@@ -47,7 +47,7 @@ def has_indonesian(text):
         'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
         'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
         'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-        'kok', 'yuk', 'ayo', 'banget', 'orang', 'bisa', 'baru',
+        'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru',
     ])
     count = sum(1 for w in words if w in id_words)
     if count >= 2:
@@ -61,14 +61,14 @@ def translate_openai(text, src, tgt):
     if not oai:
         return None
     try:
-        if src == 'zh':
-            msg = "Terjemahkan ke Bahasa Indonesia yang natural: " + text
+        if src == "zh":
+            msg = "Translate the following Traditional Chinese text to natural Indonesian (Bahasa Indonesia). Only output the translation: " + text
         else:
-            msg = "翻譯成自然流暢的繁體中文: " + text
+            msg = "Translate the following Indonesian text to natural Traditional Chinese (Traditional Mandarin used in Taiwan). Only output the translation: " + text
         r = oai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a translator. Only output the translation, nothing else."},
+                {"role": "system", "content": "You are a professional translator between Traditional Chinese and Indonesian. Only output the translation, nothing else. Make the translation natural and easy to understand."},
                 {"role": "user", "content": msg}
             ],
             temperature=0.3,
@@ -82,15 +82,19 @@ def translate_openai(text, src, tgt):
 
 def translate_google(text, src, tgt):
     try:
-        sl = 'zh-TW' if src == 'zh' else 'id'
-        tl = 'id' if tgt == 'id' else 'zh-TW'
+        sl = "zh-TW" if src == "zh" else "id"
+        tl = "id" if tgt == "id" else "zh-TW"
         q = urllib.parse.quote(text)
-        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t&q=%s" % (sl, tl, q)
+        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" + sl + "&tl=" + tl + "&dt=t&q=" + q
         req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'Mozilla/5.0')
+        req.add_header("User-Agent", "Mozilla/5.0")
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            return ''.join([item[0] for item in data[0] if item[0]])
+            data = json.loads(resp.read().decode("utf-8"))
+            parts = []
+            for item in data[0]:
+                if item[0]:
+                    parts.append(item[0])
+            return "".join(parts)
     except Exception as e:
         logger.error("Google translate error: %s", e)
         return None
@@ -119,24 +123,19 @@ def handle_message(event):
     text = event.message.text.strip()
     if len(text) < 2:
         return
-    if text.startswith('/') or text.startswith('!'):
+    if text.startswith("/") or text.startswith("!"):
         return
-
+    reply = None
     if has_chinese(text):
-        result = translate(text, 'zh', 'id')
+        result = translate(text, "zh", "id")
         if result:
             reply = "\U0001f1ee\U0001f1e9 " + result
-        else:
-            return
     elif has_indonesian(text):
-        result = translate(text, 'id', 'zh')
+        result = translate(text, "id", "zh")
         if result:
             reply = "\U0001f1f9\U0001f1fc " + result
-        else:
-            return
-    else:
+    if reply is None:
         return
-
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
         api.reply_message(ReplyMessageRequest(
