@@ -23,10 +23,8 @@ configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
-# Store group translation on/off state (in memory, resets on restart)
 group_settings = {}
 
-# Language flags
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
     "id": "\U0001f1ee\U0001f1e9",
@@ -72,8 +70,8 @@ def has_thai(text):
 
 def has_vietnamese(text):
     vi_special = re.findall(r'[\u01a0\u01a1\u01af\u01b0\u0110\u0111]', text)
-    vi_marks = re.findall(r'[\u0300-\u036f]', text)
     vi_chars = re.findall(r'[\u00e0-\u00ff\u1ea0-\u1ef9]', text.lower())
+    vi_marks = re.findall(r'[\u0300-\u036f]', text)
     words = text.lower().split()
     vi_markers = set([
         'cua', 'nhung', 'trong', 'duoc', 'khong', 'nhu', 'mot',
@@ -239,30 +237,57 @@ def translate(text, src, tgt):
     return translate_google(text, src, tgt)
 
 
+def make_notice(content):
+    id_text = translate(content, "zh", "id")
+    if not id_text:
+        id_text = "(translation failed)"
+    lines = []
+    lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
+    lines.append("====================")
+    lines.append("\U0001f1f9\U0001f1fc " + content)
+    lines.append("\U0001f1ee\U0001f1e9 " + id_text)
+    lines.append("====================")
+    return "\n".join(lines)
+
+
+def make_notice_from_id(content):
+    zh_text = translate(content, "id", "zh")
+    if not zh_text:
+        zh_text = "(translation failed)"
+    lines = []
+    lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
+    lines.append("====================")
+    lines.append("\U0001f1f9\U0001f1fc " + zh_text)
+    lines.append("\U0001f1ee\U0001f1e9 " + content)
+    lines.append("====================")
+    return "\n".join(lines)
+
+
 def get_help_text():
-    return (
-        "\U0001f310 Translation Bot\n"
-        "====================\n"
-        "/on  - Turn on translation\n"
-        "/off - Turn off translation\n"
-        "/status - Check status\n"
-        "/help - Show this message\n"
-        "====================\n"
-        "Supported:\n"
-        "\U0001f1f9\U0001f1fc Chinese\n"
-        "\U0001f1ee\U0001f1e9 Indonesian\n"
-        "\U0001f1ec\U0001f1e7 English\n"
-        "\U0001f1fb\U0001f1f3 Vietnamese\n"
-        "\U0001f1f9\U0001f1ed Thai\n"
-        "\U0001f1ef\U0001f1f5 Japanese\n"
-        "\U0001f1f0\U0001f1f7 Korean\n"
-        "\U0001f1f2\U0001f1fe Malay\n"
-        "\U0001f1f5\U0001f1ed Filipino\n"
-        "====================\n"
-        "Auto-detect & translate!\n"
-        "Chinese -> Indonesian\n"
-        "Other languages -> Chinese"
-    )
+    lines = []
+    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba\u6307\u4ee4")
+    lines.append("====================")
+    lines.append("/on  - \u958b\u555f\u7ffb\u8b6f")
+    lines.append("/off - \u95dc\u9589\u7ffb\u8b6f")
+    lines.append("/status - \u67e5\u770b\u72c0\u614b")
+    lines.append("/notice \u5167\u5bb9 - \u767c\u4f48\u96d9\u8a9e\u516c\u544a")
+    lines.append("/help - \u986f\u793a\u6b64\u8aaa\u660e")
+    lines.append("====================")
+    lines.append("\u652f\u63f4\u8a9e\u8a00\uff1a")
+    lines.append("\U0001f1f9\U0001f1fc \u4e2d\u6587")
+    lines.append("\U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587")
+    lines.append("\U0001f1ec\U0001f1e7 \u82f1\u6587")
+    lines.append("\U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587")
+    lines.append("\U0001f1f9\U0001f1ed \u6cf0\u6587")
+    lines.append("\U0001f1ef\U0001f1f5 \u65e5\u6587")
+    lines.append("\U0001f1f0\U0001f1f7 \u97d3\u6587")
+    lines.append("\U0001f1f2\U0001f1fe \u99ac\u4f86\u6587")
+    lines.append("\U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587")
+    lines.append("====================")
+    lines.append("\u81ea\u52d5\u5075\u6e2c\u8a9e\u8a00\uff0c\u81ea\u52d5\u7ffb\u8b6f\uff01")
+    lines.append("\u4e2d\u6587 \u2192 \u5370\u5c3c\u6587")
+    lines.append("\u5176\u4ed6\u8a9e\u8a00 \u2192 \u4e2d\u6587")
+    return "\n".join(lines)
 
 
 def handle_command(text, group_id):
@@ -271,16 +296,26 @@ def handle_command(text, group_id):
         return get_help_text()
     elif cmd == "/on":
         group_settings[group_id] = True
-        return "\u2705 Translation ON"
+        return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f"
     elif cmd == "/off":
         group_settings[group_id] = False
-        return "\u274c Translation OFF"
+        return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         if is_on:
-            return "\u2705 Translation is currently ON"
+            return "\u2705 \u7ffb\u8b6f\u72c0\u614b\uff1a\u958b\u555f\u4e2d"
         else:
-            return "\u274c Translation is currently OFF"
+            return "\u274c \u7ffb\u8b6f\u72c0\u614b\uff1a\u5df2\u95dc\u9589"
+    elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
+        content = text.strip()[8:].strip()
+        if not content:
+            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\uff0c\u4f8b\u5982\uff1a/notice \u660e\u5929\u653e\u5047\u4e00\u5929"
+        if has_chinese(content):
+            return make_notice(content)
+        elif has_indonesian(content):
+            return make_notice_from_id(content)
+        else:
+            return make_notice(content)
     return None
 
 
@@ -301,11 +336,9 @@ def handle_message(event):
     if len(text) < 2:
         return
 
-    # Get group ID
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
 
-    # Handle commands
     if text.startswith("/"):
         cmd_result = handle_command(text, group_id)
         if cmd_result:
@@ -317,21 +350,17 @@ def handle_message(event):
                 ))
         return
 
-    # Check if translation is enabled
     is_on = group_settings.get(group_id, True)
     if not is_on:
         return
 
-    # Ignore !
     if text.startswith("!"):
         return
 
-    # Detect language
     lang = detect_language(text)
     if lang is None:
         return
 
-    # Translate
     reply = None
     if lang == "zh":
         result = translate(text, "zh", "id")
