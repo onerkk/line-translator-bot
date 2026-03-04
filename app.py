@@ -24,6 +24,8 @@ handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
 group_settings = {}
+# Target language for Chinese translation per group, default "id"
+group_target_lang = {}
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -49,11 +51,23 @@ LANG_NAMES = {
     "tl": "Filipino/Tagalog",
 }
 
+LANG_NAMES_ZH = {
+    "id": "\u5370\u5c3c\u6587",
+    "en": "\u82f1\u6587",
+    "vi": "\u8d8a\u5357\u6587",
+    "th": "\u6cf0\u6587",
+    "ja": "\u65e5\u6587",
+    "ko": "\u97d3\u6587",
+    "ms": "\u99ac\u4f86\u6587",
+    "tl": "\u83f2\u5f8b\u8cd3\u6587",
+}
+
+# Valid target languages (excluding zh since zh is source)
+VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
+
 
 def extract_mentions(text):
-    # Only match @followed by latin letters/numbers/spaces, stop at Chinese or newline
     mentions = re.findall(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', text)
-    # Trim trailing spaces
     mentions = [m.rstrip() for m in mentions]
     return mentions
 
@@ -77,7 +91,6 @@ def restore_mentions(text, placeholders):
 
 
 def strip_mentions_for_detect(text):
-    # Remove @mentions (latin only) for language detection
     clean = re.sub(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', ' ', text)
     return clean
 
@@ -145,8 +158,8 @@ def has_indonesian(text):
         'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
         'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
         'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
-        'di', 'ke', 'jam', 'hari', 'bisa', 'pergi', 'ruang',
-        'baca', 'soal', 'ujian', 'terakhir', 'kamu',
+        'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
+        'terakhir', 'kamu',
     ])
     count = sum(1 for w in words if w in id_words)
     if count >= 2:
@@ -187,14 +200,11 @@ def has_english(text):
 
 
 def detect_language(text):
-    # Remove @mentions before detecting language
     clean = strip_mentions_for_detect(text).strip()
     if not clean or len(clean) < 2:
         return None
-    # Check for mixed: if has both Chinese and Indonesian words, decide by ratio
     zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
     latin_words = re.findall(r'[a-zA-Z]+', clean.lower())
-    # If mostly Chinese characters with some latin names, treat as Chinese
     if zh_count >= 2 and len(latin_words) <= 2:
         return "zh"
     if has_japanese(clean):
@@ -203,9 +213,7 @@ def detect_language(text):
         return "ko"
     if has_thai(clean):
         return "th"
-    # If has Chinese and also has Indonesian/other latin, check which is dominant
     if zh_count >= 2:
-        # Has Chinese characters - check if the latin part is just names or actual language
         id_words = set([
             'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
             'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
@@ -242,7 +250,7 @@ def translate_openai(text, src, tgt):
             "This is a group with Taiwanese managers and Indonesian workers. "
             "CRITICAL RULES: "
             "1. NEVER translate person names. Keep all names exactly as they are. "
-            "For example: Chinese nicknames for people must stay unchanged. If you see characters that are clearly a person's name or nickname, do NOT translate them literally. "
+            "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
             "2. Any text like MHOLD0ER, MHOLD1ER etc are placeholders - keep them exactly as is. "
             "3. Translate naturally like real people talk at work. Use casual daily language. "
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
@@ -304,64 +312,99 @@ def translate(text, src, tgt):
     return translate_google(text, src, tgt)
 
 
-def make_notice(content):
-    id_text = translate(content, "zh", "id")
-    if not id_text:
-        id_text = "(translation failed)"
+def make_notice(content, target="id"):
+    tgt_text = translate(content, "zh", target)
+    if not tgt_text:
+        tgt_text = "(translation failed)"
     lines = []
     lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
     lines.append("====================")
     lines.append("\U0001f1f9\U0001f1fc " + content)
-    lines.append("\U0001f1ee\U0001f1e9 " + id_text)
+    lines.append(LANG_FLAGS.get(target, "") + " " + tgt_text)
     lines.append("====================")
     return "\n".join(lines)
 
 
-def make_notice_from_id(content):
-    zh_text = translate(content, "id", "zh")
+def make_notice_from_other(content, src, target="zh"):
+    zh_text = translate(content, src, "zh")
     if not zh_text:
         zh_text = "(translation failed)"
     lines = []
     lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
     lines.append("====================")
     lines.append("\U0001f1f9\U0001f1fc " + zh_text)
-    lines.append("\U0001f1ee\U0001f1e9 " + content)
+    lines.append(LANG_FLAGS.get(src, "") + " " + content)
     lines.append("====================")
     return "\n".join(lines)
 
 
-def get_help_text():
+def get_help_text(group_id):
+    tgt = group_target_lang.get(group_id, "id")
+    tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
+    tgt_flag = LANG_FLAGS.get(tgt, "")
     lines = []
     lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba / Bot Penerjemah")
     lines.append("====================")
     lines.append("/on  - \u958b\u555f\u7ffb\u8b6f / Aktifkan")
     lines.append("/off - \u95dc\u9589\u7ffb\u8b6f / Nonaktifkan")
     lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
-    lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a / Pengumuman")
+    lines.append("/lang \u4ee3\u78bc - \u5207\u63db\u76ee\u6a19\u8a9e\u8a00")
+    lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a")
     lines.append("/help - \u8aaa\u660e / Bantuan")
     lines.append("====================")
-    lines.append("\u652f\u63f4\u8a9e\u8a00 / Bahasa:")
-    lines.append("\U0001f1f9\U0001f1fc \u4e2d\u6587 / Chinese")
-    lines.append("\U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587 / Indonesia")
-    lines.append("\U0001f1ec\U0001f1e7 \u82f1\u6587 / English")
-    lines.append("\U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587 / Vietnam")
-    lines.append("\U0001f1f9\U0001f1ed \u6cf0\u6587 / Thai")
-    lines.append("\U0001f1ef\U0001f1f5 \u65e5\u6587 / Jepang")
-    lines.append("\U0001f1f0\U0001f1f7 \u97d3\u6587 / Korea")
-    lines.append("\U0001f1f2\U0001f1fe \u99ac\u4f86\u6587 / Melayu")
-    lines.append("\U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587 / Filipina")
+    lines.append("\u8a9e\u8a00\u4ee3\u78bc / Kode bahasa:")
+    lines.append("id = \U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587 / Indonesia")
+    lines.append("en = \U0001f1ec\U0001f1e7 \u82f1\u6587 / English")
+    lines.append("vi = \U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587 / Vietnam")
+    lines.append("th = \U0001f1f9\U0001f1ed \u6cf0\u6587 / Thai")
+    lines.append("ja = \U0001f1ef\U0001f1f5 \u65e5\u6587 / Jepang")
+    lines.append("ko = \U0001f1f0\U0001f1f7 \u97d3\u6587 / Korea")
+    lines.append("ms = \U0001f1f2\U0001f1fe \u99ac\u4f86\u6587 / Melayu")
+    lines.append("tl = \U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587 / Filipina")
     lines.append("====================")
-    lines.append("\u81ea\u52d5\u5075\u6e2c\uff0c\u81ea\u52d5\u7ffb\u8b6f\uff01")
-    lines.append("Deteksi otomatis & terjemahkan!")
-    lines.append("\u4e2d\u6587 \u2192 \u5370\u5c3c\u6587")
-    lines.append("\u5176\u4ed6\u8a9e\u8a00 \u2192 \u4e2d\u6587")
+    lines.append("\u76ee\u524d\u8a2d\u5b9a / Saat ini:")
+    lines.append("\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh)
+    lines.append("\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587")
+    lines.append("====================")
+    lines.append("\u7bc4\u4f8b / Contoh:")
+    lines.append("/lang en \u2192 \u4e2d\u6587\u7ffb\u82f1\u6587")
+    lines.append("/lang id \u2192 \u4e2d\u6587\u7ffb\u5370\u5c3c\u6587")
     return "\n".join(lines)
+
+
+def handle_lang_command(text, group_id):
+    parts = text.strip().split()
+    if len(parts) < 2:
+        # Show current setting
+        tgt = group_target_lang.get(group_id, "id")
+        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
+        tgt_flag = LANG_FLAGS.get(tgt, "")
+        lines = []
+        lines.append("\u76ee\u524d\u4e2d\u6587\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh)
+        lines.append("")
+        lines.append("\u5207\u63db\u8acb\u8f38\u5165 / Ketik:")
+        lines.append("/lang id \u2192 \u5370\u5c3c\u6587")
+        lines.append("/lang en \u2192 \u82f1\u6587")
+        lines.append("/lang vi \u2192 \u8d8a\u5357\u6587")
+        lines.append("/lang th \u2192 \u6cf0\u6587")
+        lines.append("/lang ja \u2192 \u65e5\u6587")
+        lines.append("/lang ko \u2192 \u97d3\u6587")
+        lines.append("/lang ms \u2192 \u99ac\u4f86\u6587")
+        lines.append("/lang tl \u2192 \u83f2\u5f8b\u8cd3\u6587")
+        return "\n".join(lines)
+    code = parts[1].lower().strip()
+    if code not in VALID_TARGETS:
+        return "\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: id, en, vi, th, ja, ko, ms, tl"
+    group_target_lang[group_id] = code
+    tgt_zh = LANG_NAMES_ZH.get(code, code)
+    tgt_flag = LANG_FLAGS.get(code, "")
+    return "\u2705 \u5df2\u5207\u63db\uff1a\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587"
 
 
 def handle_command(text, group_id):
     cmd = text.strip().lower()
     if cmd == "/help":
-        return get_help_text()
+        return get_help_text(group_id)
     elif cmd == "/on":
         group_settings[group_id] = True
         return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f / Penerjemah aktif"
@@ -370,20 +413,27 @@ def handle_command(text, group_id):
         return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
+        tgt = group_target_lang.get(group_id, "id")
+        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
+        tgt_flag = LANG_FLAGS.get(tgt, "")
         if is_on:
-            return "\u2705 \u7ffb\u8b6f\u72c0\u614b\uff1a\u958b\u555f\u4e2d / Status: Aktif"
+            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh
         else:
-            return "\u274c \u7ffb\u8b6f\u72c0\u614b\uff1a\u5df2\u95dc\u9589 / Status: Nonaktif"
+            return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
+    elif cmd.startswith("/lang"):
+        return handle_lang_command(text, group_id)
     elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
         content = text.strip()[8:].strip()
         if not content:
             return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\n\u4f8b\u5982 / Contoh: /notice \u660e\u5929\u653e\u5047\u4e00\u5929"
+        tgt = group_target_lang.get(group_id, "id")
         if has_chinese(content):
-            return make_notice(content)
-        elif has_indonesian(content):
-            return make_notice_from_id(content)
+            return make_notice(content, tgt)
         else:
-            return make_notice(content)
+            src = detect_language(content)
+            if src and src != "zh":
+                return make_notice_from_other(content, src)
+            return make_notice(content, tgt)
     return None
 
 
@@ -429,11 +479,13 @@ def handle_message(event):
     if lang is None:
         return
 
+    tgt = group_target_lang.get(group_id, "id")
+
     reply = None
     if lang == "zh":
-        result = translate(text, "zh", "id")
+        result = translate(text, "zh", tgt)
         if result:
-            reply = LANG_FLAGS.get("id", "") + " " + result
+            reply = LANG_FLAGS.get(tgt, "") + " " + result
     else:
         result = translate(text, lang, "zh")
         if result:
