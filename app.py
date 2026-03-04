@@ -50,6 +50,38 @@ LANG_NAMES = {
 }
 
 
+def extract_mentions(text):
+    # Only match @followed by latin letters/numbers/spaces, stop at Chinese or newline
+    mentions = re.findall(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', text)
+    # Trim trailing spaces
+    mentions = [m.rstrip() for m in mentions]
+    return mentions
+
+
+def protect_mentions(text):
+    mentions = extract_mentions(text)
+    protected = text
+    placeholders = {}
+    for i, m in enumerate(mentions):
+        ph = "MHOLD" + str(i) + "ER"
+        placeholders[ph] = m
+        protected = protected.replace(m, ph, 1)
+    return protected, placeholders
+
+
+def restore_mentions(text, placeholders):
+    restored = text
+    for ph, original in placeholders.items():
+        restored = restored.replace(ph, original)
+    return restored
+
+
+def strip_mentions_for_detect(text):
+    # Remove @mentions (latin only) for language detection
+    clean = re.sub(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', ' ', text)
+    return clean
+
+
 def has_chinese(text):
     return len(re.findall(r'[\u4e00-\u9fff]', text)) >= 2
 
@@ -113,11 +145,13 @@ def has_indonesian(text):
         'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
         'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
         'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
+        'di', 'ke', 'jam', 'hari', 'bisa', 'pergi', 'ruang',
+        'baca', 'soal', 'ujian', 'terakhir', 'kamu',
     ])
     count = sum(1 for w in words if w in id_words)
     if count >= 2:
         return True
-    if len(words) > 0 and count / len(words) > 0.3:
+    if len(words) >= 3 and count >= 1 and count / len(words) > 0.2:
         return True
     return False
 
@@ -153,10 +187,15 @@ def has_english(text):
 
 
 def detect_language(text):
-    clean = text.strip()
+    # Remove @mentions before detecting language
+    clean = strip_mentions_for_detect(text).strip()
     if not clean or len(clean) < 2:
         return None
-    if has_chinese(clean):
+    # Check for mixed: if has both Chinese and Indonesian words, decide by ratio
+    zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
+    latin_words = re.findall(r'[a-zA-Z]+', clean.lower())
+    # If mostly Chinese characters with some latin names, treat as Chinese
+    if zh_count >= 2 and len(latin_words) <= 2:
         return "zh"
     if has_japanese(clean):
         return "ja"
@@ -164,6 +203,23 @@ def detect_language(text):
         return "ko"
     if has_thai(clean):
         return "th"
+    # If has Chinese and also has Indonesian/other latin, check which is dominant
+    if zh_count >= 2:
+        # Has Chinese characters - check if the latin part is just names or actual language
+        id_words = set([
+            'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
+            'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
+            'belum', 'harus', 'boleh', 'mau', 'karena', 'tapi', 'atau',
+            'kalau', 'masih', 'lagi', 'nanti', 'sekarang',
+            'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih',
+            'di', 'ke', 'jam', 'hari', 'bisa', 'pergi', 'ruang',
+            'baca', 'soal', 'ujian', 'terakhir', 'kamu',
+            'makan', 'minum', 'kerja', 'pulang', 'rumah',
+        ])
+        id_count = sum(1 for w in latin_words if w in id_words)
+        if id_count >= 3:
+            return "id"
+        return "zh"
     if has_vietnamese(clean):
         return "vi"
     if has_indonesian(clean):
@@ -179,16 +235,22 @@ def translate_openai(text, src, tgt):
     try:
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
-        msg = "Translate from " + src_name + " to " + tgt_name + ": " + text
+        protected, placeholders = protect_mentions(text)
+        msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
         sys_prompt = (
-            "You are a professional translator. "
-            "Translate naturally and colloquially, like how real people talk in daily life. "
-            "Understand slang, abbreviations, internet speak, and casual expressions. "
-            "For Indonesian slang: 'gak'='tidak', 'udah'='sudah', 'gimana'='bagaimana', 'bgt'='banget', 'org'='orang', 'yg'='yang', 'tdk'='tidak', 'dg'='dengan', 'krn'='karena', 'blm'='belum', 'hrs'='harus', 'bs'='bisa', 'lg'='lagi', 'gw'='saya', 'lu'='kamu'. "
-            "For Chinese internet slang and abbreviations too. "
-            "If the target language is Traditional Chinese, use Taiwan-style Mandarin (not mainland China style). Use common Taiwanese expressions. "
-            "If the target language is Indonesian, use natural daily Indonesian, not formal/textbook style. "
-            "Only output the translation, nothing else. No quotes, no explanation, no prefix."
+            "You are a professional translator for a factory work group chat. "
+            "This is a group with Taiwanese managers and Indonesian workers. "
+            "CRITICAL RULES: "
+            "1. NEVER translate person names. Keep all names exactly as they are. "
+            "For example: Chinese nicknames for people must stay unchanged. If you see characters that are clearly a person's name or nickname, do NOT translate them literally. "
+            "2. Any text like MHOLD0ER, MHOLD1ER etc are placeholders - keep them exactly as is. "
+            "3. Translate naturally like real people talk at work. Use casual daily language. "
+            "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
+            "5. Chinese slang and abbreviations too. "
+            "6. Target Traditional Chinese = Taiwan style, not mainland. "
+            "7. Target Indonesian = simple clear daily language for factory workers. "
+            "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
+            "Only output the translation. No quotes, no explanation, no prefix."
         )
         r = oai.chat.completions.create(
             model="gpt-4o-mini",
@@ -199,7 +261,9 @@ def translate_openai(text, src, tgt):
             temperature=0.3,
             max_tokens=2000,
         )
-        return r.choices[0].message.content.strip()
+        result = r.choices[0].message.content.strip()
+        result = restore_mentions(result, placeholders)
+        return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
         return None
@@ -207,6 +271,7 @@ def translate_openai(text, src, tgt):
 
 def translate_google(text, src, tgt):
     try:
+        protected, placeholders = protect_mentions(text)
         lang_map = {
             "zh": "zh-TW", "id": "id", "en": "en",
             "vi": "vi", "th": "th", "ja": "ja",
@@ -214,7 +279,7 @@ def translate_google(text, src, tgt):
         }
         sl = lang_map.get(src, src)
         tl = lang_map.get(tgt, tgt)
-        q = urllib.parse.quote(text)
+        q = urllib.parse.quote(protected)
         url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" + sl + "&tl=" + tl + "&dt=t&q=" + q
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "Mozilla/5.0")
@@ -224,7 +289,9 @@ def translate_google(text, src, tgt):
             for item in data[0]:
                 if item[0]:
                     parts.append(item[0])
-            return "".join(parts)
+            result = "".join(parts)
+            result = restore_mentions(result, placeholders)
+            return result
     except Exception as e:
         logger.error("Google translate error: %s", e)
         return None
@@ -265,26 +332,27 @@ def make_notice_from_id(content):
 
 def get_help_text():
     lines = []
-    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba\u6307\u4ee4")
+    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba / Bot Penerjemah")
     lines.append("====================")
-    lines.append("/on  - \u958b\u555f\u7ffb\u8b6f")
-    lines.append("/off - \u95dc\u9589\u7ffb\u8b6f")
-    lines.append("/status - \u67e5\u770b\u72c0\u614b")
-    lines.append("/notice \u5167\u5bb9 - \u767c\u4f48\u96d9\u8a9e\u516c\u544a")
-    lines.append("/help - \u986f\u793a\u6b64\u8aaa\u660e")
+    lines.append("/on  - \u958b\u555f\u7ffb\u8b6f / Aktifkan")
+    lines.append("/off - \u95dc\u9589\u7ffb\u8b6f / Nonaktifkan")
+    lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
+    lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a / Pengumuman")
+    lines.append("/help - \u8aaa\u660e / Bantuan")
     lines.append("====================")
-    lines.append("\u652f\u63f4\u8a9e\u8a00\uff1a")
-    lines.append("\U0001f1f9\U0001f1fc \u4e2d\u6587")
-    lines.append("\U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587")
-    lines.append("\U0001f1ec\U0001f1e7 \u82f1\u6587")
-    lines.append("\U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587")
-    lines.append("\U0001f1f9\U0001f1ed \u6cf0\u6587")
-    lines.append("\U0001f1ef\U0001f1f5 \u65e5\u6587")
-    lines.append("\U0001f1f0\U0001f1f7 \u97d3\u6587")
-    lines.append("\U0001f1f2\U0001f1fe \u99ac\u4f86\u6587")
-    lines.append("\U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587")
+    lines.append("\u652f\u63f4\u8a9e\u8a00 / Bahasa:")
+    lines.append("\U0001f1f9\U0001f1fc \u4e2d\u6587 / Chinese")
+    lines.append("\U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587 / Indonesia")
+    lines.append("\U0001f1ec\U0001f1e7 \u82f1\u6587 / English")
+    lines.append("\U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587 / Vietnam")
+    lines.append("\U0001f1f9\U0001f1ed \u6cf0\u6587 / Thai")
+    lines.append("\U0001f1ef\U0001f1f5 \u65e5\u6587 / Jepang")
+    lines.append("\U0001f1f0\U0001f1f7 \u97d3\u6587 / Korea")
+    lines.append("\U0001f1f2\U0001f1fe \u99ac\u4f86\u6587 / Melayu")
+    lines.append("\U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587 / Filipina")
     lines.append("====================")
-    lines.append("\u81ea\u52d5\u5075\u6e2c\u8a9e\u8a00\uff0c\u81ea\u52d5\u7ffb\u8b6f\uff01")
+    lines.append("\u81ea\u52d5\u5075\u6e2c\uff0c\u81ea\u52d5\u7ffb\u8b6f\uff01")
+    lines.append("Deteksi otomatis & terjemahkan!")
     lines.append("\u4e2d\u6587 \u2192 \u5370\u5c3c\u6587")
     lines.append("\u5176\u4ed6\u8a9e\u8a00 \u2192 \u4e2d\u6587")
     return "\n".join(lines)
@@ -296,20 +364,20 @@ def handle_command(text, group_id):
         return get_help_text()
     elif cmd == "/on":
         group_settings[group_id] = True
-        return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f"
+        return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f / Penerjemah aktif"
     elif cmd == "/off":
         group_settings[group_id] = False
-        return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589"
+        return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         if is_on:
-            return "\u2705 \u7ffb\u8b6f\u72c0\u614b\uff1a\u958b\u555f\u4e2d"
+            return "\u2705 \u7ffb\u8b6f\u72c0\u614b\uff1a\u958b\u555f\u4e2d / Status: Aktif"
         else:
-            return "\u274c \u7ffb\u8b6f\u72c0\u614b\uff1a\u5df2\u95dc\u9589"
+            return "\u274c \u7ffb\u8b6f\u72c0\u614b\uff1a\u5df2\u95dc\u9589 / Status: Nonaktif"
     elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
         content = text.strip()[8:].strip()
         if not content:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\uff0c\u4f8b\u5982\uff1a/notice \u660e\u5929\u653e\u5047\u4e00\u5929"
+            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\n\u4f8b\u5982 / Contoh: /notice \u660e\u5929\u653e\u5047\u4e00\u5929"
         if has_chinese(content):
             return make_notice(content)
         elif has_indonesian(content):
