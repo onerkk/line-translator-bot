@@ -6,10 +6,11 @@ import urllib.parse
 import logging
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
+import base64
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,8 @@ oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
 group_target_lang = {}
+# Image translation toggle per group, default True
+group_img_settings = {}
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -312,6 +315,64 @@ def translate(text, src, tgt):
     return translate_google(text, src, tgt)
 
 
+def ocr_image_openai(image_base64):
+    """Use OpenAI Vision to extract text from image."""
+    if not oai:
+        return None
+    try:
+        r = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an OCR assistant. Extract ALL text visible in the image. "
+                        "Output ONLY the extracted text, preserving line breaks. "
+                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + image_base64,
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": "Extract all text from this image."
+                        }
+                    ]
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+        )
+        result = r.choices[0].message.content.strip()
+        if result == "NO_TEXT_FOUND" or not result:
+            return None
+        return result
+    except Exception as e:
+        logger.error("OpenAI Vision OCR error: %s", e)
+        return None
+
+
+def download_line_image(message_id):
+    """Download image from LINE and return base64 string."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            content = blob_api.get_message_content(message_id)
+            img_base64 = base64.b64encode(content).decode("utf-8")
+            return img_base64
+    except Exception as e:
+        logger.error("LINE image download error: %s", e)
+        return None
+
+
 def make_notice(content, target="id"):
     tgt_text = translate(content, "zh", target)
     if not tgt_text:
@@ -347,6 +408,8 @@ def get_help_text(group_id):
     lines.append("====================")
     lines.append("/on  - \u958b\u555f\u7ffb\u8b6f / Aktifkan")
     lines.append("/off - \u95dc\u9589\u7ffb\u8b6f / Nonaktifkan")
+    lines.append("/img on  - \u958b\u555f\u5716\u7247\u7ffb\u8b6f / Aktifkan terjemahan gambar")
+    lines.append("/img off - \u95dc\u9589\u5716\u7247\u7ffb\u8b6f / Nonaktifkan terjemahan gambar")
     lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
     lines.append("/lang \u4ee3\u78bc - \u5207\u63db\u76ee\u6a19\u8a9e\u8a00")
     lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a")
@@ -411,13 +474,21 @@ def handle_command(text, group_id):
     elif cmd == "/off":
         group_settings[group_id] = False
         return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
+    elif cmd == "/img on":
+        group_img_settings[group_id] = True
+        return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan gambar aktif"
+    elif cmd == "/img off":
+        group_img_settings[group_id] = False
+        return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         tgt = group_target_lang.get(group_id, "id")
         tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
         tgt_flag = LANG_FLAGS.get(tgt, "")
         if is_on:
-            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh
+            img_on = group_img_settings.get(group_id, True)
+            img_status = "\u2705 \u958b\u555f" if img_on else "\u274c \u95dc\u9589"
+            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status
         else:
             return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
     elif cmd.startswith("/lang"):
@@ -490,6 +561,70 @@ def handle_message(event):
         result = translate(text, lang, "zh")
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
+
+    if reply is None:
+        return
+
+    with ApiClient(configuration) as api_client:
+        api = MessagingApi(api_client)
+        api.reply_message(ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[TextMessage(text=reply)]
+        ))
+
+
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image(event):
+    """Handle image messages: OCR + detect language + translate."""
+    source = event.source
+    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+
+    # Check if translation is on
+    is_on = group_settings.get(group_id, True)
+    if not is_on:
+        return
+
+    # Check if image translation is on
+    img_on = group_img_settings.get(group_id, True)
+    if not img_on:
+        return
+
+    # Need OpenAI for image OCR
+    if not oai:
+        logger.warning("No OpenAI key, cannot do image OCR")
+        return
+
+    # Download image from LINE
+    message_id = event.message.id
+    img_base64 = download_line_image(message_id)
+    if not img_base64:
+        return
+
+    # OCR: extract text from image
+    extracted = ocr_image_openai(img_base64)
+    if not extracted:
+        return
+
+    # Skip very short text
+    if len(extracted.strip()) < 2:
+        return
+
+    # Detect language
+    lang = detect_language(extracted)
+    if lang is None:
+        return
+
+    tgt = group_target_lang.get(group_id, "id")
+
+    reply = None
+    if lang == "zh":
+        result = translate(extracted, "zh", tgt)
+        if result:
+            reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(tgt, "") + "\n" + result
+    else:
+        result = translate(extracted, lang, "zh")
+        if result:
+            reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get("zh", "") + "\n" + result
 
     if reply is None:
         return
