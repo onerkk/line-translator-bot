@@ -32,6 +32,8 @@ group_target_lang = {}
 group_img_settings = {}
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
+# Skip list: set of user_ids per group whose messages won't be translated
+group_skip_users = {}
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -447,6 +449,9 @@ def get_help_text(group_id):
     lines.append("/img off - \u95dc\u9589\u5716\u7247\u7ffb\u8b6f / Nonaktifkan terjemahan gambar")
     lines.append("/voice on  - \u958b\u555f\u8a9e\u97f3\u7ffb\u8b6f / Aktifkan terjemahan suara")
     lines.append("/voice off - \u95dc\u9589\u8a9e\u97f3\u7ffb\u8b6f / Nonaktifkan terjemahan suara")
+    lines.append("/skip - \u4e0d\u7ffb\u8b6f\u6211\u7684\u8a0a\u606f / Jangan terjemahkan saya")
+    lines.append("/unskip - \u6062\u5fa9\u7ffb\u8b6f\u6211\u7684\u8a0a\u606f / Terjemahkan saya lagi")
+    lines.append("/skiplist - \u67e5\u770b\u767d\u540d\u55ae / Lihat daftar skip")
     lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
     lines.append("/lang \u4ee3\u78bc - \u5207\u63db\u76ee\u6a19\u8a9e\u8a00")
     lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a")
@@ -501,7 +506,7 @@ def handle_lang_command(text, group_id):
     return "\u2705 \u5df2\u5207\u63db\uff1a\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587"
 
 
-def handle_command(text, group_id):
+def handle_command(text, group_id, user_id=None):
     cmd = text.strip().lower()
     if cmd == "/help":
         return get_help_text(group_id)
@@ -523,6 +528,24 @@ def handle_command(text, group_id):
     elif cmd == "/voice off":
         group_audio_settings[group_id] = False
         return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
+    elif cmd == "/skip":
+        if not user_id:
+            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
+        if group_id not in group_skip_users:
+            group_skip_users[group_id] = set()
+        group_skip_users[group_id].add(user_id)
+        return "\u2705 \u5df2\u5c07\u4f60\u52a0\u5165\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f\nAnda ditambahkan ke daftar skip"
+    elif cmd == "/unskip":
+        if not user_id:
+            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
+        if group_id in group_skip_users:
+            group_skip_users[group_id].discard(user_id)
+        return "\u2705 \u5df2\u5c07\u4f60\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f\nAnda dihapus dari daftar skip"
+    elif cmd == "/skiplist":
+        skipped = group_skip_users.get(group_id, set())
+        if not skipped:
+            return "\u76ee\u524d\u767d\u540d\u55ae\u662f\u7a7a\u7684 / Daftar skip kosong"
+        return "\u23ed\ufe0f \u767d\u540d\u55ae / Daftar skip:\n" + str(len(skipped)) + " \u4eba\u5df2\u8df3\u904e / orang di-skip"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         tgt = group_target_lang.get(group_id, "id")
@@ -574,7 +597,8 @@ def handle_message(event):
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
 
     if text.startswith("/"):
-        cmd_result = handle_command(text, group_id)
+        user_id = getattr(source, 'user_id', None)
+        cmd_result = handle_command(text, group_id, user_id)
         if cmd_result:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
@@ -586,6 +610,11 @@ def handle_message(event):
 
     is_on = group_settings.get(group_id, True)
     if not is_on:
+        return
+
+    # Check skip list
+    sender_id = getattr(source, 'user_id', None)
+    if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
     if text.startswith("!"):
@@ -627,6 +656,11 @@ def handle_image(event):
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
     if not is_on:
+        return
+
+    # Check skip list
+    sender_id = getattr(source, 'user_id', None)
+    if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
     # Check if image translation is on
@@ -691,6 +725,11 @@ def handle_audio(event):
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
     if not is_on:
+        return
+
+    # Check skip list
+    sender_id = getattr(source, 'user_id', None)
+    if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
     # Check if audio translation is on
