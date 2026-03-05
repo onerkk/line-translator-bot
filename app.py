@@ -7,10 +7,11 @@ import logging
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
+import tempfile
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,8 @@ group_settings = {}
 group_target_lang = {}
 # Image translation toggle per group, default True
 group_img_settings = {}
+# Audio/voice translation toggle per group, default True
+group_audio_settings = {}
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -373,6 +376,38 @@ def download_line_image(message_id):
         return None
 
 
+def download_line_audio(message_id):
+    """Download audio from LINE and return bytes."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            content = blob_api.get_message_content(message_id)
+            return content
+    except Exception as e:
+        logger.error("LINE audio download error: %s", e)
+        return None
+
+
+def transcribe_audio_openai(audio_bytes):
+    """Use OpenAI Whisper to transcribe audio to text."""
+    if not oai:
+        return None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=True) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            tmp.seek(0)
+            r = oai.audio.transcriptions.create(
+                model="whisper-1",
+                file=tmp,
+            )
+            text = r.text.strip() if r.text else None
+            return text
+    except Exception as e:
+        logger.error("OpenAI Whisper error: %s", e)
+        return None
+
+
 def make_notice(content, target="id"):
     tgt_text = translate(content, "zh", target)
     if not tgt_text:
@@ -410,6 +445,8 @@ def get_help_text(group_id):
     lines.append("/off - \u95dc\u9589\u7ffb\u8b6f / Nonaktifkan")
     lines.append("/img on  - \u958b\u555f\u5716\u7247\u7ffb\u8b6f / Aktifkan terjemahan gambar")
     lines.append("/img off - \u95dc\u9589\u5716\u7247\u7ffb\u8b6f / Nonaktifkan terjemahan gambar")
+    lines.append("/voice on  - \u958b\u555f\u8a9e\u97f3\u7ffb\u8b6f / Aktifkan terjemahan suara")
+    lines.append("/voice off - \u95dc\u9589\u8a9e\u97f3\u7ffb\u8b6f / Nonaktifkan terjemahan suara")
     lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
     lines.append("/lang \u4ee3\u78bc - \u5207\u63db\u76ee\u6a19\u8a9e\u8a00")
     lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a")
@@ -480,6 +517,12 @@ def handle_command(text, group_id):
     elif cmd == "/img off":
         group_img_settings[group_id] = False
         return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
+    elif cmd == "/voice on":
+        group_audio_settings[group_id] = True
+        return "\u2705 \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan suara aktif"
+    elif cmd == "/voice off":
+        group_audio_settings[group_id] = False
+        return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         tgt = group_target_lang.get(group_id, "id")
@@ -488,7 +531,9 @@ def handle_command(text, group_id):
         if is_on:
             img_on = group_img_settings.get(group_id, True)
             img_status = "\u2705 \u958b\u555f" if img_on else "\u274c \u95dc\u9589"
-            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status
+            audio_on = group_audio_settings.get(group_id, True)
+            audio_status = "\u2705 \u958b\u555f" if audio_on else "\u274c \u95dc\u9589"
+            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status + "\n\U0001f3a4 \u8a9e\u97f3\u7ffb\u8b6f\uff1a" + audio_status
         else:
             return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
     elif cmd.startswith("/lang"):
@@ -625,6 +670,66 @@ def handle_image(event):
         result = translate(extracted, lang, "zh")
         if result:
             reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get("zh", "") + "\n" + result
+
+    if reply is None:
+        return
+
+    with ApiClient(configuration) as api_client:
+        api = MessagingApi(api_client)
+        api.reply_message(ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[TextMessage(text=reply)]
+        ))
+
+
+@handler.add(MessageEvent, message=AudioMessageContent)
+def handle_audio(event):
+    """Handle audio/voice messages: Whisper STT + detect language + translate."""
+    source = event.source
+    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+
+    # Check if translation is on
+    is_on = group_settings.get(group_id, True)
+    if not is_on:
+        return
+
+    # Check if audio translation is on
+    audio_on = group_audio_settings.get(group_id, True)
+    if not audio_on:
+        return
+
+    # Need OpenAI for Whisper
+    if not oai:
+        logger.warning("No OpenAI key, cannot do audio transcription")
+        return
+
+    # Download audio from LINE
+    message_id = event.message.id
+    audio_bytes = download_line_audio(message_id)
+    if not audio_bytes:
+        return
+
+    # Transcribe with Whisper
+    transcribed = transcribe_audio_openai(audio_bytes)
+    if not transcribed or len(transcribed.strip()) < 2:
+        return
+
+    # Detect language
+    lang = detect_language(transcribed)
+    if lang is None:
+        return
+
+    tgt = group_target_lang.get(group_id, "id")
+
+    reply = None
+    if lang == "zh":
+        result = translate(transcribed, "zh", tgt)
+        if result:
+            reply = "\U0001f3a4 " + LANG_FLAGS.get(tgt, "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
+    else:
+        result = translate(transcribed, lang, "zh")
+        if result:
+            reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
 
     if reply is None:
         return
