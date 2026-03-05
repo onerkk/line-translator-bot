@@ -420,6 +420,65 @@ def ocr_image_openai(image_base64):
         return None
 
 
+def ocr_and_translate_image(image_base64, tgt_lang):
+    """OCR + translate image text in one API call, preserving layout."""
+    if not oai:
+        return None, None
+    tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
+    try:
+        r = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an OCR + translation assistant for a factory work group chat. "
+                        "Task: Extract ALL text from the image, then translate it. "
+                        "CRITICAL RULES:\n"
+                        "1. Preserve the original layout structure using line breaks and spacing.\n"
+                        "2. If the image has a table, list, form, or structured layout, keep the same structure.\n"
+                        "3. Use simple aligned text to simulate the original positions.\n"
+                        "4. Output format:\n"
+                        "--- Original ---\n"
+                        "(extracted text preserving layout)\n"
+                        "--- " + tgt_name + " ---\n"
+                        "(translated text preserving same layout)\n"
+                        "5. If there is no text in the image, output exactly: NO_TEXT_FOUND\n"
+                        "6. Translate naturally, casual daily language for factory workers.\n"
+                        "7. Target Traditional Chinese = Taiwan style.\n"
+                        "8. NEVER translate person names.\n"
+                        "9. Only output the formatted result. No extra explanation."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + image_base64,
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": "Extract and translate all text from this image to " + tgt_name + "."
+                        }
+                    ]
+                }
+            ],
+            temperature=0.3,
+            max_tokens=3000,
+        )
+        result = r.choices[0].message.content.strip()
+        if result == "NO_TEXT_FOUND" or not result:
+            return None, None
+        return result, None
+    except Exception as e:
+        logger.error("OpenAI Vision OCR+translate error: %s", e)
+        return None, str(e)
+
+
 def download_line_image(message_id):
     """Download image from LINE and return base64 string."""
     try:
@@ -806,7 +865,7 @@ def handle_message(event):
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
-    """Handle image messages: OCR + detect language + translate."""
+    """Handle image messages: OCR + translate with layout preserved."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
 
@@ -836,34 +895,42 @@ def handle_image(event):
     if not img_base64:
         return
 
-    # OCR: extract text from image
+    # Determine target language
+    tgt = group_target_lang.get(group_id, "id")
+
+    # First try: quick OCR to check if there's text and detect language
     extracted = ocr_image_openai(img_base64)
-    if not extracted:
+    if not extracted or len(extracted.strip()) < 2:
         return
 
-    # Skip very short text
-    if len(extracted.strip()) < 2:
-        return
-
-    # Detect language
     lang = detect_language(extracted)
     if lang is None:
         return
 
-    tgt = group_target_lang.get(group_id, "id")
-
-    reply = None
+    # Determine actual translation target
     if lang == "zh":
-        result = translate(extracted, "zh", tgt)
-        if result:
-            reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(tgt, "") + "\n" + result
+        actual_tgt = tgt
     else:
-        result = translate(extracted, lang, "zh")
-        if result:
-            reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get("zh", "") + "\n" + result
+        actual_tgt = "zh"
 
-    if reply is None:
-        return
+    # OCR + translate in one call with layout preserved
+    result, err = ocr_and_translate_image(img_base64, actual_tgt)
+    if not result:
+        # Fallback: use plain text translation
+        if lang == "zh":
+            plain = translate(extracted, "zh", tgt)
+        else:
+            plain = translate(extracted, lang, "zh")
+        if plain:
+            result = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + plain
+        else:
+            return
+
+    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+
+    # LINE message limit is 5000 chars
+    if len(reply) > 5000:
+        reply = reply[:4990] + "\n..."
 
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
