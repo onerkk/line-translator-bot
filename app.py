@@ -12,6 +12,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
+import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +35,14 @@ group_img_settings = {}
 group_audio_settings = {}
 # Skip list: set of user_ids per group whose messages won't be translated
 group_skip_users = {}
+
+# DM (private message) target language per user, default "id"
+dm_target_lang = {}
+
+# Translation cache: key = (text, src, tgt), value = (result, timestamp)
+translation_cache = {}
+CACHE_MAX_SIZE = 500
+CACHE_TTL = 3600  # 1 hour
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -313,11 +322,57 @@ def translate_google(text, src, tgt):
         return None
 
 
+def cache_get(text, src, tgt):
+    """Get translation from cache if exists and not expired."""
+    key = (text.strip(), src, tgt)
+    if key in translation_cache:
+        result, ts = translation_cache[key]
+        if time.time() - ts < CACHE_TTL:
+            logger.info("Cache hit: %s -> %s", src, tgt)
+            return result
+        else:
+            del translation_cache[key]
+    return None
+
+
+def cache_set(text, src, tgt, result):
+    """Store translation in cache, evict oldest if full."""
+    if len(translation_cache) >= CACHE_MAX_SIZE:
+        oldest_key = min(translation_cache, key=lambda k: translation_cache[k][1])
+        del translation_cache[oldest_key]
+    key = (text.strip(), src, tgt)
+    translation_cache[key] = (result, time.time())
+
+
+def translate_with_retry(func, text, src, tgt, max_retries=2):
+    """Call a translation function with retry on failure."""
+    for attempt in range(max_retries + 1):
+        result = func(text, src, tgt)
+        if result:
+            return result
+        if attempt < max_retries:
+            wait = 1 * (attempt + 1)
+            logger.warning("Retry %d/%d after %ds for %s", attempt + 1, max_retries, wait, func.__name__)
+            time.sleep(wait)
+    return None
+
+
 def translate(text, src, tgt):
-    result = translate_openai(text, src, tgt)
+    # Check cache first
+    cached = cache_get(text, src, tgt)
+    if cached:
+        return cached
+    # Try OpenAI with retry
+    result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
     if result:
+        cache_set(text, src, tgt, result)
         return result
-    return translate_google(text, src, tgt)
+    # Fallback to Google with retry
+    result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
+    if result:
+        cache_set(text, src, tgt, result)
+        return result
+    return None
 
 
 def ocr_image_openai(image_base64):
@@ -594,10 +649,112 @@ def handle_message(event):
         return
 
     source = event.source
+    is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+    user_id = getattr(source, 'user_id', None)
 
+    # --- DM (private message) mode ---
+    if is_dm and user_id:
+        # DM commands
+        cmd = text.strip().lower()
+        if cmd == "/help":
+            tgt = dm_target_lang.get(user_id, "id")
+            tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
+            tgt_flag = LANG_FLAGS.get(tgt, "")
+            lines = []
+            lines.append("\U0001f310 \u79c1\u8a0a\u7ffb\u8b6f\u6a21\u5f0f / Mode Terjemahan Pribadi")
+            lines.append("====================")
+            lines.append("\u50b3\u8a0a\u606f\u7d66\u6211\uff0c\u6211\u6703\u81ea\u52d5\u7ffb\u8b6f\uff01")
+            lines.append("Kirim pesan ke saya, akan diterjemahkan!")
+            lines.append("")
+            lines.append("/to \u4ee3\u78bc - \u8a2d\u5b9a\u7ffb\u8b6f\u76ee\u6a19\u8a9e\u8a00")
+            lines.append("/help - \u8aaa\u660e")
+            lines.append("====================")
+            lines.append("\u8a9e\u8a00\u4ee3\u78bc / Kode bahasa:")
+            lines.append("zh = \U0001f1f9\U0001f1fc \u4e2d\u6587")
+            lines.append("id = \U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587")
+            lines.append("en = \U0001f1ec\U0001f1e7 \u82f1\u6587")
+            lines.append("vi = \U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587")
+            lines.append("th = \U0001f1f9\U0001f1ed \u6cf0\u6587")
+            lines.append("ja = \U0001f1ef\U0001f1f5 \u65e5\u6587")
+            lines.append("ko = \U0001f1f0\U0001f1f7 \u97d3\u6587")
+            lines.append("ms = \U0001f1f2\U0001f1fe \u99ac\u4f86\u6587")
+            lines.append("tl = \U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587")
+            lines.append("====================")
+            lines.append("\u76ee\u524d\u76ee\u6a19 / Target: " + tgt_flag + " " + tgt_zh)
+            lines.append("\u7bc4\u4f8b: /to en \u2192 \u5168\u90e8\u7ffb\u6210\u82f1\u6587")
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="\n".join(lines))]
+                ))
+            return
+        if cmd.startswith("/to"):
+            parts = text.strip().split()
+            dm_valid = ["zh", "id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
+            if len(parts) < 2:
+                tgt = dm_target_lang.get(user_id, "id")
+                tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
+                tgt_flag = LANG_FLAGS.get(tgt, "")
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="\u76ee\u524d\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u7bc4\u4f8b: /to en")]
+                    ))
+                return
+            code = parts[1].lower().strip()
+            if code not in dm_valid:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: zh, id, en, vi, th, ja, ko, ms, tl")]
+                    ))
+                return
+            dm_target_lang[user_id] = code
+            tgt_zh = LANG_NAMES_ZH.get(code, code) if code != "zh" else "\u4e2d\u6587"
+            tgt_flag = LANG_FLAGS.get(code, "")
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
+                ))
+            return
+        # DM: skip other / commands
+        if text.startswith("/"):
+            return
+
+        # DM translation: detect language, translate to target
+        lang = detect_language(text)
+        tgt = dm_target_lang.get(user_id, "id")
+        if lang is None:
+            # Cannot detect, just translate to target anyway using OpenAI
+            result = translate(text, "auto", tgt)
+            if not result:
+                return
+            reply = LANG_FLAGS.get(tgt, "") + " " + result
+        elif lang == tgt:
+            # Same language, skip
+            return
+        else:
+            result = translate(text, lang, tgt)
+            if not result:
+                return
+            reply = LANG_FLAGS.get(tgt, "") + " " + result
+
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply)]
+            ))
+        return
+
+    # --- Group mode (original logic) ---
     if text.startswith("/"):
-        user_id = getattr(source, 'user_id', None)
         cmd_result = handle_command(text, group_id, user_id)
         if cmd_result:
             with ApiClient(configuration) as api_client:
