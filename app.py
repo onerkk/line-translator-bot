@@ -84,9 +84,19 @@ VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
 
 
 def extract_mentions(text):
-    mentions = re.findall(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', text)
-    mentions = [m.rstrip() for m in mentions]
-    return mentions
+    # Capture @mentions conservatively while still allowing common LINE names with spaces.
+    # Stop before obvious separators so we do not swallow the rest of the sentence.
+    pattern = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))'
+    mentions = re.findall(pattern, text)
+    mentions = [m.rstrip() for m in mentions if m and len(m) > 1]
+    # Remove duplicates while preserving order
+    seen = set()
+    result = []
+    for m in mentions:
+        if m not in seen:
+            seen.add(m)
+            result.append(m)
+    return result
 
 
 def protect_mentions(text):
@@ -94,21 +104,40 @@ def protect_mentions(text):
     protected = text
     placeholders = {}
     for i, m in enumerate(mentions):
-        ph = "MHOLD" + str(i) + "ER"
+        # Use a stronger placeholder that is less likely to be translated or split.
+        ph = f"__MENTION_{i}__"
         placeholders[ph] = m
         protected = protected.replace(m, ph, 1)
     return protected, placeholders
 
 
 def restore_mentions(text, placeholders):
-    restored = text
+    restored = text or ""
     for ph, original in placeholders.items():
-        restored = restored.replace(ph, original)
+        idx = ph.replace("__MENTION_", "").replace("__", "")
+        variants = [
+            ph,
+            ph.replace("_", " "),
+            ph.replace("__", ""),
+            f"MENTION_{idx}",
+            f"MENTION {idx}",
+            f"__MENTION {idx}__",
+            f"[[MENTION_{idx}]]",
+        ]
+        for v in variants:
+            restored = restored.replace(v, original)
+
+    # Final safety net: if any original @mention disappeared during translation,
+    # prepend it back so the tagged person is not lost.
+    missing = [original for original in placeholders.values() if original not in restored]
+    if missing:
+        prefix = " ".join(missing)
+        restored = (prefix + " " + restored).strip()
     return restored
 
 
 def strip_mentions_for_detect(text):
-    clean = re.sub(r'@[a-zA-Z0-9][a-zA-Z0-9 ]*', ' ', text)
+    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
     return clean
 
 
@@ -255,7 +284,7 @@ def detect_language(text):
 
 
 def contains_source_script_outside_placeholders(text, src):
-    cleaned = re.sub(r'MHOLD\d+ER', ' ', text or '')
+    cleaned = re.sub(r'__MENTION_\d+__', ' ', text or '')
     patterns = {
         "zh": r'[\u4e00-\u9fff]',
         "ja": r'[\u3040-\u30ff\u4e00-\u9fff]',
@@ -288,15 +317,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if strict_no_source_script and src != tgt:
             if src == "zh":
                 extra_rule = (
-                    " 9. IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or MHOLD placeholder."
+                    " 9. IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or __MENTION__ placeholder."
                     " Terms such as 印籍, 印尼籍, 早班, 夜班, 考試, 讀書, 下班後 must be translated into the target language."
                 )
             elif src == "ja":
-                extra_rule = " 9. IMPORTANT: Do not leave Japanese text untranslated unless it is a person's name or MHOLD placeholder."
+                extra_rule = " 9. IMPORTANT: Do not leave Japanese text untranslated unless it is a person's name or __MENTION__ placeholder."
             elif src == "ko":
-                extra_rule = " 9. IMPORTANT: Do not leave Korean text untranslated unless it is a person's name or MHOLD placeholder."
+                extra_rule = " 9. IMPORTANT: Do not leave Korean text untranslated unless it is a person's name or __MENTION__ placeholder."
             elif src == "th":
-                extra_rule = " 9. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or MHOLD placeholder."
+                extra_rule = " 9. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or __MENTION__ placeholder."
 
         sys_prompt = (
             "You are a professional translator for a factory work group chat. "
@@ -304,7 +333,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "CRITICAL RULES: "
             "1. NEVER translate @mentions and never translate person names. Keep all names exactly as they are. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
-            "2. Any text like MHOLD0ER, MHOLD1ER etc are placeholders - keep them exactly as is. "
+            "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
             "3. Translate all other content completely and naturally like real people talk at work. Use casual daily language. "
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
             "5. Chinese slang and abbreviations too. "
@@ -320,7 +349,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "Original text (source language): " + protected + "\n\n"
                 "Bad translation that leaked source-language words: " + bad_result + "\n\n"
                 "Rewrite the bad translation into pure " + tgt_name +
-                ". Preserve names and MHOLD placeholders exactly. Translate every remaining source-language word."
+                ". Preserve names and __MENTION__ placeholders exactly. Translate every remaining source-language word."
             )
         else:
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
