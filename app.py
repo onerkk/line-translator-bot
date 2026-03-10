@@ -254,28 +254,53 @@ def detect_language(text):
     return None
 
 
-def contains_chinese_outside_placeholders(text):
+def contains_source_script_outside_placeholders(text, src):
     cleaned = re.sub(r'MHOLD\d+ER', ' ', text or '')
-    return len(re.findall(r'[\u4e00-\u9fff]', cleaned)) >= 2
+    patterns = {
+        "zh": r'[\u4e00-\u9fff]',
+        "ja": r'[\u3040-\u30ff\u4e00-\u9fff]',
+        "ko": r'[\uac00-\ud7af]',
+        "th": r'[\u0e00-\u0e7f]',
+    }
+    pattern = patterns.get(src)
+    if not pattern:
+        return False
+    return len(re.findall(pattern, cleaned)) >= 2
 
 
-def translate_openai(text, src, tgt, strict_no_source_script=False):
+def is_translation_valid(result, src, tgt):
+    if not result or not result.strip():
+        return False
+    if src != tgt and contains_source_script_outside_placeholders(result, src):
+        return False
+    return True
+
+
+def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
     if not oai:
         return None
     try:
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
         protected, placeholders = protect_mentions(text)
-        msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
+
         extra_rule = ""
-        if strict_no_source_script and src == "zh" and tgt != "zh":
-            extra_rule = (
-                " 9. IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or MHOLD placeholder."
-                " Terms such as 印籍, 印尼籍, 早班, 夜班, 考試, 讀書, 下班後 must be translated into the target language."
-            )
+        if strict_no_source_script and src != tgt:
+            if src == "zh":
+                extra_rule = (
+                    " 9. IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or MHOLD placeholder."
+                    " Terms such as 印籍, 印尼籍, 早班, 夜班, 考試, 讀書, 下班後 must be translated into the target language."
+                )
+            elif src == "ja":
+                extra_rule = " 9. IMPORTANT: Do not leave Japanese text untranslated unless it is a person's name or MHOLD placeholder."
+            elif src == "ko":
+                extra_rule = " 9. IMPORTANT: Do not leave Korean text untranslated unless it is a person's name or MHOLD placeholder."
+            elif src == "th":
+                extra_rule = " 9. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or MHOLD placeholder."
+
         sys_prompt = (
             "You are a professional translator for a factory work group chat. "
-            "This is a group with Taiwanese managers and Indonesian workers. "
+            "This is a group with Taiwanese managers and migrant workers. "
             "CRITICAL RULES: "
             "1. NEVER translate @mentions and never translate person names. Keep all names exactly as they are. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
@@ -289,13 +314,24 @@ def translate_openai(text, src, tgt, strict_no_source_script=False):
             + extra_rule +
             " Only output the translation. No quotes, no explanation, no prefix."
         )
+
+        if repair_mode and bad_result:
+            msg = (
+                "Original text (source language): " + protected + "\n\n"
+                "Bad translation that leaked source-language words: " + bad_result + "\n\n"
+                "Rewrite the bad translation into pure " + tgt_name +
+                ". Preserve names and MHOLD placeholders exactly. Translate every remaining source-language word."
+            )
+        else:
+            msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
+
         r = oai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ],
-            temperature=0.2,
+            temperature=0.1 if strict_no_source_script or repair_mode else 0.2,
             max_tokens=2000,
         )
         result = r.choices[0].message.content.strip()
@@ -375,25 +411,50 @@ def translate(text, src, tgt):
     if cached:
         return cached
 
-    # Try OpenAI with retry
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
 
-    # If Chinese leaked into a non-Chinese target, retry once with stricter rules
-    if result and src == "zh" and tgt != "zh" and contains_chinese_outside_placeholders(result):
-        logger.warning("Chinese leakage detected in translation, retrying with stricter prompt")
+    # If source-language leakage is detected, retry with strict mode.
+    if result and not is_translation_valid(result, src, tgt):
+        logger.warning("Source-language leakage detected in translation, retrying with stricter prompt")
         strict_result = translate_openai(text, src, tgt, strict_no_source_script=True)
-        if strict_result:
+        if strict_result and is_translation_valid(strict_result, src, tgt):
             result = strict_result
+        else:
+            repaired = translate_openai(
+                text,
+                src,
+                tgt,
+                strict_no_source_script=True,
+                repair_mode=True,
+                bad_result=(strict_result or result)
+            )
+            if repaired and is_translation_valid(repaired, src, tgt):
+                result = repaired
 
-    if result:
+    if result and is_translation_valid(result, src, tgt):
         cache_set(text, src, tgt, result)
         return result
 
-    # Fallback to Google with retry
+    # Fallback to Google with retry.
     result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
-    if result:
+    if result and is_translation_valid(result, src, tgt):
         cache_set(text, src, tgt, result)
         return result
+
+    # Last chance: ask OpenAI to repair the latest output instead of returning a leaked translation.
+    if result:
+        repaired = translate_openai(
+            text,
+            src,
+            tgt,
+            strict_no_source_script=True,
+            repair_mode=True,
+            bad_result=result
+        )
+        if repaired and is_translation_valid(repaired, src, tgt):
+            cache_set(text, src, tgt, repaired)
+            return repaired
+
     return None
 
 
