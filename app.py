@@ -722,7 +722,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
 
 
 def ocr_translate_structured(image_base64, tgt_lang):
-    """Ask GPT to return structured text blocks with approximate positions and translations."""
+    """Ask GPT to return text blocks with bounding boxes and translations."""
     if not oai:
         return None
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
@@ -735,26 +735,39 @@ def ocr_translate_structured(image_base64, tgt_lang):
                     "content": (
                         "You are an OCR + translation assistant for a factory work group chat.\n"
                         "Analyze the image and identify all text blocks.\n"
-                        "For each text block, provide:\n"
-                        "- y_pct: approximate vertical position as percentage from top (0=top, 100=bottom)\n"
+                        "For each text block, provide the bounding box as percentages of image size:\n"
+                        "- x_pct: left edge percentage (0=left, 100=right)\n"
+                        "- y_pct: top edge percentage (0=top, 100=bottom)\n"
+                        "- w_pct: width percentage\n"
+                        "- h_pct: height percentage\n"
                         "- original: the original text\n"
                         "- translation: translation to " + tgt_name + "\n\n"
                         "RULES:\n"
-                        "1. Group text that belongs together (e.g. a title + its content = one block)\n"
-                        "2. Keep blocks in order from top to bottom\n"
+                        "1. Each block = one line or one short paragraph of text\n"
+                        "2. Be precise with bounding boxes - they should tightly cover the text area\n"
                         "3. Translate naturally, casual daily language for factory workers\n"
                         "4. Target Traditional Chinese = Taiwan style\n"
                         "5. NEVER translate person names\n"
                         "6. Factory vocabulary: 研磨=grinding, 拋光=polishing, 來料=incoming material, "
-                        "交辦事項=hal yang harus dikerjakan, 量測=mengukur, 尺寸=diameter/dimensi, "
+                        "交辦事項=hal yang harus dikerjakan/tugas yang harus dilakukan, "
+                        "量測=mengukur, 尺寸=diameter/dimensi, "
                         "雷射=laser, 設備=peralatan, 故障=rusak, 產線=lini produksi, "
                         "品管=QC, 不良品=barang reject/NG, PMI=PMI, 鋼種=jenis baja, "
                         "抽查=sampling check, 全檢=periksa semua, 棒材=batang baja, "
                         "削皮=peeling, 環狀擦傷=goresan melingkar, 混料=tercampur material, "
-                        "出貨=pengiriman\n"
+                        "出貨=pengiriman, 紀錄=catat, 來料=material masuk, "
+                        "三點式=3 titik, 佳東=Jia Dong, 拋光棒=batang polishing, "
+                        "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
+                        "重工=rework, 料回=material kembali, 削皮=kupas/peeling, "
+                        "補上=lengkapi, C行套環=C-ring, 廠內=di dalam pabrik, "
+                        "禁止=dilarang, 餵狗=kasih makan anjing, 宣導=sosialisasi, "
+                        "包裝站=stasiun packing, 啟動=mulai, 全檢=inspeksi penuh, "
+                        "抽查機制=sistem sampling, 每捆=setiap bundel, "
+                        "檢測=periksa, 確實=pastikan, 防止=mencegah, "
+                        "依情節=sesuai tingkat pelanggaran, 增加績效=tambah penilaian kinerja\n"
                         "7. Output ONLY valid JSON, no markdown backticks\n\n"
                         "Output format:\n"
-                        '{"blocks":[{"y_pct":10,"original":"text here","translation":"translated text"},...]}'
+                        '{"blocks":[{"x_pct":5,"y_pct":10,"w_pct":90,"h_pct":5,"original":"中文","translation":"Indonesian"},...]}'
                     )
                 },
                 {
@@ -769,7 +782,7 @@ def ocr_translate_structured(image_base64, tgt_lang):
                         },
                         {
                             "type": "text",
-                            "text": "Extract and translate all text blocks from this image to " + tgt_name + ". Return JSON only."
+                            "text": "Extract and translate all text blocks from this image to " + tgt_name + ". Return JSON with bounding boxes only."
                         }
                     ]
                 }
@@ -778,7 +791,6 @@ def ocr_translate_structured(image_base64, tgt_lang):
             max_tokens=3000,
         )
         raw = r.choices[0].message.content.strip()
-        # Strip markdown backticks if present
         raw = re.sub(r'^```(?:json)?\s*', '', raw)
         raw = re.sub(r'\s*```$', '', raw)
         data = json.loads(raw)
@@ -798,7 +810,6 @@ def get_font(size):
             return ImageFont.truetype(FONT_PATH, size)
         except Exception:
             pass
-    # Fallback: try common system fonts
     fallbacks = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -833,133 +844,121 @@ def wrap_text(text, font, max_width, draw):
     return lines
 
 
-def create_annotated_image(img_bytes, blocks):
-    """Create side-by-side image: original left, translations right."""
+def sample_bg_color(img, x, y, w, h):
+    """Sample the most common background color in a region."""
     try:
-        original = Image.open(io.BytesIO(img_bytes))
-        if original.mode != 'RGB':
-            original = original.convert('RGB')
+        # Sample edges of the region to find background color
+        pixels = []
+        # Top edge
+        for sx in range(x, min(x + w, img.width), max(1, w // 10)):
+            pixels.append(img.getpixel((sx, max(0, y))))
+        # Bottom edge
+        for sx in range(x, min(x + w, img.width), max(1, w // 10)):
+            pixels.append(img.getpixel((sx, min(img.height - 1, y + h))))
+        # Left edge
+        for sy in range(y, min(y + h, img.height), max(1, h // 5)):
+            pixels.append(img.getpixel((max(0, x), sy)))
 
-        orig_w, orig_h = original.size
+        if not pixels:
+            return (255, 255, 255)
 
-        # Right panel width = 60% of original width (for translation text)
-        panel_w = max(int(orig_w * 0.6), 300)
-        margin = 15
-        text_w = panel_w - margin * 2
+        # Find the most common color (simple mode)
+        from collections import Counter
+        # Quantize to reduce noise
+        quantized = []
+        for p in pixels:
+            if isinstance(p, tuple) and len(p) >= 3:
+                quantized.append((p[0] // 16 * 16, p[1] // 16 * 16, p[2] // 16 * 16))
+        if not quantized:
+            return (255, 255, 255)
+        most_common = Counter(quantized).most_common(1)[0][0]
+        return most_common
+    except Exception:
+        return (255, 255, 255)
 
-        # Determine font size based on image height
-        font_size = max(14, min(22, orig_h // 30))
-        font = get_font(font_size)
-        small_font = get_font(max(11, font_size - 3))
 
-        # Create a temporary draw to measure text
-        tmp_img = Image.new('RGB', (1, 1))
-        tmp_draw = ImageDraw.Draw(tmp_img)
+def get_text_color(bg_color):
+    """Choose black or white text based on background brightness."""
+    brightness = bg_color[0] * 0.299 + bg_color[1] * 0.587 + bg_color[2] * 0.114
+    return (0, 0, 0) if brightness > 128 else (255, 255, 255)
 
-        # Pre-calculate text heights for each block
-        block_renders = []
+
+def create_annotated_image(img_bytes, blocks):
+    """Overlay translations directly on the original image, replacing original text."""
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        img_w, img_h = img.size
+        draw = ImageDraw.Draw(img)
+
         for block in blocks:
-            orig_lines = wrap_text(block.get("original", ""), small_font, text_w, tmp_draw)
-            trans_lines = wrap_text(block.get("translation", ""), font, text_w, tmp_draw)
-            # Estimate height
-            line_h = font_size + 4
-            small_line_h = max(11, font_size - 3) + 3
-            block_h = len(orig_lines) * small_line_h + 6 + len(trans_lines) * line_h + margin
-            block_renders.append({
-                "y_pct": block.get("y_pct", 0),
-                "orig_lines": orig_lines,
-                "trans_lines": trans_lines,
-                "block_h": block_h,
-                "line_h": line_h,
-                "small_line_h": small_line_h,
-            })
+            x_pct = block.get("x_pct", 0)
+            y_pct = block.get("y_pct", 0)
+            w_pct = block.get("w_pct", 50)
+            h_pct = block.get("h_pct", 5)
+            translation = block.get("translation", "")
 
-        # Total needed height for right panel
-        total_text_h = sum(b["block_h"] for b in block_renders) + margin * 2
-        canvas_h = max(orig_h, total_text_h)
+            if not translation.strip():
+                continue
 
-        # Create canvas
-        canvas_w = orig_w + panel_w
-        canvas = Image.new('RGB', (canvas_w, canvas_h), (255, 255, 255))
+            # Convert percentages to pixels
+            x = int(x_pct / 100.0 * img_w)
+            y = int(y_pct / 100.0 * img_h)
+            w = int(w_pct / 100.0 * img_w)
+            h = int(h_pct / 100.0 * img_h)
 
-        # Paste original image (vertically centered if canvas is taller)
-        y_offset = (canvas_h - orig_h) // 2
-        canvas.paste(original, (0, y_offset))
+            # Clamp to image bounds
+            x = max(0, min(x, img_w - 10))
+            y = max(0, min(y, img_h - 10))
+            w = max(20, min(w, img_w - x))
+            h = max(10, min(h, img_h - y))
 
-        draw = ImageDraw.Draw(canvas)
+            # Sample background color from edges of this region
+            bg_color = sample_bg_color(img, x, y, w, h)
+            text_color = get_text_color(bg_color)
 
-        # Draw separator line
-        draw.line([(orig_w, 0), (orig_w, canvas_h)], fill=(200, 200, 200), width=2)
-
-        # Draw header on right panel
-        header = "\U0001f310 翻譯 / Terjemahan"
-        draw.text((orig_w + margin, 8), header, fill=(100, 100, 100), font=small_font)
-
-        # Draw blocks on right panel
-        # Try to position at matching vertical positions
-        current_y = margin + max(11, font_size - 3) + 15  # after header
-
-        # Colors for alternating blocks
-        colors = [
-            ((230, 245, 255), (0, 80, 160)),    # light blue bg, dark blue text
-            ((255, 245, 230), (160, 80, 0)),     # light orange bg, dark orange text
-            ((230, 255, 235), (0, 120, 40)),     # light green bg, dark green text
-            ((245, 230, 255), (100, 0, 160)),    # light purple bg, dark purple text
-        ]
-
-        for i, br in enumerate(block_renders):
-            bg_color, text_color = colors[i % len(colors)]
-
-            # Target Y position based on y_pct (relative to original image)
-            target_y = y_offset + int(br["y_pct"] / 100.0 * orig_h)
-            # Use target_y if it's below current_y, otherwise just stack
-            draw_y = max(current_y, target_y - br["block_h"] // 2)
-
-            # Draw background rectangle
-            draw.rounded_rectangle(
-                [(orig_w + margin - 5, draw_y - 3),
-                 (orig_w + panel_w - margin + 5, draw_y + br["block_h"] - margin + 3)],
-                radius=6,
-                fill=bg_color,
+            # Fill the region with background color (cover original text)
+            padding = 2
+            draw.rectangle(
+                [(x + padding, y + padding), (x + w - padding, y + h - padding)],
+                fill=bg_color
             )
 
-            # Draw connecting line from right edge of original to block
-            mid_y = draw_y + br["block_h"] // 2
-            draw.line([(orig_w, target_y), (orig_w + margin - 5, mid_y)],
-                      fill=bg_color, width=2)
+            # Calculate font size to fit in the box
+            font_size = max(10, min(h - 4, 28))
+            font = get_font(font_size)
 
-            # Draw original text (smaller, gray)
-            y = draw_y
-            for line in br["orig_lines"]:
-                draw.text((orig_w + margin, y), line, fill=(130, 130, 130), font=small_font)
-                y += br["small_line_h"]
+            # Wrap text to fit width
+            text_lines = wrap_text(translation, font, w - padding * 4, draw)
 
-            # Small separator
-            y += 3
-            draw.line([(orig_w + margin, y), (orig_w + margin + 40, y)],
-                      fill=(180, 180, 180), width=1)
-            y += 5
+            # If too many lines, reduce font size
+            line_h = font_size + 2
+            while len(text_lines) * line_h > h and font_size > 8:
+                font_size -= 1
+                font = get_font(font_size)
+                line_h = font_size + 2
+                text_lines = wrap_text(translation, font, w - padding * 4, draw)
 
-            # Draw translated text (larger, colored)
-            for line in br["trans_lines"]:
-                draw.text((orig_w + margin, y), line, fill=text_color, font=font)
-                y += br["line_h"]
+            # Draw text centered vertically in the box
+            total_text_h = len(text_lines) * line_h
+            start_y = y + max(padding, (h - total_text_h) // 2)
 
-            current_y = draw_y + br["block_h"]
+            for line in text_lines:
+                draw.text((x + padding * 2, start_y), line, fill=text_color, font=font)
+                start_y += line_h
 
-        # Save to JPEG bytes
+        # Save
         buf = io.BytesIO()
-        # Limit size: if too large, reduce quality
-        canvas.save(buf, format='JPEG', quality=85)
+        img.save(buf, format='JPEG', quality=88)
         result = buf.getvalue()
 
-        # If image is too large (>5MB), reduce quality
         if len(result) > 5 * 1024 * 1024:
             buf = io.BytesIO()
-            # Resize canvas
-            ratio = 0.7
-            canvas = canvas.resize((int(canvas_w * ratio), int(canvas_h * ratio)), Image.LANCZOS)
-            canvas.save(buf, format='JPEG', quality=70)
+            ratio = 0.75
+            img = img.resize((int(img_w * ratio), int(img_h * ratio)), Image.LANCZOS)
+            img.save(buf, format='JPEG', quality=70)
             result = buf.getvalue()
 
         return result
