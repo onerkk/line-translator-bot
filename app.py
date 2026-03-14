@@ -6,16 +6,13 @@ import urllib.parse
 import logging
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage, ImageMessage
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
 import time
-import io
-import uuid
-from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -24,58 +21,10 @@ logger = logging.getLogger(__name__)
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
-APP_URL = os.environ.get("APP_URL", "https://line-translator-bot-9khl.onrender.com")  # e.g. https://your-app.onrender.com
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
-
-# --- Font setup for image annotation ---
-FONT_PATH = None
-FONT_DIR = "/tmp/fonts"
-
-
-def setup_font():
-    """Download Noto Sans TC font for image annotation."""
-    global FONT_PATH
-    font_file = os.path.join(FONT_DIR, "NotoSansTC.ttf")
-    if os.path.exists(font_file):
-        FONT_PATH = font_file
-        logger.info("Font already available: %s", font_file)
-        return
-    os.makedirs(FONT_DIR, exist_ok=True)
-    # Try system fonts first
-    sys_fonts = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-    ]
-    for sf in sys_fonts:
-        if os.path.exists(sf):
-            FONT_PATH = sf
-            logger.info("Using system font: %s", sf)
-            return
-    # Download from GitHub
-    url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC%5Bwght%5D.ttf"
-    try:
-        logger.info("Downloading CJK font...")
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", "Mozilla/5.0")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            with open(font_file, "wb") as f:
-                f.write(resp.read())
-        FONT_PATH = font_file
-        logger.info("Font downloaded: %s", font_file)
-    except Exception as e:
-        logger.warning("Could not download CJK font: %s", e)
-
-
-setup_font()
-
-# --- Temp image storage for serving annotated images ---
-temp_images = {}  # {filename: (bytes, timestamp)}
-TEMP_IMG_TTL = 300  # 5 minutes
-TEMP_IMG_MAX = 50
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -402,8 +351,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 extra_rule = " 10. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or __MENTION__ placeholder."
 
         sys_prompt = (
-            "You are a professional translator for a factory work group chat. "
-            "This is a group with Taiwanese managers and migrant workers. "
+            "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
+            "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
+            "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment. "
             "CRITICAL RULES: "
             "1. NEVER translate @mentions and never translate person names. Keep all names exactly as they are. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
@@ -414,7 +364,27 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "6. Target Traditional Chinese = Taiwan style, not mainland. "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
-            "9. IMPORTANT factory vocabulary (Chinese → Indonesian): "
+            "9. IMPORTANT factory vocabulary (Chinese → Indonesian). "
+            "This is a stainless steel factory (Walsin Lihwa/華新麗華) with centerless grinding (無心研磨) operations. "
+            "【無心研磨/Centerless Grinding】"
+            "無心研磨=centerless grinding, 研磨=grinding, 研磨機=mesin grinding, "
+            "砂輪=batu gerinda/grinding wheel, 調整輪=roda pengatur/regulating wheel, "
+            "刀板=work rest blade/pisau penahan, 進刀=feeding/pemotongan, "
+            "通過式研磨=through-feed grinding, 停止式研磨=in-feed grinding, "
+            "磨削=penggerindaan, 進料=feeding material, 出料=output material, "
+            "真圓度=kebulatan/roundness, 直線度=kelurusan/straightness, "
+            "表面粗糙度=kekasaran permukaan/surface roughness, "
+            "冷卻液=cairan pendingin/coolant, 修整砂輪=dressing grinding wheel, "
+            "【不鏽鋼製程】"
+            "不鏽鋼=baja tahan karat/stainless steel, 棒鋼=batang baja/steel bar, "
+            "盤元=wire rod, 削皮棒=peeled bar/batang kupas, 冷精棒=cold-drawn bar, "
+            "鋼胚=billet baja, 小鋼胚=small billet, 扁鋼胚=flat billet, "
+            "熱軋=hot rolling, 軋製=rolling/pengerolan, "
+            "退火=annealing/pelunakan, 酸洗=pickling/pencucian asam, "
+            "削皮=peeling/kupas, 冷抽=cold drawing/penarikan dingin, "
+            "鋼種=jenis baja/steel grade, PMI=PMI (uji material), "
+            "來料=material masuk/incoming material, 棒材=batang baja, "
+            "混料=tercampur material, 料號=nomor material, "
             "【班次/出勤】"
             "點名=ada pengawas yang datang (inspection/supervisor visit, NOT roll call), "
             "主管點名/主管來點名=ada pengawas/atasan yang datang untuk inspeksi, "
@@ -436,40 +406,52 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "產量=jumlah produksi, 目標=target, 達標=capai target, "
             "訂單=order/pesanan, 出貨=kirim barang, 交期=deadline pengiriman, "
             "趕貨=kejar order, 急單=order urgent, "
+            "交辦事項=hal yang harus dikerjakan/tugas, "
             "【品質/檢查】"
             "品質=kualitas, 品管=QC, 巡查=inspeksi, 檢查=periksa/cek, "
-            "抽檢=sampling check, 全檢=periksa semua, "
+            "抽檢=sampling check, 全檢=periksa semua/inspeksi penuh, "
+            "抽查機制=sistem sampling, "
             "合格=lulus/OK, 不合格=tidak lulus/NG, "
             "重工=rework, 返修=perbaiki ulang, "
+            "環狀擦傷=goresan melingkar, 刮傷=goresan, 瑕疵=cacat, "
+            "【量測/設備】"
+            "量測=mengukur, 尺寸=diameter/dimensi, 量測尺寸=ukur diameter, "
+            "手動量測=ukur secara manual, 三點式=3 titik, "
+            "雷射=laser, 設備=peralatan/mesin, "
+            "故障=rusak/error, 拋光=polishing, 拋光棒=batang polishing, "
+            "切割=cutting/potong, 模具=cetakan/mold, "
+            "公差=toleransi, 校正=kalibrasi, 游標卡尺=jangka sorong, "
+            "千分尺=mikrometer, 測量儀=alat ukur, "
+            "紀錄=catat, 清洗=cuci, 輕調輕放=handle dengan hati-hati, "
+            "每捆=setiap bundel, 包裝站=stasiun packing, "
+            "C行套環=C-ring, 補上=lengkapi, "
             "【安全/環境】"
             "安全=keselamatan, 戴手套=pakai sarung tangan, 戴口罩=pakai masker, "
             "護目鏡=kacamata pelindung, 安全帽=helm, 安全鞋=sepatu safety, "
             "消防=pemadam kebakaran, 滅火器=alat pemadam, "
             "打掃=bersih-bersih, 清潔=kebersihan, 整理=rapikan, "
             "5S=5S, 垃圾=sampah, 回收=daur ulang, "
+            "廠內=di dalam pabrik, 禁止=dilarang, 宣導=sosialisasi, "
             "【宿舍/生活】"
             "宿舍=asrama, 房間=kamar, 室友=teman sekamar, "
             "門禁=jam malam, 熄燈=lampu mati, 洗衣=cuci baju, "
             "煮飯=masak nasi, 餐廳=kantin, 便當=bekal makan, "
+            "餵狗=kasih makan anjing, "
             "【薪資/人事】"
             "薪水=gaji, 底薪=gaji pokok, 加班費=uang lembur, "
             "全勤獎金=bonus kehadiran penuh, 獎金=bonus, 扣薪=potong gaji, "
+            "績效=penilaian kinerja, 增加績效=tambah penilaian kinerja, "
+            "依情節=sesuai tingkat pelanggaran, "
             "匯款=kirim uang/transfer, 發薪=bayar gaji, "
             "續約=perpanjang kontrak, 合約=kontrak, 體檢=medical check-up, "
             "居留證=ARC/kartu izin tinggal, 護照=paspor, "
-            "【量測/設備】"
-            "量測=mengukur, 尺寸=diameter/dimensi, 量測尺寸=ukur diameter, "
-            "手動量測=ukur secara manual, 雷射=laser, 設備=peralatan/mesin, "
-            "故障=rusak/error, 研磨=grinding, 研磨機=mesin grinding, "
-            "拋光=polishing, 切割=cutting/potong, 模具=cetakan/mold, "
-            "公差=toleransi, 校正=kalibrasi, 游標卡尺=jangka sorong, "
-            "千分尺=mikrometer, 測量儀=alat ukur, "
             "【溝通/其他】"
             "開會=rapat, 集合=kumpul, 公告=pengumuman, "
             "報告=laporan, 表格=formulir, 簽名=tanda tangan, "
             "聽不懂=tidak mengerti, 慢慢來=pelan-pelan, 快一點=cepat sedikit, "
             "小心=hati-hati, 注意=perhatian, 禁止=dilarang, "
-            "做得好=kerja bagus, 辛苦了=terima kasih atas kerja kerasnya."
+            "做得好=kerja bagus, 辛苦了=terima kasih atas kerja kerasnya, "
+            "確實=pastikan, 防止=mencegah."
             + extra_rule +
             " Only output the translation. No quotes, no explanation, no prefix."
         )
@@ -667,6 +649,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
     if not oai:
         return None, None
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
+    tgt_flag = LANG_FLAGS.get(tgt_lang, "")
     try:
         r = oai.chat.completions.create(
             model="gpt-4o-mini",
@@ -674,22 +657,46 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                 {
                     "role": "system",
                     "content": (
-                        "You are an OCR + translation assistant for a factory work group chat. "
-                        "Task: Extract ALL text from the image, then translate it. "
-                        "CRITICAL RULES:\n"
-                        "1. Preserve the original layout structure using line breaks and spacing.\n"
-                        "2. If the image has a table, list, form, or structured layout, keep the same structure.\n"
-                        "3. Use simple aligned text to simulate the original positions.\n"
-                        "4. Output format:\n"
-                        "--- Original ---\n"
-                        "(extracted text preserving layout)\n"
-                        "--- " + tgt_name + " ---\n"
-                        "(translated text preserving same layout)\n"
-                        "5. If there is no text in the image, output exactly: NO_TEXT_FOUND\n"
-                        "6. Translate naturally, casual daily language for factory workers.\n"
-                        "7. Target Traditional Chinese = Taiwan style.\n"
-                        "8. NEVER translate person names.\n"
-                        "9. Only output the formatted result. No extra explanation."
+                        "You are an OCR + translation assistant for a factory work group chat.\n"
+                        "Task: Extract ALL text from the image, then translate each section.\n\n"
+                        "OUTPUT FORMAT - translate each section/paragraph separately:\n"
+                        "For each distinct section in the image, output:\n"
+                        "【original section title or first line】\n"
+                        "original text...\n"
+                        + tgt_flag + " translated text...\n"
+                        "(blank line before next section)\n\n"
+                        "EXAMPLE:\n"
+                        "【交辦事項】\n"
+                        "1.研磨來料前需紀錄來料三點式尺寸\n"
+                        + tgt_flag + " 1.Sebelum grinding material masuk, catat dimensi 3 titik\n\n"
+                        "RULES:\n"
+                        "1. Keep the SAME structure, numbering, and line breaks as the original.\n"
+                        "2. Each section shows original first, then translation with " + tgt_flag + " flag.\n"
+                        "3. If there are numbered items (1. 2. 3.), keep the same numbering.\n"
+                        "4. Translate naturally, casual daily language for factory workers.\n"
+                        "5. Target Traditional Chinese = Taiwan style.\n"
+                        "6. NEVER translate person names or company names.\n"
+                        "7. If no text found, output exactly: NO_TEXT_FOUND\n"
+                        "8. Factory vocabulary: "
+                        "交辦事項=hal yang harus dikerjakan, "
+                        "研磨=grinding, 拋光=polishing, 來料=material masuk, "
+                        "量測=mengukur, 尺寸=diameter/dimensi, 三點式=3 titik, "
+                        "雷射=laser, 設備=peralatan, 故障=rusak, "
+                        "紀錄=catat, 佳東=Jia Dong, 拋光棒=batang polishing, "
+                        "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
+                        "環狀擦傷=goresan melingkar, "
+                        "重工=rework, 料回削皮=material kembali kupas/peeling, "
+                        "補上=lengkapi, C行套環=C-ring, "
+                        "廠內=di dalam pabrik, 禁止=dilarang, 餵狗=kasih makan anjing, "
+                        "宣導=sosialisasi, "
+                        "包裝站=stasiun packing, 啟動=mulai, "
+                        "PMI全檢=inspeksi penuh PMI, 抽查機制=sistem sampling, "
+                        "每捆=setiap bundel, 鋼種=jenis baja, "
+                        "棒材=batang baja, 混料=tercampur material, "
+                        "出貨=pengiriman, 依情節=sesuai tingkat pelanggaran, "
+                        "增加績效=tambah penilaian kinerja, "
+                        "確實=pastikan, 防止=mencegah\n"
+                        "9. Only output the result. No extra explanation."
                     )
                 },
                 {
@@ -704,12 +711,12 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         },
                         {
                             "type": "text",
-                            "text": "Extract and translate all text from this image to " + tgt_name + "."
+                            "text": "Extract and translate all text from this image to " + tgt_name + ". Keep the same layout structure."
                         }
                     ]
                 }
             ],
-            temperature=0.3,
+            temperature=0.2,
             max_tokens=3000,
         )
         result = r.choices[0].message.content.strip()
@@ -720,251 +727,6 @@ def ocr_and_translate_image(image_base64, tgt_lang):
         logger.error("OpenAI Vision OCR+translate error: %s", e)
         return None, str(e)
 
-
-def ocr_translate_structured(image_base64, tgt_lang):
-    """Ask GPT to return text blocks with bounding boxes and translations."""
-    if not oai:
-        return None
-    tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
-    try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an OCR + translation assistant for a factory work group chat.\n"
-                        "Analyze the image and identify all text blocks.\n"
-                        "For each text block, provide the bounding box as percentages of image size:\n"
-                        "- x_pct: left edge percentage (0=left, 100=right)\n"
-                        "- y_pct: top edge percentage (0=top, 100=bottom)\n"
-                        "- w_pct: width percentage\n"
-                        "- h_pct: height percentage\n"
-                        "- original: the original text\n"
-                        "- translation: translation to " + tgt_name + "\n\n"
-                        "RULES:\n"
-                        "1. Each block = one line or one short paragraph of text\n"
-                        "2. Be precise with bounding boxes - they should tightly cover the text area\n"
-                        "3. Translate naturally, casual daily language for factory workers\n"
-                        "4. Target Traditional Chinese = Taiwan style\n"
-                        "5. NEVER translate person names\n"
-                        "6. Factory vocabulary: 研磨=grinding, 拋光=polishing, 來料=incoming material, "
-                        "交辦事項=hal yang harus dikerjakan/tugas yang harus dilakukan, "
-                        "量測=mengukur, 尺寸=diameter/dimensi, "
-                        "雷射=laser, 設備=peralatan, 故障=rusak, 產線=lini produksi, "
-                        "品管=QC, 不良品=barang reject/NG, PMI=PMI, 鋼種=jenis baja, "
-                        "抽查=sampling check, 全檢=periksa semua, 棒材=batang baja, "
-                        "削皮=peeling, 環狀擦傷=goresan melingkar, 混料=tercampur material, "
-                        "出貨=pengiriman, 紀錄=catat, 來料=material masuk, "
-                        "三點式=3 titik, 佳東=Jia Dong, 拋光棒=batang polishing, "
-                        "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
-                        "重工=rework, 料回=material kembali, 削皮=kupas/peeling, "
-                        "補上=lengkapi, C行套環=C-ring, 廠內=di dalam pabrik, "
-                        "禁止=dilarang, 餵狗=kasih makan anjing, 宣導=sosialisasi, "
-                        "包裝站=stasiun packing, 啟動=mulai, 全檢=inspeksi penuh, "
-                        "抽查機制=sistem sampling, 每捆=setiap bundel, "
-                        "檢測=periksa, 確實=pastikan, 防止=mencegah, "
-                        "依情節=sesuai tingkat pelanggaran, 增加績效=tambah penilaian kinerja\n"
-                        "7. Output ONLY valid JSON, no markdown backticks\n\n"
-                        "Output format:\n"
-                        '{"blocks":[{"x_pct":5,"y_pct":10,"w_pct":90,"h_pct":5,"original":"中文","translation":"Indonesian"},...]}'
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract and translate all text blocks from this image to " + tgt_name + ". Return JSON with bounding boxes only."
-                        }
-                    ]
-                }
-            ],
-            temperature=0.1,
-            max_tokens=3000,
-        )
-        raw = r.choices[0].message.content.strip()
-        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-        raw = re.sub(r'\s*```$', '', raw)
-        data = json.loads(raw)
-        blocks = data.get("blocks", [])
-        if not blocks:
-            return None
-        return blocks
-    except Exception as e:
-        logger.error("Structured OCR error: %s", e)
-        return None
-
-
-def get_font(size):
-    """Get a font that supports CJK characters."""
-    if FONT_PATH:
-        try:
-            return ImageFont.truetype(FONT_PATH, size)
-        except Exception:
-            pass
-    fallbacks = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
-    for fb in fallbacks:
-        if os.path.exists(fb):
-            try:
-                return ImageFont.truetype(fb, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-
-def wrap_text(text, font, max_width, draw):
-    """Wrap text to fit within max_width pixels."""
-    lines = []
-    for paragraph in text.split('\n'):
-        if not paragraph.strip():
-            lines.append("")
-            continue
-        current = ""
-        for char in paragraph:
-            test = current + char
-            bbox = draw.textbbox((0, 0), test, font=font)
-            if bbox[2] - bbox[0] > max_width and current:
-                lines.append(current)
-                current = char
-            else:
-                current = test
-        if current:
-            lines.append(current)
-    return lines
-
-
-def sample_bg_color(img, x, y, w, h):
-    """Sample the most common background color in a region."""
-    try:
-        # Sample edges of the region to find background color
-        pixels = []
-        # Top edge
-        for sx in range(x, min(x + w, img.width), max(1, w // 10)):
-            pixels.append(img.getpixel((sx, max(0, y))))
-        # Bottom edge
-        for sx in range(x, min(x + w, img.width), max(1, w // 10)):
-            pixels.append(img.getpixel((sx, min(img.height - 1, y + h))))
-        # Left edge
-        for sy in range(y, min(y + h, img.height), max(1, h // 5)):
-            pixels.append(img.getpixel((max(0, x), sy)))
-
-        if not pixels:
-            return (255, 255, 255)
-
-        # Find the most common color (simple mode)
-        from collections import Counter
-        # Quantize to reduce noise
-        quantized = []
-        for p in pixels:
-            if isinstance(p, tuple) and len(p) >= 3:
-                quantized.append((p[0] // 16 * 16, p[1] // 16 * 16, p[2] // 16 * 16))
-        if not quantized:
-            return (255, 255, 255)
-        most_common = Counter(quantized).most_common(1)[0][0]
-        return most_common
-    except Exception:
-        return (255, 255, 255)
-
-
-def get_text_color(bg_color):
-    """Choose black or white text based on background brightness."""
-    brightness = bg_color[0] * 0.299 + bg_color[1] * 0.587 + bg_color[2] * 0.114
-    return (0, 0, 0) if brightness > 128 else (255, 255, 255)
-
-
-def create_annotated_image(img_bytes, blocks):
-    """Overlay translations directly on the original image, replacing original text."""
-    try:
-        img = Image.open(io.BytesIO(img_bytes))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-
-        img_w, img_h = img.size
-        draw = ImageDraw.Draw(img)
-
-        for block in blocks:
-            x_pct = block.get("x_pct", 0)
-            y_pct = block.get("y_pct", 0)
-            w_pct = block.get("w_pct", 50)
-            h_pct = block.get("h_pct", 5)
-            translation = block.get("translation", "")
-
-            if not translation.strip():
-                continue
-
-            # Convert percentages to pixels
-            x = int(x_pct / 100.0 * img_w)
-            y = int(y_pct / 100.0 * img_h)
-            w = int(w_pct / 100.0 * img_w)
-            h = int(h_pct / 100.0 * img_h)
-
-            # Clamp to image bounds
-            x = max(0, min(x, img_w - 10))
-            y = max(0, min(y, img_h - 10))
-            w = max(20, min(w, img_w - x))
-            h = max(10, min(h, img_h - y))
-
-            # Sample background color from edges of this region
-            bg_color = sample_bg_color(img, x, y, w, h)
-            text_color = get_text_color(bg_color)
-
-            # Fill the region with background color (cover original text)
-            padding = 2
-            draw.rectangle(
-                [(x + padding, y + padding), (x + w - padding, y + h - padding)],
-                fill=bg_color
-            )
-
-            # Calculate font size to fit in the box
-            font_size = max(10, min(h - 4, 28))
-            font = get_font(font_size)
-
-            # Wrap text to fit width
-            text_lines = wrap_text(translation, font, w - padding * 4, draw)
-
-            # If too many lines, reduce font size
-            line_h = font_size + 2
-            while len(text_lines) * line_h > h and font_size > 8:
-                font_size -= 1
-                font = get_font(font_size)
-                line_h = font_size + 2
-                text_lines = wrap_text(translation, font, w - padding * 4, draw)
-
-            # Draw text centered vertically in the box
-            total_text_h = len(text_lines) * line_h
-            start_y = y + max(padding, (h - total_text_h) // 2)
-
-            for line in text_lines:
-                draw.text((x + padding * 2, start_y), line, fill=text_color, font=font)
-                start_y += line_h
-
-        # Save
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=88)
-        result = buf.getvalue()
-
-        if len(result) > 5 * 1024 * 1024:
-            buf = io.BytesIO()
-            ratio = 0.75
-            img = img.resize((int(img_w * ratio), int(img_h * ratio)), Image.LANCZOS)
-            img.save(buf, format='JPEG', quality=70)
-            result = buf.getvalue()
-
-        return result
-    except Exception as e:
-        logger.error("Image annotation error: %s", e)
-        return None
 
 
 def download_line_image(message_id):
@@ -1353,7 +1115,7 @@ def handle_message(event):
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
-    """Handle image messages: OCR + translate, with annotated image output."""
+    """Handle image messages: OCR + translate with layout-preserving text."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
 
@@ -1401,71 +1163,31 @@ def handle_image(event):
     else:
         actual_tgt = "zh"
 
-    # --- Try annotated image approach ---
-    app_url = APP_URL.rstrip("/") if APP_URL else None
-    annotated_sent = False
+    # OCR + translate with layout preserved
+    result, err = ocr_and_translate_image(img_base64, actual_tgt)
+    if not result:
+        # Fallback: use plain text translation
+        if lang == "zh":
+            plain = translate(extracted, "zh", tgt)
+        else:
+            plain = translate(extracted, lang, "zh")
+        if plain:
+            result = plain
+        else:
+            return
 
-    if app_url and FONT_PATH and img_raw:
-        try:
-            blocks = ocr_translate_structured(img_base64, actual_tgt)
-            if blocks and len(blocks) > 0:
-                annotated_bytes = create_annotated_image(img_raw, blocks)
-                if annotated_bytes:
-                    filename = store_temp_image(annotated_bytes)
-                    img_url = app_url + "/tmp_img/" + filename
+    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
 
-                    # Also create a smaller preview
-                    try:
-                        preview_img = Image.open(io.BytesIO(annotated_bytes))
-                        pw = min(240, preview_img.width)
-                        ratio = pw / preview_img.width
-                        ph = int(preview_img.height * ratio)
-                        preview_img = preview_img.resize((pw, ph), Image.LANCZOS)
-                        preview_buf = io.BytesIO()
-                        preview_img.save(preview_buf, format='JPEG', quality=60)
-                        preview_filename = store_temp_image(preview_buf.getvalue())
-                        preview_url = app_url + "/tmp_img/" + preview_filename
-                    except Exception:
-                        preview_url = img_url
+    # LINE message limit is 5000 chars
+    if len(reply) > 5000:
+        reply = reply[:4990] + "\n..."
 
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[ImageMessage(
-                                original_content_url=img_url,
-                                preview_image_url=preview_url,
-                            )]
-                        ))
-                    annotated_sent = True
-                    logger.info("Sent annotated image for message %s", message_id)
-        except Exception as e:
-            logger.error("Annotated image failed, falling back to text: %s", e)
-
-    # --- Fallback to text ---
-    if not annotated_sent:
-        result, err = ocr_and_translate_image(img_base64, actual_tgt)
-        if not result:
-            if lang == "zh":
-                plain = translate(extracted, "zh", tgt)
-            else:
-                plain = translate(extracted, lang, "zh")
-            if plain:
-                result = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + plain
-            else:
-                return
-
-        reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
-
-        if len(reply) > 5000:
-            reply = reply[:4990] + "\n..."
-
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            api.reply_message(ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply)]
-            ))
+    with ApiClient(configuration) as api_client:
+        api = MessagingApi(api_client)
+        api.reply_message(ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[TextMessage(text=reply)]
+        ))
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
@@ -1532,36 +1254,6 @@ def handle_audio(event):
             messages=[TextMessage(text=reply)]
         ))
 
-
-@app.route("/tmp_img/<filename>", methods=["GET"])
-def serve_temp_img(filename):
-    """Serve temporary annotated images for LINE to fetch."""
-    if filename in temp_images:
-        data, ts = temp_images[filename]
-        if time.time() - ts < TEMP_IMG_TTL:
-            from flask import Response
-            return Response(data, mimetype="image/jpeg")
-    abort(404)
-
-
-def cleanup_temp_images():
-    """Remove expired temp images."""
-    now = time.time()
-    expired = [k for k, (_, ts) in temp_images.items() if now - ts > TEMP_IMG_TTL]
-    for k in expired:
-        del temp_images[k]
-
-
-def store_temp_image(img_bytes):
-    """Store image bytes and return filename."""
-    cleanup_temp_images()
-    # Evict oldest if too many
-    while len(temp_images) >= TEMP_IMG_MAX:
-        oldest = min(temp_images, key=lambda k: temp_images[k][1])
-        del temp_images[oldest]
-    filename = str(uuid.uuid4()) + ".jpg"
-    temp_images[filename] = (img_bytes, time.time())
-    return filename
 
 
 @app.route("/health", methods=["GET"])
