@@ -6,13 +6,16 @@ import urllib.parse
 import logging
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage, ImageMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
 import time
+import io
+import uuid
+from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +24,58 @@ logger = logging.getLogger(__name__)
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+APP_URL = os.environ.get("APP_URL", "https://line-translator-bot-9khl.onrender.com")  # e.g. https://your-app.onrender.com
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+
+# --- Font setup for image annotation ---
+FONT_PATH = None
+FONT_DIR = "/tmp/fonts"
+
+
+def setup_font():
+    """Download Noto Sans TC font for image annotation."""
+    global FONT_PATH
+    font_file = os.path.join(FONT_DIR, "NotoSansTC.ttf")
+    if os.path.exists(font_file):
+        FONT_PATH = font_file
+        logger.info("Font already available: %s", font_file)
+        return
+    os.makedirs(FONT_DIR, exist_ok=True)
+    # Try system fonts first
+    sys_fonts = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    ]
+    for sf in sys_fonts:
+        if os.path.exists(sf):
+            FONT_PATH = sf
+            logger.info("Using system font: %s", sf)
+            return
+    # Download from GitHub
+    url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC%5Bwght%5D.ttf"
+    try:
+        logger.info("Downloading CJK font...")
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            with open(font_file, "wb") as f:
+                f.write(resp.read())
+        FONT_PATH = font_file
+        logger.info("Font downloaded: %s", font_file)
+    except Exception as e:
+        logger.warning("Could not download CJK font: %s", e)
+
+
+setup_font()
+
+# --- Temp image storage for serving annotated images ---
+temp_images = {}  # {filename: (bytes, timestamp)}
+TEMP_IMG_TTL = 300  # 5 minutes
+TEMP_IMG_MAX = 50
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -86,7 +137,8 @@ VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
 def extract_mentions(text):
     # Capture @mentions conservatively while still allowing common LINE names with spaces.
     # Stop before obvious separators so we do not swallow the rest of the sentence.
-    pattern = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))'
+    # Also stop before a space + Chinese character (common: "@name 暱稱 ...").
+    pattern = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|\s[一-鿿]|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))'
     mentions = re.findall(pattern, text)
     mentions = [m.rstrip() for m in mentions if m and len(m) > 1]
     # Remove duplicates while preserving order
@@ -106,8 +158,18 @@ def protect_mentions(text):
     for i, m in enumerate(mentions):
         # Use a stronger placeholder that is less likely to be translated or split.
         ph = f"__MENTION_{i}__"
-        placeholders[ph] = m
-        protected = protected.replace(m, ph, 1)
+        # Check if a short Chinese nickname (1-4 chars) follows the @mention.
+        # e.g. "@budi santoso 山多" → "山多" is a nickname, protect it too.
+        escaped = re.escape(m)
+        nick_pattern = escaped + r'(\s+[\u4e00-\u9fff]{1,4})(?=\s|[,，。!！?？:：;；\n]|$)'
+        nick_match = re.search(nick_pattern, protected)
+        if nick_match:
+            full = m + nick_match.group(1)
+            placeholders[ph] = full
+            protected = protected.replace(full, ph, 1)
+        else:
+            placeholders[ph] = m
+            protected = protected.replace(m, ph, 1)
     return protected, placeholders
 
 
@@ -137,7 +199,8 @@ def restore_mentions(text, placeholders):
 
 
 def strip_mentions_for_detect(text):
-    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
+    # Strip @mentions including optional Chinese nickname (1-4 chars) that follows
+    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
     return clean
 
 
@@ -263,15 +326,26 @@ def detect_language(text):
         id_words = set([
             'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
             'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-            'belum', 'harus', 'boleh', 'mau', 'karena', 'tapi', 'atau',
-            'kalau', 'masih', 'lagi', 'nanti', 'sekarang',
-            'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih',
-            'di', 'ke', 'jam', 'hari', 'bisa', 'pergi', 'ruang',
-            'baca', 'soal', 'ujian', 'terakhir', 'kamu',
-            'makan', 'minum', 'kerja', 'pulang', 'rumah',
+            'mereka', 'dia', 'apa', 'bagaimana', 'kenapa', 'kapan', 'dimana',
+            'siapa', 'belum', 'sedang', 'harus', 'boleh', 'mau', 'ingin',
+            'bukan', 'jangan', 'tolong', 'terima', 'kasih', 'selamat',
+            'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
+            'salah', 'besar', 'kecil', 'makan', 'minum', 'tidur', 'kerja',
+            'pulang', 'pergi', 'rumah', 'kantor', 'uang', 'harga', 'berapa',
+            'banyak', 'sedikit', 'semua', 'karena', 'tetapi', 'tapi', 'atau',
+            'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
+            'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
+            'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
+            'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru', 'lembur',
+            'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
+            'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
+            'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
+            'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
+            'terakhir', 'kamu', 'jadi', 'harap', 'ukur', 'secara',
+            'manual', 'rusak', 'saat', 'mohon', 'pakai', 'bisa',
         ])
         id_count = sum(1 for w in latin_words if w in id_words)
-        if id_count >= 3:
+        if id_count >= 2:
             return "id"
         return "zh"
     if has_vietnamese(clean):
@@ -383,6 +457,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "匯款=kirim uang/transfer, 發薪=bayar gaji, "
             "續約=perpanjang kontrak, 合約=kontrak, 體檢=medical check-up, "
             "居留證=ARC/kartu izin tinggal, 護照=paspor, "
+            "【量測/設備】"
+            "量測=mengukur, 尺寸=diameter/dimensi, 量測尺寸=ukur diameter, "
+            "手動量測=ukur secara manual, 雷射=laser, 設備=peralatan/mesin, "
+            "故障=rusak/error, 研磨=grinding, 研磨機=mesin grinding, "
+            "拋光=polishing, 切割=cutting/potong, 模具=cetakan/mold, "
+            "公差=toleransi, 校正=kalibrasi, 游標卡尺=jangka sorong, "
+            "千分尺=mikrometer, 測量儀=alat ukur, "
             "【溝通/其他】"
             "開會=rapat, 集合=kumpul, 公告=pengumuman, "
             "報告=laporan, 表格=formulir, 簽名=tanda tangan, "
@@ -640,17 +721,264 @@ def ocr_and_translate_image(image_base64, tgt_lang):
         return None, str(e)
 
 
+def ocr_translate_structured(image_base64, tgt_lang):
+    """Ask GPT to return structured text blocks with approximate positions and translations."""
+    if not oai:
+        return None
+    tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
+    try:
+        r = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an OCR + translation assistant for a factory work group chat.\n"
+                        "Analyze the image and identify all text blocks.\n"
+                        "For each text block, provide:\n"
+                        "- y_pct: approximate vertical position as percentage from top (0=top, 100=bottom)\n"
+                        "- original: the original text\n"
+                        "- translation: translation to " + tgt_name + "\n\n"
+                        "RULES:\n"
+                        "1. Group text that belongs together (e.g. a title + its content = one block)\n"
+                        "2. Keep blocks in order from top to bottom\n"
+                        "3. Translate naturally, casual daily language for factory workers\n"
+                        "4. Target Traditional Chinese = Taiwan style\n"
+                        "5. NEVER translate person names\n"
+                        "6. Factory vocabulary: 研磨=grinding, 拋光=polishing, 來料=incoming material, "
+                        "交辦事項=hal yang harus dikerjakan, 量測=mengukur, 尺寸=diameter/dimensi, "
+                        "雷射=laser, 設備=peralatan, 故障=rusak, 產線=lini produksi, "
+                        "品管=QC, 不良品=barang reject/NG, PMI=PMI, 鋼種=jenis baja, "
+                        "抽查=sampling check, 全檢=periksa semua, 棒材=batang baja, "
+                        "削皮=peeling, 環狀擦傷=goresan melingkar, 混料=tercampur material, "
+                        "出貨=pengiriman\n"
+                        "7. Output ONLY valid JSON, no markdown backticks\n\n"
+                        "Output format:\n"
+                        '{"blocks":[{"y_pct":10,"original":"text here","translation":"translated text"},...]}'
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + image_base64,
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": "Extract and translate all text blocks from this image to " + tgt_name + ". Return JSON only."
+                        }
+                    ]
+                }
+            ],
+            temperature=0.1,
+            max_tokens=3000,
+        )
+        raw = r.choices[0].message.content.strip()
+        # Strip markdown backticks if present
+        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = re.sub(r'\s*```$', '', raw)
+        data = json.loads(raw)
+        blocks = data.get("blocks", [])
+        if not blocks:
+            return None
+        return blocks
+    except Exception as e:
+        logger.error("Structured OCR error: %s", e)
+        return None
+
+
+def get_font(size):
+    """Get a font that supports CJK characters."""
+    if FONT_PATH:
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception:
+            pass
+    # Fallback: try common system fonts
+    fallbacks = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for fb in fallbacks:
+        if os.path.exists(fb):
+            try:
+                return ImageFont.truetype(fb, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
+def wrap_text(text, font, max_width, draw):
+    """Wrap text to fit within max_width pixels."""
+    lines = []
+    for paragraph in text.split('\n'):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        current = ""
+        for char in paragraph:
+            test = current + char
+            bbox = draw.textbbox((0, 0), test, font=font)
+            if bbox[2] - bbox[0] > max_width and current:
+                lines.append(current)
+                current = char
+            else:
+                current = test
+        if current:
+            lines.append(current)
+    return lines
+
+
+def create_annotated_image(img_bytes, blocks):
+    """Create side-by-side image: original left, translations right."""
+    try:
+        original = Image.open(io.BytesIO(img_bytes))
+        if original.mode != 'RGB':
+            original = original.convert('RGB')
+
+        orig_w, orig_h = original.size
+
+        # Right panel width = 60% of original width (for translation text)
+        panel_w = max(int(orig_w * 0.6), 300)
+        margin = 15
+        text_w = panel_w - margin * 2
+
+        # Determine font size based on image height
+        font_size = max(14, min(22, orig_h // 30))
+        font = get_font(font_size)
+        small_font = get_font(max(11, font_size - 3))
+
+        # Create a temporary draw to measure text
+        tmp_img = Image.new('RGB', (1, 1))
+        tmp_draw = ImageDraw.Draw(tmp_img)
+
+        # Pre-calculate text heights for each block
+        block_renders = []
+        for block in blocks:
+            orig_lines = wrap_text(block.get("original", ""), small_font, text_w, tmp_draw)
+            trans_lines = wrap_text(block.get("translation", ""), font, text_w, tmp_draw)
+            # Estimate height
+            line_h = font_size + 4
+            small_line_h = max(11, font_size - 3) + 3
+            block_h = len(orig_lines) * small_line_h + 6 + len(trans_lines) * line_h + margin
+            block_renders.append({
+                "y_pct": block.get("y_pct", 0),
+                "orig_lines": orig_lines,
+                "trans_lines": trans_lines,
+                "block_h": block_h,
+                "line_h": line_h,
+                "small_line_h": small_line_h,
+            })
+
+        # Total needed height for right panel
+        total_text_h = sum(b["block_h"] for b in block_renders) + margin * 2
+        canvas_h = max(orig_h, total_text_h)
+
+        # Create canvas
+        canvas_w = orig_w + panel_w
+        canvas = Image.new('RGB', (canvas_w, canvas_h), (255, 255, 255))
+
+        # Paste original image (vertically centered if canvas is taller)
+        y_offset = (canvas_h - orig_h) // 2
+        canvas.paste(original, (0, y_offset))
+
+        draw = ImageDraw.Draw(canvas)
+
+        # Draw separator line
+        draw.line([(orig_w, 0), (orig_w, canvas_h)], fill=(200, 200, 200), width=2)
+
+        # Draw header on right panel
+        header = "\U0001f310 翻譯 / Terjemahan"
+        draw.text((orig_w + margin, 8), header, fill=(100, 100, 100), font=small_font)
+
+        # Draw blocks on right panel
+        # Try to position at matching vertical positions
+        current_y = margin + max(11, font_size - 3) + 15  # after header
+
+        # Colors for alternating blocks
+        colors = [
+            ((230, 245, 255), (0, 80, 160)),    # light blue bg, dark blue text
+            ((255, 245, 230), (160, 80, 0)),     # light orange bg, dark orange text
+            ((230, 255, 235), (0, 120, 40)),     # light green bg, dark green text
+            ((245, 230, 255), (100, 0, 160)),    # light purple bg, dark purple text
+        ]
+
+        for i, br in enumerate(block_renders):
+            bg_color, text_color = colors[i % len(colors)]
+
+            # Target Y position based on y_pct (relative to original image)
+            target_y = y_offset + int(br["y_pct"] / 100.0 * orig_h)
+            # Use target_y if it's below current_y, otherwise just stack
+            draw_y = max(current_y, target_y - br["block_h"] // 2)
+
+            # Draw background rectangle
+            draw.rounded_rectangle(
+                [(orig_w + margin - 5, draw_y - 3),
+                 (orig_w + panel_w - margin + 5, draw_y + br["block_h"] - margin + 3)],
+                radius=6,
+                fill=bg_color,
+            )
+
+            # Draw connecting line from right edge of original to block
+            mid_y = draw_y + br["block_h"] // 2
+            draw.line([(orig_w, target_y), (orig_w + margin - 5, mid_y)],
+                      fill=bg_color, width=2)
+
+            # Draw original text (smaller, gray)
+            y = draw_y
+            for line in br["orig_lines"]:
+                draw.text((orig_w + margin, y), line, fill=(130, 130, 130), font=small_font)
+                y += br["small_line_h"]
+
+            # Small separator
+            y += 3
+            draw.line([(orig_w + margin, y), (orig_w + margin + 40, y)],
+                      fill=(180, 180, 180), width=1)
+            y += 5
+
+            # Draw translated text (larger, colored)
+            for line in br["trans_lines"]:
+                draw.text((orig_w + margin, y), line, fill=text_color, font=font)
+                y += br["line_h"]
+
+            current_y = draw_y + br["block_h"]
+
+        # Save to JPEG bytes
+        buf = io.BytesIO()
+        # Limit size: if too large, reduce quality
+        canvas.save(buf, format='JPEG', quality=85)
+        result = buf.getvalue()
+
+        # If image is too large (>5MB), reduce quality
+        if len(result) > 5 * 1024 * 1024:
+            buf = io.BytesIO()
+            # Resize canvas
+            ratio = 0.7
+            canvas = canvas.resize((int(canvas_w * ratio), int(canvas_h * ratio)), Image.LANCZOS)
+            canvas.save(buf, format='JPEG', quality=70)
+            result = buf.getvalue()
+
+        return result
+    except Exception as e:
+        logger.error("Image annotation error: %s", e)
+        return None
+
+
 def download_line_image(message_id):
-    """Download image from LINE and return base64 string."""
+    """Download image from LINE and return (base64_string, raw_bytes)."""
     try:
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             content = blob_api.get_message_content(message_id)
             img_base64 = base64.b64encode(content).decode("utf-8")
-            return img_base64
+            return img_base64, content
     except Exception as e:
         logger.error("LINE image download error: %s", e)
-        return None
+        return None, None
 
 
 def download_line_audio(message_id):
@@ -1026,7 +1354,7 @@ def handle_message(event):
 
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
-    """Handle image messages: OCR + translate with layout preserved."""
+    """Handle image messages: OCR + translate, with annotated image output."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
 
@@ -1052,14 +1380,14 @@ def handle_image(event):
 
     # Download image from LINE
     message_id = event.message.id
-    img_base64 = download_line_image(message_id)
+    img_base64, img_raw = download_line_image(message_id)
     if not img_base64:
         return
 
     # Determine target language
     tgt = group_target_lang.get(group_id, "id")
 
-    # First try: quick OCR to check if there's text and detect language
+    # Quick OCR to check if there's text and detect language
     extracted = ocr_image_openai(img_base64)
     if not extracted or len(extracted.strip()) < 2:
         return
@@ -1074,31 +1402,71 @@ def handle_image(event):
     else:
         actual_tgt = "zh"
 
-    # OCR + translate in one call with layout preserved
-    result, err = ocr_and_translate_image(img_base64, actual_tgt)
-    if not result:
-        # Fallback: use plain text translation
-        if lang == "zh":
-            plain = translate(extracted, "zh", tgt)
-        else:
-            plain = translate(extracted, lang, "zh")
-        if plain:
-            result = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + plain
-        else:
-            return
+    # --- Try annotated image approach ---
+    app_url = APP_URL.rstrip("/") if APP_URL else None
+    annotated_sent = False
 
-    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+    if app_url and FONT_PATH and img_raw:
+        try:
+            blocks = ocr_translate_structured(img_base64, actual_tgt)
+            if blocks and len(blocks) > 0:
+                annotated_bytes = create_annotated_image(img_raw, blocks)
+                if annotated_bytes:
+                    filename = store_temp_image(annotated_bytes)
+                    img_url = app_url + "/tmp_img/" + filename
 
-    # LINE message limit is 5000 chars
-    if len(reply) > 5000:
-        reply = reply[:4990] + "\n..."
+                    # Also create a smaller preview
+                    try:
+                        preview_img = Image.open(io.BytesIO(annotated_bytes))
+                        pw = min(240, preview_img.width)
+                        ratio = pw / preview_img.width
+                        ph = int(preview_img.height * ratio)
+                        preview_img = preview_img.resize((pw, ph), Image.LANCZOS)
+                        preview_buf = io.BytesIO()
+                        preview_img.save(preview_buf, format='JPEG', quality=60)
+                        preview_filename = store_temp_image(preview_buf.getvalue())
+                        preview_url = app_url + "/tmp_img/" + preview_filename
+                    except Exception:
+                        preview_url = img_url
 
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[ImageMessage(
+                                original_content_url=img_url,
+                                preview_image_url=preview_url,
+                            )]
+                        ))
+                    annotated_sent = True
+                    logger.info("Sent annotated image for message %s", message_id)
+        except Exception as e:
+            logger.error("Annotated image failed, falling back to text: %s", e)
+
+    # --- Fallback to text ---
+    if not annotated_sent:
+        result, err = ocr_and_translate_image(img_base64, actual_tgt)
+        if not result:
+            if lang == "zh":
+                plain = translate(extracted, "zh", tgt)
+            else:
+                plain = translate(extracted, lang, "zh")
+            if plain:
+                result = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + plain
+            else:
+                return
+
+        reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+
+        if len(reply) > 5000:
+            reply = reply[:4990] + "\n..."
+
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply)]
+            ))
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
@@ -1164,6 +1532,37 @@ def handle_audio(event):
             reply_token=event.reply_token,
             messages=[TextMessage(text=reply)]
         ))
+
+
+@app.route("/tmp_img/<filename>", methods=["GET"])
+def serve_temp_img(filename):
+    """Serve temporary annotated images for LINE to fetch."""
+    if filename in temp_images:
+        data, ts = temp_images[filename]
+        if time.time() - ts < TEMP_IMG_TTL:
+            from flask import Response
+            return Response(data, mimetype="image/jpeg")
+    abort(404)
+
+
+def cleanup_temp_images():
+    """Remove expired temp images."""
+    now = time.time()
+    expired = [k for k, (_, ts) in temp_images.items() if now - ts > TEMP_IMG_TTL]
+    for k in expired:
+        del temp_images[k]
+
+
+def store_temp_image(img_bytes):
+    """Store image bytes and return filename."""
+    cleanup_temp_images()
+    # Evict oldest if too many
+    while len(temp_images) >= TEMP_IMG_MAX:
+        oldest = min(temp_images, key=lambda k: temp_images[k][1])
+        del temp_images[oldest]
+    filename = str(uuid.uuid4()) + ".jpg"
+    temp_images[filename] = (img_bytes, time.time())
+    return filename
 
 
 @app.route("/health", methods=["GET"])
