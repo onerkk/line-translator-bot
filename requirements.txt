@@ -1,5 +1,0 @@
-flask
-line-bot-sdk
-openai
-gunicorn
-Pillow
