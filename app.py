@@ -1426,6 +1426,8 @@ def handle_message(event):
             lines.append("Kirim pesan ke saya, akan diterjemahkan!")
             lines.append("")
             lines.append("/to \u4ee3\u78bc - \u8a2d\u5b9a\u7ffb\u8b6f\u76ee\u6a19\u8a9e\u8a00")
+            lines.append("/qry \u5ba2\u6236\u540d - \u67e5\u8a62\u5132\u5340")
+            lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u7167\u7247 - \u81ea\u52d5\u5075\u6e2c\u5ba2\u6236\u67e5\u5132\u5340")
             lines.append("/help - \u8aaa\u660e")
             lines.append("====================")
             lines.append("\u8a9e\u8a00\u4ee3\u78bc / Kode bahasa:")
@@ -1480,6 +1482,17 @@ def handle_message(event):
                     reply_token=event.reply_token,
                     messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
                 ))
+            return
+        # DM: handle /qry command
+        if text.strip().lower().startswith("/qry"):
+            qry_result = handle_qry_command(text)
+            if qry_result:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=qry_result)]
+                    ))
             return
         # DM: skip other / commands
         if text.startswith("/"):
