@@ -1010,14 +1010,12 @@ def format_storage_for_work_order(customer_name):
     lines.append("\U0001f4cb \u5de5\u55ae\u5075\u6e2c")
     lines.append("\u5ba2\u6236\uff1a" + customer_name)
     lines.append("")
-    lines.append("\U0001f4e6 " + customer_name + " \u5132\u5340\u67e5\u8a62")
-    lines.append("=" * 24)
-    lines.append("\u8a02\u55ae\u9577\u5ea6          \u5132\u5340")
-    lines.append("-" * 24)
+    lines.append("\U0001f4e6 \u5132\u5340\u67e5\u8a62")
+    lines.append("\u2500" * 16)
     for length, area in entries:
         zh = format_length_zh(length)
-        lines.append(f"{zh:<14}{area}")
-    lines.append("=" * 24)
+        lines.append(zh + " \u2192 " + area)
+    lines.append("\u2500" * 16)
     return "\n".join(lines)
 
 
@@ -1372,13 +1370,11 @@ def handle_qry_command(text):
     # Build response
     lines = []
     lines.append("\U0001f4e6 " + query + " \u5132\u5340\u67e5\u8a62")
-    lines.append("=" * 24)
-    lines.append("\u8a02\u55ae\u9577\u5ea6          \u5132\u5340")
-    lines.append("-" * 24)
+    lines.append("\u2500" * 16)
     for length, area in entries:
         zh = format_length_zh(length)
-        lines.append(f"{zh:<14}{area}")
-    lines.append("=" * 24)
+        lines.append(zh + " \u2192 " + area)
+    lines.append("\u2500" * 16)
     return "\n".join(lines)
 
 
