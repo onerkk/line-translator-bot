@@ -1137,7 +1137,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
         r = oai.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
