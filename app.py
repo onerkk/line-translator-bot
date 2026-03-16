@@ -1065,6 +1065,51 @@ def format_storage_for_work_order(customer_name):
         return None
 
 
+def ocr_image_openai(image_base64):
+    """Use OpenAI Vision to extract text from image."""
+    if not oai:
+        return None
+    try:
+        r = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an OCR assistant. Extract ALL text visible in the image. "
+                        "Output ONLY the extracted text, preserving line breaks. "
+                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64," + image_base64,
+                                "detail": "high"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": "Extract all text from this image."
+                        }
+                    ]
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+        )
+        result = r.choices[0].message.content.strip()
+        if result == "NO_TEXT_FOUND" or not result:
+            return None
+        return result
+    except Exception as e:
+        logger.error("OpenAI Vision OCR error: %s", e)
+        return None
+
+
 def ocr_and_translate_image(image_base64, tgt_lang):
     """OCR + translate image text in one API call, preserving layout."""
     if not oai:
