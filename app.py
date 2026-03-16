@@ -431,29 +431,121 @@ ZH_TO_ID_HARD = {
 
 # Post-replacement: fix common GPT mistakes in output
 ID_POST_FIX = {
+    # 爐號 corrections
     "nomor panas": "heat number",
     "label nomor panas": "label heat number",
+    "nomor tungku": "heat number",
+    "label nomor tungku": "label heat number",
+    "nomor oven": "heat number",
+    "label nomor oven": "label heat number",
+    # 有包到 corrections
     "paket datang ke": "kalau ada packing untuk",
     "saat paket datang ke": "kalau ada packing untuk",
     "Mohon diperhatikan saat paket datang ke": "Nanti kalau ada packing untuk",
+    "Mohon diperhatikan saat kalau ada packing untuk": "Nanti kalau ada packing untuk",
+    # 三米六米 corrections
     "tiga meter di atas enam meter": "batang 3 meter ditaruh di atas batang 6 meter",
     "Tiga meter di atas enam meter": "Batang 3 meter ditaruh di atas batang 6 meter",
+    "3 meter di atas 6 meter": "batang 3 meter ditaruh di atas batang 6 meter",
+    # 品保 corrections
+    "jaminan kualitas": "QC",
+    "penjaminan mutu": "QC",
+    # 點名 corrections (NOT roll call)
+    "panggilan nama": "inspeksi pengawas",
+    "absen nama": "inspeksi pengawas",
+    "roll call": "inspeksi pengawas",
+    # 感溫 - should not be translated literally
+    "suhu perasaan": "terima kasih",
+    "merasakan suhu": "terima kasih",
+    # Common GPT errors
+    "Polymetal": "寶麗金屬",
+    "Bao Li Metal": "寶麗金屬",
+    "Bao Li Logam": "寶麗金屬",
+    "Changzhou Zhongshan": "常州眾山",
+    "Da Shun": "大順",
+    "Da Cheng": "大成",
+    "Bei Ze": "北澤",
+    "Hong Yun": "鴻運",
+    "Tian Hua Rong": "田華榕",
+    "Jia Dong": "佳東",
 }
 
 # Customer names - protect from translation by wrapping
 CUSTOMER_NAMES = [
-    "DACAPO", "CASTLE", "LOTUS", "METALINOX", "KANGRUI", "SUNGEUN", "STEELINC",
-    "GLH", "shinko", "wing keung",
-    "田華榕", "佳東", "蘋果", "常州眾山", "大順", "大成", "巨昌", "北澤",
-    "鴻運", "畯圓", "名威", "右勝", "貝克休斯", "皇銘",
-    "台芝", "百堅", "津展", "曜麟", "廉錩", "盛昌遠", "永吉", "寶麗金屬",
+    "SING LEONG-雙馬", "三利", "三卯鍛壓", "三大興", "上晉", "上海億科",
+    "上海凡斯", "上海坤成", "上海町芃", "上銀", "世廷", "世華",
+    "中國防蝕", "京碼", "京鋼", "佳東", "佳東-台中", "佳東-台北",
+    "佳東-高雄", "俊來(蘆洲)", "俊益", "優普洛", "元偉勝", "光翔",
+    "全利金屬", "全敏尖端", "凡立", "凱記", "力常(觀音)", "功億",
+    "勝初", "勝新", "勝盟", "北澤", "北澤一廠", "北澤三廠",
+    "北澤二廠", "升暘", "協崎", "厚群", "台灣亞錁", "台灣林吉",
+    "台灣矽微", "台芝", "右勝", "右勝鋼鐵", "合順", "名威",
+    "向春", "君立", "商旺", "嘉冠", "嘉碁", "坤泰",
+    "域鑫科技", "壯安", "大成", "大甲永和", "大連德邁仕", "大順",
+    "天津隆德", "奇賓", "威孚高科技", "宇慶", "宇隆", "宏盈",
+    "宏荃", "富億鑫", "寧波東葛", "寶麗金屬", "尊茂", "尚智",
+    "展舵", "岡山東穎", "峰作金屬", "峰勝", "巨昌", "巨頻",
+    "常州眾山", "廉喬", "廉錩", "廉錩-台北", "廉錩-台南", "廣泰",
+    "建新", "強實", "強淞", "志典", "恒耀", "慈溪龍華",
+    "慶鋐", "慷倫", "振家", "振華興", "捷流", "敦壹",
+    "新創捷", "新華特聯", "新萊應材", "方鉦", "明石", "易隆",
+    "時哲", "晉易", "晉椿", "晉椿(鹿港)", "曜麟", "有光",
+    "朝盟", "東徽", "東栗", "東莞峰作", "東萊", "柏緯",
+    "歐承", "毅鋼", "永吉", "永川泰", "永村", "汎新",
+    "江蘇迪威", "江陰外庫", "江陰華新", "津展", "津展-台中", "津展-台北",
+    "津展-台南", "浙江三花", "淳康", "無錫永雋", "瑞鋼", "環友",
+    "甫剛", "田華榕", "町洋", "畯圓", "百呈", "百堅",
+    "皇銘", "益陽", "盛昌遠", "眾山", "睿緻佳", "磐石",
+    "祥日達", "祥英", "福泉", "禾桀", "科威聯", "笠源",
+    "經捷", "經貿", "群鎰", "聖泰", "聚祥", "聯岱",
+    "聯祥", "舜欽", "英鈿", "華友(外)", "萬揚", "蘋果",
+    "西邁金屬", "詠勗", "詠晟", "誼山", "貝克休斯", "貝加",
+    "路竹新益", "進達", "邁達斯", "重慶九勝", "重慶九環", "金亞洲",
+    "金利山", "金城", "金大", "金煜", "金耘", "金耘-南營所",
+    "鉅泰昇", "鉅豐", "鉅銅", "銓宥", "鐿順發", "鑫誠鐵材",
+    "長圓", "長盈", "隆明", "隆門", "隆順發", "雅信億",
+    "雙和", "頂翔勝", "頭份", "高立熱處理", "高銪", "鴻運",
+    "麒譯", "麥億", "鼎崴",
+    "ABE", "AIK", "ALCONIX JP", "AMS", "ANCHOR", "ANIL METALS", "APEX METAL",
+    "AWACS", "B&B", "B&J", "BOBCO", "BOLLINGHAUS",
+    "CA-ASD", "CA-AUSTRAL", "CA-DALSTEEL", "CA-M&S", "CA-MICO", "CA-MIDWAY",
+    "CA-S&T", "CA-VAN LEEUWEN", "CA-VES", "CA-VULCAN", "CA-VULCAN NZ", "CA-WAKEFIELD",
+    "CAMELLIA", "CASTLE", "CHANDAN", "CHANG HSIN", "CHANGSU",
+    "COGNE AOSTA", "COGNE CELIK", "COGNE DE", "COGNE DG", "COGNE FR", "COGNE KR", "COGNE UK",
+    "COMINOX", "COMPRINOX", "CSMU", "DACAPO", "DACAPO-K STOCK",
+    "DAECHANG", "DAMSTAHL", "DAVER", "DK METAL", "DUFU",
+    "EGMO", "ESP", "EURO STEEL", "FASTENAL", "FINE METAL TRADE", "FSS",
+    "G HWA", "GIC", "GLH", "GS METAL",
+    "HADCO", "HAKUDO", "HAMATECH", "HANWA", "HEAP SING HUAT", "HH", "HRMETAL",
+    "HUA GUAN METAL", "HWA GUAN METAL", "IM", "INTEGRITY STAINLESS",
+    "IPE", "ISE", "IWATANI", "JANG ANN", "JFE SHOJI",
+    "KANGRUI", "KANSAI", "KDK", "KIAN", "KIM ANN", "KJ", "KJ PRECISION",
+    "KOMINOX AB", "LAI KING", "LAURIE", "LE", "LEE & STEEL", "LIM MENG SENG",
+    "LINSTER", "LOTUS", "LOTUS METAL", "LTM",
+    "M.R. STEEL", "MAINCHAIN", "MAN TAK", "MARINE", "MCB", "MENAM",
+    "METAL ESTABLISH", "METALINOX", "METALLSERVIS",
+    "NAKAYAMA", "NDE", "NM", "NMSK", "NOVA TRADING", "NOXFAP", "NS METAL", "NSC",
+    "OKAYA", "OLYMPIC STEEL", "OME", "PACKER(ISRAEL)", "PASCAL", "PF",
+    "PRECISION", "PRECISION METAL", "PRECISION METALS",
+    "RAAJRATNA", "RHS", "RINO", "RISEBM", "SAGAMI", "SAMWON",
+    "SCM", "SCOT", "SD-BK", "SD-BKL", "SD-KHS", "SD-LIM METAL",
+    "SD-METALPHILE", "SD-METHA", "SD-TPS",
+    "SENG HUAT", "SENG HUAT METALPLEX", "SGH", "SHIMIZU MATERIAL",
+    "SHINKO", "shinko", "SHINKO TH", "SLA", "SMG", "SPECTROMATRIX",
+    "STEELINC", "STEWART", "STIRLINGS", "STIRLINGS(5%)", "STKSTAINLESS",
+    "SUNGEUN", "SUPERFIX", "SUPREME",
+    "TAN VIET", "TCI", "TITAN METALS", "TK-SCHULTE", "TKMP", "TMC",
+    "TOP SUNNY", "TOZZHIN THAILAND", "TSA", "TUSCO",
+    "WESCO", "WEST COAST", "WING KEUNG", "wing keung", "WPS",
+    "YGS", "YIEH CORP LTD(HK)", "YONGTA", "YOSHU", "YOUCHANG", "YOUNG DONG",
 ]
 
 
 def pre_replace_zh(text):
-    """Apply hard replacements to Chinese text before GPT translation."""
+    """Apply hard replacements to Chinese text before GPT translation.
+    Returns (modified_text, customer_placeholders_dict)."""
     result = text
-    # Protect customer names with placeholders
+    # Protect customer names with placeholders (these survive GPT translation)
     cust_ph = {}
     for i, name in enumerate(CUSTOMER_NAMES):
         if name in result:
@@ -463,10 +555,27 @@ def pre_replace_zh(text):
     # Apply hard replacements (longest first to avoid partial matches)
     for zh, replacement in sorted(ZH_TO_ID_HARD.items(), key=lambda x: -len(x[0])):
         if zh in result:
-            result = result.replace(zh, f"({replacement})")
-    # Restore customer names
+            result = result.replace(zh, f"[{replacement}]")
+    return result, cust_ph
+
+
+def restore_customers(text, cust_ph):
+    """Restore customer name placeholders back to original names."""
+    if not text or not cust_ph:
+        return text
+    result = text
     for ph, name in cust_ph.items():
-        result = result.replace(ph, name)
+        # GPT might mangle placeholders, try variants
+        idx = ph.replace("__CUST_", "").replace("__", "")
+        variants = [
+            ph, ph.replace("_", " "), f"CUST_{idx}", f"CUST {idx}",
+            f"__CUST {idx}__", f"[CUST_{idx}]",
+        ]
+        for v in variants:
+            if v in result:
+                result = result.replace(v, name)
+    # Safety: if any customer name placeholder pattern remains, try regex
+    result = re.sub(r'__CUST_(\d+)__', lambda m: cust_ph.get(f"__CUST_{m.group(1)}__", m.group(0)), result)
     return result
 
 
@@ -475,13 +584,12 @@ def post_fix_translation(text):
     if not text:
         return text
     result = text
-    for wrong, correct in ID_POST_FIX.items():
+    # Fix specific wrong translations (longest match first)
+    for wrong, correct in sorted(ID_POST_FIX.items(), key=lambda x: -len(x[0])):
         result = result.replace(wrong, correct)
-    # Remove parenthesized hints that leaked through
-    result = re.sub(r'\((?:heat number|bekas grinding mark|bekas pisau bubut|mesin straightening|'
-                    r'mesin press polish|mesin polishing|mesin sanding|QC|bagian sales|'
-                    r'production planning|kontainer|order urgent|jumbo bag|'
-                    r'pekerja Indonesia|heat number|label heat number)\)', '', result)
+    # Remove bracketed hints that leaked through from pre_replace
+    result = re.sub(r'\[([a-zA-Z /&]+)\]', r'\1', result)
+    # Clean up double spaces
     result = re.sub(r'\s{2,}', ' ', result).strip()
     return result
 
@@ -495,8 +603,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
 
         # Apply hard replacements before GPT for zh->other
         input_text = text
+        cust_placeholders = {}
         if src == "zh":
-            input_text = pre_replace_zh(text)
+            input_text, cust_placeholders = pre_replace_zh(text)
 
         protected, placeholders = protect_mentions(input_text)
 
@@ -762,9 +871,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         )
         result = r.choices[0].message.content.strip()
         result = restore_mentions(result, placeholders)
-        # Fix known GPT translation mistakes
+        # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
             result = post_fix_translation(result)
+            result = restore_customers(result, cust_placeholders)
         return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
