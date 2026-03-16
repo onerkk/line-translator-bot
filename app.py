@@ -328,13 +328,177 @@ def is_translation_valid(result, src, tgt):
     return True
 
 
+# === Hard replacement tables ===
+# These bypass GPT entirely - applied BEFORE sending to GPT (zh->id)
+# and AFTER receiving from GPT (id->zh result post-processing)
+
+ZH_TO_ID_HARD = {
+    # 製程/站別
+    "爐號標籤": "label heat number",
+    "爐號": "heat number",
+    "無心研磨": "centerless grinding",
+    "光輝退火爐": "furnace bright annealing",
+    "光輝退火": "bright annealing",
+    "退火爐": "tungku annealing",
+    "過帳": "input data ke sistem",
+    "放行": "release data",
+    # 品質/缺陷
+    "殺光痕": "bekas grinding mark",
+    "車刀痕": "bekas pisau bubut",
+    "砂光痕": "bekas sanding mark",
+    "軋輥印痕": "bekas roll mark",
+    "環狀擦傷": "goresan melingkar",
+    "表粗": "surface roughness",
+    "偏小": "under size",
+    "偏大": "over size",
+    "風險批": "lot berisiko",
+    "走ET檢測": "jalankan pengujian ET",
+    "開立重工": "buat work order rework",
+    "不允收": "pelanggan tidak terima",
+    # 設備
+    "矯直機": "mesin straightening",
+    "壓光機": "mesin press polish",
+    "砂光機": "mesin sanding",
+    "拋光機": "mesin polishing",
+    "眼模": "die/cetakan",
+    "引拔座": "drawing bench",
+    "皮膜槽": "coating tank",
+    "氣壓缸": "silinder pneumatik",
+    "安全圍籬": "safety fence",
+    "集塵設備": "dust collector",
+    "計長器": "length counter",
+    "冷水機": "chiller",
+    "馬蹄環": "shackle",
+    "吊掛物": "beban gantung",
+    "護罩": "pelindung mesin",
+    "interlock": "pengunci keamanan",
+    "標籤機": "mesin label",
+    # 管理
+    "品保": "QC",
+    "儲運": "bagian gudang",
+    "生計": "production planning",
+    "業務": "bagian sales",
+    "人事": "HRD",
+    "處長": "kepala divisi",
+    "稼動率": "utilization rate",
+    "線速": "kecepatan lini",
+    "速差": "selisih kecepatan",
+    "主機手": "operator utama",
+    "印勞": "pekerja Indonesia",
+    "在製品管制表": "tabel kontrol WIP",
+    # 包裝/入庫
+    "套紙管": "pasang tabung kertas",
+    "太空包": "jumbo bag",
+    "噴漆罐": "kaleng spray",
+    "木箱": "kotak kayu",
+    "櫃子": "kontainer",
+    # 訂單
+    "允收": "toleransi terima",
+    "訂尺": "panjang pesanan",
+    "短尺": "ukuran pendek",
+    "異型棒": "batang bentuk khusus",
+    "遞延單": "order ditunda",
+    "急單": "order urgent",
+    "溢量": "kelebihan produksi",
+    "併包": "gabung packing",
+    "出貨差": "kekurangan pengiriman",
+    # HR/紀律
+    "忘卡補": "input lewat sistem lupa kartu",
+    "造冊": "buat daftar absensi",
+    "班股": "rapat shift",
+    "堆高機複訓": "pelatihan ulang forklift",
+    "天車複訓": "pelatihan ulang crane",
+    "扣績效": "potong penilaian kinerja",
+    "劣項": "pelanggaran",
+    "納入劣項": "dicatat pelanggaran",
+    "提報懲處": "laporkan untuk sanksi",
+    "三定": "3 tetap",
+    "不要物": "barang tidak terpakai",
+    "被釘": "kena tegur",
+    "綠卡": "kartu hijau",
+    # 環境
+    "煙蒂": "puntung rokok",
+    "檳榔渣": "sisa pinang",
+    "廚餘": "sisa makanan",
+    "漏油": "bocor oli",
+    "積水": "genangan air",
+    "粉塵": "debu",
+    # 口語
+    "感溫": "terima kasih",
+    "有夠": "sangat",
+    "母湯": "jangan",
+}
+
+# Post-replacement: fix common GPT mistakes in output
+ID_POST_FIX = {
+    "nomor panas": "heat number",
+    "label nomor panas": "label heat number",
+    "paket datang ke": "kalau ada packing untuk",
+    "saat paket datang ke": "kalau ada packing untuk",
+    "Mohon diperhatikan saat paket datang ke": "Nanti kalau ada packing untuk",
+    "tiga meter di atas enam meter": "batang 3 meter ditaruh di atas batang 6 meter",
+    "Tiga meter di atas enam meter": "Batang 3 meter ditaruh di atas batang 6 meter",
+}
+
+# Customer names - protect from translation by wrapping
+CUSTOMER_NAMES = [
+    "DACAPO", "CASTLE", "LOTUS", "METALINOX", "KANGRUI", "SUNGEUN", "STEELINC",
+    "GLH", "shinko", "wing keung",
+    "田華榕", "佳東", "蘋果", "常州眾山", "大順", "大成", "巨昌", "北澤",
+    "鴻運", "畯圓", "名威", "右勝", "貝克休斯", "皇銘",
+    "台芝", "百堅", "津展", "曜麟", "廉錩", "盛昌遠", "永吉", "寶麗金屬",
+]
+
+
+def pre_replace_zh(text):
+    """Apply hard replacements to Chinese text before GPT translation."""
+    result = text
+    # Protect customer names with placeholders
+    cust_ph = {}
+    for i, name in enumerate(CUSTOMER_NAMES):
+        if name in result:
+            ph = f"__CUST_{i}__"
+            cust_ph[ph] = name
+            result = result.replace(name, ph)
+    # Apply hard replacements (longest first to avoid partial matches)
+    for zh, replacement in sorted(ZH_TO_ID_HARD.items(), key=lambda x: -len(x[0])):
+        if zh in result:
+            result = result.replace(zh, f"({replacement})")
+    # Restore customer names
+    for ph, name in cust_ph.items():
+        result = result.replace(ph, name)
+    return result
+
+
+def post_fix_translation(text):
+    """Fix known GPT translation mistakes in output."""
+    if not text:
+        return text
+    result = text
+    for wrong, correct in ID_POST_FIX.items():
+        result = result.replace(wrong, correct)
+    # Remove parenthesized hints that leaked through
+    result = re.sub(r'\((?:heat number|bekas grinding mark|bekas pisau bubut|mesin straightening|'
+                    r'mesin press polish|mesin polishing|mesin sanding|QC|bagian sales|'
+                    r'production planning|kontainer|order urgent|jumbo bag|'
+                    r'pekerja Indonesia|heat number|label heat number)\)', '', result)
+    result = re.sub(r'\s{2,}', ' ', result).strip()
+    return result
+
+
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
     if not oai:
         return None
     try:
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
-        protected, placeholders = protect_mentions(text)
+
+        # Apply hard replacements before GPT for zh->other
+        input_text = text
+        if src == "zh":
+            input_text = pre_replace_zh(text)
+
+        protected, placeholders = protect_mentions(input_text)
 
         extra_rule = ""
         if strict_no_source_script and src != tgt:
@@ -588,7 +752,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
         r = oai.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
@@ -598,6 +762,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         )
         result = r.choices[0].message.content.strip()
         result = restore_mentions(result, placeholders)
+        # Fix known GPT translation mistakes
+        if src == "zh":
+            result = post_fix_translation(result)
         return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
@@ -626,6 +793,8 @@ def translate_google(text, src, tgt):
                     parts.append(item[0])
             result = "".join(parts)
             result = restore_mentions(result, placeholders)
+            # Fix known translation mistakes
+            result = post_fix_translation(result)
             return result
     except Exception as e:
         logger.error("Google translate error: %s", e)
