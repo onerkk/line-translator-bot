@@ -1011,11 +1011,11 @@ def format_storage_for_work_order(customer_name):
     lines.append("\u5ba2\u6236\uff1a" + customer_name)
     lines.append("")
     lines.append("\U0001f4e6 \u5132\u5340\u67e5\u8a62")
-    lines.append("\u25ac" * 6)
+    lines.append("=" * 18)
     for length, area in entries:
         zh = format_length_zh(length)
         lines.append(zh + " \u2192 " + area)
-    lines.append("\u25ac" * 6)
+    lines.append("=" * 18)
     return "\n".join(lines)
 
 
@@ -1242,12 +1242,13 @@ def make_notice(content, target="id"):
     tgt_text = translate(content, "zh", target)
     if not tgt_text:
         tgt_text = "(translation failed)"
+    sep = "=" * 18
     lines = []
     lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
-    lines.append("====================")
+    lines.append(sep)
     lines.append("\U0001f1f9\U0001f1fc " + content)
     lines.append(LANG_FLAGS.get(target, "") + " " + tgt_text)
-    lines.append("====================")
+    lines.append(sep)
     return "\n".join(lines)
 
 
@@ -1255,12 +1256,13 @@ def make_notice_from_other(content, src, target="zh"):
     zh_text = translate(content, src, "zh")
     if not zh_text:
         zh_text = "(translation failed)"
+    sep = "=" * 18
     lines = []
     lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
-    lines.append("====================")
+    lines.append(sep)
     lines.append("\U0001f1f9\U0001f1fc " + zh_text)
     lines.append(LANG_FLAGS.get(src, "") + " " + content)
-    lines.append("====================")
+    lines.append(sep)
     return "\n".join(lines)
 
 
@@ -1268,42 +1270,31 @@ def get_help_text(group_id):
     tgt = group_target_lang.get(group_id, "id")
     tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
     tgt_flag = LANG_FLAGS.get(tgt, "")
+    sep = "=" * 18
     lines = []
-    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba / Bot Penerjemah")
-    lines.append("====================")
-    lines.append("/on  - \u958b\u555f\u7ffb\u8b6f / Aktifkan")
-    lines.append("/off - \u95dc\u9589\u7ffb\u8b6f / Nonaktifkan")
-    lines.append("/img on  - \u958b\u555f\u5716\u7247\u7ffb\u8b6f / Aktifkan terjemahan gambar")
-    lines.append("/img off - \u95dc\u9589\u5716\u7247\u7ffb\u8b6f / Nonaktifkan terjemahan gambar")
-    lines.append("/voice on  - \u958b\u555f\u8a9e\u97f3\u7ffb\u8b6f / Aktifkan terjemahan suara")
-    lines.append("/voice off - \u95dc\u9589\u8a9e\u97f3\u7ffb\u8b6f / Nonaktifkan terjemahan suara")
-    lines.append("/skip - \u4e0d\u7ffb\u8b6f\u6211\u7684\u8a0a\u606f / Jangan terjemahkan saya")
-    lines.append("/unskip - \u6062\u5fa9\u7ffb\u8b6f\u6211\u7684\u8a0a\u606f / Terjemahkan saya lagi")
-    lines.append("/skiplist - \u67e5\u770b\u767d\u540d\u55ae / Lihat daftar skip")
-    lines.append("/status - \u67e5\u770b\u72c0\u614b / Cek status")
-    lines.append("/lang \u4ee3\u78bc - \u5207\u63db\u76ee\u6a19\u8a9e\u8a00")
-    lines.append("/notice \u5167\u5bb9 - \u96d9\u8a9e\u516c\u544a")
-    lines.append("/qry \u5ba2\u6236\u540d - \u67e5\u8a62\u5132\u5340 / Cari area penyimpanan")
-    lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u7167\u7247 - \u81ea\u52d5\u5075\u6e2c\u5ba2\u6236\u67e5\u5132\u5340")
-    lines.append("/help - \u8aaa\u660e / Bantuan")
-    lines.append("====================")
-    lines.append("\u8a9e\u8a00\u4ee3\u78bc / Kode bahasa:")
-    lines.append("id = \U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587 / Indonesia")
-    lines.append("en = \U0001f1ec\U0001f1e7 \u82f1\u6587 / English")
-    lines.append("vi = \U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587 / Vietnam")
-    lines.append("th = \U0001f1f9\U0001f1ed \u6cf0\u6587 / Thai")
-    lines.append("ja = \U0001f1ef\U0001f1f5 \u65e5\u6587 / Jepang")
-    lines.append("ko = \U0001f1f0\U0001f1f7 \u97d3\u6587 / Korea")
-    lines.append("ms = \U0001f1f2\U0001f1fe \u99ac\u4f86\u6587 / Melayu")
-    lines.append("tl = \U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587 / Filipina")
-    lines.append("====================")
-    lines.append("\u76ee\u524d\u8a2d\u5b9a / Saat ini:")
-    lines.append("\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh)
-    lines.append("\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587")
-    lines.append("====================")
-    lines.append("\u7bc4\u4f8b / Contoh:")
-    lines.append("/lang en \u2192 \u4e2d\u6587\u7ffb\u82f1\u6587")
-    lines.append("/lang id \u2192 \u4e2d\u6587\u7ffb\u5370\u5c3c\u6587")
+    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba")
+    lines.append(sep)
+    lines.append("\u3010\u958b\u95dc\u3011")
+    lines.append("/on \u30fb /off \u7ffb\u8b6f")
+    lines.append("/img on\u30fboff \u5716\u7247")
+    lines.append("/voice on\u30fboff \u8a9e\u97f3")
+    lines.append("\u3010\u500b\u4eba\u3011")
+    lines.append("/skip \u4e0d\u7ffb\u8b6f\u6211")
+    lines.append("/unskip \u6062\u5fa9\u7ffb\u8b6f")
+    lines.append("/skiplist \u767d\u540d\u55ae")
+    lines.append("\u3010\u529f\u80fd\u3011")
+    lines.append("/lang \u4ee3\u78bc \u5207\u63db\u8a9e\u8a00")
+    lines.append("/notice \u5167\u5bb9 \u96d9\u8a9e\u516c\u544a")
+    lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
+    lines.append("/status \u67e5\u770b\u72c0\u614b")
+    lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
+    lines.append(sep)
+    lines.append("\u8a9e\u8a00\u4ee3\u78bc:")
+    lines.append("id\u5370\u5c3c en\u82f1 vi\u8d8a th\u6cf0")
+    lines.append("ja\u65e5 ko\u97d3 ms\u99ac\u4f86 tl\u83f2")
+    lines.append(sep)
+    lines.append("\u76ee\u524d: \u4e2d\u6587\u2192" + tgt_flag + tgt_zh)
+    lines.append("\u7bc4\u4f8b: /lang en")
     return "\n".join(lines)
 
 
@@ -1370,11 +1361,11 @@ def handle_qry_command(text):
     # Build response
     lines = []
     lines.append("\U0001f4e6 " + query + " \u5132\u5340\u67e5\u8a62")
-    lines.append("\u25ac" * 6)
+    lines.append("=" * 18)
     for length, area in entries:
         zh = format_length_zh(length)
         lines.append(zh + " \u2192 " + area)
-    lines.append("\u25ac" * 6)
+    lines.append("=" * 18)
     return "\n".join(lines)
 
 
@@ -1480,30 +1471,21 @@ def handle_message(event):
             tgt = dm_target_lang.get(user_id, "id")
             tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
             tgt_flag = LANG_FLAGS.get(tgt, "")
+            sep = "=" * 18
             lines = []
-            lines.append("\U0001f310 \u79c1\u8a0a\u7ffb\u8b6f\u6a21\u5f0f / Mode Terjemahan Pribadi")
-            lines.append("====================")
-            lines.append("\u50b3\u8a0a\u606f\u7d66\u6211\uff0c\u6211\u6703\u81ea\u52d5\u7ffb\u8b6f\uff01")
-            lines.append("Kirim pesan ke saya, akan diterjemahkan!")
+            lines.append("\U0001f310 \u79c1\u8a0a\u7ffb\u8b6f\u6a21\u5f0f")
+            lines.append(sep)
+            lines.append("\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")
             lines.append("")
-            lines.append("/to \u4ee3\u78bc - \u8a2d\u5b9a\u7ffb\u8b6f\u76ee\u6a19\u8a9e\u8a00")
-            lines.append("/qry \u5ba2\u6236\u540d - \u67e5\u8a62\u5132\u5340")
-            lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u7167\u7247 - \u81ea\u52d5\u5075\u6e2c\u5ba2\u6236\u67e5\u5132\u5340")
-            lines.append("/help - \u8aaa\u660e")
-            lines.append("====================")
-            lines.append("\u8a9e\u8a00\u4ee3\u78bc / Kode bahasa:")
-            lines.append("zh = \U0001f1f9\U0001f1fc \u4e2d\u6587")
-            lines.append("id = \U0001f1ee\U0001f1e9 \u5370\u5c3c\u6587")
-            lines.append("en = \U0001f1ec\U0001f1e7 \u82f1\u6587")
-            lines.append("vi = \U0001f1fb\U0001f1f3 \u8d8a\u5357\u6587")
-            lines.append("th = \U0001f1f9\U0001f1ed \u6cf0\u6587")
-            lines.append("ja = \U0001f1ef\U0001f1f5 \u65e5\u6587")
-            lines.append("ko = \U0001f1f0\U0001f1f7 \u97d3\u6587")
-            lines.append("ms = \U0001f1f2\U0001f1fe \u99ac\u4f86\u6587")
-            lines.append("tl = \U0001f1f5\U0001f1ed \u83f2\u5f8b\u8cd3\u6587")
-            lines.append("====================")
-            lines.append("\u76ee\u524d\u76ee\u6a19 / Target: " + tgt_flag + " " + tgt_zh)
-            lines.append("\u7bc4\u4f8b: /to en \u2192 \u5168\u90e8\u7ffb\u6210\u82f1\u6587")
+            lines.append("/to \u4ee3\u78bc \u8a2d\u5b9a\u76ee\u6a19\u8a9e\u8a00")
+            lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
+            lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
+            lines.append(sep)
+            lines.append("\u8a9e\u8a00: zh\u4e2d id\u5370\u5c3c en\u82f1")
+            lines.append("vi\u8d8a th\u6cf0 ja\u65e5 ko\u97d3 ms\u99ac tl\u83f2")
+            lines.append(sep)
+            lines.append("\u76ee\u524d: " + tgt_flag + tgt_zh)
+            lines.append("\u7bc4\u4f8b: /to en")
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
