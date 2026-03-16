@@ -987,7 +987,7 @@ def format_length_zh(code):
     elif code == ">4200":
         return "超過4200"
     elif code == ">3200<=4200":
-        return "3200～4200之間"
+        return "3200～4200"
     elif code == ">4000":
         return "超過4000"
     else:
@@ -1011,11 +1011,11 @@ def format_storage_for_work_order(customer_name):
     lines.append("\u5ba2\u6236\uff1a" + customer_name)
     lines.append("")
     lines.append("\U0001f4e6 \u5132\u5340\u67e5\u8a62")
-    lines.append("\u2500" * 16)
+    lines.append("\u25ac" * 6)
     for length, area in entries:
         zh = format_length_zh(length)
         lines.append(zh + " \u2192 " + area)
-    lines.append("\u2500" * 16)
+    lines.append("\u25ac" * 6)
     return "\n".join(lines)
 
 
@@ -1370,11 +1370,11 @@ def handle_qry_command(text):
     # Build response
     lines = []
     lines.append("\U0001f4e6 " + query + " \u5132\u5340\u67e5\u8a62")
-    lines.append("\u2500" * 16)
+    lines.append("\u25ac" * 6)
     for length, area in entries:
         zh = format_length_zh(length)
         lines.append(zh + " \u2192 " + area)
-    lines.append("\u2500" * 16)
+    lines.append("\u25ac" * 6)
     return "\n".join(lines)
 
 
