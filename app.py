@@ -148,8 +148,10 @@ def restore_mentions(text, placeholders):
 
 
 def strip_mentions_for_detect(text):
-    # Strip @mentions including optional Chinese nickname (1-4 chars) that follows
+    # Strip @mentions: English names with optional Chinese nickname
     clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
+    # Strip @mentions: Chinese names with optional parenthesized title e.g. @小麥（研磨股班長）
+    clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[（(][^）)]*[）)])?', ' ', clean)
     return clean
 
 
