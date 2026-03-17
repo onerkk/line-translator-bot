@@ -387,6 +387,7 @@ ZH_TO_ID_HARD = {
     "儲運": "bagian gudang",
     "生計": "production planning",
     "業務": "bagian sales",
+    "營業": "bagian sales",
     "人事": "HRD",
     "處長": "kepala divisi",
     "稼動率": "utilization rate",
@@ -477,6 +478,9 @@ ID_POST_FIX = {
     "Hong Yun": "鴻運",
     "Tian Hua Rong": "田華榕",
     "Jia Dong": "佳東",
+    # 營業 common mistranslation
+    "bagian operasional": "bagian sales",
+    "operasional perlu": "sales perlu",
 }
 
 # Customer names - protect from translation by wrapping
@@ -578,7 +582,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
             "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment. "
             "CRITICAL RULES: "
-            "1. NEVER translate @mentions and never translate person names. Keep all names exactly as they are. "
+            "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
+            "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
             "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
             "3. Translate all other content completely and naturally like real people talk at work. Use casual daily language. "
@@ -669,7 +674,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "不允收=pelanggan tidak terima, 風險批=lot berisiko, 走ET檢測=jalankan pengujian ET, "
             "卡料需關閉電源後再取料=material macet HARUS matikan listrik dulu baru ambil, "
             "【部門/人員】"
-            "業務=sales, 生計=production planning, 資訊=IT department, 品保=QC, 儲運=gudang&logistik, 人事=HRD, 工安=safety officer, "
+            "業務=sales, 營業=sales(=業務), 生計=production planning, 資訊=IT department, 品保=QC, 儲運=gudang&logistik, 人事=HRD, 工安=safety officer, "
             "處長=kepala divisi, 抓資料=ambil data, "
             "【標籤/系統】"
             "TAG=label, 儲區=area penyimpanan di sistem, 轉檔=konversi data, "
@@ -1145,6 +1150,12 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "5. Translate naturally, casual daily language for factory workers.\n"
                         "6. Target Traditional Chinese = Taiwan style.\n"
                         "7. NEVER translate or romanize person names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
+                        "7b. NEVER translate customer/company names. Keep them EXACTLY as-is: "
+                        "賽利金屬, 寶麗金屬, 田華榕, 佳東, 蘋果, 常州眾山, 大順, 大成, 巨昌, 北澤, 鴻運, 畯圓, 名威, 右勝, "
+                        "貝克休斯, 皇銘, 台芝, 百堅, 津展, 曜麟, 廉錩, 盛昌遠, 永吉, 光輝, "
+                        "DACAPO, CASTLE, LOTUS, METALINOX, KANGRUI, SUNGEUN, STEELINC, GLH, SHINKO, WING KEUNG, "
+                        "BOLLINGHAUS, COGNE, TCI, PLUTUS, SAMWON, DK METAL, KJ. "
+                        "If you see ANY company name in the image, keep it unchanged. Do NOT translate 金屬=metal, 鋼鐵=steel etc. when part of a company name.\n"
                         "8. If no text found, output exactly: NO_TEXT_FOUND\n"
                         "9. TABLES/SPREADSHEETS: If the image is a table or spreadsheet, output it as a COMPACT table. "
                         "Only translate column headers and labels. Keep person names as-is in original characters. "
@@ -1155,10 +1166,10 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "Do NOT output each cell as a separate translated section. Keep it compact.\n"
                         "10. Factory vocabulary: "
                         "交辦事項=hal yang harus dikerjakan, "
-                        "研磨=grinding, 拋光=polishing, 來料=material masuk, "
+                        "研磨=grinding, 無心研磨=centerless grinding, 拋光=polishing, 來料=material masuk, "
                         "量測=mengukur, 尺寸=diameter/dimensi, 三點式=3 titik, "
                         "雷射=laser, 設備=peralatan, 故障=rusak, "
-                        "紀錄=catat, 佳東=Jia Dong, 拋光棒=batang polishing, "
+                        "紀錄=catat, 拋光棒=batang polishing, "
                         "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
                         "環狀擦傷=goresan melingkar, "
                         "重工=rework, 料回削皮=material kembali kupas/peeling, "
@@ -1171,7 +1182,20 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "棒材=batang baja, 混料=tercampur material, "
                         "出貨=pengiriman, 依情節=sesuai tingkat pelanggaran, "
                         "增加績效=tambah penilaian kinerja, "
-                        "確實=pastikan, 防止=mencegah\n"
+                        "確實=pastikan, 防止=mencegah, "
+                        "精整=finishing, AP=mesin finishing, 矯直=straightening, 壓光=press polish, "
+                        "退火=annealing, 光輝退火=bright annealing, 酸洗=pickling, 削皮=peeling, 冷抽=cold drawing, "
+                        "熱軋=hot rolling, 煉鋼=steelmaking/peleburan baja, 碳廠=pabrik karbon, "
+                        "職安署=Dinas K3(inspeksi keselamatan kerja), 查核=audit/inspeksi, "
+                        "品保=QC, 儲運=gudang&logistik, 生計=production planning, 業務=sales, 營業=sales, 人事=HRD, "
+                        "處長=kepala divisi, 點名=inspeksi pengawas(NOT roll call), "
+                        "加班=lembur, 排班=jadwal shift, 早班=shift pagi, 夜班=shift malam, "
+                        "砂輪=batu gerinda, 天車=overhead crane, 堆高機=forklift, "
+                        "油桶=drum oli, 太空包=jumbo bag, 噴漆罐=kaleng spray, "
+                        "入庫=masuk gudang, 退庫=kembalikan ke gudang, 出貨差=kekurangan pengiriman, "
+                        "掛單/工單=work order, 重掛單=pasang ulang work order, 取樣=ambil sampel, "
+                        "二道門=pintu kedua(gate 2), 捐血=donor darah, "
+                        "爐號=heat number(NEVER nomor panas), 過帳=input data ke sistem, 放行=release data\n"
                         "11. Only output the result. No extra explanation."
                     )
                 },
@@ -1721,18 +1745,14 @@ def handle_image(event):
     else:
         actual_tgt = "zh"
 
-    # OCR + translate with layout preserved
-    result, err = ocr_and_translate_image(img_base64, actual_tgt)
+    # Translate OCR text using the same translation engine as text messages
+    if lang == "zh":
+        result = translate(extracted, "zh", tgt)
+    else:
+        result = translate(extracted, lang, "zh")
+
     if not result:
-        # Fallback: use plain text translation
-        if lang == "zh":
-            plain = translate(extracted, "zh", tgt)
-        else:
-            plain = translate(extracted, lang, "zh")
-        if plain:
-            result = plain
-        else:
-            return
+        return
 
     reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
 
