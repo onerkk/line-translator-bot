@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_ADMIN_KEY = os.environ.get("OPENAI_ADMIN_KEY", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
@@ -1276,7 +1277,8 @@ def make_notice_from_other(content, src, target="zh"):
 
 def check_openai_credit():
     """Query OpenAI billing endpoints for credit balance and recent usage."""
-    if not OPENAI_KEY:
+    billing_key = OPENAI_ADMIN_KEY or OPENAI_KEY
+    if not billing_key:
         return "\u26a0\ufe0f \u672a\u8a2d\u5b9a OpenAI API Key"
 
     results = []
@@ -1286,7 +1288,7 @@ def check_openai_credit():
     try:
         url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
         req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + OPENAI_KEY)
+        req.add_header("Authorization", "Bearer " + billing_key)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             total_granted = data.get("total_granted", 0)
@@ -1331,7 +1333,7 @@ def check_openai_credit():
                "&end_time=" + str(end_time) +
                "&bucket_width=1d")
         req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + OPENAI_KEY)
+        req.add_header("Authorization", "Bearer " + billing_key)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             buckets = data.get("data", [])
@@ -1383,7 +1385,7 @@ def check_openai_credit():
     try:
         url = "https://api.openai.com/v1/dashboard/billing/subscription"
         req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + OPENAI_KEY)
+        req.add_header("Authorization", "Bearer " + billing_key)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             plan = data.get("plan", {}).get("title", "")
@@ -1412,13 +1414,14 @@ def check_openai_credit():
 
 def _fetch_credit_available():
     """Fetch available credit balance from OpenAI. Returns float or None."""
-    if not OPENAI_KEY:
+    billing_key = OPENAI_ADMIN_KEY or OPENAI_KEY
+    if not billing_key:
         return None
     # Try credit_grants first
     try:
         url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
         req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + OPENAI_KEY)
+        req.add_header("Authorization", "Bearer " + billing_key)
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             avail = data.get("total_available")
@@ -1430,7 +1433,7 @@ def _fetch_credit_available():
     try:
         url = "https://api.openai.com/v1/dashboard/billing/subscription"
         req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + OPENAI_KEY)
+        req.add_header("Authorization", "Bearer " + billing_key)
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             hard_limit = data.get("hard_limit_usd")
