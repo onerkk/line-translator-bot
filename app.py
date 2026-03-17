@@ -1144,7 +1144,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "4. Do NOT repeat the original text. Show it only ONCE then show the translation.\n"
                         "5. Translate naturally, casual daily language for factory workers.\n"
                         "6. Target Traditional Chinese = Taiwan style.\n"
-                        "7. NEVER translate person names or company names.\n"
+                        "7. NEVER translate or romanize person names or company names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
                         "8. If no text found, output exactly: NO_TEXT_FOUND\n"
                         "9. Factory vocabulary: "
                         "交辦事項=hal yang harus dikerjakan, "
