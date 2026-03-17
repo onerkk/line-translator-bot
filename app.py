@@ -13,7 +13,6 @@ from openai import OpenAI
 import base64
 import tempfile
 import time
-import datetime
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +21,6 @@ logger = logging.getLogger(__name__)
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_ADMIN_KEY = os.environ.get("OPENAI_ADMIN_KEY", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
@@ -35,6 +33,8 @@ group_target_lang = {}
 group_img_settings = {}
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
+# Work order photo detection toggle per group, default True
+group_wo_settings = {}
 # Skip list: set of user_ids per group whose messages won't be translated
 group_skip_users = {}
 
@@ -45,10 +45,6 @@ dm_target_lang = {}
 translation_cache = {}
 CACHE_MAX_SIZE = 500
 CACHE_TTL = 3600  # 1 hour
-
-# Credit balance cache
-_credit_balance = {"value": None, "ts": 0}
-CREDIT_CACHE_TTL = 300  # 5 minutes
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -1275,200 +1271,6 @@ def make_notice_from_other(content, src, target="zh"):
     return "\n".join(lines)
 
 
-def check_openai_credit():
-    """Query OpenAI billing endpoints for credit balance and recent usage."""
-    billing_key = OPENAI_ADMIN_KEY or OPENAI_KEY
-    if not billing_key:
-        return "\u26a0\ufe0f \u672a\u8a2d\u5b9a OpenAI API Key"
-
-    results = []
-    sep = "=" * 18
-
-    # --- 1. Try credit_grants (prepaid balance) ---
-    try:
-        url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + billing_key)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            total_granted = data.get("total_granted", 0)
-            total_used = data.get("total_used", 0)
-            total_available = data.get("total_available", 0)
-            results.append("\U0001f4b3 \u984d\u5ea6\u8cc7\u8a0a")
-            results.append(sep)
-            results.append("\u7e3d\u984d\u5ea6: $" + "{:.2f}".format(total_granted))
-            results.append("\u5df2\u4f7f\u7528: $" + "{:.2f}".format(total_used))
-            results.append("\u5269\u9918: $" + "{:.2f}".format(total_available))
-            # Show grants detail if available
-            grants = data.get("grants", {}).get("data", [])
-            if grants:
-                results.append("")
-                for g in grants[:3]:
-                    exp = g.get("expires_at")
-                    exp_str = ""
-                    if exp:
-                        import datetime
-                        try:
-                            exp_dt = datetime.datetime.fromtimestamp(exp)
-                            exp_str = " (\u5230\u671f " + exp_dt.strftime("%Y-%m-%d") + ")"
-                        except Exception:
-                            pass
-                    g_id = g.get("id", "")[:16]
-                    g_avail = g.get("effective_at", "")
-                    results.append("  " + g_id + " $" + "{:.2f}".format(g.get("grant_amount", 0)) + exp_str)
-    except urllib.error.HTTPError as e:
-        if e.code == 404 or e.code == 403:
-            logger.info("credit_grants endpoint not available (HTTP %d)", e.code)
-        else:
-            logger.warning("credit_grants error: HTTP %d", e.code)
-    except Exception as e:
-        logger.warning("credit_grants error: %s", e)
-
-    # --- 2. Try organization costs (last 7 days) ---
-    try:
-        end_time = int(time.time())
-        start_time = end_time - (7 * 24 * 60 * 60)
-        url = ("https://api.openai.com/v1/organization/costs"
-               "?start_time=" + str(start_time) +
-               "&end_time=" + str(end_time) +
-               "&bucket_width=1d")
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + billing_key)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            buckets = data.get("data", [])
-            total_cost = 0.0
-            for bucket in buckets:
-                for item in bucket.get("results", []):
-                    amt = item.get("amount", {})
-                    total_cost += amt.get("value", 0)
-            if results:
-                results.append("")
-            results.append("\U0001f4ca \u8fd1 7 \u5929\u7528\u91cf")
-            results.append(sep)
-            results.append("\u82b1\u8cbb: $" + "{:.4f}".format(total_cost))
-            # Show daily breakdown
-            for bucket in buckets[-3:]:
-                ts = bucket.get("start_time", 0)
-                if ts:
-                    import datetime
-                    try:
-                        dt = datetime.datetime.fromtimestamp(ts)
-                        day_str = dt.strftime("%m/%d")
-                    except Exception:
-                        day_str = str(ts)
-                else:
-                    day_str = "?"
-                day_cost = 0.0
-                for item in bucket.get("results", []):
-                    day_cost += item.get("amount", {}).get("value", 0)
-                if day_cost > 0:
-                    results.append("  " + day_str + ": $" + "{:.4f}".format(day_cost))
-    except urllib.error.HTTPError as e:
-        if e.code == 404 or e.code == 403:
-            logger.info("organization/costs endpoint not available (HTTP %d), may need Admin Key", e.code)
-            if not results:
-                results.append("\u26a0\ufe0f \u67e5\u8a62\u5931\u6557")
-                results.append(sep)
-                results.append("\u53ef\u80fd\u539f\u56e0:")
-                results.append("1. \u9700\u8981 Admin Key \u624d\u80fd\u67e5\u8a62")
-                results.append("2. \u5e33\u6236\u985e\u578b\u4e0d\u652f\u63f4 API \u67e5\u8a62")
-                results.append("")
-                results.append("\u8acb\u76f4\u63a5\u67e5\u770b:")
-                results.append("platform.openai.com/usage")
-        else:
-            logger.warning("organization/costs error: HTTP %d", e.code)
-    except Exception as e:
-        logger.warning("organization/costs error: %s", e)
-
-    # --- 3. Try subscription info ---
-    try:
-        url = "https://api.openai.com/v1/dashboard/billing/subscription"
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + billing_key)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            plan = data.get("plan", {}).get("title", "")
-            hard_limit = data.get("hard_limit_usd", 0)
-            soft_limit = data.get("soft_limit_usd", 0)
-            if plan or hard_limit:
-                if results:
-                    results.append("")
-                results.append("\U0001f4cb \u5e33\u6236")
-                if plan:
-                    results.append("\u65b9\u6848: " + str(plan))
-                if hard_limit:
-                    results.append("\u6708\u4e0a\u9650: $" + "{:.2f}".format(hard_limit))
-    except Exception:
-        pass
-
-    if not results:
-        results.append("\u26a0\ufe0f \u7121\u6cd5\u67e5\u8a62 API \u8cc7\u8a0a")
-        results.append("")
-        results.append("\u8acb\u76f4\u63a5\u67e5\u770b:")
-        results.append("platform.openai.com/usage")
-
-    results.append(sep)
-    return "\n".join(results)
-
-
-def _fetch_credit_available():
-    """Fetch available credit balance from OpenAI. Returns float or None."""
-    billing_key = OPENAI_ADMIN_KEY or OPENAI_KEY
-    if not billing_key:
-        return None
-    # Try credit_grants first
-    try:
-        url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + billing_key)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            avail = data.get("total_available")
-            if avail is not None:
-                return float(avail)
-    except Exception as e:
-        logger.debug("_fetch_credit_available credit_grants: %s", e)
-    # Try subscription hard_limit minus usage as rough estimate
-    try:
-        url = "https://api.openai.com/v1/dashboard/billing/subscription"
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", "Bearer " + billing_key)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            hard_limit = data.get("hard_limit_usd")
-            if hard_limit:
-                return float(hard_limit)
-    except Exception as e:
-        logger.debug("_fetch_credit_available subscription: %s", e)
-    return None
-
-
-def get_credit_suffix():
-    """Return a short credit balance string for appending to translations.
-    Uses cached value, refreshes every 5 minutes in the background."""
-    now = time.time()
-    # If cache is fresh, return it
-    if _credit_balance["value"] is not None and (now - _credit_balance["ts"]) < CREDIT_CACHE_TTL:
-        return "\n\U0001f4b0 $" + "{:.2f}".format(_credit_balance["value"])
-    # If cache is stale or empty, try to refresh (non-blocking best-effort)
-    try:
-        val = _fetch_credit_available()
-        if val is not None:
-            _credit_balance["value"] = val
-            _credit_balance["ts"] = now
-            return "\n\U0001f4b0 $" + "{:.2f}".format(val)
-        else:
-            # If we had a previous value, keep showing it with a ~ to indicate stale
-            if _credit_balance["value"] is not None:
-                return "\n\U0001f4b0 ~$" + "{:.2f}".format(_credit_balance["value"])
-    except Exception as e:
-        logger.debug("get_credit_suffix error: %s", e)
-        if _credit_balance["value"] is not None:
-            return "\n\U0001f4b0 ~$" + "{:.2f}".format(_credit_balance["value"])
-    return ""
-
-
 def get_help_text(group_id):
     tgt = group_target_lang.get(group_id, "id")
     tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
@@ -1481,6 +1283,7 @@ def get_help_text(group_id):
     lines.append("/on \u30fb /off \u7ffb\u8b6f")
     lines.append("/img on\u30fboff \u5716\u7247")
     lines.append("/voice on\u30fboff \u8a9e\u97f3")
+    lines.append("/wo on\u30fboff \u62cd\u5de5\u55ae\u67e5\u5132\u5340")
     lines.append("\u3010\u500b\u4eba\u3011")
     lines.append("/skip \u4e0d\u7ffb\u8b6f\u6211")
     lines.append("/unskip \u6062\u5fa9\u7ffb\u8b6f")
@@ -1490,7 +1293,6 @@ def get_help_text(group_id):
     lines.append("/notice \u5167\u5bb9 \u96d9\u8a9e\u516c\u544a")
     lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
     lines.append("/status \u67e5\u770b\u72c0\u614b")
-    lines.append("/credit \u67e5API\u9918\u984d")
     lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
     lines.append(sep)
     lines.append("\u8a9e\u8a00\u4ee3\u78bc:")
@@ -1573,117 +1375,6 @@ def handle_qry_command(text):
     return "\n".join(lines)
 
 
-def query_openai_credit():
-    """Query OpenAI API credit/usage info from multiple endpoints."""
-    if not OPENAI_KEY:
-        return "\u26a0\ufe0f 未設定 OpenAI API Key"
-
-    headers = {
-        "Authorization": "Bearer " + OPENAI_KEY,
-        "Content-Type": "application/json",
-    }
-
-    sep = "=" * 18
-    results = ["\U0001f4b0 OpenAI API 用量查詢", sep]
-    got_any = False
-
-    # --- 1. Try /v1/organization/costs (needs admin key) ---
-    try:
-        now = datetime.datetime.utcnow()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        start_ts = int(month_start.timestamp())
-        end_ts = int(now.timestamp()) + 60  # add 1 min buffer
-
-        url = (
-            "https://api.openai.com/v1/organization/costs"
-            "?start_time=" + str(start_ts) +
-            "&end_time=" + str(end_ts) +
-            "&bucket_width=1d"
-        )
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            total_cents = 0
-            if "data" in data:
-                for bucket in data["data"]:
-                    for r_item in bucket.get("results", []):
-                        amt = r_item.get("amount", {})
-                        total_cents += amt.get("value", 0)
-            # costs API returns cents
-            total_usd = total_cents / 100.0
-            month_str = now.strftime("%Y/%m")
-            results.append("\U0001f4c5 " + month_str + " 本月花費")
-            results.append("   $" + "{:.4f}".format(total_usd) + " USD")
-            got_any = True
-    except urllib.error.HTTPError as e:
-        if e.code == 403 or e.code == 401:
-            logger.info("organization/costs: no permission (HTTP %d), skipping", e.code)
-        else:
-            logger.warning("organization/costs error: HTTP %d", e.code)
-    except Exception as e:
-        logger.warning("organization/costs error: %s", e)
-
-    # --- 2. Try /dashboard/billing/credit_grants (legacy) ---
-    try:
-        url = "https://api.openai.com/dashboard/billing/credit_grants"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            total_granted = data.get("total_granted", 0)
-            total_used = data.get("total_used", 0)
-            total_available = data.get("total_available", 0)
-            if total_granted > 0 or total_available > 0:
-                results.append("")
-                results.append("\U0001f3ab 額度 (Credit Grants)")
-                results.append("   已獲: $" + "{:.2f}".format(total_granted))
-                results.append("   已用: $" + "{:.2f}".format(total_used))
-                results.append("   剩餘: $" + "{:.2f}".format(total_available))
-                got_any = True
-    except urllib.error.HTTPError as e:
-        logger.info("credit_grants: HTTP %d, skipping", e.code)
-    except Exception as e:
-        logger.info("credit_grants error: %s", e)
-
-    # --- 3. Try /dashboard/billing/subscription ---
-    try:
-        url = "https://api.openai.com/dashboard/billing/subscription"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            hard_limit = data.get("hard_limit_usd")
-            soft_limit = data.get("soft_limit_usd")
-            plan = data.get("plan", {}).get("title", "")
-            if hard_limit or plan:
-                results.append("")
-                if plan:
-                    results.append("\U0001f4cb 方案: " + str(plan))
-                if hard_limit:
-                    results.append("   月上限: $" + "{:.2f}".format(hard_limit))
-                if soft_limit:
-                    results.append("   軟上限: $" + "{:.2f}".format(soft_limit))
-                got_any = True
-    except urllib.error.HTTPError as e:
-        logger.info("subscription: HTTP %d, skipping", e.code)
-    except Exception as e:
-        logger.info("subscription error: %s", e)
-
-    if not got_any:
-        results.append("")
-        results.append("\u26a0\ufe0f 無法透過 API 查詢")
-        results.append("可能原因:")
-        results.append("• API Key 無 Admin 權限")
-        results.append("• 舊版端點已停用")
-        results.append("")
-        results.append("請直接查看:")
-        results.append("platform.openai.com/usage")
-    else:
-        results.append("")
-        results.append("\U0001f4ca platform.openai.com/usage")
-
-    results.append(sep)
-    return "\n".join(results)
-
-
 def handle_command(text, group_id, user_id=None):
     cmd = text.strip().lower()
     if cmd == "/help":
@@ -1706,6 +1397,12 @@ def handle_command(text, group_id, user_id=None):
     elif cmd == "/voice off":
         group_audio_settings[group_id] = False
         return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
+    elif cmd == "/wo on":
+        group_wo_settings[group_id] = True
+        return "\u2705 \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u958b\u555f"
+    elif cmd == "/wo off":
+        group_wo_settings[group_id] = False
+        return "\u274c \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u95dc\u9589"
     elif cmd == "/skip":
         if not user_id:
             return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
@@ -1734,7 +1431,9 @@ def handle_command(text, group_id, user_id=None):
             img_status = "\u2705 \u958b\u555f" if img_on else "\u274c \u95dc\u9589"
             audio_on = group_audio_settings.get(group_id, True)
             audio_status = "\u2705 \u958b\u555f" if audio_on else "\u274c \u95dc\u9589"
-            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status + "\n\U0001f3a4 \u8a9e\u97f3\u7ffb\u8b6f\uff1a" + audio_status
+            wo_on = group_wo_settings.get(group_id, True)
+            wo_status = "\u2705 \u958b\u555f" if wo_on else "\u274c \u95dc\u9589"
+            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status + "\n\U0001f3a4 \u8a9e\u97f3\u7ffb\u8b6f\uff1a" + audio_status + "\n\U0001f4cb \u62cd\u5de5\u55ae\u67e5\u5132\u5340\uff1a" + wo_status
         else:
             return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
     elif cmd.startswith("/lang"):
@@ -1753,8 +1452,6 @@ def handle_command(text, group_id, user_id=None):
             return make_notice(content, tgt)
     elif text.strip().lower().startswith("/qry"):
         return handle_qry_command(text)
-    elif cmd == "/credit":
-        return check_openai_credit()
     return None
 
 
@@ -1854,16 +1551,6 @@ def handle_message(event):
                         messages=[TextMessage(text=qry_result)]
                     ))
             return
-        # DM: handle /credit command
-        if cmd == "/credit":
-            credit_result = check_openai_credit()
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=credit_result)]
-                ))
-            return
         # DM: skip other / commands
         if text.startswith("/"):
             return
@@ -1888,7 +1575,6 @@ def handle_message(event):
                 return
             reply = LANG_FLAGS.get(tgt, "") + " " + result
 
-        reply += get_credit_suffix()
 
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
@@ -1946,7 +1632,6 @@ def handle_message(event):
     if reply is None:
         return
 
-    reply += get_credit_suffix()
 
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
@@ -2001,20 +1686,22 @@ def handle_image(event):
         return
 
     # === Check if this is a work order (製造指示書) ===
-    try:
-        wo_customer = detect_work_order(extracted)
-        if wo_customer:
-            reply = format_storage_for_work_order(wo_customer)
-            if reply:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=reply)]
-                    ))
-                return
-    except Exception as e:
-        logger.error("Work order detection error: %s", e)
+    wo_on = group_wo_settings.get(group_id, True)
+    if wo_on:
+        try:
+            wo_customer = detect_work_order(extracted)
+            if wo_customer:
+                reply = format_storage_for_work_order(wo_customer)
+                if reply:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=reply)]
+                        ))
+                    return
+        except Exception as e:
+            logger.error("Work order detection error: %s", e)
     # === End work order check ===
 
     lang = detect_language(extracted)
@@ -2041,7 +1728,6 @@ def handle_image(event):
             return
 
     reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
-    reply += get_credit_suffix()
 
     # LINE message limit is 5000 chars
     if len(reply) > 5000:
@@ -2112,7 +1798,6 @@ def handle_audio(event):
     if reply is None:
         return
 
-    reply += get_credit_suffix()
 
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
