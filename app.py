@@ -1144,9 +1144,16 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "4. Do NOT repeat the original text. Show it only ONCE then show the translation.\n"
                         "5. Translate naturally, casual daily language for factory workers.\n"
                         "6. Target Traditional Chinese = Taiwan style.\n"
-                        "7. NEVER translate or romanize person names or company names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
+                        "7. NEVER translate or romanize person names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
                         "8. If no text found, output exactly: NO_TEXT_FOUND\n"
-                        "9. Factory vocabulary: "
+                        "9. TABLES/SPREADSHEETS: If the image is a table or spreadsheet, output it as a COMPACT table. "
+                        "Only translate column headers and labels. Keep person names as-is in original characters. "
+                        "Keep numbers as-is. Use a simple format like:\n"
+                        "姓名/Nama | 3/17止/Hingga 3/17\n"
+                        "陳弘林 | -600\n"
+                        "蔡佳佳 | 200\n"
+                        "Do NOT output each cell as a separate translated section. Keep it compact.\n"
+                        "10. Factory vocabulary: "
                         "交辦事項=hal yang harus dikerjakan, "
                         "研磨=grinding, 拋光=polishing, 來料=material masuk, "
                         "量測=mengukur, 尺寸=diameter/dimensi, 三點式=3 titik, "
@@ -1165,7 +1172,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "出貨=pengiriman, 依情節=sesuai tingkat pelanggaran, "
                         "增加績效=tambah penilaian kinerja, "
                         "確實=pastikan, 防止=mencegah\n"
-                        "10. Only output the result. No extra explanation."
+                        "11. Only output the result. No extra explanation."
                     )
                 },
                 {
