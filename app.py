@@ -1541,20 +1541,22 @@ def handle_message(event):
         if text.startswith("/"):
             return
 
-        # DM translation: detect language, translate to target
-        lang = detect_language(text)
+        # DM translation: strip mentions, detect language, translate
+        text_clean = strip_mentions_for_detect(text).strip()
+        if not text_clean or len(text_clean) < 2:
+            return
+
+        lang = detect_language(text_clean)
         tgt = dm_target_lang.get(user_id, "id")
         if lang is None:
-            # Cannot detect, just translate to target anyway using OpenAI
-            result = translate(text, "auto", tgt)
+            result = translate(text_clean, "auto", tgt)
             if not result:
                 return
             reply = LANG_FLAGS.get(tgt, "") + " " + result
         elif lang == tgt:
-            # Same language, skip
             return
         else:
-            result = translate(text, lang, tgt)
+            result = translate(text_clean, lang, tgt)
             if not result:
                 return
             reply = LANG_FLAGS.get(tgt, "") + " " + result
@@ -1591,7 +1593,12 @@ def handle_message(event):
     if text.startswith("!"):
         return
 
-    lang = detect_language(text)
+    # Strip @mentions - pure mentions without content should not be translated
+    text_clean = strip_mentions_for_detect(text).strip()
+    if not text_clean or len(text_clean) < 2:
+        return
+
+    lang = detect_language(text_clean)
     if lang is None:
         return
 
@@ -1599,11 +1606,11 @@ def handle_message(event):
 
     reply = None
     if lang == "zh":
-        result = translate(text, "zh", tgt)
+        result = translate(text_clean, "zh", tgt)
         if result:
             reply = LANG_FLAGS.get(tgt, "") + " " + result
     else:
-        result = translate(text, lang, "zh")
+        result = translate(text_clean, lang, "zh")
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
 
