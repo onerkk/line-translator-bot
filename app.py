@@ -409,6 +409,8 @@ ZH_TO_ID_HARD = {
     "異型棒": "batang bentuk khusus",
     "遞延單": "order ditunda",
     "急單": "order urgent",
+    "不擋非本月": "order bukan bulan ini boleh masuk gudang",
+    "不擋": "tidak dibatasi",
     "溢量": "kelebihan produksi",
     "併包": "gabung packing",
     "出貨差": "kekurangan pengiriman",
@@ -662,6 +664,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "分捆=pisah bundel, 遞延單=delayed order, 非本月=bukan order bulan ini, "
             "非本月不入庫=order bukan bulan ini jangan masuk gudang, 檔非本月=tahan order bukan bulan ini, "
             "異型棒=batang bentuk khusus, 異型棒不擋=batang khusus tidak dibatasi, "
+            "不擋=tidak dibatasi/boleh masuk(exemption), 不擋非本月=order bukan bulan ini BOLEH masuk gudang(exception/exemption, NOT blocked), "
             "入庫目標=target masuk gudang, 壓日期=ada deadline ketat, "
             "管控=kontrol, 不管控=tidak dikontrol(bebas), "
             "【品質/缺陷】"
@@ -721,6 +724,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "X再Y(condition+action)=hanya X yang Y / X baru Y(=才). e.g. 急單再幫忙安排入庫=hanya order urgent yang tolong bantu atur masuk gudang. "
             "再+verb(without preceding condition)=lagi/sekali lagi(=again). e.g. 再確認一下=confirm sekali lagi. "
             "m) 非本月=bukan order bulan ini(order that is NOT for the current month). 非本月包裝不入庫=yang bukan order bulan ini jangan packing masuk gudang. "
+            "n) 不擋=tidak dibatasi/boleh masuk(EXEMPTION, means ALLOWED). 不擋非本月=order bukan bulan ini BOLEH masuk gudang. "
+            "CRITICAL: 不擋 means NOT blocked = ALLOWED. Do NOT translate as tidak boleh(=blocked). "
+            "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
+            "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
+            "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
             "11. TRANSLATION EXAMPLES (follow strictly): "
             "【中→印尼】"
             "乾 需不需要提報一下 → Aduh, perlu dilaporkan gak nih? "
@@ -786,6 +794,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "非本月只有異型棒不管控，其他麻煩不要入了，昨天早班沒管控被檢討 → Bukan bulan ini cuma batang khusus bebas, sisanya jangan masuk, shift pagi kemarin gak kontrol kena tegur. "
             "非本月包裝不入庫 → Yang bukan order bulan ini jangan packing masuk gudang. "
             "急單再幫忙安排入庫 → Hanya order urgent yang tolong bantu atur masuk gudang. "
+            "大成、SUNGEUN/佳東/麒譯/津展/DACAPO不擋非本月，各班在注意一下 → 大成, SUNGEUN/佳東/麒譯/津展/DACAPO order bukan bulan ini boleh masuk gudang, semua shift tolong perhatikan ya. "
+            "H、S異型棒、大成、SUNGEUN、佳東……以上不擋非本月 → H, S, batang bentuk khusus, 大成, SUNGEUN, 佳東... yang di atas order bukan bulan ini boleh masuk gudang. "
             "開天車務必遵守規定目視吊掛物 → Operasi crane WAJIB lihat beban gantung sesuai aturan. "
             "護罩跟外勞宣導一下要蓋好 → Sosialisasi ke pekerja Indonesia pelindung mesin harus ditutup rapat. "
             "印勞打錯系統有提示 可是他們看不懂把他按掉了 → Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup. "
