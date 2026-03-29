@@ -4,27 +4,34 @@ import json
 import urllib.request
 import urllib.parse
 import logging
-from flask import Flask, request, abort
+from flask import Flask, request, abort, session, redirect, jsonify, render_template_string
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent, JoinEvent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
 import time
+import hashlib
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "walsin-bot-secret-" + os.environ.get("LINE_CHANNEL_SECRET", "default"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # 管理後台密碼
+ADMIN_EMAIL = "onerkk@gmail.com"  # 管理員信箱（顯示用）
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+
+# --- Group tracking ---
+known_groups = {}  # {group_id: {"last_active": timestamp, "msg_count": int, "name": str}}
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -1515,6 +1522,260 @@ def handle_command(text, group_id, user_id=None):
     return None
 
 
+
+def track_group(group_id):
+    """Track group activity for admin panel."""
+    if not group_id or not group_id.startswith("C"):
+        return
+    if group_id not in known_groups:
+        known_groups[group_id] = {"last_active": time.time(), "msg_count": 0, "name": ""}
+    known_groups[group_id]["last_active"] = time.time()
+    known_groups[group_id]["msg_count"] = known_groups[group_id].get("msg_count", 0) + 1
+    # Try to get group name (only once)
+    if not known_groups[group_id].get("name"):
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                summary = api.get_group_summary(group_id)
+                known_groups[group_id]["name"] = summary.group_name or ""
+        except Exception:
+            pass
+
+
+def admin_required(f):
+    """Decorator to require admin login."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not ADMIN_KEY:
+            return "ADMIN_KEY not set in environment", 503
+        if not session.get("admin_logged_in"):
+            return redirect("/admin/login")
+        return f(*args, **kwargs)
+    return decorated
+
+
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>翻譯機器人管理</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
+.header { background: #06c755; color: white; padding: 20px; text-align: center; }
+.header h1 { font-size: 22px; }
+.header small { opacity: 0.8; }
+.container { max-width: 800px; margin: 20px auto; padding: 0 15px; }
+.card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 16px; overflow: hidden; }
+.card-header { padding: 16px 20px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 16px; }
+.card-body { padding: 20px; }
+.group-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+.group-item:last-child { border-bottom: none; }
+.group-info { flex: 1; }
+.group-name { font-weight: bold; font-size: 15px; }
+.group-id { font-size: 12px; color: #888; font-family: monospace; word-break: break-all; }
+.group-meta { font-size: 12px; color: #666; margin-top: 4px; }
+.btn { padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; }
+.btn-danger { background: #ff4444; color: white; }
+.btn-danger:hover { background: #cc0000; }
+.btn-success { background: #06c755; color: white; }
+.empty { text-align: center; padding: 40px; color: #888; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { background: white; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.stat-num { font-size: 28px; font-weight: bold; color: #06c755; }
+.stat-label { font-size: 12px; color: #888; margin-top: 4px; }
+.logout { position: absolute; right: 20px; top: 20px; background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 6px; text-decoration: none; font-size: 13px; }
+.refresh { text-align: center; margin: 12px 0; }
+.refresh a { color: #06c755; text-decoration: none; font-size: 14px; }
+.confirm-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; justify-content: center; align-items: center; }
+.confirm-box { background: white; border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; }
+.confirm-box .btn { margin: 8px; }
+</style>
+</head>
+<body>
+<div class="header" style="position:relative;">
+<h1>🤖 翻譯機器人管理</h1>
+<small>{{ admin_email }}</small>
+<a href="/admin/logout" class="logout">登出</a>
+</div>
+<div class="container">
+<div class="stats">
+<div class="stat"><div class="stat-num">{{ groups|length }}</div><div class="stat-label">已知群組</div></div>
+<div class="stat"><div class="stat-num">{{ total_msgs }}</div><div class="stat-label">總訊息數</div></div>
+<div class="stat"><div class="stat-num">{{ cache_size }}</div><div class="stat-label">翻譯快取</div></div>
+</div>
+<div class="refresh"><a href="/admin">🔄 重新整理</a></div>
+<div class="card">
+<div class="card-header">📋 群組列表</div>
+<div class="card-body">
+{% if groups %}
+{% for g in groups %}
+<div class="group-item">
+<div class="group-info">
+<div class="group-name">{{ g.name or '(未取得名稱)' }}</div>
+<div class="group-id">{{ g.id }}</div>
+<div class="group-meta">訊息: {{ g.msg_count }} | 最後活動: {{ g.last_active }}</div>
+</div>
+<button class="btn btn-danger" onclick="confirmLeave('{{ g.id }}', '{{ g.name or g.id }}')">退出</button>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty">尚無已知群組<br><small>Bot 收到群組訊息後才會記錄</small></div>
+{% endif %}
+</div>
+</div>
+</div>
+<div class="confirm-overlay" id="confirmOverlay">
+<div class="confirm-box">
+<p style="margin-bottom:16px;">確定要讓 Bot 退出<br><strong id="confirmName"></strong>？</p>
+<button class="btn btn-danger" id="confirmBtn" onclick="doLeave()">確定退出</button>
+<button class="btn" style="background:#ddd;" onclick="cancelLeave()">取消</button>
+</div>
+</div>
+<script>
+let leaveId = '';
+function confirmLeave(id, name) {
+    leaveId = id;
+    document.getElementById('confirmName').textContent = name;
+    document.getElementById('confirmOverlay').style.display = 'flex';
+}
+function cancelLeave() {
+    document.getElementById('confirmOverlay').style.display = 'none';
+}
+function doLeave() {
+    document.getElementById('confirmBtn').textContent = '處理中...';
+    document.getElementById('confirmBtn').disabled = true;
+    fetch('/admin/leave/' + leaveId, {method:'POST'})
+    .then(r => r.json())
+    .then(d => { alert(d.message || d.error); location.reload(); })
+    .catch(e => { alert('錯誤: ' + e); location.reload(); });
+}
+</script>
+</body>
+</html>
+"""
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理登入</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+.login-box { background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); width: 340px; text-align: center; }
+.login-box h2 { margin-bottom: 8px; }
+.login-box p { color: #888; font-size: 14px; margin-bottom: 24px; }
+.login-box input { width: 100%; padding: 12px 16px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; margin-bottom: 16px; }
+.login-box input:focus { outline: none; border-color: #06c755; }
+.login-box button { width: 100%; padding: 12px; background: #06c755; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
+.login-box button:hover { background: #05a648; }
+.error { color: #ff4444; font-size: 14px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="login-box">
+<h2>🔐 管理登入</h2>
+<p>翻譯機器人後台</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="POST">
+<input type="password" name="key" placeholder="請輸入管理密碼" autofocus>
+<button type="submit">登入</button>
+</form>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if not ADMIN_KEY:
+        return "ADMIN_KEY not set in Render environment variables", 503
+    if request.method == "POST":
+        key = request.form.get("key", "")
+        if key == ADMIN_KEY:
+            session["admin_logged_in"] = True
+            return redirect("/admin")
+        return render_template_string(LOGIN_HTML, error="密碼錯誤")
+    return render_template_string(LOGIN_HTML, error=None)
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("admin_logged_in", None)
+    return redirect("/admin/login")
+
+
+@app.route("/admin")
+@admin_required
+def admin_page():
+    import datetime
+    groups_list = []
+    for gid, info in sorted(known_groups.items(), key=lambda x: x[1].get("last_active", 0), reverse=True):
+        last = info.get("last_active", 0)
+        if last:
+            dt = datetime.datetime.fromtimestamp(last)
+            last_str = dt.strftime("%m/%d %H:%M")
+        else:
+            last_str = "-"
+        groups_list.append({
+            "id": gid,
+            "name": info.get("name", ""),
+            "msg_count": info.get("msg_count", 0),
+            "last_active": last_str,
+        })
+    total_msgs = sum(g.get("msg_count", 0) for g in known_groups.values())
+    return render_template_string(
+        ADMIN_HTML,
+        groups=groups_list,
+        total_msgs=total_msgs,
+        cache_size=len(translation_cache),
+        admin_email=ADMIN_EMAIL,
+    )
+
+
+@app.route("/admin/leave/<group_id>", methods=["POST"])
+@admin_required
+def admin_leave_group(group_id):
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.leave_group(group_id)
+        # Remove from tracking
+        known_groups.pop(group_id, None)
+        group_settings.pop(group_id, None)
+        group_target_lang.pop(group_id, None)
+        group_img_settings.pop(group_id, None)
+        group_audio_settings.pop(group_id, None)
+        group_wo_settings.pop(group_id, None)
+        group_skip_users.pop(group_id, None)
+        return jsonify({"ok": True, "message": "已退出群組 " + group_id})
+    except Exception as e:
+        logger.error("Leave group error: %s", e)
+        return jsonify({"ok": False, "error": "退出失敗: " + str(e)}), 500
+
+
+@app.route("/admin/api/groups")
+@admin_required
+def admin_api_groups():
+    return jsonify({"groups": known_groups, "count": len(known_groups)})
+
+
+@handler.add(JoinEvent)
+def handle_join(event):
+    """Track when bot is added to a group."""
+    group_id = getattr(event.source, 'group_id', None)
+    if group_id:
+        logger.info("Bot joined group: %s", group_id)
+        track_group(group_id)
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     sig = request.headers.get("X-Line-Signature", "")
@@ -1645,6 +1906,7 @@ def handle_message(event):
         return
 
     # --- Group mode (original logic) ---
+    track_group(group_id)
     if text.startswith("/"):
         cmd_result = handle_command(text, group_id, user_id)
         if cmd_result:
@@ -1707,6 +1969,7 @@ def handle_image(event):
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
     logger.info("Image received from %s", group_id)
+    track_group(group_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
@@ -1802,6 +2065,7 @@ def handle_audio(event):
     """Handle audio/voice messages: Whisper STT + detect language + translate."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+    track_group(group_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
