@@ -33,6 +33,11 @@ oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 # --- Group tracking ---
 known_groups = {}  # {group_id: {"last_active": timestamp, "msg_count": int, "name": str}}
 
+# --- DM control ---
+dm_enabled = False  # 私訊翻譯預設關閉
+dm_api_calls = 0  # 追蹤私訊 API 呼叫次數
+known_dm_users = {}  # {user_id: {"name": str, "last_active": ts, "msg_count": int, "allowed": False}}
+
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
 group_target_lang = {}
@@ -1542,6 +1547,35 @@ def track_group(group_id):
             pass
 
 
+def track_dm_user(user_id):
+    """Track DM user for admin panel."""
+    if not user_id or user_id.startswith("C"):
+        return
+    if user_id not in known_dm_users:
+        known_dm_users[user_id] = {"name": "", "last_active": time.time(), "msg_count": 0, "allowed": False}
+    known_dm_users[user_id]["last_active"] = time.time()
+    known_dm_users[user_id]["msg_count"] = known_dm_users[user_id].get("msg_count", 0) + 1
+    # Try to get display name (only once)
+    if not known_dm_users[user_id].get("name"):
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                profile = api.get_profile(user_id)
+                known_dm_users[user_id]["name"] = profile.display_name or ""
+        except Exception:
+            pass
+
+
+def is_dm_allowed(user_id):
+    """Check if a user is allowed to use DM translation."""
+    if not dm_enabled:
+        return False
+    info = known_dm_users.get(user_id)
+    if not info:
+        return False
+    return info.get("allowed", False)
+
+
 def admin_required(f):
     """Decorator to require admin login."""
     from functools import wraps
@@ -1609,6 +1643,39 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 </div>
 <div class="refresh"><a href="/admin">🔄 重新整理</a></div>
 <div class="card">
+<div class="card-header">💬 私訊翻譯</div>
+<div class="card-body" style="display:flex;justify-content:space-between;align-items:center;">
+<div>
+<div style="font-size:15px;">總開關：<strong>{{ '開啟' if dm_on else '關閉' }}</strong></div>
+<div style="font-size:12px;color:#888;margin-top:4px;">API 呼叫次數：{{ dm_calls }}</div>
+</div>
+<button class="btn {{ 'btn-danger' if dm_on else 'btn-success' }}" onclick="toggleDM()">{{ '關閉' if dm_on else '開啟' }}</button>
+</div>
+</div>
+<div class="card">
+<div class="card-header">👤 私訊用戶白名單</div>
+<div class="card-body">
+{% if dm_on %}
+{% if dm_users %}
+{% for u in dm_users %}
+<div class="group-item">
+<div class="group-info">
+<div class="group-name">{{ u.name or '(未取得名稱)' }}</div>
+<div class="group-id">{{ u.id[:20] }}...</div>
+<div class="group-meta">訊息: {{ u.msg_count }} | 最後: {{ u.last_active }}</div>
+</div>
+<button class="btn {{ 'btn-danger' if u.allowed else 'btn-success' }}" style="font-size:12px;padding:6px 12px;" onclick="toggleUser('{{ u.id }}')">{{ '取消' if u.allowed else '允許' }}</button>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty">尚無私訊用戶<br><small>有人私訊 Bot 後才會記錄</small></div>
+{% endif %}
+{% else %}
+<div class="empty">請先開啟私訊翻譯總開關</div>
+{% endif %}
+</div>
+</div>
+<div class="card">
 <div class="card-header">📋 群組列表</div>
 <div class="card-body">
 {% if groups %}
@@ -1651,6 +1718,18 @@ function doLeave() {
     fetch('/admin/leave/' + leaveId, {method:'POST'})
     .then(r => r.json())
     .then(d => { alert(d.message || d.error); location.reload(); })
+    .catch(e => { alert('錯誤: ' + e); location.reload(); });
+}
+function toggleDM() {
+    fetch('/admin/toggle_dm', {method:'POST'})
+    .then(r => r.json())
+    .then(d => { location.reload(); })
+    .catch(e => { alert('錯誤: ' + e); location.reload(); });
+}
+function toggleUser(uid) {
+    fetch('/admin/toggle_user/' + uid, {method:'POST'})
+    .then(r => r.json())
+    .then(d => { location.reload(); })
     .catch(e => { alert('錯誤: ' + e); location.reload(); });
 }
 </script>
@@ -1731,12 +1810,31 @@ def admin_page():
             "last_active": last_str,
         })
     total_msgs = sum(g.get("msg_count", 0) for g in known_groups.values())
+    # Build DM users list
+    dm_users_list = []
+    for uid, info in sorted(known_dm_users.items(), key=lambda x: x[1].get("last_active", 0), reverse=True):
+        last = info.get("last_active", 0)
+        if last:
+            dt = datetime.datetime.fromtimestamp(last)
+            last_str = dt.strftime("%m/%d %H:%M")
+        else:
+            last_str = "-"
+        dm_users_list.append({
+            "id": uid,
+            "name": info.get("name", ""),
+            "msg_count": info.get("msg_count", 0),
+            "last_active": last_str,
+            "allowed": info.get("allowed", False),
+        })
     return render_template_string(
         ADMIN_HTML,
         groups=groups_list,
         total_msgs=total_msgs,
         cache_size=len(translation_cache),
         admin_email=ADMIN_EMAIL,
+        dm_on=dm_enabled,
+        dm_calls=dm_api_calls,
+        dm_users=dm_users_list,
     )
 
 
@@ -1759,6 +1857,27 @@ def admin_leave_group(group_id):
     except Exception as e:
         logger.error("Leave group error: %s", e)
         return jsonify({"ok": False, "error": "退出失敗: " + str(e)}), 500
+
+
+@app.route("/admin/toggle_dm", methods=["POST"])
+@admin_required
+def admin_toggle_dm():
+    global dm_enabled
+    dm_enabled = not dm_enabled
+    status = "開啟" if dm_enabled else "關閉"
+    return jsonify({"ok": True, "dm_enabled": dm_enabled, "message": "私訊翻譯已" + status})
+
+
+@app.route("/admin/toggle_user/<user_id>", methods=["POST"])
+@admin_required
+def admin_toggle_user(user_id):
+    if user_id not in known_dm_users:
+        return jsonify({"ok": False, "error": "用戶不存在"}), 404
+    current = known_dm_users[user_id].get("allowed", False)
+    known_dm_users[user_id]["allowed"] = not current
+    name = known_dm_users[user_id].get("name", user_id[:10])
+    status = "允許" if not current else "取消"
+    return jsonify({"ok": True, "allowed": not current, "message": name + " 已" + status + "私訊翻譯"})
 
 
 @app.route("/admin/api/groups")
@@ -1800,8 +1919,34 @@ def handle_message(event):
 
     # --- DM (private message) mode ---
     if is_dm and user_id:
-        # DM commands
+        # Always track DM users
+        track_dm_user(user_id)
+
+        # DM commands that always work (no API cost)
         cmd = text.strip().lower()
+        if text.strip().lower().startswith("/qry"):
+            qry_result = handle_qry_command(text)
+            if qry_result:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=qry_result)]
+                    ))
+            return
+
+        # Check if DM translation is allowed for this user
+        if not is_dm_allowed(user_id):
+            if cmd == "/help" or cmd.startswith("/to") or not text.startswith("/"):
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="\u274c \u79c1\u8a0a\u7ffb\u8b6f\u672a\u6388\u6b0a\n\u8acb\u5728\u7fa4\u7d44\u4e2d\u4f7f\u7528\n\n/qry \u5ba2\u6236 \u53ef\u67e5\u5132\u5340")]
+                    ))
+            return
+
+        # DM commands
         if cmd == "/help":
             tgt = dm_target_lang.get(user_id, "id")
             tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
@@ -1861,22 +2006,13 @@ def handle_message(event):
                     messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
                 ))
             return
-        # DM: handle /qry command
-        if text.strip().lower().startswith("/qry"):
-            qry_result = handle_qry_command(text)
-            if qry_result:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=qry_result)]
-                    ))
-            return
         # DM: skip other / commands
         if text.startswith("/"):
             return
 
         # DM translation: strip mentions, detect language, translate
+        global dm_api_calls
+        dm_api_calls += 1
         text_clean = strip_mentions_for_detect(text).strip()
         if not text_clean or len(text_clean) < 2:
             return
