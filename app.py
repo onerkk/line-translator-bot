@@ -4,10 +4,10 @@ import json
 import urllib.request
 import urllib.parse
 import logging
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage, LeaveGroupRequest, LeaveRoomRequest
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent, JoinEvent, FollowEvent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
@@ -39,9 +40,15 @@ group_wo_settings = {}
 group_skip_users = {}
 # Track user display names per group: {group_id: {user_id: display_name}}
 group_user_names = {}
+# Group tracking: {group_id: {"name": str, "joined_at": float}}
+group_tracking = {}
 
 # DM (private message) target language per user, default "id"
 dm_target_lang = {}
+# DM master toggle (global on/off for all DM)
+dm_master_enabled = True
+# DM whitelist: set of user_ids allowed to DM when master is off
+dm_whitelist = set()
 
 # Translation cache: key = (text, src, tgt), value = (result, timestamp)
 translation_cache = {}
@@ -1699,6 +1706,10 @@ def handle_message(event):
         if text.startswith("/"):
             return
 
+        # DM master toggle check
+        if not dm_master_enabled and user_id not in dm_whitelist:
+            return
+
         # DM translation: strip mentions, detect language, translate
         text_clean = strip_mentions_for_detect(text).strip()
         if not text_clean or len(text_clean) < 2:
@@ -1732,6 +1743,17 @@ def handle_message(event):
     # Record user display name for /skipadd lookup
     if group_id and user_id:
         record_user_name(group_id, user_id)
+    # Track group for admin panel
+    if group_id and not is_dm and group_id not in group_tracking:
+        gname = ""
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                summary = api.get_group_summary(group_id)
+                gname = summary.group_name or ""
+        except Exception:
+            pass
+        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
 
     if text.startswith("/"):
         cmd_result = handle_command(text, group_id, user_id)
@@ -1805,6 +1827,12 @@ def handle_image(event):
     sender_id = getattr(source, 'user_id', None)
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
+
+    # DM master toggle check for image
+    is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+    if is_dm_img and sender_id:
+        if not dm_master_enabled and sender_id not in dm_whitelist:
+            return
 
     # Check if image translation is on
     img_on = group_img_settings.get(group_id, True)
@@ -1901,6 +1929,12 @@ def handle_audio(event):
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
+    # DM master toggle check for audio
+    is_dm_aud = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+    if is_dm_aud and sender_id:
+        if not dm_master_enabled and sender_id not in dm_whitelist:
+            return
+
     # Check if audio translation is on
     audio_on = group_audio_settings.get(group_id, True)
     if not audio_on:
@@ -1950,6 +1984,486 @@ def handle_audio(event):
             messages=[TextMessage(text=reply)]
         ))
 
+
+
+@handler.add(JoinEvent)
+def handle_join(event):
+    """Track when bot joins a group."""
+    source = event.source
+    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
+    if not group_id:
+        return
+    gname = ""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            summary = api.get_group_summary(group_id)
+            gname = summary.group_name or ""
+    except Exception:
+        pass
+    group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+
+
+# ─── Admin Panel ────────────────────────────────────────
+
+ADMIN_HTML = '''<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>翻譯Bot 管理後台</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#06C755">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bot管理">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;padding-bottom:env(safe-area-inset-bottom)}
+.header{background:linear-gradient(135deg,#06C755,#04a648);padding:18px 16px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(6,199,85,.3)}
+.header h1{font-size:18px;color:#fff;display:flex;align-items:center;gap:8px}
+.login-wrap{display:flex;justify-content:center;align-items:center;min-height:80vh;padding:20px}
+.login-box{background:#1a1a1a;border-radius:16px;padding:32px 24px;width:100%;max-width:360px;box-shadow:0 4px 24px rgba(0,0,0,.4)}
+.login-box h2{text-align:center;margin-bottom:24px;color:#06C755}
+.input-field{width:100%;padding:14px 16px;border-radius:12px;border:1px solid #333;background:#111;color:#fff;font-size:16px;margin-bottom:16px;outline:none;transition:border .2s}
+.input-field:focus{border-color:#06C755}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-green{background:#06C755;color:#fff}
+.btn-green:active{background:#05a648;transform:scale(.98)}
+.btn-red{background:#dc3545;color:#fff}
+.btn-red:active{background:#b02a37;transform:scale(.98)}
+.btn-sm{padding:8px 14px;font-size:13px;width:auto;border-radius:8px;display:inline-block}
+.tabs{display:flex;background:#111;border-bottom:1px solid #222;position:sticky;top:56px;z-index:99}
+.tab{flex:1;padding:12px 0;text-align:center;font-size:14px;font-weight:500;color:#888;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
+.tab.active{color:#06C755;border-bottom-color:#06C755}
+.panel{display:none;padding:16px}
+.panel.active{display:block}
+.card{background:#1a1a1a;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #222}
+.card-title{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.card-sub{font-size:12px;color:#888}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:500}
+.badge-on{background:rgba(6,199,85,.15);color:#06C755}
+.badge-off{background:rgba(220,53,69,.15);color:#dc3545}
+.toggle-wrap{display:flex;align-items:center;justify-content:space-between;padding:16px;background:#1a1a1a;border-radius:12px;margin-bottom:12px;border:1px solid #222}
+.toggle-label{font-size:15px;font-weight:500}
+.toggle{position:relative;width:52px;height:30px;cursor:pointer}
+.toggle input{display:none}
+.toggle .slider{position:absolute;inset:0;background:#333;border-radius:30px;transition:.3s}
+.toggle .slider:before{content:"";position:absolute;height:24px;width:24px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+.toggle input:checked+.slider{background:#06C755}
+.toggle input:checked+.slider:before{transform:translateX(22px)}
+.wl-item{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #222}
+.wl-item:last-child{border-bottom:none}
+.add-row{display:flex;gap:8px;margin-top:12px}
+.add-row input{flex:1}
+.empty{text-align:center;color:#666;padding:32px 16px;font-size:14px}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 24px;border-radius:20px;font-size:14px;z-index:200;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+.group-select{width:100%;padding:12px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;font-size:14px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- Login -->
+<div id="loginPage">
+<div class="header"><h1>🤖 翻譯Bot 管理後台</h1></div>
+<div class="login-wrap">
+<div class="login-box">
+<h2>🔐 登入</h2>
+<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
+<button class="btn btn-green" onclick="doLogin()">登入</button>
+</div>
+</div>
+</div>
+
+<!-- Main -->
+<div id="mainPage" style="display:none">
+<div class="header"><h1>🤖 翻譯Bot 管理後台</h1></div>
+<div class="tabs">
+<div class="tab active" onclick="switchTab('groups')">群組</div>
+<div class="tab" onclick="switchTab('dm')">私訊DM</div>
+<div class="tab" onclick="switchTab('skip')">白名單</div>
+</div>
+
+<!-- Groups Panel -->
+<div class="panel active" id="panel-groups">
+<div id="groupList"><div class="empty">載入中...</div></div>
+</div>
+
+<!-- DM Panel -->
+<div class="panel" id="panel-dm">
+<div class="toggle-wrap">
+<span class="toggle-label">DM 翻譯總開關</span>
+<label class="toggle"><input type="checkbox" id="dmToggle" onchange="toggleDM()"><span class="slider"></span></label>
+</div>
+<div class="card">
+<div class="card-title">DM 白名單</div>
+<div class="card-sub">總開關關閉時，只有白名單內的人可以私訊翻譯</div>
+<div id="dmWlList"></div>
+<div class="add-row">
+<input class="input-field" id="dmWlInput" placeholder="輸入 User ID" style="margin:0">
+<button class="btn btn-green btn-sm" onclick="addDmWl()">新增</button>
+</div>
+</div>
+</div>
+
+<!-- Skip Panel -->
+<div class="panel" id="panel-skip">
+<select class="group-select" id="skipGroupSelect" onchange="loadSkipList()">
+<option value="">選擇群組...</option>
+</select>
+<div id="skipListContent"><div class="empty">請先選擇群組</div></div>
+</div>
+
+</div><!-- mainPage -->
+
+</div><!-- app -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+let KEY='';
+const API=window.location.origin+'/api/admin';
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
+
+async function api(path,method='GET',body=null){
+  const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
+  if(body)opts.body=JSON.stringify(body);
+  const r=await fetch(API+path,opts);
+  if(r.status===403){toast('密碼錯誤');return null}
+  return r.json();
+}
+
+function doLogin(){
+  KEY=document.getElementById('pwInput').value.trim();
+  if(!KEY){toast('請輸入密碼');return}
+  api('/status').then(d=>{
+    if(!d)return;
+    document.getElementById('loginPage').style.display='none';
+    document.getElementById('mainPage').style.display='block';
+    localStorage.setItem('bot_admin_key',KEY);
+    loadAll();
+  });
+}
+
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',t.textContent.includes(name==='groups'?'群組':name==='dm'?'DM':'白名單'))});
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+}
+
+function loadAll(){loadGroups();loadDM();loadGroupSelect()}
+
+async function loadGroups(){
+  const d=await api('/groups');
+  if(!d)return;
+  const el=document.getElementById('groupList');
+  if(!d.groups||d.groups.length===0){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
+  el.innerHTML=d.groups.map(g=>`
+    <div class="card">
+      <div class="card-title">
+        <span>${g.name||'(未知群組)'}</span>
+        <span class="badge ${g.translation_on?'badge-on':'badge-off'}">${g.translation_on?'翻譯開':'翻譯關'}</span>
+      </div>
+      <div class="card-sub">ID: ${g.id.substring(0,12)}... ｜語言: ${g.target_lang}</div>
+      <div style="margin-top:10px">
+        <button class="btn btn-red btn-sm" onclick="leaveGroup('${g.id}','${(g.name||'').replace(/'/g,"\\'")}')">退出群組</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function leaveGroup(gid,name){
+  if(!confirm('確定退出「'+name+'」？')){return}
+  const d=await api('/groups/leave','POST',{group_id:gid});
+  if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}
+}
+
+async function loadDM(){
+  const d=await api('/dm');
+  if(!d)return;
+  document.getElementById('dmToggle').checked=d.master_enabled;
+  renderDmWl(d.whitelist||[]);
+}
+
+function renderDmWl(list){
+  const el=document.getElementById('dmWlList');
+  if(!list.length){el.innerHTML='<div class="empty" style="padding:12px">白名單為空</div>';return}
+  el.innerHTML=list.map(u=>`
+    <div class="wl-item">
+      <span style="font-size:13px;word-break:break-all">${u}</span>
+      <button class="btn btn-red btn-sm" onclick="removeDmWl('${u}')">移除</button>
+    </div>
+  `).join('');
+}
+
+async function toggleDM(){
+  const on=document.getElementById('dmToggle').checked;
+  const d=await api('/dm','POST',{master_enabled:on});
+  if(d)toast(on?'DM 已開啟':'DM 已關閉');
+}
+
+async function addDmWl(){
+  const v=document.getElementById('dmWlInput').value.trim();
+  if(!v){toast('請輸入 User ID');return}
+  const d=await api('/dm/whitelist','POST',{user_id:v,action:'add'});
+  if(d){toast('已新增');document.getElementById('dmWlInput').value='';loadDM()}
+}
+
+async function removeDmWl(uid){
+  const d=await api('/dm/whitelist','POST',{user_id:uid,action:'remove'});
+  if(d){toast('已移除');loadDM()}
+}
+
+async function loadGroupSelect(){
+  const d=await api('/groups');
+  if(!d)return;
+  const sel=document.getElementById('skipGroupSelect');
+  const cur=sel.value;
+  sel.innerHTML='<option value="">選擇群組...</option>';
+  (d.groups||[]).forEach(g=>{
+    const opt=document.createElement('option');
+    opt.value=g.id;opt.textContent=g.name||g.id.substring(0,16);
+    sel.appendChild(opt);
+  });
+  if(cur)sel.value=cur;
+}
+
+async function loadSkipList(){
+  const gid=document.getElementById('skipGroupSelect').value;
+  const el=document.getElementById('skipListContent');
+  if(!gid){el.innerHTML='<div class="empty">請先選擇群組</div>';return}
+  const d=await api('/skip?group_id='+gid);
+  if(!d)return;
+  const list=d.skip_users||[];
+  if(!list.length){
+    el.innerHTML='<div class="empty">此群組白名單為空</div><div class="add-row"><input class="input-field" id="skipAddInput" placeholder="輸入顯示名稱" style="margin:0"><button class="btn btn-green btn-sm" onclick="addSkipUser()">新增</button></div>';
+    return;
+  }
+  el.innerHTML=list.map(u=>`
+    <div class="wl-item">
+      <span>${u.name||'(未知)'}</span>
+      <button class="btn btn-red btn-sm" onclick="removeSkipUser('${u.user_id}')">移除</button>
+    </div>
+  `).join('')+'<div class="add-row"><input class="input-field" id="skipAddInput" placeholder="輸入顯示名稱" style="margin:0"><button class="btn btn-green btn-sm" onclick="addSkipUser()">新增</button></div>';
+}
+
+async function addSkipUser(){
+  const gid=document.getElementById('skipGroupSelect').value;
+  const name=document.getElementById('skipAddInput').value.trim();
+  if(!gid||!name){toast('請選群組並輸入名稱');return}
+  const d=await api('/skip','POST',{group_id:gid,name:name,action:'add'});
+  if(d&&d.error){toast(d.error);return}
+  if(d){toast(d.message||'已新增');loadSkipList()}
+}
+
+async function removeSkipUser(uid){
+  const gid=document.getElementById('skipGroupSelect').value;
+  const d=await api('/skip','POST',{group_id:gid,user_id:uid,action:'remove'});
+  if(d){toast('已移除');loadSkipList()}
+}
+
+// Auto-login from cache
+window.addEventListener('load',()=>{
+  const k=localStorage.getItem('bot_admin_key');
+  if(k){document.getElementById('pwInput').value=k;doLogin()}
+});
+
+// PWA install
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{})}
+</script>
+</body>
+</html>'''
+
+SW_JS = '''const CACHE='bot-admin-v1';
+const URLS=['/admin'];
+self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
+self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});'''
+
+MANIFEST_JSON = json.dumps({
+    "name": "翻譯Bot 管理後台",
+    "short_name": "Bot管理",
+    "start_url": "/admin",
+    "display": "standalone",
+    "background_color": "#0a0a0a",
+    "theme_color": "#06C755",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
+    ]
+}, ensure_ascii=False)
+
+
+def check_admin_key():
+    key = request.headers.get("X-Admin-Key", "")
+    return key == ADMIN_KEY
+
+
+@app.route("/admin")
+def admin_page():
+    return ADMIN_HTML
+
+
+@app.route("/manifest.json")
+def manifest():
+    return app.response_class(MANIFEST_JSON, mimetype="application/manifest+json")
+
+
+@app.route("/sw.js")
+def service_worker():
+    return app.response_class(SW_JS, mimetype="application/javascript")
+
+
+@app.route("/icon-192.png")
+@app.route("/icon-512.png")
+def admin_icon():
+    # Generate a simple green circle PNG as icon
+    import struct, zlib
+    size = 192 if "192" in request.path else 512
+    # 1x1 green pixel PNG, browser will scale
+    png = (b'\\x89PNG\\r\\n\\x1a\\n'
+           + struct.pack('>I', 13) + b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
+           + struct.pack('>I', zlib.crc32(b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) & 0xffffffff)
+           + struct.pack('>I', 12) + b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')
+           + struct.pack('>I', zlib.crc32(b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')) & 0xffffffff)
+           + struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff))
+    return app.response_class(png, mimetype="image/png")
+
+
+# ─── Admin API ──────────────────────────────────────────
+
+@app.route("/api/admin/status")
+def api_admin_status():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/groups", methods=["GET"])
+def api_admin_groups():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    groups = []
+    # Merge from group_tracking + group_settings
+    all_gids = set(group_tracking.keys()) | set(group_settings.keys()) | set(group_target_lang.keys())
+    for gid in all_gids:
+        info = group_tracking.get(gid, {})
+        groups.append({
+            "id": gid,
+            "name": info.get("name", ""),
+            "translation_on": group_settings.get(gid, True),
+            "target_lang": group_target_lang.get(gid, "id"),
+        })
+    groups.sort(key=lambda x: x["name"] or x["id"])
+    return jsonify({"groups": groups})
+
+
+@app.route("/api/admin/groups/leave", methods=["POST"])
+def api_admin_leave_group():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    gid = data.get("group_id", "")
+    if not gid:
+        return jsonify({"error": "missing group_id"}), 400
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.leave_group(gid)
+    except Exception as e:
+        logger.warning("Leave group failed: %s", e)
+        # Try room
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.leave_room(gid)
+        except Exception:
+            pass
+    # Clean up local data
+    group_tracking.pop(gid, None)
+    group_settings.pop(gid, None)
+    group_target_lang.pop(gid, None)
+    group_img_settings.pop(gid, None)
+    group_audio_settings.pop(gid, None)
+    group_wo_settings.pop(gid, None)
+    group_skip_users.pop(gid, None)
+    group_user_names.pop(gid, None)
+    return jsonify({"message": "已退出群組"})
+
+
+@app.route("/api/admin/dm", methods=["GET", "POST"])
+def api_admin_dm():
+    global dm_master_enabled
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "POST":
+        data = request.get_json() or {}
+        if "master_enabled" in data:
+            dm_master_enabled = bool(data["master_enabled"])
+        return jsonify({"ok": True})
+    return jsonify({
+        "master_enabled": dm_master_enabled,
+        "whitelist": list(dm_whitelist)
+    })
+
+
+@app.route("/api/admin/dm/whitelist", methods=["POST"])
+def api_admin_dm_whitelist():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    uid = data.get("user_id", "").strip()
+    action = data.get("action", "add")
+    if not uid:
+        return jsonify({"error": "missing user_id"}), 400
+    if action == "add":
+        dm_whitelist.add(uid)
+    elif action == "remove":
+        dm_whitelist.discard(uid)
+    return jsonify({"ok": True, "whitelist": list(dm_whitelist)})
+
+
+@app.route("/api/admin/skip", methods=["GET", "POST"])
+def api_admin_skip():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "POST":
+        data = request.get_json() or {}
+        gid = data.get("group_id", "")
+        action = data.get("action", "add")
+        if not gid:
+            return jsonify({"error": "missing group_id"}), 400
+        if action == "add":
+            name_query = data.get("name", "").strip()
+            if not name_query:
+                return jsonify({"error": "請輸入名稱"}), 400
+            matches = find_user_by_name(gid, name_query)
+            if not matches:
+                return jsonify({"error": "找不到「" + name_query + "」，需先在群組發過訊息"}), 400
+            if len(matches) > 1:
+                names = ", ".join([m[1] for m in matches])
+                return jsonify({"error": "找到多人: " + names + "，請輸入更完整的名字"}), 400
+            uid, dname = matches[0]
+            if gid not in group_skip_users:
+                group_skip_users[gid] = set()
+            group_skip_users[gid].add(uid)
+            return jsonify({"message": "已將「" + dname + "」加入白名單"})
+        elif action == "remove":
+            uid = data.get("user_id", "")
+            if gid in group_skip_users:
+                group_skip_users[gid].discard(uid)
+            return jsonify({"message": "已移除"})
+    # GET
+    gid = request.args.get("group_id", "")
+    skipped = group_skip_users.get(gid, set())
+    names_cache = group_user_names.get(gid, {})
+    result = []
+    for uid in skipped:
+        result.append({"user_id": uid, "name": names_cache.get(uid, "")})
+    return jsonify({"skip_users": result})
 
 
 @app.route("/health", methods=["GET"])
