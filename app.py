@@ -1596,6 +1596,12 @@ ADMIN_HTML = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>翻譯機器人管理</title>
+<meta name="theme-color" content="#06c755">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="翻譯Bot">
+<link rel="manifest" href="/pwa/manifest.json">
+<link rel="apple-touch-icon" href="/pwa/icon-192.png">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
@@ -1733,6 +1739,11 @@ function toggleUser(uid) {
     .catch(e => { alert('錯誤: ' + e); location.reload(); });
 }
 </script>
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/pwa/sw.js').catch(function(){});
+}
+</script>
 </body>
 </html>
 """
@@ -1744,6 +1755,11 @@ LOGIN_HTML = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>管理登入</title>
+<meta name="theme-color" content="#06c755">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="翻譯Bot">
+<link rel="manifest" href="/pwa/manifest.json">
+<link rel="apple-touch-icon" href="/pwa/icon-192.png">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
@@ -2262,6 +2278,111 @@ def handle_audio(event):
             messages=[TextMessage(text=reply)]
         ))
 
+
+
+
+# === PWA routes ===
+PWA_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs>
+<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" style="stop-color:#06c755"/>
+<stop offset="100%" style="stop-color:#04a647"/>
+</linearGradient>
+</defs>
+<rect width="512" height="512" rx="108" fill="url(#bg)"/>
+<g transform="translate(256,200)">
+<circle cx="0" cy="0" r="72" fill="white" opacity="0.95"/>
+<circle cx="0" cy="0" r="52" fill="url(#bg)"/>
+<path d="M-24,-12 L-24,16 L-8,16 L-8,-2 L8,-2 L8,16 L24,16 L24,-12 L0,-28 Z" fill="white"/>
+</g>
+<g transform="translate(256,320)">
+<rect x="-80" y="0" width="160" height="8" rx="4" fill="white" opacity="0.9"/>
+<rect x="-60" y="18" width="120" height="8" rx="4" fill="white" opacity="0.7"/>
+<rect x="-70" y="36" width="140" height="8" rx="4" fill="white" opacity="0.5"/>
+</g>
+<g transform="translate(380,120)">
+<circle cx="0" cy="0" r="32" fill="#FFD43B"/>
+<text x="0" y="8" text-anchor="middle" font-size="32" font-family="Arial" font-weight="bold" fill="#333">譯</text>
+</g>
+</svg>'''
+
+
+@app.route("/pwa/manifest.json")
+def pwa_manifest():
+    manifest = {
+        "name": "翻譯機器人管理",
+        "short_name": "翻譯Bot",
+        "description": "LINE 翻譯機器人管理後台",
+        "start_url": "/admin",
+        "display": "standalone",
+        "background_color": "#f0f2f5",
+        "theme_color": "#06c755",
+        "orientation": "any",
+        "icons": [
+            {
+                "src": "/pwa/icon.svg",
+                "sizes": "any",
+                "type": "image/svg+xml",
+                "purpose": "any"
+            },
+            {
+                "src": "/pwa/icon.svg",
+                "sizes": "192x192",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            },
+            {
+                "src": "/pwa/icon.svg",
+                "sizes": "512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ]
+    }
+    resp = app.response_class(
+        response=json.dumps(manifest, ensure_ascii=False),
+        status=200,
+        mimetype='application/manifest+json'
+    )
+    return resp
+
+
+@app.route("/pwa/icon.svg")
+def pwa_icon_svg():
+    resp = app.response_class(
+        response=PWA_ICON_SVG,
+        status=200,
+        mimetype='image/svg+xml'
+    )
+    resp.headers['Cache-Control'] = 'public, max-age=86400'
+    return resp
+
+
+@app.route("/pwa/icon-192.png")
+def pwa_icon_192():
+    # Redirect to SVG (works for most modern browsers)
+    return redirect("/pwa/icon.svg")
+
+
+@app.route("/pwa/sw.js")
+def pwa_sw():
+    sw_code = """
+self.addEventListener('install', function(e) { self.skipWaiting(); });
+self.addEventListener('activate', function(e) { clients.claim(); });
+self.addEventListener('fetch', function(e) {
+    e.respondWith(fetch(e.request).catch(function() {
+        return new Response('離線中，請檢查網路連線', {headers: {'Content-Type': 'text/html; charset=utf-8'}});
+    }));
+});
+"""
+    resp = app.response_class(
+        response=sw_code,
+        status=200,
+        mimetype='application/javascript'
+    )
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp
 
 
 @app.route("/health", methods=["GET"])
