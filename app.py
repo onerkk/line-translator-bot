@@ -2102,6 +2102,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tab active" onclick="switchTab('groups')">群組</div>
 <div class="tab" onclick="switchTab('dm')">私訊DM</div>
 <div class="tab" onclick="switchTab('skip')">白名單</div>
+<div class="tab" onclick="switchTab('storage')">儲區</div>
 </div>
 
 <!-- Groups Panel -->
@@ -2127,7 +2128,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <select class="group-select" id="skipGroupSelect" onchange="loadSkipList()">
 <option value="">選擇群組...</option>
 </select>
+<div class="card-sub" style="padding:0 4px 8px;font-size:12px">開啟 = 不翻譯該成員訊息</div>
 <div id="skipListContent"><div class="empty">請先選擇群組</div></div>
+</div>
+
+<!-- Storage Panel -->
+<div class="panel" id="panel-storage">
+<div class="card">
+<div class="card-title">📦 儲區資料更新</div>
+<div class="card-sub">上傳 Excel 檔案自動更新儲區查詢資料</div>
+<div style="margin-top:12px">
+<input type="file" id="storageFile" accept=".xlsx,.xls" style="display:none" onchange="previewStorage()">
+<button class="btn btn-green" onclick="document.getElementById('storageFile').click()">選擇 Excel 檔案</button>
+<div id="storageFileName" style="margin-top:8px;font-size:13px;color:#888"></div>
+</div>
+</div>
+<div id="storagePreview"></div>
+<div id="storageActions" style="display:none;margin-top:12px">
+<button class="btn btn-green" onclick="uploadStorage()">確認更新</button>
+</div>
+<div class="card" style="margin-top:12px">
+<div class="card-title">目前資料</div>
+<div id="storageStats"><div class="empty">載入中...</div></div>
+<div style="margin-top:10px">
+<button class="btn btn-sm" style="background:#333;color:#fff" onclick="downloadJson()">下載 JSON</button>
+</div>
+</div>
 </div>
 
 </div><!-- mainPage -->
@@ -2163,12 +2189,13 @@ function doLogin(){
 }
 
 function switchTab(name){
-  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',t.textContent.includes(name==='groups'?'群組':name==='dm'?'DM':'白名單'))});
+  const labels={'groups':'群組','dm':'DM','skip':'白名單','storage':'儲區'};
+  document.querySelectorAll('.tab').forEach(t=>{t.classList.toggle('active',t.textContent.includes(labels[name]))});
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
 }
 
-function loadAll(){loadGroups();loadDM();loadGroupSelect()}
+function loadAll(){loadGroups();loadDM();loadGroupSelect();loadStorageStats()}
 
 async function loadGroups(){
   const d=await api('/groups');
@@ -2244,32 +2271,66 @@ async function loadSkipList(){
   if(!gid){el.innerHTML='<div class="empty">請先選擇群組</div>';return}
   const d=await api('/skip?group_id='+gid);
   if(!d)return;
-  const list=d.skip_users||[];
-  if(!list.length){
-    el.innerHTML='<div class="empty">此群組白名單為空</div><div class="add-row"><input class="input-field" id="skipAddInput" placeholder="輸入顯示名稱" style="margin:0"><button class="btn btn-green btn-sm" onclick="addSkipUser()">新增</button></div>';
+  const users=d.users||[];
+  if(!users.length){
+    el.innerHTML='<div class="empty">尚無成員紀錄<br>成員在群組發訊息後會自動出現</div>';
     return;
   }
-  el.innerHTML=list.map(u=>`
+  el.innerHTML=users.map(u=>`
     <div class="wl-item">
-      <span>${u.name||'(未知)'}</span>
-      <button class="btn btn-red btn-sm" onclick="removeSkipUser('${u.user_id}')">移除</button>
+      <span>${u.name}</span>
+      <label class="toggle"><input type="checkbox" ${u.skipped?'checked':''} onchange="toggleSkip('${u.user_id}',this.checked)"><span class="slider"></span></label>
     </div>
-  `).join('')+'<div class="add-row"><input class="input-field" id="skipAddInput" placeholder="輸入顯示名稱" style="margin:0"><button class="btn btn-green btn-sm" onclick="addSkipUser()">新增</button></div>';
+  `).join('');
 }
 
-async function addSkipUser(){
+async function toggleSkip(uid,on){
   const gid=document.getElementById('skipGroupSelect').value;
-  const name=document.getElementById('skipAddInput').value.trim();
-  if(!gid||!name){toast('請選群組並輸入名稱');return}
-  const d=await api('/skip','POST',{group_id:gid,name:name,action:'add'});
-  if(d&&d.error){toast(d.error);return}
-  if(d){toast(d.message||'已新增');loadSkipList()}
+  const d=await api('/skip','POST',{group_id:gid,user_id:uid,action:on?'add':'remove'});
+  if(d)toast(on?'已跳過翻譯':'已恢復翻譯');
 }
 
-async function removeSkipUser(uid){
-  const gid=document.getElementById('skipGroupSelect').value;
-  const d=await api('/skip','POST',{group_id:gid,user_id:uid,action:'remove'});
-  if(d){toast('已移除');loadSkipList()}
+async function loadStorageStats(){
+  const d=await api('/storage/stats');
+  if(!d)return;
+  document.getElementById('storageStats').innerHTML='<div style="font-size:14px">客戶數: <b>'+d.count+'</b></div>';
+}
+
+let storageFileData=null;
+function previewStorage(){
+  const f=document.getElementById('storageFile').files[0];
+  if(!f)return;
+  document.getElementById('storageFileName').textContent='📄 '+f.name;
+  storageFileData=f;
+  document.getElementById('storageActions').style.display='block';
+  document.getElementById('storagePreview').innerHTML='<div class="card"><div class="card-sub">點「確認更新」上傳並解析</div></div>';
+}
+
+async function uploadStorage(){
+  if(!storageFileData){toast('請先選擇檔案');return}
+  const fd=new FormData();
+  fd.append('file',storageFileData);
+  try{
+    const r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    const d=await r.json();
+    if(d.error){toast(d.error);return}
+    toast('更新成功！共 '+d.count+' 筆客戶');
+    document.getElementById('storageActions').style.display='none';
+    document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#06C755;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div><div class="card-sub" style="margin-top:4px">⚠️ 重啟後會失效，請下載 JSON 更新 app.py</div></div>';
+    loadStorageStats();
+  }catch(e){toast('上傳失敗: '+e)}
+}
+
+async function downloadJson(){
+  try{
+    const r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY}});
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='storage_data.json';a.click();
+    URL.revokeObjectURL(url);
+    toast('JSON 已下載');
+  }catch(e){toast('下載失敗')}
 }
 
 // Auto-login from cache
@@ -2444,37 +2505,114 @@ def api_admin_skip():
     if request.method == "POST":
         data = request.get_json() or {}
         gid = data.get("group_id", "")
+        uid = data.get("user_id", "")
         action = data.get("action", "add")
-        if not gid:
-            return jsonify({"error": "missing group_id"}), 400
+        if not gid or not uid:
+            return jsonify({"error": "missing group_id or user_id"}), 400
+        if gid not in group_skip_users:
+            group_skip_users[gid] = set()
         if action == "add":
-            name_query = data.get("name", "").strip()
-            if not name_query:
-                return jsonify({"error": "請輸入名稱"}), 400
-            matches = find_user_by_name(gid, name_query)
-            if not matches:
-                return jsonify({"error": "找不到「" + name_query + "」，需先在群組發過訊息"}), 400
-            if len(matches) > 1:
-                names = ", ".join([m[1] for m in matches])
-                return jsonify({"error": "找到多人: " + names + "，請輸入更完整的名字"}), 400
-            uid, dname = matches[0]
-            if gid not in group_skip_users:
-                group_skip_users[gid] = set()
             group_skip_users[gid].add(uid)
-            return jsonify({"message": "已將「" + dname + "」加入白名單"})
+            return jsonify({"ok": True})
         elif action == "remove":
-            uid = data.get("user_id", "")
-            if gid in group_skip_users:
-                group_skip_users[gid].discard(uid)
-            return jsonify({"message": "已移除"})
-    # GET
+            group_skip_users[gid].discard(uid)
+            return jsonify({"ok": True})
+    # GET: return all known users in group with skip status
     gid = request.args.get("group_id", "")
     skipped = group_skip_users.get(gid, set())
     names_cache = group_user_names.get(gid, {})
-    result = []
-    for uid in skipped:
-        result.append({"user_id": uid, "name": names_cache.get(uid, "")})
-    return jsonify({"skip_users": result})
+    users = []
+    for uid, dname in names_cache.items():
+        users.append({"user_id": uid, "name": dname, "skipped": uid in skipped})
+    users.sort(key=lambda x: x["name"])
+    return jsonify({"users": users})
+
+
+@app.route("/api/admin/storage/stats")
+def api_admin_storage_stats():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({"count": len(STORAGE_LOOKUP)})
+
+
+@app.route("/api/admin/storage/upload", methods=["POST"])
+def api_admin_storage_upload():
+    global STORAGE_LOOKUP, CUSTOMER_NAMES
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if 'file' not in request.files:
+        return jsonify({"error": "沒有檔案"}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "沒有檔案"}), 400
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(f, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return jsonify({"error": "空的 Excel"}), 400
+        # Auto-detect format: find header row
+        header = [str(c).strip() if c else "" for c in rows[0]]
+        new_data = {}
+        # Try format: Customer | <=3200 | >3200<=4200 | >4200
+        len_cols = {}
+        for i, h in enumerate(header):
+            hl = h.replace(" ", "")
+            if "<=3200" in hl and ">3200" not in hl:
+                len_cols["<=3200"] = i
+            elif ">3200" in hl and "<=4200" in hl:
+                len_cols[">3200<=4200"] = i
+            elif ">4200" in hl:
+                len_cols[">4200"] = i
+        if len(len_cols) >= 2:
+            # Detected column-based format
+            cust_col = 0  # assume first column is customer
+            for _, row in enumerate(rows[1:], 1):
+                if not row or not row[cust_col]:
+                    continue
+                cust = str(row[cust_col]).strip()
+                if not cust:
+                    continue
+                entries = []
+                for length_key, col_idx in len_cols.items():
+                    if col_idx < len(row) and row[col_idx]:
+                        zone = str(row[col_idx]).strip()
+                        if zone:
+                            entries.append([length_key, zone])
+                if entries:
+                    new_data[cust] = entries
+        else:
+            # Try row-based format: Customer | LengthRange | Zone
+            for row in rows[1:]:
+                if not row or len(row) < 3:
+                    continue
+                cust = str(row[0]).strip() if row[0] else ""
+                length_key = str(row[1]).strip() if row[1] else ""
+                zone = str(row[2]).strip() if row[2] else ""
+                if cust and length_key and zone:
+                    if cust not in new_data:
+                        new_data[cust] = []
+                    new_data[cust].append([length_key, zone])
+        if not new_data:
+            return jsonify({"error": "無法解析 Excel，請確認格式：\n欄A=客戶 欄B=<=3200 欄C=>3200<=4200 欄D=>4200"}), 400
+        # Update in-memory
+        STORAGE_LOOKUP = new_data
+        CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
+        logger.info("Storage updated via admin: %d customers", len(new_data))
+        return jsonify({"ok": True, "count": len(new_data)})
+    except Exception as e:
+        logger.error("Storage upload error: %s", e)
+        return jsonify({"error": "解析失敗: " + str(e)}), 400
+
+
+@app.route("/api/admin/storage/json")
+def api_admin_storage_json():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
+    return app.response_class(json_str, mimetype="application/json",
+                              headers={"Content-Disposition": "attachment; filename=storage_data.json"})
 
 
 @app.route("/health", methods=["GET"])
