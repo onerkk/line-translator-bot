@@ -53,6 +53,8 @@ dm_target_lang = {}
 dm_master_enabled = True
 # DM whitelist: set of user_ids allowed to DM when master is off
 dm_whitelist = set()
+# DM known users: {user_id: display_name} for anyone who has DM'd the bot
+dm_known_users = {}
 
 # Translation cache: key = (text, src, tgt), value = (result, timestamp)
 translation_cache = {}
@@ -1634,6 +1636,16 @@ def handle_message(event):
 
     # --- DM (private message) mode ---
     if is_dm and user_id:
+        # Record DM user for admin panel
+        if user_id not in dm_known_users:
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    profile = api.get_profile(user_id)
+                    dm_known_users[user_id] = profile.display_name or user_id
+            except Exception:
+                dm_known_users[user_id] = user_id
+
         # DM commands
         cmd = text.strip().lower()
         if cmd == "/help":
@@ -2107,10 +2119,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="card-title">DM 白名單</div>
 <div class="card-sub">總開關關閉時，只有白名單內的人可以私訊翻譯</div>
 <div id="dmWlList"></div>
-<div class="add-row">
-<input class="input-field" id="dmWlInput" placeholder="輸入 User ID" style="margin:0">
-<button class="btn btn-green btn-sm" onclick="addDmWl()">新增</button>
-</div>
 </div>
 </div>
 
@@ -2191,16 +2199,16 @@ async function loadDM(){
   const d=await api('/dm');
   if(!d)return;
   document.getElementById('dmToggle').checked=d.master_enabled;
-  renderDmWl(d.whitelist||[]);
+  renderDmWl(d.known_users||[]);
 }
 
-function renderDmWl(list){
+function renderDmWl(users){
   const el=document.getElementById('dmWlList');
-  if(!list.length){el.innerHTML='<div class="empty" style="padding:12px">白名單為空</div>';return}
-  el.innerHTML=list.map(u=>`
+  if(!users.length){el.innerHTML='<div class="empty" style="padding:12px">尚無人私訊過 Bot</div>';return}
+  el.innerHTML=users.map(u=>`
     <div class="wl-item">
-      <span style="font-size:13px;word-break:break-all">${u}</span>
-      <button class="btn btn-red btn-sm" onclick="removeDmWl('${u}')">移除</button>
+      <span>${u.name}</span>
+      <label class="toggle"><input type="checkbox" ${u.whitelisted?'checked':''} onchange="toggleDmWl('${u.user_id}',this.checked)"><span class="slider"></span></label>
     </div>
   `).join('');
 }
@@ -2211,16 +2219,9 @@ async function toggleDM(){
   if(d)toast(on?'DM 已開啟':'DM 已關閉');
 }
 
-async function addDmWl(){
-  const v=document.getElementById('dmWlInput').value.trim();
-  if(!v){toast('請輸入 User ID');return}
-  const d=await api('/dm/whitelist','POST',{user_id:v,action:'add'});
-  if(d){toast('已新增');document.getElementById('dmWlInput').value='';loadDM()}
-}
-
-async function removeDmWl(uid){
-  const d=await api('/dm/whitelist','POST',{user_id:uid,action:'remove'});
-  if(d){toast('已移除');loadDM()}
+async function toggleDmWl(uid,on){
+  const d=await api('/dm/whitelist','POST',{user_id:uid,action:on?'add':'remove'});
+  if(d)toast(on?'已加入白名單':'已移出白名單');
 }
 
 async function loadGroupSelect(){
@@ -2409,9 +2410,14 @@ def api_admin_dm():
         if "master_enabled" in data:
             dm_master_enabled = bool(data["master_enabled"])
         return jsonify({"ok": True})
+    # Build known users list with whitelist status
+    known = []
+    for uid, name in dm_known_users.items():
+        known.append({"user_id": uid, "name": name, "whitelisted": uid in dm_whitelist})
     return jsonify({
         "master_enabled": dm_master_enabled,
-        "whitelist": list(dm_whitelist)
+        "whitelist": list(dm_whitelist),
+        "known_users": known
     })
 
 
