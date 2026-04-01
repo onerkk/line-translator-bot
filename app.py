@@ -4,39 +4,27 @@ import json
 import urllib.request
 import urllib.parse
 import logging
-from flask import Flask, request, abort, session, redirect, jsonify, render_template_string
+from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent, JoinEvent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
 import time
-import hashlib
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "walsin-bot-secret-" + os.environ.get("LINE_CHANNEL_SECRET", "default"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # 管理後台密碼
-ADMIN_EMAIL = "onerkk@gmail.com"  # 管理員信箱（顯示用）
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
-
-# --- Group tracking ---
-known_groups = {}  # {group_id: {"last_active": timestamp, "msg_count": int, "name": str}}
-
-# --- DM control ---
-dm_enabled = False  # 私訊翻譯預設關閉
-dm_api_calls = 0  # 追蹤私訊 API 呼叫次數
-known_dm_users = {}  # {user_id: {"name": str, "last_active": ts, "msg_count": int, "allowed": False}}
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -49,6 +37,8 @@ group_audio_settings = {}
 group_wo_settings = {}
 # Skip list: set of user_ids per group whose messages won't be translated
 group_skip_users = {}
+# Track user display names per group: {group_id: {user_id: display_name}}
+group_user_names = {}
 
 # DM (private message) target language per user, default "id"
 dm_target_lang = {}
@@ -1359,7 +1349,10 @@ def get_help_text(group_id):
     lines.append("\u3010\u500b\u4eba\u3011")
     lines.append("/skip \u4e0d\u7ffb\u8b6f\u6211")
     lines.append("/unskip \u6062\u5fa9\u7ffb\u8b6f")
-    lines.append("/skiplist \u767d\u540d\u55ae")
+    lines.append("\u3010\u7ba1\u7406\u3011")
+    lines.append("/skipadd \u540d\u5b57 \u52a0\u5165\u767d\u540d\u55ae")
+    lines.append("/skipdel \u540d\u5b57 \u79fb\u51fa\u767d\u540d\u55ae")
+    lines.append("/skiplist \u67e5\u770b\u767d\u540d\u55ae")
     lines.append("\u3010\u529f\u80fd\u3011")
     lines.append("/lang \u4ee3\u78bc \u5207\u63db\u8a9e\u8a00")
     lines.append("/notice \u5167\u5bb9 \u96d9\u8a9e\u516c\u544a")
@@ -1447,6 +1440,48 @@ def handle_qry_command(text):
     return "\n".join(lines)
 
 
+def get_display_name(group_id, user_id):
+    """Get user display name from cache or LINE API."""
+    # Check cache first
+    if group_id in group_user_names and user_id in group_user_names[group_id]:
+        return group_user_names[group_id][user_id]
+    # Try LINE API
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            profile = api.get_group_member_profile(group_id, user_id)
+            name = profile.display_name
+            if name:
+                if group_id not in group_user_names:
+                    group_user_names[group_id] = {}
+                group_user_names[group_id][user_id] = name
+                return name
+    except Exception as e:
+        logger.warning("Failed to get display name for %s: %s", user_id, e)
+    return None
+
+
+def record_user_name(group_id, user_id):
+    """Record user display name in background (best effort)."""
+    if not group_id or not user_id:
+        return
+    if group_id in group_user_names and user_id in group_user_names[group_id]:
+        return
+    get_display_name(group_id, user_id)
+
+
+def find_user_by_name(group_id, name_query):
+    """Find user_id by display name (partial match). Returns list of (user_id, display_name)."""
+    if group_id not in group_user_names:
+        return []
+    matches = []
+    query_lower = name_query.lower().strip()
+    for uid, dname in group_user_names[group_id].items():
+        if query_lower == dname.lower() or query_lower in dname.lower() or dname.lower() in query_lower:
+            matches.append((uid, dname))
+    return matches
+
+
 def handle_command(text, group_id, user_id=None):
     cmd = text.strip().lower()
     if cmd == "/help":
@@ -1488,11 +1523,48 @@ def handle_command(text, group_id, user_id=None):
         if group_id in group_skip_users:
             group_skip_users[group_id].discard(user_id)
         return "\u2705 \u5df2\u5c07\u4f60\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f\nAnda dihapus dari daftar skip"
+    elif text.strip().lower().startswith("/skipadd"):
+        name_query = text.strip()[8:].strip()
+        if not name_query:
+            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipadd \u79cb\u60c5"
+        matches = find_user_by_name(group_id, name_query)
+        if len(matches) == 0:
+            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d\n\u8a72\u7528\u6236\u9700\u5148\u5728\u7fa4\u7d44\u767c\u904e\u8a0a\u606f\u624d\u80fd\u88ab\u8a8d\u5230"
+        if len(matches) > 1:
+            names = "\n".join(["  \u2022 " + m[1] for m in matches])
+            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
+        uid, dname = matches[0]
+        if group_id not in group_skip_users:
+            group_skip_users[group_id] = set()
+        group_skip_users[group_id].add(uid)
+        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u52a0\u5165\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f"
+    elif text.strip().lower().startswith("/skipdel"):
+        name_query = text.strip()[8:].strip()
+        if not name_query:
+            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipdel \u79cb\u60c5"
+        matches = find_user_by_name(group_id, name_query)
+        if len(matches) == 0:
+            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d"
+        if len(matches) > 1:
+            names = "\n".join(["  \u2022 " + m[1] for m in matches])
+            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
+        uid, dname = matches[0]
+        if group_id in group_skip_users:
+            group_skip_users[group_id].discard(uid)
+        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f"
     elif cmd == "/skiplist":
         skipped = group_skip_users.get(group_id, set())
         if not skipped:
             return "\u76ee\u524d\u767d\u540d\u55ae\u662f\u7a7a\u7684 / Daftar skip kosong"
-        return "\u23ed\ufe0f \u767d\u540d\u55ae / Daftar skip:\n" + str(len(skipped)) + " \u4eba\u5df2\u8df3\u904e / orang di-skip"
+        names_cache = group_user_names.get(group_id, {})
+        lines = ["\u23ed\ufe0f \u767d\u540d\u55ae / Daftar skip:"]
+        for uid in skipped:
+            dname = names_cache.get(uid)
+            if dname:
+                lines.append("  \u2022 " + dname)
+            else:
+                lines.append("  \u2022 (\u672a\u77e5\u7528\u6236)")
+        return "\n".join(lines)
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
         tgt = group_target_lang.get(group_id, "id")
@@ -1527,390 +1599,6 @@ def handle_command(text, group_id, user_id=None):
     return None
 
 
-
-def track_group(group_id):
-    """Track group activity for admin panel."""
-    if not group_id or not group_id.startswith("C"):
-        return
-    if group_id not in known_groups:
-        known_groups[group_id] = {"last_active": time.time(), "msg_count": 0, "name": ""}
-    known_groups[group_id]["last_active"] = time.time()
-    known_groups[group_id]["msg_count"] = known_groups[group_id].get("msg_count", 0) + 1
-    # Try to get group name (only once)
-    if not known_groups[group_id].get("name"):
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                summary = api.get_group_summary(group_id)
-                known_groups[group_id]["name"] = summary.group_name or ""
-        except Exception:
-            pass
-
-
-def track_dm_user(user_id):
-    """Track DM user for admin panel."""
-    if not user_id or user_id.startswith("C"):
-        return
-    if user_id not in known_dm_users:
-        known_dm_users[user_id] = {"name": "", "last_active": time.time(), "msg_count": 0, "allowed": False}
-    known_dm_users[user_id]["last_active"] = time.time()
-    known_dm_users[user_id]["msg_count"] = known_dm_users[user_id].get("msg_count", 0) + 1
-    # Try to get display name (only once)
-    if not known_dm_users[user_id].get("name"):
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                profile = api.get_profile(user_id)
-                known_dm_users[user_id]["name"] = profile.display_name or ""
-        except Exception:
-            pass
-
-
-def is_dm_allowed(user_id):
-    """Check if a user is allowed to use DM translation."""
-    if not dm_enabled:
-        return False
-    info = known_dm_users.get(user_id)
-    if not info:
-        return False
-    return info.get("allowed", False)
-
-
-def admin_required(f):
-    """Decorator to require admin login."""
-    from functools import wraps
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not ADMIN_KEY:
-            return "ADMIN_KEY not set in environment", 503
-        if not session.get("admin_logged_in"):
-            return redirect("/admin/login")
-        return f(*args, **kwargs)
-    return decorated
-
-
-ADMIN_HTML = """
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>翻譯機器人管理</title>
-<meta name="theme-color" content="#06c755">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="翻譯Bot">
-<link rel="manifest" href="/pwa/manifest.json">
-<link rel="apple-touch-icon" href="/pwa/icon-192.png">
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
-.header { background: #06c755; color: white; padding: 20px; text-align: center; }
-.header h1 { font-size: 22px; }
-.header small { opacity: 0.8; }
-.container { max-width: 800px; margin: 20px auto; padding: 0 15px; }
-.card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 16px; overflow: hidden; }
-.card-header { padding: 16px 20px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 16px; }
-.card-body { padding: 20px; }
-.group-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
-.group-item:last-child { border-bottom: none; }
-.group-info { flex: 1; }
-.group-name { font-weight: bold; font-size: 15px; }
-.group-id { font-size: 12px; color: #888; font-family: monospace; word-break: break-all; }
-.group-meta { font-size: 12px; color: #666; margin-top: 4px; }
-.btn { padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; }
-.btn-danger { background: #ff4444; color: white; }
-.btn-danger:hover { background: #cc0000; }
-.btn-success { background: #06c755; color: white; }
-.empty { text-align: center; padding: 40px; color: #888; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.stat { background: white; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-.stat-num { font-size: 28px; font-weight: bold; color: #06c755; }
-.stat-label { font-size: 12px; color: #888; margin-top: 4px; }
-.logout { position: absolute; right: 20px; top: 20px; background: rgba(255,255,255,0.2); color: white; padding: 6px 14px; border-radius: 6px; text-decoration: none; font-size: 13px; }
-.refresh { text-align: center; margin: 12px 0; }
-.refresh a { color: #06c755; text-decoration: none; font-size: 14px; }
-.confirm-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; justify-content: center; align-items: center; }
-.confirm-box { background: white; border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; }
-.confirm-box .btn { margin: 8px; }
-</style>
-</head>
-<body>
-<div class="header" style="position:relative;">
-<h1>🤖 翻譯機器人管理</h1>
-<small>{{ admin_email }}</small>
-<a href="/admin/logout" class="logout">登出</a>
-</div>
-<div class="container">
-<div class="stats">
-<div class="stat"><div class="stat-num">{{ groups|length }}</div><div class="stat-label">已知群組</div></div>
-<div class="stat"><div class="stat-num">{{ total_msgs }}</div><div class="stat-label">總訊息數</div></div>
-<div class="stat"><div class="stat-num">{{ cache_size }}</div><div class="stat-label">翻譯快取</div></div>
-</div>
-<div class="refresh"><a href="/admin">🔄 重新整理</a></div>
-<div class="card">
-<div class="card-header">💬 私訊翻譯</div>
-<div class="card-body" style="display:flex;justify-content:space-between;align-items:center;">
-<div>
-<div style="font-size:15px;">總開關：<strong>{{ '開啟' if dm_on else '關閉' }}</strong></div>
-<div style="font-size:12px;color:#888;margin-top:4px;">API 呼叫次數：{{ dm_calls }}</div>
-</div>
-<button class="btn {{ 'btn-danger' if dm_on else 'btn-success' }}" onclick="toggleDM()">{{ '關閉' if dm_on else '開啟' }}</button>
-</div>
-</div>
-<div class="card">
-<div class="card-header">👤 私訊用戶白名單</div>
-<div class="card-body">
-{% if dm_on %}
-{% if dm_users %}
-{% for u in dm_users %}
-<div class="group-item">
-<div class="group-info">
-<div class="group-name">{{ u.name or '(未取得名稱)' }}</div>
-<div class="group-id">{{ u.id[:20] }}...</div>
-<div class="group-meta">訊息: {{ u.msg_count }} | 最後: {{ u.last_active }}</div>
-</div>
-<button class="btn {{ 'btn-danger' if u.allowed else 'btn-success' }}" style="font-size:12px;padding:6px 12px;" onclick="toggleUser('{{ u.id }}')">{{ '取消' if u.allowed else '允許' }}</button>
-</div>
-{% endfor %}
-{% else %}
-<div class="empty">尚無私訊用戶<br><small>有人私訊 Bot 後才會記錄</small></div>
-{% endif %}
-{% else %}
-<div class="empty">請先開啟私訊翻譯總開關</div>
-{% endif %}
-</div>
-</div>
-<div class="card">
-<div class="card-header">📋 群組列表</div>
-<div class="card-body">
-{% if groups %}
-{% for g in groups %}
-<div class="group-item">
-<div class="group-info">
-<div class="group-name">{{ g.name or '(未取得名稱)' }}</div>
-<div class="group-id">{{ g.id }}</div>
-<div class="group-meta">訊息: {{ g.msg_count }} | 最後活動: {{ g.last_active }}</div>
-</div>
-<button class="btn btn-danger" onclick="confirmLeave('{{ g.id }}', '{{ g.name or g.id }}')">退出</button>
-</div>
-{% endfor %}
-{% else %}
-<div class="empty">尚無已知群組<br><small>Bot 收到群組訊息後才會記錄</small></div>
-{% endif %}
-</div>
-</div>
-</div>
-<div class="confirm-overlay" id="confirmOverlay">
-<div class="confirm-box">
-<p style="margin-bottom:16px;">確定要讓 Bot 退出<br><strong id="confirmName"></strong>？</p>
-<button class="btn btn-danger" id="confirmBtn" onclick="doLeave()">確定退出</button>
-<button class="btn" style="background:#ddd;" onclick="cancelLeave()">取消</button>
-</div>
-</div>
-<script>
-let leaveId = '';
-function confirmLeave(id, name) {
-    leaveId = id;
-    document.getElementById('confirmName').textContent = name;
-    document.getElementById('confirmOverlay').style.display = 'flex';
-}
-function cancelLeave() {
-    document.getElementById('confirmOverlay').style.display = 'none';
-}
-function doLeave() {
-    document.getElementById('confirmBtn').textContent = '處理中...';
-    document.getElementById('confirmBtn').disabled = true;
-    fetch('/admin/leave/' + leaveId, {method:'POST'})
-    .then(r => r.json())
-    .then(d => { alert(d.message || d.error); location.reload(); })
-    .catch(e => { alert('錯誤: ' + e); location.reload(); });
-}
-function toggleDM() {
-    fetch('/admin/toggle_dm', {method:'POST'})
-    .then(r => r.json())
-    .then(d => { location.reload(); })
-    .catch(e => { alert('錯誤: ' + e); location.reload(); });
-}
-function toggleUser(uid) {
-    fetch('/admin/toggle_user/' + uid, {method:'POST'})
-    .then(r => r.json())
-    .then(d => { location.reload(); })
-    .catch(e => { alert('錯誤: ' + e); location.reload(); });
-}
-</script>
-<script>
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/pwa/sw.js').catch(function(){});
-}
-</script>
-</body>
-</html>
-"""
-
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>管理登入</title>
-<meta name="theme-color" content="#06c755">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="翻譯Bot">
-<link rel="manifest" href="/pwa/manifest.json">
-<link rel="apple-touch-icon" href="/pwa/icon-192.png">
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-.login-box { background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); width: 340px; text-align: center; }
-.login-box h2 { margin-bottom: 8px; }
-.login-box p { color: #888; font-size: 14px; margin-bottom: 24px; }
-.login-box input { width: 100%; padding: 12px 16px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; margin-bottom: 16px; }
-.login-box input:focus { outline: none; border-color: #06c755; }
-.login-box button { width: 100%; padding: 12px; background: #06c755; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-.login-box button:hover { background: #05a648; }
-.error { color: #ff4444; font-size: 14px; margin-bottom: 12px; }
-</style>
-</head>
-<body>
-<div class="login-box">
-<h2>🔐 管理登入</h2>
-<p>翻譯機器人後台</p>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="POST">
-<input type="password" name="key" placeholder="請輸入管理密碼" autofocus>
-<button type="submit">登入</button>
-</form>
-</div>
-</body>
-</html>
-"""
-
-
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    if not ADMIN_KEY:
-        return "ADMIN_KEY not set in Render environment variables", 503
-    if request.method == "POST":
-        key = request.form.get("key", "")
-        if key == ADMIN_KEY:
-            session["admin_logged_in"] = True
-            return redirect("/admin")
-        return render_template_string(LOGIN_HTML, error="密碼錯誤")
-    return render_template_string(LOGIN_HTML, error=None)
-
-
-@app.route("/admin/logout")
-def admin_logout():
-    session.pop("admin_logged_in", None)
-    return redirect("/admin/login")
-
-
-@app.route("/admin")
-@admin_required
-def admin_page():
-    import datetime
-    groups_list = []
-    for gid, info in sorted(known_groups.items(), key=lambda x: x[1].get("last_active", 0), reverse=True):
-        last = info.get("last_active", 0)
-        if last:
-            dt = datetime.datetime.fromtimestamp(last)
-            last_str = dt.strftime("%m/%d %H:%M")
-        else:
-            last_str = "-"
-        groups_list.append({
-            "id": gid,
-            "name": info.get("name", ""),
-            "msg_count": info.get("msg_count", 0),
-            "last_active": last_str,
-        })
-    total_msgs = sum(g.get("msg_count", 0) for g in known_groups.values())
-    # Build DM users list
-    dm_users_list = []
-    for uid, info in sorted(known_dm_users.items(), key=lambda x: x[1].get("last_active", 0), reverse=True):
-        last = info.get("last_active", 0)
-        if last:
-            dt = datetime.datetime.fromtimestamp(last)
-            last_str = dt.strftime("%m/%d %H:%M")
-        else:
-            last_str = "-"
-        dm_users_list.append({
-            "id": uid,
-            "name": info.get("name", ""),
-            "msg_count": info.get("msg_count", 0),
-            "last_active": last_str,
-            "allowed": info.get("allowed", False),
-        })
-    return render_template_string(
-        ADMIN_HTML,
-        groups=groups_list,
-        total_msgs=total_msgs,
-        cache_size=len(translation_cache),
-        admin_email=ADMIN_EMAIL,
-        dm_on=dm_enabled,
-        dm_calls=dm_api_calls,
-        dm_users=dm_users_list,
-    )
-
-
-@app.route("/admin/leave/<group_id>", methods=["POST"])
-@admin_required
-def admin_leave_group(group_id):
-    try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            api.leave_group(group_id)
-        # Remove from tracking
-        known_groups.pop(group_id, None)
-        group_settings.pop(group_id, None)
-        group_target_lang.pop(group_id, None)
-        group_img_settings.pop(group_id, None)
-        group_audio_settings.pop(group_id, None)
-        group_wo_settings.pop(group_id, None)
-        group_skip_users.pop(group_id, None)
-        return jsonify({"ok": True, "message": "已退出群組 " + group_id})
-    except Exception as e:
-        logger.error("Leave group error: %s", e)
-        return jsonify({"ok": False, "error": "退出失敗: " + str(e)}), 500
-
-
-@app.route("/admin/toggle_dm", methods=["POST"])
-@admin_required
-def admin_toggle_dm():
-    global dm_enabled
-    dm_enabled = not dm_enabled
-    status = "開啟" if dm_enabled else "關閉"
-    return jsonify({"ok": True, "dm_enabled": dm_enabled, "message": "私訊翻譯已" + status})
-
-
-@app.route("/admin/toggle_user/<user_id>", methods=["POST"])
-@admin_required
-def admin_toggle_user(user_id):
-    if user_id not in known_dm_users:
-        return jsonify({"ok": False, "error": "用戶不存在"}), 404
-    current = known_dm_users[user_id].get("allowed", False)
-    known_dm_users[user_id]["allowed"] = not current
-    name = known_dm_users[user_id].get("name", user_id[:10])
-    status = "允許" if not current else "取消"
-    return jsonify({"ok": True, "allowed": not current, "message": name + " 已" + status + "私訊翻譯"})
-
-
-@app.route("/admin/api/groups")
-@admin_required
-def admin_api_groups():
-    return jsonify({"groups": known_groups, "count": len(known_groups)})
-
-
-@handler.add(JoinEvent)
-def handle_join(event):
-    """Track when bot is added to a group."""
-    group_id = getattr(event.source, 'group_id', None)
-    if group_id:
-        logger.info("Bot joined group: %s", group_id)
-        track_group(group_id)
-
-
 @app.route("/callback", methods=["POST"])
 def callback():
     sig = request.headers.get("X-Line-Signature", "")
@@ -1935,34 +1623,8 @@ def handle_message(event):
 
     # --- DM (private message) mode ---
     if is_dm and user_id:
-        # Always track DM users
-        track_dm_user(user_id)
-
-        # DM commands that always work (no API cost)
-        cmd = text.strip().lower()
-        if text.strip().lower().startswith("/qry"):
-            qry_result = handle_qry_command(text)
-            if qry_result:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=qry_result)]
-                    ))
-            return
-
-        # Check if DM translation is allowed for this user
-        if not is_dm_allowed(user_id):
-            if cmd == "/help" or cmd.startswith("/to") or not text.startswith("/"):
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="\u274c \u79c1\u8a0a\u7ffb\u8b6f\u672a\u6388\u6b0a\n\u8acb\u5728\u7fa4\u7d44\u4e2d\u4f7f\u7528\n\n/qry \u5ba2\u6236 \u53ef\u67e5\u5132\u5340")]
-                    ))
-            return
-
         # DM commands
+        cmd = text.strip().lower()
         if cmd == "/help":
             tgt = dm_target_lang.get(user_id, "id")
             tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
@@ -2022,13 +1684,22 @@ def handle_message(event):
                     messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
                 ))
             return
+        # DM: handle /qry command
+        if text.strip().lower().startswith("/qry"):
+            qry_result = handle_qry_command(text)
+            if qry_result:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=qry_result)]
+                    ))
+            return
         # DM: skip other / commands
         if text.startswith("/"):
             return
 
         # DM translation: strip mentions, detect language, translate
-        global dm_api_calls
-        dm_api_calls += 1
         text_clean = strip_mentions_for_detect(text).strip()
         if not text_clean or len(text_clean) < 2:
             return
@@ -2058,7 +1729,10 @@ def handle_message(event):
         return
 
     # --- Group mode (original logic) ---
-    track_group(group_id)
+    # Record user display name for /skipadd lookup
+    if group_id and user_id:
+        record_user_name(group_id, user_id)
+
     if text.startswith("/"):
         cmd_result = handle_command(text, group_id, user_id)
         if cmd_result:
@@ -2121,7 +1795,6 @@ def handle_image(event):
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
     logger.info("Image received from %s", group_id)
-    track_group(group_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
@@ -2217,7 +1890,6 @@ def handle_audio(event):
     """Handle audio/voice messages: Whisper STT + detect language + translate."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
-    track_group(group_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
@@ -2278,111 +1950,6 @@ def handle_audio(event):
             messages=[TextMessage(text=reply)]
         ))
 
-
-
-
-# === PWA routes ===
-PWA_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<defs>
-<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-<stop offset="0%" style="stop-color:#06c755"/>
-<stop offset="100%" style="stop-color:#04a647"/>
-</linearGradient>
-</defs>
-<rect width="512" height="512" rx="108" fill="url(#bg)"/>
-<g transform="translate(256,200)">
-<circle cx="0" cy="0" r="72" fill="white" opacity="0.95"/>
-<circle cx="0" cy="0" r="52" fill="url(#bg)"/>
-<path d="M-24,-12 L-24,16 L-8,16 L-8,-2 L8,-2 L8,16 L24,16 L24,-12 L0,-28 Z" fill="white"/>
-</g>
-<g transform="translate(256,320)">
-<rect x="-80" y="0" width="160" height="8" rx="4" fill="white" opacity="0.9"/>
-<rect x="-60" y="18" width="120" height="8" rx="4" fill="white" opacity="0.7"/>
-<rect x="-70" y="36" width="140" height="8" rx="4" fill="white" opacity="0.5"/>
-</g>
-<g transform="translate(380,120)">
-<circle cx="0" cy="0" r="32" fill="#FFD43B"/>
-<text x="0" y="8" text-anchor="middle" font-size="32" font-family="Arial" font-weight="bold" fill="#333">譯</text>
-</g>
-</svg>'''
-
-
-@app.route("/pwa/manifest.json")
-def pwa_manifest():
-    manifest = {
-        "name": "翻譯機器人管理",
-        "short_name": "翻譯Bot",
-        "description": "LINE 翻譯機器人管理後台",
-        "start_url": "/admin",
-        "display": "standalone",
-        "background_color": "#f0f2f5",
-        "theme_color": "#06c755",
-        "orientation": "any",
-        "icons": [
-            {
-                "src": "/pwa/icon.svg",
-                "sizes": "any",
-                "type": "image/svg+xml",
-                "purpose": "any"
-            },
-            {
-                "src": "/pwa/icon.svg",
-                "sizes": "192x192",
-                "type": "image/svg+xml",
-                "purpose": "any maskable"
-            },
-            {
-                "src": "/pwa/icon.svg",
-                "sizes": "512x512",
-                "type": "image/svg+xml",
-                "purpose": "any maskable"
-            }
-        ]
-    }
-    resp = app.response_class(
-        response=json.dumps(manifest, ensure_ascii=False),
-        status=200,
-        mimetype='application/manifest+json'
-    )
-    return resp
-
-
-@app.route("/pwa/icon.svg")
-def pwa_icon_svg():
-    resp = app.response_class(
-        response=PWA_ICON_SVG,
-        status=200,
-        mimetype='image/svg+xml'
-    )
-    resp.headers['Cache-Control'] = 'public, max-age=86400'
-    return resp
-
-
-@app.route("/pwa/icon-192.png")
-def pwa_icon_192():
-    # Redirect to SVG (works for most modern browsers)
-    return redirect("/pwa/icon.svg")
-
-
-@app.route("/pwa/sw.js")
-def pwa_sw():
-    sw_code = """
-self.addEventListener('install', function(e) { self.skipWaiting(); });
-self.addEventListener('activate', function(e) { clients.claim(); });
-self.addEventListener('fetch', function(e) {
-    e.respondWith(fetch(e.request).catch(function() {
-        return new Response('離線中，請檢查網路連線', {headers: {'Content-Type': 'text/html; charset=utf-8'}});
-    }));
-});
-"""
-    resp = app.response_class(
-        response=sw_code,
-        status=200,
-        mimetype='application/javascript'
-    )
-    resp.headers['Cache-Control'] = 'no-cache'
-    resp.headers['Service-Worker-Allowed'] = '/'
-    return resp
 
 
 @app.route("/health", methods=["GET"])
