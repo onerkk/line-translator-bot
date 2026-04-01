@@ -6,8 +6,12 @@ import urllib.parse
 import logging
 from flask import Flask, request, abort, jsonify
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage, LeaveGroupRequest, LeaveRoomRequest
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent, JoinEvent, FollowEvent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+try:
+    from linebot.v3.webhooks import JoinEvent
+except ImportError:
+    JoinEvent = None
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
@@ -1986,22 +1990,23 @@ def handle_audio(event):
 
 
 
-@handler.add(JoinEvent)
-def handle_join(event):
-    """Track when bot joins a group."""
-    source = event.source
-    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
-    if not group_id:
-        return
-    gname = ""
-    try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            summary = api.get_group_summary(group_id)
-            gname = summary.group_name or ""
-    except Exception:
-        pass
-    group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+if JoinEvent:
+    @handler.add(JoinEvent)
+    def handle_join(event):
+        """Track when bot joins a group."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
+        if not group_id:
+            return
+        gname = ""
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                summary = api.get_group_summary(group_id)
+                gname = summary.group_name or ""
+        except Exception:
+            pass
+        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
 
 
 # ─── Admin Panel ────────────────────────────────────────
