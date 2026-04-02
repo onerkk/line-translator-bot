@@ -2520,16 +2520,17 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=2').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v1';
+SW_JS = '''const CACHE='bot-admin-v2';
 const URLS=['/admin'];
-self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
-self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});'''
+self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
+self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).then(r=>{if(r.ok){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c))}return r}).catch(()=>caches.match(e.request)))});'''
 
 MANIFEST_JSON = json.dumps({
     "name": "翻譯Bot 管理後台",
@@ -2595,7 +2596,10 @@ def check_admin_key():
 
 @app.route("/admin")
 def admin_page():
-    return ADMIN_HTML
+    resp = app.response_class(ADMIN_HTML, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.route("/manifest.json")
@@ -2605,7 +2609,9 @@ def manifest():
 
 @app.route("/sw.js")
 def service_worker():
-    return app.response_class(SW_JS, mimetype="application/javascript")
+    resp = app.response_class(SW_JS, mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
 
 
 @app.route("/icon-192.png")
