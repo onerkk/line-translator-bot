@@ -1,143 +1,171 @@
+"""
+翻譯小助手 — Discord Bot
+Ported from LINE translator bot (Walsin Lihwa / 華新麗華 鹽水廠)
+"""
 import os
 import re
 import json
+import logging
 import urllib.request
 import urllib.parse
-import logging
-from flask import Flask, request, abort, jsonify
-from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
-try:
-    from linebot.v3.webhooks import JoinEvent
-except ImportError:
-    JoinEvent = None
-from linebot.v3.exceptions import InvalidSignatureError
-from openai import OpenAI
-import base64
-import tempfile
 import time
+import asyncio
+import io
+import base64
 
-app = Flask(__name__)
+import discord
+from discord import app_commands
+from discord.ext import commands
+from openai import OpenAI
+from aiohttp import web
+
+# ─── Config ─────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("discord_bot")
 
-LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
-LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO = "onerkk/line-translator-bot"
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "onerkk/discord-translator-bot")
 
-configuration = Configuration(access_token=LINE_TOKEN)
-handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
-group_settings = {}
-# Target language for Chinese translation per group, default "id"
-group_target_lang = {}
-# Image translation toggle per group, default True
-group_img_settings = {}
-# Audio/voice translation toggle per group, default True
-group_audio_settings = {}
-# Work order photo detection toggle per group, default True
-group_wo_settings = {}
-# Skip list: set of user_ids per group whose messages won't be translated
-group_skip_users = {}
-# Track user display names per group: {group_id: {user_id: display_name}}
-group_user_names = {}
-# Group tracking: {group_id: {"name": str, "joined_at": float}}
-group_tracking = {}
+# ─── Per-channel settings ───────────────────────────────
+channel_settings = {}       # {channel_id: True/False} translation on/off
+channel_target_lang = {}    # {channel_id: "id"/"en"/...}
+channel_skip_users = {}     # {channel_id: set(user_ids)}
+channel_img_settings = {}   # {channel_id: True/False} image OCR on/off
+channel_audio_settings = {} # {channel_id: True/False} voice on/off
+channel_wo_settings = {}    # {channel_id: True/False} work order detection on/off
 
-# DM (private message) target language per user, default "id"
-dm_target_lang = {}
-# DM master toggle (global on/off for all DM)
-dm_master_enabled = True
-# DM whitelist: set of user_ids allowed to DM when master is off
-dm_whitelist = set()
-# DM known users: {user_id: display_name} for anyone who has DM'd the bot
-dm_known_users = {}
-
-# Translation cache: key = (text, src, tgt), value = (result, timestamp)
+# Translation cache
 translation_cache = {}
 CACHE_MAX_SIZE = 500
-CACHE_TTL = 3600  # 1 hour
+CACHE_TTL = 3600
 
+# ─── Language constants ─────────────────────────────────
 LANG_FLAGS = {
-    "zh": "\U0001f1f9\U0001f1fc",
-    "id": "\U0001f1ee\U0001f1e9",
-    "en": "\U0001f1ec\U0001f1e7",
-    "vi": "\U0001f1fb\U0001f1f3",
-    "th": "\U0001f1f9\U0001f1ed",
-    "ja": "\U0001f1ef\U0001f1f5",
-    "ko": "\U0001f1f0\U0001f1f7",
-    "ms": "\U0001f1f2\U0001f1fe",
+    "zh": "\U0001f1f9\U0001f1fc", "id": "\U0001f1ee\U0001f1e9",
+    "en": "\U0001f1ec\U0001f1e7", "vi": "\U0001f1fb\U0001f1f3",
+    "th": "\U0001f1f9\U0001f1ed", "ja": "\U0001f1ef\U0001f1f5",
+    "ko": "\U0001f1f0\U0001f1f7", "ms": "\U0001f1f2\U0001f1fe",
     "tl": "\U0001f1f5\U0001f1ed",
 }
-
 LANG_NAMES = {
-    "zh": "Traditional Chinese",
-    "id": "Indonesian",
-    "en": "English",
-    "vi": "Vietnamese",
-    "th": "Thai",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "ms": "Malay",
-    "tl": "Filipino/Tagalog",
+    "zh": "Traditional Chinese", "id": "Indonesian", "en": "English",
+    "vi": "Vietnamese", "th": "Thai", "ja": "Japanese",
+    "ko": "Korean", "ms": "Malay", "tl": "Filipino/Tagalog",
 }
-
 LANG_NAMES_ZH = {
-    "id": "\u5370\u5c3c\u6587",
-    "en": "\u82f1\u6587",
-    "vi": "\u8d8a\u5357\u6587",
-    "th": "\u6cf0\u6587",
-    "ja": "\u65e5\u6587",
-    "ko": "\u97d3\u6587",
-    "ms": "\u99ac\u4f86\u6587",
-    "tl": "\u83f2\u5f8b\u8cd3\u6587",
+    "id": "印尼文", "en": "英文", "vi": "越南文", "th": "泰文",
+    "ja": "日文", "ko": "韓文", "ms": "馬來文", "tl": "菲律賓文",
 }
-
-# Valid target languages (excluding zh since zh is source)
 VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
 
+# ─── Hard replacement tables ────────────────────────────
+ZH_TO_ID_HARD = {
+    "爐號標籤": "label heat number", "爐號": "heat number",
+    "無心研磨": "centerless grinding", "光輝退火爐": "furnace bright annealing",
+    "光輝退火": "bright annealing", "退火爐": "tungku annealing",
+    "過帳": "input data ke sistem", "放行": "release data",
+    "殺光痕": "bekas grinding mark", "車刀痕": "bekas pisau bubut",
+    "砂光痕": "bekas sanding mark", "軋輥印痕": "bekas roll mark",
+    "環狀擦傷": "goresan melingkar", "表粗": "surface roughness",
+    "偏小": "under size", "偏大": "over size", "風險批": "lot berisiko",
+    "走ET檢測": "jalankan pengujian ET", "開立重工": "buat work order rework",
+    "不允收": "pelanggan tidak terima",
+    "矯直機": "mesin straightening", "壓光機": "mesin press polish",
+    "砂光機": "mesin sanding", "拋光機": "mesin polishing",
+    "眼模": "die/cetakan", "引拔座": "drawing bench", "皮膜槽": "coating tank",
+    "氣壓缸": "silinder pneumatik", "安全圍籬": "safety fence",
+    "集塵設備": "dust collector", "計長器": "length counter", "冷水機": "chiller",
+    "馬蹄環": "shackle", "吊掛物": "beban gantung", "護罩": "pelindung mesin",
+    "interlock": "pengunci keamanan", "標籤機": "mesin label",
+    "品保": "QC", "儲運": "bagian gudang", "生計": "production planning",
+    "業務": "bagian sales", "營業": "bagian sales", "人事": "HRD",
+    "處長": "kepala divisi", "稼動率": "utilization rate", "線速": "kecepatan lini",
+    "速差": "selisih kecepatan", "主機手": "operator utama", "印勞": "pekerja Indonesia",
+    "在製品管制表": "tabel kontrol WIP",
+    "套紙管": "pasang tabung kertas", "太空包": "jumbo bag",
+    "噴漆罐": "kaleng spray", "木箱": "kotak kayu", "櫃子": "kontainer",
+    "允收": "toleransi terima", "訂尺": "panjang pesanan", "短尺": "ukuran pendek",
+    "異型棒": "batang bentuk khusus", "遞延單": "order ditunda", "急單": "order urgent",
+    "不擋非本月": "order bukan bulan ini boleh masuk gudang", "不擋": "tidak dibatasi",
+    "溢量": "kelebihan produksi", "併包": "gabung packing",
+    "出貨差": "kekurangan pengiriman",
+    "忘卡補": "input lewat sistem lupa kartu", "造冊": "buat daftar absensi",
+    "班股": "rapat shift", "堆高機複訓": "pelatihan ulang forklift",
+    "天車複訓": "pelatihan ulang crane", "扣績效": "potong penilaian kinerja",
+    "劣項": "pelanggaran", "納入劣項": "dicatat pelanggaran",
+    "提報懲處": "laporkan untuk sanksi", "三定": "3 tetap",
+    "不要物": "barang tidak terpakai", "被釘": "kena tegur",
+    "綠卡": "kartu hijau",
+    "煙蒂": "puntung rokok", "檳榔渣": "sisa pinang", "廚餘": "sisa makanan",
+    "漏油": "bocor oli", "積水": "genangan air", "粉塵": "debu",
+    "感溫": "terima kasih", "有夠": "sangat", "母湯": "jangan",
+}
 
-def extract_mentions(text):
-    # Capture @mentions conservatively while still allowing common LINE names with spaces.
-    # Stop before obvious separators so we do not swallow the rest of the sentence.
-    # Also stop before a space + Chinese character (common: "@name 暱稱 ...").
-    pattern = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|\s[一-鿿]|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))'
-    mentions = re.findall(pattern, text)
-    mentions = [m.rstrip() for m in mentions if m and len(m) > 1]
-    # Remove duplicates while preserving order
-    seen = set()
-    result = []
-    for m in mentions:
-        if m not in seen:
-            seen.add(m)
-            result.append(m)
-    return result
+ID_POST_FIX = {
+    "nomor panas": "heat number", "label nomor panas": "label heat number",
+    "nomor tungku": "heat number", "label nomor tungku": "label heat number",
+    "nomor oven": "heat number", "label nomor oven": "label heat number",
+    "paket datang ke": "kalau ada packing untuk",
+    "saat paket datang ke": "kalau ada packing untuk",
+    "Mohon diperhatikan saat paket datang ke": "Nanti kalau ada packing untuk",
+    "Mohon diperhatikan saat kalau ada packing untuk": "Nanti kalau ada packing untuk",
+    "tiga meter di atas enam meter": "batang 3 meter ditaruh di atas batang 6 meter",
+    "Tiga meter di atas enam meter": "Batang 3 meter ditaruh di atas batang 6 meter",
+    "3 meter di atas 6 meter": "batang 3 meter ditaruh di atas batang 6 meter",
+    "jaminan kualitas": "QC", "penjaminan mutu": "QC",
+    "panggilan nama": "inspeksi pengawas", "absen nama": "inspeksi pengawas",
+    "roll call": "inspeksi pengawas",
+    "suhu perasaan": "terima kasih", "merasakan suhu": "terima kasih",
+    "Polymetal": "寶麗金屬", "Bao Li Metal": "寶麗金屬", "Bao Li Logam": "寶麗金屬",
+    "Changzhou Zhongshan": "常州眾山", "Da Shun": "大順", "Da Cheng": "大成",
+    "Bei Ze": "北澤", "Hong Yun": "鴻運", "Tian Hua Rong": "田華榕",
+    "Jia Dong": "佳東",
+    "bagian operasional": "bagian sales", "operasional perlu": "sales perlu",
+}
+
+# ─── Storage data (embedded) ────────────────────────────
+_STORAGE_JSON = '{"6C422209": [["<=3200", "EH28"], [">4200", "EG38"], [">3200<=4200", "EH26"]], "ABE": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "AIK": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "ALCONIX JP": [["<=3200", "EG14"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "AMERICAN STAINLESS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "AMS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "ANCHOR": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "ANIL METALS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "APEX METAL": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "AWACS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "B&B": [[">4200", "EH33"], ["<=3200", "EH22"], [">3200<=4200", "EG14"]], "B&J": [["<=3200", "EC40"], [">4200", "EC40"], [">3200<=4200", "EC45"]], "BOBCO": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "BOLLINGHAUS": [[">3200<=4200", "EC43"], ["<=3200", "EC43"], [">4200", "EC43"]], "CA-ASD": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-AUSTRAL": [[">3200<=4200", "EH12"], ["<=3200", "EH12"], [">4200", "EH11"]], "CA-DALSTEEL": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-FLETCHER": [[">3200<=4200", "EH12"], [">4200", "EH11"], ["<=3200", "EH28"]], "CA-M&S": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-MICO": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-MIDWAY": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-S&T": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-VAN LEEUWEN": [["<=3200", "EH12"], [">4200", "EH11"], [">3200<=4200", "EH12"]], "CA-VES": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-VULCAN": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-VULCAN NZ": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-WAKEFIELD": [[">4200", "EH11"], [">3200<=4200", "EH12"], ["<=3200", "EH12"]], "CAMELLIA": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "CASTLE": [[">3200<=4200", "EH12"], ["<=3200", "EH28"], [">4200", "EH11"]], "CHANDAN": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "CHANG HSIN": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "CONTINENTAL": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "DACAPO": [["<=3200", "EH22"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "DK METAL": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "ESTEELINDO": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "EURO INOX": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "FIX": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "FORTUNE METAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "GD METAL": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "GLH": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "GLOBAL STAINLESS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "GP SYRMA": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "H.Y.S.": [["<=3200", "EH22"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "HANSAE": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "HIDAYAT": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "ISTANA KARANG LAUT": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "JAYESH": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "JIGNESH": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "KANGRUI": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "KARTHIK": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "KJ": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "LEMONA": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "LOGAM MAS": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "MANGAL": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "METALINOX": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "MICROSTEEL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "PANCHMAHAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "PLUTUS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "PT.COGNE": [[">3200<=4200", "EC43"], ["<=3200", "EC43"], [">4200", "EC43"]], "SAMRAT": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "SAMWON": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "SHANDONG GUANGDA": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "SHREE AMBIKA": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "STEELINC": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "SUNGEUN": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "SUPRA": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "TATASTEEL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "TCI": [["<=3200", "EC43"], [">4200", "EC43"], [">3200<=4200", "EC43"]], "THREE STAR": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "TOKYO STAINLESS": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "TOPGAIN": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "VIRAJ": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "ZHEJIANG": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "三寶": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "三陽": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "上暉": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "久鑫": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "元台": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "全聯": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "六星": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "冠升": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "利泓": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "加倍力": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "北澤": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "協和": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "協奇": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "台芝": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "右勝": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "名威": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "和鍵": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "唐榮": [["<=3200", "EC47"], [">3200<=4200", "EC40"], [">4200", "EC40"]], "嘉泰": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "四維": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "堡辰": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "大成": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "大洋": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "大順": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "天基": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "奧森": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "寶穎": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "巨昌": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "常州眾山": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "廉錩": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "弘森": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "志盛": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "慶達": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "擎億": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "新光": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "旗勝": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "明憲": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "普利擎": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "永吉": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "津展": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "洪福": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "源盛傑": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "漢翊": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "百堅": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "皇銘": [[">3200<=4200", "EH27"], ["<=3200", "EH27"], [">4200", "EG38"]], "盛英": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "知行": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "磐石": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "誼山": [["<=3200", "EH29"], [">3200<=4200", "EH78"], [">4200", "EH38"]], "頭份": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "優普洛": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "營三備庫(內)": [[">3200<=4200", "EC40"], ["<=3200", "EC47"], [">4200", "EC40"]], "營三備庫(外)": [[">3200<=4200", "EC40"], [">4200", "EC40"], ["<=3200", "EC47"]], "營業庫存": [[">4200", "EH99"], ["<=3200", "EH99"], [">3200<=4200", "EH99"]], "環友": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "聯岱": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "聯祥": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "邁達斯": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "鴻運": [[">3200<=4200", "EH27"], ["<=3200", "EH27"], [">4200", "EG38"]], "雙和": [[">3200<=4200", "EG14"], ["<=3200", "EH26"], [">4200", "EG34"]], "麒譯": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "町洋": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "晟田": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "畯圓": [["<=3200", "EH19"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "鐿順發": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "鑫誠鐵材": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "恒耀": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "暉": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "頂": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]]}'
+STORAGE_LOOKUP = json.loads(_STORAGE_JSON)
+
+# Try loading external storage_data.json
+_storage_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage_data.json")
+if os.path.exists(_storage_json_path):
+    try:
+        with open(_storage_json_path, "r", encoding="utf-8") as _f:
+            STORAGE_LOOKUP = json.load(_f)
+            logger.info("Loaded storage_data.json: %d customers", len(STORAGE_LOOKUP))
+    except Exception as _e:
+        logger.warning("Failed to load storage_data.json: %s", _e)
+
+EXTRA_CUSTOMERS = [
+    "寶麗金屬", "田華榕", "蘋果", "賽利金屬", "盛昌遠", "曜麟",
+    "LOTUS", "LOTUS METAL", "shinko", "wing keung",
+]
+CUSTOMER_NAMES = sorted(
+    list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)),
+    key=lambda x: -len(x)
+)
+
+
+# ─── Mention handling (Discord style) ──────────────────
+def extract_mentions_discord(text):
+    """Extract Discord <@id> mentions."""
+    return re.findall(r'<@!?\d+>', text)
 
 
 def protect_mentions(text):
-    mentions = extract_mentions(text)
+    mentions = extract_mentions_discord(text)
     protected = text
     placeholders = {}
     for i, m in enumerate(mentions):
-        # Use a stronger placeholder that is less likely to be translated or split.
         ph = f"__MENTION_{i}__"
-        # Check if a short Chinese nickname (1-4 chars) follows the @mention.
-        # e.g. "@budi santoso 山多" → "山多" is a nickname, protect it too.
-        escaped = re.escape(m)
-        nick_pattern = escaped + r'(\s+[\u4e00-\u9fff]{1,4})(?=\s|[,，。!！?？:：;；\n]|$)'
-        nick_match = re.search(nick_pattern, protected)
-        if nick_match:
-            full = m + nick_match.group(1)
-            placeholders[ph] = full
-            protected = protected.replace(full, ph, 1)
-        else:
-            placeholders[ph] = m
-            protected = protected.replace(m, ph, 1)
+        placeholders[ph] = m
+        protected = protected.replace(m, ph, 1)
     return protected, placeholders
 
 
@@ -145,74 +173,42 @@ def restore_mentions(text, placeholders):
     restored = text or ""
     for ph, original in placeholders.items():
         idx = ph.replace("__MENTION_", "").replace("__", "")
-        variants = [
-            ph,
-            ph.replace("_", " "),
-            ph.replace("__", ""),
-            f"MENTION_{idx}",
-            f"MENTION {idx}",
-            f"__MENTION {idx}__",
-            f"[[MENTION_{idx}]]",
-        ]
+        variants = [ph, ph.replace("_", " "), f"MENTION_{idx}", f"MENTION {idx}",
+                    f"__MENTION {idx}__", f"[[MENTION_{idx}]]"]
         for v in variants:
             restored = restored.replace(v, original)
-
-    # Final safety net: if any original @mention disappeared during translation,
-    # prepend it back so the tagged person is not lost.
-    missing = [original for original in placeholders.values() if original not in restored]
+    missing = [orig for orig in placeholders.values() if orig not in restored]
     if missing:
-        prefix = " ".join(missing)
-        restored = (prefix + " " + restored).strip()
-    return restored
+        restored = " ".join(missing) + " " + restored
+    return restored.strip()
 
 
-def strip_mentions_for_detect(text):
-    # Strip @mentions: English names with optional Chinese nickname
-    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
-    # Strip @mentions: Chinese names with optional parenthesized title e.g. @小麥（研磨股班長）
-    clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[（(][^）)]*[）)])?', ' ', clean)
-    return clean
-
-
+# ─── Language detection ─────────────────────────────────
 def has_chinese(text):
     return len(re.findall(r'[\u4e00-\u9fff]', text)) >= 2
 
-
 def has_japanese(text):
-    hira = len(re.findall(r'[\u3040-\u309f]', text))
-    kata = len(re.findall(r'[\u30a0-\u30ff]', text))
-    return (hira + kata) >= 2
-
+    return (len(re.findall(r'[\u3040-\u309f]', text)) + len(re.findall(r'[\u30a0-\u30ff]', text))) >= 2
 
 def has_korean(text):
     return len(re.findall(r'[\uac00-\ud7af]', text)) >= 2
 
-
 def has_thai(text):
     return len(re.findall(r'[\u0e00-\u0e7f]', text)) >= 2
-
 
 def has_vietnamese(text):
     vi_special = re.findall(r'[\u01a0\u01a1\u01af\u01b0\u0110\u0111]', text)
     vi_chars = re.findall(r'[\u00e0-\u00ff\u1ea0-\u1ef9]', text.lower())
-    vi_marks = re.findall(r'[\u0300-\u036f]', text)
     words = text.lower().split()
-    vi_markers = set([
-        'cua', 'nhung', 'trong', 'duoc', 'khong', 'nhu', 'mot',
-        'toi', 'ban', 'anh', 'chi', 'em', 'ong', 'ba',
-        'la', 'va', 'cac', 'cho', 'voi', 'tai', 'nay', 'khi',
-        'con', 'roi', 'lam', 'biet', 'muon', 'den', 'di',
-        'xin', 'cam', 'chao', 'dep', 'ngon', 'tot', 'xau',
-    ])
+    vi_markers = {'cua','nhung','trong','duoc','khong','nhu','mot','toi','ban','anh','chi','em',
+                  'la','va','cac','cho','voi','tai','nay','khi','con','roi','lam','biet','muon',
+                  'den','di','xin','cam','chao','dep','ngon','tot','xau'}
     marker_count = sum(1 for w in words if w in vi_markers)
     if len(vi_special) >= 1:
         return True
     if len(vi_chars) >= 3 and marker_count >= 1:
         return True
-    if len(vi_marks) >= 2 and marker_count >= 1:
-        return True
     return False
-
 
 def has_indonesian(text):
     if has_chinese(text) or has_thai(text) or has_korean(text) or has_japanese(text):
@@ -220,100 +216,76 @@ def has_indonesian(text):
     words = re.findall(r'[a-zA-Z]+', text.lower())
     if len(words) < 2:
         return False
-    id_words = set([
-        'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
-        'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-        'mereka', 'dia', 'apa', 'bagaimana', 'kenapa', 'kapan', 'dimana',
-        'siapa', 'belum', 'sedang', 'harus', 'boleh', 'mau', 'ingin',
-        'bukan', 'jangan', 'tolong', 'terima', 'kasih', 'selamat',
-        'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
-        'salah', 'besar', 'kecil', 'makan', 'minum', 'tidur', 'kerja',
-        'pulang', 'pergi', 'rumah', 'kantor', 'uang', 'harga', 'berapa',
-        'banyak', 'sedikit', 'semua', 'karena', 'tetapi', 'tapi', 'atau',
-        'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
-        'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
-        'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-        'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru', 'lembur',
-        'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
-        'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
-        'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
-        'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
-        'terakhir', 'kamu',
-    ])
-    count = sum(1 for w in words if w in id_words)
-    if count >= 2:
-        return True
-    if len(words) >= 3 and count >= 1 and count / len(words) > 0.2:
-        return True
-    return False
-
+    id_words = {
+        'yang','dan','ini','itu','ada','untuk','dengan','dari','tidak','akan','sudah','bisa',
+        'juga','saya','kami','kita','mereka','dia','apa','bagaimana','kenapa','kapan','dimana',
+        'siapa','belum','sedang','harus','boleh','mau','ingin','bukan','jangan','tolong',
+        'terima','kasih','selamat','pagi','siang','sore','malam','baik','bagus','benar',
+        'salah','besar','kecil','makan','minum','tidur','kerja','pulang','pergi','rumah',
+        'kantor','uang','harga','berapa','banyak','sedikit','semua','karena','tetapi','tapi',
+        'atau','jika','kalau','sampai','masih','lagi','saja','dulu','nanti','sekarang',
+        'hari','minggu','bulan','tahun','gak','nggak','udah','gimana','dong','sih','nih',
+        'kok','yuk','ayo','banget','orang','baru','lembur','cuti','gaji','minta','ambil',
+        'kirim','tunggu','cepat','lambat','susah','gampang','senang','sedih','marah',
+        'takut','capek','lapar','haus','sakit','sehat','di','ke','jam','ruang','baca',
+        'soal','ujian','terakhir','kamu','jadi','harap','ukur','secara','manual','rusak',
+        'saat','mohon','pakai',
+    }
+    id_count = sum(1 for w in words if w in id_words)
+    return id_count >= 2
 
 def has_english(text):
     if has_chinese(text) or has_thai(text) or has_korean(text) or has_japanese(text):
         return False
-    if has_vietnamese(text) or has_indonesian(text):
-        return False
     words = re.findall(r'[a-zA-Z]+', text.lower())
-    if len(words) < 3:
+    if len(words) < 2:
         return False
-    en_words = set([
-        'the', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
-        'will', 'would', 'could', 'should', 'can', 'may', 'might',
-        'this', 'that', 'these', 'those', 'what', 'which', 'who',
-        'where', 'when', 'how', 'why', 'not', 'but', 'and', 'or',
-        'for', 'with', 'from', 'about', 'into', 'your', 'you',
-        'we', 'they', 'she', 'him', 'her', 'its', 'our', 'their',
-        'just', 'also', 'very', 'much', 'more', 'most', 'some',
-        'any', 'all', 'each', 'every', 'been', 'being', 'does',
-        'did', 'doing', 'going', 'want', 'need', 'know', 'think',
-        'come', 'make', 'like', 'time', 'good', 'new', 'first',
-        'please', 'thank', 'thanks', 'sorry', 'hello', 'okay',
-        'yes', 'yeah', 'already', 'still', 'here', 'there',
-    ])
-    count = sum(1 for w in words if w in en_words)
-    if count >= 2:
-        return True
-    if len(words) > 0 and count / len(words) > 0.25:
-        return True
-    return False
-
+    en_words = {
+        'the','is','are','was','were','have','has','had','do','does','did','will','would',
+        'can','could','should','shall','may','might','must','been','being','what','where',
+        'when','who','how','why','which','this','that','these','those','with','from',
+        'about','into','through','after','before','between','under','over','again','then',
+        'here','there','very','just','also','not','but','and','for','all','each','every',
+        'both','few','more','most','other','some','such','only','same','than','too',
+    }
+    id_words_check = {
+        'yang','dan','ini','itu','ada','untuk','dengan','dari','tidak','sudah','bisa',
+        'saya','kami','mereka','apa','bagaimana','kenapa','belum','harus','boleh','mau',
+        'jangan','tolong','terima','kasih','selamat','pagi','siang','sore','malam',
+    }
+    en_count = sum(1 for w in words if w in en_words)
+    id_count = sum(1 for w in words if w in id_words_check)
+    return en_count > id_count and en_count >= 2
 
 def detect_language(text):
-    clean = strip_mentions_for_detect(text).strip()
-    if not clean or len(clean) < 2:
+    clean = re.sub(r'<@!?\d+>', ' ', text)
+    clean = re.sub(r'https?://\S+', ' ', clean)
+    clean = clean.strip()
+    if not clean:
         return None
-    zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
-    latin_words = re.findall(r'[a-zA-Z]+', clean.lower())
-    if zh_count >= 2 and len(latin_words) <= 2:
-        return "zh"
-    if has_japanese(clean):
+    if has_japanese(clean) and not has_chinese(clean):
         return "ja"
     if has_korean(clean):
         return "ko"
     if has_thai(clean):
         return "th"
-    if zh_count >= 2:
-        id_words = set([
-            'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
-            'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-            'mereka', 'dia', 'apa', 'bagaimana', 'kenapa', 'kapan', 'dimana',
-            'siapa', 'belum', 'sedang', 'harus', 'boleh', 'mau', 'ingin',
-            'bukan', 'jangan', 'tolong', 'terima', 'kasih', 'selamat',
-            'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
-            'salah', 'besar', 'kecil', 'makan', 'minum', 'tidur', 'kerja',
-            'pulang', 'pergi', 'rumah', 'kantor', 'uang', 'harga', 'berapa',
-            'banyak', 'sedikit', 'semua', 'karena', 'tetapi', 'tapi', 'atau',
-            'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
-            'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
-            'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-            'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru', 'lembur',
-            'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
-            'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
-            'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
-            'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
-            'terakhir', 'kamu', 'jadi', 'harap', 'ukur', 'secara',
-            'manual', 'rusak', 'saat', 'mohon', 'pakai', 'bisa',
-        ])
+    if has_chinese(clean):
+        latin_words = re.findall(r'[a-zA-Z]+', clean.lower())
+        id_words = {
+            'yang','dan','ini','itu','ada','untuk','dengan','dari','tidak','akan','sudah',
+            'bisa','juga','saya','kami','kita','mereka','dia','apa','bagaimana','kenapa',
+            'kapan','dimana','siapa','belum','sedang','harus','boleh','mau','ingin','bukan',
+            'jangan','tolong','terima','kasih','selamat','pagi','siang','sore','malam',
+            'baik','bagus','benar','salah','besar','kecil','makan','minum','tidur','kerja',
+            'pulang','pergi','rumah','kantor','uang','harga','berapa','banyak','sedikit',
+            'semua','karena','tetapi','tapi','atau','jika','kalau','sampai','masih','lagi',
+            'saja','dulu','nanti','sekarang','hari','minggu','bulan','tahun','gak','nggak',
+            'udah','gimana','dong','sih','nih','kok','yuk','ayo','banget','orang','baru',
+            'lembur','cuti','gaji','minta','ambil','kirim','tunggu','cepat','lambat',
+            'susah','gampang','senang','sedih','marah','takut','capek','lapar','haus',
+            'sakit','sehat','di','ke','jam','ruang','baca','soal','ujian','terakhir',
+            'kamu','jadi','harap','ukur','secara','manual','rusak','saat','mohon','pakai',
+        }
         id_count = sum(1 for w in latin_words if w in id_words)
         if id_count >= 2:
             return "id"
@@ -327,561 +299,161 @@ def detect_language(text):
     return None
 
 
-def contains_source_script_outside_placeholders(text, src):
-    cleaned = re.sub(r'__MENTION_\d+__', ' ', text or '')
-    cleaned = re.sub(r'__CUST_\d+__', ' ', cleaned)
-    # Also strip known customer names (they are kept in original language intentionally)
-    for name in CUSTOMER_NAMES:
-        if name in cleaned:
-            cleaned = cleaned.replace(name, ' ')
-    patterns = {
-        "zh": r'[\u4e00-\u9fff]',
-        "ja": r'[\u3040-\u30ff\u4e00-\u9fff]',
-        "ko": r'[\uac00-\ud7af]',
-        "th": r'[\u0e00-\u0e7f]',
-    }
-    pattern = patterns.get(src)
-    if not pattern:
-        return False
-    return len(re.findall(pattern, cleaned)) >= 2
-
-
-def is_translation_valid(result, src, tgt):
-    if not result or not result.strip():
-        return False
-    if src != tgt and contains_source_script_outside_placeholders(result, src):
-        return False
-    return True
-
-
-# === Hard replacement tables ===
-# These bypass GPT entirely - applied BEFORE sending to GPT (zh->id)
-# and AFTER receiving from GPT (id->zh result post-processing)
-
-ZH_TO_ID_HARD = {
-    # 製程/站別
-    "爐號標籤": "label heat number",
-    "爐號": "heat number",
-    "無心研磨": "centerless grinding",
-    "光輝退火爐": "furnace bright annealing",
-    "光輝退火": "bright annealing",
-    "退火爐": "tungku annealing",
-    "過帳": "input data ke sistem",
-    "放行": "release data",
-    # 品質/缺陷
-    "殺光痕": "bekas grinding mark",
-    "車刀痕": "bekas pisau bubut",
-    "砂光痕": "bekas sanding mark",
-    "軋輥印痕": "bekas roll mark",
-    "環狀擦傷": "goresan melingkar",
-    "表粗": "surface roughness",
-    "偏小": "under size",
-    "偏大": "over size",
-    "風險批": "lot berisiko",
-    "走ET檢測": "jalankan pengujian ET",
-    "開立重工": "buat work order rework",
-    "不允收": "pelanggan tidak terima",
-    # 設備
-    "矯直機": "mesin straightening",
-    "壓光機": "mesin press polish",
-    "砂光機": "mesin sanding",
-    "拋光機": "mesin polishing",
-    "眼模": "die/cetakan",
-    "引拔座": "drawing bench",
-    "皮膜槽": "coating tank",
-    "氣壓缸": "silinder pneumatik",
-    "安全圍籬": "safety fence",
-    "集塵設備": "dust collector",
-    "計長器": "length counter",
-    "冷水機": "chiller",
-    "馬蹄環": "shackle",
-    "吊掛物": "beban gantung",
-    "護罩": "pelindung mesin",
-    "interlock": "pengunci keamanan",
-    "標籤機": "mesin label",
-    # 管理
-    "品保": "QC",
-    "儲運": "bagian gudang",
-    "生計": "production planning",
-    "業務": "bagian sales",
-    "營業": "bagian sales",
-    "人事": "HRD",
-    "處長": "kepala divisi",
-    "稼動率": "utilization rate",
-    "線速": "kecepatan lini",
-    "速差": "selisih kecepatan",
-    "主機手": "operator utama",
-    "印勞": "pekerja Indonesia",
-    "在製品管制表": "tabel kontrol WIP",
-    # 包裝/入庫
-    "套紙管": "pasang tabung kertas",
-    "太空包": "jumbo bag",
-    "噴漆罐": "kaleng spray",
-    "木箱": "kotak kayu",
-    "櫃子": "kontainer",
-    # 訂單
-    "允收": "toleransi terima",
-    "訂尺": "panjang pesanan",
-    "短尺": "ukuran pendek",
-    "異型棒": "batang bentuk khusus",
-    "遞延單": "order ditunda",
-    "急單": "order urgent",
-    "不擋非本月": "order bukan bulan ini boleh masuk gudang",
-    "不擋": "tidak dibatasi",
-    "溢量": "kelebihan produksi",
-    "併包": "gabung packing",
-    "出貨差": "kekurangan pengiriman",
-    # HR/紀律
-    "忘卡補": "input lewat sistem lupa kartu",
-    "造冊": "buat daftar absensi",
-    "班股": "rapat shift",
-    "堆高機複訓": "pelatihan ulang forklift",
-    "天車複訓": "pelatihan ulang crane",
-    "扣績效": "potong penilaian kinerja",
-    "劣項": "pelanggaran",
-    "納入劣項": "dicatat pelanggaran",
-    "提報懲處": "laporkan untuk sanksi",
-    "三定": "3 tetap",
-    "不要物": "barang tidak terpakai",
-    "被釘": "kena tegur",
-    "綠卡": "kartu hijau",
-    # 環境
-    "煙蒂": "puntung rokok",
-    "檳榔渣": "sisa pinang",
-    "廚餘": "sisa makanan",
-    "漏油": "bocor oli",
-    "積水": "genangan air",
-    "粉塵": "debu",
-    # 口語
-    "感溫": "terima kasih",
-    "有夠": "sangat",
-    "母湯": "jangan",
-}
-
-# Post-replacement: fix common GPT mistakes in output
-ID_POST_FIX = {
-    # 爐號 corrections
-    "nomor panas": "heat number",
-    "label nomor panas": "label heat number",
-    "nomor tungku": "heat number",
-    "label nomor tungku": "label heat number",
-    "nomor oven": "heat number",
-    "label nomor oven": "label heat number",
-    # 有包到 corrections
-    "paket datang ke": "kalau ada packing untuk",
-    "saat paket datang ke": "kalau ada packing untuk",
-    "Mohon diperhatikan saat paket datang ke": "Nanti kalau ada packing untuk",
-    "Mohon diperhatikan saat kalau ada packing untuk": "Nanti kalau ada packing untuk",
-    # 三米六米 corrections
-    "tiga meter di atas enam meter": "batang 3 meter ditaruh di atas batang 6 meter",
-    "Tiga meter di atas enam meter": "Batang 3 meter ditaruh di atas batang 6 meter",
-    "3 meter di atas 6 meter": "batang 3 meter ditaruh di atas batang 6 meter",
-    # 品保 corrections
-    "jaminan kualitas": "QC",
-    "penjaminan mutu": "QC",
-    # 點名 corrections (NOT roll call)
-    "panggilan nama": "inspeksi pengawas",
-    "absen nama": "inspeksi pengawas",
-    "roll call": "inspeksi pengawas",
-    # 感溫 - should not be translated literally
-    "suhu perasaan": "terima kasih",
-    "merasakan suhu": "terima kasih",
-    # Common GPT errors
-    "Polymetal": "寶麗金屬",
-    "Bao Li Metal": "寶麗金屬",
-    "Bao Li Logam": "寶麗金屬",
-    "Changzhou Zhongshan": "常州眾山",
-    "Da Shun": "大順",
-    "Da Cheng": "大成",
-    "Bei Ze": "北澤",
-    "Hong Yun": "鴻運",
-    "Tian Hua Rong": "田華榕",
-    "Jia Dong": "佳東",
-    # 營業 common mistranslation
-    "bagian operasional": "bagian sales",
-    "operasional perlu": "sales perlu",
-}
-
-# Customer names - protect from translation by wrapping
-# Storage area lookup data (from 儲區查詢.xlsx)
-_STORAGE_JSON = '{"6C422209": [["<=3200", "EH28"], [">4200", "EG38"], [">3200<=4200", "EH26"]], "ABE": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "AIK": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "ALCONIX JP": [["<=3200", "EG14"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "AMERICAN STAINLESS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "AMS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "ANCHOR": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "ANIL METALS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "APEX METAL": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "AWACS": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "B&B": [[">4200", "EH33"], ["<=3200", "EH22"], [">3200<=4200", "EG14"]], "B&J": [["<=3200", "EC40"], [">4200", "EC40"], [">3200<=4200", "EC45"]], "BOBCO": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "BOLLINGHAUS": [[">3200<=4200", "EC43"], ["<=3200", "EC43"], [">4200", "EC43"]], "CA-ASD": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-AUSTRAL": [[">3200<=4200", "EH12"], ["<=3200", "EH12"], [">4200", "EH11"]], "CA-DALSTEEL": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-FLETCHER": [[">3200<=4200", "EH12"], [">4200", "EH11"], ["<=3200", "EH28"]], "CA-M&S": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-MICO": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-MIDWAY": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-S&T": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-VAN LEEUWEN": [["<=3200", "EH12"], [">4200", "EH11"], [">3200<=4200", "EH12"]], "CA-VES": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-VULCAN": [[">4200", "EH11"], ["<=3200", "EH12"], [">3200<=4200", "EH12"]], "CA-VULCAN NZ": [["<=3200", "EH12"], [">3200<=4200", "EH12"], [">4200", "EH11"]], "CA-WAKEFIELD": [[">4200", "EH11"], [">3200<=4200", "EH12"], ["<=3200", "EH12"]], "CAMELLIA": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "CASTLE": [[">3200<=4200", "EH12"], ["<=3200", "EH28"], [">4200", "EH11"]], "CHANDAN": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "CHANG HSIN": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "CHANGSU": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "COGNE AOSTA": [[">3200<=4200", "EG34"], ["<=3200", "EH28"], [">4200", "EG14"]], "COGNE CELIK": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "COGNE DE": [[">3200<=4200", "EG14"], [">4200", "EH34"], ["<=3200", "EH28"]], "COGNE DG": [[">3200<=4200", "EC47"], ["<=3200", "EC47"], [">4200", "EC41"]], "COGNE FR": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "COGNE KR": [["<=3200", "EH26"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "COGNE UK": [[">3200<=4200", "EG14"], [">4200", "EH34"], ["<=3200", "EH28"]], "COMINOX": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "COMPRINOX": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "CSMU": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "DACAPO": [["<=3200", "EH25"], [">3200<=4200", "EG14"], [">4200", "EH31"]], "DACAPO-K STOCK": [["<=3200", "EH25"], [">3200<=4200", "EG14"], [">4200", "EH31"]], "DAECHANG": [[">4200", "EG34"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "DAMSTAHL": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "DAVER": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "DK METAL": [[">4200", "EG35"], [">3200<=4200", "EG14"], ["<=3200", "EC47"]], "DUFU": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "EGMO": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "EIAM": [[">3200<=4200", "EG14"], ["<=3200", "EG14"], [">4200", "EH33"]], "ESP": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "EURO STEEL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "FASTENAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "FINE METAL TRADE": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "FSS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "G HWA": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "GIC": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "GLH": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "GS METAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "HADCO": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "HAKUDO": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "HAMATECH": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "HANWA": [["<=3200", "EH21"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "HEAP SING HUAT": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "HH": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "HRMETAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH34"]], "HUA GUAN METAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "HWA GUAN METAL": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "IM": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "INTEGRITY STAINLESS": [[">4200", "EG34"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "IPE": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "ISE": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "IWATANI": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "JANG ANN": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "JFE SHOJI": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "KANGRUI": [[">3200<=4200", "EG14"], [">4200", "EC45"], ["<=3200", "EH28"]], "KANSAI": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "KDK": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "KIAN": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "KIM ANN": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "KJ": [[">4200", "EG32"], ["<=3200", "EC47"], [">3200<=4200", "EG14"]], "KJ PRECISION": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "KOMINOX AB": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "LAI KING": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "LAURIE": [["<=3200", "EG14"], [">3200<=4200", "EH28"], [">4200", "EH33"]], "LE": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "LEE & STEEL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "LIM MENG SENG": [[">3200<=4200", "EG14"], [">4200", "EG34"], ["<=3200", "EH28"]], "LINSTER": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "LOTUS METAL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "LTM": [["<=3200", "EG15"], [">3200<=4200", "EG15"], [">4200", "EG34"]], "M.R. STEEL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "MAINCHAIN": [[">4200", "EG34"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "MAN TAK": [[">4200", "EG34"], ["<=3200", "EG15"], [">3200<=4200", "EG15"]], "MARINE": [["<=3200", "EG14"], [">3200<=4200", "EH28"], [">4200", "EH33"]], "MCB": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "MENAM": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "METAL ESTABLISH": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "METALINOX": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "METALLSERVIS": [[">3200<=4200", "EH14"], ["<=3200", "EH28"], [">4200", "EG35"]], "NAKAYAMA": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "NDE": [["<=3200", "EH28"], [">4000", "EG34"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "NM": [[">3200<=4200", "EG14"], ["<=3200", "EH22"], [">4200", "EG34"]], "NMSK": [[">4200", "EG34"], ["<=3200", "EH28"]], "NOVA TRADING": [["<=3200", "EH27"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "NOXFAP": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "NS METAL": [[">3200<=4200", "EG14"], ["<=3200", "EG14"], [">4200", "EH18"]], "NSC": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "OKAYA": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EH14"]], "OLYMPIC STEEL": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "OME": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "PACKER(ISRAEL)": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EH14"]], "PASCAL": [[">3200<=4200", "EH14"], ["<=3200", "EH28"], [">4200", "EG34"]], "PF": [["<=3200", "EH28"], [">3200<=4200", "EH14"], [">4200", "EG34"]], "PLUTUS": [[">3200<=4200", "EI30"], ["<=3200", "EI25"], [">4200", "EI40"]], "PRECISION": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EH14"]], "PRECISION METAL": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EH14"]], "PRECISION METALS": [[">3200<=4200", "EH14"], ["<=3200", "EH28"], [">4200", "EH33"]], "QPLUS": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "RAAJRATNA": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "RHS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "RINO": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH34"]], "RISEBM": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "SAGAMI": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "SAMWON": [["<=3200", "EC47"], [">3200<=4200", "EG14"], [">4200", "EG32"]], "SCM": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "SCOT": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EI40"]], "SD-BK": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "SD-BKL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "SD-KHS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH33"]], "SD-LIM METAL": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "SD-METALPHILE": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EG34"]], "SD-METHA": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "SD-TPS": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "SENG HUAT": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "SENG HUAT METALPLEX": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "SGH": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "SHIMIZU MATERIAL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "SHINKO": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "SHINKO TH": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "SING LEONG-雙馬": [["<=3200", "EH28"], [">4200", "EH34"], [">3200<=4200", "EG14"]], "SLA": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "SMG": [["<=3200", "EH28"], [">4200", "EG33"], [">3200<=4200", "EG14"]], "SPECTROMATRIX": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "STEELINC": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "STEWART": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH28"]], "STIRLINGS": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH34"]], "STIRLINGS(5%)": [[">3200<=4200", "EG14"], [">4200", "EH34"], ["<=3200", "EH28"]], "STKSTAINLESS": [["<=3200", "EH28"], [">4200", "EH33"], [">3200<=4200", "EG14"]], "STRONG STEEL": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH34"]], "SUNGEUN": [[">4200", "EG33"], ["<=3200", "EG37"], [">3200<=4200", "EG14"]], "SUNGSIL METAL": [[">4200", "EG35"], ["<=3200", "EC47"], [">3200<=4200", "EG14"]], "SUPERFIX": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "SUPREME": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "TAN VIET": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "TCI": [["<=3200", "EH32"], [">3200<=4200", "EH32"], [">4200", "EH32"]], "TEKPOINT": [[">3200<=4200", "EG14"], ["<=3200", "EG14"], [">4200", "EG34"]], "TITAN METALS": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "TK-SCHULTE": [[">4200", "EH33"], [">3200<=4200", "EG14"], ["<=3200", "EH22"]], "TKMP": [[">3200<=4200", "EG14"], [">4200", "EH34"], ["<=3200", "EH26"]], "TMC": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "TOP SUNNY": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "TOZZHIN THAILAND": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "TSA": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "TSM": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EG34"]], "TUBE SUPPLY": [[">4200", "EG34"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "TUSCO": [[">3200<=4200", "EG15"], [">4200", "EG34"], ["<=3200", "EH28"]], "WESCO": [[">4200", "EG34"], [">3200<=4200", "EG15"], ["<=3200", "EH28"]], "WEST COAST": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "WING KEUNG": [[">3200<=4200", "EG14"], [">4200", "EH33"], ["<=3200", "EH29"]], "WPS": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "YGS": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "YIEH CORP LTD(HK)": [["<=3200", "EH28"], [">4200", "EG34"], [">3200<=4200", "EG14"]], "YONGTA": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "YOSHU": [[">4200", "EH33"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "YOUCHANG": [[">4200", "EG34"], [">3200<=4200", "EG14"], ["<=3200", "EH28"]], "YOUNG DONG": [[">3200<=4200", "EG15"], ["<=3200", "EG15"], [">4200", "EH33"]], "？頂": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "？暉": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "力常(觀音)": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "三大興": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "三卯鍛壓": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "三利": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "上晉": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "上海凡斯": [["<=3200", "EC47"], [">4200", "EC40"], [">3200<=4200", "EC45"]], "上海坤成": [["<=3200", "EC47"], [">3200<=4200", "EC40"], [">4200", "EC40"]], "上海億科": [[">3200<=4200", "EC40"], [">4200", "EC40"], ["<=3200", "EC47"]], "上海町芃": [["<=3200", "EH10"], [">4200", "EH10"], [">3200<=4200", "EH10"]], "上銀": [["<=3200", "EH99"], [">4200", "EC40"], [">3200<=4200", "EH99"]], "凡立": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "千里眼": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "大甲永和": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "大成": [[">4200", "EH32"], [">3200<=4200", "EH32"], ["<=3200", "EH32"]], "大連德邁仕": [["<=3200", "EC47"], [">3200<=4200", "EC47"], [">4200", "EC40"]], "大順": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "中國防蝕": [[">4200", "EH35"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "元盈": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "元偉勝": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "升暘": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EG38"]], "天津隆德": [[">4200", "EC40"], ["<=3200", "EC47"], [">3200<=4200", "EC40"]], "方鉦": [[">3200<=4200", "EH72"], [">4200", "EH72"], ["<=3200", "EH79"]], "世廷": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "世華": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "功億": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "北澤": [[">4200", "EG38"], [">3200<=4200", "EG39"], ["<=3200", "EG39"]], "北澤一廠": [["<=3200", "EG39"], [">3200<=4200", "EG39"], [">4200", "EG38"]], "北澤二廠": [[">4200", "EG38"], ["<=3200", "EG39"], [">3200<=4200", "EG38"]], "北澤三廠": [["<=3200", "EG39"], [">3200<=4200", "EG38"], [">4200", "EG38"]], "右勝鋼鐵": [[">3200<=4200", "EH78"], ["<=3200", "EG39"], [">4200", "EH71"]], "台芝": [[">4200", "EH10"], ["<=3200", "EH10"], [">3200<=4200", "EH10"]], "台灣亞錁": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "台灣林吉": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "台灣矽微": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "巨昌": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "巨頻": [[">3200<=4200", "EG14"], [">4200", "EG38"], ["<=3200", "EH79"]], "永川泰": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "永村": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "生計直棒": [[">3200<=4200", "EH99"], ["<=3200", "EH99"], [">4200", "EH99"]], "生計庫存": [[">3200<=4200", "EH99"], [">4200", "EH99"], ["<=3200", "EH99"]], "禾桀": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH38"]], "光翔": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "全利金屬": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "全敏尖端": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "向春": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "名威": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "合順": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "宇隆": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "宇慶": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "有光": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "江陰外庫": [["<=3200", "EC47"], [">3200<=4200", "EC47"], [">4200", "EC40"]], "江陰華新": [[">4200", "EC40"], [">3200<=4200", "EC40"], ["<=3200", "EC47"]], "江蘇迪威": [[">4200", "EC40"], [">3200<=4200", "EC47"], ["<=3200", "EC47"]], "汎新": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "百呈": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "百堅": [[">3200<=4200", "EG37"], [">4200", "EH33"], ["<=3200", "EG14"]], "西邁金屬": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH33"]], "君立": [["<=3200", "EH79"], [">4200", "EH36"], [">3200<=4200", "EH78"]], "壯安": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "宏盈": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "宏荃": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "志典": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH33"]], "志聯": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "甫剛": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "貝加": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "貝克休斯": [[">3200<=4200", "EG38"], [">4200", "EG38"], ["<=3200", "EG38"]], "京碼": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "京鋼": [[">4200", "EC41"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "佳東": [[">3200<=4200", "EH76"], ["<=3200", "EH76"], [">4200", "EH70"]], "佳東-台中": [[">4200", "EH70"], ["<=3200", "EH76"], [">3200<=4200", "EH78"]], "佳東-台北": [[">4200", "EH70"], [">3200<=4200", "EH78"], ["<=3200", "EH76"]], "佳東-高雄": [[">3200<=4200", "EH78"], [">4200", "EH70"], ["<=3200", "EH76"]], "協崎": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "坤泰": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "奇賓": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EG38"]], "孟駿": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "尚智": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "岡山東穎": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "承總": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "易隆": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "昆山金富盈": [[">3200<=4200", "EC40"], ["<=3200", "EC47"], [">4200", "EC40"]], "明石": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "東栗": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "東莞峰作": [["<=3200", "EC47"], [">3200<=4200", "EC40"], [">4200", "EC40"]], "東萊": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "東徽": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH33"]], "武漢機械": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "金大": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "金利山": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "金亞洲": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "金城": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "金耘": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH71"]], "金耘-南營所": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH71"]], "金煜": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH71"]], "長盈": [[">4200", "EG38"], [">3200<=4200", "EG14"], ["<=3200", "EH79"]], "長圓": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "俊來(蘆洲)": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "俊益": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "厚群": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "威孚高科技": [["<=3200", "EC47"], [">3200<=4200", "EC47"], [">4200", "EC40"]], "建新": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "柏緯": [[">3200<=4200", "EC47"], [">4200", "EC42"], ["<=3200", "EC47"]], "津展": [["<=3200", "EH75"], [">4200", "EH71"], [">3200<=4200", "EH71"]], "津展-台中": [[">4200", "EH72"], ["<=3200", "EH75"], [">3200<=4200", "EH72"]], "津展-台北": [[">3200<=4200", "EH72"], [">4200", "EH72"], ["<=3200", "EH75"]], "津展-台南": [[">3200<=4200", "EH72"], ["<=3200", "EH75"], [">4200", "EH72"]], "皇銘": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "研發部": [["<=3200", "EH99"], [">3200<=4200", "EH99"], [">4200", "EH99"]], "研發測試": [["<=3200", "EH99"], [">3200<=4200", "EH99"], [">4200", "EH99"]], "科威聯": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "英鈿": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "重慶九勝": [[">4200", "EC40"], ["<=3200", "EC47"], [">3200<=4200", "EC47"]], "重慶九環": [[">4200", "EC40"], ["<=3200", "EC47"], [">3200<=4200", "EC40"]], "展舵": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "峰作金屬": [["<=3200", "EH74"], [">3200<=4200", "EH78"], [">4200", "EH71"]], "峰勝": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "振家": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "振華興": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "時哲": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "晉易": [[">4200", "EH38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "晉椿": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH38"]], "晉椿(鹿港)": [[">4200", "EH38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "浙江三花": [[">4200", "EG34"], ["<=3200", "EH28"], [">3200<=4200", "EG14"]], "益陽": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "退庫重工": [[">4200", "EH99"], [">3200<=4200", "EH99"], ["<=3200", "EH99"]], "高立熱處理": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "高銪": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "商旺": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "域鑫科技": [[">4200", "EC40"]], "常州眾山": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EC43"]], "強淞": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "強實": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "捷流": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "淳康": [[">3200<=4200", "EH10"], ["<=3200", "EH10"], [">4200", "EH10"]], "眾山": [[">3200<=4200", "EH78"], [">4200", "EG35"], ["<=3200", "EH79"]], "祥日達": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "祥英": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "笠源": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "頂翔勝": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "麥億": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "備料庫存": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "凱記": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "勝初": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "勝新": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "勝盟": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "富億鑫": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "尊茂": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "復盛應用": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH78"]], "敦壹": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "朝盟": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "無錫永雋": [["<=3200", "EH28"], [">3200<=4200", "EG14"], [">4200", "EH33"]], "舜欽": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "華友(外)": [[">3200<=4200", "EG14"], ["<=3200", "EH28"], [">4200", "EH34"]], "華纜": [[">4200", "EH10"], [">3200<=4200", "EH10"], ["<=3200", "EH10"]], "詠勗": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "詠晟": [["<=3200", "EH79"], [">3200<=4200", "EC47"], [">4200", "EC40"]], "進達": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "開滋": [["<=3200", "EG39"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "隆明": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "隆門": [[">4200", "EG38"], [">3200<=4200", "EH28"], ["<=3200", "EH28"]], "隆順發": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "雅信億": [[">3200<=4200", "EH14"], ["<=3200", "EH79"], [">4200", "EH33"]], "廉喬": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "廉錩": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH77"]], "廉錩-台北": [[">3200<=4200", "EH78"], ["<=3200", "EH77"], [">4200", "EG38"]], "廉錩-台南": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH77"]], "慈溪龍華": [[">4200", "EC40"], [">3200<=4200", "EC40"], ["<=3200", "EC47"]], "新創捷": [["<=3200", "EH79"], [">3200<=4200", "EH14"], [">4200", "EH33"]], "新華特聯": [["<=3200", "EH79"], [">3200<=4200", "EH14"], [">4200", "EH35"]], "新萊應材": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "瑞鋼": [[">4200", "EC40"], [">3200<=4200", "EC40"], ["<=3200", "EC47"]], "盟鉦": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "萬揚": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EH33"]], "經捷": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "經貿": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "群鎰": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "聖泰": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "路竹新益": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "鉅泰昇": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EH36"]], "鉅銅": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "鉅豐": [["<=3200", "EH79"]], "鼎崴": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "嘉冠": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "嘉碁": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "寧波東葛": [[">3200<=4200", "EC40"], ["<=3200", "EC47"], [">4200", "EC40"]], "慷倫": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "睿緻佳": [["<=3200", "EH78"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "福泉": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "聚祥": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "銓宥": [[">4200", "EH10"], [">3200<=4200", "EH10"], ["<=3200", "EH10"]], "廣泰": [[">4200", "EH10"], [">3200<=4200", "EH10"], ["<=3200", "EH10"]], "慶鋐": [[">3200<=4200", "EH78"], [">4200", "EG38"], ["<=3200", "EH79"]], "歐承": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "毅鋼": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "磐石": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "誼山": [["<=3200", "EH29"], [">3200<=4200", "EH78"], [">4200", "EH38"]], "頭份": [[">4200", "EG38"], [">3200<=4200", "EH78"], ["<=3200", "EH79"]], "優普洛": [["<=3200", "EH79"], [">3200<=4200", "EH78"], [">4200", "EG38"]], "營三備庫(內)": [[">3200<=4200", "EC40"], ["<=3200", "EC47"], [">4200", "EC40"]], "營三備庫(外)": [[">3200<=4200", "EC40"], [">4200", "EC40"], ["<=3200", "EC47"]], "營業庫存": [[">4200", "EH99"], ["<=3200", "EH99"], [">3200<=4200", "EH99"]], "環友": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "聯岱": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "聯祥": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "邁達斯": [[">4200", "EG38"], ["<=3200", "EH79"], [">3200<=4200", "EH78"]], "鴻運": [[">3200<=4200", "EH27"], ["<=3200", "EH27"], [">4200", "EG38"]], "雙和": [[">3200<=4200", "EG14"], ["<=3200", "EH26"], [">4200", "EG34"]], "麒譯": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "町洋": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "晟田": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "畯圓": [["<=3200", "EH19"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "鐿順發": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "鑫誠鐵材": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "恒耀": [["<=3200", "EH79"], [">4200", "EG38"], [">3200<=4200", "EH78"]], "暉": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]], "頂": [[">3200<=4200", "EH78"], ["<=3200", "EH79"], [">4200", "EG38"]]}'
-STORAGE_LOOKUP = json.loads(_STORAGE_JSON)
-# Try loading from storage_data.json (auto-updated via admin panel)
-_storage_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage_data.json")
-if os.path.exists(_storage_json_path):
-    try:
-        with open(_storage_json_path, "r", encoding="utf-8") as _f:
-            STORAGE_LOOKUP = json.load(_f)
-            logger.info("Loaded storage data from storage_data.json: %d customers", len(STORAGE_LOOKUP))
-    except Exception as _e:
-        logger.warning("Failed to load storage_data.json, using embedded: %s", _e)
-# Extra customers not in storage Excel but appear in factory chat
-EXTRA_CUSTOMERS = [
-    "寶麗金屬", "田華榕", "蘋果", "賽利金屬", "盛昌遠", "曜麟",
-    "LOTUS", "LOTUS METAL", "shinko", "wing keung",
-]
-CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
-
-
+# ─── Translation pipeline ──────────────────────────────
 def pre_replace_zh(text):
-    """Apply hard replacements to Chinese text before GPT translation.
-    Returns (modified_text, customer_placeholders_dict)."""
     result = text
-    # Protect customer names with placeholders (these survive GPT translation)
     cust_ph = {}
     for i, name in enumerate(CUSTOMER_NAMES):
         if name in result:
             ph = f"__CUST_{i}__"
             cust_ph[ph] = name
             result = result.replace(name, ph)
-    # Apply hard replacements (longest first to avoid partial matches)
     for zh, replacement in sorted(ZH_TO_ID_HARD.items(), key=lambda x: -len(x[0])):
         if zh in result:
             result = result.replace(zh, f"[{replacement}]")
     return result, cust_ph
 
-
 def restore_customers(text, cust_ph):
-    """Restore customer name placeholders back to original names."""
     if not text or not cust_ph:
         return text
     result = text
     for ph, name in cust_ph.items():
-        # GPT might mangle placeholders, try variants
         idx = ph.replace("__CUST_", "").replace("__", "")
-        variants = [
-            ph, ph.replace("_", " "), f"CUST_{idx}", f"CUST {idx}",
-            f"__CUST {idx}__", f"[CUST_{idx}]",
-        ]
+        variants = [ph, ph.replace("_", " "), f"CUST_{idx}", f"CUST {idx}",
+                    f"__CUST {idx}__", f"[CUST_{idx}]"]
         for v in variants:
             if v in result:
                 result = result.replace(v, name)
-    # Safety: if any customer name placeholder pattern remains, try regex
-    result = re.sub(r'__CUST_(\d+)__', lambda m: cust_ph.get(f"__CUST_{m.group(1)}__", m.group(0)), result)
+    result = re.sub(r'__CUST_(\d+)__',
+                    lambda m: cust_ph.get(f"__CUST_{m.group(1)}__", m.group(0)), result)
     return result
 
-
 def post_fix_translation(text):
-    """Fix known GPT translation mistakes in output."""
     if not text:
         return text
     result = text
-    # Fix specific wrong translations (longest match first)
     for wrong, correct in sorted(ID_POST_FIX.items(), key=lambda x: -len(x[0])):
         result = result.replace(wrong, correct)
-    # Remove bracketed hints that leaked through from pre_replace
     result = re.sub(r'\[([a-zA-Z /&]+)\]', r'\1', result)
-    # Clean up double spaces
     result = re.sub(r'\s{2,}', ' ', result).strip()
     return result
 
+def contains_source_script(text, src):
+    cleaned = re.sub(r'__MENTION_\d+__', ' ', text or '')
+    cleaned = re.sub(r'__CUST_\d+__', ' ', cleaned)
+    for name in CUSTOMER_NAMES:
+        if name in cleaned:
+            cleaned = cleaned.replace(name, ' ')
+    patterns = {"zh": r'[\u4e00-\u9fff]', "ja": r'[\u3040-\u30ff\u4e00-\u9fff]',
+                "ko": r'[\uac00-\ud7af]', "th": r'[\u0e00-\u0e7f]'}
+    pattern = patterns.get(src)
+    if not pattern:
+        return False
+    return len(re.findall(pattern, cleaned)) >= 2
 
-def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
+def is_translation_valid(result, src, tgt):
+    if not result or not result.strip():
+        return False
+    if src != tgt and contains_source_script(result, src):
+        return False
+    return True
+
+def build_system_prompt(extra_rule=""):
+    return (
+        "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
+        "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
+        "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment. "
+        "CRITICAL RULES: "
+        "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
+        "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
+        "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
+        "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
+        "3. Translate all other content completely and naturally like real people talk at work. Use casual daily language. "
+        "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
+        "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
+        "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
+        "啦=lah/dong, 喔/哦=ya/lho, 耶=dong/nih, 嘛=dong/kan, 蛤=hah?/apa?, 厚=ya kan, "
+        "醬/降=begitu/gitu(=這樣), 母湯=jangan/gak boleh(=不要), 超/有夠=banget(=非常), 感溫=terima kasih(台語感恩), "
+        "CRITICAL: Taiwanese rhetorical questions SUGGEST doing something: 需不需要X=perlu X gak nih(suggesting X should be done), 要不要X=gimana kalau X, 還在X=masih X(often implies criticism). "
+        "搞什麼=ngapain sih, 搞定=beres, 人咧=orangnya mana, 怎麼搞的=kenapa bisa begini, 出包=ada masalah, 先這樣=segitu dulu ya, 再說=nanti aja, "
+        "X到不行/X得要死/X到爆=X banget, 怎麼這麼X=kok X banget, 有夠X=X banget, "
+        "ㄏㄏ=haha, QQ=sedih, 3Q=terima kasih, GG=tamat, XD=haha, @@=bingung. "
+        "6. Target Traditional Chinese = Taiwan style, not mainland. "
+        "7. Target Indonesian = simple clear daily language for factory workers. "
+        "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
+        "9. FACTORY VOCABULARY: "
+        "【製程/Process】無心研磨=centerless grinding, 研磨=grinding, 砂輪=batu gerinda, 調整輪=roda pengatur, 刀板=work rest blade, 冷卻液=cairan pendingin, "
+        "不鏽鋼=stainless steel, 棒鋼=steel bar, 盤元=wire rod, 削皮棒=peeled bar, 冷精棒=cold-drawn bar, "
+        "熱軋=hot rolling, 退火=annealing, 酸洗=pickling, 削皮=peeling, 冷抽=cold drawing, "
+        "鋼種=jenis baja, PMI=uji material, 來料=material masuk, 棒材=batang baja, 混料=tercampur material(SERIOUS), 料號=nomor material, "
+        "拋光=polishing, 粗拋=rough polishing, 噴漆=spray paint, 洗料=cuci material, "
+        "倒角=chamfer, 修磨=repair grinding, 壓光=press polish, 矯直=straightening, 精整=finishing, AP=mesin finishing, "
+        "光輝退火=bright annealing, 回爐=kirim kembali ke furnace, "
+        "側磨=side grinding(DILARANG/prohibited), 不可側磨=dilarang side grinding, "
+        "【班次/出勤】點名=ada pengawas yang datang(inspection, NOT roll call), 早班=shift pagi, 夜班=shift malam, 中班=shift siang, "
+        "加班=lembur, 請假=izin, 病假=izin sakit, 事假=izin pribadi, 特休=cuti tahunan, "
+        "【設備】天車=overhead crane, 台車=trolley, 吊秤=timbangan gantung, 馬蹄環=shackle, "
+        "稼動率=utilization rate, 線速=line speed, 主機手=operator utama, 印勞=pekerja Indonesia, "
+        "【包裝】套紙管=pasang tabung kertas, 入庫=masuk gudang, 櫃子=kontainer, 木箱=kotak kayu, "
+        "把=bundel, 捆=bundel/ikat, 支/根=batang, 批=lot/batch, "
+        "包(verb)=packing, 秤重=timbang, 貼標=tempel label, "
+        "【訂單】允收=jumlah yang boleh diterima, 訂尺=panjang sesuai pesanan, 爐號=heat number, "
+        "不擋=tidak dibatasi(ALLOWED), 不擋非本月=order bukan bulan ini BOLEH masuk gudang, "
+        "溢量=kelebihan produksi, 併包=gabung packing, 出貨差=kekurangan pengiriman, "
+        "過帳=input data ke sistem, 放行=release data, "
+        "【品質】品保=QC, 客訴=komplain pelanggan, 偏小=under size, 偏大=over size, 表粗=surface roughness, "
+        "開立重工=buat WO rework, 風險批=lot berisiko, "
+        "【部門】業務=sales, 營業=sales, 生計=production planning, 品保=QC, 儲運=gudang&logistik, 人事=HRD, "
+        "處長=kepala divisi, "
+        "10. CRITICAL CONTEXT RULES: "
+        "a) X米=bar LENGTH. 三米上面放六米=batang 3m di atas 6m. "
+        "b) 把/捆=BUNDLE counters. 包2把=packing 2 bundel. "
+        "c) 包(verb)=packing NOT wrapping. "
+        "d) 爐號=heat number(NEVER 'nomor panas'). "
+        "e) 放=POLYSEMY: 放+把/單/批=RELEASE; 放+地點=PUT/PLACE; 放+料=FEED. "
+        "f) 再=POLYSEMY: X再Y(condition)=hanya X yang Y; 再+verb(alone)=lagi/again. "
+        "g) 不擋=NOT blocked=ALLOWED. "
+        "h) Customer names=keep as-is, do NOT translate. "
+        + extra_rule +
+        " Only output the translation. No quotes, no explanation, no prefix."
+    )
+
+def translate_openai(text, src, tgt, strict=False, repair_mode=False, bad_result=None):
     if not oai:
         return None
     try:
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
-
-        # Apply hard replacements before GPT for zh->other
         input_text = text
         cust_placeholders = {}
         if src == "zh":
             input_text, cust_placeholders = pre_replace_zh(text)
-
         protected, placeholders = protect_mentions(input_text)
 
         extra_rule = ""
-        if strict_no_source_script and src != tgt:
+        if strict and src != tgt:
             if src == "zh":
-                extra_rule = (
-                    " 10. IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or __MENTION__ placeholder."
-                    " Terms such as 印籍, 印尼籍, 早班, 夜班, 考試, 讀書, 下班後 must be translated into the target language."
-                )
-            elif src == "ja":
-                extra_rule = " 10. IMPORTANT: Do not leave Japanese text untranslated unless it is a person's name or __MENTION__ placeholder."
-            elif src == "ko":
-                extra_rule = " 10. IMPORTANT: Do not leave Korean text untranslated unless it is a person's name or __MENTION__ placeholder."
-            elif src == "th":
-                extra_rule = " 10. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or __MENTION__ placeholder."
+                extra_rule = " IMPORTANT: Do not leave any Chinese words untranslated unless they are a person's name or placeholder."
 
-        sys_prompt = (
-            "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
-            "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
-            "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment. "
-            "CRITICAL RULES: "
-            "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
-            "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
-            "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
-            "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
-            "3. Translate all other content completely and naturally like real people talk at work. Use casual daily language. "
-            "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
-            "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
-            "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
-            "啦=lah/dong, 喔/哦=ya/lho, 耶=dong/nih, 嘛=dong/kan, 蛤=hah?/apa?, 厚=ya kan, "
-            "醬/降=begitu/gitu(=這樣), 母湯=jangan/gak boleh(=不要), 超/有夠=banget(=非常), 感溫=terima kasih(台語感恩), "
-            "CRITICAL: Taiwanese rhetorical questions SUGGEST doing something: 需不需要X=perlu X gak nih(suggesting X should be done), 要不要X=gimana kalau X, 還在X=masih X(often implies criticism). "
-            "搞什麼=ngapain sih, 搞定=beres, 人咧=orangnya mana, 怎麼搞的=kenapa bisa begini, 出包=ada masalah, 先這樣=segitu dulu ya, 再說=nanti aja, "
-            "X到不行/X得要死/X到爆=X banget, 怎麼這麼X=kok X banget, 有夠X=X banget, "
-            "ㄏㄏ=haha, QQ=sedih, 3Q=terima kasih, GG=tamat, XD=haha, @@=bingung. "
-            "6. Target Traditional Chinese = Taiwan style, not mainland. "
-            "7. Target Indonesian = simple clear daily language for factory workers. "
-            "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
-            "9. FACTORY VOCABULARY: "
-            "【製程/Process】"
-            "無心研磨=centerless grinding, 研磨=grinding, 砂輪=batu gerinda, 調整輪=roda pengatur, 刀板=work rest blade, 冷卻液=cairan pendingin, "
-            "不鏽鋼=stainless steel, 棒鋼=steel bar, 盤元=wire rod, 削皮棒=peeled bar, 冷精棒=cold-drawn bar, "
-            "熱軋=hot rolling, 退火=annealing, 酸洗=pickling, 削皮=peeling, 冷抽=cold drawing, "
-            "鋼種=jenis baja, PMI=uji material, 來料=material masuk, 棒材=batang baja, 混料=tercampur material(SERIOUS), 料號=nomor material, "
-            "拋光=polishing, 粗拋=rough polishing, 噴漆=spray paint, 洗料=cuci material, "
-            "倒角=chamfer, 修磨=repair grinding, 盤元修磨=repair grinding wire rod, 線外修磨=offline repair grinding, "
-            "壓光=press polish, 矯直=straightening, 重矯=straightening ulang, 精整=finishing, AP=mesin finishing, "
-            "光輝退火=bright annealing, 回爐=kirim kembali ke furnace, "
-            "側磨=side grinding(DILARANG/prohibited), 不可側磨=dilarang side grinding, "
-            "【站別/Stations - numbers are STATION NUMBERS】"
-            "400站=station 400, 401站=station 401, 420站=station 420, "
-            "470站=station 470(UT station), UT=mesin UT(di station 470), 480站=station 480, "
-            "490站=station 490(秤重站/timbang), 801站=station 801, "
-            "OL=sedang produksi/online, 回400=kembalikan ke station 400, "
-            "無主=tanpa pemilik/unassigned, 入無主=masukkan ke status tanpa pemilik, "
-            "掛單/工單=work order, 重掛單=pasang ulang work order, 無工單資訊=tidak ada info work order, "
-            "改制=ubah proses, 去化=ada order baru mau terima, 有單去化=ada order baru untuk serap material, 改制去化=ubah proses produksi, "
-            "帳/帳務=data administrasi(ERP), 帳已回400=data sudah dikembalikan ke station 400, "
-            "過帳=input data produksi(jumlah&berat)ke sistem tanpa release ke stasiun berikutnya, "
-            "放行=release data ke stasiun berikutnya(setelah QC lulus), "
-            "退庫=kembalikan ke gudang, 退庫拆包=keluarkan dari gudang bongkar packing untuk dibagi ulang, "
-            "發料=issue material, 存檔=simpan data, 暫存=simpan sementara, 短尺=ukuran pendek, "
-            "溢量=kelebihan produksi melebihi permintaan, 併包=gabung packing dari lot berbeda dalam order sama, "
-            "出貨差=kekurangan pengiriman hari ini, 轉用=dialihkan untuk order lain, 跳無主轉用=pindah ke tanpa pemilik lalu dialihkan, "
-            "【班次/出勤】"
-            "點名=ada pengawas yang datang(inspection, NOT roll call), 早班=shift pagi, 夜班=shift malam, 中班=shift siang, "
-            "加班=lembur, 排班=jadwal shift, 調班=tukar shift, 上班=masuk kerja, 下班=pulang kerja, 打卡=absen, "
-            "請假=izin, 病假=izin sakit, 事假=izin pribadi, 特休=cuti tahunan, 代班=gantikan shift, "
-            "忘卡補=lupa kartu ID, pakai sistem input waktu, 造冊=buat daftar absensi, "
-            "班股=rapat shift, 堆高機複訓=pelatihan ulang forklift, 天車複訓=pelatihan ulang crane, "
-            "紅包=angpao, 年終獎金=bonus akhir tahun, 過年不停機=Imlek tidak berhenti produksi, "
-            "【產線/設備】"
-            "產線=lini produksi, 機台=mesin, 開機=nyalakan mesin, 停機=mesin berhenti, 調機=setting mesin, "
-            "上料=isi material, 備料=siapkan material, 產量=jumlah produksi, 目標=target, 達標=capai target, 超產=over production, "
-            "訂單=order, 出貨=kirim barang, 交期=deadline, 趕貨=kejar order, 急單=order urgent, 急單備註=catatan order urgent, "
-            "下製程=proses selanjutnya, 異常=abnormal/ada masalah, 維修中=sedang diperbaiki, "
-            "天車=overhead crane, 台車=trolley, 吊秤=timbangan gantung, 馬蹄環=shackle, 鋼索=sling baja, 吊掛物=beban gantung, "
-            "稼動率=utilization rate, 線速=line speed(m/min), 限速=batas kecepatan, 降速=turunkan kecepatan, 提速=naikkan kecepatan, 速差=selisih kecepatan, "
-            "撥料=feed material, 過機=lewatkan mesin, 線外=offline, 印勞=pekerja Indonesia, "
-            "砂光機=sanding machine, 眼模=die/cetakan drawing, 引拔座=drawing bench, 皮膜槽=coating tank, "
-            "查修=investigasi&perbaiki, 修護=maintenance, 儀電=instrumen listrik, 備品=spare part, "
-            "跳異常=error muncul, 復歸=reset, 復歸無效=reset gagal, 跳機=mesin trip, 恢復生產=kembali produksi, "
-            "叫修=panggil teknisi, 進廠查修=teknisi masuk pabrik cek, 電聯儀電=hubungi instrumen listrik, "
-            "斷料=material putus, 卡料=material macet, 擠料=material terjepit keluar, "
-            "主機手=operator utama, 上料人員=petugas pengisian material, 點檢=cek rutin, 護罩=pelindung mesin/safety guard, "
-            "interlock=pengunci keamanan(jangan ditahan pakai benda), "
-            "【包裝/入庫】"
-            "套紙管=pasang tabung kertas, 入庫=masuk gudang, 優先包裝入庫=prioritas packing masuk gudang, "
-            "需求單=formulir permintaan, 可以全收=bisa diterima semua, "
-            "櫃子=kontainer(shipping container), 櫃子在路上=kontainer sedang di jalan, "
-            "木箱=kotak kayu, 裝箱=masukkan ke kotak kayu, 2700大的木箱=kotak kayu ukuran besar 2700mm, "
-            "NOTE: 木箱 context: 3200/2400=box LENGTH mm, 500/1000=weight CAPACITY kg. "
-            "把=bundel(bundle), 捆=bundel/ikat, 支/根=batang(piece/rod), 批=lot/batch, "
-            "NOTE: X米(三米,六米)=batang X meter(bar LENGTH not distance). 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
-            "包(verb)=packing/kemas(NOT wrapping). 秤重=timbang, 貼標=tempel label, 綁鐵=ikat besi, "
-            "【訂單管理】"
-            "允收=jumlah yang boleh diterima pelanggan, 允收0支=zero tolerance, 不收短尺=tidak terima ukuran pendek, "
-            "訂尺=panjang sesuai pesanan, 爐號=heat number/nomor furnace(NEVER translate as 'panas'), 爐號標籤=label heat number, "
-            "分捆=pisah bundel, 遞延單=delayed order, 非本月=bukan order bulan ini, "
-            "非本月不入庫=order bukan bulan ini jangan masuk gudang, 檔非本月=tahan order bukan bulan ini, "
-            "異型棒=batang bentuk khusus, 異型棒不擋=batang khusus tidak dibatasi, "
-            "不擋=tidak dibatasi/boleh masuk(exemption), 不擋非本月=order bukan bulan ini BOLEH masuk gudang(exception/exemption, NOT blocked), "
-            "入庫目標=target masuk gudang, 壓日期=ada deadline ketat, "
-            "管控=kontrol, 不管控=tidak dikontrol(bebas), "
-            "【品質/缺陷】"
-            "品保=QC, 會驗=joint inspection, 暫留=hold sementara, HOLD=tahan, "
-            "客訴=komplain pelanggan, 夾帶樣品=sertakan sampel, 掛檔=simpan ke arsip, 稽核=audit, "
-            "螺紋=thread mark, 車刀痕=turning tool mark, 砂光痕=sanding mark, 殺光痕=grinding mark, "
-            "剝片=flaking, 軋輥印痕=roll mark, 碰傷=luka benturan, 黑皮=unfinished surface, "
-            "偏小=under size, 偏大=over size, 表粗=surface roughness, 目視=visual inspection, "
-            "開立重工=buat WO rework, 重工研磨至尺寸下限=rework grinding sampai batas bawah ukuran, "
-            "不允收=pelanggan tidak terima, 風險批=lot berisiko, 走ET檢測=jalankan pengujian ET, "
-            "卡料需關閉電源後再取料=material macet HARUS matikan listrik dulu baru ambil, "
-            "【部門/人員】"
-            "業務=sales, 營業=sales(=業務), 生計=production planning, 資訊=IT department, 品保=QC, 儲運=gudang&logistik, 人事=HRD, 工安=safety officer, "
-            "處長=kepala divisi, 抓資料=ambil data, "
-            "【標籤/系統】"
-            "TAG=label, 儲區=area penyimpanan di sistem, 轉檔=konversi data, "
-            "MES=MES(sistem produksi), 報表=laporan produksi, 條碼=barcode, "
-            "標籤機=mesin label, 包裝電腦=komputer packing, "
-            "在製品管制表=WIP control sheet, "
-            "【安全/環境/紀律】"
-            "太空包=jumbo bag/FIBC, 噴漆罐一定要打洞才能丟棄在太空包=kaleng spray HARUS dilubangi sebelum buang ke jumbo bag, "
-            "扣績效=potong kinerja(sanksi), 劣項=pelanggaran, 納入劣項=dicatat pelanggaran, "
-            "三定=3 tetap(tempat/barang/jumlah tetap), 不要物=barang tidak terpakai, "
-            "漏油=bocor oli, 生鏽=berkarat, 掉漆=cat mengelupas, 積水=genangan air, 粉塵=debu, "
-            "煙蒂=puntung rokok, 檳榔渣=sisa pinang, 被釘=kena tegur atasan, "
-            "提報懲處=laporkan untuk sanksi, 會嚴罰=dihukum berat, "
-            "綠卡=kartu hijau(catatan safety), KYT=pelatihan prediksi bahaya, 防火演練=latihan pemadam kebakaran, "
-            "調班單=formulir tukar shift, 簽核=tanda tangan persetujuan, "
-            "【生活/薪資】"
-            "宿舍=asrama, 便當=bekal makan, 餵狗=kasih makan anjing, "
-            "薪水=gaji, 加班費=uang lembur, 績效=penilaian kinerja, 匯款=transfer, "
-            "尾牙=pesta akhir tahun, 春酒=pesta tahun baru, 伴手禮=oleh-oleh, 便當費=biaya makan siang, "
-            "量測=mengukur, 尺寸=diameter, 公差=toleransi, 校正=kalibrasi, "
-            "【客戶 - NEVER translate】"
-            "DACAPO, CASTLE, LOTUS, METALINOX, KANGRUI, SUNGEUN, STEELINC, GLH, shinko, wing keung, "
-            "田華榕, 佳東, 蘋果, 常州眾山, 大順, 大成, 巨昌, 北澤, 鴻運, 畯圓, 名威, 右勝, 貝克休斯, 皇銘, "
-            "台芝, 百堅, 津展, 曜麟, 廉錩, 盛昌遠, 永吉, 光輝, 寶麗金屬. "
-            "NOTE: 蘋果=customer NOT fruit. 光輝=customer OR 光輝退火(bright annealing), context determines. "
-            "10. CRITICAL CONTEXT RULES: "
-            "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
-            "b) 把/捆=BUNDLE counters. 包2把=packing 2 bundel. "
-            "c) 包(verb)=packing NOT wrapping. 高侑的今天包2把都這樣=Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
-            "d) Names(高侑,十元,小麥,啊堂,秋情,政軒,碩凱,汶錡,武駿,凱銘,小趙,阿澤,法比恩,山多,EggEgg,fang,Dato潘)=keep as-is. "
-            "e) Customer names=keep as-is, do NOT translate. "
-            "f) R+number=round bar diameter(R28.57=bulat 28.57mm). Non-R=hex/special(H26=hex 26mm). "
-            "g) S/B=straight bar. E1~E11=cold drawing lines. I1~I21=grinding machines. BF2/3/5=polishing machines. "
-            "h) 5F/5L/6S/6T/6U/6W/7E/7F/7G+numbers=work order ID, keep as-is. "
-            "i) 課料=section chief designated material. G包=packing method code. AP=finishing equipment. "
-            "j) 爐號=heat number(NEVER 'nomor panas'). 有包到X=kalau ada packing untuk X(NOT 'paket datang ke X'). "
-            "k) 放=POLYSEMY(multiple meanings, judge by context): "
-            "放+把/單/批/工單號/這把/這單/這批=RELEASE data(放行). e.g. 先放這把=release bundel ini dulu, 放了=sudah di-release, 幫放一下=tolong bantu release. "
-            "放+地點/方位(地上/旁邊/上面/那邊/架上)=PUT/PLACE(taruh). e.g. 放地上=taruh di lantai, 三米上面放六米=batang 3m ditaruh di atas 6m. "
-            "放+料/材料(without location)=FEED material. e.g. 放料=isi material. "
-            "放假=libur/holiday. "
-            "When ambiguous and context is about work orders or production flow, default to RELEASE(放行). "
-            "l) 再=POLYSEMY: "
-            "X再Y(condition+action)=hanya X yang Y / X baru Y(=才). e.g. 急單再幫忙安排入庫=hanya order urgent yang tolong bantu atur masuk gudang. "
-            "再+verb(without preceding condition)=lagi/sekali lagi(=again). e.g. 再確認一下=confirm sekali lagi. "
-            "m) 非本月=bukan order bulan ini(order that is NOT for the current month). 非本月包裝不入庫=yang bukan order bulan ini jangan packing masuk gudang. "
-            "n) 不擋=tidak dibatasi/boleh masuk(EXEMPTION, means ALLOWED). 不擋非本月=order bukan bulan ini BOLEH masuk gudang. "
-            "CRITICAL: 不擋 means NOT blocked = ALLOWED. Do NOT translate as tidak boleh(=blocked). "
-            "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
-            "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
-            "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
-            "11. TRANSLATION EXAMPLES (follow strictly): "
-            "【中→印尼】"
-            "乾 需不需要提報一下 → Aduh, perlu dilaporkan gak nih? "
-            "UT囤一堆料了 → UT udah numpuk banyak material. "
-            "品保還在下班 誇張 → QC udah pulang, keterlaluan. "
-            "三米上面放六米 → Batang 3 meter ditaruh di atas batang 6 meter. "
-            "麻煩他們不要這樣放料 → Tolong bilang ke mereka jangan taruh material kayak gini. "
-            "高侑的今天包2把都這樣 → Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
-            "來料都短少4-5公斤 → Material masuk semuanya kurang 4-5 kilogram. "
-            "已轉達 → Sudah disampaikan. "
-            "這批料有問題 → Lot material ini ada masalah. "
-            "幫我盯一下 → Tolong awasin ya. "
-            "怎麼搞的啦 → Kok bisa kayak gini sih. "
-            "人咧 → Orangnya mana? "
-            "辛苦了 → Makasih kerja kerasnya. "
-            "靠 又壞了 → Astaga, rusak lagi. "
-            "先這樣 → Segitu dulu ya. "
-            "叫他快點 → Suruh dia cepatan. "
-            "砂輪要換了 → Batu gerinda harus diganti. "
-            "公差超過了 → Toleransinya udah lewat. "
-            "這6把再麻煩今晚入庫 → 6 bundel ini tolong masukin gudang malam ini. "
-            "明早業務要抓資料 謝謝 → Besok pagi sales perlu ambil data, makasih. "
-            "BF2拋光機維修中 → Mesin polishing BF2 sedang diperbaiki. "
-            "44.45前天有跟妳說超產，業務回覆了嗎 → Diameter 44.45 kemarin sudah bilang over produksi, sales udah balas belum? "
-            "噴漆後照訂單量拆包 → Setelah spray paint, bagi packing sesuai jumlah order. "
-            "品保點錯製程，麻煩退回400-無主 → QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik. "
-            "帳已回400、料要回去那一個單位？ → Data sudah dikembalikan ke 400, materialnya mau ke unit mana? "
-            "去削皮退火 感溫 → Ke proses peeling dan annealing, makasih. "
-            "7F414020 請幫放至480轉用收回400，要改制去化，謝謝 → 7F414020 tolong pindahkan ke station 480, lalu kembalikan ke 400, mau ubah proses, makasih. "
-            "業務說收～ 請包～ → Sales bilang terima, tolong di-packing. "
-            "班長～ 7F656502A 這把溢量請再入無主～ 謝謝! → Kepala shift, 7F656502A bundel ini kelebihan, tolong masukkan ke tanpa pemilik, makasih! "
-            "客需求支數7支、不收短 來料只有6支、其中一支短、剔除掉剩5支、能包嘛？ → Pelanggan minta 7 batang, gak terima pendek. Masuk cuma 6, 1 pendek dibuang sisa 5, bisa packing gak? "
-            "因為櫃子在路上 9點到 這樣可能可以等一下入庫 → Karena kontainer sedang di jalan, sampai jam 9, mungkin bisa tunggu sebentar baru masuk gudang. "
-            "DACAPO都入完了 → DACAPO semuanya sudah masuk gudang. "
-            "班長～ 請用2700大的木箱裝，再麻煩幫我抓一下幾點會好，業務下午要出，謝謝 → Kepala shift, tolong pakai kotak kayu 2700, cek jam berapa selesai, sales sore mau kirim, makasih. "
-            "那就是帳沒入到 → Berarti datanya belum masuk ke sistem. "
-            "資料異常，凱銘在處理了 → Data ada masalah, 凱銘 sedang urus. "
-            "研磨排程已更新，急單再麻煩安排洗料拋光 謝謝 → Jadwal grinding diupdate, order urgent tolong atur cuci material dan polishing, makasih. "
-            "粗拋完已放行 → Rough polishing selesai, sudah di-release. "
-            "麻煩先放這把 → Tolong release bundel ini dulu. "
-            "放了 → Sudah di-release. "
-            "先放這單 → Release order ini dulu. "
-            "幫放一下 → Tolong bantu release. "
-            "這批先不要放 → Lot ini jangan di-release dulu. "
-            "料放旁邊 → Material taruh di samping. "
-            "放地上 → Taruh di lantai. "
-            "今日出貨差 DACAPO 7G63837在490 7G687108A在420 OL → Hari ini pengiriman kurang: DACAPO 7G63837 di 490, 7G687108A di 420 sedang produksi. "
-            "METALINOX 差2噸等等K4會在出料 可以的在幫包裝 感謝 → METALINOX kurang 2 ton, nanti K4 keluarkan material, kalau bisa tolong packing, makasih. "
-            "7G108519D 請幫收回400，有單去化 謝謝 → 7G108519D tolong kembalikan ke 400, ada order baru untuk serap material, makasih. "
-            "洗給E7拋了 → Sudah dicuci dan dikasih ke E7 untuk polishing. "
-            "包裝遇到常州眾山再注意這個料號，剛接單後續才會投料生產，此訂單不收短尺需將短尺分捆 → Kalau packing ketemu 常州眾山 perhatikan nomor material ini, baru terima order nanti baru produksi, order ini gak terima pendek harus pisah bundel. "
-            "剛剛開會決議過年不停機，如果A班D班出勤人數不夠12人，想賺紅包可以代班 → Rapat keputusan Imlek tidak stop, shift A D kurang 12 orang, mau angpao bisa gantikan shift. "
-            "人事有通知堆高機複訓課程，1/29 1700-2000三樓會議室。當天來上課就好，加班時數改天用忘卡補 → HRD info pelatihan forklift, 29/1 jam 17-20 ruang rapat lt.3. Datang ikut aja, jam lembur diinput lewat sistem lupa kartu di hari lain. "
-            "處長走了 → Kepala divisi sudah pergi. "
-            "有壓日期的急單再幫忙處理一下，很多未到站，拋光會一邊產出 → Order urgent deadline tolong diproses, banyak belum sampai, polishing produksi sambil jalan. "
-            "噴漆罐一定要打洞才能丟棄在太空包，本週被查核兩次缺失 → Kaleng spray HARUS dilubangi baru buang ke jumbo bag, minggu ini kena audit 2 kali. "
-            "本月入庫目標2950，異型棒不擋，其餘非本月不入庫 → Target gudang 2950, batang khusus bebas, sisanya bukan bulan ini jangan masuk. "
-            "本月入庫目標量已達標，目前只入急單、異型棒跟二月以前的遞延單 → Target tercapai, sekarang hanya urgent, batang khusus, dan order ditunda sebelum Feb. "
-            "今天沒點名，昨天來過了 → Hari ini gak ada inspeksi, kemarin sudah datang. "
-            "應該是上週四D班，傍晚要注意一下小趙跟處長行蹤，免得凱銘被釘 → Harusnya shift D Kamis kemarin, sore perhatikan 小趙 dan kepala divisi, supaya 凱銘 gak kena tegur. "
-            "自己稍微看一下設備的料源，有料就是要生產。月底我們不可能是停機的單位 → Cek material di mesin masing-masing, ada material ya produksi. Akhir bulan kita gak boleh mesin berhenti. "
-            "之後有包到寶麗金屬注意一下，有一批訂單會備註客戶不要爐號標籤 → Nanti kalau ada packing untuk 寶麗金屬 perhatikan, ada order dicatat pelanggan tidak mau label heat number. "
-            "非本月只有異型棒不管控，其他麻煩不要入了，昨天早班沒管控被檢討 → Bukan bulan ini cuma batang khusus bebas, sisanya jangan masuk, shift pagi kemarin gak kontrol kena tegur. "
-            "非本月包裝不入庫 → Yang bukan order bulan ini jangan packing masuk gudang. "
-            "急單再幫忙安排入庫 → Hanya order urgent yang tolong bantu atur masuk gudang. "
-            "大成、SUNGEUN/佳東/麒譯/津展/DACAPO不擋非本月，各班在注意一下 → 大成, SUNGEUN/佳東/麒譯/津展/DACAPO order bukan bulan ini boleh masuk gudang, semua shift tolong perhatikan ya. "
-            "H、S異型棒、大成、SUNGEUN、佳東……以上不擋非本月 → H, S, batang bentuk khusus, 大成, SUNGEUN, 佳東... yang di atas order bukan bulan ini boleh masuk gudang. "
-            "開天車務必遵守規定目視吊掛物 → Operasi crane WAJIB lihat beban gantung sesuai aturan. "
-            "護罩跟外勞宣導一下要蓋好 → Sosialisasi ke pekerja Indonesia pelindung mesin harus ditutup rapat. "
-            "印勞打錯系統有提示 可是他們看不懂把他按掉了 → Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup. "
-            "拋光機interlock都不要拿東西擋著，上面會查 → Pengunci keamanan polishing jangan ditahan pakai benda, atasan akan periksa. "
-            "來料自由端偏小 → Material masuk ujung bebasnya under size. "
-            "殺光痕嚴重但表粗有過 → Bekas grinding parah tapi surface roughness lulus. "
-            "表粗有過目視沒過 → Surface roughness lulus tapi visual tidak lulus. "
-            "涉及軋輥印痕的批次，請協助開立重工研磨至尺寸下限 → Lot kena roll mark, tolong buat WO rework grinding sampai batas bawah ukuran. "
-            "護罩要隨時關閉，卡料需關閉電源後再取料 → Pelindung mesin harus ditutup, material macet HARUS matikan listrik dulu baru ambil. "
-            "嚴禁運轉中設備直接以手搬動棒材 → DILARANG pindahkan batang baja dengan tangan saat mesin jalan. "
-            "矯直機前壓輪故障，卡死無法上昇，已請修護協助處理 → Roda tekan straightening rusak macet, sudah minta maintenance bantu. "
-            "氣壓缸更換備品回裝完成，測試OK正常生產 → Silinder pneumatik ganti spare part selesai, tes OK produksi normal. "
-            "來料盤元不佳退回線外修磨 → Wire rod masuk kualitas buruk, dikembalikan offline repair grinding. "
-            "不可側磨已宣導多次，納入劣項 → Larangan side grinding sudah disosialisasi berkali-kali, dicatat pelanggaran. "
-            "E5線速是否過慢，僅2.4～3.6m/min → Kecepatan lini E5 terlalu lambat, cuma 2.4-3.6 m/min? "
-            "眼模刮傷整修一次，無法改善，更換眼模 → Die tergores, perbaiki sekali tidak membaik, ganti die. "
-            "E11已抽完，要回精整，請放行過帳 → E11 selesai drawing, harus kembali ke finishing, tolong release dan input data. "
-            "更換備品後已恢復生產 → Setelah ganti spare part sudah kembali produksi. "
-            "報表要記得確實填寫，尤其是雷射校正部分 → Laporan produksi ingat diisi benar, terutama bagian kalibrasi laser. "
-            "幫追料 → Tolong kejar materialnya. "
-            "幫追帳 → Tolong kejar data administrasinya. "
-            "已2900別入帳了噢 → Sudah 2900 jangan masukkan data lagi ya. "
-            "【印尼→中文】"
-            "Saya mau izin besok → 我明天要請假 "
-            "Mesinnya rusak → 機台壞了 "
-            "Materialnya udah habis → 料用完了 "
-            "Kapan gajinya keluar? → 薪水什麼時候發？ "
-            "Saya gak ngerti → 我聽不懂 "
-            "Boleh pulang duluan? → 可以先下班嗎？ "
-            "Lembur sampai jam berapa? → 加班到幾點？ "
-            "Bos, ini udah selesai → 老闆，這個好了 "
-            "Ukurannya gak pas → 尺寸不對 "
-            "Stoknya masih ada? → 庫存還有嗎？ "
-            "Tolong ajarin saya → 請教我一下"
-            + extra_rule +
-            " Only output the translation. No quotes, no explanation, no prefix."
-        )
+        sys_prompt = build_system_prompt(extra_rule)
 
         if repair_mode and bad_result:
-            msg = (
-                "Original text (source language): " + protected + "\n\n"
-                "Bad translation that leaked source-language words: " + bad_result + "\n\n"
-                "Rewrite the bad translation into pure " + tgt_name +
-                ". Preserve names and __MENTION__ placeholders exactly. Translate every remaining source-language word."
-            )
+            msg = (f"Original text (source language): {protected}\n\n"
+                   f"Bad translation that leaked source-language words: {bad_result}\n\n"
+                   f"Rewrite the bad translation into pure {tgt_name}. "
+                   "Preserve names and __MENTION__ placeholders exactly.")
         else:
-            msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
+            msg = f"Translate from {src_name} to {tgt_name}: {protected}"
 
         r = oai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": msg}
-            ],
-            temperature=0.1 if strict_no_source_script or repair_mode else 0.2,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": msg}],
+            temperature=0.1 if strict or repair_mode else 0.2,
             max_tokens=2000,
         )
         result = r.choices[0].message.content.strip()
         result = restore_mentions(result, placeholders)
-        # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
             result = post_fix_translation(result)
             result = restore_customers(result, cust_placeholders)
@@ -890,58 +462,50 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         logger.error("OpenAI error: %s", e)
         return None
 
-
 def translate_google(text, src, tgt):
     try:
         protected, placeholders = protect_mentions(text)
-        lang_map = {
-            "zh": "zh-TW", "id": "id", "en": "en",
-            "vi": "vi", "th": "th", "ja": "ja",
-            "ko": "ko", "ms": "ms", "tl": "tl",
-        }
+        lang_map = {"zh": "zh-TW", "id": "id", "en": "en", "vi": "vi",
+                    "th": "th", "ja": "ja", "ko": "ko", "ms": "ms", "tl": "tl"}
         sl = lang_map.get(src, src)
         tl = lang_map.get(tgt, tgt)
         q = urllib.parse.quote(protected)
-        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" + sl + "&tl=" + tl + "&dt=t&q=" + q
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&q={q}"
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "Mozilla/5.0")
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            parts = []
-            for item in data[0]:
-                if item[0]:
-                    parts.append(item[0])
+            parts = [item[0] for item in data[0] if item[0]]
             result = "".join(parts)
             result = restore_mentions(result, placeholders)
-            # Fix known translation mistakes
             result = post_fix_translation(result)
             return result
     except Exception as e:
         logger.error("Google translate error: %s", e)
         return None
 
-
 def cache_get(text, src, tgt):
-    """Get translation from cache if exists and not expired."""
     key = (text.strip(), src, tgt)
     if key in translation_cache:
         result, ts = translation_cache[key]
         if time.time() - ts < CACHE_TTL:
-            logger.info("Cache hit: %s -> %s", src, tgt)
             return result
-        else:
-            del translation_cache[key]
+        del translation_cache[key]
     return None
 
-
 def cache_set(text, src, tgt, result):
-    """Store translation in cache, evict oldest if full."""
     if len(translation_cache) >= CACHE_MAX_SIZE:
-        oldest_key = min(translation_cache, key=lambda k: translation_cache[k][1])
-        del translation_cache[oldest_key]
-    key = (text.strip(), src, tgt)
-    translation_cache[key] = (result, time.time())
+        oldest = min(translation_cache, key=lambda k: translation_cache[k][1])
+        del translation_cache[oldest]
+    translation_cache[(text.strip(), src, tgt)] = (result, time.time())
 
+def safe_embed_text(text, max_len=4090):
+    """Truncate text to fit Discord embed limits (4096 chars)."""
+    if not text:
+        return text
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
 
 def translate_with_retry(func, text, src, tgt, max_retries=2):
     """Call a translation function with retry on failure."""
@@ -955,30 +519,22 @@ def translate_with_retry(func, text, src, tgt, max_retries=2):
             time.sleep(wait)
     return None
 
-
 def translate(text, src, tgt):
-    # Check cache first
     cached = cache_get(text, src, tgt)
     if cached:
         return cached
 
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
 
-    # If source-language leakage is detected, retry with strict mode.
+    # Retry with strict mode if source leakage detected
     if result and not is_translation_valid(result, src, tgt):
-        logger.warning("Source-language leakage detected in translation, retrying with stricter prompt")
-        strict_result = translate_openai(text, src, tgt, strict_no_source_script=True)
+        logger.warning("Source leakage detected, retrying strict")
+        strict_result = translate_openai(text, src, tgt, strict=True)
         if strict_result and is_translation_valid(strict_result, src, tgt):
             result = strict_result
         else:
-            repaired = translate_openai(
-                text,
-                src,
-                tgt,
-                strict_no_source_script=True,
-                repair_mode=True,
-                bad_result=(strict_result or result)
-            )
+            repaired = translate_openai(text, src, tgt, strict=True,
+                                        repair_mode=True, bad_result=(strict_result or result))
             if repaired and is_translation_valid(repaired, src, tgt):
                 result = repaired
 
@@ -986,22 +542,15 @@ def translate(text, src, tgt):
         cache_set(text, src, tgt, result)
         return result
 
-    # Fallback to Google with retry.
+    # Fallback: Google Translate with retry
     result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
     if result and is_translation_valid(result, src, tgt):
         cache_set(text, src, tgt, result)
         return result
 
-    # Last chance: ask OpenAI to repair the latest output instead of returning a leaked translation.
+    # Last chance repair
     if result:
-        repaired = translate_openai(
-            text,
-            src,
-            tgt,
-            strict_no_source_script=True,
-            repair_mode=True,
-            bad_result=result
-        )
+        repaired = translate_openai(text, src, tgt, strict=True, repair_mode=True, bad_result=result)
         if repaired and is_translation_valid(repaired, src, tgt):
             cache_set(text, src, tgt, repaired)
             return repaired
@@ -1009,58 +558,17 @@ def translate(text, src, tgt):
     return None
 
 
-def detect_work_order(ocr_text):
-    """Detect if OCR text is from a factory work order (製造指示書).
-    Returns customer name if detected, None otherwise."""
-    if not ocr_text:
-        return None
-    wo_keywords = ["冷精棒製造指示書", "製造指示書", "訂單編號", "客戶名稱", "成品尺寸",
-                   "FINAL流程", "FINAL", "MIC_NO", "ID_NO", "HRITABPDIL", "退火代碼",
-                   "冷精棒", "收貨人", "短尺", "品保", "特殊", "削皮", "訂單資訊",
-                   "成品尺寸MIN", "成品尺寸MAX", "製造指示"]
-    keyword_count = sum(1 for kw in wo_keywords if kw in ocr_text)
-    logger.info("Work order detection: %d keywords matched in OCR text (%d chars)", keyword_count, len(ocr_text))
-    if keyword_count < 2:
-        return None
-    # Try multiple patterns to extract customer name
-    patterns = [
-        r'客戶名稱[:\s：]*([^\s\n|,，]+)',
-        r'客戶[:\s：]*([^\s\n|,，]+)',
-        r'客[户戶]名[称稱][:\s：]*([^\s\n|,，]+)',
-    ]
-    for pat in patterns:
-        m = re.search(pat, ocr_text)
-        if m:
-            customer = m.group(1).strip()
-            if customer and len(customer) >= 2:
-                logger.info("Work order customer detected: %s", customer)
-                return customer
-    # Fallback: try to match any known customer name in the text
-    for name in CUSTOMER_NAMES:
-        if len(name) >= 2 and name in ocr_text:
-            logger.info("Work order customer matched from list: %s", name)
-            return name
-    logger.info("Work order detected but no customer name found")
-    return None
-
-
+# ─── Storage query ──────────────────────────────────────
 def format_length_zh(code):
-    """Convert length code to Chinese."""
-    if code == "<=3200":
-        return "未滿3200"
-    elif code == ">4200":
-        return "超過4200"
-    elif code == ">3200<=4200":
-        return "3200～4200"
-    elif code == ">4000":
-        return "超過4000"
+    if code == "<=3200": return "未滿3200"
+    elif code == ">4200": return "超過4200"
+    elif code == ">3200<=4200": return "3200～4200"
+    elif code == ">4000": return "超過4000"
     else:
-        c = code.replace("<=", "未滿").replace(">=", "超過").replace(">", "超過").replace("<", "未滿")
-        return c
+        return code.replace("<=", "未滿").replace(">=", "超過").replace(">", "超過").replace("<", "未滿")
 
-
-def format_storage_for_work_order(customer_name):
-    """Format storage lookup for work order image detection."""
+def query_storage(customer_name):
+    """Look up storage zone for a customer. Returns embed-ready data or None."""
     entries = STORAGE_LOOKUP.get(customer_name)
     if not entries:
         for key in STORAGE_LOOKUP:
@@ -1069,113 +577,15 @@ def format_storage_for_work_order(customer_name):
                 customer_name = key
                 break
     if not entries:
-        return None
-    lines = []
-    lines.append("\U0001f4cb \u5de5\u55ae\u5075\u6e2c")
-    lines.append("\u5ba2\u6236\uff1a" + customer_name)
-    lines.append("")
-    lines.append("\U0001f4e6 \u5132\u5340\u67e5\u8a62")
-    lines.append("=" * 18)
-    for length, area in entries:
-        zh = format_length_zh(length)
-        lines.append(zh + " \u2192 " + area)
-    lines.append("=" * 18)
-    return "\n".join(lines)
-
-
-    """Use OpenAI Vision to extract text from image."""
-    if not oai:
-        return None
-    try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an OCR assistant. Extract ALL text visible in the image. "
-                        "Output ONLY the extracted text, preserving line breaks. "
-                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract all text from this image."
-                        }
-                    ]
-                }
-            ],
-            temperature=0.1,
-            max_tokens=2000,
-        )
-        result = r.choices[0].message.content.strip()
-        if result == "NO_TEXT_FOUND" or not result:
-            return None
-        return result
-    except Exception as e:
-        logger.error("OpenAI Vision OCR error: %s", e)
-        return None
-
-
-def ocr_image_openai(image_base64):
-    """Use OpenAI Vision to extract text from image."""
-    if not oai:
-        return None
-    try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an OCR assistant. Extract ALL text visible in the image. "
-                        "Output ONLY the extracted text, preserving line breaks. "
-                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract all text from this image."
-                        }
-                    ]
-                }
-            ],
-            temperature=0.1,
-            max_tokens=2000,
-        )
-        result = r.choices[0].message.content.strip()
-        if result == "NO_TEXT_FOUND" or not result:
-            return None
-        return result
-    except Exception as e:
-        logger.error("OpenAI Vision OCR error: %s", e)
-        return None
-
-
-def ocr_and_translate_image(image_base64, tgt_lang):
-    """OCR + translate image text in one API call, preserving layout."""
-    if not oai:
         return None, None
+    return customer_name, entries
+
+
+# ─── OCR (image text extraction) ────────────────────────
+def ocr_and_translate_image(image_base64, tgt_lang):
+    """OCR + translate image text in one API call."""
+    if not oai:
+        return None
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
     tgt_flag = LANG_FLAGS.get(tgt_lang, "")
     try:
@@ -1192,965 +602,1202 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "original text...\n"
                         + tgt_flag + " translated text...\n"
                         "(blank line before next section)\n\n"
-                        "EXAMPLE:\n"
-                        "1.研磨來料前需紀錄來料三點式尺寸\n"
-                        + tgt_flag + " 1.Sebelum grinding material masuk, catat dimensi 3 titik\n\n"
-                        "2.拋光棒需清洗\n"
-                        + tgt_flag + " 2.Batang polishing harus dicuci\n\n"
                         "RULES:\n"
                         "1. Keep the SAME structure, numbering, and line breaks as the original.\n"
-                        "2. Each section: original text first, then translation with " + tgt_flag + " flag. Do NOT add section titles or brackets.\n"
-                        "3. If there are numbered items (1. 2. 3.), keep the same numbering.\n"
-                        "4. Do NOT repeat the original text. Show it only ONCE then show the translation.\n"
-                        "5. Translate naturally, casual daily language for factory workers.\n"
-                        "6. Target Traditional Chinese = Taiwan style.\n"
-                        "7. NEVER translate or romanize person names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
-                        "7b. NEVER translate customer/company names. Keep them EXACTLY as-is: "
+                        "2. Each section: original text first, then translation with " + tgt_flag + " flag.\n"
+                        "3. Translate naturally, casual daily language for factory workers.\n"
+                        "4. Target Traditional Chinese = Taiwan style.\n"
+                        "5. NEVER translate or romanize person names. Keep Chinese names in original characters.\n"
+                        "6. NEVER translate customer/company names. Keep them EXACTLY as-is: "
                         "賽利金屬, 寶麗金屬, 田華榕, 佳東, 蘋果, 常州眾山, 大順, 大成, 巨昌, 北澤, 鴻運, 畯圓, 名威, 右勝, "
                         "貝克休斯, 皇銘, 台芝, 百堅, 津展, 曜麟, 廉錩, 盛昌遠, 永吉, 光輝, "
                         "DACAPO, CASTLE, LOTUS, METALINOX, KANGRUI, SUNGEUN, STEELINC, GLH, SHINKO, WING KEUNG, "
-                        "BOLLINGHAUS, COGNE, TCI, PLUTUS, SAMWON, DK METAL, KJ. "
-                        "If you see ANY company name in the image, keep it unchanged. Do NOT translate 金屬=metal, 鋼鐵=steel etc. when part of a company name.\n"
-                        "8. If no text found, output exactly: NO_TEXT_FOUND\n"
-                        "9. TABLES/SPREADSHEETS: If the image is a table or spreadsheet, output it as a COMPACT table. "
-                        "Only translate column headers and labels. Keep person names as-is in original characters. "
-                        "Keep numbers as-is. Use a simple format like:\n"
-                        "姓名/Nama | 3/17止/Hingga 3/17\n"
-                        "陳弘林 | -600\n"
-                        "蔡佳佳 | 200\n"
-                        "Do NOT output each cell as a separate translated section. Keep it compact.\n"
-                        "10. Factory vocabulary: "
-                        "交辦事項=hal yang harus dikerjakan, "
-                        "研磨=grinding, 無心研磨=centerless grinding, 拋光=polishing, 來料=material masuk, "
-                        "量測=mengukur, 尺寸=diameter/dimensi, 三點式=3 titik, "
-                        "雷射=laser, 設備=peralatan, 故障=rusak, "
-                        "紀錄=catat, 拋光棒=batang polishing, "
-                        "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
-                        "環狀擦傷=goresan melingkar, "
-                        "重工=rework, 料回削皮=material kembali kupas/peeling, "
-                        "補上=lengkapi, C行套環=C-ring, "
-                        "廠內=di dalam pabrik, 禁止=dilarang, 餵狗=kasih makan anjing, "
-                        "宣導=sosialisasi, "
-                        "包裝站=stasiun packing, 啟動=mulai, "
-                        "PMI全檢=inspeksi penuh PMI, 抽查機制=sistem sampling, "
-                        "每捆=setiap bundel, 鋼種=jenis baja, "
-                        "棒材=batang baja, 混料=tercampur material, "
-                        "出貨=pengiriman, 依情節=sesuai tingkat pelanggaran, "
-                        "增加績效=tambah penilaian kinerja, "
-                        "確實=pastikan, 防止=mencegah, "
-                        "精整=finishing, AP=mesin finishing, 矯直=straightening, 壓光=press polish, "
-                        "退火=annealing, 光輝退火=bright annealing, 酸洗=pickling, 削皮=peeling, 冷抽=cold drawing, "
-                        "熱軋=hot rolling, 煉鋼=steelmaking/peleburan baja, 碳廠=pabrik karbon, "
-                        "職安署=Dinas K3(inspeksi keselamatan kerja), 查核=audit/inspeksi, "
-                        "品保=QC, 儲運=gudang&logistik, 生計=production planning, 業務=sales, 營業=sales, 人事=HRD, "
-                        "處長=kepala divisi, 點名=inspeksi pengawas(NOT roll call), "
-                        "加班=lembur, 排班=jadwal shift, 早班=shift pagi, 夜班=shift malam, "
-                        "砂輪=batu gerinda, 天車=overhead crane, 堆高機=forklift, "
-                        "油桶=drum oli, 太空包=jumbo bag, 噴漆罐=kaleng spray, "
-                        "入庫=masuk gudang, 退庫=kembalikan ke gudang, 出貨差=kekurangan pengiriman, "
-                        "掛單/工單=work order, 重掛單=pasang ulang work order, 取樣=ambil sampel, "
-                        "二道門=pintu kedua(gate 2), 捐血=donor darah, "
-                        "爐號=heat number(NEVER nomor panas), 過帳=input data ke sistem, 放行=release data\n"
-                        "11. Only output the result. No extra explanation."
+                        "BOLLINGHAUS, COGNE, TCI, PLUTUS, SAMWON, DK METAL, KJ.\n"
+                        "7. If there is no text in the image, output exactly: NO_TEXT_FOUND"
                     )
                 },
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract and translate all text from this image to " + tgt_name + ". Keep the same layout structure."
-                        }
+                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_base64, "detail": "high"}},
+                        {"type": "text", "text": "Extract all text from this image and translate to " + tgt_name + "."}
                     ]
                 }
             ],
-            temperature=0.2,
-            max_tokens=3000,
+            temperature=0.1,
+            max_tokens=2000,
         )
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
-            return None, None
-        return result, None
+            return None
+        return result
     except Exception as e:
-        logger.error("OpenAI Vision OCR+translate error: %s", e)
-        return None, str(e)
-
-
-
-def download_line_image(message_id):
-    """Download image from LINE and return (base64_string, raw_bytes)."""
-    try:
-        with ApiClient(configuration) as api_client:
-            blob_api = MessagingApiBlob(api_client)
-            content = blob_api.get_message_content(message_id)
-            img_base64 = base64.b64encode(content).decode("utf-8")
-            return img_base64, content
-    except Exception as e:
-        logger.error("LINE image download error: %s", e)
-        return None, None
-
-
-def download_line_audio(message_id):
-    """Download audio from LINE and return bytes."""
-    try:
-        with ApiClient(configuration) as api_client:
-            blob_api = MessagingApiBlob(api_client)
-            content = blob_api.get_message_content(message_id)
-            return content
-    except Exception as e:
-        logger.error("LINE audio download error: %s", e)
+        logger.error("OCR error: %s", e)
         return None
 
 
-def transcribe_audio_openai(audio_bytes):
-    """Use OpenAI Whisper to transcribe audio to text."""
+def ocr_image_only(image_base64):
+    """Extract text only from image (for work order detection)."""
     if not oai:
         return None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=True) as tmp:
-            tmp.write(audio_bytes)
-            tmp.flush()
-            tmp.seek(0)
-            r = oai.audio.transcriptions.create(
-                model="whisper-1",
-                file=tmp,
-            )
-            text = r.text.strip() if r.text else None
-            return text
+        r = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an OCR assistant. Extract ALL text visible in the image. Output ONLY the extracted text, preserving line breaks. If no text, output: NO_TEXT_FOUND"},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_base64, "detail": "high"}},
+                    {"type": "text", "text": "Extract all text from this image."}
+                ]}
+            ],
+            temperature=0.1, max_tokens=2000,
+        )
+        result = r.choices[0].message.content.strip()
+        if result == "NO_TEXT_FOUND" or not result:
+            return None
+        return result
     except Exception as e:
-        logger.error("OpenAI Whisper error: %s", e)
+        logger.error("OCR-only error: %s", e)
         return None
 
 
-def make_notice(content, target="id"):
-    tgt_text = translate(content, "zh", target)
-    if not tgt_text:
-        tgt_text = "(translation failed)"
-    sep = "=" * 18
-    lines = []
-    lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
-    lines.append(sep)
-    lines.append("\U0001f1f9\U0001f1fc " + content)
-    lines.append(LANG_FLAGS.get(target, "") + " " + tgt_text)
-    lines.append(sep)
-    return "\n".join(lines)
+# ─── Work order detection ───────────────────────────────
+def detect_work_order(ocr_text):
+    """Detect if OCR text is from a factory work order (製造指示書)."""
+    if not ocr_text:
+        return None
+    wo_keywords = ["冷精棒製造指示書", "製造指示書", "訂單編號", "客戶名稱", "成品尺寸",
+                   "FINAL流程", "FINAL", "MIC_NO", "ID_NO", "HRITABPDIL", "退火代碼",
+                   "冷精棒", "收貨人", "短尺", "品保", "特殊", "削皮", "訂單資訊",
+                   "成品尺寸MIN", "成品尺寸MAX", "製造指示"]
+    keyword_count = sum(1 for kw in wo_keywords if kw in ocr_text)
+    if keyword_count < 2:
+        return None
+    patterns = [r'客戶名稱[:\s：]*([^\s\n|,，]+)', r'客戶[:\s：]*([^\s\n|,，]+)',
+                r'客[户戶]名[称稱][:\s：]*([^\s\n|,，]+)']
+    for pat in patterns:
+        m = re.search(pat, ocr_text)
+        if m:
+            customer = m.group(1).strip()
+            if customer and len(customer) >= 2:
+                return customer
+    for name in CUSTOMER_NAMES:
+        if len(name) >= 2 and name in ocr_text:
+            return name
+    return None
 
 
-def make_notice_from_other(content, src, target="zh"):
-    zh_text = translate(content, src, "zh")
-    if not zh_text:
-        zh_text = "(translation failed)"
-    sep = "=" * 18
-    lines = []
-    lines.append("\U0001f4e2 \u516c\u544a / Pengumuman")
-    lines.append(sep)
-    lines.append("\U0001f1f9\U0001f1fc " + zh_text)
-    lines.append(LANG_FLAGS.get(src, "") + " " + content)
-    lines.append(sep)
-    return "\n".join(lines)
-
-
-def get_help_text(group_id):
-    tgt = group_target_lang.get(group_id, "id")
-    tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-    tgt_flag = LANG_FLAGS.get(tgt, "")
-    sep = "=" * 18
-    lines = []
-    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba")
-    lines.append(sep)
-    lines.append("\u3010\u958b\u95dc\u3011")
-    lines.append("/on \u30fb /off \u7ffb\u8b6f")
-    lines.append("/img on\u30fboff \u5716\u7247")
-    lines.append("/voice on\u30fboff \u8a9e\u97f3")
-    lines.append("/wo on\u30fboff \u62cd\u5de5\u55ae\u67e5\u5132\u5340")
-    lines.append("\u3010\u500b\u4eba\u3011")
-    lines.append("/skip \u4e0d\u7ffb\u8b6f\u6211")
-    lines.append("/unskip \u6062\u5fa9\u7ffb\u8b6f")
-    lines.append("\u3010\u7ba1\u7406\u3011")
-    lines.append("/skipadd \u540d\u5b57 \u52a0\u5165\u767d\u540d\u55ae")
-    lines.append("/skipdel \u540d\u5b57 \u79fb\u51fa\u767d\u540d\u55ae")
-    lines.append("/skiplist \u67e5\u770b\u767d\u540d\u55ae")
-    lines.append("\u3010\u529f\u80fd\u3011")
-    lines.append("/lang \u4ee3\u78bc \u5207\u63db\u8a9e\u8a00")
-    lines.append("/notice \u5167\u5bb9 \u96d9\u8a9e\u516c\u544a")
-    lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
-    lines.append("/status \u67e5\u770b\u72c0\u614b")
-    lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
-    lines.append(sep)
-    lines.append("\u8a9e\u8a00\u4ee3\u78bc:")
-    lines.append("id\u5370\u5c3c en\u82f1 vi\u8d8a th\u6cf0")
-    lines.append("ja\u65e5 ko\u97d3 ms\u99ac\u4f86 tl\u83f2")
-    lines.append(sep)
-    lines.append("\u76ee\u524d: \u4e2d\u6587\u2192" + tgt_flag + tgt_zh)
-    lines.append("\u7bc4\u4f8b: /lang en")
-    return "\n".join(lines)
-
-
-def handle_lang_command(text, group_id):
-    parts = text.strip().split()
-    if len(parts) < 2:
-        # Show current setting
-        tgt = group_target_lang.get(group_id, "id")
-        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-        tgt_flag = LANG_FLAGS.get(tgt, "")
-        lines = []
-        lines.append("\u76ee\u524d\u4e2d\u6587\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh)
-        lines.append("")
-        lines.append("\u5207\u63db\u8acb\u8f38\u5165 / Ketik:")
-        lines.append("/lang id \u2192 \u5370\u5c3c\u6587")
-        lines.append("/lang en \u2192 \u82f1\u6587")
-        lines.append("/lang vi \u2192 \u8d8a\u5357\u6587")
-        lines.append("/lang th \u2192 \u6cf0\u6587")
-        lines.append("/lang ja \u2192 \u65e5\u6587")
-        lines.append("/lang ko \u2192 \u97d3\u6587")
-        lines.append("/lang ms \u2192 \u99ac\u4f86\u6587")
-        lines.append("/lang tl \u2192 \u83f2\u5f8b\u8cd3\u6587")
-        return "\n".join(lines)
-    code = parts[1].lower().strip()
-    if code not in VALID_TARGETS:
-        return "\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: id, en, vi, th, ja, ko, ms, tl"
-    group_target_lang[group_id] = code
-    tgt_zh = LANG_NAMES_ZH.get(code, code)
-    tgt_flag = LANG_FLAGS.get(code, "")
-    return "\u2705 \u5df2\u5207\u63db\uff1a\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587"
-
-
-def handle_qry_command(text):
-    """Handle /qry <customer_name> command to lookup storage area."""
-    parts = text.strip().split(None, 1)
-    if len(parts) < 2:
-        return "\u26a0\ufe0f \u8acb\u8f38\u5165\u5ba2\u6236\u540d\u7a31\n\u7bc4\u4f8b: /qry ABE\n\u7bc4\u4f8b: /qry \u4f73\u6771"
-    query = parts[1].strip()
-    # Try exact match first
-    entries = STORAGE_LOOKUP.get(query)
-    # Try case-insensitive match
+def format_storage_for_work_order(customer_name):
+    """Format storage lookup for work order image detection."""
+    entries = STORAGE_LOOKUP.get(customer_name)
     if not entries:
         for key in STORAGE_LOOKUP:
-            if key.lower() == query.lower():
+            if key.lower() == customer_name.lower() or customer_name in key or key in customer_name:
                 entries = STORAGE_LOOKUP[key]
-                query = key
+                customer_name = key
                 break
-    # Try partial match
     if not entries:
-        matches = [k for k in STORAGE_LOOKUP if query.lower() in k.lower() or query in k]
-        if len(matches) == 1:
-            query = matches[0]
-            entries = STORAGE_LOOKUP[query]
-        elif len(matches) > 1:
-            result = "\U0001f50d \u627e\u5230\u591a\u7b46\u7b26\u5408:\n"
-            for m in matches[:10]:
-                result += "  \u2022 " + m + "\n"
-            if len(matches) > 10:
-                result += "  ...(\u5171" + str(len(matches)) + "\u7b46)\n"
-            result += "\n\u8acb\u8f38\u5165\u5b8c\u6574\u5ba2\u6236\u540d\u7a31"
-            return result
-    if not entries:
-        return "\u274c \u627e\u4e0d\u5230\u5ba2\u6236: " + query + "\n\u8acb\u78ba\u8a8d\u540d\u7a31\u662f\u5426\u6b63\u78ba"
-    # Build response
-    lines = []
-    lines.append("\U0001f4e6 " + query + " \u5132\u5340\u67e5\u8a62")
-    lines.append("=" * 18)
+        return None
+    lines = [f"📋 工單偵測\n客戶：{customer_name}\n", "📦 儲區查詢", "=" * 18]
     for length, area in entries:
         zh = format_length_zh(length)
-        lines.append(zh + " \u2192 " + area)
+        lines.append(f"{zh} → {area}")
     lines.append("=" * 18)
     return "\n".join(lines)
 
 
-def get_display_name(group_id, user_id):
-    """Get user display name from cache or LINE API."""
-    # Check cache first
-    if group_id in group_user_names and user_id in group_user_names[group_id]:
-        return group_user_names[group_id][user_id]
-    # Try LINE API
+# ─── Voice transcription (Whisper) ──────────────────────
+def transcribe_audio(audio_bytes, filename="audio.ogg"):
+    """Transcribe audio using OpenAI Whisper."""
+    if not oai:
+        return None
     try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            profile = api.get_group_member_profile(group_id, user_id)
-            name = profile.display_name
-            if name:
-                if group_id not in group_user_names:
-                    group_user_names[group_id] = {}
-                group_user_names[group_id][user_id] = name
-                return name
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = filename
+        r = oai.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+        text = r.text.strip()
+        return text if text else None
     except Exception as e:
-        logger.warning("Failed to get display name for %s: %s", user_id, e)
-    return None
+        logger.error("Whisper error: %s", e)
+        return None
 
 
-def record_user_name(group_id, user_id):
-    """Record user display name in background (best effort)."""
-    if not group_id or not user_id:
-        return
-    if group_id in group_user_names and user_id in group_user_names[group_id]:
-        return
-    get_display_name(group_id, user_id)
+# ─── Usage stats tracking ───────────────────────────────
+usage_stats = {
+    "text_translations": 0,
+    "image_translations": 0,
+    "voice_translations": 0,
+    "work_orders_detected": 0,
+    "slash_commands": 0,
+    "reaction_translations": 0,
+    "context_translations": 0,
+    "start_time": time.time(),
+}
+
+# ─── Per-user language preference ───────────────────────
+user_lang_prefs = {}  # {user_id: "zh"/"id"/"en"/...}
+
+# ─── Auto-role language mapping ─────────────────────────
+LANG_ROLE_NAMES = {
+    "zh": "🇹🇼 中文",
+    "id": "🇮🇩 Indonesia",
+    "en": "🇬🇧 English",
+    "vi": "🇻🇳 Tiếng Việt",
+    "th": "🇹🇭 ไทย",
+    "ja": "🇯🇵 日本語",
+    "ko": "🇰🇷 한국어",
+}
+
+# ─── Flag emoji to language mapping ─────────────────────
+FLAG_TO_LANG = {
+    "🇹🇼": "zh", "🇨🇳": "zh", "🇮🇩": "id", "🇬🇧": "en", "🇺🇸": "en",
+    "🇻🇳": "vi", "🇹🇭": "th", "🇯🇵": "ja", "🇰🇷": "ko", "🇲🇾": "ms", "🇵🇭": "tl",
+}
+
+# ─── Discord Bot ────────────────────────────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.reactions = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-def find_user_by_name(group_id, name_query):
-    """Find user_id by display name (partial match). Returns list of (user_id, display_name)."""
-    if group_id not in group_user_names:
-        return []
-    matches = []
-    query_lower = name_query.lower().strip()
-    for uid, dname in group_user_names[group_id].items():
-        if query_lower == dname.lower() or query_lower in dname.lower() or dname.lower() in query_lower:
-            matches.append((uid, dname))
-    return matches
+# ─── Translate Button View ──────────────────────────────
+class TranslateView(discord.ui.View):
+    """Buttons under translation results."""
+    def __init__(self, original_text, src_lang, current_tgt):
+        super().__init__(timeout=300)
+        self.original_text = original_text
+        self.src_lang = src_lang
+        self.current_tgt = current_tgt
 
+    @discord.ui.button(label="🇮🇩 ID", style=discord.ButtonStyle.secondary)
+    async def btn_id(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._retranslate(interaction, "id")
 
-def handle_command(text, group_id, user_id=None):
-    cmd = text.strip().lower()
-    if cmd == "/help":
-        return get_help_text(group_id)
-    elif cmd == "/on":
-        group_settings[group_id] = True
-        return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f / Penerjemah aktif"
-    elif cmd == "/off":
-        group_settings[group_id] = False
-        return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
-    elif cmd == "/img on":
-        group_img_settings[group_id] = True
-        return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan gambar aktif"
-    elif cmd == "/img off":
-        group_img_settings[group_id] = False
-        return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
-    elif cmd == "/voice on":
-        group_audio_settings[group_id] = True
-        return "\u2705 \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan suara aktif"
-    elif cmd == "/voice off":
-        group_audio_settings[group_id] = False
-        return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
-    elif cmd == "/wo on":
-        group_wo_settings[group_id] = True
-        return "\u2705 \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u958b\u555f"
-    elif cmd == "/wo off":
-        group_wo_settings[group_id] = False
-        return "\u274c \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u95dc\u9589"
-    elif cmd == "/skip":
-        if not user_id:
-            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
-        if group_id not in group_skip_users:
-            group_skip_users[group_id] = set()
-        group_skip_users[group_id].add(user_id)
-        return "\u2705 \u5df2\u5c07\u4f60\u52a0\u5165\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f\nAnda ditambahkan ke daftar skip"
-    elif cmd == "/unskip":
-        if not user_id:
-            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
-        if group_id in group_skip_users:
-            group_skip_users[group_id].discard(user_id)
-        return "\u2705 \u5df2\u5c07\u4f60\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f\nAnda dihapus dari daftar skip"
-    elif text.strip().lower().startswith("/skipadd"):
-        name_query = text.strip()[8:].strip()
-        if not name_query:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipadd \u79cb\u60c5"
-        matches = find_user_by_name(group_id, name_query)
-        if len(matches) == 0:
-            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d\n\u8a72\u7528\u6236\u9700\u5148\u5728\u7fa4\u7d44\u767c\u904e\u8a0a\u606f\u624d\u80fd\u88ab\u8a8d\u5230"
-        if len(matches) > 1:
-            names = "\n".join(["  \u2022 " + m[1] for m in matches])
-            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
-        uid, dname = matches[0]
-        if group_id not in group_skip_users:
-            group_skip_users[group_id] = set()
-        group_skip_users[group_id].add(uid)
-        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u52a0\u5165\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f"
-    elif text.strip().lower().startswith("/skipdel"):
-        name_query = text.strip()[8:].strip()
-        if not name_query:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipdel \u79cb\u60c5"
-        matches = find_user_by_name(group_id, name_query)
-        if len(matches) == 0:
-            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d"
-        if len(matches) > 1:
-            names = "\n".join(["  \u2022 " + m[1] for m in matches])
-            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
-        uid, dname = matches[0]
-        if group_id in group_skip_users:
-            group_skip_users[group_id].discard(uid)
-        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f"
-    elif cmd == "/skiplist":
-        skipped = group_skip_users.get(group_id, set())
-        if not skipped:
-            return "\u76ee\u524d\u767d\u540d\u55ae\u662f\u7a7a\u7684 / Daftar skip kosong"
-        names_cache = group_user_names.get(group_id, {})
-        lines = ["\u23ed\ufe0f \u767d\u540d\u55ae / Daftar skip:"]
-        for uid in skipped:
-            dname = names_cache.get(uid)
-            if dname:
-                lines.append("  \u2022 " + dname)
-            else:
-                lines.append("  \u2022 (\u672a\u77e5\u7528\u6236)")
-        return "\n".join(lines)
-    elif cmd == "/status":
-        is_on = group_settings.get(group_id, True)
-        tgt = group_target_lang.get(group_id, "id")
-        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-        tgt_flag = LANG_FLAGS.get(tgt, "")
-        if is_on:
-            img_on = group_img_settings.get(group_id, True)
-            img_status = "\u2705 \u958b\u555f" if img_on else "\u274c \u95dc\u9589"
-            audio_on = group_audio_settings.get(group_id, True)
-            audio_status = "\u2705 \u958b\u555f" if audio_on else "\u274c \u95dc\u9589"
-            wo_on = group_wo_settings.get(group_id, True)
-            wo_status = "\u2705 \u958b\u555f" if wo_on else "\u274c \u95dc\u9589"
-            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status + "\n\U0001f3a4 \u8a9e\u97f3\u7ffb\u8b6f\uff1a" + audio_status + "\n\U0001f4cb \u62cd\u5de5\u55ae\u67e5\u5132\u5340\uff1a" + wo_status
+    @discord.ui.button(label="🇹🇼 中文", style=discord.ButtonStyle.secondary)
+    async def btn_zh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._retranslate(interaction, "zh")
+
+    @discord.ui.button(label="🇬🇧 EN", style=discord.ButtonStyle.secondary)
+    async def btn_en(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._retranslate(interaction, "en")
+
+    @discord.ui.button(label="🇻🇳 VI", style=discord.ButtonStyle.secondary)
+    async def btn_vi(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._retranslate(interaction, "vi")
+
+    async def _retranslate(self, interaction, tgt):
+        if tgt == self.src_lang:
+            await interaction.response.send_message("⚠️ 來源語言和目標語言相同", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        result = translate(self.original_text, self.src_lang, tgt)
+        if result:
+            flag = LANG_FLAGS.get(tgt, "🌐")
+            usage_stats["text_translations"] += 1
+            await interaction.followup.send(f"{flag} {result}", ephemeral=True)
         else:
-            return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
-    elif cmd.startswith("/lang"):
-        return handle_lang_command(text, group_id)
-    elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
-        content = text.strip()[8:].strip()
-        if not content:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\n\u4f8b\u5982 / Contoh: /notice \u660e\u5929\u653e\u5047\u4e00\u5929"
-        tgt = group_target_lang.get(group_id, "id")
-        if has_chinese(content):
-            return make_notice(content, tgt)
-        else:
-            src = detect_language(content)
-            if src and src != "zh":
-                return make_notice_from_other(content, src)
-            return make_notice(content, tgt)
-    elif text.strip().lower().startswith("/qry"):
-        return handle_qry_command(text)
-    return None
+            await interaction.followup.send("❌ 翻譯失敗", ephemeral=True)
 
 
-@app.route("/callback", methods=["POST"])
-def callback():
-    sig = request.headers.get("X-Line-Signature", "")
-    body = request.get_data(as_text=True)
+# ─── Handover Template View ─────────────────────────────
+class HandoverView(discord.ui.View):
+    """Buttons for shift handover template."""
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="A班 → B班", style=discord.ButtonStyle.primary)
+    async def shift_ab(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._send_template(interaction, "A", "B")
+
+    @discord.ui.button(label="B班 → C班", style=discord.ButtonStyle.primary)
+    async def shift_bc(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._send_template(interaction, "B", "C")
+
+    @discord.ui.button(label="C班 → D班", style=discord.ButtonStyle.primary)
+    async def shift_cd(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._send_template(interaction, "C", "D")
+
+    @discord.ui.button(label="D班 → A班", style=discord.ButtonStyle.primary)
+    async def shift_da(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._send_template(interaction, "D", "A")
+
+    async def _send_template(self, interaction, from_shift, to_shift):
+        zh = (f"📋 **{from_shift}班 → {to_shift}班 交班紀錄**\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"📅 日期：\n"
+              f"👤 交班人：\n"
+              f"👤 接班人：\n"
+              f"━━━━━━━━━━━━━━━━━━\n"
+              f"🔧 **設備狀態：**\n"
+              f"• \n"
+              f"📦 **生產進度：**\n"
+              f"• \n"
+              f"⚠️ **待處理事項：**\n"
+              f"• \n"
+              f"📝 **備註：**\n"
+              f"• \n"
+              f"━━━━━━━━━━━━━━━━━━")
+        id_text = (f"📋 **Serah terima shift {from_shift} → {to_shift}**\n"
+                   f"━━━━━━━━━━━━━━━━━━\n"
+                   f"📅 Tanggal:\n"
+                   f"👤 Shift keluar:\n"
+                   f"👤 Shift masuk:\n"
+                   f"━━━━━━━━━━━━━━━━━━\n"
+                   f"🔧 **Status mesin:**\n"
+                   f"• \n"
+                   f"📦 **Progress produksi:**\n"
+                   f"• \n"
+                   f"⚠️ **Yang harus ditangani:**\n"
+                   f"• \n"
+                   f"📝 **Catatan:**\n"
+                   f"• \n"
+                   f"━━━━━━━━━━━━━━━━━━")
+        embed = discord.Embed(title=f"📋 交班 Serah Terima | {from_shift}→{to_shift}", color=0x06C755)
+        embed.add_field(name="🇹🇼 中文", value=zh, inline=False)
+        embed.add_field(name="🇮🇩 Indonesia", value=id_text, inline=False)
+        await interaction.response.send_message(embed=embed)
+
+
+# ─── Admin permission check ─────────────────────────────
+def is_admin(interaction: discord.Interaction) -> bool:
+    """Check if user has admin/manage_guild permission."""
+    if not interaction.guild:
+        return True
+    perms = interaction.user.guild_permissions
+    return perms.administrator or perms.manage_guild
+
+
+# ─── Report Modal (popup form) ──────────────────────────
+class ReportModal(discord.ui.Modal, title="🚨 異常回報 / Laporan Masalah"):
+    location = discord.ui.TextInput(
+        label="位置/機台 (Lokasi/Mesin)",
+        placeholder="例：I5研磨機 / Station 420",
+        max_length=100,
+    )
+    description = discord.ui.TextInput(
+        label="異常描述 (Deskripsi masalah)",
+        style=discord.TextStyle.paragraph,
+        placeholder="詳細描述異常狀況...",
+        max_length=1000,
+    )
+    action_taken = discord.ui.TextInput(
+        label="已採取措施 (Tindakan)",
+        style=discord.TextStyle.paragraph,
+        placeholder="目前已做了什麼處理...",
+        max_length=500,
+        required=False,
+    )
+    urgency = discord.ui.TextInput(
+        label="緊急程度 (1=輕微 2=一般 3=緊急)",
+        placeholder="1, 2, 或 3",
+        max_length=1,
+        default="2",
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        level_map = {"1": ("🟢", "輕微", "Ringan", 0x00AA00),
+                     "2": ("🟡", "一般", "Normal", 0xFFAA00),
+                     "3": ("🔴", "緊急", "Darurat", 0xFF0000)}
+        lvl = level_map.get(str(self.urgency).strip(), level_map["2"])
+
+        # Translate description
+        src = detect_language(str(self.description)) or "zh"
+        tgt = "id" if src == "zh" else "zh"
+        translated_desc = translate(str(self.description), src, tgt)
+        translated_action = ""
+        if str(self.action_taken).strip():
+            translated_action = translate(str(self.action_taken), src, tgt) or ""
+
+        embed = discord.Embed(
+            title=f"🚨 異常回報 / Laporan Masalah {lvl[0]}",
+            color=lvl[3]
+        )
+        embed.add_field(name=f"{lvl[0]} 等級 / Level", value=f"{lvl[1]} / {lvl[2]}", inline=True)
+        embed.add_field(name="📍 位置 / Lokasi", value=str(self.location), inline=True)
+        embed.add_field(name=f"{LANG_FLAGS.get(src, '')} 描述", value=str(self.description), inline=False)
+        if translated_desc:
+            embed.add_field(name=f"{LANG_FLAGS.get(tgt, '')} 翻譯", value=translated_desc, inline=False)
+        if str(self.action_taken).strip():
+            embed.add_field(name=f"{LANG_FLAGS.get(src, '')} 已處理", value=str(self.action_taken), inline=False)
+            if translated_action:
+                embed.add_field(name=f"{LANG_FLAGS.get(tgt, '')} Tindakan", value=translated_action, inline=False)
+        embed.set_footer(text=f"回報人：{interaction.user.display_name} | {time.strftime('%Y-%m-%d %H:%M')}")
+        usage_stats["slash_commands"] += 1
+        await interaction.followup.send(embed=embed)
+
+
+# ─── Language Dropdown Select ───────────────────────────
+class LangSelectView(discord.ui.View):
+    """Dropdown to select personal language preference."""
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.select(
+        placeholder="選擇你的語言 / Pilih bahasa...",
+        options=[
+            discord.SelectOption(label="🇹🇼 中文 (繁體)", value="zh", description="Traditional Chinese"),
+            discord.SelectOption(label="🇮🇩 Bahasa Indonesia", value="id", description="Indonesian"),
+            discord.SelectOption(label="🇬🇧 English", value="en", description="English"),
+            discord.SelectOption(label="🇻🇳 Tiếng Việt", value="vi", description="Vietnamese"),
+            discord.SelectOption(label="🇹🇭 ภาษาไทย", value="th", description="Thai"),
+            discord.SelectOption(label="🇯🇵 日本語", value="ja", description="Japanese"),
+            discord.SelectOption(label="🇰🇷 한국어", value="ko", description="Korean"),
+            discord.SelectOption(label="🇲🇾 Bahasa Melayu", value="ms", description="Malay"),
+            discord.SelectOption(label="🇵🇭 Filipino", value="tl", description="Filipino/Tagalog"),
+        ]
+    )
+    async def lang_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        lang = select.values[0]
+        user_lang_prefs[interaction.user.id] = lang
+        flag = LANG_FLAGS.get(lang, "")
+        name = LANG_NAMES_ZH.get(lang, LANG_NAMES.get(lang, lang))
+
+        # Auto-assign language role
+        await auto_assign_role(interaction.user, interaction.guild, lang)
+
+        await interaction.response.send_message(
+            f"✅ 你的語言已設為 {flag} **{name}**\n"
+            f"Bot 會根據你的語言偏好翻譯",
+            ephemeral=True
+        )
+
+
+# ─── Poll View (bilingual voting) ──────────────────────
+class PollView(discord.ui.View):
+    """Interactive bilingual poll buttons."""
+    def __init__(self, options_zh, options_tgt, tgt_flag):
+        super().__init__(timeout=None)
+        self.votes = {}  # {option_index: set(user_ids)}
+        self.options_zh = options_zh
+        self.options_tgt = options_tgt
+        for i, (zh, tgt) in enumerate(zip(options_zh, options_tgt)):
+            self.votes[i] = set()
+            button = discord.ui.Button(
+                label=f"{zh} / {tgt}" if len(zh) + len(tgt) < 70 else zh,
+                style=discord.ButtonStyle.primary,
+                custom_id=f"poll_{i}",
+            )
+            button.callback = self._make_callback(i)
+            self.add_item(button)
+
+    def _make_callback(self, index):
+        async def callback(interaction: discord.Interaction):
+            uid = interaction.user.id
+            # Remove from other options
+            for idx in self.votes:
+                self.votes[idx].discard(uid)
+            # Add to selected
+            self.votes[index].add(uid)
+            # Build results
+            lines = []
+            for i, (zh, tgt) in enumerate(zip(self.options_zh, self.options_tgt)):
+                count = len(self.votes[i])
+                bar = "█" * count + "░" * max(0, 10 - count)
+                lines.append(f"{zh} / {tgt}: {bar} **{count}**")
+            await interaction.response.send_message(
+                f"✅ 已投票：**{self.options_zh[index]}**\n\n" + "\n".join(lines),
+                ephemeral=True
+            )
+        return callback
+
+
+# ─── Auto-role assignment helper ────────────────────────
+async def auto_assign_role(member, guild, lang):
+    """Auto-assign a language role to a member."""
+    if not guild or not member:
+        return
+    role_name = LANG_ROLE_NAMES.get(lang)
+    if not role_name:
+        return
     try:
-        handler.handle(body, sig)
-    except InvalidSignatureError:
-        abort(400)
-    return "OK"
+        # Find or create role
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            role = await guild.create_role(name=role_name, mentionable=True)
+        # Remove other language roles
+        for rn in LANG_ROLE_NAMES.values():
+            existing = discord.utils.get(guild.roles, name=rn)
+            if existing and existing in member.roles and existing != role:
+                await member.remove_roles(existing)
+        # Add new role
+        if role not in member.roles:
+            await member.add_roles(role)
+    except Exception as e:
+        logger.error(f"Auto-role error: {e}")
 
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    text = event.message.text.strip()
+@bot.event
+async def on_ready():
+    logger.info(f"Bot online: {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.watching, name="翻譯中... | /help"
+    ))
+
+
+# ─── Flag emoji reaction translation ────────────────────
+@bot.event
+async def on_raw_reaction_add(payload):
+    """React with a flag emoji to translate a message to that language."""
+    if payload.member and payload.member.bot:
+        return
+    emoji = str(payload.emoji)
+    tgt = FLAG_TO_LANG.get(emoji)
+    if not tgt:
+        return
+    try:
+        channel = bot.get_channel(payload.channel_id)
+        if not channel:
+            return
+        message = await channel.fetch_message(payload.message_id)
+        if not message or message.author.bot:
+            return
+        text = message.content.strip()
+        if not text:
+            return
+        src = detect_language(text)
+        if not src or src == tgt:
+            return
+        result = translate(text, src, tgt)
+        if not result:
+            return
+        flag = LANG_FLAGS.get(tgt, "🌐")
+        embed = discord.Embed(description=safe_embed_text(f"{flag} {result}"), color=0x06C755)
+        embed.set_footer(text=f"反應翻譯 {emoji} | {LANG_NAMES.get(src, src)[:2]} → {LANG_NAMES.get(tgt, tgt)[:2]}")
+        await message.reply(embed=embed, mention_author=False)
+        usage_stats["reaction_translations"] += 1
+    except Exception as e:
+        logger.error(f"Reaction translate error: {e}")
+
+
+# ─── Right-click context menu translation ────────────────
+@bot.tree.context_menu(name="翻譯這段")
+async def ctx_translate(interaction: discord.Interaction, message: discord.Message):
+    """Right-click a message → Apps → 翻譯這段"""
+    text = message.content.strip()
+    if not text:
+        await interaction.response.send_message("❌ 這則訊息沒有文字", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    src = detect_language(text)
+    if not src:
+        src = "id"
+    ch_id = interaction.channel_id
+    tgt_lang = channel_target_lang.get(ch_id, "id")
+    tgt = tgt_lang if src == "zh" else "zh"
+    if src == tgt:
+        tgt = "id" if src == "zh" else "zh"
+    result = translate(text, src, tgt)
+    if not result:
+        await interaction.followup.send("❌ 翻譯失敗", ephemeral=True)
+        return
+    flag = LANG_FLAGS.get(tgt, "🌐")
+    usage_stats["context_translations"] += 1
+    await interaction.followup.send(
+        f"**原文：** {text}\n{flag} **翻譯：** {result}",
+        ephemeral=True
+    )
+
+
+# ─── Welcome new members (bilingual) ────────────────────
+@bot.event
+async def on_member_join(member):
+    """Send bilingual welcome message when a new member joins."""
+    guild = member.guild
+    # Try to find a general/welcome channel
+    target_channel = None
+    for ch in guild.text_channels:
+        if ch.permissions_for(guild.me).send_messages:
+            if any(kw in ch.name.lower() for kw in ['一般', 'general', 'welcome', '歡迎']):
+                target_channel = ch
+                break
+    if not target_channel:
+        for ch in guild.text_channels:
+            if ch.permissions_for(guild.me).send_messages:
+                target_channel = ch
+                break
+    if not target_channel:
+        return
+    embed = discord.Embed(
+        title=f"👋 歡迎 / Selamat Datang!",
+        description=(
+            f"歡迎 **{member.display_name}** 加入 **{guild.name}**！\n"
+            f"Selamat datang **{member.display_name}** di **{guild.name}**!\n\n"
+            f"💬 直接打字會自動翻譯 / Ketik langsung otomatis diterjemahkan\n"
+            f"📦 輸入 `/help` 查看所有指令 / Ketik `/help` untuk lihat semua perintah"
+        ),
+        color=0x06C755
+    )
+    embed.set_thumbnail(url=member.display_avatar.url if member.display_avatar else None)
+    await target_channel.send(embed=embed)
+
+
+# ─── Auto-translate on message ──────────────────────────
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    await bot.process_commands(message)
+
+    # ── DM translation (private message to bot) ──
+    if isinstance(message.channel, discord.DMChannel):
+        text = message.content.strip()
+        if not text:
+            return
+        src = detect_language(text)
+        if not src:
+            await message.reply("❌ 無法偵測語言 / Bahasa tidak terdeteksi")
+            return
+        tgt = "id" if src == "zh" else "zh"
+        result = translate(text, src, tgt)
+        if result:
+            flag = LANG_FLAGS.get(tgt, "🌐")
+            embed = discord.Embed(description=safe_embed_text(f"{flag} {result}"), color=0x06C755)
+            embed.set_footer(text=f"私訊翻譯 | {LANG_NAMES.get(src, src)[:2]} → {LANG_NAMES.get(tgt, tgt)[:2]}")
+            view = TranslateView(text, src, tgt)
+            await message.reply(embed=embed, view=view)
+            usage_stats["text_translations"] += 1
+        return
+
+    ch_id = message.channel.id
+    if not channel_settings.get(ch_id, True):
+        return
+    if message.author.id in channel_skip_users.get(ch_id, set()):
+        return
+
+    tgt_lang = channel_target_lang.get(ch_id, "id")
+
+    # ── Handle image attachments ──
+    for attachment in message.attachments:
+        if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']):
+            # Check if image translation is on
+            if not channel_img_settings.get(ch_id, True):
+                continue
+            try:
+                img_bytes = await attachment.read()
+                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+                # Check for work order first (if wo enabled)
+                if channel_wo_settings.get(ch_id, True):
+                    ocr_text = ocr_image_only(img_b64)
+                    if ocr_text:
+                        customer = detect_work_order(ocr_text)
+                        if customer:
+                            storage_info = format_storage_for_work_order(customer)
+                            if storage_info:
+                                embed = discord.Embed(description=storage_info, color=0xFFD700)
+                                embed.set_footer(text="📋 工單自動偵測")
+                                await message.reply(embed=embed, mention_author=False)
+                                usage_stats["work_orders_detected"] += 1
+                                continue
+
+                # OCR + translate
+                result = ocr_and_translate_image(img_b64, tgt_lang)
+                if result:
+                    if len(result) > 4000:
+                        result = result[:4000] + "..."
+                    embed = discord.Embed(title="🖼️ 圖片翻譯", description=result, color=0x06C755)
+                    embed.set_footer(text="OCR + 翻譯")
+                    await message.reply(embed=embed, mention_author=False)
+                    usage_stats["image_translations"] += 1
+            except Exception as e:
+                logger.error(f"Image processing error: {e}")
+            continue
+
+        # ── Handle audio/voice attachments ──
+        if any(attachment.filename.lower().endswith(ext) for ext in ['.ogg', '.mp3', '.wav', '.m4a', '.opus', '.flac']):
+            # Check if voice translation is on
+            if not channel_audio_settings.get(ch_id, True):
+                continue
+            try:
+                audio_bytes = await attachment.read()
+                text = transcribe_audio(audio_bytes, attachment.filename)
+                if not text:
+                    continue
+
+                src = detect_language(text) or "zh"
+                tgt = tgt_lang if src == "zh" else "zh"
+
+                result = translate(text, src, tgt) if src != tgt else None
+                src_flag = LANG_FLAGS.get(src, "🎤")
+                tgt_flag = LANG_FLAGS.get(tgt, "🌐")
+
+                embed = discord.Embed(color=0x06C755)
+                embed.add_field(name=f"🎤 語音辨識 {src_flag}", value=text, inline=False)
+                if result:
+                    embed.add_field(name=f"💬 翻譯 {tgt_flag}", value=result, inline=False)
+                embed.set_footer(text="Whisper 語音辨識 + 翻譯")
+                await message.reply(embed=embed, mention_author=False)
+                usage_stats["voice_translations"] += 1
+            except Exception as e:
+                logger.error(f"Audio processing error: {e}")
+            continue
+
+    # ── Handle text messages ──
+    text = message.content.strip()
+    if not text or text.startswith("/") or text.startswith("!"):
+        return
     if len(text) < 2:
         return
 
-    source = event.source
-    is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
-    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
-    user_id = getattr(source, 'user_id', None)
-
-    # --- DM (private message) mode ---
-    if is_dm and user_id:
-        # Record DM user for admin panel
-        if user_id not in dm_known_users:
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    profile = api.get_profile(user_id)
-                    dm_known_users[user_id] = profile.display_name or user_id
-            except Exception:
-                dm_known_users[user_id] = user_id
-
-        # DM commands
-        cmd = text.strip().lower()
-        if cmd == "/help":
-            tgt = dm_target_lang.get(user_id, "id")
-            tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
-            tgt_flag = LANG_FLAGS.get(tgt, "")
-            sep = "=" * 18
-            lines = []
-            lines.append("\U0001f310 \u79c1\u8a0a\u7ffb\u8b6f\u6a21\u5f0f")
-            lines.append(sep)
-            lines.append("\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")
-            lines.append("")
-            lines.append("/to \u4ee3\u78bc \u8a2d\u5b9a\u76ee\u6a19\u8a9e\u8a00")
-            lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
-            lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
-            lines.append(sep)
-            lines.append("\u8a9e\u8a00: zh\u4e2d id\u5370\u5c3c en\u82f1")
-            lines.append("vi\u8d8a th\u6cf0 ja\u65e5 ko\u97d3 ms\u99ac tl\u83f2")
-            lines.append(sep)
-            lines.append("\u76ee\u524d: " + tgt_flag + tgt_zh)
-            lines.append("\u7bc4\u4f8b: /to en")
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="\n".join(lines))]
-                ))
-            return
-        if cmd.startswith("/to"):
-            parts = text.strip().split()
-            dm_valid = ["zh", "id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
-            if len(parts) < 2:
-                tgt = dm_target_lang.get(user_id, "id")
-                tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
-                tgt_flag = LANG_FLAGS.get(tgt, "")
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="\u76ee\u524d\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u7bc4\u4f8b: /to en")]
-                    ))
-                return
-            code = parts[1].lower().strip()
-            if code not in dm_valid:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: zh, id, en, vi, th, ja, ko, ms, tl")]
-                    ))
-                return
-            dm_target_lang[user_id] = code
-            tgt_zh = LANG_NAMES_ZH.get(code, code) if code != "zh" else "\u4e2d\u6587"
-            tgt_flag = LANG_FLAGS.get(code, "")
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
-                ))
-            return
-        # DM: handle /qry command
-        if text.strip().lower().startswith("/qry"):
-            qry_result = handle_qry_command(text)
-            if qry_result:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=qry_result)]
-                    ))
-            return
-        # DM: skip other / commands
-        if text.startswith("/"):
-            return
-
-        # DM master toggle check
-        if not dm_master_enabled and user_id not in dm_whitelist:
-            return
-
-        # DM translation: strip mentions, detect language, translate
-        text_clean = strip_mentions_for_detect(text).strip()
-        if not text_clean or len(text_clean) < 2:
-            return
-
-        lang = detect_language(text_clean)
-        tgt = dm_target_lang.get(user_id, "id")
-        if lang is None:
-            result = translate(text_clean, "auto", tgt)
-            if not result:
-                return
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
-        elif lang == tgt:
-            return
-        else:
-            result = translate(text_clean, lang, tgt)
-            if not result:
-                return
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
-
-
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            api.reply_message(ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply)]
-            ))
+    src = detect_language(text)
+    if not src:
         return
 
-    # --- Group mode (original logic) ---
-    # Record user display name for /skipadd lookup
-    if group_id and user_id:
-        record_user_name(group_id, user_id)
-    # Track group for admin panel
-    if group_id and not is_dm and group_id not in group_tracking:
-        gname = ""
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                summary = api.get_group_summary(group_id)
-                gname = summary.group_name or ""
-        except Exception:
-            pass
-        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+    # Auto-assign language role on first detected message
+    if message.guild and message.author.id not in user_lang_prefs:
+        user_lang_prefs[message.author.id] = src
+        await auto_assign_role(message.author, message.guild, src)
 
-    if text.startswith("/"):
-        cmd_result = handle_command(text, group_id, user_id)
-        if cmd_result:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=cmd_result)]
-                ))
-        return
-
-    is_on = group_settings.get(group_id, True)
-    if not is_on:
-        return
-
-    # Check skip list
-    sender_id = getattr(source, 'user_id', None)
-    if sender_id and sender_id in group_skip_users.get(group_id, set()):
-        return
-
-    if text.startswith("!"):
-        return
-
-    # Strip @mentions - pure mentions without content should not be translated
-    text_clean = strip_mentions_for_detect(text).strip()
-    if not text_clean or len(text_clean) < 2:
-        return
-
-    lang = detect_language(text_clean)
-    if lang is None:
-        return
-
-    tgt = group_target_lang.get(group_id, "id")
-
-    reply = None
-    if lang == "zh":
-        result = translate(text_clean, "zh", tgt)
-        if result:
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
+    # Determine target: use user's personal pref if set, else channel default
+    user_pref = user_lang_prefs.get(message.author.id)
+    if src == "zh":
+        tgt = tgt_lang
+    elif src == tgt_lang:
+        tgt = "zh"
+    elif user_pref and src == user_pref:
+        # User's language detected, translate to opposite
+        tgt = "zh" if user_pref != "zh" else tgt_lang
     else:
-        result = translate(text_clean, lang, "zh")
-        if result:
-            reply = LANG_FLAGS.get("zh", "") + " " + result
+        tgt = "zh"
 
-    if reply is None:
+    if src == tgt:
         return
 
-
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
-
-
-@handler.add(MessageEvent, message=ImageMessageContent)
-def handle_image(event):
-    """Handle image messages: OCR + translate with layout-preserving text."""
-    source = event.source
-    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
-    logger.info("Image received from %s", group_id)
-
-    # Check if translation is on
-    is_on = group_settings.get(group_id, True)
-    if not is_on:
-        return
-
-    # Check skip list
-    sender_id = getattr(source, 'user_id', None)
-    if sender_id and sender_id in group_skip_users.get(group_id, set()):
-        return
-
-    # DM master toggle check for image
-    is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
-    if is_dm_img and sender_id:
-        if not dm_master_enabled and sender_id not in dm_whitelist:
-            return
-
-    # Check if image translation is on
-    img_on = group_img_settings.get(group_id, True)
-    if not img_on:
-        return
-
-    # Need OpenAI for image OCR
-    if not oai:
-        logger.warning("No OpenAI key, cannot do image OCR")
-        return
-
-    # Download image from LINE
-    message_id = event.message.id
-    img_base64, img_raw = download_line_image(message_id)
-    if not img_base64:
-        logger.warning("Failed to download image %s", message_id)
-        return
-    logger.info("Image downloaded: %d bytes", len(img_raw) if img_raw else 0)
-
-    # Determine target language
-    tgt = group_target_lang.get(group_id, "id")
-
-    # Quick OCR to check if there's text and detect language
-    extracted = ocr_image_openai(img_base64)
-    logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
-    if not extracted or len(extracted.strip()) < 2:
-        return
-
-    # === Check if this is a work order (製造指示書) ===
-    wo_on = group_wo_settings.get(group_id, True)
-    if wo_on:
-        try:
-            wo_customer = detect_work_order(extracted)
-            if wo_customer:
-                reply = format_storage_for_work_order(wo_customer)
-                if reply:
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=reply)]
-                        ))
-                    return
-        except Exception as e:
-            logger.error("Work order detection error: %s", e)
-    # === End work order check ===
-
-    lang = detect_language(extracted)
-    if lang is None:
-        return
-
-    # Determine actual translation target
-    if lang == "zh":
-        actual_tgt = tgt
-    else:
-        actual_tgt = "zh"
-
-    # Translate OCR text using the same translation engine as text messages
-    if lang == "zh":
-        result = translate(extracted, "zh", tgt)
-    else:
-        result = translate(extracted, lang, "zh")
-
+    result = translate(text, src, tgt)
     if not result:
         return
 
-    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+    flag = LANG_FLAGS.get(tgt, "🌐")
+    embed = discord.Embed(description=safe_embed_text(f"{flag} {result}"), color=0x06C755)
+    embed.set_footer(text=f"翻譯 {LANG_NAMES.get(src, src)[:2]} → {LANG_NAMES.get(tgt, tgt)[:2]}")
+    view = TranslateView(text, src, tgt)
 
-    # LINE message limit is 5000 chars
-    if len(reply) > 5000:
-        reply = reply[:4990] + "\n..."
-
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
+    try:
+        await message.reply(embed=embed, view=view, mention_author=False)
+        usage_stats["text_translations"] += 1
+    except Exception as e:
+        logger.error(f"Reply error: {e}")
 
 
-@handler.add(MessageEvent, message=AudioMessageContent)
-def handle_audio(event):
-    """Handle audio/voice messages: Whisper STT + detect language + translate."""
-    source = event.source
-    group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+# ─── Slash Commands ─────────────────────────────────────
 
-    # Check if translation is on
-    is_on = group_settings.get(group_id, True)
-    if not is_on:
+@bot.tree.command(name="help", description="顯示機器人指令說明")
+async def cmd_help(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🤖 翻譯小助手",
+        description="華新麗華鹽水廠 — 多語翻譯機器人",
+        color=0x06C755
+    )
+    embed.add_field(name="💬 自動翻譯", value="頻道打字自動翻譯＋按鈕切換語言", inline=False)
+    embed.add_field(name="🏳️ 旗幟反應翻譯", value="對訊息加 🇮🇩🇹🇼🇬🇧🇻🇳🇹🇭🇯🇵🇰🇷 翻譯", inline=False)
+    embed.add_field(name="📋 右鍵翻譯", value="長按訊息 → 應用程式 → **翻譯這段**", inline=False)
+    embed.add_field(name="💬 私訊翻譯", value="直接私訊 bot 翻譯", inline=False)
+    embed.add_field(name="🖼️ 圖片翻譯", value="上傳圖片自動 OCR 翻譯", inline=False)
+    embed.add_field(name="🎤 語音翻譯", value="上傳語音檔 Whisper 辨識翻譯", inline=False)
+    embed.add_field(name="📋 工單偵測", value="上傳製造指示書自動查儲區", inline=False)
+    embed.add_field(name="👋 歡迎訊息", value="新成員加入自動雙語歡迎", inline=False)
+    embed.add_field(name="🏷️ 自動角色", value="偵測語言自動分配語言角色", inline=False)
+    embed.add_field(name="📦 /qry <客戶>", value="儲區查詢（自動補全）", inline=True)
+    embed.add_field(name="🔍 /search <字>", value="模糊搜尋客戶儲區", inline=True)
+    embed.add_field(name="📖 /term <字>", value="工廠術語查詢", inline=True)
+    embed.add_field(name="📢 /notice <訊息>", value="雙語公告", inline=True)
+    embed.add_field(name="📌 /pin <訊息>", value="雙語公告釘選 🔒", inline=True)
+    embed.add_field(name="📝 /handover", value="交班雙語模板", inline=True)
+    embed.add_field(name="🚨 /report", value="異常回報表單（Modal）", inline=True)
+    embed.add_field(name="📊 /poll", value="雙語投票", inline=True)
+    embed.add_field(name="🌐 /mylang", value="個人語言偏好（下拉選單）", inline=True)
+    embed.add_field(name="🌐 /lang 🔒", value="頻道語言（管理員）", inline=True)
+    embed.add_field(name="🔇 /skip 🔒", value="跳過翻譯（管理員）", inline=True)
+    embed.add_field(name="⏸️ /toggle 🔒", value="開關翻譯（管理員）", inline=True)
+    embed.add_field(name="🖼️ /img 🔒", value="開關圖片翻譯", inline=True)
+    embed.add_field(name="🎤 /voice 🔒", value="開關語音翻譯", inline=True)
+    embed.add_field(name="📋 /wo 🔒", value="開關工單偵測", inline=True)
+    embed.add_field(name="📃 /skiplist", value="查看跳過名單", inline=True)
+    embed.add_field(name="📊 /stats", value="使用統計", inline=True)
+    embed.add_field(name="ℹ️ /status", value="頻道設定", inline=True)
+    embed.set_footer(text="🔒=管理員限定 | 華新麗華鹽水廠 不鏽鋼事業部")
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="qry", description="查詢客戶儲區位置")
+@app_commands.describe(customer="客戶名稱")
+async def cmd_qry(interaction: discord.Interaction, customer: str):
+    name, entries = query_storage(customer)
+    if not entries:
+        await interaction.response.send_message(
+            f"❌ 找不到客戶「{customer}」\n💡 試試 `/search {customer}` 模糊搜尋",
+            ephemeral=True
+        )
         return
+    embed = discord.Embed(title=f"📦 {name} — 儲區查詢", color=0x06C755)
+    for length, area in entries:
+        zh = format_length_zh(length)
+        embed.add_field(name=zh, value=f"**{area}**", inline=True)
+    embed.set_footer(text="儲區資料 | 華新麗華鹽水廠")
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
 
-    # Check skip list
-    sender_id = getattr(source, 'user_id', None)
-    if sender_id and sender_id in group_skip_users.get(group_id, set()):
-        return
 
-    # DM master toggle check for audio
-    is_dm_aud = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
-    if is_dm_aud and sender_id:
-        if not dm_master_enabled and sender_id not in dm_whitelist:
-            return
-
-    # Check if audio translation is on
-    audio_on = group_audio_settings.get(group_id, True)
-    if not audio_on:
-        return
-
-    # Need OpenAI for Whisper
-    if not oai:
-        logger.warning("No OpenAI key, cannot do audio transcription")
-        return
-
-    # Download audio from LINE
-    message_id = event.message.id
-    audio_bytes = download_line_audio(message_id)
-    if not audio_bytes:
-        return
-
-    # Transcribe with Whisper
-    transcribed = transcribe_audio_openai(audio_bytes)
-    if not transcribed or len(transcribed.strip()) < 2:
-        return
-
-    # Detect language
-    lang = detect_language(transcribed)
-    if lang is None:
-        return
-
-    tgt = group_target_lang.get(group_id, "id")
-
-    reply = None
-    if lang == "zh":
-        result = translate(transcribed, "zh", tgt)
-        if result:
-            reply = "\U0001f3a4 " + LANG_FLAGS.get(tgt, "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
+@cmd_qry.autocomplete("customer")
+async def qry_autocomplete(interaction: discord.Interaction, current: str):
+    if not current:
+        choices = [app_commands.Choice(name=k, value=k) for k in sorted(STORAGE_LOOKUP.keys())[:25]]
     else:
-        result = translate(transcribed, lang, "zh")
-        if result:
-            reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
+        matches = [k for k in STORAGE_LOOKUP.keys() if current.lower() in k.lower()]
+        choices = [app_commands.Choice(name=m, value=m) for m in sorted(matches)[:25]]
+    return choices
 
-    if reply is None:
+
+@bot.tree.command(name="search", description="模糊搜尋多個客戶儲區")
+@app_commands.describe(keyword="客戶名稱關鍵字")
+async def cmd_search(interaction: discord.Interaction, keyword: str):
+    kw = keyword.strip().lower()
+    matches = [(k, v) for k, v in STORAGE_LOOKUP.items() if kw in k.lower()]
+    if not matches:
+        await interaction.response.send_message(f"❌ 找不到包含「{keyword}」的客戶", ephemeral=True)
         return
+    embed = discord.Embed(title=f"🔍 搜尋結果：{keyword}（{len(matches)} 筆）", color=0x06C755)
+    for name, entries in matches[:15]:
+        zones = " | ".join(f"{format_length_zh(l)}: {a}" for l, a in entries)
+        embed.add_field(name=name, value=zones, inline=False)
+    if len(matches) > 15:
+        embed.set_footer(text=f"還有 {len(matches) - 15} 筆未顯示，請縮小搜尋範圍")
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
 
 
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
+@bot.tree.command(name="notice", description="發送雙語公告")
+@app_commands.describe(message="公告內容（中文或印尼文）")
+async def cmd_notice(interaction: discord.Interaction, message: str):
+    await interaction.response.defer()
+    src = detect_language(message) or "zh"
+    ch_id = interaction.channel_id
+    tgt_lang = channel_target_lang.get(ch_id, "id")
+    tgt = tgt_lang if src == "zh" else "zh"
+    result = translate(message, src, tgt)
+    if not result:
+        await interaction.followup.send("❌ 翻譯失敗，請稍後再試")
+        return
+    src_flag = LANG_FLAGS.get(src, "")
+    tgt_flag = LANG_FLAGS.get(tgt, "")
+    embed = discord.Embed(title="📢 公告 / Pengumuman", color=0xFFD700)
+    embed.add_field(name=f"{src_flag} 原文", value=message, inline=False)
+    embed.add_field(name=f"{tgt_flag} 翻譯", value=result, inline=False)
+    embed.set_footer(text=f"由 {interaction.user.display_name} 發送")
+    usage_stats["slash_commands"] += 1
+    await interaction.followup.send(embed=embed)
 
 
+@bot.tree.command(name="pin", description="發送雙語公告並釘選（管理員）")
+@app_commands.describe(message="公告內容")
+async def cmd_pin(interaction: discord.Interaction, message: str):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限 / Perlu izin admin", ephemeral=True)
+        return
+    await interaction.response.defer()
+    src = detect_language(message) or "zh"
+    ch_id = interaction.channel_id
+    tgt_lang = channel_target_lang.get(ch_id, "id")
+    tgt = tgt_lang if src == "zh" else "zh"
+    result = translate(message, src, tgt)
+    if not result:
+        await interaction.followup.send("❌ 翻譯失敗")
+        return
+    src_flag = LANG_FLAGS.get(src, "")
+    tgt_flag = LANG_FLAGS.get(tgt, "")
+    embed = discord.Embed(title="📌 重要公告 / Pengumuman Penting", color=0xFF4444)
+    embed.add_field(name=f"{src_flag} 原文", value=message, inline=False)
+    embed.add_field(name=f"{tgt_flag} 翻譯", value=result, inline=False)
+    embed.set_footer(text=f"由 {interaction.user.display_name} 釘選")
+    msg = await interaction.followup.send(embed=embed)
+    try:
+        await msg.pin()
+    except Exception:
+        pass
+    usage_stats["slash_commands"] += 1
 
-if JoinEvent:
-    @handler.add(JoinEvent)
-    def handle_join(event):
-        """Track when bot joins a group."""
-        source = event.source
-        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
-        if not group_id:
-            return
-        gname = ""
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                summary = api.get_group_summary(group_id)
-                gname = summary.group_name or ""
-        except Exception:
-            pass
-        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+
+@bot.tree.command(name="handover", description="交班雙語模板")
+async def cmd_handover(interaction: discord.Interaction):
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message("選擇交班方向：", view=HandoverView(), ephemeral=True)
 
 
-# ─── Admin Panel ────────────────────────────────────────
+@bot.tree.command(name="report", description="異常回報（彈出表單填寫）")
+async def cmd_report(interaction: discord.Interaction):
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_modal(ReportModal())
 
+
+@bot.tree.command(name="poll", description="建立雙語投票")
+@app_commands.describe(
+    question="投票問題",
+    option1="選項1", option2="選項2",
+    option3="選項3（可選）", option4="選項4（可選）",
+)
+async def cmd_poll(interaction: discord.Interaction, question: str,
+                   option1: str, option2: str,
+                   option3: str = None, option4: str = None):
+    await interaction.response.defer()
+    options = [option1, option2]
+    if option3:
+        options.append(option3)
+    if option4:
+        options.append(option4)
+
+    # Translate question and options
+    src = detect_language(question) or "zh"
+    tgt = "id" if src == "zh" else "zh"
+
+    q_translated = translate(question, src, tgt) or question
+    options_translated = []
+    for opt in options:
+        t = translate(opt, src, tgt) or opt
+        options_translated.append(t)
+
+    src_flag = LANG_FLAGS.get(src, "")
+    tgt_flag = LANG_FLAGS.get(tgt, "")
+
+    embed = discord.Embed(
+        title=f"📊 投票 / Voting",
+        color=0x5865F2
+    )
+    embed.add_field(name=f"{src_flag} {question}", value=f"{tgt_flag} {q_translated}", inline=False)
+    for i, (zh, tgt_opt) in enumerate(zip(options, options_translated)):
+        embed.add_field(name=f"選項 {i+1}", value=f"{zh} / {tgt_opt}", inline=True)
+    embed.set_footer(text=f"由 {interaction.user.display_name} 發起 | 點按鈕投票")
+
+    if src == "zh":
+        view = PollView(options, options_translated, tgt_flag)
+    else:
+        view = PollView(options_translated, options, src_flag)
+
+    usage_stats["slash_commands"] += 1
+    await interaction.followup.send(embed=embed, view=view)
+
+
+@bot.tree.command(name="mylang", description="設定你的個人語言偏好（下拉選單）")
+async def cmd_mylang(interaction: discord.Interaction):
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(
+        "🌐 選擇你的語言 / Pilih bahasa kamu:",
+        view=LangSelectView(),
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="lang", description="設定頻道目標語言（管理員）")
+@app_commands.describe(language="目標語言代碼")
+@app_commands.choices(language=[
+    app_commands.Choice(name="🇮🇩 印尼文", value="id"),
+    app_commands.Choice(name="🇬🇧 英文", value="en"),
+    app_commands.Choice(name="🇻🇳 越南文", value="vi"),
+    app_commands.Choice(name="🇹🇭 泰文", value="th"),
+    app_commands.Choice(name="🇯🇵 日文", value="ja"),
+    app_commands.Choice(name="🇰🇷 韓文", value="ko"),
+    app_commands.Choice(name="🇲🇾 馬來文", value="ms"),
+    app_commands.Choice(name="🇵🇭 菲律賓文", value="tl"),
+])
+async def cmd_lang(interaction: discord.Interaction, language: app_commands.Choice[str]):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限 / Perlu izin admin", ephemeral=True)
+        return
+    channel_target_lang[interaction.channel_id] = language.value
+    zh_name = LANG_NAMES_ZH.get(language.value, language.value)
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(f"✅ 本頻道目標語言已設為 **{language.name}**（{zh_name}）")
+
+
+@bot.tree.command(name="skip", description="切換使用者翻譯跳過狀態（管理員）")
+@app_commands.describe(user="要跳過翻譯的使用者")
+async def cmd_skip(interaction: discord.Interaction, user: discord.Member):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限 / Perlu izin admin", ephemeral=True)
+        return
+    ch_id = interaction.channel_id
+    if ch_id not in channel_skip_users:
+        channel_skip_users[ch_id] = set()
+    if user.id in channel_skip_users[ch_id]:
+        channel_skip_users[ch_id].discard(user.id)
+        await interaction.response.send_message(f"✅ **{user.display_name}** 的訊息將恢復翻譯")
+    else:
+        channel_skip_users[ch_id].add(user.id)
+        await interaction.response.send_message(f"🔇 **{user.display_name}** 的訊息將不再翻譯")
+    usage_stats["slash_commands"] += 1
+
+
+@bot.tree.command(name="toggle", description="開關本頻道的自動翻譯（管理員）")
+async def cmd_toggle(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限 / Perlu izin admin", ephemeral=True)
+        return
+    ch_id = interaction.channel_id
+    current = channel_settings.get(ch_id, True)
+    channel_settings[ch_id] = not current
+    status = "開啟 ✅" if not current else "關閉 ❌"
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(f"翻譯已{status}")
+
+
+@bot.tree.command(name="img", description="開關本頻道的圖片翻譯（管理員）")
+@app_commands.choices(switch=[
+    app_commands.Choice(name="開啟", value="on"),
+    app_commands.Choice(name="關閉", value="off"),
+])
+async def cmd_img(interaction: discord.Interaction, switch: app_commands.Choice[str]):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限", ephemeral=True)
+        return
+    channel_img_settings[interaction.channel_id] = (switch.value == "on")
+    status = "開啟 ✅" if switch.value == "on" else "關閉 ❌"
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(f"🖼️ 圖片翻譯已{status}")
+
+
+@bot.tree.command(name="voice", description="開關本頻道的語音翻譯（管理員）")
+@app_commands.choices(switch=[
+    app_commands.Choice(name="開啟", value="on"),
+    app_commands.Choice(name="關閉", value="off"),
+])
+async def cmd_voice(interaction: discord.Interaction, switch: app_commands.Choice[str]):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限", ephemeral=True)
+        return
+    channel_audio_settings[interaction.channel_id] = (switch.value == "on")
+    status = "開啟 ✅" if switch.value == "on" else "關閉 ❌"
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(f"🎤 語音翻譯已{status}")
+
+
+@bot.tree.command(name="wo", description="開關本頻道的工單偵測（管理員）")
+@app_commands.choices(switch=[
+    app_commands.Choice(name="開啟", value="on"),
+    app_commands.Choice(name="關閉", value="off"),
+])
+async def cmd_wo(interaction: discord.Interaction, switch: app_commands.Choice[str]):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ 需要管理員權限", ephemeral=True)
+        return
+    channel_wo_settings[interaction.channel_id] = (switch.value == "on")
+    status = "開啟 ✅" if switch.value == "on" else "關閉 ❌"
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(f"📋 工單偵測已{status}")
+
+
+@bot.tree.command(name="skiplist", description="查看本頻道被跳過翻譯的使用者")
+async def cmd_skiplist(interaction: discord.Interaction):
+    ch_id = interaction.channel_id
+    skipped = channel_skip_users.get(ch_id, set())
+    if not skipped:
+        await interaction.response.send_message("✅ 目前沒有被跳過的使用者", ephemeral=True)
+        return
+    lines = []
+    for uid in skipped:
+        member = interaction.guild.get_member(uid) if interaction.guild else None
+        name = member.display_name if member else str(uid)
+        lines.append(f"• {name}")
+    embed = discord.Embed(title="🔇 跳過翻譯名單", description="\n".join(lines), color=0x06C755)
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="stats", description="查看翻譯使用統計")
+async def cmd_stats(interaction: discord.Interaction):
+    uptime_sec = time.time() - usage_stats["start_time"]
+    hours = int(uptime_sec // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    embed = discord.Embed(title="📊 翻譯小助手 使用統計", color=0x06C755)
+    embed.add_field(name="⏱️ 運行時間", value=f"{hours}h {minutes}m", inline=True)
+    embed.add_field(name="💬 文字翻譯", value=str(usage_stats["text_translations"]), inline=True)
+    embed.add_field(name="🖼️ 圖片翻譯", value=str(usage_stats["image_translations"]), inline=True)
+    embed.add_field(name="🎤 語音翻譯", value=str(usage_stats["voice_translations"]), inline=True)
+    embed.add_field(name="📋 工單偵測", value=str(usage_stats["work_orders_detected"]), inline=True)
+    embed.add_field(name="🏳️ 反應翻譯", value=str(usage_stats["reaction_translations"]), inline=True)
+    embed.add_field(name="📋 右鍵翻譯", value=str(usage_stats["context_translations"]), inline=True)
+    embed.add_field(name="⌨️ 斜線指令", value=str(usage_stats["slash_commands"]), inline=True)
+    embed.add_field(name="📦 快取數量", value=str(len(translation_cache)), inline=True)
+    embed.add_field(name="👥 儲區客戶", value=str(len(STORAGE_LOOKUP)), inline=True)
+    embed.add_field(name="📖 術語詞條", value=str(len(ZH_TO_ID_HARD)), inline=True)
+    embed.add_field(name="🤖 GPT 模型", value="gpt-4o-mini", inline=True)
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="status", description="查看本頻道翻譯設定")
+async def cmd_status(interaction: discord.Interaction):
+    ch_id = interaction.channel_id
+    on = channel_settings.get(ch_id, True)
+    lang = channel_target_lang.get(ch_id, "id")
+    zh_name = LANG_NAMES_ZH.get(lang, lang)
+    skip_count = len(channel_skip_users.get(ch_id, set()))
+    embed = discord.Embed(title="⚙️ 頻道翻譯設定", color=0x06C755)
+    embed.add_field(name="翻譯狀態", value="✅ 開啟" if on else "❌ 關閉", inline=True)
+    embed.add_field(name="目標語言", value=f"{LANG_FLAGS.get(lang, '')} {zh_name}", inline=True)
+    embed.add_field(name="跳過人數", value=str(skip_count), inline=True)
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="term", description="查詢工廠術語翻譯")
+@app_commands.describe(keyword="中文或印尼文關鍵字")
+async def cmd_term(interaction: discord.Interaction, keyword: str):
+    results = []
+    kw = keyword.strip().lower()
+    for zh, id_text in ZH_TO_ID_HARD.items():
+        if kw in zh.lower() or kw in id_text.lower():
+            results.append(f"**{zh}** → {id_text}")
+    if not results:
+        await interaction.response.send_message(f"❌ 找不到「{keyword}」相關術語", ephemeral=True)
+        return
+    display = results[:20]
+    if len(results) > 20:
+        display.append(f"... 還有 {len(results) - 20} 筆")
+    embed = discord.Embed(title=f"📖 術語查詢：{keyword}", description="\n".join(display), color=0x06C755)
+    usage_stats["slash_commands"] += 1
+    await interaction.response.send_message(embed=embed)
+
+
+# ─── Admin Panel HTML ────────────────────────────────────
 ADMIN_HTML = '''<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>翻譯Bot 管理後台</title>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#06C755">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>翻譯Bot 管理後台 (Discord)</title>
+<meta name="theme-color" content="#5865F2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Bot管理">
+<meta name="apple-mobile-web-app-title" content="DC Bot管理">
+<link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;padding-bottom:env(safe-area-inset-bottom)}
-.header{background:linear-gradient(135deg,#06C755,#04a648);padding:18px 16px;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(6,199,85,.3)}
-.header h1{font-size:18px;color:#fff;display:flex;align-items:center;gap:8px}
-.login-wrap{display:flex;justify-content:center;align-items:center;min-height:80vh;padding:20px}
-.login-box{background:#1a1a1a;border-radius:16px;padding:32px 24px;width:100%;max-width:360px;box-shadow:0 4px 24px rgba(0,0,0,.4)}
-.login-box h2{text-align:center;margin-bottom:24px;color:#06C755}
-.input-field{width:100%;padding:14px 16px;border-radius:12px;border:1px solid #333;background:#111;color:#fff;font-size:16px;margin-bottom:16px;outline:none;transition:border .2s}
-.input-field:focus{border-color:#06C755}
-.btn{display:block;width:100%;padding:14px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;transition:all .2s}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh}
+.header{background:linear-gradient(135deg,#5865F2,#7289DA);padding:16px;font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+#loginPage{padding:20px;max-width:400px;margin:40px auto}
+#loginPage h2{margin-bottom:16px;text-align:center}
+#mainPage{display:none}
+input[type=password],input[type=text],textarea{width:100%;padding:12px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#fff;font-size:15px;margin-bottom:12px}
+textarea{min-height:80px;resize:vertical}
+.btn{padding:10px 20px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;display:inline-block}
+.btn-purple{background:#5865F2;color:#fff}
 .btn-green{background:#06C755;color:#fff}
-.btn-green:active{background:#05a648;transform:scale(.98)}
-.btn-red{background:#dc3545;color:#fff}
-.btn-red:active{background:#b02a37;transform:scale(.98)}
-.btn-sm{padding:8px 14px;font-size:13px;width:auto;border-radius:8px;display:inline-block}
-.tabs{display:flex;background:#111;border-bottom:1px solid #222;position:sticky;top:56px;z-index:99}
-.tab{flex:1;padding:12px 0;text-align:center;font-size:14px;font-weight:500;color:#888;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
-.tab.active{color:#06C755;border-bottom-color:#06C755}
-.panel{display:none;padding:16px}
+.btn-red{background:#d93025;color:#fff}
+.btn-sm{padding:6px 12px;font-size:12px}
+.tabs{display:flex;overflow-x:auto;background:#111;border-bottom:2px solid #222;-webkit-overflow-scrolling:touch}
+.tab{padding:12px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px;flex-shrink:0}
+.tab.active{color:#5865F2;border-bottom-color:#5865F2}
+.panel{display:none;padding:12px}
 .panel.active{display:block}
-.card{background:#1a1a1a;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #222}
-.card-title{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
-.card-sub{font-size:12px;color:#888}
-.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:500}
-.badge-on{background:rgba(6,199,85,.15);color:#06C755}
-.badge-off{background:rgba(220,53,69,.15);color:#dc3545}
-.toggle-wrap{display:flex;align-items:center;justify-content:space-between;padding:16px;background:#1a1a1a;border-radius:12px;margin-bottom:12px;border:1px solid #222}
-.toggle-label{font-size:15px;font-weight:500}
-.toggle{position:relative;width:52px;height:30px;cursor:pointer}
-.toggle input{display:none}
-.toggle .slider{position:absolute;inset:0;background:#333;border-radius:30px;transition:.3s}
-.toggle .slider:before{content:"";position:absolute;height:24px;width:24px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
-.toggle input:checked+.slider{background:#06C755}
-.toggle input:checked+.slider:before{transform:translateX(22px)}
-.wl-item{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #222}
-.wl-item:last-child{border-bottom:none}
-.add-row{display:flex;gap:8px;margin-top:12px}
-.add-row input{flex:1}
-.empty{text-align:center;color:#666;padding:32px 16px;font-size:14px}
-.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 24px;border-radius:20px;font-size:14px;z-index:200;opacity:0;transition:opacity .3s;pointer-events:none}
+.card{background:#161616;border-radius:10px;padding:14px;margin-bottom:10px;border:1px solid #222}
+.card-title{font-weight:600;font-size:14px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center}
+.card-sub{font-size:12px;color:#888;margin-top:2px}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;cursor:pointer}
+.badge-on{background:#06C75522;color:#06C755}
+.badge-off{background:#d9302522;color:#d93025}
+.badge-info{background:#5865F222;color:#5865F2}
+.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat-box{background:#161616;border-radius:8px;padding:12px;text-align:center;border:1px solid #222}
+.stat-num{font-size:24px;font-weight:700;color:#5865F2}
+.stat-label{font-size:11px;color:#888;margin-top:4px}
+.empty{text-align:center;padding:20px;color:#666;font-size:13px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .3s;z-index:999}
 .toast.show{opacity:1}
-.group-select{width:100%;padding:12px;border-radius:10px;border:1px solid #333;background:#111;color:#fff;font-size:14px;margin-bottom:12px}
+.toggle{position:relative;display:inline-block;width:44px;height:24px}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:absolute;cursor:pointer;inset:0;background:#444;border-radius:24px;transition:.3s}
+.slider::before{content:"";position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+.toggle input:checked+.slider{background:#5865F2}
+.toggle input:checked+.slider::before{transform:translateX(20px)}
+.wl-item{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #222}
+select{width:100%;padding:10px;border-radius:8px;background:#1a1a1a;color:#fff;border:1px solid #333;font-size:14px;margin-bottom:8px}
+.inline-select{display:inline;width:auto;padding:2px 6px;font-size:11px;margin:0}
+.tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin:2px}
+.tag-green{background:#06C75533;color:#06C755}
+.tag-blue{background:#5865F233;color:#5865F2}
+.tag-red{background:#d9302533;color:#d93025}
+.note-card{background:#1a1a1a;border-radius:8px;padding:12px;margin-bottom:8px;border-left:3px solid #5865F2}
+.note-time{font-size:11px;color:#666;margin-top:4px}
+.note-content{font-size:13px;white-space:pre-wrap}
 </style>
 </head>
 <body>
-<div id="app">
+<div class="header">🤖 翻譯Bot 管理後台 <span style="font-size:12px;color:#ddd;font-weight:400">Discord</span></div>
 
-<!-- Login -->
 <div id="loginPage">
-<div class="header"><h1>🤖 翻譯Bot 管理後台</h1></div>
-<div class="login-wrap">
-<div class="login-box">
 <h2>🔐 登入</h2>
-<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
-<button class="btn btn-green" onclick="doLogin()">登入</button>
-</div>
-</div>
+<input type="password" id="pwInput" placeholder="輸入管理密碼" onkeydown="if(event.key==='Enter')doLogin()">
+<button class="btn btn-purple" style="width:100%" onclick="doLogin()">登入</button>
 </div>
 
-<!-- Main -->
-<div id="mainPage" style="display:none">
-<div class="header"><h1>🤖 翻譯Bot 管理後台</h1></div>
+<div id="mainPage">
 <div class="tabs">
-<div class="tab active" onclick="switchTab('groups')">群組</div>
-<div class="tab" onclick="switchTab('dm')">私訊DM</div>
+<div class="tab active" onclick="switchTab('dash')">總覽</div>
+<div class="tab" onclick="switchTab('channels')">頻道</div>
+<div class="tab" onclick="switchTab('notes')">相簿&筆記</div>
 <div class="tab" onclick="switchTab('skip')">白名單</div>
+<div class="tab" onclick="switchTab('users')">使用者</div>
 <div class="tab" onclick="switchTab('storage')">儲區</div>
 </div>
 
-<!-- Groups Panel -->
-<div class="panel active" id="panel-groups">
-<div id="groupList"><div class="empty">載入中...</div></div>
+<!-- Dashboard -->
+<div class="panel active" id="panel-dash">
+<div id="statsGrid" class="stat-grid"><div class="empty">載入中...</div></div>
 </div>
 
-<!-- DM Panel -->
-<div class="panel" id="panel-dm">
-<div class="toggle-wrap">
-<span class="toggle-label">DM 翻譯總開關</span>
-<label class="toggle"><input type="checkbox" id="dmToggle" onchange="toggleDM()"><span class="slider"></span></label>
+<!-- Channels -->
+<div class="panel" id="panel-channels">
+<div id="channelList"><div class="empty">載入中...</div></div>
 </div>
+
+<!-- Notes -->
+<div class="panel" id="panel-notes">
 <div class="card">
-<div class="card-title">DM 白名單</div>
-<div class="card-sub">總開關關閉時，只有白名單內的人可以私訊翻譯</div>
-<div id="dmWlList"></div>
+<div class="card-title">📝 新增筆記 / 公告</div>
+<textarea id="noteInput" placeholder="輸入筆記內容..."></textarea>
+<div style="display:flex;gap:8px">
+<button class="btn btn-purple btn-sm" onclick="addNote()">新增筆記</button>
+<button class="btn btn-green btn-sm" onclick="addNote(true)">📌 釘選公告</button>
 </div>
+</div>
+<div id="notesList"><div class="empty">尚無筆記</div></div>
 </div>
 
-<!-- Skip Panel -->
+<!-- Skip/Whitelist -->
 <div class="panel" id="panel-skip">
-<select class="group-select" id="skipGroupSelect" onchange="loadSkipList()">
-<option value="">選擇群組...</option>
+<select id="skipChannelSelect" onchange="loadSkipList()">
+<option value="">選擇頻道...</option>
 </select>
 <div class="card-sub" style="padding:0 4px 8px;font-size:12px">開啟 = 不翻譯該成員訊息</div>
-<div id="skipListContent"><div class="empty">請先選擇群組</div></div>
+<div id="skipListContent"><div class="empty">請先選擇頻道</div></div>
 </div>
 
-<!-- Storage Panel -->
+<!-- Users -->
+<div class="panel" id="panel-users">
+<div id="userList"><div class="empty">載入中...</div></div>
+</div>
+
+<!-- Storage -->
 <div class="panel" id="panel-storage">
 <div class="card">
 <div class="card-title">📦 儲區資料更新</div>
 <div class="card-sub">上傳 Excel 檔案自動更新儲區查詢資料</div>
 <div style="margin-top:12px">
 <input type="file" id="storageFile" accept=".xlsx,.xls" style="display:none" onchange="previewStorage()">
-<button class="btn btn-green" onclick="document.getElementById('storageFile').click()">選擇 Excel 檔案</button>
+<button class="btn btn-purple" onclick="document.getElementById('storageFile').click()">選擇 Excel 檔案</button>
 <div id="storageFileName" style="margin-top:8px;font-size:13px;color:#888"></div>
 </div>
 </div>
@@ -2166,10 +1813,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div>
 </div>
 </div>
-
-</div><!-- mainPage -->
-
-</div><!-- app -->
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -2180,11 +1824,13 @@ const API=window.location.origin+'/api/admin';
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
 
 async function api(path,method='GET',body=null){
-  const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
-  if(body)opts.body=JSON.stringify(body);
-  const r=await fetch(API+path,opts);
-  if(r.status===403){toast('密碼錯誤');return null}
-  return r.json();
+  try{
+    const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
+    if(body)opts.body=JSON.stringify(body);
+    const r=await fetch(API+path,opts);
+    if(r.status===403){toast('密碼錯誤');return null}
+    return r.json();
+  }catch(e){toast('連線失敗，請重試');return null}
 }
 
 function doLogin(){
@@ -2194,119 +1840,142 @@ function doLogin(){
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
-    localStorage.setItem('bot_admin_key',KEY);
+    localStorage.setItem('dc_admin_key',KEY);
     loadAll();
   });
 }
 
 function switchTab(name){
-  const labels={'groups':'群組','dm':'DM','skip':'白名單','storage':'儲區'};
+  const labels={'dash':'總覽','channels':'頻道','notes':'相簿','skip':'白名單','users':'使用者','storage':'儲區'};
   document.querySelectorAll('.tab').forEach(t=>{t.classList.toggle('active',t.textContent.includes(labels[name]))});
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
 }
 
-function loadAll(){loadGroups();loadDM();loadGroupSelect();loadStorageStats()}
+function loadAll(){loadStats();loadChannels();loadUsers();loadStorage();loadNotes();loadChannelSelect()}
 
-async function loadGroups(){
-  const d=await api('/groups');
+// ── Dashboard ──
+async function loadStats(){
+  const d=await api('/stats');
   if(!d)return;
-  const el=document.getElementById('groupList');
-  if(!d.groups||d.groups.length===0){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
-  el.innerHTML=d.groups.map(g=>`
-    <div class="card">
-      <div class="card-title">
-        <span>${g.name||'(未知群組)'}</span>
-        <span class="badge ${g.translation_on?'badge-on':'badge-off'}">${g.translation_on?'翻譯開':'翻譯關'}</span>
-      </div>
-      <div class="card-sub">ID: ${g.id.substring(0,12)}... ｜語言: ${g.target_lang}</div>
-      <div style="margin-top:10px">
-        <button class="btn btn-red btn-sm" onclick="leaveGroup('${g.id}','${(g.name||'').replace(/'/g,"\\'")}')">退出群組</button>
-      </div>
-    </div>
-  `).join('');
+  const el=document.getElementById('statsGrid');
+  const labels={'uptime':'⏱️ 運行時間','text_translations':'💬 文字翻譯','image_translations':'🖼️ 圖片翻譯','voice_translations':'🎤 語音翻譯','work_orders_detected':'📋 工單偵測','slash_commands':'⌨️ 指令','reaction_translations':'🏳️ 反應翻譯','context_translations':'📋 右鍵翻譯','cache_count':'📦 快取','customer_count':'👥 客戶','guilds':'🏠 伺服器','channels_active':'📢 頻道','users_known':'👤 使用者'};
+  el.innerHTML=Object.entries(d).map(([k,v])=>{
+    if(k==='start_time')return '';
+    return '<div class="stat-box"><div class="stat-num">'+v+'</div><div class="stat-label">'+(labels[k]||k)+'</div></div>';
+  }).join('');
 }
 
-async function leaveGroup(gid,name){
-  if(!confirm('確定退出「'+name+'」？')){return}
-  const d=await api('/groups/leave','POST',{group_id:gid});
-  if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}
-}
-
-async function loadDM(){
-  const d=await api('/dm');
+// ── Channels ──
+async function loadChannels(){
+  const d=await api('/channels');
   if(!d)return;
-  document.getElementById('dmToggle').checked=d.master_enabled;
-  renderDmWl(d.known_users||[]);
+  const el=document.getElementById('channelList');
+  if(!d.channels||!d.channels.length){el.innerHTML='<div class="empty">尚無頻道紀錄</div>';return}
+  el.innerHTML=d.channels.map(c=>{
+    const imgOn=c.img_on!==false;
+    const voiceOn=c.voice_on!==false;
+    const woOn=c.wo_on!==false;
+    return '<div class="card">'+
+      '<div class="card-title"><span>#'+c.name+' <span style="color:#666;font-size:11px">'+c.guild+'</span></span>'+
+      '<span class="badge '+(c.translation_on?'badge-on':'badge-off')+'" onclick="toggleCh(\''+c.id+'\')">翻譯'+(c.translation_on?'開':'關')+'</span></div>'+
+      '<div class="card-sub">語言: <select class="inline-select" onchange="setChLang(\''+c.id+'\',this.value)">'+
+      '<option value="id" '+(c.target_lang==='id'?'selected':'')+'>印尼</option>'+
+      '<option value="en" '+(c.target_lang==='en'?'selected':'')+'>英文</option>'+
+      '<option value="vi" '+(c.target_lang==='vi'?'selected':'')+'>越南</option>'+
+      '<option value="th" '+(c.target_lang==='th'?'selected':'')+'>泰文</option>'+
+      '<option value="ja" '+(c.target_lang==='ja'?'selected':'')+'>日文</option>'+
+      '<option value="ko" '+(c.target_lang==='ko'?'selected':'')+'>韓文</option>'+
+      '</select> ｜跳過: '+c.skip_count+'人</div>'+
+      '<div style="margin-top:6px">'+
+      '<span class="tag '+(imgOn?'tag-green':'tag-red')+'" onclick="toggleChSetting(\''+c.id+'\',\'img\')">'+(imgOn?'🖼️ 圖片開':'🖼️ 圖片關')+'</span> '+
+      '<span class="tag '+(voiceOn?'tag-green':'tag-red')+'" onclick="toggleChSetting(\''+c.id+'\',\'voice\')">'+(voiceOn?'🎤 語音開':'🎤 語音關')+'</span> '+
+      '<span class="tag '+(woOn?'tag-green':'tag-red')+'" onclick="toggleChSetting(\''+c.id+'\',\'wo\')">'+(woOn?'📋 工單開':'📋 工單關')+'</span>'+
+      '</div>'+
+      '<div style="margin-top:8px"><button class="btn btn-red btn-sm" onclick="leaveGuild(\''+c.guild_id+'\',\''+c.guild+'\')">退出伺服器: '+c.guild+'</button></div>'+
+    '</div>';
+  }).join('');
 }
 
-function renderDmWl(users){
-  const el=document.getElementById('dmWlList');
-  if(!users.length){el.innerHTML='<div class="empty" style="padding:12px">尚無人私訊過 Bot</div>';return}
-  el.innerHTML=users.map(u=>`
-    <div class="wl-item">
-      <span>${u.name}</span>
-      <label class="toggle"><input type="checkbox" ${u.whitelisted?'checked':''} onchange="toggleDmWl('${u.user_id}',this.checked)"><span class="slider"></span></label>
-    </div>
-  `).join('');
+async function toggleCh(chId){
+  const d=await api('/channel/toggle','POST',{channel_id:chId});
+  if(d&&d.ok){toast(d.translation_on?'翻譯已開':'翻譯已關');loadChannels()}
+}
+async function setChLang(chId,lang){
+  const d=await api('/channel/lang','POST',{channel_id:chId,lang:lang});
+  if(d&&d.ok)toast('語言已切換: '+lang);
+}
+async function toggleChSetting(chId,setting){
+  const d=await api('/channel/setting','POST',{channel_id:chId,setting:setting});
+  if(d&&d.ok){toast(setting+' 已切換');loadChannels()}
+}
+async function leaveGuild(guildId,name){
+  if(!confirm('確定退出「'+name+'」伺服器？'))return;
+  const d=await api('/guild/leave','POST',{guild_id:guildId});
+  if(d)toast(d.message||'已退出');loadChannels();
 }
 
-async function toggleDM(){
-  const on=document.getElementById('dmToggle').checked;
-  const d=await api('/dm','POST',{master_enabled:on});
-  if(d)toast(on?'DM 已開啟':'DM 已關閉');
-}
-
-async function toggleDmWl(uid,on){
-  const d=await api('/dm/whitelist','POST',{user_id:uid,action:on?'add':'remove'});
-  if(d)toast(on?'已加入白名單':'已移出白名單');
-}
-
-async function loadGroupSelect(){
-  const d=await api('/groups');
+// ── Notes ──
+async function loadNotes(){
+  const d=await api('/notes');
   if(!d)return;
-  const sel=document.getElementById('skipGroupSelect');
-  const cur=sel.value;
-  sel.innerHTML='<option value="">選擇群組...</option>';
-  (d.groups||[]).forEach(g=>{
+  const el=document.getElementById('notesList');
+  if(!d.notes||!d.notes.length){el.innerHTML='<div class="empty">尚無筆記</div>';return}
+  el.innerHTML=d.notes.map((n,i)=>'<div class="note-card">'+(n.pinned?'📌 ':'')+'<div class="note-content">'+n.content+'</div><div class="note-time">'+n.time+' <span style="cursor:pointer;color:#d93025" onclick="deleteNote('+i+')">刪除</span></div></div>').join('');
+}
+async function addNote(pin=false){
+  const content=document.getElementById('noteInput').value.trim();
+  if(!content){toast('請輸入內容');return}
+  const d=await api('/notes','POST',{content:content,pinned:pin});
+  if(d&&d.ok){toast(pin?'已釘選公告':'已新增筆記');document.getElementById('noteInput').value='';loadNotes()}
+}
+async function deleteNote(idx){
+  if(!confirm('確定刪除？'))return;
+  const d=await api('/notes/delete','POST',{index:idx});
+  if(d&&d.ok){toast('已刪除');loadNotes()}
+}
+
+// ── Skip/Whitelist ──
+async function loadChannelSelect(){
+  const d=await api('/channels');
+  if(!d)return;
+  const sel=document.getElementById('skipChannelSelect');
+  sel.innerHTML='<option value="">選擇頻道...</option>';
+  (d.channels||[]).forEach(c=>{
     const opt=document.createElement('option');
-    opt.value=g.id;opt.textContent=g.name||g.id.substring(0,16);
+    opt.value=c.id;opt.textContent='#'+c.name+' ('+c.guild+')';
     sel.appendChild(opt);
   });
-  if(cur)sel.value=cur;
 }
-
 async function loadSkipList(){
-  const gid=document.getElementById('skipGroupSelect').value;
+  const chId=document.getElementById('skipChannelSelect').value;
   const el=document.getElementById('skipListContent');
-  if(!gid){el.innerHTML='<div class="empty">請先選擇群組</div>';return}
-  const d=await api('/skip?group_id='+gid);
+  if(!chId){el.innerHTML='<div class="empty">請先選擇頻道</div>';return}
+  const d=await api('/channel/members?channel_id='+chId);
   if(!d)return;
-  const users=d.users||[];
-  if(!users.length){
-    el.innerHTML='<div class="empty">尚無成員紀錄<br>成員在群組發訊息後會自動出現</div>';
-    return;
-  }
-  el.innerHTML=users.map(u=>`
-    <div class="wl-item">
-      <span>${u.name}</span>
-      <label class="toggle"><input type="checkbox" ${u.skipped?'checked':''} onchange="toggleSkip('${u.user_id}',this.checked)"><span class="slider"></span></label>
-    </div>
-  `).join('');
+  if(!d.members||!d.members.length){el.innerHTML='<div class="empty">尚無成員紀錄</div>';return}
+  el.innerHTML=d.members.map(u=>'<div class="wl-item"><span>'+u.name+'</span><label class="toggle"><input type="checkbox" '+(u.skipped?'checked':'')+' onchange="toggleSkipUser(\''+chId+'\',\''+u.id+'\',this.checked)"><span class="slider"></span></label></div>').join('');
+}
+async function toggleSkipUser(chId,uid,on){
+  const d=await api('/user/skip','POST',{channel_id:chId,user_id:uid,skip:on});
+  if(d&&d.ok)toast(on?'已跳過翻譯':'已恢復翻譯');
 }
 
-async function toggleSkip(uid,on){
-  const gid=document.getElementById('skipGroupSelect').value;
-  const d=await api('/skip','POST',{group_id:gid,user_id:uid,action:on?'add':'remove'});
-  if(d)toast(on?'已跳過翻譯':'已恢復翻譯');
+// ── Users ──
+async function loadUsers(){
+  const d=await api('/users');
+  if(!d)return;
+  const el=document.getElementById('userList');
+  if(!d.users||!d.users.length){el.innerHTML='<div class="empty">尚無使用者紀錄</div>';return}
+  el.innerHTML=d.users.map(u=>'<div class="card"><div class="card-title"><span>'+u.name+'</span><span class="badge '+(u.lang?'badge-info':'badge-off')+'">'+(u.lang||'未設定')+'</span></div><div class="card-sub">ID: '+u.id+(u.is_admin?' <span style="color:#5865F2">🔑 管理員</span>':'')+'</div></div>').join('');
 }
 
-async function loadStorageStats(){
-  const d=await api('/storage/stats');
+// ── Storage ──
+async function loadStorage(){
+  const d=await api('/storage');
   if(!d)return;
   document.getElementById('storageStats').innerHTML='<div style="font-size:14px">客戶數: <b>'+d.count+'</b></div>';
 }
-
 let storageFileData=null;
 function previewStorage(){
   const f=document.getElementById('storageFile').files[0];
@@ -2316,301 +1985,262 @@ function previewStorage(){
   document.getElementById('storageActions').style.display='block';
   document.getElementById('storagePreview').innerHTML='<div class="card"><div class="card-sub">點「確認更新」上傳並解析</div></div>';
 }
-
 async function uploadStorage(){
   if(!storageFileData){toast('請先選擇檔案');return}
-  const fd=new FormData();
-  fd.append('file',storageFileData);
+  const fd=new FormData();fd.append('file',storageFileData);
   try{
     const r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
     const d=await r.json();
     if(d.error){toast(d.error);return}
     toast(d.message||'更新成功');
-    const ghStatus=d.github?'✅ 已推送 GitHub，Render 將自動部署':'⚠️ GitHub 推送失敗，僅暫時生效';
     document.getElementById('storageActions').style.display='none';
-    document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#06C755;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div><div class="card-sub" style="margin-top:4px">'+ghStatus+'</div></div>';
-    loadStorageStats();
+    document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#06C755;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div></div>';
+    loadStorage();
   }catch(e){toast('上傳失敗: '+e)}
 }
-
 async function downloadJson(){
   try{
     const r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY}});
-    const blob=await r.blob();
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url;a.download='storage_data.json';a.click();
-    URL.revokeObjectURL(url);
-    toast('JSON 已下載');
+    const blob=await r.blob();const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='storage_data.json';a.click();
+    URL.revokeObjectURL(url);toast('JSON 已下載');
   }catch(e){toast('下載失敗')}
 }
 
-// Auto-login from cache
 window.addEventListener('load',()=>{
-  const k=localStorage.getItem('bot_admin_key');
+  const k=localStorage.getItem('dc_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-
-// PWA install
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
-SW_JS = '''const CACHE='bot-admin-v1';
-const URLS=['/admin'];
-self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
-self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});'''
 
-MANIFEST_JSON = json.dumps({
-    "name": "翻譯Bot 管理後台",
-    "short_name": "Bot管理",
+# ─── PWA resources ───────────────────────────────────────
+DC_MANIFEST = json.dumps({
+    "name": "翻譯Bot 管理後台 (Discord)",
+    "short_name": "DC Bot管理",
     "start_url": "/admin",
     "display": "standalone",
     "background_color": "#0a0a0a",
-    "theme_color": "#06C755",
+    "theme_color": "#5865F2",
     "icons": [
         {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
         {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
     ]
 }, ensure_ascii=False)
 
+DC_SW_JS = '''const CACHE='dc-bot-admin-v1';
+const URLS=['/admin'];
+self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
+self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});'''
 
-def commit_storage_to_github(json_data):
-    """Auto-commit storage_data.json to GitHub repo."""
-    if not GITHUB_TOKEN:
-        logger.warning("No GITHUB_TOKEN, skipping GitHub commit")
-        return False
-    try:
-        # Get current file SHA (if exists)
-        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/storage_data.json"
-        req = urllib.request.Request(api_url, headers={
-            "Authorization": "token " + GITHUB_TOKEN,
-            "Accept": "application/vnd.github.v3+json"
-        })
-        sha = None
-        try:
-            with urllib.request.urlopen(req) as resp:
-                existing = json.loads(resp.read().decode())
-                sha = existing.get("sha")
-        except urllib.error.HTTPError as e:
-            if e.code != 404:
-                raise
-        # Commit new content
-        content_b64 = base64.b64encode(json_data.encode("utf-8")).decode("utf-8")
-        body = {
-            "message": "Update storage data via admin panel",
-            "content": content_b64,
-            "branch": "main"
-        }
-        if sha:
-            body["sha"] = sha
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(api_url, data=data, method="PUT", headers={
-            "Authorization": "token " + GITHUB_TOKEN,
-            "Accept": "application/vnd.github.v3+json",
-            "Content-Type": "application/json"
-        })
-        with urllib.request.urlopen(req) as resp:
-            logger.info("Storage data committed to GitHub successfully")
-            return True
-    except Exception as e:
-        logger.error("GitHub commit failed: %s", e)
-        return False
+def generate_icon_png(size=192):
+    """Generate a nice bot icon PNG."""
+    import struct, zlib
+    width = height = size
+    raw = b''
+    center = size / 2
+    r = size * 0.44  # main radius
+    br = size * 0.08  # border radius for rounding
+
+    for y in range(height):
+        raw += b'\x00'  # PNG filter: none
+        for x in range(width):
+            # Normalized coordinates
+            nx = (x - center) / (size / 2)
+            ny = (y - center) / (size / 2)
+
+            # Rounded square mask
+            ax = abs(nx) * 1.1
+            ay = abs(ny) * 1.1
+            in_shape = max(ax, ay) < 0.88 and (ax + ay) < 1.5
+
+            if not in_shape:
+                raw += b'\x0a\x0a\x0a'  # transparent/dark bg
+                continue
+
+            # Gradient: top purple #5865F2 → bottom blue #3B44C4
+            t = (ny + 1) / 2  # 0 to 1 top to bottom
+            pr = int(0x58 * (1 - t) + 0x3B * t)
+            pg = int(0x65 * (1 - t) + 0x44 * t)
+            pb = int(0xF2 * (1 - t) + 0xC4 * t)
+
+            # Draw chat bubble shape (white)
+            bx = nx * 1.3
+            by = (ny - 0.05) * 1.5
+            in_bubble = (bx * bx + by * by) < 0.35
+            # Small triangle at bottom
+            in_tri = (abs(bx) < 0.12 and by > 0.28 and by < 0.52)
+
+            # Draw "中" text area (simplified)
+            tx = nx + 0.22
+            ty = ny - 0.02
+            in_left_char = abs(tx) < 0.18 and abs(ty) < 0.2
+
+            # Draw "ID" text area
+            rx = nx - 0.22
+            ry = ny - 0.02
+            in_right_char = abs(rx) < 0.16 and abs(ry) < 0.18
+
+            # Divider line
+            in_divider = abs(nx) < 0.015 and abs(ny - 0.0) < 0.22
+
+            if in_bubble or in_tri:
+                if in_divider:
+                    raw += bytes([pr, pg, pb])  # divider in gradient color
+                elif in_left_char:
+                    # Left side slightly tinted
+                    raw += b'\xF0\xF0\xFF'
+                elif in_right_char:
+                    raw += b'\xFF\xF0\xF0'
+                else:
+                    raw += b'\xFF\xFF\xFF'  # white bubble
+            else:
+                raw += bytes([pr, pg, pb])  # gradient background
+
+    compressed = zlib.compress(raw, 9)
+    def make_chunk(chunk_type, data):
+        chunk = chunk_type + data
+        return struct.pack('>I', len(data)) + chunk + struct.pack('>I', zlib.crc32(chunk) & 0xffffffff)
+    ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    png = b'\x89PNG\r\n\x1a\n'
+    png += make_chunk(b'IHDR', ihdr_data)
+    png += make_chunk(b'IDAT', compressed)
+    png += make_chunk(b'IEND', b'')
+    return png
+
+# Cache generated icons to avoid regenerating on every request
+_icon_cache = {}
+def get_icon(size):
+    if size not in _icon_cache:
+        _icon_cache[size] = generate_icon_png(size)
+    return _icon_cache[size]
 
 
-def check_admin_key():
+# ─── Web server + Admin API ──────────────────────────────
+async def health_handler(request):
+    return web.Response(text='{"status":"ok"}', content_type="application/json")
+
+async def admin_page_handler(request):
+    return web.Response(text=ADMIN_HTML, content_type="text/html")
+
+def check_admin_key(request):
     key = request.headers.get("X-Admin-Key", "")
     return key == ADMIN_KEY
 
+async def api_admin_status(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return web.json_response({"ok": True})
 
-@app.route("/admin")
-def admin_page():
-    return ADMIN_HTML
+async def api_admin_stats(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    uptime_sec = time.time() - usage_stats["start_time"]
+    hours = int(uptime_sec // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    data = {
+        "uptime": f"{hours}h {minutes}m",
+        "text_translations": usage_stats["text_translations"],
+        "image_translations": usage_stats["image_translations"],
+        "voice_translations": usage_stats["voice_translations"],
+        "work_orders_detected": usage_stats["work_orders_detected"],
+        "slash_commands": usage_stats["slash_commands"],
+        "reaction_translations": usage_stats["reaction_translations"],
+        "context_translations": usage_stats["context_translations"],
+        "cache_count": len(translation_cache),
+        "customer_count": len(STORAGE_LOOKUP),
+        "guilds": len(bot.guilds) if bot.is_ready() else 0,
+        "channels_active": len(channel_settings),
+        "users_known": len(user_lang_prefs),
+    }
+    return web.json_response(data)
 
+async def api_admin_channels(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    channels = []
+    if bot.is_ready():
+        for guild in bot.guilds:
+            for ch in guild.text_channels:
+                ch_id = ch.id
+                if ch_id in channel_settings or ch_id in channel_target_lang or True:
+                    channels.append({
+                        "id": str(ch_id),
+                        "name": ch.name,
+                        "guild": guild.name,
+                        "guild_id": str(guild.id),
+                        "translation_on": channel_settings.get(ch_id, True),
+                        "target_lang": channel_target_lang.get(ch_id, "id"),
+                        "skip_count": len(channel_skip_users.get(ch_id, set())),
+                        "img_on": channel_img_settings.get(ch_id, True),
+                        "voice_on": channel_audio_settings.get(ch_id, True),
+                        "wo_on": channel_wo_settings.get(ch_id, True),
+                    })
+    return web.json_response({"channels": channels})
 
-@app.route("/manifest.json")
-def manifest():
-    return app.response_class(MANIFEST_JSON, mimetype="application/manifest+json")
-
-
-@app.route("/sw.js")
-def service_worker():
-    return app.response_class(SW_JS, mimetype="application/javascript")
-
-
-@app.route("/icon-192.png")
-@app.route("/icon-512.png")
-def admin_icon():
-    # Generate a simple green circle PNG as icon
-    import struct, zlib
-    size = 192 if "192" in request.path else 512
-    # 1x1 green pixel PNG, browser will scale
-    png = (b'\\x89PNG\\r\\n\\x1a\\n'
-           + struct.pack('>I', 13) + b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
-           + struct.pack('>I', zlib.crc32(b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) & 0xffffffff)
-           + struct.pack('>I', 12) + b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')
-           + struct.pack('>I', zlib.crc32(b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')) & 0xffffffff)
-           + struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff))
-    return app.response_class(png, mimetype="image/png")
-
-
-# ─── Admin API ──────────────────────────────────────────
-
-@app.route("/api/admin/status")
-def api_admin_status():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    return jsonify({"ok": True})
-
-
-@app.route("/api/admin/groups", methods=["GET"])
-def api_admin_groups():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    groups = []
-    # Merge from group_tracking + group_settings
-    all_gids = set(group_tracking.keys()) | set(group_settings.keys()) | set(group_target_lang.keys())
-    for gid in all_gids:
-        info = group_tracking.get(gid, {})
-        groups.append({
-            "id": gid,
-            "name": info.get("name", ""),
-            "translation_on": group_settings.get(gid, True),
-            "target_lang": group_target_lang.get(gid, "id"),
-        })
-    groups.sort(key=lambda x: x["name"] or x["id"])
-    return jsonify({"groups": groups})
-
-
-@app.route("/api/admin/groups/leave", methods=["POST"])
-def api_admin_leave_group():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    data = request.get_json() or {}
-    gid = data.get("group_id", "")
-    if not gid:
-        return jsonify({"error": "missing group_id"}), 400
-    try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            api.leave_group(gid)
-    except Exception as e:
-        logger.warning("Leave group failed: %s", e)
-        # Try room
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.leave_room(gid)
-        except Exception:
-            pass
-    # Clean up local data
-    group_tracking.pop(gid, None)
-    group_settings.pop(gid, None)
-    group_target_lang.pop(gid, None)
-    group_img_settings.pop(gid, None)
-    group_audio_settings.pop(gid, None)
-    group_wo_settings.pop(gid, None)
-    group_skip_users.pop(gid, None)
-    group_user_names.pop(gid, None)
-    return jsonify({"message": "已退出群組"})
-
-
-@app.route("/api/admin/dm", methods=["GET", "POST"])
-def api_admin_dm():
-    global dm_master_enabled
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    if request.method == "POST":
-        data = request.get_json() or {}
-        if "master_enabled" in data:
-            dm_master_enabled = bool(data["master_enabled"])
-        return jsonify({"ok": True})
-    # Build known users list with whitelist status
-    known = []
-    for uid, name in dm_known_users.items():
-        known.append({"user_id": uid, "name": name, "whitelisted": uid in dm_whitelist})
-    return jsonify({
-        "master_enabled": dm_master_enabled,
-        "whitelist": list(dm_whitelist),
-        "known_users": known
-    })
-
-
-@app.route("/api/admin/dm/whitelist", methods=["POST"])
-def api_admin_dm_whitelist():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    data = request.get_json() or {}
-    uid = data.get("user_id", "").strip()
-    action = data.get("action", "add")
-    if not uid:
-        return jsonify({"error": "missing user_id"}), 400
-    if action == "add":
-        dm_whitelist.add(uid)
-    elif action == "remove":
-        dm_whitelist.discard(uid)
-    return jsonify({"ok": True, "whitelist": list(dm_whitelist)})
-
-
-@app.route("/api/admin/skip", methods=["GET", "POST"])
-def api_admin_skip():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    if request.method == "POST":
-        data = request.get_json() or {}
-        gid = data.get("group_id", "")
-        uid = data.get("user_id", "")
-        action = data.get("action", "add")
-        if not gid or not uid:
-            return jsonify({"error": "missing group_id or user_id"}), 400
-        if gid not in group_skip_users:
-            group_skip_users[gid] = set()
-        if action == "add":
-            group_skip_users[gid].add(uid)
-            return jsonify({"ok": True})
-        elif action == "remove":
-            group_skip_users[gid].discard(uid)
-            return jsonify({"ok": True})
-    # GET: return all known users in group with skip status
-    gid = request.args.get("group_id", "")
-    skipped = group_skip_users.get(gid, set())
-    names_cache = group_user_names.get(gid, {})
+async def api_admin_users(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
     users = []
-    for uid, dname in names_cache.items():
-        users.append({"user_id": uid, "name": dname, "skipped": uid in skipped})
+    if bot.is_ready():
+        seen = set()
+        for guild in bot.guilds:
+            for member in guild.members:
+                if member.bot or member.id in seen:
+                    continue
+                seen.add(member.id)
+                lang = user_lang_prefs.get(member.id)
+                is_admin = member.guild_permissions.administrator or member.guild_permissions.manage_guild
+                users.append({
+                    "id": str(member.id),
+                    "name": member.display_name,
+                    "lang": lang or "",
+                    "is_admin": is_admin,
+                })
     users.sort(key=lambda x: x["name"])
-    return jsonify({"users": users})
+    return web.json_response({"users": users})
 
+async def api_admin_storage(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return web.json_response({"count": len(STORAGE_LOOKUP)})
 
-@app.route("/api/admin/storage/stats")
-def api_admin_storage_stats():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    return jsonify({"count": len(STORAGE_LOOKUP)})
+async def api_admin_storage_json(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
+    return web.Response(
+        text=json_str, content_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=storage_data.json"}
+    )
 
-
-@app.route("/api/admin/storage/upload", methods=["POST"])
-def api_admin_storage_upload():
+async def api_admin_storage_upload(request):
     global STORAGE_LOOKUP, CUSTOMER_NAMES
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    if 'file' not in request.files:
-        return jsonify({"error": "沒有檔案"}), 400
-    f = request.files['file']
-    if not f.filename:
-        return jsonify({"error": "沒有檔案"}), 400
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
     try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != 'file':
+            return web.json_response({"error": "沒有檔案"}, status=400)
+        data = await field.read()
+        if not data:
+            return web.json_response({"error": "空的檔案"}, status=400)
+
         import openpyxl
-        wb = openpyxl.load_workbook(f, data_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
-            return jsonify({"error": "空的 Excel"}), 400
-        # Auto-detect format: find header row
+            return web.json_response({"error": "空的 Excel"}, status=400)
+
         header = [str(c).strip() if c else "" for c in rows[0]]
         new_data = {}
-        # Try format: Customer | <=3200 | >3200<=4200 | >4200
+
+        # Auto-detect format
         len_cols = {}
         for i, h in enumerate(header):
             hl = h.replace(" ", "")
@@ -2620,9 +2250,9 @@ def api_admin_storage_upload():
                 len_cols[">3200<=4200"] = i
             elif ">4200" in hl:
                 len_cols[">4200"] = i
+
         if len(len_cols) >= 2:
-            # Detected column-based format
-            cust_col = 0  # assume first column is customer
+            cust_col = 0
             for _, row in enumerate(rows[1:], 1):
                 if not row or not row[cust_col]:
                     continue
@@ -2638,7 +2268,6 @@ def api_admin_storage_upload():
                 if entries:
                     new_data[cust] = entries
         else:
-            # Try row-based format: Customer | LengthRange | Zone
             for row in rows[1:]:
                 if not row or len(row) < 3:
                     continue
@@ -2649,40 +2278,252 @@ def api_admin_storage_upload():
                     if cust not in new_data:
                         new_data[cust] = []
                     new_data[cust].append([length_key, zone])
+
         if not new_data:
-            return jsonify({"error": "無法解析 Excel，請確認格式：\n欄A=客戶 欄B=<=3200 欄C=>3200<=4200 欄D=>4200"}), 400
-        # Update in-memory
+            return web.json_response({"error": "無法解析 Excel，請確認格式"}, status=400)
+
         STORAGE_LOOKUP = new_data
         CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
         logger.info("Storage updated via admin: %d customers", len(new_data))
-        # Auto-commit to GitHub for permanent update
+
+        # Auto-commit to GitHub
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_storage_to_github(json_str)
-        msg = "已更新 " + str(len(new_data)) + " 筆客戶"
+        msg = f"已更新 {len(new_data)} 筆客戶"
         if gh_ok:
-            msg += "（已自動推送 GitHub，將永久生效）"
+            msg += "（已自動推送 GitHub）"
         else:
             msg += "（GitHub 推送失敗，僅暫時生效）"
-        return jsonify({"ok": True, "count": len(new_data), "github": gh_ok, "message": msg})
+
+        return web.json_response({"ok": True, "count": len(new_data), "github": gh_ok, "message": msg})
     except Exception as e:
         logger.error("Storage upload error: %s", e)
-        return jsonify({"error": "解析失敗: " + str(e)}), 400
+        return web.json_response({"error": f"解析失敗: {str(e)}"}, status=400)
 
 
-@app.route("/api/admin/storage/json")
-def api_admin_storage_json():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
-    return app.response_class(json_str, mimetype="application/json",
-                              headers={"Content-Disposition": "attachment; filename=storage_data.json"})
+def commit_storage_to_github(json_data):
+    """Auto-commit storage_data.json to GitHub repo."""
+    if not GITHUB_TOKEN:
+        logger.warning("No GITHUB_TOKEN, skipping GitHub commit")
+        return False
+    try:
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/storage_data.json"
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json"
+        })
+        sha = None
+        try:
+            with urllib.request.urlopen(req) as resp:
+                existing = json.loads(resp.read().decode())
+                sha = existing.get("sha")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        content_b64 = base64.b64encode(json_data.encode("utf-8")).decode("utf-8")
+        body = {"message": "Update storage data via admin panel", "content": content_b64, "branch": "main"}
+        if sha:
+            body["sha"] = sha
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(api_url, data=data, method="PUT", headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json",
+            "Content-Type": "application/json"
+        })
+        with urllib.request.urlopen(req) as resp:
+            logger.info("Storage committed to GitHub successfully")
+            return True
+    except Exception as e:
+        logger.error("GitHub commit failed: %s", e)
+        return False
 
 
-@app.route("/health", methods=["GET"])
-def health():
-    return {"status": "ok"}
+# ─── Notes storage (in-memory) ───────────────────────────
+admin_notes = []  # [{content: str, pinned: bool, time: str}]
 
+
+# ─── Admin API: channel/user management ──────────────────
+async def api_admin_channel_toggle(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    ch_id = int(data.get("channel_id", 0))
+    if not ch_id:
+        return web.json_response({"error": "missing channel_id"}, status=400)
+    current = channel_settings.get(ch_id, True)
+    channel_settings[ch_id] = not current
+    return web.json_response({"ok": True, "translation_on": not current})
+
+async def api_admin_channel_lang(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    ch_id = int(data.get("channel_id", 0))
+    lang = data.get("lang", "id")
+    if not ch_id:
+        return web.json_response({"error": "missing channel_id"}, status=400)
+    channel_target_lang[ch_id] = lang
+    return web.json_response({"ok": True, "lang": lang})
+
+async def api_admin_channel_setting(request):
+    """Toggle img/voice/wo per channel."""
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    ch_id = int(data.get("channel_id", 0))
+    setting = data.get("setting", "")
+    if not ch_id or setting not in ("img", "voice", "wo"):
+        return web.json_response({"error": "invalid"}, status=400)
+    settings_map = {"img": channel_img_settings, "voice": channel_audio_settings, "wo": channel_wo_settings}
+    store = settings_map[setting]
+    current = store.get(ch_id, True)
+    store[ch_id] = not current
+    return web.json_response({"ok": True, "value": not current})
+
+async def api_admin_channel_members(request):
+    """Get members of a channel for skip list."""
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    ch_id = int(request.query.get("channel_id", 0))
+    if not ch_id or not bot.is_ready():
+        return web.json_response({"members": []})
+    skipped = channel_skip_users.get(ch_id, set())
+    members = []
+    for guild in bot.guilds:
+        channel = guild.get_channel(ch_id)
+        if channel:
+            for member in guild.members:
+                if not member.bot:
+                    members.append({
+                        "id": str(member.id),
+                        "name": member.display_name,
+                        "skipped": member.id in skipped,
+                    })
+            break
+    members.sort(key=lambda x: x["name"])
+    return web.json_response({"members": members})
+
+async def api_admin_user_skip(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    uid = int(data.get("user_id", 0))
+    ch_id = int(data.get("channel_id", 0))
+    skip = data.get("skip", True)
+    if not uid or not ch_id:
+        return web.json_response({"error": "missing params"}, status=400)
+    if ch_id not in channel_skip_users:
+        channel_skip_users[ch_id] = set()
+    if skip:
+        channel_skip_users[ch_id].add(uid)
+    else:
+        channel_skip_users[ch_id].discard(uid)
+    return web.json_response({"ok": True, "skipped": skip})
+
+async def api_admin_guild_leave(request):
+    """Leave a Discord guild/server."""
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    guild_id = int(data.get("guild_id", 0))
+    if not guild_id or not bot.is_ready():
+        return web.json_response({"error": "invalid"}, status=400)
+    guild = bot.get_guild(guild_id)
+    if guild:
+        try:
+            await guild.leave()
+            return web.json_response({"ok": True, "message": f"已退出 {guild.name}"})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"error": "找不到伺服器"}, status=404)
+
+async def api_admin_notes_get(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return web.json_response({"notes": admin_notes})
+
+async def api_admin_notes_add(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    content = data.get("content", "").strip()
+    pinned = data.get("pinned", False)
+    if not content:
+        return web.json_response({"error": "empty"}, status=400)
+    note = {"content": content, "pinned": pinned, "time": time.strftime("%Y-%m-%d %H:%M")}
+    if pinned:
+        admin_notes.insert(0, note)  # Pinned at top
+    else:
+        admin_notes.append(note)
+    return web.json_response({"ok": True})
+
+async def api_admin_notes_delete(request):
+    if not check_admin_key(request):
+        return web.json_response({"error": "forbidden"}, status=403)
+    data = await request.json()
+    idx = data.get("index", -1)
+    if 0 <= idx < len(admin_notes):
+        admin_notes.pop(idx)
+        return web.json_response({"ok": True})
+    return web.json_response({"error": "invalid index"}, status=400)
+
+async def manifest_handler(request):
+    return web.Response(text=DC_MANIFEST, content_type="application/manifest+json")
+
+async def sw_handler(request):
+    return web.Response(text=DC_SW_JS, content_type="application/javascript")
+
+async def icon_handler(request):
+    # Serve uploaded icon.png from repo, fallback to generated
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+    if os.path.exists(icon_path):
+        with open(icon_path, "rb") as f:
+            return web.Response(body=f.read(), content_type="image/png",
+                                headers={"Cache-Control": "public, max-age=86400"})
+    size = 512 if "512" in request.path else 192
+    return web.Response(body=get_icon(size), content_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/health", health_handler)
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/admin", admin_page_handler)
+    app.router.add_get("/manifest.json", manifest_handler)
+    app.router.add_get("/sw.js", sw_handler)
+    app.router.add_get("/icon-192.png", icon_handler)
+    app.router.add_get("/icon-512.png", icon_handler)
+    app.router.add_get("/api/admin/status", api_admin_status)
+    app.router.add_get("/api/admin/stats", api_admin_stats)
+    app.router.add_get("/api/admin/channels", api_admin_channels)
+    app.router.add_get("/api/admin/users", api_admin_users)
+    app.router.add_get("/api/admin/storage", api_admin_storage)
+    app.router.add_get("/api/admin/storage/json", api_admin_storage_json)
+    app.router.add_post("/api/admin/storage/upload", api_admin_storage_upload)
+    app.router.add_post("/api/admin/channel/toggle", api_admin_channel_toggle)
+    app.router.add_post("/api/admin/channel/lang", api_admin_channel_lang)
+    app.router.add_post("/api/admin/channel/setting", api_admin_channel_setting)
+    app.router.add_get("/api/admin/channel/members", api_admin_channel_members)
+    app.router.add_post("/api/admin/user/skip", api_admin_user_skip)
+    app.router.add_post("/api/admin/guild/leave", api_admin_guild_leave)
+    app.router.add_get("/api/admin/notes", api_admin_notes_get)
+    app.router.add_post("/api/admin/notes", api_admin_notes_add)
+    app.router.add_post("/api/admin/notes/delete", api_admin_notes_delete)
+    port = int(os.environ.get("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Web server started on port {port} (admin: /admin)")
+
+# ─── Run ────────────────────────────────────────────────
+async def main():
+    if not DISCORD_TOKEN:
+        logger.error("DISCORD_TOKEN not set!")
+        exit(1)
+    await start_web_server()
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    asyncio.run(main())
