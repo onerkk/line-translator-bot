@@ -2171,7 +2171,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tabs">
 <div class="tab active" onclick="switchTab('overview')">總覽</div>
 <div class="tab" onclick="switchTab('groups')">群組</div>
-<div class="tab" onclick="switchTab('albums')">相簿＆筆記</div>
 <div class="tab" onclick="switchTab('skip')">白名單</div>
 <div class="tab" onclick="switchTab('users')">使用者</div>
 <div class="tab" onclick="switchTab('storage')">儲區</div>
@@ -2204,15 +2203,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div id="dmWlList" style="margin-top:10px"></div>
 </div>
 <div id="groupList"><div class="empty">載入中...</div></div>
-</div>
-
-<!-- Albums Panel -->
-<div class="panel" id="panel-albums">
-<div class="card" style="text-align:center;padding:40px 20px">
-<div style="font-size:32px;margin-bottom:12px">📸</div>
-<div style="font-weight:600;font-size:15px;margin-bottom:8px">相簿＆筆記功能開發中</div>
-<div class="card-sub">可用於儲存工單照片、班次筆記等</div>
-</div>
 </div>
 
 <!-- Whitelist/Skip Panel -->
@@ -2289,7 +2279,7 @@ function doLogin(){
   });
 }
 
-const TAB_KEYS=['overview','groups','albums','skip','users','storage'];
+const TAB_KEYS=['overview','groups','skip','users','storage'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach((t,i)=>{
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -2520,13 +2510,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=2').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=3').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v2';
+SW_JS = '''const CACHE='bot-admin-v3';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
