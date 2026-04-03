@@ -1432,6 +1432,7 @@ def handle_lang_command(text, group_id):
     if code not in VALID_TARGETS:
         return "\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: id, en, vi, th, ja, ko, ms, tl"
     group_target_lang[group_id] = code
+    save_settings()
     tgt_zh = LANG_NAMES_ZH.get(code, code)
     tgt_flag = LANG_FLAGS.get(code, "")
     return "\u2705 \u5df2\u5207\u63db\uff1a\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587"
@@ -1528,27 +1529,35 @@ def handle_command(text, group_id, user_id=None):
         return get_help_text(group_id)
     elif cmd == "/on":
         group_settings[group_id] = True
+        save_settings()
         return "\u2705 \u7ffb\u8b6f\u5df2\u958b\u555f / Penerjemah aktif"
     elif cmd == "/off":
         group_settings[group_id] = False
+        save_settings()
         return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
     elif cmd == "/img on":
         group_img_settings[group_id] = True
+        save_settings()
         return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan gambar aktif"
     elif cmd == "/img off":
         group_img_settings[group_id] = False
+        save_settings()
         return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
     elif cmd == "/voice on":
         group_audio_settings[group_id] = True
+        save_settings()
         return "\u2705 \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan suara aktif"
     elif cmd == "/voice off":
         group_audio_settings[group_id] = False
+        save_settings()
         return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
     elif cmd == "/wo on":
         group_wo_settings[group_id] = True
+        save_settings()
         return "\u2705 \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u958b\u555f"
     elif cmd == "/wo off":
         group_wo_settings[group_id] = False
+        save_settings()
         return "\u274c \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u95dc\u9589"
     elif cmd == "/skip":
         if not user_id:
@@ -1556,12 +1565,14 @@ def handle_command(text, group_id, user_id=None):
         if group_id not in group_skip_users:
             group_skip_users[group_id] = set()
         group_skip_users[group_id].add(user_id)
+        save_settings()
         return "\u2705 \u5df2\u5c07\u4f60\u52a0\u5165\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f\nAnda ditambahkan ke daftar skip"
     elif cmd == "/unskip":
         if not user_id:
             return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
         if group_id in group_skip_users:
             group_skip_users[group_id].discard(user_id)
+        save_settings()
         return "\u2705 \u5df2\u5c07\u4f60\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f\nAnda dihapus dari daftar skip"
     elif text.strip().lower().startswith("/skipadd"):
         name_query = text.strip()[8:].strip()
@@ -1577,6 +1588,7 @@ def handle_command(text, group_id, user_id=None):
         if group_id not in group_skip_users:
             group_skip_users[group_id] = set()
         group_skip_users[group_id].add(uid)
+        save_settings()
         return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u52a0\u5165\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f"
     elif text.strip().lower().startswith("/skipdel"):
         name_query = text.strip()[8:].strip()
@@ -1591,6 +1603,7 @@ def handle_command(text, group_id, user_id=None):
         uid, dname = matches[0]
         if group_id in group_skip_users:
             group_skip_users[group_id].discard(uid)
+        save_settings()
         return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f"
     elif cmd == "/skiplist":
         skipped = group_skip_users.get(group_id, set())
@@ -1798,6 +1811,7 @@ def handle_message(event):
         except Exception:
             pass
         group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+        save_settings()
 
     if text.startswith("/"):
         cmd_result = handle_command(text, group_id, user_id)
@@ -2049,6 +2063,7 @@ if JoinEvent:
         except Exception:
             pass
         group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
+        save_settings()
 
 
 # ─── Admin Panel ────────────────────────────────────────
@@ -2510,13 +2525,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=3').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=4').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v3';
+SW_JS = '''const CACHE='bot-admin-v4';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -2538,12 +2553,16 @@ MANIFEST_JSON = json.dumps({
 
 def commit_storage_to_github(json_data):
     """Auto-commit storage_data.json to GitHub repo."""
+    return _commit_file_to_github("storage_data.json", json_data, "Update storage data via admin panel")
+
+
+def _commit_file_to_github(filename, content_str, message="Auto-update"):
+    """Generic: commit a file to GitHub repo."""
     if not GITHUB_TOKEN:
-        logger.warning("No GITHUB_TOKEN, skipping GitHub commit")
+        logger.warning("No GITHUB_TOKEN, skipping GitHub commit for %s", filename)
         return False
     try:
-        # Get current file SHA (if exists)
-        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/storage_data.json"
+        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
         req = urllib.request.Request(api_url, headers={
             "Authorization": "token " + GITHUB_TOKEN,
             "Accept": "application/vnd.github.v3+json"
@@ -2556,13 +2575,8 @@ def commit_storage_to_github(json_data):
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
-        # Commit new content
-        content_b64 = base64.b64encode(json_data.encode("utf-8")).decode("utf-8")
-        body = {
-            "message": "Update storage data via admin panel",
-            "content": content_b64,
-            "branch": "main"
-        }
+        content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+        body = {"message": message, "content": content_b64, "branch": "main"}
         if sha:
             body["sha"] = sha
         data = json.dumps(body).encode("utf-8")
@@ -2572,11 +2586,88 @@ def commit_storage_to_github(json_data):
             "Content-Type": "application/json"
         })
         with urllib.request.urlopen(req) as resp:
-            logger.info("Storage data committed to GitHub successfully")
+            logger.info("Committed %s to GitHub", filename)
             return True
     except Exception as e:
-        logger.error("GitHub commit failed: %s", e)
+        logger.error("GitHub commit %s failed: %s", filename, e)
         return False
+
+
+def _load_file_from_github(filename):
+    """Load a JSON file from GitHub repo. Returns parsed dict/list or None."""
+    if not GITHUB_TOKEN:
+        return None
+    try:
+        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json"
+        })
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read().decode())
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            return json.loads(content)
+    except Exception as e:
+        logger.warning("Load %s from GitHub failed: %s", filename, e)
+        return None
+
+
+def save_settings():
+    """Persist all bot settings to GitHub as bot_settings.json."""
+    data = {
+        "group_settings": group_settings,
+        "group_target_lang": group_target_lang,
+        "group_img_settings": group_img_settings,
+        "group_audio_settings": group_audio_settings,
+        "group_wo_settings": group_wo_settings,
+        "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
+        "group_tracking": group_tracking,
+        "group_user_names": group_user_names,
+        "dm_master_enabled": dm_master_enabled,
+        "dm_whitelist": list(dm_whitelist),
+        "dm_known_users": dm_known_users,
+        "dm_target_lang": dm_target_lang,
+        "admin_users": admin_users,
+        "bot_stats": bot_stats,
+    }
+    json_str = json.dumps(data, ensure_ascii=False, indent=2)
+    return _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings")
+
+
+def load_settings():
+    """Load bot settings from GitHub on startup."""
+    global dm_master_enabled, dm_whitelist, dm_known_users, dm_target_lang
+    global group_settings, group_target_lang, group_img_settings, group_audio_settings
+    global group_wo_settings, group_skip_users, group_tracking, group_user_names
+    global admin_users, bot_stats
+    data = _load_file_from_github("bot_settings.json")
+    if not data:
+        logger.info("No bot_settings.json found on GitHub, starting fresh")
+        return
+    try:
+        group_settings.update(data.get("group_settings", {}))
+        group_target_lang.update(data.get("group_target_lang", {}))
+        group_img_settings.update(data.get("group_img_settings", {}))
+        group_audio_settings.update(data.get("group_audio_settings", {}))
+        group_wo_settings.update(data.get("group_wo_settings", {}))
+        for k, v in data.get("group_skip_users", {}).items():
+            group_skip_users[k] = set(v)
+        group_tracking.update(data.get("group_tracking", {}))
+        group_user_names.update(data.get("group_user_names", {}))
+        dm_master_enabled = data.get("dm_master_enabled", True)
+        dm_whitelist = set(data.get("dm_whitelist", []))
+        dm_known_users.update(data.get("dm_known_users", {}))
+        dm_target_lang.update(data.get("dm_target_lang", {}))
+        admin_users.update(data.get("admin_users", {}))
+        bot_stats.update(data.get("bot_stats", {}))
+        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users",
+                     len(group_tracking), len(dm_known_users))
+    except Exception as e:
+        logger.error("Error loading bot settings: %s", e)
+
+
+# Load settings on startup
+load_settings()
 
 
 def check_admin_key():
@@ -2683,6 +2774,7 @@ def api_admin_leave_group():
     group_wo_settings.pop(gid, None)
     group_skip_users.pop(gid, None)
     group_user_names.pop(gid, None)
+    save_settings()
     return jsonify({"message": "已退出群組"})
 
 
@@ -2722,6 +2814,7 @@ def api_admin_group_settings():
         group_audio_settings[gid] = bool(data["voice_on"])
     if "work_order_on" in data:
         group_wo_settings[gid] = bool(data["work_order_on"])
+    save_settings()
     return jsonify({"ok": True})
 
 
@@ -2734,6 +2827,7 @@ def api_admin_dm():
         data = request.get_json() or {}
         if "master_enabled" in data:
             dm_master_enabled = bool(data["master_enabled"])
+        save_settings()
         return jsonify({"ok": True})
     # Build known users list with whitelist status
     known = []
@@ -2759,6 +2853,7 @@ def api_admin_dm_whitelist():
         dm_whitelist.add(uid)
     elif action == "remove":
         dm_whitelist.discard(uid)
+    save_settings()
     return jsonify({"ok": True, "whitelist": list(dm_whitelist)})
 
 
@@ -2777,9 +2872,11 @@ def api_admin_skip():
             group_skip_users[gid] = set()
         if action == "add":
             group_skip_users[gid].add(uid)
+            save_settings()
             return jsonify({"ok": True})
         elif action == "remove":
             group_skip_users[gid].discard(uid)
+            save_settings()
             return jsonify({"ok": True})
     # GET: return all known users in group with skip status
     gid = request.args.get("group_id", "")
@@ -2830,6 +2927,7 @@ def api_admin_users_toggle_admin():
     if uid not in admin_users:
         admin_users[uid] = {}
     admin_users[uid]["is_admin"] = is_admin
+    save_settings()
     return jsonify({"ok": True})
 
 
