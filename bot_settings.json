@@ -1,0 +1,31 @@
+{
+  "group_settings": {},
+  "group_target_lang": {},
+  "group_img_settings": {},
+  "group_audio_settings": {},
+  "group_wo_settings": {},
+  "group_skip_users": {},
+  "group_tracking": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "name": "研磨C班",
+      "joined_at": 1775182429.4926066
+    }
+  },
+  "group_user_names": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+    }
+  },
+  "dm_master_enabled": true,
+  "dm_whitelist": [],
+  "dm_known_users": {},
+  "dm_target_lang": {},
+  "admin_users": {},
+  "bot_stats": {
+    "text_translations": 0,
+    "image_translations": 0,
+    "voice_translations": 0,
+    "work_order_detections": 0,
+    "commands": 0
+  }
+}
