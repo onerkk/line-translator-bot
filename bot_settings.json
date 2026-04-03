@@ -24,7 +24,11 @@
   "dm_whitelist": [],
   "dm_known_users": {},
   "dm_target_lang": {},
-  "admin_users": {},
+  "admin_users": {
+    "Uaf4dc8fc636bc8f6060521c398514dc1": {
+      "is_admin": true
+    }
+  },
   "bot_stats": {
     "text_translations": 0,
     "image_translations": 0,
