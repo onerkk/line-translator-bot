@@ -3,7 +3,9 @@
   "group_target_lang": {},
   "group_img_settings": {},
   "group_audio_settings": {},
-  "group_wo_settings": {},
+  "group_wo_settings": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
   "group_skip_users": {},
   "group_tracking": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
