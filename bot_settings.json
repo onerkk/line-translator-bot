@@ -17,7 +17,8 @@
   },
   "group_user_names": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     }
   },
   "dm_master_enabled": true,
@@ -27,10 +28,13 @@
   "admin_users": {
     "Uaf4dc8fc636bc8f6060521c398514dc1": {
       "is_admin": true
+    },
+    "Ucbc2c71e01fb7b1fc12b756eed45c042": {
+      "is_admin": true
     }
   },
   "bot_stats": {
-    "text_translations": 0,
+    "text_translations": 1,
     "image_translations": 0,
     "voice_translations": 0,
     "work_order_detections": 0,
