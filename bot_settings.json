@@ -6,7 +6,7 @@
   },
   "group_audio_settings": {},
   "group_wo_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": true
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
   "group_skip_users": {},
   "group_tracking": {
@@ -34,8 +34,8 @@
     }
   },
   "bot_stats": {
-    "text_translations": 1,
-    "image_translations": 0,
+    "text_translations": 2,
+    "image_translations": 1,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 0
