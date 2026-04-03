@@ -2341,8 +2341,8 @@ function langSelect(gid,cur){
     LANG_OPTS.map(o=>'<option value="'+o.c+'"'+(o.c===cur?' selected':'')+'>'+o.l+'</option>').join('')+
     '</select></span>';
 }
-function featBadge(label,icon,on){
-  return '<span class="feat-badge '+(on?'on':'off')+'">'+icon+' '+(on?label+'開':label+'關')+'</span>';
+function featBadge(gid,key,label,icon,on){
+  return '<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat(\\''+gid+'\\',\\''+key+'\\','+(!on)+')">'+icon+' '+(on?label+'開':label+'關')+'</span>';
 }
 
 async function loadGroups(){
@@ -2355,14 +2355,14 @@ async function loadGroups(){
     return '<div class="card">'+
       '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+
       (g.name||'(未知群組)')+'</span></div>'+
-      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
+      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat(\\''+g.id+'\\',\\'translation_on\\','+(!g.translation_on)+')">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
       '<span class="card-sub">語言:</span>'+langSelect(g.id,g.target_lang)+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
       '<div class="feat-badges">'+
-      featBadge('圖片','🖼️',g.image_on)+
-      featBadge('語音','🎤',g.voice_on)+
-      featBadge('工單','📋',g.work_order_on)+'</div>'+
+      featBadge(g.id,'image_on','圖片','🖼️',g.image_on)+
+      featBadge(g.id,'voice_on','語音','🎤',g.voice_on)+
+      featBadge(g.id,'work_order_on','工單','📋',g.work_order_on)+'</div>'+
       '<button class="btn btn-red btn-sm" onclick="leaveGroup(\\''+g.id+'\\',\\''+
       (g.name||'').replace(/'/g,"\\\\'")+'\\')">退出群組: '+(g.name||g.id.substring(0,12))+'</button>'+
       '</div>';
@@ -2371,7 +2371,13 @@ async function loadGroups(){
 
 async function setGroupLang(gid,lang){
   const d=await api('/groups/settings','POST',{group_id:gid,target_lang:lang});
-  if(d) toast('語言已更新');
+  if(d){toast('語言已更新');loadGroups()}
+}
+
+async function toggleFeat(gid,key,val){
+  const body={group_id:gid};body[key]=val;
+  const d=await api('/groups/settings','POST',body);
+  if(d){toast('已更新');loadGroups()}
 }
 
 async function leaveGroup(gid,name){
@@ -2525,13 +2531,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=4').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=5').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v4';
+SW_JS = '''const CACHE='bot-admin-v5';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -2613,25 +2619,31 @@ def _load_file_from_github(filename):
 
 
 def save_settings():
-    """Persist all bot settings to GitHub as bot_settings.json."""
-    data = {
-        "group_settings": group_settings,
-        "group_target_lang": group_target_lang,
-        "group_img_settings": group_img_settings,
-        "group_audio_settings": group_audio_settings,
-        "group_wo_settings": group_wo_settings,
-        "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
-        "group_tracking": group_tracking,
-        "group_user_names": group_user_names,
-        "dm_master_enabled": dm_master_enabled,
-        "dm_whitelist": list(dm_whitelist),
-        "dm_known_users": dm_known_users,
-        "dm_target_lang": dm_target_lang,
-        "admin_users": admin_users,
-        "bot_stats": bot_stats,
-    }
-    json_str = json.dumps(data, ensure_ascii=False, indent=2)
-    return _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings")
+    """Persist all bot settings to GitHub as bot_settings.json (background, non-blocking)."""
+    import threading
+    def _do_save():
+        try:
+            data = {
+                "group_settings": group_settings,
+                "group_target_lang": group_target_lang,
+                "group_img_settings": group_img_settings,
+                "group_audio_settings": group_audio_settings,
+                "group_wo_settings": group_wo_settings,
+                "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
+                "group_tracking": group_tracking,
+                "group_user_names": group_user_names,
+                "dm_master_enabled": dm_master_enabled,
+                "dm_whitelist": list(dm_whitelist),
+                "dm_known_users": dm_known_users,
+                "dm_target_lang": dm_target_lang,
+                "admin_users": admin_users,
+                "bot_stats": bot_stats,
+            }
+            json_str = json.dumps(data, ensure_ascii=False, indent=2)
+            _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings")
+        except Exception as e:
+            logger.error("Background save_settings failed: %s", e)
+    threading.Thread(target=_do_save, daemon=True).start()
 
 
 def load_settings():
