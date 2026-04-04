@@ -2986,6 +2986,90 @@ def admin_page():
     return resp
 
 
+@app.route("/debug")
+def debug_page():
+    """Minimal debug page - no SW, no cache."""
+    html = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Debug</title>
+<style>body{background:#000;color:#0f0;font:13px monospace;padding:12px}input,button{font:14px sans-serif;padding:8px 12px;margin:4px;border-radius:6px;border:1px solid #555}input{background:#111;color:#fff;width:200px}button{background:#7c6fef;color:#fff;border:none;cursor:pointer}#log{white-space:pre-wrap;margin-top:12px}</style>
+</head><body>
+<h3>🔧 Bot Debug Panel</h3>
+<div>
+<input id="pw" type="password" placeholder="管理密碼">
+<button onclick="go()">測試登入</button>
+<button onclick="testHealth()">Health</button>
+<button onclick="clearSW()">清除SW快取</button>
+</div>
+<div id="log">等待操作...\n</div>
+<script>
+const L=document.getElementById('log');
+const API=window.location.origin+'/api/admin';
+function log(s){L.textContent+=new Date().toLocaleTimeString()+' '+s+'\\n';L.scrollTop=L.scrollHeight}
+
+async function testHealth(){
+  log('>>> GET /health');
+  try{
+    const r=await fetch('/health');
+    const d=await r.json();
+    log('<<< '+r.status+' '+JSON.stringify(d));
+  }catch(e){log('!!! '+e.message)}
+}
+
+async function go(){
+  const key=document.getElementById('pw').value;
+  if(!key){log('請輸入密碼');return}
+  log('>>> GET /api/admin/status');
+  try{
+    const r=await fetch(API+'/status',{headers:{'X-Admin-Key':key}});
+    log('<<< status: '+r.status);
+    const d=await r.json();
+    log('<<< body: '+JSON.stringify(d));
+    if(d.ok){
+      log('✅ 登入成功! 測試其他API...');
+      log('>>> GET /api/admin/stats');
+      const r2=await fetch(API+'/stats',{headers:{'X-Admin-Key':key}});
+      log('<<< stats: '+r2.status);
+      const d2=await r2.json();
+      log('<<< '+JSON.stringify(d2).substring(0,300));
+      log('>>> GET /api/admin/groups');
+      const r3=await fetch(API+'/groups',{headers:{'X-Admin-Key':key}});
+      log('<<< groups: '+r3.status);
+      const d3=await r3.json();
+      log('<<< '+JSON.stringify(d3).substring(0,300));
+    }
+  }catch(e){log('!!! 錯誤: '+e.message)}
+}
+
+async function clearSW(){
+  log('清除所有 Service Worker...');
+  if('serviceWorker' in navigator){
+    const regs=await navigator.serviceWorker.getRegistrations();
+    log('找到 '+regs.length+' 個 SW');
+    for(const r of regs){
+      await r.unregister();
+      log('已移除: '+r.scope);
+    }
+    log('清除快取...');
+    const keys=await caches.keys();
+    for(const k of keys){
+      await caches.delete(k);
+      log('已刪除快取: '+k);
+    }
+    log('✅ 全部清除完成! 現在可以回 /admin 了');
+  }else{
+    log('此瀏覽器不支援 SW');
+  }
+}
+
+log('Debug頁面載入完成');
+log('API: '+API);
+</script></body></html>'''
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
 @app.route("/manifest.json")
 def manifest():
     return app.response_class(MANIFEST_JSON, mimetype="application/manifest+json")
