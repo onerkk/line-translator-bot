@@ -1920,11 +1920,12 @@ def handle_image(event):
         return
 
     # === Check if this is a work order (製造指示書) ===
-    wo_on = group_wo_settings.get(group_id, True)
-    if wo_on:
-        try:
-            wo_customer = detect_work_order(extracted)
-            if wo_customer:
+    try:
+        wo_customer = detect_work_order(extracted)
+        if wo_customer:
+            # It's a work order — never translate work order content
+            wo_on = group_wo_settings.get(group_id, True)
+            if wo_on:
                 reply = format_storage_for_work_order(wo_customer)
                 if reply:
                     bot_stats["work_order_detections"] += 1
@@ -1934,9 +1935,10 @@ def handle_image(event):
                             reply_token=event.reply_token,
                             messages=[TextMessage(text=reply)]
                         ))
-                    return
-        except Exception as e:
-            logger.error("Work order detection error: %s", e)
+            # Whether storage found or not, skip translation for work orders
+            return
+    except Exception as e:
+        logger.error("Work order detection error: %s", e)
     # === End work order check ===
 
     lang = detect_language(extracted)
@@ -2531,13 +2533,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=5').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=6').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v5';
+SW_JS = '''const CACHE='bot-admin-v6';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
