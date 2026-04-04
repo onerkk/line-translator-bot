@@ -72,10 +72,48 @@ bot_stats = {
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 0,
+    "tokens_prompt": 0,
+    "tokens_completion": 0,
 }
+
+
+def track_tokens(response):
+    """Track token usage from OpenAI API response."""
+    try:
+        if response and hasattr(response, 'usage') and response.usage:
+            bot_stats["tokens_prompt"] += response.usage.prompt_tokens or 0
+            bot_stats["tokens_completion"] += response.usage.completion_tokens or 0
+    except Exception:
+        pass
+
+
+def track_group_usage(group_id, before_prompt, before_completion):
+    """Calculate token diff since snapshot and attribute to group."""
+    dp = bot_stats.get("tokens_prompt", 0) - before_prompt
+    dc = bot_stats.get("tokens_completion", 0) - before_completion
+    if group_id and (dp > 0 or dc > 0):
+        if group_id not in group_api_usage:
+            group_api_usage[group_id] = {"tokens_prompt": 0, "tokens_completion": 0}
+        group_api_usage[group_id]["tokens_prompt"] += dp
+        group_api_usage[group_id]["tokens_completion"] += dc
+
+
+def calc_group_cost_twd(group_id):
+    """Calculate cost in TWD for a group."""
+    u = group_api_usage.get(group_id, {})
+    tp = u.get("tokens_prompt", 0)
+    tc = u.get("tokens_completion", 0)
+    usd = (tp * 0.00000015) + (tc * 0.0000006)
+    return round(usd * USD_TO_TWD, 2)
 
 # Admin users tracking: {user_id: {"is_admin": bool}}
 admin_users = {}
+
+# Per-group API usage tracking: {group_id: {"tokens_prompt": int, "tokens_completion": int}}
+group_api_usage = {}
+
+# USD to TWD rate (approximate)
+USD_TO_TWD = 32.0
 
 # Translation cache: key = (text, src, tgt), value = (result, timestamp)
 translation_cache = {}
@@ -536,10 +574,22 @@ if os.path.exists(_storage_json_path):
         logger.warning("Failed to load storage_data.json, using embedded: %s", _e)
 # Extra customers not in storage Excel but appear in factory chat
 EXTRA_CUSTOMERS = [
+    # 公司/客戶名
     "寶麗金屬", "田華榕", "蘋果", "賽利金屬", "盛昌遠", "曜麟",
     "LOTUS", "LOTUS METAL", "shinko", "wing keung",
+    # 人名/綽號
+    "高侑", "十元", "小麥", "啊堂", "秋情", "政軒", "碩凱", "汶錡",
+    "武駿", "凱銘", "小趙", "阿澤", "法比恩", "山多", "EggEgg", "fang", "Dato潘",
+    "阿添", "小叮噹", "多啦A夢", "潘柏良", "大彭",
 ]
-CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
+
+def rebuild_customer_names():
+    """Rebuild CUSTOMER_NAMES from STORAGE_LOOKUP + EXTRA_CUSTOMERS."""
+    global CUSTOMER_NAMES
+    CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
+
+CUSTOMER_NAMES = []
+rebuild_customer_names()
 
 
 def pre_replace_zh(text):
@@ -752,7 +802,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
             "b) 把/捆=BUNDLE counters. 包2把=packing 2 bundel. "
             "c) 包(verb)=packing NOT wrapping. 高侑的今天包2把都這樣=Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
-            "d) Names(高侑,十元,小麥,啊堂,秋情,政軒,碩凱,汶錡,武駿,凱銘,小趙,阿澤,法比恩,山多,EggEgg,fang,Dato潘)=keep as-is. "
+            "d) Names(" + ",".join(EXTRA_CUSTOMERS) + ")=keep as-is. "
             "e) Customer names=keep as-is, do NOT translate. "
             "f) R+number=round bar diameter(R28.57=bulat 28.57mm). Non-R=hex/special(H26=hex 26mm). "
             "g) S/B=straight bar. E1~E11=cold drawing lines. I1~I21=grinding machines. BF2/3/5=polishing machines. "
@@ -898,6 +948,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             temperature=0.1 if strict_no_source_script or repair_mode else 0.2,
             max_tokens=2000,
         )
+        track_tokens(r)
         result = r.choices[0].message.content.strip()
         result = restore_mentions(result, placeholders)
         # Fix known GPT translation mistakes and restore customer names
@@ -1137,6 +1188,7 @@ def format_storage_for_work_order(customer_name):
             temperature=0.1,
             max_tokens=2000,
         )
+        track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
             return None
@@ -1182,6 +1234,7 @@ def ocr_image_openai(image_base64):
             temperature=0.1,
             max_tokens=2000,
         )
+        track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
             return None
@@ -1293,6 +1346,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
             temperature=0.2,
             max_tokens=3000,
         )
+        track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
             return None, None
@@ -1852,6 +1906,7 @@ def handle_message(event):
     tgt = group_target_lang.get(group_id, "id")
 
     reply = None
+    _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     if lang == "zh":
         result = translate(text_clean, "zh", tgt)
         if result:
@@ -1860,6 +1915,7 @@ def handle_message(event):
         result = translate(text_clean, lang, "zh")
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
+    track_group_usage(group_id, _bp, _bc)
 
     if reply is None:
         return
@@ -1923,6 +1979,7 @@ def handle_image(event):
     tgt = group_target_lang.get(group_id, "id")
 
     # Quick OCR to check if there's text and detect language
+    _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     extracted = ocr_image_openai(img_base64)
     logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
     if not extracted or len(extracted.strip()) < 2:
@@ -1945,6 +2002,7 @@ def handle_image(event):
                             messages=[TextMessage(text=reply)]
                         ))
             # Whether storage found or not, skip translation for work orders
+            track_group_usage(group_id, _bp, _bc)
             return
     except Exception as e:
         logger.error("Work order detection error: %s", e)
@@ -1967,6 +2025,7 @@ def handle_image(event):
         result = translate(extracted, lang, "zh")
 
     if not result:
+        track_group_usage(group_id, _bp, _bc)
         return
 
     reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
@@ -1975,6 +2034,7 @@ def handle_image(event):
     if len(reply) > 5000:
         reply = reply[:4990] + "\n..."
 
+    track_group_usage(group_id, _bp, _bc)
     bot_stats["image_translations"] += 1
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
@@ -2040,6 +2100,7 @@ def handle_audio(event):
     tgt = group_target_lang.get(group_id, "id")
 
     reply = None
+    _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     if lang == "zh":
         result = translate(transcribed, "zh", tgt)
         if result:
@@ -2048,6 +2109,7 @@ def handle_audio(event):
         result = translate(transcribed, lang, "zh")
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
+    track_group_usage(group_id, _bp, _bc)
 
     if reply is None:
         return
@@ -2232,6 +2294,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="stat-card"><div class="stat-value highlight" id="st-groups">0</div><div class="stat-label">💬 群組</div></div>
 <div class="stat-card"><div class="stat-value" id="st-dm-users">0</div><div class="stat-label">👤 DM使用者</div></div>
 </div>
+<!-- API Usage Card -->
+<div class="card" style="margin:16px 16px 0" id="apiUsageCard">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🔑 OpenAI API 用量</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+<div style="font-size:13px;color:#8a8a9a">Tokens（本次啟動）</div>
+<div style="font-size:13px;text-align:right" id="st-tokens">0</div>
+<div style="font-size:13px;color:#8a8a9a">預估花費</div>
+<div style="font-size:13px;text-align:right" id="st-cost">$0.00</div>
+<div style="font-size:13px;color:#8a8a9a">API 餘額</div>
+<div style="font-size:13px;text-align:right" id="st-balance"><span style="color:#5a5a6a">查詢中...</span></div>
+</div>
+</div>
 </div>
 
 <!-- Groups Panel -->
@@ -2264,6 +2338,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <!-- Users Panel -->
 <div class="panel" id="panel-users">
 <div id="usersList"><div class="empty">載入中...</div></div>
+
+<!-- Protected Names Section -->
+<div class="card" style="margin-top:16px">
+<div style="font-weight:700;font-size:15px;margin-bottom:4px">🛡️ 翻譯保護名單</div>
+<div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻（人名、公司名皆可）</div>
+<div style="display:flex;gap:8px;margin-bottom:12px">
+<input id="newNameInput" type="text" placeholder="輸入名字..." onkeydown="if(event.key==='Enter')addName()" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:14px;outline:none">
+<button class="btn btn-primary btn-sm" onclick="addName()">新增</button>
+</div>
+<div id="namesList"></div>
+<div id="namesCount" style="font-size:12px;color:#8a8a9a;margin-top:8px"></div>
+</div>
 </div>
 
 <!-- Storage Panel -->
@@ -2333,11 +2419,11 @@ function switchTab(name){
   if(name==='overview') loadStats();
   if(name==='groups'){loadGroups();loadDM();}
   if(name==='skip') loadGroupSelect();
-  if(name==='users') loadUsers();
+  if(name==='users'){loadUsers();loadNames();}
   if(name==='storage') loadStorageStats();
 }
 
-function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsers();loadStorageStats()}
+function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsers();loadNames();loadStorageStats()}
 
 // ─── Overview ───
 async function loadStats(){
@@ -2354,6 +2440,19 @@ async function loadStats(){
   setStatVal('st-cust',d.customers||0);
   setStatVal('st-groups',d.groups||0);
   setStatVal('st-dm-users',d.dm_users||0);
+  // API usage
+  const tt=d.tokens_total||0;
+  document.getElementById('st-tokens').textContent=tt.toLocaleString();
+  document.getElementById('st-cost').textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
+  const bal=d.openai_balance;
+  const balEl=document.getElementById('st-balance');
+  if(bal&&bal.available!==undefined){
+    balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span><span style="color:#5a5a6a"> / $'+bal.total.toFixed(2)+'</span>';
+  }else if(bal&&bal.limit){
+    balEl.innerHTML='額度上限: $'+bal.limit;
+  }else{
+    balEl.innerHTML='<span style="color:#5a5a6a">無法取得（需帳單權限）</span>';
+  }
 }
 function setStatVal(id,val){
   const el=document.getElementById(id);
@@ -2391,6 +2490,9 @@ async function loadGroups(){
       featBadge(g.id,'image_on','圖片','🖼️',g.image_on)+
       featBadge(g.id,'voice_on','語音','🎤',g.voice_on)+
       featBadge(g.id,'work_order_on','工單','📋',g.work_order_on)+'</div>'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
+      '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
+      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost(\\''+g.id+'\\')">歸零</button></div>'+
       '<button class="btn btn-red btn-sm" onclick="leaveGroup(\\''+g.id+'\\',\\''+
       (g.name||'').replace(/'/g,"\\\\'")+'\\')">退出群組: '+(g.name||g.id.substring(0,12))+'</button>'+
       '</div>';
@@ -2412,6 +2514,12 @@ async function leaveGroup(gid,name){
   if(!confirm('確定退出「'+name+'」？'))return;
   const d=await api('/groups/leave','POST',{group_id:gid});
   if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}
+}
+
+async function resetCost(gid){
+  if(!confirm('確定歸零此群組的累計花費？'))return;
+  const d=await api('/groups/reset-cost','POST',{group_id:gid});
+  if(d){toast('已歸零');loadGroups()}
 }
 
 // ─── DM ───
@@ -2507,6 +2615,34 @@ async function toggleAdmin(uid,on){
   if(d) toast(on?'已設為管理員':'已取消管理員');
 }
 
+// ─── Protected Names ───
+async function loadNames(){
+  const d=await api('/names');
+  if(!d)return;
+  const el=document.getElementById('namesList');
+  const names=d.names||[];
+  document.getElementById('namesCount').textContent='共 '+names.length+' 個保護名稱';
+  if(!names.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
+  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px">'+names.map(n=>
+    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
+    n+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName(\''+n.replace(/'/g,"\\'")+'\')">×</span></span>'
+  ).join('')+'</div>';
+}
+
+async function addName(){
+  const inp=document.getElementById('newNameInput');
+  const name=inp.value.trim();
+  if(!name){toast('請輸入名字');return}
+  const d=await api('/names','POST',{action:'add',name:name});
+  if(d){toast('已新增: '+name);inp.value='';loadNames()}
+}
+
+async function removeName(name){
+  if(!confirm('確定移除「'+name+'」？'))return;
+  const d=await api('/names','POST',{action:'remove',name:name});
+  if(d){toast('已移除: '+name);loadNames()}
+}
+
 // ─── Storage ───
 async function loadStorageStats(){
   const d=await api('/storage/stats');
@@ -2559,13 +2695,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=7').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=11').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v7';
+SW_JS = '''const CACHE='bot-admin-v11';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -2666,6 +2802,8 @@ def save_settings():
                 "dm_target_lang": dm_target_lang,
                 "admin_users": admin_users,
                 "bot_stats": bot_stats,
+                "extra_customers": EXTRA_CUSTOMERS,
+                "group_api_usage": group_api_usage,
             }
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
             _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings")
@@ -2680,6 +2818,7 @@ def load_settings():
     global group_settings, group_target_lang, group_img_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
+    global EXTRA_CUSTOMERS, group_api_usage
     data = _load_file_from_github("bot_settings.json")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -2700,14 +2839,50 @@ def load_settings():
         dm_target_lang.update(data.get("dm_target_lang", {}))
         admin_users.update(data.get("admin_users", {}))
         bot_stats.update(data.get("bot_stats", {}))
-        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users",
-                     len(group_tracking), len(dm_known_users))
+        if "extra_customers" in data:
+            EXTRA_CUSTOMERS = data["extra_customers"]
+            rebuild_customer_names()
+        group_api_usage.update(data.get("group_api_usage", {}))
+        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names",
+                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS))
     except Exception as e:
         logger.error("Error loading bot settings: %s", e)
 
 
 # Load settings on startup
 load_settings()
+
+
+def get_openai_balance():
+    """Try to get OpenAI API remaining balance."""
+    if not OPENAI_KEY:
+        return None
+    try:
+        # Try credit grants (prepaid)
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/dashboard/billing/credit_grants",
+            headers={"Authorization": "Bearer " + OPENAI_KEY}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            total = data.get("total_granted", 0)
+            used = data.get("total_used", 0)
+            available = data.get("total_available", 0)
+            return {"total": total, "used": used, "available": available}
+    except Exception:
+        pass
+    try:
+        # Try subscription endpoint
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/dashboard/billing/subscription",
+            headers={"Authorization": "Bearer " + OPENAI_KEY}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            limit = data.get("hard_limit_usd", 0)
+            return {"limit": limit}
+    except Exception:
+        return None
 
 
 def check_admin_key():
@@ -2779,6 +2954,7 @@ def api_admin_groups():
             "voice_on": group_audio_settings.get(gid, True),
             "work_order_on": group_wo_settings.get(gid, True),
             "skip_count": skip_count,
+            "cost_twd": calc_group_cost_twd(gid),
         })
     groups.sort(key=lambda x: x["name"] or x["id"])
     return jsonify({"groups": groups})
@@ -2823,6 +2999,12 @@ def api_admin_stats():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     uptime = time.time() - bot_start_time
+    # Calculate estimated cost (GPT-4o-mini pricing)
+    tp = bot_stats.get("tokens_prompt", 0)
+    tc = bot_stats.get("tokens_completion", 0)
+    cost = (tp * 0.00000015) + (tc * 0.0000006)
+    # Try to get OpenAI balance
+    balance = get_openai_balance()
     return jsonify({
         "uptime_seconds": int(uptime),
         "text_translations": bot_stats.get("text_translations", 0),
@@ -2833,6 +3015,11 @@ def api_admin_stats():
         "customers": len(STORAGE_LOOKUP),
         "groups": len(set(group_tracking.keys()) | set(group_settings.keys())),
         "dm_users": len(dm_known_users),
+        "tokens_prompt": tp,
+        "tokens_completion": tc,
+        "tokens_total": tp + tc,
+        "estimated_cost_usd": round(cost, 4),
+        "openai_balance": balance,
     })
 
 
@@ -2854,6 +3041,19 @@ def api_admin_group_settings():
         group_audio_settings[gid] = bool(data["voice_on"])
     if "work_order_on" in data:
         group_wo_settings[gid] = bool(data["work_order_on"])
+    save_settings()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/groups/reset-cost", methods=["POST"])
+def api_admin_reset_group_cost():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    gid = data.get("group_id", "")
+    if not gid:
+        return jsonify({"error": "missing group_id"}), 400
+    group_api_usage.pop(gid, None)
     save_settings()
     return jsonify({"ok": True})
 
@@ -2971,6 +3171,32 @@ def api_admin_users_toggle_admin():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/names", methods=["GET", "POST"])
+def api_admin_names():
+    global EXTRA_CUSTOMERS
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "POST":
+        data = request.get_json() or {}
+        action = data.get("action", "add")
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"error": "missing name"}), 400
+        if action == "add":
+            if name not in EXTRA_CUSTOMERS:
+                EXTRA_CUSTOMERS.append(name)
+                rebuild_customer_names()
+                save_settings()
+            return jsonify({"ok": True, "count": len(EXTRA_CUSTOMERS)})
+        elif action == "remove":
+            if name in EXTRA_CUSTOMERS:
+                EXTRA_CUSTOMERS.remove(name)
+                rebuild_customer_names()
+                save_settings()
+            return jsonify({"ok": True, "count": len(EXTRA_CUSTOMERS)})
+    return jsonify({"names": EXTRA_CUSTOMERS, "count": len(EXTRA_CUSTOMERS)})
+
+
 @app.route("/api/admin/storage/stats")
 def api_admin_storage_stats():
     if not check_admin_key():
@@ -3041,7 +3267,7 @@ def api_admin_storage_upload():
             return jsonify({"error": "無法解析 Excel，請確認格式：\n欄A=客戶 欄B=<=3200 欄C=>3200<=4200 欄D=>4200"}), 400
         # Update in-memory
         STORAGE_LOOKUP = new_data
-        CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
+        rebuild_customer_names()
         logger.info("Storage updated via admin: %d customers", len(new_data))
         # Auto-commit to GitHub for permanent update
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
