@@ -2302,8 +2302,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div style="font-size:13px;text-align:right" id="st-tokens">0</div>
 <div style="font-size:13px;color:#8a8a9a">預估花費</div>
 <div style="font-size:13px;text-align:right" id="st-cost">$0.00</div>
-<div style="font-size:13px;color:#8a8a9a">API 餘額</div>
-<div style="font-size:13px;text-align:right" id="st-balance"><span style="color:#5a5a6a">查詢中...</span></div>
 </div>
 </div>
 </div>
@@ -2440,26 +2438,12 @@ async function loadStats(){
   var tt=d.tokens_total||0;
   document.getElementById('st-tokens').textContent=tt.toLocaleString();
   document.getElementById('st-cost').textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
-  loadBalance();
 }
 function setStatVal(id,val){
   var el=document.getElementById(id);
   el.textContent=val;
   if(val>0)el.classList.add('highlight');
   else el.classList.remove('highlight');
-}
-async function loadBalance(){
-  var balEl=document.getElementById('st-balance');
-  try{
-    var d=await api('/balance');
-    if(!d||!d.balance){balEl.textContent='無法取得';return}
-    var bal=d.balance;
-    if(bal.available!==undefined){
-      balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span> / $'+bal.total.toFixed(2);
-    }else if(bal.limit){
-      balEl.textContent='額度: $'+bal.limit;
-    }else{balEl.textContent='無法取得'}
-  }catch(e){balEl.textContent='無法取得'}
 }
 
 var LANG_OPTS=[{c:'id',l:'印尼'},{c:'zh',l:'中文'},{c:'en',l:'英文'},{c:'vi',l:'越南'},{c:'th',l:'泰文'},{c:'ja',l:'日文'},{c:'ko',l:'韓文'},{c:'ms',l:'馬來'},{c:'tl',l:'菲律賓'}];
@@ -2705,7 +2689,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=16').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=17').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -2919,36 +2903,6 @@ except Exception as e:
     logger.error("Startup settings load failed (non-fatal): %s", e)
 
 
-def get_openai_balance():
-    """Try to get OpenAI API remaining balance."""
-    if not OPENAI_KEY:
-        return None
-    try:
-        # Try credit grants (prepaid)
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/dashboard/billing/credit_grants",
-            headers={"Authorization": "Bearer " + OPENAI_KEY}
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode())
-            total = data.get("total_granted", 0)
-            used = data.get("total_used", 0)
-            available = data.get("total_available", 0)
-            return {"total": total, "used": used, "available": available}
-    except Exception:
-        pass
-    try:
-        # Try subscription endpoint
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/dashboard/billing/subscription",
-            headers={"Authorization": "Bearer " + OPENAI_KEY}
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode())
-            limit = data.get("hard_limit_usd", 0)
-            return {"limit": limit}
-    except Exception:
-        return None
 
 
 def check_admin_key():
@@ -3168,14 +3122,6 @@ def api_admin_stats():
         "tokens_total": tp + tc,
         "estimated_cost_usd": round(cost, 4),
     })
-
-
-@app.route("/api/admin/balance")
-def api_admin_balance():
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    balance = get_openai_balance()
-    return jsonify({"balance": balance})
 
 
 @app.route("/api/admin/groups/settings", methods=["POST"])
