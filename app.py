@@ -2380,26 +2380,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <script>
 let KEY='';
 const API=window.location.origin+'/api/admin';
+const FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000)}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
 
-async function api(path,method='GET',body=null){
-  const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
+async function api(path,method,body){
+  method=method||'GET';
+  var opts={method:method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
   if(body)opts.body=JSON.stringify(body);
   try{
-    const r=await fetch(API+path,opts);
+    var r=await fetch(API+path,opts);
     if(r.status===403){toast('密碼錯誤');return null}
     return await r.json();
-  }catch(e){
-    toast('連線失敗: '+e.message);
-    return null;
-  }
+  }catch(e){toast('連線失敗: '+e.message);return null}
 }
 
 function doLogin(){
   KEY=document.getElementById('pwInput').value.trim();
   if(!KEY){toast('請輸入密碼');return}
-  api('/status').then(d=>{
+  api('/status').then(function(d){
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
@@ -2408,14 +2407,13 @@ function doLogin(){
   });
 }
 
-const TAB_KEYS=['overview','groups','skip','users','storage'];
+var TAB_KEYS=['overview','groups','skip','users','storage'];
 function switchTab(name){
-  document.querySelectorAll('.tab').forEach((t,i)=>{
+  document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
   });
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
   document.getElementById('panel-'+name).classList.add('active');
-  // Lazy load
   if(name==='overview') loadStats();
   if(name==='groups'){loadGroups();loadDM();}
   if(name==='skip') loadGroupSelect();
@@ -2425,12 +2423,11 @@ function switchTab(name){
 
 function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsers();loadNames();loadStorageStats()}
 
-// ─── Overview ───
 async function loadStats(){
-  const d=await api('/stats');
+  var d=await api('/stats');
   if(!d)return;
-  const h=Math.floor((d.uptime_seconds||0)/3600);
-  const m=Math.floor(((d.uptime_seconds||0)%3600)/60);
+  var h=Math.floor((d.uptime_seconds||0)/3600);
+  var m=Math.floor(((d.uptime_seconds||0)%3600)/60);
   document.getElementById('st-uptime').textContent=h+'h '+m+'m';
   setStatVal('st-text',d.text_translations||0);
   setStatVal('st-image',d.image_translations||0);
@@ -2440,236 +2437,235 @@ async function loadStats(){
   setStatVal('st-cust',d.customers||0);
   setStatVal('st-groups',d.groups||0);
   setStatVal('st-dm-users',d.dm_users||0);
-  // API usage
-  const tt=d.tokens_total||0;
+  var tt=d.tokens_total||0;
   document.getElementById('st-tokens').textContent=tt.toLocaleString();
   document.getElementById('st-cost').textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
-  // Fetch balance separately (non-blocking)
   loadBalance();
 }
-async function loadBalance(){
-  const balEl=document.getElementById('st-balance');
-  try{
-    const d=await api('/balance');
-    if(!d||!d.balance){balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';return}
-    const bal=d.balance;
-    if(bal.available!==undefined){
-      balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span><span style="color:#5a5a6a"> / $'+bal.total.toFixed(2)+'</span>';
-    }else if(bal.limit){
-      balEl.innerHTML='額度: $'+bal.limit;
-    }else{
-      balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';
-    }
-  }catch(e){
-    balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';
-  }
-}
 function setStatVal(id,val){
-  const el=document.getElementById(id);
+  var el=document.getElementById(id);
   el.textContent=val;
-  if(val>0) el.classList.add('highlight');
+  if(val>0)el.classList.add('highlight');
   else el.classList.remove('highlight');
 }
+async function loadBalance(){
+  var balEl=document.getElementById('st-balance');
+  try{
+    var d=await api('/balance');
+    if(!d||!d.balance){balEl.textContent='無法取得';return}
+    var bal=d.balance;
+    if(bal.available!==undefined){
+      balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span> / $'+bal.total.toFixed(2);
+    }else if(bal.limit){
+      balEl.textContent='額度: $'+bal.limit;
+    }else{balEl.textContent='無法取得'}
+  }catch(e){balEl.textContent='無法取得'}
+}
 
-// ─── Groups ───
-const LANG_OPTS=[{c:'id',l:'印尼'},{c:'zh',l:'中文'},{c:'en',l:'英文'},{c:'vi',l:'越南'},{c:'th',l:'泰文'},{c:'ja',l:'日文'},{c:'ko',l:'韓文'},{c:'ms',l:'馬來'},{c:'tl',l:'菲律賓'}];
-function langSelect(gid,cur){
-  return '<span class="sel-wrap"><select class="sel" onchange="setGroupLang(\\''+gid+'\\',this.value)">'+
-    LANG_OPTS.map(o=>'<option value="'+o.c+'"'+(o.c===cur?' selected':'')+'>'+o.l+'</option>').join('')+
-    '</select></span>';
-}
-function featBadge(idx,key,label,icon,on){
-  return '<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeatIdx('+idx+',\''+key+'\','+(!on)+')">'+icon+' '+(on?label+'開':label+'關')+'</span>';
-}
+var LANG_OPTS=[{c:'id',l:'印尼'},{c:'zh',l:'中文'},{c:'en',l:'英文'},{c:'vi',l:'越南'},{c:'th',l:'泰文'},{c:'ja',l:'日文'},{c:'ko',l:'韓文'},{c:'ms',l:'馬來'},{c:'tl',l:'菲律賓'}];
 
 var _groupList=[];
 async function loadGroups(){
-  const d=await api('/groups');
+  var d=await api('/groups');
   if(!d)return;
   _groupList=d.groups||[];
-  const el=document.getElementById('groupList');
+  var el=document.getElementById('groupList');
   if(!_groupList.length){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
-  el.innerHTML=_groupList.map(function(g,i){
+  var html='';
+  for(var i=0;i<_groupList.length;i++){
+    var g=_groupList[i];
     var skipCt=g.skip_count||0;
-    return '<div class="card">'+
-      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+
-      (g.name||'(未知群組)')+'</span></div>'+
-      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeatIdx('+i+',\'translation_on\','+(!g.translation_on)+')">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
+    var langOpts='';
+    for(var j=0;j<LANG_OPTS.length;j++){
+      var o=LANG_OPTS[j];
+      langOpts+='<option value="'+o.c+'"'+(o.c===g.target_lang?' selected':'')+'>'+o.l+'</option>';
+    }
+    html+='<div class="card">'+
+      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span></div>'+
+      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
-      '<span class="card-sub">語言:</span>'+langSelect(g.id,g.target_lang)+
+      '<span class="card-sub">語言:</span>'+
+      '<span class="sel-wrap"><select class="sel" onchange="setGroupLang('+i+',this.value)">'+langOpts+'</select></span>'+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
       '<div class="feat-badges">'+
-      featBadge(i,'image_on','圖片','🖼️',g.image_on)+
-      featBadge(i,'voice_on','語音','🎤',g.voice_on)+
-      featBadge(i,'work_order_on','工單','📋',g.work_order_on)+'</div>'+
+      '<span class="feat-badge '+(g.image_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',1)">🖼️ '+(g.image_on?'圖片開':'圖片關')+'</span>'+
+      '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
+      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span></div>'+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
-      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCostIdx('+i+')">歸零</button></div>'+
-      '<button class="btn btn-red btn-sm" onclick="leaveGroupIdx('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button>'+
-      '</div>';
-  }).join('');
+      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
+      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button></div>';
+  }
+  el.innerHTML=html;
 }
 
-async function setGroupLang(gid,lang){
-  const d=await api('/groups/settings','POST',{group_id:gid,target_lang:lang});
-  if(d){toast('語言已更新');loadGroups()}
-}
-
-async function toggleFeatIdx(idx,key,val){
+function setGroupLang(idx,lang){
   var g=_groupList[idx];if(!g)return;
-  var body={group_id:g.id};body[key]=val;
-  const d=await api('/groups/settings','POST',body);
-  if(d){toast('已更新');loadGroups()}
+  api('/groups/settings','POST',{group_id:g.id,target_lang:lang}).then(function(d){if(d){toast('語言已更新');loadGroups()}});
 }
-
-async function leaveGroupIdx(idx){
+function toggleFeat(idx,keyIdx){
+  var g=_groupList[idx];if(!g)return;
+  var key=FEAT_KEYS[keyIdx];
+  var cur=g[key];
+  var body={group_id:g.id};body[key]=!cur;
+  api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+}
+function leaveGroup(idx){
   var g=_groupList[idx];if(!g)return;
   if(!confirm('確定退出「'+(g.name||g.id)+'」？'))return;
-  const d=await api('/groups/leave','POST',{group_id:g.id});
-  if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}
+  api('/groups/leave','POST',{group_id:g.id}).then(function(d){if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}});
 }
-
-async function resetCostIdx(idx){
+function resetCost(idx){
   var g=_groupList[idx];if(!g)return;
   if(!confirm('確定歸零累計花費？'))return;
-  const d=await api('/groups/reset-cost','POST',{group_id:g.id});
-  if(d){toast('已歸零');loadGroups()}
+  api('/groups/reset-cost','POST',{group_id:g.id}).then(function(d){if(d){toast('已歸零');loadGroups()}});
 }
 
-// ─── DM ───
+var _dmUsers=[];
 async function loadDM(){
-  const d=await api('/dm');
+  var d=await api('/dm');
   if(!d)return;
   document.getElementById('dmToggle').checked=d.master_enabled;
-  const el=document.getElementById('dmWlList');
-  const users=d.known_users||[];
-  if(!users.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無人私訊過 Bot</div>';return}
-  el.innerHTML=users.map(u=>
-    '<div class="wl-item" style="border-color:#2a2a3e"><span>'+u.name+'</span>'+
+  _dmUsers=d.known_users||[];
+  var el=document.getElementById('dmWlList');
+  if(!_dmUsers.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無人私訊過 Bot</div>';return}
+  var html='';
+  for(var i=0;i<_dmUsers.length;i++){
+    var u=_dmUsers[i];
+    html+='<div class="wl-item" style="border-color:#2a2a3e"><span>'+u.name+'</span>'+
     '<label class="toggle"><input type="checkbox" '+(u.whitelisted?'checked':'')+
-    ' onchange="toggleDmWl(\\''+u.user_id+'\\',this.checked)"><span class="slider"></span></label></div>'
-  ).join('');
+    ' onchange="toggleDmWl('+i+',this.checked)"><span class="slider"></span></label></div>';
+  }
+  el.innerHTML=html;
 }
-
 async function toggleDM(){
-  const on=document.getElementById('dmToggle').checked;
-  const d=await api('/dm','POST',{master_enabled:on});
+  var on=document.getElementById('dmToggle').checked;
+  var d=await api('/dm','POST',{master_enabled:on});
   if(d) toast(on?'DM 已開啟':'DM 已關閉');
 }
-
-async function toggleDmWl(uid,on){
-  const d=await api('/dm/whitelist','POST',{user_id:uid,action:on?'add':'remove'});
-  if(d) toast(on?'已加入白名單':'已移出白名單');
+function toggleDmWl(idx,on){
+  var u=_dmUsers[idx];if(!u)return;
+  api('/dm/whitelist','POST',{user_id:u.user_id,action:on?'add':'remove'}).then(function(d){
+    if(d) toast(on?'已加入白名單':'已移出白名單');
+  });
 }
 
-// ─── Whitelist/Skip ───
 async function loadGroupSelect(){
-  const d=await api('/groups');
+  var d=await api('/groups');
   if(!d)return;
-  const sel=document.getElementById('skipGroupSelect');
-  const cur=sel.value;
+  var sel=document.getElementById('skipGroupSelect');
+  var cur=sel.value;
   sel.innerHTML='<option value="">選擇群組...</option>';
-  (d.groups||[]).forEach(g=>{
-    const opt=document.createElement('option');
+  var groups=d.groups||[];
+  for(var i=0;i<groups.length;i++){
+    var g=groups[i];
+    var opt=document.createElement('option');
     opt.value=g.id;opt.textContent='#'+(g.name||g.id.substring(0,16));
     sel.appendChild(opt);
-  });
+  }
   if(cur)sel.value=cur;
 }
 
+var _skipUsers=[];
 async function loadSkipList(){
-  const gid=document.getElementById('skipGroupSelect').value;
-  const el=document.getElementById('skipListContent');
+  var gid=document.getElementById('skipGroupSelect').value;
+  var el=document.getElementById('skipListContent');
   if(!gid){el.innerHTML='<div class="empty">請先選擇群組</div>';return}
-  const d=await api('/skip?group_id='+gid);
+  var d=await api('/skip?group_id='+gid);
   if(!d)return;
-  const users=d.users||[];
-  if(!users.length){
+  _skipUsers=d.users||[];
+  if(!_skipUsers.length){
     el.innerHTML='<div class="empty">尚無成員紀錄<br>成員在群組發訊息後會自動出現</div>';
     return;
   }
-  el.innerHTML=users.map(u=>
-    '<div class="wl-item"><span style="font-size:15px">'+u.name+'</span>'+
+  var html='';
+  for(var i=0;i<_skipUsers.length;i++){
+    var u=_skipUsers[i];
+    html+='<div class="wl-item"><span style="font-size:15px">'+u.name+'</span>'+
     '<label class="toggle"><input type="checkbox" '+(u.skipped?'checked':'')+
-    ' onchange="toggleSkip(\\''+u.user_id+'\\',this.checked)"><span class="slider"></span></label></div>'
-  ).join('');
+    ' onchange="toggleSkip('+i+',this.checked)"><span class="slider"></span></label></div>';
+  }
+  el.innerHTML=html;
+}
+function toggleSkip(idx,on){
+  var gid=document.getElementById('skipGroupSelect').value;
+  var u=_skipUsers[idx];if(!u)return;
+  api('/skip','POST',{group_id:gid,user_id:u.user_id,action:on?'add':'remove'}).then(function(d){
+    if(d) toast(on?'已跳過翻譯':'已恢復翻譯');
+  });
 }
 
-async function toggleSkip(uid,on){
-  const gid=document.getElementById('skipGroupSelect').value;
-  const d=await api('/skip','POST',{group_id:gid,user_id:uid,action:on?'add':'remove'});
-  if(d) toast(on?'已跳過翻譯':'已恢復翻譯');
-}
-
-// ─── Users ───
+var _allUsers=[];
 async function loadUsers(){
-  const d=await api('/users');
+  var d=await api('/users');
   if(!d)return;
-  const el=document.getElementById('usersList');
-  const users=d.users||[];
-  if(!users.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
-  el.innerHTML=users.map(u=>{
-    const langBadge=u.target_lang?
-      '<span class="badge badge-on">'+(LANG_OPTS.find(o=>o.c===u.target_lang)||{l:u.target_lang}).l+'</span>':
+  _allUsers=d.users||[];
+  var el=document.getElementById('usersList');
+  if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
+  var html='';
+  for(var i=0;i<_allUsers.length;i++){
+    var u=_allUsers[i];
+    var langBadge=u.target_lang?
+      '<span class="badge badge-on">'+(LANG_OPTS.find(function(o){return o.c===u.target_lang})||{l:u.target_lang}).l+'</span>':
       '<span class="badge badge-yellow">未設定</span>';
-    return '<div class="user-card">'+
+    html+='<div class="user-card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+
       langBadge+'</div>'+
       '<div class="user-admin-row">'+
       '<span class="admin-label">🔑 管理員</span>'+
       '<label class="toggle"><input type="checkbox" '+(u.is_admin?'checked':'')+
-      ' onchange="toggleAdmin(\\''+u.user_id+'\\',this.checked)"><span class="slider"></span></label>'+
+      ' onchange="toggleAdmin('+i+',this.checked)"><span class="slider"></span></label>'+
       '</div></div>';
-  }).join('');
+  }
+  el.innerHTML=html;
+}
+function toggleAdmin(idx,on){
+  var u=_allUsers[idx];if(!u)return;
+  api('/users/admin','POST',{user_id:u.user_id,is_admin:on}).then(function(d){
+    if(d) toast(on?'已設為管理員':'已取消管理員');
+  });
 }
 
-async function toggleAdmin(uid,on){
-  const d=await api('/users/admin','POST',{user_id:uid,is_admin:on});
-  if(d) toast(on?'已設為管理員':'已取消管理員');
-}
-
-// ─── Protected Names ───
 var _protectedNames=[];
 async function loadNames(){
-  const d=await api('/names');
+  var d=await api('/names');
   if(!d)return;
   _protectedNames=d.names||[];
-  const el=document.getElementById('namesList');
+  var el=document.getElementById('namesList');
   document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個保護名稱';
   if(!_protectedNames.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
-  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px">'+_protectedNames.map(function(n,i){
-    return '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
-    n+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
-  }).join('')+'</div>';
+  var html='<div style="display:flex;flex-wrap:wrap;gap:8px">';
+  for(var i=0;i<_protectedNames.length;i++){
+    html+='<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
+    _protectedNames[i]+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
 }
-
 async function addName(){
-  const inp=document.getElementById('newNameInput');
-  const name=inp.value.trim();
+  var inp=document.getElementById('newNameInput');
+  var name=inp.value.trim();
   if(!name){toast('請輸入名字');return}
-  const d=await api('/names','POST',{action:'add',name:name});
+  var d=await api('/names','POST',{action:'add',name:name});
   if(d){toast('已新增: '+name);inp.value='';loadNames()}
 }
-
-async function removeName(idx){
+function removeName(idx){
   var name=_protectedNames[idx];
   if(!name)return;
   if(!confirm('確定移除「'+name+'」？'))return;
-  const d=await api('/names','POST',{action:'remove',name:name});
-  if(d){toast('已移除: '+name);loadNames()}
+  api('/names','POST',{action:'remove',name:name}).then(function(d){if(d){toast('已移除: '+name);loadNames()}});
 }
 
-// ─── Storage ───
 async function loadStorageStats(){
-  const d=await api('/storage/stats');
+  var d=await api('/storage/stats');
   if(!d)return;
   document.getElementById('storageStats').innerHTML='客戶數: <strong style="color:#7c6fef">'+d.count+'</strong>';
 }
 
-let storageFileData=null;
+var storageFileData=null;
 function previewStorage(){
-  const f=document.getElementById('storageFile').files[0];
+  var f=document.getElementById('storageFile').files[0];
   if(!f)return;
   document.getElementById('storageFileName').textContent='📄 '+f.name;
   storageFileData=f;
@@ -2679,14 +2675,14 @@ function previewStorage(){
 
 async function uploadStorage(){
   if(!storageFileData){toast('請先選擇檔案');return}
-  const fd=new FormData();
+  var fd=new FormData();
   fd.append('file',storageFileData);
   try{
-    const r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
-    const d=await r.json();
+    var r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    var d=await r.json();
     if(d.error){toast(d.error);return}
     toast(d.message||'更新成功');
-    const ghStatus=d.github?'✅ 已推送 GitHub，Render 將自動部署':'⚠️ GitHub 推送失敗，僅暫時生效';
+    var ghStatus=d.github?'✅ 已推送 GitHub，Render 將自動部署':'⚠️ GitHub 推送失敗，僅暫時生效';
     document.getElementById('storageActions').style.display='none';
     document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#43b581;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div><div class="card-sub" style="margin-top:4px">'+ghStatus+'</div></div>';
     loadStorageStats();
@@ -2695,24 +2691,21 @@ async function uploadStorage(){
 
 async function downloadJson(){
   try{
-    const r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY}});
-    const blob=await r.blob();
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
+    var r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY}});
+    var blob=await r.blob();
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
     a.href=url;a.download='storage_data.json';a.click();
     URL.revokeObjectURL(url);
     toast('JSON 已下載');
   }catch(e){toast('下載失敗')}
 }
 
-// Auto-login from cache
-window.addEventListener('load',()=>{
-  const k=localStorage.getItem('bot_admin_key');
+window.addEventListener('load',function(){
+  var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-
-// PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=15').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=16').catch(function(){})}
 </script>
 </body>
 </html>'''
