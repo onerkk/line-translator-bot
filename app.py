@@ -2444,14 +2444,24 @@ async function loadStats(){
   const tt=d.tokens_total||0;
   document.getElementById('st-tokens').textContent=tt.toLocaleString();
   document.getElementById('st-cost').textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
-  const bal=d.openai_balance;
+  // Fetch balance separately (non-blocking)
+  loadBalance();
+}
+async function loadBalance(){
   const balEl=document.getElementById('st-balance');
-  if(bal&&bal.available!==undefined){
-    balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span><span style="color:#5a5a6a"> / $'+bal.total.toFixed(2)+'</span>';
-  }else if(bal&&bal.limit){
-    balEl.innerHTML='額度上限: $'+bal.limit;
-  }else{
-    balEl.innerHTML='<span style="color:#5a5a6a">無法取得（需帳單權限）</span>';
+  try{
+    const d=await api('/balance');
+    if(!d||!d.balance){balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';return}
+    const bal=d.balance;
+    if(bal.available!==undefined){
+      balEl.innerHTML='<span style="color:#43b581;font-weight:600">$'+bal.available.toFixed(2)+'</span><span style="color:#5a5a6a"> / $'+bal.total.toFixed(2)+'</span>';
+    }else if(bal.limit){
+      balEl.innerHTML='額度: $'+bal.limit;
+    }else{
+      balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';
+    }
+  }catch(e){
+    balEl.innerHTML='<span style="color:#5a5a6a">無法取得</span>';
   }
 }
 function setStatVal(id,val){
@@ -2695,13 +2705,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=11').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=12').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v11';
+SW_JS = '''const CACHE='bot-admin-v12';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -2863,7 +2873,7 @@ def get_openai_balance():
             "https://api.openai.com/v1/dashboard/billing/credit_grants",
             headers={"Authorization": "Bearer " + OPENAI_KEY}
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
             total = data.get("total_granted", 0)
             used = data.get("total_used", 0)
@@ -2877,7 +2887,7 @@ def get_openai_balance():
             "https://api.openai.com/v1/dashboard/billing/subscription",
             headers={"Authorization": "Bearer " + OPENAI_KEY}
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
             limit = data.get("hard_limit_usd", 0)
             return {"limit": limit}
@@ -3003,8 +3013,6 @@ def api_admin_stats():
     tp = bot_stats.get("tokens_prompt", 0)
     tc = bot_stats.get("tokens_completion", 0)
     cost = (tp * 0.00000015) + (tc * 0.0000006)
-    # Try to get OpenAI balance
-    balance = get_openai_balance()
     return jsonify({
         "uptime_seconds": int(uptime),
         "text_translations": bot_stats.get("text_translations", 0),
@@ -3019,8 +3027,15 @@ def api_admin_stats():
         "tokens_completion": tc,
         "tokens_total": tp + tc,
         "estimated_cost_usd": round(cost, 4),
-        "openai_balance": balance,
     })
+
+
+@app.route("/api/admin/balance")
+def api_admin_balance():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    balance = get_openai_balance()
+    return jsonify({"balance": balance})
 
 
 @app.route("/api/admin/groups/settings", methods=["POST"])
