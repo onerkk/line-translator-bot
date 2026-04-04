@@ -2705,13 +2705,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=12').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=13').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v12';
+SW_JS = '''const CACHE='bot-admin-v13';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -2736,27 +2736,27 @@ def commit_storage_to_github(json_data):
     return _commit_file_to_github("storage_data.json", json_data, "Update storage data via admin panel")
 
 
-def _commit_file_to_github(filename, content_str, message="Auto-update"):
+def _commit_file_to_github(filename, content_str, message="Auto-update", branch="main"):
     """Generic: commit a file to GitHub repo."""
     if not GITHUB_TOKEN:
         logger.warning("No GITHUB_TOKEN, skipping GitHub commit for %s", filename)
         return False
     try:
         api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
-        req = urllib.request.Request(api_url, headers={
+        req = urllib.request.Request(api_url + "?ref=" + branch, headers={
             "Authorization": "token " + GITHUB_TOKEN,
             "Accept": "application/vnd.github.v3+json"
         })
         sha = None
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 existing = json.loads(resp.read().decode())
                 sha = existing.get("sha")
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
         content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
-        body = {"message": message, "content": content_b64, "branch": "main"}
+        body = {"message": message, "content": content_b64, "branch": branch}
         if sha:
             body["sha"] = sha
         data = json.dumps(body).encode("utf-8")
@@ -2765,36 +2765,88 @@ def _commit_file_to_github(filename, content_str, message="Auto-update"):
             "Accept": "application/vnd.github.v3+json",
             "Content-Type": "application/json"
         })
-        with urllib.request.urlopen(req) as resp:
-            logger.info("Committed %s to GitHub", filename)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info("Committed %s to GitHub (%s)", filename, branch)
             return True
     except Exception as e:
         logger.error("GitHub commit %s failed: %s", filename, e)
         return False
 
 
-def _load_file_from_github(filename):
+def _ensure_data_branch():
+    """Create 'data' branch if it doesn't exist."""
+    if not GITHUB_TOKEN:
+        return
+    try:
+        # Check if branch exists
+        url = "https://api.github.com/repos/" + GITHUB_REPO + "/branches/data"
+        req = urllib.request.Request(url, headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json"
+        })
+        urllib.request.urlopen(req, timeout=5)
+        return  # branch exists
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            return
+    except Exception:
+        return
+    try:
+        # Get main branch SHA
+        url = "https://api.github.com/repos/" + GITHUB_REPO + "/git/refs/heads/main"
+        req = urllib.request.Request(url, headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json"
+        })
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            main_data = json.loads(resp.read().decode())
+            sha = main_data["object"]["sha"]
+        # Create data branch
+        url = "https://api.github.com/repos/" + GITHUB_REPO + "/git/refs"
+        body = json.dumps({"ref": "refs/heads/data", "sha": sha}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Authorization": "token " + GITHUB_TOKEN,
+            "Accept": "application/vnd.github.v3+json",
+            "Content-Type": "application/json"
+        })
+        urllib.request.urlopen(req, timeout=5)
+        logger.info("Created 'data' branch on GitHub")
+    except Exception as e:
+        logger.error("Failed to create data branch: %s", e)
+
+
+def _load_file_from_github(filename, branch="main"):
     """Load a JSON file from GitHub repo. Returns parsed dict/list or None."""
     if not GITHUB_TOKEN:
         return None
     try:
-        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
+        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename + "?ref=" + branch
         req = urllib.request.Request(api_url, headers={
             "Authorization": "token " + GITHUB_TOKEN,
             "Accept": "application/vnd.github.v3+json"
         })
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read().decode())
             content = base64.b64decode(data["content"]).decode("utf-8")
             return json.loads(content)
     except Exception as e:
-        logger.warning("Load %s from GitHub failed: %s", filename, e)
+        logger.warning("Load %s from GitHub (%s) failed: %s", filename, branch, e)
         return None
 
 
+_last_save_time = 0
+_save_lock = None
+
 def save_settings():
-    """Persist all bot settings to GitHub as bot_settings.json (background, non-blocking)."""
+    """Persist all bot settings to GitHub (background, throttled to max once per 30s)."""
+    global _last_save_time, _save_lock
     import threading
+    if _save_lock is None:
+        _save_lock = threading.Lock()
+    now = time.time()
+    if now - _last_save_time < 30:
+        return  # throttle: skip if saved less than 30s ago
+    _last_save_time = now
     def _do_save():
         try:
             data = {
@@ -2816,7 +2868,7 @@ def save_settings():
                 "group_api_usage": group_api_usage,
             }
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
-            _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings")
+            _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
         except Exception as e:
             logger.error("Background save_settings failed: %s", e)
     threading.Thread(target=_do_save, daemon=True).start()
@@ -2829,7 +2881,7 @@ def load_settings():
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage
-    data = _load_file_from_github("bot_settings.json")
+    data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
         return
@@ -2859,8 +2911,12 @@ def load_settings():
         logger.error("Error loading bot settings: %s", e)
 
 
-# Load settings on startup
-load_settings()
+# Ensure data branch exists and load settings on startup
+try:
+    _ensure_data_branch()
+    load_settings()
+except Exception as e:
+    logger.error("Startup settings load failed (non-fatal): %s", e)
 
 
 def get_openai_balance():
