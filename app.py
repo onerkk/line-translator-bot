@@ -2375,7 +2375,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div><!-- mainPage -->
 </div><!-- app -->
 
-<div id="debugLog" style="position:fixed;bottom:0;left:0;right:0;padding:8px 12px;background:#111;border-top:1px solid #333;font-family:monospace;font-size:11px;color:#0f0;white-space:pre-wrap;max-height:150px;overflow-y:auto;z-index:999"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2387,17 +2386,11 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 async function api(path,method='GET',body=null){
   const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
   if(body)opts.body=JSON.stringify(body);
-  const dbg=document.getElementById('debugLog');
   try{
-    dbg.textContent+='[API] '+method+' '+path+'\\n';
     const r=await fetch(API+path,opts);
-    dbg.textContent+='[RES] '+r.status+' '+r.statusText+'\\n';
     if(r.status===403){toast('密碼錯誤');return null}
-    const d=await r.json();
-    dbg.textContent+='[OK] '+path+'\\n';
-    return d;
+    return await r.json();
   }catch(e){
-    dbg.textContent+='[ERR] '+path+': '+e.message+'\\n';
     toast('連線失敗: '+e.message);
     return null;
   }
@@ -2406,18 +2399,12 @@ async function api(path,method='GET',body=null){
 function doLogin(){
   KEY=document.getElementById('pwInput').value.trim();
   if(!KEY){toast('請輸入密碼');return}
-  const dbg=document.getElementById('debugLog');
-  dbg.textContent='[LOGIN] 開始登入...\\n';
   api('/status').then(d=>{
-    dbg.textContent+='[LOGIN] status回應: '+JSON.stringify(d)+'\\n';
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
     localStorage.setItem('bot_admin_key',KEY);
-    dbg.textContent+='[LOGIN] 成功，載入資料...\\n';
     loadAll();
-  }).catch(e=>{
-    dbg.textContent+='[LOGIN] 錯誤: '+e.message+'\\n';
   });
 }
 
@@ -2491,33 +2478,34 @@ function langSelect(gid,cur){
     LANG_OPTS.map(o=>'<option value="'+o.c+'"'+(o.c===cur?' selected':'')+'>'+o.l+'</option>').join('')+
     '</select></span>';
 }
-function featBadge(gid,key,label,icon,on){
-  return '<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat(\\''+gid+'\\',\\''+key+'\\','+(!on)+')">'+icon+' '+(on?label+'開':label+'關')+'</span>';
+function featBadge(idx,key,label,icon,on){
+  return '<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeatIdx('+idx+',\''+key+'\','+(!on)+')">'+icon+' '+(on?label+'開':label+'關')+'</span>';
 }
 
+var _groupList=[];
 async function loadGroups(){
   const d=await api('/groups');
   if(!d)return;
+  _groupList=d.groups||[];
   const el=document.getElementById('groupList');
-  if(!d.groups||d.groups.length===0){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
-  el.innerHTML=d.groups.map(g=>{
-    const skipCt=g.skip_count||0;
+  if(!_groupList.length){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
+  el.innerHTML=_groupList.map(function(g,i){
+    var skipCt=g.skip_count||0;
     return '<div class="card">'+
       '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+
       (g.name||'(未知群組)')+'</span></div>'+
-      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat(\\''+g.id+'\\',\\'translation_on\\','+(!g.translation_on)+')">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
+      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeatIdx('+i+',\'translation_on\','+(!g.translation_on)+')">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
       '<span class="card-sub">語言:</span>'+langSelect(g.id,g.target_lang)+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
       '<div class="feat-badges">'+
-      featBadge(g.id,'image_on','圖片','🖼️',g.image_on)+
-      featBadge(g.id,'voice_on','語音','🎤',g.voice_on)+
-      featBadge(g.id,'work_order_on','工單','📋',g.work_order_on)+'</div>'+
+      featBadge(i,'image_on','圖片','🖼️',g.image_on)+
+      featBadge(i,'voice_on','語音','🎤',g.voice_on)+
+      featBadge(i,'work_order_on','工單','📋',g.work_order_on)+'</div>'+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
-      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost(\\''+g.id+'\\')">歸零</button></div>'+
-      '<button class="btn btn-red btn-sm" onclick="leaveGroup(\\''+g.id+'\\',\\''+
-      (g.name||'').replace(/'/g,"\\\\'")+'\\')">退出群組: '+(g.name||g.id.substring(0,12))+'</button>'+
+      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCostIdx('+i+')">歸零</button></div>'+
+      '<button class="btn btn-red btn-sm" onclick="leaveGroupIdx('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button>'+
       '</div>';
   }).join('');
 }
@@ -2527,21 +2515,24 @@ async function setGroupLang(gid,lang){
   if(d){toast('語言已更新');loadGroups()}
 }
 
-async function toggleFeat(gid,key,val){
-  const body={group_id:gid};body[key]=val;
+async function toggleFeatIdx(idx,key,val){
+  var g=_groupList[idx];if(!g)return;
+  var body={group_id:g.id};body[key]=val;
   const d=await api('/groups/settings','POST',body);
   if(d){toast('已更新');loadGroups()}
 }
 
-async function leaveGroup(gid,name){
-  if(!confirm('確定退出「'+name+'」？'))return;
-  const d=await api('/groups/leave','POST',{group_id:gid});
+async function leaveGroupIdx(idx){
+  var g=_groupList[idx];if(!g)return;
+  if(!confirm('確定退出「'+(g.name||g.id)+'」？'))return;
+  const d=await api('/groups/leave','POST',{group_id:g.id});
   if(d){toast(d.message||'已退出');loadGroups();loadGroupSelect()}
 }
 
-async function resetCost(gid){
-  if(!confirm('確定歸零此群組的累計花費？'))return;
-  const d=await api('/groups/reset-cost','POST',{group_id:gid});
+async function resetCostIdx(idx){
+  var g=_groupList[idx];if(!g)return;
+  if(!confirm('確定歸零累計花費？'))return;
+  const d=await api('/groups/reset-cost','POST',{group_id:g.id});
   if(d){toast('已歸零');loadGroups()}
 }
 
@@ -2639,17 +2630,18 @@ async function toggleAdmin(uid,on){
 }
 
 // ─── Protected Names ───
+var _protectedNames=[];
 async function loadNames(){
   const d=await api('/names');
   if(!d)return;
+  _protectedNames=d.names||[];
   const el=document.getElementById('namesList');
-  const names=d.names||[];
-  document.getElementById('namesCount').textContent='共 '+names.length+' 個保護名稱';
-  if(!names.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
-  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px">'+names.map(n=>
-    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
-    n+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName(\''+n.replace(/'/g,"\\'")+'\')">×</span></span>'
-  ).join('')+'</div>';
+  document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個保護名稱';
+  if(!_protectedNames.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
+  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px">'+_protectedNames.map(function(n,i){
+    return '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
+    n+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
+  }).join('')+'</div>';
 }
 
 async function addName(){
@@ -2660,7 +2652,9 @@ async function addName(){
   if(d){toast('已新增: '+name);inp.value='';loadNames()}
 }
 
-async function removeName(name){
+async function removeName(idx){
+  var name=_protectedNames[idx];
+  if(!name)return;
   if(!confirm('確定移除「'+name+'」？'))return;
   const d=await api('/names','POST',{action:'remove',name:name});
   if(d){toast('已移除: '+name);loadNames()}
@@ -2713,27 +2707,18 @@ async function downloadJson(){
 
 // Auto-login from cache
 window.addEventListener('load',()=>{
-  const dbg=document.getElementById('debugLog');
-  dbg.textContent='[INIT] 頁面載入完成\\n';
-  dbg.textContent+='[INIT] API: '+API+'\\n';
   const k=localStorage.getItem('bot_admin_key');
-  if(k){
-    dbg.textContent+='[INIT] 找到快取密碼，自動登入\\n';
-    document.getElementById('pwInput').value=k;
-    doLogin();
-  }else{
-    dbg.textContent+='[INIT] 無快取密碼，等待手動登入\\n';
-  }
+  if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=14').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=15').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v14';
+SW_JS = '''const CACHE='bot-admin-v15';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
