@@ -9,6 +9,10 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 try:
+    from linebot.v3.webhooks import StickerMessageContent
+except ImportError:
+    StickerMessageContent = None
+try:
     from linebot.v3.webhooks import JoinEvent
 except ImportError:
     JoinEvent = None
@@ -1874,7 +1878,13 @@ def handle_image(event):
     """Handle image messages: OCR + translate with layout-preserving text."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+    user_id = getattr(source, 'user_id', None)
+    is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     logger.info("Image received from %s", group_id)
+
+    # Record user for whitelist (even if translation is off)
+    if group_id and user_id and not is_dm_img:
+        record_user_name(group_id, user_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
@@ -1882,12 +1892,11 @@ def handle_image(event):
         return
 
     # Check skip list
-    sender_id = getattr(source, 'user_id', None)
+    sender_id = user_id
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
     # DM master toggle check for image
-    is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     if is_dm_img and sender_id:
         if not dm_master_enabled and sender_id not in dm_whitelist:
             return
@@ -1980,6 +1989,12 @@ def handle_audio(event):
     """Handle audio/voice messages: Whisper STT + detect language + translate."""
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+    user_id = getattr(source, 'user_id', None)
+    is_dm_aud = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+
+    # Record user for whitelist
+    if group_id and user_id and not is_dm_aud:
+        record_user_name(group_id, user_id)
 
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
@@ -1987,12 +2002,11 @@ def handle_audio(event):
         return
 
     # Check skip list
-    sender_id = getattr(source, 'user_id', None)
+    sender_id = user_id
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
         return
 
     # DM master toggle check for audio
-    is_dm_aud = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     if is_dm_aud and sender_id:
         if not dm_master_enabled and sender_id not in dm_whitelist:
             return
@@ -2046,6 +2060,18 @@ def handle_audio(event):
             messages=[TextMessage(text=reply)]
         ))
 
+
+
+if StickerMessageContent:
+    @handler.add(MessageEvent, message=StickerMessageContent)
+    def handle_sticker(event):
+        """Record user name when they send a sticker (for whitelist tracking)."""
+        source = event.source
+        is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
+        user_id = getattr(source, 'user_id', None)
+        if group_id and user_id and not is_dm:
+            record_user_name(group_id, user_id)
 
 
 if JoinEvent:
@@ -2533,13 +2559,13 @@ window.addEventListener('load',()=>{
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=6').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=7').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v6';
+SW_JS = '''const CACHE='bot-admin-v7';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
