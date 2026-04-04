@@ -2278,6 +2278,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tab" onclick="switchTab('groups')">群組</div>
 <div class="tab" onclick="switchTab('skip')">白名單</div>
 <div class="tab" onclick="switchTab('users')">使用者</div>
+<div class="tab" onclick="switchTab('names')">保護名單</div>
 <div class="tab" onclick="switchTab('storage')">儲區</div>
 </div>
 
@@ -2335,10 +2336,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
 <!-- Users Panel -->
 <div class="panel" id="panel-users">
+<div class="ch-select-wrap">
+<select class="ch-select" id="usersGroupSelect" onchange="loadUsers()">
+<option value="">全部使用者</option>
+</select>
+</div>
 <div id="usersList"><div class="empty">載入中...</div></div>
+</div>
 
-<!-- Protected Names Section -->
-<div class="card" style="margin-top:16px">
+<!-- Protected Names Panel -->
+<div class="panel" id="panel-names">
+<div class="card">
 <div style="font-weight:700;font-size:15px;margin-bottom:4px">🛡️ 翻譯保護名單</div>
 <div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻（人名、公司名皆可）</div>
 <div style="display:flex;gap:8px;margin-bottom:12px">
@@ -2405,7 +2413,7 @@ function doLogin(){
   });
 }
 
-var TAB_KEYS=['overview','groups','skip','users','storage'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -2415,11 +2423,12 @@ function switchTab(name){
   if(name==='overview') loadStats();
   if(name==='groups'){loadGroups();loadDM();}
   if(name==='skip') loadGroupSelect();
-  if(name==='users'){loadUsers();loadNames();}
+  if(name==='users'){loadUsersGroupSelect();loadUsers();}
+  if(name==='names') loadNames();
   if(name==='storage') loadStorageStats();
 }
 
-function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsers();loadNames();loadStorageStats()}
+function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsersGroupSelect();loadUsers();loadNames();loadStorageStats()}
 
 async function loadStats(){
   var d=await api('/stats');
@@ -2579,9 +2588,27 @@ function toggleSkip(idx,on){
   });
 }
 
+async function loadUsersGroupSelect(){
+  var d=await api('/groups');
+  if(!d)return;
+  var sel=document.getElementById('usersGroupSelect');
+  var cur=sel.value;
+  sel.innerHTML='<option value="">全部使用者</option>';
+  var groups=d.groups||[];
+  for(var i=0;i<groups.length;i++){
+    var g=groups[i];
+    var opt=document.createElement('option');
+    opt.value=g.id;opt.textContent='#'+(g.name||g.id.substring(0,16));
+    sel.appendChild(opt);
+  }
+  if(cur)sel.value=cur;
+}
+
 var _allUsers=[];
 async function loadUsers(){
-  var d=await api('/users');
+  var gid=document.getElementById('usersGroupSelect').value;
+  var path=gid?'/users?group_id='+gid:'/users';
+  var d=await api(path);
   if(!d)return;
   _allUsers=d.users||[];
   var el=document.getElementById('usersList');
@@ -2689,7 +2716,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=17').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=18').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -3234,24 +3261,38 @@ def api_admin_skip():
 def api_admin_users():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
+    filter_gid = request.args.get("group_id", "")
     users = []
-    # Merge DM users + all group users
-    all_users = {}
-    for uid, name in dm_known_users.items():
-        all_users[uid] = name
-    for gid, names in group_user_names.items():
-        for uid, name in names.items():
-            if uid not in all_users:
-                all_users[uid] = name
-    for uid, name in all_users.items():
-        tgt = dm_target_lang.get(uid, None)
-        is_admin = admin_users.get(uid, {}).get("is_admin", False)
-        users.append({
-            "user_id": uid,
-            "name": name,
-            "target_lang": tgt,
-            "is_admin": is_admin,
-        })
+    if filter_gid:
+        # Show only users from this group
+        names_cache = group_user_names.get(filter_gid, {})
+        for uid, name in names_cache.items():
+            tgt = dm_target_lang.get(uid, None)
+            is_admin = admin_users.get(uid, {}).get("is_admin", False)
+            users.append({
+                "user_id": uid,
+                "name": name,
+                "target_lang": tgt,
+                "is_admin": is_admin,
+            })
+    else:
+        # Merge DM users + all group users
+        all_users = {}
+        for uid, name in dm_known_users.items():
+            all_users[uid] = name
+        for gid, names in group_user_names.items():
+            for uid, name in names.items():
+                if uid not in all_users:
+                    all_users[uid] = name
+        for uid, name in all_users.items():
+            tgt = dm_target_lang.get(uid, None)
+            is_admin = admin_users.get(uid, {}).get("is_admin", False)
+            users.append({
+                "user_id": uid,
+                "name": name,
+                "target_lang": tgt,
+                "is_admin": is_admin,
+            })
     users.sort(key=lambda x: x["name"])
     return jsonify({"users": users})
 
