@@ -573,19 +573,24 @@ if os.path.exists(_storage_json_path):
     except Exception as _e:
         logger.warning("Failed to load storage_data.json, using embedded: %s", _e)
 # Extra customers not in storage Excel but appear in factory chat
-EXTRA_CUSTOMERS = [
-    # 公司/客戶名
+# Per-group protected names: {"__all__": [...], "group_id": [...]}
+_DEFAULT_NAMES = [
     "寶麗金屬", "田華榕", "蘋果", "賽利金屬", "盛昌遠", "曜麟",
     "LOTUS", "LOTUS METAL", "shinko", "wing keung",
-    # 人名/綽號
     "高侑", "十元", "小麥", "啊堂", "秋情", "政軒", "碩凱", "汶錡",
     "武駿", "凱銘", "小趙", "阿澤", "法比恩", "山多", "EggEgg", "fang", "Dato潘",
     "阿添", "小叮噹", "多啦A夢", "潘柏良", "大彭",
 ]
+extra_names_by_group = {"__all__": list(_DEFAULT_NAMES)}
+EXTRA_CUSTOMERS = []
 
 def rebuild_customer_names():
-    """Rebuild CUSTOMER_NAMES from STORAGE_LOOKUP + EXTRA_CUSTOMERS."""
-    global CUSTOMER_NAMES
+    """Rebuild EXTRA_CUSTOMERS and CUSTOMER_NAMES from all groups."""
+    global EXTRA_CUSTOMERS, CUSTOMER_NAMES
+    merged = set()
+    for names in extra_names_by_group.values():
+        merged.update(names)
+    EXTRA_CUSTOMERS = sorted(list(merged), key=lambda x: -len(x))
     CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
 
 CUSTOMER_NAMES = []
@@ -2304,6 +2309,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div style="font-size:13px;color:#8a8a9a">預估花費</div>
 <div style="font-size:13px;text-align:right" id="st-cost">$0.00</div>
 </div>
+<a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" style="display:block;margin-top:12px;padding:10px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#7c6fef;font-size:13px;font-weight:600;text-decoration:none">💳 查看 API 餘額</a>
 </div>
 </div>
 
@@ -2716,7 +2722,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=18').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=21').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -2875,7 +2881,7 @@ def save_settings():
                 "dm_target_lang": dm_target_lang,
                 "admin_users": admin_users,
                 "bot_stats": bot_stats,
-                "extra_customers": EXTRA_CUSTOMERS,
+                "extra_customers": extra_names_by_group,
                 "group_api_usage": group_api_usage,
             }
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
@@ -2891,7 +2897,7 @@ def load_settings():
     global group_settings, group_target_lang, group_img_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
-    global EXTRA_CUSTOMERS, group_api_usage
+    global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -2913,7 +2919,11 @@ def load_settings():
         admin_users.update(data.get("admin_users", {}))
         bot_stats.update(data.get("bot_stats", {}))
         if "extra_customers" in data:
-            EXTRA_CUSTOMERS = data["extra_customers"]
+            ec = data["extra_customers"]
+            if isinstance(ec, dict):
+                extra_names_by_group.update(ec)
+            elif isinstance(ec, list):
+                extra_names_by_group["__all__"] = ec
             rebuild_customer_names()
         group_api_usage.update(data.get("group_api_usage", {}))
         logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names",
@@ -3315,9 +3325,9 @@ def api_admin_users_toggle_admin():
 
 @app.route("/api/admin/names", methods=["GET", "POST"])
 def api_admin_names():
-    global EXTRA_CUSTOMERS
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
+    names_list = extra_names_by_group.setdefault("__all__", [])
     if request.method == "POST":
         data = request.get_json() or {}
         action = data.get("action", "add")
@@ -3325,18 +3335,18 @@ def api_admin_names():
         if not name:
             return jsonify({"error": "missing name"}), 400
         if action == "add":
-            if name not in EXTRA_CUSTOMERS:
-                EXTRA_CUSTOMERS.append(name)
+            if name not in names_list:
+                names_list.append(name)
                 rebuild_customer_names()
                 save_settings()
-            return jsonify({"ok": True, "count": len(EXTRA_CUSTOMERS)})
+            return jsonify({"ok": True})
         elif action == "remove":
-            if name in EXTRA_CUSTOMERS:
-                EXTRA_CUSTOMERS.remove(name)
+            if name in names_list:
+                names_list.remove(name)
                 rebuild_customer_names()
                 save_settings()
-            return jsonify({"ok": True, "count": len(EXTRA_CUSTOMERS)})
-    return jsonify({"names": EXTRA_CUSTOMERS, "count": len(EXTRA_CUSTOMERS)})
+            return jsonify({"ok": True})
+    return jsonify({"names": names_list, "count": len(names_list)})
 
 
 @app.route("/api/admin/storage/stats")
