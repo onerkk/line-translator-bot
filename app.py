@@ -2375,6 +2375,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div><!-- mainPage -->
 </div><!-- app -->
 
+<div id="debugLog" style="position:fixed;bottom:0;left:0;right:0;padding:8px 12px;background:#111;border-top:1px solid #333;font-family:monospace;font-size:11px;color:#0f0;white-space:pre-wrap;max-height:150px;overflow-y:auto;z-index:999"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -2386,12 +2387,18 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 async function api(path,method='GET',body=null){
   const opts={method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
   if(body)opts.body=JSON.stringify(body);
+  const dbg=document.getElementById('debugLog');
   try{
+    dbg.textContent+='[API] '+method+' '+path+'\\n';
     const r=await fetch(API+path,opts);
+    dbg.textContent+='[RES] '+r.status+' '+r.statusText+'\\n';
     if(r.status===403){toast('密碼錯誤');return null}
-    return await r.json();
+    const d=await r.json();
+    dbg.textContent+='[OK] '+path+'\\n';
+    return d;
   }catch(e){
-    toast('連線失敗，請稍後重試');
+    dbg.textContent+='[ERR] '+path+': '+e.message+'\\n';
+    toast('連線失敗: '+e.message);
     return null;
   }
 }
@@ -2399,12 +2406,18 @@ async function api(path,method='GET',body=null){
 function doLogin(){
   KEY=document.getElementById('pwInput').value.trim();
   if(!KEY){toast('請輸入密碼');return}
+  const dbg=document.getElementById('debugLog');
+  dbg.textContent='[LOGIN] 開始登入...\\n';
   api('/status').then(d=>{
+    dbg.textContent+='[LOGIN] status回應: '+JSON.stringify(d)+'\\n';
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
     localStorage.setItem('bot_admin_key',KEY);
+    dbg.textContent+='[LOGIN] 成功，載入資料...\\n';
     loadAll();
+  }).catch(e=>{
+    dbg.textContent+='[LOGIN] 錯誤: '+e.message+'\\n';
   });
 }
 
@@ -2700,18 +2713,27 @@ async function downloadJson(){
 
 // Auto-login from cache
 window.addEventListener('load',()=>{
+  const dbg=document.getElementById('debugLog');
+  dbg.textContent='[INIT] 頁面載入完成\\n';
+  dbg.textContent+='[INIT] API: '+API+'\\n';
   const k=localStorage.getItem('bot_admin_key');
-  if(k){document.getElementById('pwInput').value=k;doLogin()}
+  if(k){
+    dbg.textContent+='[INIT] 找到快取密碼，自動登入\\n';
+    document.getElementById('pwInput').value=k;
+    doLogin();
+  }else{
+    dbg.textContent+='[INIT] 無快取密碼，等待手動登入\\n';
+  }
 });
 
 // PWA install
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=13').catch(()=>{})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=14').catch(()=>{})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v13';
+SW_JS = '''const CACHE='bot-admin-v14';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
