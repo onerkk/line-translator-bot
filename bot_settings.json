@@ -6,7 +6,8 @@
   },
   "group_audio_settings": {},
   "group_wo_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
+    "Cd188e1adc7792e407c90f3fa78850316": false
   },
   "group_skip_users": {},
   "group_tracking": {
@@ -22,7 +23,8 @@
   "group_user_names": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
+      "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
@@ -41,13 +43,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 5,
+    "text_translations": 6,
     "image_translations": 1,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 0,
-    "tokens_prompt": 38685,
-    "tokens_completion": 601
+    "tokens_prompt": 46300,
+    "tokens_completion": 635
   },
   "extra_customers": {
     "__all__": [
@@ -97,8 +99,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 7612,
-      "tokens_completion": 56
+      "tokens_prompt": 15227,
+      "tokens_completion": 90
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 31073,
