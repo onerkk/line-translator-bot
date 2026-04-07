@@ -23,6 +23,9 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     }
   },
   "dm_master_enabled": true,
@@ -38,13 +41,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 3,
+    "text_translations": 5,
     "image_translations": 1,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 0,
-    "tokens_prompt": 7612,
-    "tokens_completion": 56
+    "tokens_prompt": 38685,
+    "tokens_completion": 601
   },
   "extra_customers": {
     "__all__": [
@@ -88,13 +91,18 @@
       "石朝元",
       "黃惟堂",
       "王文良",
-      "詹秋情"
+      "詹秋情",
+      "就是這個光 ✨༄"
     ]
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "tokens_prompt": 7612,
       "tokens_completion": 56
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "tokens_prompt": 31073,
+      "tokens_completion": 545
     }
   }
 }
