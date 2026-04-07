@@ -160,12 +160,24 @@ VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
 
 
 def extract_mentions(text):
-    # Capture @mentions conservatively while still allowing common LINE names with spaces.
-    # Stop before obvious separators so we do not swallow the rest of the sentence.
-    # Also stop before a space + Chinese character (common: "@name 暱稱 ...").
-    pattern = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|\s[一-鿿]|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))'
-    mentions = re.findall(pattern, text)
-    mentions = [m.rstrip() for m in mentions if m and len(m) > 1]
+    # Capture @mentions: English names, Chinese names, @All
+    mentions = []
+    # English names: @budi santoso, @EggEgg etc.
+    pattern_en = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|\s[一-鿿]|[\n,，。!！?？:：;；()（）\[\]{}<>“”]|$))'
+    for m in re.findall(pattern_en, text):
+        m = m.rstrip()
+        if m and len(m) > 1:
+            mentions.append(m)
+    # Chinese names: @小麥, @就是這個光, @小麥（研磨股班長）, with optional emoji
+    pattern_zh = r'@[一-鿿぀-ヿ]+(?:\s*[（(][^）)]*[）)])?'
+    for m in re.findall(pattern_zh, text):
+        m = m.rstrip()
+        if m and len(m) > 1 and m not in mentions:
+            mentions.append(m)
+    # @All @all @ALL
+    for m in re.findall(r'@[Aa][Ll][Ll]', text):
+        if m not in mentions:
+            mentions.append(m)
     # Remove duplicates while preserving order
     seen = set()
     result = []
@@ -174,6 +186,7 @@ def extract_mentions(text):
             seen.add(m)
             result.append(m)
     return result
+
 
 
 def protect_mentions(text):
@@ -2722,7 +2735,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=21').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=22').catch(function(){})}
 </script>
 </body>
 </html>'''
