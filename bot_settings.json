@@ -133,6 +133,7 @@
     "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
+  "group_welcome_settings": {},
   "flex_enabled": false,
   "quick_reply_enabled": true,
   "silent_mode": false,
@@ -140,6 +141,13 @@
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat.png",
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
+  "group_flex_settings": {
+    "Cd188e1adc7792e407c90f3fa78850316": true
+  },
+  "group_qr_settings": {},
+  "group_silent_settings": {},
+  "group_video_settings": {},
+  "group_location_settings": {},
   "user_pictures": {},
   "pw1_text": "UR00179\nXx0972315373",
   "pw2_text": "UR00644\nJj0973550210",
