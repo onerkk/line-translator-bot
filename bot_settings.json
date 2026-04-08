@@ -15,7 +15,14 @@
   },
   "group_cmd_enabled": {
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "pw1": false
+      "pw1": false,
+      "pw2": false,
+      "pkg": false,
+      "scrap": true,
+      "notice": false
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "notice": false
     }
   },
   "group_skip_users": {},
@@ -126,7 +133,7 @@
     "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
-  "flex_enabled": true,
+  "flex_enabled": false,
   "quick_reply_enabled": true,
   "silent_mode": false,
   "sender_name": "AI機器人",
