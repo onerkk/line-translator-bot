@@ -160,33 +160,46 @@ VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
 
 
 def extract_mentions(text):
-    # Capture @mentions: English names, Chinese names, @All
+    """Extract @mentions from text. Skip @Indonesian_word (not real mentions)."""
+    _id_skip = {
+        'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
+        'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
+        'sedang','harus','boleh','mau','bukan','jangan','terima','kasih','baik',
+        'bagus','benar','salah','kerja','pulang','pergi','karena','tapi','atau',
+        'kalau','masih','lagi','nanti','sekarang','siap','izin','minta','cepat',
+        'capek','sakit','gak','udah','gimana','dong','banget','kipas','mesin',
+        'rusak','bocor','macet','stok','habis','ganti','pasang','gudang','masuk',
+        'keluar','tutup','buka','material','selesai','beres','datang','besok',
+        'kemarin','libur','lembur','cuti','proses','produksi','diperhatikan',
+        'selalu','mohon','pakai','pake','cek','lihat','bilang','ambil','kirim',
+        'tunggu','bantu','butuh','perlu','panggil','suruh','hati','awas',
+        'bahaya','lantai','mesin','pompa','pipa','oli','besi','baja','batang',
+    }
     mentions = []
-    # English names: @budi santoso, @EggEgg etc.
-    pattern_en = r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?=(?:\s{2,}|\s[一-鿿]|[\n,，。!！?？:：;；()（）\[\]{}<>“”]|$))'
-    for m in re.findall(pattern_en, text):
-        m = m.rstrip()
-        if m and len(m) > 1:
-            mentions.append(m)
-    # Chinese names: @小麥, @就是這個光, @小麥（研磨股班長）, with optional emoji
-    pattern_zh = r'@[一-鿿぀-ヿ]+(?:\s*[（(][^）)]*[）)])?'
-    for m in re.findall(pattern_zh, text):
+    # English @mentions: grab @word + up to 2 more, trim Indonesian words from end
+    for m in re.finditer(r'@([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.-]+))?', text):
+        first = m.group(1)
+        if first.lower() in _id_skip:
+            continue
+        parts = [first]
+        for g in [m.group(2), m.group(3)]:
+            if g and g.lower() not in _id_skip:
+                parts.append(g)
+            else:
+                break
+        mention = '@' + ' '.join(parts)
+        if mention not in mentions:
+            mentions.append(mention)
+    # Chinese @mentions
+    for m in re.findall(r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', text):
         m = m.rstrip()
         if m and len(m) > 1 and m not in mentions:
             mentions.append(m)
-    # @All @all @ALL
+    # @All
     for m in re.findall(r'@[Aa][Ll][Ll]', text):
         if m not in mentions:
             mentions.append(m)
-    # Remove duplicates while preserving order
-    seen = set()
-    result = []
-    for m in mentions:
-        if m not in seen:
-            seen.add(m)
-            result.append(m)
-    return result
-
+    return list(dict.fromkeys(mentions))
 
 
 def protect_mentions(text):
@@ -237,10 +250,27 @@ def restore_mentions(text, placeholders):
 
 
 def strip_mentions_for_detect(text):
-    # Strip @mentions: English names with optional Chinese nickname
-    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,，。!！?？:：;；()（）\[\]{}<>"“”]|$))', ' ', text)
-    # Strip @mentions: Chinese names with optional parenthesized title e.g. @小麥（研磨股班長）
-    clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[（(][^）)]*[）)])?', ' ', clean)
+    """Strip @mentions for language detection. Preserve @Indonesian_word."""
+    _id_skip = {
+        'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
+        'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
+        'sedang','harus','boleh','mau','bukan','jangan','terima','kasih','baik',
+        'kerja','pulang','pergi','karena','tapi','atau','kalau','masih','lagi',
+        'siap','izin','minta','capek','sakit','gak','udah','gimana','dong',
+        'kipas','mesin','rusak','bocor','macet','stok','habis','ganti','pasang',
+        'gudang','masuk','keluar','tutup','buka','material','selesai','beres',
+        'datang','besok','kemarin','libur','lembur','cuti','proses','produksi',
+        'selalu','mohon','pakai','pake','cek','lihat','bilang','ambil','kirim',
+        'tunggu','bantu','butuh','perlu','panggil','suruh','hati','awas',
+    }
+    def _replace_en(m):
+        first_word = re.match(r'@([A-Za-z0-9]+)', m.group(0))
+        if first_word and first_word.group(1).lower() in _id_skip:
+            return m.group(0)  # Keep: not a real @mention
+        return ' '
+    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))', _replace_en, clean if 'clean' in dir() else text)
+    # Strip Chinese @mentions
+    clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', ' ', clean)
     return clean
 
 
@@ -2842,7 +2872,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=25').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=26').catch(function(){})}
 </script>
 </body>
 </html>'''
