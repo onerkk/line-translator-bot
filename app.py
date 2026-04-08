@@ -3796,38 +3796,35 @@ window.onerror=function(msg,url,line,col,err){
   document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\n'+msg+'\nLine: '+line+'\nCol: '+col+'</div>';
   return false;
 };
-</script>
-<script>
-let KEY='';
-const API=window.location.origin+'/api/admin';
-const FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
+var KEY='';
+var API=window.location.origin+'/api/admin';
 
-function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
+function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
 
-async function api(path,method,body){
+function api(path,method,body){
   method=method||'GET';
   var opts={method:method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
   if(body)opts.body=JSON.stringify(body);
-  try{
-    var r=await fetch(API+path,opts);
+  return fetch(API+path,opts).then(function(r){
     if(r.status===403){toast('密碼錯誤');return null}
-    return await r.json();
-  }catch(e){toast('連線失敗: '+e.message);return null}
+    return r.json();
+  }).catch(function(e){toast('連線失敗: '+e.message);return null});
 }
 
 function doLogin(){
   KEY=document.getElementById('pwInput').value.trim();
   if(!KEY){toast('請輸入密碼');return}
-  alert('DEBUG: calling API...');
   api('/status').then(function(d){
-    alert('DEBUG: API returned: '+JSON.stringify(d));
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
     localStorage.setItem('bot_admin_key',KEY);
-    loadAll();
-  }).catch(function(e){alert('DEBUG: error='+e)});
+    if(typeof loadAll==='function') loadAll();
+  });
 }
+</script>
+<script>
+var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
 var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','settings'];
 function switchTab(name){
