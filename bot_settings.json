@@ -13,6 +13,11 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false
   },
+  "group_cmd_enabled": {
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "pw1": false
+    }
+  },
   "group_skip_users": {},
   "group_tracking": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
