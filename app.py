@@ -6,8 +6,52 @@ import urllib.parse
 import logging
 from flask import Flask, request, abort, jsonify
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.messaging import (
+    Configuration, ApiClient, MessagingApi, MessagingApiBlob,
+    ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer,
+    QuickReply, QuickReplyItem, MessageAction, PushMessageRequest,
+    MulticastRequest,
+)
+try:
+    from linebot.v3.messaging import (
+        TemplateMessage, ConfirmTemplate, ButtonsTemplate,
+        CarouselTemplate, CarouselColumn,
+        PostbackAction, URIAction as MsgURIAction,
+        ImagemapMessage, ImagemapBaseSize, ImagemapArea,
+        MessageImagemapAction, URIImagemapAction,
+        BroadcastRequest,
+    )
+except ImportError:
+    TemplateMessage = None
+    BroadcastRequest = None
+try:
+    from linebot.v3.messaging import ShowLoadingAnimationRequest
+except ImportError:
+    ShowLoadingAnimationRequest = None
+try:
+    from linebot.v3.messaging import Sender as MessageSender
+except ImportError:
+    MessageSender = None
+try:
+    from linebot.v3.messaging import (
+        RichMenuRequest, RichMenuArea, RichMenuBounds, RichMenuSize,
+        CreateRichMenuAliasRequest, URIAction,
+    )
+except ImportError:
+    RichMenuRequest = None
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+try:
+    from linebot.v3.webhooks import VideoMessageContent
+except ImportError:
+    VideoMessageContent = None
+try:
+    from linebot.v3.webhooks import FileMessageContent
+except ImportError:
+    FileMessageContent = None
+try:
+    from linebot.v3.webhooks import LocationMessageContent
+except ImportError:
+    LocationMessageContent = None
 try:
     from linebot.v3.webhooks import StickerMessageContent
 except ImportError:
@@ -16,6 +60,31 @@ try:
     from linebot.v3.webhooks import JoinEvent
 except ImportError:
     JoinEvent = None
+try:
+    from linebot.v3.webhooks import MemberJoinedEvent
+except ImportError:
+    MemberJoinedEvent = None
+try:
+    from linebot.v3.webhooks import MemberLeftEvent
+except ImportError:
+    MemberLeftEvent = None
+try:
+    from linebot.v3.webhooks import FollowEvent, UnfollowEvent
+except ImportError:
+    FollowEvent = None
+    UnfollowEvent = None
+try:
+    from linebot.v3.webhooks import LeaveEvent as BotLeaveEvent
+except ImportError:
+    BotLeaveEvent = None
+try:
+    from linebot.v3.webhooks import PostbackEvent
+except ImportError:
+    PostbackEvent = None
+try:
+    from linebot.v3.webhooks import UnsendEvent
+except ImportError:
+    UnsendEvent = None
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
@@ -109,8 +178,34 @@ def calc_group_cost_twd(group_id):
 # Admin users tracking: {user_id: {"is_admin": bool}}
 admin_users = {}
 
+# User language cache from LINE profile: {user_id: "id"|"zh-TW"|"en"|...}
+user_languages = {}
+
 # Per-group API usage tracking: {group_id: {"tokens_prompt": int, "tokens_completion": int}}
 group_api_usage = {}
+
+# ── Admin-controllable feature settings ──
+# Welcome message: {enabled: bool, text_zh: str, text_id: str}
+welcome_settings = {
+    "enabled": True,
+    "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
+    "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis.",
+}
+# Flex message ON/OFF (True = Flex card, False = plain text)
+flex_enabled = True
+# Quick Reply buttons ON/OFF
+quick_reply_enabled = True
+# Silent mode: translation messages don't buzz the phone
+silent_mode = False
+# Video OCR translation ON/OFF
+video_ocr_enabled = True
+# Location translation ON/OFF
+location_translate_enabled = True
+# Custom sender name/icon for translation messages
+sender_name = "翻譯小助手"
+sender_icon = ""  # URL to icon image, empty = default
+# User profile pictures cache: {user_id: url}
+user_pictures = {}
 
 # USD to TWD rate (approximate)
 USD_TO_TWD = 32.0
@@ -119,6 +214,10 @@ USD_TO_TWD = 32.0
 translation_cache = {}
 CACHE_MAX_SIZE = 500
 CACHE_TTL = 3600  # 1 hour
+
+# Message cache for quoted message context: {message_id: {"text": str, "ts": float}}
+message_cache = {}
+MESSAGE_CACHE_MAX = 200
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
@@ -181,23 +280,36 @@ def extract_mentions(text):
     return list(dict.fromkeys(mentions))
 
 
-def protect_mentions(text):
-    mentions = extract_mentions(text)
+def extract_line_mentions(text, message):
+    """Extract @mention strings using LINE's actual mention data (the blue text).
+    Returns list of exact mention strings from the message."""
+    mentions = []
+    try:
+        mention_data = getattr(message, 'mention', None)
+        if mention_data and hasattr(mention_data, 'mentionees'):
+            for m in mention_data.mentionees:
+                idx = m.index
+                length = m.length
+                mention_text = text[idx:idx+length]
+                if mention_text and mention_text not in mentions:
+                    mentions.append(mention_text)
+    except Exception:
+        pass
+    return mentions
+
+
+def protect_mentions(text, line_mentions=None):
+    # Use LINE's actual mention data if available (100% accurate)
+    # Fall back to regex extraction if not
+    if line_mentions:
+        mentions = line_mentions
+    else:
+        mentions = extract_mentions(text)
     protected = text
     placeholders = {}
     for i, m in enumerate(mentions):
-        # Use a stronger placeholder that is less likely to be translated or split.
         ph = f"__MENTION_{i}__"
-        # Check if a short Chinese nickname (1-4 chars) follows the @mention.
-        # e.g. "@budi santoso 山多" → "山多" is a nickname, protect it too.
-        escaped = re.escape(m)
-        nick_pattern = escaped + r'(\s+[\u4e00-\u9fff]{1,4})(?=\s|[,，。!！?？:：;；\n]|$)'
-        nick_match = re.search(nick_pattern, protected)
-        if nick_match:
-            full = m + nick_match.group(1)
-            placeholders[ph] = full
-            protected = protected.replace(full, ph, 1)
-        else:
+        if m in protected:
             placeholders[ph] = m
             protected = protected.replace(m, ph, 1)
     return protected, placeholders
@@ -228,8 +340,14 @@ def restore_mentions(text, placeholders):
     return restored
 
 
-def strip_mentions_for_detect(text):
-    """Strip @mentions for language detection. Preserve @Indonesian_word."""
+def strip_mentions_for_detect(text, line_mentions=None):
+    """Strip @mentions for language detection."""
+    if line_mentions:
+        # Use LINE's actual mention data - most accurate
+        clean = text
+        for m in line_mentions:
+            clean = clean.replace(m, ' ')
+        return clean
     _id_skip = {
         'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
         'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
@@ -940,6 +1058,23 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "斷料=material putus, 卡料=material macet, 擠料=material terjepit keluar, "
             "主機手=operator utama, 上料人員=petugas pengisian material, 點檢=cek rutin, 護罩=pelindung mesin/safety guard, "
             "interlock=pengunci keamanan(jangan ditahan pakai benda), "
+            "【印尼文機械/設備詞彙 Indonesian Mechanical Terms】"
+            "as=軸/軸心(axle/shaft), as roda=輪軸(wheel axle), roda=輪(wheel), roda penarik=拉料輪(pulling wheel), "
+            "penarik barang=拉料車/拖料車(material puller/cart), "
+            "kopel=萬向接頭(universal joint/coupling), cross joint=十字接頭(cross joint), "
+            "as roda penarik barang patah=拉料輪的萬向接頭斷裂(pulling wheel universal joint broken), "
+            "patah=斷了/斷裂(snapped/broken off), bengkok=彎了(bent), "
+            "retak=裂了(cracked), aus=磨損(worn out), bocor=漏(leak), macet=卡住(jammed), "
+            "bearing=軸承(bearing), rantai=鏈條(chain), sabuk=皮帶(belt), engsel=鉸鏈(hinge), "
+            "kawat=鋼線/線材(wire), selang=軟管(hose), katup=閥門(valve), baut=螺栓(bolt), mur=螺帽(nut), "
+            "tekanan=壓力(pressure), getaran=震動(vibration), gesekan=摩擦(friction), pelumas=潤滑油(lubricant), "
+            "gigi/gear=齒輪(gear), kipas=風扇(fan), kipas angin=電風扇(electric fan), motor=馬達(motor), "
+            "pompa=泵浦(pump), kompresor=壓縮機(compressor), pipa=管(pipe), tabung=鋼瓶/桶(tank/cylinder), "
+            "dongkrak=千斤頂(jack), kunci=扳手/鑰匙(wrench/key), obeng=螺絲起子(screwdriver), tang=鉗子(pliers), "
+            "las=焊接(welding), gerinda=砂輪機(grinder), bor=鑽孔機(drill), gergaji=鋸子(saw), "
+            "forklift=堆高機(forklift), crane=吊車(crane), conveyor=輸送帶(conveyor), "
+            "NOTE: 'As' in Indonesian mechanical context ALWAYS means axle/shaft(軸), never translate as 'as/像'. "
+            "NOTE: 'patah' means snapped/broken off(斷了), different from 'rusak'(壞了/故障). "
             "【包裝/入庫】"
             "套紙管=pasang tabung kertas, 入庫=masuk gudang, 優先包裝入庫=prioritas packing masuk gudang, "
             "需求單=formulir permintaan, 可以全收=bisa diterima semua, "
@@ -1700,11 +1835,9 @@ def handle_qry_command(text):
 
 
 def get_display_name(group_id, user_id):
-    """Get user display name from cache or LINE API."""
-    # Check cache first
+    """Get user display name from cache or LINE API. Also caches user language."""
     if group_id in group_user_names and user_id in group_user_names[group_id]:
         return group_user_names[group_id][user_id]
-    # Try LINE API
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
@@ -1714,7 +1847,15 @@ def get_display_name(group_id, user_id):
                 if group_id not in group_user_names:
                     group_user_names[group_id] = {}
                 group_user_names[group_id][user_id] = name
-                return name
+            # Cache user language and picture from LINE profile
+            lang = getattr(profile, 'language', None)
+            if lang and user_id not in user_languages:
+                user_languages[user_id] = lang
+                logger.info("User %s language: %s", name or user_id, lang)
+            pic = getattr(profile, 'picture_url', None)
+            if pic:
+                user_pictures[user_id] = pic
+            return name
     except Exception as e:
         logger.warning("Failed to get display name for %s: %s", user_id, e)
     return None
@@ -2020,25 +2161,57 @@ def handle_message(event):
     if text.startswith("!"):
         return
 
-    # Strip @mentions - pure mentions without content should not be translated
-    text_clean = strip_mentions_for_detect(text).strip()
-    if not text_clean or len(text_clean) < 2:
+    # Extract LINE's actual @mention data (blue text = 100% accurate)
+    line_mentions = extract_line_mentions(text, event.message)
+
+    # Cache this message for future quote references
+    msg_id = getattr(event.message, 'id', None)
+    if msg_id:
+        message_cache[msg_id] = {"text": text, "ts": time.time()}
+        # Trim cache
+        if len(message_cache) > MESSAGE_CACHE_MAX:
+            oldest = sorted(message_cache.items(), key=lambda x: x[1]["ts"])[:50]
+            for k, _ in oldest:
+                message_cache.pop(k, None)
+
+    # Check if this is a reply to another message (quoted message)
+    quoted_text = None
+    quoted_id = getattr(event.message, 'quoted_message_id', None)
+    if quoted_id and quoted_id in message_cache:
+        quoted_text = message_cache[quoted_id].get("text", "")
+
+    # Strip @mentions for language detection only
+    text_for_detect = strip_mentions_for_detect(text, line_mentions).strip()
+    if not text_for_detect or len(text_for_detect) < 2:
         return
 
-    lang = detect_language(text_clean)
+    lang = detect_language(text_for_detect)
     if lang is None:
         return
 
     tgt = group_target_lang.get(group_id, "id")
 
+    # Show typing indicator while translating
+    show_loading(group_id)
+
+    # Protect LINE mentions before translation
+    text_to_translate = text
+    mention_placeholders = {}
+    if line_mentions:
+        text_to_translate, mention_placeholders = protect_mentions(text, line_mentions)
+
     reply = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     if lang == "zh":
-        result = translate(text_clean, "zh", tgt)
+        result = translate(text_to_translate, "zh", tgt)
+        if result and mention_placeholders:
+            result = restore_mentions(result, mention_placeholders)
         if result:
             reply = LANG_FLAGS.get(tgt, "") + " " + result
     else:
-        result = translate(text_clean, lang, "zh")
+        result = translate(text_to_translate, lang, "zh")
+        if result and mention_placeholders:
+            result = restore_mentions(result, mention_placeholders)
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
     track_group_usage(group_id, _bp, _bc)
@@ -2047,12 +2220,53 @@ def handle_message(event):
         return
 
     bot_stats["text_translations"] += 1
+
+    # Build reply message based on settings
+    sender_display = None
+    if sender_id:
+        sender_display = (group_user_names.get(group_id, {}).get(sender_id) or
+                       get_display_name(group_id, sender_id))
+
+    src_flag = LANG_FLAGS.get(lang, "")
+    tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else "id", "")
+    translated_text = reply.split(" ", 1)[1] if " " in reply else reply
+
+    # Flex or plain text based on setting
+    flex_msg = None
+    if flex_enabled:
+        flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
+    qr = build_quick_reply() if quick_reply_enabled else None
+    custom_sender = get_sender_object()
+    # Get quoteToken from original message for reply linking
+    qt = getattr(event.message, 'quote_token', None)
+
     with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
+        api_line = MessagingApi(api_client)
+        if flex_msg:
+            if qr:
+                flex_msg.quick_reply = qr
+            if custom_sender:
+                flex_msg.sender = custom_sender
+            if qt:
+                try: flex_msg.quote_token = qt
+                except Exception: pass
+            req = ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg])
+            if silent_mode:
+                req.notification_disabled = True
+            api_line.reply_message(req)
+        else:
+            msg = TextMessage(text=reply)
+            if qr:
+                msg.quick_reply = qr
+            if custom_sender:
+                msg.sender = custom_sender
+            if qt:
+                try: msg.quote_token = qt
+                except Exception: pass
+            req = ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])
+            if silent_mode:
+                req.notification_disabled = True
+            api_line.reply_message(req)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -2262,6 +2476,100 @@ if StickerMessageContent:
             record_user_name(group_id, user_id)
 
 
+if VideoMessageContent:
+    @handler.add(MessageEvent, message=VideoMessageContent)
+    def handle_video(event):
+        """Handle video messages: download thumbnail, OCR, translate."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+        user_id = getattr(source, 'user_id', None)
+        is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+        if group_id and user_id and not is_dm:
+            record_user_name(group_id, user_id)
+        # Video OCR: try to get preview image and OCR it
+        if not video_ocr_enabled:
+            return
+        if not group_settings.get(group_id, True):
+            return
+        if not group_img_settings.get(group_id, True) and not is_dm:
+            return
+        try:
+            msg_id = event.message.id
+            with ApiClient(configuration) as api_client:
+                blob_api = MessagingApiBlob(api_client)
+                # Get video content (preview/thumbnail)
+                content = blob_api.get_message_content_preview(msg_id)
+                if content and len(content) > 100:
+                    b64 = base64.b64encode(content).decode()
+                    # OCR the preview frame
+                    ocr_result = ocr_image_openai(b64)
+                    if ocr_result and len(ocr_result.strip()) > 2:
+                        lang = detect_language(ocr_result)
+                        if lang and lang == "zh":
+                            tgt = group_target_lang.get(group_id, "id")
+                            result = translate(ocr_result, "zh", tgt)
+                            if result:
+                                reply = "🎬 " + LANG_FLAGS.get(tgt, "") + " " + result
+                                with ApiClient(configuration) as ac2:
+                                    api2 = MessagingApi(ac2)
+                                    api2.reply_message(ReplyMessageRequest(
+                                        reply_token=event.reply_token,
+                                        messages=[TextMessage(text=reply)]
+                                    ))
+                                bot_stats["image_translations"] += 1
+        except Exception as e:
+            logger.warning("Video OCR failed: %s", e)
+
+
+if FileMessageContent:
+    @handler.add(MessageEvent, message=FileMessageContent)
+    def handle_file(event):
+        """Handle file messages: record user, log file info."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
+        user_id = getattr(source, 'user_id', None)
+        is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+        if group_id and user_id and not is_dm:
+            record_user_name(group_id, user_id)
+        fname = getattr(event.message, 'file_name', '未知檔案')
+        fsize = getattr(event.message, 'file_size', 0)
+        logger.info("File received: %s (%d bytes) from %s", fname, fsize, group_id)
+
+
+if LocationMessageContent:
+    @handler.add(MessageEvent, message=LocationMessageContent)
+    def handle_location(event):
+        """Handle location messages: translate location info."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
+        user_id = getattr(source, 'user_id', None)
+        is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+        if group_id and user_id and not is_dm:
+            record_user_name(group_id, user_id)
+        if not group_settings.get(group_id, True):
+            return
+        if not location_translate_enabled:
+            return
+        # Translate location title/address if available
+        title = getattr(event.message, 'title', '') or ''
+        address = getattr(event.message, 'address', '') or ''
+        if title or address:
+            loc_text = (title + " " + address).strip()
+            lang = detect_language(loc_text)
+            if lang and lang != "zh":
+                result = translate(loc_text, lang, "zh")
+                if result:
+                    try:
+                        with ApiClient(configuration) as api_client:
+                            api = MessagingApi(api_client)
+                            api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text="📍 " + LANG_FLAGS.get("zh", "") + " " + result)]
+                            ))
+                    except Exception:
+                        pass
+
+
 if JoinEvent:
     @handler.add(JoinEvent)
     def handle_join(event):
@@ -2280,6 +2588,614 @@ if JoinEvent:
             pass
         group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
         save_settings()
+
+if MemberJoinedEvent:
+    @handler.add(MemberJoinedEvent)
+    def handle_member_joined(event):
+        """Send bilingual welcome when a new member joins the group."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None)
+        if not group_id:
+            return
+        # Record new members
+        members = getattr(event, 'joined', None)
+        if members and hasattr(members, 'members'):
+            for member in members.members:
+                uid = getattr(member, 'user_id', None)
+                if uid:
+                    record_user_name(group_id, uid)
+        # Send welcome if enabled
+        if not welcome_settings.get("enabled", True):
+            return
+        if not group_settings.get(group_id, True):
+            return
+        try:
+            zh = welcome_settings.get("text_zh", "")
+            id_text = welcome_settings.get("text_id", "")
+            welcome = zh + "\n\n" + id_text if zh and id_text else (zh or id_text)
+            if welcome:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=welcome)]
+                    ))
+        except Exception as e:
+            logger.warning("Failed to send welcome: %s", e)
+
+
+if MemberLeftEvent:
+    @handler.add(MemberLeftEvent)
+    def handle_member_left(event):
+        """Track when a member leaves the group."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None)
+        if not group_id:
+            return
+        left = getattr(event, 'left', None)
+        if left and hasattr(left, 'members'):
+            for member in left.members:
+                uid = getattr(member, 'user_id', None)
+                if uid:
+                    # Remove from skip list
+                    if group_id in group_skip_users:
+                        group_skip_users[group_id].discard(uid)
+                    logger.info("Member %s left group %s", uid, group_id)
+
+
+if FollowEvent:
+    @handler.add(FollowEvent)
+    def handle_follow(event):
+        """Track when a user adds the bot as friend."""
+        user_id = getattr(event.source, 'user_id', None)
+        if not user_id:
+            return
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                profile = api.get_profile(user_id)
+                dm_known_users[user_id] = profile.display_name or user_id
+                lang = getattr(profile, 'language', None)
+                if lang:
+                    user_languages[user_id] = lang
+        except Exception:
+            dm_known_users[user_id] = user_id
+        bot_stats["followers"] = bot_stats.get("followers", 0) + 1
+        save_settings()
+        logger.info("New follower: %s", dm_known_users.get(user_id, user_id))
+
+
+if UnfollowEvent:
+    @handler.add(UnfollowEvent)
+    def handle_unfollow(event):
+        """Track when a user blocks/removes the bot."""
+        user_id = getattr(event.source, 'user_id', None)
+        if user_id:
+            bot_stats["unfollowers"] = bot_stats.get("unfollowers", 0) + 1
+            logger.info("Unfollowed by: %s", user_id)
+
+
+if BotLeaveEvent:
+    @handler.add(BotLeaveEvent)
+    def handle_bot_leave(event):
+        """Clean up when bot is removed from a group."""
+        group_id = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+        if group_id:
+            group_tracking.pop(group_id, None)
+            group_settings.pop(group_id, None)
+            group_target_lang.pop(group_id, None)
+            group_img_settings.pop(group_id, None)
+            group_audio_settings.pop(group_id, None)
+            group_wo_settings.pop(group_id, None)
+            group_skip_users.pop(group_id, None)
+            group_user_names.pop(group_id, None)
+            save_settings()
+            logger.info("Bot removed from group %s", group_id)
+
+
+if PostbackEvent:
+    @handler.add(PostbackEvent)
+    def handle_postback(event):
+        """Handle postback actions from Quick Reply etc."""
+        data = event.postback.data if hasattr(event.postback, 'data') else ""
+        logger.info("Postback: %s", data)
+
+
+if UnsendEvent:
+    @handler.add(UnsendEvent)
+    def handle_unsend(event):
+        """Clean up cached message when user unsends."""
+        msg_id = getattr(event.unsend, 'message_id', None) if hasattr(event, 'unsend') else None
+        if msg_id and msg_id in message_cache:
+            del message_cache[msg_id]
+            logger.info("Unsend: removed message %s from cache", msg_id)
+
+
+def show_loading(chat_id):
+    """Show typing indicator before translation."""
+    if not ShowLoadingAnimationRequest:
+        return
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.show_loading_animation(ShowLoadingAnimationRequest(chat_id=chat_id))
+    except Exception:
+        pass
+
+
+def get_line_quota():
+    """Get LINE monthly message quota info."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            quota = api.get_message_quota()
+            consumption = api.get_message_quota_consumption()
+            return {
+                "quota": getattr(quota, 'value', None),
+                "type": getattr(quota, 'type', None),
+                "used": getattr(consumption, 'total_usage', None),
+            }
+    except Exception:
+        return None
+
+
+def get_follower_count():
+    """Get bot follower count."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_number_of_followers(var_date=time.strftime("%Y%m%d"))
+            return getattr(resp, 'followers', None)
+    except Exception:
+        return None
+
+
+def get_bot_info():
+    """Get bot's own profile info."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            info = api.get_bot_info()
+            return {
+                "name": getattr(info, 'display_name', ''),
+                "picture": getattr(info, 'picture_url', ''),
+                "status": getattr(info, 'chat_mode', ''),
+            }
+    except Exception:
+        return None
+
+
+def get_group_member_count(group_id):
+    """Get group member count from LINE API."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            count = api.get_group_members_count(group_id)
+            return count
+    except Exception:
+        return None
+
+
+def fetch_all_group_members(group_id):
+    """Fetch all member IDs in a group using LINE API."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            member_ids = []
+            token = None
+            while True:
+                if token:
+                    resp = api.get_group_members_ids(group_id, start=token)
+                else:
+                    resp = api.get_group_members_ids(group_id)
+                member_ids.extend(resp.member_user_ids or [])
+                token = getattr(resp, 'next', None)
+                if not token:
+                    break
+            # Record names for all members
+            for uid in member_ids:
+                record_user_name(group_id, uid)
+            logger.info("Fetched %d members from group %s", len(member_ids), group_id)
+            return member_ids
+    except Exception as e:
+        logger.warning("Failed to fetch group members: %s", e)
+        return []
+
+
+def push_message_to_group(group_id, text):
+    """Push a message to a group (not a reply)."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.push_message(PushMessageRequest(
+                to=group_id,
+                messages=[TextMessage(text=text)]
+            ))
+            return True
+    except Exception as e:
+        logger.warning("Push message failed: %s", e)
+        return False
+
+
+def setup_rich_menu():
+    """Create a rich menu with common bot actions."""
+    if not RichMenuRequest:
+        logger.warning("RichMenuRequest not available, skipping rich menu setup")
+        return None
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            # Delete existing default rich menu
+            try:
+                api.cancel_default_rich_menu()
+            except Exception:
+                pass
+            # Create new rich menu (2-column, 1-row layout)
+            rm = RichMenuRequest(
+                size=RichMenuSize(width=2500, height=843),
+                selected=True,
+                name="翻譯Bot選單",
+                chat_bar_text="📋 選單",
+                areas=[
+                    RichMenuArea(
+                        bounds=RichMenuBounds(x=0, y=0, width=833, height=843),
+                        action=MessageAction(label="說明", text="/help")
+                    ),
+                    RichMenuArea(
+                        bounds=RichMenuBounds(x=833, y=0, width=834, height=843),
+                        action=MessageAction(label="狀態", text="/status")
+                    ),
+                    RichMenuArea(
+                        bounds=RichMenuBounds(x=1667, y=0, width=833, height=843),
+                        action=MessageAction(label="查儲區", text="/qry ")
+                    ),
+                ]
+            )
+            result = api.create_rich_menu(rm)
+            rid = result.rich_menu_id
+            # Generate simple image for rich menu
+            _upload_rich_menu_image(api_client, rid)
+            # Set as default
+            api.set_default_rich_menu(rid)
+            logger.info("Rich menu created: %s", rid)
+            return rid
+    except Exception as e:
+        logger.warning("Rich menu setup failed: %s", e)
+        return None
+
+
+def _upload_rich_menu_image(api_client, rich_menu_id):
+    """Generate and upload a simple rich menu image."""
+    try:
+        # Create a simple PNG image (2500x843) with 3 sections
+        import struct, zlib
+        W, H = 2500, 843
+        # Simple solid color bars: purple sections with white text area
+        row_bytes = []
+        for y in range(H):
+            row = b'\x00'  # filter byte
+            for x in range(W):
+                if x < 833:
+                    row += b'\x6c\x5f\xef'  # purple 1
+                elif x < 1667:
+                    row += b'\x5a\x4f\xdf'  # purple 2
+                else:
+                    row += b'\x48\x3f\xcf'  # purple 3
+            row_bytes.append(row)
+        raw = b''.join(row_bytes)
+        # PNG encoding
+        def png_chunk(chunk_type, data):
+            c = chunk_type + data
+            return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+        header = b'\x89PNG\r\n\x1a\n'
+        ihdr = struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0)
+        compressed = zlib.compress(raw)
+        png_data = header + png_chunk(b'IHDR', ihdr) + png_chunk(b'IDAT', compressed) + png_chunk(b'IEND', b'')
+        blob_api = MessagingApiBlob(api_client)
+        blob_api.set_rich_menu_image(rich_menu_id, body=png_data, _headers={'Content-Type': 'image/png'})
+    except Exception as e:
+        logger.warning("Rich menu image upload failed: %s", e)
+
+
+def delete_rich_menu():
+    """Delete the default rich menu."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.cancel_default_rich_menu()
+            return True
+    except Exception:
+        return False
+
+
+def get_sender_object():
+    """Build Sender object for customized bot display name/icon."""
+    if not MessageSender or not sender_name:
+        return None
+    try:
+        kwargs = {"name": sender_name}
+        if sender_icon and sender_icon.startswith("http"):
+            kwargs["icon_url"] = sender_icon
+        return MessageSender(**kwargs)
+    except Exception:
+        return None
+
+
+def get_insight_followers():
+    """Get follower demographics from Insight API."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            # Get follower demographics
+            demo = api.get_follower_demographics()
+            return {
+                "ages": getattr(demo, 'ages', None),
+                "genders": getattr(demo, 'genders', None),
+                "areas": getattr(demo, 'areas', None),
+                "available": getattr(demo, 'available', False),
+            }
+    except Exception:
+        return None
+
+
+def get_message_delivery_stats(date_str=None):
+    """Get message delivery stats for a specific date."""
+    try:
+        if not date_str:
+            date_str = time.strftime("%Y%m%d", time.gmtime(time.time() - 86400))
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            stats = api.get_number_of_sent_reply_messages(var_date=date_str)
+            return {
+                "reply": getattr(stats, 'success', 0),
+                "date": date_str,
+            }
+    except Exception:
+        return None
+
+
+def list_rich_menus():
+    """List all existing rich menus."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            result = api.get_rich_menu_list()
+            menus = []
+            for rm in (result.richmenus or []):
+                menus.append({
+                    "id": rm.rich_menu_id,
+                    "name": getattr(rm, 'name', ''),
+                    "selected": getattr(rm, 'selected', False),
+                    "chat_bar_text": getattr(rm, 'chat_bar_text', ''),
+                })
+            return menus
+    except Exception:
+        return []
+
+
+def link_rich_menu_to_user(user_id, rich_menu_id):
+    """Link a specific rich menu to a user."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.link_rich_menu_id_to_user(user_id, rich_menu_id)
+            return True
+    except Exception:
+        return False
+
+
+def unlink_rich_menu_from_user(user_id):
+    """Unlink rich menu from a user."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.unlink_rich_menu_id_from_user(user_id)
+            return True
+    except Exception:
+        return False
+
+
+def multicast_message(user_ids, text):
+    """Send a message to multiple users at once."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.multicast(MulticastRequest(
+                to=user_ids,
+                messages=[TextMessage(text=text)]
+            ))
+            return True
+    except Exception as e:
+        logger.warning("Multicast failed: %s", e)
+        return False
+
+
+def build_confirm_template(text, yes_label, yes_data, no_label, no_data):
+    """Build a ConfirmTemplate message for yes/no interactions."""
+    if not TemplateMessage:
+        return None
+    try:
+        return TemplateMessage(
+            alt_text=text,
+            template=ConfirmTemplate(
+                text=text,
+                actions=[
+                    PostbackAction(label=yes_label, data=yes_data),
+                    PostbackAction(label=no_label, data=no_data),
+                ]
+            )
+        )
+    except Exception:
+        return None
+
+
+def build_carousel(columns):
+    """Build a CarouselTemplate message.
+    columns: list of {"title": str, "text": str, "actions": [{"label": str, "text": str}]}
+    """
+    if not TemplateMessage or not CarouselTemplate:
+        return None
+    try:
+        cols = []
+        for c in columns[:10]:  # max 10 columns
+            actions = [MessageAction(label=a["label"], text=a["text"]) for a in c.get("actions", [])]
+            cols.append(CarouselColumn(
+                title=c.get("title", "")[:40],
+                text=c.get("text", "")[:60],
+                actions=actions[:3]  # max 3 actions
+            ))
+        return TemplateMessage(
+            alt_text=columns[0].get("title", "選單"),
+            template=CarouselTemplate(columns=cols)
+        )
+    except Exception:
+        return None
+
+
+def broadcast_message(text):
+    """Broadcast a message to all bot followers."""
+    if not BroadcastRequest:
+        return False
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.broadcast(BroadcastRequest(
+                messages=[TextMessage(text=text)]
+            ))
+            return True
+    except Exception as e:
+        logger.warning("Broadcast failed: %s", e)
+        return False
+
+
+def manage_rich_menu_alias(alias_id, rich_menu_id, action="create"):
+    """Create or delete a Rich Menu alias."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            if action == "create" and CreateRichMenuAliasRequest:
+                api.create_rich_menu_alias(CreateRichMenuAliasRequest(
+                    rich_menu_alias_id=alias_id,
+                    rich_menu_id=rich_menu_id
+                ))
+                return True
+            elif action == "delete":
+                api.delete_rich_menu_alias(alias_id)
+                return True
+    except Exception as e:
+        logger.warning("Rich menu alias %s failed: %s", action, e)
+    return False
+
+
+def batch_link_rich_menu(user_ids, rich_menu_id):
+    """Link a rich menu to multiple users at once."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.link_rich_menu_id_to_users(
+                rich_menu_id=rich_menu_id,
+                user_ids=user_ids
+            )
+            return True
+    except Exception as e:
+        logger.warning("Batch rich menu link failed: %s", e)
+        return False
+
+
+def batch_unlink_rich_menu(user_ids):
+    """Unlink rich menu from multiple users at once."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.unlink_rich_menu_id_from_users(user_ids=user_ids)
+            return True
+    except Exception as e:
+        logger.warning("Batch rich menu unlink failed: %s", e)
+        return False
+
+
+def add_line_emoji_to_text(text, emoji_product_id="5ac1bfd5040ab15980c9b435", emoji_ids=None):
+    """Build a TextMessage with LINE emojis embedded.
+    This is a helper - LINE emojis use $placeholder in text + emojis array."""
+    # LINE emoji format: text has $ placeholders, emojis array maps each
+    # For simplicity, return a TextMessage with emoji support
+    try:
+        if not emoji_ids:
+            return TextMessage(text=text)
+        emojis = []
+        for i, eid in enumerate(emoji_ids):
+            emojis.append({
+                "index": text.index("$", sum(1 for c in text[:text.index("$")] if True)),
+                "productId": emoji_product_id,
+                "emojiId": eid
+            })
+        return TextMessage(text=text, emojis=emojis)
+    except Exception:
+        return TextMessage(text=text)
+
+
+def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name_display=None, quoted_text=None):
+    """Build a Flex Message for translation with original + translated text."""
+    try:
+        body_contents = []
+        # Quoted message context (if replying to another message)
+        if quoted_text:
+            qt = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
+            body_contents.append({
+                "type": "text", "text": "↩ " + qt,
+                "size": "xxs", "color": "#6a6a7a", "wrap": True, "margin": "none",
+                "style": "italic"
+            })
+            body_contents.append({"type": "separator", "margin": "sm"})
+        # Sender name
+        if sender_name_display:
+            body_contents.append({
+                "type": "text", "text": sender_name_display,
+                "size": "xs", "color": "#8a8a9a", "margin": "none"
+            })
+        # Original text
+        body_contents.append({
+            "type": "text", "text": src_flag + " " + original,
+            "size": "sm", "color": "#b0b0b0", "wrap": True, "margin": "sm"
+        })
+        # Separator
+        body_contents.append({"type": "separator", "margin": "md"})
+        # Translated text
+        body_contents.append({
+            "type": "text", "text": tgt_flag + " " + translated,
+            "size": "md", "color": "#ffffff", "wrap": True, "margin": "md", "weight": "bold"
+        })
+
+        flex_obj = {
+            "type": "bubble",
+            "size": "kilo",
+            "body": {
+                "type": "box", "layout": "vertical",
+                "contents": body_contents,
+                "backgroundColor": "#1a1a2e",
+                "paddingAll": "16px",
+                "cornerRadius": "12px"
+            }
+        }
+        return FlexMessage(
+            alt_text=tgt_flag + " " + translated,
+            contents=FlexContainer.from_dict(flex_obj)
+        )
+    except Exception as e:
+        logger.warning("Flex message build failed, falling back to text: %s", e)
+        return None
+
+
+def build_quick_reply():
+    """Build Quick Reply buttons for translation messages."""
+    try:
+        return QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="📋 查儲區", text="/qry ")),
+            QuickReplyItem(action=MessageAction(label="❌ 不翻我", text="/skip")),
+            QuickReplyItem(action=MessageAction(label="📊 狀態", text="/status")),
+        ])
+    except Exception:
+        return None
 
 
 # ─── Admin Panel ────────────────────────────────────────
@@ -2406,6 +3322,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tab" onclick="switchTab('users')">使用者</div>
 <div class="tab" onclick="switchTab('names')">保護名單</div>
 <div class="tab" onclick="switchTab('storage')">儲區</div>
+<div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
 <!-- Overview Panel -->
@@ -2505,6 +3422,97 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div>
 </div>
 
+<!-- Settings Panel -->
+<div class="panel" id="panel-settings">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">⚙️ 功能設定</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">👋 歡迎訊息</span><br><span style="font-size:12px;color:#8a8a9a">新成員加入時自動發送</span></div>
+<label class="toggle"><input type="checkbox" id="welcomeToggle" onchange="toggleFeatureSetting('welcome_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div style="padding:12px 0">
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">中文歡迎詞</div>
+<textarea id="welcomeZh" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" onblur="saveWelcomeText()"></textarea>
+<div style="font-size:13px;color:#8a8a9a;margin:8px 0 6px">印尼文歡迎詞</div>
+<textarea id="welcomeId" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" onblur="saveWelcomeText()"></textarea>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🎨 Flex 翻譯卡片</span><br><span style="font-size:12px;color:#8a8a9a">關閉後用純文字顯示</span></div>
+<label class="toggle"><input type="checkbox" id="flexToggle" onchange="toggleFeatureSetting('flex_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">⚡ Quick Reply 按鈕</span><br><span style="font-size:12px;color:#8a8a9a">翻譯後顯示快捷操作</span></div>
+<label class="toggle"><input type="checkbox" id="qrToggle" onchange="toggleFeatureSetting('quick_reply_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🔇 靜音模式</span><br><span style="font-size:12px;color:#8a8a9a">翻譯訊息不震動手機</span></div>
+<label class="toggle"><input type="checkbox" id="silentToggle" onchange="toggleFeatureSetting('silent_mode',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🎬 影片 OCR 翻譯</span><br><span style="font-size:12px;color:#8a8a9a">影片截圖自動 OCR 翻譯</span></div>
+<label class="toggle"><input type="checkbox" id="videoToggle" onchange="toggleFeatureSetting('video_ocr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">📍 位置訊息翻譯</span><br><span style="font-size:12px;color:#8a8a9a">翻譯地點名稱和地址</span></div>
+<label class="toggle"><input type="checkbox" id="locationToggle" onchange="toggleFeatureSetting('location_translate_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📊 LINE 配額 & 統計</div>
+<div id="lineQuotaInfo" style="font-size:13px;color:#8a8a9a">載入中...</div>
+<div id="lineInsight" style="font-size:13px;color:#8a8a9a;margin-top:8px"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🤖 Bot 顯示設定</div>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">名稱</div>
+<div style="display:flex;gap:8px;margin-bottom:8px">
+<input id="senderNameInput" type="text" placeholder="翻譯小助手" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<button class="btn btn-primary btn-sm" onclick="saveSenderSettings()">儲存</button>
+</div>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">圖示 URL（選填）</div>
+<input id="senderIconInput" type="text" placeholder="https://example.com/icon.png" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📢 推送訊息</div>
+<div class="ch-select-wrap" style="margin-bottom:8px">
+<select class="ch-select" id="pushGroupSelect" style="font-size:13px;padding:10px"></select>
+</div>
+<textarea id="pushText" rows="3" placeholder="輸入要推送的訊息..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical;margin-bottom:8px"></textarea>
+<div style="display:flex;gap:8px">
+<button class="btn btn-primary btn-sm" onclick="pushMessage()">📤 推送到群組</button>
+<button class="btn btn-dark btn-sm" onclick="broadcastMessage()">📣 推送全體好友</button>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📋 Rich Menu 選單</div>
+<div style="display:flex;gap:8px;margin-bottom:8px">
+<button class="btn btn-primary btn-sm" onclick="createRichMenu()">建立選單</button>
+<button class="btn btn-red btn-sm" onclick="deleteRichMenu()">刪除選單</button>
+</div>
+<div id="richMenuList" style="font-size:12px;color:#8a8a9a;margin-top:6px">LINE 底部常駐按鈕</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">👥 批次載入成員</div>
+<div class="ch-select-wrap" style="margin-bottom:8px">
+<select class="ch-select" id="fetchMembersGroupSelect" style="font-size:13px;padding:10px"></select>
+</div>
+<button class="btn btn-primary btn-sm" onclick="fetchAllMembers()">載入全部成員</button>
+<div style="font-size:12px;color:#8a8a9a;margin-top:6px">一次取得群組所有成員（不用等發訊息）</div>
+</div>
+</div>
+
 </div><!-- mainPage -->
 </div><!-- app -->
 
@@ -2540,7 +3548,7 @@ function doLogin(){
   });
 }
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','settings'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -2553,6 +3561,7 @@ function switchTab(name){
   if(name==='users'){loadUsersGroupSelect();loadUsers();}
   if(name==='names') loadNames();
   if(name==='storage') loadStorageStats();
+  if(name==='settings') loadFeatureSettings();
 }
 
 function loadAll(){loadStats();loadGroups();loadDM();loadGroupSelect();loadUsersGroupSelect();loadUsers();loadNames();loadStorageStats()}
@@ -2593,8 +3602,9 @@ async function loadGroups(){
   for(var i=0;i<_groupList.length;i++){
     var g=_groupList[i];
     var skipCt=g.skip_count||0;
+    var memberCt=g.member_count?g.member_count+'人':'--';
     html+='<div class="card">'+
-      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span></div>'+
+      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
       '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
       '<span class="card-sub">中文 ⇄ 🇮🇩 印尼文</span>'+
@@ -2731,9 +3741,10 @@ async function loadUsers(){
   var html='';
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
+    var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
     html+='<div class="user-card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
-      '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div></div>'+
+      '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+langBadge+'</div>'+
       '<div class="user-admin-row">'+
       '<span class="admin-label">🔑 管理員</span>'+
       '<label class="toggle"><input type="checkbox" '+(u.is_admin?'checked':'')+
@@ -2823,11 +3834,134 @@ async function downloadJson(){
   }catch(e){toast('下載失敗')}
 }
 
+// ─── Feature Settings ───
+async function loadFeatureSettings(){
+  var d=await api('/features');
+  if(!d)return;
+  document.getElementById('welcomeToggle').checked=d.welcome_enabled;
+  document.getElementById('welcomeZh').value=d.welcome_text_zh||'';
+  document.getElementById('welcomeId').value=d.welcome_text_id||'';
+  document.getElementById('flexToggle').checked=d.flex_enabled;
+  document.getElementById('qrToggle').checked=d.quick_reply_enabled;
+  document.getElementById('silentToggle').checked=d.silent_mode;
+  document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
+  document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
+  document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
+  document.getElementById('senderIconInput').value=d.sender_icon||'';
+  // Load group selects for push and fetch members
+  loadSettingsGroupSelects();
+  // Load LINE quota
+  var s=await api('/stats');
+  if(s){
+    var info='';
+    if(s.line_quota){
+      var q=s.line_quota;
+      if(q.quota)info+='配額: '+q.quota.toLocaleString()+' 則/月';
+      if(q.used!==null&&q.used!==undefined)info+=(info?' ｜ ':'')+'已用: '+q.used.toLocaleString()+' 則';
+    }
+    if(s.followers)info+=(info?'<br>':'')+'好友: '+s.followers;
+    if(s.unfollowers)info+=' ｜ 封鎖: '+s.unfollowers;
+    if(d.bot_info&&d.bot_info.name)info+=(info?'<br>':'')+'Bot: '+d.bot_info.name;
+    document.getElementById('lineQuotaInfo').innerHTML=info||'無法取得';
+  }
+  // Load Insight API data
+  var ins=await api('/insight');
+  if(ins){
+    var ihtml='';
+    if(ins.delivery&&ins.delivery.reply)ihtml+='昨日回覆: '+ins.delivery.reply+' 則';
+    if(ins.demographics&&ins.demographics.available){
+      if(ins.demographics.genders){ihtml+=(ihtml?'<br>':'')+'性別分布: '+JSON.stringify(ins.demographics.genders)}
+    }
+    document.getElementById('lineInsight').innerHTML=ihtml;
+  }
+  // Load Rich Menu list
+  var rm=await api('/richmenu/list');
+  if(rm&&rm.menus&&rm.menus.length){
+    var rmhtml='目前選單: ';
+    for(var r=0;r<rm.menus.length;r++){
+      rmhtml+='<span class="badge badge-on" style="font-size:11px;margin:2px">'+rm.menus[r].name+'</span> ';
+    }
+    document.getElementById('richMenuList').innerHTML=rmhtml;
+  }else{
+    document.getElementById('richMenuList').textContent='尚未建立 Rich Menu';
+  }
+}
+function toggleFeatureSetting(key,val){
+  var body={};body[key]=val;
+  api('/features','POST',body).then(function(d){if(d)toast('已更新')});
+}
+function saveWelcomeText(){
+  var zh=document.getElementById('welcomeZh').value;
+  var id=document.getElementById('welcomeId').value;
+  api('/features','POST',{welcome_text_zh:zh,welcome_text_id:id}).then(function(d){if(d)toast('歡迎詞已儲存')});
+}
+function saveSenderSettings(){
+  var name=document.getElementById('senderNameInput').value.trim();
+  var icon=document.getElementById('senderIconInput').value.trim();
+  if(!name){toast('請輸入名稱');return}
+  api('/features','POST',{sender_name:name,sender_icon:icon}).then(function(d){if(d)toast('已更新')});
+}
+async function broadcastMessage(){
+  var text=document.getElementById('pushText').value.trim();
+  if(!text){toast('請輸入訊息');return}
+  if(!confirm('確定推送給所有好友？'))return;
+  var d=await api('/broadcast','POST',{text:text});
+  if(d&&d.ok){toast('已推送全體');document.getElementById('pushText').value=''}
+  else toast('推送失敗');
+}
+async function pushMessage(){
+  var gid=document.getElementById('pushGroupSelect').value;
+  var text=document.getElementById('pushText').value.trim();
+  if(!gid){toast('請選擇群組');return}
+  if(!text){toast('請輸入訊息');return}
+  if(!confirm('確定推送到群組？'))return;
+  var d=await api('/push','POST',{group_id:gid,text:text});
+  if(d&&d.ok){toast('已推送');document.getElementById('pushText').value=''}
+  else toast('推送失敗');
+}
+function createRichMenu(){
+  api('/richmenu','POST',{action:'create'}).then(function(d){
+    if(d&&d.ok)toast('Rich Menu 已建立');
+    else toast('建立失敗');
+  });
+}
+function deleteRichMenu(){
+  if(!confirm('確定刪除 Rich Menu？'))return;
+  api('/richmenu','POST',{action:'delete'}).then(function(d){
+    if(d&&d.ok)toast('已刪除');
+    else toast('刪除失敗');
+  });
+}
+async function fetchAllMembers(){
+  var gid=document.getElementById('fetchMembersGroupSelect').value;
+  if(!gid){toast('請選擇群組');return}
+  toast('載入中...');
+  var d=await api('/members','POST',{group_id:gid});
+  if(d&&d.ok)toast('已載入 '+d.count+' 位成員');
+  else toast('載入失敗');
+}
+async function loadSettingsGroupSelects(){
+  var d=await api('/groups');
+  if(!d)return;
+  var groups=d.groups||[];
+  var sels=['pushGroupSelect','fetchMembersGroupSelect'];
+  for(var s=0;s<sels.length;s++){
+    var sel=document.getElementById(sels[s]);
+    sel.innerHTML='<option value="">選擇群組...</option>';
+    for(var i=0;i<groups.length;i++){
+      var g=groups[i];
+      var opt=document.createElement('option');
+      opt.value=g.id;opt.textContent='#'+(g.name||g.id.substring(0,16));
+      sel.appendChild(opt);
+    }
+  }
+}
+
 window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=29').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=38').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -2988,6 +4122,16 @@ def save_settings():
                 "bot_stats": bot_stats,
                 "extra_customers": extra_names_by_group,
                 "group_api_usage": group_api_usage,
+                "user_languages": user_languages,
+                "welcome_settings": welcome_settings,
+                "flex_enabled": flex_enabled,
+                "quick_reply_enabled": quick_reply_enabled,
+                "silent_mode": silent_mode,
+                "sender_name": sender_name,
+                "sender_icon": sender_icon,
+                "video_ocr_enabled": video_ocr_enabled,
+                "location_translate_enabled": location_translate_enabled,
+                "user_pictures": user_pictures,
             }
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
             _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
@@ -3002,7 +4146,8 @@ def load_settings():
     global group_settings, group_target_lang, group_img_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
-    global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group
+    global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
+    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -3031,6 +4176,24 @@ def load_settings():
                 extra_names_by_group["__all__"] = ec
             rebuild_customer_names()
         group_api_usage.update(data.get("group_api_usage", {}))
+        user_languages.update(data.get("user_languages", {}))
+        if "welcome_settings" in data:
+            welcome_settings.update(data.get("welcome_settings", {}))
+        if "flex_enabled" in data:
+            flex_enabled = data["flex_enabled"]
+        if "quick_reply_enabled" in data:
+            quick_reply_enabled = data["quick_reply_enabled"]
+        if "silent_mode" in data:
+            silent_mode = data["silent_mode"]
+        if "sender_name" in data:
+            sender_name = data["sender_name"]
+        if "sender_icon" in data:
+            sender_icon = data["sender_icon"]
+        if "video_ocr_enabled" in data:
+            video_ocr_enabled = data["video_ocr_enabled"]
+        if "location_translate_enabled" in data:
+            location_translate_enabled = data["location_translate_enabled"]
+        user_pictures.update(data.get("user_pictures", {}))
         logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names",
                      len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS))
     except Exception as e:
@@ -3201,6 +4364,7 @@ def api_admin_groups():
             "work_order_on": group_wo_settings.get(gid, True),
             "skip_count": skip_count,
             "cost_twd": calc_group_cost_twd(gid),
+            "member_count": get_group_member_count(gid),
         })
     groups.sort(key=lambda x: x["name"] or x["id"])
     return jsonify({"groups": groups})
@@ -3263,7 +4427,202 @@ def api_admin_stats():
         "tokens_completion": tc,
         "tokens_total": tp + tc,
         "estimated_cost_usd": round(cost, 4),
+        "followers": bot_stats.get("followers", 0),
+        "unfollowers": bot_stats.get("unfollowers", 0),
+        "line_quota": get_line_quota(),
+        # Feature settings
+        "welcome_enabled": welcome_settings.get("enabled", True),
+        "welcome_text_zh": welcome_settings.get("text_zh", ""),
+        "welcome_text_id": welcome_settings.get("text_id", ""),
+        "flex_enabled": flex_enabled,
+        "quick_reply_enabled": quick_reply_enabled,
+        "silent_mode": silent_mode,
     })
+
+
+@app.route("/api/admin/features", methods=["GET", "POST"])
+def api_admin_features():
+    """Get/set feature settings."""
+    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
+    global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "POST":
+        data = request.get_json() or {}
+        if "welcome_enabled" in data:
+            welcome_settings["enabled"] = bool(data["welcome_enabled"])
+        if "welcome_text_zh" in data:
+            welcome_settings["text_zh"] = str(data["welcome_text_zh"])
+        if "welcome_text_id" in data:
+            welcome_settings["text_id"] = str(data["welcome_text_id"])
+        if "flex_enabled" in data:
+            flex_enabled = bool(data["flex_enabled"])
+        if "quick_reply_enabled" in data:
+            quick_reply_enabled = bool(data["quick_reply_enabled"])
+        if "silent_mode" in data:
+            silent_mode = bool(data["silent_mode"])
+        if "video_ocr_enabled" in data:
+            video_ocr_enabled = bool(data["video_ocr_enabled"])
+        if "location_translate_enabled" in data:
+            location_translate_enabled = bool(data["location_translate_enabled"])
+        if "sender_name" in data:
+            sender_name = str(data["sender_name"])[:20]
+        if "sender_icon" in data:
+            sender_icon = str(data["sender_icon"])
+        save_settings()
+        return jsonify({"ok": True})
+    return jsonify({
+        "welcome_enabled": welcome_settings.get("enabled", True),
+        "welcome_text_zh": welcome_settings.get("text_zh", ""),
+        "welcome_text_id": welcome_settings.get("text_id", ""),
+        "flex_enabled": flex_enabled,
+        "quick_reply_enabled": quick_reply_enabled,
+        "silent_mode": silent_mode,
+        "video_ocr_enabled": video_ocr_enabled,
+        "location_translate_enabled": location_translate_enabled,
+        "sender_name": sender_name,
+        "sender_icon": sender_icon,
+        "bot_info": get_bot_info(),
+    })
+
+
+@app.route("/api/admin/push", methods=["POST"])
+def api_admin_push():
+    """Push a message to a group."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    gid = data.get("group_id", "")
+    text = data.get("text", "").strip()
+    if not gid or not text:
+        return jsonify({"error": "missing group_id or text"}), 400
+    ok = push_message_to_group(gid, text)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/richmenu", methods=["POST"])
+def api_admin_richmenu():
+    """Create or delete rich menu."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    action = data.get("action", "create")
+    if action == "create":
+        rid = setup_rich_menu()
+        return jsonify({"ok": bool(rid), "rich_menu_id": rid})
+    elif action == "delete":
+        ok = delete_rich_menu()
+        return jsonify({"ok": ok})
+    return jsonify({"error": "invalid action"}), 400
+
+
+@app.route("/api/admin/members", methods=["POST"])
+def api_admin_fetch_members():
+    """Fetch all members of a group."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    gid = data.get("group_id", "")
+    if not gid:
+        return jsonify({"error": "missing group_id"}), 400
+    members = fetch_all_group_members(gid)
+    save_settings()
+    return jsonify({"ok": True, "count": len(members)})
+
+
+@app.route("/api/admin/insight")
+def api_admin_insight():
+    """Get follower demographics and message delivery stats."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({
+        "demographics": get_insight_followers(),
+        "delivery": get_message_delivery_stats(),
+    })
+
+
+@app.route("/api/admin/richmenu/list")
+def api_admin_richmenu_list():
+    """List all rich menus."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({"menus": list_rich_menus()})
+
+
+@app.route("/api/admin/richmenu/link", methods=["POST"])
+def api_admin_richmenu_link():
+    """Link/unlink rich menu to a specific user."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    user_id = data.get("user_id", "")
+    rm_id = data.get("rich_menu_id", "")
+    action = data.get("action", "link")
+    if not user_id:
+        return jsonify({"error": "missing user_id"}), 400
+    if action == "link" and rm_id:
+        ok = link_rich_menu_to_user(user_id, rm_id)
+    elif action == "unlink":
+        ok = unlink_rich_menu_from_user(user_id)
+    else:
+        return jsonify({"error": "invalid params"}), 400
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/multicast", methods=["POST"])
+def api_admin_multicast():
+    """Send a message to multiple users."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    user_ids = data.get("user_ids", [])
+    text = data.get("text", "").strip()
+    if not user_ids or not text:
+        return jsonify({"error": "missing user_ids or text"}), 400
+    ok = multicast_message(user_ids, text)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/broadcast", methods=["POST"])
+def api_admin_broadcast():
+    """Broadcast to all followers."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "missing text"}), 400
+    ok = broadcast_message(text)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/richmenu/alias", methods=["POST"])
+def api_admin_richmenu_alias():
+    """Create/delete rich menu alias."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    alias_id = data.get("alias_id", "")
+    rm_id = data.get("rich_menu_id", "")
+    action = data.get("action", "create")
+    ok = manage_rich_menu_alias(alias_id, rm_id, action)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/richmenu/batch", methods=["POST"])
+def api_admin_richmenu_batch():
+    """Batch link/unlink rich menu to users."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    user_ids = data.get("user_ids", [])
+    rm_id = data.get("rich_menu_id", "")
+    action = data.get("action", "link")
+    if action == "link" and rm_id:
+        ok = batch_link_rich_menu(user_ids, rm_id)
+    else:
+        ok = batch_unlink_rich_menu(user_ids)
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/admin/groups/settings", methods=["POST"])
@@ -3379,19 +4738,17 @@ def api_admin_users():
     filter_gid = request.args.get("group_id", "")
     users = []
     if filter_gid:
-        # Show only users from this group
         names_cache = group_user_names.get(filter_gid, {})
         for uid, name in names_cache.items():
-            tgt = dm_target_lang.get(uid, None)
             is_admin = admin_users.get(uid, {}).get("is_admin", False)
             users.append({
                 "user_id": uid,
                 "name": name,
-                "target_lang": tgt,
                 "is_admin": is_admin,
+                "line_lang": user_languages.get(uid, ""),
+                "picture_url": user_pictures.get(uid, ""),
             })
     else:
-        # Merge DM users + all group users
         all_users = {}
         for uid, name in dm_known_users.items():
             all_users[uid] = name
@@ -3400,13 +4757,13 @@ def api_admin_users():
                 if uid not in all_users:
                     all_users[uid] = name
         for uid, name in all_users.items():
-            tgt = dm_target_lang.get(uid, None)
             is_admin = admin_users.get(uid, {}).get("is_admin", False)
             users.append({
                 "user_id": uid,
                 "name": name,
-                "target_lang": tgt,
                 "is_admin": is_admin,
+                "line_lang": user_languages.get(uid, ""),
+                "picture_url": user_pictures.get(uid, ""),
             })
     users.sort(key=lambda x: x["name"])
     return jsonify({"users": users})
