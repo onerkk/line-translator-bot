@@ -3525,32 +3525,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408b</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408c</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
 <button class="btn btn-primary" onclick="doLogin()">登入</button>
 </div>
 </div>
 </div>
-<script>
-function doLogin(){
-  try{
-    var k=document.getElementById('pwInput').value.trim();
-    if(!k){alert('請輸入密碼');return}
-    fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d&&d.ok){
-        document.getElementById('loginPage').style.display='none';
-        document.getElementById('mainPage').style.display='block';
-        window._KEY=k;
-      }else{
-        alert('登入失敗: '+JSON.stringify(d));
-      }
-    })
-    .catch(function(e){alert('連線錯誤: '+e)});
-  }catch(ex){alert('例外: '+ex)}
-}
-</script>
 
 <!-- Main -->
 <div id="mainPage" style="display:none">
@@ -4344,13 +4324,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=46').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=47').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v46';
+SW_JS = '''const CACHE='bot-admin-v47';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
