@@ -124,7 +124,7 @@
   "flex_enabled": true,
   "quick_reply_enabled": true,
   "silent_mode": false,
-  "sender_name": "翻譯小助手",
+  "sender_name": "AI機器人",
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat.png",
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
