@@ -3792,8 +3792,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="toast" id="toast"></div>
 
 <script>
-window.onerror=function(msg,url,line,col,err){alert('JS Error: '+msg+' (line '+line+')');return false};
-window.addEventListener('unhandledrejection',function(e){alert('Promise Error: '+e.reason)});
+window.onerror=function(msg,url,line,col,err){
+  document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\n'+msg+'\nLine: '+line+'\nCol: '+col+'</div>';
+  return false;
+};
+</script>
+<script>
 let KEY='';
 const API=window.location.origin+'/api/admin';
 const FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
