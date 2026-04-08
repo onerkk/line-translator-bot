@@ -62,13 +62,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 10,
+    "text_translations": 11,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 1,
-    "tokens_prompt": 136441,
-    "tokens_completion": 765
+    "tokens_prompt": 144560,
+    "tokens_completion": 766
   },
   "extra_customers": {
     "__all__": [
@@ -119,8 +119,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 72230,
-      "tokens_completion": 179
+      "tokens_prompt": 80349,
+      "tokens_completion": 180
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 31073,
@@ -133,7 +133,7 @@
     "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
-  "flex_enabled": false,
+  "flex_enabled": true,
   "quick_reply_enabled": true,
   "silent_mode": false,
   "sender_name": "AI機器人",
