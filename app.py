@@ -3525,12 +3525,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408c</div>
-<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
-<button class="btn btn-primary" onclick="doLogin()">登入</button>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408d</div>
+<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
+<div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
+<button class="btn btn-primary" id="loginBtn" type="button">登入</button>
 </div>
 </div>
 </div>
+<script>
+document.getElementById('loginBtn').addEventListener('click',function(){
+  var m=document.getElementById('loginMsg');
+  m.textContent='登入中...';
+  try{doLogin()}catch(e){m.textContent='錯誤: '+e.message}
+});
+</script>
 
 <!-- Main -->
 <div id="mainPage" style="display:none">
@@ -4324,13 +4332,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=47').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=48').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v47';
+SW_JS = '''const CACHE='bot-admin-v48';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
