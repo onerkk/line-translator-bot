@@ -3525,6 +3525,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
 <button class="btn btn-primary" onclick="doLogin()">登入</button>
 </div>
@@ -3813,13 +3814,15 @@ async function api(path,method,body){
 function doLogin(){
   KEY=document.getElementById('pwInput').value.trim();
   if(!KEY){toast('請輸入密碼');return}
+  alert('DEBUG: calling API...');
   api('/status').then(function(d){
+    alert('DEBUG: API returned: '+JSON.stringify(d));
     if(!d)return;
     document.getElementById('loginPage').style.display='none';
     document.getElementById('mainPage').style.display='block';
     localStorage.setItem('bot_admin_key',KEY);
     loadAll();
-  });
+  }).catch(function(e){alert('DEBUG: error='+e)});
 }
 
 var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','settings'];
