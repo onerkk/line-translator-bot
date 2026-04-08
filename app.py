@@ -115,6 +115,27 @@ group_img_settings = {}
 group_audio_settings = {}
 # Work order photo detection toggle per group, default True
 group_wo_settings = {}
+# Per-group command toggles: {group_id: {"pw1": bool, "pw2": bool, ...}}
+group_cmd_enabled = {}
+# Command definitions: (key, emoji+label_on, emoji+label_off, default)
+CMD_DEFS = [
+    ("pw1",    "🔑密碼1開", "🔑密碼1關", True),
+    ("pw2",    "🏭密碼2開", "🏭密碼2關", True),
+    ("pkg",    "📦包裝開",  "📦包裝關",  True),
+    ("scrap",  "🎨廢料開",  "🎨廢料關",  True),
+    ("qry",    "🔍儲區開",  "🔍儲區關",  True),
+    ("notice", "📢公告開",  "📢公告關",  True),
+]
+
+def is_cmd_enabled(group_id, cmd_key):
+    """Check if a command is enabled for a group."""
+    cmds = group_cmd_enabled.get(group_id, {})
+    # Find default from CMD_DEFS
+    for key, _, _, default in CMD_DEFS:
+        if key == cmd_key:
+            return cmds.get(cmd_key, default)
+    return True
+
 # Skip list: set of user_ids per group whose messages won't be translated
 group_skip_users = {}
 # Track user display names per group: {group_id: {user_id: display_name}}
@@ -1909,14 +1930,25 @@ def handle_pkg_command(text):
             return result
     if not entry:
         return "❌ 找不到包裝碼: " + query
-    # Build response - show ALL fields dynamically
+    # Build response - show specific fields in order
+    # Match Excel headers by keyword → display label
+    PKG_DISPLAY = [
+        ("簡稱",       ["簡稱"]),
+        ("詳細包裝方式", ["詳細包裝", "包裝方式說明", "包裝方式"]),
+        ("內包裝",     ["內包裝"]),
+        ("外包裝",     ["外包裝"]),
+        ("固定繩",     ["固定繩", "固定"]),
+    ]
     lines = []
     lines.append("📦 包裝碼: " + matched_key)
     lines.append("=" * 20)
     if isinstance(entry, dict):
-        for field_name, field_val in entry.items():
-            if field_val:
-                lines.append(str(field_name) + ": " + str(field_val))
+        for display_label, keywords in PKG_DISPLAY:
+            # Find matching field in entry
+            for field_name, field_val in entry.items():
+                if field_val and any(kw in field_name for kw in keywords):
+                    lines.append(display_label + ": " + str(field_val))
+                    break
     elif isinstance(entry, str):
         lines.append(entry)
     lines.append("=" * 20)
@@ -2082,6 +2114,8 @@ def handle_command(text, group_id, user_id=None):
     elif cmd.startswith("/lang"):
         return handle_lang_command(text, group_id)
     elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
+        if not is_cmd_enabled(group_id, "notice"):
+            return None
         content = text.strip()[8:].strip()
         if not content:
             return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\n\u4f8b\u5982 / Contoh: /notice \u660e\u5929\u653e\u5047\u4e00\u5929"
@@ -2094,14 +2128,24 @@ def handle_command(text, group_id, user_id=None):
                 return make_notice_from_other(content, src)
             return make_notice(content, tgt)
     elif text.strip().lower().startswith("/qry"):
+        if not is_cmd_enabled(group_id, "qry"):
+            return None
         return handle_qry_command(text)
     elif cmd == "/pw1":
+        if not is_cmd_enabled(group_id, "pw1"):
+            return None
         return "🔑 班長密碼 / PW Shift Leader\n" + "=" * 18 + "\n" + pw1_text + "\n" + "=" * 18
     elif cmd == "/pw2":
+        if not is_cmd_enabled(group_id, "pw2"):
+            return None
         return "🏭 儲運密碼 / PW Gudang\n" + "=" * 18 + "\n" + pw2_text + "\n" + "=" * 18
     elif cmd == "/scrap":
+        if not is_cmd_enabled(group_id, "scrap"):
+            return None
         return scrap_text
     elif text.strip().lower().startswith("/pkg"):
+        if not is_cmd_enabled(group_id, "pkg"):
+            return None
         return handle_pkg_command(text)
     return None
 
@@ -3841,6 +3885,7 @@ async function loadGroups(){
       '<span class="feat-badge '+(g.image_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',1)">🖼️ '+(g.image_on?'圖片開':'圖片關')+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
       '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span></div>'+
+      buildCmdBadges(g, i)+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
       '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
@@ -3855,6 +3900,21 @@ function toggleFeat(idx,keyIdx){
   var cur=g[key];
   var body={group_id:g.id};body[key]=!cur;
   api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+}
+var CMD_DEFS=[["pw1","🔑密碼1"],["pw2","🏭密碼2"],["pkg","📦包裝"],["scrap","🎨廢料"],["qry","🔍儲區"],["notice","📢公告"]];
+function buildCmdBadges(g,idx){
+  var ce=g.cmd_enabled||{};
+  var h='<div class="feat-badges" style="margin-top:4px">';
+  for(var c=0;c<CMD_DEFS.length;c++){
+    var key=CMD_DEFS[c][0],label=CMD_DEFS[c][1];
+    var on=ce[key]!==false;
+    h+='<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleCmd('+idx+',\''+key+'\','+(!on)+')">'+label+(on?'開':'關')+'</span>';
+  }
+  return h+'</div>';
+}
+function toggleCmd(idx,key,val){
+  var g=_groupList[idx];if(!g)return;
+  api('/groups/settings','POST',{group_id:g.id,cmd_toggle:key,cmd_val:val}).then(function(d){if(d){toast('已更新');loadGroups()}});
 }
 function leaveGroup(idx){
   var g=_groupList[idx];if(!g)return;
@@ -4410,6 +4470,7 @@ def save_settings():
                 "group_img_settings": group_img_settings,
                 "group_audio_settings": group_audio_settings,
                 "group_wo_settings": group_wo_settings,
+                "group_cmd_enabled": group_cmd_enabled,
                 "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
                 "group_tracking": group_tracking,
                 "group_user_names": group_user_names,
@@ -4461,6 +4522,7 @@ def load_settings():
         group_img_settings.update(data.get("group_img_settings", {}))
         group_audio_settings.update(data.get("group_audio_settings", {}))
         group_wo_settings.update(data.get("group_wo_settings", {}))
+        group_cmd_enabled.update(data.get("group_cmd_enabled", {}))
         for k, v in data.get("group_skip_users", {}).items():
             group_skip_users[k] = set(v)
         group_tracking.update(data.get("group_tracking", {}))
@@ -4671,6 +4733,7 @@ def api_admin_groups():
             "image_on": group_img_settings.get(gid, True),
             "voice_on": group_audio_settings.get(gid, True),
             "work_order_on": group_wo_settings.get(gid, True),
+            "cmd_enabled": {k: is_cmd_enabled(gid, k) for k, _, _, _ in CMD_DEFS},
             "skip_count": skip_count,
             "cost_twd": calc_group_cost_twd(gid),
             "member_count": get_group_member_count(gid),
@@ -4956,6 +5019,12 @@ def api_admin_group_settings():
         group_audio_settings[gid] = bool(data["voice_on"])
     if "work_order_on" in data:
         group_wo_settings[gid] = bool(data["work_order_on"])
+    if "cmd_toggle" in data:
+        cmd_key = data["cmd_toggle"]
+        cmd_val = bool(data.get("cmd_val", True))
+        if gid not in group_cmd_enabled:
+            group_cmd_enabled[gid] = {}
+        group_cmd_enabled[gid][cmd_key] = cmd_val
     save_settings()
     return jsonify({"ok": True})
 
