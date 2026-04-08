@@ -1880,40 +1880,46 @@ def handle_pkg_command(text):
     if len(parts) < 2:
         return (
             "⚠️ 請輸入包裝碼 / Masukkan kode kemasan\n"
-            "範例 / Contoh: /pkg C1\n"
-            "範例 / Contoh: /pkg CB"
+            "範例 / Contoh: /pkg U\n"
+            "範例 / Contoh: /pkg G"
         )
-    query = parts[1].strip().upper()
+    query = parts[1].strip()
+    query_upper = query.upper()
     if not PACKAGING_LOOKUP:
         return "⚠️ 包裝碼資料尚未上傳\nData kode kemasan belum diupload"
-    # Try exact match
-    entry = PACKAGING_LOOKUP.get(query)
+    # Try exact match (case-insensitive)
+    entry = PACKAGING_LOOKUP.get(query) or PACKAGING_LOOKUP.get(query_upper)
+    matched_key = query if PACKAGING_LOOKUP.get(query) else query_upper
     if not entry:
-        # Try partial match
-        matches = [k for k in PACKAGING_LOOKUP if query in k.upper()]
+        for k in PACKAGING_LOOKUP:
+            if k.upper() == query_upper:
+                entry = PACKAGING_LOOKUP[k]
+                matched_key = k
+                break
+    # Try partial match
+    if not entry:
+        matches = [k for k in PACKAGING_LOOKUP if query_upper in k.upper()]
         if len(matches) == 1:
-            query = matches[0]
-            entry = PACKAGING_LOOKUP[query]
+            matched_key = matches[0]
+            entry = PACKAGING_LOOKUP[matched_key]
         elif len(matches) > 1:
             result = "🔍 找到多筆符合:\n"
-            for m in matches[:10]:
+            for m in matches[:15]:
                 result += "  • " + m + "\n"
             return result
     if not entry:
         return "❌ 找不到包裝碼: " + query
-    # Build response
+    # Build response - show ALL fields dynamically
     lines = []
-    lines.append("📦 包裝碼 / Kode Kemasan: " + query)
-    lines.append("=" * 18)
-    if entry.get("type"):
-        lines.append("類型: " + entry["type"])
-    if entry.get("material"):
-        lines.append("包裝簡稱: " + entry["material"])
-    if entry.get("combo"):
-        lines.append("包裝簡稱(組合): " + entry["combo"])
-    if entry.get("detail"):
-        lines.append("詳細說明: " + entry["detail"])
-    lines.append("=" * 18)
+    lines.append("📦 包裝碼: " + matched_key)
+    lines.append("=" * 20)
+    if isinstance(entry, dict):
+        for field_name, field_val in entry.items():
+            if field_val:
+                lines.append(str(field_name) + ": " + str(field_val))
+    elif isinstance(entry, str):
+        lines.append(entry)
+    lines.append("=" * 20)
     return "\n".join(lines)
 
 
@@ -5266,57 +5272,69 @@ def api_admin_packaging_upload():
     try:
         import openpyxl
         wb = openpyxl.load_workbook(f, data_only=True)
+        # Use first sheet (直棒包裝 or whatever)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             return jsonify({"error": "空的 Excel"}), 400
         header = [str(c).strip() if c else "" for c in rows[0]]
-        # Auto-detect columns by name keywords
-        col_map = {}
+        # Find the code column: look for header containing 碼/code
+        code_col = None
         for i, h in enumerate(header):
             hl = h.lower().replace(" ", "")
-            if "代碼" in h or "代号" in h or "code" in hl or "碼" in h:
-                col_map["code"] = i
-            elif "類型" in h or "type" in hl:
-                col_map["type"] = i
-            elif "組合" in h or "combo" in hl:
-                col_map["combo"] = i
-            elif "簡稱" in h or "material" in hl or "包裝" in h:
-                if "combo" not in col_map or col_map.get("combo") != i:
-                    col_map["material"] = i
-            elif "說明" in h or "detail" in hl or "備註" in h or "描述" in h:
-                col_map["detail"] = i
-        # If no code column found, assume first column is code
-        if "code" not in col_map:
-            col_map["code"] = 0
+            if "包裝碼" in h or "代碼" in h or "代号" in h or "code" in hl:
+                code_col = i
+                break
+        # Fallback: if header contains just "碼" somewhere
+        if code_col is None:
+            for i, h in enumerate(header):
+                if "碼" in h:
+                    code_col = i
+                    break
+        # Last fallback: first non-empty header column
+        if code_col is None:
+            for i, h in enumerate(header):
+                if h:
+                    code_col = i
+                    break
+        if code_col is None:
+            return jsonify({"error": "找不到包裝碼欄位"}), 400
+        # All other columns with non-empty headers become data fields
+        data_cols = []  # [(col_index, header_name), ...]
+        for i, h in enumerate(header):
+            if i != code_col and h:
+                data_cols.append((i, h))
         # Build lookup
         new_data = {}
         for row in rows[1:]:
             if not row:
                 continue
-            code_idx = col_map["code"]
-            if code_idx >= len(row) or not row[code_idx]:
+            if code_col >= len(row) or not row[code_col]:
                 continue
-            code = str(row[code_idx]).strip().upper()
+            code = str(row[code_col]).strip()
             if not code:
                 continue
             entry = {}
-            for field in ["type", "material", "combo", "detail"]:
-                if field in col_map and col_map[field] < len(row) and row[col_map[field]]:
-                    entry[field] = str(row[col_map[field]]).strip()
+            for col_idx, col_name in data_cols:
+                if col_idx < len(row) and row[col_idx] is not None:
+                    val = str(row[col_idx]).strip()
+                    if val:
+                        entry[col_name] = val
             if entry:
                 new_data[code] = entry
         if not new_data:
-            return jsonify({"error": "無法解析 Excel，請確認第一列為標題列，含代碼/Code欄位"}), 400
+            return jsonify({"error": "無法解析 Excel，請確認第一列為標題列，含包裝碼欄位"}), 400
         PACKAGING_LOOKUP = new_data
-        logger.info("Packaging updated via admin: %d codes", len(new_data))
+        logger.info("Packaging updated via admin: %d codes, columns: %s",
+                     len(new_data), [c[1] for c in data_cols])
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_packaging_to_github(json_str)
-        msg = "已更新 " + str(len(new_data)) + " 筆包裝碼"
+        cols_info = "、".join([c[1] for c in data_cols])
+        msg = "已更新 " + str(len(new_data)) + " 筆包裝碼（欄位：" + cols_info + "）"
         if gh_ok:
-            msg += "（已自動推送 GitHub，永久生效）"
+            msg += "\n已自動推送 GitHub，永久生效"
         else:
-            msg += "（GitHub 推送失敗，僅暫時生效）"
+            msg += "\nGitHub 推送失敗，僅暫時生效"
         return jsonify({"ok": True, "count": len(new_data), "github": gh_ok, "message": msg})
     except Exception as e:
         logger.error("Packaging upload error: %s", e)
