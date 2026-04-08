@@ -5,7 +5,10 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false
   },
-  "group_audio_settings": {},
+  "group_audio_settings": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
+    "Cd188e1adc7792e407c90f3fa78850316": false
+  },
   "group_wo_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false
@@ -98,7 +101,8 @@
       "黃惟堂",
       "王文良",
       "詹秋情",
-      "就是這個光 ✨༄"
+      "就是這個光 ✨༄",
+      "辰"
     ]
   },
   "group_api_usage": {
