@@ -2834,12 +2834,21 @@ def setup_rich_menu():
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
-            # Delete existing default rich menu
+            # Delete ALL existing rich menus first
             try:
                 api.cancel_default_rich_menu()
             except Exception:
                 pass
-            # Create new rich menu (2-column, 1-row layout)
+            try:
+                existing = api.get_rich_menu_list()
+                for rm_old in (existing.richmenus or []):
+                    try:
+                        api.delete_rich_menu(rm_old.rich_menu_id)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Create new rich menu (2 rows x 3 columns)
             rm = RichMenuRequest(
                 size=RichMenuSize(width=2500, height=1686),
                 selected=True,
@@ -2899,11 +2908,20 @@ def _upload_rich_menu_image(api_client, rich_menu_id):
 
 
 def delete_rich_menu():
-    """Delete the default rich menu."""
+    """Delete ALL rich menus."""
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
-            api.cancel_default_rich_menu()
+            try:
+                api.cancel_default_rich_menu()
+            except Exception:
+                pass
+            existing = api.get_rich_menu_list()
+            for rm in (existing.richmenus or []):
+                try:
+                    api.delete_rich_menu(rm.rich_menu_id)
+                except Exception:
+                    pass
             return True
     except Exception:
         return False
@@ -3964,7 +3982,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=41').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=42').catch(function(){})}
 </script>
 </body>
 </html>'''
