@@ -123,40 +123,19 @@ CACHE_TTL = 3600  # 1 hour
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",
     "id": "\U0001f1ee\U0001f1e9",
-    "en": "\U0001f1ec\U0001f1e7",
-    "vi": "\U0001f1fb\U0001f1f3",
-    "th": "\U0001f1f9\U0001f1ed",
-    "ja": "\U0001f1ef\U0001f1f5",
-    "ko": "\U0001f1f0\U0001f1f7",
-    "ms": "\U0001f1f2\U0001f1fe",
-    "tl": "\U0001f1f5\U0001f1ed",
 }
 
 LANG_NAMES = {
     "zh": "Traditional Chinese",
     "id": "Indonesian",
-    "en": "English",
-    "vi": "Vietnamese",
-    "th": "Thai",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "ms": "Malay",
-    "tl": "Filipino/Tagalog",
 }
 
 LANG_NAMES_ZH = {
     "id": "\u5370\u5c3c\u6587",
-    "en": "\u82f1\u6587",
-    "vi": "\u8d8a\u5357\u6587",
-    "th": "\u6cf0\u6587",
-    "ja": "\u65e5\u6587",
-    "ko": "\u97d3\u6587",
-    "ms": "\u99ac\u4f86\u6587",
-    "tl": "\u83f2\u5f8b\u8cd3\u6587",
 }
 
-# Valid target languages (excluding zh since zh is source)
-VALID_TARGETS = ["id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
+# Valid target languages
+VALID_TARGETS = ["id"]
 
 
 def extract_mentions(text):
@@ -448,6 +427,96 @@ def has_indonesian(text):
         'nasi', 'ayam', 'ikan', 'sayur', 'teh', 'kopi', 'susu', 'roti',
         'mie', 'goreng', 'rebus', 'pedas', 'manis', 'asin', 'pahit',
         'warung', 'kantin',
+        # ── Missing common words (comprehensive) ──
+        'kata', 'sandi', 'nama', 'alamat', 'telepon', 'email', 'buku',
+        'dengar', 'pikir', 'rasa', 'cinta', 'suka', 'benci',
+        'teman', 'musuh', 'keluarga', 'anak', 'istri', 'suami',
+        'adik', 'kakak', 'ayah', 'nenek', 'kakek', 'paman', 'bibi',
+        # ── Places ──
+        'negara', 'kota', 'desa', 'gedung', 'toko', 'sekolah',
+        'masjid', 'gereja', 'pasar', 'bandara', 'stasiun', 'terminal',
+        'rumah', 'hotel', 'restoran', 'warnet', 'bengkel',
+        # ── Transport ──
+        'sepeda', 'pesawat', 'kapal', 'kereta', 'bis', 'taksi', 'ojek',
+        # ── Food detail ──
+        'makanan', 'minuman', 'buah', 'sayuran', 'daging', 'beras',
+        'garam', 'gula', 'minyak', 'tepung', 'bumbu', 'sambal',
+        'telur', 'tempe', 'tahu', 'soto', 'bakso', 'sate',
+        # ── Body ──
+        'tangan', 'kaki', 'kepala', 'mata', 'telinga', 'mulut',
+        'hidung', 'perut', 'punggung', 'dada', 'bahu', 'jari',
+        'lutut', 'siku', 'leher', 'pinggang', 'tumit', 'bibir',
+        # ── Abstract / reasoning ──
+        'milik', 'hak', 'kewajiban', 'tugas', 'tanggung', 'jawab',
+        'solusi', 'metode', 'alasan', 'tujuan', 'maksud', 'arti',
+        'makna', 'contoh', 'info', 'informasi', 'berita', 'pesan',
+        # ── Ability / certainty ──
+        'mampu', 'sanggup', 'berani', 'gembira', 'sulit', 'mudah',
+        'lebih', 'hampir', 'nyaris', 'mungkin', 'pasti', 'tentu',
+        'yakin', 'ragu', 'percaya',
+        # ── ber- prefix verbs ──
+        'bekerja', 'belajar', 'bermain', 'berlari', 'berjalan',
+        'berbicara', 'berpikir', 'berharap', 'berdoa', 'bernyanyi',
+        'beristirahat', 'berbelanja', 'bertemu', 'bercerita',
+        'berdiri', 'berbaring', 'berputar', 'bergerak', 'berhenti',
+        'bergabung', 'berpisah', 'bertugas', 'bertanya', 'berubah',
+        # ── me- prefix verbs ──
+        'membuat', 'membeli', 'menjual', 'membawa', 'mengambil',
+        'memberikan', 'menerima', 'mengirim', 'menyimpan', 'membuang',
+        'mencari', 'menemukan', 'menunggu', 'melihat', 'mendengar',
+        'menulis', 'membaca', 'menghitung', 'mengukur', 'memotong',
+        'membuka', 'menutup', 'menyalakan', 'mematikan', 'menghubungi',
+        'menelepon', 'mengecek', 'memeriksa', 'memperbaiki', 'mengganti',
+        'memasang', 'melepas', 'mengisi', 'mengosongkan', 'membersihkan',
+        'mencuci', 'membantu', 'meminta', 'memakai', 'memasak',
+        'memilih', 'memiliki', 'mengerti', 'mengetahui', 'memulai',
+        'menyelesaikan', 'mengerjakan', 'melapor', 'melaporkan',
+        'mengatur', 'mengantar', 'menjaga', 'menjemput', 'menaruh',
+        'memindahkan', 'mengangkat', 'menurunkan', 'mendorong',
+        'menarik', 'memutar', 'menekan', 'mengunci', 'merasa',
+        # ── di- prefix (passive) ──
+        'dibuat', 'dibeli', 'dijual', 'dibawa', 'diambil', 'dikirim',
+        'disimpan', 'dibuang', 'dicari', 'ditemukan', 'dilihat',
+        'ditulis', 'dibaca', 'dihitung', 'diukur', 'dipotong',
+        'dibuka', 'ditutup', 'dinyalakan', 'dimatikan', 'dicek',
+        'diperiksa', 'diperbaiki', 'diganti', 'dipasang', 'dilepas',
+        'diisi', 'dibersihkan', 'dicuci', 'diminta', 'dipakai',
+        'dipilih', 'diketahui', 'dikerjakan', 'dilaporkan', 'diatur',
+        'dijaga', 'ditaruh', 'dipindahkan', 'diangkat', 'diturunkan',
+        'diperhatikan', 'disampaikan', 'dilakukan', 'diberikan',
+        'diterima', 'digunakan', 'disediakan', 'dibutuhkan',
+        # ── Documents / admin ──
+        'formulir', 'dokumen', 'berkas', 'file', 'data', 'rekening',
+        'tabungan', 'pinjaman', 'hutang', 'bayaran', 'diskon', 'gratis',
+        'untung', 'rugi', 'modal', 'surat', 'izin', 'tanda', 'tangan',
+        'stempel', 'cap', 'kuitansi', 'faktur', 'invoice', 'nota',
+        # ── Dimensions / colors ──
+        'tinggi', 'rendah', 'dangkal', 'halus', 'cair', 'padat', 'lunak',
+        'merah', 'kuning', 'hijau', 'biru', 'putih', 'hitam',
+        'coklat', 'abu', 'emas', 'perak', 'ungu', 'oranye', 'pink',
+        # ── Weather / nature ──
+        'hujan', 'awan', 'mendung', 'cerah', 'badai', 'banjir',
+        'gempa', 'petir', 'kabut', 'embun',
+        # ── Speed / manner ──
+        'bentar', 'sebentar', 'langsung', 'pelan', 'keras', 'kencang',
+        'terburu', 'santai', 'harian', 'mingguan', 'bulanan', 'tahunan',
+        # ── ke-...-an nouns ──
+        'keselamatan', 'kecelakaan', 'kerusakan', 'kebersihan',
+        'keamanan', 'kesehatan', 'kecepatan', 'keterlambatan',
+        'kekurangan', 'kelebihan', 'kesalahan', 'keberhasilan',
+        'kemampuan', 'kebutuhan', 'keperluan', 'keterangan',
+        # ── per-...-an nouns ──
+        'perbaikan', 'perubahan', 'perbedaan', 'perhatian',
+        'perkembangan', 'pertemuan', 'perjanjian', 'perusahaan',
+        'pekerjaan', 'peralatan', 'peraturan', 'perlengkapan',
+        'permintaan', 'pengiriman', 'penggantian', 'pemasangan',
+        'pemeriksaan', 'pembersihan', 'pengisian', 'pengecekan',
+        'penggunaan', 'pemakaian', 'pelaksanaan', 'pelaporan',
+        # ── Common endings -kan / -i ──
+        'pastikan', 'perhatikan', 'sampaikan', 'lakukan', 'berikan',
+        'gunakan', 'sediakan', 'siapkan', 'selesaikan', 'kerjakan',
+        'beritahukan', 'hubungi', 'temui', 'cari', 'ambilkan',
+        'tolong', 'mohon', 'harap', 'silakan', 'silahkan',
     ])
     count = sum(1 for w in words if w in id_words)
     if count >= 2:
@@ -488,49 +557,21 @@ def has_english(text):
 
 
 def detect_language(text):
+    """Detect language: Chinese → 'zh', Latin text → 'id'."""
     clean = strip_mentions_for_detect(text).strip()
     if not clean or len(clean) < 2:
         return None
     zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
-    latin_words = re.findall(r'[a-zA-Z]+', clean.lower())
-    if zh_count >= 2 and len(latin_words) <= 2:
+    latin_words = re.findall(r'[a-zA-Z]{2,}', clean.lower())
+    # Has Chinese and no significant Latin → Chinese
+    if zh_count >= 2 and len(latin_words) <= 1:
         return "zh"
-    if has_japanese(clean):
-        return "ja"
-    if has_korean(clean):
-        return "ko"
-    if has_thai(clean):
-        return "th"
-    if zh_count >= 2:
-        id_words = set([
-            'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
-            'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-            'mereka', 'dia', 'belum', 'sedang', 'harus', 'boleh', 'mau',
-            'bukan', 'jangan', 'tolong', 'terima', 'kasih',
-            'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
-            'kerja', 'pulang', 'pergi', 'rumah', 'kantor', 'harga',
-            'karena', 'tapi', 'atau', 'kalau', 'sampai', 'masih', 'lagi',
-            'nanti', 'sekarang', 'hari',
-            'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-            'kok', 'banget', 'orang', 'baru', 'lembur', 'cuti', 'gaji',
-            'minta', 'ambil', 'kirim', 'tunggu', 'cepat', 'capek', 'sakit',
-            'jadi', 'harap', 'ukur', 'secara', 'manual', 'rusak', 'mohon', 'pakai',
-            'siap', 'bos', 'izin', 'datang', 'besok', 'selesai', 'beres',
-            'ga', 'gk', 'udh', 'bgt', 'org', 'yg', 'blm', 'bs', 'sy', 'tp',
-            'kipas', 'angin', 'mesin', 'pompa', 'baut', 'oli', 'bocor',
-            'macet', 'stok', 'habis', 'ganti', 'pasang', 'gudang',
-            'mati', 'hidup', 'nyala', 'taruh', 'pindah', 'masuk', 'keluar',
-        ])
-        id_count = sum(1 for w in latin_words if w in id_words)
-        if id_count >= 1:
-            return "id"
-        return "zh"
-    if has_vietnamese(clean):
-        return "vi"
-    if has_indonesian(clean):
+    # Has Latin text → Indonesian
+    if latin_words:
         return "id"
-    if has_english(clean):
-        return "en"
+    # Only Chinese
+    if zh_count >= 1:
+        return "zh"
     return None
 
 
@@ -1586,69 +1627,34 @@ def make_notice_from_other(content, src, target="zh"):
 
 
 def get_help_text(group_id):
-    tgt = group_target_lang.get(group_id, "id")
-    tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-    tgt_flag = LANG_FLAGS.get(tgt, "")
     sep = "=" * 18
     lines = []
-    lines.append("\U0001f310 \u7ffb\u8b6f\u6a5f\u5668\u4eba")
+    lines.append("\U0001f310 翻譯機器人")
     lines.append(sep)
-    lines.append("\u3010\u958b\u95dc\u3011")
-    lines.append("/on \u30fb /off \u7ffb\u8b6f")
-    lines.append("/img on\u30fboff \u5716\u7247")
-    lines.append("/voice on\u30fboff \u8a9e\u97f3")
-    lines.append("/wo on\u30fboff \u62cd\u5de5\u55ae\u67e5\u5132\u5340")
-    lines.append("\u3010\u500b\u4eba\u3011")
-    lines.append("/skip \u4e0d\u7ffb\u8b6f\u6211")
-    lines.append("/unskip \u6062\u5fa9\u7ffb\u8b6f")
-    lines.append("\u3010\u7ba1\u7406\u3011")
-    lines.append("/skipadd \u540d\u5b57 \u52a0\u5165\u767d\u540d\u55ae")
-    lines.append("/skipdel \u540d\u5b57 \u79fb\u51fa\u767d\u540d\u55ae")
-    lines.append("/skiplist \u67e5\u770b\u767d\u540d\u55ae")
-    lines.append("\u3010\u529f\u80fd\u3011")
-    lines.append("/lang \u4ee3\u78bc \u5207\u63db\u8a9e\u8a00")
-    lines.append("/notice \u5167\u5bb9 \u96d9\u8a9e\u516c\u544a")
-    lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
-    lines.append("/status \u67e5\u770b\u72c0\u614b")
-    lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
+    lines.append("【開關】")
+    lines.append("/on ・ /off 翻譯")
+    lines.append("/img on・off 圖片")
+    lines.append("/voice on・off 語音")
+    lines.append("/wo on・off 拍工單查儲區")
+    lines.append("【個人】")
+    lines.append("/skip 不翻譯我")
+    lines.append("/unskip 恢復翻譯")
+    lines.append("【管理】")
+    lines.append("/skipadd 名字 加入白名單")
+    lines.append("/skipdel 名字 移出白名單")
+    lines.append("/skiplist 查看白名單")
+    lines.append("【功能】")
+    lines.append("/notice 內容 雙語公告")
+    lines.append("/qry 客戶 查儲區")
+    lines.append("/status 查看狀態")
+    lines.append("\U0001f4f7 拍工單→自動查儲區")
     lines.append(sep)
-    lines.append("\u8a9e\u8a00\u4ee3\u78bc:")
-    lines.append("id\u5370\u5c3c en\u82f1 vi\u8d8a th\u6cf0")
-    lines.append("ja\u65e5 ko\u97d3 ms\u99ac\u4f86 tl\u83f2")
-    lines.append(sep)
-    lines.append("\u76ee\u524d: \u4e2d\u6587\u2192" + tgt_flag + tgt_zh)
-    lines.append("\u7bc4\u4f8b: /lang en")
+    lines.append("中文 ⇄ 🇮🇩 印尼文 即時互譯")
     return "\n".join(lines)
 
 
 def handle_lang_command(text, group_id):
-    parts = text.strip().split()
-    if len(parts) < 2:
-        # Show current setting
-        tgt = group_target_lang.get(group_id, "id")
-        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-        tgt_flag = LANG_FLAGS.get(tgt, "")
-        lines = []
-        lines.append("\u76ee\u524d\u4e2d\u6587\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh)
-        lines.append("")
-        lines.append("\u5207\u63db\u8acb\u8f38\u5165 / Ketik:")
-        lines.append("/lang id \u2192 \u5370\u5c3c\u6587")
-        lines.append("/lang en \u2192 \u82f1\u6587")
-        lines.append("/lang vi \u2192 \u8d8a\u5357\u6587")
-        lines.append("/lang th \u2192 \u6cf0\u6587")
-        lines.append("/lang ja \u2192 \u65e5\u6587")
-        lines.append("/lang ko \u2192 \u97d3\u6587")
-        lines.append("/lang ms \u2192 \u99ac\u4f86\u6587")
-        lines.append("/lang tl \u2192 \u83f2\u5f8b\u8cd3\u6587")
-        return "\n".join(lines)
-    code = parts[1].lower().strip()
-    if code not in VALID_TARGETS:
-        return "\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: id, en, vi, th, ja, ko, ms, tl"
-    group_target_lang[group_id] = code
-    save_settings()
-    tgt_zh = LANG_NAMES_ZH.get(code, code)
-    tgt_flag = LANG_FLAGS.get(code, "")
-    return "\u2705 \u5df2\u5207\u63db\uff1a\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\u5176\u4ed6\u8a9e\u8a00 \u2192 \U0001f1f9\U0001f1fc \u4e2d\u6587"
+    return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯"
 
 
 def handle_qry_command(text):
@@ -1833,19 +1839,16 @@ def handle_command(text, group_id, user_id=None):
         return "\n".join(lines)
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
-        tgt = group_target_lang.get(group_id, "id")
-        tgt_zh = LANG_NAMES_ZH.get(tgt, tgt)
-        tgt_flag = LANG_FLAGS.get(tgt, "")
         if is_on:
             img_on = group_img_settings.get(group_id, True)
-            img_status = "\u2705 \u958b\u555f" if img_on else "\u274c \u95dc\u9589"
+            img_status = "\u2705 開啟" if img_on else "\u274c 關閉"
             audio_on = group_audio_settings.get(group_id, True)
-            audio_status = "\u2705 \u958b\u555f" if audio_on else "\u274c \u95dc\u9589"
+            audio_status = "\u2705 開啟" if audio_on else "\u274c 關閉"
             wo_on = group_wo_settings.get(group_id, True)
-            wo_status = "\u2705 \u958b\u555f" if wo_on else "\u274c \u95dc\u9589"
-            return "\u2705 \u7ffb\u8b6f\uff1a\u958b\u555f\u4e2d / Aktif\n\u4e2d\u6587 \u2192 " + tgt_flag + " " + tgt_zh + "\n\U0001f5bc\ufe0f \u5716\u7247\u7ffb\u8b6f\uff1a" + img_status + "\n\U0001f3a4 \u8a9e\u97f3\u7ffb\u8b6f\uff1a" + audio_status + "\n\U0001f4cb \u62cd\u5de5\u55ae\u67e5\u5132\u5340\uff1a" + wo_status
+            wo_status = "\u2705 開啟" if wo_on else "\u274c 關閉"
+            return "\u2705 翻譯：開啟中 / Aktif\n中文 ⇄ 🇮🇩 印尼文\n\U0001f5bc\ufe0f 圖片翻譯：" + img_status + "\n\U0001f3a4 語音翻譯：" + audio_status + "\n\U0001f4cb 拍工單查儲區：" + wo_status
         else:
-            return "\u274c \u7ffb\u8b6f\uff1a\u5df2\u95dc\u9589 / Nonaktif"
+            return "\u274c 翻譯：已關閉 / Nonaktif"
     elif cmd.startswith("/lang"):
         return handle_lang_command(text, group_id)
     elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
@@ -1902,24 +1905,17 @@ def handle_message(event):
         # DM commands
         cmd = text.strip().lower()
         if cmd == "/help":
-            tgt = dm_target_lang.get(user_id, "id")
-            tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
-            tgt_flag = LANG_FLAGS.get(tgt, "")
             sep = "=" * 18
             lines = []
-            lines.append("\U0001f310 \u79c1\u8a0a\u7ffb\u8b6f\u6a21\u5f0f")
+            lines.append("\U0001f310 私訊翻譯模式")
             lines.append(sep)
-            lines.append("\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")
+            lines.append("傳訊息給我就會翻譯！")
+            lines.append("中文 → 🇮🇩 印尼文")
+            lines.append("印尼文 → 🇹🇼 中文")
             lines.append("")
-            lines.append("/to \u4ee3\u78bc \u8a2d\u5b9a\u76ee\u6a19\u8a9e\u8a00")
-            lines.append("/qry \u5ba2\u6236 \u67e5\u5132\u5340")
-            lines.append("\U0001f4f7 \u62cd\u5de5\u55ae\u2192\u81ea\u52d5\u67e5\u5132\u5340")
+            lines.append("/qry 客戶 查儲區")
+            lines.append("\U0001f4f7 拍工單→自動查儲區")
             lines.append(sep)
-            lines.append("\u8a9e\u8a00: zh\u4e2d id\u5370\u5c3c en\u82f1")
-            lines.append("vi\u8d8a th\u6cf0 ja\u65e5 ko\u97d3 ms\u99ac tl\u83f2")
-            lines.append(sep)
-            lines.append("\u76ee\u524d: " + tgt_flag + tgt_zh)
-            lines.append("\u7bc4\u4f8b: /to en")
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
@@ -1928,36 +1924,11 @@ def handle_message(event):
                 ))
             return
         if cmd.startswith("/to"):
-            parts = text.strip().split()
-            dm_valid = ["zh", "id", "en", "vi", "th", "ja", "ko", "ms", "tl"]
-            if len(parts) < 2:
-                tgt = dm_target_lang.get(user_id, "id")
-                tgt_zh = LANG_NAMES_ZH.get(tgt, tgt) if tgt != "zh" else "\u4e2d\u6587"
-                tgt_flag = LANG_FLAGS.get(tgt, "")
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="\u76ee\u524d\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u7bc4\u4f8b: /to en")]
-                    ))
-                return
-            code = parts[1].lower().strip()
-            if code not in dm_valid:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="\u26a0\ufe0f \u7121\u6548\u4ee3\u78bc\uff01\u8acb\u7528: zh, id, en, vi, th, ja, ko, ms, tl")]
-                    ))
-                return
-            dm_target_lang[user_id] = code
-            tgt_zh = LANG_NAMES_ZH.get(code, code) if code != "zh" else "\u4e2d\u6587"
-            tgt_flag = LANG_FLAGS.get(code, "")
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="\u2705 \u79c1\u8a0a\u7ffb\u8b6f\u76ee\u6a19\uff1a" + tgt_flag + " " + tgt_zh + "\n\u50b3\u8a0a\u606f\u7d66\u6211\u5c31\u6703\u7ffb\u8b6f\uff01")]
+                    messages=[TextMessage(text="ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯")]
                 ))
             return
         # DM: handle /qry command
@@ -2611,8 +2582,6 @@ function setStatVal(id,val){
   else el.classList.remove('highlight');
 }
 
-var LANG_OPTS=[{c:'id',l:'印尼'},{c:'zh',l:'中文'},{c:'en',l:'英文'},{c:'vi',l:'越南'},{c:'th',l:'泰文'},{c:'ja',l:'日文'},{c:'ko',l:'韓文'},{c:'ms',l:'馬來'},{c:'tl',l:'菲律賓'}];
-
 var _groupList=[];
 async function loadGroups(){
   var d=await api('/groups');
@@ -2624,17 +2593,11 @@ async function loadGroups(){
   for(var i=0;i<_groupList.length;i++){
     var g=_groupList[i];
     var skipCt=g.skip_count||0;
-    var langOpts='';
-    for(var j=0;j<LANG_OPTS.length;j++){
-      var o=LANG_OPTS[j];
-      langOpts+='<option value="'+o.c+'"'+(o.c===g.target_lang?' selected':'')+'>'+o.l+'</option>';
-    }
     html+='<div class="card">'+
       '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span></div>'+
       '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
-      '<span class="card-sub">語言:</span>'+
-      '<span class="sel-wrap"><select class="sel" onchange="setGroupLang('+i+',this.value)">'+langOpts+'</select></span>'+
+      '<span class="card-sub">中文 ⇄ 🇮🇩 印尼文</span>'+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
       '<div class="feat-badges">'+
       '<span class="feat-badge '+(g.image_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',1)">🖼️ '+(g.image_on?'圖片開':'圖片關')+'</span>'+
@@ -2648,10 +2611,6 @@ async function loadGroups(){
   el.innerHTML=html;
 }
 
-function setGroupLang(idx,lang){
-  var g=_groupList[idx];if(!g)return;
-  api('/groups/settings','POST',{group_id:g.id,target_lang:lang}).then(function(d){if(d){toast('語言已更新');loadGroups()}});
-}
 function toggleFeat(idx,keyIdx){
   var g=_groupList[idx];if(!g)return;
   var key=FEAT_KEYS[keyIdx];
@@ -2772,13 +2731,9 @@ async function loadUsers(){
   var html='';
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
-    var langBadge=u.target_lang?
-      '<span class="badge badge-on">'+(LANG_OPTS.find(function(o){return o.c===u.target_lang})||{l:u.target_lang}).l+'</span>':
-      '<span class="badge badge-yellow">未設定</span>';
     html+='<div class="user-card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
-      '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+
-      langBadge+'</div>'+
+      '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div></div>'+
       '<div class="user-admin-row">'+
       '<span class="admin-label">🔑 管理員</span>'+
       '<label class="toggle"><input type="checkbox" '+(u.is_admin?'checked':'')+
@@ -2872,7 +2827,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=26').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=29').catch(function(){})}
 </script>
 </body>
 </html>'''
