@@ -2909,6 +2909,7 @@ def _upload_rich_menu_image(api_client, rich_menu_id):
 
 def delete_rich_menu():
     """Delete ALL rich menus."""
+    deleted = 0
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
@@ -2916,15 +2917,28 @@ def delete_rich_menu():
                 api.cancel_default_rich_menu()
             except Exception:
                 pass
-            existing = api.get_rich_menu_list()
-            for rm in (existing.richmenus or []):
-                try:
-                    api.delete_rich_menu(rm.rich_menu_id)
-                except Exception:
-                    pass
-            return True
-    except Exception:
-        return False
+            try:
+                existing = api.get_rich_menu_list()
+                # Try multiple attribute names
+                menus = getattr(existing, 'richmenus', None) or getattr(existing, 'rich_menus', None) or []
+                if not menus and hasattr(existing, '__iter__'):
+                    menus = list(existing)
+                logger.info("Found %d rich menus to delete (type: %s)", len(menus), type(menus).__name__)
+                for rm in menus:
+                    rid = getattr(rm, 'rich_menu_id', None) or getattr(rm, 'richMenuId', None)
+                    if rid:
+                        try:
+                            api.delete_rich_menu(rid)
+                            deleted += 1
+                            logger.info("Deleted rich menu: %s", rid)
+                        except Exception as e:
+                            logger.warning("Failed to delete rich menu %s: %s", rid, e)
+            except Exception as e:
+                logger.warning("Failed to list rich menus: %s", e)
+    except Exception as e:
+        logger.warning("Delete rich menu error: %s", e)
+    logger.info("Deleted %d rich menus", deleted)
+    return deleted
 
 
 def get_sender_object():
@@ -2979,16 +2993,18 @@ def list_rich_menus():
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             result = api.get_rich_menu_list()
+            raw = getattr(result, 'richmenus', None) or getattr(result, 'rich_menus', None) or []
             menus = []
-            for rm in (result.richmenus or []):
+            for rm in raw:
                 menus.append({
-                    "id": rm.rich_menu_id,
+                    "id": getattr(rm, 'rich_menu_id', '') or getattr(rm, 'richMenuId', ''),
                     "name": getattr(rm, 'name', ''),
                     "selected": getattr(rm, 'selected', False),
                     "chat_bar_text": getattr(rm, 'chat_bar_text', ''),
                 })
             return menus
-    except Exception:
+    except Exception as e:
+        logger.warning("list_rich_menus failed: %s", e)
         return []
 
 
@@ -3209,9 +3225,12 @@ def build_quick_reply():
     """Build Quick Reply buttons for translation messages."""
     try:
         return QuickReply(items=[
-            QuickReplyItem(action=MessageAction(label="📋 查儲區", text="/qry ")),
-            QuickReplyItem(action=MessageAction(label="❌ 不翻我", text="/skip")),
+            QuickReplyItem(action=MessageAction(label="📖 說明", text="/help")),
             QuickReplyItem(action=MessageAction(label="📊 狀態", text="/status")),
+            QuickReplyItem(action=MessageAction(label="🔍 查儲區", text="/qry ")),
+            QuickReplyItem(action=MessageAction(label="✅ 翻譯開", text="/on")),
+            QuickReplyItem(action=MessageAction(label="❌ 不翻我", text="/skip")),
+            QuickReplyItem(action=MessageAction(label="📢 公告", text="/notice ")),
         ])
     except Exception:
         return None
@@ -3939,15 +3958,17 @@ async function pushMessage(){
   else toast('推送失敗');
 }
 function createRichMenu(){
+  toast('建立中...');
   api('/richmenu','POST',{action:'create'}).then(function(d){
-    if(d&&d.ok)toast('Rich Menu 已建立');
+    if(d&&d.ok){toast('Rich Menu 已建立');loadFeatureSettings();}
     else toast('建立失敗');
   });
 }
 function deleteRichMenu(){
-  if(!confirm('確定刪除 Rich Menu？'))return;
+  if(!confirm('確定刪除所有 Rich Menu？'))return;
+  toast('刪除中...');
   api('/richmenu','POST',{action:'delete'}).then(function(d){
-    if(d&&d.ok)toast('已刪除');
+    if(d&&d.ok){toast('已刪除 '+(d.deleted||0)+' 個選單');loadFeatureSettings();}
     else toast('刪除失敗');
   });
 }
@@ -3982,13 +4003,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=43').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=44').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v15';
+SW_JS = '''const CACHE='bot-admin-v44';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -4532,8 +4553,8 @@ def api_admin_richmenu():
         rid = setup_rich_menu()
         return jsonify({"ok": bool(rid), "rich_menu_id": rid})
     elif action == "delete":
-        ok = delete_rich_menu()
-        return jsonify({"ok": ok})
+        count = delete_rich_menu()
+        return jsonify({"ok": True, "deleted": count})
     return jsonify({"error": "invalid action"}), 400
 
 
