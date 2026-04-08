@@ -3527,7 +3527,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <h2>🔒 管理員登入</h2>
 <div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off">
-<button class="btn btn-primary" onclick="doLogin()">登入</button>
+<button class="btn btn-primary" onclick="try{var k=document.getElementById('pwInput').value.trim();if(!k){alert('no pw');return}fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}}).then(function(r){return r.json()}).then(function(d){if(d&&d.ok){document.getElementById('loginPage').style.display='none';document.getElementById('mainPage').style.display='block';window._KEY=k;alert('OK login')}else{alert('fail:'+JSON.stringify(d))}}).catch(function(e){alert('err:'+e)})}catch(ex){alert('EX:'+ex)}">登入</button>
 </div>
 </div>
 </div>
