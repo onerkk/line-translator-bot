@@ -3525,7 +3525,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408d</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408f</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -3535,8 +3535,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <script>
 document.getElementById('loginBtn').addEventListener('click',function(){
   var m=document.getElementById('loginMsg');
+  var k=document.getElementById('pwInput').value.trim();
+  if(!k){m.textContent='請輸入密碼';return}
   m.textContent='登入中...';
-  try{doLogin()}catch(e){m.textContent='錯誤: '+e.message}
+  m.style.color='#aaa';
+  fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
+  .then(function(r){return r.json()})
+  .then(function(d){
+    if(d&&d.ok){
+      m.textContent='';
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainPage').style.display='block';
+      window._ADMIN_KEY=k;
+      try{localStorage.setItem('bot_admin_key',k)}catch(e){}
+      if(typeof KEY!=='undefined') KEY=k;
+      if(typeof loadAll==='function') loadAll();
+    }else{
+      m.style.color='#f04747';
+      m.textContent='登入失敗: '+(d?JSON.stringify(d):'no response');
+    }
+  })
+  .catch(function(e){
+    m.style.color='#f04747';
+    m.textContent='連線錯誤: '+e.message;
+  });
+});
+document.getElementById('pwInput').addEventListener('keydown',function(e){
+  if(e.key==='Enter') document.getElementById('loginBtn').click();
 });
 </script>
 
@@ -3801,10 +3826,10 @@ document.getElementById('loginBtn').addEventListener('click',function(){
 
 <script>
 window.onerror=function(msg,url,line,col,err){
-  document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\n'+msg+'\nLine: '+line+'\nCol: '+col+'</div>';
+  document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\\n'+msg+'\\nLine: '+line+'\\nCol: '+col+'</div>';
   return false;
 };
-var KEY='';
+var KEY=window._ADMIN_KEY||'';
 var API=window.location.origin+'/api/admin';
 
 function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
@@ -3925,7 +3950,7 @@ function buildCmdBadges(g,idx){
   for(var c=0;c<CMD_DEFS.length;c++){
     var key=CMD_DEFS[c][0],label=CMD_DEFS[c][1];
     var on=ce[key]!==false;
-    h+='<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleCmd('+idx+',\''+key+'\','+(!on)+')">'+label+(on?'開':'關')+'</span>';
+    h+='<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleCmd('+idx+',&apos;'+key+'&apos;,'+(!on)+')">'+label+(on?'開':'關')+'</span>';
   }
   return h+'</div>';
 }
@@ -4332,13 +4357,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=48').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=50').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v48';
+SW_JS = '''const CACHE='bot-admin-v50';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
