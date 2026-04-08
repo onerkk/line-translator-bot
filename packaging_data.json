@@ -1,0 +1,71 @@
+{
+  "U": {
+    "material": "瓦楞板+鋼帶+膠膜"
+  },
+  "1": {
+    "material": "瓦楞板+木條"
+  },
+  "5": {
+    "material": "瓦楞板+木條"
+  },
+  "2": {
+    "material": "瓦楞板+木箱"
+  },
+  "4": {
+    "material": "瓦楞板+木箱"
+  },
+  "3": {
+    "material": "瓦楞板+木箱"
+  },
+  "G": {
+    "material": "PE布+膠膜"
+  },
+  "Q": {
+    "material": "PE布+膠膜"
+  },
+  "V": {
+    "material": "PE布+膠膜"
+  },
+  "8": {
+    "material": "PE布+膠膜"
+  },
+  "K": {
+    "material": "頭尾3P袋"
+  },
+  "E": {
+    "material": "PE布+膠膜+木條"
+  },
+  "W": {
+    "material": "PE布+膠膜+木條"
+  },
+  "7": {
+    "material": "PE布+膠膜+木條"
+  },
+  "B": {
+    "material": "木箱"
+  },
+  "6": {
+    "material": "木箱+角鐵"
+  },
+  "H": {
+    "material": "木箱(扁)"
+  },
+  "X": {
+    "material": "木箱"
+  },
+  "C": {
+    "material": "木箱"
+  },
+  "Z": {
+    "material": "木箱"
+  },
+  "A": {
+    "material": "木箱"
+  },
+  "J": {
+    "material": "線架"
+  },
+  "R": {
+    "material": "-"
+  }
+}
