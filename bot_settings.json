@@ -114,5 +114,19 @@
       "tokens_prompt": 31073,
       "tokens_completion": 545
     }
-  }
+  },
+  "user_languages": {},
+  "welcome_settings": {
+    "enabled": true,
+    "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
+    "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
+  },
+  "flex_enabled": true,
+  "quick_reply_enabled": true,
+  "silent_mode": false,
+  "sender_name": "翻譯小助手",
+  "sender_icon": "",
+  "video_ocr_enabled": true,
+  "location_translate_enabled": true,
+  "user_pictures": {}
 }
