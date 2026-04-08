@@ -128,5 +128,8 @@
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat.png",
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
-  "user_pictures": {}
+  "user_pictures": {},
+  "pw1_text": "班長工號密碼：(UR00179 Xx0972315373)\nPassword shift leader: (UR00179 Xx0972315373)",
+  "pw2_text": "儲運工號密碼：(UR00644 Jj0973550210)\nPassword gudang: (UR00644 Jj0973550210)",
+  "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n=================="
 }
