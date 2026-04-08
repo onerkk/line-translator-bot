@@ -207,6 +207,33 @@ sender_icon = ""  # URL to icon image, empty = default
 # User profile pictures cache: {user_id: url}
 user_pictures = {}
 
+# ── Password settings (editable from admin) ──
+pw1_text = "班長工號密碼：(尚未設定)\nPassword shift leader: (not set)"
+pw2_text = "儲運工號密碼：(尚未設定)\nPassword gudang: (not set)"
+
+# ── Scrap color text ──
+scrap_text = (
+    "🎨 廢料鋼種顏色 / Warna Scrap\n"
+    "==================\n"
+    "U物料(廢料) / U Material:\n"
+    "  303 → 白/Putih\n"
+    "  304 → 黃/Kuning\n"
+    "  316 → 桃/Pink\n"
+    "  209 → 特藍/Biru Khusus\n"
+    "  174 → 紫羅蘭/Ungu\n"
+    "  400系列 → 紅/Merah\n"
+    "\n"
+    "委外代工 / Outsource:\n"
+    "  303 → 白/Putih\n"
+    "  304 → 黃/Kuning\n"
+    "  316 → 桃/Pink\n"
+    "  403 → 紅/Merah\n"
+    "=================="
+)
+
+# ── Packaging code lookup ──
+PACKAGING_LOOKUP = {}
+
 # USD to TWD rate (approximate)
 USD_TO_TWD = 32.0
 
@@ -881,6 +908,15 @@ if os.path.exists(_storage_json_path):
             logger.info("Loaded storage data from storage_data.json: %d customers", len(STORAGE_LOOKUP))
     except Exception as _e:
         logger.warning("Failed to load storage_data.json, using embedded: %s", _e)
+# Try loading packaging_data.json
+_packaging_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packaging_data.json")
+if os.path.exists(_packaging_json_path):
+    try:
+        with open(_packaging_json_path, "r", encoding="utf-8") as _f:
+            PACKAGING_LOOKUP = json.load(_f)
+            logger.info("Loaded packaging data: %d codes", len(PACKAGING_LOOKUP))
+    except Exception as _e:
+        logger.warning("Failed to load packaging_data.json: %s", _e)
 # Extra customers not in storage Excel but appear in factory chat
 # Per-group protected names: {"__all__": [...], "group_id": [...]}
 _DEFAULT_NAMES = [
@@ -1781,6 +1817,10 @@ def get_help_text(group_id):
     lines.append("【功能】")
     lines.append("/notice 內容 雙語公告")
     lines.append("/qry 客戶 查儲區")
+    lines.append("/pkg 代碼 查包裝碼")
+    lines.append("/pw1 班長密碼")
+    lines.append("/pw2 儲運密碼")
+    lines.append("/scrap 廢料顏色")
     lines.append("/status 查看狀態")
     lines.append("\U0001f4f7 拍工單→自動查儲區")
     lines.append(sep)
@@ -1830,6 +1870,49 @@ def handle_qry_command(text):
     for length, area in entries:
         zh = format_length_zh(length)
         lines.append(zh + " \u2192 " + area)
+    lines.append("=" * 18)
+    return "\n".join(lines)
+
+
+def handle_pkg_command(text):
+    """Handle /pkg <code> command to lookup packaging info."""
+    parts = text.strip().split(None, 1)
+    if len(parts) < 2:
+        return (
+            "⚠️ 請輸入包裝碼 / Masukkan kode kemasan\n"
+            "範例 / Contoh: /pkg C1\n"
+            "範例 / Contoh: /pkg CB"
+        )
+    query = parts[1].strip().upper()
+    if not PACKAGING_LOOKUP:
+        return "⚠️ 包裝碼資料尚未上傳\nData kode kemasan belum diupload"
+    # Try exact match
+    entry = PACKAGING_LOOKUP.get(query)
+    if not entry:
+        # Try partial match
+        matches = [k for k in PACKAGING_LOOKUP if query in k.upper()]
+        if len(matches) == 1:
+            query = matches[0]
+            entry = PACKAGING_LOOKUP[query]
+        elif len(matches) > 1:
+            result = "🔍 找到多筆符合:\n"
+            for m in matches[:10]:
+                result += "  • " + m + "\n"
+            return result
+    if not entry:
+        return "❌ 找不到包裝碼: " + query
+    # Build response
+    lines = []
+    lines.append("📦 包裝碼 / Kode Kemasan: " + query)
+    lines.append("=" * 18)
+    if entry.get("type"):
+        lines.append("類型: " + entry["type"])
+    if entry.get("material"):
+        lines.append("包裝簡稱: " + entry["material"])
+    if entry.get("combo"):
+        lines.append("包裝簡稱(組合): " + entry["combo"])
+    if entry.get("detail"):
+        lines.append("詳細說明: " + entry["detail"])
     lines.append("=" * 18)
     return "\n".join(lines)
 
@@ -2006,6 +2089,14 @@ def handle_command(text, group_id, user_id=None):
             return make_notice(content, tgt)
     elif text.strip().lower().startswith("/qry"):
         return handle_qry_command(text)
+    elif cmd == "/pw1":
+        return "🔑 班長密碼 / PW Shift Leader\n" + "=" * 18 + "\n" + pw1_text + "\n" + "=" * 18
+    elif cmd == "/pw2":
+        return "🏭 儲運密碼 / PW Gudang\n" + "=" * 18 + "\n" + pw2_text + "\n" + "=" * 18
+    elif cmd == "/scrap":
+        return scrap_text
+    elif text.strip().lower().startswith("/pkg"):
+        return handle_pkg_command(text)
     return None
 
 
@@ -2055,6 +2146,10 @@ def handle_message(event):
             lines.append("印尼文 → 🇹🇼 中文")
             lines.append("")
             lines.append("/qry 客戶 查儲區")
+            lines.append("/pkg 代碼 查包裝碼")
+            lines.append("/pw1 班長密碼")
+            lines.append("/pw2 儲運密碼")
+            lines.append("/scrap 廢料顏色")
             lines.append("\U0001f4f7 拍工單→自動查儲區")
             lines.append(sep)
             with ApiClient(configuration) as api_client:
@@ -2082,6 +2177,24 @@ def handle_message(event):
                         reply_token=event.reply_token,
                         messages=[TextMessage(text=qry_result)]
                     ))
+            return
+        # DM: handle /pw1, /pw2, /scrap, /pkg commands
+        dm_cmd_result = None
+        if cmd == "/pw1":
+            dm_cmd_result = "🔑 班長密碼 / PW Shift Leader\n" + "=" * 18 + "\n" + pw1_text + "\n" + "=" * 18
+        elif cmd == "/pw2":
+            dm_cmd_result = "🏭 儲運密碼 / PW Gudang\n" + "=" * 18 + "\n" + pw2_text + "\n" + "=" * 18
+        elif cmd == "/scrap":
+            dm_cmd_result = scrap_text
+        elif text.strip().lower().startswith("/pkg"):
+            dm_cmd_result = handle_pkg_command(text)
+        if dm_cmd_result:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=dm_cmd_result)]
+                ))
             return
         # DM: skip other / commands
         if text.startswith("/"):
@@ -3224,14 +3337,29 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
 def build_quick_reply():
     """Build Quick Reply buttons for translation messages."""
     try:
-        return QuickReply(items=[
-            QuickReplyItem(action=MessageAction(label="📖 說明", text="/help")),
-            QuickReplyItem(action=MessageAction(label="📊 狀態", text="/status")),
-            QuickReplyItem(action=MessageAction(label="🔍 查儲區", text="/qry ")),
-            QuickReplyItem(action=MessageAction(label="✅ 翻譯開", text="/on")),
-            QuickReplyItem(action=MessageAction(label="❌ 不翻我", text="/skip")),
-            QuickReplyItem(action=MessageAction(label="📢 公告", text="/notice ")),
-        ])
+        items = [
+            QuickReplyItem(action=MessageAction(label="📖 說明/Info", text="/help")),
+            QuickReplyItem(action=MessageAction(label="🔍 儲區/Gudang", text="/qry ")),
+            QuickReplyItem(action=MessageAction(label="❌ 不翻我/Skip", text="/skip")),
+            QuickReplyItem(action=MessageAction(label="✅ 翻譯我/Unskip", text="/unskip")),
+            QuickReplyItem(action=MessageAction(label="🔑 班長密碼/PW1", text="/pw1")),
+            QuickReplyItem(action=MessageAction(label="🏭 儲運密碼/PW2", text="/pw2")),
+            QuickReplyItem(action=MessageAction(label="📦 包裝碼/Kemas", text="/pkg ")),
+            QuickReplyItem(action=MessageAction(label="🎨 廢料色/Warna", text="/scrap")),
+        ]
+        # URI-based buttons (open external links)
+        try:
+            items.append(QuickReplyItem(action=MsgURIAction(
+                label="💡 提案/Saran",
+                uri="https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList"
+            )))
+            items.append(QuickReplyItem(action=MsgURIAction(
+                label="📅 差勤/Absen",
+                uri="https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=人事_WS"
+            )))
+        except Exception:
+            pass
+        return QuickReply(items=items)
     except Exception:
         return None
 
@@ -3360,6 +3488,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="tab" onclick="switchTab('users')">使用者</div>
 <div class="tab" onclick="switchTab('names')">保護名單</div>
 <div class="tab" onclick="switchTab('storage')">儲區</div>
+<div class="tab" onclick="switchTab('packaging')">包裝碼</div>
+<div class="tab" onclick="switchTab('passwords')">密碼</div>
+<div class="tab" onclick="switchTab('scrap')">廢料色</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
@@ -3457,6 +3588,56 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div style="font-weight:700;font-size:15px;margin-bottom:6px">目前資料</div>
 <div id="storageStats" style="font-size:14px;margin-bottom:14px">載入中...</div>
 <button class="btn btn-dark btn-sm" onclick="downloadJson()">下載 JSON</button>
+</div>
+</div>
+
+<!-- Packaging Panel -->
+<div class="panel" id="panel-packaging">
+<div class="card">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:15px">📦 包裝碼資料更新</div>
+<div class="card-sub" style="margin-bottom:14px">上傳 Excel 檔案（第一列標題列，含代碼/Code欄位）</div>
+<input type="file" id="packagingFile" accept=".xlsx,.xls" style="display:none" onchange="previewPackaging()">
+<button class="btn btn-primary btn-sm" onclick="document.getElementById('packagingFile').click()">選擇 Excel 檔案</button>
+<div id="packagingFileName" style="margin-top:8px;font-size:13px;color:#8a8a9a"></div>
+</div>
+<div id="packagingPreview"></div>
+<div id="packagingActions" style="display:none;margin-top:12px">
+<button class="btn btn-primary btn-sm" onclick="uploadPackaging()">確認更新</button>
+</div>
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:6px">目前資料</div>
+<div id="packagingStats" style="font-size:14px;margin-bottom:14px">載入中...</div>
+<button class="btn btn-dark btn-sm" onclick="downloadPackagingJson()">下載 JSON</button>
+</div>
+</div>
+
+<!-- Passwords Panel -->
+<div class="panel" id="panel-passwords">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">🔑 密碼設定</div>
+<div style="margin-bottom:16px">
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">班長工號密碼 (使用者傳 /pw1 時顯示)</div>
+<textarea id="pw1Input" rows="3" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical"></textarea>
+</div>
+<div style="margin-bottom:16px">
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">儲運工號密碼 (使用者傳 /pw2 時顯示)</div>
+<textarea id="pw2Input" rows="3" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical"></textarea>
+</div>
+<button class="btn btn-primary btn-sm" onclick="savePasswords()">儲存密碼</button>
+<div id="pwSaveResult" style="margin-top:8px;font-size:13px"></div>
+</div>
+</div>
+
+<!-- Scrap Panel -->
+<div class="panel" id="panel-scrap">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">🎨 廢料鋼種顏色</div>
+<div class="card-sub" style="margin-bottom:14px">使用者傳 /scrap 時顯示的內容</div>
+<textarea id="scrapInput" rows="16" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical;font-family:monospace"></textarea>
+<div style="margin-top:12px">
+<button class="btn btn-primary btn-sm" onclick="saveScrap()">儲存</button>
+<div id="scrapSaveResult" style="margin-top:8px;font-size:13px"></div>
+</div>
 </div>
 </div>
 
@@ -3586,7 +3767,7 @@ function doLogin(){
   });
 }
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','settings'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -3599,6 +3780,9 @@ function switchTab(name){
   if(name==='users'){loadUsersGroupSelect();loadUsers();}
   if(name==='names') loadNames();
   if(name==='storage') loadStorageStats();
+  if(name==='packaging') loadPackagingStats();
+  if(name==='passwords') loadPasswords();
+  if(name==='scrap') loadScrap();
   if(name==='settings') loadFeatureSettings();
 }
 
@@ -3872,6 +4056,68 @@ async function downloadJson(){
   }catch(e){toast('下載失敗')}
 }
 
+// ─── Packaging ───
+async function loadPackagingStats(){
+  var d=await api('/packaging/stats');
+  if(d) document.getElementById('packagingStats').textContent='共 '+d.count+' 筆包裝碼';
+}
+function previewPackaging(){
+  var f=document.getElementById('packagingFile').files[0];
+  if(!f)return;
+  document.getElementById('packagingFileName').textContent='📄 '+f.name;
+  document.getElementById('packagingActions').style.display='block';
+}
+async function uploadPackaging(){
+  var f=document.getElementById('packagingFile').files[0];
+  if(!f){toast('請選擇檔案');return;}
+  var fd=new FormData();fd.append('file',f);
+  try{
+    var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    var d=await r.json();
+    if(d.ok){toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';}
+    else{toast(d.error||'上傳失敗');}
+  }catch(e){toast('上傳失敗: '+e);}
+}
+async function downloadPackagingJson(){
+  try{
+    var r=await fetch(API+'/packaging/json',{headers:{'X-Admin-Key':KEY}});
+    var blob=await r.blob();
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;a.download='packaging_data.json';a.click();
+    URL.revokeObjectURL(url);
+    toast('JSON 已下載');
+  }catch(e){toast('下載失敗')}
+}
+
+// ─── Passwords ───
+async function loadPasswords(){
+  var d=await api('/passwords');
+  if(!d)return;
+  document.getElementById('pw1Input').value=d.pw1||'';
+  document.getElementById('pw2Input').value=d.pw2||'';
+}
+async function savePasswords(){
+  var pw1=document.getElementById('pw1Input').value;
+  var pw2=document.getElementById('pw2Input').value;
+  var d=await api('/passwords','POST',{pw1:pw1,pw2:pw2});
+  document.getElementById('pwSaveResult').textContent=d&&d.ok?'✅ 已儲存':'❌ 儲存失敗';
+  if(d&&d.ok)toast('密碼已更新');
+}
+
+// ─── Scrap ───
+async function loadScrap(){
+  var d=await api('/scrap');
+  if(!d)return;
+  document.getElementById('scrapInput').value=d.text||'';
+}
+async function saveScrap(){
+  var text=document.getElementById('scrapInput').value;
+  var d=await api('/scrap','POST',{text:text});
+  document.getElementById('scrapSaveResult').textContent=d&&d.ok?'✅ 已儲存':'❌ 儲存失敗';
+  if(d&&d.ok)toast('廢料色資訊已更新');
+}
+
 // ─── Feature Settings ───
 async function loadFeatureSettings(){
   var d=await api('/features');
@@ -4034,6 +4280,11 @@ def commit_storage_to_github(json_data):
     return _commit_file_to_github("storage_data.json", json_data, "Update storage data via admin panel")
 
 
+def commit_packaging_to_github(json_data):
+    """Auto-commit packaging_data.json to GitHub repo."""
+    return _commit_file_to_github("packaging_data.json", json_data, "Update packaging data via admin panel")
+
+
 def _commit_file_to_github(filename, content_str, message="Auto-update", branch="main"):
     """Generic: commit a file to GitHub repo."""
     if not GITHUB_TOKEN:
@@ -4174,6 +4425,9 @@ def save_settings():
                 "video_ocr_enabled": video_ocr_enabled,
                 "location_translate_enabled": location_translate_enabled,
                 "user_pictures": user_pictures,
+                "pw1_text": pw1_text,
+                "pw2_text": pw2_text,
+                "scrap_text": scrap_text,
             }
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
             _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
@@ -4190,6 +4444,7 @@ def load_settings():
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
+    global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -4236,6 +4491,12 @@ def load_settings():
         if "location_translate_enabled" in data:
             location_translate_enabled = data["location_translate_enabled"]
         user_pictures.update(data.get("user_pictures", {}))
+        if "pw1_text" in data:
+            pw1_text = data["pw1_text"]
+        if "pw2_text" in data:
+            pw2_text = data["pw2_text"]
+        if "scrap_text" in data:
+            scrap_text = data["scrap_text"]
         logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names",
                      len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS))
     except Exception as e:
@@ -4950,6 +5211,125 @@ def api_admin_storage_json():
     json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
     return app.response_class(json_str, mimetype="application/json",
                               headers={"Content-Disposition": "attachment; filename=storage_data.json"})
+
+
+# ─── Passwords API ──────────────────────────────────
+@app.route("/api/admin/passwords", methods=["GET", "POST"])
+def api_admin_passwords():
+    global pw1_text, pw2_text
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "GET":
+        return jsonify({"pw1": pw1_text, "pw2": pw2_text})
+    data = request.get_json(force=True)
+    if "pw1" in data:
+        pw1_text = data["pw1"]
+    if "pw2" in data:
+        pw2_text = data["pw2"]
+    save_settings()
+    return jsonify({"ok": True, "pw1": pw1_text, "pw2": pw2_text})
+
+
+# ─── Scrap Text API ─────────────────────────────────
+@app.route("/api/admin/scrap", methods=["GET", "POST"])
+def api_admin_scrap():
+    global scrap_text
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "GET":
+        return jsonify({"text": scrap_text})
+    data = request.get_json(force=True)
+    if "text" in data:
+        scrap_text = data["text"]
+    save_settings()
+    return jsonify({"ok": True})
+
+
+# ─── Packaging API ──────────────────────────────────
+@app.route("/api/admin/packaging/stats")
+def api_admin_packaging_stats():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({"count": len(PACKAGING_LOOKUP)})
+
+
+@app.route("/api/admin/packaging/upload", methods=["POST"])
+def api_admin_packaging_upload():
+    global PACKAGING_LOOKUP
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if 'file' not in request.files:
+        return jsonify({"error": "沒有檔案"}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "沒有檔案"}), 400
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(f, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return jsonify({"error": "空的 Excel"}), 400
+        header = [str(c).strip() if c else "" for c in rows[0]]
+        # Auto-detect columns by name keywords
+        col_map = {}
+        for i, h in enumerate(header):
+            hl = h.lower().replace(" ", "")
+            if "代碼" in h or "代号" in h or "code" in hl or "碼" in h:
+                col_map["code"] = i
+            elif "類型" in h or "type" in hl:
+                col_map["type"] = i
+            elif "組合" in h or "combo" in hl:
+                col_map["combo"] = i
+            elif "簡稱" in h or "material" in hl or "包裝" in h:
+                if "combo" not in col_map or col_map.get("combo") != i:
+                    col_map["material"] = i
+            elif "說明" in h or "detail" in hl or "備註" in h or "描述" in h:
+                col_map["detail"] = i
+        # If no code column found, assume first column is code
+        if "code" not in col_map:
+            col_map["code"] = 0
+        # Build lookup
+        new_data = {}
+        for row in rows[1:]:
+            if not row:
+                continue
+            code_idx = col_map["code"]
+            if code_idx >= len(row) or not row[code_idx]:
+                continue
+            code = str(row[code_idx]).strip().upper()
+            if not code:
+                continue
+            entry = {}
+            for field in ["type", "material", "combo", "detail"]:
+                if field in col_map and col_map[field] < len(row) and row[col_map[field]]:
+                    entry[field] = str(row[col_map[field]]).strip()
+            if entry:
+                new_data[code] = entry
+        if not new_data:
+            return jsonify({"error": "無法解析 Excel，請確認第一列為標題列，含代碼/Code欄位"}), 400
+        PACKAGING_LOOKUP = new_data
+        logger.info("Packaging updated via admin: %d codes", len(new_data))
+        json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
+        gh_ok = commit_packaging_to_github(json_str)
+        msg = "已更新 " + str(len(new_data)) + " 筆包裝碼"
+        if gh_ok:
+            msg += "（已自動推送 GitHub，永久生效）"
+        else:
+            msg += "（GitHub 推送失敗，僅暫時生效）"
+        return jsonify({"ok": True, "count": len(new_data), "github": gh_ok, "message": msg})
+    except Exception as e:
+        logger.error("Packaging upload error: %s", e)
+        return jsonify({"error": "解析失敗: " + str(e)}), 400
+
+
+@app.route("/api/admin/packaging/json")
+def api_admin_packaging_json():
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    json_str = json.dumps(PACKAGING_LOOKUP, ensure_ascii=False, indent=2)
+    return app.response_class(json_str, mimetype="application/json",
+                              headers={"Content-Disposition": "attachment; filename=packaging_data.json"})
 
 
 @app.route("/health", methods=["GET"])
