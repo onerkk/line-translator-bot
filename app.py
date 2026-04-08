@@ -291,29 +291,138 @@ def has_indonesian(text):
     if len(words) < 2:
         return False
     id_words = set([
-        'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
-        'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-        'mereka', 'dia', 'apa', 'bagaimana', 'kenapa', 'kapan', 'dimana',
-        'siapa', 'belum', 'sedang', 'harus', 'boleh', 'mau', 'ingin',
-        'bukan', 'jangan', 'tolong', 'terima', 'kasih', 'selamat',
-        'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
-        'salah', 'besar', 'kecil', 'makan', 'minum', 'tidur', 'kerja',
-        'pulang', 'pergi', 'rumah', 'kantor', 'uang', 'harga', 'berapa',
-        'banyak', 'sedikit', 'semua', 'karena', 'tetapi', 'tapi', 'atau',
-        'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
-        'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
-        'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-        'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru', 'lembur',
-        'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
-        'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
-        'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
-        'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
-        'terakhir', 'kamu',
+        # ── Pronouns / titles ──
+        'saya', 'aku', 'gue', 'gw', 'kamu', 'lu', 'elo', 'dia', 'mereka',
+        'kami', 'kita', 'kalian', 'bapak', 'ibu', 'pak', 'bu', 'mas', 'mbak',
+        'bang', 'kak', 'om', 'tante', 'bos', 'boss', 'gan',
+        # ── Particles / fillers ──
+        'ya', 'lah', 'loh', 'dong', 'sih', 'nih', 'kok', 'deh', 'kan',
+        'tuh', 'nah', 'wah', 'aduh', 'masa', 'emang', 'kayak', 'kayaknya',
+        'soalnya', 'makanya', 'jadinya', 'aja', 'doang', 'cuma', 'gitu',
+        'gini', 'sini', 'sana', 'situ', 'mana', 'iya', 'oke',
+        # ── Prepositions / conjunctions ──
+        'di', 'ke', 'dari', 'pada', 'oleh', 'untuk', 'dengan', 'supaya',
+        'agar', 'karena', 'tetapi', 'tapi', 'namun', 'sehingga', 'meskipun',
+        'walaupun', 'sebelum', 'sesudah', 'setelah', 'selama', 'ketika',
+        'sambil', 'tanpa', 'antara', 'tentang', 'terhadap', 'atau', 'dan',
+        'jika', 'kalau', 'biar', 'sampai',
+        # ── Question words ──
+        'apa', 'siapa', 'dimana', 'kapan', 'kenapa', 'bagaimana', 'berapa',
+        'gimana', 'mana', 'mengapa',
+        # ── Common verbs ──
+        'ada', 'adalah', 'ambil', 'angkat', 'antar', 'atur', 'bangun',
+        'bantu', 'bawa', 'bayar', 'beli', 'berangkat', 'berhenti', 'bicara',
+        'bilang', 'bisa', 'bikin', 'boleh', 'buat', 'buang', 'buka', 'butuh',
+        'cari', 'catat', 'cek', 'coba', 'cuci', 'dapat', 'datang', 'duduk',
+        'ganti', 'hapus', 'hitung', 'hubungi', 'ikut', 'ingat', 'isi',
+        'jaga', 'jalan', 'jawab', 'jemput', 'jual', 'kasih', 'kejar',
+        'keluar', 'kembali', 'kirim', 'kurang', 'lari', 'lepas', 'lewat',
+        'lihat', 'lupa', 'makan', 'masak', 'masuk', 'mau', 'minum', 'minta',
+        'naik', 'paham', 'pakai', 'pake', 'panggil', 'pasang', 'perbaiki',
+        'pergi', 'periksa', 'pindah', 'potong', 'pulang', 'selesai',
+        'sembuh', 'simpan', 'suruh', 'tahu', 'tau', 'tambah', 'tanya',
+        'taruh', 'tiba', 'tidur', 'tinggal', 'tolong', 'tukar', 'tulis',
+        'tunggu', 'turun', 'tutup', 'ngerti', 'paham', 'ngomong', 'ngobrol',
+        'nyari', 'nyoba', 'nunggu', 'ngitung', 'ngirim', 'ngecek', 'ngangkat',
+        'ingin', 'harus', 'boleh', 'perlu', 'wajib',
+        # ── Common adjectives ──
+        'bagus', 'baik', 'baru', 'benar', 'berat', 'besar', 'bersih',
+        'buruk', 'cepat', 'dingin', 'gampang', 'gelap', 'jelek', 'kecil',
+        'keras', 'kotor', 'kuat', 'lambat', 'lama', 'lebar', 'lemah',
+        'lurus', 'mahal', 'miring', 'murah', 'panas', 'panjang', 'pendek',
+        'penuh', 'rata', 'ringan', 'salah', 'sehat', 'sempit', 'susah',
+        'tajam', 'tebal', 'terang', 'tipis', 'tua', 'muda', 'lembut',
+        'kasar', 'kosong', 'basah', 'kering',
+        # ── Nouns (general) ──
+        'air', 'api', 'asap', 'barang', 'batu', 'biaya', 'botol', 'cat',
+        'dinding', 'ember', 'gelas', 'helm', 'kabel', 'kaca', 'kain',
+        'kamar', 'kayu', 'kertas', 'kotak', 'kursi', 'lampu', 'listrik',
+        'meja', 'mobil', 'motor', 'obat', 'paku', 'papan', 'pintu',
+        'plastik', 'rak', 'roda', 'sabun', 'sapu', 'selang', 'sepatu',
+        'surat', 'tangga', 'tali', 'tas', 'tiang', 'topi', 'truk',
+        # ── Nouns (work / factory) ──
+        'absen', 'alat', 'atasan', 'bahan', 'bengkel', 'bor', 'crane',
+        'debu', 'forklift', 'gaji', 'gerinda', 'gudang', 'jadwal',
+        'kartu', 'kecelakaan', 'kerusakan', 'kualitas', 'laporan',
+        'las', 'limbah', 'lini', 'logam', 'lubang', 'mandor', 'masalah',
+        'meter', 'mutu', 'pabrik', 'pekerja', 'pelindung', 'peralatan',
+        'perbaikan', 'peraturan', 'permukaan', 'produksi', 'produk',
+        'rapat', 'sabuk', 'sampel', 'shift', 'sisa', 'sparepart',
+        'supervisor', 'tabung', 'tekanan', 'timbangan', 'toleransi',
+        'tungku', 'upah', 'wadah',
+        # ── Factory equipment / materials ──
+        'kipas', 'angin', 'mesin', 'pompa', 'kunci', 'baut', 'mur',
+        'pipa', 'oli', 'besi', 'baja', 'batang', 'stok', 'material',
+        'lantai', 'atas', 'bawah', 'ukuran', 'nomor',
+        'bocor', 'macet', 'mati', 'hidup', 'nyala', 'jalan',
+        # ── Factory actions ──
+        'ukur', 'timbang', 'sortir', 'pisah', 'gabung', 'campur', 'cetak',
+        'press', 'poles', 'tekuk', 'lipat', 'gulung', 'tarik', 'dorong',
+        'geser', 'putar', 'balik', 'susun', 'tumpuk', 'bungkus', 'ikat',
+        'segel', 'proses', 'bagian', 'tempat',
+        # ── Safety / quality ──
+        'bahaya', 'aman', 'keselamatan', 'cidera', 'luka', 'awas', 'hati',
+        'peringatan', 'darurat', 'masker', 'kacamata', 'rompi', 'cacat',
+        'retak', 'gores', 'bengkok', 'penyok', 'standar', 'inspeksi',
+        'audit', 'lapor',
+        # ── Time ──
+        'detik', 'menit', 'jam', 'hari', 'minggu', 'bulan', 'tahun',
+        'pagi', 'siang', 'sore', 'malam', 'subuh', 'kemarin', 'sekarang',
+        'besok', 'lusa', 'nanti', 'dulu', 'tadi', 'segera', 'selalu',
+        'sering', 'kadang', 'jarang',
+        # ── Numbers / quantity ──
+        'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh',
+        'delapan', 'sembilan', 'sepuluh', 'puluh', 'ratus', 'ribu',
+        'juta', 'setengah', 'cukup', 'terlalu', 'sekitar', 'kira',
+        'banyak', 'sedikit', 'semua', 'beberapa',
+        # ── States / emotions ──
+        'senang', 'sedih', 'marah', 'takut', 'capek', 'cape', 'males',
+        'lapar', 'haus', 'sakit', 'sehat', 'ngantuk', 'bosan', 'bingung',
+        'kaget', 'malu', 'bangga', 'puas', 'kecewa', 'khawatir', 'tenang',
+        'sibuk', 'santai', 'mantap', 'keren', 'asik',
+        # ── Daily / HR ──
+        'izin', 'cuti', 'libur', 'lembur', 'istirahat', 'kerja', 'masuk',
+        'pulang', 'absen', 'telat', 'terlambat', 'ijin', 'sakit', 'mangkir',
+        'resign', 'kontrak', 'tetap', 'harian', 'bulanan', 'THR',
+        # ── Negation / affirmation ──
+        'tidak', 'bukan', 'belum', 'jangan', 'sudah', 'akan', 'sedang',
+        'masih', 'lagi', 'saja', 'juga', 'pernah', 'tidak', 'tanpa',
+        'hanya', 'bahkan', 'sangat', 'amat', 'sekali', 'paling',
+        # ── Slang abbreviations ──
+        'gak', 'nggak', 'ga', 'gk', 'udah', 'udh', 'uda',
+        'gmn', 'bgt', 'org', 'yg', 'tdk', 'dg', 'dgn', 'krn',
+        'blm', 'bs', 'sy', 'trs', 'tp', 'tpi', 'sm', 'lg',
+        'dl', 'skrg', 'hr', 'msh', 'brp', 'dpt', 'hrs', 'kmrn',
+        'bsk', 'wkwk', 'otw', 'gpp', 'jgn', 'tlg', 'cb', 'emg',
+        'stlh', 'sblm', 'tgl', 'mksd', 'kl', 'krj', 'plg', 'msk',
+        'klr', 'btw', 'fyi', 'cmn', 'drpd', 'blg', 'klo', 'knp',
+        'dmn', 'gmna', 'bkn', 'sbg', 'ttg', 'scr', 'utk',
+        # ── Common responses ──
+        'siap', 'beres', 'selesai', 'oke', 'sip', 'mantap', 'lanjut',
+        'betul', 'benar', 'setuju', 'mengerti', 'paham', 'jelas',
+        'terima', 'kasih', 'makasih', 'maaf', 'permisi', 'selamat',
+        'halo', 'hai', 'assalamualaikum', 'waalaikumsalam',
+        # ── Misc common ──
+        'orang', 'baru', 'lain', 'beda', 'sama', 'sendiri', 'bersama',
+        'bareng', 'duluan', 'belakangan', 'awal', 'akhir', 'mulai',
+        'setiap', 'tiap', 'per', 'masing', 'soal', 'hal', 'cara',
+        'jenis', 'tipe', 'macam', 'warna', 'bentuk', 'sisi', 'ujung',
+        'tengah', 'tepi', 'pinggir', 'depan', 'belakang', 'kiri', 'kanan',
+        'dalam', 'luar', 'atas', 'bawah', 'samping', 'sebelah',
+        'dekat', 'jauh', 'sini', 'sana', 'situ',
+        'yang', 'ini', 'itu', 'rumah', 'kantor', 'uang', 'harga',
+        'yuk', 'ayo', 'banget', 'ruang', 'baca', 'ujian', 'terakhir',
+        'punya', 'jadi', 'mohon', 'saat', 'secara', 'harap', 'rusak',
+        'habis', 'bulat', 'kamu',
+        # ── Food / break ──
+        'nasi', 'ayam', 'ikan', 'sayur', 'teh', 'kopi', 'susu', 'roti',
+        'mie', 'goreng', 'rebus', 'pedas', 'manis', 'asin', 'pahit',
+        'warung', 'kantin',
     ])
     count = sum(1 for w in words if w in id_words)
     if count >= 2:
         return True
-    if len(words) >= 3 and count >= 1 and count / len(words) > 0.2:
+    if count >= 1 and len(words) >= 2 and count / len(words) >= 0.4:
         return True
     return False
 
@@ -366,26 +475,24 @@ def detect_language(text):
         id_words = set([
             'yang', 'dan', 'ini', 'itu', 'ada', 'untuk', 'dengan', 'dari',
             'tidak', 'akan', 'sudah', 'bisa', 'juga', 'saya', 'kami', 'kita',
-            'mereka', 'dia', 'apa', 'bagaimana', 'kenapa', 'kapan', 'dimana',
-            'siapa', 'belum', 'sedang', 'harus', 'boleh', 'mau', 'ingin',
-            'bukan', 'jangan', 'tolong', 'terima', 'kasih', 'selamat',
+            'mereka', 'dia', 'belum', 'sedang', 'harus', 'boleh', 'mau',
+            'bukan', 'jangan', 'tolong', 'terima', 'kasih',
             'pagi', 'siang', 'sore', 'malam', 'baik', 'bagus', 'benar',
-            'salah', 'besar', 'kecil', 'makan', 'minum', 'tidur', 'kerja',
-            'pulang', 'pergi', 'rumah', 'kantor', 'uang', 'harga', 'berapa',
-            'banyak', 'sedikit', 'semua', 'karena', 'tetapi', 'tapi', 'atau',
-            'jika', 'kalau', 'sampai', 'masih', 'lagi', 'saja', 'dulu',
-            'nanti', 'sekarang', 'hari', 'minggu', 'bulan', 'tahun',
+            'kerja', 'pulang', 'pergi', 'rumah', 'kantor', 'harga',
+            'karena', 'tapi', 'atau', 'kalau', 'sampai', 'masih', 'lagi',
+            'nanti', 'sekarang', 'hari',
             'gak', 'nggak', 'udah', 'gimana', 'dong', 'sih', 'nih',
-            'kok', 'yuk', 'ayo', 'banget', 'orang', 'baru', 'lembur',
-            'cuti', 'gaji', 'minta', 'ambil', 'kirim', 'tunggu', 'cepat',
-            'lambat', 'susah', 'gampang', 'senang', 'sedih', 'marah',
-            'takut', 'capek', 'lapar', 'haus', 'sakit', 'sehat',
-            'di', 'ke', 'jam', 'ruang', 'baca', 'soal', 'ujian',
-            'terakhir', 'kamu', 'jadi', 'harap', 'ukur', 'secara',
-            'manual', 'rusak', 'saat', 'mohon', 'pakai', 'bisa',
+            'kok', 'banget', 'orang', 'baru', 'lembur', 'cuti', 'gaji',
+            'minta', 'ambil', 'kirim', 'tunggu', 'cepat', 'capek', 'sakit',
+            'jadi', 'harap', 'ukur', 'secara', 'manual', 'rusak', 'mohon', 'pakai',
+            'siap', 'bos', 'izin', 'datang', 'besok', 'selesai', 'beres',
+            'ga', 'gk', 'udh', 'bgt', 'org', 'yg', 'blm', 'bs', 'sy', 'tp',
+            'kipas', 'angin', 'mesin', 'pompa', 'baut', 'oli', 'bocor',
+            'macet', 'stok', 'habis', 'ganti', 'pasang', 'gudang',
+            'mati', 'hidup', 'nyala', 'taruh', 'pindah', 'masuk', 'keluar',
         ])
         id_count = sum(1 for w in latin_words if w in id_words)
-        if id_count >= 2:
+        if id_count >= 1:
             return "id"
         return "zh"
     if has_vietnamese(clean):
@@ -2735,7 +2842,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=22').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=25').catch(function(){})}
 </script>
 </body>
 </html>'''
