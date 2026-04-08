@@ -3958,7 +3958,7 @@ async function fetchAllMembers(){
   var d=await api('/members','POST',{group_id:gid});
   if(d&&d.ok){
     if(d.count>0) toast('已載入 '+d.count+' 位成員');
-    else toast('API載入0位'+(d.known?'（已知'+d.known+'位）':'')+'\n'+(d.note||''));
+    else toast('API載入0位'+(d.known?'（已知'+d.known+'位）':'')+(d.note?' '+d.note:''));
   }else toast('載入失敗');
 }
 async function loadSettingsGroupSelects(){
@@ -3982,7 +3982,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=42').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=43').catch(function(){})}
 </script>
 </body>
 </html>'''
