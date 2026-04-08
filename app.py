@@ -222,6 +222,13 @@ silent_mode = False
 video_ocr_enabled = True
 # Location translation ON/OFF
 location_translate_enabled = True
+# Per-group feature overrides (group_id -> bool), global values above are defaults
+group_flex_settings = {}      # per-group flex card toggle
+group_qr_settings = {}        # per-group quick reply toggle
+group_silent_settings = {}    # per-group silent mode toggle
+group_video_settings = {}     # per-group video OCR toggle
+group_location_settings = {}  # per-group location translate toggle
+group_welcome_settings = {}   # per-group welcome: {group_id: {"enabled": bool, "text_zh": str, "text_id": str}}
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
 sender_icon = ""  # URL to icon image, empty = default
@@ -257,6 +264,36 @@ PACKAGING_LOOKUP = {}
 
 # USD to TWD rate (approximate)
 USD_TO_TWD = 32.0
+
+
+def get_group_feature(group_id, feature):
+    """Get per-group feature setting with global fallback."""
+    _map = {
+        'flex': (group_flex_settings, 'flex_enabled'),
+        'quick_reply': (group_qr_settings, 'quick_reply_enabled'),
+        'silent': (group_silent_settings, 'silent_mode'),
+        'video_ocr': (group_video_settings, 'video_ocr_enabled'),
+        'location': (group_location_settings, 'location_translate_enabled'),
+    }
+    if feature not in _map:
+        return True
+    d, global_key = _map[feature]
+    if group_id and group_id in d:
+        return d[group_id]
+    return globals().get(global_key, True)
+
+
+def get_group_welcome(group_id):
+    """Get per-group welcome settings with global fallback."""
+    if group_id and group_id in group_welcome_settings:
+        gw = group_welcome_settings[group_id]
+        # Merge with global defaults for missing keys
+        return {
+            "enabled": gw.get("enabled", welcome_settings.get("enabled", True)),
+            "text_zh": gw.get("text_zh", welcome_settings.get("text_zh", "")),
+            "text_id": gw.get("text_id", welcome_settings.get("text_id", "")),
+        }
+    return welcome_settings
 
 # Translation cache: key = (text, src, tgt), value = (result, timestamp)
 translation_cache = {}
@@ -2396,9 +2433,9 @@ def handle_message(event):
 
     # Flex or plain text based on setting
     flex_msg = None
-    if flex_enabled:
+    if get_group_feature(group_id, 'flex'):
         flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
-    qr = build_quick_reply() if quick_reply_enabled else None
+    qr = build_quick_reply() if get_group_feature(group_id, 'quick_reply') else None
     custom_sender = get_sender_object()
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
@@ -2414,7 +2451,7 @@ def handle_message(event):
                 try: flex_msg.quote_token = qt
                 except Exception: pass
             req = ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg])
-            if silent_mode:
+            if get_group_feature(group_id, 'silent'):
                 req.notification_disabled = True
             api_line.reply_message(req)
         else:
@@ -2427,7 +2464,7 @@ def handle_message(event):
                 try: msg.quote_token = qt
                 except Exception: pass
             req = ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])
-            if silent_mode:
+            if get_group_feature(group_id, 'silent'):
                 req.notification_disabled = True
             api_line.reply_message(req)
 
@@ -2650,7 +2687,7 @@ if VideoMessageContent:
         if group_id and user_id and not is_dm:
             record_user_name(group_id, user_id)
         # Video OCR: try to get preview image and OCR it
-        if not video_ocr_enabled:
+        if not get_group_feature(group_id, 'video_ocr'):
             return
         if not group_settings.get(group_id, True):
             return
@@ -2711,7 +2748,7 @@ if LocationMessageContent:
             record_user_name(group_id, user_id)
         if not group_settings.get(group_id, True):
             return
-        if not location_translate_enabled:
+        if not get_group_feature(group_id, 'location'):
             return
         # Translate location title/address if available
         title = getattr(event.message, 'title', '') or ''
@@ -2768,13 +2805,14 @@ if MemberJoinedEvent:
                 if uid:
                     record_user_name(group_id, uid)
         # Send welcome if enabled
-        if not welcome_settings.get("enabled", True):
+        ws = get_group_welcome(group_id)
+        if not ws.get("enabled", True):
             return
         if not group_settings.get(group_id, True):
             return
         try:
-            zh = welcome_settings.get("text_zh", "")
-            id_text = welcome_settings.get("text_id", "")
+            zh = ws.get("text_zh", "")
+            id_text = ws.get("text_id", "")
             welcome = zh + "\n\n" + id_text if zh and id_text else (zh or id_text)
             if welcome:
                 with ApiClient(configuration) as api_client:
@@ -3732,6 +3770,12 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="panel" id="panel-settings">
 <div class="card">
 <div style="font-weight:700;font-size:15px;margin-bottom:12px">⚙️ 功能設定</div>
+<div class="ch-select-wrap" style="margin-bottom:12px">
+<select class="ch-select" id="settingsGroupSelect" style="font-size:13px;padding:10px" onchange="loadFeatureSettingsForGroup()">
+<option value="">全域預設</option>
+</select>
+</div>
+<div id="settingsCustomBadge" style="display:none;margin-bottom:10px"><span class="badge badge-on" style="font-size:11px">已自訂</span> <span style="font-size:12px;color:#8a8a9a;cursor:pointer;text-decoration:underline" onclick="resetGroupSettings()">重設為預設</span></div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">👋 歡迎訊息</span><br><span style="font-size:12px;color:#8a8a9a">新成員加入時自動發送</span></div>
@@ -3809,14 +3853,6 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="richMenuList" style="font-size:12px;color:#8a8a9a;margin-top:6px">LINE 底部常駐按鈕</div>
 </div>
 
-<div class="card" style="margin-top:12px">
-<div style="font-weight:700;font-size:15px;margin-bottom:10px">👥 批次載入成員</div>
-<div class="ch-select-wrap" style="margin-bottom:8px">
-<select class="ch-select" id="fetchMembersGroupSelect" style="font-size:13px;padding:10px"></select>
-</div>
-<button class="btn btn-primary btn-sm" onclick="fetchAllMembers()">載入全部成員</button>
-<div style="font-size:12px;color:#8a8a9a;margin-top:6px">一次取得群組所有成員（不用等發訊息）</div>
-</div>
 </div>
 
 </div><!-- mainPage -->
@@ -4227,21 +4263,11 @@ async function saveScrap(){
 }
 
 // ─── Feature Settings ───
+var _settingsGid='';
 async function loadFeatureSettings(){
-  var d=await api('/features');
-  if(!d)return;
-  document.getElementById('welcomeToggle').checked=d.welcome_enabled;
-  document.getElementById('welcomeZh').value=d.welcome_text_zh||'';
-  document.getElementById('welcomeId').value=d.welcome_text_id||'';
-  document.getElementById('flexToggle').checked=d.flex_enabled;
-  document.getElementById('qrToggle').checked=d.quick_reply_enabled;
-  document.getElementById('silentToggle').checked=d.silent_mode;
-  document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
-  document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
-  document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
-  document.getElementById('senderIconInput').value=d.sender_icon||'';
-  // Load group selects for push and fetch members
-  loadSettingsGroupSelects();
+  await loadSettingsGroupSelects();
+  _settingsGid='';
+  await _loadFeatures('');
   // Load LINE quota
   var s=await api('/stats');
   if(s){
@@ -4253,7 +4279,6 @@ async function loadFeatureSettings(){
     }
     if(s.followers)info+=(info?'<br>':'')+'好友: '+s.followers;
     if(s.unfollowers)info+=' ｜ 封鎖: '+s.unfollowers;
-    if(d.bot_info&&d.bot_info.name)info+=(info?'<br>':'')+'Bot: '+d.bot_info.name;
     document.getElementById('lineQuotaInfo').innerHTML=info||'無法取得';
   }
   // Load Insight API data
@@ -4278,14 +4303,51 @@ async function loadFeatureSettings(){
     document.getElementById('richMenuList').textContent='尚未建立 Rich Menu';
   }
 }
+async function loadFeatureSettingsForGroup(){
+  _settingsGid=document.getElementById('settingsGroupSelect').value;
+  await _loadFeatures(_settingsGid);
+}
+async function _loadFeatures(gid){
+  var path=gid?'/features?group_id='+encodeURIComponent(gid):'/features';
+  var d=await api(path);
+  if(!d)return;
+  document.getElementById('welcomeToggle').checked=d.welcome_enabled;
+  document.getElementById('welcomeZh').value=d.welcome_text_zh||'';
+  document.getElementById('welcomeId').value=d.welcome_text_id||'';
+  document.getElementById('flexToggle').checked=d.flex_enabled;
+  document.getElementById('qrToggle').checked=d.quick_reply_enabled;
+  document.getElementById('silentToggle').checked=d.silent_mode;
+  document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
+  document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
+  document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
+  document.getElementById('senderIconInput').value=d.sender_icon||'';
+  var cb=document.getElementById('settingsCustomBadge');
+  if(gid&&d.is_customized)cb.style.display='block';
+  else cb.style.display='none';
+  if(d.bot_info&&d.bot_info.name){
+    var qi=document.getElementById('lineQuotaInfo');
+    if(qi&&!qi.innerHTML.includes('Bot:'))qi.innerHTML+='<br>Bot: '+d.bot_info.name;
+  }
+}
 function toggleFeatureSetting(key,val){
   var body={};body[key]=val;
-  api('/features','POST',body).then(function(d){if(d)toast('已更新')});
+  if(_settingsGid)body.group_id=_settingsGid;
+  api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'群組設定已更新':'全域設定已更新')});
 }
 function saveWelcomeText(){
   var zh=document.getElementById('welcomeZh').value;
   var id=document.getElementById('welcomeId').value;
-  api('/features','POST',{welcome_text_zh:zh,welcome_text_id:id}).then(function(d){if(d)toast('歡迎詞已儲存')});
+  var body={welcome_text_zh:zh,welcome_text_id:id};
+  if(_settingsGid)body.group_id=_settingsGid;
+  api('/features','POST',body).then(function(d){if(d)toast('歡迎詞已儲存')});
+}
+async function resetGroupSettings(){
+  if(!_settingsGid){toast('請先選擇群組');return}
+  if(!confirm('確定重設此群組為全域預設？'))return;
+  var body={group_id:_settingsGid,reset:true};
+  var d=await api('/features/reset','POST',body);
+  if(d&&d.ok){toast('已重設');loadFeatureSettingsForGroup()}
+  else toast('重設失敗');
 }
 function saveSenderSettings(){
   var name=document.getElementById('senderNameInput').value.trim();
@@ -4326,30 +4388,23 @@ function deleteRichMenu(){
     else toast('刪除失敗');
   });
 }
-async function fetchAllMembers(){
-  var gid=document.getElementById('fetchMembersGroupSelect').value;
-  if(!gid){toast('請選擇群組');return}
-  toast('載入中...');
-  var d=await api('/members','POST',{group_id:gid});
-  if(d&&d.ok){
-    if(d.count>0) toast('已載入 '+d.count+' 位成員');
-    else toast('API載入0位'+(d.known?'（已知'+d.known+'位）':'')+(d.note?' '+d.note:''));
-  }else toast('載入失敗');
-}
 async function loadSettingsGroupSelects(){
   var d=await api('/groups');
   if(!d)return;
   var groups=d.groups||[];
-  var sels=['pushGroupSelect','fetchMembersGroupSelect'];
+  var sels=['pushGroupSelect','settingsGroupSelect'];
   for(var s=0;s<sels.length;s++){
     var sel=document.getElementById(sels[s]);
-    sel.innerHTML='<option value="">選擇群組...</option>';
+    if(!sel)continue;
+    var cur=sel.value;
+    sel.innerHTML=sels[s]==='settingsGroupSelect'?'<option value="">全域預設</option>':'<option value="">選擇群組...</option>';
     for(var i=0;i<groups.length;i++){
       var g=groups[i];
       var opt=document.createElement('option');
       opt.value=g.id;opt.textContent='#'+(g.name||g.id.substring(0,16));
       sel.appendChild(opt);
     }
+    if(cur)sel.value=cur;
   }
 }
 
@@ -4526,6 +4581,7 @@ def save_settings():
                 "group_api_usage": group_api_usage,
                 "user_languages": user_languages,
                 "welcome_settings": welcome_settings,
+                "group_welcome_settings": group_welcome_settings,
                 "flex_enabled": flex_enabled,
                 "quick_reply_enabled": quick_reply_enabled,
                 "silent_mode": silent_mode,
@@ -4533,6 +4589,11 @@ def save_settings():
                 "sender_icon": sender_icon,
                 "video_ocr_enabled": video_ocr_enabled,
                 "location_translate_enabled": location_translate_enabled,
+                "group_flex_settings": group_flex_settings,
+                "group_qr_settings": group_qr_settings,
+                "group_silent_settings": group_silent_settings,
+                "group_video_settings": group_video_settings,
+                "group_location_settings": group_location_settings,
                 "user_pictures": user_pictures,
                 "pw1_text": pw1_text,
                 "pw2_text": pw2_text,
@@ -4553,6 +4614,7 @@ def load_settings():
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
+    global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
@@ -4600,6 +4662,12 @@ def load_settings():
             video_ocr_enabled = data["video_ocr_enabled"]
         if "location_translate_enabled" in data:
             location_translate_enabled = data["location_translate_enabled"]
+        group_flex_settings.update(data.get("group_flex_settings", {}))
+        group_qr_settings.update(data.get("group_qr_settings", {}))
+        group_silent_settings.update(data.get("group_silent_settings", {}))
+        group_video_settings.update(data.get("group_video_settings", {}))
+        group_location_settings.update(data.get("group_location_settings", {}))
+        group_welcome_settings.update(data.get("group_welcome_settings", {}))
         user_pictures.update(data.get("user_pictures", {}))
         if "pw1_text" in data:
             pw1_text = data["pw1_text"]
@@ -4856,35 +4924,88 @@ def api_admin_stats():
 
 @app.route("/api/admin/features", methods=["GET", "POST"])
 def api_admin_features():
-    """Get/set feature settings."""
+    """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
+    gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
     if request.method == "POST":
         data = request.get_json() or {}
-        if "welcome_enabled" in data:
-            welcome_settings["enabled"] = bool(data["welcome_enabled"])
-        if "welcome_text_zh" in data:
-            welcome_settings["text_zh"] = str(data["welcome_text_zh"])
-        if "welcome_text_id" in data:
-            welcome_settings["text_id"] = str(data["welcome_text_id"])
-        if "flex_enabled" in data:
-            flex_enabled = bool(data["flex_enabled"])
-        if "quick_reply_enabled" in data:
-            quick_reply_enabled = bool(data["quick_reply_enabled"])
-        if "silent_mode" in data:
-            silent_mode = bool(data["silent_mode"])
-        if "video_ocr_enabled" in data:
-            video_ocr_enabled = bool(data["video_ocr_enabled"])
-        if "location_translate_enabled" in data:
-            location_translate_enabled = bool(data["location_translate_enabled"])
+        if gid:
+            # Per-group settings
+            _feat_map = {
+                "flex_enabled": group_flex_settings,
+                "quick_reply_enabled": group_qr_settings,
+                "silent_mode": group_silent_settings,
+                "video_ocr_enabled": group_video_settings,
+                "location_translate_enabled": group_location_settings,
+            }
+            for key, d in _feat_map.items():
+                if key in data:
+                    d[gid] = bool(data[key])
+            # Per-group welcome
+            if any(k in data for k in ("welcome_enabled", "welcome_text_zh", "welcome_text_id")):
+                if gid not in group_welcome_settings:
+                    group_welcome_settings[gid] = {}
+                if "welcome_enabled" in data:
+                    group_welcome_settings[gid]["enabled"] = bool(data["welcome_enabled"])
+                if "welcome_text_zh" in data:
+                    group_welcome_settings[gid]["text_zh"] = str(data["welcome_text_zh"])
+                if "welcome_text_id" in data:
+                    group_welcome_settings[gid]["text_id"] = str(data["welcome_text_id"])
+        else:
+            # Global defaults
+            if "welcome_enabled" in data:
+                welcome_settings["enabled"] = bool(data["welcome_enabled"])
+            if "welcome_text_zh" in data:
+                welcome_settings["text_zh"] = str(data["welcome_text_zh"])
+            if "welcome_text_id" in data:
+                welcome_settings["text_id"] = str(data["welcome_text_id"])
+            if "flex_enabled" in data:
+                flex_enabled = bool(data["flex_enabled"])
+            if "quick_reply_enabled" in data:
+                quick_reply_enabled = bool(data["quick_reply_enabled"])
+            if "silent_mode" in data:
+                silent_mode = bool(data["silent_mode"])
+            if "video_ocr_enabled" in data:
+                video_ocr_enabled = bool(data["video_ocr_enabled"])
+            if "location_translate_enabled" in data:
+                location_translate_enabled = bool(data["location_translate_enabled"])
+        # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
         if "sender_icon" in data:
             sender_icon = str(data["sender_icon"])
         save_settings()
         return jsonify({"ok": True})
+    # GET - return settings for specific group or global
+    if gid:
+        ws = get_group_welcome(gid)
+        return jsonify({
+            "group_id": gid,
+            "welcome_enabled": ws.get("enabled", True),
+            "welcome_text_zh": ws.get("text_zh", ""),
+            "welcome_text_id": ws.get("text_id", ""),
+            "flex_enabled": get_group_feature(gid, 'flex'),
+            "quick_reply_enabled": get_group_feature(gid, 'quick_reply'),
+            "silent_mode": get_group_feature(gid, 'silent'),
+            "video_ocr_enabled": get_group_feature(gid, 'video_ocr'),
+            "location_translate_enabled": get_group_feature(gid, 'location'),
+            "sender_name": sender_name,
+            "sender_icon": sender_icon,
+            "bot_info": get_bot_info(),
+            # Include global defaults for reference
+            "global_defaults": {
+                "welcome_enabled": welcome_settings.get("enabled", True),
+                "flex_enabled": flex_enabled,
+                "quick_reply_enabled": quick_reply_enabled,
+                "silent_mode": silent_mode,
+                "video_ocr_enabled": video_ocr_enabled,
+                "location_translate_enabled": location_translate_enabled,
+            },
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings,
+        })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
         "welcome_text_zh": welcome_settings.get("text_zh", ""),
@@ -4898,6 +5019,25 @@ def api_admin_features():
         "sender_icon": sender_icon,
         "bot_info": get_bot_info(),
     })
+
+
+@app.route("/api/admin/features/reset", methods=["POST"])
+def api_admin_features_reset():
+    """Reset per-group feature settings to global defaults."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    gid = data.get("group_id", "")
+    if not gid:
+        return jsonify({"error": "missing group_id"}), 400
+    group_flex_settings.pop(gid, None)
+    group_qr_settings.pop(gid, None)
+    group_silent_settings.pop(gid, None)
+    group_video_settings.pop(gid, None)
+    group_location_settings.pop(gid, None)
+    group_welcome_settings.pop(gid, None)
+    save_settings()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/admin/push", methods=["POST"])
@@ -4928,24 +5068,6 @@ def api_admin_richmenu():
         count = delete_rich_menu()
         return jsonify({"ok": True, "deleted": count})
     return jsonify({"error": "invalid action"}), 400
-
-
-@app.route("/api/admin/members", methods=["POST"])
-def api_admin_fetch_members():
-    """Fetch all members of a group."""
-    if not check_admin_key():
-        return jsonify({"error": "forbidden"}), 403
-    data = request.get_json() or {}
-    gid = data.get("group_id", "")
-    if not gid:
-        return jsonify({"error": "missing group_id"}), 400
-    members = fetch_all_group_members(gid)
-    if members:
-        save_settings()
-    # Also count already known members
-    known = len(group_user_names.get(gid, {}))
-    return jsonify({"ok": True, "count": len(members), "known": known,
-                    "note": "若為0，可能是LINE免費方案不支援此API，成員會在發訊息時自動記錄" if not members else ""})
 
 
 @app.route("/api/admin/insight")
