@@ -117,7 +117,7 @@
   },
   "user_languages": {},
   "welcome_settings": {
-    "enabled": true,
+    "enabled": false,
     "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
