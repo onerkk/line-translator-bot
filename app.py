@@ -1048,8 +1048,10 @@ def post_fix_translation(text):
         result = result.replace(wrong, correct)
     # Remove bracketed hints that leaked through from pre_replace
     result = re.sub(r'\[([a-zA-Z /&]+)\]', r'\1', result)
-    # Clean up double spaces
-    result = re.sub(r'\s{2,}', ' ', result).strip()
+    # Clean up double spaces (preserve newlines)
+    result = re.sub(r'[^\S\n]+', ' ', result)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    result = result.strip()
     return result
 
 
@@ -1351,6 +1353,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Stoknya masih ada? → 庫存還有嗎？ "
             "Tolong ajarin saya → 請教我一下"
             + extra_rule +
+            " IMPORTANT: Preserve the original line breaks and blank lines exactly. If the source has a blank line between paragraphs, keep a blank line in the same position in the translation."
             " Only output the translation. No quotes, no explanation, no prefix."
         )
 
