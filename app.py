@@ -229,6 +229,26 @@ group_silent_settings = {}    # per-group silent mode toggle
 group_video_settings = {}     # per-group video OCR toggle
 group_location_settings = {}  # per-group location translate toggle
 group_welcome_settings = {}   # per-group welcome: {group_id: {"enabled": bool, "text_zh": str, "text_id": str}}
+# Translation tone settings
+TONE_PRESETS = {
+    "casual": "Translate casually like real people talk at work. Use everyday slang and informal language.",
+    "natural": "Translate like a native speaker would naturally say it in daily factory conversation. Use the most natural, fluent, mother-tongue phrasing. Prefer colloquial expressions over textbook ones (e.g. Indonesian: prefer 'belum' over 'tidak' for not-yet-done actions, prefer 'udah' over 'sudah').",
+    "formal": "Translate in formal, polite, professional language suitable for official announcements or documents.",
+}
+translation_tone = "casual"       # global default: casual / natural / formal
+translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
+group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
+
+import threading as _threading
+_tl = _threading.local()          # thread-local for passing tone into translate_openai
+
+def get_group_tone(group_id):
+    """Return (preset, custom_text) for a group."""
+    if group_id and group_id in group_tone_settings:
+        gs = group_tone_settings[group_id]
+        return gs.get("tone", translation_tone), gs.get("custom", "")
+    return translation_tone, translation_tone_custom
+
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
 sender_icon = ""  # URL to icon image, empty = default
@@ -1084,6 +1104,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             elif src == "th":
                 extra_rule = " 10. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or __MENTION__ placeholder."
 
+        # Get tone from thread-local (set by handler before calling translate)
+        _tone = getattr(_tl, 'tone', 'casual')
+        _tone_custom = getattr(_tl, 'tone_custom', '')
+        tone_instruction = _tone_custom if _tone_custom else TONE_PRESETS.get(_tone, TONE_PRESETS['casual'])
+
         sys_prompt = (
             "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
             "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
@@ -1093,7 +1118,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
             "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
-            "3. Translate all other content completely and naturally like real people talk at work. Use casual daily language. "
+            "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
             "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
             "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
@@ -2405,6 +2430,10 @@ def handle_message(event):
 
     reply = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    # Set translation tone for this group
+    _tone, _tone_custom = get_group_tone(group_id)
+    _tl.tone = _tone
+    _tl.tone_custom = _tone_custom
     if lang == "zh":
         result = translate(text_to_translate, "zh", tgt)
         if result and mention_placeholders:
@@ -2562,6 +2591,10 @@ def handle_image(event):
         actual_tgt = "zh"
 
     # Translate OCR text using the same translation engine as text messages
+    # Set translation tone for this group
+    _tone, _tone_custom = get_group_tone(group_id)
+    _tl.tone = _tone
+    _tl.tone_custom = _tone_custom
     if lang == "zh":
         result = translate(extracted, "zh", tgt)
     else:
@@ -3816,6 +3849,19 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div><span style="font-weight:600">📍 位置訊息翻譯</span><br><span style="font-size:12px;color:#8a8a9a">翻譯地點名稱和地址</span></div>
 <label class="toggle"><input type="checkbox" id="locationToggle" onchange="toggleFeatureSetting('location_translate_enabled',this.checked)"><span class="slider"></span></label>
 </div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🗣️ 翻譯口吻</span><br><span style="font-size:12px;color:#8a8a9a">控制翻譯的語氣風格</span></div>
+<select id="toneSelect" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px" onchange="toggleFeatureSetting('translation_tone',this.value)">
+<option value="casual">日常口語</option>
+<option value="natural">母語自然風格</option>
+<option value="formal">正式書面</option>
+</select>
+</div>
+<div style="padding:4px 0 12px">
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:6px">自訂語氣指令（填寫後覆蓋上方選項）</div>
+<textarea id="toneCustom" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="例如：用最口語的印尼文翻譯，像當地人聊天" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
+</div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -4322,6 +4368,8 @@ async function _loadFeatures(gid){
   document.getElementById('silentToggle').checked=d.silent_mode;
   document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
   document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
+  document.getElementById('toneSelect').value=d.translation_tone||'casual';
+  document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
   var cb=document.getElementById('settingsCustomBadge');
@@ -4597,6 +4645,9 @@ def save_settings():
                 "group_silent_settings": group_silent_settings,
                 "group_video_settings": group_video_settings,
                 "group_location_settings": group_location_settings,
+                "translation_tone": translation_tone,
+                "translation_tone_custom": translation_tone_custom,
+                "group_tone_settings": group_tone_settings,
                 "user_pictures": user_pictures,
                 "pw1_text": pw1_text,
                 "pw2_text": pw2_text,
@@ -4618,6 +4669,7 @@ def load_settings():
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
+    global translation_tone, translation_tone_custom
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
@@ -4671,6 +4723,11 @@ def load_settings():
         group_video_settings.update(data.get("group_video_settings", {}))
         group_location_settings.update(data.get("group_location_settings", {}))
         group_welcome_settings.update(data.get("group_welcome_settings", {}))
+        if "translation_tone" in data:
+            translation_tone = data["translation_tone"]
+        if "translation_tone_custom" in data:
+            translation_tone_custom = data["translation_tone_custom"]
+        group_tone_settings.update(data.get("group_tone_settings", {}))
         user_pictures.update(data.get("user_pictures", {}))
         if "pw1_text" in data:
             pw1_text = data["pw1_text"]
@@ -4930,6 +4987,7 @@ def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
+    global translation_tone, translation_tone_custom
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
@@ -4957,6 +5015,15 @@ def api_admin_features():
                     group_welcome_settings[gid]["text_zh"] = str(data["welcome_text_zh"])
                 if "welcome_text_id" in data:
                     group_welcome_settings[gid]["text_id"] = str(data["welcome_text_id"])
+            # Per-group tone
+            if "translation_tone" in data:
+                if gid not in group_tone_settings:
+                    group_tone_settings[gid] = {}
+                group_tone_settings[gid]["tone"] = str(data["translation_tone"])
+            if "translation_tone_custom" in data:
+                if gid not in group_tone_settings:
+                    group_tone_settings[gid] = {}
+                group_tone_settings[gid]["custom"] = str(data["translation_tone_custom"])
         else:
             # Global defaults
             if "welcome_enabled" in data:
@@ -4975,6 +5042,10 @@ def api_admin_features():
                 video_ocr_enabled = bool(data["video_ocr_enabled"])
             if "location_translate_enabled" in data:
                 location_translate_enabled = bool(data["location_translate_enabled"])
+            if "translation_tone" in data:
+                translation_tone = str(data["translation_tone"])
+            if "translation_tone_custom" in data:
+                translation_tone_custom = str(data["translation_tone_custom"])
         # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
@@ -4995,6 +5066,8 @@ def api_admin_features():
             "silent_mode": get_group_feature(gid, 'silent'),
             "video_ocr_enabled": get_group_feature(gid, 'video_ocr'),
             "location_translate_enabled": get_group_feature(gid, 'location'),
+            "translation_tone": get_group_tone(gid)[0],
+            "translation_tone_custom": get_group_tone(gid)[1],
             "sender_name": sender_name,
             "sender_icon": sender_icon,
             "bot_info": get_bot_info(),
@@ -5007,7 +5080,7 @@ def api_admin_features():
                 "video_ocr_enabled": video_ocr_enabled,
                 "location_translate_enabled": location_translate_enabled,
             },
-            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings,
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings,
         })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
@@ -5018,6 +5091,8 @@ def api_admin_features():
         "silent_mode": silent_mode,
         "video_ocr_enabled": video_ocr_enabled,
         "location_translate_enabled": location_translate_enabled,
+        "translation_tone": translation_tone,
+        "translation_tone_custom": translation_tone_custom,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
         "bot_info": get_bot_info(),
@@ -5039,6 +5114,7 @@ def api_admin_features_reset():
     group_video_settings.pop(gid, None)
     group_location_settings.pop(gid, None)
     group_welcome_settings.pop(gid, None)
+    group_tone_settings.pop(gid, None)
     save_settings()
     return jsonify({"ok": True})
 
