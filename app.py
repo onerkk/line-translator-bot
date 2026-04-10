@@ -29,6 +29,28 @@ try:
 except ImportError:
     ShowLoadingAnimationRequest = None
 try:
+    from linebot.v3.messaging import MarkMessagesAsReadRequest
+except ImportError:
+    MarkMessagesAsReadRequest = None
+try:
+    from linebot.v3.messaging import (
+        DatetimePickerAction as MsgDatetimePickerAction,
+        CameraAction as MsgCameraAction,
+        CameraRollAction as MsgCameraRollAction,
+        LocationAction as MsgLocationAction,
+        ClipboardAction as MsgClipboardAction,
+    )
+except ImportError:
+    MsgDatetimePickerAction = None
+    MsgCameraAction = None
+    MsgCameraRollAction = None
+    MsgLocationAction = None
+    MsgClipboardAction = None
+try:
+    from linebot.v3.messaging import ValidateMessageRequest
+except ImportError:
+    ValidateMessageRequest = None
+try:
     from linebot.v3.messaging import Sender as MessageSender
 except ImportError:
     MessageSender = None
@@ -85,11 +107,16 @@ try:
     from linebot.v3.webhooks import UnsendEvent
 except ImportError:
     UnsendEvent = None
+try:
+    from linebot.v3.webhooks import VideoPlayCompleteEvent
+except ImportError:
+    VideoPlayCompleteEvent = None
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
 import tempfile
 import time
+import uuid
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -222,12 +249,24 @@ silent_mode = False
 video_ocr_enabled = True
 # Location translation ON/OFF
 location_translate_enabled = True
+# Mark-as-read ON/OFF (shows 'read' indicator in chat)
+mark_read_enabled = True
+# X-Line-Retry-Key ON/OFF (idempotent message sending)
+retry_key_enabled = True
+# Camera Quick Reply button ON/OFF
+camera_qr_enabled = True
+# Clipboard Quick Reply button ON/OFF (copy storage zone etc.)
+clipboard_qr_enabled = False
 # Per-group feature overrides (group_id -> bool), global values above are defaults
 group_flex_settings = {}      # per-group flex card toggle
 group_qr_settings = {}        # per-group quick reply toggle
 group_silent_settings = {}    # per-group silent mode toggle
 group_video_settings = {}     # per-group video OCR toggle
 group_location_settings = {}  # per-group location translate toggle
+group_mark_read_settings = {} # per-group mark-as-read toggle
+group_retry_key_settings = {} # per-group retry key toggle
+group_camera_qr_settings = {} # per-group camera QR button toggle
+group_clipboard_qr_settings = {} # per-group clipboard QR button toggle
 group_welcome_settings = {}   # per-group welcome: {group_id: {"enabled": bool, "text_zh": str, "text_id": str}}
 # Translation tone settings
 TONE_PRESETS = {
@@ -294,6 +333,10 @@ def get_group_feature(group_id, feature):
         'silent': (group_silent_settings, 'silent_mode'),
         'video_ocr': (group_video_settings, 'video_ocr_enabled'),
         'location': (group_location_settings, 'location_translate_enabled'),
+        'mark_read': (group_mark_read_settings, 'mark_read_enabled'),
+        'retry_key': (group_retry_key_settings, 'retry_key_enabled'),
+        'camera_qr': (group_camera_qr_settings, 'camera_qr_enabled'),
+        'clipboard_qr': (group_clipboard_qr_settings, 'clipboard_qr_enabled'),
     }
     if feature not in _map:
         return True
@@ -2421,6 +2464,8 @@ def handle_message(event):
 
     # Show typing indicator while translating
     show_loading(group_id)
+    if get_group_feature(group_id, 'mark_read'):
+        mark_as_read(group_id)
 
     # Protect LINE mentions before translation
     text_to_translate = text
@@ -2467,10 +2512,13 @@ def handle_message(event):
     flex_msg = None
     if get_group_feature(group_id, 'flex'):
         flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
-    qr = build_quick_reply() if get_group_feature(group_id, 'quick_reply') else None
+    qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
     custom_sender = get_sender_object()
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
+
+    _use_retry = get_group_feature(group_id, 'retry_key')
+    _retry_key = generate_retry_key() if _use_retry else None
 
     with ApiClient(configuration) as api_client:
         api_line = MessagingApi(api_client)
@@ -2485,7 +2533,13 @@ def handle_message(event):
             req = ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg])
             if get_group_feature(group_id, 'silent'):
                 req.notification_disabled = True
-            api_line.reply_message(req)
+            try:
+                if _retry_key:
+                    api_line.reply_message(req, x_line_retry_key=_retry_key)
+                else:
+                    api_line.reply_message(req)
+            except TypeError:
+                api_line.reply_message(req)
         else:
             msg = TextMessage(text=reply)
             if qr:
@@ -2498,7 +2552,13 @@ def handle_message(event):
             req = ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])
             if get_group_feature(group_id, 'silent'):
                 req.notification_disabled = True
-            api_line.reply_message(req)
+            try:
+                if _retry_key:
+                    api_line.reply_message(req, x_line_retry_key=_retry_key)
+                else:
+                    api_line.reply_message(req)
+            except TypeError:
+                api_line.reply_message(req)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -2538,6 +2598,10 @@ def handle_image(event):
     if not oai:
         logger.warning("No OpenAI key, cannot do image OCR")
         return
+
+    show_loading(group_id)
+    if get_group_feature(group_id, 'mark_read'):
+        mark_as_read(group_id)
 
     # Download image from LINE
     message_id = event.message.id
@@ -2656,6 +2720,10 @@ def handle_audio(event):
     if not oai:
         logger.warning("No OpenAI key, cannot do audio transcription")
         return
+
+    show_loading(group_id)
+    if get_group_feature(group_id, 'mark_read'):
+        mark_as_read(group_id)
 
     # Download audio from LINE
     message_id = event.message.id
@@ -2948,6 +3016,18 @@ if UnsendEvent:
             logger.info("Unsend: removed message %s from cache", msg_id)
 
 
+if VideoPlayCompleteEvent:
+    @handler.add(VideoPlayCompleteEvent)
+    def handle_video_play_complete(event):
+        """Handle video viewing complete event — log for analytics."""
+        source = event.source
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', '')
+        user_id = getattr(source, 'user_id', '')
+        tracking_id = getattr(event.video_play_complete, 'tracking_id', '') if hasattr(event, 'video_play_complete') else ''
+        logger.info("VideoPlayComplete: group=%s user=%s tracking=%s", group_id, user_id, tracking_id)
+        bot_stats["video_play_complete"] = bot_stats.get("video_play_complete", 0) + 1
+
+
 def show_loading(chat_id):
     """Show typing indicator before translation."""
     if not ShowLoadingAnimationRequest:
@@ -2958,6 +3038,154 @@ def show_loading(chat_id):
             api.show_loading_animation(ShowLoadingAnimationRequest(chat_id=chat_id))
     except Exception:
         pass
+
+
+def mark_as_read(chat_id):
+    """Mark messages as read in the chat (shows 'read' indicator)."""
+    if not MarkMessagesAsReadRequest:
+        return
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.mark_messages_as_read(MarkMessagesAsReadRequest(chat_id=chat_id))
+    except Exception as e:
+        logger.debug("mark_as_read failed: %s", e)
+
+
+def generate_retry_key():
+    """Generate a UUID v4 for X-Line-Retry-Key header to prevent duplicate sends."""
+    return str(uuid.uuid4())
+
+
+def safe_reply(reply_token, messages, retry=True):
+    """Reply with optional X-Line-Retry-Key for idempotency."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
+            if retry:
+                # SDK v3 supports x_line_retry_key param
+                try:
+                    api.reply_message(req, x_line_retry_key=generate_retry_key())
+                except TypeError:
+                    api.reply_message(req)
+            else:
+                api.reply_message(req)
+    except Exception as e:
+        logger.warning("safe_reply failed: %s", e)
+
+
+def safe_push(to, messages, retry=True):
+    """Push with optional X-Line-Retry-Key for idempotency."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            req = PushMessageRequest(to=to, messages=messages)
+            if retry:
+                try:
+                    api.push_message(req, x_line_retry_key=generate_retry_key())
+                except TypeError:
+                    api.push_message(req)
+            else:
+                api.push_message(req)
+    except Exception as e:
+        logger.warning("safe_push failed: %s", e)
+
+
+# ---- Webhook Management API ----
+def get_webhook_info():
+    """Get current webhook endpoint info."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            info = api.get_webhook_endpoint()
+            return {
+                "endpoint": getattr(info, 'endpoint', ''),
+                "active": getattr(info, 'active', None),
+            }
+    except Exception as e:
+        logger.warning("get_webhook_info failed: %s", e)
+        return None
+
+
+def set_webhook_url(url):
+    """Set webhook endpoint URL via API."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            from linebot.v3.messaging import SetWebhookEndpointRequest
+            api.set_webhook_endpoint(SetWebhookEndpointRequest(endpoint=url))
+            return True
+    except Exception as e:
+        logger.warning("set_webhook_url failed: %s", e)
+        return False
+
+
+def test_webhook(endpoint=None):
+    """Test webhook endpoint."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            from linebot.v3.messaging import TestWebhookEndpointRequest
+            if endpoint:
+                resp = api.test_webhook_endpoint(TestWebhookEndpointRequest(endpoint=endpoint))
+            else:
+                resp = api.test_webhook_endpoint(TestWebhookEndpointRequest())
+            return {
+                "success": getattr(resp, 'success', None),
+                "timestamp": getattr(resp, 'timestamp', ''),
+                "status_code": getattr(resp, 'status_code', None),
+                "reason": getattr(resp, 'reason', ''),
+                "detail": getattr(resp, 'detail', ''),
+            }
+    except Exception as e:
+        logger.warning("test_webhook failed: %s", e)
+        return {"success": False, "reason": str(e)}
+
+
+# ---- Content Preview & Preparation Status ----
+def get_content_preview(message_id):
+    """Get a preview image of an image or video message."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            content = blob_api.get_message_content_preview(message_id)
+            return content
+    except Exception as e:
+        logger.warning("get_content_preview failed: %s", e)
+        return None
+
+
+def check_content_preparation(message_id):
+    """Check if video/audio content is ready for download."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            resp = blob_api.get_message_content_transcoding_by_message_id(message_id)
+            status = getattr(resp, 'status', 'unknown')
+            return status  # "processing", "succeeded", "failed"
+    except Exception as e:
+        logger.debug("check_content_preparation failed: %s", e)
+        return "unknown"
+
+
+# ---- Validate Message Objects ----
+def validate_message_objects(messages, msg_type="reply"):
+    """Validate message objects before sending. Returns True/error dict."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            if msg_type == "push":
+                api.validate_push({"messages": messages})
+            elif msg_type == "broadcast":
+                api.validate_broadcast({"messages": messages})
+            elif msg_type == "multicast":
+                api.validate_multicast({"messages": messages})
+            else:
+                api.validate_reply({"messages": messages})
+            return {"valid": True}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
 
 
 def get_line_quota():
@@ -3458,19 +3686,41 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
         return None
 
 
-def build_quick_reply():
-    """Build Quick Reply buttons for translation messages."""
+def build_quick_reply(group_id=None):
+    """Build Quick Reply buttons for translation messages, respecting per-group command toggles."""
     try:
+        # Core buttons always shown
         items = [
             QuickReplyItem(action=MessageAction(label="📖 說明/Info", text="/help")),
-            QuickReplyItem(action=MessageAction(label="🔍 儲區/Gudang", text="/qry ")),
-            QuickReplyItem(action=MessageAction(label="❌ 不翻我/Skip", text="/skip")),
-            QuickReplyItem(action=MessageAction(label="✅ 翻譯我/Unskip", text="/unskip")),
-            QuickReplyItem(action=MessageAction(label="🔑 班長密碼/PW1", text="/pw1")),
-            QuickReplyItem(action=MessageAction(label="🏭 儲運密碼/PW2", text="/pw2")),
-            QuickReplyItem(action=MessageAction(label="📦 包裝碼/Kemas", text="/pkg ")),
-            QuickReplyItem(action=MessageAction(label="🎨 廢料色/Warna", text="/scrap")),
         ]
+        # Command-linked buttons: only show if that command is enabled for the group
+        if is_cmd_enabled(group_id, 'qry'):
+            items.append(QuickReplyItem(action=MessageAction(label="🔍 儲區/Gudang", text="/qry ")))
+        items.append(QuickReplyItem(action=MessageAction(label="❌ 不翻我/Skip", text="/skip")))
+        items.append(QuickReplyItem(action=MessageAction(label="✅ 翻譯我/Unskip", text="/unskip")))
+        if is_cmd_enabled(group_id, 'pw1'):
+            items.append(QuickReplyItem(action=MessageAction(label="🔑 班長密碼/PW1", text="/pw1")))
+        if is_cmd_enabled(group_id, 'pw2'):
+            items.append(QuickReplyItem(action=MessageAction(label="🏭 儲運密碼/PW2", text="/pw2")))
+        if is_cmd_enabled(group_id, 'pkg'):
+            items.append(QuickReplyItem(action=MessageAction(label="📦 包裝碼/Kemas", text="/pkg ")))
+        if is_cmd_enabled(group_id, 'scrap'):
+            items.append(QuickReplyItem(action=MessageAction(label="🎨 廢料色/Warna", text="/scrap")))
+        # Camera quick reply button (opens camera directly)
+        if MsgCameraAction and get_group_feature(group_id, 'camera_qr'):
+            try:
+                items.append(QuickReplyItem(action=MsgCameraAction(label="📷 拍照/Foto")))
+            except Exception:
+                pass
+        # Clipboard quick reply button (copy useful text)
+        if MsgClipboardAction and get_group_feature(group_id, 'clipboard_qr'):
+            try:
+                items.append(QuickReplyItem(action=MsgClipboardAction(
+                    label="📋 複製儲區指令",
+                    clipboard_text="/qry "
+                )))
+            except Exception:
+                pass
         # URI-based buttons (open external links)
         try:
             items.append(QuickReplyItem(action=MsgURIAction(
@@ -3599,7 +3849,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.5-0408f</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0410b</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -3851,6 +4101,26 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">👁️ 標記已讀</span><br><span style="font-size:12px;color:#8a8a9a">處理訊息時顯示已讀標記</span></div>
+<label class="toggle"><input type="checkbox" id="markReadToggle" onchange="toggleFeatureSetting('mark_read_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🔄 防重複發送</span><br><span style="font-size:12px;color:#8a8a9a">X-Line-Retry-Key 冪等性</span></div>
+<label class="toggle"><input type="checkbox" id="retryKeyToggle" onchange="toggleFeatureSetting('retry_key_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">📷 拍照快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入拍照按鈕</span></div>
+<label class="toggle"><input type="checkbox" id="cameraQrToggle" onchange="toggleFeatureSetting('camera_qr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">📋 複製快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入複製指令按鈕</span></div>
+<label class="toggle"><input type="checkbox" id="clipboardQrToggle" onchange="toggleFeatureSetting('clipboard_qr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">🗣️ 翻譯口吻</span><br><span style="font-size:12px;color:#8a8a9a">控制翻譯的語氣風格</span></div>
 <select id="toneSelect" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px" onchange="toggleFeatureSetting('translation_tone',this.value)">
 <option value="casual">日常口語</option>
@@ -3868,6 +4138,13 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">📊 LINE 配額 & 統計</div>
 <div id="lineQuotaInfo" style="font-size:13px;color:#8a8a9a">載入中...</div>
 <div id="lineInsight" style="font-size:13px;color:#8a8a9a;margin-top:8px"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🔗 Webhook 狀態</div>
+<div id="webhookInfo" style="font-size:13px;color:#8a8a9a">載入中...</div>
+<button class="btn btn-dark btn-sm" style="margin-top:8px" onclick="testWebhook()">🧪 測試 Webhook</button>
+<div id="webhookTestResult" style="font-size:12px;color:#8a8a9a;margin-top:6px"></div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -4340,6 +4617,15 @@ async function loadFeatureSettings(){
     }
     document.getElementById('lineInsight').innerHTML=ihtml;
   }
+  // Load Webhook info
+  try{
+    var wh=await api('/webhook');
+    if(wh&&wh.webhook){
+      var whInfo='URL: '+(wh.webhook.endpoint||'(未設定)');
+      if(wh.webhook.active!==null)whInfo+=' ｜ '+(wh.webhook.active?'✅ 啟用':'❌ 停用');
+      document.getElementById('webhookInfo').innerHTML=whInfo;
+    }
+  }catch(e){document.getElementById('webhookInfo').innerHTML='無法取得';}
   // Load Rich Menu list
   var rm=await api('/richmenu/list');
   if(rm&&rm.menus&&rm.menus.length){
@@ -4368,6 +4654,10 @@ async function _loadFeatures(gid){
   document.getElementById('silentToggle').checked=d.silent_mode;
   document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
   document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
+  document.getElementById('markReadToggle').checked=d.mark_read_enabled!==false;
+  document.getElementById('retryKeyToggle').checked=d.retry_key_enabled!==false;
+  document.getElementById('cameraQrToggle').checked=d.camera_qr_enabled||false;
+  document.getElementById('clipboardQrToggle').checked=d.clipboard_qr_enabled||false;
   document.getElementById('toneSelect').value=d.translation_tone||'casual';
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
@@ -4413,6 +4703,16 @@ async function broadcastMessage(){
   var d=await api('/broadcast','POST',{text:text});
   if(d&&d.ok){toast('已推送全體');document.getElementById('pushText').value=''}
   else toast('推送失敗');
+}
+async function testWebhook(){
+  document.getElementById('webhookTestResult').innerHTML='測試中...';
+  var d=await api('/webhook/test','POST',{});
+  if(d){
+    var r=d.success?'✅ 成功':'❌ 失敗';
+    if(d.status_code)r+=' ('+d.status_code+')';
+    if(d.reason)r+=' - '+d.reason;
+    document.getElementById('webhookTestResult').innerHTML=r;
+  }else{document.getElementById('webhookTestResult').innerHTML='測試失敗';}
 }
 async function pushMessage(){
   var gid=document.getElementById('pushGroupSelect').value;
@@ -4645,6 +4945,14 @@ def save_settings():
                 "group_silent_settings": group_silent_settings,
                 "group_video_settings": group_video_settings,
                 "group_location_settings": group_location_settings,
+                "mark_read_enabled": mark_read_enabled,
+                "retry_key_enabled": retry_key_enabled,
+                "camera_qr_enabled": camera_qr_enabled,
+                "clipboard_qr_enabled": clipboard_qr_enabled,
+                "group_mark_read_settings": group_mark_read_settings,
+                "group_retry_key_settings": group_retry_key_settings,
+                "group_camera_qr_settings": group_camera_qr_settings,
+                "group_clipboard_qr_settings": group_clipboard_qr_settings,
                 "translation_tone": translation_tone,
                 "translation_tone_custom": translation_tone_custom,
                 "group_tone_settings": group_tone_settings,
@@ -4669,6 +4977,8 @@ def load_settings():
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
+    global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
+    global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global translation_tone, translation_tone_custom
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
@@ -4722,6 +5032,18 @@ def load_settings():
         group_silent_settings.update(data.get("group_silent_settings", {}))
         group_video_settings.update(data.get("group_video_settings", {}))
         group_location_settings.update(data.get("group_location_settings", {}))
+        if "mark_read_enabled" in data:
+            mark_read_enabled = data["mark_read_enabled"]
+        if "retry_key_enabled" in data:
+            retry_key_enabled = data["retry_key_enabled"]
+        if "camera_qr_enabled" in data:
+            camera_qr_enabled = data["camera_qr_enabled"]
+        if "clipboard_qr_enabled" in data:
+            clipboard_qr_enabled = data["clipboard_qr_enabled"]
+        group_mark_read_settings.update(data.get("group_mark_read_settings", {}))
+        group_retry_key_settings.update(data.get("group_retry_key_settings", {}))
+        group_camera_qr_settings.update(data.get("group_camera_qr_settings", {}))
+        group_clipboard_qr_settings.update(data.get("group_clipboard_qr_settings", {}))
         group_welcome_settings.update(data.get("group_welcome_settings", {}))
         if "translation_tone" in data:
             translation_tone = data["translation_tone"]
@@ -4988,6 +5310,7 @@ def api_admin_features():
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom
+    global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
@@ -5001,6 +5324,10 @@ def api_admin_features():
                 "silent_mode": group_silent_settings,
                 "video_ocr_enabled": group_video_settings,
                 "location_translate_enabled": group_location_settings,
+                "mark_read_enabled": group_mark_read_settings,
+                "retry_key_enabled": group_retry_key_settings,
+                "camera_qr_enabled": group_camera_qr_settings,
+                "clipboard_qr_enabled": group_clipboard_qr_settings,
             }
             for key, d in _feat_map.items():
                 if key in data:
@@ -5042,6 +5369,14 @@ def api_admin_features():
                 video_ocr_enabled = bool(data["video_ocr_enabled"])
             if "location_translate_enabled" in data:
                 location_translate_enabled = bool(data["location_translate_enabled"])
+            if "mark_read_enabled" in data:
+                mark_read_enabled = bool(data["mark_read_enabled"])
+            if "retry_key_enabled" in data:
+                retry_key_enabled = bool(data["retry_key_enabled"])
+            if "camera_qr_enabled" in data:
+                camera_qr_enabled = bool(data["camera_qr_enabled"])
+            if "clipboard_qr_enabled" in data:
+                clipboard_qr_enabled = bool(data["clipboard_qr_enabled"])
             if "translation_tone" in data:
                 translation_tone = str(data["translation_tone"])
             if "translation_tone_custom" in data:
@@ -5066,6 +5401,10 @@ def api_admin_features():
             "silent_mode": get_group_feature(gid, 'silent'),
             "video_ocr_enabled": get_group_feature(gid, 'video_ocr'),
             "location_translate_enabled": get_group_feature(gid, 'location'),
+            "mark_read_enabled": get_group_feature(gid, 'mark_read'),
+            "retry_key_enabled": get_group_feature(gid, 'retry_key'),
+            "camera_qr_enabled": get_group_feature(gid, 'camera_qr'),
+            "clipboard_qr_enabled": get_group_feature(gid, 'clipboard_qr'),
             "translation_tone": get_group_tone(gid)[0],
             "translation_tone_custom": get_group_tone(gid)[1],
             "sender_name": sender_name,
@@ -5079,8 +5418,12 @@ def api_admin_features():
                 "silent_mode": silent_mode,
                 "video_ocr_enabled": video_ocr_enabled,
                 "location_translate_enabled": location_translate_enabled,
+                "mark_read_enabled": mark_read_enabled,
+                "retry_key_enabled": retry_key_enabled,
+                "camera_qr_enabled": camera_qr_enabled,
+                "clipboard_qr_enabled": clipboard_qr_enabled,
             },
-            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings,
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings,
         })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
@@ -5091,6 +5434,10 @@ def api_admin_features():
         "silent_mode": silent_mode,
         "video_ocr_enabled": video_ocr_enabled,
         "location_translate_enabled": location_translate_enabled,
+        "mark_read_enabled": mark_read_enabled,
+        "retry_key_enabled": retry_key_enabled,
+        "camera_qr_enabled": camera_qr_enabled,
+        "clipboard_qr_enabled": clipboard_qr_enabled,
         "translation_tone": translation_tone,
         "translation_tone_custom": translation_tone_custom,
         "sender_name": sender_name,
@@ -5113,6 +5460,10 @@ def api_admin_features_reset():
     group_silent_settings.pop(gid, None)
     group_video_settings.pop(gid, None)
     group_location_settings.pop(gid, None)
+    group_mark_read_settings.pop(gid, None)
+    group_retry_key_settings.pop(gid, None)
+    group_camera_qr_settings.pop(gid, None)
+    group_clipboard_qr_settings.pop(gid, None)
     group_welcome_settings.pop(gid, None)
     group_tone_settings.pop(gid, None)
     save_settings()
@@ -5660,6 +6011,67 @@ def api_admin_packaging_json():
     json_str = json.dumps(PACKAGING_LOOKUP, ensure_ascii=False, indent=2)
     return app.response_class(json_str, mimetype="application/json",
                               headers={"Content-Disposition": "attachment; filename=packaging_data.json"})
+
+
+@app.route("/api/admin/webhook", methods=["GET", "POST"])
+def api_admin_webhook():
+    """Get or set webhook endpoint URL."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "POST":
+        data = request.get_json() or {}
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"error": "missing url"}), 400
+        ok = set_webhook_url(url)
+        return jsonify({"ok": ok})
+    return jsonify({"webhook": get_webhook_info()})
+
+
+@app.route("/api/admin/webhook/test", methods=["POST"])
+def api_admin_webhook_test():
+    """Test webhook endpoint connectivity."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    endpoint = data.get("endpoint", "")
+    result = test_webhook(endpoint if endpoint else None)
+    return jsonify(result)
+
+
+@app.route("/api/admin/validate", methods=["POST"])
+def api_admin_validate():
+    """Validate message objects before sending."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    text = data.get("text", "").strip()
+    msg_type = data.get("type", "reply")
+    if not text:
+        return jsonify({"error": "missing text"}), 400
+    msgs = [{"type": "text", "text": text}]
+    result = validate_message_objects(msgs, msg_type)
+    return jsonify(result)
+
+
+@app.route("/api/admin/content/preview/<message_id>")
+def api_admin_content_preview(message_id):
+    """Get content preview for an image/video message."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    content = get_content_preview(message_id)
+    if content:
+        return app.response_class(content, mimetype="image/jpeg")
+    return jsonify({"error": "not found"}), 404
+
+
+@app.route("/api/admin/content/status/<message_id>")
+def api_admin_content_status(message_id):
+    """Check preparation status for video/audio content."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    status = check_content_preparation(message_id)
+    return jsonify({"message_id": message_id, "status": status})
 
 
 @app.route("/health", methods=["GET"])
