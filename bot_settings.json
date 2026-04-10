@@ -165,7 +165,7 @@
   "group_camera_qr_settings": {},
   "group_clipboard_qr_settings": {},
   "camera_roll_qr_enabled": false,
-  "location_qr_enabled": true,
+  "location_qr_enabled": false,
   "group_camera_roll_qr_settings": {},
   "group_location_qr_settings": {},
   "translation_tone": "natural",
