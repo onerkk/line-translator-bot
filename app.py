@@ -257,6 +257,10 @@ retry_key_enabled = True
 camera_qr_enabled = True
 # Clipboard Quick Reply button ON/OFF (copy storage zone etc.)
 clipboard_qr_enabled = False
+# Camera Roll Quick Reply button ON/OFF
+camera_roll_qr_enabled = False
+# Location Quick Reply button ON/OFF
+location_qr_enabled = False
 # Per-group feature overrides (group_id -> bool), global values above are defaults
 group_flex_settings = {}      # per-group flex card toggle
 group_qr_settings = {}        # per-group quick reply toggle
@@ -267,6 +271,8 @@ group_mark_read_settings = {} # per-group mark-as-read toggle
 group_retry_key_settings = {} # per-group retry key toggle
 group_camera_qr_settings = {} # per-group camera QR button toggle
 group_clipboard_qr_settings = {} # per-group clipboard QR button toggle
+group_camera_roll_qr_settings = {} # per-group camera roll QR button toggle
+group_location_qr_settings = {} # per-group location QR button toggle
 group_welcome_settings = {}   # per-group welcome: {group_id: {"enabled": bool, "text_zh": str, "text_id": str}}
 # Translation tone settings
 TONE_PRESETS = {
@@ -337,6 +343,8 @@ def get_group_feature(group_id, feature):
         'retry_key': (group_retry_key_settings, 'retry_key_enabled'),
         'camera_qr': (group_camera_qr_settings, 'camera_qr_enabled'),
         'clipboard_qr': (group_clipboard_qr_settings, 'clipboard_qr_enabled'),
+        'camera_roll_qr': (group_camera_roll_qr_settings, 'camera_roll_qr_enabled'),
+        'location_qr': (group_location_qr_settings, 'location_qr_enabled'),
     }
     if feature not in _map:
         return True
@@ -3437,19 +3445,238 @@ def get_insight_followers():
 
 
 def get_message_delivery_stats(date_str=None):
-    """Get message delivery stats for a specific date."""
+    """Get message delivery stats for a specific date (reply/push/multicast/broadcast)."""
     try:
         if not date_str:
             date_str = time.strftime("%Y%m%d", time.gmtime(time.time() - 86400))
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
-            stats = api.get_number_of_sent_reply_messages(var_date=date_str)
+            result = {"date": date_str}
+            try:
+                s = api.get_number_of_sent_reply_messages(var_date=date_str)
+                result["reply"] = getattr(s, 'success', 0)
+            except Exception:
+                result["reply"] = None
+            try:
+                s = api.get_number_of_sent_push_messages(var_date=date_str)
+                result["push"] = getattr(s, 'success', 0)
+            except Exception:
+                result["push"] = None
+            try:
+                s = api.get_number_of_sent_multicast_messages(var_date=date_str)
+                result["multicast"] = getattr(s, 'success', 0)
+            except Exception:
+                result["multicast"] = None
+            try:
+                s = api.get_number_of_sent_broadcast_messages(var_date=date_str)
+                result["broadcast"] = getattr(s, 'success', 0)
+            except Exception:
+                result["broadcast"] = None
+            return result
+    except Exception:
+        return None
+
+
+def get_message_interaction_stats(request_id):
+    """Get user interaction statistics (opens, clicks) for a sent message."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_message_event(request_id=request_id)
             return {
-                "reply": getattr(stats, 'success', 0),
-                "date": date_str,
+                "overview": getattr(resp, 'overview', None),
+                "messages": getattr(resp, 'messages', None),
+                "clicks": getattr(resp, 'clicks', None),
+            }
+    except Exception as e:
+        logger.debug("get_message_interaction_stats failed: %s", e)
+        return None
+
+
+def get_all_follower_ids():
+    """Get all follower user IDs (paginated)."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            follower_ids = []
+            token = None
+            for _ in range(50):  # safety limit
+                try:
+                    if token:
+                        resp = api.get_followers(start=token)
+                    else:
+                        resp = api.get_followers()
+                except AttributeError:
+                    if token:
+                        resp = api.get_follower_ids(start=token)
+                    else:
+                        resp = api.get_follower_ids()
+                ids = getattr(resp, 'user_ids', None) or getattr(resp, 'follower_ids', None) or []
+                follower_ids.extend(ids)
+                token = getattr(resp, 'next', None) or getattr(resp, 'next_token', None)
+                if not token:
+                    break
+            return follower_ids
+    except Exception as e:
+        logger.warning("get_all_follower_ids failed: %s", e)
+        return []
+
+
+# ---- Room (multi-person chat) support ----
+def get_room_member_count(room_id):
+    """Get number of users in a multi-person chat."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            return api.get_room_members_count(room_id)
+    except Exception:
+        return None
+
+
+def fetch_all_room_members(room_id):
+    """Fetch all member IDs in a multi-person chat."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            member_ids = []
+            token = None
+            while True:
+                try:
+                    if token:
+                        resp = api.get_room_member_ids(room_id, start=token)
+                    else:
+                        resp = api.get_room_member_ids(room_id)
+                except AttributeError:
+                    break
+                ids = getattr(resp, 'member_user_ids', None) or getattr(resp, 'member_ids', None) or []
+                member_ids.extend(ids)
+                token = getattr(resp, 'next', None) or getattr(resp, 'next_token', None)
+                if not token:
+                    break
+            return member_ids
+    except Exception as e:
+        logger.warning("fetch_all_room_members failed: %s", e)
+        return []
+
+
+def get_room_member_profile(room_id, user_id):
+    """Get profile of a member in a multi-person chat."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            profile = api.get_room_member_profile(room_id, user_id)
+            return {
+                "display_name": getattr(profile, 'display_name', ''),
+                "user_id": getattr(profile, 'user_id', ''),
+                "picture_url": getattr(profile, 'picture_url', ''),
             }
     except Exception:
         return None
+
+
+# ---- Rich Menu enhanced ----
+def get_rich_menu_by_id(rich_menu_id):
+    """Get a single rich menu by ID."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            rm = api.get_rich_menu(rich_menu_id)
+            return {
+                "id": getattr(rm, 'rich_menu_id', ''),
+                "name": getattr(rm, 'name', ''),
+                "size": {"width": getattr(getattr(rm, 'size', None), 'width', 0), "height": getattr(getattr(rm, 'size', None), 'height', 0)} if getattr(rm, 'size', None) else None,
+                "chat_bar_text": getattr(rm, 'chat_bar_text', ''),
+                "selected": getattr(rm, 'selected', False),
+                "areas_count": len(getattr(rm, 'areas', []) or []),
+            }
+    except Exception as e:
+        logger.warning("get_rich_menu_by_id failed: %s", e)
+        return None
+
+
+def get_default_rich_menu_id():
+    """Get the ID of the current default rich menu."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_default_rich_menu_id()
+            return getattr(resp, 'rich_menu_id', None)
+    except Exception:
+        return None
+
+
+def get_user_rich_menu_id(user_id):
+    """Get the rich menu ID linked to a specific user."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_rich_menu_id_of_user(user_id)
+            return getattr(resp, 'rich_menu_id', None)
+    except Exception:
+        return None
+
+
+def validate_rich_menu_obj(rich_menu_dict):
+    """Validate a rich menu object before creating it."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.validate_rich_menu_object(rich_menu_dict)
+            return {"valid": True}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+def download_rich_menu_image(rich_menu_id):
+    """Download the image of a rich menu."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            content = blob_api.get_rich_menu_image(rich_menu_id)
+            return content
+    except Exception as e:
+        logger.warning("download_rich_menu_image failed: %s", e)
+        return None
+
+
+# ---- Rich Menu Alias enhanced ----
+def get_rich_menu_alias(alias_id):
+    """Get rich menu alias info by ID."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_rich_menu_alias(alias_id)
+            return {
+                "alias_id": getattr(resp, 'rich_menu_alias_id', ''),
+                "rich_menu_id": getattr(resp, 'rich_menu_id', ''),
+            }
+    except Exception:
+        return None
+
+
+def list_rich_menu_aliases():
+    """Get list of all rich menu aliases."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            resp = api.get_rich_menu_alias_list()
+            aliases_raw = getattr(resp, 'aliases', []) or []
+            return [{"alias_id": getattr(a, 'rich_menu_alias_id', ''), "rich_menu_id": getattr(a, 'rich_menu_id', '')} for a in aliases_raw]
+    except Exception:
+        return []
+
+
+def update_rich_menu_alias(alias_id, new_rich_menu_id):
+    """Update an existing rich menu alias to point to a different menu."""
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            from linebot.v3.messaging import UpdateRichMenuAliasRequest
+            api.update_rich_menu_alias(alias_id, UpdateRichMenuAliasRequest(rich_menu_id=new_rich_menu_id))
+            return True
+    except Exception as e:
+        logger.warning("update_rich_menu_alias failed: %s", e)
+        return False
 
 
 def list_rich_menus():
@@ -3721,6 +3948,18 @@ def build_quick_reply(group_id=None):
                 )))
             except Exception:
                 pass
+        # Camera Roll quick reply button (opens photo album)
+        if MsgCameraRollAction and get_group_feature(group_id, 'camera_roll_qr'):
+            try:
+                items.append(QuickReplyItem(action=MsgCameraRollAction(label="🖼️ 相簿/Album")))
+            except Exception:
+                pass
+        # Location quick reply button (share location)
+        if MsgLocationAction and get_group_feature(group_id, 'location_qr'):
+            try:
+                items.append(QuickReplyItem(action=MsgLocationAction(label="📍 位置/Lokasi")))
+            except Exception:
+                pass
         # URI-based buttons (open external links)
         try:
             items.append(QuickReplyItem(action=MsgURIAction(
@@ -3849,7 +4088,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0410b</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0410c</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -4121,6 +4360,16 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🖼️ 相簿快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入開啟相簿按鈕</span></div>
+<label class="toggle"><input type="checkbox" id="cameraRollQrToggle" onchange="toggleFeatureSetting('camera_roll_qr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">📍 位置快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入分享位置按鈕</span></div>
+<label class="toggle"><input type="checkbox" id="locationQrToggle" onchange="toggleFeatureSetting('location_qr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">🗣️ 翻譯口吻</span><br><span style="font-size:12px;color:#8a8a9a">控制翻譯的語氣風格</span></div>
 <select id="toneSelect" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px" onchange="toggleFeatureSetting('translation_tone',this.value)">
 <option value="casual">日常口語</option>
@@ -4145,6 +4394,34 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="webhookInfo" style="font-size:13px;color:#8a8a9a">載入中...</div>
 <button class="btn btn-dark btn-sm" style="margin-top:8px" onclick="testWebhook()">🧪 測試 Webhook</button>
 <div id="webhookTestResult" style="font-size:12px;color:#8a8a9a;margin-top:6px"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📈 送出統計（昨日）</div>
+<div id="deliveryStats" style="font-size:13px;color:#8a8a9a">載入中...</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">👥 好友清單</div>
+<button class="btn btn-dark btn-sm" onclick="loadFollowers()">載入好友列表</button>
+<div id="followersList" style="font-size:13px;color:#8a8a9a;margin-top:8px;max-height:200px;overflow-y:auto"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎨 Rich Menu 管理</div>
+<div id="richMenuList" style="font-size:13px;color:#8a8a9a;margin-bottom:8px"></div>
+<div id="richMenuDefault" style="font-size:13px;color:#8a8a9a;margin-bottom:8px"></div>
+<div style="margin-bottom:8px">
+<span style="font-size:13px;color:#8a8a9a">查詢用戶綁定選單：</span>
+<div style="display:flex;gap:6px;margin-top:4px">
+<input id="rmUserIdInput" type="text" placeholder="user ID" style="flex:1;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<button class="btn btn-dark btn-sm" onclick="checkUserMenu()">查詢</button>
+</div>
+<div id="rmUserResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+</div>
+<div style="font-size:13px;font-weight:600;margin-bottom:6px">Alias 列表</div>
+<div id="rmAliasList" style="font-size:13px;color:#8a8a9a"></div>
+<button class="btn btn-dark btn-sm" style="margin-top:6px" onclick="loadAliases()">重新載入 Alias</button>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -4176,7 +4453,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <button class="btn btn-primary btn-sm" onclick="createRichMenu()">建立選單</button>
 <button class="btn btn-red btn-sm" onclick="deleteRichMenu()">刪除選單</button>
 </div>
-<div id="richMenuList" style="font-size:12px;color:#8a8a9a;margin-top:6px">LINE 底部常駐按鈕</div>
+<div id="richMenuListOld" style="font-size:12px;color:#8a8a9a;margin-top:6px">LINE 底部常駐按鈕</div>
 </div>
 
 </div>
@@ -4637,6 +4914,10 @@ async function loadFeatureSettings(){
   }else{
     document.getElementById('richMenuList').textContent='尚未建立 Rich Menu';
   }
+  // Load delivery stats, rich menu default, aliases
+  loadDeliveryStats();
+  loadRichMenuDefault();
+  loadAliases();
 }
 async function loadFeatureSettingsForGroup(){
   _settingsGid=document.getElementById('settingsGroupSelect').value;
@@ -4658,6 +4939,8 @@ async function _loadFeatures(gid){
   document.getElementById('retryKeyToggle').checked=d.retry_key_enabled!==false;
   document.getElementById('cameraQrToggle').checked=d.camera_qr_enabled||false;
   document.getElementById('clipboardQrToggle').checked=d.clipboard_qr_enabled||false;
+  document.getElementById('cameraRollQrToggle').checked=d.camera_roll_qr_enabled||false;
+  document.getElementById('locationQrToggle').checked=d.location_qr_enabled||false;
   document.getElementById('toneSelect').value=d.translation_tone||'casual';
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
@@ -4713,6 +4996,57 @@ async function testWebhook(){
     if(d.reason)r+=' - '+d.reason;
     document.getElementById('webhookTestResult').innerHTML=r;
   }else{document.getElementById('webhookTestResult').innerHTML='測試失敗';}
+}
+async function loadFollowers(){
+  document.getElementById('followersList').innerHTML='載入中...';
+  var d=await api('/followers');
+  if(d&&d.followers){
+    var h='總計: '+d.count+' 人<br>';
+    for(var i=0;i<d.followers.length&&i<100;i++){
+      var f=d.followers[i];
+      h+='<span style="font-size:11px">'+(f.name||f.user_id.substr(0,12)+'...')+'</span> ';
+    }
+    if(d.count>100)h+='<br>...僅顯示前100人';
+    document.getElementById('followersList').innerHTML=h;
+  }else{document.getElementById('followersList').innerHTML='無法載入';}
+}
+async function loadDeliveryStats(){
+  var d=await api('/delivery');
+  if(d&&d.delivery){
+    var s=d.delivery;
+    var h='日期: '+(s.date||'-');
+    if(s.reply!==null)h+='<br>Reply: '+s.reply;
+    if(s.push!==null)h+=' ｜ Push: '+s.push;
+    if(s.multicast!==null)h+=' ｜ Multicast: '+s.multicast;
+    if(s.broadcast!==null)h+='<br>Broadcast: '+s.broadcast;
+    document.getElementById('deliveryStats').innerHTML=h;
+  }else{document.getElementById('deliveryStats').innerHTML='無法取得';}
+}
+async function checkUserMenu(){
+  var uid=document.getElementById('rmUserIdInput').value.trim();
+  if(!uid){toast('請輸入 user ID');return}
+  var d=await api('/richmenu/user/'+uid);
+  if(d){
+    document.getElementById('rmUserResult').innerHTML=d.rich_menu_id?('綁定: '+d.rich_menu_id):'無綁定（使用預設）';
+  }
+}
+async function loadAliases(){
+  var d=await api('/richmenu/alias/list');
+  if(d&&d.aliases){
+    if(!d.aliases.length){document.getElementById('rmAliasList').innerHTML='（無 alias）';return;}
+    var h='';
+    for(var i=0;i<d.aliases.length;i++){
+      var a=d.aliases[i];
+      h+='<div style="padding:4px 0;border-bottom:1px solid #2a2a3e"><b>'+a.alias_id+'</b> → '+a.rich_menu_id+'</div>';
+    }
+    document.getElementById('rmAliasList').innerHTML=h;
+  }
+}
+async function loadRichMenuDefault(){
+  var d=await api('/richmenu/default');
+  if(d){
+    document.getElementById('richMenuDefault').innerHTML='預設選單 ID: '+(d.default_rich_menu_id||'（未設定）');
+  }
 }
 async function pushMessage(){
   var gid=document.getElementById('pushGroupSelect').value;
@@ -4953,6 +5287,10 @@ def save_settings():
                 "group_retry_key_settings": group_retry_key_settings,
                 "group_camera_qr_settings": group_camera_qr_settings,
                 "group_clipboard_qr_settings": group_clipboard_qr_settings,
+                "camera_roll_qr_enabled": camera_roll_qr_enabled,
+                "location_qr_enabled": location_qr_enabled,
+                "group_camera_roll_qr_settings": group_camera_roll_qr_settings,
+                "group_location_qr_settings": group_location_qr_settings,
                 "translation_tone": translation_tone,
                 "translation_tone_custom": translation_tone_custom,
                 "group_tone_settings": group_tone_settings,
@@ -4978,7 +5316,9 @@ def load_settings():
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
+    global group_camera_roll_qr_settings, group_location_qr_settings
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
+    global camera_roll_qr_enabled, location_qr_enabled
     global translation_tone, translation_tone_custom
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
@@ -5044,6 +5384,12 @@ def load_settings():
         group_retry_key_settings.update(data.get("group_retry_key_settings", {}))
         group_camera_qr_settings.update(data.get("group_camera_qr_settings", {}))
         group_clipboard_qr_settings.update(data.get("group_clipboard_qr_settings", {}))
+        if "camera_roll_qr_enabled" in data:
+            camera_roll_qr_enabled = data["camera_roll_qr_enabled"]
+        if "location_qr_enabled" in data:
+            location_qr_enabled = data["location_qr_enabled"]
+        group_camera_roll_qr_settings.update(data.get("group_camera_roll_qr_settings", {}))
+        group_location_qr_settings.update(data.get("group_location_qr_settings", {}))
         group_welcome_settings.update(data.get("group_welcome_settings", {}))
         if "translation_tone" in data:
             translation_tone = data["translation_tone"]
@@ -5311,6 +5657,7 @@ def api_admin_features():
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
+    global camera_roll_qr_enabled, location_qr_enabled
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
@@ -5328,6 +5675,8 @@ def api_admin_features():
                 "retry_key_enabled": group_retry_key_settings,
                 "camera_qr_enabled": group_camera_qr_settings,
                 "clipboard_qr_enabled": group_clipboard_qr_settings,
+                "camera_roll_qr_enabled": group_camera_roll_qr_settings,
+                "location_qr_enabled": group_location_qr_settings,
             }
             for key, d in _feat_map.items():
                 if key in data:
@@ -5377,6 +5726,10 @@ def api_admin_features():
                 camera_qr_enabled = bool(data["camera_qr_enabled"])
             if "clipboard_qr_enabled" in data:
                 clipboard_qr_enabled = bool(data["clipboard_qr_enabled"])
+            if "camera_roll_qr_enabled" in data:
+                camera_roll_qr_enabled = bool(data["camera_roll_qr_enabled"])
+            if "location_qr_enabled" in data:
+                location_qr_enabled = bool(data["location_qr_enabled"])
             if "translation_tone" in data:
                 translation_tone = str(data["translation_tone"])
             if "translation_tone_custom" in data:
@@ -5405,6 +5758,8 @@ def api_admin_features():
             "retry_key_enabled": get_group_feature(gid, 'retry_key'),
             "camera_qr_enabled": get_group_feature(gid, 'camera_qr'),
             "clipboard_qr_enabled": get_group_feature(gid, 'clipboard_qr'),
+            "camera_roll_qr_enabled": get_group_feature(gid, 'camera_roll_qr'),
+            "location_qr_enabled": get_group_feature(gid, 'location_qr'),
             "translation_tone": get_group_tone(gid)[0],
             "translation_tone_custom": get_group_tone(gid)[1],
             "sender_name": sender_name,
@@ -5422,8 +5777,10 @@ def api_admin_features():
                 "retry_key_enabled": retry_key_enabled,
                 "camera_qr_enabled": camera_qr_enabled,
                 "clipboard_qr_enabled": clipboard_qr_enabled,
+                "camera_roll_qr_enabled": camera_roll_qr_enabled,
+                "location_qr_enabled": location_qr_enabled,
             },
-            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings,
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings or gid in group_camera_roll_qr_settings or gid in group_location_qr_settings,
         })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
@@ -5438,6 +5795,8 @@ def api_admin_features():
         "retry_key_enabled": retry_key_enabled,
         "camera_qr_enabled": camera_qr_enabled,
         "clipboard_qr_enabled": clipboard_qr_enabled,
+        "camera_roll_qr_enabled": camera_roll_qr_enabled,
+        "location_qr_enabled": location_qr_enabled,
         "translation_tone": translation_tone,
         "translation_tone_custom": translation_tone_custom,
         "sender_name": sender_name,
@@ -5464,6 +5823,8 @@ def api_admin_features_reset():
     group_retry_key_settings.pop(gid, None)
     group_camera_qr_settings.pop(gid, None)
     group_clipboard_qr_settings.pop(gid, None)
+    group_camera_roll_qr_settings.pop(gid, None)
+    group_location_qr_settings.pop(gid, None)
     group_welcome_settings.pop(gid, None)
     group_tone_settings.pop(gid, None)
     save_settings()
@@ -6072,6 +6433,146 @@ def api_admin_content_status(message_id):
         return jsonify({"error": "forbidden"}), 403
     status = check_content_preparation(message_id)
     return jsonify({"message_id": message_id, "status": status})
+
+
+@app.route("/api/admin/followers")
+def api_admin_followers():
+    """Get all follower user IDs and resolve names."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    ids = get_all_follower_ids()
+    followers = []
+    for uid in ids:
+        name = ""
+        # Try to find in known users
+        for gid, names in group_user_names.items():
+            if uid in names:
+                name = names[uid]
+                break
+        if not name:
+            name = dm_known_users.get(uid, {}).get("name", "")
+        followers.append({"user_id": uid, "name": name})
+    return jsonify({"count": len(ids), "followers": followers})
+
+
+@app.route("/api/admin/interaction")
+def api_admin_interaction():
+    """Get message interaction stats by request_id."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    req_id = request.args.get("request_id", "")
+    if not req_id:
+        return jsonify({"error": "missing request_id"}), 400
+    stats = get_message_interaction_stats(req_id)
+    return jsonify({"stats": stats})
+
+
+@app.route("/api/admin/delivery")
+def api_admin_delivery():
+    """Get full delivery stats (reply/push/multicast/broadcast)."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    date_str = request.args.get("date", "")
+    stats = get_message_delivery_stats(date_str if date_str else None)
+    return jsonify({"delivery": stats})
+
+
+@app.route("/api/admin/room/members")
+def api_admin_room_members():
+    """Get members of a multi-person chat room."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    room_id = request.args.get("room_id", "")
+    if not room_id:
+        return jsonify({"error": "missing room_id"}), 400
+    count = get_room_member_count(room_id)
+    members = fetch_all_room_members(room_id)
+    profiles = []
+    for uid in members[:50]:  # limit to 50
+        p = get_room_member_profile(room_id, uid)
+        if p:
+            profiles.append(p)
+    return jsonify({"count": count, "members": profiles})
+
+
+@app.route("/api/admin/richmenu/detail/<rm_id>")
+def api_admin_richmenu_detail(rm_id):
+    """Get detailed info of a single rich menu."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    detail = get_rich_menu_by_id(rm_id)
+    return jsonify({"menu": detail})
+
+
+@app.route("/api/admin/richmenu/default")
+def api_admin_richmenu_default():
+    """Get the current default rich menu ID."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    rm_id = get_default_rich_menu_id()
+    return jsonify({"default_rich_menu_id": rm_id})
+
+
+@app.route("/api/admin/richmenu/user/<user_id>")
+def api_admin_richmenu_user(user_id):
+    """Get which rich menu is linked to a specific user."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    rm_id = get_user_rich_menu_id(user_id)
+    return jsonify({"user_id": user_id, "rich_menu_id": rm_id})
+
+
+@app.route("/api/admin/richmenu/validate", methods=["POST"])
+def api_admin_richmenu_validate():
+    """Validate a rich menu object before creating."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    result = validate_rich_menu_obj(data)
+    return jsonify(result)
+
+
+@app.route("/api/admin/richmenu/image/<rm_id>")
+def api_admin_richmenu_image(rm_id):
+    """Download/preview the image of a rich menu."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    content = download_rich_menu_image(rm_id)
+    if content:
+        return app.response_class(content, mimetype="image/png")
+    return jsonify({"error": "not found"}), 404
+
+
+@app.route("/api/admin/richmenu/alias/list")
+def api_admin_richmenu_alias_list():
+    """Get all rich menu aliases."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    aliases = list_rich_menu_aliases()
+    return jsonify({"aliases": aliases})
+
+
+@app.route("/api/admin/richmenu/alias/update", methods=["POST"])
+def api_admin_richmenu_alias_update():
+    """Update a rich menu alias to point to a different menu."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    alias_id = data.get("alias_id", "")
+    rm_id = data.get("rich_menu_id", "")
+    if not alias_id or not rm_id:
+        return jsonify({"error": "missing alias_id or rich_menu_id"}), 400
+    ok = update_rich_menu_alias(alias_id, rm_id)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/admin/richmenu/alias/detail/<alias_id>")
+def api_admin_richmenu_alias_detail(alias_id):
+    """Get info about a specific rich menu alias."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    info = get_rich_menu_alias(alias_id)
+    return jsonify({"alias": info})
 
 
 @app.route("/health", methods=["GET"])
