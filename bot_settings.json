@@ -158,7 +158,7 @@
   "group_location_settings": {},
   "mark_read_enabled": true,
   "retry_key_enabled": true,
-  "camera_qr_enabled": true,
+  "camera_qr_enabled": false,
   "clipboard_qr_enabled": true,
   "group_mark_read_settings": {},
   "group_retry_key_settings": {},
