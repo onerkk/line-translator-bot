@@ -41,10 +41,18 @@
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
       "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪",
-      "U98def5ae6e4786c8ecc3e4a2f510cfb8": "辰"
+      "U98def5ae6e4786c8ecc3e4a2f510cfb8": "辰",
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
+      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
+      "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
+      "U1447d16f768aad47c0efaf2409505f97": "Dato潘"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
+      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     }
   },
   "dm_master_enabled": false,
@@ -62,13 +70,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 11,
+    "text_translations": 21,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 1,
-    "tokens_prompt": 144560,
-    "tokens_completion": 766
+    "tokens_prompt": 226947,
+    "tokens_completion": 1098
   },
   "extra_customers": {
     "__all__": [
@@ -119,12 +127,12 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 80349,
-      "tokens_completion": 180
+      "tokens_prompt": 129849,
+      "tokens_completion": 449
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 31073,
-      "tokens_completion": 545
+      "tokens_prompt": 63960,
+      "tokens_completion": 608
     }
   },
   "user_languages": {},
@@ -142,7 +150,7 @@
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": true
+    "Cd188e1adc7792e407c90f3fa78850316": false
   },
   "group_qr_settings": {},
   "group_silent_settings": {},
@@ -151,7 +159,14 @@
   "translation_tone": "natural",
   "translation_tone_custom": "",
   "group_tone_settings": {},
-  "user_pictures": {},
+  "user_pictures": {
+    "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
+    "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomgWc9OXpCFCeJpptHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
+    "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
+    "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
+    "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb74DyeGVhPTgZajKpnZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x"
+  },
   "pw1_text": "UR00179\nXx0972315373",
   "pw2_text": "UR00644\nJj0973550210",
   "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n=================="
