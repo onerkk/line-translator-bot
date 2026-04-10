@@ -4088,7 +4088,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0410d</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0411a</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -4103,7 +4103,7 @@ document.getElementById('loginBtn').addEventListener('click',function(){
   m.textContent='登入中...';
   m.style.color='#aaa';
   fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
-  .then(function(r){return r.json()})
+  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
   .then(function(d){
     if(d&&d.ok){
       m.textContent='';
@@ -4479,6 +4479,8 @@ function api(path,method,body){
   if(body)opts.body=JSON.stringify(body);
   return fetch(API+path,opts).then(function(r){
     if(r.status===403){toast('密碼錯誤');return null}
+    var ct=r.headers.get('content-type')||'';
+    if(!r.ok||ct.indexOf('application/json')<0){toast('伺服器錯誤('+r.status+')');return null}
     return r.json();
   }).catch(function(e){toast('連線失敗: '+e.message);return null});
 }
@@ -4781,6 +4783,7 @@ async function uploadStorage(){
   fd.append('file',storageFileData);
   try{
     var r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.error){toast(d.error);return}
     toast(d.message||'更新成功');
@@ -4820,6 +4823,7 @@ async function uploadPackaging(){
   var fd=new FormData();fd.append('file',f);
   try{
     var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.ok){toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';}
     else{toast(d.error||'上傳失敗');}
@@ -5103,11 +5107,11 @@ if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=51')
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v51';
+SW_JS = '''const CACHE='bot-admin-v52';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
-self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).then(r=>{if(r.ok){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c))}return r}).catch(()=>caches.match(e.request)))});'''
+self.addEventListener('fetch',e=>{const u=e.request.url;if(u.includes('/api/')||u.includes('/health')){e.respondWith(fetch(e.request));return}e.respondWith(fetch(e.request).then(r=>{if(r.ok){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c))}return r}).catch(()=>caches.match(e.request)))});'''
 
 MANIFEST_JSON = json.dumps({
     "name": "翻譯Bot 管理後台",
