@@ -122,6 +122,8 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+VERSION = "v2.6-0412c"
+
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
@@ -368,6 +370,7 @@ def get_group_welcome(group_id):
 
 # Translation cache: key = (text, src, tgt), value = (result, timestamp)
 translation_cache = {}
+_cache_lock = _threading.Lock()
 CACHE_MAX_SIZE = 500
 CACHE_TTL = 3600  # 1 hour
 
@@ -521,7 +524,7 @@ def strip_mentions_for_detect(text, line_mentions=None):
         if first_word and first_word.group(1).lower() in _id_skip:
             return m.group(0)  # Keep: not a real @mention
         return ' '
-    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))', _replace_en, clean if 'clean' in dir() else text)
+    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))', _replace_en, text)
     # Strip Chinese @mentions
     clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', ' ', clean)
     return clean
@@ -831,21 +834,28 @@ def has_english(text):
 
 
 def detect_language(text):
-    """Detect language: Chinese → 'zh', Latin text → 'id'."""
+    """Detect language: Chinese → 'zh', Latin text → 'id'.
+    For mixed messages (factory codes + Chinese), Chinese dominates."""
     clean = strip_mentions_for_detect(text).strip()
     if not clean or len(clean) < 2:
         return None
     zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
     latin_words = re.findall(r'[a-zA-Z]{2,}', clean.lower())
-    # Has Chinese and no significant Latin → Chinese
-    if zh_count >= 2 and len(latin_words) <= 1:
+    # Has Chinese characters — if Chinese dominates or Latin is minimal, it's Chinese
+    if zh_count >= 2 and zh_count >= len(latin_words):
         return "zh"
-    # Has Latin text → Indonesian
-    if latin_words:
+    # No Chinese but has Latin → Indonesian
+    if zh_count == 0 and latin_words:
         return "id"
-    # Only Chinese
+    # Both exist but Latin dominates → Indonesian
+    if latin_words and len(latin_words) > zh_count:
+        return "id"
+    # Only Chinese (1+ chars)
     if zh_count >= 1:
         return "zh"
+    # Has some Latin words
+    if latin_words:
+        return "id"
     return None
 
 
@@ -1498,23 +1508,25 @@ def translate_google(text, src, tgt):
 def cache_get(text, src, tgt):
     """Get translation from cache if exists and not expired."""
     key = (text.strip(), src, tgt)
-    if key in translation_cache:
-        result, ts = translation_cache[key]
-        if time.time() - ts < CACHE_TTL:
-            logger.info("Cache hit: %s -> %s", src, tgt)
-            return result
-        else:
-            del translation_cache[key]
+    with _cache_lock:
+        if key in translation_cache:
+            result, ts = translation_cache[key]
+            if time.time() - ts < CACHE_TTL:
+                logger.info("Cache hit: %s -> %s", src, tgt)
+                return result
+            else:
+                del translation_cache[key]
     return None
 
 
 def cache_set(text, src, tgt, result):
     """Store translation in cache, evict oldest if full."""
-    if len(translation_cache) >= CACHE_MAX_SIZE:
-        oldest_key = min(translation_cache, key=lambda k: translation_cache[k][1])
-        del translation_cache[oldest_key]
     key = (text.strip(), src, tgt)
-    translation_cache[key] = (result, time.time())
+    with _cache_lock:
+        if len(translation_cache) >= CACHE_MAX_SIZE:
+            oldest_key = min(translation_cache, key=lambda k: translation_cache[k][1])
+            del translation_cache[oldest_key]
+        translation_cache[key] = (result, time.time())
 
 
 def translate_with_retry(func, text, src, tgt, max_retries=2):
@@ -2378,17 +2390,20 @@ def handle_message(event):
         lang = detect_language(text_clean)
         tgt = dm_target_lang.get(user_id, "id")
         if lang is None:
-            result = translate(text_clean, "auto", tgt)
-            if not result:
-                return
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
-        elif lang == tgt:
             return
-        else:
-            result = translate(text_clean, lang, tgt)
-            if not result:
-                return
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
+        if lang == tgt:
+            return
+
+        # Set translation tone for DM (use global default)
+        _tl.tone = translation_tone
+        _tl.tone_custom = translation_tone_custom
+
+        _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+        result = translate(text_clean, lang, tgt)
+        track_group_usage("__dm__", _bp, _bc)
+        if not result:
+            return
+        reply = LANG_FLAGS.get(tgt, "") + " " + result
 
 
         bot_stats["text_translations"] += 1
@@ -2418,6 +2433,10 @@ def handle_message(event):
         save_settings()
 
     if text.startswith("/"):
+        # Set tone before commands that may translate (e.g. /notice)
+        _tone, _tone_custom = get_group_tone(group_id)
+        _tl.tone = _tone
+        _tl.tone_custom = _tone_custom
         cmd_result = handle_command(text, group_id, user_id)
         if cmd_result:
             with ApiClient(configuration) as api_client:
@@ -2753,6 +2772,10 @@ def handle_audio(event):
 
     reply = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    # Set translation tone for this group
+    _tone, _tone_custom = get_group_tone(group_id)
+    _tl.tone = _tone
+    _tl.tone_custom = _tone_custom
     if lang == "zh":
         result = translate(transcribed, "zh", tgt)
         if result:
@@ -2817,11 +2840,20 @@ if VideoMessageContent:
                     ocr_result = ocr_image_openai(b64)
                     if ocr_result and len(ocr_result.strip()) > 2:
                         lang = detect_language(ocr_result)
-                        if lang and lang == "zh":
-                            tgt = group_target_lang.get(group_id, "id")
-                            result = translate(ocr_result, "zh", tgt)
+                        if lang:
+                            # Set translation tone for this group
+                            _tone, _tone_custom = get_group_tone(group_id)
+                            _tl.tone = _tone
+                            _tl.tone_custom = _tone_custom
+                            if lang == "zh":
+                                tgt = group_target_lang.get(group_id, "id")
+                                result = translate(ocr_result, "zh", tgt)
+                                actual_tgt = tgt
+                            else:
+                                result = translate(ocr_result, lang, "zh")
+                                actual_tgt = "zh"
                             if result:
-                                reply = "🎬 " + LANG_FLAGS.get(tgt, "") + " " + result
+                                reply = "🎬 " + LANG_FLAGS.get(actual_tgt, "") + " " + result
                                 with ApiClient(configuration) as ac2:
                                     api2 = MessagingApi(ac2)
                                     api2.reply_message(ReplyMessageRequest(
@@ -2868,15 +2900,25 @@ if LocationMessageContent:
         if title or address:
             loc_text = (title + " " + address).strip()
             lang = detect_language(loc_text)
-            if lang and lang != "zh":
-                result = translate(loc_text, lang, "zh")
+            if lang:
+                # Set translation tone
+                _tone, _tone_custom = get_group_tone(group_id)
+                _tl.tone = _tone
+                _tl.tone_custom = _tone_custom
+                if lang == "zh":
+                    tgt = group_target_lang.get(group_id, "id")
+                    result = translate(loc_text, "zh", tgt)
+                    actual_tgt = tgt
+                else:
+                    result = translate(loc_text, lang, "zh")
+                    actual_tgt = "zh"
                 if result:
                     try:
                         with ApiClient(configuration) as api_client:
                             api = MessagingApi(api_client)
                             api.reply_message(ReplyMessageRequest(
                                 reply_token=event.reply_token,
-                                messages=[TextMessage(text="📍 " + LANG_FLAGS.get("zh", "") + " " + result)]
+                                messages=[TextMessage(text="📍 " + LANG_FLAGS.get(actual_tgt, "") + " " + result)]
                             ))
                     except Exception:
                         pass
@@ -4088,7 +4130,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0411a</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0412c</div>
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -5236,78 +5278,98 @@ def _load_file_from_github(filename, branch="main"):
 
 
 _last_save_time = 0
-_save_lock = None
+_save_lock = _threading.Lock()
+_save_scheduled = False
 
 def save_settings():
-    """Persist all bot settings to GitHub (background, throttled to max once per 30s)."""
-    global _last_save_time, _save_lock
-    import threading
-    if _save_lock is None:
-        _save_lock = threading.Lock()
+    """Persist all bot settings to GitHub (background, throttled to max once per 30s).
+    If throttled, schedules a delayed save so no changes are lost."""
+    global _last_save_time, _save_scheduled
     now = time.time()
-    if now - _last_save_time < 30:
-        return  # throttle: skip if saved less than 30s ago
-    _last_save_time = now
-    def _do_save():
-        try:
-            data = {
-                "group_settings": group_settings,
-                "group_target_lang": group_target_lang,
-                "group_img_settings": group_img_settings,
-                "group_audio_settings": group_audio_settings,
-                "group_wo_settings": group_wo_settings,
-                "group_cmd_enabled": group_cmd_enabled,
-                "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
-                "group_tracking": group_tracking,
-                "group_user_names": group_user_names,
-                "dm_master_enabled": dm_master_enabled,
-                "dm_whitelist": list(dm_whitelist),
-                "dm_known_users": dm_known_users,
-                "dm_target_lang": dm_target_lang,
-                "admin_users": admin_users,
-                "bot_stats": bot_stats,
-                "extra_customers": extra_names_by_group,
-                "group_api_usage": group_api_usage,
-                "user_languages": user_languages,
-                "welcome_settings": welcome_settings,
-                "group_welcome_settings": group_welcome_settings,
-                "flex_enabled": flex_enabled,
-                "quick_reply_enabled": quick_reply_enabled,
-                "silent_mode": silent_mode,
-                "sender_name": sender_name,
-                "sender_icon": sender_icon,
-                "video_ocr_enabled": video_ocr_enabled,
-                "location_translate_enabled": location_translate_enabled,
-                "group_flex_settings": group_flex_settings,
-                "group_qr_settings": group_qr_settings,
-                "group_silent_settings": group_silent_settings,
-                "group_video_settings": group_video_settings,
-                "group_location_settings": group_location_settings,
-                "mark_read_enabled": mark_read_enabled,
-                "retry_key_enabled": retry_key_enabled,
-                "camera_qr_enabled": camera_qr_enabled,
-                "clipboard_qr_enabled": clipboard_qr_enabled,
-                "group_mark_read_settings": group_mark_read_settings,
-                "group_retry_key_settings": group_retry_key_settings,
-                "group_camera_qr_settings": group_camera_qr_settings,
-                "group_clipboard_qr_settings": group_clipboard_qr_settings,
-                "camera_roll_qr_enabled": camera_roll_qr_enabled,
-                "location_qr_enabled": location_qr_enabled,
-                "group_camera_roll_qr_settings": group_camera_roll_qr_settings,
-                "group_location_qr_settings": group_location_qr_settings,
-                "translation_tone": translation_tone,
-                "translation_tone_custom": translation_tone_custom,
-                "group_tone_settings": group_tone_settings,
-                "user_pictures": user_pictures,
-                "pw1_text": pw1_text,
-                "pw2_text": pw2_text,
-                "scrap_text": scrap_text,
-            }
-            json_str = json.dumps(data, ensure_ascii=False, indent=2)
-            _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
-        except Exception as e:
-            logger.error("Background save_settings failed: %s", e)
-    threading.Thread(target=_do_save, daemon=True).start()
+    with _save_lock:
+        remaining = 30 - (now - _last_save_time)
+        if remaining > 0:
+            # Throttled — schedule a delayed save if not already scheduled
+            if not _save_scheduled:
+                _save_scheduled = True
+                _threading.Timer(remaining + 1, _flush_pending_save).start()
+            return
+        _last_save_time = now
+        _save_scheduled = False
+    _threading.Thread(target=_do_save_impl, daemon=True).start()
+
+
+def _flush_pending_save():
+    """Called by timer after throttle window expires."""
+    global _save_scheduled
+    with _save_lock:
+        _save_scheduled = False
+    save_settings()
+
+
+def _do_save_impl():
+    global _last_save_time
+    try:
+        data = {
+            "group_settings": group_settings,
+            "group_target_lang": group_target_lang,
+            "group_img_settings": group_img_settings,
+            "group_audio_settings": group_audio_settings,
+            "group_wo_settings": group_wo_settings,
+            "group_cmd_enabled": group_cmd_enabled,
+            "group_skip_users": {k: list(v) for k, v in group_skip_users.items()},
+            "group_tracking": group_tracking,
+            "group_user_names": group_user_names,
+            "dm_master_enabled": dm_master_enabled,
+            "dm_whitelist": list(dm_whitelist),
+            "dm_known_users": dm_known_users,
+            "dm_target_lang": dm_target_lang,
+            "admin_users": admin_users,
+            "bot_stats": bot_stats,
+            "extra_customers": extra_names_by_group,
+            "group_api_usage": group_api_usage,
+            "user_languages": user_languages,
+            "welcome_settings": welcome_settings,
+            "group_welcome_settings": group_welcome_settings,
+            "flex_enabled": flex_enabled,
+            "quick_reply_enabled": quick_reply_enabled,
+            "silent_mode": silent_mode,
+            "sender_name": sender_name,
+            "sender_icon": sender_icon,
+            "video_ocr_enabled": video_ocr_enabled,
+            "location_translate_enabled": location_translate_enabled,
+            "group_flex_settings": group_flex_settings,
+            "group_qr_settings": group_qr_settings,
+            "group_silent_settings": group_silent_settings,
+            "group_video_settings": group_video_settings,
+            "group_location_settings": group_location_settings,
+            "mark_read_enabled": mark_read_enabled,
+            "retry_key_enabled": retry_key_enabled,
+            "camera_qr_enabled": camera_qr_enabled,
+            "clipboard_qr_enabled": clipboard_qr_enabled,
+            "group_mark_read_settings": group_mark_read_settings,
+            "group_retry_key_settings": group_retry_key_settings,
+            "group_camera_qr_settings": group_camera_qr_settings,
+            "group_clipboard_qr_settings": group_clipboard_qr_settings,
+            "camera_roll_qr_enabled": camera_roll_qr_enabled,
+            "location_qr_enabled": location_qr_enabled,
+            "group_camera_roll_qr_settings": group_camera_roll_qr_settings,
+            "group_location_qr_settings": group_location_qr_settings,
+            "translation_tone": translation_tone,
+            "translation_tone_custom": translation_tone_custom,
+            "group_tone_settings": group_tone_settings,
+            "user_pictures": user_pictures,
+            "pw1_text": pw1_text,
+            "pw2_text": pw2_text,
+            "scrap_text": scrap_text,
+        }
+        json_str = json.dumps(data, ensure_ascii=False, indent=2)
+        _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
+    except Exception as e:
+        logger.error("Background save_settings failed: %s", e)
+        # Reset timer so next call will retry instead of being throttled
+        with _save_lock:
+            _last_save_time = 0
 
 
 def load_settings():
@@ -6454,7 +6516,8 @@ def api_admin_followers():
                 name = names[uid]
                 break
         if not name:
-            name = dm_known_users.get(uid, {}).get("name", "")
+            dm_val = dm_known_users.get(uid, "")
+            name = dm_val if isinstance(dm_val, str) else (dm_val.get("name", "") if isinstance(dm_val, dict) else "")
         followers.append({"user_id": uid, "name": name})
     return jsonify({"count": len(ids), "followers": followers})
 
@@ -6581,7 +6644,7 @@ def api_admin_richmenu_alias_detail(alias_id):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": VERSION, "uptime": int(time.time() - bot_start_time)}
 
 
 if __name__ == "__main__":
