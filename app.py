@@ -5790,6 +5790,7 @@ def load_settings():
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global translation_tone, translation_tone_custom
+    global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
