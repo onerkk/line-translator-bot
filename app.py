@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.7-0415a"
+VERSION = "v2.8-0415b"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -286,6 +286,11 @@ translation_tone = "casual"       # global default: casual / natural / formal
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
 group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
 
+# Model auto-switch: use gpt-4o for long messages, gpt-4o-mini for short
+model_default = "gpt-4o-mini"     # model for short messages
+model_upgrade = "gpt-4o"          # model for long messages
+model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
+
 import threading as _threading
 _tl = _threading.local()          # thread-local for passing tone into translate_openai
 
@@ -295,6 +300,13 @@ def get_group_tone(group_id):
         gs = group_tone_settings[group_id]
         return gs.get("tone", translation_tone), gs.get("custom", "")
     return translation_tone, translation_tone_custom
+
+
+def pick_model(text):
+    """Pick OpenAI model based on text length and threshold setting."""
+    if model_threshold > 0 and len(text) >= model_threshold:
+        return model_upgrade
+    return model_default
 
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
@@ -1453,8 +1465,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
+        _model = pick_model(text)
         r = oai.chat.completions.create(
-            model="gpt-4o-mini",
+            model=_model,
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
@@ -4508,6 +4521,34 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:6px">自訂語氣指令（填寫後覆蓋上方選項）</div>
 <textarea id="toneCustom" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="例如：用最口語的印尼文翻譯，像當地人聊天" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
 </div>
+
+<div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:4px">
+<div style="font-weight:600;margin-bottom:8px">🤖 AI 模型自動切換</div>
+<div class="card-sub" style="margin-bottom:8px">訊息超過指定字數自動升級為 GPT-4o（翻譯更流暢但較貴）。設為 0 表示全部用預設模型。</div>
+<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+<div style="font-size:13px;color:#8a8a9a;white-space:nowrap">字數門檻</div>
+<input id="modelThreshold" type="number" min="0" value="0" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+<div style="font-size:12px;color:#8a8a9a">字</div>
+</div>
+<div style="display:flex;gap:8px;margin-bottom:8px">
+<div style="flex:1">
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
+<select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<option value="gpt-4o-mini">gpt-4o-mini</option>
+<option value="gpt-4o">gpt-4o</option>
+</select>
+</div>
+<div style="flex:1">
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
+<select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<option value="gpt-4o">gpt-4o</option>
+<option value="gpt-4o-mini">gpt-4o-mini</option>
+</select>
+</div>
+</div>
+<button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
+<div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+</div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -5331,6 +5372,12 @@ async function _loadFeatures(gid){
   document.getElementById('locationQrToggle').checked=d.location_qr_enabled||false;
   document.getElementById('toneSelect').value=d.translation_tone||'casual';
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
+  // Model settings (global only, not per-group)
+  if(!gid){
+    document.getElementById('modelDefault').value=d.model_default||'gpt-4o-mini';
+    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-4o';
+    document.getElementById('modelThreshold').value=d.model_threshold||0;
+  }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
   var cb=document.getElementById('settingsCustomBadge');
@@ -5345,6 +5392,18 @@ function toggleFeatureSetting(key,val){
   var body={};body[key]=val;
   if(_settingsGid)body.group_id=_settingsGid;
   api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'群組設定已更新':'全域設定已更新')});
+}
+function saveModelSettings(){
+  var md=document.getElementById('modelDefault').value;
+  var mu=document.getElementById('modelUpgrade').value;
+  var mt=parseInt(document.getElementById('modelThreshold').value)||0;
+  api('/features','POST',{model_default:md,model_upgrade:mu,model_threshold:mt}).then(function(d){
+    if(d){
+      toast('模型設定已儲存');
+      var info=mt>0?'≥'+mt+'字用 '+mu+'，其餘用 '+md:'全部用 '+md;
+      document.getElementById('modelSaveResult').innerHTML='<span style="color:#43b581">✅ '+info+'</span>';
+    }
+  });
 }
 function saveWelcomeText(){
   var zh=document.getElementById('welcomeZh').value;
@@ -5485,13 +5544,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=53').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=54').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v53';
+SW_JS = '''const CACHE='bot-admin-v54';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -5700,6 +5759,9 @@ def _do_save_impl():
             "translation_tone": translation_tone,
             "translation_tone_custom": translation_tone_custom,
             "group_tone_settings": group_tone_settings,
+            "model_default": model_default,
+            "model_upgrade": model_upgrade,
+            "model_threshold": model_threshold,
             "user_pictures": user_pictures,
             "pw1_text": pw1_text,
             "pw2_text": pw2_text,
@@ -5804,6 +5866,12 @@ def load_settings():
         if "translation_tone_custom" in data:
             translation_tone_custom = data["translation_tone_custom"]
         group_tone_settings.update(data.get("group_tone_settings", {}))
+        if "model_default" in data:
+            model_default = data["model_default"]
+        if "model_upgrade" in data:
+            model_upgrade = data["model_upgrade"]
+        if "model_threshold" in data:
+            model_threshold = int(data["model_threshold"])
         user_pictures.update(data.get("user_pictures", {}))
         if "pw1_text" in data:
             pw1_text = data["pw1_text"]
@@ -6066,6 +6134,7 @@ def api_admin_features():
     global translation_tone, translation_tone_custom
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
+    global model_default, model_upgrade, model_threshold
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
@@ -6142,6 +6211,12 @@ def api_admin_features():
                 translation_tone = str(data["translation_tone"])
             if "translation_tone_custom" in data:
                 translation_tone_custom = str(data["translation_tone_custom"])
+            if "model_default" in data:
+                model_default = str(data["model_default"])
+            if "model_upgrade" in data:
+                model_upgrade = str(data["model_upgrade"])
+            if "model_threshold" in data:
+                model_threshold = int(data["model_threshold"])
         # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
@@ -6207,6 +6282,9 @@ def api_admin_features():
         "location_qr_enabled": location_qr_enabled,
         "translation_tone": translation_tone,
         "translation_tone_custom": translation_tone_custom,
+        "model_default": model_default,
+        "model_upgrade": model_upgrade,
+        "model_threshold": model_threshold,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
         "bot_info": get_bot_info(),
