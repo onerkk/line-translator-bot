@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.6-0412c"
+VERSION = "v2.7-0415a"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -3535,6 +3535,71 @@ def get_message_interaction_stats(request_id):
         return None
 
 
+def get_statistics_per_unit(date_str=None, num_days=7):
+    """Get daily follower statistics (new followers, blocks, unblocks) for recent days.
+    Uses LINE Insight API: /v2/bot/insight/followers?date=YYYYMMDD"""
+    results = []
+    try:
+        for i in range(num_days):
+            d = time.strftime("%Y%m%d", time.gmtime(time.time() - 86400 * (i + 1)))
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    resp = api.get_number_of_followers(var_date=d)
+                    results.append({
+                        "date": d,
+                        "followers": getattr(resp, 'followers', None),
+                        "targeted_reaches": getattr(resp, 'targeted_reaches', None),
+                        "blocks": getattr(resp, 'blocks', None),
+                    })
+            except Exception:
+                results.append({"date": d, "followers": None, "targeted_reaches": None, "blocks": None})
+    except Exception as e:
+        logger.debug("get_statistics_per_unit failed: %s", e)
+    return results
+
+
+def upload_rich_menu_image_custom(rich_menu_id, image_bytes, content_type="image/png"):
+    """Upload a custom image to a rich menu (from admin panel upload)."""
+    try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            blob_api.set_rich_menu_image(rich_menu_id, body=image_bytes, _headers={'Content-Type': content_type})
+            return True
+    except Exception as e:
+        logger.warning("upload_rich_menu_image_custom failed: %s", e)
+        return False
+
+
+def send_imagemap_message(to, base_url, alt_text, width, height, actions):
+    """Send an Imagemap message to a user or group.
+    actions: list of {"type": "message"|"uri", "text"|"uri": str, "x": int, "y": int, "w": int, "h": int}
+    """
+    if not ImagemapMessage:
+        return False
+    try:
+        imap_actions = []
+        for a in actions:
+            area = ImagemapArea(x=a["x"], y=a["y"], width=a["w"], height=a["h"])
+            if a.get("type") == "uri":
+                imap_actions.append(URIImagemapAction(link_uri=a["uri"], area=area))
+            else:
+                imap_actions.append(MessageImagemapAction(text=a.get("text", ""), area=area))
+        msg = ImagemapMessage(
+            base_url=base_url,
+            alt_text=alt_text or "圖片選單",
+            base_size=ImagemapBaseSize(width=width, height=height),
+            actions=imap_actions,
+        )
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.push_message(PushMessageRequest(to=to, messages=[msg]))
+        return True
+    except Exception as e:
+        logger.warning("send_imagemap_message failed: %s", e)
+        return False
+
+
 def get_all_follower_ids():
     """Get all follower user IDs (paginated)."""
     try:
@@ -4183,6 +4248,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('packaging')">包裝碼</div>
 <div class="tab" onclick="switchTab('passwords')">密碼</div>
 <div class="tab" onclick="switchTab('scrap')">廢料色</div>
+<div class="tab" onclick="switchTab('insight')">數據</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
@@ -4333,6 +4399,25 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 </div>
 
+<!-- Insight Panel -->
+<div class="panel" id="panel-insight">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">📊 好友趨勢（近7日）</div>
+<div id="insightTrendChart" style="min-height:160px;position:relative">
+<canvas id="trendCanvas" width="600" height="180" style="width:100%;height:180px"></canvas>
+</div>
+<div id="insightTrendData" style="font-size:12px;color:#8a8a9a;margin-top:8px"></div>
+</div>
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">👥 好友人口統計</div>
+<div id="insightDemoData" style="font-size:13px;color:#8a8a9a">載入中...</div>
+</div>
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">📈 昨日發送統計</div>
+<div id="insightDelivery" style="font-size:13px;color:#8a8a9a">載入中...</div>
+</div>
+</div>
+
 <!-- Settings Panel -->
 <div class="panel" id="panel-settings">
 <div class="card">
@@ -4464,6 +4549,42 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div style="font-size:13px;font-weight:600;margin-bottom:6px">Alias 列表</div>
 <div id="rmAliasList" style="font-size:13px;color:#8a8a9a"></div>
 <button class="btn btn-dark btn-sm" style="margin-top:6px" onclick="loadAliases()">重新載入 Alias</button>
+<div style="margin-top:12px;border-top:1px solid #2a2a3e;padding-top:12px">
+<div style="font-size:13px;font-weight:600;margin-bottom:6px">📤 上傳選單圖片</div>
+<div class="card-sub" style="margin-bottom:8px">選擇 Rich Menu 後上傳圖片（建議 2500x1686 或 2500x843）</div>
+<div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+<select id="rmUploadSelect" style="flex:1;min-width:120px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px"></select>
+<label class="btn btn-dark btn-sm" style="cursor:pointer;display:inline-flex;align-items:center">
+選擇圖片 <input type="file" id="rmImageFile" accept="image/png,image/jpeg" style="display:none" onchange="previewRmImage(this)">
+</label>
+</div>
+<div id="rmImagePreview" style="display:none;margin-bottom:6px"><img id="rmImagePreviewImg" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid #3a3a4e"></div>
+<button class="btn btn-primary btn-sm" onclick="uploadRmImage()" id="rmUploadBtn" style="display:none">⬆️ 上傳</button>
+<div id="rmUploadResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🗺️ Imagemap 圖片選單</div>
+<div class="card-sub" style="margin-bottom:10px">發送可點擊區域的圖片到群組（圖片需為 HTTPS URL，建議 1040px 寬）</div>
+<div class="ch-select-wrap" style="margin-bottom:8px">
+<select class="ch-select" id="imapGroupSelect" style="font-size:13px;padding:10px"></select>
+</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">圖片 Base URL（不含 /1040 等尺寸後綴）</div>
+<input id="imapBaseUrl" type="text" placeholder="https://example.com/images/menu" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+</div>
+<div style="display:flex;gap:8px;margin-bottom:8px">
+<div style="flex:1"><div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">寬度</div><input id="imapW" type="number" value="1040" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>
+<div style="flex:1"><div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">高度</div><input id="imapH" type="number" value="1040" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>
+</div>
+<div style="font-size:13px;font-weight:600;margin-bottom:6px">點擊區域</div>
+<div id="imapActions"></div>
+<button class="btn btn-dark btn-sm" style="margin-bottom:8px" onclick="addImapAction()">＋ 新增區域</button>
+<div style="margin-top:8px">
+<button class="btn btn-primary btn-sm" onclick="sendImap()">📤 發送 Imagemap</button>
+</div>
+<div id="imapResult" style="font-size:12px;color:#8a8a9a;margin-top:6px"></div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -4542,7 +4663,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','insight','settings'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -4558,6 +4679,7 @@ function switchTab(name){
   if(name==='packaging') loadPackagingStats();
   if(name==='passwords') loadPasswords();
   if(name==='scrap') loadScrap();
+  if(name==='insight') loadInsightTab();
   if(name==='settings') loadFeatureSettings();
 }
 
@@ -4911,6 +5033,210 @@ async function saveScrap(){
   if(d&&d.ok)toast('廢料色資訊已更新');
 }
 
+// ─── Insight Tab ───
+async function loadInsightTab(){
+  // Load trend
+  var t=await api('/insight/trend?days=7');
+  if(t&&t.trend&&t.trend.length){
+    var trend=t.trend.reverse();
+    var labels=[];var followers=[];var blocks=[];
+    for(var i=0;i<trend.length;i++){
+      var d=trend[i].date;
+      labels.push(d.substring(4,6)+'/'+d.substring(6,8));
+      followers.push(trend[i].followers||0);
+      blocks.push(trend[i].blocks||0);
+    }
+    drawTrendChart(labels,followers,blocks);
+    var html='<table style="width:100%;font-size:12px;border-collapse:collapse">';
+    html+='<tr style="color:#8a8a9a"><td>日期</td><td style="text-align:right">好友數</td><td style="text-align:right">封鎖</td></tr>';
+    for(var i=0;i<trend.length;i++){
+      html+='<tr><td>'+labels[i]+'</td><td style="text-align:right">'+(trend[i].followers||'-')+'</td><td style="text-align:right;color:#f04747">'+(trend[i].blocks||'-')+'</td></tr>';
+    }
+    html+='</table>';
+    document.getElementById('insightTrendData').innerHTML=html;
+  }else{
+    document.getElementById('insightTrendData').textContent='無趨勢資料（需至少20名好友且帳號開通超過7天）';
+  }
+  // Load demographics
+  var ins=await api('/insight');
+  if(ins){
+    var dhtml='';
+    if(ins.demographics&&ins.demographics.available){
+      if(ins.demographics.genders){
+        dhtml+='<div style="font-weight:600;margin-bottom:4px">性別</div>';
+        var g=ins.demographics.genders;
+        if(Array.isArray(g)){
+          for(var i=0;i<g.length;i++){
+            var pct=g[i].percentage?Math.round(g[i].percentage*100)+'%':'';
+            dhtml+='<span class="badge badge-on" style="font-size:11px;margin:2px">'+(g[i].gender||'-')+' '+pct+'</span> ';
+          }
+        }else{dhtml+=JSON.stringify(g)}
+        dhtml+='<br>';
+      }
+      if(ins.demographics.ages){
+        dhtml+='<div style="font-weight:600;margin:8px 0 4px">年齡</div>';
+        var a=ins.demographics.ages;
+        if(Array.isArray(a)){
+          for(var i=0;i<a.length;i++){
+            var pct=a[i].percentage?Math.round(a[i].percentage*100)+'%':'';
+            dhtml+='<span class="badge badge-on" style="font-size:11px;margin:2px">'+(a[i].age||'-')+' '+pct+'</span> ';
+          }
+        }else{dhtml+=JSON.stringify(a)}
+        dhtml+='<br>';
+      }
+      if(ins.demographics.areas){
+        dhtml+='<div style="font-weight:600;margin:8px 0 4px">地區</div>';
+        var ar=ins.demographics.areas;
+        if(Array.isArray(ar)){
+          for(var i=0;i<Math.min(ar.length,10);i++){
+            var pct=ar[i].percentage?Math.round(ar[i].percentage*100)+'%':'';
+            dhtml+='<span class="badge badge-on" style="font-size:11px;margin:2px">'+(ar[i].area||'-')+' '+pct+'</span> ';
+          }
+        }else{dhtml+=JSON.stringify(ar)}
+      }
+    }else{dhtml='人口統計需至少20名好友'}
+    document.getElementById('insightDemoData').innerHTML=dhtml||'無資料';
+    // Delivery
+    if(ins.delivery){
+      var s=ins.delivery;
+      var dv='日期: '+(s.date||'-');
+      if(s.reply!==null)dv+='<br>Reply: '+s.reply;
+      if(s.push!==null)dv+=' ｜ Push: '+s.push;
+      if(s.multicast!==null)dv+=' ｜ Multicast: '+s.multicast;
+      if(s.broadcast!==null)dv+='<br>Broadcast: '+s.broadcast;
+      document.getElementById('insightDelivery').innerHTML=dv;
+    }
+  }
+}
+function drawTrendChart(labels,followers,blocks){
+  var canvas=document.getElementById('trendCanvas');
+  if(!canvas)return;
+  var ctx=canvas.getContext('2d');
+  var W=canvas.width;var H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  var pad={t:20,r:10,b:30,l:50};
+  var cw=W-pad.l-pad.r;var ch=H-pad.t-pad.b;
+  var maxF=Math.max.apply(null,followers)||1;
+  // Grid
+  ctx.strokeStyle='#2a2a3e';ctx.lineWidth=1;
+  for(var i=0;i<4;i++){
+    var y=pad.t+ch*(i/3);
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
+  }
+  // Labels
+  ctx.fillStyle='#8a8a9a';ctx.font='11px sans-serif';ctx.textAlign='center';
+  for(var i=0;i<labels.length;i++){
+    var x=pad.l+cw*(i/(labels.length-1||1));
+    ctx.fillText(labels[i],x,H-8);
+  }
+  ctx.textAlign='right';
+  for(var i=0;i<4;i++){
+    var y=pad.t+ch*(i/3);
+    var val=Math.round(maxF*(1-i/3));
+    ctx.fillText(val,pad.l-6,y+4);
+  }
+  // Follower line
+  ctx.strokeStyle='#7c6fef';ctx.lineWidth=2;ctx.beginPath();
+  for(var i=0;i<followers.length;i++){
+    var x=pad.l+cw*(i/(followers.length-1||1));
+    var y=pad.t+ch*(1-followers[i]/maxF);
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  // Dots
+  ctx.fillStyle='#7c6fef';
+  for(var i=0;i<followers.length;i++){
+    var x=pad.l+cw*(i/(followers.length-1||1));
+    var y=pad.t+ch*(1-followers[i]/maxF);
+    ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();
+  }
+}
+
+// ─── Rich Menu Image Upload ───
+var _rmImageData=null;
+function previewRmImage(input){
+  if(!input.files||!input.files[0])return;
+  var file=input.files[0];
+  var reader=new FileReader();
+  reader.onload=function(e){
+    _rmImageData=e.target.result;
+    document.getElementById('rmImagePreviewImg').src=_rmImageData;
+    document.getElementById('rmImagePreview').style.display='block';
+    document.getElementById('rmUploadBtn').style.display='inline-block';
+  };
+  reader.readAsDataURL(file);
+}
+async function uploadRmImage(){
+  var sel=document.getElementById('rmUploadSelect');
+  var rmId=sel.value;
+  if(!rmId){toast('請選擇 Rich Menu');return}
+  if(!_rmImageData){toast('請選擇圖片');return}
+  document.getElementById('rmUploadResult').textContent='上傳中...';
+  var d=await api('/richmenu/upload/'+rmId,'POST',{image:_rmImageData});
+  if(d&&d.ok){
+    document.getElementById('rmUploadResult').innerHTML='<span style="color:#43b581">✅ 上傳成功</span>';
+    toast('圖片已上傳');
+    _rmImageData=null;
+    document.getElementById('rmImagePreview').style.display='none';
+    document.getElementById('rmUploadBtn').style.display='none';
+  }else{
+    document.getElementById('rmUploadResult').innerHTML='<span style="color:#f04747">❌ 上傳失敗: '+(d&&d.error||'unknown')+'</span>';
+  }
+}
+
+// ─── Imagemap Send ───
+var _imapActionCount=0;
+function addImapAction(){
+  var div=document.getElementById('imapActions');
+  var idx=_imapActionCount++;
+  var html='<div id="imapAct'+idx+'" style="background:#0d0d1a;border:1px solid #3a3a4e;border-radius:8px;padding:8px;margin-bottom:6px;font-size:12px">';
+  html+='<div style="display:flex;gap:6px;margin-bottom:4px;align-items:center">';
+  html+='<select id="imapType'+idx+'" style="padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px"><option value="message">文字訊息</option><option value="uri">開啟網址</option></select>';
+  html+='<input id="imapText'+idx+'" placeholder="訊息文字 或 URL" style="flex:1;padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='<span style="color:#f04747;cursor:pointer" onclick="document.getElementById(&apos;imapAct'+idx+'&apos;).remove()">✕</span>';
+  html+='</div>';
+  html+='<div style="display:flex;gap:4px">';
+  html+='<input id="imapX'+idx+'" type="number" placeholder="X" value="0" style="width:60px;padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='<input id="imapY'+idx+'" type="number" placeholder="Y" value="0" style="width:60px;padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='<input id="imapAW'+idx+'" type="number" placeholder="W" value="1040" style="width:60px;padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='<input id="imapAH'+idx+'" type="number" placeholder="H" value="1040" style="width:60px;padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='</div></div>';
+  div.insertAdjacentHTML('beforeend',html);
+}
+async function sendImap(){
+  var sel=document.getElementById('imapGroupSelect');
+  var to=sel.value;
+  if(!to){toast('請選擇群組');return}
+  var baseUrl=document.getElementById('imapBaseUrl').value.trim();
+  if(!baseUrl){toast('請輸入圖片 Base URL');return}
+  var w=parseInt(document.getElementById('imapW').value)||1040;
+  var h=parseInt(document.getElementById('imapH').value)||1040;
+  var actions=[];
+  for(var i=0;i<_imapActionCount;i++){
+    var el=document.getElementById('imapAct'+i);
+    if(!el)continue;
+    var type=document.getElementById('imapType'+i).value;
+    var text=document.getElementById('imapText'+i).value.trim();
+    var x=parseInt(document.getElementById('imapX'+i).value)||0;
+    var y=parseInt(document.getElementById('imapY'+i).value)||0;
+    var aw=parseInt(document.getElementById('imapAW'+i).value)||1040;
+    var ah=parseInt(document.getElementById('imapAH'+i).value)||1040;
+    if(!text)continue;
+    var act={type:type,x:x,y:y,w:aw,h:ah};
+    if(type==='uri')act.uri=text;else act.text=text;
+    actions.push(act);
+  }
+  if(!actions.length){toast('請新增至少一個點擊區域');return}
+  if(!confirm('確定發送 Imagemap 到此群組？'))return;
+  var d=await api('/imagemap/send','POST',{to:to,base_url:baseUrl,width:w,height:h,actions:actions});
+  if(d&&d.ok){
+    document.getElementById('imapResult').innerHTML='<span style="color:#43b581">✅ 已發送</span>';
+    toast('Imagemap 已發送');
+  }else{
+    document.getElementById('imapResult').innerHTML='<span style="color:#f04747">❌ 發送失敗: '+(d&&d.error||'unknown')+'</span>';
+  }
+}
+
 // ─── Feature Settings ───
 var _settingsGid='';
 async function loadFeatureSettings(){
@@ -4953,12 +5279,28 @@ async function loadFeatureSettings(){
   var rm=await api('/richmenu/list');
   if(rm&&rm.menus&&rm.menus.length){
     var rmhtml='目前選單: ';
+    var rmSel=document.getElementById('rmUploadSelect');
+    rmSel.innerHTML='<option value="">選擇 Rich Menu...</option>';
     for(var r=0;r<rm.menus.length;r++){
       rmhtml+='<span class="badge badge-on" style="font-size:11px;margin:2px">'+rm.menus[r].name+'</span> ';
+      var opt=document.createElement('option');
+      opt.value=rm.menus[r].id;opt.textContent=rm.menus[r].name||rm.menus[r].id.substring(0,16);
+      rmSel.appendChild(opt);
     }
     document.getElementById('richMenuList').innerHTML=rmhtml;
   }else{
     document.getElementById('richMenuList').textContent='尚未建立 Rich Menu';
+    document.getElementById('rmUploadSelect').innerHTML='<option value="">無選單</option>';
+  }
+  // Populate imagemap group select
+  var imSel=document.getElementById('imapGroupSelect');
+  imSel.innerHTML='<option value="">選擇群組...</option>';
+  if(_groupList&&_groupList.length){
+    for(var g=0;g<_groupList.length;g++){
+      var opt=document.createElement('option');
+      opt.value=_groupList[g].id;opt.textContent='#'+(_groupList[g].name||_groupList[g].id.substring(0,16));
+      imSel.appendChild(opt);
+    }
   }
   // Load delivery stats, rich menu default, aliases
   loadDeliveryStats();
@@ -5143,13 +5485,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=51').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=53').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v52';
+SW_JS = '''const CACHE='bot-admin-v53';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -5936,6 +6278,63 @@ def api_admin_insight():
         "demographics": get_insight_followers(),
         "delivery": get_message_delivery_stats(),
     })
+
+
+@app.route("/api/admin/insight/trend")
+def api_admin_insight_trend():
+    """Get daily follower trend data (7 days)."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    days = min(int(request.args.get("days", 7)), 30)
+    trend = get_statistics_per_unit(num_days=days)
+    return jsonify({"trend": trend})
+
+
+@app.route("/api/admin/richmenu/upload/<rm_id>", methods=["POST"])
+def api_admin_richmenu_upload(rm_id):
+    """Upload a custom image to a rich menu from admin panel."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    img_b64 = data.get("image", "")
+    content_type = data.get("content_type", "image/png")
+    if not img_b64:
+        return jsonify({"error": "missing image data"}), 400
+    try:
+        # Strip data URI prefix if present
+        if "," in img_b64:
+            header, img_b64 = img_b64.split(",", 1)
+            if "jpeg" in header or "jpg" in header:
+                content_type = "image/jpeg"
+            elif "png" in header:
+                content_type = "image/png"
+        img_bytes = base64.b64decode(img_b64)
+        if len(img_bytes) > 5 * 1024 * 1024:
+            return jsonify({"error": "image too large (max 5MB)"}), 400
+        ok = upload_rich_menu_image_custom(rm_id, img_bytes, content_type)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/admin/imagemap/send", methods=["POST"])
+def api_admin_imagemap_send():
+    """Send an Imagemap message to a group or user."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    to = data.get("to", "")
+    base_url = data.get("base_url", "")
+    alt_text = data.get("alt_text", "圖片選單")
+    width = int(data.get("width", 1040))
+    height = int(data.get("height", 1040))
+    actions = data.get("actions", [])
+    if not to or not base_url:
+        return jsonify({"error": "missing to or base_url"}), 400
+    if not actions:
+        return jsonify({"error": "missing actions"}), 400
+    ok = send_imagemap_message(to, base_url, alt_text, width, height, actions)
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/admin/richmenu/list")
