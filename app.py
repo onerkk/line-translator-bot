@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.9-0416d"
+VERSION = "v2.9-0416f"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1033,6 +1033,8 @@ ZH_TO_ID_HARD = {
     "速差": "selisih kecepatan",
     "主機手": "operator utama",
     "印勞": "pekerja Indonesia",
+    "加壓": "tambah tekanan",
+    "電流": "arus listrik",
     "在製品管制表": "tabel kontrol WIP",
     # 包裝/入庫
     "套紙管": "pasang tabung kertas",
@@ -1569,6 +1571,17 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Udah dicek, hasilnya OK → 已經檢查了，沒問題 "
             "Belakangan ini atasan sering datang inspeksi → 最近主管常常來巡場 "
             "Tadi pagi ditemukan banyak posisi kerja kosong → 今天早上發現很多工作崗位沒人 "
+            "Saya menjalankan mesin pelan dengan kecepatan 500 → 我降速跑機台，速度500 "
+            "Menjalankan mesin pelan → 降速跑機台 "
+            "Mesin jalan pelan → 機台跑很慢 "
+            "Naikkan kecepatan → 加速 "
+            "Turunkan kecepatan → 降速 "
+            "Kecepatan terlalu cepat → 速度太快了 "
+            "Kecepatan terlalu pelan → 速度太慢了 "
+            "Ganti batu gerinda → 換砂輪 "
+            "Ganti batu polishing → 換拋光輪 "
+            "Arus depan dan belakang tambah 0.3 → 前後電流加0.3 "
+            "Mesin I16 saya jalankan pelan → 我I16慢慢跑 "
             "UT udah numpuk banyak material → UT囤一堆料了 "
             "QC udah pulang, keterlaluan → 品保已經下班了，太扯了 "
             "Batang 3 meter ditaruh di atas batang 6 meter → 三米放在六米上面 "
