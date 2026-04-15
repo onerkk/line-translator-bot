@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.8-0415d"
+VERSION = "v2.9-0415e"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -308,6 +308,30 @@ def pick_model(text):
         return model_upgrade
     return model_default
 
+
+def _build_custom_examples_prompt():
+    """Build custom examples string to inject into translation prompt."""
+    if not custom_translation_examples:
+        return " "
+    zh2id = []
+    id2zh = []
+    for ex in custom_translation_examples:
+        zh = ex.get("zh", "").strip()
+        idn = ex.get("id", "").strip()
+        if not zh or not idn:
+            continue
+        d = ex.get("dir", "zh2id")
+        if d == "id2zh":
+            id2zh.append(idn + " → " + zh)
+        else:
+            zh2id.append(zh + " → " + idn)
+    parts = []
+    if zh2id:
+        parts.append(" 【自訂中→印尼】" + " ".join(zh2id))
+    if id2zh:
+        parts.append(" 【自訂印尼→中文】" + " ".join(id2zh))
+    return " ".join(parts) if parts else " "
+
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
 sender_icon = ""  # URL to icon image, empty = default
@@ -340,6 +364,11 @@ scrap_text = (
 
 # ── Packaging code lookup ──
 PACKAGING_LOOKUP = {}
+
+# ── Custom translation examples (editable from admin panel) ──
+# List of {"zh": "中文", "id": "Indonesian", "dir": "zh2id"|"id2zh"}
+CUSTOM_EXAMPLES_MAX = 200
+custom_translation_examples = []
 
 # USD to TWD rate (approximate)
 USD_TO_TWD = 32.0
@@ -1567,7 +1596,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Tolong kejar materialnya → 幫追料 "
             "Tolong kejar data administrasinya → 幫追帳 "
             "Sudah 2900 jangan masukkan data lagi ya → 已2900別入帳了"
-            + extra_rule +
+            + _build_custom_examples_prompt() +
+            extra_rule +
             " IMPORTANT: Preserve the original line breaks and blank lines exactly. If the source has a blank line between paragraphs, keep a blank line in the same position in the translation."
             " Only output the translation. No quotes, no explanation, no prefix."
         )
@@ -4379,6 +4409,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('passwords')">密碼</div>
 <div class="tab" onclick="switchTab('scrap')">廢料色</div>
 <div class="tab" onclick="switchTab('insight')">數據</div>
+<div class="tab" onclick="switchTab('examples')">翻譯範例</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
@@ -4545,6 +4576,47 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:12px">📈 昨日發送統計</div>
 <div id="insightDelivery" style="font-size:13px;color:#8a8a9a">載入中...</div>
+</div>
+</div>
+
+<!-- Examples Panel -->
+<div class="panel" id="panel-examples">
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+<div style="font-weight:700;font-size:15px">📝 自訂翻譯範例</div>
+<span id="exCountBadge" class="badge badge-on" style="font-size:11px">0/200</span>
+</div>
+<div class="card-sub" style="margin-bottom:12px">新增的範例會即時注入 AI 翻譯的 prompt，讓翻譯結果更符合你的用語習慣。</div>
+<div id="exWarning" style="display:none;background:rgba(250,166,26,.12);border:1px solid rgba(250,166,26,.3);border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;color:#faa61a"></div>
+
+<div style="margin-bottom:12px">
+<div style="display:flex;gap:8px;margin-bottom:6px">
+<select id="exDir" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<option value="zh2id">中文→印尼</option>
+<option value="id2zh">印尼→中文</option>
+</select>
+</div>
+<div style="display:flex;gap:8px;margin-bottom:6px">
+<input id="exZh" type="text" placeholder="中文" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<input id="exId" type="text" placeholder="印尼文" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+</div>
+<button class="btn btn-primary btn-sm" onclick="addExample()">＋ 新增範例</button>
+<div id="exAddResult" style="font-size:12px;margin-top:4px"></div>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+<div style="font-weight:600;font-size:14px">範例列表</div>
+<div style="display:flex;gap:6px">
+<select id="exFilter" style="padding:4px 8px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px" onchange="renderExamples()">
+<option value="all">全部</option>
+<option value="zh2id">中→印尼</option>
+<option value="id2zh">印尼→中文</option>
+</select>
+</div>
+</div>
+<div id="exList"><div class="empty">載入中...</div></div>
 </div>
 </div>
 
@@ -4821,7 +4893,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','insight','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','insight','examples','settings'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -4838,6 +4910,7 @@ function switchTab(name){
   if(name==='passwords') loadPasswords();
   if(name==='scrap') loadScrap();
   if(name==='insight') loadInsightTab();
+  if(name==='examples') loadExamples();
   if(name==='settings') loadFeatureSettings();
 }
 
@@ -5395,6 +5468,147 @@ async function sendImap(){
   }
 }
 
+// ─── Translation Examples ───
+var _exData=[];
+var _builtinExamples=null;
+function _getBuiltinExamples(){
+  if(_builtinExamples)return _builtinExamples;
+  _builtinExamples=[];
+  var raw=[
+    ["乾 需不需要提報一下","Aduh, perlu dilaporkan gak nih?"],
+    ["UT囤一堆料了","UT udah numpuk banyak material."],
+    ["品保還在下班 誇張","QC udah pulang, keterlaluan."],
+    ["三米上面放六米","Batang 3 meter ditaruh di atas batang 6 meter."],
+    ["來料都短少4-5公斤","Material masuk semuanya kurang 4-5 kilogram."],
+    ["已轉達","Sudah disampaikan."],
+    ["這批料有問題","Lot material ini ada masalah."],
+    ["幫我盯一下","Tolong awasin ya."],
+    ["怎麼搞的啦","Kok bisa kayak gini sih."],
+    ["人咧","Orangnya mana?"],
+    ["辛苦了","Makasih kerja kerasnya."],
+    ["靠 又壞了","Astaga, rusak lagi."],
+    ["先這樣","Segitu dulu ya."],
+    ["砂輪要換了","Batu gerinda harus diganti."],
+    ["公差超過了","Toleransinya udah lewat."],
+    ["粗拋完已放行","Rough polishing selesai, sudah di-release."],
+    ["放了","Sudah di-release."],
+    ["放地上","Taruh di lantai."],
+    ["料放旁邊","Material taruh di samping."],
+    ["幫追料","Tolong kejar materialnya"],
+    ["幫追帳","Tolong kejar data administrasinya"],
+    ["處長走了","Kepala divisi sudah pergi."],
+    ["Saya mau izin besok","我明天要請假"],
+    ["Mesinnya rusak","機台壞了"],
+    ["Materialnya udah habis","料用完了"],
+    ["Saya gak ngerti","我聽不懂"],
+    ["Boleh pulang duluan?","可以先下班嗎？"],
+    ["Lembur sampai jam berapa?","加班到幾點？"],
+    ["Bos, ini udah selesai","老闆，這個好了"],
+    ["Ukurannya gak pas","尺寸不對"],
+    ["Stoknya masih ada?","庫存還有嗎？"],
+    ["Tolong ajarin saya","請教我一下"],
+    ["Sudah di-release","放了"],
+    ["Tolong bantu release","幫放一下"],
+    ["Tolong kejar materialnya","幫追料"],
+    ["Kepala divisi sudah pergi","處長走了"],
+    ["Besok libur gak?","明天放假嗎？"],
+    ["Maaf bos, saya telat","老闆抱歉，我遲到了"],
+    ["Mesin udah jalan normal","機台已經恢復正常了"],
+    ["Sudah saya laporkan ke QC","我已經跟品保回報了"],
+    ["Packing-nya salah, harus bongkar ulang","包裝包錯了，要拆掉重包"],
+    ["DILARANG pindahkan batang baja dengan tangan saat mesin jalan","嚴禁運轉中用手搬棒材"],
+  ];
+  for(var i=0;i<raw.length;i++){
+    _builtinExamples.push({zh:raw[i][0].toLowerCase(),id:raw[i][1].toLowerCase()});
+  }
+  return _builtinExamples;
+}
+function _checkBuiltinDuplicate(zh,id){
+  var bex=_getBuiltinExamples();
+  var zl=zh.toLowerCase().trim();
+  var il=id.toLowerCase().trim();
+  for(var i=0;i<bex.length;i++){
+    if(bex[i].zh===zl||bex[i].id===il||bex[i].zh===il||bex[i].id===zl)return true;
+  }
+  return false;
+}
+async function loadExamples(){
+  var d=await api('/examples');
+  if(!d)return;
+  _exData=d.examples||[];
+  document.getElementById('exCountBadge').textContent=d.count+'/'+d.max;
+  if(d.count>=d.max){
+    document.getElementById('exWarning').style.display='block';
+    document.getElementById('exWarning').textContent='⚠️ 已達上限 '+d.max+' 條，請刪除舊的再新增。';
+  }else if(d.count>=d.max*0.8){
+    document.getElementById('exWarning').style.display='block';
+    document.getElementById('exWarning').textContent='⚠️ 已使用 '+d.count+'/'+d.max+' 條，接近上限。範例越多 API 成本越高。';
+  }else{
+    document.getElementById('exWarning').style.display='none';
+  }
+  renderExamples();
+}
+function renderExamples(){
+  var filter=document.getElementById('exFilter').value;
+  var el=document.getElementById('exList');
+  if(!_exData.length){el.innerHTML='<div class="empty">尚無自訂範例</div>';return}
+  var html='';
+  var shown=0;
+  for(var i=0;i<_exData.length;i++){
+    var ex=_exData[i];
+    if(filter!=='all'&&ex.dir!==filter)continue;
+    shown++;
+    var dirLabel=ex.dir==='id2zh'?'🇮🇩→🇹🇼':'🇹🇼→🇮🇩';
+    html+='<div style="padding:8px 0;border-bottom:1px solid #2a2a3e;font-size:13px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
+    html+='<div style="flex:1"><span class="badge badge-on" style="font-size:10px;margin-right:4px">'+dirLabel+'</span>';
+    html+='<span style="color:#e0e0e0">'+ex.zh+'</span>';
+    html+='<br><span style="color:#8a8a9a">→ '+ex.id+'</span></div>';
+    html+='<span style="color:#f04747;cursor:pointer;padding:4px 8px;font-size:16px" onclick="deleteExample('+i+')">✕</span>';
+    html+='</div></div>';
+  }
+  if(!shown) html='<div class="empty">無符合篩選的範例</div>';
+  el.innerHTML=html;
+}
+async function addExample(){
+  var zh=document.getElementById('exZh').value.trim();
+  var id=document.getElementById('exId').value.trim();
+  var dir=document.getElementById('exDir').value;
+  var resEl=document.getElementById('exAddResult');
+  if(!zh||!id){resEl.innerHTML='<span style="color:#f04747">請輸入中文和印尼文</span>';return}
+  // Check built-in duplicates
+  if(_checkBuiltinDuplicate(zh,id)){
+    resEl.innerHTML='<span style="color:#faa61a">⚠️ 此範例已存在於核心翻譯範例中，不需重複新增</span>';
+    return;
+  }
+  // Check custom duplicates
+  for(var i=0;i<_exData.length;i++){
+    if(_exData[i].zh===zh&&_exData[i].id===id){
+      resEl.innerHTML='<span style="color:#faa61a">⚠️ 此範例已存在</span>';
+      return;
+    }
+  }
+  var d=await api('/examples/add','POST',{zh:zh,id:id,dir:dir});
+  if(d&&d.ok){
+    resEl.innerHTML='<span style="color:#43b581">✅ 已新增</span>';
+    document.getElementById('exZh').value='';
+    document.getElementById('exId').value='';
+    loadExamples();
+  }else if(d&&d.error==='max_reached'){
+    resEl.innerHTML='<span style="color:#f04747">❌ 已達上限 '+d.max+' 條</span>';
+  }else if(d&&d.error==='duplicate'){
+    resEl.innerHTML='<span style="color:#faa61a">⚠️ 此範例已存在</span>';
+  }else{
+    resEl.innerHTML='<span style="color:#f04747">❌ 新增失敗</span>';
+  }
+}
+async function deleteExample(idx){
+  if(!confirm('確定刪除此範例？'))return;
+  var d=await api('/examples/delete','POST',{index:idx});
+  if(d&&d.ok){toast('已刪除');loadExamples()}
+  else toast('刪除失敗');
+}
+
 // ─── Feature Settings ───
 var _settingsGid='';
 async function loadFeatureSettings(){
@@ -5661,13 +5875,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=54').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=55').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v54';
+SW_JS = '''const CACHE='bot-admin-v55';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -5883,6 +6097,7 @@ def _do_save_impl():
             "pw1_text": pw1_text,
             "pw2_text": pw2_text,
             "scrap_text": scrap_text,
+            "custom_translation_examples": custom_translation_examples,
         }
         json_str = json.dumps(data, ensure_ascii=False, indent=2)
         _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
@@ -5908,7 +6123,7 @@ def load_settings():
     global camera_roll_qr_enabled, location_qr_enabled
     global translation_tone, translation_tone_custom
     global model_default, model_upgrade, model_threshold
-    global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP
+    global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -5997,8 +6212,10 @@ def load_settings():
             pw2_text = data["pw2_text"]
         if "scrap_text" in data:
             scrap_text = data["scrap_text"]
-        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names",
-                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS))
+        if "custom_translation_examples" in data:
+            custom_translation_examples = data["custom_translation_examples"]
+        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names, %d custom examples",
+                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS), len(custom_translation_examples))
     except Exception as e:
         logger.error("Error loading bot settings: %s", e)
 
@@ -6932,6 +7149,77 @@ def api_admin_scrap():
     data = request.get_json(force=True)
     if "text" in data:
         scrap_text = data["text"]
+    save_settings()
+    return jsonify({"ok": True})
+
+
+# ─── Custom Translation Examples API ──────────────────
+@app.route("/api/admin/examples", methods=["GET"])
+def api_admin_examples_get():
+    """Get all custom translation examples."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({
+        "examples": custom_translation_examples,
+        "count": len(custom_translation_examples),
+        "max": CUSTOM_EXAMPLES_MAX,
+    })
+
+
+@app.route("/api/admin/examples/add", methods=["POST"])
+def api_admin_examples_add():
+    """Add a custom translation example."""
+    global custom_translation_examples
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    zh = data.get("zh", "").strip()
+    idn = data.get("id", "").strip()
+    direction = data.get("dir", "zh2id")
+    if not zh or not idn:
+        return jsonify({"error": "missing zh or id"}), 400
+    if len(custom_translation_examples) >= CUSTOM_EXAMPLES_MAX:
+        return jsonify({"error": "max_reached", "max": CUSTOM_EXAMPLES_MAX}), 400
+    # Check for duplicates
+    for ex in custom_translation_examples:
+        if ex.get("zh") == zh and ex.get("id") == idn:
+            return jsonify({"error": "duplicate"}), 400
+    custom_translation_examples.append({"zh": zh, "id": idn, "dir": direction})
+    save_settings()
+    return jsonify({"ok": True, "count": len(custom_translation_examples)})
+
+
+@app.route("/api/admin/examples/delete", methods=["POST"])
+def api_admin_examples_delete():
+    """Delete a custom translation example by index."""
+    global custom_translation_examples
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    idx = data.get("index")
+    if idx is None or idx < 0 or idx >= len(custom_translation_examples):
+        return jsonify({"error": "invalid index"}), 400
+    custom_translation_examples.pop(idx)
+    save_settings()
+    return jsonify({"ok": True, "count": len(custom_translation_examples)})
+
+
+@app.route("/api/admin/examples/edit", methods=["POST"])
+def api_admin_examples_edit():
+    """Edit a custom translation example by index."""
+    global custom_translation_examples
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    idx = data.get("index")
+    if idx is None or idx < 0 or idx >= len(custom_translation_examples):
+        return jsonify({"error": "invalid index"}), 400
+    zh = data.get("zh", "").strip()
+    idn = data.get("id", "").strip()
+    direction = data.get("dir", custom_translation_examples[idx].get("dir", "zh2id"))
+    if not zh or not idn:
+        return jsonify({"error": "missing zh or id"}), 400
+    custom_translation_examples[idx] = {"zh": zh, "id": idn, "dir": direction}
     save_settings()
     return jsonify({"ok": True})
 
