@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.9-0416c"
+VERSION = "v2.9-0416d"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -995,6 +995,7 @@ ZH_TO_ID_HARD = {
     "軋輥印痕": "bekas roll mark",
     "環狀擦傷": "goresan melingkar",
     "表粗": "surface roughness",
+    "直度": "kelurusan",
     "偏小": "under size",
     "偏大": "over size",
     "風險批": "lot berisiko",
@@ -1368,7 +1369,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "客訴=komplain pelanggan, 夾帶樣品=sertakan sampel, 掛檔=simpan ke arsip, 稽核=audit, "
             "螺紋=thread mark, 車刀痕=turning tool mark, 砂光痕=sanding mark, 殺光痕=grinding mark, "
             "剝片=flaking, 軋輥印痕=roll mark, 碰傷=luka benturan, 黑皮=unfinished surface, "
-            "偏小=under size, 偏大=over size, 表粗=surface roughness, 目視=visual inspection, "
+            "偏小=under size, 偏大=over size, 直度=kelurusan(straightness), 表粗=surface roughness, 目視=visual inspection, "
             "開立重工=buat WO rework, 重工研磨至尺寸下限=rework grinding sampai batas bawah ukuran, "
             "不允收=pelanggan tidak terima, 風險批=lot berisiko, 走ET檢測=jalankan pengujian ET, "
             "卡料需關閉電源後再取料=material macet HARUS matikan listrik dulu baru ambil, "
