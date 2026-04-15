@@ -212,6 +212,11 @@
       "zh": "課長",
       "id": "Supervisor",
       "dir": "zh2id"
+    },
+    {
+      "zh": "副課長",
+      "id": "Wakil Supervisor",
+      "dir": "zh2id"
     }
   ]
 }
