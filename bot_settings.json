@@ -58,7 +58,8 @@
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
-      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬"
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
+      "Udf71d63c9e7e225acbb13015cf4e4660": "阿馬"
     }
   },
   "dm_master_enabled": false,
@@ -76,13 +77,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 26,
+    "text_translations": 33,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 2,
-    "tokens_prompt": 268059,
-    "tokens_completion": 1174
+    "tokens_prompt": 345197,
+    "tokens_completion": 1224
   },
   "extra_customers": {
     "__all__": [
@@ -133,12 +134,12 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 146297,
-      "tokens_completion": 484
+      "tokens_prompt": 212413,
+      "tokens_completion": 526
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 88624,
-      "tokens_completion": 649
+      "tokens_prompt": 99646,
+      "tokens_completion": 657
     }
   },
   "user_languages": {},
@@ -187,7 +188,8 @@
     "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
     "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
     "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb74DyeGVhPTgZajKpnZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
-    "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow"
+    "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
+    "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R"
   },
   "pw1_text": "UR00179\nXx0972315373",
   "pw2_text": "UR00644\nJj0973550210",
@@ -221,6 +223,11 @@
     {
       "zh": "班長",
       "id": "Leader",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "先過機就好",
+      "id": "Sementara cukup isi jumlah produknya saja, jangan teruskan data ke station 480 (QC).",
       "dir": "zh2id"
     }
   ]
