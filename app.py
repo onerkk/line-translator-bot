@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.9-0415e"
+VERSION = "v2.9-0415f"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4590,15 +4590,15 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="exWarning" style="display:none;background:rgba(250,166,26,.12);border:1px solid rgba(250,166,26,.3);border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;color:#faa61a"></div>
 
 <div style="margin-bottom:12px">
-<div style="display:flex;gap:8px;margin-bottom:6px">
-<select id="exDir" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<div style="margin-bottom:6px">
+<select id="exDir" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
 <option value="zh2id">中文→印尼</option>
 <option value="id2zh">印尼→中文</option>
 </select>
 </div>
-<div style="display:flex;gap:8px;margin-bottom:6px">
-<input id="exZh" type="text" placeholder="中文" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
-<input id="exId" type="text" placeholder="印尼文" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<div style="margin-bottom:6px">
+<input id="exZh" type="text" placeholder="中文（例：砂輪要換了）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:6px">
+<input id="exId" type="text" placeholder="印尼文（例：Batu gerinda harus diganti）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
 </div>
 <button class="btn btn-primary btn-sm" onclick="addExample()">＋ 新增範例</button>
 <div id="exAddResult" style="font-size:12px;margin-top:4px"></div>
@@ -5875,13 +5875,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=55').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=56').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v55';
+SW_JS = '''const CACHE='bot-admin-v56';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
