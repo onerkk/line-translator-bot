@@ -73,7 +73,19 @@
     "Uaf4dc8fc636bc8f6060521c398514dc1": {
       "is_admin": true,
       "allowed_tabs": [
-        "names"
+        "names",
+        "insight",
+        "users",
+        "scrap",
+        "skip",
+        "passwords",
+        "settings",
+        "forms",
+        "packaging",
+        "groups",
+        "overview",
+        "storage",
+        "examples"
       ]
     },
     "Ucbc2c71e01fb7b1fc12b756eed45c042": {
