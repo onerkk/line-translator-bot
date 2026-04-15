@@ -78,13 +78,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 39,
+    "text_translations": 40,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 2,
-    "tokens_prompt": 403065,
-    "tokens_completion": 1303
+    "tokens_prompt": 415069,
+    "tokens_completion": 1332
   },
   "extra_customers": {
     "__all__": [
@@ -135,8 +135,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 270281,
-      "tokens_completion": 605
+      "tokens_prompt": 282285,
+      "tokens_completion": 634
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -315,6 +315,16 @@
         },
         "submitted_at": "2026-04-15 23:26:44",
         "approved": true
+      },
+      "U98def5ae6e4786c8ecc3e4a2f510cfb8": {
+        "user_name": "辰",
+        "picture_url": "https://profile.line-scdn.net/0ho5vCfOC4MBpbOi7k8ftOJCtqM3B4S2kIdl96dTppOS02CHFJfgx3dG86bCtkA3YecVp2ezxuO3h5S3QuNigtBx1OGE84DBckLDUoPxJFbG0ZTig-Ex4bBhRaOF5iXTwVASUleT5AHV45XyUMKyc8ITQ8NyInfH4EEW1cTF4IXpk0OEdPdl13dW47by_n",
+        "answers": {
+          "fld_1": "B",
+          "fld_2": "B"
+        },
+        "submitted_at": "2026-04-15 23:34:44",
+        "approved": false
       }
     }
   }
