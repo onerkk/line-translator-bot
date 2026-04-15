@@ -249,6 +249,11 @@
       "zh": "對",
       "id": "betul",
       "dir": "id2zh"
+    },
+    {
+      "zh": "錯了",
+      "id": "salah",
+      "dir": "id2zh"
     }
   ]
 }
