@@ -77,13 +77,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 33,
+    "text_translations": 36,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 2,
-    "tokens_prompt": 345197,
-    "tokens_completion": 1224
+    "tokens_prompt": 367281,
+    "tokens_completion": 1239
   },
   "extra_customers": {
     "__all__": [
@@ -134,8 +134,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 212413,
-      "tokens_completion": 526
+      "tokens_prompt": 234497,
+      "tokens_completion": 541
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -229,6 +229,11 @@
       "zh": "先過機就好",
       "id": "Sementara cukup isi jumlah produknya saja, jangan teruskan data ke station 480 (QC).",
       "dir": "zh2id"
+    },
+    {
+      "zh": "這句是正確的",
+      "id": "ini benar",
+      "dir": "id2zh"
     }
   ]
 }
