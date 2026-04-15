@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.0-0416a"
+VERSION = "v3.0-0416b"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -5948,7 +5948,7 @@ async function doPushForm(fid){
 }
 
 async function viewFormSubmissions(fid){
-  var r=await fetch(API_BASE+'/api/admin/forms/submissions/'+fid+'?key='+KEY);
+  var r=await fetch(API+'/forms/submissions/'+fid,{headers:{'X-Admin-Key':KEY}});
   var data=await r.json();
   var subs=data.submissions||[];
   var form=data.form||{};
@@ -8158,7 +8158,7 @@ def api_liff_form_submit(form_id):
 # ─── Admin Form Management API ─────────────────────────
 @app.route("/api/admin/forms", methods=["GET"])
 def api_admin_forms_list():
-    if request.args.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     result = []
     for fid, f in forms_data.items():
@@ -8170,7 +8170,7 @@ def api_admin_forms_list():
 @app.route("/api/admin/forms/create", methods=["POST"])
 def api_admin_forms_create():
     data = request.get_json(force=True)
-    if data.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     import random, string
     fid = "form_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
@@ -8191,7 +8191,7 @@ def api_admin_forms_create():
 @app.route("/api/admin/forms/update", methods=["POST"])
 def api_admin_forms_update():
     data = request.get_json(force=True)
-    if data.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     if fid not in forms_data:
@@ -8213,7 +8213,7 @@ def api_admin_forms_update():
 @app.route("/api/admin/forms/delete", methods=["POST"])
 def api_admin_forms_delete():
     data = request.get_json(force=True)
-    if data.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     if fid in forms_data:
@@ -8226,7 +8226,7 @@ def api_admin_forms_delete():
 
 @app.route("/api/admin/forms/submissions/<form_id>")
 def api_admin_forms_submissions(form_id):
-    if request.args.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     subs = forms_submissions.get(form_id, {})
     result = []
@@ -8238,7 +8238,7 @@ def api_admin_forms_submissions(form_id):
 @app.route("/api/admin/forms/approve", methods=["POST"])
 def api_admin_forms_approve():
     data = request.get_json(force=True)
-    if data.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     uid = data.get("user_id")
@@ -8252,7 +8252,7 @@ def api_admin_forms_approve():
 def api_admin_forms_push():
     """Push form link to target groups via Flex Message."""
     data = request.get_json(force=True)
-    if data.get("key") != ADMIN_KEY:
+    if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     group_ids = data.get("group_ids", [])
@@ -8303,7 +8303,7 @@ def api_admin_forms_push():
 @app.route("/api/admin/forms/export/<form_id>")
 def api_admin_forms_export(form_id):
     """Export form submissions as Excel."""
-    if request.args.get("key") != ADMIN_KEY:
+    if not check_admin_key() and request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
     f = forms_data.get(form_id)
     if not f:
