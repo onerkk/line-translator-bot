@@ -207,6 +207,11 @@
       "zh": "副經理",
       "id": "Asisten Manajer",
       "dir": "zh2id"
+    },
+    {
+      "zh": "課長",
+      "id": "Supervisor",
+      "dir": "zh2id"
     }
   ]
 }
