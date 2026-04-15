@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.0-0416b"
+VERSION = "v3.0-0416c"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -5878,7 +5878,7 @@ async function submitCreateForm(){
   for(var i=0;i<_formFields.length;i++){
     if(!_formFields[i].label_zh){alert('欄位 '+(i+1)+' 缺少中文標籤');return}
   }
-  var r=await api('forms/create','POST',{title_zh:tz,title_id:ti,fields:_formFields});
+  var r=await api('/forms/create','POST',{title_zh:tz,title_id:ti,fields:_formFields});
   if(r.ok){
     document.getElementById('formsCreateArea').style.display='none';
     loadFormsTab();
@@ -5886,7 +5886,8 @@ async function submitCreateForm(){
 }
 
 async function loadFormsTab(){
-  var r=await api('forms');
+  var r=await api('/forms');
+  if(!r){document.getElementById('formsList').innerHTML='<div style="text-align:center;padding:20px;color:#f04747">載入失敗</div>';return}
   var forms=r.forms||[];
   var html='';
   if(forms.length===0){html='<div style="text-align:center;padding:20px;color:#8a8a9a">尚無表單</div>'}
@@ -5915,18 +5916,18 @@ async function loadFormsTab(){
 }
 
 async function toggleFormStatus(fid,status){
-  await api('forms/update','POST',{form_id:fid,status:status});
+  await api('/forms/update','POST',{form_id:fid,status:status});
   loadFormsTab();
 }
 
 async function deleteForm(fid){
   if(!confirm('確定刪除此表單？所有填寫資料也會刪除。'))return;
-  await api('forms/delete','POST',{form_id:fid});
+  await api('/forms/delete','POST',{form_id:fid});
   loadFormsTab();
 }
 
 async function pushFormToGroup(fid){
-  var r=await api('groups');
+  var r=await api('/groups');
   var groups=r.groups||[];
   if(groups.length===0){alert('沒有群組');return}
   var html='<div class="card"><div style="font-weight:600;font-size:14px;margin-bottom:8px">選擇推送群組</div>';
@@ -5943,7 +5944,7 @@ async function doPushForm(fid){
   var cbs=document.querySelectorAll('.pushGrpCb:checked');
   var ids=[];cbs.forEach(function(c){ids.push(c.value)});
   if(ids.length===0){alert('請至少選一個群組');return}
-  var r=await api('forms/push','POST',{form_id:fid,group_ids:ids});
+  var r=await api('/forms/push','POST',{form_id:fid,group_ids:ids});
   if(r.ok){alert('已推送到 '+r.pushed+' 個群組');document.getElementById('formDetailArea').style.display='none'}
 }
 
@@ -5981,7 +5982,7 @@ async function viewFormSubmissions(fid){
 }
 
 async function approveSubmission(fid,uid){
-  await api('forms/approve','POST',{form_id:fid,user_id:uid});
+  await api('/forms/approve','POST',{form_id:fid,user_id:uid});
   viewFormSubmissions(fid);
 }
 
