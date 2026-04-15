@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.9-0416f"
+VERSION = "v3.0-0416a"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -130,6 +130,7 @@ OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
+LIFF_ID = os.environ.get("LIFF_ID", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
@@ -416,6 +417,13 @@ PACKAGING_LOOKUP = {}
 # List of {"zh": "中文", "id": "Indonesian", "dir": "zh2id"|"id2zh"}
 CUSTOM_EXAMPLES_MAX = 200
 custom_translation_examples = []
+
+# ── LIFF Form System ──────────────────────────────────
+# forms_data: {form_id: {id, title_zh, title_id, fields:[{id,type,label_zh,label_id,options,required}], created, status, target_groups:[]}}
+# forms_submissions: {form_id: {user_id: {fields..., submitted_at, user_name, approved}}}
+forms_data = {}
+forms_submissions = {}
+_forms_loaded = False
 
 # USD to TWD rate (approximate)
 USD_TO_TWD = 32.0
@@ -4587,6 +4595,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('scrap')">廢料色</div>
 <div class="tab" onclick="switchTab('insight')">數據</div>
 <div class="tab" onclick="switchTab('examples')">翻譯範例</div>
+<div class="tab" onclick="switchTab('forms')">表單</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
@@ -4795,6 +4804,23 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 <div id="exList"><div class="empty">載入中...</div></div>
 </div>
+</div>
+
+<!-- Forms Panel -->
+<div class="panel" id="panel-forms">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">📋 表單管理</div>
+<button class="btn btn-primary btn-sm" onclick="showCreateForm()">＋ 建立表單</button>
+<div id="formsCreateArea" style="display:none;margin-top:12px;padding:12px;background:#0d0d1a;border-radius:8px;border:1px solid #3a3a4e">
+<div style="margin-bottom:8px"><input type="text" id="formTitleZh" placeholder="表單標題（中文）" style="width:100%;padding:8px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:13px;margin-bottom:6px"><input type="text" id="formTitleId" placeholder="Judul formulir (印尼文)" style="width:100%;padding:8px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:13px"></div>
+<div style="font-size:13px;font-weight:600;margin:8px 0 4px">欄位 Fields:</div>
+<div id="formFieldsList"></div>
+<button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;margin-top:6px;padding:6px 10px;border-radius:6px;font-size:12px" onclick="addFormField()">＋ 新增欄位</button>
+<div style="margin-top:10px;display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="submitCreateForm()">建立</button><button class="btn btn-sm" style="background:#3a3a4e;color:#ccc;border:none;padding:6px 12px;border-radius:6px;font-size:12px" onclick="document.getElementById(&apos;formsCreateArea&apos;).style.display=&apos;none&apos;">取消</button></div>
+</div>
+</div>
+<div id="formsList" style="margin-top:10px"></div>
+<div id="formDetailArea" style="display:none;margin-top:10px"></div>
 </div>
 
 <!-- Settings Panel -->
@@ -5070,7 +5096,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','insight','examples','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','packaging','passwords','scrap','insight','examples','forms','settings'];
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
@@ -5088,6 +5114,7 @@ function switchTab(name){
   if(name==='scrap') loadScrap();
   if(name==='insight') loadInsightTab();
   if(name==='examples') loadExamples();
+  if(name==='forms') loadFormsTab();
   if(name==='settings') loadFeatureSettings();
 }
 
@@ -5786,6 +5813,178 @@ async function deleteExample(idx){
   else toast('刪除失敗');
 }
 
+// ─── Forms System ───
+function esc(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+var _formFields=[];
+var _formFieldCounter=0;
+
+function showCreateForm(){
+  _formFields=[];_formFieldCounter=0;
+  document.getElementById('formFieldsList').innerHTML='';
+  document.getElementById('formTitleZh').value='';
+  document.getElementById('formTitleId').value='';
+  document.getElementById('formsCreateArea').style.display='block';
+  addFormField();
+}
+
+function addFormField(){
+  _formFieldCounter++;
+  var fid='fld_'+_formFieldCounter;
+  _formFields.push({id:fid,type:'text',label_zh:'',label_id:'',required:true,options:[]});
+  renderFormFields();
+}
+
+function renderFormFields(){
+  var c=document.getElementById('formFieldsList');
+  var html='';
+  for(var i=0;i<_formFields.length;i++){
+    var f=_formFields[i];
+    html+='<div style="padding:8px;margin-bottom:6px;background:#1a1a2e;border:1px solid #2a2a3e;border-radius:6px">';
+    html+='<div style="display:flex;gap:4px;margin-bottom:4px;align-items:center"><span style="font-size:11px;color:#8a8a9a;min-width:14px">'+(i+1)+'</span>';
+    html+='<select onchange="updFldType('+i+',this.value)" style="padding:4px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:11px">';
+    var types=[['text','文字'],['number','數字'],['date','日期'],['textarea','長文'],['select','下拉'],['checkbox','核取']];
+    for(var t=0;t<types.length;t++){html+='<option value="'+types[t][0]+'"'+(f.type===types[t][0]?' selected':'')+'>'+types[t][1]+'</option>'}
+    html+='</select>';
+    html+='<label style="font-size:11px;color:#8a8a9a;display:flex;align-items:center;gap:2px"><input type="checkbox" '+(f.required?'checked':'')+' onchange="updFldReq('+i+',this.checked)" style="width:14px;height:14px">必填</label>';
+    html+='<span style="font-size:11px;color:#f04747;cursor:pointer;margin-left:auto" onclick="delFld('+i+')">✕</span></div>';
+    html+='<input type="text" value="'+esc(f.label_zh)+'" placeholder="中文標籤" onchange="updFldLabel('+i+',&apos;zh&apos;,this.value)" style="width:100%;padding:5px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:3px">';
+    html+='<input type="text" value="'+esc(f.label_id)+'" placeholder="Label Indonesia" onchange="updFldLabel('+i+',&apos;id&apos;,this.value)" style="width:100%;padding:5px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">';
+    if(f.type==='select'){
+      html+='<input type="text" value="'+esc((f.options||[]).map(function(o){return o.zh+'/'+o.id}).join(', '))+'" placeholder="選項: 選項1中/選項1印, 選項2中/選項2印" onchange="updFldOpts('+i+',this.value)" style="width:100%;padding:5px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:11px;margin-top:3px">';
+    }
+    html+='</div>';
+  }
+  c.innerHTML=html;
+}
+
+function updFldType(i,v){_formFields[i].type=v;renderFormFields()}
+function updFldReq(i,v){_formFields[i].required=v}
+function updFldLabel(i,lang,v){if(lang==='zh')_formFields[i].label_zh=v;else _formFields[i].label_id=v}
+function delFld(i){_formFields.splice(i,1);renderFormFields()}
+function updFldOpts(i,v){
+  var parts=v.split(',');
+  _formFields[i].options=parts.map(function(p){
+    var s=p.trim().split('/');
+    return {zh:s[0]||'',id:s[1]||s[0]||''};
+  });
+}
+
+async function submitCreateForm(){
+  var tz=document.getElementById('formTitleZh').value.trim();
+  var ti=document.getElementById('formTitleId').value.trim();
+  if(!tz){alert('請填寫中文標題');return}
+  if(!ti){alert('Harap isi judul Indonesia');return}
+  if(_formFields.length===0){alert('至少新增一個欄位');return}
+  for(var i=0;i<_formFields.length;i++){
+    if(!_formFields[i].label_zh){alert('欄位 '+(i+1)+' 缺少中文標籤');return}
+  }
+  var r=await api('forms/create','POST',{title_zh:tz,title_id:ti,fields:_formFields});
+  if(r.ok){
+    document.getElementById('formsCreateArea').style.display='none';
+    loadFormsTab();
+  }
+}
+
+async function loadFormsTab(){
+  var r=await api('forms');
+  var forms=r.forms||[];
+  var html='';
+  if(forms.length===0){html='<div style="text-align:center;padding:20px;color:#8a8a9a">尚無表單</div>'}
+  for(var i=0;i<forms.length;i++){
+    var f=forms[i];
+    var st=f.status==='active'?'<span style="color:#43b581">●啟用</span>':'<span style="color:#f04747">●停用</span>';
+    html+='<div class="card" style="margin-bottom:8px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center">';
+    html+='<div><div style="font-weight:600;font-size:14px">'+esc(f.title_zh)+'</div><div style="font-size:12px;color:#8a8a9a">'+esc(f.title_id)+'</div></div>';
+    html+='<div style="text-align:right"><div style="font-size:11px">'+st+'</div><div style="font-size:11px;color:#8a8a9a">填寫: '+f.submission_count+'</div></div>';
+    html+='</div>';
+    html+='<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+    html+='<button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px" onclick="viewFormSubmissions(&apos;'+f.id+'&apos;)">查看填寫</button>';
+    html+='<button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:4px 8px;font-size:11px;border-radius:6px" onclick="pushFormToGroup(&apos;'+f.id+'&apos;)">推送到群組</button>';
+    if(f.status==='active'){
+      html+='<button class="btn btn-sm" style="background:#3a2a1a;color:#faa61a;border:1px solid #5a4a2a;padding:4px 8px;font-size:11px;border-radius:6px" onclick="toggleFormStatus(&apos;'+f.id+'&apos;,&apos;closed&apos;)">停用</button>';
+    }else{
+      html+='<button class="btn btn-sm" style="background:#1a3a2a;color:#43b581;border:1px solid #2a5a3a;padding:4px 8px;font-size:11px;border-radius:6px" onclick="toggleFormStatus(&apos;'+f.id+'&apos;,&apos;active&apos;)">啟用</button>';
+    }
+    html+='<button class="btn btn-sm" style="background:#3a1a1a;color:#f04747;border:1px solid #5a2a2a;padding:4px 8px;font-size:11px;border-radius:6px" onclick="deleteForm(&apos;'+f.id+'&apos;)">刪除</button>';
+    html+='<a href="/api/admin/forms/export/'+f.id+'?key='+KEY+'" target="_blank" class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:4px 8px;font-size:11px;border-radius:6px;text-decoration:none;display:inline-block">下載Excel</a>';
+    html+='</div></div>';
+  }
+  document.getElementById('formsList').innerHTML=html;
+  document.getElementById('formDetailArea').style.display='none';
+}
+
+async function toggleFormStatus(fid,status){
+  await api('forms/update','POST',{form_id:fid,status:status});
+  loadFormsTab();
+}
+
+async function deleteForm(fid){
+  if(!confirm('確定刪除此表單？所有填寫資料也會刪除。'))return;
+  await api('forms/delete','POST',{form_id:fid});
+  loadFormsTab();
+}
+
+async function pushFormToGroup(fid){
+  var r=await api('groups');
+  var groups=r.groups||[];
+  if(groups.length===0){alert('沒有群組');return}
+  var html='<div class="card"><div style="font-weight:600;font-size:14px;margin-bottom:8px">選擇推送群組</div>';
+  for(var i=0;i<groups.length;i++){
+    var g=groups[i];
+    html+='<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:13px"><input type="checkbox" class="pushGrpCb" value="'+g.id+'" style="width:16px;height:16px">'+esc(g.name)+'</label>';
+  }
+  html+='<button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="doPushForm(&apos;'+fid+'&apos;)">推送</button></div>';
+  document.getElementById('formDetailArea').innerHTML=html;
+  document.getElementById('formDetailArea').style.display='block';
+}
+
+async function doPushForm(fid){
+  var cbs=document.querySelectorAll('.pushGrpCb:checked');
+  var ids=[];cbs.forEach(function(c){ids.push(c.value)});
+  if(ids.length===0){alert('請至少選一個群組');return}
+  var r=await api('forms/push','POST',{form_id:fid,group_ids:ids});
+  if(r.ok){alert('已推送到 '+r.pushed+' 個群組');document.getElementById('formDetailArea').style.display='none'}
+}
+
+async function viewFormSubmissions(fid){
+  var r=await fetch(API_BASE+'/api/admin/forms/submissions/'+fid+'?key='+KEY);
+  var data=await r.json();
+  var subs=data.submissions||[];
+  var form=data.form||{};
+  var fields=form.fields||[];
+  var html='<div class="card"><div style="font-weight:600;font-size:14px;margin-bottom:8px">'+esc(form.title_zh)+' — 填寫結果 ('+subs.length+')</div>';
+  if(subs.length===0){
+    html+='<div style="color:#8a8a9a;font-size:13px">尚無人填寫</div>';
+  }else{
+    for(var i=0;i<subs.length;i++){
+      var s=subs[i];
+      var approved=s.approved;
+      html+='<div style="padding:8px;margin-bottom:6px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">';
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-weight:600;font-size:13px">'+esc(s.user_name)+'</span>';
+      html+='<span style="font-size:11px;'+(approved?'color:#43b581':'color:#faa61a')+'">'+(approved?'✅已核准':'⏳待核准')+'</span></div>';
+      html+='<div style="font-size:11px;color:#666;margin-bottom:4px">'+esc(s.submitted_at)+'</div>';
+      for(var j=0;j<fields.length;j++){
+        var fd=fields[j];
+        var ans=s.answers[fd.id]||'—';
+        html+='<div style="font-size:12px;margin-bottom:2px"><span style="color:#8a8a9a">'+esc(fd.label_zh)+':</span> '+esc(ans)+'</div>';
+      }
+      if(!approved){
+        html+='<button class="btn btn-sm" style="background:#1a3a2a;color:#43b581;border:1px solid #2a5a3a;padding:3px 8px;font-size:11px;border-radius:4px;margin-top:4px" onclick="approveSubmission(&apos;'+fid+'&apos;,&apos;'+s.user_id+'&apos;)">核准</button>';
+      }
+      html+='</div>';
+    }
+  }
+  html+='</div>';
+  document.getElementById('formDetailArea').innerHTML=html;
+  document.getElementById('formDetailArea').style.display='block';
+}
+
+async function approveSubmission(fid,uid){
+  await api('forms/approve','POST',{form_id:fid,user_id:uid});
+  viewFormSubmissions(fid);
+}
+
 // ─── Feature Settings ───
 var _settingsGid='';
 async function loadFeatureSettings(){
@@ -6052,7 +6251,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=57').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=58').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -6275,6 +6474,8 @@ def _do_save_impl():
             "pw2_text": pw2_text,
             "scrap_text": scrap_text,
             "custom_translation_examples": custom_translation_examples,
+            "forms_data": forms_data,
+            "forms_submissions": forms_submissions,
         }
         json_str = json.dumps(data, ensure_ascii=False, indent=2)
         _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
@@ -6301,6 +6502,7 @@ def load_settings():
     global translation_tone, translation_tone_custom
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
+    global forms_data, forms_submissions
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -6391,8 +6593,12 @@ def load_settings():
             scrap_text = data["scrap_text"]
         if "custom_translation_examples" in data:
             custom_translation_examples = data["custom_translation_examples"]
-        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names, %d custom examples",
-                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS), len(custom_translation_examples))
+        if "forms_data" in data:
+            forms_data = data["forms_data"]
+        if "forms_submissions" in data:
+            forms_submissions = data["forms_submissions"]
+        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names, %d custom examples, %d forms",
+                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS), len(custom_translation_examples), len(forms_data))
     except Exception as e:
         logger.error("Error loading bot settings: %s", e)
 
@@ -7700,6 +7906,433 @@ def api_admin_richmenu_alias_detail(alias_id):
         return jsonify({"error": "forbidden"}), 403
     info = get_rich_menu_alias(alias_id)
     return jsonify({"alias": info})
+
+
+# ═══════════════════════════════════════════════════════════
+# ─── LIFF Form System ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+
+LIFF_FORM_HTML = """<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>表單系統</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d0d0d;color:#e0e0e0;min-height:100vh}
+.header{background:linear-gradient(135deg,#7c6fef,#5b6abf);padding:16px;text-align:center;font-size:18px;font-weight:700}
+.container{padding:16px;max-width:600px;margin:0 auto}
+.card{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:16px;margin-bottom:12px}
+.field-label{font-size:14px;font-weight:600;margin-bottom:6px;color:#ccc}
+.field-label-id{font-size:12px;color:#8a8a9a;margin-bottom:8px}
+input[type=text],input[type=number],input[type=date],textarea,select{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:14px;margin-bottom:4px}
+textarea{resize:vertical;min-height:60px}
+select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238a8a9a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
+.checkbox-wrap{display:flex;align-items:center;gap:8px;padding:8px 0}
+.checkbox-wrap input[type=checkbox]{width:20px;height:20px;accent-color:#7c6fef}
+.checkbox-wrap label{font-size:14px}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;text-align:center;margin-top:12px}
+.btn-primary{background:#7c6fef;color:#fff}
+.btn-primary:active{background:#6358d4}
+.btn-primary:disabled{background:#3a3a4e;color:#666;cursor:not-allowed}
+.required-mark{color:#f04747;margin-left:2px}
+.success-box{background:#1a3a2a;border:1px solid #43b581;border-radius:12px;padding:24px;text-align:center;margin-top:20px}
+.success-box h2{color:#43b581;font-size:20px;margin-bottom:8px}
+.error-box{background:#3a1a1a;border:1px solid #f04747;border-radius:12px;padding:24px;text-align:center;margin-top:20px}
+.error-box h2{color:#f04747;font-size:20px;margin-bottom:8px}
+.loading{text-align:center;padding:40px;color:#8a8a9a}
+.already-box{background:#2a2a1a;border:1px solid #faa61a;border-radius:12px;padding:24px;text-align:center;margin-top:20px}
+.already-box h2{color:#faa61a;font-size:20px;margin-bottom:8px}
+.form-list .form-item{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer}
+.form-item:active{background:#252540}
+.form-item h3{font-size:15px;margin-bottom:4px}
+.form-item .sub{font-size:12px;color:#8a8a9a}
+.expired{opacity:.5}
+</style>
+</head>
+<body>
+<div class="header">📋 表單系統 Form System</div>
+<div class="container" id="app">
+<div class="loading" id="loadingBox">載入中 Loading...</div>
+</div>
+<script>
+var LIFF_ID='""" + LIFF_ID + """';
+var API_BASE=location.origin;
+var currentUser=null;
+var formId=null;
+
+async function initLiff(){
+  try{
+    await liff.init({liffId:LIFF_ID});
+    if(!liff.isLoggedIn()){liff.login();return}
+    var profile=await liff.getProfile();
+    currentUser={userId:profile.userId,displayName:profile.displayName,pictureUrl:profile.pictureUrl||''};
+    var params=new URLSearchParams(location.search);
+    formId=params.get('id');
+    if(formId){
+      await loadForm(formId);
+    }else{
+      await loadFormList();
+    }
+  }catch(e){
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+  }
+}
+
+async function loadFormList(){
+  try{
+    var r=await fetch(API_BASE+'/api/liff/forms');
+    var data=await r.json();
+    var forms=data.forms||[];
+    var active=forms.filter(function(f){return f.status==='active'});
+    if(active.length===0){
+      document.getElementById('app').innerHTML='<div style="text-align:center;padding:40px;color:#8a8a9a">目前沒有表單<br>No forms available</div>';
+      return;
+    }
+    var html='<div class="form-list">';
+    for(var i=0;i<active.length;i++){
+      var f=active[i];
+      html+='<div class="form-item" onclick="location.href=location.pathname+&apos;?id='+f.id+'&apos;"><h3>'+esc(f.title_zh)+'</h3><div class="sub">'+esc(f.title_id)+'</div></div>';
+    }
+    html+='</div>';
+    document.getElementById('app').innerHTML=html;
+  }catch(e){
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+  }
+}
+
+async function loadForm(fid){
+  try{
+    var r=await fetch(API_BASE+'/api/liff/form/'+fid+'?user_id='+currentUser.userId);
+    var data=await r.json();
+    if(data.error){
+      document.getElementById('app').innerHTML='<div class="error-box"><h2>錯誤</h2><p>'+esc(data.error)+'</p></div>';
+      return;
+    }
+    if(data.already_submitted){
+      document.getElementById('app').innerHTML='<div class="already-box"><h2>✅ 已填寫 Sudah diisi</h2><p>你已經提交過此表單<br>Anda sudah mengisi formulir ini</p></div>';
+      return;
+    }
+    renderForm(data.form);
+  }catch(e){
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+  }
+}
+
+function renderForm(form){
+  var html='<div class="card" style="margin-bottom:16px"><h2 style="font-size:18px;margin-bottom:4px">'+esc(form.title_zh)+'</h2><div style="font-size:13px;color:#8a8a9a">'+esc(form.title_id)+'</div></div>';
+  var fields=form.fields||[];
+  for(var i=0;i<fields.length;i++){
+    var f=fields[i];
+    html+='<div class="card">';
+    html+='<div class="field-label">'+esc(f.label_zh)+(f.required?'<span class="required-mark">*</span>':'')+'</div>';
+    html+='<div class="field-label-id">'+esc(f.label_id)+'</div>';
+    if(f.type==='text'){
+      html+='<input type="text" id="f_'+f.id+'" placeholder="">';
+    }else if(f.type==='number'){
+      html+='<input type="number" id="f_'+f.id+'" placeholder="">';
+    }else if(f.type==='date'){
+      html+='<input type="date" id="f_'+f.id+'">';
+    }else if(f.type==='textarea'){
+      html+='<textarea id="f_'+f.id+'"></textarea>';
+    }else if(f.type==='select'){
+      html+='<select id="f_'+f.id+'"><option value="">-- 請選擇 Pilih --</option>';
+      var opts=f.options||[];
+      for(var j=0;j<opts.length;j++){
+        html+='<option value="'+esc(opts[j].zh)+'">'+esc(opts[j].zh)+' / '+esc(opts[j].id)+'</option>';
+      }
+      html+='</select>';
+    }else if(f.type==='checkbox'){
+      html+='<div class="checkbox-wrap"><input type="checkbox" id="f_'+f.id+'"><label for="f_'+f.id+'">'+esc(f.label_zh)+' / '+esc(f.label_id)+'</label></div>';
+    }
+    html+='</div>';
+  }
+  html+='<button class="btn btn-primary" id="submitBtn" onclick="submitForm()">提交 Kirim</button>';
+  document.getElementById('app').innerHTML=html;
+}
+
+async function submitForm(){
+  var btn=document.getElementById('submitBtn');
+  btn.disabled=true;btn.textContent='提交中 Mengirim...';
+  try{
+    var r=await fetch(API_BASE+'/api/liff/form/'+formId+'?user_id='+currentUser.userId);
+    var meta=await r.json();
+    var fields=meta.form.fields||[];
+    var answers={};
+    for(var i=0;i<fields.length;i++){
+      var f=fields[i];
+      var el=document.getElementById('f_'+f.id);
+      if(!el)continue;
+      var val='';
+      if(f.type==='checkbox'){val=el.checked?'yes':'no'}
+      else{val=el.value.trim()}
+      if(f.required && !val && f.type!=='checkbox'){
+        alert('請填寫: '+f.label_zh+'\\nHarap isi: '+f.label_id);
+        btn.disabled=false;btn.textContent='提交 Kirim';return;
+      }
+      answers[f.id]=val;
+    }
+    var body={user_id:currentUser.userId,user_name:currentUser.displayName,picture_url:currentUser.pictureUrl,answers:answers};
+    var r2=await fetch(API_BASE+'/api/liff/form/'+formId+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var res=await r2.json();
+    if(res.ok){
+      document.getElementById('app').innerHTML='<div class="success-box"><h2>✅ 提交成功 Berhasil</h2><p>感謝填寫！<br>Terima kasih sudah mengisi!</p></div>';
+      setTimeout(function(){if(liff.isInClient())liff.closeWindow()},2000);
+    }else{
+      alert(res.error||'Error');btn.disabled=false;btn.textContent='提交 Kirim';
+    }
+  }catch(e){
+    alert('Error: '+e.message);btn.disabled=false;btn.textContent='提交 Kirim';
+  }
+}
+
+function esc(s){if(!s)return '';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+document.addEventListener('DOMContentLoaded',initLiff);
+</script>
+</body>
+</html>"""
+
+
+@app.route("/liff/form")
+def liff_form_page():
+    resp = app.response_class(LIFF_FORM_HTML, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
+
+
+@app.route("/api/liff/forms")
+def api_liff_forms_list():
+    """Public: list active forms (no auth needed, LIFF user sees these)."""
+    result = []
+    for fid, f in forms_data.items():
+        if f.get("status") == "active":
+            result.append({"id": fid, "title_zh": f["title_zh"], "title_id": f["title_id"], "field_count": len(f.get("fields", []))})
+    return jsonify({"forms": result})
+
+
+@app.route("/api/liff/form/<form_id>")
+def api_liff_form_detail(form_id):
+    """Public: get form detail + check if user already submitted."""
+    f = forms_data.get(form_id)
+    if not f:
+        return jsonify({"error": "表單不存在 Form not found"}), 404
+    if f.get("status") != "active":
+        return jsonify({"error": "表單已關閉 Form closed"}), 403
+    user_id = request.args.get("user_id", "")
+    already = False
+    if user_id and form_id in forms_submissions:
+        already = user_id in forms_submissions[form_id]
+    return jsonify({"form": f, "already_submitted": already})
+
+
+@app.route("/api/liff/form/<form_id>/submit", methods=["POST"])
+def api_liff_form_submit(form_id):
+    """Public: submit form answers."""
+    f = forms_data.get(form_id)
+    if not f:
+        return jsonify({"error": "表單不存在"}), 404
+    if f.get("status") != "active":
+        return jsonify({"error": "表單已關閉"}), 403
+    body = request.get_json(force=True)
+    user_id = body.get("user_id", "")
+    if not user_id:
+        return jsonify({"error": "缺少用戶ID"}), 400
+    if form_id not in forms_submissions:
+        forms_submissions[form_id] = {}
+    if user_id in forms_submissions[form_id]:
+        return jsonify({"error": "已填寫過 Sudah diisi"}), 409
+    forms_submissions[form_id][user_id] = {
+        "user_name": body.get("user_name", ""),
+        "picture_url": body.get("picture_url", ""),
+        "answers": body.get("answers", {}),
+        "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "approved": False,
+    }
+    save_settings()
+    return jsonify({"ok": True})
+
+
+# ─── Admin Form Management API ─────────────────────────
+@app.route("/api/admin/forms", methods=["GET"])
+def api_admin_forms_list():
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    result = []
+    for fid, f in forms_data.items():
+        sub_count = len(forms_submissions.get(fid, {}))
+        result.append({**f, "submission_count": sub_count})
+    return jsonify({"forms": result})
+
+
+@app.route("/api/admin/forms/create", methods=["POST"])
+def api_admin_forms_create():
+    data = request.get_json(force=True)
+    if data.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    import random, string
+    fid = "form_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    form_obj = {
+        "id": fid,
+        "title_zh": data.get("title_zh", "未命名表單"),
+        "title_id": data.get("title_id", "Formulir tanpa nama"),
+        "fields": data.get("fields", []),
+        "status": "active",
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "target_groups": data.get("target_groups", []),
+    }
+    forms_data[fid] = form_obj
+    save_settings()
+    return jsonify({"ok": True, "form": form_obj})
+
+
+@app.route("/api/admin/forms/update", methods=["POST"])
+def api_admin_forms_update():
+    data = request.get_json(force=True)
+    if data.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    fid = data.get("form_id")
+    if fid not in forms_data:
+        return jsonify({"error": "not found"}), 404
+    if "title_zh" in data:
+        forms_data[fid]["title_zh"] = data["title_zh"]
+    if "title_id" in data:
+        forms_data[fid]["title_id"] = data["title_id"]
+    if "fields" in data:
+        forms_data[fid]["fields"] = data["fields"]
+    if "status" in data:
+        forms_data[fid]["status"] = data["status"]
+    if "target_groups" in data:
+        forms_data[fid]["target_groups"] = data["target_groups"]
+    save_settings()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/forms/delete", methods=["POST"])
+def api_admin_forms_delete():
+    data = request.get_json(force=True)
+    if data.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    fid = data.get("form_id")
+    if fid in forms_data:
+        del forms_data[fid]
+    if fid in forms_submissions:
+        del forms_submissions[fid]
+    save_settings()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/forms/submissions/<form_id>")
+def api_admin_forms_submissions(form_id):
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    subs = forms_submissions.get(form_id, {})
+    result = []
+    for uid, s in subs.items():
+        result.append({"user_id": uid, **s})
+    return jsonify({"submissions": result, "form": forms_data.get(form_id)})
+
+
+@app.route("/api/admin/forms/approve", methods=["POST"])
+def api_admin_forms_approve():
+    data = request.get_json(force=True)
+    if data.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    fid = data.get("form_id")
+    uid = data.get("user_id")
+    if fid in forms_submissions and uid in forms_submissions[fid]:
+        forms_submissions[fid][uid]["approved"] = True
+        save_settings()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/forms/push", methods=["POST"])
+def api_admin_forms_push():
+    """Push form link to target groups via Flex Message."""
+    data = request.get_json(force=True)
+    if data.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    fid = data.get("form_id")
+    group_ids = data.get("group_ids", [])
+    if fid not in forms_data:
+        return jsonify({"error": "form not found"}), 404
+    f = forms_data[fid]
+    liff_url = "https://liff.line.me/" + LIFF_ID + "?id=" + fid
+    flex_msg = {
+        "type": "flex",
+        "altText": "📋 " + f["title_zh"] + " / " + f["title_id"],
+        "contents": {
+            "type": "bubble",
+            "size": "kilo",
+            "header": {
+                "type": "box", "layout": "vertical", "backgroundColor": "#7c6fef",
+                "paddingAll": "14px",
+                "contents": [{"type": "text", "text": "📋 " + f["title_zh"], "color": "#ffffff", "weight": "bold", "size": "md"},
+                             {"type": "text", "text": f["title_id"], "color": "#ffffffcc", "size": "sm", "margin": "xs"}]
+            },
+            "body": {
+                "type": "box", "layout": "vertical", "paddingAll": "14px",
+                "contents": [
+                    {"type": "text", "text": "請點擊下方按鈕填寫表單", "size": "sm", "color": "#999999", "wrap": True},
+                    {"type": "text", "text": "Silakan klik tombol di bawah untuk mengisi", "size": "sm", "color": "#999999", "wrap": True, "margin": "xs"},
+                    {"type": "text", "text": "欄位數 Jumlah kolom: " + str(len(f.get("fields", []))), "size": "xs", "color": "#666666", "margin": "md"},
+                ]
+            },
+            "footer": {
+                "type": "box", "layout": "vertical", "paddingAll": "10px",
+                "contents": [
+                    {"type": "button", "action": {"type": "uri", "label": "填寫表單 Isi Formulir", "uri": liff_url}, "style": "primary", "color": "#7c6fef", "height": "sm"}
+                ]
+            }
+        }
+    }
+    pushed = 0
+    with ApiClient(configuration) as api_client:
+        line_api = MessagingApi(api_client)
+        for gid in group_ids:
+            try:
+                line_api.push_message(PushMessageRequest(to=gid, messages=[FlexMessage.from_dict(flex_msg)]))
+                pushed += 1
+            except Exception as e:
+                logger.error("Push form to %s failed: %s", gid, e)
+    return jsonify({"ok": True, "pushed": pushed})
+
+
+@app.route("/api/admin/forms/export/<form_id>")
+def api_admin_forms_export(form_id):
+    """Export form submissions as Excel."""
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    f = forms_data.get(form_id)
+    if not f:
+        return jsonify({"error": "not found"}), 404
+    subs = forms_submissions.get(form_id, {})
+    try:
+        import openpyxl
+        from io import BytesIO
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "submissions"
+        fields = f.get("fields", [])
+        headers = ["用戶名稱", "提交時間", "已核准"]
+        for fd in fields:
+            headers.append(fd.get("label_zh", fd["id"]))
+        ws.append(headers)
+        for uid, s in subs.items():
+            row = [s.get("user_name", uid), s.get("submitted_at", ""), "是" if s.get("approved") else "否"]
+            for fd in fields:
+                row.append(s.get("answers", {}).get(fd["id"], ""))
+            ws.append(row)
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from flask import send_file
+        return send_file(buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True, download_name=f["title_zh"] + ".xlsx")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/health", methods=["GET"])
