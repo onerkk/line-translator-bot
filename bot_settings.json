@@ -202,6 +202,11 @@
       "zh": "經理",
       "id": "Manajer",
       "dir": "zh2id"
+    },
+    {
+      "zh": "副經理",
+      "id": "Asisten Manajer",
+      "dir": "zh2id"
     }
   ]
 }
