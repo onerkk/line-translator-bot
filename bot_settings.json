@@ -78,13 +78,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 38,
+    "text_translations": 39,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 2,
-    "tokens_prompt": 391076,
-    "tokens_completion": 1286
+    "tokens_prompt": 403065,
+    "tokens_completion": 1303
   },
   "extra_customers": {
     "__all__": [
@@ -135,8 +135,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 258292,
-      "tokens_completion": 588
+      "tokens_prompt": 270281,
+      "tokens_completion": 605
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -299,7 +299,7 @@
           ]
         }
       ],
-      "status": "active",
+      "status": "closed",
       "created": "2026-04-15 23:24:34",
       "target_groups": []
     }
