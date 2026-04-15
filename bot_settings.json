@@ -239,6 +239,16 @@
       "zh": "benar",
       "id": "對",
       "dir": "id2zh"
+    },
+    {
+      "zh": "不是",
+      "id": "bukan",
+      "dir": "id2zh"
+    },
+    {
+      "zh": "對",
+      "id": "betul",
+      "dir": "id2zh"
     }
   ]
 }
