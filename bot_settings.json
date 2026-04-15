@@ -234,6 +234,11 @@
       "zh": "這句是正確的",
       "id": "ini benar",
       "dir": "id2zh"
+    },
+    {
+      "zh": "benar",
+      "id": "對",
+      "dir": "id2zh"
     }
   ]
 }
