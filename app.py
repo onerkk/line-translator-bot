@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.9-0415f"
+VERSION = "v2.9-0415h"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -331,6 +331,53 @@ def _build_custom_examples_prompt():
     if id2zh:
         parts.append(" 【自訂印尼→中文】" + " ".join(id2zh))
     return " ".join(parts) if parts else " "
+
+
+def _check_custom_example_exact(text, src, tgt):
+    """Check if text exactly matches a custom example. Returns translation or None.
+    Supports exact match, case-insensitive, and common prefix stripping."""
+    if not custom_translation_examples:
+        return None
+    t = text.strip()
+    tl = t.lower()
+    # Common prefixes that don't change meaning
+    _zh_prefixes = ["先", "幫", "麻煩", "請", "幫忙", "再", "趕快", "快"]
+    _id_prefixes = ["tolong ", "coba ", "mohon ", "bisa ", "mau "]
+    # Build variants for matching
+    zh_variants = [tl]
+    id_variants = [tl]
+    for p in _zh_prefixes:
+        if tl.startswith(p) and len(tl) > len(p):
+            zh_variants.append(tl[len(p):].strip())
+    for p in _id_prefixes:
+        if tl.startswith(p) and len(tl) > len(p):
+            id_variants.append(tl[len(p):].strip())
+    for ex in custom_translation_examples:
+        zh = ex.get("zh", "").strip()
+        idn = ex.get("id", "").strip()
+        if not zh or not idn:
+            continue
+        zl = zh.lower()
+        il = idn.lower()
+        if src == "zh":
+            # Check if input matches zh side (with prefix stripping on both sides)
+            zh_ex_variants = [zl]
+            for p in _zh_prefixes:
+                if zl.startswith(p) and len(zl) > len(p):
+                    zh_ex_variants.append(zl[len(p):].strip())
+            for v in zh_variants:
+                if v in zh_ex_variants:
+                    return idn
+        elif src == "id":
+            # Check if input matches id side
+            id_ex_variants = [il]
+            for p in _id_prefixes:
+                if il.startswith(p) and len(il) > len(p):
+                    id_ex_variants.append(il[len(p):].strip())
+            for v in id_variants:
+                if v in id_ex_variants:
+                    return zh
+    return None
 
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
@@ -1273,7 +1320,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "下製程=proses selanjutnya, 異常=abnormal/ada masalah, 維修中=sedang diperbaiki, "
             "天車=overhead crane, 台車=trolley, 吊秤=timbangan gantung, 馬蹄環=shackle, 鋼索=sling baja, 吊掛物=beban gantung, "
             "稼動率=utilization rate, 線速=line speed(m/min), 限速=batas kecepatan, 降速=turunkan kecepatan, 提速=naikkan kecepatan, 速差=selisih kecepatan, "
-            "撥料=feed material, 過機=lewatkan mesin, 線外=offline, 印勞=pekerja Indonesia, "
+            "撥料=feed material, 線外=offline, 印勞=pekerja Indonesia, "
             "砂光機=sanding machine, 眼模=die/cetakan drawing, 引拔座=drawing bench, 皮膜槽=coating tank, "
             "查修=investigasi&perbaiki, 修護=maintenance, 儀電=instrumen listrik, 備品=spare part, "
             "跳異常=error muncul, 復歸=reset, 復歸無效=reset gagal, 跳機=mesin trip, 恢復生產=kembali produksi, "
@@ -1378,7 +1425,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
             "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
             "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
-            "11. TRANSLATION EXAMPLES (follow strictly): "
+            + _build_custom_examples_prompt() +
+            " 11. TRANSLATION EXAMPLES (follow strictly): "
             "【中→印尼】"
             "乾 需不需要提報一下 → Aduh, perlu dilaporkan gak nih? "
             "UT囤一堆料了 → UT udah numpuk banyak material. "
@@ -1596,8 +1644,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Tolong kejar materialnya → 幫追料 "
             "Tolong kejar data administrasinya → 幫追帳 "
             "Sudah 2900 jangan masukkan data lagi ya → 已2900別入帳了"
-            + _build_custom_examples_prompt() +
-            extra_rule +
+            + extra_rule +
             " IMPORTANT: Preserve the original line breaks and blank lines exactly. If the source has a blank line between paragraphs, keep a blank line in the same position in the translation."
             " Only output the translation. No quotes, no explanation, no prefix."
         )
@@ -1703,6 +1750,12 @@ def translate_with_retry(func, text, src, tgt, max_retries=2):
 
 
 def translate(text, src, tgt):
+    # Check custom examples for exact match first (free, no API call)
+    exact = _check_custom_example_exact(text.strip(), src, tgt)
+    if exact:
+        logger.info("Custom example exact match: %s -> %s", src, tgt)
+        return exact
+
     # Check cache first
     cached = cache_get(text, src, tgt)
     if cached:
@@ -5875,13 +5928,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=56').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=57').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v56';
+SW_JS = '''const CACHE='bot-admin-v57';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
