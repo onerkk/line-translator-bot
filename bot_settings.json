@@ -197,6 +197,11 @@
       "zh": "處長",
       "id": "Direktur",
       "dir": "zh2id"
+    },
+    {
+      "zh": "經理",
+      "id": "Manajer",
+      "dir": "zh2id"
     }
   ]
 }
