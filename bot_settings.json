@@ -214,13 +214,13 @@
       "dir": "zh2id"
     },
     {
-      "zh": "副課長",
-      "id": "Wakil Supervisor",
+      "zh": "工程師",
+      "id": "Engineer",
       "dir": "zh2id"
     },
     {
-      "zh": "股長",
-      "id": "Kepala Regu",
+      "zh": "班長",
+      "id": "Leader",
       "dir": "zh2id"
     }
   ]
