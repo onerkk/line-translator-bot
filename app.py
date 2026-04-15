@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.0-0416c"
+VERSION = "v3.0-0416d"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4540,42 +4540,89 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v2.6-0412c</div>
-<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('loginBtn').click()">
+<div style="font-size:11px;color:#666;margin-bottom:8px">v3.0</div>
+<div style="display:flex;gap:6px;margin-bottom:10px">
+<button id="modeSuper" class="btn btn-primary btn-sm" style="flex:1;font-size:12px" onclick="switchLoginMode(&apos;super&apos;)">超級管理員</button>
+<button id="modeManager" class="btn btn-sm" style="flex:1;font-size:12px;background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;border-radius:6px" onclick="switchLoginMode(&apos;manager&apos;)">管理員</button>
+</div>
+<div id="superLoginFields">
+<input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key===&apos;Enter&apos;)document.getElementById(&apos;loginBtn&apos;).click()">
+</div>
+<div id="managerLoginFields" style="display:none">
+<input class="input-field" id="managerIdInput" type="text" placeholder="輸入你的 LINE User ID" autocomplete="off" onkeydown="if(event.key===&apos;Enter&apos;)document.getElementById(&apos;loginBtn&apos;).click()">
+<div style="font-size:11px;color:#666;margin-top:2px">從使用者 tab 複製你的 ID</div>
+</div>
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
 </div>
 </div>
 </div>
 <script>
+var _loginMode='super';
+function switchLoginMode(mode){
+  _loginMode=mode;
+  document.getElementById('superLoginFields').style.display=mode==='super'?'block':'none';
+  document.getElementById('managerLoginFields').style.display=mode==='manager'?'block':'none';
+  document.getElementById('modeSuper').style.background=mode==='super'?'#7c6fef':'#2a2a3e';
+  document.getElementById('modeSuper').style.color=mode==='super'?'#fff':'#aaa';
+  document.getElementById('modeManager').style.background=mode==='manager'?'#7c6fef':'#2a2a3e';
+  document.getElementById('modeManager').style.color=mode==='manager'?'#fff':'#aaa';
+  document.getElementById('loginMsg').textContent='';
+}
+function applyTabFilter(tabs){
+  var allTabs=document.querySelectorAll('.tabs .tab');
+  allTabs.forEach(function(t,i){
+    var key=TAB_KEYS[i];
+    if(tabs && tabs.indexOf(key)<0){t.style.display='none'}
+    else{t.style.display=''}
+  });
+  var allPanels=document.querySelectorAll('.panel');
+  allPanels.forEach(function(p){p.classList.remove('active')});
+  if(tabs && tabs.length>0){switchTab(tabs[0])}
+  else{switchTab('overview')}
+}
 document.getElementById('loginBtn').addEventListener('click',function(){
   var m=document.getElementById('loginMsg');
-  var k=document.getElementById('pwInput').value.trim();
-  if(!k){m.textContent='請輸入密碼';return}
-  m.textContent='登入中...';
-  m.style.color='#aaa';
-  fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
-  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
-  .then(function(d){
-    if(d&&d.ok){
-      m.textContent='';
-      document.getElementById('loginPage').style.display='none';
-      document.getElementById('mainPage').style.display='block';
-      window._ADMIN_KEY=k;
-      try{localStorage.setItem('bot_admin_key',k)}catch(e){}
-      if(typeof KEY!=='undefined') KEY=k;
-      if(typeof loadAll==='function') loadAll();
-    }else{
-      m.style.color='#f04747';
-      m.textContent='登入失敗: '+(d?JSON.stringify(d):'no response');
-    }
-  })
-  .catch(function(e){
-    m.style.color='#f04747';
-    m.textContent='連線錯誤: '+e.message;
-  });
+  m.textContent='登入中...';m.style.color='#aaa';
+  if(_loginMode==='super'){
+    var k=document.getElementById('pwInput').value.trim();
+    if(!k){m.textContent='請輸入密碼';m.style.color='#f04747';return}
+    fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+    .then(function(d){
+      if(d&&d.ok){
+        m.textContent='';
+        document.getElementById('loginPage').style.display='none';
+        document.getElementById('mainPage').style.display='block';
+        window._ADMIN_KEY=k;
+        try{localStorage.setItem('bot_admin_key',k)}catch(e){}
+        if(typeof KEY!=='undefined') KEY=k;
+        applyTabFilter(null);
+        if(typeof loadAll==='function') loadAll();
+      }else{m.style.color='#f04747';m.textContent='密碼錯誤'}
+    }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
+  }else{
+    var uid=document.getElementById('managerIdInput').value.trim();
+    if(!uid){m.textContent='請輸入 User ID';m.style.color='#f04747';return}
+    fetch(window.location.origin+'/api/admin/manager-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d&&d.ok){
+        m.textContent='';
+        document.getElementById('loginPage').style.display='none';
+        document.getElementById('mainPage').style.display='block';
+        window._ADMIN_KEY='';
+        window._MANAGER_TABS=d.tabs;
+        window._MANAGER_ID=uid;
+        applyTabFilter(d.tabs);
+      }else{m.style.color='#f04747';m.textContent=d.error||'登入失敗'}
+    }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
+  }
 });
 document.getElementById('pwInput').addEventListener('keydown',function(e){
+  if(e.key==='Enter') document.getElementById('loginBtn').click();
+});
+document.getElementById('managerIdInput').addEventListener('keydown',function(e){
   if(e.key==='Enter') document.getElementById('loginBtn').click();
 });
 </script>
@@ -5071,10 +5118,13 @@ function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textCo
 
 function api(path,method,body){
   method=method||'GET';
-  var opts={method:method,headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}};
+  var h={'Content-Type':'application/json'};
+  if(KEY) h['X-Admin-Key']=KEY;
+  if(window._MANAGER_ID) h['X-Manager-Id']=window._MANAGER_ID;
+  var opts={method:method,headers:h};
   if(body)opts.body=JSON.stringify(body);
   return fetch(API+path,opts).then(function(r){
-    if(r.status===403){toast('密碼錯誤');return null}
+    if(r.status===403){toast('權限不足');return null}
     var ct=r.headers.get('content-type')||'';
     if(!r.ok||ct.indexOf('application/json')<0){toast('伺服器錯誤('+r.status+')');return null}
     return r.json();
@@ -5309,9 +5359,11 @@ async function loadUsers(){
   var el=document.getElementById('usersList');
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
+  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
+    var atabs=u.allowed_tabs||[];
     html+='<div class="user-card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
       '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+langBadge+'</div>'+
@@ -5319,15 +5371,46 @@ async function loadUsers(){
       '<span class="admin-label">🔑 管理員</span>'+
       '<label class="toggle"><input type="checkbox" '+(u.is_admin?'checked':'')+
       ' onchange="toggleAdmin('+i+',this.checked)"><span class="slider"></span></label>'+
-      '</div></div>';
+      '</div>';
+    if(u.is_admin){
+      html+='<div style="margin-top:6px;padding:8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">';
+      html+='<div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">可用功能：</div>';
+      html+='<div style="display:flex;flex-wrap:wrap;gap:4px">';
+      for(var t=0;t<TAB_OPTS.length;t++){
+        var tk=TAB_OPTS[t][0],tl=TAB_OPTS[t][1];
+        var ck=atabs.indexOf(tk)>=0;
+        html+='<label style="font-size:11px;color:#ccc;display:flex;align-items:center;gap:2px;padding:2px 4px;background:'+(ck?'#1a2a3a':'#1a1a2e')+';border-radius:4px;border:1px solid '+(ck?'#3a5a7a':'#2a2a3e')+'"><input type="checkbox" data-uid="'+u.user_id+'" data-tab="'+tk+'" '+(ck?'checked':'')+' onchange="toggleUserTab(this)" style="width:12px;height:12px">'+tl+'</label>';
+      }
+      html+='</div></div>';
+    }
+    html+='</div>';
   }
   el.innerHTML=html;
 }
 function toggleAdmin(idx,on){
   var u=_allUsers[idx];if(!u)return;
   api('/users/admin','POST',{user_id:u.user_id,is_admin:on}).then(function(d){
-    if(d) toast(on?'已設為管理員':'已取消管理員');
+    if(d){toast(on?'已設為管理員':'已取消管理員');u.is_admin=on;renderUsersList()}
   });
+}
+function toggleUserTab(el){
+  var uid=el.getAttribute('data-uid');
+  var tab=el.getAttribute('data-tab');
+  var u=null;
+  for(var i=0;i<_allUsers.length;i++){if(_allUsers[i].user_id===uid){u=_allUsers[i];break}}
+  if(!u)return;
+  var tabs=u.allowed_tabs||[];
+  if(el.checked){if(tabs.indexOf(tab)<0)tabs.push(tab)}
+  else{tabs=tabs.filter(function(t){return t!==tab})}
+  u.allowed_tabs=tabs;
+  api('/users/tabs','POST',{user_id:uid,allowed_tabs:tabs}).then(function(d){
+    if(d)toast('已更新');
+  });
+}
+function renderUsersList(){
+  var el=document.getElementById('usersListContainer');
+  if(!el)return;
+  loadUsers();
 }
 
 var _protectedNames=[];
@@ -6252,7 +6335,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=58').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=59').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -6619,6 +6702,21 @@ def check_admin_key():
     return key == ADMIN_KEY
 
 
+def check_manager_access(required_tab=None):
+    """Check if request is from super admin or authorized manager."""
+    if check_admin_key():
+        return True
+    uid = request.headers.get("X-Manager-Id", "")
+    if not uid or uid not in admin_users:
+        return False
+    if not admin_users[uid].get("is_admin"):
+        return False
+    if required_tab:
+        allowed = admin_users[uid].get("allowed_tabs", [])
+        return required_tab in allowed
+    return True
+
+
 @app.route("/admin")
 def admin_page():
     resp = app.response_class(ADMIN_HTML, mimetype="text/html")
@@ -6745,7 +6843,22 @@ def admin_icon():
 def api_admin_status():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "role": "super"})
+
+
+@app.route("/api/admin/manager-login", methods=["POST"])
+def api_admin_manager_login():
+    """Login as manager using LINE user ID."""
+    data = request.get_json(force=True)
+    uid = data.get("user_id", "").strip()
+    if not uid:
+        return jsonify({"error": "請輸入 User ID"}), 400
+    if uid not in admin_users or not admin_users[uid].get("is_admin"):
+        return jsonify({"error": "此 ID 沒有管理員權限"}), 403
+    allowed = admin_users[uid].get("allowed_tabs", [])
+    if not allowed:
+        return jsonify({"error": "尚未設定可用功能，請聯繫超級管理員"}), 403
+    return jsonify({"ok": True, "role": "manager", "tabs": allowed})
 
 
 @app.route("/api/admin/groups", methods=["GET"])
@@ -7344,6 +7457,7 @@ def api_admin_users():
                 "user_id": uid,
                 "name": name,
                 "is_admin": is_admin,
+                "allowed_tabs": admin_users.get(uid, {}).get("allowed_tabs", []),
                 "line_lang": user_languages.get(uid, ""),
                 "picture_url": user_pictures.get(uid, ""),
             })
@@ -7361,6 +7475,7 @@ def api_admin_users():
                 "user_id": uid,
                 "name": name,
                 "is_admin": is_admin,
+                "allowed_tabs": admin_users.get(uid, {}).get("allowed_tabs", []),
                 "line_lang": user_languages.get(uid, ""),
                 "picture_url": user_pictures.get(uid, ""),
             })
@@ -7384,7 +7499,21 @@ def api_admin_users_toggle_admin():
     return jsonify({"ok": True})
 
 
-@app.route("/api/admin/names", methods=["GET", "POST"])
+@app.route("/api/admin/users/tabs", methods=["POST"])
+def api_admin_users_tabs():
+    """Set allowed tabs for a manager user."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    uid = data.get("user_id", "")
+    tabs = data.get("allowed_tabs", [])
+    if not uid:
+        return jsonify({"error": "missing user_id"}), 400
+    if uid not in admin_users:
+        admin_users[uid] = {}
+    admin_users[uid]["allowed_tabs"] = tabs
+    save_settings()
+    return jsonify({"ok": True})
 def api_admin_names():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
@@ -7412,7 +7541,7 @@ def api_admin_names():
 
 @app.route("/api/admin/storage/stats")
 def api_admin_storage_stats():
-    if not check_admin_key():
+    if not check_manager_access("storage"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({"count": len(STORAGE_LOOKUP)})
 
@@ -7420,7 +7549,7 @@ def api_admin_storage_stats():
 @app.route("/api/admin/storage/upload", methods=["POST"])
 def api_admin_storage_upload():
     global STORAGE_LOOKUP, CUSTOMER_NAMES
-    if not check_admin_key():
+    if not check_manager_access("storage"):
         return jsonify({"error": "forbidden"}), 403
     if 'file' not in request.files:
         return jsonify({"error": "沒有檔案"}), 400
@@ -7498,7 +7627,7 @@ def api_admin_storage_upload():
 
 @app.route("/api/admin/storage/json")
 def api_admin_storage_json():
-    if not check_admin_key():
+    if not check_manager_access("storage"):
         return jsonify({"error": "forbidden"}), 403
     json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
     return app.response_class(json_str, mimetype="application/json",
@@ -7509,7 +7638,7 @@ def api_admin_storage_json():
 @app.route("/api/admin/passwords", methods=["GET", "POST"])
 def api_admin_passwords():
     global pw1_text, pw2_text
-    if not check_admin_key():
+    if not check_manager_access("passwords"):
         return jsonify({"error": "forbidden"}), 403
     if request.method == "GET":
         return jsonify({"pw1": pw1_text, "pw2": pw2_text})
@@ -7526,7 +7655,7 @@ def api_admin_passwords():
 @app.route("/api/admin/scrap", methods=["GET", "POST"])
 def api_admin_scrap():
     global scrap_text
-    if not check_admin_key():
+    if not check_manager_access("scrap"):
         return jsonify({"error": "forbidden"}), 403
     if request.method == "GET":
         return jsonify({"text": scrap_text})
@@ -7611,7 +7740,7 @@ def api_admin_examples_edit():
 # ─── Packaging API ──────────────────────────────────
 @app.route("/api/admin/packaging/stats")
 def api_admin_packaging_stats():
-    if not check_admin_key():
+    if not check_manager_access("packaging"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({"count": len(PACKAGING_LOOKUP)})
 
@@ -7619,7 +7748,7 @@ def api_admin_packaging_stats():
 @app.route("/api/admin/packaging/upload", methods=["POST"])
 def api_admin_packaging_upload():
     global PACKAGING_LOOKUP
-    if not check_admin_key():
+    if not check_manager_access("packaging"):
         return jsonify({"error": "forbidden"}), 403
     if 'file' not in request.files:
         return jsonify({"error": "沒有檔案"}), 400
@@ -7700,7 +7829,7 @@ def api_admin_packaging_upload():
 
 @app.route("/api/admin/packaging/json")
 def api_admin_packaging_json():
-    if not check_admin_key():
+    if not check_manager_access("packaging"):
         return jsonify({"error": "forbidden"}), 403
     json_str = json.dumps(PACKAGING_LOOKUP, ensure_ascii=False, indent=2)
     return app.response_class(json_str, mimetype="application/json",
