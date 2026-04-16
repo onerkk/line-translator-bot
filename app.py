@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.1-0416c"
+VERSION = "v3.1-0416d"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4562,7 +4562,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div>
 <script>
 var _loginMode='super';
-var GCID='""" + GOOGLE_CLIENT_ID + """';
+var GCID='__GOOGLE_CLIENT_ID__';
 function switchLoginMode(mode){
   _loginMode=mode;
   document.getElementById('superLoginFields').style.display=mode==='super'?'block':'none';
@@ -6738,7 +6738,8 @@ def check_manager_access(required_tab=None):
 
 @app.route("/admin")
 def admin_page():
-    resp = app.response_class(ADMIN_HTML, mimetype="text/html")
+    html = ADMIN_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
