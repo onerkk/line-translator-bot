@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.1-0416d"
+VERSION = "v3.1-0416e"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4599,6 +4599,7 @@ function handleGoogleLogin(response){
       window._MANAGER_TABS=d.tabs;
       window._MANAGER_ID=d.user_id||'';
       applyTabFilter(d.tabs);
+      if(typeof loadAll==='function') loadAll();
     }else{m.style.color='#f04747';m.textContent=d.error||'登入失敗'}
   }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
 }
@@ -5483,7 +5484,7 @@ async function uploadStorage(){
   var fd=new FormData();
   fd.append('file',storageFileData);
   try{
-    var r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    var r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
     if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.error){toast(d.error);return}
@@ -5497,7 +5498,7 @@ async function uploadStorage(){
 
 async function downloadJson(){
   try{
-    var r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY}});
+    var r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
     var blob=await r.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -5523,7 +5524,7 @@ async function uploadPackaging(){
   if(!f){toast('請選擇檔案');return;}
   var fd=new FormData();fd.append('file',f);
   try{
-    var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY},body:fd});
+    var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
     if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.ok){toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';}
@@ -5532,7 +5533,7 @@ async function uploadPackaging(){
 }
 async function downloadPackagingJson(){
   try{
-    var r=await fetch(API+'/packaging/json',{headers:{'X-Admin-Key':KEY}});
+    var r=await fetch(API+'/packaging/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
     var blob=await r.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -6051,7 +6052,7 @@ async function doPushForm(fid){
 }
 
 async function viewFormSubmissions(fid){
-  var r=await fetch(API+'/forms/submissions/'+fid,{headers:{'X-Admin-Key':KEY}});
+  var r=await fetch(API+'/forms/submissions/'+fid,{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
   var data=await r.json();
   var subs=data.submissions||[];
   var form=data.form||{};
@@ -6354,13 +6355,13 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=60').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=61').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v57';
+SW_JS = '''const CACHE='bot-admin-v58';
 const URLS=['/admin'];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -6861,9 +6862,11 @@ def admin_icon():
 
 @app.route("/api/admin/status")
 def api_admin_status():
-    if not check_admin_key():
+    if check_admin_key():
+        return jsonify({"ok": True, "role": "super"})
+    if not check_manager_access():
         return jsonify({"error": "forbidden"}), 403
-    return jsonify({"ok": True, "role": "super"})
+    return jsonify({"ok": True, "role": "manager"})
 
 
 @app.route("/api/admin/google-config")
@@ -6961,7 +6964,7 @@ def api_admin_manager_login():
 
 @app.route("/api/admin/groups", methods=["GET"])
 def api_admin_groups():
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     groups = []
     # Merge from group_tracking + group_settings
@@ -6988,7 +6991,7 @@ def api_admin_groups():
 
 @app.route("/api/admin/groups/leave", methods=["POST"])
 def api_admin_leave_group():
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     gid = data.get("group_id", "")
@@ -7022,7 +7025,7 @@ def api_admin_leave_group():
 
 @app.route("/api/admin/stats")
 def api_admin_stats():
-    if not check_admin_key():
+    if not check_manager_access():
         return jsonify({"error": "forbidden"}), 403
     uptime = time.time() - bot_start_time
     # Calculate estimated cost (GPT-4o-mini pricing)
@@ -7065,7 +7068,7 @@ def api_admin_features():
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
     if request.method == "POST":
@@ -7224,7 +7227,7 @@ def api_admin_features():
 @app.route("/api/admin/features/reset", methods=["POST"])
 def api_admin_features_reset():
     """Reset per-group feature settings to global defaults."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     gid = data.get("group_id", "")
@@ -7250,7 +7253,7 @@ def api_admin_features_reset():
 @app.route("/api/admin/push", methods=["POST"])
 def api_admin_push():
     """Push a message to a group."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     gid = data.get("group_id", "")
@@ -7264,7 +7267,7 @@ def api_admin_push():
 @app.route("/api/admin/richmenu", methods=["POST"])
 def api_admin_richmenu():
     """Create or delete rich menu."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     action = data.get("action", "create")
@@ -7280,7 +7283,7 @@ def api_admin_richmenu():
 @app.route("/api/admin/insight")
 def api_admin_insight():
     """Get follower demographics and message delivery stats."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({
         "demographics": get_insight_followers(),
@@ -7291,7 +7294,7 @@ def api_admin_insight():
 @app.route("/api/admin/insight/trend")
 def api_admin_insight_trend():
     """Get daily follower trend data (7 days)."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     days = min(int(request.args.get("days", 7)), 30)
     trend = get_statistics_per_unit(num_days=days)
@@ -7301,7 +7304,7 @@ def api_admin_insight_trend():
 @app.route("/api/admin/richmenu/upload/<rm_id>", methods=["POST"])
 def api_admin_richmenu_upload(rm_id):
     """Upload a custom image to a rich menu from admin panel."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     img_b64 = data.get("image", "")
@@ -7328,7 +7331,7 @@ def api_admin_richmenu_upload(rm_id):
 @app.route("/api/admin/imagemap/send", methods=["POST"])
 def api_admin_imagemap_send():
     """Send an Imagemap message to a group or user."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     to = data.get("to", "")
@@ -7348,7 +7351,7 @@ def api_admin_imagemap_send():
 @app.route("/api/admin/richmenu/list")
 def api_admin_richmenu_list():
     """List all rich menus."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({"menus": list_rich_menus()})
 
@@ -7356,7 +7359,7 @@ def api_admin_richmenu_list():
 @app.route("/api/admin/richmenu/link", methods=["POST"])
 def api_admin_richmenu_link():
     """Link/unlink rich menu to a specific user."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     user_id = data.get("user_id", "")
@@ -7376,7 +7379,7 @@ def api_admin_richmenu_link():
 @app.route("/api/admin/multicast", methods=["POST"])
 def api_admin_multicast():
     """Send a message to multiple users."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     user_ids = data.get("user_ids", [])
@@ -7390,7 +7393,7 @@ def api_admin_multicast():
 @app.route("/api/admin/broadcast", methods=["POST"])
 def api_admin_broadcast():
     """Broadcast to all followers."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     text = data.get("text", "").strip()
@@ -7403,7 +7406,7 @@ def api_admin_broadcast():
 @app.route("/api/admin/richmenu/alias", methods=["POST"])
 def api_admin_richmenu_alias():
     """Create/delete rich menu alias."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     alias_id = data.get("alias_id", "")
@@ -7416,7 +7419,7 @@ def api_admin_richmenu_alias():
 @app.route("/api/admin/richmenu/batch", methods=["POST"])
 def api_admin_richmenu_batch():
     """Batch link/unlink rich menu to users."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     user_ids = data.get("user_ids", [])
@@ -7431,7 +7434,7 @@ def api_admin_richmenu_batch():
 
 @app.route("/api/admin/groups/settings", methods=["POST"])
 def api_admin_group_settings():
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     gid = data.get("group_id", "")
@@ -7459,7 +7462,7 @@ def api_admin_group_settings():
 
 @app.route("/api/admin/groups/reset-cost", methods=["POST"])
 def api_admin_reset_group_cost():
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     gid = data.get("group_id", "")
@@ -7473,7 +7476,7 @@ def api_admin_reset_group_cost():
 @app.route("/api/admin/dm", methods=["GET", "POST"])
 def api_admin_dm():
     global dm_master_enabled
-    if not check_admin_key():
+    if not check_manager_access("settings"):
         return jsonify({"error": "forbidden"}), 403
     if request.method == "POST":
         data = request.get_json() or {}
@@ -7494,7 +7497,7 @@ def api_admin_dm():
 
 @app.route("/api/admin/dm/whitelist", methods=["POST"])
 def api_admin_dm_whitelist():
-    if not check_admin_key():
+    if not check_manager_access("settings"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     uid = data.get("user_id", "").strip()
@@ -7511,7 +7514,7 @@ def api_admin_dm_whitelist():
 
 @app.route("/api/admin/skip", methods=["GET", "POST"])
 def api_admin_skip():
-    if not check_admin_key():
+    if not check_manager_access("skip"):
         return jsonify({"error": "forbidden"}), 403
     if request.method == "POST":
         data = request.get_json() or {}
@@ -7543,7 +7546,7 @@ def api_admin_skip():
 
 @app.route("/api/admin/users", methods=["GET"])
 def api_admin_users():
-    if not check_admin_key():
+    if not check_manager_access("users"):
         return jsonify({"error": "forbidden"}), 403
     filter_gid = request.args.get("group_id", "")
     users = []
@@ -7585,7 +7588,7 @@ def api_admin_users():
 
 @app.route("/api/admin/users/admin", methods=["POST"])
 def api_admin_users_toggle_admin():
-    if not check_admin_key():
+    if not check_manager_access("users"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     uid = data.get("user_id", "")
@@ -7602,7 +7605,7 @@ def api_admin_users_toggle_admin():
 @app.route("/api/admin/users/tabs", methods=["POST"])
 def api_admin_users_tabs():
     """Set allowed tabs for a manager user."""
-    if not check_admin_key():
+    if not check_manager_access("users"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     uid = data.get("user_id", "")
@@ -7619,7 +7622,7 @@ def api_admin_users_tabs():
 @app.route("/api/admin/users/email", methods=["POST"])
 def api_admin_users_email():
     """Set Google email for a manager user."""
-    if not check_admin_key():
+    if not check_manager_access("users"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     uid = data.get("user_id", "")
@@ -7635,7 +7638,7 @@ def api_admin_users_email():
 
 @app.route("/api/admin/names", methods=["GET", "POST"])
 def api_admin_names():
-    if not check_admin_key():
+    if not check_manager_access("names"):
         return jsonify({"error": "forbidden"}), 403
     names_list = extra_names_by_group.setdefault("__all__", [])
     if request.method == "POST":
@@ -7790,7 +7793,7 @@ def api_admin_scrap():
 @app.route("/api/admin/examples", methods=["GET"])
 def api_admin_examples_get():
     """Get all custom translation examples."""
-    if not check_admin_key():
+    if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({
         "examples": custom_translation_examples,
@@ -7803,7 +7806,7 @@ def api_admin_examples_get():
 def api_admin_examples_add():
     """Add a custom translation example."""
     global custom_translation_examples
-    if not check_admin_key():
+    if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     zh = data.get("zh", "").strip()
@@ -7826,7 +7829,7 @@ def api_admin_examples_add():
 def api_admin_examples_delete():
     """Delete a custom translation example by index."""
     global custom_translation_examples
-    if not check_admin_key():
+    if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     idx = data.get("index")
@@ -7841,7 +7844,7 @@ def api_admin_examples_delete():
 def api_admin_examples_edit():
     """Edit a custom translation example by index."""
     global custom_translation_examples
-    if not check_admin_key():
+    if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     idx = data.get("index")
@@ -7959,7 +7962,7 @@ def api_admin_packaging_json():
 @app.route("/api/admin/webhook", methods=["GET", "POST"])
 def api_admin_webhook():
     """Get or set webhook endpoint URL."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     if request.method == "POST":
         data = request.get_json() or {}
@@ -7974,7 +7977,7 @@ def api_admin_webhook():
 @app.route("/api/admin/webhook/test", methods=["POST"])
 def api_admin_webhook_test():
     """Test webhook endpoint connectivity."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     endpoint = data.get("endpoint", "")
@@ -7985,7 +7988,7 @@ def api_admin_webhook_test():
 @app.route("/api/admin/validate", methods=["POST"])
 def api_admin_validate():
     """Validate message objects before sending."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     text = data.get("text", "").strip()
@@ -8000,7 +8003,7 @@ def api_admin_validate():
 @app.route("/api/admin/content/preview/<message_id>")
 def api_admin_content_preview(message_id):
     """Get content preview for an image/video message."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     content = get_content_preview(message_id)
     if content:
@@ -8011,7 +8014,7 @@ def api_admin_content_preview(message_id):
 @app.route("/api/admin/content/status/<message_id>")
 def api_admin_content_status(message_id):
     """Check preparation status for video/audio content."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     status = check_content_preparation(message_id)
     return jsonify({"message_id": message_id, "status": status})
@@ -8020,7 +8023,7 @@ def api_admin_content_status(message_id):
 @app.route("/api/admin/followers")
 def api_admin_followers():
     """Get all follower user IDs and resolve names."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     ids = get_all_follower_ids()
     followers = []
@@ -8041,7 +8044,7 @@ def api_admin_followers():
 @app.route("/api/admin/interaction")
 def api_admin_interaction():
     """Get message interaction stats by request_id."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     req_id = request.args.get("request_id", "")
     if not req_id:
@@ -8053,7 +8056,7 @@ def api_admin_interaction():
 @app.route("/api/admin/delivery")
 def api_admin_delivery():
     """Get full delivery stats (reply/push/multicast/broadcast)."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     date_str = request.args.get("date", "")
     stats = get_message_delivery_stats(date_str if date_str else None)
@@ -8063,7 +8066,7 @@ def api_admin_delivery():
 @app.route("/api/admin/room/members")
 def api_admin_room_members():
     """Get members of a multi-person chat room."""
-    if not check_admin_key():
+    if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
     room_id = request.args.get("room_id", "")
     if not room_id:
@@ -8081,7 +8084,7 @@ def api_admin_room_members():
 @app.route("/api/admin/richmenu/detail/<rm_id>")
 def api_admin_richmenu_detail(rm_id):
     """Get detailed info of a single rich menu."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     detail = get_rich_menu_by_id(rm_id)
     return jsonify({"menu": detail})
@@ -8090,7 +8093,7 @@ def api_admin_richmenu_detail(rm_id):
 @app.route("/api/admin/richmenu/default")
 def api_admin_richmenu_default():
     """Get the current default rich menu ID."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     rm_id = get_default_rich_menu_id()
     return jsonify({"default_rich_menu_id": rm_id})
@@ -8099,7 +8102,7 @@ def api_admin_richmenu_default():
 @app.route("/api/admin/richmenu/user/<user_id>")
 def api_admin_richmenu_user(user_id):
     """Get which rich menu is linked to a specific user."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     rm_id = get_user_rich_menu_id(user_id)
     return jsonify({"user_id": user_id, "rich_menu_id": rm_id})
@@ -8108,7 +8111,7 @@ def api_admin_richmenu_user(user_id):
 @app.route("/api/admin/richmenu/validate", methods=["POST"])
 def api_admin_richmenu_validate():
     """Validate a rich menu object before creating."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     result = validate_rich_menu_obj(data)
@@ -8118,7 +8121,7 @@ def api_admin_richmenu_validate():
 @app.route("/api/admin/richmenu/image/<rm_id>")
 def api_admin_richmenu_image(rm_id):
     """Download/preview the image of a rich menu."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     content = download_rich_menu_image(rm_id)
     if content:
@@ -8129,7 +8132,7 @@ def api_admin_richmenu_image(rm_id):
 @app.route("/api/admin/richmenu/alias/list")
 def api_admin_richmenu_alias_list():
     """Get all rich menu aliases."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     aliases = list_rich_menu_aliases()
     return jsonify({"aliases": aliases})
@@ -8138,7 +8141,7 @@ def api_admin_richmenu_alias_list():
 @app.route("/api/admin/richmenu/alias/update", methods=["POST"])
 def api_admin_richmenu_alias_update():
     """Update a rich menu alias to point to a different menu."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json() or {}
     alias_id = data.get("alias_id", "")
@@ -8152,7 +8155,7 @@ def api_admin_richmenu_alias_update():
 @app.route("/api/admin/richmenu/alias/detail/<alias_id>")
 def api_admin_richmenu_alias_detail(alias_id):
     """Get info about a specific rich menu alias."""
-    if not check_admin_key():
+    if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     info = get_rich_menu_alias(alias_id)
     return jsonify({"alias": info})
@@ -8408,7 +8411,7 @@ def api_liff_form_submit(form_id):
 # ─── Admin Form Management API ─────────────────────────
 @app.route("/api/admin/forms", methods=["GET"])
 def api_admin_forms_list():
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     result = []
     for fid, f in forms_data.items():
@@ -8420,7 +8423,7 @@ def api_admin_forms_list():
 @app.route("/api/admin/forms/create", methods=["POST"])
 def api_admin_forms_create():
     data = request.get_json(force=True)
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     import random, string
     fid = "form_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
@@ -8441,7 +8444,7 @@ def api_admin_forms_create():
 @app.route("/api/admin/forms/update", methods=["POST"])
 def api_admin_forms_update():
     data = request.get_json(force=True)
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     if fid not in forms_data:
@@ -8463,7 +8466,7 @@ def api_admin_forms_update():
 @app.route("/api/admin/forms/delete", methods=["POST"])
 def api_admin_forms_delete():
     data = request.get_json(force=True)
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     if fid in forms_data:
@@ -8476,7 +8479,7 @@ def api_admin_forms_delete():
 
 @app.route("/api/admin/forms/submissions/<form_id>")
 def api_admin_forms_submissions(form_id):
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     subs = forms_submissions.get(form_id, {})
     result = []
@@ -8488,7 +8491,7 @@ def api_admin_forms_submissions(form_id):
 @app.route("/api/admin/forms/approve", methods=["POST"])
 def api_admin_forms_approve():
     data = request.get_json(force=True)
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     uid = data.get("user_id")
@@ -8502,7 +8505,7 @@ def api_admin_forms_approve():
 def api_admin_forms_push():
     """Push form link to target groups via Flex Message."""
     data = request.get_json(force=True)
-    if not check_admin_key():
+    if not check_manager_access("forms"):
         return jsonify({"error": "forbidden"}), 403
     fid = data.get("form_id")
     group_ids = data.get("group_ids", [])
@@ -8553,7 +8556,7 @@ def api_admin_forms_push():
 @app.route("/api/admin/forms/export/<form_id>")
 def api_admin_forms_export(form_id):
     """Export form submissions as Excel."""
-    if not check_admin_key() and request.args.get("key") != ADMIN_KEY:
+    if not check_manager_access("forms") and request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
     f = forms_data.get(form_id)
     if not f:
