@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.0-0416d"
+VERSION = "v3.1-0416a"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -131,6 +131,8 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
@@ -4440,6 +4442,7 @@ ADMIN_HTML = '''<!DOCTYPE html>
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>翻譯Bot 管理後台</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#7c6fef">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -4549,8 +4552,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <input class="input-field" id="pwInput" type="password" placeholder="輸入管理密碼" autocomplete="off" onkeydown="if(event.key===&apos;Enter&apos;)document.getElementById(&apos;loginBtn&apos;).click()">
 </div>
 <div id="managerLoginFields" style="display:none">
-<input class="input-field" id="managerIdInput" type="text" placeholder="輸入你的 LINE User ID" autocomplete="off" onkeydown="if(event.key===&apos;Enter&apos;)document.getElementById(&apos;loginBtn&apos;).click()">
-<div style="font-size:11px;color:#666;margin-top:2px">從使用者 tab 複製你的 ID</div>
+<div id="googleBtnWrap"></div>
+<div style="font-size:11px;color:#666;margin-top:6px">使用超級管理員指定的 Google 帳號登入</div>
 </div>
 <div id="loginMsg" style="color:#f04747;font-size:12px;min-height:18px;margin-top:4px"></div>
 <button class="btn btn-primary" id="loginBtn" type="button">登入</button>
@@ -4559,6 +4562,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div>
 <script>
 var _loginMode='super';
+var GCID='""" + GOOGLE_CLIENT_ID + """';
 function switchLoginMode(mode){
   _loginMode=mode;
   document.getElementById('superLoginFields').style.display=mode==='super'?'block':'none';
@@ -4568,61 +4572,67 @@ function switchLoginMode(mode){
   document.getElementById('modeManager').style.background=mode==='manager'?'#7c6fef':'#2a2a3e';
   document.getElementById('modeManager').style.color=mode==='manager'?'#fff':'#aaa';
   document.getElementById('loginMsg').textContent='';
+  document.getElementById('loginBtn').style.display=mode==='super'?'block':'none';
+  if(mode==='manager') initGoogleBtn();
+}
+var _gsiInited=false;
+function initGoogleBtn(){
+  if(_gsiInited)return;
+  _gsiInited=true;
+  if(typeof google==='undefined'||!google.accounts){
+    setTimeout(initGoogleBtn,500);_gsiInited=false;return;
+  }
+  google.accounts.id.initialize({client_id:GCID,callback:handleGoogleLogin});
+  google.accounts.id.renderButton(document.getElementById('googleBtnWrap'),{theme:'outline',size:'large',width:280,text:'signin_with',locale:'zh-TW'});
+}
+function handleGoogleLogin(response){
+  var m=document.getElementById('loginMsg');
+  m.textContent='Google 驗證中...';m.style.color='#aaa';
+  fetch(window.location.origin+'/api/admin/manager-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:response.credential})})
+  .then(function(r){return r.json()})
+  .then(function(d){
+    if(d&&d.ok){
+      m.textContent='';
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainPage').style.display='block';
+      window._ADMIN_KEY='';
+      window._MANAGER_TABS=d.tabs;
+      window._MANAGER_ID=d.user_id||'';
+      applyTabFilter(d.tabs);
+    }else{m.style.color='#f04747';m.textContent=d.error||'登入失敗'}
+  }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
 }
 function applyTabFilter(tabs){
   var allTabs=document.querySelectorAll('.tabs .tab');
   allTabs.forEach(function(t,i){
     var key=TAB_KEYS[i];
-    if(tabs && tabs.indexOf(key)<0){t.style.display='none'}
+    if(tabs&&tabs.indexOf(key)<0){t.style.display='none'}
     else{t.style.display=''}
   });
-  var allPanels=document.querySelectorAll('.panel');
-  allPanels.forEach(function(p){p.classList.remove('active')});
-  if(tabs && tabs.length>0){switchTab(tabs[0])}
+  if(tabs&&tabs.length>0){switchTab(tabs[0])}
   else{switchTab('overview')}
 }
 document.getElementById('loginBtn').addEventListener('click',function(){
   var m=document.getElementById('loginMsg');
   m.textContent='登入中...';m.style.color='#aaa';
-  if(_loginMode==='super'){
-    var k=document.getElementById('pwInput').value.trim();
-    if(!k){m.textContent='請輸入密碼';m.style.color='#f04747';return}
-    fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
-    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
-    .then(function(d){
-      if(d&&d.ok){
-        m.textContent='';
-        document.getElementById('loginPage').style.display='none';
-        document.getElementById('mainPage').style.display='block';
-        window._ADMIN_KEY=k;
-        try{localStorage.setItem('bot_admin_key',k)}catch(e){}
-        if(typeof KEY!=='undefined') KEY=k;
-        applyTabFilter(null);
-        if(typeof loadAll==='function') loadAll();
-      }else{m.style.color='#f04747';m.textContent='密碼錯誤'}
-    }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
-  }else{
-    var uid=document.getElementById('managerIdInput').value.trim();
-    if(!uid){m.textContent='請輸入 User ID';m.style.color='#f04747';return}
-    fetch(window.location.origin+'/api/admin/manager-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid})})
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d&&d.ok){
-        m.textContent='';
-        document.getElementById('loginPage').style.display='none';
-        document.getElementById('mainPage').style.display='block';
-        window._ADMIN_KEY='';
-        window._MANAGER_TABS=d.tabs;
-        window._MANAGER_ID=uid;
-        applyTabFilter(d.tabs);
-      }else{m.style.color='#f04747';m.textContent=d.error||'登入失敗'}
-    }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
-  }
+  var k=document.getElementById('pwInput').value.trim();
+  if(!k){m.textContent='請輸入密碼';m.style.color='#f04747';return}
+  fetch(window.location.origin+'/api/admin/status',{headers:{'X-Admin-Key':k}})
+  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+  .then(function(d){
+    if(d&&d.ok){
+      m.textContent='';
+      document.getElementById('loginPage').style.display='none';
+      document.getElementById('mainPage').style.display='block';
+      window._ADMIN_KEY=k;
+      try{localStorage.setItem('bot_admin_key',k)}catch(e){}
+      if(typeof KEY!=='undefined') KEY=k;
+      applyTabFilter(null);
+      if(typeof loadAll==='function') loadAll();
+    }else{m.style.color='#f04747';m.textContent='密碼錯誤'}
+  }).catch(function(e){m.style.color='#f04747';m.textContent='連線錯誤: '+e.message});
 });
 document.getElementById('pwInput').addEventListener('keydown',function(e){
-  if(e.key==='Enter') document.getElementById('loginBtn').click();
-});
-document.getElementById('managerIdInput').addEventListener('keydown',function(e){
   if(e.key==='Enter') document.getElementById('loginBtn').click();
 });
 </script>
@@ -5374,6 +5384,8 @@ async function loadUsers(){
       '</div>';
     if(u.is_admin){
       html+='<div style="margin-top:6px;padding:8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">';
+      html+='<div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">📧 Google 信箱（登入用）：</div>';
+      html+='<div style="display:flex;gap:4px;margin-bottom:8px"><input type="email" value="'+esc(u.google_email||'')+'" placeholder="example@gmail.com" data-uid="'+u.user_id+'" style="flex:1;padding:5px 8px;border-radius:4px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px" onchange="saveUserEmail(this)"><span style="font-size:10px;color:#43b581;align-self:center">'+(u.google_email?'✓':'')+'</span></div>';
       html+='<div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">可用功能：</div>';
       html+='<div style="display:flex;flex-wrap:wrap;gap:4px">';
       for(var t=0;t<TAB_OPTS.length;t++){
@@ -5391,6 +5403,13 @@ function toggleAdmin(idx,on){
   var u=_allUsers[idx];if(!u)return;
   api('/users/admin','POST',{user_id:u.user_id,is_admin:on}).then(function(d){
     if(d){toast(on?'已設為管理員':'已取消管理員');u.is_admin=on;renderUsersList()}
+  });
+}
+function saveUserEmail(el){
+  var uid=el.getAttribute('data-uid');
+  var email=el.value.trim();
+  api('/users/email','POST',{user_id:uid,google_email:email}).then(function(d){
+    if(d)toast(email?'已綁定: '+email:'已清除信箱');
   });
 }
 function toggleUserTab(el){
@@ -6335,7 +6354,7 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=59').catch(function(){})}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=60').catch(function(){})}
 </script>
 </body>
 </html>'''
@@ -6848,17 +6867,48 @@ def api_admin_status():
 
 @app.route("/api/admin/manager-login", methods=["POST"])
 def api_admin_manager_login():
-    """Login as manager using LINE user ID."""
+    """Login as manager using Google ID token."""
     data = request.get_json(force=True)
-    uid = data.get("user_id", "").strip()
-    if not uid:
-        return jsonify({"error": "請輸入 User ID"}), 400
-    if uid not in admin_users or not admin_users[uid].get("is_admin"):
-        return jsonify({"error": "此 ID 沒有管理員權限"}), 403
-    allowed = admin_users[uid].get("allowed_tabs", [])
+    credential = data.get("credential", "")
+    if not credential:
+        return jsonify({"error": "缺少 Google 憑證"}), 400
+    # Verify Google ID token
+    try:
+        # Decode JWT without verification first to get email (we verify with Google tokeninfo)
+        import base64
+        parts = credential.split(".")
+        if len(parts) < 2:
+            return jsonify({"error": "無效的憑證格式"}), 400
+        payload = parts[1]
+        payload += "=" * (4 - len(payload) % 4)  # pad base64
+        token_data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+        email = token_data.get("email", "").lower().strip()
+        if not email:
+            return jsonify({"error": "無法取得 Google 信箱"}), 400
+        # Verify token with Google
+        verify_url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + credential
+        req = urllib.request.Request(verify_url)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            verify_data = json.loads(resp.read().decode())
+            if verify_data.get("aud") != GOOGLE_CLIENT_ID:
+                return jsonify({"error": "憑證驗證失敗"}), 403
+    except Exception as e:
+        logger.error("Google token verify failed: %s", e)
+        return jsonify({"error": "Google 驗證失敗: " + str(e)}), 400
+    # Find user by email
+    found_uid = None
+    for uid, info in admin_users.items():
+        if info.get("google_email", "").lower().strip() == email:
+            found_uid = uid
+            break
+    if not found_uid:
+        return jsonify({"error": "此 Google 帳號未綁定任何管理員 (" + email + ")"}), 403
+    if not admin_users[found_uid].get("is_admin"):
+        return jsonify({"error": "此帳號沒有管理員權限"}), 403
+    allowed = admin_users[found_uid].get("allowed_tabs", [])
     if not allowed:
         return jsonify({"error": "尚未設定可用功能，請聯繫超級管理員"}), 403
-    return jsonify({"ok": True, "role": "manager", "tabs": allowed})
+    return jsonify({"ok": True, "role": "manager", "tabs": allowed, "email": email, "user_id": found_uid})
 
 
 @app.route("/api/admin/groups", methods=["GET"])
@@ -7458,6 +7508,7 @@ def api_admin_users():
                 "name": name,
                 "is_admin": is_admin,
                 "allowed_tabs": admin_users.get(uid, {}).get("allowed_tabs", []),
+                "google_email": admin_users.get(uid, {}).get("google_email", ""),
                 "line_lang": user_languages.get(uid, ""),
                 "picture_url": user_pictures.get(uid, ""),
             })
@@ -7476,6 +7527,7 @@ def api_admin_users():
                 "name": name,
                 "is_admin": is_admin,
                 "allowed_tabs": admin_users.get(uid, {}).get("allowed_tabs", []),
+                "google_email": admin_users.get(uid, {}).get("google_email", ""),
                 "line_lang": user_languages.get(uid, ""),
                 "picture_url": user_pictures.get(uid, ""),
             })
@@ -7514,6 +7566,26 @@ def api_admin_users_tabs():
     admin_users[uid]["allowed_tabs"] = tabs
     save_settings()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/users/email", methods=["POST"])
+def api_admin_users_email():
+    """Set Google email for a manager user."""
+    if not check_admin_key():
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    uid = data.get("user_id", "")
+    email = data.get("google_email", "").strip().lower()
+    if not uid:
+        return jsonify({"error": "missing user_id"}), 400
+    if uid not in admin_users:
+        admin_users[uid] = {}
+    admin_users[uid]["google_email"] = email
+    save_settings()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/names", methods=["GET", "POST"])
 def api_admin_names():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
