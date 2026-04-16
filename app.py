@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.1-0416a"
+VERSION = "v3.1-0416b"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -6863,6 +6863,18 @@ def api_admin_status():
     if not check_admin_key():
         return jsonify({"error": "forbidden"}), 403
     return jsonify({"ok": True, "role": "super"})
+
+
+@app.route("/api/admin/google-config")
+def api_admin_google_config():
+    """Public debug endpoint - check if Google Client ID is set."""
+    return jsonify({
+        "client_id_set": bool(GOOGLE_CLIENT_ID),
+        "client_id_length": len(GOOGLE_CLIENT_ID),
+        "client_id_first10": GOOGLE_CLIENT_ID[:10] if GOOGLE_CLIENT_ID else "",
+        "client_id_last10": GOOGLE_CLIENT_ID[-10:] if GOOGLE_CLIENT_ID else "",
+        "secret_set": bool(GOOGLE_CLIENT_SECRET),
+    })
 
 
 @app.route("/api/admin/manager-login", methods=["POST"])
