@@ -99,7 +99,8 @@
         "examples",
         "skip",
         "names",
-        "storage"
+        "storage",
+        "settings"
       ]
     }
   },
