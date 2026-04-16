@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.1-0416b"
+VERSION = "v3.1-0416c"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -6875,6 +6875,41 @@ def api_admin_google_config():
         "client_id_last10": GOOGLE_CLIENT_ID[-10:] if GOOGLE_CLIENT_ID else "",
         "secret_set": bool(GOOGLE_CLIENT_SECRET),
     })
+
+
+@app.route("/google-test")
+def google_test_page():
+    """Visual test page for Google Sign In."""
+    html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Google Test</title><script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>body{font-family:sans-serif;padding:20px;background:#111;color:#eee}
+pre{background:#000;padding:10px;border-radius:6px;word-break:break-all;white-space:pre-wrap;font-size:12px}
+#btn{margin:20px 0}</style></head><body>
+<h2>Google Sign In Test</h2>
+<div>Client ID being used:</div>
+<pre id="cid"></pre>
+<div>Length: <span id="cidlen"></span></div>
+<div id="btn"></div>
+<h3>Result:</h3>
+<pre id="result">waiting...</pre>
+<script>
+var CID='""" + GOOGLE_CLIENT_ID + """';
+document.getElementById('cid').textContent=CID;
+document.getElementById('cidlen').textContent=CID.length;
+function handle(response){
+  document.getElementById('result').textContent='SUCCESS!\\ncredential length: '+response.credential.length;
+}
+function init(){
+  if(typeof google==='undefined'||!google.accounts){setTimeout(init,500);return}
+  try{
+    google.accounts.id.initialize({client_id:CID,callback:handle});
+    google.accounts.id.renderButton(document.getElementById('btn'),{theme:'outline',size:'large'});
+    document.getElementById('result').textContent='Button rendered, click it to test.';
+  }catch(e){document.getElementById('result').textContent='ERROR: '+e.message}
+}
+document.addEventListener('DOMContentLoaded',init);
+</script></body></html>"""
+    return app.response_class(html, mimetype="text/html")
 
 
 @app.route("/api/admin/manager-login", methods=["POST"])
