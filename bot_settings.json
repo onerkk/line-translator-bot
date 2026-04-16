@@ -90,7 +90,13 @@
     },
     "Ucbc2c71e01fb7b1fc12b756eed45c042": {
       "is_admin": true,
-      "google_email": "asus0814999@gmail.com"
+      "google_email": "asus0814999@gmail.com",
+      "allowed_tabs": [
+        "passwords",
+        "packaging",
+        "scrap",
+        "forms"
+      ]
     }
   },
   "bot_stats": {
