@@ -101,7 +101,8 @@
         "skip",
         "names",
         "storage",
-        "settings"
+        "settings",
+        "groups"
       ]
     }
   },
