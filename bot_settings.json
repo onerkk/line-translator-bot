@@ -75,14 +75,11 @@
       "allowed_tabs": [
         "names",
         "insight",
-        "users",
         "scrap",
-        "skip",
         "passwords",
         "settings",
         "forms",
         "packaging",
-        "groups",
         "storage",
         "examples"
       ],
