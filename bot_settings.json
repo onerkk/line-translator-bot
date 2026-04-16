@@ -98,7 +98,8 @@
         "forms",
         "examples",
         "skip",
-        "names"
+        "names",
+        "storage"
       ]
     }
   },
