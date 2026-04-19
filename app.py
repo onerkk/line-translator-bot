@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0420a"
+VERSION = "v3.2-0420b"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -2325,8 +2325,8 @@ def get_help_text(group_id):
 
 
 # ======================================================================
-# /help Flex Message (v3.2-0420a)
-# Industrial-grade bilingual help card: Carousel with ZH-TW + ID bubbles
+# /help Flex Message (v3.2-0420b)
+# Dark-themed bilingual help card: Carousel with ZH-TW (blue) + ID (red)
 # Switch language via postback: action=help&lang=zh|id
 # ======================================================================
 
@@ -2373,8 +2373,38 @@ HELP_COMMAND_SECTIONS = [
     },
 ]
 
+# Color palette per language
+_HELP_COLORS = {
+    "zh": {
+        "body_bg":    "#1A1D3A",  # 深夜藍
+        "header_bg":  "#12142A",  # 更深藍黑
+        "accent":     "#7FB3FF",  # 青藍（分組編號、header meta）
+        "cmd_color":  "#FFFFFF",  # 指令代碼白
+        "desc_color": "#A8B0C8",  # 說明淺藍灰
+        "divider":    "#2A2D4A",  # 分隔線
+        "info_bg":    "#252849",  # info strip 稍亮
+        "info_text":  "#C5CCE0",
+        "btn_bg":     "#7FB3FF",  # 切換鈕青藍底
+        "btn_text":   "#0D0F1E",  # 按鈕深底字
+        "plate_text": "#5A6080",
+    },
+    "id": {
+        "body_bg":    "#3A1A1D",  # 深酒紅
+        "header_bg":  "#2A1213",
+        "accent":     "#FF8A95",  # 橘粉紅
+        "cmd_color":  "#FFFFFF",
+        "desc_color": "#C8A8AE",
+        "divider":    "#4A2A2D",
+        "info_bg":    "#492528",
+        "info_text":  "#E0C5C9",
+        "btn_bg":     "#FF8A95",
+        "btn_text":   "#1E0D0F",
+        "plate_text": "#805A60",
+    },
+}
 
-def _help_cmd_row(cmd, desc):
+
+def _help_cmd_row(cmd, desc, c):
     """Build a single command row: [cmd_code]  [description]"""
     return {
         "type": "box",
@@ -2387,7 +2417,7 @@ def _help_cmd_row(cmd, desc):
                 "type": "text",
                 "text": cmd,
                 "size": "xs",
-                "color": "#1A1D21",
+                "color": c["cmd_color"],
                 "weight": "bold",
                 "flex": 4,
                 "wrap": False,
@@ -2396,7 +2426,7 @@ def _help_cmd_row(cmd, desc):
                 "type": "text",
                 "text": desc,
                 "size": "xs",
-                "color": "#5A5F64",
+                "color": c["desc_color"],
                 "flex": 5,
                 "wrap": True,
             },
@@ -2405,10 +2435,10 @@ def _help_cmd_row(cmd, desc):
 
 
 def _help_section(num, tag, name, items, lang):
-    """Build one section: header row + command rows"""
-    accent = "#06C755" if lang == "zh" else "#E63946"
+    """Build one section: header row + divider + command rows."""
+    c = _HELP_COLORS[lang]
     rows = []
-    # Section header: [I / SWITCH] [開關]
+    # Section header
     rows.append({
         "type": "box",
         "layout": "baseline",
@@ -2419,7 +2449,7 @@ def _help_section(num, tag, name, items, lang):
                 "type": "text",
                 "text": num + " / " + tag,
                 "size": "xxs",
-                "color": accent,
+                "color": c["accent"],
                 "weight": "bold",
                 "flex": 0,
             },
@@ -2427,37 +2457,30 @@ def _help_section(num, tag, name, items, lang):
                 "type": "text",
                 "text": name,
                 "size": "xs",
-                "color": "#1A1D21",
+                "color": c["cmd_color"],
                 "weight": "bold",
                 "flex": 0,
                 "margin": "md",
             },
-            {
-                "type": "filler",
-            },
+            {"type": "filler"},
         ],
     })
-    # Thin divider under section header
     rows.append({
         "type": "separator",
-        "color": "#E4E4E0",
+        "color": c["divider"],
         "margin": "sm",
     })
-    # Command rows
     for i, (cmd, zh_desc, id_desc) in enumerate(items):
         desc = zh_desc if lang == "zh" else id_desc
-        rows.append(_help_cmd_row(cmd, desc))
+        rows.append(_help_cmd_row(cmd, desc, c))
         if i < len(items) - 1:
-            rows.append({
-                "type": "separator",
-                "color": "#EDEDEA",
-            })
+            rows.append({"type": "separator", "color": c["divider"]})
     return rows
 
 
 def _build_help_bubble(lang):
     """Build one Flex bubble for the given language ('zh' or 'id')."""
-    accent = "#06C755" if lang == "zh" else "#E63946"
+    c = _HELP_COLORS[lang]
     if lang == "zh":
         hdr_meta = "COMMAND REFERENCE · ZH-TW"
         hdr_title = "翻譯機器人"
@@ -2475,36 +2498,33 @@ def _build_help_bubble(lang):
         switch_btn_label = "中文版 / MANDARIN  ›"
         switch_lang = "zh"
 
-    # Build body sections
     body_contents = []
     for sect in HELP_COMMAND_SECTIONS:
         tag = sect["zh_tag"] if lang == "zh" else sect["id_tag"]
         name = sect["zh_name"] if lang == "zh" else sect["id_name"]
-        body_contents.extend(
-            _help_section(sect["num"], tag, name, sect["items"], lang)
-        )
+        body_contents.extend(_help_section(sect["num"], tag, name, sect["items"], lang))
 
-    # Info strip at bottom of body
+    # Info strip
     body_contents.append({
         "type": "box",
         "layout": "vertical",
         "margin": "xl",
         "paddingAll": "md",
-        "backgroundColor": "#F0EFEA",
+        "backgroundColor": c["info_bg"],
         "cornerRadius": "sm",
         "contents": [
             {
                 "type": "text",
                 "text": info_line_1,
                 "size": "xxs",
-                "color": "#3A3D42",
+                "color": c["info_text"],
                 "wrap": True,
             },
             {
                 "type": "text",
                 "text": info_line_2,
                 "size": "xxs",
-                "color": "#3A3D42",
+                "color": c["info_text"],
                 "wrap": True,
                 "margin": "xs",
             },
@@ -2517,14 +2537,14 @@ def _build_help_bubble(lang):
         "header": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#1A1D21",
+            "backgroundColor": c["header_bg"],
             "paddingAll": "xl",
             "contents": [
                 {
                     "type": "text",
                     "text": hdr_meta,
                     "size": "xxs",
-                    "color": accent,
+                    "color": c["accent"],
                     "weight": "bold",
                 },
                 {
@@ -2539,7 +2559,7 @@ def _build_help_bubble(lang):
                     "type": "text",
                     "text": hdr_sub,
                     "size": "xxs",
-                    "color": "#8A8F94",
+                    "color": c["desc_color"],
                     "margin": "sm",
                 },
             ],
@@ -2547,7 +2567,7 @@ def _build_help_bubble(lang):
         "body": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#FAFAF7",
+            "backgroundColor": c["body_bg"],
             "paddingAll": "xl",
             "spacing": "none",
             "contents": body_contents,
@@ -2555,7 +2575,7 @@ def _build_help_bubble(lang):
         "footer": {
             "type": "box",
             "layout": "vertical",
-            "backgroundColor": "#FAFAF7",
+            "backgroundColor": c["body_bg"],
             "paddingTop": "md",
             "paddingBottom": "lg",
             "paddingStart": "xl",
@@ -2563,12 +2583,12 @@ def _build_help_bubble(lang):
             "contents": [
                 {
                     "type": "separator",
-                    "color": "#EDEDEA",
+                    "color": c["divider"],
                 },
                 {
                     "type": "button",
                     "style": "primary",
-                    "color": "#1A1D21",
+                    "color": c["btn_bg"],
                     "height": "sm",
                     "margin": "lg",
                     "action": {
@@ -2587,14 +2607,14 @@ def _build_help_bubble(lang):
                             "type": "text",
                             "text": "MODEL · " + VERSION.upper(),
                             "size": "xxs",
-                            "color": "#9A9FA4",
+                            "color": c["plate_text"],
                             "align": "start",
                         },
                         {
                             "type": "text",
                             "text": "UNIT · GRINDING-C",
                             "size": "xxs",
-                            "color": "#9A9FA4",
+                            "color": c["plate_text"],
                             "align": "end",
                         },
                     ],
@@ -2611,18 +2631,14 @@ def _build_help_bubble(lang):
 
 
 def build_help_flex(primary_lang="zh"):
-    """Build the complete help Flex carousel (2 bubbles).
-    primary_lang: which language shows first ('zh' or 'id')"""
+    """Build the complete help Flex carousel (2 bubbles)."""
     if primary_lang == "id":
         contents = [_build_help_bubble("id"), _build_help_bubble("zh")]
         alt_text = "🌐 Daftar Perintah Bot Penerjemah / 翻譯機器人指令"
     else:
         contents = [_build_help_bubble("zh"), _build_help_bubble("id")]
         alt_text = "🌐 翻譯機器人指令 / Daftar Perintah"
-    carousel = {
-        "type": "carousel",
-        "contents": contents,
-    }
+    carousel = {"type": "carousel", "contents": contents}
     return alt_text, carousel
 
 
