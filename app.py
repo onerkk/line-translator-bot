@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.1-0416e"
+VERSION = "v3.2-0420a"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -2324,6 +2324,346 @@ def get_help_text(group_id):
     return "\n".join(lines)
 
 
+# ======================================================================
+# /help Flex Message (v3.2-0420a)
+# Industrial-grade bilingual help card: Carousel with ZH-TW + ID bubbles
+# Switch language via postback: action=help&lang=zh|id
+# ======================================================================
+
+HELP_COMMAND_SECTIONS = [
+    {
+        "num": "I", "zh_tag": "SWITCH", "zh_name": "開關",
+        "id_tag": "SAKELAR", "id_name": "TOMBOL",
+        "items": [
+            ("/on · /off",   "開啟 / 關閉翻譯",       "Aktif / nonaktif"),
+            ("/img on·off",  "圖片翻譯",              "Terjemahan gambar"),
+            ("/voice on·off","語音翻譯",              "Terjemahan suara"),
+            ("/wo on·off",   "拍工單查儲區",          "Foto WO cek gudang"),
+        ],
+    },
+    {
+        "num": "II", "zh_tag": "PERSONAL", "zh_name": "個人",
+        "id_tag": "PRIBADI", "id_name": "PERSONAL",
+        "items": [
+            ("/skip",   "不翻譯我",   "Jangan terjemahkan saya"),
+            ("/unskip", "恢復翻譯",   "Terjemahkan lagi"),
+        ],
+    },
+    {
+        "num": "III", "zh_tag": "ADMIN", "zh_name": "管理",
+        "id_tag": "ADMIN", "id_name": "PENGELOLA",
+        "items": [
+            ("/skipadd 名字", "加入白名單",   "Tambah whitelist"),
+            ("/skipdel 名字", "移出白名單",   "Hapus whitelist"),
+            ("/skiplist",     "查看白名單",   "Lihat whitelist"),
+        ],
+    },
+    {
+        "num": "IV", "zh_tag": "FUNCTION", "zh_name": "功能",
+        "id_tag": "FUNGSI", "id_name": "FITUR",
+        "items": [
+            ("/notice 內容",  "雙語公告",       "Pengumuman 2 bahasa"),
+            ("/qry 客戶",     "查儲區",         "Cek gudang"),
+            ("/pkg 代碼",     "查包裝碼",       "Cek kode kemasan"),
+            ("/pw1",          "班長密碼",       "Password mandor"),
+            ("/pw2",          "儲運密碼",       "Password gudang"),
+            ("/scrap",        "廢料顏色",       "Warna scrap"),
+            ("/status",       "查看狀態",       "Cek status"),
+        ],
+    },
+]
+
+
+def _help_cmd_row(cmd, desc):
+    """Build a single command row: [cmd_code]  [description]"""
+    return {
+        "type": "box",
+        "layout": "baseline",
+        "spacing": "md",
+        "paddingTop": "sm",
+        "paddingBottom": "sm",
+        "contents": [
+            {
+                "type": "text",
+                "text": cmd,
+                "size": "xs",
+                "color": "#1A1D21",
+                "weight": "bold",
+                "flex": 4,
+                "wrap": False,
+            },
+            {
+                "type": "text",
+                "text": desc,
+                "size": "xs",
+                "color": "#5A5F64",
+                "flex": 5,
+                "wrap": True,
+            },
+        ],
+    }
+
+
+def _help_section(num, tag, name, items, lang):
+    """Build one section: header row + command rows"""
+    accent = "#06C755" if lang == "zh" else "#E63946"
+    rows = []
+    # Section header: [I / SWITCH] [開關]
+    rows.append({
+        "type": "box",
+        "layout": "baseline",
+        "spacing": "sm",
+        "margin": "lg",
+        "contents": [
+            {
+                "type": "text",
+                "text": num + " / " + tag,
+                "size": "xxs",
+                "color": accent,
+                "weight": "bold",
+                "flex": 0,
+            },
+            {
+                "type": "text",
+                "text": name,
+                "size": "xs",
+                "color": "#1A1D21",
+                "weight": "bold",
+                "flex": 0,
+                "margin": "md",
+            },
+            {
+                "type": "filler",
+            },
+        ],
+    })
+    # Thin divider under section header
+    rows.append({
+        "type": "separator",
+        "color": "#E4E4E0",
+        "margin": "sm",
+    })
+    # Command rows
+    for i, (cmd, zh_desc, id_desc) in enumerate(items):
+        desc = zh_desc if lang == "zh" else id_desc
+        rows.append(_help_cmd_row(cmd, desc))
+        if i < len(items) - 1:
+            rows.append({
+                "type": "separator",
+                "color": "#EDEDEA",
+            })
+    return rows
+
+
+def _build_help_bubble(lang):
+    """Build one Flex bubble for the given language ('zh' or 'id')."""
+    accent = "#06C755" if lang == "zh" else "#E63946"
+    if lang == "zh":
+        hdr_meta = "COMMAND REFERENCE · ZH-TW"
+        hdr_title = "翻譯機器人"
+        hdr_sub = "研磨股C班 · 不鏽鋼棒線部"
+        info_line_1 = "📷 拍工單　直接傳照片自動查儲區"
+        info_line_2 = "中文 ⇄ 印尼文　即時互譯・免指令"
+        switch_btn_label = "BAHASA INDONESIA  ›"
+        switch_lang = "id"
+    else:
+        hdr_meta = "DAFTAR PERINTAH · ID"
+        hdr_title = "Bot Penerjemah"
+        hdr_sub = "Grup Grinding C · Stainless Steel"
+        info_line_1 = "📷 Foto WO　Kirim foto otomatis cek gudang"
+        info_line_2 = "Mandarin ⇄ Indonesia　Terjemah langsung"
+        switch_btn_label = "中文版 / MANDARIN  ›"
+        switch_lang = "zh"
+
+    # Build body sections
+    body_contents = []
+    for sect in HELP_COMMAND_SECTIONS:
+        tag = sect["zh_tag"] if lang == "zh" else sect["id_tag"]
+        name = sect["zh_name"] if lang == "zh" else sect["id_name"]
+        body_contents.extend(
+            _help_section(sect["num"], tag, name, sect["items"], lang)
+        )
+
+    # Info strip at bottom of body
+    body_contents.append({
+        "type": "box",
+        "layout": "vertical",
+        "margin": "xl",
+        "paddingAll": "md",
+        "backgroundColor": "#F0EFEA",
+        "cornerRadius": "sm",
+        "contents": [
+            {
+                "type": "text",
+                "text": info_line_1,
+                "size": "xxs",
+                "color": "#3A3D42",
+                "wrap": True,
+            },
+            {
+                "type": "text",
+                "text": info_line_2,
+                "size": "xxs",
+                "color": "#3A3D42",
+                "wrap": True,
+                "margin": "xs",
+            },
+        ],
+    })
+
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1A1D21",
+            "paddingAll": "xl",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": hdr_meta,
+                    "size": "xxs",
+                    "color": accent,
+                    "weight": "bold",
+                },
+                {
+                    "type": "text",
+                    "text": hdr_title,
+                    "size": "xl",
+                    "color": "#FFFFFF",
+                    "weight": "bold",
+                    "margin": "xs",
+                },
+                {
+                    "type": "text",
+                    "text": hdr_sub,
+                    "size": "xxs",
+                    "color": "#8A8F94",
+                    "margin": "sm",
+                },
+            ],
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FAFAF7",
+            "paddingAll": "xl",
+            "spacing": "none",
+            "contents": body_contents,
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FAFAF7",
+            "paddingTop": "md",
+            "paddingBottom": "lg",
+            "paddingStart": "xl",
+            "paddingEnd": "xl",
+            "contents": [
+                {
+                    "type": "separator",
+                    "color": "#EDEDEA",
+                },
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": "#1A1D21",
+                    "height": "sm",
+                    "margin": "lg",
+                    "action": {
+                        "type": "postback",
+                        "label": switch_btn_label,
+                        "data": "action=help&lang=" + switch_lang,
+                        "displayText": switch_btn_label,
+                    },
+                },
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "md",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "MODEL · " + VERSION.upper(),
+                            "size": "xxs",
+                            "color": "#9A9FA4",
+                            "align": "start",
+                        },
+                        {
+                            "type": "text",
+                            "text": "UNIT · GRINDING-C",
+                            "size": "xxs",
+                            "color": "#9A9FA4",
+                            "align": "end",
+                        },
+                    ],
+                },
+            ],
+        },
+        "styles": {
+            "header": {"separator": False},
+            "body": {"separator": False},
+            "footer": {"separator": False},
+        },
+    }
+    return bubble
+
+
+def build_help_flex(primary_lang="zh"):
+    """Build the complete help Flex carousel (2 bubbles).
+    primary_lang: which language shows first ('zh' or 'id')"""
+    if primary_lang == "id":
+        contents = [_build_help_bubble("id"), _build_help_bubble("zh")]
+        alt_text = "🌐 Daftar Perintah Bot Penerjemah / 翻譯機器人指令"
+    else:
+        contents = [_build_help_bubble("zh"), _build_help_bubble("id")]
+        alt_text = "🌐 翻譯機器人指令 / Daftar Perintah"
+    carousel = {
+        "type": "carousel",
+        "contents": contents,
+    }
+    return alt_text, carousel
+
+
+def send_help_flex(reply_token, primary_lang="zh"):
+    """Send help Flex carousel via reply token."""
+    try:
+        alt_text, carousel = build_help_flex(primary_lang)
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[FlexMessage(
+                    alt_text=alt_text,
+                    contents=FlexContainer.from_dict(carousel),
+                )]
+            ))
+        return True
+    except Exception as e:
+        logger.exception("send_help_flex failed: %s", e)
+        return False
+
+
+def push_help_flex(to_id, primary_lang="zh"):
+    """Push help Flex to a group/user (for postback language switch)."""
+    try:
+        alt_text, carousel = build_help_flex(primary_lang)
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.push_message(PushMessageRequest(
+                to=to_id,
+                messages=[FlexMessage(
+                    alt_text=alt_text,
+                    contents=FlexContainer.from_dict(carousel),
+                )]
+            ))
+        return True
+    except Exception as e:
+        logger.exception("push_help_flex failed: %s", e)
+        return False
+
+
 def handle_lang_command(text, group_id):
     return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯"
 
@@ -2482,7 +2822,8 @@ def handle_command(text, group_id, user_id=None):
     bot_stats["commands"] += 1
     cmd = text.strip().lower()
     if cmd == "/help":
-        return get_help_text(group_id)
+        # Return sentinel; caller detects this and sends Flex instead of Text
+        return "__FLEX_HELP__"
     elif cmd == "/on":
         group_settings[group_id] = True
         save_settings()
@@ -2662,27 +3003,8 @@ def handle_message(event):
         # DM commands
         cmd = text.strip().lower()
         if cmd == "/help":
-            sep = "=" * 18
-            lines = []
-            lines.append("\U0001f310 私訊翻譯模式")
-            lines.append(sep)
-            lines.append("傳訊息給我就會翻譯！")
-            lines.append("中文 → 🇮🇩 印尼文")
-            lines.append("印尼文 → 🇹🇼 中文")
-            lines.append("")
-            lines.append("/qry 客戶 查儲區")
-            lines.append("/pkg 代碼 查包裝碼")
-            lines.append("/pw1 班長密碼")
-            lines.append("/pw2 儲運密碼")
-            lines.append("/scrap 廢料顏色")
-            lines.append("\U0001f4f7 拍工單→自動查儲區")
-            lines.append(sep)
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="\n".join(lines))]
-                ))
+            # DM /help also uses Flex carousel (ZH + ID bilingual)
+            send_help_flex(event.reply_token, primary_lang="zh")
             return
         if cmd.startswith("/to"):
             with ApiClient(configuration) as api_client:
@@ -2785,7 +3107,10 @@ def handle_message(event):
         _tl.tone = _tone
         _tl.tone_custom = _tone_custom
         cmd_result = handle_command(text, group_id, user_id)
-        if cmd_result:
+        if cmd_result == "__FLEX_HELP__":
+            # /help uses Flex Message carousel (ZH + ID bilingual)
+            send_help_flex(event.reply_token, primary_lang="zh")
+        elif cmd_result:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
@@ -3398,9 +3723,25 @@ if BotLeaveEvent:
 if PostbackEvent:
     @handler.add(PostbackEvent)
     def handle_postback(event):
-        """Handle postback actions from Quick Reply etc."""
+        """Handle postback actions from Quick Reply / Flex buttons."""
         data = event.postback.data if hasattr(event.postback, 'data') else ""
         logger.info("Postback: %s", data)
+
+        # Parse postback data (format: action=X&lang=Y&...)
+        try:
+            params = dict(urllib.parse.parse_qsl(data))
+        except Exception:
+            params = {}
+
+        action = params.get("action", "")
+
+        # /help language switch: re-send Flex with the other language first
+        if action == "help":
+            lang = params.get("lang", "zh")
+            if lang not in ("zh", "id"):
+                lang = "zh"
+            send_help_flex(event.reply_token, primary_lang=lang)
+            return
 
 
 if UnsendEvent:
