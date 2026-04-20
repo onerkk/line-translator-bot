@@ -52,7 +52,8 @@
       "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
       "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
       "Uacd199ee8dc09268d0bab80702ebb2ac": "秋情",
-      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
+      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
+      "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
@@ -107,13 +108,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 46,
+    "text_translations": 48,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 487032,
-    "tokens_completion": 1451
+    "tokens_prompt": 510997,
+    "tokens_completion": 1472
   },
   "extra_customers": {
     "__all__": [
@@ -164,8 +165,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 354248,
-      "tokens_completion": 753
+      "tokens_prompt": 378213,
+      "tokens_completion": 774
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -220,7 +221,8 @@
     "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb74DyeGVhPTgZajKpnZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
     "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
     "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R",
-    "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ"
+    "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
+    "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E"
   },
   "pw1_text": "UR00179\nXx0972315373",
   "pw2_text": "UR00644\nJj0973550210",
@@ -290,6 +292,11 @@
       "zh": "有",
       "id": "Sudah",
       "dir": "id2zh"
+    },
+    {
+      "zh": "入完了",
+      "id": "sudah diinput ke 801",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
