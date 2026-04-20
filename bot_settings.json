@@ -207,7 +207,7 @@
   "group_camera_roll_qr_settings": {},
   "group_location_qr_settings": {},
   "translation_tone": "natural",
-  "translation_tone_custom": "",
+  "translation_tone_custom": "翻譯成印尼文時，使用印尼工廠現場實際會用的自然口吻，句子要簡單、直接、清楚，不要過度書面化，不要逐字直譯，不要加多餘修飾。公告類內容要像主管在工作群組提醒員工那樣。專有詞請固定保留或依下列詞庫翻譯：工單=work order、TAG=TAG、站別=stasiun、混料=material tercampur、PMI=PMI。若原文是工廠作業指示，優先翻成現場人員一看就懂的說法，而不是文法最漂亮的說法。",
   "group_tone_settings": {},
   "model_default": "gpt-4o-mini",
   "model_upgrade": "gpt-4o",
