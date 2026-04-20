@@ -352,6 +352,11 @@
       "zh": "台車滿了",
       "id": "troli angkut batang sudah penuh",
       "dir": "zh2id"
+    },
+    {
+      "zh": "麻煩一下",
+      "id": "tolong bantu",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
