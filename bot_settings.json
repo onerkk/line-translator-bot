@@ -108,13 +108,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 48,
+    "text_translations": 50,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 510997,
-    "tokens_completion": 1472
+    "tokens_prompt": 535120,
+    "tokens_completion": 1636
   },
   "extra_customers": {
     "__all__": [
@@ -165,8 +165,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 378213,
-      "tokens_completion": 774
+      "tokens_prompt": 402336,
+      "tokens_completion": 938
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -296,6 +296,11 @@
     {
       "zh": "入完了",
       "id": "sudah diinput ke 801",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "PMI",
+      "id": "pemeriksaan grade baja batang dengan spektrometer",
       "dir": "zh2id"
     }
   ],
