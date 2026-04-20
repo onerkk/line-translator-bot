@@ -332,6 +332,11 @@
       "zh": "一定要確實執行",
       "id": "harus benar-benar dijalankan",
       "dir": "zh2id"
+    },
+    {
+      "zh": "一定要標示清楚",
+      "id": "harus diberi penandaan yang jelas 比 label jelas",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
