@@ -337,6 +337,11 @@
       "zh": "一定要標示清楚",
       "id": "harus diberi penandaan yang jelas 比 label jelas",
       "dir": "zh2id"
+    },
+    {
+      "zh": "PMI作業",
+      "id": "pemeriksaan grade baja batang dengan spektrometer",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
