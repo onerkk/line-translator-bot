@@ -317,6 +317,16 @@
       "zh": "混料客訴",
       "id": "komplain customer karena material tercampur",
       "dir": "zh2id"
+    },
+    {
+      "zh": "再宣導一下",
+      "id": "Saya ingatkan lagi",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "再強調一次",
+      "id": "Saya tegaskan lagi",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
