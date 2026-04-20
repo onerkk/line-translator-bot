@@ -342,6 +342,11 @@
       "zh": "PMI作業",
       "id": "pemeriksaan grade baja batang dengan spektrometer",
       "dir": "zh2id"
+    },
+    {
+      "zh": "台車",
+      "id": "troli angkut batang",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
