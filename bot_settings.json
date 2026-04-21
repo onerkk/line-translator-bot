@@ -108,13 +108,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 52,
+    "text_translations": 57,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 560246,
-    "tokens_completion": 1680
+    "tokens_prompt": 625912,
+    "tokens_completion": 1742
   },
   "extra_customers": {
     "__all__": [
@@ -165,8 +165,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 427462,
-      "tokens_completion": 982
+      "tokens_prompt": 493128,
+      "tokens_completion": 1044
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 99646,
@@ -356,6 +356,11 @@
     {
       "zh": "麻煩一下",
       "id": "tolong bantu",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "台車再幫忙一下",
+      "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.",
       "dir": "zh2id"
     }
   ],
