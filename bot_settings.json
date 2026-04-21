@@ -362,6 +362,11 @@
       "zh": "台車再幫忙一下",
       "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.",
       "dir": "zh2id"
+    },
+    {
+      "zh": "削皮那邊還需要一台",
+      "id": "Bagian peeling masih butuh satu troli lagi.",
+      "dir": "zh2id"
     }
   ],
   "forms_data": {},
