@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0420b"
+VERSION = "v3.2-0422a"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1109,6 +1109,14 @@ ID_POST_FIX = {
     "tiga meter di atas enam meter": "batang 3 meter ditaruh di atas batang 6 meter",
     "Tiga meter di atas enam meter": "Batang 3 meter ditaruh di atas batang 6 meter",
     "3 meter di atas 6 meter": "batang 3 meter ditaruh di atas batang 6 meter",
+    # 放=PUT/PLACE asking WHO: must use menaruh/meletakkan, NOT bare taruh (too colloquial)
+    # These fix "siapa yang taruh X" → "siapa yang menaruh X"
+    "siapa yang taruh": "siapa yang menaruh",
+    "Siapa yang taruh": "Siapa yang menaruh",
+    "yang taruh batang": "yang menaruh batang",
+    "yang taruh material": "yang meletakkan material",
+    "yang taruh barang": "yang menaruh barang",
+    "yang taruh kotak": "yang menaruh kotak",
     # 品保 corrections
     "jaminan kualitas": "QC",
     "penjaminan mutu": "QC",
@@ -1425,9 +1433,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "j) 爐號=heat number(NEVER 'nomor panas'). 有包到X=kalau ada packing untuk X(NOT 'paket datang ke X'). "
             "k) 放=POLYSEMY(multiple meanings, judge by context): "
             "放+把/單/批/工單號/這把/這單/這批=RELEASE data(放行). e.g. 先放這把=release bundel ini dulu, 放了=sudah di-release, 幫放一下=tolong bantu release. "
-            "放+地點/方位(地上/旁邊/上面/那邊/架上)=PUT/PLACE(taruh). e.g. 放地上=taruh di lantai, 三米上面放六米=batang 3m ditaruh di atas 6m. "
+            "放+地點/方位(地上/旁邊/上面/那邊/架上)=PUT/PLACE. e.g. 放地上=taruh di lantai, 三米上面放六米=batang 3m ditaruh di atas 6m. "
+            "放+這些/這批/這個+物體(棒材/料/箱/東西) WITHOUT 地點 + 詢問責任/歸屬(誰放的/誰放的啊/哪個人放的)=PUT/PLACE asking WHO placed it. "
+            "CRITICAL: 在這種「誰放的」句型必須用 menaruh 或 meletakkan(formal/written), 不可用 taruh(太口語). "
+            "e.g. 這些棒材誰放的=Ada yang tahu siapa yang menaruh batang-batang ini? "
+            "這批料誰放這裡的=Siapa yang meletakkan material ini di sini? "
+            "這個箱子誰放的=Siapa yang menaruh kotak ini? "
             "放+料/材料(without location)=FEED material. e.g. 放料=isi material. "
             "放假=libur/holiday. "
+            "IMPORTANT taruh vs menaruh/meletakkan: taruh(base form) 只適合祈使句「叫某人把東西放哪」(e.g. taruh di sana=放那邊). "
+            "當主詞是人問責任(誰放的/誰擺的)→ 必須用 menaruh 或 meletakkan, 不能用裸 taruh. "
             "When ambiguous and context is about work orders or production flow, default to RELEASE(放行). "
             "l) 再=POLYSEMY: "
             "X再Y(condition+action)=hanya X yang Y / X baru Y(=才). e.g. 急單再幫忙安排入庫=hanya order urgent yang tolong bantu atur masuk gudang. "
@@ -1446,6 +1461,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "品保還在下班 誇張 → QC udah pulang, keterlaluan. "
             "三米上面放六米 → Batang 3 meter ditaruh di atas batang 6 meter. "
             "麻煩他們不要這樣放料 → Tolong bilang ke mereka jangan taruh material kayak gini. "
+            "有人知道這些棒材誰放的嗎？ → Ada yang tahu siapa yang menaruh batang-batang ini? "
+            "這批料誰放這裡的？ → Siapa yang meletakkan material ini di sini? "
+            "這些東西誰放的？ → Siapa yang menaruh barang-barang ini? "
             "高侑的今天包2把都這樣 → Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
             "來料都短少4-5公斤 → Material masuk semuanya kurang 4-5 kilogram. "
             "已轉達 → Sudah disampaikan. "
@@ -1596,6 +1614,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "QC udah pulang, keterlaluan → 品保已經下班了，太扯了 "
             "Batang 3 meter ditaruh di atas batang 6 meter → 三米放在六米上面 "
             "Tolong bilang ke mereka jangan taruh material kayak gini → 麻煩跟他們說不要這樣放料 "
+            "Ada yang tahu siapa yang menaruh batang-batang ini? → 有人知道這些棒材誰放的嗎？ "
+            "Siapa yang meletakkan material ini di sini? → 這批料誰放這裡的？ "
             "Yang di-packing hari ini 2 bundel semuanya kayak gini → 今天包的2把都這樣 "
             "Material masuk semuanya kurang 4-5 kilogram → 來料全部短少4-5公斤 "
             "Lot material ini ada masalah → 這批料有問題 "
