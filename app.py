@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0422a"
+VERSION = "v3.2-0422b"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1030,6 +1030,8 @@ ZH_TO_ID_HARD = {
     "護罩": "pelindung mesin",
     "interlock": "pengunci keamanan",
     "標籤機": "mesin label",
+    "台車": "troli",
+    "天車": "crane",
     # 管理
     "品保": "QC",
     "儲運": "bagian gudang",
@@ -1453,6 +1455,19 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
             "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
             "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
+            "p) ELLIPTICAL QUANTITY REPLIES (very important for Taiwan factory chat): "
+            "Chinese speakers often reply with JUST '數字+量詞' (number + measure word) as a short answer, OMITTING the noun that was mentioned earlier. "
+            "e.g. Q:『需要幾台台車?』 A:『兩台』 (=兩台台車=two troli, NOT 'two units'). "
+            "Q:『要幾把?』 A:『3把』 (=3 bundel). "
+            "Q:『幾支?』 A:『5支』 (=5 batang). "
+            "Because each message is translated independently WITHOUT conversation context, DO NOT invent or guess the noun. "
+            "Translate these short replies with a GENERIC Indonesian quantity phrase that stays neutral: "
+            "兩台/兩個/兩支/兩把/兩件 (when noun is omitted) → 'dua' or 'dua buah'(generic), NEVER 'dua unit'(too formal and wrong in casual chat). "
+            "The word 'unit' in Indonesian suggests abstract units/modules and is WRONG for physical countable items like troli/batang/bundel. "
+            "Default mapping for bare quantity replies: 台=buah(generic) or keep context-neutral, 把=bundel, 支=batang, 個=buah, 件=potong(for items/pieces). "
+            "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. "
+            "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
+            "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently. "
             + _build_custom_examples_prompt() +
             " 11. TRANSLATION EXAMPLES (follow strictly): "
             "【中→印尼】"
@@ -1485,6 +1500,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "品保點錯製程，麻煩退回400-無主 → QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik. "
             "帳已回400、料要回去那一個單位？ → Data sudah dikembalikan ke 400, materialnya mau ke unit mana? "
             "去削皮退火 感溫 → Ke proses peeling dan annealing, makasih. "
+            "削皮需要台車，再麻煩一下 → Bagian peeling butuh troli, tolong bantu ya. "
+            "兩台 → dua buah. "
+            "兩台台車 → dua troli. "
+            "要幾台？ → Perlu berapa? "
+            "三把 → tiga bundel. "
+            "5支 → 5 batang. "
+            "一個 → satu buah. "
+            "需要兩台 → Butuh dua buah. "
+            "再一台 → satu lagi. "
             "7F414020 請幫放至480轉用收回400，要改制去化，謝謝 → 7F414020 tolong pindahkan ke station 480, lalu kembalikan ke 400, mau ubah proses, makasih. "
             "業務說收～ 請包～ → Sales bilang terima, tolong di-packing. "
             "班長～ 7F656502A 這把溢量請再入無主～ 謝謝! → Kepala shift, 7F656502A bundel ini kelebihan, tolong masukkan ke tanpa pemilik, makasih! "
@@ -1630,6 +1654,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik → 品保點錯製程，麻煩退回400無主 "
             "Data sudah dikembalikan ke 400, materialnya mau ke unit mana? → 帳已回400，料要回去哪個單位？ "
             "Ke proses peeling dan annealing, makasih → 去削皮退火，謝謝 "
+            "Bagian peeling butuh troli, tolong bantu ya → 削皮需要台車，再麻煩一下 "
+            "dua buah → 兩個 "
+            "dua troli → 兩台台車 "
+            "tiga bundel → 三把 "
+            "5 batang → 5支 "
             "Sales bilang terima, tolong di-packing → 業務說收了，請包 "
             "Bundel ini kelebihan, tolong masukkan ke tanpa pemilik → 這把溢量，請入無主 "
             "Pelanggan minta 7 batang, gak terima pendek. Masuk cuma 6, 1 pendek dibuang sisa 5, bisa packing gak? → 客戶要7支不收短，來料只有6支其中1支短剔掉剩5支，能包嗎？ "
