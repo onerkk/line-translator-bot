@@ -208,7 +208,7 @@
   "location_qr_enabled": false,
   "group_camera_roll_qr_settings": {},
   "group_location_qr_settings": {},
-  "translation_tone": "natural",
+  "translation_tone": "factory",
   "translation_tone_custom": "",
   "group_tone_settings": {},
   "model_default": "gpt-4o-mini",
