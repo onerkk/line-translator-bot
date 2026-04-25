@@ -66,7 +66,7 @@
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多"
     }
   },
-  "dm_master_enabled": false,
+  "dm_master_enabled": true,
   "dm_whitelist": [
     "Uaf4dc8fc636bc8f6060521c398514dc1"
   ],
