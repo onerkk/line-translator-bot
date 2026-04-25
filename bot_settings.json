@@ -61,7 +61,8 @@
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
-      "Udf71d63c9e7e225acbb13015cf4e4660": "阿馬"
+      "Udf71d63c9e7e225acbb13015cf4e4660": "阿馬",
+      "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多"
     }
   },
   "dm_master_enabled": false,
@@ -108,13 +109,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 57,
+    "text_translations": 63,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 625912,
-    "tokens_completion": 1742
+    "tokens_prompt": 710649,
+    "tokens_completion": 2096
   },
   "extra_customers": {
     "__all__": [
@@ -165,12 +166,12 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 493128,
-      "tokens_completion": 1044
+      "tokens_prompt": 563596,
+      "tokens_completion": 1202
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 99646,
-      "tokens_completion": 657
+      "tokens_prompt": 113915,
+      "tokens_completion": 853
     }
   },
   "user_languages": {},
@@ -222,7 +223,8 @@
     "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
     "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R",
     "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
-    "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E"
+    "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
+    "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA"
   },
   "pw1_text": "UR00179\nXx0972315373",
   "pw2_text": "UR00644\nJj0973550210",
@@ -366,6 +368,11 @@
     {
       "zh": "削皮那邊還需要一台",
       "id": "Bagian peeling masih butuh satu troli lagi.",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "太凸",
+      "id": "terlalu panjang",
       "dir": "zh2id"
     }
   ],
