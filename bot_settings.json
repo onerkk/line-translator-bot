@@ -233,11 +233,6 @@
   "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
   "custom_translation_examples": [
     {
-      "zh": "處長",
-      "id": "Direktur",
-      "dir": "zh2id"
-    },
-    {
       "zh": "經理",
       "id": "Manajer",
       "dir": "zh2id"
