@@ -67,7 +67,9 @@
     }
   },
   "dm_master_enabled": false,
-  "dm_whitelist": [],
+  "dm_whitelist": [
+    "Uaf4dc8fc636bc8f6060521c398514dc1"
+  ],
   "dm_known_users": {
     "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
   },
