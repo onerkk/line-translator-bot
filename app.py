@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0422b"
+VERSION = "v3.2-0426c"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -284,6 +284,42 @@ TONE_PRESETS = {
     "casual": "Translate casually like real people talk at work. Use everyday slang and informal language.",
     "natural": "Translate like a native speaker would naturally say it in daily factory conversation. Use the most natural, fluent, mother-tongue phrasing. Prefer colloquial expressions over textbook ones (e.g. Indonesian: prefer 'belum' over 'tidak' for not-yet-done actions, prefer 'udah' over 'sudah').",
     "formal": "Translate in formal, polite, professional language suitable for official announcements or documents.",
+    "factory": (
+        "你是工廠現場中印翻譯助理，專門處理台灣工廠工作群組、現場指令、品質異常、站別流轉、工單、TAG、PMI、包裝、混料、入站、資料輸入等訊息。"
+        "你的任務不是逐字翻譯，而是把中文準確翻成「印尼工廠現場員工一看就懂、實際會用」的自然印尼文。請嚴格遵守以下規則："
+        "【最高優先規則】"
+        "1. 只要範例表/內建範例已有對應詞、對應句、固定說法，必須優先套用，不可改寫，不可換同義詞，不可自創新翻法。"
+        "2. 若輸入句子中包含範例表已有的片語或句型，優先沿用範例表的翻法，再補齊其他部分。"
+        "3. 若範例表已有專有詞定義，例如 PMI、工單、TAG、混料、站別等專有詞，必須依範例表理解，不可用一般字典義亂翻；像「入完了」「不擋」「無主」「放料」這類工廠動作慣用語，也必須依範例表的工廠脈絡解讀，不可從字面直翻。"
+        "【翻譯風格規則】"
+        "4. 一律使用印尼工廠現場自然口吻，簡短、直接、清楚，像主管或同事在工作群組講話。"
+        "5. 不要逐字直譯，不要翻成書面公文，不要翻成教科書語氣，不要華麗修飾。"
+        "6. 句子要以「現場人員看得懂、能立刻執行」為優先，不以文法漂亮為優先。"
+        "7. 若原文是提醒、警告、要求、異常通報，語氣要明確、有執行感，但不要粗暴失禮。"
+        "8. 若原文很口語、省略主詞或量詞混亂，必須依工廠作業脈絡補足正確意思後再翻，不可照字面硬翻。"
+        "【工廠語境理解規則】"
+        "9. 在本系統中，很多中文詞語不是日常字面義，必須依工廠語境理解，例如："
+        "- 「入了 / 入完了」要依上下文判斷：預設是「入庫」(masuk gudang)；如果上下文在講站別、製程、登錄，才理解為「入站」(masuk stasiun)或「資料登錄完成」(data sudah dimasukkan)。不要直接用無語境的 sudah masuk。"
+        "- 「把」作為量詞時(數字+把，如「6把」「兩把」) = bundel(棒材捆數)；作為介詞時(把+受詞，如「把工單入完」「把資料登錄」) = 中文文法輔助詞，不要翻成 bundel，而是依完整句子重組成印尼文語序。"
+        "- 「PMI」不是泛稱，必須依範例表定義理解(分光檢測棒材鋼種)"
+        "- 「混料」固定理解為 material tercampur"
+        "- 「工單」固定用 work order"
+        "- 「TAG」固定保留 TAG"
+        "- 「站別」固定理解為 stasiun"
+        "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
+        "【輸出規則】"
+        "11. 只輸出最終譯文，不要解釋，不要加註解，不要說明原因，不要列出其他可能翻法。"
+        "12. 不要擅自補充原文沒有的資訊。"
+        "13. 不要省略數字、站號、代碼、重量、尺寸、長度、批號。"
+        "14. 若原文是短句，就翻成短句；若原文是群組公告，就翻成可直接貼群組的公告語氣。"
+        "15. 若原文已經是明顯命令句、提醒句、異常句，翻譯後必須保留同等強度，不可弱化。"
+        "【品質優先規則】"
+        "16. 翻譯優先順序為：範例表固定翻法 > 工廠現場正確語意 > 印尼員工可懂度 > 文法自然 > 字面對應"
+        "17. 寧可翻得直白清楚，也不要翻得漂亮卻不符合現場。"
+        "18. 若一句中文有歧義，請優先依「工廠製造、站別流轉、工單、包裝、品質異常、鋼材/棒材、分光檢測」脈絡判斷最合理意思後再翻。"
+        "19. 若輸入是繁中口語群組訊息，請預設場景為工廠工作群組，不要用日常聊天語境解讀。"
+        "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。"
+    ),
 }
 translation_tone = "casual"       # global default: casual / natural / formal
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
@@ -313,12 +349,16 @@ def pick_model(text):
 
 
 def _build_custom_examples_prompt():
-    """Build custom examples string to inject into translation prompt."""
-    if not custom_translation_examples:
+    """Build custom examples string to inject into translation prompt.
+    Includes BOTH hardcoded BUILTIN_EXAMPLES and admin-editable custom_translation_examples.
+    BUILTIN comes first so it has higher priority when GPT scans the examples."""
+    # Combine: builtin first, then custom (custom can override by being seen later)
+    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    if not all_examples:
         return " "
     zh2id = []
     id2zh = []
-    for ex in custom_translation_examples:
+    for ex in all_examples:
         zh = ex.get("zh", "").strip()
         idn = ex.get("id", "").strip()
         if not zh or not idn:
@@ -338,8 +378,11 @@ def _build_custom_examples_prompt():
 
 def _check_custom_example_exact(text, src, tgt):
     """Check if text exactly matches a custom example. Returns translation or None.
-    Supports exact match, case-insensitive, and common prefix stripping."""
-    if not custom_translation_examples:
+    Supports exact match, case-insensitive, and common prefix stripping.
+    Checks BUILTIN_EXAMPLES first (hardcoded), then custom_translation_examples (admin-editable)."""
+    # Combine: builtin first (higher priority for exact match)
+    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    if not all_examples:
         return None
     t = text.strip()
     tl = t.lower()
@@ -355,7 +398,7 @@ def _check_custom_example_exact(text, src, tgt):
     for p in _id_prefixes:
         if tl.startswith(p) and len(tl) > len(p):
             id_variants.append(tl[len(p):].strip())
-    for ex in custom_translation_examples:
+    for ex in all_examples:
         zh = ex.get("zh", "").strip()
         idn = ex.get("id", "").strip()
         if not zh or not idn:
@@ -419,6 +462,23 @@ PACKAGING_LOOKUP = {}
 # List of {"zh": "中文", "id": "Indonesian", "dir": "zh2id"|"id2zh"}
 CUSTOM_EXAMPLES_MAX = 200
 custom_translation_examples = []
+
+# ── Built-in factory examples (hardcoded, NOT visible in admin panel) ──
+# These are baked into the code and CANNOT be removed by user. They take
+# priority over GPT translation via exact match in _check_custom_example_exact()
+# and are also injected into the system prompt via _build_custom_examples_prompt().
+BUILTIN_EXAMPLES = [
+    {"zh": "再強調一次", "id": "Saya tegaskan lagi", "dir": "zh2id"},
+    {"zh": "一定要確實執行", "id": "harus benar-benar dijalankan", "dir": "zh2id"},
+    {"zh": "一定要標示清楚", "id": "harus diberi penandaan yang jelas", "dir": "zh2id"},
+    {"zh": "PMI作業", "id": "pemeriksaan grade baja batang dengan spektrometer", "dir": "zh2id"},
+    {"zh": "台車", "id": "troli angkut batang", "dir": "zh2id"},
+    {"zh": "台車滿了", "id": "troli angkut batang sudah penuh", "dir": "zh2id"},
+    {"zh": "麻煩一下", "id": "tolong bantu", "dir": "zh2id"},
+    {"zh": "台車再幫忙一下", "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.", "dir": "zh2id"},
+    {"zh": "削皮那邊還需要一台", "id": "Bagian peeling masih butuh satu troli lagi.", "dir": "zh2id"},
+    {"zh": "太凸", "id": "terlalu panjang", "dir": "zh2id"},
+]
 
 # ── LIFF Form System ──────────────────────────────────
 # forms_data: {form_id: {id, title_zh, title_id, fields:[{id,type,label_zh,label_id,options,required}], created, status, target_groups:[]}}
@@ -1279,7 +1339,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Get tone from thread-local (set by handler before calling translate)
         _tone = getattr(_tl, 'tone', 'casual')
         _tone_custom = getattr(_tl, 'tone_custom', '')
-        tone_instruction = _tone_custom if _tone_custom else TONE_PRESETS.get(_tone, TONE_PRESETS['casual'])
+        # v3.2-0426c: tone_custom is now ADDITIVE (appends to preset) instead of REPLACING preset.
+        # This way the 20-rule factory preset (or whichever preset is selected) always stays in effect,
+        # and the admin-entered custom text is appended as additional fine-tuning.
+        _preset_text = TONE_PRESETS.get(_tone, TONE_PRESETS['casual'])
+        if _tone_custom and _tone_custom.strip():
+            tone_instruction = _preset_text + " 【額外語氣指令（來自管理員，作為上方規則的補充微調，若有衝突以下方為準）】 " + _tone_custom.strip()
+        else:
+            tone_instruction = _preset_text
 
         sys_prompt = (
             "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
@@ -1468,6 +1535,22 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
             "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently. "
+            "r) APOLOGY DETECTION (CRITICAL - DO NOT MISTRANSLATE APOLOGIES AS REQUESTS): "
+            "Indonesian 'maaf' family ALWAYS means SORRY/APOLOGY in Chinese: 對不起/抱歉/不好意思. "
+            "It NEVER means 麻煩你了 (=please/asking for help) — this is a SERIOUS translation error that completely flips the speaker's intent. "
+            "RECOGNIZE THESE SPELLING VARIANTS as the same apology: "
+            "Maaf / Maafkan / Maafkan saya / Mafkan saya / Maf kan saya / Maf kan / Mafin / Mohon maaf / Minta maaf / Mafin saya / Mhn maaf — ALL mean 對不起 / 抱歉 / 請原諒我. "
+            "Workers commonly misspell 'Maafkan' as 'Maf kan' (with space) or 'Mafkan' (missing one 'a') — these are STILL apologies, NOT requests. "
+            "🙏 emoji combined with maaf strengthens it as a sincere apology, NOT a polite request. "
+            "Context for apology: When followed by self-correction or future commitment (e.g. 'kedepan akan lebih teliti'=以後會更仔細, 'gak akan ulang lagi'=不會再犯, 'saya salah'=我錯了), it is DEFINITELY an apology. "
+            "EXAMPLES OF CORRECT APOLOGY TRANSLATION: "
+            "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作. "
+            "Maafkan saya bos → 老闆對不起. "
+            "Mohon maaf, saya salah → 真的很抱歉，是我的錯. "
+            "Mhn maaf telat → 抱歉遲到了. "
+            "Maf saya → 對不起. "
+            "WRONG TRANSLATION (DO NOT DO THIS): translating any maaf-form as 麻煩你了 / 麻煩了 / 不好意思麻煩你 — these are REQUEST phrases, not apologies. "
+            "麻煩你了 = 'tolong ya' / 'maaf merepotkan' (asking favor), which is OPPOSITE of an apology for one's own mistake. "
             + _build_custom_examples_prompt() +
             " 11. TRANSLATION EXAMPLES (follow strictly): "
             "【中→印尼】"
@@ -1654,6 +1737,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik → 品保點錯製程，麻煩退回400無主 "
             "Data sudah dikembalikan ke 400, materialnya mau ke unit mana? → 帳已回400，料要回去哪個單位？ "
             "Ke proses peeling dan annealing, makasih → 去削皮退火，謝謝 "
+            "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作 "
+            "Maafkan saya 🙏 → 對不起 🙏 "
+            "Mafkan saya bos, saya salah → 老闆對不起，是我的錯 "
+            "Maf kan saya, gak akan ulang lagi → 對不起，不會再犯了 "
+            "Mohon maaf, sudah saya perbaiki → 真的很抱歉，已經修正了 "
+            "Minta maaf telat balas → 抱歉太晚回覆 "
             "Bagian peeling butuh troli, tolong bantu ya → 削皮需要台車，再麻煩一下 "
             "dua buah → 兩個 "
             "dua troli → 兩台台車 "
@@ -5368,14 +5457,15 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">🗣️ 翻譯口吻</span><br><span style="font-size:12px;color:#8a8a9a">控制翻譯的語氣風格</span></div>
 <select id="toneSelect" style="padding:6px 10px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px" onchange="toggleFeatureSetting('translation_tone',this.value)">
+<option value="factory">🏭 工廠現場（建議）</option>
 <option value="casual">日常口語</option>
 <option value="natural">母語自然風格</option>
 <option value="formal">正式書面</option>
 </select>
 </div>
 <div style="padding:4px 0 12px">
-<div style="font-size:12px;color:#8a8a9a;margin-bottom:6px">自訂語氣指令（填寫後覆蓋上方選項）</div>
-<textarea id="toneCustom" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="例如：用最口語的印尼文翻譯，像當地人聊天" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:6px">自訂語氣指令（追加在上方選項之後，作為微調補充）</div>
+<textarea id="toneCustom" rows="3" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="可選填。例如：「最近主管脾氣差，語氣再緩和一點」、「加上鼓勵語氣」、「補充某個專有詞翻譯」。留空則完全使用上方選項的預設規則。" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:4px">
