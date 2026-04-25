@@ -66,10 +66,8 @@
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多"
     }
   },
-  "dm_master_enabled": true,
-  "dm_whitelist": [
-    "Uaf4dc8fc636bc8f6060521c398514dc1"
-  ],
+  "dm_master_enabled": false,
+  "dm_whitelist": [],
   "dm_known_users": {
     "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
   },
@@ -112,13 +110,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 66,
+    "text_translations": 67,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 753033,
-    "tokens_completion": 2269
+    "tokens_prompt": 767656,
+    "tokens_completion": 2273
   },
   "extra_customers": {
     "__all__": [
@@ -175,6 +173,10 @@
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
       "tokens_completion": 853
+    },
+    "__dm__": {
+      "tokens_prompt": 14623,
+      "tokens_completion": 4
     }
   },
   "user_languages": {},
