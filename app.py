@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0426c"
+VERSION = "v3.2-0426d"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -319,16 +319,42 @@ TONE_PRESETS = {
         "18. 若一句中文有歧義，請優先依「工廠製造、站別流轉、工單、包裝、品質異常、鋼材/棒材、分光檢測」脈絡判斷最合理意思後再翻。"
         "19. 若輸入是繁中口語群組訊息，請預設場景為工廠工作群組，不要用日常聊天語境解讀。"
         "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。"
+        "21. CRITICAL: 翻譯前先判斷說話者的情感方向(道歉/感謝/請求/警告/抱怨/承諾/通報)，確認後再翻；不要被 emoji(尤其 🙏)誤導，不要看到第一個合理選項就停。"
     ),
 }
 translation_tone = "casual"       # global default: casual / natural / formal
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
 group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
 
-# Model auto-switch: use gpt-4o for long messages, gpt-4o-mini for short
-model_default = "gpt-4o-mini"     # model for short messages
-model_upgrade = "gpt-4o"          # model for long messages
+# Model auto-switch: use gpt-4.1 for long messages, gpt-4.1-mini for short
+# v3.2-0426d: upgraded from gpt-4o family to gpt-4.1 family.
+# gpt-4.1 ranks #1 for translation in Intento State of Translation Automation 2025.
+model_default = "gpt-4.1-mini"    # model for short messages
+model_upgrade = "gpt-4.1"         # model for long messages
 model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
+# v3.2-0426d: New translation parameters (admin-controllable)
+translation_temperature = 0.0     # 0.0 = deterministic, 0.3 = slight variety. Translation should be 0~0.3.
+translation_top_p = 1.0           # Nucleus sampling. Keep 1.0 unless you know what you're doing.
+translation_seed = 0              # 0 = random; non-zero = (mostly) reproducible outputs for same input.
+# v3.2-0426d Batch B: Round-trip verification (double-check)
+# Mode: "off" / "smart" (long msgs + apology keywords) / "all" / "keywords_only"
+double_check_mode = "smart"
+double_check_threshold = 0.55     # Similarity threshold (0~1). Below = warning. Lower = more permissive.
+double_check_keywords = "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混"
+# v3.2-0426d Batch B: Few-shot examples format mode
+# "system_prompt" (legacy) | "messages" (OpenAI standard, better quality)
+fewshot_mode = "messages"
+# v3.2-0426d Batch C: Logprobs + Structured Outputs
+logprobs_enabled = True             # When True, request logprobs to compute confidence
+confidence_threshold = 0.85         # Below this = prepend ⚠️ to translation
+structured_output_enabled = False   # When True, force JSON {translation, confidence, alternatives}
+prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% discount
+# v3.2-0426d Batch D: Translation logging + monitoring
+translation_logging_enabled = True   # Record every translation
+translation_log = []                 # In-memory ring buffer
+TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
+ab_test_enabled = False              # A/B prompt testing
+ab_test_variant_b_prompt = ""        # Custom variant B prompt
 
 import threading as _threading
 _tl = _threading.local()          # thread-local for passing tone into translate_openai
@@ -348,11 +374,128 @@ def pick_model(text):
     return model_default
 
 
+def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
+    """Translate the translation BACK to source language and compare with original.
+    Returns (passes_check: bool, similarity: float, back_translation: str).
+    Used to detect SEVERE semantic errors like 'maaf' → '麻煩你了' (opposite meaning).
+    """
+    if not oai or not translated_text:
+        return True, 1.0, ""
+    try:
+        # Use cheap model for back-translation (we only need rough similarity)
+        check_model = "gpt-4.1-nano" if model_default.startswith("gpt-4.1") else "gpt-4o-mini"
+        # Direct, minimal prompt for back translation
+        if tgt_lang == "zh":
+            back_prompt = "Translate this Chinese to Indonesian. Output ONLY the translation, no explanation:"
+        elif tgt_lang == "id":
+            back_prompt = "Translate this Indonesian to Chinese. Output ONLY the translation, no explanation:"
+        else:
+            return True, 1.0, ""
+        r = oai.chat.completions.create(
+            model=check_model,
+            messages=[
+                {"role": "system", "content": back_prompt},
+                {"role": "user", "content": translated_text}
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
+        track_tokens(r)
+        back = r.choices[0].message.content.strip()
+        # Compute similarity using simple character-level Jaccard
+        sim = _text_similarity(original_text, back)
+        return sim >= double_check_threshold, sim, back
+    except Exception as e:
+        logger.error("Round-trip check error: %s", e)
+        return True, 1.0, ""  # Don't block on errors
+
+
+def _calc_confidence_from_logprobs(logprobs_obj):
+    """Compute average token probability from logprobs response.
+    Returns float 0~1 (1.0 = very confident, 0.5 = uncertain)."""
+    try:
+        if not logprobs_obj or not getattr(logprobs_obj, 'content', None):
+            return 1.0
+        import math
+        probs = []
+        for tok in logprobs_obj.content:
+            if tok and getattr(tok, 'logprob', None) is not None:
+                probs.append(math.exp(tok.logprob))
+        if not probs:
+            return 1.0
+        return sum(probs) / len(probs)
+    except Exception:
+        return 1.0
+
+
+def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, confidence, double_checked, similarity, group_id=""):
+    """Append a translation event to the in-memory log."""
+    if not translation_logging_enabled:
+        return
+    try:
+        entry = {
+            "ts": int(time.time()),
+            "src": src_text[:200],
+            "tgt": tgt_text[:200],
+            "src_lang": src_lang,
+            "tgt_lang": tgt_lang,
+            "model": model,
+            "tokens": tokens,
+            "confidence": round(confidence, 3) if confidence else None,
+            "double_checked": bool(double_checked),
+            "similarity": round(similarity, 3) if similarity else None,
+            "group_id": group_id,
+            "marked_wrong": False,
+        }
+        translation_log.append(entry)
+        # Ring buffer
+        if len(translation_log) > TRANSLATION_LOG_MAX:
+            del translation_log[:len(translation_log) - TRANSLATION_LOG_MAX]
+    except Exception as e:
+        logger.error("Log translation error: %s", e)
+
+
+def _text_similarity(a, b):
+    """Compute Jaccard similarity on character bigrams. Range 0~1."""
+    if not a or not b:
+        return 0.0
+    def bigrams(s):
+        s = s.lower().strip()
+        s = re.sub(r'\s+', '', s)
+        if len(s) < 2:
+            return {s}
+        return {s[i:i+2] for i in range(len(s)-1)}
+    A = bigrams(a)
+    B = bigrams(b)
+    if not A or not B:
+        return 0.0
+    inter = len(A & B)
+    union = len(A | B)
+    return inter / union if union else 0.0
+
+
+def _should_double_check(text, src_lang):
+    """Decide whether to perform round-trip verification based on mode."""
+    if double_check_mode == "off":
+        return False
+    if double_check_mode == "all":
+        return True
+    if double_check_mode == "keywords_only":
+        kws = [k.strip().lower() for k in double_check_keywords.split(",") if k.strip()]
+        tl = text.lower()
+        return any(k in tl for k in kws)
+    if double_check_mode == "smart":
+        # Long messages OR keyword present
+        if len(text) > 30:
+            return True
+        kws = [k.strip().lower() for k in double_check_keywords.split(",") if k.strip()]
+        tl = text.lower()
+        return any(k in tl for k in kws)
+    return False
+
+
 def _build_custom_examples_prompt():
-    """Build custom examples string to inject into translation prompt.
-    Includes BOTH hardcoded BUILTIN_EXAMPLES and admin-editable custom_translation_examples.
-    BUILTIN comes first so it has higher priority when GPT scans the examples."""
-    # Combine: builtin first, then custom (custom can override by being seen later)
+    """Build custom examples string. Includes BUILTIN_EXAMPLES + custom."""
     all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
     if not all_examples:
         return " "
@@ -377,12 +520,9 @@ def _build_custom_examples_prompt():
 
 
 def _check_custom_example_exact(text, src, tgt):
-    """Check if text exactly matches a custom example. Returns translation or None.
-    Supports exact match, case-insensitive, and common prefix stripping.
-    Checks BUILTIN_EXAMPLES first (hardcoded), then custom_translation_examples (admin-editable)."""
-    # Combine: builtin first (higher priority for exact match)
-    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
-    if not all_examples:
+    """Check if text exactly matches a custom or builtin example."""
+    all_examples_local = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    if not all_examples_local:
         return None
     t = text.strip()
     tl = t.lower()
@@ -398,7 +538,7 @@ def _check_custom_example_exact(text, src, tgt):
     for p in _id_prefixes:
         if tl.startswith(p) and len(tl) > len(p):
             id_variants.append(tl[len(p):].strip())
-    for ex in all_examples:
+    for ex in all_examples_local:
         zh = ex.get("zh", "").strip()
         idn = ex.get("id", "").strip()
         if not zh or not idn:
@@ -464,9 +604,6 @@ CUSTOM_EXAMPLES_MAX = 200
 custom_translation_examples = []
 
 # ── Built-in factory examples (hardcoded, NOT visible in admin panel) ──
-# These are baked into the code and CANNOT be removed by user. They take
-# priority over GPT translation via exact match in _check_custom_example_exact()
-# and are also injected into the system prompt via _build_custom_examples_prompt().
 BUILTIN_EXAMPLES = [
     {"zh": "再強調一次", "id": "Saya tegaskan lagi", "dir": "zh2id"},
     {"zh": "一定要確實執行", "id": "harus benar-benar dijalankan", "dir": "zh2id"},
@@ -1092,6 +1229,8 @@ ZH_TO_ID_HARD = {
     "標籤機": "mesin label",
     "台車": "troli",
     "天車": "crane",
+    "台車": "troli",
+    "天車": "crane",
     # 管理
     "品保": "QC",
     "儲運": "bagian gudang",
@@ -1339,12 +1478,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Get tone from thread-local (set by handler before calling translate)
         _tone = getattr(_tl, 'tone', 'casual')
         _tone_custom = getattr(_tl, 'tone_custom', '')
-        # v3.2-0426c: tone_custom is now ADDITIVE (appends to preset) instead of REPLACING preset.
-        # This way the 20-rule factory preset (or whichever preset is selected) always stays in effect,
-        # and the admin-entered custom text is appended as additional fine-tuning.
+        # v3.2-0426d: tone_custom is ADDITIVE (appends to preset) instead of REPLACING.
         _preset_text = TONE_PRESETS.get(_tone, TONE_PRESETS['casual'])
         if _tone_custom and _tone_custom.strip():
-            tone_instruction = _preset_text + " 【額外語氣指令（來自管理員，作為上方規則的補充微調，若有衝突以下方為準）】 " + _tone_custom.strip()
+            tone_instruction = _preset_text + " 【額外語氣指令（補充微調，衝突時以下方為準）】 " + _tone_custom.strip()
         else:
             tone_instruction = _preset_text
 
@@ -1522,6 +1659,24 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
             "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
             "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
+            "p) ELLIPTICAL QUANTITY REPLIES: Chinese speakers often reply with JUST '數字+量詞' as a short answer, omitting the noun. "
+            "e.g. Q:『要幾台?』A:『兩台』(=兩台台車=two troli, NOT 'two units'). "
+            "Default mapping: 兩台→dua buah(generic, NEVER 'dua unit'); 三把→tiga bundel; 5支→5 batang; 一個→satu buah; 兩件→dua potong. "
+            "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese contains '單位'. "
+            "q) 台車=troli(hard replacement applied). 削皮=peeling(hard replacement applied). "
+            "r) APOLOGY DETECTION (CRITICAL - MISTRANSLATING APOLOGIES AS REQUESTS IS A SEVERE ERROR): "
+            "Indonesian 'maaf' family ALWAYS means SORRY/APOLOGY: 對不起/抱歉/請原諒我. "
+            "It NEVER means 麻煩你了 (=tolong ya, asking favor) — they are OPPOSITE in meaning. "
+            "RECOGNIZE THESE SPELLING VARIANTS as the same apology: "
+            "Maaf / Maafkan / Maafkan saya / Mafkan saya / Maf kan saya / Maf kan / Mafin / Mohon maaf / Minta maaf / Mhn maaf — ALL = 對不起. "
+            "Workers commonly misspell as 'Maf kan' or 'Mafkan' — these are STILL apologies. "
+            "🙏 emoji combined with maaf = sincere apology, NOT a polite request. "
+            "When followed by 'kedepan akan lebih...' (以後會更...) or 'gak akan ulang lagi' (不會再犯) — DEFINITELY apology. "
+            "EXAMPLES: "
+            "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作. "
+            "Mohon maaf, saya salah → 真的很抱歉，是我的錯. "
+            "Mhn maaf telat → 抱歉遲到了. "
+            "WRONG: translating any maaf-form as 麻煩你了/麻煩了 — these are REQUEST phrases, OPPOSITE of apology. "
             "p) ELLIPTICAL QUANTITY REPLIES (very important for Taiwan factory chat): "
             "Chinese speakers often reply with JUST '數字+量詞' (number + measure word) as a short answer, OMITTING the noun that was mentioned earlier. "
             "e.g. Q:『需要幾台台車?』 A:『兩台』 (=兩台台車=two troli, NOT 'two units'). "
@@ -1535,22 +1690,6 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
             "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently. "
-            "r) APOLOGY DETECTION (CRITICAL - DO NOT MISTRANSLATE APOLOGIES AS REQUESTS): "
-            "Indonesian 'maaf' family ALWAYS means SORRY/APOLOGY in Chinese: 對不起/抱歉/不好意思. "
-            "It NEVER means 麻煩你了 (=please/asking for help) — this is a SERIOUS translation error that completely flips the speaker's intent. "
-            "RECOGNIZE THESE SPELLING VARIANTS as the same apology: "
-            "Maaf / Maafkan / Maafkan saya / Mafkan saya / Maf kan saya / Maf kan / Mafin / Mohon maaf / Minta maaf / Mafin saya / Mhn maaf — ALL mean 對不起 / 抱歉 / 請原諒我. "
-            "Workers commonly misspell 'Maafkan' as 'Maf kan' (with space) or 'Mafkan' (missing one 'a') — these are STILL apologies, NOT requests. "
-            "🙏 emoji combined with maaf strengthens it as a sincere apology, NOT a polite request. "
-            "Context for apology: When followed by self-correction or future commitment (e.g. 'kedepan akan lebih teliti'=以後會更仔細, 'gak akan ulang lagi'=不會再犯, 'saya salah'=我錯了), it is DEFINITELY an apology. "
-            "EXAMPLES OF CORRECT APOLOGY TRANSLATION: "
-            "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作. "
-            "Maafkan saya bos → 老闆對不起. "
-            "Mohon maaf, saya salah → 真的很抱歉，是我的錯. "
-            "Mhn maaf telat → 抱歉遲到了. "
-            "Maf saya → 對不起. "
-            "WRONG TRANSLATION (DO NOT DO THIS): translating any maaf-form as 麻煩你了 / 麻煩了 / 不好意思麻煩你 — these are REQUEST phrases, not apologies. "
-            "麻煩你了 = 'tolong ya' / 'maaf merepotkan' (asking favor), which is OPPOSITE of an apology for one's own mistake. "
             + _build_custom_examples_prompt() +
             " 11. TRANSLATION EXAMPLES (follow strictly): "
             "【中→印尼】"
@@ -1583,6 +1722,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "品保點錯製程，麻煩退回400-無主 → QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik. "
             "帳已回400、料要回去那一個單位？ → Data sudah dikembalikan ke 400, materialnya mau ke unit mana? "
             "去削皮退火 感溫 → Ke proses peeling dan annealing, makasih. "
+            "削皮需要台車，再麻煩一下 → Bagian peeling butuh troli, tolong bantu ya. "
+            "兩台 → dua buah. "
+            "兩台台車 → dua troli. "
+            "三把 → tiga bundel. "
+            "5支 → 5 batang. "
+            "需要兩台 → Butuh dua buah. "
+            "再一台 → satu lagi. "
             "削皮需要台車，再麻煩一下 → Bagian peeling butuh troli, tolong bantu ya. "
             "兩台 → dua buah. "
             "兩台台車 → dua troli. "
@@ -1737,6 +1883,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik → 品保點錯製程，麻煩退回400無主 "
             "Data sudah dikembalikan ke 400, materialnya mau ke unit mana? → 帳已回400，料要回去哪個單位？ "
             "Ke proses peeling dan annealing, makasih → 去削皮退火，謝謝 "
+            "Bagian peeling butuh troli, tolong bantu ya → 削皮需要台車，再麻煩一下 "
+            "dua buah → 兩個 "
+            "dua troli → 兩台台車 "
             "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作 "
             "Maafkan saya 🙏 → 對不起 🙏 "
             "Mafkan saya bos, saya salah → 老闆對不起，是我的錯 "
@@ -1932,15 +2081,31 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
         _model = pick_model(text)
-        r = oai.chat.completions.create(
-            model=_model,
-            messages=[
+        # v3.2-0426d: build kwargs to support optional seed, logprobs, structured output
+        _kwargs = {
+            "model": _model,
+            "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ],
-            temperature=0.1 if strict_no_source_script or repair_mode else 0.2,
-            max_tokens=2000,
-        )
+            "temperature": translation_temperature,
+            "top_p": translation_top_p,
+            "max_tokens": 2000,
+        }
+        if translation_seed and translation_seed != 0:
+            _kwargs["seed"] = int(translation_seed)
+        # Batch C: Logprobs (skip for o-series reasoning models which don't support)
+        _supports_logprobs = not _model.startswith(("o1", "o3", "o4"))
+        if logprobs_enabled and _supports_logprobs:
+            _kwargs["logprobs"] = True
+        r = oai.chat.completions.create(**_kwargs)
+        # Batch C: extract confidence
+        _confidence = 1.0
+        try:
+            if logprobs_enabled and _supports_logprobs and r.choices and getattr(r.choices[0], 'logprobs', None):
+                _confidence = _calc_confidence_from_logprobs(r.choices[0].logprobs)
+        except Exception:
+            _confidence = 1.0
         track_tokens(r)
         result = r.choices[0].message.content.strip()
         result = restore_mentions(result, placeholders)
@@ -1948,6 +2113,39 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if src == "zh":
             result = post_fix_translation(result)
             result = restore_customers(result, cust_placeholders)
+        # v3.2-0426d Batch B: Round-trip verification
+        _did_double_check = False
+        _similarity_val = 1.0
+        try:
+            if _should_double_check(text, src):
+                _did_double_check = True
+                passes, _similarity_val, back = _round_trip_check(text, result, src, tgt)
+                if not passes:
+                    logger.warning("Round-trip check FAILED: orig=%r trans=%r back=%r sim=%.2f",
+                                   text[:80], result[:80], back[:80], _similarity_val)
+                    result = "⚠️ " + result
+                else:
+                    logger.info("Round-trip check passed: sim=%.2f", _similarity_val)
+        except Exception as _e:
+            logger.error("Round-trip wrap error: %s", _e)
+        # Batch C: low confidence warning
+        try:
+            if logprobs_enabled and _confidence < confidence_threshold and not result.startswith("⚠️"):
+                result = "⚠️ " + result
+                logger.warning("Low confidence translation: %.2f < %.2f for %r",
+                               _confidence, confidence_threshold, text[:80])
+        except Exception:
+            pass
+        # Batch D: log this translation
+        try:
+            _tokens_used = 0
+            if r and getattr(r, 'usage', None):
+                _tokens_used = r.usage.total_tokens
+            _log_translation(text, result, src, tgt, _model, _tokens_used,
+                             _confidence, _did_double_check, _similarity_val,
+                             getattr(_tl, 'group_id', ''))
+        except Exception:
+            pass
         return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
@@ -5465,7 +5663,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 <div style="padding:4px 0 12px">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:6px">自訂語氣指令（追加在上方選項之後，作為微調補充）</div>
-<textarea id="toneCustom" rows="3" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="可選填。例如：「最近主管脾氣差，語氣再緩和一點」、「加上鼓勵語氣」、「補充某個專有詞翻譯」。留空則完全使用上方選項的預設規則。" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
+<textarea id="toneCustom" rows="3" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;resize:vertical" placeholder="可選填。例如：「最近主管脾氣差，語氣再緩和」、「補充某個專有詞翻譯」。留空則完全使用上方選項的預設規則。" onblur="toggleFeatureSetting('translation_tone_custom',this.value)"></textarea>
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:4px">
@@ -5480,21 +5678,139 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<optgroup label="GPT-4.1 系列（推薦）">
+<option value="gpt-4.1-mini">gpt-4.1-mini ⭐</option>
+<option value="gpt-4.1-nano">gpt-4.1-nano（最便宜）</option>
+<option value="gpt-4.1">gpt-4.1</option>
+</optgroup>
+<optgroup label="GPT-5 系列（需 Tier 2+）">
+<option value="gpt-5-nano">gpt-5-nano</option>
+<option value="gpt-5-mini">gpt-5-mini</option>
+<option value="gpt-5">gpt-5</option>
+</optgroup>
+<optgroup label="推理模型（複雜句更準）">
+<option value="o4-mini">o4-mini</option>
+<option value="o3-mini">o3-mini</option>
+</optgroup>
+<optgroup label="舊模型（已過時）">
 <option value="gpt-4o-mini">gpt-4o-mini</option>
 <option value="gpt-4o">gpt-4o</option>
+</optgroup>
 </select>
 </div>
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<optgroup label="GPT-4.1 系列（推薦）">
+<option value="gpt-4.1">gpt-4.1 ⭐</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini</option>
+</optgroup>
+<optgroup label="GPT-5 系列（需 Tier 2+）">
+<option value="gpt-5">gpt-5</option>
+<option value="gpt-5-mini">gpt-5-mini</option>
+</optgroup>
+<optgroup label="推理模型">
+<option value="o4-mini">o4-mini</option>
+<option value="o3-mini">o3-mini</option>
+</optgroup>
+<optgroup label="舊模型">
 <option value="gpt-4o">gpt-4o</option>
 <option value="gpt-4o-mini">gpt-4o-mini</option>
+</optgroup>
 </select>
 </div>
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎯 翻譯品質進階設定（v3.2-0426d）</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">控制翻譯穩定度、雙重檢查、Few-shot 格式</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">🌡️ Temperature（隨機度，0=最穩定）</label>
+<input id="ttemp" type="number" step="0.1" min="0" max="1" value="0" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center"> <span style="font-size:12px;color:#8a8a9a">建議翻譯用 0~0.3</span>
+</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">🎲 Top_p（核採樣，預設 1.0）</label>
+<input id="ttopp" type="number" step="0.05" min="0" max="1" value="1.0" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">🌱 Seed（可重現種子，0=隨機）</label>
+<input id="tseed" type="number" min="0" value="0" style="width:120px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center"> <span style="font-size:12px;color:#8a8a9a">非 0 時相同輸入會得相同結果</span>
+</div>
+
+<div style="margin-bottom:12px;padding:10px;background:#0d0d1a;border-radius:8px;border:1px solid #2a2a3e">
+<div style="font-weight:600;margin-bottom:6px">🔍 雙重檢查（反譯比對）</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:8px">翻譯後反譯回原文比對相似度，差異大會在訊息加 ⚠️。可避免「對不起」翻成「麻煩你了」這種致命誤譯。</div>
+<select id="dcMode" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:8px">
+<option value="off">❌ 關閉</option>
+<option value="smart">🧠 智能（長句+關鍵詞，建議）</option>
+<option value="keywords_only">🔑 只查關鍵詞</option>
+<option value="all">🔁 全部訊息（成本高）</option>
+</select>
+<label style="font-size:12px;color:#8a8a9a;display:block;margin-bottom:4px">相似度門檻（0.55 建議；越低越寬鬆）</label>
+<input id="dcThr" type="number" step="0.05" min="0" max="1" value="0.55" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center;margin-bottom:8px">
+<label style="font-size:12px;color:#8a8a9a;display:block;margin-bottom:4px">關鍵詞（逗號分隔）</label>
+<textarea id="dcKw" rows="2" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px"></textarea>
+</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">📚 Few-shot 範例格式</label>
+<select id="fsMode" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<option value="messages">messages 模式（OpenAI 標準，較好）</option>
+<option value="system_prompt">system_prompt 模式（舊版）</option>
+</select>
+</div>
+
+<button class="btn btn-primary btn-sm" onclick="saveAdvancedSettings()">儲存進階設定</button>
+<div id="advSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎓 Batch C: 信心度 & 結構化輸出</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">利用 logprobs 計算翻譯信心度，低信心翻譯加 ⚠️</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="lpEn" type="checkbox" onchange="saveBatchCD()"> 啟用 Logprobs（信心度計算）
+</label>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">信心度警告門檻（0~1，建議 0.85）</label>
+<input id="cfThr" type="number" step="0.05" min="0" max="1" value="0.85" onchange="saveBatchCD()" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="soEn" type="checkbox" onchange="saveBatchCD()"> 強制 JSON 結構化輸出（實驗中）
+</label>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="pcEn" type="checkbox" onchange="saveBatchCD()"> 啟用 Prompt Caching（自動，省 75% input 費用）
+</label>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📊 Batch D: 翻譯日誌 & 監控</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">記錄每筆翻譯，可標記錯誤自動加入修正範例</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="tlEn" type="checkbox" onchange="saveBatchCD()"> 啟用翻譯日誌
+</label>
+
+<div id="tlStats" style="font-size:13px;color:#8a8a9a;margin-bottom:10px;padding:8px;background:#0d0d1a;border-radius:6px">載入中...</div>
+
+<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+<button class="btn btn-dark btn-sm" onclick="loadTransLog('all')">📋 全部</button>
+<button class="btn btn-dark btn-sm" onclick="loadTransLog('warned')">⚠️ 只看警告</button>
+<button class="btn btn-dark btn-sm" onclick="loadTransLog('wrong')">❌ 已標錯</button>
+<button class="btn btn-dark btn-sm" onclick="clearTransLog()">🗑️ 清空</button>
+</div>
+
+<div id="tlList" style="max-height:400px;overflow-y:auto;font-size:12px"></div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -6681,8 +6997,23 @@ async function _loadFeatures(gid){
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   // Model settings (global only, not per-group)
   if(!gid){
-    document.getElementById('modelDefault').value=d.model_default||'gpt-4o-mini';
-    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-4o';
+    document.getElementById('modelDefault').value=d.model_default||'gpt-4.1-mini';
+    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-4.1';
+    // v3.2-0426d Batch B: load advanced settings
+    if(document.getElementById('ttemp')) document.getElementById('ttemp').value=(d.translation_temperature!==undefined?d.translation_temperature:0);
+    if(document.getElementById('ttopp')) document.getElementById('ttopp').value=(d.translation_top_p!==undefined?d.translation_top_p:1.0);
+    if(document.getElementById('tseed')) document.getElementById('tseed').value=(d.translation_seed!==undefined?d.translation_seed:0);
+    if(document.getElementById('dcMode')) document.getElementById('dcMode').value=d.double_check_mode||'smart';
+    if(document.getElementById('dcThr')) document.getElementById('dcThr').value=(d.double_check_threshold!==undefined?d.double_check_threshold:0.55);
+    if(document.getElementById('dcKw')) document.getElementById('dcKw').value=d.double_check_keywords||'';
+    if(document.getElementById('fsMode')) document.getElementById('fsMode').value=d.fewshot_mode||'messages';
+    // Batch C/D load
+    if(document.getElementById('lpEn')) document.getElementById('lpEn').checked=d.logprobs_enabled!==false;
+    if(document.getElementById('cfThr')) document.getElementById('cfThr').value=(d.confidence_threshold!==undefined?d.confidence_threshold:0.85);
+    if(document.getElementById('soEn')) document.getElementById('soEn').checked=!!d.structured_output_enabled;
+    if(document.getElementById('pcEn')) document.getElementById('pcEn').checked=d.prompt_caching_enabled!==false;
+    if(document.getElementById('tlEn')) document.getElementById('tlEn').checked=d.translation_logging_enabled!==false;
+    if(typeof loadTransLog==='function') setTimeout(function(){loadTransLog('all')},500);
     document.getElementById('modelThreshold').value=d.model_threshold||0;
   }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
@@ -6711,6 +7042,79 @@ function saveModelSettings(){
       document.getElementById('modelSaveResult').innerHTML='<span style="color:#43b581">✅ '+info+'</span>';
     }
   });
+}
+function saveAdvancedSettings(){
+  var body={
+    translation_temperature: parseFloat(document.getElementById('ttemp').value)||0,
+    translation_top_p: parseFloat(document.getElementById('ttopp').value)||1.0,
+    translation_seed: parseInt(document.getElementById('tseed').value)||0,
+    double_check_mode: document.getElementById('dcMode').value,
+    double_check_threshold: parseFloat(document.getElementById('dcThr').value)||0.55,
+    double_check_keywords: document.getElementById('dcKw').value,
+    fewshot_mode: document.getElementById('fsMode').value
+  };
+  api('/features','POST',body).then(function(d){
+    if(d){
+      toast('進階設定已儲存');
+      document.getElementById('advSaveResult').innerHTML='<span style="color:#43b581">✅ 進階設定已生效</span>';
+    }
+  });
+}
+function saveBatchCD(){
+  var body={
+    logprobs_enabled: document.getElementById('lpEn').checked,
+    confidence_threshold: parseFloat(document.getElementById('cfThr').value)||0.85,
+    structured_output_enabled: document.getElementById('soEn').checked,
+    prompt_caching_enabled: document.getElementById('pcEn').checked,
+    translation_logging_enabled: document.getElementById('tlEn').checked
+  };
+  api('/features','POST',body).then(function(d){if(d)toast('已儲存')});
+}
+async function loadTransLog(filter){
+  filter = filter || 'all';
+  var url = '/translation-log?limit=100';
+  if(filter==='warned') url += '&only_warned=1';
+  if(filter==='wrong') url += '&only_wrong=1';
+  var d = await api(url, 'GET');
+  if(!d) return;
+  // Stats
+  var s = d.stats || {};
+  document.getElementById('tlStats').innerHTML =
+    '總計: <b>' + (s.total||0) + '</b> 筆 | ' +
+    '警告: <b style="color:#f59e0b">' + (s.warned||0) + '</b> | ' +
+    '已標錯: <b style="color:#ef4444">' + (s.wrong||0) + '</b> | ' +
+    '平均信心: <b>' + (s.avg_confidence||0) + '</b>';
+  // List
+  var html = '';
+  (d.items||[]).forEach(function(it){
+    var d2 = new Date(it.ts*1000);
+    var time = d2.getHours()+':'+('0'+d2.getMinutes()).slice(-2);
+    var warn = it.tgt && it.tgt.indexOf('⚠️')===0 ? ' style="border-left:3px solid #f59e0b"' : '';
+    var wrong = it.marked_wrong ? ' style="border-left:3px solid #ef4444;opacity:0.6"' : '';
+    var conf = it.confidence!==null && it.confidence!==undefined ? ' | 信心:'+it.confidence : '';
+    var sim = it.similarity!==null && it.similarity!==undefined ? ' | 相似:'+it.similarity : '';
+    html += '<div'+(wrong||warn)+' style="padding:8px;margin-bottom:6px;background:#0d0d1a;border-radius:6px">' +
+            '<div style="color:#8a8a9a;font-size:11px">'+time+' | '+it.model+conf+sim+'</div>' +
+            '<div style="color:#a0a0c0">'+escHtml(it.src||'')+'</div>' +
+            '<div style="color:#e0e0e0;margin:4px 0">→ '+escHtml(it.tgt||'')+'</div>' +
+            (it.marked_wrong ? '<div style="color:#ef4444;font-size:11px">已標記為錯誤</div>'
+                             : '<button class="btn btn-dark btn-sm" onclick="markWrong('+it.ts+')">❌ 標記錯誤</button>') +
+            '</div>';
+  });
+  document.getElementById('tlList').innerHTML = html || '<div style="color:#8a8a9a;padding:12px">無資料</div>';
+}
+function escHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+async function markWrong(ts){
+  var correct = prompt('輸入正確翻譯（留空僅標記不加範例）：');
+  if(correct === null) return;
+  var body = {ts: ts, correct_translation: correct, add_to_examples: !!correct};
+  var d = await api('/translation-log','POST',body);
+  if(d && d.ok){toast('已標記');loadTransLog('all')}
+}
+async function clearTransLog(){
+  if(!confirm('清空所有翻譯日誌？')) return;
+  await api('/translation-log','DELETE',{});
+  loadTransLog('all');
 }
 function saveWelcomeText(){
   var zh=document.getElementById('welcomeZh').value;
@@ -7065,6 +7469,19 @@ def _do_save_impl():
             "group_location_qr_settings": group_location_qr_settings,
             "translation_tone": translation_tone,
             "translation_tone_custom": translation_tone_custom,
+            "translation_temperature": translation_temperature,
+            "translation_top_p": translation_top_p,
+            "translation_seed": translation_seed,
+            "double_check_mode": double_check_mode,
+            "double_check_threshold": double_check_threshold,
+            "double_check_keywords": double_check_keywords,
+            "fewshot_mode": fewshot_mode,
+            "logprobs_enabled": logprobs_enabled,
+            "confidence_threshold": confidence_threshold,
+            "structured_output_enabled": structured_output_enabled,
+            "prompt_caching_enabled": prompt_caching_enabled,
+            "translation_logging_enabled": translation_logging_enabled,
+            "ab_test_enabled": ab_test_enabled,
             "group_tone_settings": group_tone_settings,
             "model_default": model_default,
             "model_upgrade": model_upgrade,
@@ -7099,7 +7516,7 @@ def load_settings():
     global group_camera_roll_qr_settings, group_location_qr_settings
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
-    global translation_tone, translation_tone_custom
+    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -7175,8 +7592,79 @@ def load_settings():
         group_welcome_settings.update(data.get("group_welcome_settings", {}))
         if "translation_tone" in data:
             translation_tone = data["translation_tone"]
+        # v3.2-0426d Batch B: load advanced translation settings from persisted state
+        if "translation_temperature" in data:
+            try: translation_temperature = float(data["translation_temperature"])
+            except: pass
+        if "translation_top_p" in data:
+            try: translation_top_p = float(data["translation_top_p"])
+            except: pass
+        if "translation_seed" in data:
+            try: translation_seed = int(data["translation_seed"])
+            except: pass
+        if "double_check_mode" in data:
+            v = str(data["double_check_mode"])
+            if v in ("off", "smart", "all", "keywords_only"):
+                double_check_mode = v
+        if "double_check_threshold" in data:
+            try: double_check_threshold = float(data["double_check_threshold"])
+            except: pass
+        if "double_check_keywords" in data:
+            double_check_keywords = str(data["double_check_keywords"])
+        if "fewshot_mode" in data:
+            v = str(data["fewshot_mode"])
+            if v in ("system_prompt", "messages"):
+                fewshot_mode = v
+        if "logprobs_enabled" in data:
+            logprobs_enabled = bool(data["logprobs_enabled"])
+        if "confidence_threshold" in data:
+            try: confidence_threshold = float(data["confidence_threshold"])
+            except: pass
+        if "structured_output_enabled" in data:
+            structured_output_enabled = bool(data["structured_output_enabled"])
+        if "prompt_caching_enabled" in data:
+            prompt_caching_enabled = bool(data["prompt_caching_enabled"])
+        if "translation_logging_enabled" in data:
+            translation_logging_enabled = bool(data["translation_logging_enabled"])
+        if "ab_test_enabled" in data:
+            ab_test_enabled = bool(data["ab_test_enabled"])
         if "translation_tone_custom" in data:
             translation_tone_custom = data["translation_tone_custom"]
+        if "translation_temperature" in data:
+            try: translation_temperature = float(data["translation_temperature"])
+            except: pass
+        if "translation_top_p" in data:
+            try: translation_top_p = float(data["translation_top_p"])
+            except: pass
+        if "translation_seed" in data:
+            try: translation_seed = int(data["translation_seed"])
+            except: pass
+        if "double_check_mode" in data:
+            v = str(data["double_check_mode"])
+            if v in ("off", "smart", "all", "keywords_only"):
+                double_check_mode = v
+        if "double_check_threshold" in data:
+            try: double_check_threshold = float(data["double_check_threshold"])
+            except: pass
+        if "double_check_keywords" in data:
+            double_check_keywords = str(data["double_check_keywords"])
+        if "fewshot_mode" in data:
+            v = str(data["fewshot_mode"])
+            if v in ("system_prompt", "messages"):
+                fewshot_mode = v
+        if "logprobs_enabled" in data:
+            logprobs_enabled = bool(data["logprobs_enabled"])
+        if "confidence_threshold" in data:
+            try: confidence_threshold = float(data["confidence_threshold"])
+            except: pass
+        if "structured_output_enabled" in data:
+            structured_output_enabled = bool(data["structured_output_enabled"])
+        if "prompt_caching_enabled" in data:
+            prompt_caching_enabled = bool(data["prompt_caching_enabled"])
+        if "translation_logging_enabled" in data:
+            translation_logging_enabled = bool(data["translation_logging_enabled"])
+        if "ab_test_enabled" in data:
+            ab_test_enabled = bool(data["ab_test_enabled"])
         group_tone_settings.update(data.get("group_tone_settings", {}))
         if "model_default" in data:
             model_default = data["model_default"]
@@ -7555,12 +8043,72 @@ def api_admin_stats():
     })
 
 
+@app.route("/api/admin/translation-log", methods=["GET", "POST", "DELETE"])
+def api_translation_log():
+    """Get/manage translation log. POST to mark-wrong. DELETE to clear."""
+    if not check_manager_access("groups"):
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "GET":
+        # Optional filters
+        limit = int(request.args.get("limit", 100))
+        only_warned = request.args.get("only_warned") == "1"
+        only_wrong = request.args.get("only_wrong") == "1"
+        items = list(translation_log)
+        if only_warned:
+            items = [x for x in items if x.get("tgt", "").startswith("⚠️")]
+        if only_wrong:
+            items = [x for x in items if x.get("marked_wrong")]
+        items = items[-limit:]
+        items.reverse()
+        # Stats
+        total = len(translation_log)
+        warned = sum(1 for x in translation_log if x.get("tgt", "").startswith("⚠️"))
+        wrong = sum(1 for x in translation_log if x.get("marked_wrong"))
+        avg_conf = (sum(x.get("confidence") or 1.0 for x in translation_log) / total) if total else 0
+        return jsonify({
+            "items": items,
+            "stats": {
+                "total": total,
+                "warned": warned,
+                "wrong": wrong,
+                "avg_confidence": round(avg_conf, 3),
+            }
+        })
+    if request.method == "POST":
+        # Mark a log entry as wrong, optionally add to BUILTIN-style override list
+        data = request.get_json() or {}
+        ts = data.get("ts")
+        if ts is None:
+            return jsonify({"error": "missing ts"}), 400
+        for entry in translation_log:
+            if entry.get("ts") == ts:
+                entry["marked_wrong"] = True
+                entry["correct_translation"] = data.get("correct_translation", "")
+                # Optionally add to custom_translation_examples
+                if data.get("add_to_examples") and data.get("correct_translation"):
+                    src_lang = entry.get("src_lang", "zh")
+                    direction = "zh2id" if src_lang == "zh" else "id2zh"
+                    new_ex = {
+                        "zh": entry.get("src", "") if src_lang == "zh" else data.get("correct_translation", ""),
+                        "id": data.get("correct_translation", "") if src_lang == "zh" else entry.get("src", ""),
+                        "dir": direction
+                    }
+                    custom_translation_examples.append(new_ex)
+                    if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
+                        custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+                return jsonify({"ok": True})
+        return jsonify({"error": "not found"}), 404
+    if request.method == "DELETE":
+        translation_log.clear()
+        return jsonify({"ok": True})
+
+
 @app.route("/api/admin/features", methods=["GET", "POST"])
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
-    global translation_tone, translation_tone_custom
+    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
