@@ -1569,6 +1569,8 @@ def factory_semantic_translate_id_zh(text):
 
 def build_factory_context_hint(text, src, tgt):
     """Compact semantic hint injected into the translation prompt."""
+    if src == "zh" and tgt == "id":
+        return build_factory_context_hint_zh_id(text)
     if src != "id" or tgt != "zh":
         return ""
     domain = detect_factory_domain(text, src, tgt)
@@ -1740,7 +1742,172 @@ def finalize_factory_translation(src_text, result, src, tgt):
         fallback = factory_semantic_translate_id_zh(src_text)
         if fallback:
             return fallback
+    if src == "zh" and tgt == "id":
+        raw = result
+        bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, raw)
+        result = post_fix_factory_zh_to_id(src_text, raw)
+        bad2, reason2, _ = detect_factory_semantic_error_zh_id(src_text, result)
+        if bad or bad2:
+            _tl.factory_audit = {
+                "src": src_text,
+                "type": "factory_semantic_auto_detected_zh_id",
+                "reason": reason2 or reason,
+                "raw_translation": raw,
+                "corrected_translation": result,
+                "domain": domains,
+                "auto_corrected": True,
+            }
+        if bad2:
+            repaired = repair_factory_translation_openai_zh_id(src_text, result, reason2)
+            if repaired:
+                result = post_fix_factory_zh_to_id(src_text, repaired)
+        fallback = factory_semantic_translate_zh_id(src_text)
+        bad3, _, _ = detect_factory_semantic_error_zh_id(src_text, result)
+        if bad3 and fallback:
+            result = fallback
     return result
+
+
+# === Factory semantic audit for Chinese -> Indonesian ===
+FACTORY_ZH_ID_BAD_PATTERNS = {
+    "dicuri": "factory_theft_literal",
+    "mencuri": "factory_theft_literal",
+    "pencuri": "factory_theft_literal",
+    "derek QC": "factory_crane_qc_literal",
+    "bereaksi": "factory_response_literal",
+    "tertelan": "factory_swallowed_literal",
+}
+
+FACTORY_ZH_ID_POST_FIX = {
+    "dicuri oleh derek QC": "dibawa oleh QC duluan",
+    "dicuri oleh QC": "dibawa oleh QC duluan",
+    "ditemukan dicuri": "ditemukan sudah dibawa duluan",
+    "mencuri": "mengambil duluan",
+    "dicuri": "dibawa duluan",
+    "pencuri": "pengambilan duluan",
+    "Anda perlu bereaksi": "harus segera lapor",
+    "perlu bereaksi": "harus segera lapor",
+    "harus bereaksi": "harus segera lapor",
+    "bereaksi": "lapor",
+    "akan tertelan setelah dibersihkan": "bisa hilang atau tertutup setelah dibersihkan",
+    "tertelan setelah dibersihkan": "hilang atau tertutup setelah dibersihkan",
+    "tertelan": "hilang atau tertutup",
+}
+
+
+def detect_factory_semantic_error_zh_id(src_text, id_text):
+    """Detect Chinese->Indonesian factory semantic errors that normal confidence misses."""
+    if not id_text:
+        return True, "empty", []
+    src = src_text or ""
+    low = id_text.lower()
+    factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"])
+    if not factory_src:
+        return False, "", []
+    domains = ["factory"]
+    if any(k in src for k in ["品保", "刮傷", "異常", "損傷"]):
+        domains.append("quality_issue")
+    if any(k in src for k in ["清洗", "研磨", "吊", "偷跑", "進料"]):
+        domains.append("material_flow")
+    if "偷跑" in src and any(x in low for x in ["dicuri", "mencuri", "pencuri"]):
+        return True, "factory_theft_literal:偷跑不可翻成偷竊", domains
+    if "吊" in src and "derek qc" in low:
+        return True, "factory_crane_qc_literal:品保不是吊車", domains
+    if "反應" in src and "bereaksi" in low:
+        return True, "factory_response_literal:反應應為回報/通報", domains
+    if "吃掉" in src and "tertelan" in low:
+        return True, "factory_swallowed_literal:被吃掉不可直譯吞掉", domains
+    for bad, reason in FACTORY_ZH_ID_BAD_PATTERNS.items():
+        b = bad.lower()
+        if b in low:
+            if b in ("dicuri", "mencuri", "pencuri") and "偷跑" not in src:
+                continue
+            if b == "bereaksi" and "反應" not in src:
+                continue
+            if b == "tertelan" and "吃掉" not in src:
+                continue
+            return True, reason + ":" + bad, domains
+    return False, "", domains
+
+
+def post_fix_factory_zh_to_id(src_text, id_text):
+    """Fix literal Indonesian outputs for Taiwan factory Chinese->ID translation."""
+    if not id_text:
+        return id_text
+    src = src_text or ""
+    result = id_text.strip()
+    factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"])
+    if not factory_src:
+        return result
+    for wrong, correct in sorted(FACTORY_ZH_ID_POST_FIX.items(), key=lambda x: -len(x[0])):
+        result = re.sub(re.escape(wrong), correct, result, flags=re.I)
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
+
+
+def factory_semantic_translate_zh_id(text):
+    """Deterministic Chinese->Indonesian factory translation for high-risk known shapes."""
+    src = text or ""
+    compact = re.sub(r"\s+", "", src)
+    if all(k in compact for k in ["清洗前", "料", "品保"]) and ("偷跑" in compact or "吊去" in compact) and "刮傷" in compact:
+        return (
+            "Kalau material sebelum dicuci ditemukan sudah dibawa QC duluan, harus segera lapor. "
+            "Sebelum dicuci, perhatikan dulu apakah material masuk ada goresan; "
+            "kalau tidak, setelah dicuci goresannya bisa hilang atau tertutup."
+        )
+    if "偷跑" in compact and "品保" in compact:
+        return "Kalau material sudah dibawa QC duluan tanpa konfirmasi, harus segera lapor."
+    if "吊去" in compact and "品保" in compact:
+        return "Material sudah dibawa oleh QC, harus segera dikonfirmasi."
+    return None
+
+
+def build_factory_context_hint_zh_id(text):
+    src = text or ""
+    if not any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"]):
+        return ""
+    return (
+        "【繁中→印尼工廠語義提示】這是台灣不鏽鋼棒材工廠群組訊息，不可逐字翻。"
+        "料/進料=material/bahan masuk；品保=QC；清洗=di-cuci/dibersihkan依現場語氣；"
+        "吊去=被吊走/移走/帶走，譯為 dibawa/diangkat，不可譯成 dicuri；"
+        "偷跑=未照正常流程先拿走/先做/先跑，譯為 dibawa/diproses duluan tanpa konfirmasi，不是偷竊；"
+        "反應=回報/通報，譯為 lapor/beri tahu，不是 bereaksi；"
+        "被吃掉=痕跡被清洗/加工後消失或被蓋掉，譯為 hilang/tertutup，不是 tertelan。"
+    )
+
+
+def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
+    if not oai:
+        return None
+    try:
+        deterministic = factory_semantic_translate_zh_id(src_text)
+        sys_prompt = (
+            "你是台灣不鏽鋼棒材工廠的繁體中文→印尼文現場翻譯審核器。"
+            "你的任務是修正工廠語義直譯錯誤，輸出印尼員工現場看得懂的自然印尼文。"
+            "不要解釋，不要加註解，只輸出修正後譯文。"
+            "規則：偷跑不是偷竊；吊去不是被吊車偷；反應是回報/通報；被吃掉是痕跡消失/被蓋掉。"
+        )
+        user_msg = (
+            f"原中文：{src_text}\n"
+            f"錯誤印尼文：{bad_result}\n"
+            f"錯誤原因：{reason}\n"
+            f"語義提示：{build_factory_context_hint_zh_id(src_text)}\n"
+        )
+        if deterministic:
+            user_msg += f"可採用譯文：{deterministic}\n"
+        user_msg += "請輸出修正後印尼文："
+        r = oai.chat.completions.create(
+            model=pick_model(src_text),
+            messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user_msg}],
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=500,
+        )
+        track_tokens(r)
+        return (r.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.error("Factory zh-id repair error: %s", e)
+        return None
 
 # === Hard replacement tables ===
 # These bypass GPT entirely - applied BEFORE sending to GPT (zh->id)
@@ -2781,7 +2948,29 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 _tl.factory_audit["corrected_translation"] = result
         # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
+            if tgt == "id":
+                _raw_factory_result_zhid = result
+                _bad_zhid, _reason_zhid, _domains_zhid = detect_factory_semantic_error_zh_id(text, _raw_factory_result_zhid)
+                if _bad_zhid:
+                    _tl.factory_audit = {
+                        "src": text,
+                        "type": "factory_semantic_auto_detected_zh_id",
+                        "reason": _reason_zhid,
+                        "raw_translation": _raw_factory_result_zhid,
+                        "domain": _domains_zhid,
+                        "auto_corrected": True,
+                    }
+                    _fixed_zhid = post_fix_factory_zh_to_id(text, result)
+                    _bad_after, _reason_after, _ = detect_factory_semantic_error_zh_id(text, _fixed_zhid)
+                    if _bad_after:
+                        _repaired_zhid = repair_factory_translation_openai_zh_id(text, _fixed_zhid, _reason_after)
+                        if _repaired_zhid:
+                            _fixed_zhid = post_fix_factory_zh_to_id(text, _repaired_zhid)
+                    result = _fixed_zhid
+                    _tl.factory_audit["corrected_translation"] = result
             result = post_fix_translation(result)
+            if tgt == "id":
+                result = post_fix_factory_zh_to_id(text, result)
             result = restore_customers(result, cust_placeholders)
         # v3.2-0426d Batch B: Round-trip verification
         _did_double_check = False
@@ -2912,6 +3101,23 @@ def translate(text, src, tgt):
                 "auto_corrected": False,
             }
             _log_translation(text, semantic, src, tgt, "factory-semantic", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
+            cache_set(text, src, tgt, semantic)
+            return semantic
+
+    if src == "zh" and tgt == "id":
+        semantic = factory_semantic_translate_zh_id(text)
+        if semantic:
+            logger.info("Factory ZH->ID semantic translation hit: %r -> %r", text[:80], semantic[:80])
+            _tl.factory_audit = {
+                "src": text,
+                "type": "factory_semantic_direct_zh_id",
+                "reason": "deterministic_factory_zh_id_translation",
+                "raw_translation": "",
+                "corrected_translation": semantic,
+                "domain": detect_factory_domain(text, src, tgt).get("domains", []),
+                "auto_corrected": False,
+            }
+            _log_translation(text, semantic, src, tgt, "factory-semantic-zh-id", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
             cache_set(text, src, tgt, semantic)
             return semantic
 
