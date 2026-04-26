@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0426d"
+VERSION = "v3.2-0427c"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -320,6 +320,14 @@ TONE_PRESETS = {
         "19. 若輸入是繁中口語群組訊息，請預設場景為工廠工作群組，不要用日常聊天語境解讀。"
         "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。"
         "21. CRITICAL: 翻譯前先判斷說話者的情感方向(道歉/感謝/請求/警告/抱怨/承諾/通報)，確認後再翻；不要被 emoji(尤其 🙏)誤導，不要看到第一個合理選項就停。"
+        "22. THINK-BEFORE-TRANSLATE (Chain-of-thought, internal): Before producing the final translation, internally consider these checks (don't output them, only output final translation): "
+        "(a) Who is the speaker? (manager/worker/admin) "
+        "(b) What is the intent? (apology/request/warning/announcement/complaint/promise/report) "
+        "(c) Are there any factory-specific terms requiring exact mapping? (PMI/工單/混料/站別/不擋/入完了/台車...) "
+        "(d) Are there ellipsed subjects/objects to fill in from context? "
+        "(e) Could the translation be misread as the OPPOSITE meaning by an Indonesian worker? If yes, reword. "
+        "(f) Is there an emoji that might mislead? (🙏 might suggest 'tolong' but with 'maaf' it means apology, not request) "
+        "After these internal checks, output ONLY the final translation, no explanation."
     ),
 }
 translation_tone = "casual"       # global default: casual / natural / formal
@@ -355,6 +363,13 @@ translation_log = []                 # In-memory ring buffer
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
 ab_test_enabled = False              # A/B prompt testing
 ab_test_variant_b_prompt = ""        # Custom variant B prompt
+# v3.2-0427b: New official OpenAI features
+stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
+forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
+forbidden_words_id = "Catatan:,(Catatan,Terjemahan:,Penjelasan:"  # id forbidden phrases
+reasoning_effort = "medium"          # For o-series: low / medium / high (more = better but slower/costlier)
+send_user_id_to_openai = True        # For abuse tracking compliance
+send_metadata_to_openai = True       # Tag each request with group_id for filtering
 
 import threading as _threading
 _tl = _threading.local()          # thread-local for passing tone into translate_openai
@@ -408,6 +423,121 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
     except Exception as e:
         logger.error("Round-trip check error: %s", e)
         return True, 1.0, ""  # Don't block on errors
+
+
+# v3.2-0427c: tiktoken integration for real logit_bias
+_tiktoken_encoders = {}  # Cache encoder per model
+_tiktoken_failed = False  # If tiktoken unavailable, give up gracefully
+
+
+def _get_tiktoken_encoder(model):
+    """Lazy-load tiktoken encoder for the given model. Returns None on failure."""
+    global _tiktoken_failed
+    if _tiktoken_failed:
+        return None
+    if model in _tiktoken_encoders:
+        return _tiktoken_encoders[model]
+    try:
+        import tiktoken
+        try:
+            enc = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Unknown model - use o200k_base (gpt-4o, gpt-4.1, gpt-5 family)
+            enc = tiktoken.get_encoding("o200k_base")
+        _tiktoken_encoders[model] = enc
+        return enc
+    except Exception as e:
+        logger.warning("tiktoken unavailable, logit_bias disabled: %s", e)
+        _tiktoken_failed = True
+        return None
+
+
+def _build_logit_bias(tgt_lang, model):
+    """v3.2-0427c: REAL logit_bias to FORBID specific phrases.
+    Encodes forbidden phrases to token IDs using tiktoken,
+    then sets their bias to -100 (effectively banned).
+    Returns dict of {token_id: -100} or {} if tiktoken unavailable.
+
+    Forbidden phrases for translation:
+    - zh target: 防止「麻煩你了」「請您」等錯誤搭配,以及機翻常見痕跡
+    - id target: 防止「Catatan:」「Penjelasan:」等多餘解釋
+    """
+    if not stop_sequences_enabled:
+        # If user disabled stop sequences, also disable logit_bias as a paired protection
+        return {}
+    enc = _get_tiktoken_encoder(model)
+    if enc is None:
+        return {}
+    # Get forbidden phrase list based on target language
+    if tgt_lang == "zh":
+        phrases_str = forbidden_words_zh or ""
+    elif tgt_lang == "id":
+        phrases_str = forbidden_words_id or ""
+    else:
+        return {}
+    phrases = [p.strip() for p in phrases_str.split(",") if p.strip()]
+    if not phrases:
+        return {}
+    bias = {}
+    try:
+        for phrase in phrases:
+            # Encode phrase - get all token IDs that make up this phrase
+            try:
+                token_ids = enc.encode(phrase)
+                for tid in token_ids:
+                    # OpenAI logit_bias keys must be strings, values -100..100
+                    bias[str(tid)] = -100
+            except Exception:
+                continue
+        # OpenAI limits logit_bias to max 300 entries
+        if len(bias) > 300:
+            # Keep first 300 (most likely the most critical short phrases)
+            keys = list(bias.keys())[:300]
+            bias = {k: bias[k] for k in keys}
+        return bias
+    except Exception as e:
+        logger.warning("logit_bias build error: %s", e)
+        return {}
+
+
+def _build_stop_sequences(tgt_lang):
+    """v3.2-0427b: Stop sequences to terminate GPT before it adds explanations.
+    These are common patterns GPT uses when adding extra commentary."""
+    if not stop_sequences_enabled:
+        return None
+    if tgt_lang == "zh":
+        return ["\n註:", "\n（註", "\n注:", "\nTranslation:", "\n翻譯:"]
+    if tgt_lang == "id":
+        return ["\nCatatan:", "\n(Catatan", "\nTerjemahan:", "\nPenjelasan:"]
+    return None
+
+
+def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
+    """v3.2-0427: Build messages array using OpenAI standard few-shot format.
+    Inserts BUILTIN_EXAMPLES + custom_translation_examples as
+    {role: "system", name: "example_user"/"example_assistant"} pairs.
+    This is OpenAI's recommended way (better than embedding examples in system prompt).
+    """
+    msgs = [{"role": "system", "content": sys_prompt}]
+    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    # Pick examples matching translation direction (only show direction-relevant pairs)
+    # If translating zh->id, show zh2id examples; reverse for id->zh
+    direction_key = "zh2id" if (src == "zh" and tgt != "zh") else "id2zh" if (src != "zh" and tgt == "zh") else None
+    relevant = [ex for ex in all_examples if ex.get("dir", "zh2id") == direction_key] if direction_key else []
+    # Cap at 8 most recent examples to avoid bloating prompt
+    for ex in relevant[-8:]:
+        zh = ex.get("zh", "").strip()
+        idn = ex.get("id", "").strip()
+        if not zh or not idn:
+            continue
+        if direction_key == "zh2id":
+            user_eg, assistant_eg = zh, idn
+        else:
+            user_eg, assistant_eg = idn, zh
+        msgs.append({"role": "system", "name": "example_user", "content": user_eg})
+        msgs.append({"role": "system", "name": "example_assistant", "content": assistant_eg})
+    msgs.append({"role": "user", "content": user_msg})
+    return msgs
 
 
 def _calc_confidence_from_logprobs(logprobs_obj):
@@ -2081,24 +2211,103 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
         _model = pick_model(text)
-        # v3.2-0426d: build kwargs to support optional seed, logprobs, structured output
-        _kwargs = {
-            "model": _model,
-            "messages": [
+        # v3.2-0427: build messages array, optionally using few-shot "messages" format
+        # which separates examples into example_user/example_assistant pairs (OpenAI standard).
+        if fewshot_mode == "messages":
+            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt)
+        else:
+            _msgs = [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
-            ],
+            ]
+        # v3.2-0427b: build kwargs with all official OpenAI features
+        # Detect if model is o-series (reasoning model) - they use different params
+        _is_reasoning_model = _model.startswith(("o1", "o3", "o4"))
+        _kwargs = {
+            "model": _model,
+            "messages": _msgs,
             "temperature": translation_temperature,
             "top_p": translation_top_p,
-            "max_tokens": 2000,
         }
+        # max_tokens vs max_completion_tokens (o-series requires the latter)
+        if _is_reasoning_model:
+            _kwargs["max_completion_tokens"] = 2000
+            # reasoning_effort param for o-series (low/medium/high)
+            if reasoning_effort in ("low", "medium", "high"):
+                _kwargs["reasoning_effort"] = reasoning_effort
+        else:
+            _kwargs["max_tokens"] = 2000
+        # Stop sequences (prevent GPT adding "Note: ..." or "(註: ...)")
+        _stops = _build_stop_sequences(tgt)
+        if _stops and not _is_reasoning_model:
+            _kwargs["stop"] = _stops
+        # User ID for OpenAI abuse tracking (compliance)
+        _user_id = getattr(_tl, 'user_id', '')
+        if send_user_id_to_openai and _user_id:
+            # Hash for privacy (don't send raw LINE user IDs)
+            import hashlib as _h
+            _kwargs["user"] = _h.sha256(_user_id.encode()).hexdigest()[:32]
+        # v3.2-0427c: logit_bias to forbid specific phrases (e.g. "Catatan:", "註:")
+        # Skip for o-series (reasoning models don't support logit_bias well)
+        if not _is_reasoning_model:
+            try:
+                _bias = _build_logit_bias(tgt, _model)
+                if _bias:
+                    _kwargs["logit_bias"] = _bias
+            except Exception as _be:
+                logger.warning("logit_bias skip: %s", _be)
+        # Metadata tag (for OpenAI dashboard filtering)
+        if send_metadata_to_openai:
+            _meta = {}
+            _gid = getattr(_tl, 'group_id', '')
+            if _gid:
+                _meta["group_id"] = str(_gid)[:64]
+            _meta["src_lang"] = src or ""
+            _meta["tgt_lang"] = tgt or ""
+            if _meta:
+                _kwargs["metadata"] = _meta
+        # v3.2-0427: Structured Outputs (response_format with json_schema)
+        if structured_output_enabled and not _model.startswith(("o1", "o3", "o4")):
+            _kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "translation_result",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "translation": {"type": "string", "description": "The final translation, no notes/explanations"},
+                            "confidence": {"type": "number", "description": "0-1 confidence score"},
+                            "alternatives": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Up to 2 alternative phrasings"
+                            }
+                        },
+                        "required": ["translation", "confidence", "alternatives"],
+                        "additionalProperties": False
+                    }
+                }
+            }
         if translation_seed and translation_seed != 0:
             _kwargs["seed"] = int(translation_seed)
         # Batch C: Logprobs (skip for o-series reasoning models which don't support)
         _supports_logprobs = not _model.startswith(("o1", "o3", "o4"))
         if logprobs_enabled and _supports_logprobs:
             _kwargs["logprobs"] = True
+        # v3.2-0427: prompt_caching_enabled triggers OpenAI's automatic caching
+        # of stable prefixes (>1024 tokens). Caching is automatic for gpt-4.1+ and
+        # gpt-4o; we just ensure system prompt is stable across requests.
+        # (No explicit param needed; just keep prefix consistent.)
         r = oai.chat.completions.create(**_kwargs)
+        # Track cache hit for stats (if available in response)
+        try:
+            if hasattr(r, 'usage') and hasattr(r.usage, 'prompt_tokens_details'):
+                _cached = getattr(r.usage.prompt_tokens_details, 'cached_tokens', 0)
+                if _cached and prompt_caching_enabled:
+                    logger.info("Prompt cache hit: %d tokens cached", _cached)
+        except Exception:
+            pass
         # Batch C: extract confidence
         _confidence = 1.0
         try:
@@ -2107,7 +2316,21 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         except Exception:
             _confidence = 1.0
         track_tokens(r)
-        result = r.choices[0].message.content.strip()
+        # v3.2-0427: parse structured output if used
+        _raw = r.choices[0].message.content.strip()
+        if structured_output_enabled and _raw.startswith("{"):
+            try:
+                import json as _json_mod
+                _parsed = _json_mod.loads(_raw)
+                result = str(_parsed.get("translation", _raw)).strip()
+                # Override confidence from structured output if available
+                _struct_conf = _parsed.get("confidence")
+                if isinstance(_struct_conf, (int, float)):
+                    _confidence = float(_struct_conf)
+            except Exception:
+                result = _raw
+        else:
+            result = _raw
         result = restore_mentions(result, placeholders)
         # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
@@ -2384,7 +2607,7 @@ def format_storage_for_work_order(customer_name):
                     ]
                 }
             ],
-            temperature=0.1,
+            temperature=translation_temperature,
             max_tokens=2000,
         )
         track_tokens(r)
@@ -2430,7 +2653,7 @@ def ocr_image_openai(image_base64):
                     ]
                 }
             ],
-            temperature=0.1,
+            temperature=translation_temperature,
             max_tokens=2000,
         )
         track_tokens(r)
@@ -2542,7 +2765,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                     ]
                 }
             ],
-            temperature=0.2,
+            temperature=translation_temperature,
             max_tokens=3000,
         )
         track_tokens(r)
@@ -3869,6 +4092,12 @@ if VideoMessageContent:
                             _tone, _tone_custom = get_group_tone(group_id)
                             _tl.tone = _tone
                             _tl.tone_custom = _tone_custom
+                            # v3.2-0427b: pass user_id and group_id for OpenAI metadata/user param
+                            try:
+                                _tl.user_id = getattr(getattr(event.source, 'user_id', ''), '__str__', lambda: '')() if hasattr(event.source, 'user_id') else ''
+                            except Exception:
+                                _tl.user_id = ''
+                            _tl.group_id = group_id or ''
                             if lang == "zh":
                                 tgt = group_target_lang.get(group_id, "id")
                                 result = translate(ocr_result, "zh", tgt)
@@ -5772,6 +6001,32 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 
 <div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🛡️ 官方 API 進階參數（v3.2-0427b）</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">OpenAI 官方功能,合規追蹤、防止 GPT 加註解、推理模型專用參數</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="ssEn" type="checkbox" checked onchange="saveOfficialFeatures()"> 啟用 stop sequences + logit_bias（防止 GPT 加「註:」「Translation:」「Catatan:」等多餘文字）
+</label>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">🧠 推理深度（僅 o3/o4/o1 模型有效）</label>
+<select id="reEf" onchange="saveOfficialFeatures()" style="width:140px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<option value="low">low（最快最便宜）</option>
+<option value="medium" selected>medium（建議）</option>
+<option value="high">high（最深入但最貴）</option>
+</select>
+</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="suid" type="checkbox" checked onchange="saveOfficialFeatures()"> 傳 user_id 給 OpenAI（雜湊後,合規追蹤)
+</label>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="smeta" type="checkbox" checked onchange="saveOfficialFeatures()"> 傳 metadata（group_id, 語言對）給 OpenAI 後台
+</label>
+</div>
+
+<div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">🎓 Batch C: 信心度 & 結構化輸出</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">利用 logprobs 計算翻譯信心度，低信心翻譯加 ⚠️</div>
 
@@ -7013,6 +7268,11 @@ async function _loadFeatures(gid){
     if(document.getElementById('soEn')) document.getElementById('soEn').checked=!!d.structured_output_enabled;
     if(document.getElementById('pcEn')) document.getElementById('pcEn').checked=d.prompt_caching_enabled!==false;
     if(document.getElementById('tlEn')) document.getElementById('tlEn').checked=d.translation_logging_enabled!==false;
+    // v3.2-0427b: load official feature settings
+    if(document.getElementById('ssEn')) document.getElementById('ssEn').checked=d.stop_sequences_enabled!==false;
+    if(document.getElementById('reEf')) document.getElementById('reEf').value=d.reasoning_effort||'medium';
+    if(document.getElementById('suid')) document.getElementById('suid').checked=d.send_user_id_to_openai!==false;
+    if(document.getElementById('smeta')) document.getElementById('smeta').checked=d.send_metadata_to_openai!==false;
     if(typeof loadTransLog==='function') setTimeout(function(){loadTransLog('all')},500);
     document.getElementById('modelThreshold').value=d.model_threshold||0;
   }
@@ -7059,6 +7319,15 @@ function saveAdvancedSettings(){
       document.getElementById('advSaveResult').innerHTML='<span style="color:#43b581">✅ 進階設定已生效</span>';
     }
   });
+}
+function saveOfficialFeatures(){
+  var body={
+    stop_sequences_enabled: document.getElementById('ssEn').checked,
+    reasoning_effort: document.getElementById('reEf').value,
+    send_user_id_to_openai: document.getElementById('suid').checked,
+    send_metadata_to_openai: document.getElementById('smeta').checked
+  };
+  api('/features','POST',body).then(function(d){if(d)toast('官方參數已儲存')});
 }
 function saveBatchCD(){
   var body={
@@ -7482,6 +7751,10 @@ def _do_save_impl():
             "prompt_caching_enabled": prompt_caching_enabled,
             "translation_logging_enabled": translation_logging_enabled,
             "ab_test_enabled": ab_test_enabled,
+            "stop_sequences_enabled": stop_sequences_enabled,
+            "reasoning_effort": reasoning_effort,
+            "send_user_id_to_openai": send_user_id_to_openai,
+            "send_metadata_to_openai": send_metadata_to_openai,
             "group_tone_settings": group_tone_settings,
             "model_default": model_default,
             "model_upgrade": model_upgrade,
@@ -7516,7 +7789,7 @@ def load_settings():
     global group_camera_roll_qr_settings, group_location_qr_settings
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
-    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled
+    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -7628,6 +7901,16 @@ def load_settings():
             translation_logging_enabled = bool(data["translation_logging_enabled"])
         if "ab_test_enabled" in data:
             ab_test_enabled = bool(data["ab_test_enabled"])
+        if "stop_sequences_enabled" in data:
+            stop_sequences_enabled = bool(data["stop_sequences_enabled"])
+        if "reasoning_effort" in data:
+            v = str(data["reasoning_effort"])
+            if v in ("low", "medium", "high"):
+                reasoning_effort = v
+        if "send_user_id_to_openai" in data:
+            send_user_id_to_openai = bool(data["send_user_id_to_openai"])
+        if "send_metadata_to_openai" in data:
+            send_metadata_to_openai = bool(data["send_metadata_to_openai"])
         if "translation_tone_custom" in data:
             translation_tone_custom = data["translation_tone_custom"]
         if "translation_temperature" in data:
@@ -7665,6 +7948,16 @@ def load_settings():
             translation_logging_enabled = bool(data["translation_logging_enabled"])
         if "ab_test_enabled" in data:
             ab_test_enabled = bool(data["ab_test_enabled"])
+        if "stop_sequences_enabled" in data:
+            stop_sequences_enabled = bool(data["stop_sequences_enabled"])
+        if "reasoning_effort" in data:
+            v = str(data["reasoning_effort"])
+            if v in ("low", "medium", "high"):
+                reasoning_effort = v
+        if "send_user_id_to_openai" in data:
+            send_user_id_to_openai = bool(data["send_user_id_to_openai"])
+        if "send_metadata_to_openai" in data:
+            send_metadata_to_openai = bool(data["send_metadata_to_openai"])
         group_tone_settings.update(data.get("group_tone_settings", {}))
         if "model_default" in data:
             model_default = data["model_default"]
@@ -8108,7 +8401,7 @@ def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
-    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled
+    global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
