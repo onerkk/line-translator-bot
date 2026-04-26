@@ -359,8 +359,40 @@ structured_output_enabled = False   # When True, force JSON {translation, confid
 prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% discount
 # v3.2-0426d Batch D: Translation logging + monitoring
 translation_logging_enabled = True   # Record every translation
-translation_log = []                 # In-memory ring buffer
+translation_log = []                 # In-memory ring buffer + persisted JSON file
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
+TRANSLATION_LOG_FILE = os.environ.get("TRANSLATION_LOG_FILE", "translation_log.json")
+
+def _load_translation_log_from_disk():
+    """Load persisted translation log on startup. Best effort; never blocks bot startup."""
+    try:
+        path = TRANSLATION_LOG_FILE
+        if not path or not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            translation_log[:] = data[-TRANSLATION_LOG_MAX:]
+            logger.info("Loaded %d translation log entries from %s", len(translation_log), path)
+    except Exception as e:
+        logger.warning("Failed to load translation log: %s", e)
+
+def _save_translation_log_to_disk():
+    """Persist translation log to JSON. Best effort; avoids losing logs on normal restarts."""
+    try:
+        path = TRANSLATION_LOG_FILE
+        if not path:
+            return
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder and not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(translation_log[-TRANSLATION_LOG_MAX:], f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        logger.warning("Failed to save translation log: %s", e)
+
 ab_test_enabled = False              # A/B prompt testing
 ab_test_variant_b_prompt = ""        # Custom variant B prompt
 # v3.2-0426e: New official OpenAI features
@@ -372,7 +404,8 @@ send_user_id_to_openai = True        # For abuse tracking compliance
 send_metadata_to_openai = True       # Tag each request with group_id for filtering
 
 import threading as _threading
-_tl = _threading.local()          # thread-local for passing tone into translate_openai
+_tl = _threading.local()          # thread-local for passing tone / audit metadata into translate_openai
+_load_translation_log_from_disk()
 
 def get_group_tone(group_id):
     """Return (preset, custom_text) for a group."""
@@ -559,28 +592,54 @@ def _calc_confidence_from_logprobs(logprobs_obj):
 
 
 def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, confidence, double_checked, similarity, group_id=""):
-    """Append a translation event to the in-memory log."""
+    """Append a translation event to the in-memory + persisted log.
+
+    Also records factory semantic audit metadata so the admin panel can show
+    auto-detected factory translation issues even when the final message was
+    auto-corrected before being sent.
+    """
     if not translation_logging_enabled:
         return
     try:
+        audit = getattr(_tl, 'factory_audit', None)
         entry = {
+            "id": f"{int(time.time())}-{uuid.uuid4().hex[:8]}",
             "ts": int(time.time()),
-            "src": src_text[:200],
-            "tgt": tgt_text[:200],
+            "src": src_text[:500],
+            "tgt": tgt_text[:500],
             "src_lang": src_lang,
             "tgt_lang": tgt_lang,
             "model": model,
             "tokens": tokens,
-            "confidence": round(confidence, 3) if confidence else None,
+            "confidence": round(confidence, 3) if confidence is not None else None,
             "double_checked": bool(double_checked),
-            "similarity": round(similarity, 3) if similarity else None,
-            "group_id": group_id,
+            "similarity": round(similarity, 3) if similarity is not None else None,
+            "group_id": group_id or getattr(_tl, 'group_id', ''),
             "marked_wrong": False,
+            "warned": bool(tgt_text.startswith("⚠️")),
         }
+        if audit and isinstance(audit, dict):
+            # Only attach current audit if it belongs to this source text.
+            if not audit.get("src") or audit.get("src") == src_text:
+                entry.update({
+                    "warned": True,
+                    "factory_warning": True,
+                    "warning_type": audit.get("type", "factory_semantic_warning"),
+                    "warning_reason": audit.get("reason", ""),
+                    "raw_translation": audit.get("raw_translation", ""),
+                    "auto_corrected": bool(audit.get("auto_corrected")),
+                    "corrected_translation": audit.get("corrected_translation", tgt_text),
+                    "factory_domain": audit.get("domain", []),
+                })
+                try:
+                    delattr(_tl, 'factory_audit')
+                except Exception:
+                    pass
         translation_log.append(entry)
         # Ring buffer
         if len(translation_log) > TRANSLATION_LOG_MAX:
             del translation_log[:len(translation_log) - TRANSLATION_LOG_MAX]
+        _save_translation_log_to_disk()
     except Exception as e:
         logger.error("Log translation error: %s", e)
 
@@ -1423,6 +1482,7 @@ FACTORY_ZH_LITERAL_RISK = {
     "前面損壞": "前端損傷",
     "後面壞了": "後端損傷",
     "前面壞了": "前端損傷",
+    "損壞": "損傷",
     "壞掉": "損傷",
     "壞了": "損傷",
 }
@@ -1567,21 +1627,61 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
     return result.strip()
 
 
-def validate_factory_translation(src_text, zh_text, src, tgt):
-    """Validate Chinese translation against factory literal-risk rules."""
+def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
+    """Detect factory-context semantic errors that normal translation confidence will miss.
+
+    Example: 'Barang rusak dari belakang' -> '物品從後面損壞' is linguistically
+    plausible but invalid in Taiwan factory quality context. This detector is
+    deliberately rule-based, not model-confidence-based.
+    """
     if src != "id" or tgt != "zh":
-        return True, ""
+        return False, "", []
     if not zh_text:
-        return False, "empty"
+        return True, "empty", []
     domain = detect_factory_domain(src_text, src, tgt)
-    if not domain["is_factory"]:
-        return True, ""
+    domains = domain.get("domains", [])
+    if not domain.get("is_factory"):
+        return False, "", domains
+
+    t = _clean_factory_id(src_text)
+    has_obj = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_OBJECTS.keys())
+    has_defect = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_DEFECTS.keys())
+    has_pos = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_POSITIONS.keys())
+    quality_context = has_defect and (has_obj or has_pos or "quality" in domains or "material_direction" in domains)
+
+    # Hard invalid patterns in quality/material direction context.
     for pat in FACTORY_BAD_ZH_PATTERNS:
         if re.search(pat, zh_text):
-            return False, "factory_literal_direction_error"
-    risk_words = ["物品從後面", "物品從前面", "東西從後面", "東西從前面", "從後面損", "從前面損"]
-    if any(w in zh_text for w in risk_words):
-        return False, "factory_literal_object_or_direction"
+            return True, "factory_literal_direction_error", domains
+
+    if quality_context:
+        bad_terms = {
+            "物品": "factory_object_literal",
+            "東西": "factory_object_literal",
+            "從後面": "factory_direction_literal",
+            "從前面": "factory_direction_literal",
+            "壞掉": "factory_defect_literal",
+            "壞了": "factory_defect_literal",
+        }
+        for bad, reason in bad_terms.items():
+            if bad in zh_text:
+                return True, reason + ":" + bad, domains
+
+    # Direction words in source should usually appear as 前端/後端/尾端/側邊 in target.
+    if quality_context and has_pos:
+        if ("belakang" in t or "ujung belakang" in t) and ("後端" not in zh_text and "尾端" not in zh_text):
+            return True, "missing_factory_back_end_direction", domains
+        if ("depan" in t or "ujung depan" in t) and "前端" not in zh_text:
+            return True, "missing_factory_front_end_direction", domains
+
+    return False, "", domains
+
+
+def validate_factory_translation(src_text, zh_text, src, tgt):
+    """Validate Chinese translation against factory literal-risk rules."""
+    bad, reason, _domains = detect_factory_semantic_error(src_text, zh_text, src, tgt)
+    if bad:
+        return False, reason
     return True, ""
 
 
@@ -2665,7 +2765,20 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             result = _raw
         result = restore_mentions(result, placeholders)
         if src == "id" and tgt == "zh":
+            _raw_factory_result = result
+            _bad, _reason, _domains = detect_factory_semantic_error(text, _raw_factory_result, src, tgt)
+            if _bad:
+                _tl.factory_audit = {
+                    "src": text,
+                    "type": "factory_semantic_auto_detected",
+                    "reason": _reason,
+                    "raw_translation": _raw_factory_result,
+                    "domain": _domains,
+                    "auto_corrected": True,
+                }
             result = post_fix_factory_id_to_zh(text, result)
+            if _bad:
+                _tl.factory_audit["corrected_translation"] = result
         # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
             result = post_fix_translation(result)
@@ -2789,12 +2902,24 @@ def translate(text, src, tgt):
         semantic = factory_semantic_translate_id_zh(text)
         if semantic:
             logger.info("Factory semantic translation hit: %r -> %r", text[:80], semantic[:80])
+            _tl.factory_audit = {
+                "src": text,
+                "type": "factory_semantic_direct",
+                "reason": "deterministic_factory_slot_translation",
+                "raw_translation": "",
+                "corrected_translation": semantic,
+                "domain": detect_factory_domain(text, src, tgt).get("domains", []),
+                "auto_corrected": False,
+            }
+            _log_translation(text, semantic, src, tgt, "factory-semantic", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
             cache_set(text, src, tgt, semantic)
             return semantic
 
     # Check cache first
     cached = cache_get(text, src, tgt)
     if cached:
+        cached = finalize_factory_translation(text, cached, src, tgt)
+        _log_translation(text, cached, src, tgt, "cache", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
         return cached
 
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
@@ -3753,12 +3878,53 @@ def find_user_by_name(group_id, name_query):
     return matches
 
 
+def mark_latest_translation_wrong(group_id, correct_translation="", add_to_examples=True):
+    """Mark the latest translation in this group as wrong from LINE command /wrong.
+
+    Usage in group: /wrong 正確翻譯
+    If no correct translation is provided, it only marks the latest entry wrong.
+    """
+    target = None
+    for entry in reversed(translation_log):
+        if not group_id or entry.get("group_id") == group_id:
+            target = entry
+            break
+    if not target:
+        return False, "找不到最近的翻譯紀錄。可能剛重啟，或翻譯日誌尚未寫入。"
+    target["marked_wrong"] = True
+    target["manual_marked_wrong"] = True
+    if correct_translation:
+        target["correct_translation"] = correct_translation
+        if add_to_examples:
+            src_lang = target.get("src_lang", "zh")
+            direction = "zh2id" if src_lang == "zh" else "id2zh"
+            new_ex = {
+                "zh": target.get("src", "") if src_lang == "zh" else correct_translation,
+                "id": correct_translation if src_lang == "zh" else target.get("src", ""),
+                "dir": direction
+            }
+            custom_translation_examples.append(new_ex)
+            if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
+                custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+    _save_translation_log_to_disk()
+    save_settings()
+    return True, target.get("src", "")[:80]
+
+
 def handle_command(text, group_id, user_id=None):
     bot_stats["commands"] += 1
     cmd = text.strip().lower()
     if cmd == "/help":
         # Return sentinel; caller detects this and sends Flex instead of Text
         return "__FLEX_HELP__"
+    elif cmd.startswith("/wrong") or cmd.startswith("/markwrong") or cmd.startswith("/錯") or cmd.startswith("/標錯"):
+        correct = text.strip().split(" ", 1)[1].strip() if " " in text.strip() else ""
+        ok, info = mark_latest_translation_wrong(group_id, correct_translation=correct, add_to_examples=bool(correct))
+        if not ok:
+            return "⚠️ " + info
+        if correct:
+            return "✅ 已標記最近一筆翻譯錯誤，並加入修正範例：" + correct
+        return "✅ 已標記最近一筆翻譯錯誤。若要同時加入正確譯文，請輸入：/wrong 正確翻譯"
     elif cmd == "/on":
         group_settings[group_id] = True
         save_settings()
@@ -4001,6 +4167,7 @@ def handle_message(event):
         # Set translation tone for DM (use global default)
         _tl.tone = translation_tone
         _tl.tone_custom = translation_tone_custom
+        _tl.group_id = "__dm__"
 
         _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
         result = translate(text_clean, lang, tgt)
@@ -4113,6 +4280,7 @@ def handle_message(event):
     _tone, _tone_custom = get_group_tone(group_id)
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
+    _tl.group_id = group_id
     if lang == "zh":
         result = translate(text_to_translate, "zh", tgt)
         if result and mention_placeholders:
@@ -5659,6 +5827,7 @@ def build_quick_reply(group_id=None):
         # Command-linked buttons: only show if that command is enabled for the group
         if is_cmd_enabled(group_id, 'qry'):
             items.append(QuickReplyItem(action=MessageAction(label="🔍 儲區/Gudang", text="/qry ")))
+        items.append(QuickReplyItem(action=MessageAction(label="❌ 標錯/Wrong", text="/wrong ")))
         items.append(QuickReplyItem(action=MessageAction(label="❌ 不翻我/Skip", text="/skip")))
         items.append(QuickReplyItem(action=MessageAction(label="✅ 翻譯我/Unskip", text="/unskip")))
         if is_cmd_enabled(group_id, 'pw1'):
@@ -8708,14 +8877,14 @@ def api_translation_log():
         only_wrong = request.args.get("only_wrong") == "1"
         items = list(translation_log)
         if only_warned:
-            items = [x for x in items if x.get("tgt", "").startswith("⚠️")]
+            items = [x for x in items if x.get("warned") or x.get("factory_warning") or x.get("tgt", "").startswith("⚠️")]
         if only_wrong:
             items = [x for x in items if x.get("marked_wrong")]
         items = items[-limit:]
         items.reverse()
         # Stats
         total = len(translation_log)
-        warned = sum(1 for x in translation_log if x.get("tgt", "").startswith("⚠️"))
+        warned = sum(1 for x in translation_log if x.get("warned") or x.get("factory_warning") or x.get("tgt", "").startswith("⚠️"))
         wrong = sum(1 for x in translation_log if x.get("marked_wrong"))
         avg_conf = (sum(x.get("confidence") or 1.0 for x in translation_log) / total) if total else 0
         return jsonify({
@@ -8749,10 +8918,12 @@ def api_translation_log():
                     custom_translation_examples.append(new_ex)
                     if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
                         custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+                _save_translation_log_to_disk()
                 return jsonify({"ok": True})
         return jsonify({"error": "not found"}), 404
     if request.method == "DELETE":
         translation_log.clear()
+        _save_translation_log_to_disk()
         return jsonify({"ok": True})
 
 
