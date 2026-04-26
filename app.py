@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0427c"
+VERSION = "v3.2-0426e"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -363,7 +363,7 @@ translation_log = []                 # In-memory ring buffer
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
 ab_test_enabled = False              # A/B prompt testing
 ab_test_variant_b_prompt = ""        # Custom variant B prompt
-# v3.2-0427b: New official OpenAI features
+# v3.2-0426e: New official OpenAI features
 stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
 forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
 forbidden_words_id = "Catatan:,(Catatan,Terjemahan:,Penjelasan:"  # id forbidden phrases
@@ -425,7 +425,7 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
         return True, 1.0, ""  # Don't block on errors
 
 
-# v3.2-0427c: tiktoken integration for real logit_bias
+# v3.2-0426e: tiktoken integration for real logit_bias
 _tiktoken_encoders = {}  # Cache encoder per model
 _tiktoken_failed = False  # If tiktoken unavailable, give up gracefully
 
@@ -453,7 +453,7 @@ def _get_tiktoken_encoder(model):
 
 
 def _build_logit_bias(tgt_lang, model):
-    """v3.2-0427c: REAL logit_bias to FORBID specific phrases.
+    """v3.2-0426e: REAL logit_bias to FORBID specific phrases.
     Encodes forbidden phrases to token IDs using tiktoken,
     then sets their bias to -100 (effectively banned).
     Returns dict of {token_id: -100} or {} if tiktoken unavailable.
@@ -501,7 +501,7 @@ def _build_logit_bias(tgt_lang, model):
 
 
 def _build_stop_sequences(tgt_lang):
-    """v3.2-0427b: Stop sequences to terminate GPT before it adds explanations.
+    """v3.2-0426e: Stop sequences to terminate GPT before it adds explanations.
     These are common patterns GPT uses when adding extra commentary."""
     if not stop_sequences_enabled:
         return None
@@ -513,7 +513,7 @@ def _build_stop_sequences(tgt_lang):
 
 
 def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
-    """v3.2-0427: Build messages array using OpenAI standard few-shot format.
+    """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
     {role: "system", name: "example_user"/"example_assistant"} pairs.
     This is OpenAI's recommended way (better than embedding examples in system prompt).
@@ -2211,7 +2211,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
 
         _model = pick_model(text)
-        # v3.2-0427: build messages array, optionally using few-shot "messages" format
+        # v3.2-0426e: build messages array, optionally using few-shot "messages" format
         # which separates examples into example_user/example_assistant pairs (OpenAI standard).
         if fewshot_mode == "messages":
             _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt)
@@ -2220,7 +2220,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ]
-        # v3.2-0427b: build kwargs with all official OpenAI features
+        # v3.2-0426e: build kwargs with all official OpenAI features
         # Detect if model is o-series (reasoning model) - they use different params
         _is_reasoning_model = _model.startswith(("o1", "o3", "o4"))
         _kwargs = {
@@ -2247,7 +2247,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # Hash for privacy (don't send raw LINE user IDs)
             import hashlib as _h
             _kwargs["user"] = _h.sha256(_user_id.encode()).hexdigest()[:32]
-        # v3.2-0427c: logit_bias to forbid specific phrases (e.g. "Catatan:", "註:")
+        # v3.2-0426e: logit_bias to forbid specific phrases (e.g. "Catatan:", "註:")
         # Skip for o-series (reasoning models don't support logit_bias well)
         if not _is_reasoning_model:
             try:
@@ -2266,7 +2266,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _meta["tgt_lang"] = tgt or ""
             if _meta:
                 _kwargs["metadata"] = _meta
-        # v3.2-0427: Structured Outputs (response_format with json_schema)
+        # v3.2-0426e: Structured Outputs (response_format with json_schema)
         if structured_output_enabled and not _model.startswith(("o1", "o3", "o4")):
             _kwargs["response_format"] = {
                 "type": "json_schema",
@@ -2295,7 +2295,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _supports_logprobs = not _model.startswith(("o1", "o3", "o4"))
         if logprobs_enabled and _supports_logprobs:
             _kwargs["logprobs"] = True
-        # v3.2-0427: prompt_caching_enabled triggers OpenAI's automatic caching
+        # v3.2-0426e: prompt_caching_enabled triggers OpenAI's automatic caching
         # of stable prefixes (>1024 tokens). Caching is automatic for gpt-4.1+ and
         # gpt-4o; we just ensure system prompt is stable across requests.
         # (No explicit param needed; just keep prefix consistent.)
@@ -2316,7 +2316,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         except Exception:
             _confidence = 1.0
         track_tokens(r)
-        # v3.2-0427: parse structured output if used
+        # v3.2-0426e: parse structured output if used
         _raw = r.choices[0].message.content.strip()
         if structured_output_enabled and _raw.startswith("{"):
             try:
@@ -4092,7 +4092,7 @@ if VideoMessageContent:
                             _tone, _tone_custom = get_group_tone(group_id)
                             _tl.tone = _tone
                             _tl.tone_custom = _tone_custom
-                            # v3.2-0427b: pass user_id and group_id for OpenAI metadata/user param
+                            # v3.2-0426e: pass user_id and group_id for OpenAI metadata/user param
                             try:
                                 _tl.user_id = getattr(getattr(event.source, 'user_id', ''), '__str__', lambda: '')() if hasattr(event.source, 'user_id') else ''
                             except Exception:
@@ -5955,7 +5955,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 
 <div class="card" style="margin-top:12px">
-<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎯 翻譯品質進階設定（v3.2-0426d）</div>
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎯 翻譯品質進階設定（v3.2-0426e）</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">控制翻譯穩定度、雙重檢查、Few-shot 格式</div>
 
 <div style="margin-bottom:12px">
@@ -6001,7 +6001,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 
 <div class="card" style="margin-top:12px">
-<div style="font-weight:700;font-size:15px;margin-bottom:10px">🛡️ 官方 API 進階參數（v3.2-0427b）</div>
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🛡️ 官方 API 進階參數（v3.2-0426e）</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">OpenAI 官方功能,合規追蹤、防止 GPT 加註解、推理模型專用參數</div>
 
 <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -7268,7 +7268,7 @@ async function _loadFeatures(gid){
     if(document.getElementById('soEn')) document.getElementById('soEn').checked=!!d.structured_output_enabled;
     if(document.getElementById('pcEn')) document.getElementById('pcEn').checked=d.prompt_caching_enabled!==false;
     if(document.getElementById('tlEn')) document.getElementById('tlEn').checked=d.translation_logging_enabled!==false;
-    // v3.2-0427b: load official feature settings
+    // v3.2-0426e: load official feature settings
     if(document.getElementById('ssEn')) document.getElementById('ssEn').checked=d.stop_sequences_enabled!==false;
     if(document.getElementById('reEf')) document.getElementById('reEf').value=d.reasoning_effort||'medium';
     if(document.getElementById('suid')) document.getElementById('suid').checked=d.send_user_id_to_openai!==false;
