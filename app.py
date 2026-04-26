@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.2-0426e"
+VERSION = "v3.3-0427-factory-semantic"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -330,7 +330,7 @@ TONE_PRESETS = {
         "After these internal checks, output ONLY the final translation, no explanation."
     ),
 }
-translation_tone = "casual"       # global default: casual / natural / formal
+translation_tone = "factory"      # global default: factory / casual / natural / formal
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
 group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
 
@@ -735,6 +735,12 @@ custom_translation_examples = []
 
 # ── Built-in factory examples (hardcoded, NOT visible in admin panel) ──
 BUILTIN_EXAMPLES = [
+    # ID->ZH hard factory examples: these are also enforced by the semantic layer below.
+    {"zh": "料件後端損傷", "id": "Barang rusak dari belakang", "dir": "id2zh"},
+    {"zh": "棒材後端損傷", "id": "Batang rusak dari belakang", "dir": "id2zh"},
+    {"zh": "料件後端有損傷", "id": "Barang bagian belakang rusak", "dir": "id2zh"},
+    {"zh": "前端損傷", "id": "Bagian depan rusak", "dir": "id2zh"},
+    {"zh": "後端損傷", "id": "Bagian belakang rusak", "dir": "id2zh"},
     {"zh": "再強調一次", "id": "Saya tegaskan lagi", "dir": "zh2id"},
     {"zh": "一定要確實執行", "id": "harus benar-benar dijalankan", "dir": "zh2id"},
     {"zh": "一定要標示清楚", "id": "harus diberi penandaan yang jelas", "dir": "zh2id"},
@@ -1311,6 +1317,331 @@ def is_translation_valid(result, src, tgt):
     return True
 
 
+
+# === Factory semantic translation engine (ID -> ZH) ===
+# Purpose: do not rely on prompt-only translation for factory chat.  This layer
+# detects factory domains, normalizes Indonesian shop-floor terms into semantic
+# slots, validates Chinese output, and repairs literal translations before reply.
+
+FACTORY_ID_ZH_OBJECTS = {
+    "barang": "料件",
+    "barangnya": "料件",
+    "material": "材料",
+    "materialnya": "材料",
+    "bahan": "材料",
+    "batang": "棒材",
+    "batangnya": "棒材",
+    "batang baja": "棒材",
+    "bundel": "這把",
+    "ikat": "這捆",
+    "lot": "這批料",
+    "order": "這張單",
+    "work order": "工單",
+    "wo": "工單",
+    "tag": "TAG",
+    "label": "標籤",
+    "mesin": "機台",
+    "mesinnya": "機台",
+    "troli": "台車",
+    "trolley": "台車",
+    "gudang": "倉庫",
+}
+
+FACTORY_ID_ZH_DEFECTS = {
+    "rusak": "損傷",
+    "cacat": "異常",
+    "lecet": "擦傷",
+    "gores": "刮傷",
+    "goresan": "刮傷",
+    "tergores": "刮傷",
+    "retak": "裂傷",
+    "patah": "斷裂",
+    "bengkok": "彎曲",
+    "penyok": "凹傷",
+    "aus": "磨損",
+    "kasar": "表面粗糙",
+    "kotor": "髒污",
+    "karat": "生鏽",
+    "berkarat": "生鏽",
+    "bocor": "漏油",
+    "macet": "卡住",
+    "habis": "用完",
+    "kurang": "短少",
+    "salah": "錯誤",
+    "tercampur": "混料",
+}
+
+FACTORY_ID_ZH_POSITIONS = {
+    "dari belakang": "後端",
+    "bagian belakang": "後端",
+    "ujung belakang": "後端",
+    "belakang": "後端",
+    "dari depan": "前端",
+    "bagian depan": "前端",
+    "ujung depan": "前端",
+    "depan": "前端",
+    "bagian tengah": "中段",
+    "tengah": "中段",
+    "sebelah samping": "側邊",
+    "samping": "側邊",
+    "bagian atas": "上方",
+    "atas": "上方",
+    "bagian bawah": "下方",
+    "bawah": "下方",
+    "permukaan": "表面",
+    "luar": "外側",
+    "dalam": "內側",
+}
+
+FACTORY_DOMAIN_KEYWORDS_ID = {
+    "quality_issue": [
+        "rusak", "cacat", "lecet", "gores", "goresan", "tergores", "retak", "patah",
+        "bengkok", "penyok", "aus", "kasar", "karat", "berkarat", "visual", "qc",
+        "lulus", "tidak lulus", "reject", "rework", "toleransi", "diameter", "ukuran",
+    ],
+    "material_flow": [
+        "barang", "material", "bahan", "batang", "bundel", "lot", "work order", "wo",
+        "masuk gudang", "gudang", "packing", "di-packing", "station", "stasiun", "line",
+        "tag", "label", "heat number", "masuk", "keluar", "taruh", "letakkan",
+    ],
+    "equipment": [
+        "mesin", "batu gerinda", "gerinda", "bearing", "kopel", "as ", "roda", "pompa",
+        "pipa", "oli", "bocor", "macet", "maintenance", "perbaiki", "mati", "jalan",
+    ],
+    "safety": [
+        "bahaya", "awas", "hati-hati", "pelindung", "interlock", "crane", "forklift",
+        "dilarang", "safety", "kacamata", "helm", "sarung tangan",
+    ],
+}
+
+FACTORY_ZH_LITERAL_RISK = {
+    "物品": "料件",
+    "東西": "料件",
+    "從後面": "後端",
+    "從前面": "前端",
+    "後面損壞": "後端損傷",
+    "前面損壞": "前端損傷",
+    "後面壞了": "後端損傷",
+    "前面壞了": "前端損傷",
+    "壞掉": "損傷",
+    "壞了": "損傷",
+}
+
+FACTORY_BAD_ZH_PATTERNS = [
+    r"物品從(後面|前面)(損壞|壞了|壞掉)",
+    r"東西從(後面|前面)(損壞|壞了|壞掉)",
+    r"材料從(後面|前面)(損壞|壞了|壞掉)",
+    r"棒材從(後面|前面)(損壞|壞了|壞掉)",
+]
+
+
+def _clean_factory_id(text):
+    t = (text or "").strip().lower()
+    t = re.sub(r"[。．.！!？?，,：:；;()（）\[\]{}]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def detect_factory_domain(text, src=None, tgt=None):
+    """Return a lightweight factory-domain profile used before/after translation."""
+    t = _clean_factory_id(text) if src == "id" else (text or "").lower()
+    domains = set()
+    if src == "id":
+        for domain, kws in FACTORY_DOMAIN_KEYWORDS_ID.items():
+            if any(kw in t for kw in kws):
+                domains.add(domain)
+        if any(p in t for p in FACTORY_ID_ZH_POSITIONS):
+            domains.add("material_direction")
+    else:
+        zh_kws = ["料", "棒材", "工單", "包裝", "入庫", "站", "機台", "品保", "異常", "損傷", "尺寸", "公差", "研磨", "削皮"]
+        if any(k in (text or "") for k in zh_kws):
+            domains.add("factory")
+    if domains:
+        return {"is_factory": True, "domains": sorted(domains)}
+    return {"is_factory": False, "domains": []}
+
+
+def _find_longest_phrase(table, text):
+    for k in sorted(table.keys(), key=len, reverse=True):
+        if re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", text):
+            return k, table[k]
+    return None, None
+
+
+def factory_semantic_translate_id_zh(text):
+    """Parse object / defect / direction slots and compose Taiwan factory Chinese."""
+    raw = text or ""
+    t = _clean_factory_id(raw)
+    if not t:
+        return None
+
+    leading_codes = re.findall(r"\b(?:[A-Z]\d[A-Z0-9-]{3,}|\d+[A-Z][A-Z0-9-]{2,})\b", raw)
+    prefix = (" ".join(dict.fromkeys(leading_codes)) + " ") if leading_codes else ""
+
+    obj_key, obj_zh = _find_longest_phrase(FACTORY_ID_ZH_OBJECTS, t)
+    defect_key, defect_zh = _find_longest_phrase(FACTORY_ID_ZH_DEFECTS, t)
+    pos_key, pos_zh = _find_longest_phrase(FACTORY_ID_ZH_POSITIONS, t)
+
+    if obj_zh and defect_zh:
+        if pos_zh:
+            return (prefix + f"{obj_zh}{pos_zh}{defect_zh}").strip()
+        if obj_key in ("barang", "barangnya", "material", "materialnya", "bahan", "batang", "batangnya", "batang baja"):
+            return (prefix + f"{obj_zh}{defect_zh}").strip()
+
+    if pos_zh and defect_zh and not obj_zh:
+        return (prefix + f"{pos_zh}{defect_zh}").strip()
+
+    phrase_map = {
+        "barang rusak dari belakang": "料件後端損傷",
+        "barang bagian belakang rusak": "料件後端有損傷",
+        "batang rusak dari belakang": "棒材後端損傷",
+        "batang bagian belakang rusak": "棒材後端有損傷",
+        "bagian belakang rusak": "後端損傷",
+        "bagian depan rusak": "前端損傷",
+        "barang rusak depan": "料件前端損傷",
+        "barang rusak belakang": "料件後端損傷",
+    }
+    if t in phrase_map:
+        return (prefix + phrase_map[t]).strip()
+
+    return None
+
+
+def build_factory_context_hint(text, src, tgt):
+    """Compact semantic hint injected into the translation prompt."""
+    if src != "id" or tgt != "zh":
+        return ""
+    domain = detect_factory_domain(text, src, tgt)
+    if not domain["is_factory"]:
+        return ""
+    t = _clean_factory_id(text)
+    terms = []
+    for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS, **FACTORY_ID_ZH_POSITIONS}.items():
+        if re.search(r"(?<![a-z])" + re.escape(source) + r"(?![a-z])", t):
+            terms.append(f"{source}={zh}")
+    deterministic = factory_semantic_translate_id_zh(text)
+    hint = (
+        "【印尼→繁中工廠語義提示】"
+        "這是台灣不鏽鋼棒材工廠群組訊息；先判斷品質異常/材料方向/設備語境，不要逐字翻譯。"
+        "barang 在工廠品質語境=料件/材料，不要翻物品；"
+        "rusak 在品質語境=損傷/異常，不要只翻壞掉；"
+        "belakang/depan 描述料件方向=後端/前端，不要翻從後面/前面；"
+        "輸出繁體中文現場用語，短句保持短句。"
+    )
+    if terms:
+        hint += " 強制術語：" + "；".join(terms) + "。"
+    if deterministic:
+        hint += " 此句語義槽位可理解為：" + deterministic + "。"
+    return hint
+
+
+def post_fix_factory_id_to_zh(src_text, zh_text):
+    """Fix literal Chinese outputs in factory ID->ZH translations."""
+    if not zh_text:
+        return zh_text
+    domain = detect_factory_domain(src_text, "id", "zh")
+    result = zh_text.strip()
+    if not domain["is_factory"]:
+        return result
+
+    high_risk = {
+        "物品從後面損壞": "料件後端損傷",
+        "物品從後面壞了": "料件後端損傷",
+        "物品從後面壞掉": "料件後端損傷",
+        "東西從後面損壞": "料件後端損傷",
+        "東西從後面壞了": "料件後端損傷",
+        "材料從後面損壞": "材料後端損傷",
+        "棒材從後面損壞": "棒材後端損傷",
+        "物品從前面損壞": "料件前端損傷",
+        "東西從前面損壞": "料件前端損傷",
+        "材料從前面損壞": "材料前端損傷",
+        "棒材從前面損壞": "棒材前端損傷",
+    }
+    for wrong, correct in sorted(high_risk.items(), key=lambda x: -len(x[0])):
+        result = result.replace(wrong, correct)
+
+    for wrong, correct in sorted(FACTORY_ZH_LITERAL_RISK.items(), key=lambda x: -len(x[0])):
+        result = result.replace(wrong, correct)
+
+    result = re.sub(r"[，,。．\s]+$", "", result)
+    return result.strip()
+
+
+def validate_factory_translation(src_text, zh_text, src, tgt):
+    """Validate Chinese translation against factory literal-risk rules."""
+    if src != "id" or tgt != "zh":
+        return True, ""
+    if not zh_text:
+        return False, "empty"
+    domain = detect_factory_domain(src_text, src, tgt)
+    if not domain["is_factory"]:
+        return True, ""
+    for pat in FACTORY_BAD_ZH_PATTERNS:
+        if re.search(pat, zh_text):
+            return False, "factory_literal_direction_error"
+    risk_words = ["物品從後面", "物品從前面", "東西從後面", "東西從前面", "從後面損", "從前面損"]
+    if any(w in zh_text for w in risk_words):
+        return False, "factory_literal_object_or_direction"
+    return True, ""
+
+
+def repair_factory_translation_openai(src_text, bad_result, reason):
+    """Repair literal ID->ZH factory translation with a small strict prompt."""
+    if not oai:
+        return None
+    try:
+        hint = build_factory_context_hint(src_text, "id", "zh")
+        deterministic = factory_semantic_translate_id_zh(src_text)
+        sys_prompt = (
+            "你是台灣不鏽鋼棒材工廠的印尼文→繁體中文現場翻譯審核器。"
+            "你的任務是修正直譯錯誤，輸出現場人員會用的短句。"
+            "不要解釋，不要加註解，只輸出修正後譯文。"
+            "規則：barang在工廠品質語境=料件/材料；batang=棒材；rusak=損傷/異常；"
+            "belakang/depan描述料件方向=後端/前端，不可翻成從後面/從前面。"
+        )
+        user_msg = (
+            f"原印尼文：{src_text}\n"
+            f"錯誤中文：{bad_result}\n"
+            f"錯誤原因：{reason}\n"
+            f"語義提示：{hint}\n"
+        )
+        if deterministic:
+            user_msg += f"可採用的語義結果：{deterministic}\n"
+        user_msg += "請輸出修正後繁體中文："
+        r = oai.chat.completions.create(
+            model=pick_model(src_text),
+            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=300,
+        )
+        track_tokens(r)
+        return (r.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.error("Factory repair error: %s", e)
+        return None
+
+
+def finalize_factory_translation(src_text, result, src, tgt):
+    """Post-process, validate, repair; deterministic fallback for covered factory shapes."""
+    if not result:
+        return result
+    if src == "id" and tgt == "zh":
+        result = post_fix_factory_id_to_zh(src_text, result)
+        ok, reason = validate_factory_translation(src_text, result, src, tgt)
+        if ok:
+            return result
+        repaired = repair_factory_translation_openai(src_text, result, reason)
+        if repaired:
+            repaired = post_fix_factory_id_to_zh(src_text, repaired)
+            ok2, _ = validate_factory_translation(src_text, repaired, src, tgt)
+            if ok2:
+                return repaired
+        fallback = factory_semantic_translate_id_zh(src_text)
+        if fallback:
+            return fallback
+    return result
+
 # === Hard replacement tables ===
 # These bypass GPT entirely - applied BEFORE sending to GPT (zh->id)
 # and AFTER receiving from GPT (id->zh result post-processing)
@@ -1625,6 +1956,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
             "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
+            + build_factory_context_hint(text, src, tgt) + " "
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
             "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
             "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
@@ -2332,6 +2664,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             result = _raw
         result = restore_mentions(result, placeholders)
+        if src == "id" and tgt == "zh":
+            result = post_fix_factory_id_to_zh(text, result)
         # Fix known GPT translation mistakes and restore customer names
         if src == "zh":
             result = post_fix_translation(result)
@@ -2449,17 +2783,30 @@ def translate(text, src, tgt):
         logger.info("Custom example exact match: %s -> %s", src, tgt)
         return exact
 
+    # Deterministic factory semantic engine before cache/OpenAI.
+    # This prevents short factory defect/direction reports from being treated as daily language.
+    if src == "id" and tgt == "zh":
+        semantic = factory_semantic_translate_id_zh(text)
+        if semantic:
+            logger.info("Factory semantic translation hit: %r -> %r", text[:80], semantic[:80])
+            cache_set(text, src, tgt, semantic)
+            return semantic
+
     # Check cache first
     cached = cache_get(text, src, tgt)
     if cached:
         return cached
 
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
+    if result:
+        result = finalize_factory_translation(text, result, src, tgt)
 
     # If source-language leakage is detected, retry with strict mode.
     if result and not is_translation_valid(result, src, tgt):
         logger.warning("Source-language leakage detected in translation, retrying with stricter prompt")
         strict_result = translate_openai(text, src, tgt, strict_no_source_script=True)
+        if strict_result:
+            strict_result = finalize_factory_translation(text, strict_result, src, tgt)
         if strict_result and is_translation_valid(strict_result, src, tgt):
             result = strict_result
         else:
@@ -2471,18 +2818,30 @@ def translate(text, src, tgt):
                 repair_mode=True,
                 bad_result=(strict_result or result)
             )
+            if repaired:
+                repaired = finalize_factory_translation(text, repaired, src, tgt)
             if repaired and is_translation_valid(repaired, src, tgt):
                 result = repaired
 
     if result and is_translation_valid(result, src, tgt):
+        result = finalize_factory_translation(text, result, src, tgt)
         cache_set(text, src, tgt, result)
         return result
 
-    # Fallback to Google with retry.
+    # Fallback to Google with retry, then factory post-validation.
     result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
+    if result:
+        result = finalize_factory_translation(text, result, src, tgt)
     if result and is_translation_valid(result, src, tgt):
         cache_set(text, src, tgt, result)
         return result
+
+    # Last chance: deterministic semantic fallback before returning None.
+    if src == "id" and tgt == "zh":
+        semantic = factory_semantic_translate_id_zh(text)
+        if semantic:
+            cache_set(text, src, tgt, semantic)
+            return semantic
 
     # Last chance: ask OpenAI to repair the latest output instead of returning a leaked translation.
     if result:
@@ -2494,12 +2853,13 @@ def translate(text, src, tgt):
             repair_mode=True,
             bad_result=result
         )
+        if repaired:
+            repaired = finalize_factory_translation(text, repaired, src, tgt)
         if repaired and is_translation_valid(repaired, src, tgt):
             cache_set(text, src, tgt, repaired)
             return repaired
 
     return None
-
 
 def detect_work_order(ocr_text):
     """Detect if OCR text is from a factory work order (製造指示書).
