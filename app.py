@@ -122,7 +122,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.3-0427-factory-semantic"
+VERSION = "v3.5-0427-instant-feedback"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -545,11 +545,40 @@ def _build_stop_sequences(tgt_lang):
     return None
 
 
+def _example_relevance_score(example_text, query_text):
+    """Score how relevant an example is to the query, by character n-gram overlap.
+    Lightweight, no external deps. Higher score = more relevant.
+    Used to pick the most useful few-shot examples when total examples grow large.
+    """
+    if not example_text or not query_text:
+        return 0.0
+    et = example_text.lower()
+    qt = query_text.lower()
+    # 1. Exact substring match: massive bonus
+    if et in qt or qt in et:
+        return 100.0 + min(len(et), len(qt))
+    # 2. Character bigram overlap
+    def bigrams(s):
+        s = re.sub(r'\s+', '', s)
+        return set(s[i:i+2] for i in range(len(s)-1)) if len(s) >= 2 else set()
+    bg_e = bigrams(et)
+    bg_q = bigrams(qt)
+    if not bg_e or not bg_q:
+        return 0.0
+    overlap = len(bg_e & bg_q)
+    union = len(bg_e | bg_q)
+    return (overlap / union) * 10.0 if union else 0.0
+
+
 def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
     {role: "system", name: "example_user"/"example_assistant"} pairs.
     This is OpenAI's recommended way (better than embedding examples in system prompt).
+
+    v3.4: When custom_examples grows large (we now allow up to 5000),
+    pick the FEWSHOT_INJECT_MAX most relevant examples by character bigram overlap
+    with the user message, instead of just taking the last N.
     """
     msgs = [{"role": "system", "content": sys_prompt}]
     all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
@@ -557,8 +586,29 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
     # If translating zh->id, show zh2id examples; reverse for id->zh
     direction_key = "zh2id" if (src == "zh" and tgt != "zh") else "id2zh" if (src != "zh" and tgt == "zh") else None
     relevant = [ex for ex in all_examples if ex.get("dir", "zh2id") == direction_key] if direction_key else []
-    # Cap at 8 most recent examples to avoid bloating prompt
-    for ex in relevant[-8:]:
+
+    # Score each example by relevance to user message and pick top N.
+    # Score against the source-language side of the example (what GPT will pattern-match).
+    if len(relevant) > FEWSHOT_INJECT_MAX:
+        scored = []
+        for ex in relevant:
+            src_side = ex.get("zh", "") if direction_key == "zh2id" else ex.get("id", "")
+            score = _example_relevance_score(src_side, user_msg)
+            scored.append((score, ex))
+        # Sort: highest relevance first, then most recent (we approximate recency by list order)
+        # Stable sort preserves original order for ties, so recent examples win on tie.
+        scored.sort(key=lambda x: x[0], reverse=True)
+        # Always include at least 2 highest-relevance + recent fallbacks if relevance is weak
+        top = [ex for score, ex in scored[:FEWSHOT_INJECT_MAX] if score > 0]
+        # If fewer than FEWSHOT_INJECT_MAX matched, fill with most recent
+        if len(top) < FEWSHOT_INJECT_MAX:
+            recent_fill = [ex for ex in relevant[-FEWSHOT_INJECT_MAX*2:] if ex not in top]
+            top.extend(recent_fill[:FEWSHOT_INJECT_MAX - len(top)])
+        chosen = top[:FEWSHOT_INJECT_MAX]
+    else:
+        chosen = relevant[-FEWSHOT_INJECT_MAX:]
+
+    for ex in chosen:
         zh = ex.get("zh", "").strip()
         idn = ex.get("id", "").strip()
         if not zh or not idn:
@@ -789,7 +839,13 @@ PACKAGING_LOOKUP = {}
 
 # ── Custom translation examples (editable from admin panel) ──
 # List of {"zh": "中文", "id": "Indonesian", "dir": "zh2id"|"id2zh"}
-CUSTOM_EXAMPLES_MAX = 200
+# v3.4: Raised cap from 200 to 5000.
+#   - Few-shot injection still uses only top 8 most relevant per request (see _build_messages_with_fewshot).
+#   - All examples are kept as the long-term training corpus for future fine-tuning.
+#   - 5000 entries is well within OpenAI's context window even if all were injected (they aren't).
+CUSTOM_EXAMPLES_MAX = 5000
+# Few-shot only uses N most semantically relevant examples per request:
+FEWSHOT_INJECT_MAX = 8
 custom_translation_examples = []
 
 # ── Built-in factory examples (hardcoded, NOT visible in admin panel) ──
@@ -3606,6 +3662,11 @@ HELP_COMMAND_SECTIONS = [
             ("/skipadd 名字", "加入白名單",   "Tambah whitelist"),
             ("/skipdel 名字", "移出白名單",   "Hapus whitelist"),
             ("/skiplist",     "查看白名單",   "Lihat whitelist"),
+            ("/wrong 譯文",   "標最新翻譯錯", "Tandai salah"),
+            ("/wrong N 譯文", "標倒數第N筆",  "Tandai ke-N salah"),
+            ("/wrong list",   "看最近10筆",   "10 terjemahan terakhir"),
+            ("/export",       "訓練資料統計", "Statistik data"),
+            ("/export jsonl", "匯出訓練資料", "Ekspor data training"),
         ],
     },
     {
@@ -4084,19 +4145,44 @@ def find_user_by_name(group_id, name_query):
     return matches
 
 
-def mark_latest_translation_wrong(group_id, correct_translation="", add_to_examples=True):
-    """Mark the latest translation in this group as wrong from LINE command /wrong.
+def mark_translation_wrong(group_id, correct_translation="", add_to_examples=True,
+                           offset=1, entry_id=None):
+    """v3.4: Mark a translation as wrong with multiple selection modes.
 
-    Usage in group: /wrong 正確翻譯
-    If no correct translation is provided, it only marks the latest entry wrong.
+    Selection priority:
+      1. If entry_id provided → find that exact entry (works across days)
+      2. Else: pick the Nth most recent translation in this group (offset=1 means latest)
+
+    Args:
+      group_id: LINE group id (limits search to this group's translations)
+      correct_translation: optional human-corrected version, added as training example
+      add_to_examples: whether to append to custom_translation_examples
+      offset: 1-based index from the most recent (1=latest, 2=2nd latest, ...)
+      entry_id: exact translation_log entry id
+
+    Returns: (ok: bool, info_text: str)
     """
     target = None
-    for entry in reversed(translation_log):
-        if not group_id or entry.get("group_id") == group_id:
-            target = entry
-            break
-    if not target:
-        return False, "找不到最近的翻譯紀錄。可能剛重啟，或翻譯日誌尚未寫入。"
+    if entry_id:
+        for entry in translation_log:
+            if entry.get("id") == entry_id:
+                target = entry
+                break
+        if not target:
+            return False, f"找不到指定 ID 的翻譯記錄：{entry_id}"
+    else:
+        # Walk most-recent-first, count down to the Nth in this group
+        n = max(1, int(offset or 1))
+        seen = 0
+        for entry in reversed(translation_log):
+            if not group_id or entry.get("group_id") == group_id:
+                seen += 1
+                if seen == n:
+                    target = entry
+                    break
+        if not target:
+            return False, f"找不到第 {n} 筆翻譯記錄。可能剛重啟，或翻譯日誌不夠長。"
+
     target["marked_wrong"] = True
     target["manual_marked_wrong"] = True
     if correct_translation:
@@ -4109,12 +4195,166 @@ def mark_latest_translation_wrong(group_id, correct_translation="", add_to_examp
                 "id": correct_translation if src_lang == "zh" else target.get("src", ""),
                 "dir": direction
             }
-            custom_translation_examples.append(new_ex)
-            if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
-                custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+            # Avoid exact duplicates
+            is_dup = any(
+                ex.get("zh") == new_ex["zh"] and ex.get("id") == new_ex["id"]
+                for ex in custom_translation_examples
+            )
+            if not is_dup:
+                custom_translation_examples.append(new_ex)
+                if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
+                    custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
     _save_translation_log_to_disk()
     save_settings()
     return True, target.get("src", "")[:80]
+
+
+def mark_latest_translation_wrong(group_id, correct_translation="", add_to_examples=True):
+    """Backward-compat wrapper. Old code/tests calling this still work."""
+    return mark_translation_wrong(group_id, correct_translation, add_to_examples, offset=1)
+
+
+def list_recent_translations(group_id, limit=10):
+    """Return the N most recent translation log entries for this group, newest first.
+    Used by /wrong list command so the user can pick which one to mark."""
+    out = []
+    for entry in reversed(translation_log):
+        if not group_id or entry.get("group_id") == group_id:
+            out.append(entry)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def format_recent_translations_for_line(entries):
+    """Format a recent-translations list as a readable LINE message."""
+    if not entries:
+        return "（沒有翻譯記錄 / Tidak ada riwayat）"
+    lines = ["📋 最近翻譯（新→舊）/ Riwayat terjemahan:"]
+    for i, e in enumerate(entries, 1):
+        src = (e.get("src") or "").strip().replace("\n", " ")[:40]
+        tgt = (e.get("tgt") or "").strip().replace("\n", " ")[:40]
+        marked = "❌ " if e.get("marked_wrong") else ""
+        lines.append(f"{i}. {marked}原: {src}")
+        lines.append(f"   譯: {tgt}")
+    lines.append("")
+    lines.append("標記第 N 筆錯誤：/wrong N 正確翻譯")
+    lines.append("Mark salah ke-N: /wrong N terjemahan benar")
+    return "\n".join(lines)
+
+
+def parse_wrong_command(text):
+    """Parse the /wrong command body. Returns dict with parsed fields.
+
+    Supported syntaxes:
+      /wrong                          → {"mode": "mark_only", "offset": 1}
+      /wrong list                     → {"mode": "list"}
+      /wrong 正確翻譯                 → {"mode": "correct", "offset": 1, "correct": "..."}
+      /wrong 3 正確翻譯               → {"mode": "correct", "offset": 3, "correct": "..."}
+      /wrong id=abc123 正確翻譯       → {"mode": "correct", "entry_id": "abc123", "correct": "..."}
+
+    The original `text` is the raw user message starting with the command keyword.
+    """
+    # Strip the leading command keyword. Accept several aliases.
+    body = text.strip()
+    for prefix in ("/wrong", "/markwrong", "/錯", "/標錯"):
+        if body.lower().startswith(prefix.lower()):
+            body = body[len(prefix):].strip()
+            break
+
+    # Empty → mark only, no correction
+    if not body:
+        return {"mode": "mark_only", "offset": 1}
+
+    # /wrong list
+    if body.lower() in ("list", "ls", "清單", "列表"):
+        return {"mode": "list"}
+
+    # /wrong id=xxx 正確翻譯
+    m = re.match(r'^id\s*=\s*(\S+)\s*(.*)$', body, re.IGNORECASE)
+    if m:
+        eid = m.group(1)
+        correct = m.group(2).strip()
+        if not correct:
+            return {"mode": "mark_only", "entry_id": eid}
+        return {"mode": "correct", "entry_id": eid, "correct": correct}
+
+    # /wrong N 正確翻譯  (N is 1-9)
+    m = re.match(r'^(\d+)\s+(.+)$', body)
+    if m:
+        n = int(m.group(1))
+        correct = m.group(2).strip()
+        if 1 <= n <= 50:
+            return {"mode": "correct", "offset": n, "correct": correct}
+
+    # /wrong 正確翻譯
+    return {"mode": "correct", "offset": 1, "correct": body}
+
+
+# v3.4: short-lived JSONL export tokens for /export jsonl LINE command.
+# Maps token → (filepath, expiry_ts). Tokens are wiped after use or expiry.
+_export_tokens = {}
+
+
+def export_examples_to_jsonl():
+    """Export custom_translation_examples to OpenAI fine-tune JSONL format.
+    Returns a public URL good for ~1 hour, or "" on failure.
+
+    OpenAI chat fine-tune format expects:
+      {"messages":[
+         {"role":"system","content":"..."},
+         {"role":"user","content":"中文原文"},
+         {"role":"assistant","content":"印尼譯文"}
+      ]}
+    one JSON per line.
+    """
+    if not custom_translation_examples:
+        return ""
+    try:
+        token = uuid.uuid4().hex[:12]
+        # Use /tmp on Render — survives within container lifetime, which is enough for 1h links.
+        path = os.path.join(tempfile.gettempdir(), f"finetune_{token}.jsonl")
+        sys_prompt = ("You are a Taiwan-factory ZH↔ID translator. "
+                      "Output only the translation, no commentary.")
+        with open(path, "w", encoding="utf-8") as f:
+            for ex in custom_translation_examples:
+                zh = (ex.get("zh") or "").strip()
+                idn = (ex.get("id") or "").strip()
+                direction = ex.get("dir", "zh2id")
+                if not zh or not idn:
+                    continue
+                if direction == "zh2id":
+                    user_msg, assistant_msg = zh, idn
+                else:
+                    user_msg, assistant_msg = idn, zh
+                row = {
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_msg},
+                        {"role": "assistant", "content": assistant_msg},
+                    ]
+                }
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _export_tokens[token] = (path, int(time.time()) + 3600)
+        # Clean up expired tokens occasionally
+        now = int(time.time())
+        expired = [t for t, (_p, exp) in _export_tokens.items() if exp < now]
+        for t in expired:
+            try:
+                os.remove(_export_tokens[t][0])
+            except Exception:
+                pass
+            _export_tokens.pop(t, None)
+        # Return a relative URL; LINE will let the user tap it.
+        # Caller can prepend host if needed; we'll use the Render hostname through env.
+        host = os.environ.get("PUBLIC_HOST", "").rstrip("/")
+        if host:
+            return f"{host}/export/finetune/{token}"
+        # Fallback: absolute path note for the user
+        return f"/export/finetune/{token}"
+    except Exception as e:
+        logger.error("export_examples_to_jsonl failed: %s", e)
+        return ""
 
 
 def handle_command(text, group_id, user_id=None):
@@ -4124,13 +4364,88 @@ def handle_command(text, group_id, user_id=None):
         # Return sentinel; caller detects this and sends Flex instead of Text
         return "__FLEX_HELP__"
     elif cmd.startswith("/wrong") or cmd.startswith("/markwrong") or cmd.startswith("/錯") or cmd.startswith("/標錯"):
-        correct = text.strip().split(" ", 1)[1].strip() if " " in text.strip() else ""
-        ok, info = mark_latest_translation_wrong(group_id, correct_translation=correct, add_to_examples=bool(correct))
+        # v3.4: rich /wrong syntax (see parse_wrong_command for supported forms)
+        parsed = parse_wrong_command(text)
+        mode = parsed.get("mode")
+
+        if mode == "list":
+            entries = list_recent_translations(group_id, limit=10)
+            return format_recent_translations_for_line(entries)
+
+        if mode == "mark_only":
+            ok, info = mark_translation_wrong(
+                group_id,
+                correct_translation="",
+                add_to_examples=False,
+                offset=parsed.get("offset", 1),
+                entry_id=parsed.get("entry_id"),
+            )
+            if not ok:
+                return "⚠️ " + info
+            return ("✅ 已標記翻譯錯誤。若要同時加入正確譯文，請輸入：\n"
+                    "/wrong 正確翻譯（標最近一筆）\n"
+                    "/wrong 2 正確翻譯（標倒數第 2 筆）\n"
+                    "/wrong list（看最近 10 筆）")
+
+        # mode == "correct"
+        correct = parsed.get("correct", "").strip()
+        ok, info = mark_translation_wrong(
+            group_id,
+            correct_translation=correct,
+            add_to_examples=True,
+            offset=parsed.get("offset", 1),
+            entry_id=parsed.get("entry_id"),
+        )
         if not ok:
             return "⚠️ " + info
-        if correct:
-            return "✅ 已標記最近一筆翻譯錯誤，並加入修正範例：" + correct
-        return "✅ 已標記最近一筆翻譯錯誤。若要同時加入正確譯文，請輸入：/wrong 正確翻譯"
+        offset = parsed.get("offset", 1)
+        position_label = "最近一筆" if offset == 1 else f"倒數第 {offset} 筆"
+        if parsed.get("entry_id"):
+            position_label = f"指定 ID 訊息"
+        total = len(custom_translation_examples)
+        return (f"✅ 已標記{position_label}錯誤，並加入修正範例：\n"
+                f"{correct}\n"
+                f"📚 累積範例：{total} / {CUSTOM_EXAMPLES_MAX}")
+
+    elif cmd.startswith("/export"):
+        # v3.4: export training data
+        parts = text.strip().split()
+        if len(parts) == 1:
+            # /export → status
+            total = len(custom_translation_examples)
+            zh2id = sum(1 for e in custom_translation_examples if e.get("dir") == "zh2id")
+            id2zh = sum(1 for e in custom_translation_examples if e.get("dir") == "id2zh")
+            target = 300
+            ready = "✅ 達到 fine-tune 建議門檻" if total >= target else f"再 {target-total} 筆達建議門檻"
+            return (f"📊 訓練資料統計 / Statistik data\n"
+                    f"總範例數 / Total: {total}\n"
+                    f"中→印 / ZH→ID: {zh2id}\n"
+                    f"印→中 / ID→ZH: {id2zh}\n"
+                    f"狀態 / Status: {ready}\n\n"
+                    f"匯出 jsonl: /export jsonl\n"
+                    f"（產生下載連結 / generate link）")
+        elif parts[1].lower() in ("jsonl", "json"):
+            url = export_examples_to_jsonl()
+            if not url:
+                return "⚠️ 匯出失敗 / Export gagal（沒有範例 / no examples）"
+            return f"📦 訓練資料已匯出 / Data ekspor:\n{url}\n\n（連結 1 小時內有效 / valid 1 hour）"
+        else:
+            return "用法 / Usage: /export 或 /export jsonl"
+
+    elif cmd in ("/stats wrong", "/wrongstats", "/標記統計"):
+        total = len(custom_translation_examples)
+        wrong_count = sum(1 for e in translation_log if e.get("marked_wrong"))
+        recent_30d = 0
+        cutoff = int(time.time()) - 30*86400
+        for e in translation_log:
+            if e.get("marked_wrong") and e.get("ts", 0) > cutoff:
+                recent_30d += 1
+        return (f"📊 翻譯品質統計\n"
+                f"累積修正範例：{total} / {CUSTOM_EXAMPLES_MAX}\n"
+                f"日誌中標錯：{wrong_count} 筆\n"
+                f"近 30 天標錯：{recent_30d} 筆\n"
+                f"距 fine-tune 門檻：{max(0, 300 - total)} 筆")
+
     elif cmd == "/on":
         group_settings[group_id] = True
         save_settings()
@@ -6482,34 +6797,98 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 
 <!-- Examples Panel -->
 <div class="panel" id="panel-examples">
-<div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-<div style="font-weight:700;font-size:15px">📝 自訂翻譯範例</div>
-<span id="exCountBadge" class="badge badge-on" style="font-size:11px">0/200</span>
-</div>
-<div class="card-sub" style="margin-bottom:12px">新增的範例會即時注入 AI 翻譯的 prompt，讓翻譯結果更符合你的用語習慣。</div>
-<div id="exWarning" style="display:none;background:rgba(250,166,26,.12);border:1px solid rgba(250,166,26,.3);border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;color:#faa61a"></div>
 
-<div style="margin-bottom:12px">
+<!-- ① 主要操作區:最近翻譯日誌(一進來就能標錯) -->
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+<div>
+<div style="font-weight:700;font-size:15px">📜 最近翻譯日誌</div>
+<div style="font-size:11px;color:#8a8a9a;margin-top:2px">點「標錯+修正」即時加入範例 · 下次翻譯立即生效</div>
+</div>
+<div style="display:flex;gap:6px;align-items:center">
+<label style="font-size:12px;color:#8a8a9a;display:flex;align-items:center;gap:4px"><input type="checkbox" id="logOnlyWrong" onchange="loadTranslationLog()"> 只看錯誤</label>
+<button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:4px 10px;border-radius:6px;font-size:12px" onclick="loadTranslationLog()">↻</button>
+</div>
+</div>
+<div id="tlogList"><div class="empty">點 ↻ 載入</div></div>
+</div>
+
+<!-- ② 累積進度 + 工具 -->
+<div class="card" style="margin-top:12px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+<div style="font-weight:700;font-size:15px">📚 範例累積</div>
+<span class="badge" style="background:rgba(67,181,129,.15);color:#43b581;font-size:11px;border:1px solid rgba(67,181,129,.3)">✓ 即時生效</span>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:10px">
+  <div style="flex:1;background:#0d0d1a;padding:10px 6px;border-radius:6px;text-align:center;border:1px solid #2a2a3e">
+    <div style="color:#7c6fef;font-weight:700;font-size:20px" id="trainTotal">—</div>
+    <div style="color:#8a8a9a;font-size:10px;margin-top:2px">總範例</div>
+  </div>
+  <div style="flex:1;background:#0d0d1a;padding:10px 6px;border-radius:6px;text-align:center;border:1px solid #2a2a3e">
+    <div style="color:#43b581;font-weight:700;font-size:20px" id="trainZh2id">—</div>
+    <div style="color:#8a8a9a;font-size:10px;margin-top:2px">中→印</div>
+  </div>
+  <div style="flex:1;background:#0d0d1a;padding:10px 6px;border-radius:6px;text-align:center;border:1px solid #2a2a3e">
+    <div style="color:#faa61a;font-weight:700;font-size:20px" id="trainId2zh">—</div>
+    <div style="color:#8a8a9a;font-size:10px;margin-top:2px">印→中</div>
+  </div>
+  <div style="flex:1;background:#0d0d1a;padding:10px 6px;border-radius:6px;text-align:center;border:1px solid #2a2a3e">
+    <div style="color:#f88;font-weight:700;font-size:20px" id="trainWrong30">—</div>
+    <div style="color:#8a8a9a;font-size:10px;margin-top:2px">30天標錯</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:6px">
+  <button class="btn btn-sm" style="flex:1;background:#2a4a7c;color:#fff;border:none;padding:8px;border-radius:6px;font-size:12px" onclick="showImportDialog()">📥 批次匯入</button>
+  <button class="btn btn-sm" style="flex:1;background:#3a5a3a;color:#fff;border:none;padding:8px;border-radius:6px;font-size:12px" onclick="downloadCsv()">📤 匯出 CSV</button>
+  <button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:8px 12px;border-radius:6px;font-size:12px" onclick="loadTrainStatus();loadExamples();loadTranslationLog()" title="重新整理">↻</button>
+</div>
+
+<div id="exWarning" style="display:none;background:rgba(250,166,26,.12);border:1px solid rgba(250,166,26,.3);border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#faa61a"></div>
+
+<!-- 批次匯入彈窗 -->
+<div id="importDialog" style="display:none;background:#0d0d1a;border:1px solid #7c6fef;border-radius:8px;padding:12px;margin-top:10px">
+  <div style="font-weight:600;font-size:13px;margin-bottom:6px">📥 批次匯入範例</div>
+  <div style="font-size:11px;color:#8a8a9a;margin-bottom:6px">
+    每行一筆，格式：<code style="background:#2a2a3e;padding:1px 4px;border-radius:3px">方向 | 中文 | 印尼文</code><br>
+    方向：<code style="background:#2a2a3e;padding:1px 4px;border-radius:3px">zh2id</code> 或 <code style="background:#2a2a3e;padding:1px 4px;border-radius:3px">id2zh</code>
+  </div>
+  <textarea id="importText" rows="6" placeholder="zh2id | 砂輪要換了 | Batu gerinda harus diganti
+id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;padding:8px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px;font-family:monospace;resize:vertical"></textarea>
+  <div style="margin-top:6px;display:flex;gap:6px">
+    <button class="btn btn-primary btn-sm" onclick="doImport()">匯入</button>
+    <button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:6px 10px;border-radius:6px;font-size:12px" onclick="document.getElementById('importDialog').style.display='none'">取消</button>
+  </div>
+  <div id="importResult" style="font-size:11px;margin-top:6px"></div>
+</div>
+</div>
+
+<!-- ③ 手動新增單筆範例 -->
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:8px">＋ 手動新增單筆</div>
+<div style="font-size:11px;color:#8a8a9a;margin-bottom:8px">用於補登歷史錯誤,或加入專業術語表</div>
 <div style="margin-bottom:6px">
 <select id="exDir" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
 <option value="zh2id">中文→印尼</option>
 <option value="id2zh">印尼→中文</option>
 </select>
 </div>
-<div style="margin-bottom:6px">
 <input id="exZh" type="text" placeholder="中文（例：砂輪要換了）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:6px">
-<input id="exId" type="text" placeholder="印尼文（例：Batu gerinda harus diganti）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
-</div>
+<input id="exId" type="text" placeholder="印尼文（例：Batu gerinda harus diganti）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:6px">
 <button class="btn btn-primary btn-sm" onclick="addExample()">＋ 新增範例</button>
 <div id="exAddResult" style="font-size:12px;margin-top:4px"></div>
 </div>
-</div>
 
+<!-- ④ 既有範例列表 -->
 <div class="card" style="margin-top:12px">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-<div style="font-weight:600;font-size:14px">範例列表</div>
+<div>
+<div style="font-weight:700;font-size:15px">📋 範例列表</div>
+<span id="exCountBadge" style="font-size:11px;color:#8a8a9a">0 / 5000</span>
+</div>
 <div style="display:flex;gap:6px">
+<input id="exSearch" type="text" placeholder="搜尋..." oninput="renderExamples()" style="padding:4px 8px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;width:120px">
 <select id="exFilter" style="padding:4px 8px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px" onchange="renderExamples()">
 <option value="all">全部</option>
 <option value="zh2id">中→印尼</option>
@@ -6519,6 +6898,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 <div id="exList"><div class="empty">載入中...</div></div>
 </div>
+
 </div>
 
 <!-- Forms Panel -->
@@ -6976,7 +7356,7 @@ function switchTab(name){
   if(name==='passwords') loadPasswords();
   if(name==='scrap') loadScrap();
   if(name==='insight') loadInsightTab();
-  if(name==='examples') loadExamples();
+  if(name==='examples'){loadExamples();loadTranslationLog();}
   if(name==='forms') loadFormsTab();
   if(name==='settings') loadFeatureSettings();
 }
@@ -7645,39 +8025,227 @@ async function loadExamples(){
   var d=await api('/examples');
   if(!d)return;
   _exData=d.examples||[];
-  document.getElementById('exCountBadge').textContent=d.count+'/'+d.max;
+  document.getElementById('exCountBadge').textContent=d.count+' / '+d.max;
   if(d.count>=d.max){
     document.getElementById('exWarning').style.display='block';
     document.getElementById('exWarning').textContent='⚠️ 已達上限 '+d.max+' 條，請刪除舊的再新增。';
   }else if(d.count>=d.max*0.8){
     document.getElementById('exWarning').style.display='block';
-    document.getElementById('exWarning').textContent='⚠️ 已使用 '+d.count+'/'+d.max+' 條，接近上限。範例越多 API 成本越高。';
+    document.getElementById('exWarning').textContent='⚠️ 已使用 '+d.count+'/'+d.max+' 條，接近上限。';
   }else{
     document.getElementById('exWarning').style.display='none';
   }
   renderExamples();
+  loadTrainStatus();
 }
 function renderExamples(){
   var filter=document.getElementById('exFilter').value;
+  var searchEl=document.getElementById('exSearch');
+  var search=searchEl?searchEl.value.trim().toLowerCase():'';
   var el=document.getElementById('exList');
   if(!_exData.length){el.innerHTML='<div class="empty">尚無自訂範例</div>';return}
   var html='';
   var shown=0;
-  for(var i=0;i<_exData.length;i++){
+  // Show newest first for usability when list grows large
+  for(var i=_exData.length-1;i>=0;i--){
     var ex=_exData[i];
     if(filter!=='all'&&ex.dir!==filter)continue;
+    if(search){
+      var hay=((ex.zh||'')+' '+(ex.id||'')).toLowerCase();
+      if(hay.indexOf(search)<0)continue;
+    }
     shown++;
     var dirLabel=ex.dir==='id2zh'?'🇮🇩→🇹🇼':'🇹🇼→🇮🇩';
-    html+='<div style="padding:8px 0;border-bottom:1px solid #2a2a3e;font-size:13px">';
-    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start">';
-    html+='<div style="flex:1"><span class="badge badge-on" style="font-size:10px;margin-right:4px">'+dirLabel+'</span>';
-    html+='<span style="color:#e0e0e0">'+ex.zh+'</span>';
-    html+='<br><span style="color:#8a8a9a">→ '+ex.id+'</span></div>';
-    html+='<span style="color:#f04747;cursor:pointer;padding:4px 8px;font-size:16px" onclick="deleteExample('+i+')">✕</span>';
+    html+='<div id="exrow_'+i+'" style="padding:8px 0;border-bottom:1px solid #2a2a3e;font-size:13px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">';
+    html+='<div style="flex:1;min-width:0">';
+    html+='<span class="badge badge-on" style="font-size:10px;margin-right:4px">'+dirLabel+'</span>';
+    html+='<span style="color:#e0e0e0">'+esc(ex.zh)+'</span>';
+    html+='<br><span style="color:#8a8a9a">→ '+esc(ex.id)+'</span>';
+    html+='</div>';
+    html+='<div style="display:flex;gap:4px;flex-shrink:0">';
+    html+='<span style="color:#7c6fef;cursor:pointer;padding:4px 6px;font-size:13px" onclick="editExample('+i+')" title="編輯">✎</span>';
+    html+='<span style="color:#f04747;cursor:pointer;padding:4px 6px;font-size:14px" onclick="deleteExample('+i+')" title="刪除">✕</span>';
+    html+='</div>';
     html+='</div></div>';
+    if(shown>=300)break; // cap render to avoid choking browser
   }
   if(!shown) html='<div class="empty">無符合篩選的範例</div>';
+  if(shown>=300) html+='<div class="empty" style="color:#faa61a">已顯示前 300 筆，請使用篩選/搜尋查看更多</div>';
   el.innerHTML=html;
+}
+function editExample(idx){
+  var ex=_exData[idx];if(!ex)return;
+  var row=document.getElementById('exrow_'+idx);if(!row)return;
+  var html='<div style="display:flex;flex-direction:column;gap:6px">';
+  html+='<select id="edDir_'+idx+'" style="padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:12px">';
+  html+='<option value="zh2id"'+(ex.dir==='zh2id'?' selected':'')+'>中文→印尼</option>';
+  html+='<option value="id2zh"'+(ex.dir==='id2zh'?' selected':'')+'>印尼→中文</option>';
+  html+='</select>';
+  html+='<input id="edZh_'+idx+'" type="text" value="'+esc(ex.zh||'')+'" placeholder="中文" style="padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:13px">';
+  html+='<input id="edId_'+idx+'" type="text" value="'+esc(ex.id||'')+'" placeholder="印尼文" style="padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#1a1a2e;color:#e0e0e0;font-size:13px">';
+  html+='<div style="display:flex;gap:6px"><button class="btn btn-primary btn-sm" onclick="saveEditExample('+idx+')">儲存</button>';
+  html+='<button class="btn btn-sm" style="background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;padding:6px 10px;border-radius:6px;font-size:12px" onclick="renderExamples()">取消</button></div>';
+  html+='</div>';
+  row.innerHTML=html;
+}
+async function saveEditExample(idx){
+  var dir=document.getElementById('edDir_'+idx).value;
+  var zh=document.getElementById('edZh_'+idx).value.trim();
+  var id=document.getElementById('edId_'+idx).value.trim();
+  if(!zh||!id){toast('請填中文和印尼文');return}
+  var d=await api('/examples/edit','POST',{index:idx,zh:zh,id:id,dir:dir});
+  if(d&&d.ok){
+    toast('✅ 已更新');
+    loadExamples();
+  }else{
+    toast('❌ 更新失敗');
+  }
+}
+async function loadTrainStatus(){
+  try{
+    var d=await api('/examples/stats');
+    if(!d)return;
+    document.getElementById('trainTotal').textContent=d.total||0;
+    var z=document.getElementById('trainZh2id');if(z)z.textContent=d.zh2id||0;
+    var i=document.getElementById('trainId2zh');if(i)i.textContent=d.id2zh||0;
+    document.getElementById('trainWrong30').textContent=d.marked_wrong_30d||0;
+  }catch(e){}
+}
+function showImportDialog(){
+  var d=document.getElementById('importDialog');
+  d.style.display=d.style.display==='none'?'block':'none';
+  document.getElementById('importResult').textContent='';
+}
+async function doImport(){
+  var text=document.getElementById('importText').value;
+  var resEl=document.getElementById('importResult');
+  if(!text.trim()){resEl.innerHTML='<span style="color:#f04747">請輸入資料</span>';return}
+  var lines=text.split(/\r?\n/);
+  var added=0, skipped=0, errors=0;
+  for(var i=0;i<lines.length;i++){
+    var line=lines[i].trim();
+    if(!line||line.startsWith('#'))continue;
+    var parts=line.split('|').map(function(p){return p.trim()});
+    if(parts.length!==3){errors++;continue}
+    var dir=parts[0].toLowerCase();
+    if(dir!=='zh2id'&&dir!=='id2zh'){errors++;continue}
+    var zh=parts[1], id=parts[2];
+    if(!zh||!id){errors++;continue}
+    try{
+      var r=await api('/examples/add','POST',{zh:zh,id:id,dir:dir});
+      if(r&&r.ok)added++;
+      else if(r&&r.error==='duplicate')skipped++;
+      else errors++;
+    }catch(e){errors++}
+  }
+  resEl.innerHTML='<span style="color:#43b581">✅ 新增 '+added+' 筆</span>'+
+    (skipped?'<span style="color:#faa61a;margin-left:8px">⏭ 跳過重複 '+skipped+'</span>':'')+
+    (errors?'<span style="color:#f04747;margin-left:8px">❌ 錯誤 '+errors+'</span>':'');
+  if(added>0){
+    document.getElementById('importText').value='';
+    setTimeout(function(){
+      document.getElementById('importDialog').style.display='none';
+      loadExamples();
+    }, 1500);
+  }
+}
+function downloadCsv(){
+  if(!_exData||!_exData.length){toast('沒有範例可匯出');return}
+  var rows=[['direction','zh','id']];
+  for(var i=0;i<_exData.length;i++){
+    var ex=_exData[i];
+    rows.push([ex.dir||'zh2id', ex.zh||'', ex.id||'']);
+  }
+  var csv=rows.map(function(r){
+    return r.map(function(c){
+      var s=String(c).replace(/"/g,'""');
+      return '"'+s+'"';
+    }).join(',');
+  }).join('\n');
+  // Add UTF-8 BOM so Excel opens it correctly
+  var blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;
+  var d=new Date();
+  var stamp=d.getFullYear()+(''+(d.getMonth()+1)).padStart(2,'0')+(''+d.getDate()).padStart(2,'0');
+  a.download='translation_examples_'+stamp+'.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('✅ CSV 已下載');
+}
+function downloadFinetuneJsonl(){
+  // Kept for backward compatibility / future fine-tune route
+  var url=window.location.origin+'/api/admin/examples/export_jsonl';
+  var a=document.createElement('a');
+  a.href=url;
+  a.download='finetune_training_data.jsonl';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+async function loadTranslationLog(){
+  var onlyWrongEl=document.getElementById('logOnlyWrong');
+  var onlyWrong=onlyWrongEl&&onlyWrongEl.checked?'1':'';
+  var qs='?limit=50';
+  if(onlyWrong) qs+='&only_wrong=1';
+  var el=document.getElementById('tlogList');
+  el.innerHTML='<div class="empty">載入中...</div>';
+  try{
+    var d=await api('/translation_log'+qs);
+    if(!d||!d.entries){el.innerHTML='<div class="empty">無法載入</div>';return}
+    if(!d.entries.length){el.innerHTML='<div class="empty">沒有翻譯日誌</div>';return}
+    var html='';
+    for(var i=0;i<d.entries.length;i++){
+      var e=d.entries[i];
+      var dt=new Date((e.ts||0)*1000);
+      var ts=dt.toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+      var dirLabel=(e.src_lang==='zh'?'🇹🇼→🇮🇩':(e.src_lang==='id'?'🇮🇩→🇹🇼':e.src_lang||'?'));
+      var marked=e.marked_wrong?'<span class="badge" style="background:#5a2020;color:#f88;font-size:10px">已標錯</span> ':'';
+      html+='<div style="padding:8px;border-bottom:1px solid #2a2a3e;font-size:12px">';
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
+      html+='<span style="color:#8a8a9a">'+ts+' '+dirLabel+'</span>';
+      html+=marked;
+      html+='</div>';
+      html+='<div style="color:#e0e0e0;margin-bottom:2px">原: '+esc(e.src||'')+'</div>';
+      html+='<div style="color:#aaa">譯: '+esc(e.tgt||'')+'</div>';
+      if(e.correct_translation){
+        html+='<div style="color:#43b581;margin-top:4px">✓ 正確: '+esc(e.correct_translation)+'</div>';
+      }
+      if(!e.marked_wrong || !e.correct_translation){
+        html+='<div style="margin-top:6px;display:flex;gap:6px">';
+        html+='<input type="text" id="fix_'+e.id+'" placeholder="輸入正確翻譯..." style="flex:1;padding:4px 6px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">';
+        html+='<button class="btn btn-sm" style="background:#5a2a2a;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px" onclick="markLogWrong(\\''+e.id+'\\')">標錯+修正</button>';
+        html+='</div>';
+      }
+      html+='</div>';
+    }
+    el.innerHTML=html;
+  }catch(err){
+    el.innerHTML='<div class="empty">錯誤：'+err+'</div>';
+  }
+}
+async function markLogWrong(entryId){
+  var input=document.getElementById('fix_'+entryId);
+  var correct=input?input.value.trim():'';
+  if(!correct){
+    if(!confirm('未填正確翻譯，只標記錯誤？')) return;
+  }
+  var d=await api('/translation_log/mark_wrong','POST',{entry_id:entryId,correct:correct});
+  if(d&&d.ok){
+    if(correct){
+      toast('✅ 已加入範例 ('+(d.examples_total||'?')+' 筆) · 下次翻譯立即生效');
+    }else{
+      toast('✅ 已標記錯誤');
+    }
+    loadTranslationLog();
+    loadExamples();
+  }else{
+    toast('❌ 失敗：'+(d&&d.info||''));
+  }
 }
 async function addExample(){
   var zh=document.getElementById('exZh').value.trim();
@@ -10660,6 +11228,154 @@ def api_admin_forms_export(form_id):
                          as_attachment=True, download_name=f["title_zh"] + ".xlsx")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/export/finetune/<token>", methods=["GET"])
+def public_export_finetune(token):
+    """Public download endpoint for fine-tune JSONL files generated via /export jsonl LINE command.
+    Tokens are short-lived (1 hour) and one-time-friendly (we don't expire on use, but they auto-clean).
+    """
+    rec = _export_tokens.get(token)
+    if not rec:
+        return "找不到或已過期 / Not found or expired", 404
+    path, expiry = rec
+    if expiry < int(time.time()):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        _export_tokens.pop(token, None)
+        return "已過期 / Expired", 410
+    if not os.path.exists(path):
+        return "檔案遺失 / File missing", 404
+    from flask import send_file
+    return send_file(path, mimetype="application/jsonl",
+                     as_attachment=True,
+                     download_name="finetune_training_data.jsonl")
+
+
+@app.route("/api/admin/examples/export_jsonl", methods=["GET"])
+def api_admin_examples_export_jsonl():
+    """Admin: download fine-tune JSONL directly from admin panel."""
+    if not check_manager_access("examples") and request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    if not custom_translation_examples:
+        return jsonify({"error": "no_examples"}), 400
+    try:
+        from flask import Response
+        sys_prompt = ("You are a Taiwan-factory ZH↔ID translator. "
+                      "Output only the translation, no commentary.")
+        lines = []
+        for ex in custom_translation_examples:
+            zh = (ex.get("zh") or "").strip()
+            idn = (ex.get("id") or "").strip()
+            direction = ex.get("dir", "zh2id")
+            if not zh or not idn:
+                continue
+            if direction == "zh2id":
+                user_msg, assistant_msg = zh, idn
+            else:
+                user_msg, assistant_msg = idn, zh
+            row = {"messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg},
+                {"role": "assistant", "content": assistant_msg},
+            ]}
+            lines.append(json.dumps(row, ensure_ascii=False))
+        body = "\n".join(lines) + "\n"
+        return Response(
+            body,
+            mimetype="application/jsonl",
+            headers={"Content-Disposition": 'attachment; filename="finetune_training_data.jsonl"'}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/examples/stats", methods=["GET"])
+def api_admin_examples_stats():
+    """Admin: training-data status summary for the dashboard."""
+    if not check_manager_access("examples"):
+        return jsonify({"error": "forbidden"}), 403
+    total = len(custom_translation_examples)
+    zh2id = sum(1 for e in custom_translation_examples if e.get("dir") == "zh2id")
+    id2zh = sum(1 for e in custom_translation_examples if e.get("dir") == "id2zh")
+    wrong_count = sum(1 for e in translation_log if e.get("marked_wrong"))
+    cutoff_30d = int(time.time()) - 30*86400
+    wrong_30d = sum(1 for e in translation_log
+                    if e.get("marked_wrong") and e.get("ts", 0) > cutoff_30d)
+    return jsonify({
+        "total": total,
+        "zh2id": zh2id,
+        "id2zh": id2zh,
+        "max": CUSTOM_EXAMPLES_MAX,
+        "marked_wrong_total": wrong_count,
+        "marked_wrong_30d": wrong_30d,
+        "fine_tune_threshold": 300,
+        "ready_for_fine_tune": total >= 300,
+    })
+
+
+@app.route("/api/admin/translation_log", methods=["GET"])
+def api_admin_translation_log():
+    """Admin: list recent translation log entries.
+    Optional query params:
+      ?group_id=<gid>       filter by group
+      ?limit=<int>          default 50, max 500
+      ?only_wrong=1         only entries marked wrong
+    """
+    if not check_manager_access("examples"):
+        return jsonify({"error": "forbidden"}), 403
+    gid = request.args.get("group_id", "")
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 500))
+    except Exception:
+        limit = 50
+    only_wrong = request.args.get("only_wrong") in ("1", "true", "yes")
+    out = []
+    for e in reversed(translation_log):
+        if gid and e.get("group_id") != gid:
+            continue
+        if only_wrong and not e.get("marked_wrong"):
+            continue
+        out.append({
+            "id": e.get("id"),
+            "ts": e.get("ts"),
+            "src": (e.get("src") or "")[:200],
+            "tgt": (e.get("tgt") or "")[:200],
+            "src_lang": e.get("src_lang"),
+            "tgt_lang": e.get("tgt_lang"),
+            "group_id": e.get("group_id"),
+            "marked_wrong": bool(e.get("marked_wrong")),
+            "correct_translation": e.get("correct_translation", ""),
+            "model": e.get("model"),
+            "warned": bool(e.get("warned")),
+        })
+        if len(out) >= limit:
+            break
+    return jsonify({"entries": out, "total": len(translation_log)})
+
+
+@app.route("/api/admin/translation_log/mark_wrong", methods=["POST"])
+def api_admin_translation_log_mark_wrong():
+    """Admin: mark a specific translation_log entry as wrong, optionally with correction.
+    Body: { "entry_id": "...", "correct": "...", "add_to_examples": true }
+    """
+    if not check_manager_access("examples"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json() or {}
+    eid = data.get("entry_id")
+    correct = (data.get("correct") or "").strip()
+    add = data.get("add_to_examples", True)
+    if not eid:
+        return jsonify({"error": "missing entry_id"}), 400
+    ok, info = mark_translation_wrong(
+        group_id=None,
+        correct_translation=correct,
+        add_to_examples=bool(correct) and add,
+        entry_id=eid,
+    )
+    return jsonify({"ok": ok, "info": info, "examples_total": len(custom_translation_examples)})
 
 
 @app.route("/health", methods=["GET"])
