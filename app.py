@@ -8121,7 +8121,7 @@ async function doImport(){
   var text=document.getElementById('importText').value;
   var resEl=document.getElementById('importResult');
   if(!text.trim()){resEl.innerHTML='<span style="color:#f04747">請輸入資料</span>';return}
-  var lines=text.split(/\r?\n/);
+  var lines=text.replace(/\\r/g,'').split('\\n');
   var added=0, skipped=0, errors=0;
   for(var i=0;i<lines.length;i++){
     var line=lines[i].trim();
