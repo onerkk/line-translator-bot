@@ -112,7 +112,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 70,
+    "text_translations": 71,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -251,7 +251,7 @@
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A"
   },
-  "pw1_text": "UR00179\nXx0972315373",
+  "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
   "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
   "custom_translation_examples": [
