@@ -8162,9 +8162,9 @@ function downloadCsv(){
       var s=String(c).replace(/"/g,'""');
       return '"'+s+'"';
     }).join(',');
-  }).join('\n');
+  }).join('\\n');
   // Add UTF-8 BOM so Excel opens it correctly
-  var blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  var blob=new Blob(['\\ufeff'+csv],{type:'text/csv;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url;
