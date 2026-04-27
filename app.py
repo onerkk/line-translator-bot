@@ -361,7 +361,26 @@ prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% d
 translation_logging_enabled = True   # Record every translation
 translation_log = []                 # In-memory ring buffer + persisted JSON file
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
-TRANSLATION_LOG_FILE = os.environ.get("TRANSLATION_LOG_FILE", "translation_log.json")
+
+def _resolve_translation_log_path():
+    """Pick a persistence path that survives Render deploys.
+
+    Priority:
+      1. TRANSLATION_LOG_FILE env var (explicit override)
+      2. /var/data/translation_log.json   (Render persistent disk default mount)
+      3. /data/translation_log.json       (common alt mount)
+      4. ./translation_log.json           (last resort; lost on each deploy)
+    """
+    env = os.environ.get("TRANSLATION_LOG_FILE", "").strip()
+    if env:
+        return env
+    for candidate_dir in ("/var/data", "/data"):
+        if os.path.isdir(candidate_dir) and os.access(candidate_dir, os.W_OK):
+            return os.path.join(candidate_dir, "translation_log.json")
+    return "translation_log.json"
+
+TRANSLATION_LOG_FILE = _resolve_translation_log_path()
+logger.info("[TLOG] persistence path = %s", TRANSLATION_LOG_FILE)
 
 def _load_translation_log_from_disk():
     """Load persisted translation log on startup. Best effort; never blocks bot startup."""
@@ -690,8 +709,12 @@ def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, conf
         if len(translation_log) > TRANSLATION_LOG_MAX:
             del translation_log[:len(translation_log) - TRANSLATION_LOG_MAX]
         _save_translation_log_to_disk()
+        logger.info("[TLOG] saved entry id=%s src=%r tgt=%r total=%d",
+                    entry.get("id"), (src_text or "")[:40], (tgt_text or "")[:40],
+                    len(translation_log))
     except Exception as e:
-        logger.error("Log translation error: %s", e)
+        import traceback
+        logger.error("[TLOG] Log translation FAILED: %s\n%s", e, traceback.format_exc())
 
 
 def _text_similarity(a, b):
@@ -3135,6 +3158,26 @@ def translate_with_retry(func, text, src, tgt, max_retries=2):
 
 
 def translate(text, src, tgt):
+    """Public translate wrapper: guarantees translation_log entry on every successful return.
+
+    Inner function may also call _log_translation along its paths; we mark those entries
+    with an internal flag so this wrapper does NOT double-log them.
+    """
+    # Snapshot log length before to detect whether inner already logged
+    _len_before = len(translation_log)
+    result = _translate_inner(text, src, tgt)
+    try:
+        if result is not None and len(translation_log) == _len_before:
+            # No inner path logged this turn — write a guaranteed entry now.
+            _log_translation(text, result, src, tgt, "wrapper", 0, 1.0, False, 1.0,
+                             getattr(_tl, 'group_id', ''))
+    except Exception as e:
+        import traceback
+        logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
+    return result
+
+
+def _translate_inner(text, src, tgt):
     # Check custom examples for exact match first (free, no API call)
     exact = _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
