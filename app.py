@@ -430,6 +430,11 @@ multi_path_backtrans_enabled = False # 多路徑反譯(zh→id 平行 zh→en→
 multi_path_min_chars = 60            # 多路徑反譯的觸發字數
 quality_metrics_enabled = True       # 收集品質指標(catastrophic_compression / missing_terms 等)
 
+# ★ v3.7 段落結構保留(對症下藥:長公告翻譯後不再連成一坨)
+preserve_paragraphs_enabled = True   # 在 prompt 中要求保留段落
+paragraph_split_translate = True     # 分段翻譯模式(雙保險)
+paragraph_split_threshold = 50       # 訊息長度超過此值且含分段時,走分段翻譯路徑
+
 # v3.2-0426e: New official OpenAI features
 stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
 forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
@@ -3110,6 +3115,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "X到不行/X得要死/X到爆=X banget, 怎麼這麼X=kok X banget, 有夠X=X banget, "
             "ㄏㄏ=haha, QQ=sedih, 3Q=terima kasih, GG=tamat, XD=haha, @@=bingung. "
             "6. Target Traditional Chinese = Taiwan style, not mainland. "
+            "6.5 PARAGRAPH STRUCTURE (CRITICAL): "
+            "Preserve the original paragraph structure EXACTLY. "
+            "If the source has a blank line (\\n\\n) between paragraphs, "
+            "the translation MUST also have a blank line in the SAME position. "
+            "If the source has line breaks (\\n) within text, preserve them. "
+            "Do NOT merge separate paragraphs into one. Do NOT remove blank lines. "
+            "Example: source '段A\\n\\n段B\\n\\n段C' MUST translate to "
+            "'translation_A\\n\\ntranslation_B\\n\\ntranslation_C', NOT 'translation_A translation_B translation_C'. "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
             "9. FACTORY VOCABULARY: "
@@ -4082,6 +4095,141 @@ def translate(text, src, tgt):
     return result
 
 
+# =====================================================================
+# v3.7 段落結構保留(分段翻譯)
+# =====================================================================
+# 問題:GPT 即使在 prompt 中要求保留段落,長訊息仍可能合併段落
+# 解法:把訊息以 \n\n 切段,每段獨立翻譯,再用相同分隔符拼接
+# 原理:每段獨立翻譯 = GPT 不可能合併不同的 API 呼叫的結果
+
+def _has_paragraph_structure(text):
+    """偵測訊息是否含分段結構
+    
+    判斷標準:
+      - 含 \n\n (空行分隔)
+      - 或含多個 \n 且總長度 > 閾值
+    """
+    if not text:
+        return False
+    # 優先:有空行分隔
+    if "\n\n" in text:
+        return True
+    # 次要:訊息夠長且含多個換行
+    char_len = len(re.sub(r"\s+", "", text))
+    if char_len >= paragraph_split_threshold and text.count("\n") >= 2:
+        return True
+    return False
+
+
+def _split_into_paragraphs(text):
+    """把訊息切成段落 list,保留分隔符資訊以便還原
+    
+    回傳: [(paragraph_text, separator_after), ...]
+      separator_after = "\n\n" / "\n" / ""
+    """
+    # 用空行分段(優先),保留分隔符
+    # 把連續空行視為一個分隔符,不加入空段
+    parts = []
+    current = ""
+    i = 0
+    while i < len(text):
+        # 偵測 \n\n+(連續空行)
+        m = re.match(r"\n{2,}", text[i:])
+        if m:
+            if current.strip():
+                parts.append((current, "\n\n"))
+            current = ""
+            i += m.end()
+            continue
+        # 偵測單個 \n
+        if text[i] == "\n":
+            if current.strip():
+                parts.append((current, "\n"))
+                current = ""
+            i += 1
+            continue
+        current += text[i]
+        i += 1
+    
+    if current.strip():
+        parts.append((current, ""))
+    
+    return parts
+
+
+def _translate_single_paragraph(text, src, tgt):
+    """v3.7 單段翻譯(供分段翻譯使用,跳過分段邏輯避免無窮迴圈)
+    
+    這函數做最小流程:cache → custom example → translate_openai
+    不做反譯、self-check 等(那些是整篇譯文層級的檢查)
+    """
+    # 1. Check exact custom example
+    exact = _check_custom_example_exact(text.strip(), src, tgt)
+    if exact:
+        return exact
+    
+    # 2. Check cache
+    cached = cache_get(text, src, tgt)
+    if cached:
+        return cached
+    
+    # 3. Translate via OpenAI(用 retry,確保穩定)
+    result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
+    if result:
+        result = finalize_factory_translation(text, result, src, tgt)
+        cache_set(text, src, tgt, result)
+    return result
+
+
+def _translate_paragraphs_separately(text, src, tgt, translate_fn):
+    """分段獨立翻譯,然後用原分隔符拼回
+    
+    Args:
+      text: 原文
+      src, tgt: 語言對
+      translate_fn: 實際翻譯函數(通常是 translate_openai)
+    
+    Returns:
+      拼接後的譯文(段落結構與原文一致),失敗時 None
+    """
+    parts = _split_into_paragraphs(text)
+    if len(parts) <= 1:
+        return None  # 沒分段,讓主流程處理
+    
+    logger.info(
+        "Paragraph-split translation: %d paragraphs, lengths=%s",
+        len(parts), [len(p[0]) for p in parts]
+    )
+    
+    translated_parts = []
+    for idx, (para_text, sep) in enumerate(parts):
+        para_clean = para_text.strip()
+        if not para_clean:
+            translated_parts.append(("", sep))
+            continue
+        
+        try:
+            tr = translate_fn(para_clean, src, tgt)
+            if not tr:
+                # 任一段失敗,放棄分段策略,讓主流程整段重翻
+                logger.warning(
+                    "Paragraph-split: paragraph %d/%d failed, falling back",
+                    idx + 1, len(parts)
+                )
+                return None
+            translated_parts.append((tr.strip(), sep))
+        except Exception as e:
+            logger.error("Paragraph-split error on paragraph %d: %s", idx + 1, e)
+            return None
+    
+    # 拼接
+    result = ""
+    for tr_text, sep in translated_parts:
+        result += tr_text + sep
+    
+    return result.strip()
+
+
 def _translate_inner(text, src, tgt):
     # ★ v3.6 印尼文預處理:在所有後續路徑之前先標準化
     _preprocessing_log = None
@@ -4103,6 +4251,27 @@ def _translate_inner(text, src, tgt):
             text_nano = normalize_indonesian_text_with_nano(text)
             if text_nano and text_nano != text:
                 text = text_nano
+    
+    # ★ v3.7 段落結構保留:訊息含分段時走分段翻譯路徑
+    # 這個路徑不影響短訊息(沒分段就直接走原本流程)
+    if paragraph_split_translate and _has_paragraph_structure(text):
+        char_len = len(re.sub(r"\s+", "", text))
+        if char_len >= paragraph_split_threshold:
+            try:
+                # 用內部 helper 來處理單段(會走 cache + custom_example)
+                def _single_para_translate(para, s, t):
+                    # 重新進入 _translate_inner 但跳過分段路徑(避免無窮迴圈)
+                    return _translate_single_paragraph(para, s, t)
+                
+                multi_result = _translate_paragraphs_separately(text, src, tgt, _single_para_translate)
+                if multi_result:
+                    logger.info("Paragraph-split SUCCESS: orig=%d chars, result=%d chars",
+                                len(text), len(multi_result))
+                    return multi_result
+                else:
+                    logger.info("Paragraph-split returned None, falling back to single-shot")
+            except Exception as _e:
+                logger.error("Paragraph-split exception: %s", _e)
     
     # Check custom examples for exact match first (free, no API call)
     exact = _check_custom_example_exact(text.strip(), src, tgt)
@@ -8197,6 +8366,27 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 
 <div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📐 v3.7 段落結構保留</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">問題:長公告原文有分段,翻譯後變成連續一坨文字。解法:雙層保護(prompt + 分段翻譯)</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="paraPreserve" type="checkbox" checked onchange="saveV37Settings()"> 在 prompt 加入段落保留指示(0 成本,推薦)
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">告訴 GPT「原文有空行就要保留空行」+ 給範例</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="paraSplit" type="checkbox" checked onchange="saveV37Settings()"> 分段獨立翻譯(雙保險,長訊息才走)
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">把訊息以空行切段,每段獨立翻譯,然後拼回。100% 保證段落結構正確。</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">分段翻譯觸發字數</label>
+<input id="paraThr" type="number" min="20" max="500" value="50" onchange="saveV37Settings()" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+<span style="font-size:11px;color:#6a6a7a">字以上且含分段的訊息才走分段翻譯</span>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">📈 翻譯品質監控儀表板</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">五大關鍵指標 + 各群組品質分數 + 最近的問題訊息</div>
 
@@ -9630,6 +9820,10 @@ async function _loadFeatures(gid){
     if(document.getElementById('idPrepNano')) document.getElementById('idPrepNano').checked=!!d.id_preprocessing_nano;
     if(document.getElementById('multiPath')) document.getElementById('multiPath').checked=!!d.multi_path_backtrans_enabled;
     if(document.getElementById('multiPathMin')) document.getElementById('multiPathMin').value=(d.multi_path_min_chars||60);
+    // v3.7 段落結構保留
+    if(document.getElementById('paraPreserve')) document.getElementById('paraPreserve').checked=d.preserve_paragraphs_enabled!==false;
+    if(document.getElementById('paraSplit')) document.getElementById('paraSplit').checked=d.paragraph_split_translate!==false;
+    if(document.getElementById('paraThr')) document.getElementById('paraThr').value=(d.paragraph_split_threshold||50);
     // Batch C/D load
     if(document.getElementById('lpEn')) document.getElementById('lpEn').checked=d.logprobs_enabled!==false;
     if(document.getElementById('cfThr')) document.getElementById('cfThr').value=(d.confidence_threshold!==undefined?d.confidence_threshold:0.85);
@@ -9727,6 +9921,16 @@ function saveV36Settings(){
     multi_path_min_chars: parseInt(document.getElementById('multiPathMin').value)||60
   };
   api('/features','POST',body).then(function(d){if(d)toast('v3.6 設定已儲存')});
+}
+
+// v3.7 段落結構保留設定儲存
+function saveV37Settings(){
+  var body={
+    preserve_paragraphs_enabled: document.getElementById('paraPreserve').checked,
+    paragraph_split_translate: document.getElementById('paraSplit').checked,
+    paragraph_split_threshold: parseInt(document.getElementById('paraThr').value)||50
+  };
+  api('/features','POST',body).then(function(d){if(d)toast('段落保留已儲存')});
 }
 
 // v3.6 翻譯品質監控儀表板
@@ -10211,6 +10415,9 @@ def _do_save_impl():
             "multi_path_backtrans_enabled": multi_path_backtrans_enabled,
             "multi_path_min_chars": multi_path_min_chars,
             "quality_metrics_enabled": quality_metrics_enabled,
+            "preserve_paragraphs_enabled": preserve_paragraphs_enabled,
+            "paragraph_split_translate": paragraph_split_translate,
+            "paragraph_split_threshold": paragraph_split_threshold,
             "stop_sequences_enabled": stop_sequences_enabled,
             "reasoning_effort": reasoning_effort,
             "send_user_id_to_openai": send_user_id_to_openai,
@@ -10252,6 +10459,7 @@ def load_settings():
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
+    global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -10387,6 +10595,14 @@ def load_settings():
             except (ValueError, TypeError): pass
         if "quality_metrics_enabled" in data:
             quality_metrics_enabled = bool(data["quality_metrics_enabled"])
+        # ★ v3.7 段落保留變數
+        if "preserve_paragraphs_enabled" in data:
+            preserve_paragraphs_enabled = bool(data["preserve_paragraphs_enabled"])
+        if "paragraph_split_translate" in data:
+            paragraph_split_translate = bool(data["paragraph_split_translate"])
+        if "paragraph_split_threshold" in data:
+            try: paragraph_split_threshold = int(data["paragraph_split_threshold"])
+            except (ValueError, TypeError): pass
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -10458,6 +10674,14 @@ def load_settings():
             except (ValueError, TypeError): pass
         if "quality_metrics_enabled" in data:
             quality_metrics_enabled = bool(data["quality_metrics_enabled"])
+        # ★ v3.7 段落保留變數
+        if "preserve_paragraphs_enabled" in data:
+            preserve_paragraphs_enabled = bool(data["preserve_paragraphs_enabled"])
+        if "paragraph_split_translate" in data:
+            paragraph_split_translate = bool(data["paragraph_split_translate"])
+        if "paragraph_split_threshold" in data:
+            try: paragraph_split_threshold = int(data["paragraph_split_threshold"])
+            except (ValueError, TypeError): pass
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -11070,6 +11294,7 @@ def api_admin_features():
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
+    global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
