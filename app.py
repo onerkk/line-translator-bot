@@ -412,8 +412,16 @@ def _save_translation_log_to_disk():
     except Exception as e:
         logger.warning("Failed to save translation log: %s", e)
 
-ab_test_enabled = False              # A/B prompt testing
-ab_test_variant_b_prompt = ""        # Custom variant B prompt
+ab_test_enabled = False              # A/B prompt testing (legacy, deprecated)
+ab_test_variant_b_prompt = ""        # Custom variant B prompt (legacy, deprecated)
+
+# ★ v3.4 ID→ZH 翻譯品質強化(對症下藥:印尼文→中文常翻錯)
+# 三項學術論文驗證有效的技巧,可獨立開關
+id_zh_cot_enabled = True             # Chain-of-Thought 二階段翻譯(ID→ZH 專用)
+id_zh_cod_enabled = True             # Chain-of-Dictionary 動態術語注入
+id_zh_pivot_enabled = False          # Pivot via English(成本較高,預設關閉)
+id_zh_pivot_threshold = 80           # 訊息長度超過此值才啟用 pivot(避免短句浪費)
+id_zh_double_translation = False     # 雙翻 ensemble(翻兩次選較完整的)成本高
 # v3.2-0426e: New official OpenAI features
 stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
 forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
@@ -441,17 +449,61 @@ def pick_model(text):
     return model_default
 
 
+def _translation_quality_check(original, translation, back_translation):
+    """v3.3 多維度翻譯品質檢查,取代純 Jaccard 相似度。
+    
+    回傳 (passes, reason, details_dict)
+    
+    檢查項目:
+      1. 譯文長度比 - 譯文/原文,< 0.33 視為災難性壓縮
+      2. 反譯長度比 - 反譯/原文,< 0.4 視為譯文丟失資訊
+      3. Jaccard 字元相似度
+    """
+    orig_len = len(re.sub(r"\s+", "", original or ""))
+    trans_len = len(re.sub(r"\s+", "", translation or ""))
+    back_len = len(re.sub(r"\s+", "", back_translation or ""))
+    
+    if orig_len == 0:
+        return True, "empty_source", {}
+    
+    details = {"orig_len": orig_len, "trans_len": trans_len, "back_len": back_len}
+    
+    # 檢查 1:譯文長度比過低 → 必定丟資訊
+    trans_ratio = trans_len / orig_len
+    details["trans_ratio"] = round(trans_ratio, 3)
+    if trans_ratio < 0.33:
+        return False, f"catastrophic_compression(ratio={trans_ratio:.2f})", details
+    
+    # 檢查 2:反譯長度比 - 譯文資訊已丟失
+    if back_len > 0:
+        back_ratio = back_len / orig_len
+        details["back_ratio"] = round(back_ratio, 3)
+        if back_ratio < 0.4:
+            return False, f"backtrans_too_short(ratio={back_ratio:.2f})", details
+    
+    # 檢查 3:Jaccard 字元相似度
+    if back_translation:
+        sim = _text_similarity(original, back_translation)
+        details["jaccard"] = round(sim, 3)
+        if sim < double_check_threshold:
+            return False, f"low_similarity(jaccard={sim:.2f})", details
+    
+    return True, "ok", details
+
+
 def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
-    """Translate the translation BACK to source language and compare with original.
-    Returns (passes_check: bool, similarity: float, back_translation: str).
-    Used to detect SEVERE semantic errors like 'maaf' → '麻煩你了' (opposite meaning).
+    """v3.3 反譯檢查 - 加入多維度品質檢查
+    回傳 (passes_check, similarity, back_translation)
+    
+    Returns:
+      passes_check: bool - 是否通過所有檢查
+      similarity: float - Jaccard 相似度(沒有反譯時為 1.0)
+      back_translation: str - 反譯結果
     """
     if not oai or not translated_text:
         return True, 1.0, ""
     try:
-        # Use cheap model for back-translation (we only need rough similarity)
         check_model = "gpt-4.1-nano" if model_default.startswith("gpt-4.1") else "gpt-4o-mini"
-        # Direct, minimal prompt for back translation
         if tgt_lang == "zh":
             back_prompt = "Translate this Chinese to Indonesian. Output ONLY the translation, no explanation:"
         elif tgt_lang == "id":
@@ -469,12 +521,212 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
         )
         track_tokens(r)
         back = r.choices[0].message.content.strip()
-        # Compute similarity using simple character-level Jaccard
-        sim = _text_similarity(original_text, back)
-        return sim >= double_check_threshold, sim, back
+        
+        # ★ v3.3:多維度檢查
+        ok, reason, details = _translation_quality_check(original_text, translated_text, back)
+        sim = details.get("jaccard", 1.0)
+        
+        if not ok:
+            logger.warning(
+                "Round-trip FAILED: %s | orig=%s | trans=%s | back=%s | details=%s",
+                reason, original_text[:60], translated_text[:60], back[:60], details
+            )
+            # 把失敗原因記到 thread-local,供日誌使用
+            try:
+                _tl.rtc_fail_reason = reason
+            except Exception:
+                pass
+        
+        return ok, sim, back
     except Exception as e:
         logger.error("Round-trip check error: %s", e)
-        return True, 1.0, ""  # Don't block on errors
+        return True, 1.0, ""
+
+
+# =====================================================================
+# v3.4 ID→ZH 翻譯品質強化:三大技巧
+# =====================================================================
+
+# ★ 高風險誤譯詞典(印尼文→中文)
+# 這些詞是常見的「直譯陷阱」,GPT 看到容易翻錯
+# 編譯來源:歐那實際使用 + 工廠語境常見錯誤
+ID_ZH_HIGH_RISK_TERMS = {
+    # 工廠用語(非直譯)
+    "barang": "料件(NOT 物品/東西)",
+    "batang": "棒材(NOT 棍子/枝)",
+    "bahan": "材料(在工廠語境)",
+    "rusak": "損傷/異常(NOT 壞掉)",
+    "bengkok": "彎曲(料件變形)",
+    "cacat": "異常/不良品(NOT 殘廢)",
+    "tercampur": "混料(NOT 混合飲料/食物)",
+    "pemotongan": "切斷區/切斷工序",
+    "penanda": "標記/識別(NOT 標誌牌)",
+    "tali pemisah": "束帶/分隔帶",
+    "lecet": "擦傷(料件表面)",
+    "gores": "刮傷",
+    "patah": "斷裂",
+    
+    # 工廠站別/動作
+    "ambil": "領取/拿(具體看上下文)",
+    "simpan": "存放/保管",
+    "kasih tau": "通知/告知(NOT 給知識)",
+    "bertugas": "值班/負責",
+    "ketahuan": "讓人知道/被發現",
+    "pekerja": "員工/作業員",
+    "atasan": "主管/上司",
+    
+    # 易錯日常
+    "kasih": "給(口語,NOT 愛/同情)",
+    "udah": "已經(口語=sudah)",
+    "gak": "不(口語=tidak)",
+    "bisa": "可以/能",
+    "harus": "必須/要",
+    "jangan": "不要/別",
+    "biar": "讓/以便(NOT 讓它去)",
+    "karna": "因為(=karena)",
+    "buang": "丟棄",
+    "langsung": "直接/立刻",
+    "terutama": "特別是/尤其",
+    "perhatikan": "注意",
+    "pemberitahuan": "公告/通知",
+    "pengumuman": "公告",
+    
+    # 中印雙向高頻誤譯
+    "dicuri": "被偷(慎用,工廠語境通常指「被先拿走」)",
+    "mencuri": "偷(慎用)",
+    "bereaksi": "反應(化學,NOT 回報)",
+    "tertelan": "吞下去(NOT 被吃掉痕跡)",
+}
+
+
+def detect_id_zh_risk_terms(text):
+    """偵測印尼文中的高風險誤譯詞,回傳「字典片段」字串供注入 prompt
+    
+    只對句中實際出現的詞建立字典,避免污染 prompt
+    """
+    if not text:
+        return ""
+    t = text.lower()
+    found = []
+    for word, hint in ID_ZH_HIGH_RISK_TERMS.items():
+        # 用 word boundary 避免誤判子字串
+        if re.search(r"(?<![a-z])" + re.escape(word) + r"(?![a-z])", t):
+            found.append(f"  - {word} → {hint}")
+    if not found:
+        return ""
+    return "【翻譯字典(必須遵守)】\n" + "\n".join(found) + "\n"
+
+
+def build_id_zh_cot_instruction(text):
+    """建構 CoT 二階段翻譯指令(只在 ID→ZH 用)
+    
+    原理:讓 GPT 在翻譯前先「展開思考」,降低直譯誤譯率
+    來源:ACL 2025 論文 "Reasoning for Translation"
+    """
+    return (
+        "【翻譯思考流程(內部,不要輸出)】"
+        "你必須先在心中完成以下三步,再輸出最終翻譯:"
+        "(1) 識別句子類型:這是公告/異常通報/閒聊/指令/問句? "
+        "(2) 列出關鍵資訊點:對象/動作/地點/原因/時間/操作要求(每個都要保留) "
+        "(3) 注意俚語、簡寫、混雜爪哇語的部分,還原成標準語意 "
+        "完成思考後,直接輸出最終的繁體中文翻譯,不要解釋過程,不要列點。"
+    )
+
+
+def translate_id_zh_with_pivot(text, src, tgt):
+    """v3.4 Pivot via English: ID → EN → ZH 三段式翻譯
+    
+    原理:GPT 對 ID-EN 和 EN-ZH 都很強(EN 是樞紐),
+    比直接 ID→ZH 通常更準確,代價是多一次 API 呼叫
+    
+    來源:ICLR 2025 論文 - 中等資源語言英語樞紐證實有效
+    
+    回傳譯文(失敗時 None,呼叫端 fallback 到原本流程)
+    """
+    if not oai or src != "id" or tgt != "zh":
+        return None
+    try:
+        # 第 1 段:ID → EN(用 nano,便宜快)
+        en_prompt = (
+            "Translate this Indonesian to fluent, complete English. "
+            "Preserve ALL information including names, numbers, machine codes, "
+            "place markers (BF, BF2, CYA, CYB etc). Output ONLY the English "
+            "translation, no notes."
+        )
+        r1 = oai.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": en_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.0,
+            max_tokens=800,
+        )
+        track_tokens(r1)
+        english = (r1.choices[0].message.content or "").strip()
+        if not english:
+            return None
+        
+        # 第 2 段:EN → ZH(用主模型,品質更好)
+        zh_prompt = (
+            "Translate this English to Traditional Chinese (繁體中文) "
+            "as used in Taiwan factories. Preserve all factory terminology. "
+            "Machine codes and English acronyms should stay in original. "
+            "Output ONLY the Chinese translation."
+        )
+        r2 = oai.chat.completions.create(
+            model=pick_model(text),
+            messages=[
+                {"role": "system", "content": zh_prompt},
+                {"role": "user", "content": english}
+            ],
+            temperature=0.0,
+            max_tokens=800,
+        )
+        track_tokens(r2)
+        return (r2.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning("Pivot translation failed: %s", e)
+        return None
+
+
+def should_use_pivot(text, src, tgt):
+    """判斷是否該用 pivot 模式"""
+    if not id_zh_pivot_enabled:
+        return False
+    if src != "id" or tgt != "zh":
+        return False
+    char_len = len(re.sub(r"\s+", "", text or ""))
+    return char_len >= id_zh_pivot_threshold
+
+
+def select_better_translation(t1, t2, original):
+    """雙翻 ensemble:在兩個翻譯中選資訊更完整的那個
+    
+    判斷標準:
+      1. 較長者通常資訊較完整
+      2. 但若一者明顯過長(> 1.8x 另一者),選較短者(避免囉嗦)
+      3. 若一者含 ⚠️ 警告,優先選另一者
+    """
+    if not t1: return t2
+    if not t2: return t1
+    
+    has_warn1 = t1.startswith("⚠️")
+    has_warn2 = t2.startswith("⚠️")
+    if has_warn1 and not has_warn2: return t2
+    if has_warn2 and not has_warn1: return t1
+    
+    l1 = len(re.sub(r"\s+", "", t1))
+    l2 = len(re.sub(r"\s+", "", t2))
+    if l1 == 0: return t2
+    if l2 == 0: return t1
+    
+    ratio = max(l1, l2) / min(l1, l2)
+    if ratio > 1.8:
+        # 太懸殊,選較短(較長者可能在亂掰)
+        return t1 if l1 < l2 else t2
+    # 否則選較長(資訊較完整)
+    return t1 if l1 > l2 else t2
 
 
 # v3.2-0426e: tiktoken integration for real logit_bias
@@ -643,19 +895,29 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
 
 
 def _calc_confidence_from_logprobs(logprobs_obj):
-    """Compute average token probability from logprobs response.
-    Returns float 0~1 (1.0 = very confident, 0.5 = uncertain)."""
+    """v3.3 計算翻譯整體信心度
+    
+    使用「平均 logprob 後再取 exp」(等同幾何平均的對數空間版本),
+    比舊版的算術平均更穩定,長譯文不會因 token 數變多而虛高。
+    
+    Returns float 0~1 (1.0 = 完美信心, 0.5 = 不確定)
+    
+    注意:單個 token 的低信心常見且無害;真正該關注的是整體序列的
+    幾何平均信心過低 → 表示模型整段都在猜。
+    """
     try:
         if not logprobs_obj or not getattr(logprobs_obj, 'content', None):
             return 1.0
         import math
-        probs = []
+        logprobs = []
         for tok in logprobs_obj.content:
             if tok and getattr(tok, 'logprob', None) is not None:
-                probs.append(math.exp(tok.logprob))
-        if not probs:
+                logprobs.append(tok.logprob)
+        if not logprobs:
             return 1.0
-        return sum(probs) / len(probs)
+        # 幾何平均 = exp(mean(logprob))。比算術平均更不易被單一高機率字蓋過低機率字。
+        avg_logprob = sum(logprobs) / len(logprobs)
+        return math.exp(avg_logprob)
     except Exception:
         return 1.0
 
@@ -889,6 +1151,62 @@ BUILTIN_EXAMPLES = [
     {"zh": "台車再幫忙一下", "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.", "dir": "zh2id"},
     {"zh": "削皮那邊還需要一台", "id": "Bagian peeling masih butuh satu troli lagi.", "dir": "zh2id"},
     {"zh": "太凸", "id": "terlalu panjang", "dir": "zh2id"},
+    
+    # ===== v3.5 新增:印尼文公告/長句的失敗案例修正 =====
+    # 來源:歐那實際遇到的災難性壓縮 (Martin 訊息)
+    # 原則:讓 GPT 看到「公告類訊息要完整翻譯,不能簡化成短語」
+    {
+        "id": "@All Pemberitahuan Bagi pekerja BF, terutama BF2, jika kalian mengambil bahan baru, dan ada tali pemisah, jangan langsung di buang talinya, karna itu penanda orang yang bekerja di pemotongan (cya, cyb) karna banyak ditemukan barang bengkok. biar ketahuan siapa yang bertugas di mesin CYA atau CYB.",
+        "zh": "@All 公告:給 BF 區員工,特別是 BF2,如果你們領取新材料時有附束帶,不要直接把束帶丟掉,因為那是切斷區(CYA、CYB)作業者的識別標記,因為發現很多料件彎曲。為了能知道是誰在 CYA 或 CYB 機台值班。",
+        "dir": "id2zh"
+    },
+    # ===== 印尼文常見錯譯修正 =====
+    {
+        "id": "Pemberitahuan untuk semua: besok lembur sampai jam 8 malam.",
+        "zh": "公告:明天加班到晚上 8 點。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "Tolong perhatikan, jangan ambil bahan dari area QC tanpa konfirmasi.",
+        "zh": "請注意,沒有確認過不要從品保區拿材料。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "Barang yang sudah di-grinding harus segera di-cek dimensinya.",
+        "zh": "已研磨的料件要立即檢查尺寸。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "Mesin CYA bermasalah lagi, tolong panggil maintenance.",
+        "zh": "CYA 機台又有問題,請叫保養人員過來。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "Bahan tercampur dengan grade lain, harus dipisahkan dulu.",
+        "zh": "材料混到其他等級了,要先分開。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "biar gak salah, tolong tanya dulu ke kepala sebelum proses.",
+        "zh": "為了不要出錯,加工前請先問組長。",
+        "dir": "id2zh"
+    },
+    {
+        "id": "Kerjaan udah selesai semua, tinggal nunggu pengiriman.",
+        "zh": "工作已經全部完成,只等出貨。",
+        "dir": "id2zh"
+    },
+    # ===== ZH→ID 公告類補強(同樣道理)=====
+    {
+        "zh": "公告:今天 BF2 下午要保養,請大家提前完成手上的料件。",
+        "id": "Pemberitahuan: Hari ini BF2 sore akan ada perawatan, mohon semua menyelesaikan barang yang sedang dikerjakan lebih awal.",
+        "dir": "zh2id"
+    },
+    {
+        "zh": "請大家注意:看到料件後端有損傷要馬上回報組長,不要自己處理。",
+        "id": "Mohon perhatian semua: kalau lihat barang ada kerusakan di bagian belakang, harus segera lapor ke kepala, jangan tangani sendiri.",
+        "dir": "zh2id"
+    },
 ]
 
 # ── LIFF Form System ──────────────────────────────────
@@ -1607,11 +1925,85 @@ def _find_longest_phrase(table, text):
     return None, None
 
 
+# ===== v3.3 訊息分類器(工廠翻譯架構 v2)=====
+# 公告/廣播訊號詞 - 命中即視為 announcement,絕不走槽位拼接
+ANNOUNCEMENT_SIGNALS = [
+    # 印尼文公告詞
+    "@all", "pemberitahuan", "pengumuman", "peringatan",
+    "bagi pekerja", "bagi semua", "untuk semua", "kepada semua",
+    "diharapkan", "wajib", "mohon perhatian", "harap diingat",
+    "tolong perhatikan", "perhatian:", "info:", "informasi:",
+    # 繁中公告詞
+    "公告", "通知", "全體", "請注意", "敬請", "通報", "宣達",
+    "請大家", "各位", "全部人員", "所有同仁",
+]
+
+# 現場簡訊長度上限
+SHORT_INCIDENT_MAX_LEN = 30
+
+
+def classify_factory_message(text, src=None):
+    """訊息分類器:announcement / incident / general
+    
+    這是工廠翻譯架構 v2 的入口。所有舊版 factory_semantic_*
+    函數現在都會先呼叫這個分類器,只有 incident 才走嚴格槽位邏輯。
+    
+    回傳 dict { type, reason, len }
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"type": "general", "reason": "empty", "len": 0}
+    
+    low = raw.lower()
+    char_len = len(re.sub(r"\s+", "", raw))
+    
+    # 規則 1:任一公告訊號詞 → announcement
+    for sig in ANNOUNCEMENT_SIGNALS:
+        if sig in low:
+            return {"type": "announcement", "reason": f"signal:{sig}", "len": char_len}
+    
+    # 規則 2:長度 > 50 且含廣播符號 → announcement
+    if char_len > 50 and ("@" in raw or " all " in (" " + low + " ")):
+        return {"type": "announcement", "reason": "long+broadcast_marker", "len": char_len}
+    
+    # 規則 3:長度 > 80 → 一般長訊息(不該被槽位吃掉)
+    if char_len > 80:
+        return {"type": "general", "reason": "too_long_for_incident", "len": char_len}
+    
+    # 規則 4+5:只有印尼文 + 短/中等長度 + 命中工廠術語才視為 incident
+    if char_len <= 50 and src == "id":
+        t = _clean_factory_id(raw)
+        has_obj = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) 
+                      for k in FACTORY_ID_ZH_OBJECTS)
+        has_defect = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) 
+                         for k in FACTORY_ID_ZH_DEFECTS)
+        if has_obj and has_defect:
+            tag = "short" if char_len <= SHORT_INCIDENT_MAX_LEN else "medium"
+            return {"type": "incident", "reason": f"{tag}+obj+defect", "len": char_len}
+    
+    return {"type": "general", "reason": "default", "len": char_len}
+
+
 def factory_semantic_translate_id_zh(text):
-    """Parse object / defect / direction slots and compose Taiwan factory Chinese."""
+    """現場簡訊的語義槽位拼接(工廠翻譯架構 v2)
+    
+    v3.3 變更:
+      - 只有 incident 類別才執行
+      - 長度上限 SHORT_INCIDENT_MAX_LEN
+      - 拼接結果若 < 原文 1/4 視為災難性壓縮,放棄
+    """
     raw = text or ""
     t = _clean_factory_id(raw)
     if not t:
+        return None
+    
+    # ★ v3.3:分類保護 - 公告/一般訊息不走槽位
+    cls = classify_factory_message(raw, src="id")
+    if cls["type"] != "incident":
+        return None
+    
+    # ★ v3.3:硬長度上限
+    if cls["len"] > SHORT_INCIDENT_MAX_LEN:
         return None
 
     leading_codes = re.findall(r"\b(?:[A-Z]\d[A-Z0-9-]{3,}|\d+[A-Z][A-Z0-9-]{2,})\b", raw)
@@ -1621,14 +2013,21 @@ def factory_semantic_translate_id_zh(text):
     defect_key, defect_zh = _find_longest_phrase(FACTORY_ID_ZH_DEFECTS, t)
     pos_key, pos_zh = _find_longest_phrase(FACTORY_ID_ZH_POSITIONS, t)
 
+    result = None
     if obj_zh and defect_zh:
         if pos_zh:
-            return (prefix + f"{obj_zh}{pos_zh}{defect_zh}").strip()
-        if obj_key in ("barang", "barangnya", "material", "materialnya", "bahan", "batang", "batangnya", "batang baja"):
-            return (prefix + f"{obj_zh}{defect_zh}").strip()
-
-    if pos_zh and defect_zh and not obj_zh:
-        return (prefix + f"{pos_zh}{defect_zh}").strip()
+            result = (prefix + f"{obj_zh}{pos_zh}{defect_zh}").strip()
+        elif obj_key in ("barang", "barangnya", "material", "materialnya",
+                         "bahan", "batang", "batangnya", "batang baja"):
+            result = (prefix + f"{obj_zh}{defect_zh}").strip()
+    elif pos_zh and defect_zh and not obj_zh:
+        result = (prefix + f"{pos_zh}{defect_zh}").strip()
+    
+    # ★ v3.3:資訊密度檢查 - 譯文 < 原文 1/4 = 災難性壓縮
+    if result and len(result) * 4 < cls["len"]:
+        return None
+    if result:
+        return result
 
     phrase_map = {
         "barang rusak dari belakang": "料件後端損傷",
@@ -1647,33 +2046,64 @@ def factory_semantic_translate_id_zh(text):
 
 
 def build_factory_context_hint(text, src, tgt):
-    """Compact semantic hint injected into the translation prompt."""
+    """產生注入 GPT 的工廠語境提示(工廠翻譯架構 v2)
+    
+    v3.3 變更:
+      - 公告類:純術語表 + 「必須完整逐句翻譯」要求,不給 deterministic 結論
+      - incident 類:給術語表 + deterministic 結論(明確標示為「參考」)
+      - 一般訊息:純術語表
+    """
     if src == "zh" and tgt == "id":
         return build_factory_context_hint_zh_id(text)
     if src != "id" or tgt != "zh":
         return ""
+    
     domain = detect_factory_domain(text, src, tgt)
     if not domain["is_factory"]:
         return ""
+    
+    cls = classify_factory_message(text, src="id")
     t = _clean_factory_id(text)
+    
+    # 收集出現的術語(供 hint 使用)
     terms = []
-    for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS, **FACTORY_ID_ZH_POSITIONS}.items():
+    for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS,
+                       **FACTORY_ID_ZH_POSITIONS}.items():
         if re.search(r"(?<![a-z])" + re.escape(source) + r"(?![a-z])", t):
             terms.append(f"{source}={zh}")
-    deterministic = factory_semantic_translate_id_zh(text)
-    hint = (
-        "【印尼→繁中工廠語義提示】"
-        "這是台灣不鏽鋼棒材工廠群組訊息；先判斷品質異常/材料方向/設備語境，不要逐字翻譯。"
-        "barang 在工廠品質語境=料件/材料，不要翻物品；"
-        "rusak 在品質語境=損傷/異常，不要只翻壞掉；"
-        "belakang/depan 描述料件方向=後端/前端，不要翻從後面/前面；"
-        "輸出繁體中文現場用語，短句保持短句。"
-    )
-    if terms:
-        hint += " 強制術語：" + "；".join(terms) + "。"
-    if deterministic:
-        hint += " 此句語義槽位可理解為：" + deterministic + "。"
-    return hint
+    
+    if cls["type"] == "announcement":
+        # 公告:絕不給 deterministic 結論,要求完整逐句翻譯
+        hint = (
+            "【印尼→繁中工廠語境】這是台灣不鏽鋼棒材工廠的群組公告，"
+            "必須完整逐句翻譯每一個資訊點(對象、原因、操作要求、相關站別、目的)，"
+            "不可只翻關鍵詞、不可簡化成短語。輸出繁體中文現場用語。"
+        )
+        if terms:
+            hint += " 術語對應：" + "、".join(terms) + "。"
+        return hint
+    
+    elif cls["type"] == "incident":
+        # 現場簡訊:可給 deterministic,但明確標示為「參考」
+        hint = (
+            "【印尼→繁中工廠語義提示】這是台灣不鏽鋼棒材工廠的現場異常簡訊，"
+            "barang 在工廠品質語境=料件/材料，不要翻物品；"
+            "rusak 在品質語境=損傷/異常，不要只翻壞掉；"
+            "belakang/depan 描述料件方向=後端/前端，不要翻從後面/前面；"
+            "輸出繁體中文現場用語，短句保持短句。"
+        )
+        if terms:
+            hint += " 強制術語：" + "、".join(terms) + "。"
+        deterministic = factory_semantic_translate_id_zh(text)
+        if deterministic:
+            hint += f" 槽位參考(僅供確認術語，實際翻譯仍需保留原文所有資訊):「{deterministic}」"
+        return hint
+    
+    else:  # general
+        hint = "【印尼→繁中工廠語境】請使用台灣工廠現場用語。"
+        if terms:
+            hint += " 術語對應：" + "、".join(terms) + "。"
+        return hint
 
 
 def post_fix_factory_id_to_zh(src_text, zh_text):
@@ -1767,34 +2197,57 @@ def validate_factory_translation(src_text, zh_text, src, tgt):
 
 
 def repair_factory_translation_openai(src_text, bad_result, reason):
-    """Repair literal ID->ZH factory translation with a small strict prompt."""
+    """v3.3 修復直譯錯誤的 ID->ZH 翻譯
+    
+    v3.3 變更:
+      - 移除 deterministic 強斷言注入(那會讓 GPT 直接複製短答案)
+      - 公告類訊息要求完整翻譯,max_tokens 提升到 600
+      - 依分類調整 user message 口徑
+    """
     if not oai:
         return None
     try:
+        cls = classify_factory_message(src_text, src="id")
         hint = build_factory_context_hint(src_text, "id", "zh")
-        deterministic = factory_semantic_translate_id_zh(src_text)
+        
         sys_prompt = (
             "你是台灣不鏽鋼棒材工廠的印尼文→繁體中文現場翻譯審核器。"
-            "你的任務是修正直譯錯誤，輸出現場人員會用的短句。"
+            "你的任務是修正直譯錯誤，輸出現場人員會用的繁體中文。"
             "不要解釋，不要加註解，只輸出修正後譯文。"
-            "規則：barang在工廠品質語境=料件/材料；batang=棒材；rusak=損傷/異常；"
-            "belakang/depan描述料件方向=後端/前端，不可翻成從後面/從前面。"
+            "規則：barang 在工廠品質語境=料件/材料；batang=棒材；rusak=損傷/異常；"
+            "belakang/depan 描述料件方向=後端/前端，不可翻成從後面/從前面。"
         )
-        user_msg = (
-            f"原印尼文：{src_text}\n"
-            f"錯誤中文：{bad_result}\n"
-            f"錯誤原因：{reason}\n"
-            f"語義提示：{hint}\n"
-        )
-        if deterministic:
-            user_msg += f"可採用的語義結果：{deterministic}\n"
-        user_msg += "請輸出修正後繁體中文："
+        
+        # ★ v3.3:依分類調整 user message
+        if cls["type"] == "announcement":
+            sys_prompt += "重要：這是公告訊息，必須完整翻譯每個資訊點，不可簡化成短語或只翻關鍵詞。"
+            user_msg = (
+                f"原印尼文：{src_text}\n"
+                f"錯誤中文(可能因簡化或漏譯)：{bad_result}\n"
+                f"錯誤原因：{reason}\n"
+                f"術語提示：{hint}\n"
+                f"請輸出完整逐句翻譯後的繁體中文(必須涵蓋原文所有資訊):"
+            )
+            max_tok = 600  # 公告需要長譯文
+        else:
+            user_msg = (
+                f"原印尼文：{src_text}\n"
+                f"錯誤中文：{bad_result}\n"
+                f"錯誤原因：{reason}\n"
+                f"語境提示：{hint}\n"
+                f"請輸出修正後繁體中文："
+            )
+            max_tok = 300
+        
         r = oai.chat.completions.create(
             model=pick_model(src_text),
-            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg}
+            ],
             temperature=0.0,
             top_p=1.0,
-            max_tokens=300,
+            max_tokens=max_tok,
         )
         track_tokens(r)
         return (r.choices[0].message.content or "").strip()
@@ -1818,9 +2271,17 @@ def finalize_factory_translation(src_text, result, src, tgt):
             ok2, _ = validate_factory_translation(src_text, repaired, src, tgt)
             if ok2:
                 return repaired
-        fallback = factory_semantic_translate_id_zh(src_text)
-        if fallback:
-            return fallback
+        # ★ v3.3:fallback 槽位拼接只用於 incident 類別
+        # 公告/一般訊息寧可回傳 repaired 或原 result(可能不完美),
+        # 也不要被槽位拼接吃掉所有資訊
+        cls = classify_factory_message(src_text, src="id")
+        if cls["type"] == "incident":
+            fallback = factory_semantic_translate_id_zh(src_text)
+            if fallback:
+                return fallback
+        # 公告/一般訊息:回傳 repaired 或原 result
+        if repaired:
+            return repaired
     if src == "zh" and tgt == "id":
         raw = result
         bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, raw)
@@ -2303,6 +2764,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
             + build_factory_context_hint(text, src, tgt) + " "
+            # ★ v3.4 CoD:對 ID→ZH 注入高風險詞字典
+            + ((detect_id_zh_risk_terms(text) + " ") if (id_zh_cod_enabled and src == "id" and tgt == "zh") else "")
+            # ★ v3.4 CoT:對 ID→ZH 注入二階段思考指令
+            + ((build_id_zh_cot_instruction(text) + " ") if (id_zh_cot_enabled and src == "id" and tgt == "zh") else "") +
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
             "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
             "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
@@ -2946,6 +3411,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 _kwargs["metadata"] = _meta
         # v3.2-0426e: Structured Outputs (response_format with json_schema)
         if structured_output_enabled and not _model.startswith(("o1", "o3", "o4")):
+            # ★ v3.5:擴充 schema,讓 GPT 自我聲明資訊完整性
             _kwargs["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -2954,15 +3420,36 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "translation": {"type": "string", "description": "The final translation, no notes/explanations"},
-                            "confidence": {"type": "number", "description": "0-1 confidence score"},
+                            "translation": {
+                                "type": "string",
+                                "description": "The final translation, no notes/explanations"
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "0-1 confidence score for this translation"
+                            },
+                            "covered_all_information": {
+                                "type": "boolean",
+                                "description": "Whether the translation covers ALL information points from the source (key for announcement-type messages)"
+                            },
+                            "message_type": {
+                                "type": "string",
+                                "enum": ["announcement", "incident", "general", "question", "command"],
+                                "description": "What kind of message this is"
+                            },
+                            "preserved_terms": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of terms kept verbatim (machine codes like BF/BF2/CYA, names, numbers)"
+                            },
                             "alternatives": {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "Up to 2 alternative phrasings"
                             }
                         },
-                        "required": ["translation", "confidence", "alternatives"],
+                        "required": ["translation", "confidence", "covered_all_information",
+                                     "message_type", "preserved_terms", "alternatives"],
                         "additionalProperties": False
                     }
                 }
@@ -2996,6 +3483,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         track_tokens(r)
         # v3.2-0426e: parse structured output if used
         _raw = r.choices[0].message.content.strip()
+        _struct_self_check_failed = None  # v3.5: 記錄 self-check 失敗原因供日誌
         if structured_output_enabled and _raw.startswith("{"):
             try:
                 import json as _json_mod
@@ -3005,7 +3493,63 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 _struct_conf = _parsed.get("confidence")
                 if isinstance(_struct_conf, (int, float)):
                     _confidence = float(_struct_conf)
-            except Exception:
+                
+                # ★ v3.5 Self-check 1:preserved_terms 真的有出現在 translation 嗎?
+                # 機台代號、人名、數字保留錯了會嚴重失真,直接擋
+                _preserved_terms = _parsed.get("preserved_terms", []) or []
+                if isinstance(_preserved_terms, list) and result:
+                    _missing_terms = []
+                    for _term in _preserved_terms:
+                        _t = str(_term).strip()
+                        if _t and _t not in result:
+                            # 容忍大小寫差異
+                            if _t.lower() not in result.lower():
+                                _missing_terms.append(_t)
+                    if _missing_terms:
+                        _struct_self_check_failed = f"missing_terms:{_missing_terms[:3]}"
+                        # 降信心,觸發後續警告
+                        _confidence = min(_confidence, 0.5)
+                        logger.warning(
+                            "Structured self-check FAILED: claimed preserved_terms %s "
+                            "but they're missing from translation. Original=%s, Translation=%s",
+                            _missing_terms, text[:60], result[:60]
+                        )
+                
+                # ★ v3.5 Self-check 2:GPT 自己說沒涵蓋全部資訊?
+                _covered = _parsed.get("covered_all_information", True)
+                if _covered is False:
+                    _struct_self_check_failed = (_struct_self_check_failed or "") + ";claimed_incomplete"
+                    _confidence = min(_confidence, 0.6)
+                    logger.warning(
+                        "Structured self-check: GPT admits incomplete coverage. "
+                        "Original=%s, Translation=%s",
+                        text[:60], result[:60]
+                    )
+                
+                # ★ v3.5 Self-check 3:訊息類型與我們的分類器交叉驗證(僅 ID→ZH)
+                # 如果 GPT 說是 announcement 但我們的分類器卻說 incident,代表有歧見
+                # 這時保險起見不要走槽位拼接降級
+                if src == "id" and tgt == "zh":
+                    _gpt_msg_type = _parsed.get("message_type", "")
+                    try:
+                        _our_cls = classify_factory_message(text, src="id")
+                        if _gpt_msg_type == "announcement" and _our_cls.get("type") != "announcement":
+                            # GPT 認為是公告,我們的分類器漏掉了 - 信任 GPT
+                            try:
+                                _tl.gpt_says_announcement = True
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                
+                # 把 self-check 結果記到 thread-local 供日誌顯示
+                if _struct_self_check_failed:
+                    try:
+                        _tl.struct_self_check = _struct_self_check_failed
+                    except Exception:
+                        pass
+            except Exception as _e:
+                logger.error("Structured output parse error: %s", _e)
                 result = _raw
         else:
             result = _raw
@@ -3066,9 +3610,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                     logger.info("Round-trip check passed: sim=%.2f", _similarity_val)
         except Exception as _e:
             logger.error("Round-trip wrap error: %s", _e)
-        # Batch C: low confidence warning
+        # ★ v3.3:低信心警告 - 只在反譯檢查未觸發時才加 ⚠️,避免雙重前綴
         try:
-            if logprobs_enabled and _confidence < confidence_threshold and not result.startswith("⚠️"):
+            if (logprobs_enabled and _confidence < confidence_threshold 
+                and not result.startswith("⚠️") and not result.startswith("⚠")):
                 result = "⚠️ " + result
                 logger.warning("Low confidence translation: %.2f < %.2f for %r",
                                _confidence, confidence_threshold, text[:80])
@@ -3227,7 +3772,19 @@ def _translate_inner(text, src, tgt):
         _log_translation(text, cached, src, tgt, "cache", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
         return cached
 
+    # ★ v3.4:長 ID→ZH 訊息嘗試 pivot via English(若啟用)
+    pivot_result = None
+    if should_use_pivot(text, src, tgt):
+        try:
+            pivot_result = translate_id_zh_with_pivot(text, src, tgt)
+        except Exception as _e:
+            logger.warning("Pivot attempt failed: %s", _e)
+    
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
+    
+    # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
+    if pivot_result and result:
+        result = select_better_translation(result, pivot_result, text)
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
 
@@ -7207,6 +7764,32 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 
 <div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🎯 v3.4 印尼文→中文翻譯品質強化</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">針對 ID→ZH 常翻錯的問題,套用三項論文驗證的技巧。建議 CoD + CoT 預設開啟。</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="idZhCoD" type="checkbox" checked onchange="saveIdZhEnhance()"> 啟用 CoD 字典注入（強烈推薦,+5% token）
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">自動偵測句中高風險誤譯詞,把正確中文塞到 prompt 開頭(barang→料件、biar→為了)</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="idZhCoT" type="checkbox" checked onchange="saveIdZhEnhance()"> 啟用 CoT 二階段思考（強烈推薦,+20% token）
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">讓 GPT 先「展開思考」再翻譯(識別句型→列關鍵資訊點→處理俚語)</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="idZhPivot" type="checkbox" onchange="saveIdZhEnhance()"> 啟用 Pivot via English（成本翻倍,慎用）
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">先 ID→EN 再 EN→ZH,長句品質更好,但會多一次 API 呼叫</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">Pivot 觸發字數門檻</label>
+<input id="idZhPivotThr" type="number" min="20" max="500" value="80" onchange="saveIdZhEnhance()" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+<span style="font-size:11px;color:#6a6a7a">字以上才用 pivot(短句不需要)</span>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">📊 Batch D: 翻譯日誌 & 監控</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">記錄每筆翻譯，可標記錯誤自動加入修正範例</div>
 
@@ -8608,6 +9191,11 @@ async function _loadFeatures(gid){
     if(document.getElementById('dcThr')) document.getElementById('dcThr').value=(d.double_check_threshold!==undefined?d.double_check_threshold:0.55);
     if(document.getElementById('dcKw')) document.getElementById('dcKw').value=d.double_check_keywords||'';
     if(document.getElementById('fsMode')) document.getElementById('fsMode').value=d.fewshot_mode||'messages';
+    // v3.4 ID→ZH 強化開關
+    if(document.getElementById('idZhCoD')) document.getElementById('idZhCoD').checked=d.id_zh_cod_enabled!==false;
+    if(document.getElementById('idZhCoT')) document.getElementById('idZhCoT').checked=d.id_zh_cot_enabled!==false;
+    if(document.getElementById('idZhPivot')) document.getElementById('idZhPivot').checked=!!d.id_zh_pivot_enabled;
+    if(document.getElementById('idZhPivotThr')) document.getElementById('idZhPivotThr').value=(d.id_zh_pivot_threshold||80);
     // Batch C/D load
     if(document.getElementById('lpEn')) document.getElementById('lpEn').checked=d.logprobs_enabled!==false;
     if(document.getElementById('cfThr')) document.getElementById('cfThr').value=(d.confidence_threshold!==undefined?d.confidence_threshold:0.85);
@@ -8684,6 +9272,16 @@ function saveBatchCD(){
     translation_logging_enabled: document.getElementById('tlEn').checked
   };
   api('/features','POST',body).then(function(d){if(d)toast('已儲存')});
+}
+// v3.4 ID→ZH 翻譯強化開關儲存
+function saveIdZhEnhance(){
+  var body={
+    id_zh_cod_enabled: document.getElementById('idZhCoD').checked,
+    id_zh_cot_enabled: document.getElementById('idZhCoT').checked,
+    id_zh_pivot_enabled: document.getElementById('idZhPivot').checked,
+    id_zh_pivot_threshold: parseInt(document.getElementById('idZhPivotThr').value)||80
+  };
+  api('/features','POST',body).then(function(d){if(d)toast('ID→ZH 強化已儲存')});
 }
 async function loadTransLog(filter){
   filter = filter || 'all';
@@ -9097,6 +9695,11 @@ def _do_save_impl():
             "prompt_caching_enabled": prompt_caching_enabled,
             "translation_logging_enabled": translation_logging_enabled,
             "ab_test_enabled": ab_test_enabled,
+            "id_zh_cot_enabled": id_zh_cot_enabled,
+            "id_zh_cod_enabled": id_zh_cod_enabled,
+            "id_zh_pivot_enabled": id_zh_pivot_enabled,
+            "id_zh_pivot_threshold": id_zh_pivot_threshold,
+            "id_zh_double_translation": id_zh_double_translation,
             "stop_sequences_enabled": stop_sequences_enabled,
             "reasoning_effort": reasoning_effort,
             "send_user_id_to_openai": send_user_id_to_openai,
@@ -9136,6 +9739,7 @@ def load_settings():
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
+    global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -9247,6 +9851,18 @@ def load_settings():
             translation_logging_enabled = bool(data["translation_logging_enabled"])
         if "ab_test_enabled" in data:
             ab_test_enabled = bool(data["ab_test_enabled"])
+        # ★ v3.4 ID→ZH 強化開關
+        if "id_zh_cot_enabled" in data:
+            id_zh_cot_enabled = bool(data["id_zh_cot_enabled"])
+        if "id_zh_cod_enabled" in data:
+            id_zh_cod_enabled = bool(data["id_zh_cod_enabled"])
+        if "id_zh_pivot_enabled" in data:
+            id_zh_pivot_enabled = bool(data["id_zh_pivot_enabled"])
+        if "id_zh_pivot_threshold" in data:
+            try: id_zh_pivot_threshold = int(data["id_zh_pivot_threshold"])
+            except (ValueError, TypeError): pass
+        if "id_zh_double_translation" in data:
+            id_zh_double_translation = bool(data["id_zh_double_translation"])
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -9294,6 +9910,18 @@ def load_settings():
             translation_logging_enabled = bool(data["translation_logging_enabled"])
         if "ab_test_enabled" in data:
             ab_test_enabled = bool(data["ab_test_enabled"])
+        # ★ v3.4 ID→ZH 強化開關
+        if "id_zh_cot_enabled" in data:
+            id_zh_cot_enabled = bool(data["id_zh_cot_enabled"])
+        if "id_zh_cod_enabled" in data:
+            id_zh_cod_enabled = bool(data["id_zh_cod_enabled"])
+        if "id_zh_pivot_enabled" in data:
+            id_zh_pivot_enabled = bool(data["id_zh_pivot_enabled"])
+        if "id_zh_pivot_threshold" in data:
+            try: id_zh_pivot_threshold = int(data["id_zh_pivot_threshold"])
+            except (ValueError, TypeError): pass
+        if "id_zh_double_translation" in data:
+            id_zh_double_translation = bool(data["id_zh_double_translation"])
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -9750,6 +10378,7 @@ def api_admin_features():
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
+    global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
