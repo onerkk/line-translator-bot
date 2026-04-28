@@ -70,7 +70,9 @@
     }
   },
   "dm_master_enabled": true,
-  "dm_whitelist": [],
+  "dm_whitelist": [
+    "Uaf4dc8fc636bc8f6060521c398514dc1"
+  ],
   "dm_known_users": {
     "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
   },
@@ -113,7 +115,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 76,
+    "text_translations": 77,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
