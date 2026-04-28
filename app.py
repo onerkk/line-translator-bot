@@ -422,6 +422,14 @@ id_zh_cod_enabled = True             # Chain-of-Dictionary 動態術語注入
 id_zh_pivot_enabled = False          # Pivot via English(成本較高,預設關閉)
 id_zh_pivot_threshold = 80           # 訊息長度超過此值才啟用 pivot(避免短句浪費)
 id_zh_double_translation = False     # 雙翻 ensemble(翻兩次選較完整的)成本高
+
+# ★ v3.6 印尼文預處理 + 多路徑反譯 + 監控儀表板
+id_preprocessing_enabled = True      # 印尼俚語/簡寫標準化(純詞表,0 API 呼叫)
+id_preprocessing_nano = False        # 額外用 nano 模型做語意級規範化(會多一次 API)
+multi_path_backtrans_enabled = False # 多路徑反譯(zh→id 平行 zh→en→id),成本翻倍
+multi_path_min_chars = 60            # 多路徑反譯的觸發字數
+quality_metrics_enabled = True       # 收集品質指標(catastrophic_compression / missing_terms 等)
+
 # v3.2-0426e: New official OpenAI features
 stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
 forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
@@ -615,6 +623,280 @@ def detect_id_zh_risk_terms(text):
     if not found:
         return ""
     return "【翻譯字典(必須遵守)】\n" + "\n".join(found) + "\n"
+
+
+# =====================================================================
+# v3.6 印尼文預處理 (Bahasa Gaul / 簡寫標準化)
+# =====================================================================
+# 來源:NusaMT-7B 論文 + 印尼語常見口語縮寫詞典
+# 原理:LLM 對標準印尼文比口語熟,把 gak→tidak / udah→sudah 等先還原,
+#       翻譯品質會明顯提升。整個過程是純詞表替換,0 API 呼叫,即時生效。
+
+ID_NORMALIZATION_MAP = {
+    # ===== 高頻簡寫(SMS/WhatsApp 風格)=====
+    "gak": "tidak", "ga": "tidak", "nggak": "tidak", "ngga": "tidak", "g": "tidak",
+    "gk": "tidak", "ndak": "tidak", "gada": "tidak ada", "gpp": "tidak apa-apa",
+    "gapapa": "tidak apa-apa",
+    "udah": "sudah", "udh": "sudah", "uda": "sudah", "dah": "sudah",
+    "blm": "belum", "blum": "belum", "blom": "belum",
+    "bgt": "banget", "bgtt": "banget",
+    "yg": "yang", "y": "ya",
+    "krn": "karena", "krna": "karena", "karna": "karena",
+    "tdk": "tidak", "tdak": "tidak",
+    "dg": "dengan", "dgn": "dengan",
+    "hrs": "harus", "hrus": "harus",
+    "bs": "bisa", "bsa": "bisa",
+    "lg": "lagi",
+    "org": "orang", "orng": "orang",
+    "kalo": "kalau", "klo": "kalau", "klau": "kalau", "kl": "kalau",
+    "tau": "tahu", "taw": "tahu",
+    "jd": "jadi", "jdi": "jadi",
+    "sm": "sama", "sma": "sama",
+    "tlg": "tolong", "tlng": "tolong", "tolg": "tolong",
+    "cepet": "cepat", "cpt": "cepat", "cpet": "cepat",
+    "dpt": "dapat", "dpat": "dapat",
+    "kpd": "kepada", "kpda": "kepada",
+    "utk": "untuk", "untk": "untuk",
+    "dr": "dari", "dri": "dari",
+    "tp": "tapi", "tpi": "tapi",
+    "skrg": "sekarang", "skg": "sekarang", "skrng": "sekarang",
+    "trs": "terus", "trus": "terus",
+    "nih": "ini",
+    "tuh": "itu",
+    "msh": "masih",
+    "udh": "sudah", "udeh": "sudah",
+    "knp": "kenapa", "knpa": "kenapa",
+    "gmn": "bagaimana", "gimana": "bagaimana", "gmna": "bagaimana",
+    "bnr": "benar", "bnar": "benar",
+    "ntr": "nanti", "ntar": "nanti",
+    "smua": "semua", "sma": "semua",
+    "krj": "kerja", "krja": "kerja",
+    "kerjaan": "pekerjaan",
+    "msk": "masuk",
+    "klr": "keluar",
+    "dh": "sudah",
+    "udh": "sudah",
+    
+    # ===== 雅加達/爪哇方言 =====
+    "gw": "saya", "gue": "saya", "gua": "saya", "aku": "saya",
+    "lu": "kamu", "lo": "kamu", "loe": "kamu",
+    "ane": "saya", "ente": "kamu",
+    "doang": "saja", "aja": "saja",
+    "bener": "benar",
+    "ngapain": "sedang apa", "ngapa": "kenapa",
+    "kok": "mengapa",
+    "nyari": "mencari",
+    "ngambil": "mengambil",
+    "ngomong": "berbicara",
+    "ngerti": "mengerti",
+    "ngga": "tidak",
+    "kasian": "kasihan",
+    "duit": "uang",
+    "sip": "baik",
+    "ngecek": "memeriksa", "cek": "memeriksa",
+    
+    # ===== 工廠常見變體 =====
+    "kerjaaan": "pekerjaan",  # 重複字
+    "stp": "setiap",
+    "tlg": "tolong", "tlng": "tolong",
+    "msl": "misal", "msl-nya": "misalnya",
+    "biar": "agar",  # 工廠語境,biar = agar/supaya 比 supaya 更常見
+}
+
+# 大寫專有名詞保護(機台代號、工廠縮寫不能被改)
+ID_PRESERVE_TOKENS = re.compile(
+    r"\b(?:[A-Z]{2,}\d*|BF\d?|CYA|CYB|QC|QA|PM|PMI|MI|SS|SUS\d+|SAE\d+|"
+    r"PK\d+|S\d+|F\d+|"
+    r"[A-Z]\d[A-Z0-9-]+|\d+[A-Z][A-Z0-9-]+)\b"
+)
+
+
+def normalize_indonesian_text(text):
+    """將印尼俚語/簡寫還原為標準印尼文(純詞表替換,0 API 呼叫)
+    
+    保護機制:
+      - 大寫專有名詞(BF2/CYA/QC 等)不會被改
+      - 處理單字邊界,避免誤改子字串
+      - 大小寫不敏感比對,但保留首字母大寫
+    
+    回傳 (normalized_text, replacements_count)
+    """
+    if not text:
+        return text, 0
+    
+    if not id_preprocessing_enabled:
+        return text, 0
+    
+    # 1. 找出需要保護的大寫專有名詞,用 placeholder 暫存
+    protected = {}
+    counter = [0]
+    
+    def _protect(m):
+        token = m.group(0)
+        ph = f"__PROT_{counter[0]}__"
+        protected[ph] = token
+        counter[0] += 1
+        return ph
+    
+    text_protected = ID_PRESERVE_TOKENS.sub(_protect, text)
+    
+    # 2. 詞表替換 - 用 word boundary,大小寫不敏感
+    replacements = 0
+    
+    # 按長度由長到短排序,避免短詞先匹配吃掉長詞
+    sorted_map = sorted(ID_NORMALIZATION_MAP.items(), key=lambda x: -len(x[0]))
+    
+    for slang, standard in sorted_map:
+        pattern = re.compile(r"(?<![a-zA-Z])" + re.escape(slang) + r"(?![a-zA-Z])", re.IGNORECASE)
+        new_text, n = pattern.subn(standard, text_protected)
+        if n > 0:
+            text_protected = new_text
+            replacements += n
+    
+    # 3. 還原保護的專有名詞
+    for ph, token in protected.items():
+        text_protected = text_protected.replace(ph, token)
+    
+    return text_protected, replacements
+
+
+def normalize_indonesian_text_with_nano(text):
+    """進階模式:額外用 nano 模型做語意級規範化
+    
+    只在 id_preprocessing_nano = True 時使用,會多一次 API 呼叫
+    用途:處理詞表抓不到的特殊用法、混雜爪哇語等
+    """
+    if not id_preprocessing_nano or not oai or not text:
+        return text
+    try:
+        prompt = (
+            "Convert this Indonesian text to standard Bahasa Indonesia, "
+            "expanding all abbreviations and slang. "
+            "Do NOT translate to other languages. Do NOT change machine codes "
+            "(like BF2, CYA, CYB) or proper nouns. "
+            "Output ONLY the normalized Indonesian text, no explanation."
+        )
+        r = oai.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.0,
+            max_tokens=600,
+        )
+        track_tokens(r)
+        normalized = (r.choices[0].message.content or "").strip()
+        return normalized if normalized else text
+    except Exception as e:
+        logger.warning("ID nano normalization failed: %s", e)
+        return text
+
+
+# =====================================================================
+# v3.6 多路徑反譯 (Multi-Path Back-Translation)
+# =====================================================================
+# 來源:LLM-BT-Terms 論文,證實平行多路徑反譯能找出 90%+ 翻譯錯誤
+# 原理:單一反譯路徑可能因模型偏誤而漏抓錯誤,
+#       兩條獨立路徑(直譯 + 經英語)兩者都通過才算真的 OK
+
+def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
+    """多路徑反譯檢查
+    
+    回傳 (passes, details_dict)
+    
+    details = {
+      'path1_passes': bool,    # 直接反譯
+      'path1_jaccard': float,
+      'path2_passes': bool,    # 經英語反譯
+      'path2_jaccard': float,
+      'final_decision': str,   # 'all_pass' / 'partial' / 'all_fail'
+    }
+    """
+    if not oai:
+        return True, {"final_decision": "no_oai"}
+    
+    details = {}
+    
+    try:
+        check_model = "gpt-4.1-nano"
+        
+        # ===== Path 1: 直接反譯 =====
+        if tgt_lang == "zh":
+            back_prompt1 = "Translate this Chinese to Indonesian. Output ONLY translation:"
+        elif tgt_lang == "id":
+            back_prompt1 = "Translate this Indonesian to Chinese. Output ONLY translation:"
+        else:
+            return True, {"final_decision": "unsupported"}
+        
+        r1 = oai.chat.completions.create(
+            model=check_model,
+            messages=[
+                {"role": "system", "content": back_prompt1},
+                {"role": "user", "content": translation}
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
+        track_tokens(r1)
+        back1 = (r1.choices[0].message.content or "").strip()
+        sim1 = _text_similarity(original, back1)
+        details["path1_jaccard"] = round(sim1, 3)
+        ok1, _, _ = _translation_quality_check(original, translation, back1)
+        details["path1_passes"] = ok1
+        
+        # ===== Path 2: 經英語反譯 (translation → English → back to source lang) =====
+        # 第一段:translation → English
+        r2a = oai.chat.completions.create(
+            model=check_model,
+            messages=[
+                {"role": "system", "content": "Translate to English. Output ONLY translation:"},
+                {"role": "user", "content": translation}
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
+        track_tokens(r2a)
+        english = (r2a.choices[0].message.content or "").strip()
+        
+        # 第二段:English → source language
+        if tgt_lang == "zh":
+            back2_prompt = "Translate this English to Indonesian. Output ONLY translation:"
+        else:
+            back2_prompt = "Translate this English to Chinese. Output ONLY translation:"
+        
+        r2b = oai.chat.completions.create(
+            model=check_model,
+            messages=[
+                {"role": "system", "content": back2_prompt},
+                {"role": "user", "content": english}
+            ],
+            temperature=0.0,
+            max_tokens=500,
+        )
+        track_tokens(r2b)
+        back2 = (r2b.choices[0].message.content or "").strip()
+        sim2 = _text_similarity(original, back2)
+        details["path2_jaccard"] = round(sim2, 3)
+        ok2, _, _ = _translation_quality_check(original, translation, back2)
+        details["path2_passes"] = ok2
+        
+        # ===== 最終判斷 =====
+        if ok1 and ok2:
+            details["final_decision"] = "all_pass"
+            return True, details
+        elif ok1 or ok2:
+            details["final_decision"] = "partial"
+            # 部分通過 - 嚴格模式下視為失敗,但只給警告
+            return False, details
+        else:
+            details["final_decision"] = "all_fail"
+            return False, details
+    
+    except Exception as e:
+        logger.warning("Multi-path back-translation error: %s", e)
+        details["final_decision"] = f"exception:{e}"
+        return True, details  # 不阻擋
 
 
 def build_id_zh_cot_instruction(text):
@@ -966,6 +1248,56 @@ def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, conf
                     delattr(_tl, 'factory_audit')
                 except Exception:
                     pass
+        # ★ v3.6 收集品質指標到 entry
+        try:
+            # 預處理紀錄
+            _prep = getattr(_tl, 'id_preprocessing', None)
+            if _prep and isinstance(_prep, dict):
+                entry["preprocessing"] = {
+                    "original": _prep.get("original", "")[:200],
+                    "normalized": _prep.get("normalized", "")[:200],
+                    "count": _prep.get("count", 0),
+                }
+                try:
+                    delattr(_tl, 'id_preprocessing')
+                except Exception:
+                    pass
+            
+            # 多路徑反譯紀錄
+            _mp = getattr(_tl, 'multi_path_fail', None)
+            if _mp and isinstance(_mp, dict):
+                entry["multi_path_fail"] = _mp
+                try:
+                    delattr(_tl, 'multi_path_fail')
+                except Exception:
+                    pass
+            
+            # Self-check 失敗紀錄
+            _sc = getattr(_tl, 'struct_self_check', None)
+            if _sc:
+                entry["struct_self_check"] = str(_sc)
+                try:
+                    delattr(_tl, 'struct_self_check')
+                except Exception:
+                    pass
+            
+            # 反譯失敗類型(catastrophic_compression / backtrans_too_short / low_similarity)
+            _rtc_reason = getattr(_tl, 'rtc_fail_reason', None)
+            if _rtc_reason:
+                entry["rtc_fail_reason"] = str(_rtc_reason)
+                try:
+                    delattr(_tl, 'rtc_fail_reason')
+                except Exception:
+                    pass
+            
+            # 譯文/原文長度比(永遠記錄)
+            _orig_l = len(re.sub(r"\s+", "", src_text or ""))
+            _trans_l = len(re.sub(r"\s+", "", tgt_text or ""))
+            if _orig_l > 0:
+                entry["length_ratio"] = round(_trans_l / _orig_l, 3)
+        except Exception as _e:
+            logger.error("[TLOG] metrics enrichment failed: %s", _e)
+        
         translation_log.append(entry)
         # Ring buffer
         if len(translation_log) > TRANSLATION_LOG_MAX:
@@ -3598,16 +3930,44 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # v3.2-0426d Batch B: Round-trip verification
         _did_double_check = False
         _similarity_val = 1.0
+        _multi_path_details = None
         try:
             if _should_double_check(text, src):
                 _did_double_check = True
-                passes, _similarity_val, back = _round_trip_check(text, result, src, tgt)
-                if not passes:
-                    logger.warning("Round-trip check FAILED: orig=%r trans=%r back=%r sim=%.2f",
-                                   text[:80], result[:80], back[:80], _similarity_val)
-                    result = "⚠️ " + result
+                
+                # ★ v3.6 多路徑反譯:長句 + 啟用時走兩條路徑
+                _orig_char_len = len(re.sub(r"\s+", "", text or ""))
+                _use_multi_path = (
+                    multi_path_backtrans_enabled 
+                    and _orig_char_len >= multi_path_min_chars
+                    and src in ("id", "zh") and tgt in ("zh", "id")
+                )
+                
+                if _use_multi_path:
+                    passes, _multi_path_details = _multi_path_back_translation(text, result, src, tgt)
+                    _similarity_val = _multi_path_details.get("path1_jaccard", 1.0)
+                    if not passes:
+                        decision = _multi_path_details.get("final_decision", "unknown")
+                        logger.warning(
+                            "Multi-path back-trans FAILED (%s): orig=%r trans=%r details=%s",
+                            decision, text[:80], result[:80], _multi_path_details
+                        )
+                        result = "⚠️ " + result
+                        # 記錄到 thread-local 供監控儀表板用
+                        try:
+                            _tl.multi_path_fail = _multi_path_details
+                        except Exception:
+                            pass
+                    else:
+                        logger.info("Multi-path back-trans passed: %s", _multi_path_details)
                 else:
-                    logger.info("Round-trip check passed: sim=%.2f", _similarity_val)
+                    passes, _similarity_val, back = _round_trip_check(text, result, src, tgt)
+                    if not passes:
+                        logger.warning("Round-trip check FAILED: orig=%r trans=%r back=%r sim=%.2f",
+                                       text[:80], result[:80], back[:80], _similarity_val)
+                        result = "⚠️ " + result
+                    else:
+                        logger.info("Round-trip check passed: sim=%.2f", _similarity_val)
         except Exception as _e:
             logger.error("Round-trip wrap error: %s", _e)
         # ★ v3.3:低信心警告 - 只在反譯檢查未觸發時才加 ⚠️,避免雙重前綴
@@ -3723,6 +4083,27 @@ def translate(text, src, tgt):
 
 
 def _translate_inner(text, src, tgt):
+    # ★ v3.6 印尼文預處理:在所有後續路徑之前先標準化
+    _preprocessing_log = None
+    if src == "id" and id_preprocessing_enabled:
+        normalized, n_replacements = normalize_indonesian_text(text)
+        if n_replacements > 0:
+            logger.info("ID preprocessing: %d replacements. %r → %r", 
+                       n_replacements, text[:60], normalized[:60])
+            _preprocessing_log = {"original": text, "normalized": normalized, "count": n_replacements}
+            # 把標準化結果存到 thread-local 供日誌記錄
+            try:
+                _tl.id_preprocessing = _preprocessing_log
+            except Exception:
+                pass
+            # 用標準化版本後續處理
+            text = normalized
+        # 進階:nano 模型語意級規範化(成本高)
+        if id_preprocessing_nano:
+            text_nano = normalize_indonesian_text_with_nano(text)
+            if text_nano and text_nano != text:
+                text = text_nano
+    
     # Check custom examples for exact match first (free, no API call)
     exact = _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
@@ -7790,6 +8171,54 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 
 <div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🔤 v3.6 印尼文預處理 + 多路徑反譯</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">把 gak/udah/bgt 等簡寫先還原為標準印尼文,翻譯品質提升 8-12%(論文驗證)</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="idPrep" type="checkbox" checked onchange="saveV36Settings()"> 啟用印尼俚語/簡寫標準化(0 API 呼叫,推薦)
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">純詞表替換,即時生效。例如 gak→tidak, udah→sudah, biar→agar</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="idPrepNano" type="checkbox" onchange="saveV36Settings()"> 進階:nano 模型語意級規範化(成本 +5%)
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">處理詞表抓不到的特殊用法、混雜爪哇語</div>
+
+<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+<input id="multiPath" type="checkbox" onchange="saveV36Settings()"> 啟用多路徑反譯(成本翻倍,只用於長句)
+</label>
+<div style="font-size:11px;color:#6a6a7a;margin-bottom:10px;padding-left:24px">平行兩條反譯路徑(直譯 + 經英語),兩條都通過才算 OK</div>
+
+<div style="margin-bottom:12px">
+<label style="font-size:13px;color:#e0e0e0;display:block;margin-bottom:4px">多路徑反譯觸發字數</label>
+<input id="multiPathMin" type="number" min="20" max="500" value="60" onchange="saveV36Settings()" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
+<span style="font-size:11px;color:#6a6a7a">字以上才用多路徑(短句單路徑就夠)</span>
+</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">📈 翻譯品質監控儀表板</div>
+<div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">五大關鍵指標 + 各群組品質分數 + 最近的問題訊息</div>
+
+<div style="display:flex;gap:6px;margin-bottom:10px">
+<button class="btn btn-dark btn-sm" onclick="loadQualityStats(7)">📅 過去 7 天</button>
+<button class="btn btn-dark btn-sm" onclick="loadQualityStats(1)">📅 今天</button>
+<button class="btn btn-dark btn-sm" onclick="loadQualityStats(30)">📅 過去 30 天</button>
+</div>
+
+<div id="qsMetrics" style="font-size:13px;color:#8a8a9a;margin-bottom:12px;padding:10px;background:#0d0d1a;border-radius:6px">點上方按鈕載入</div>
+
+<div style="font-weight:600;font-size:13px;color:#e0e0e0;margin-bottom:6px">各語言對</div>
+<div id="qsByLang" style="font-size:12px;margin-bottom:12px"></div>
+
+<div style="font-weight:600;font-size:13px;color:#e0e0e0;margin-bottom:6px">各群組品質分數(差的排前面)</div>
+<div id="qsByGroup" style="font-size:12px;margin-bottom:12px"></div>
+
+<div style="font-weight:600;font-size:13px;color:#e0e0e0;margin-bottom:6px">最近的問題訊息</div>
+<div id="qsIssues" style="font-size:12px;max-height:300px;overflow-y:auto"></div>
+</div>
+
+<div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">📊 Batch D: 翻譯日誌 & 監控</div>
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:10px">記錄每筆翻譯，可標記錯誤自動加入修正範例</div>
 
@@ -9196,6 +9625,11 @@ async function _loadFeatures(gid){
     if(document.getElementById('idZhCoT')) document.getElementById('idZhCoT').checked=d.id_zh_cot_enabled!==false;
     if(document.getElementById('idZhPivot')) document.getElementById('idZhPivot').checked=!!d.id_zh_pivot_enabled;
     if(document.getElementById('idZhPivotThr')) document.getElementById('idZhPivotThr').value=(d.id_zh_pivot_threshold||80);
+    // v3.6 印尼文預處理 + 多路徑反譯
+    if(document.getElementById('idPrep')) document.getElementById('idPrep').checked=d.id_preprocessing_enabled!==false;
+    if(document.getElementById('idPrepNano')) document.getElementById('idPrepNano').checked=!!d.id_preprocessing_nano;
+    if(document.getElementById('multiPath')) document.getElementById('multiPath').checked=!!d.multi_path_backtrans_enabled;
+    if(document.getElementById('multiPathMin')) document.getElementById('multiPathMin').value=(d.multi_path_min_chars||60);
     // Batch C/D load
     if(document.getElementById('lpEn')) document.getElementById('lpEn').checked=d.logprobs_enabled!==false;
     if(document.getElementById('cfThr')) document.getElementById('cfThr').value=(d.confidence_threshold!==undefined?d.confidence_threshold:0.85);
@@ -9282,6 +9716,78 @@ function saveIdZhEnhance(){
     id_zh_pivot_threshold: parseInt(document.getElementById('idZhPivotThr').value)||80
   };
   api('/features','POST',body).then(function(d){if(d)toast('ID→ZH 強化已儲存')});
+}
+
+// v3.6 預處理 + 多路徑反譯設定儲存
+function saveV36Settings(){
+  var body={
+    id_preprocessing_enabled: document.getElementById('idPrep').checked,
+    id_preprocessing_nano: document.getElementById('idPrepNano').checked,
+    multi_path_backtrans_enabled: document.getElementById('multiPath').checked,
+    multi_path_min_chars: parseInt(document.getElementById('multiPathMin').value)||60
+  };
+  api('/features','POST',body).then(function(d){if(d)toast('v3.6 設定已儲存')});
+}
+
+// v3.6 翻譯品質監控儀表板
+async function loadQualityStats(days){
+  days = days || 7;
+  var d = await api('/translation-stats?days='+days, 'GET');
+  if(!d) return;
+  
+  // === 五大指標 ===
+  var m = d.metrics || {};
+  var metricsHtml = 
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">總翻譯數</div><div style="font-size:18px;font-weight:700;color:#e0e0e0">'+(d.total||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">平均長度比</div><div style="font-size:18px;font-weight:700;color:'+(m.avg_length_ratio>0.6&&m.avg_length_ratio<1.4?'#10b981':'#f59e0b')+'">'+(m.avg_length_ratio||'N/A')+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">災難壓縮</div><div style="font-size:18px;font-weight:700;color:'+(m.catastrophic_compression_count?'#ef4444':'#10b981')+'">'+(m.catastrophic_compression_count||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">術語遺失</div><div style="font-size:18px;font-weight:700;color:'+(m.missing_terms_count?'#ef4444':'#10b981')+'">'+(m.missing_terms_count||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">GPT 自首未翻完</div><div style="font-size:18px;font-weight:700;color:'+(m.claimed_incomplete_count?'#f59e0b':'#10b981')+'">'+(m.claimed_incomplete_count||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">多路徑失敗</div><div style="font-size:18px;font-weight:700;color:'+(m.multi_path_fails?'#f59e0b':'#10b981')+'">'+(m.multi_path_fails||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">⚠️ 警告</div><div style="font-size:18px;font-weight:700;color:#f59e0b">'+(m.warned_total||0)+'</div></div>' +
+    '<div style="padding:8px;background:#1a1a2e;border-radius:4px"><div style="font-size:11px;color:#8a8a9a">已標錯</div><div style="font-size:18px;font-weight:700;color:#ef4444">'+(m.wrong_total||0)+'</div></div>' +
+    '</div>';
+  document.getElementById('qsMetrics').innerHTML = metricsHtml;
+  
+  // === 各語言對 ===
+  var langHtml = '';
+  (d.by_lang || []).forEach(function(b){
+    langHtml += '<div style="padding:6px 8px;margin-bottom:4px;background:#0d0d1a;border-radius:4px;display:flex;justify-content:space-between">' +
+      '<span style="color:#e0e0e0;font-weight:600">'+b.pair+'</span>' +
+      '<span style="color:#8a8a9a">'+b.total+' 筆 | 警告率 '+b.warned_rate+'% | 長度比 '+(b.avg_length_ratio||'N/A')+'</span>' +
+      '</div>';
+  });
+  document.getElementById('qsByLang').innerHTML = langHtml || '<div style="color:#6a6a7a;font-size:11px">無資料</div>';
+  
+  // === 各群組(最差排前面)===
+  var grpHtml = '';
+  (d.by_group || []).slice(0, 10).forEach(function(g){
+    var color = g.quality_score >= 80 ? '#10b981' : (g.quality_score >= 60 ? '#f59e0b' : '#ef4444');
+    grpHtml += '<div style="padding:6px 8px;margin-bottom:4px;background:#0d0d1a;border-radius:4px;display:flex;justify-content:space-between">' +
+      '<span style="color:#e0e0e0;font-family:monospace;font-size:11px">'+(g.group_id||'unknown').substr(0,32)+'</span>' +
+      '<span style="color:'+color+';font-weight:600">'+g.quality_score+' 分 ('+g.total+' 筆,'+g.warned+' 警告)</span>' +
+      '</div>';
+  });
+  document.getElementById('qsByGroup').innerHTML = grpHtml || '<div style="color:#6a6a7a;font-size:11px">無資料</div>';
+  
+  // === 最近的問題訊息 ===
+  var issuesHtml = '';
+  (d.issues || []).forEach(function(it){
+    var time = new Date(it.ts*1000).toLocaleString();
+    var reasons = [];
+    if(it.rtc_fail_reason) reasons.push('反譯失敗:'+it.rtc_fail_reason);
+    if(it.struct_self_check) reasons.push('Self-check:'+it.struct_self_check);
+    if(it.multi_path_fail) reasons.push('多路徑:'+it.multi_path_fail.final_decision);
+    if(it.marked_wrong) reasons.push('已手動標錯');
+    issuesHtml += '<div style="padding:8px;margin-bottom:6px;background:#0d0d1a;border-left:3px solid #ef4444;border-radius:4px">' +
+      '<div style="color:#8a8a9a;font-size:11px">'+time+' | '+(it.src_lang||'?')+'→'+(it.tgt_lang||'?')+' | 長度比 '+(it.length_ratio||'N/A')+'</div>' +
+      '<div style="color:#a0a0c0;margin:4px 0">'+escHtml(it.src||'')+'</div>' +
+      '<div style="color:#e0e0e0;margin-bottom:4px">→ '+escHtml(it.tgt||'')+'</div>' +
+      '<div style="color:#ef4444;font-size:11px">'+reasons.join(' | ')+'</div>' +
+      '</div>';
+  });
+  document.getElementById('qsIssues').innerHTML = issuesHtml || '<div style="color:#6a6a7a;padding:12px">無問題訊息 ✓</div>';
 }
 async function loadTransLog(filter){
   filter = filter || 'all';
@@ -9700,6 +10206,11 @@ def _do_save_impl():
             "id_zh_pivot_enabled": id_zh_pivot_enabled,
             "id_zh_pivot_threshold": id_zh_pivot_threshold,
             "id_zh_double_translation": id_zh_double_translation,
+            "id_preprocessing_enabled": id_preprocessing_enabled,
+            "id_preprocessing_nano": id_preprocessing_nano,
+            "multi_path_backtrans_enabled": multi_path_backtrans_enabled,
+            "multi_path_min_chars": multi_path_min_chars,
+            "quality_metrics_enabled": quality_metrics_enabled,
             "stop_sequences_enabled": stop_sequences_enabled,
             "reasoning_effort": reasoning_effort,
             "send_user_id_to_openai": send_user_id_to_openai,
@@ -9740,6 +10251,7 @@ def load_settings():
     global camera_roll_qr_enabled, location_qr_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
+    global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
     global model_default, model_upgrade, model_threshold
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -9863,6 +10375,18 @@ def load_settings():
             except (ValueError, TypeError): pass
         if "id_zh_double_translation" in data:
             id_zh_double_translation = bool(data["id_zh_double_translation"])
+        # ★ v3.6 變數 POST 處理
+        if "id_preprocessing_enabled" in data:
+            id_preprocessing_enabled = bool(data["id_preprocessing_enabled"])
+        if "id_preprocessing_nano" in data:
+            id_preprocessing_nano = bool(data["id_preprocessing_nano"])
+        if "multi_path_backtrans_enabled" in data:
+            multi_path_backtrans_enabled = bool(data["multi_path_backtrans_enabled"])
+        if "multi_path_min_chars" in data:
+            try: multi_path_min_chars = int(data["multi_path_min_chars"])
+            except (ValueError, TypeError): pass
+        if "quality_metrics_enabled" in data:
+            quality_metrics_enabled = bool(data["quality_metrics_enabled"])
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -9922,6 +10446,18 @@ def load_settings():
             except (ValueError, TypeError): pass
         if "id_zh_double_translation" in data:
             id_zh_double_translation = bool(data["id_zh_double_translation"])
+        # ★ v3.6 變數 POST 處理
+        if "id_preprocessing_enabled" in data:
+            id_preprocessing_enabled = bool(data["id_preprocessing_enabled"])
+        if "id_preprocessing_nano" in data:
+            id_preprocessing_nano = bool(data["id_preprocessing_nano"])
+        if "multi_path_backtrans_enabled" in data:
+            multi_path_backtrans_enabled = bool(data["multi_path_backtrans_enabled"])
+        if "multi_path_min_chars" in data:
+            try: multi_path_min_chars = int(data["multi_path_min_chars"])
+            except (ValueError, TypeError): pass
+        if "quality_metrics_enabled" in data:
+            quality_metrics_enabled = bool(data["quality_metrics_enabled"])
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
         if "reasoning_effort" in data:
@@ -10372,6 +10908,160 @@ def api_translation_log():
         return jsonify({"ok": True})
 
 
+@app.route("/api/admin/translation-stats", methods=["GET"])
+def api_translation_stats():
+    """v3.6 翻譯品質監控儀表板 - 五大指標 + 各群組分數"""
+    if not check_manager_access("groups"):
+        return jsonify({"error": "forbidden"}), 403
+    
+    # 時間範圍:預設過去 7 天
+    days = int(request.args.get("days", 7))
+    cutoff_ts = int(time.time()) - days * 86400
+    
+    items = [x for x in translation_log if x.get("ts", 0) >= cutoff_ts]
+    total = len(items)
+    
+    if total == 0:
+        return jsonify({
+            "period_days": days,
+            "total": 0,
+            "metrics": {},
+            "by_group": [],
+            "by_lang": [],
+            "issues": [],
+        })
+    
+    # ===== 指標 1:平均譯文/原文長度比 =====
+    length_ratios = [x.get("length_ratio") for x in items if x.get("length_ratio") is not None]
+    avg_length_ratio = round(sum(length_ratios) / len(length_ratios), 3) if length_ratios else None
+    
+    # ===== 指標 2:catastrophic_compression 觸發次數 =====
+    catastrophic = sum(
+        1 for x in items 
+        if x.get("rtc_fail_reason", "").startswith("catastrophic_compression")
+    )
+    
+    # ===== 指標 3:missing_terms (self-check 抓到 GPT 說謊) =====
+    missing_terms = sum(
+        1 for x in items 
+        if "missing_terms" in str(x.get("struct_self_check", ""))
+    )
+    
+    # ===== 指標 4:claimed_incomplete (GPT 自首沒翻完) =====
+    claimed_incomplete = sum(
+        1 for x in items 
+        if "claimed_incomplete" in str(x.get("struct_self_check", ""))
+    )
+    
+    # ===== 指標 5:多路徑反譯失敗次數 =====
+    multi_path_fails = sum(1 for x in items if x.get("multi_path_fail"))
+    
+    # ===== 各群組品質分數 =====
+    by_group = {}
+    for x in items:
+        gid = x.get("group_id", "unknown") or "unknown"
+        if gid not in by_group:
+            by_group[gid] = {
+                "group_id": gid, "total": 0, "warned": 0, "wrong": 0,
+                "avg_confidence_sum": 0.0, "confidence_count": 0,
+            }
+        g = by_group[gid]
+        g["total"] += 1
+        if x.get("warned") or x.get("factory_warning") or (x.get("tgt", "") or "").startswith("⚠️"):
+            g["warned"] += 1
+        if x.get("marked_wrong"):
+            g["wrong"] += 1
+        if x.get("confidence") is not None:
+            g["avg_confidence_sum"] += x.get("confidence")
+            g["confidence_count"] += 1
+    
+    by_group_list = []
+    for gid, g in by_group.items():
+        avg_conf = (g["avg_confidence_sum"] / g["confidence_count"]) if g["confidence_count"] > 0 else None
+        # 品質分數 = (1 - warned率) * 100,被標錯扣分
+        quality_score = round(
+            ((1 - g["warned"] / g["total"]) * 100) - (g["wrong"] / g["total"] * 50)
+            if g["total"] > 0 else 0,
+            1
+        )
+        by_group_list.append({
+            "group_id": gid,
+            "total": g["total"],
+            "warned": g["warned"],
+            "wrong": g["wrong"],
+            "avg_confidence": round(avg_conf, 3) if avg_conf is not None else None,
+            "quality_score": max(0, quality_score),
+        })
+    by_group_list.sort(key=lambda x: x["quality_score"])  # 最差排前面
+    
+    # ===== 各語言對統計 =====
+    by_lang = {}
+    for x in items:
+        key = f"{x.get('src_lang', '?')}→{x.get('tgt_lang', '?')}"
+        if key not in by_lang:
+            by_lang[key] = {"pair": key, "total": 0, "warned": 0, 
+                            "avg_length_ratio_sum": 0.0, "lr_count": 0}
+        b = by_lang[key]
+        b["total"] += 1
+        if x.get("warned") or (x.get("tgt", "") or "").startswith("⚠️"):
+            b["warned"] += 1
+        if x.get("length_ratio") is not None:
+            b["avg_length_ratio_sum"] += x.get("length_ratio")
+            b["lr_count"] += 1
+    
+    by_lang_list = []
+    for key, b in by_lang.items():
+        avg_lr = (b["avg_length_ratio_sum"] / b["lr_count"]) if b["lr_count"] > 0 else None
+        by_lang_list.append({
+            "pair": key,
+            "total": b["total"],
+            "warned": b["warned"],
+            "warned_rate": round(b["warned"] / b["total"] * 100, 1) if b["total"] > 0 else 0,
+            "avg_length_ratio": round(avg_lr, 3) if avg_lr is not None else None,
+        })
+    by_lang_list.sort(key=lambda x: -x["total"])
+    
+    # ===== 最近的問題訊息(供調試)=====
+    recent_issues = []
+    for x in reversed(items):
+        if len(recent_issues) >= 10:
+            break
+        is_issue = (
+            x.get("rtc_fail_reason") or x.get("struct_self_check") 
+            or x.get("multi_path_fail") or x.get("marked_wrong")
+        )
+        if is_issue:
+            recent_issues.append({
+                "ts": x.get("ts"),
+                "src": (x.get("src", "") or "")[:100],
+                "tgt": (x.get("tgt", "") or "")[:100],
+                "src_lang": x.get("src_lang"),
+                "tgt_lang": x.get("tgt_lang"),
+                "rtc_fail_reason": x.get("rtc_fail_reason"),
+                "struct_self_check": x.get("struct_self_check"),
+                "multi_path_fail": x.get("multi_path_fail"),
+                "marked_wrong": x.get("marked_wrong"),
+                "length_ratio": x.get("length_ratio"),
+            })
+    
+    return jsonify({
+        "period_days": days,
+        "total": total,
+        "metrics": {
+            "avg_length_ratio": avg_length_ratio,
+            "catastrophic_compression_count": catastrophic,
+            "missing_terms_count": missing_terms,
+            "claimed_incomplete_count": claimed_incomplete,
+            "multi_path_fails": multi_path_fails,
+            "warned_total": sum(1 for x in items if x.get("warned") or (x.get("tgt", "") or "").startswith("⚠️")),
+            "wrong_total": sum(1 for x in items if x.get("marked_wrong")),
+        },
+        "by_group": by_group_list,
+        "by_lang": by_lang_list,
+        "issues": recent_issues,
+    })
+
+
 @app.route("/api/admin/features", methods=["GET", "POST"])
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
@@ -10379,6 +11069,7 @@ def api_admin_features():
     global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
+    global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
