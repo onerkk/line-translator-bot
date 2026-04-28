@@ -230,6 +230,16 @@
   "prompt_caching_enabled": true,
   "translation_logging_enabled": true,
   "ab_test_enabled": false,
+  "id_zh_cot_enabled": true,
+  "id_zh_cod_enabled": true,
+  "id_zh_pivot_enabled": false,
+  "id_zh_pivot_threshold": 80,
+  "id_zh_double_translation": false,
+  "id_preprocessing_enabled": true,
+  "id_preprocessing_nano": false,
+  "multi_path_backtrans_enabled": false,
+  "multi_path_min_chars": 60,
+  "quality_metrics_enabled": true,
   "stop_sequences_enabled": true,
   "reasoning_effort": "medium",
   "send_user_id_to_openai": true,
@@ -260,11 +270,6 @@
     {
       "zh": "Micro",
       "id": "分離卡",
-      "dir": "id2zh"
-    },
-    {
-      "zh": "__MENTION_0__ Pemberitahuan Bagi pekerja BF, terutama BF2,jika kalian mengambil bahan baru,dan ada tali pemisah,jangan langsung di buang talinya,karna itu penanda orang yang bekerja di pemotongan ( cya,cyb ) karna banyak ditemukan barang bengkok.biar ketahuan siapa yang bertugas di mesin CYA atau CYB.",
-      "id": "通知 給 BF 的作業人員，尤其是 BF2： 如果你們領取新的材料時，材料上有分隔用的繩子，請不要直接把繩子丟掉。 因為那條繩子是用來標記切斷作業人員的，也就是 CYA、CYB 機台的作業者。 最近發現很多材料有彎曲的情況，所以需要保留這個標記，才能查出當時是誰負責 CYA 或 CYB 機台。 比較自然、適合工廠公告版的版本： 編寫 @All 通知 BF 作業人員，尤其是 BF2 請注意： 領取新材料時，如果材料上有分隔繩，請勿直接丟棄。 該繩子是切斷作業人員，也就是 CYA、CYB 機台的識別標記。 近期發現多起材料彎曲問題，請務必保留分隔繩，以便追查是哪位人員負責 CYA 或 CYB 機台。",
       "dir": "id2zh"
     }
   ],
