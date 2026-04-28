@@ -65,7 +65,8 @@
       "Udf71d63c9e7e225acbb13015cf4e4660": "阿馬",
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
-      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁"
     }
   },
   "dm_master_enabled": false,
@@ -112,7 +113,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 71,
+    "text_translations": 76,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -249,7 +250,8 @@
     "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
     "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
-    "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A"
+    "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
+    "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
@@ -258,6 +260,11 @@
     {
       "zh": "Micro",
       "id": "分離卡",
+      "dir": "id2zh"
+    },
+    {
+      "zh": "正確繁體中文翻譯如下： 編寫 @All 通知 給 BF 的作業人員，尤其是 BF2： 如果你們領取新的材料時，材料上有分隔用的繩子，請不要直接把繩子丟掉。 因為那條繩子是用來標記切斷作業人員的，也就是 CYA、CYB 機台的作業者。 最近發現很多材料有彎曲的情況，所以需要保留這個標記，才能查出當時是誰負責 CYA 或 CYB 機台。 比較自然、適合工廠公告版的版本： 編寫 @All 通知 BF 作業人員，尤其是 BF2 請注意： 領取新材料時，如果材料上有分隔繩，請勿直接丟棄。 該繩子是切斷作業人員，也就是 CYA、CYB 機台的識別標記。 近期發現多起材料彎曲問題，請務必保留分隔繩，以便追查是哪位人員負責 CYA 或 CYB 機台。",
+      "id": "__MENTION_0__ Pemberitahuan\n Bagi pekerja BF, terutama BF2,jika kalian mengambil bahan baru,dan ada tali pemisah,jangan langsung di buang talinya,karna itu penanda orang yang bekerja di pemotongan ( cya,cyb ) karna banyak ditemukan barang bengkok.biar ketahuan siapa yang bertugas di mesin CYA atau CYB.",
       "dir": "id2zh"
     }
   ],
