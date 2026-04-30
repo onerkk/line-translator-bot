@@ -111,6 +111,13 @@ try:
     from linebot.v3.webhooks import VideoPlayCompleteEvent
 except ImportError:
     VideoPlayCompleteEvent = None
+# v3.8: Reaction event for instant translation feedback.
+# Members react with 👍/❤️ → auto-add to examples.
+# Members react with 😢/😡 → auto-mark as wrong.
+try:
+    from linebot.v3.webhooks import MessageReactionEvent
+except ImportError:
+    MessageReactionEvent = None
 from linebot.v3.exceptions import InvalidSignatureError
 from openai import OpenAI
 import base64
@@ -357,10 +364,49 @@ logprobs_enabled = True             # When True, request logprobs to compute con
 confidence_threshold = 0.85         # Below this = prepend ⚠️ to translation
 structured_output_enabled = False   # When True, force JSON {translation, confidence, alternatives}
 prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% discount
+# v3.8: prompt_cache_key sticky-routing.
+# OpenAI hashes the first ~256 prompt tokens to pick a backend; if many
+# requests share the same prefix but spread across machines, cache hit
+# rate drops. Passing a stable prompt_cache_key per logical "stream"
+# (group + direction) raises sticky-routing chance, taking cache hit
+# rate from ~60% → ~87% in OpenAI's published cookbook benchmark.
+# Kept independently toggleable; default ON because it's free upside.
+prompt_cache_key_enabled = True
+
+
+def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
+    """v3.8: Stable per-stream cache routing key.
+    Same group + same direction + same kind always yields the same key,
+    so OpenAI routes those requests to the same backend with warm KV cache.
+    Falls back to a generic key if group_id is missing.
+    """
+    if not prompt_cache_key_enabled:
+        return None
+    gid = (group_id or "default")[-20:]  # last 20 chars enough for uniqueness
+    return f"{kind}:{src}-{tgt}:{gid}"
+
+
 # v3.2-0426d Batch D: Translation logging + monitoring
 translation_logging_enabled = True   # Record every translation
 translation_log = []                 # In-memory ring buffer + persisted JSON file
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
+
+# v3.8: Reaction-event feedback pipeline.
+# Maps: bot's sent message_id → {"entry_id": ..., "ts": ..., "group_id": ...}
+# When a user reacts to a translation, look up which entry it was and apply
+# the feedback (positive → add to examples; negative → mark wrong).
+# Bounded LRU-style: capped at 2000 entries, oldest evicted.
+import collections as _collections
+sent_message_to_entry = _collections.OrderedDict()
+SENT_MSG_MAP_MAX = 2000
+
+# Reaction → action mapping. Reaction names follow LINE's API enum.
+# Positive reactions teach the bot "this translation was good";
+# Negative ones flag the entry as wrong (operators can later add a correction).
+REACTION_POSITIVE = {"love", "like", "happy"}
+REACTION_NEGATIVE = {"sad", "surprise"}  # 😢 sad, 😮 surprise (user-confused)
+# `all` (👍 thumbs-down equivalent depending on platform) is left out
+# because LINE's reaction set is small and ambiguous; tune as needed.
 
 def _resolve_translation_log_path():
     """Pick a persistence path that survives Render deploys.
@@ -1308,6 +1354,11 @@ def _log_translation(src_text, tgt_text, src_lang, tgt_lang, model, tokens, conf
         if len(translation_log) > TRANSLATION_LOG_MAX:
             del translation_log[:len(translation_log) - TRANSLATION_LOG_MAX]
         _save_translation_log_to_disk()
+        # v3.8: expose the just-logged entry id for reply-message-id binding.
+        try:
+            _tl.last_entry_id = entry.get("id")
+        except Exception:
+            pass
         logger.info("[TLOG] saved entry id=%s src=%r tgt=%r total=%d",
                     entry.get("id"), (src_text or "")[:40], (tgt_text or "")[:40],
                     len(translation_log))
@@ -2576,16 +2627,35 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             )
             max_tok = 300
         
-        r = oai.chat.completions.create(
-            model=pick_model(src_text),
-            messages=[
+        # v3.8: Predicted Outputs - bad_result is mostly correct, GPT just edits.
+        # Passing it as prediction lets OpenAI skip already-matching tokens,
+        # cutting latency 30-50% for repair-pipeline calls.
+        repair_kwargs = {
+            "model": pick_model(src_text),
+            "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=max_tok,
-        )
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": max_tok,
+        }
+        try:
+            # `prediction` is the EAS feature for low-latency edits.
+            # Skip if model is reasoning-only (o-series) - they don't accept prediction.
+            _rmodel = repair_kwargs["model"]
+            if bad_result and not _rmodel.startswith(("o1", "o3", "o4")):
+                repair_kwargs["prediction"] = {
+                    "type": "content",
+                    "content": bad_result,
+                }
+            # v3.8: cache key for sticky routing on repair pipeline
+            _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "id", "zh", "repair")
+            if _ck_r and not _rmodel.startswith(("o1", "o3", "o4")):
+                repair_kwargs["prompt_cache_key"] = _ck_r
+        except Exception:
+            pass
+        r = oai.chat.completions.create(**repair_kwargs)
         track_tokens(r)
         return (r.choices[0].message.content or "").strip()
     except Exception as e:
@@ -2773,13 +2843,28 @@ def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
         if deterministic:
             user_msg += f"可採用譯文：{deterministic}\n"
         user_msg += "請輸出修正後印尼文："
-        r = oai.chat.completions.create(
-            model=pick_model(src_text),
-            messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user_msg}],
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=500,
-        )
+        # v3.8: Predicted Outputs - bad_result is mostly correct, GPT just edits.
+        repair_kwargs = {
+            "model": pick_model(src_text),
+            "messages": [{"role":"system","content":sys_prompt},{"role":"user","content":user_msg}],
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 500,
+        }
+        try:
+            _rmodel = repair_kwargs["model"]
+            if bad_result and not _rmodel.startswith(("o1", "o3", "o4")):
+                repair_kwargs["prediction"] = {
+                    "type": "content",
+                    "content": bad_result,
+                }
+            # v3.8: cache key for sticky routing
+            _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "zh", "id", "repair")
+            if _ck_r and not _rmodel.startswith(("o1", "o3", "o4")):
+                repair_kwargs["prompt_cache_key"] = _ck_r
+        except Exception:
+            pass
+        r = oai.chat.completions.create(**repair_kwargs)
         track_tokens(r)
         return (r.choices[0].message.content or "").strip()
     except Exception as e:
@@ -3809,6 +3894,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # of stable prefixes (>1024 tokens). Caching is automatic for gpt-4.1+ and
         # gpt-4o; we just ensure system prompt is stable across requests.
         # (No explicit param needed; just keep prefix consistent.)
+        # v3.8: also pass prompt_cache_key for sticky-routing → higher hit rate.
+        try:
+            _ck = _build_cache_key(getattr(_tl, 'group_id', ''), src, tgt, "trans")
+            if _ck and not _is_reasoning_model:
+                _kwargs["prompt_cache_key"] = _ck
+        except Exception:
+            pass
         r = oai.chat.completions.create(**_kwargs)
         # Track cache hit for stats (if available in response)
         try:
@@ -4517,14 +4609,54 @@ def format_storage_for_work_order(customer_name):
         return None
 
 
+# v3.8: Vision model upgrade. gpt-4o-mini → gpt-5-mini for OCR.
+# gpt-5-mini has noticeably better small-text + handwriting recognition,
+# critical for factory work-order photos and shift schedule snapshots.
+# Auto-fallback to gpt-4o-mini if gpt-5-mini unavailable.
+VISION_MODEL = os.environ.get("VISION_MODEL", "gpt-5-mini")
+VISION_FALLBACK_MODEL = "gpt-4o-mini"
+
+
+def _vision_call(messages, max_tokens, cache_key=None):
+    """v3.8: Centralised vision call with auto-fallback.
+
+    Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
+    Caller passes pre-built messages array.
+    Optional cache_key for sticky-routing prompt caching.
+    """
+    last_err = None
+    for attempt_model in (VISION_MODEL, VISION_FALLBACK_MODEL):
+        if attempt_model == VISION_FALLBACK_MODEL and VISION_MODEL == VISION_FALLBACK_MODEL:
+            break
+        try:
+            kwargs = {
+                "model": attempt_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+            # gpt-5 family ignores temperature; only set for legacy models.
+            if not attempt_model.startswith("gpt-5"):
+                kwargs["temperature"] = translation_temperature
+            # v3.8: prompt_cache_key for sticky routing on OCR/vision calls.
+            if cache_key:
+                kwargs["prompt_cache_key"] = cache_key
+            r = oai.chat.completions.create(**kwargs)
+            if attempt_model != VISION_MODEL:
+                logger.warning("Vision fell back from %s to %s", VISION_MODEL, attempt_model)
+            return r
+        except Exception as e:
+            last_err = e
+            logger.warning("Vision model %s failed: %s", attempt_model, e)
+            continue
+    raise last_err if last_err else RuntimeError("vision call failed")
+
+
 def ocr_image_openai(image_base64):
-    """Use OpenAI Vision to extract text from image."""
+    """Use OpenAI Vision to extract text from image. v3.8: model upgraded."""
     if not oai:
         return None
     try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        msgs = [
                 {
                     "role": "system",
                     "content": (
@@ -4549,10 +4681,10 @@ def ocr_image_openai(image_base64):
                         }
                     ]
                 }
-            ],
-            temperature=translation_temperature,
-            max_tokens=2000,
-        )
+            ]
+        r = _vision_call(msgs, max_tokens=2000,
+                         cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
+                                                    "img", "txt", "ocr"))
         track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
@@ -4570,9 +4702,7 @@ def ocr_and_translate_image(image_base64, tgt_lang):
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
     tgt_flag = LANG_FLAGS.get(tgt_lang, "")
     try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        msgs = [
                 {
                     "role": "system",
                     "content": (
@@ -4661,10 +4791,10 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         }
                     ]
                 }
-            ],
-            temperature=translation_temperature,
-            max_tokens=3000,
-        )
+            ]
+        r = _vision_call(msgs, max_tokens=3000,
+                         cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
+                                                    "img", tgt_lang, "ocrtrans"))
         track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
@@ -4701,24 +4831,67 @@ def download_line_audio(message_id):
         return None
 
 
+# v3.8: STT model upgrade. whisper-1 (2022) → gpt-4o-transcribe (2025).
+# Lower WER, better noise robustness, semantic VAD, supports prompt hint.
+# Critical for noisy factory-floor recordings with Indonesian-accented speech.
+STT_MODEL = os.environ.get("STT_MODEL", "gpt-4o-transcribe")  # or gpt-4o-mini-transcribe (cheaper, slightly less accurate)
+STT_FALLBACK_MODEL = "whisper-1"  # auto-fallback if primary unavailable
+
+# Factory vocabulary hint passed to STT to bias recognition toward
+# domain-specific terms, station numbers, and known names. Keep <224 tokens.
+STT_PROMPT_HINT = (
+    "工廠語音記錄。常見詞彙：無心研磨、研磨、拋光、削皮、退火、酸洗、冷抽、矯直、精整、"
+    "棒鋼、盤元、不鏽鋼、削皮棒、冷精棒、料號、爐號、鋼種、混料、出貨、來料、"
+    "400站、401站、420站、470站、480站、490站、801站、UT、PMI、AP、OL、"
+    "工單、掛單、放行、過帳、退庫、入庫、無主、改制、去化、"
+    "早班、夜班、中班、加班、點名、班股、堆高機、天車、"
+    "Bahasa Indonesia istilah pabrik: as, kopel, patah, bengkok, retak, aus, bocor, "
+    "macet, bearing, rantai, sabuk, baut, mur, kawat, motor, pompa, gerinda, las, bor, "
+    "shift pagi, shift malam, lembur, work order."
+)
+
+
 def transcribe_audio_openai(audio_bytes):
-    """Use OpenAI Whisper to transcribe audio to text."""
+    """v3.8: Use gpt-4o-transcribe (or fallback to whisper-1) to transcribe audio.
+
+    Improvements over the old whisper-1 path:
+      * gpt-4o-transcribe / gpt-4o-mini-transcribe have noticeably lower WER on
+        noisy environments and accented speech (factory floor + Indonesian accent).
+      * `prompt` parameter biases the model toward our factory vocabulary,
+        station numbers, and Indonesian mechanical terms.
+      * Auto-fallback to whisper-1 if the new model isn't available on the account.
+    """
     if not oai:
         return None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=True) as tmp:
-            tmp.write(audio_bytes)
-            tmp.flush()
-            tmp.seek(0)
-            r = oai.audio.transcriptions.create(
-                model="whisper-1",
-                file=tmp,
-            )
-            text = r.text.strip() if r.text else None
-            return text
-    except Exception as e:
-        logger.error("OpenAI Whisper error: %s", e)
-        return None
+    primary = STT_MODEL
+    last_err = None
+    for attempt_model in (primary, STT_FALLBACK_MODEL):
+        if attempt_model == STT_FALLBACK_MODEL and primary == STT_FALLBACK_MODEL:
+            break  # already tried as primary
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".m4a", delete=True) as tmp:
+                tmp.write(audio_bytes)
+                tmp.flush()
+                tmp.seek(0)
+                kwargs = {
+                    "model": attempt_model,
+                    "file": tmp,
+                }
+                # Only the new gpt-4o-transcribe family accepts the `prompt`
+                # vocabulary-bias parameter via the standard transcriptions endpoint.
+                if attempt_model.startswith("gpt-4o"):
+                    kwargs["prompt"] = STT_PROMPT_HINT
+                r = oai.audio.transcriptions.create(**kwargs)
+                text = r.text.strip() if r.text else None
+                if attempt_model != primary:
+                    logger.warning("STT fell back from %s to %s", primary, attempt_model)
+                return text
+        except Exception as e:
+            last_err = e
+            logger.warning("STT model %s failed: %s", attempt_model, e)
+            continue
+    logger.error("OpenAI STT error (all models failed): %s", last_err)
+    return None
 
 
 def make_notice(content, target="id"):
@@ -5995,6 +6168,10 @@ def handle_message(event):
 
     with ApiClient(configuration) as api_client:
         api_line = MessagingApi(api_client)
+        # v3.8: capture last logged entry id BEFORE reply, so we can map it
+        # to the bot's outgoing message_id for reaction-event feedback.
+        _entry_id_for_reaction = getattr(_tl, 'last_entry_id', None)
+        _reply_resp = None
         if flex_msg:
             if qr:
                 flex_msg.quick_reply = qr
@@ -6008,11 +6185,11 @@ def handle_message(event):
                 req.notification_disabled = True
             try:
                 if _retry_key:
-                    api_line.reply_message(req, x_line_retry_key=_retry_key)
+                    _reply_resp = api_line.reply_message(req, x_line_retry_key=_retry_key)
                 else:
-                    api_line.reply_message(req)
+                    _reply_resp = api_line.reply_message(req)
             except TypeError:
-                api_line.reply_message(req)
+                _reply_resp = api_line.reply_message(req)
         else:
             msg = TextMessage(text=reply)
             if qr:
@@ -6027,11 +6204,22 @@ def handle_message(event):
                 req.notification_disabled = True
             try:
                 if _retry_key:
-                    api_line.reply_message(req, x_line_retry_key=_retry_key)
+                    _reply_resp = api_line.reply_message(req, x_line_retry_key=_retry_key)
                 else:
-                    api_line.reply_message(req)
+                    _reply_resp = api_line.reply_message(req)
             except TypeError:
-                api_line.reply_message(req)
+                _reply_resp = api_line.reply_message(req)
+        # v3.8: bind every sent_message.id back to the translation entry so
+        # subsequent reactions can be attributed to the correct entry.
+        try:
+            if _reply_resp and _entry_id_for_reaction:
+                sent_msgs = getattr(_reply_resp, 'sent_messages', None) or []
+                for sm in sent_msgs:
+                    sm_id = getattr(sm, 'id', None)
+                    if sm_id:
+                        register_sent_message(sm_id, _entry_id_for_reaction, group_id)
+        except Exception as _re:
+            logger.debug("register_sent_message skipped: %s", _re)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -6104,11 +6292,18 @@ def handle_image(event):
                 reply = format_storage_for_work_order(wo_customer)
                 if reply:
                     bot_stats["work_order_detections"] += 1
+                    qt_wo = getattr(event.message, 'quote_token', None)
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
+                        msg_obj = TextMessage(text=reply)
+                        if qt_wo:
+                            try:
+                                msg_obj.quote_token = qt_wo
+                            except Exception:
+                                pass
                         api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[TextMessage(text=reply)]
+                            messages=[msg_obj]
                         ))
             # Whether storage found or not, skip translation for work orders
             track_group_usage(group_id, _bp, _bc)
@@ -6149,11 +6344,19 @@ def handle_image(event):
 
     track_group_usage(group_id, _bp, _bc)
     bot_stats["image_translations"] += 1
+    # v3.8: thread quote_token onto image translation reply.
+    qt = getattr(event.message, 'quote_token', None)
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
+        msg_obj = TextMessage(text=reply)
+        if qt:
+            try:
+                msg_obj.quote_token = qt
+            except Exception:
+                pass
         api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
+            messages=[msg_obj]
         ))
 
 
@@ -6236,11 +6439,20 @@ def handle_audio(event):
         return
 
     bot_stats["voice_translations"] += 1
+    # v3.8: thread quote_token onto the reply so the translation visually
+    # references the original audio bubble. Important in busy group chats.
+    qt = getattr(event.message, 'quote_token', None)
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
+        msg_obj = TextMessage(text=reply)
+        if qt:
+            try:
+                msg_obj.quote_token = qt
+            except Exception:
+                pass
         api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
+            messages=[msg_obj]
         ))
 
 
@@ -6544,6 +6756,145 @@ if VideoPlayCompleteEvent:
         tracking_id = getattr(event.video_play_complete, 'tracking_id', '') if hasattr(event, 'video_play_complete') else ''
         logger.info("VideoPlayComplete: group=%s user=%s tracking=%s", group_id, user_id, tracking_id)
         bot_stats["video_play_complete"] = bot_stats.get("video_play_complete", 0) + 1
+
+
+# v3.8: --- Reaction event feedback pipeline ---
+
+def register_sent_message(message_id, entry_id, group_id):
+    """Record that bot sent message_id as the rendering of translation entry_id.
+    Allows reaction-event feedback to find which translation a user reacted to.
+    Bounded LRU; oldest evicted at SENT_MSG_MAP_MAX.
+    """
+    if not message_id or not entry_id:
+        return
+    try:
+        sent_message_to_entry[message_id] = {
+            "entry_id": entry_id,
+            "group_id": group_id or "",
+            "ts": int(time.time()),
+        }
+        # Evict oldest if oversized.
+        while len(sent_message_to_entry) > SENT_MSG_MAP_MAX:
+            sent_message_to_entry.popitem(last=False)
+    except Exception:
+        pass
+
+
+def _apply_reaction_feedback(message_id, reaction_type, user_id, group_id):
+    """Look up which translation entry the reacted message corresponds to,
+    then apply positive/negative feedback to translation_log.
+
+    Positive (love/like/happy): if entry has a known correct translation,
+        promote it to examples; else just record the positive vote.
+    Negative (sad/surprise): mark the entry as wrong (operator can later add
+        a correction via admin panel or LINE command).
+    """
+    rec = sent_message_to_entry.get(message_id)
+    if not rec:
+        return False, "unknown_message"
+    entry_id = rec.get("entry_id")
+    target = None
+    for e in translation_log:
+        if e.get("id") == entry_id:
+            target = e
+            break
+    if not target:
+        return False, "entry_evicted"
+
+    rt = (reaction_type or "").lower()
+    feedback = target.setdefault("reaction_feedback", {"positive": 0, "negative": 0, "voters": {}})
+    voters = feedback["voters"]
+    prev = voters.get(user_id or "")
+
+    if rt in REACTION_POSITIVE:
+        if prev != "positive":
+            feedback["positive"] += 1
+            if prev == "negative":
+                feedback["negative"] = max(0, feedback["negative"] - 1)
+            voters[user_id or ""] = "positive"
+        # If 2+ positive votes and not yet a training example, promote it.
+        try:
+            if feedback["positive"] >= 2 and not target.get("promoted_to_examples"):
+                src_text = target.get("src", "")
+                tgt_text = target.get("tgt", "")
+                src_lang = target.get("src_lang", "zh")
+                if src_text and tgt_text and not tgt_text.startswith("⚠️"):
+                    direction = "zh2id" if src_lang == "zh" else "id2zh"
+                    new_ex = {
+                        "zh": src_text if src_lang == "zh" else tgt_text,
+                        "id": tgt_text if src_lang == "zh" else src_text,
+                        "dir": direction,
+                        "source": "reaction_positive",
+                    }
+                    if new_ex not in custom_translation_examples:
+                        custom_translation_examples.append(new_ex)
+                        # Cap at configured max to prevent unbounded growth.
+                        try:
+                            cap = int(CUSTOM_EXAMPLES_MAX)
+                        except Exception:
+                            cap = 1000
+                        if len(custom_translation_examples) > cap:
+                            custom_translation_examples[:] = custom_translation_examples[-cap:]
+                        target["promoted_to_examples"] = True
+                        try:
+                            _save_examples_to_disk()
+                        except Exception:
+                            pass
+                        try:
+                            _save_translation_log_to_disk()
+                        except Exception:
+                            pass
+                        logger.info("Reaction promoted entry %s to examples", entry_id)
+        except Exception as ee:
+            logger.warning("Reaction promote failed: %s", ee)
+        return True, "positive"
+
+    if rt in REACTION_NEGATIVE:
+        if prev != "negative":
+            feedback["negative"] += 1
+            if prev == "positive":
+                feedback["positive"] = max(0, feedback["positive"] - 1)
+            voters[user_id or ""] = "negative"
+        # Mark wrong if 1+ negative vote (single complaint is enough to flag).
+        if not target.get("marked_wrong"):
+            target["marked_wrong"] = True
+            target["marked_wrong_source"] = "reaction"
+            try:
+                _save_translation_log_to_disk()
+            except Exception:
+                pass
+        return True, "negative"
+
+    return False, "ignored_reaction_type"
+
+
+if MessageReactionEvent:
+    @handler.add(MessageReactionEvent)
+    def handle_reaction(event):
+        """v3.8: Free quality signal from group members.
+        ❤️/👍 → promote the translation to training examples (after 2 positive votes).
+        😢/😮 → flag the translation as wrong, surface to admin panel.
+        """
+        try:
+            source = event.source
+            user_id = getattr(source, 'user_id', '')
+            group_id = (getattr(source, 'group_id', None)
+                        or getattr(source, 'room_id', None)
+                        or user_id or '')
+            # event.reaction is a struct with `type` and `emoji`-related fields
+            rx = getattr(event, 'reaction', None)
+            rtype = getattr(rx, 'type', '') if rx else ''
+            # `messageId` identifies which message was reacted to
+            msg_id = getattr(event, 'message_id', None) or (
+                getattr(rx, 'message_id', None) if rx else None)
+            if not msg_id:
+                return
+            ok, info = _apply_reaction_feedback(msg_id, rtype, user_id, group_id)
+            if ok:
+                logger.info("Reaction feedback applied: msg=%s type=%s result=%s",
+                            msg_id, rtype, info)
+        except Exception as e:
+            logger.warning("Reaction handler error: %s", e)
 
 
 def show_loading(chat_id):
