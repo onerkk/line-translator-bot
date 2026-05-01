@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.10-0501-image-ask-mode"
+VERSION = "v3.9.12-0501-image-ask-flex"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -5594,6 +5594,122 @@ def push_help_flex(to_id, primary_lang="zh"):
         return False
 
 
+def build_image_ask_flex(message_id):
+    """v3.9.12: Build a Flex bubble asking whether to translate the received image.
+    Same visual style as the help bubble (dark navy + cyan-blue accent).
+    Two large action buttons: 翻譯這張 (primary) / 跳過 (secondary).
+    """
+    c = _HELP_COLORS["zh"]
+    bubble = {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": c["header_bg"],
+            "paddingAll": "xl",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "IMAGE RECEIVED · 收到圖片",
+                    "size": "xxs",
+                    "color": c["accent"],
+                    "weight": "bold",
+                },
+                {
+                    "type": "text",
+                    "text": "翻譯這張圖?",
+                    "size": "xl",
+                    "color": "#FFFFFF",
+                    "weight": "bold",
+                    "margin": "xs",
+                },
+                {
+                    "type": "text",
+                    "text": "Terjemahkan gambar ini?",
+                    "size": "xs",
+                    "color": c["desc_color"],
+                    "margin": "xs",
+                },
+            ],
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": c["body_bg"],
+            "paddingAll": "xl",
+            "spacing": "md",
+            "contents": [
+                # 說明文字
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "paddingAll": "md",
+                    "backgroundColor": c["info_bg"],
+                    "cornerRadius": "sm",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📷 點下方按鈕決定要不要翻譯",
+                            "size": "xxs",
+                            "color": c["info_text"],
+                            "wrap": True,
+                        },
+                        {
+                            "type": "text",
+                            "text": "Pilih: terjemahkan atau lewati",
+                            "size": "xxs",
+                            "color": c["info_text"],
+                            "wrap": True,
+                            "margin": "xs",
+                        },
+                    ],
+                },
+                # 主按鈕:翻譯這張
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": c["btn_bg"],
+                    "height": "md",
+                    "margin": "lg",
+                    "action": {
+                        "type": "postback",
+                        "label": "✨ 翻譯這張 / Terjemahkan",
+                        "data": "img_translate=" + message_id,
+                        "displayText": "✨ 翻譯這張圖",
+                    },
+                },
+                # 次按鈕:跳過
+                {
+                    "type": "button",
+                    "style": "secondary",
+                    "height": "sm",
+                    "action": {
+                        "type": "postback",
+                        "label": "跳過 / Lewati",
+                        "data": "img_skip=" + message_id,
+                        "displayText": "已跳過",
+                    },
+                },
+                # 提示
+                {
+                    "type": "text",
+                    "text": "30 分鐘後過期",
+                    "size": "xxs",
+                    "color": c["plate_text"],
+                    "align": "center",
+                    "margin": "sm",
+                },
+            ],
+        },
+        "styles": {
+            "header": {"backgroundColor": c["header_bg"]},
+            "body": {"backgroundColor": c["body_bg"]},
+        },
+    }
+    return bubble
+
+
 def handle_lang_command(text, group_id):
     return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯"
 
@@ -6568,35 +6684,50 @@ def handle_image(event):
                 "ts": _now,
                 "reply_token": None,  # 不存 reply_token(只能用一次,而且過期快)
             }
-            # 用 Quick Reply 發詢問訊息(可附在後續訊息上)
+            # v3.9.12: 用 Flex 卡片詢問,跟 /help 同視覺風格
             try:
-                from linebot.v3.messaging import (
-                    QuickReply, QuickReplyItem, PostbackAction
-                )
-                qr = QuickReply(items=[
-                    QuickReplyItem(action=PostbackAction(
-                        label="📝 翻譯這張",
-                        data="img_translate=" + event.message.id,
-                        display_text="翻譯這張圖"
-                    )),
-                    QuickReplyItem(action=PostbackAction(
-                        label="❌ 不用",
-                        data="img_skip=" + event.message.id,
-                        display_text="不用翻譯"
-                    )),
-                ])
+                bubble = build_image_ask_flex(event.message.id)
                 with ApiClient(configuration) as api_client:
                     api = MessagingApi(api_client)
-                    msg = TextMessage(
-                        text="📷 收到圖片,要翻譯內容嗎?",
-                        quick_reply=qr
-                    )
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[msg]
+                        messages=[FlexMessage(
+                            alt_text="📷 收到圖片 - 要翻譯嗎?",
+                            contents=FlexContainer.from_dict(bubble),
+                        )]
                     ))
+                logger.info("[ImgAsk] Flex sent for msg=%s", event.message.id)
             except Exception as _e:
-                logger.warning("Image ask-mode quick reply failed: %s", _e)
+                logger.warning("Image ask-mode Flex failed: %s", _e)
+                # Fallback 到純文字 + Quick Reply
+                try:
+                    from linebot.v3.messaging import (
+                        QuickReply, QuickReplyItem, PostbackAction
+                    )
+                    qr = QuickReply(items=[
+                        QuickReplyItem(action=PostbackAction(
+                            label="📝 翻譯這張",
+                            data="img_translate=" + event.message.id,
+                            display_text="翻譯這張圖"
+                        )),
+                        QuickReplyItem(action=PostbackAction(
+                            label="❌ 不用",
+                            data="img_skip=" + event.message.id,
+                            display_text="不用翻譯"
+                        )),
+                    ])
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        msg = TextMessage(
+                            text="📷 收到圖片,要翻譯內容嗎?",
+                            quick_reply=qr
+                        )
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[msg]
+                        ))
+                except Exception:
+                    pass
         return
 
     # Need OpenAI for image OCR
@@ -6707,64 +6838,81 @@ def handle_image(event):
 def _process_pending_image_translate(event, message_id):
     """v3.9.10: 詢問模式下,使用者按了「翻譯這張」之後執行實際翻譯。
     重用 handle_image 的下載/OCR/翻譯邏輯,但 reply_token 來自 postback event。
+    
+    v3.9.11: 增加全程 logging + 最終 fallback push,避免任何路徑靜默失敗。
     """
-    info = _pending_image_translate.pop(message_id, None)
-    if not info:
-        # 已過期或不存在
+    logger.info("[ImgAsk] postback triggered for msg=%s, pending_count=%d",
+                message_id, len(_pending_image_translate))
+    
+    # 統一回覆 helper:reply_token 失效時改用 push_message
+    def _reply_or_push(text):
         try:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="⚠️ 圖片資訊已過期(超過 30 分鐘),請重新傳一次")]
+                    messages=[TextMessage(text=text)]
                 ))
-        except Exception:
-            pass
+            logger.info("[ImgAsk] reply sent: %s", text[:80])
+            return True
+        except Exception as _re:
+            logger.warning("[ImgAsk] reply_message failed (%s), trying push", _re)
+            try:
+                gid = info["group_id"] if info else None
+                if gid:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.push_message(PushMessageRequest(
+                            to=gid,
+                            messages=[TextMessage(text=text)]
+                        ))
+                    logger.info("[ImgAsk] push sent")
+                    return True
+            except Exception as _pe:
+                logger.error("[ImgAsk] both reply and push failed: %s", _pe)
+            return False
+
+    info = _pending_image_translate.pop(message_id, None)
+    if not info:
+        logger.warning("[ImgAsk] message %s not in pending dict (expired or replay)", message_id)
+        _reply_or_push("⚠️ 圖片資訊已過期(超過 30 分鐘),請重新傳一次")
         return
 
     group_id = info["group_id"]
     if not oai:
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="❌ 系統未設定 OpenAI,無法 OCR 圖片")]
-                ))
-        except Exception:
-            pass
+        _reply_or_push("❌ 系統未設定 OpenAI,無法 OCR 圖片")
         return
 
     show_loading(group_id)
 
-    # 下載圖片(這時候 LINE 還保留約 30 天,所以用 message_id 直接抓沒問題)
-    img_base64, img_raw = download_line_image(message_id)
-    if not img_base64:
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="❌ 下載圖片失敗(可能 LINE 端已過期)")]
-                ))
-        except Exception:
-            pass
+    # 下載圖片
+    logger.info("[ImgAsk] downloading image %s", message_id)
+    try:
+        img_base64, img_raw = download_line_image(message_id)
+    except Exception as _de:
+        logger.error("[ImgAsk] download exception: %s", _de)
+        _reply_or_push("❌ 下載圖片失敗:" + str(_de)[:100])
         return
+    if not img_base64:
+        _reply_or_push("❌ 下載圖片失敗(LINE 端已過期或網路錯誤)")
+        return
+    logger.info("[ImgAsk] downloaded %d bytes", len(img_raw) if img_raw else 0)
 
     tgt = group_target_lang.get(group_id, "id")
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
-    extracted = ocr_image_openai(img_base64)
-    if not extracted or len(extracted.strip()) < 2:
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="ℹ️ 圖片中沒偵測到可翻譯的文字")]
-                ))
-        except Exception:
-            pass
+    
+    logger.info("[ImgAsk] running OCR")
+    try:
+        extracted = ocr_image_openai(img_base64)
+    except Exception as _oe:
+        logger.error("[ImgAsk] OCR exception: %s", _oe)
+        _reply_or_push("❌ OCR 失敗:" + str(_oe)[:100])
         return
+    if not extracted or len(extracted.strip()) < 2:
+        logger.info("[ImgAsk] OCR returned no text")
+        _reply_or_push("ℹ️ 圖片中沒偵測到可翻譯的文字")
+        return
+    logger.info("[ImgAsk] OCR ok: %d chars", len(extracted))
 
     # 工單偵測
     try:
@@ -6772,49 +6920,51 @@ def _process_pending_image_translate(event, message_id):
         if wo_customer:
             wo_on = group_wo_settings.get(group_id, True)
             if wo_on:
-                reply = format_storage_for_work_order(wo_customer)
-                if reply:
+                wo_reply = format_storage_for_work_order(wo_customer)
+                if wo_reply:
                     bot_stats["work_order_detections"] += 1
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=reply)]
-                        ))
+                    _reply_or_push(wo_reply)
             track_group_usage(group_id, _bp, _bc)
             return
     except Exception as e:
-        logger.error("Work order detection error (postback): %s", e)
+        logger.error("[ImgAsk] Work order detection error: %s", e)
 
     lang = detect_language(extracted)
     if lang is None:
+        logger.warning("[ImgAsk] lang detection returned None for: %s", extracted[:80])
+        _reply_or_push("⚠️ 偵測不到語言,無法翻譯")
         return
     actual_tgt = tgt if lang == "zh" else "zh"
+    logger.info("[ImgAsk] translating %s -> %s", lang, actual_tgt)
 
     _tone, _tone_custom = get_group_tone(group_id)
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
-    if lang == "zh":
-        result = translate(extracted, "zh", tgt)
-    else:
-        result = translate(extracted, lang, "zh")
+    _tl.group_id = group_id
+    try:
+        if lang == "zh":
+            result = translate(extracted, "zh", tgt)
+        else:
+            result = translate(extracted, lang, "zh")
+    except Exception as _te:
+        logger.error("[ImgAsk] translate exception: %s", _te)
+        _reply_or_push("❌ 翻譯失敗:" + str(_te)[:100])
+        return
 
     if not result:
+        logger.warning("[ImgAsk] translate returned empty")
+        _reply_or_push("⚠️ 翻譯結果為空,請重試")
         track_group_usage(group_id, _bp, _bc)
         return
 
-    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
-    if len(reply) > 5000:
-        reply = reply[:4990] + "\n..."
+    reply_text = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+    if len(reply_text) > 5000:
+        reply_text = reply_text[:4990] + "\n..."
 
     track_group_usage(group_id, _bp, _bc)
     bot_stats["image_translations"] += 1
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
-        ))
+    _reply_or_push(reply_text)
+    logger.info("[ImgAsk] DONE")
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
