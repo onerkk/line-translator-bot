@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.5-0501-debug-snapshot"
+VERSION = "v3.9.6-0501-fix-metadata-store"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -3874,6 +3874,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             except Exception as _be:
                 logger.warning("logit_bias skip: %s", _be)
         # Metadata tag (for OpenAI dashboard filtering)
+        # v3.9.6 (2026-05): OpenAI changed the rules - 'metadata' parameter now
+        # requires 'store=true' to be set together. Without store=true, the API
+        # rejects every request with 400 BadRequestError. This single bug caused
+        # ALL OpenAI translations to fail and silently fall back to Google
+        # Translate, which is why custom examples appeared not to work.
         if send_metadata_to_openai:
             _meta = {}
             _gid = getattr(_tl, 'group_id', '')
@@ -3883,6 +3888,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _meta["tgt_lang"] = tgt or ""
             if _meta:
                 _kwargs["metadata"] = _meta
+                _kwargs["store"] = True   # Required since 2025 — without this, 400 error
         # v3.2-0426e: Structured Outputs (response_format with json_schema)
         if structured_output_enabled and not _model.startswith(("o1", "o3", "o4")):
             # ★ v3.5:擴充 schema,讓 GPT 自我聲明資訊完整性
