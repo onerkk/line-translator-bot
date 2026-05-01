@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.25-0501-background-thread-architecture"
+VERSION = "v3.9.26-0501-bg-thread-with-tracking"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -7041,6 +7041,12 @@ def _handle_image_background(ctx):
         user_id = ctx["user_id"]
         message_id = ctx["message_id"]
         is_dm_img = ctx["is_dm_img"]
+        
+        # v3.9.26: 確認 thread 真的開始跑
+        _event_log_write("bg_thread_started", {
+            "msg_id": message_id,
+            "group_id": group_id or "",
+        })
         
         # show_loading + mark_read(原本在 webhook 主流程做的,移到背景)
         _event_log_write("image_step", {"step": "before_show_loading"})
