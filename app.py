@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.19-0501-event-log-disk"
+VERSION = "v3.9.20-0501-step-by-step-log"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -6951,21 +6951,42 @@ def handle_image(event):
 
     # Need OpenAI for image OCR
     if not oai:
+        _event_log_write("image_aborted", {"reason": "openai_not_initialized"})
         logger.warning("No OpenAI key, cannot do image OCR")
         return
 
-    show_loading(group_id)
+    _event_log_write("image_step", {"step": "before_show_loading"})
+    try:
+        show_loading(group_id)
+    except Exception as _sle:
+        _event_log_write("image_step_error", {"step": "show_loading", "err": str(_sle)[:200]})
     if get_group_feature(group_id, 'mark_read'):
-        mark_as_read(group_id)
+        try:
+            mark_as_read(group_id)
+        except Exception:
+            pass
 
     # Download image from LINE
     message_id = event.message.id
-    img_base64, img_raw = download_line_image(message_id)
+    _event_log_write("image_step", {"step": "downloading", "msg_id": message_id})
+    try:
+        img_base64, img_raw = download_line_image(message_id)
+    except Exception as _de:
+        _event_log_write("image_step_error", {"step": "download", "err": str(_de)[:300]})
+        logger.exception("Image download exception: %s", _de)
+        return
     if not img_base64:
+        _event_log_write("image_aborted", {"reason": "download_returned_none"})
         logger.warning("Failed to download image %s", message_id)
         return
     # v3.9.17: 偵測圖片 MIME(LINE 可能傳 PNG / JPEG / HEIC...)
     img_mime = detect_image_mime(img_raw)
+    _event_log_write("image_step", {
+        "step": "downloaded",
+        "size_bytes": len(img_raw) if img_raw else 0,
+        "mime": img_mime,
+        "first_bytes_hex": (img_raw[:16].hex() if img_raw else ""),
+    })
     logger.info("Image downloaded: %d bytes, mime=%s", len(img_raw) if img_raw else 0, img_mime)
 
     # Determine target language
@@ -6973,15 +6994,28 @@ def handle_image(event):
 
     # Quick OCR to check if there's text and detect language
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
-    extracted = ocr_image_openai(img_base64, mime_type=img_mime)
+    _event_log_write("image_step", {"step": "before_ocr"})
+    try:
+        extracted = ocr_image_openai(img_base64, mime_type=img_mime)
+    except Exception as _oe:
+        _event_log_write("image_step_error", {"step": "ocr", "err": str(_oe)[:500]})
+        logger.exception("OCR exception: %s", _oe)
+        return
+    _event_log_write("image_step", {
+        "step": "ocr_done",
+        "extracted_len": len(extracted) if extracted else 0,
+        "extracted_preview": (extracted[:100] if extracted else None),
+    })
     logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
     if not extracted or len(extracted.strip()) < 2:
+        _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
         return
 
     # === Check if this is a work order (製造指示書) ===
     try:
         wo_customer = detect_work_order(extracted)
         if wo_customer:
+            _event_log_write("image_step", {"step": "work_order_detected", "customer": str(wo_customer)[:50]})
             # It's a work order — never translate work order content
             wo_on = group_wo_settings.get(group_id, True)
             if wo_on:
@@ -7001,15 +7035,20 @@ def handle_image(event):
                             reply_token=event.reply_token,
                             messages=[msg_obj]
                         ))
+                    _event_log_write("image_done", {"path": "work_order"})
             # Whether storage found or not, skip translation for work orders
             track_group_usage(group_id, _bp, _bc)
             return
     except Exception as e:
+        _event_log_write("image_step_error", {"step": "work_order_detect", "err": str(e)[:200]})
         logger.error("Work order detection error: %s", e)
     # === End work order check ===
 
+    _event_log_write("image_step", {"step": "before_lang_detect"})
     lang = detect_language(extracted)
+    _event_log_write("image_step", {"step": "lang_detected", "lang": lang})
     if lang is None:
+        _event_log_write("image_aborted", {"reason": "lang_is_none"})
         return
 
     # Determine actual translation target
@@ -7023,12 +7062,24 @@ def handle_image(event):
     _tone, _tone_custom = get_group_tone(group_id)
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
-    if lang == "zh":
-        result = translate(extracted, "zh", tgt)
-    else:
-        result = translate(extracted, lang, "zh")
+    _event_log_write("image_step", {"step": "before_translate", "src": lang, "tgt": (tgt if lang == "zh" else "zh")})
+    try:
+        if lang == "zh":
+            result = translate(extracted, "zh", tgt)
+        else:
+            result = translate(extracted, lang, "zh")
+    except Exception as _te:
+        _event_log_write("image_step_error", {"step": "translate", "err": str(_te)[:300]})
+        logger.exception("Translate exception: %s", _te)
+        return
+    _event_log_write("image_step", {
+        "step": "translate_done",
+        "result_len": len(result) if result else 0,
+        "result_preview": (result[:100] if result else None),
+    })
 
     if not result:
+        _event_log_write("image_aborted", {"reason": "translate_returned_empty"})
         track_group_usage(group_id, _bp, _bc)
         return
 
@@ -7040,20 +7091,26 @@ def handle_image(event):
 
     track_group_usage(group_id, _bp, _bc)
     bot_stats["image_translations"] += 1
+    _event_log_write("image_step", {"step": "before_reply"})
     # v3.8: thread quote_token onto image translation reply.
     qt = getattr(event.message, 'quote_token', None)
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        msg_obj = TextMessage(text=reply)
-        if qt:
-            try:
-                msg_obj.quote_token = qt
-            except Exception:
-                pass
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[msg_obj]
-        ))
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            msg_obj = TextMessage(text=reply)
+            if qt:
+                try:
+                    msg_obj.quote_token = qt
+                except Exception:
+                    pass
+            api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[msg_obj]
+            ))
+        _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply)})
+    except Exception as _re:
+        _event_log_write("image_step_error", {"step": "reply", "err": str(_re)[:300]})
+        logger.exception("Reply exception: %s", _re)
 
 
 def _process_pending_image_translate(event, message_id):
