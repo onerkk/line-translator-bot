@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.3-0501-fewshot-format-fix"
+VERSION = "v3.9.4-0501-example-ui-direction"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -8411,13 +8411,22 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="font-weight:700;font-size:15px;margin-bottom:8px">＋ 手動新增單筆</div>
 <div style="font-size:11px;color:#8a8a9a;margin-bottom:8px">用於補登歷史錯誤,或加入專業術語表</div>
 <div style="margin-bottom:6px">
-<select id="exDir" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
-<option value="zh2id">中文→印尼</option>
-<option value="id2zh">印尼→中文</option>
+<select id="exDir" onchange="updateExampleInputOrder()" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<option value="zh2id">中文 → 印尼（zh→id）</option>
+<option value="id2zh">印尼 → 中文（id→zh）</option>
 </select>
 </div>
-<input id="exZh" type="text" placeholder="中文（例：砂輪要換了）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:6px">
-<input id="exId" type="text" placeholder="印尼文（例：Batu gerinda harus diganti）" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:6px">
+<!-- v3.9.4: 兩個 input 用獨立容器,JS 依方向切換順序與 placeholder -->
+<div id="exInputContainer">
+<div id="exSrcWrap" data-role="src" style="margin-bottom:6px">
+<div style="font-size:11px;color:#8a8a9a;margin-bottom:3px"><span id="exSrcLabel">原文（中文)</span></div>
+<input id="exSrc" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+</div>
+<div id="exTgtWrap" data-role="tgt" style="margin-bottom:6px">
+<div style="font-size:11px;color:#8a8a9a;margin-bottom:3px"><span id="exTgtLabel">正確翻譯（印尼文)</span></div>
+<input id="exTgt" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+</div>
+</div>
 <button class="btn btn-primary btn-sm" onclick="addExample()">＋ 新增範例</button>
 <div id="exAddResult" style="font-size:12px;margin-top:4px"></div>
 </div>
@@ -9942,12 +9951,39 @@ async function markLogWrong(entryId){
     toast('❌ 失敗：'+(d&&d.info||''));
   }
 }
+// v3.9.4: 依當前方向更新 input 標籤與 placeholder
+function updateExampleInputOrder(){
+  var dir = document.getElementById('exDir').value;
+  var srcLabel = document.getElementById('exSrcLabel');
+  var tgtLabel = document.getElementById('exTgtLabel');
+  var srcInput = document.getElementById('exSrc');
+  var tgtInput = document.getElementById('exTgt');
+  if(dir === 'id2zh'){
+    srcLabel.textContent = '原文（印尼文)';
+    tgtLabel.textContent = '正確翻譯（中文)';
+    srcInput.placeholder = '例：Batu gerinda harus diganti';
+    tgtInput.placeholder = '例：砂輪要換了';
+  }else{
+    srcLabel.textContent = '原文（中文)';
+    tgtLabel.textContent = '正確翻譯（印尼文)';
+    srcInput.placeholder = '例：砂輪要換了';
+    tgtInput.placeholder = '例：Batu gerinda harus diganti';
+  }
+}
+
 async function addExample(){
-  var zh=document.getElementById('exZh').value.trim();
-  var id=document.getElementById('exId').value.trim();
   var dir=document.getElementById('exDir').value;
+  var src=document.getElementById('exSrc').value.trim();
+  var tgt=document.getElementById('exTgt').value.trim();
   var resEl=document.getElementById('exAddResult');
-  if(!zh||!id){resEl.innerHTML='<span style="color:#f04747">請輸入中文和印尼文</span>';return}
+  if(!src||!tgt){resEl.innerHTML='<span style="color:#f04747">請填入原文與正確翻譯</span>';return}
+  // v3.9.4: 依方向把 src/tgt 對應回 zh/id 兩個資料庫欄位
+  var zh, id;
+  if(dir === 'zh2id'){
+    zh = src; id = tgt;
+  }else{
+    id = src; zh = tgt;
+  }
   // Check built-in duplicates
   if(_checkBuiltinDuplicate(zh,id)){
     resEl.innerHTML='<span style="color:#faa61a">⚠️ 此範例已存在於核心翻譯範例中，不需重複新增</span>';
@@ -9962,9 +9998,9 @@ async function addExample(){
   }
   var d=await api('/examples/add','POST',{zh:zh,id:id,dir:dir});
   if(d&&d.ok){
-    resEl.innerHTML='<span style="color:#43b581">✅ 已新增</span>';
-    document.getElementById('exZh').value='';
-    document.getElementById('exId').value='';
+    resEl.innerHTML='<span style="color:#43b581">✅ 已新增（'+(dir==='zh2id'?'中→印':'印→中')+'）</span>';
+    document.getElementById('exSrc').value='';
+    document.getElementById('exTgt').value='';
     loadExamples();
   }else if(d&&d.error==='max_reached'){
     resEl.innerHTML='<span style="color:#f04747">❌ 已達上限 '+d.max+' 條</span>';
