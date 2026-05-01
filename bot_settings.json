@@ -256,7 +256,7 @@
   "model_default": "gpt-5-mini",
   "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
-  "vision_model": "gpt-5-mini",
+  "vision_model": "gpt-4o",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
     "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomgWc9OXpCFCeJpptHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
