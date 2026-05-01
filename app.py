@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.18-0501-recent-images-debug"
+VERSION = "v3.9.19-0501-event-log-disk"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -152,6 +152,50 @@ group_target_lang = {}
 group_img_settings = {}
 # v3.9.18: 記錄最後 5 張收到的 LINE 圖片 message_id(供 /debug/recent-images 使用)
 _last_image_received_msgs = []  # list of dicts: {msg_id, group_id, ts}
+
+# v3.9.19: 全 webhook 事件磁碟 log,跨 worker 共享
+def _event_log_path():
+    for d in ("/tmp", "/var/data", "/data"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "bot_event_log.json")
+    return "bot_event_log.json"
+
+_EVENT_LOG_FILE = None
+_EVENT_LOG_MAX = 200  # 最多保留 200 筆
+
+def _event_log_write(event_type, data):
+    """寫一筆事件到磁碟 log。失敗安靜略過,不影響主流程。"""
+    global _EVENT_LOG_FILE
+    try:
+        if _EVENT_LOG_FILE is None:
+            _EVENT_LOG_FILE = _event_log_path()
+        # 讀現有 log
+        existing = []
+        try:
+            if os.path.exists(_EVENT_LOG_FILE):
+                with open(_EVENT_LOG_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                if not isinstance(existing, list):
+                    existing = []
+        except Exception:
+            existing = []
+        # 追加
+        entry = {
+            "ts": int(time.time()),
+            "type": event_type,
+            "data": data,
+        }
+        existing.append(entry)
+        # 截尾保留最後 _EVENT_LOG_MAX 筆
+        if len(existing) > _EVENT_LOG_MAX:
+            existing = existing[-_EVENT_LOG_MAX:]
+        # 原子寫
+        tmp = _EVENT_LOG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False)
+        os.replace(tmp, _EVENT_LOG_FILE)
+    except Exception:
+        pass  # 永遠不阻擋主流程
 # v3.9.10: 圖片翻譯詢問模式 — 收到圖片不自動翻,先問使用者要不要翻
 # 結構:group_img_settings=False AND group_img_ask_settings=True → 詢問模式
 #       group_img_settings=False AND group_img_ask_settings=False → 完全不翻
@@ -6456,9 +6500,30 @@ def handle_command(text, group_id, user_id=None):
 def callback():
     sig = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
+    # v3.9.19: 記錄所有進來的 webhook(只記事件 type 跟 message type,不記內容)
+    try:
+        _b = json.loads(body) if body else {}
+        _evts = _b.get("events", [])
+        _summary = []
+        for ev in _evts:
+            _t = ev.get("type", "?")
+            _msg = ev.get("message", {})
+            _src = ev.get("source", {})
+            _summary.append({
+                "type": _t,
+                "message_type": _msg.get("type") if _msg else None,
+                "message_id": _msg.get("id") if _msg else None,
+                "source_type": _src.get("type"),
+                "group_id": _src.get("groupId") or _src.get("roomId"),
+                "user_id_tail": (_src.get("userId") or "")[-6:] if _src.get("userId") else None,
+            })
+        _event_log_write("webhook_in", {"events_count": len(_evts), "events": _summary})
+    except Exception as _le:
+        _event_log_write("webhook_parse_error", {"error": str(_le)[:200]})
     try:
         handler.handle(body, sig)
     except InvalidSignatureError:
+        _event_log_write("webhook_invalid_sig", {})
         abort(400)
     return "OK"
 
@@ -6772,6 +6837,14 @@ def handle_image(event):
     is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     logger.info("Image received from %s", group_id)
     
+    # v3.9.19: 寫磁碟 log(跨 worker 共享)
+    _event_log_write("image_handler_entered", {
+        "msg_id": event.message.id,
+        "group_id": group_id or "",
+        "user_id_tail": (user_id or "")[-6:],
+        "is_dm": is_dm_img,
+    })
+    
     # v3.9.18: 記錄到 recent images(供 /debug/recent-images 使用)
     try:
         _last_image_received_msgs.append({
@@ -6792,16 +6865,19 @@ def handle_image(event):
     # Check if translation is on
     is_on = group_settings.get(group_id, True)
     if not is_on:
+        _event_log_write("image_skipped", {"reason": "translation_off", "group_id": group_id or ""})
         return
 
     # Check skip list
     sender_id = user_id
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
+        _event_log_write("image_skipped", {"reason": "user_in_skip_list", "user_tail": (sender_id or "")[-6:]})
         return
 
     # DM master toggle check for image
     if is_dm_img and sender_id:
         if not dm_master_enabled and sender_id not in dm_whitelist:
+            _event_log_write("image_skipped", {"reason": "dm_disabled"})
             return
 
     # v3.9.10: 三種圖片處理模式
@@ -6810,6 +6886,12 @@ def handle_image(event):
     # 3. group_img_settings=False AND group_img_ask_settings=False → 完全不處理
     img_on = group_img_settings.get(group_id, True)
     img_ask = group_img_ask_settings.get(group_id, False)
+    _event_log_write("image_mode_check", {
+        "group_id": group_id or "",
+        "img_on": img_on,
+        "img_ask": img_ask,
+        "decision": "auto_translate" if img_on else ("ask_mode" if img_ask else "fully_off")
+    })
     if not img_on:
         if img_ask:
             # === 詢問模式 ===
@@ -14772,6 +14854,83 @@ def admin_health_check():
     h.append(f'<div class="dim" style="font-size:11px;text-align:center;margin-top:20px">JSON: <a href="?key={key_param}&format=json" style="color:#7c6fef">?format=json</a></div>')
     h.append('</body></html>')
     return Response("\n".join(h), mimetype="text/html; charset=utf-8")
+
+
+@app.route("/debug/event-log", methods=["GET"])
+def debug_event_log():
+    """v3.9.19: 看磁碟版 webhook 事件 log(跨 worker)
+    
+    Usage: GET /debug/event-log?key=KEY[&filter=image][&n=50]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    
+    global _EVENT_LOG_FILE
+    if _EVENT_LOG_FILE is None:
+        _EVENT_LOG_FILE = _event_log_path()
+    
+    entries = []
+    try:
+        if os.path.exists(_EVENT_LOG_FILE):
+            with open(_EVENT_LOG_FILE, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            if not isinstance(entries, list):
+                entries = []
+    except Exception as e:
+        entries = []
+    
+    filter_str = request.args.get("filter", "").lower()
+    n = int(request.args.get("n", "50"))
+    
+    if filter_str:
+        entries = [e for e in entries if filter_str in e.get("type", "").lower()]
+    entries = entries[-n:]
+    entries.reverse()  # 新的在最上
+    
+    if request.args.get("format") == "json":
+        return jsonify({"count": len(entries), "log_file": _EVENT_LOG_FILE, "entries": entries})
+    
+    # HTML
+    html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    html += "<style>body{font-family:monospace;padding:10px;background:#0d0d1a;color:#e0e0e0;font-size:12px;}"
+    html += "h2,h3{color:#7c6fef}"
+    html += ".entry{background:#1a1a2e;padding:8px;border-radius:6px;border:1px solid #2a2a3e;margin:6px 0}"
+    html += ".ts{color:#8a8a9a;font-size:11px}"
+    html += ".type{color:#7FB3FF;font-weight:bold}"
+    html += ".webhook_in{border-left:3px solid #43b581}"
+    html += ".image_handler_entered{border-left:3px solid #43b581}"
+    html += ".image_skipped{border-left:3px solid #f0a020}"
+    html += ".image_mode_check{border-left:3px solid #7c6fef}"
+    html += "pre{margin:4px 0;white-space:pre-wrap;word-break:break-all}"
+    html += "a{color:#7FB3FF;margin-right:10px}"
+    html += "</style></head><body>"
+    html += "<h2>📋 Event Log</h2>"
+    html += f"<p>檔案: {_EVENT_LOG_FILE}</p>"
+    html += "<p>篩選: "
+    html += f"<a href='?key={ADMIN_KEY}'>全部</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=image'>圖片</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=webhook_in'>Webhook 進入</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=image_skipped'>圖片被略過</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=ImgAsk'>詢問模式</a>"
+    html += "</p>"
+    
+    if not entries:
+        html += "<p>(沒有 log 紀錄。可能剛部署或 /tmp 不可寫。)</p>"
+    else:
+        html += f"<p>共 {len(entries)} 筆,新的在上</p>"
+        import datetime as _dt
+        for e in entries:
+            ts_str = _dt.datetime.fromtimestamp(e.get("ts", 0)).strftime("%H:%M:%S")
+            t = e.get("type", "?")
+            d = e.get("data", {})
+            html += f'<div class="entry {t}">'
+            html += f'<div><span class="ts">{ts_str}</span> · <span class="type">{t}</span></div>'
+            html += '<pre>' + json.dumps(d, ensure_ascii=False, indent=1) + '</pre>'
+            html += '</div>'
+    
+    html += "</body></html>"
+    from flask import Response
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/debug/recent-images", methods=["GET"])
