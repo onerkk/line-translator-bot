@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.12-0501-image-ask-flex"
+VERSION = "v3.9.13-0501-pending-disk-multiworker"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -155,11 +155,67 @@ group_img_settings = {}
 #       group_img_settings=False AND group_img_ask_settings=False → 完全不翻
 #       group_img_settings=True → 自動翻譯(原本行為)
 group_img_ask_settings = {}
-# v3.9.10: 暫存待確認圖片(postback 時才下載+OCR+翻譯)
-# key: message_id(LINE 圖片 message_id);value: dict 含 group_id/user_id/timestamp
-# 30 分鐘後自動清掉沒按的
-_pending_image_translate = {}
-_PENDING_IMG_TTL = 1800  # 30 分鐘
+# v3.9.13: pending image 跨 worker 共享 — 寫到本地檔案(避免 gunicorn 多 worker 看不到彼此)
+# 30 分鐘自動清掉沒按的
+_PENDING_IMG_TTL = 1800
+def _pending_img_path():
+    """選擇可寫入的暫存路徑 — 同 worker 共用,deploy 重啟即清空(這就是要的行為)"""
+    for d in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "pending_img_translate.json")
+    return "pending_img_translate.json"
+_PENDING_IMG_FILE = None  # lazy init,等 logger 準備好後設
+
+def _load_pending_imgs():
+    """讀檔。檔案不存在 / 壞掉 → 回 {}。每次讀都過濾掉過期的。"""
+    global _PENDING_IMG_FILE
+    if _PENDING_IMG_FILE is None:
+        _PENDING_IMG_FILE = _pending_img_path()
+    try:
+        if not os.path.exists(_PENDING_IMG_FILE):
+            return {}
+        with open(_PENDING_IMG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        # 過濾過期
+        now = int(time.time())
+        return {k: v for k, v in data.items()
+                if isinstance(v, dict) and now - v.get("ts", 0) <= _PENDING_IMG_TTL}
+    except Exception:
+        return {}
+
+def _save_pending_imgs(data):
+    """原子寫入 — 用 write+rename 避免被讀到一半"""
+    global _PENDING_IMG_FILE
+    if _PENDING_IMG_FILE is None:
+        _PENDING_IMG_FILE = _pending_img_path()
+    try:
+        tmp = _PENDING_IMG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, _PENDING_IMG_FILE)
+        return True
+    except Exception as e:
+        try:
+            logger.warning("[ImgAsk] save pending failed: %s", e)
+        except Exception:
+            pass
+        return False
+
+def _pending_img_set(message_id, info):
+    """加入一筆 pending,先 load 再 add 再 save(避免覆蓋其他 worker 寫的)"""
+    data = _load_pending_imgs()
+    data[message_id] = info
+    _save_pending_imgs(data)
+
+def _pending_img_pop(message_id):
+    """取出並刪除一筆 pending(類似 dict.pop)"""
+    data = _load_pending_imgs()
+    info = data.pop(message_id, None)
+    if info is not None:
+        _save_pending_imgs(data)
+    return info
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
 # Work order photo detection toggle per group, default True
@@ -6672,18 +6728,14 @@ def handle_image(event):
     if not img_on:
         if img_ask:
             # === 詢問模式 ===
-            # 暫存圖片資訊,先不下載/OCR(節省成本),等使用者按了再執行
+            # v3.9.13: 用磁碟版 pending(_pending_img_set)跨 worker 共享
             _now = int(time.time())
-            # 順便清理過期的待確認圖片
-            for _mid, _info in list(_pending_image_translate.items()):
-                if _now - _info.get("ts", 0) > _PENDING_IMG_TTL:
-                    _pending_image_translate.pop(_mid, None)
-            _pending_image_translate[event.message.id] = {
+            _pending_img_set(event.message.id, {
                 "group_id": group_id,
-                "user_id": user_id,
+                "user_id": user_id or "",
                 "ts": _now,
-                "reply_token": None,  # 不存 reply_token(只能用一次,而且過期快)
-            }
+            })
+            logger.info("[ImgAsk] pending stored: msg=%s gid=%s", event.message.id, group_id)
             # v3.9.12: 用 Flex 卡片詢問,跟 /help 同視覺風格
             try:
                 bubble = build_image_ask_flex(event.message.id)
@@ -6836,13 +6888,48 @@ def handle_image(event):
 
 
 def _process_pending_image_translate(event, message_id):
+    """v3.9.13: 外層 wrapper — 任何例外都不可吞掉,一定要送錯誤訊息給使用者"""
+    try:
+        return _process_pending_image_translate_inner(event, message_id)
+    except Exception as e:
+        logger.exception("[ImgAsk] UNCAUGHT exception: %s", e)
+        # 嘗試任何方式回應
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤:" + str(e)[:200])]
+                ))
+        except Exception:
+            # reply 失敗 → 試 push 到事件來源
+            try:
+                src = getattr(event, 'source', None)
+                gid = (getattr(src, 'group_id', None) or
+                       getattr(src, 'room_id', None) or
+                       getattr(src, 'user_id', None))
+                if gid:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.push_message(PushMessageRequest(
+                            to=gid,
+                            messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤:" + str(e)[:200])]
+                        ))
+            except Exception as e2:
+                logger.error("[ImgAsk] emergency push also failed: %s", e2)
+
+
+def _process_pending_image_translate_inner(event, message_id):
     """v3.9.10: 詢問模式下,使用者按了「翻譯這張」之後執行實際翻譯。
     重用 handle_image 的下載/OCR/翻譯邏輯,但 reply_token 來自 postback event。
     
     v3.9.11: 增加全程 logging + 最終 fallback push,避免任何路徑靜默失敗。
+    v3.9.13: 改用磁碟版 pending(跨 worker)+ 外層 wrapper catch-all。
     """
+    # v3.9.13: 從磁碟讀(支援多 worker)
+    _all_pending = _load_pending_imgs()
     logger.info("[ImgAsk] postback triggered for msg=%s, pending_count=%d",
-                message_id, len(_pending_image_translate))
+                message_id, len(_all_pending))
     
     # 統一回覆 helper:reply_token 失效時改用 push_message
     def _reply_or_push(text):
@@ -6872,9 +6959,9 @@ def _process_pending_image_translate(event, message_id):
                 logger.error("[ImgAsk] both reply and push failed: %s", _pe)
             return False
 
-    info = _pending_image_translate.pop(message_id, None)
+    info = _pending_img_pop(message_id)
     if not info:
-        logger.warning("[ImgAsk] message %s not in pending dict (expired or replay)", message_id)
+        logger.warning("[ImgAsk] message %s not in pending file (expired or other worker fetched)", message_id)
         _reply_or_push("⚠️ 圖片資訊已過期(超過 30 分鐘),請重新傳一次")
         return
 
@@ -7348,7 +7435,7 @@ if PostbackEvent:
             return
         if "img_skip" in params:
             _msgid = params["img_skip"]
-            _pending_image_translate.pop(_msgid, None)
+            _pending_img_pop(_msgid)
             try:
                 with ApiClient(configuration) as api_client:
                     api = MessagingApi(api_client)
