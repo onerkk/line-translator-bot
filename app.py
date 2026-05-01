@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.4-0501-example-ui-direction"
+VERSION = "v3.9.5-0501-debug-snapshot"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -390,6 +390,11 @@ def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
 translation_logging_enabled = True   # Record every translation
 translation_log = []                 # In-memory ring buffer + persisted JSON file
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
+
+# v3.9.5: Debug snapshot for the last translation. Used by /admin/debug/last-translate
+# to diagnose why custom examples may not be reaching the model. Stores the
+# actual messages array sent to OpenAI, the path taken, model, and raw response.
+last_translate_debug = {}
 
 # v3.8: Reaction-event feedback pipeline.
 # Maps: bot's sent message_id → {"entry_id": ..., "ts": ..., "group_id": ...}
@@ -3806,6 +3811,27 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ]
+        # v3.9.5: snapshot what we are about to send to OpenAI so /admin/debug/last-translate can show it.
+        # This is the single most useful diagnostic when custom examples aren't taking effect.
+        try:
+            global last_translate_debug
+            _example_count = sum(1 for m in _msgs if m.get("role") in ("user", "assistant")) - 1  # -1 for the actual user msg
+            _example_count = max(0, _example_count // 2)  # pairs
+            last_translate_debug = {
+                "ts": int(time.time()),
+                "src_text": text,
+                "src_lang": src,
+                "tgt_lang": tgt,
+                "model_picked": _model,
+                "fewshot_mode": fewshot_mode,
+                "tone": _tone,
+                "example_pairs_in_prompt": _example_count,
+                "messages_sent": _msgs,  # full messages array
+                "strict_no_source_script": strict_no_source_script,
+                "repair_mode": repair_mode,
+            }
+        except Exception:
+            pass
         # v3.2-0426e: build kwargs with all official OpenAI features
         # v3.9.2 (2026-05): GPT-5 series (incl. 5.4, 5.5) are also reasoning models.
         # They reject temperature/top_p/logit_bias/max_tokens and require
@@ -3921,6 +3947,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         except Exception:
             pass
         r = oai.chat.completions.create(**_kwargs)
+        # v3.9.5: record raw OpenAI response into debug snapshot
+        try:
+            _resp_text = r.choices[0].message.content if (r and r.choices) else ""
+            last_translate_debug["openai_raw_response"] = _resp_text
+            last_translate_debug["openai_finish_reason"] = r.choices[0].finish_reason if (r and r.choices) else None
+            last_translate_debug["openai_status"] = "success"
+            last_translate_debug["kwargs_keys_sent"] = sorted(list(_kwargs.keys()))
+        except Exception:
+            pass
         # Track cache hit for stats (if available in response)
         try:
             if hasattr(r, 'usage') and hasattr(r.usage, 'prompt_tokens_details'):
@@ -4116,6 +4151,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
+        # v3.9.5: record exception in debug snapshot
+        try:
+            last_translate_debug["openai_status"] = "exception"
+            last_translate_debug["openai_error"] = str(e)[:500]
+            last_translate_debug["openai_error_type"] = type(e).__name__
+        except Exception:
+            pass
         return None
 
 
@@ -8573,107 +8615,66 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="⭐ 推薦給工廠翻譯">
-<option value="gpt-4.1-mini">gpt-4.1-mini ⭐ 推薦（$0.40 / $1.60）</option>
-<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
-</optgroup>
-<optgroup label="GPT-5.5（最新，2026-04，價格高）">
-<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
-</optgroup>
-<optgroup label="GPT-5.4 系列（2026-03）">
-<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
-</optgroup>
-<optgroup label="GPT-5 系列">
-<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
+<option value="gpt-4.1-mini">⭐ gpt-4.1-mini（$0.40 / $1.60）</option>
 <option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
-<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40，最便宜）</option>
-</optgroup>
-<optgroup label="GPT-4.1 系列">
-<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40）</option>
 <option value="gpt-4.1-nano">gpt-4.1-nano（$0.10 / $0.40）</option>
-</optgroup>
-<optgroup label="推理模型（複雜句更準）">
-<option value="o4-mini">o4-mini（$1.10 / $4.40）</option>
-<option value="o3-mini">o3-mini（$1.10 / $4.40）</option>
-</optgroup>
-<optgroup label="舊模型（已過時）">
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60）</option>
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
-</optgroup>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊）</option>
+<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier2+）</option>
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
+<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，貴）</option>
+<option value="o4-mini">o4-mini（推理模型）</option>
+<option value="o3-mini">o3-mini（推理模型）</option>
 </select>
 </div>
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="⭐ 推薦給長訊息">
-<option value="gpt-4.1">gpt-4.1 ⭐ 推薦（$2.00 / $8.00）</option>
-<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-</optgroup>
-<optgroup label="GPT-5.5（最新，2026-04，價格高）">
-<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
-</optgroup>
-<optgroup label="GPT-5.4 系列">
-<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
-</optgroup>
-<optgroup label="GPT-5 系列">
-<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
-<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
-</optgroup>
-<optgroup label="GPT-4.1 系列">
+<option value="gpt-4.1">⭐ gpt-4.1（$2.00 / $8.00）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
-</optgroup>
-<optgroup label="推理模型">
-<option value="o4-mini">o4-mini（$1.10 / $4.40）</option>
-<option value="o3-mini">o3-mini（$1.10 / $4.40）</option>
-</optgroup>
-<optgroup label="舊模型">
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60）</option>
-</optgroup>
+<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
+<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier2+）</option>
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
+<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，貴）</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊）</option>
+<option value="o4-mini">o4-mini（推理模型）</option>
+<option value="o3-mini">o3-mini（推理模型）</option>
 </select>
 </div>
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
-💡 <b>真實推薦（2026-05 查證）</b>：你目前的 <code style="color:#7c6fef">gpt-4.1-mini</code> 已穩定且性價比好（每百萬 token $0.40 in / $1.60 out），加上你已累積的 fine-tune 例子，模型差距會被弱化。<b>不建議切到 gpt-5.5</b>（貴 12 倍以上）。若想嘗鮮新一代,<code style="color:#7c6fef">gpt-5.4-mini</code> 是合理選項（OpenAI 官方推薦的高吞吐量首選）。
+⭐ = 推薦。<b>gpt-4.1-mini</b> 是工廠翻譯最穩的選擇,你已累積的範例對它效果最好。GPT-5 系列是 reasoning model,對 fewshot 範例的順從度反而不如 GPT-4 系列。價錢格式:每百萬 input/output token (USD)。
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
 <div style="font-weight:600;margin-bottom:6px">📷 照片分析模型（Vision / OCR）</div>
-<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖等。失敗時自動 fallback 到 gpt-4o-mini，避免單一模型不可用造成中斷。</div>
+<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖。失敗自動 fallback 到 gpt-4o-mini。</div>
 <select id="visionModel" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:8px">
-<optgroup label="⭐ 推薦給工單 OCR">
-<option value="gpt-5-mini">gpt-5-mini ⭐ 推薦（$0.25 / $2.00，視覺強+便宜）</option>
-<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，新一代）</option>
-</optgroup>
-<optgroup label="GPT-5.5（最新，2026-04，最強但最貴）">
-<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
-</optgroup>
-<optgroup label="GPT-5.4 系列">
-<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最便宜新一代）</option>
-</optgroup>
-<optgroup label="GPT-5 系列">
-<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
-<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40）</option>
-</optgroup>
-<optgroup label="GPT-4.1 系列">
-<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-5-mini">⭐ gpt-5-mini（$0.25 / $2.00，視覺強+便宜）</option>
+<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40，最便宜）</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊但穩）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
-</optgroup>
-<optgroup label="舊模型">
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，fallback 用）</option>
-</optgroup>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
+<option value="gpt-5">gpt-5（$1.25 / $10.00）</option>
+<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
+<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，最貴）</option>
 </select>
 <button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
 <div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
-💡 <b>真實推薦（2026-05 查證）</b>：<code style="color:#7c6fef">gpt-5-mini</code> 是工廠工單 OCR 的最佳甜蜜點 — 小字、手寫辨識能力比 gpt-4o-mini 強很多，但價錢只有 gpt-5.5 的 1/20。除非實測 gpt-5-mini 對你的特定工單辨識率不夠，否則沒必要升 5.5。<b>注意：「gpt-5.5-mini」目前 OpenAI 並未推出，不要選</b>。
+⭐ <b>gpt-5-mini</b> 對工單 OCR 是甜蜜點。注意:gpt-5.5-mini 目前 OpenAI 未推出。
 </div>
-<div style="font-size:11px;color:#999;margin-top:6px">⚠️ 若新模型在你的 OpenAI 帳戶尚未開通,系統會自動 fallback 到 gpt-4o-mini,翻譯不會中斷。<br>💰 價格格式：每百萬 input / output token 費用（USD）</div>
 </div>
 </div>
 </div>
@@ -13476,6 +13477,71 @@ def api_admin_translation_log_mark_wrong():
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok", "version": VERSION, "uptime": int(time.time() - bot_start_time)}
+
+
+@app.route("/debug/last-translate", methods=["GET"])
+def debug_last_translate():
+    """v3.9.5: Inspect the last translation that hit translate_openai.
+    Shows the EXACT messages array that was sent to OpenAI, so we can verify
+    custom examples are reaching the model. Requires ADMIN_KEY for security.
+
+    Usage: GET /debug/last-translate?key=YOUR_ADMIN_KEY[&format=html]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden, append ?key=YOUR_ADMIN_KEY"}), 403
+    if not last_translate_debug:
+        return jsonify({"error": "no translation has been made since restart"}), 404
+
+    fmt = request.args.get("format", "json")
+    if fmt == "html":
+        # Pretty HTML for mobile reading
+        d = last_translate_debug
+        msgs = d.get("messages_sent", [])
+        from flask import Response
+        html = ['<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">']
+        html.append('<title>Last Translate Debug</title>')
+        html.append('<style>body{font-family:-apple-system,sans-serif;background:#0d0d1a;color:#e0e0e0;padding:12px;font-size:14px;line-height:1.5}')
+        html.append('.box{background:#1a1a2e;border:1px solid #3a3a4e;border-radius:8px;padding:10px;margin-bottom:10px}')
+        html.append('.k{color:#7c6fef;font-weight:bold}.v{color:#43b581}.warn{color:#faa61a}.err{color:#f04747}')
+        html.append('.role{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold;margin-right:6px}')
+        html.append('.role-system{background:#5a4a8a;color:#fff}.role-user{background:#2a5a8a;color:#fff}.role-assistant{background:#2a8a4a;color:#fff}')
+        html.append('pre{white-space:pre-wrap;word-break:break-word;margin:4px 0;font-size:12px}')
+        html.append('h2{color:#7c6fef;border-bottom:1px solid #3a3a4e;padding-bottom:4px}</style></head><body>')
+        html.append('<h2>📋 Last Translate Debug</h2>')
+        html.append('<div class="box">')
+        html.append(f'<div><span class="k">原文:</span> <span class="v">{d.get("src_text","")}</span></div>')
+        html.append(f'<div><span class="k">方向:</span> {d.get("src_lang","?")} → {d.get("tgt_lang","?")}</div>')
+        html.append(f'<div><span class="k">使用模型:</span> <span class="v">{d.get("model_picked","?")}</span></div>')
+        html.append(f'<div><span class="k">Few-shot 模式:</span> {d.get("fewshot_mode","?")}</div>')
+        html.append(f'<div><span class="k">Tone:</span> {d.get("tone","?")}</div>')
+        ec = d.get("example_pairs_in_prompt", 0)
+        ec_class = "v" if ec >= 3 else ("warn" if ec >= 1 else "err")
+        html.append(f'<div><span class="k">範例對數量:</span> <span class="{ec_class}">{ec}</span> {"⚠️ 太少!" if ec < 3 else "✅"}</div>')
+        html.append(f'<div><span class="k">OpenAI 狀態:</span> <span class="{"v" if d.get("openai_status")=="success" else "err"}">{d.get("openai_status","?")}</span></div>')
+        if d.get("openai_error"):
+            html.append(f'<div><span class="k err">錯誤:</span> <span class="err">{d.get("openai_error")}</span></div>')
+            html.append(f'<div><span class="k err">錯誤類型:</span> <span class="err">{d.get("openai_error_type","?")}</span></div>')
+        if d.get("openai_raw_response"):
+            html.append(f'<div><span class="k">原始回應:</span></div><pre class="v">{d.get("openai_raw_response","")[:1000]}</pre>')
+        html.append(f'<div><span class="k">送出的 kwargs keys:</span> <span class="v">{", ".join(d.get("kwargs_keys_sent", []))}</span></div>')
+        html.append('</div>')
+
+        html.append(f'<h2>📨 送給 OpenAI 的完整 messages (共 {len(msgs)} 則)</h2>')
+        for i, m in enumerate(msgs):
+            role = m.get("role", "?")
+            name = m.get("name", "")
+            content = (m.get("content") or "")
+            # truncate long system prompts
+            display = content if len(content) < 800 or role != "system" else (content[:800] + f"\n...[truncated {len(content)-800} chars]")
+            html.append(f'<div class="box">')
+            html.append(f'<span class="role role-{role}">[{i}] {role}{(":"+name) if name else ""}</span>')
+            html.append(f'<pre>{display}</pre>')
+            html.append('</div>')
+        html.append('</body></html>')
+        return Response("\n".join(html), mimetype="text/html; charset=utf-8")
+
+    # default: json
+    return jsonify(last_translate_debug)
 
 
 if __name__ == "__main__":
