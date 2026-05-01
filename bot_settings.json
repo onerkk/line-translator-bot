@@ -119,12 +119,12 @@
   },
   "bot_stats": {
     "text_translations": 86,
-    "image_translations": 2,
+    "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 994813,
-    "tokens_completion": 3574
+    "tokens_prompt": 1280202,
+    "tokens_completion": 4124
   },
   "extra_customers": {
     "__all__": [
@@ -175,8 +175,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 749503,
-      "tokens_completion": 1640
+      "tokens_prompt": 1034892,
+      "tokens_completion": 2190
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
@@ -256,7 +256,7 @@
   "model_default": "gpt-5-mini",
   "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
-  "vision_model": "gpt-4o",
+  "vision_model": "gpt-5-mini",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
     "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomgWc9OXpCFCeJpptHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
