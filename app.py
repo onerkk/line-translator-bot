@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.2-0501-fix-gpt5-compat"
+VERSION = "v3.9.3-0501-fewshot-format-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1228,8 +1228,14 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
             user_eg, assistant_eg = zh, idn
         else:
             user_eg, assistant_eg = idn, zh
-        msgs.append({"role": "system", "name": "example_user", "content": user_eg})
-        msgs.append({"role": "system", "name": "example_assistant", "content": assistant_eg})
+        # v3.9.3 (2026-05): OpenAI 早期文件曾推薦用
+        # {"role": "system", "name": "example_user/example_assistant"} 格式做 few-shot,
+        # 但這個格式已被棄用,GPT-5 系列(reasoning model)幾乎完全忽略它,
+        # GPT-4 系列也不一定可靠。改用 OpenAI 現在所有官方文件、Cookbook 都使用的標準格式:
+        # 直接用 user/assistant 對話對。
+        # 這是讓範例真正進入 prompt 並影響翻譯的關鍵修復。
+        msgs.append({"role": "user", "content": user_eg})
+        msgs.append({"role": "assistant", "content": assistant_eg})
     msgs.append({"role": "user", "content": user_msg})
     return msgs
 
@@ -4471,11 +4477,17 @@ def _translate_inner(text, src, tgt):
         return result
 
     # Fallback to Google with retry, then factory post-validation.
+    # v3.9.3: DO NOT cache Google fallback results. If the OpenAI call failed
+    # (e.g. wrong API params, rate limit), Google will give a literal direct
+    # translation that ignores all custom examples. Caching that result poisons
+    # subsequent lookups for 1 hour even after the OpenAI bug is fixed.
+    # Instead, return the Google result without caching, so a retry can hit OpenAI.
     result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
     if result and is_translation_valid(result, src, tgt):
-        cache_set(text, src, tgt, result)
+        # cache_set(text, src, tgt, result)  # ← intentionally disabled
+        logger.warning("Used Google fallback (NOT cached); check OpenAI errors above")
         return result
 
     # Last chance: deterministic semantic fallback before returning None.
@@ -5892,6 +5904,15 @@ def handle_command(text, group_id, user_id=None):
             return "\u2705 翻譯：開啟中 / Aktif\n中文 ⇄ 🇮🇩 印尼文\n\U0001f5bc\ufe0f 圖片翻譯：" + img_status + "\n\U0001f3a4 語音翻譯：" + audio_status + "\n\U0001f4cb 拍工單查儲區：" + wo_status
         else:
             return "\u274c 翻譯：已關閉 / Nonaktif"
+    elif cmd == "/clearcache":
+        # v3.9.3: clear translation cache (e.g. after fixing a bad translation
+        # that got cached, or after switching to a new model). Anyone in the
+        # group can run this — it only affects the in-memory cache, no data loss.
+        with _cache_lock:
+            n = len(translation_cache)
+            translation_cache.clear()
+        logger.info("Translation cache cleared (%d entries) by user in group %s", n, group_id)
+        return f"🧹 已清除翻譯快取 / Cache terjemahan dibersihkan\n清除筆數 / Jumlah: {n}"
     elif cmd.startswith("/lang"):
         return handle_lang_command(text, group_id)
     elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
