@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.16-0501-vision-minimal-debug"
+VERSION = "v3.9.17-0501-mime-detect-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4997,15 +4997,20 @@ def _vision_call(messages, max_tokens, cache_key=None):
     raise last_err if last_err else RuntimeError("vision call failed")
 
 
-def ocr_image_openai(image_base64):
+def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     """Use OpenAI Vision to extract text from image. v3.8: model upgraded.
     
     v3.9.14: GPT-5 vision OCR 改良:
       - prompt 改為更明確的指令,避免 GPT-5 過度解讀回 NO_TEXT_FOUND
       - 失敗時詳細記錄 raw response,方便偵錯
+    v3.9.17: 加 mime_type 參數 — 不能再寫死 jpeg,LINE 可能傳 PNG/HEIC
     """
     if not oai:
         return None
+    # v3.9.17: HEIC OpenAI 不支援,改用 jpeg(雖然會失敗但至少 OpenAI 會給明確錯誤)
+    if mime_type == "image/heic":
+        logger.warning("[OCR] HEIC not supported by OpenAI, sending as jpeg (may fail)")
+        mime_type = "image/jpeg"
     try:
         msgs = [
                 {
@@ -5026,7 +5031,7 @@ def ocr_image_openai(image_base64):
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
+                                "url": f"data:{mime_type};base64," + image_base64,
                                 "detail": "high"
                             }
                         },
@@ -5174,12 +5179,45 @@ def ocr_and_translate_image(image_base64, tgt_lang):
 
 
 
+def detect_image_mime(raw_bytes):
+    """v3.9.17: 從 magic bytes 偵測圖片格式。
+    回傳 'image/jpeg', 'image/png', 'image/gif', 'image/webp' 之一。
+    無法辨識時回 'image/jpeg'(safest fallback)。
+    """
+    if not raw_bytes or len(raw_bytes) < 12:
+        return "image/jpeg"
+    if raw_bytes[:3] == b'\xff\xd8\xff':
+        return "image/jpeg"
+    if raw_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        return "image/png"
+    if raw_bytes[:6] in (b'GIF87a', b'GIF89a'):
+        return "image/gif"
+    if raw_bytes[:4] == b'RIFF' and raw_bytes[8:12] == b'WEBP':
+        return "image/webp"
+    # HEIC/HEIF — OpenAI 不支援,但至少標記出來
+    if raw_bytes[4:12] in (b'ftypheic', b'ftypheix', b'ftyphevc', b'ftypheim',
+                           b'ftypheis', b'ftyphevm', b'ftyphevs', b'ftypmif1'):
+        logger.warning("[Vision] HEIC/HEIF image detected, OpenAI may reject it")
+        return "image/heic"  # 讓 OpenAI 自己決定怎麼回應
+    logger.warning("[Vision] unknown image format, first bytes: %s", raw_bytes[:16].hex())
+    return "image/jpeg"  # safest fallback
+
+
 def download_line_image(message_id):
     """Download image from LINE and return (base64_string, raw_bytes)."""
     try:
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             content = blob_api.get_message_content(message_id)
+            # v3.9.17: 確保 content 是 bytes(不是 bytearray 或其他)
+            if isinstance(content, bytearray):
+                content = bytes(content)
+            elif not isinstance(content, bytes):
+                # 如果是 file-like object,讀出來
+                if hasattr(content, 'read'):
+                    content = content.read()
+                else:
+                    content = bytes(content)
             img_base64 = base64.b64encode(content).decode("utf-8")
             return img_base64, content
     except Exception as e:
@@ -6829,14 +6867,16 @@ def handle_image(event):
     if not img_base64:
         logger.warning("Failed to download image %s", message_id)
         return
-    logger.info("Image downloaded: %d bytes", len(img_raw) if img_raw else 0)
+    # v3.9.17: 偵測圖片 MIME(LINE 可能傳 PNG / JPEG / HEIC...)
+    img_mime = detect_image_mime(img_raw)
+    logger.info("Image downloaded: %d bytes, mime=%s", len(img_raw) if img_raw else 0, img_mime)
 
     # Determine target language
     tgt = group_target_lang.get(group_id, "id")
 
     # Quick OCR to check if there's text and detect language
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
-    extracted = ocr_image_openai(img_base64)
+    extracted = ocr_image_openai(img_base64, mime_type=img_mime)
     logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
     if not extracted or len(extracted.strip()) < 2:
         return
@@ -7014,14 +7054,16 @@ def _process_pending_image_translate_inner(event, message_id):
     if not img_base64:
         _reply_or_push("❌ 下載圖片失敗(LINE 端已過期或網路錯誤)")
         return
-    logger.info("[ImgAsk] downloaded %d bytes", len(img_raw) if img_raw else 0)
+    # v3.9.17: 偵測 MIME 格式
+    img_mime = detect_image_mime(img_raw)
+    logger.info("[ImgAsk] downloaded %d bytes, mime=%s", len(img_raw) if img_raw else 0, img_mime)
 
     tgt = group_target_lang.get(group_id, "id")
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     
     logger.info("[ImgAsk] running OCR")
     try:
-        extracted = ocr_image_openai(img_base64)
+        extracted = ocr_image_openai(img_base64, mime_type=img_mime)
     except Exception as _oe:
         logger.error("[ImgAsk] OCR exception: %s", _oe)
         _reply_or_push("❌ OCR 失敗:" + str(_oe)[:100])
@@ -14719,42 +14761,96 @@ def admin_health_check():
 
 @app.route("/debug/vision-test", methods=["GET"])
 def debug_vision_test():
-    """v3.9.16: 用 hardcode 的小圖測試 vision call,確認 OpenAI vision API 能否成功。
-    繞過 LINE webhook,從瀏覽器直接測試 _vision_call → ocr_image_openai。
+    """v3.9.17: 用最近一張真實 LINE 圖片測 vision call
     
-    Usage: GET /debug/vision-test?key=YOUR_ADMIN_KEY[&model=gpt-5-mini]
+    Usage:
+      GET /debug/vision-test?key=KEY                      → 用 hardcode 簡單測試圖
+      GET /debug/vision-test?key=KEY&msg_id=XXX           → 用指定的 LINE message_id 測
+      GET /debug/vision-test?key=KEY&model=gpt-4o-mini   → 指定模型
     """
     if request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
     if not oai:
         return jsonify({"error": "OpenAI client not initialized"}), 500
     
-    # 1x1 紅色像素 PNG(最小可能的圖片,只是要測 API 通)
-    # 但 1x1 沒文字,所以也測試一張內含文字的小圖
-    # 這是「Hello」黑字白底 100x40 PNG(base64)
-    test_image_b64 = (
-        "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAoCAYAAAAIeF9DAAAAAXNSR0IArs4c6QAAAARnQU1BAACx"
-        "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAGRSURBVHhe7ZmxasMwFEUfSqFkKGRoll2X4MWL"
-        "wYsXf0E/IH/QH+gP9Av6B/2ALl26FDIE0iEZAumQDF1cP/skP1tWnGRpDF7uAYHss4xBz2/KkEcg"
-        "iVQYJEKKGFKEmFKEGCnFCKlSjJBSiZBShJpQUI2QQoaYRoeYRgcRhqQYEsOQGENiGBJjSAxDYgyJ"
-        "YUiMITEMiTEkhiExhsQwJMaQGAYoEsOQGENiDIkxJIYhMYbEMCSGITGGxDAkhiExDIkxJIYhMQyJ"
-        "MSSGITGGxDAkhiExhsQwJMaQGEZmEUg6+QFvdpqOOvB30AAAAABJRU5ErkJggg=="
-    )
-    
     requested_model = request.args.get("model", "")
+    line_msg_id = request.args.get("msg_id", "")
     
     result = {
         "ok": False,
         "vision_model_global": VISION_MODEL,
         "vision_fallback_global": VISION_FALLBACK_MODEL,
-        "openai_client_set": bool(oai),
         "stages": [],
     }
     
-    # Stage 1: 直接呼叫 OpenAI(不經過 _vision_call wrapper)
+    # Stage 0: 取得測試圖片
+    img_b64 = None
+    img_mime = "image/jpeg"
+    if line_msg_id:
+        # 用真實 LINE 圖片
+        try:
+            result["stages"].append({"stage": "downloading_line_image", "msg_id": line_msg_id})
+            img_b64, img_raw = download_line_image(line_msg_id)
+            if img_b64 and img_raw:
+                # 偵測格式
+                if img_raw[:3] == b'\xff\xd8\xff':
+                    img_mime = "image/jpeg"
+                elif img_raw[:8] == b'\x89PNG\r\n\x1a\n':
+                    img_mime = "image/png"
+                elif img_raw[:6] in (b'GIF87a', b'GIF89a'):
+                    img_mime = "image/gif"
+                elif img_raw[:4] == b'RIFF' and img_raw[8:12] == b'WEBP':
+                    img_mime = "image/webp"
+                else:
+                    # 看前 12 byte 是什麼
+                    img_mime = "unknown (first 12 bytes: " + img_raw[:12].hex() + ")"
+                result["stages"].append({
+                    "stage": "line_image_downloaded",
+                    "size_bytes": len(img_raw),
+                    "detected_mime": img_mime,
+                    "first_bytes_hex": img_raw[:16].hex(),
+                })
+            else:
+                result["stages"].append({"stage": "line_download_failed"})
+                return jsonify(result)
+        except Exception as e:
+            result["stages"].append({"stage": "line_download_exception", "error": str(e)})
+            return jsonify(result)
+    else:
+        # 用一個確定有效的小 PNG(2x2 紅色方塊)
+        # 用 Python 動態產生確保 PNG header 正確
+        import struct, zlib
+        def _make_simple_png():
+            # 2x2 紅色方塊 RGB PNG
+            width, height = 2, 2
+            raw = b'\x00' + b'\xff\x00\x00' * width  # filter byte + RGB pixels
+            raw = raw * height
+            compressed = zlib.compress(raw)
+            png = b'\x89PNG\r\n\x1a\n'
+            # IHDR chunk
+            ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+            png += struct.pack('>I', 13) + b'IHDR' + ihdr_data
+            png += struct.pack('>I', zlib.crc32(b'IHDR' + ihdr_data))
+            # IDAT chunk
+            png += struct.pack('>I', len(compressed)) + b'IDAT' + compressed
+            png += struct.pack('>I', zlib.crc32(b'IDAT' + compressed))
+            # IEND chunk
+            png += struct.pack('>I', 0) + b'IEND'
+            png += struct.pack('>I', zlib.crc32(b'IEND'))
+            return png
+        png_bytes = _make_simple_png()
+        img_b64 = base64.b64encode(png_bytes).decode("utf-8")
+        img_mime = "image/png"
+        result["stages"].append({
+            "stage": "using_synthetic_png",
+            "size_bytes": len(png_bytes),
+            "first_bytes_hex": png_bytes[:16].hex(),
+        })
+    
+    # Stage 1: 直接呼叫 OpenAI
     try:
         target_model = requested_model or VISION_MODEL
-        result["stages"].append({"stage": "raw_call_attempt", "model": target_model})
+        result["stages"].append({"stage": "raw_call_attempt", "model": target_model, "mime": img_mime})
         
         kwargs = {
             "model": target_model,
@@ -14762,8 +14858,10 @@ def debug_vision_test():
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "What text do you see in this image? Output only the text."},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + test_image_b64}},
+                        {"type": "text", "text": "Describe what you see in this image briefly."},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:{img_mime if not img_mime.startswith('unknown') else 'image/jpeg'};base64,{img_b64}"
+                        }},
                     ]
                 }
             ],
@@ -14771,7 +14869,7 @@ def debug_vision_test():
         if target_model.startswith("gpt-5") or target_model.startswith("o1") or target_model.startswith("o3"):
             kwargs["max_completion_tokens"] = 8000
         else:
-            kwargs["max_tokens"] = 200
+            kwargs["max_tokens"] = 500
             kwargs["temperature"] = 0.0
         
         r = oai.chat.completions.create(**kwargs)
@@ -14793,47 +14891,25 @@ def debug_vision_test():
             "stage": "raw_call_failed",
             "error": str(e),
             "error_type": type(e).__name__,
-            "traceback": traceback.format_exc()[-2000:],
+            "traceback": traceback.format_exc()[-1500:],
         })
     
-    # Stage 2: 透過 _vision_call wrapper
-    try:
-        result["stages"].append({"stage": "wrapper_call_attempt"})
-        msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What text do you see in this image?"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + test_image_b64}},
-                ]
-            }
-        ]
-        r2 = _vision_call(msgs, max_tokens=200)
-        content2 = r2.choices[0].message.content if r2.choices else None
-        result["stages"].append({
-            "stage": "wrapper_call_ok",
-            "content": content2,
-            "content_len": len(content2) if content2 else 0,
-        })
-    except Exception as e:
-        import traceback
-        result["stages"].append({
-            "stage": "wrapper_call_failed",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "traceback": traceback.format_exc()[-2000:],
-        })
-    
-    # 用 HTML 格式回應,手機方便看
+    # 用 HTML 格式回應
     html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
     html += "<style>body{font-family:monospace;padding:10px;background:#0d0d1a;color:#e0e0e0;font-size:12px;}"
     html += "pre{white-space:pre-wrap;word-break:break-all;background:#1a1a2e;padding:8px;border-radius:6px;border:1px solid #2a2a3e;}"
-    html += "h2{color:#7c6fef}.ok{color:#43b581}.err{color:#f04747}</style></head><body>"
+    html += "h2,h3{color:#7c6fef}.ok{color:#43b581}.err{color:#f04747}"
+    html += "a{color:#7FB3FF}</style></head><body>"
     html += "<h2>🔍 Vision Debug Report</h2>"
-    html += f"<p>VISION_MODEL: <b>{VISION_MODEL}</b></p>"
-    html += f"<p>VISION_FALLBACK: <b>{VISION_FALLBACK_MODEL}</b></p>"
+    html += f"<p>VISION_MODEL: <b>{VISION_MODEL}</b> · FALLBACK: <b>{VISION_FALLBACK_MODEL}</b></p>"
     html += f"<p>整體狀態: <span class='{'ok' if result['ok'] else 'err'}'>{'✅ 成功' if result['ok'] else '❌ 失敗'}</span></p>"
-    html += "<hr><h3>各階段結果:</h3>"
+    html += "<hr>"
+    html += "<p><b>用法:</b><br>"
+    html += "&bull; <code>?key=KEY</code> → 用合成的 PNG 測試<br>"
+    html += "&bull; <code>?key=KEY&amp;msg_id=LINE_MSG_ID</code> → 用真實 LINE 圖片測試<br>"
+    html += "&bull; <code>?key=KEY&amp;model=gpt-4o-mini</code> → 換模型測<br>"
+    html += "</p><hr>"
+    html += "<h3>各階段:</h3>"
     import json as _json
     html += "<pre>" + _json.dumps(result["stages"], ensure_ascii=False, indent=2) + "</pre>"
     html += "</body></html>"
