@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.21-0501-vision-timeout-fix"
+VERSION = "v3.9.22-0501-translate-timeout-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -613,7 +613,7 @@ def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0,
     Use this for: back-translation checks, normalization, pivot intermediate, etc.
     Do NOT use for the MAIN translate_openai call (that has its own richer logic).
     """
-    kwargs = {"model": model_name, "messages": messages}
+    kwargs = {"model": model_name, "messages": messages, "timeout": 30}
     if model_supports(model_name, "temperature"):
         kwargs["temperature"] = temperature
     if model_supports(model_name, "max_completion_tokens"):
@@ -4115,6 +4115,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _kwargs = {
             "model": _model,
             "messages": _msgs,
+            # v3.9.22: 加 timeout 30 秒,避免無限等待
+            "timeout": 30,
         }
         # Sampling parameters
         if model_supports(_model, "temperature"):
@@ -4234,7 +4236,36 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                     _kwargs["prompt_cache_key"] = _ck
             except Exception:
                 pass
-        r = oai.chat.completions.create(**_kwargs)
+        try:
+            _event_log_write("translate_call_start", {
+                "model": _model,
+                "src": src,
+                "tgt": tgt,
+                "text_len": len(text or ""),
+                "kwargs_keys": list(_kwargs.keys()),
+            })
+        except Exception:
+            pass
+        try:
+            r = oai.chat.completions.create(**_kwargs)
+        except Exception as _te:
+            try:
+                _event_log_write("translate_call_failed", {
+                    "model": _model,
+                    "error": str(_te)[:300],
+                    "error_type": type(_te).__name__,
+                })
+            except Exception:
+                pass
+            raise
+        try:
+            _event_log_write("translate_call_done", {
+                "model": _model,
+                "finish": r.choices[0].finish_reason if (r and r.choices) else None,
+                "content_len": len(r.choices[0].message.content or "") if (r and r.choices) else 0,
+            })
+        except Exception:
+            pass
         # v3.9.5: record raw OpenAI response into debug snapshot
         try:
             _resp_text = r.choices[0].message.content if (r and r.choices) else ""
@@ -14988,6 +15019,7 @@ def debug_event_log():
     html += f"<a href='?key={ADMIN_KEY}&filter=webhook_in'>Webhook 進入</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=image_skipped'>圖片被略過</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=vision'>Vision 呼叫</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=translate'>翻譯呼叫</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=ImgAsk'>詢問模式</a>"
     html += "</p>"
     
