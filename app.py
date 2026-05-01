@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.6-0501-fix-metadata-store"
+VERSION = "v3.9.8-0501-gpt5-optimal"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -347,6 +347,97 @@ group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str
 model_default = "gpt-4.1-mini"    # model for short messages
 model_upgrade = "gpt-4.1"         # model for long messages
 model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
+
+# v3.9.7 (2026-05): 模型能力對照表 — 讓使用者亂勾任何進階設定都不會 400。
+# 後端永遠根據實際模型過濾參數;UI 端會把不相容的設定自動還原成中性值。
+def _model_family(model_name):
+    """v3.9.8: GPT-5 series splits into two sub-families based on lowest reasoning effort:
+      - 'gpt5_minimal': gpt-5, gpt-5.4, gpt-5.5 — supports reasoning_effort='minimal'
+      - 'gpt5_none':    gpt-5.1, gpt-5.2 — supports reasoning_effort='none'
+    """
+    if not model_name:
+        return "unknown"
+    m = model_name.lower()
+    # GPT-5.1 / 5.2 family — supports 'none' as lowest reasoning effort
+    if m.startswith(("gpt-5.2", "gpt-5.1")):
+        return "gpt5_none"
+    # GPT-5 / 5.4 / 5.5 family — supports 'minimal' as lowest
+    if m.startswith(("gpt-5.5", "gpt-5.4", "gpt-5")):
+        return "gpt5_minimal"
+    if m.startswith(("o1", "o3", "o4")):
+        return "oseries_reasoning"
+    if m.startswith(("gpt-4.1", "gpt-4o", "gpt-4")):
+        return "gpt4_classic"
+    return "unknown"
+
+# v3.9.8: optimal reasoning_effort for translation per family.
+# Based on OpenAI official migration guide:
+#   "gpt-4.1: gpt-5.2 with `none` reasoning"
+#   "minimal performs especially well in coding and instruction following scenarios"
+# Translation = lightweight task that needs faithful instruction following, NOT reasoning.
+# Confirmed by arxiv 2505.14810: "improving reasoning capability often comes at the
+# cost of instruction adherence" — exactly what we don't want for translation.
+TRANSLATION_OPTIMAL_REASONING = {
+    "gpt5_minimal": "minimal",
+    "gpt5_none": "none",
+    "oseries_reasoning": "low",  # o-series doesn't have minimal/none
+    "gpt4_classic": None,
+    "unknown": None,
+}
+
+MODEL_CAPABILITIES = {
+    # GPT-5 / 5.4 / 5.5 — reasoning models with minimal/low/medium/high effort
+    "gpt5_minimal": {
+        "temperature": False, "top_p": False, "max_tokens": False,
+        "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
+        "stop": False, "structured_output": True, "metadata": True,
+        "prompt_cache_key": True, "reasoning_effort": True, "seed": False,
+        "verbosity": True,
+    },
+    # GPT-5.1 / 5.2 — newer reasoning models with none/low/medium/high
+    "gpt5_none": {
+        "temperature": False, "top_p": False, "max_tokens": False,
+        "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
+        "stop": False, "structured_output": True, "metadata": True,
+        "prompt_cache_key": True, "reasoning_effort": True, "seed": False,
+        "verbosity": True,
+    },
+    "oseries_reasoning": {
+        "temperature": False, "top_p": False, "max_tokens": False,
+        "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
+        "stop": False, "structured_output": False, "metadata": True,
+        "prompt_cache_key": False, "reasoning_effort": True, "seed": False,
+        "verbosity": False,
+    },
+    "gpt4_classic": {
+        "temperature": True, "top_p": True, "max_tokens": True,
+        "max_completion_tokens": False, "logprobs": True, "logit_bias": True,
+        "stop": True, "structured_output": True, "metadata": True,
+        "prompt_cache_key": True, "reasoning_effort": False, "seed": True,
+        "verbosity": False,
+    },
+    "unknown": {
+        "temperature": True, "top_p": True, "max_tokens": True,
+        "max_completion_tokens": False, "logprobs": True, "logit_bias": True,
+        "stop": True, "structured_output": True, "metadata": True,
+        "prompt_cache_key": True, "reasoning_effort": False, "seed": True,
+        "verbosity": False,
+    },
+}
+
+def model_supports(model_name, capability):
+    family = _model_family(model_name)
+    return MODEL_CAPABILITIES.get(family, MODEL_CAPABILITIES["unknown"]).get(capability, False)
+
+def optimal_reasoning_for_translation(model_name):
+    """v3.9.8: Get optimal reasoning_effort for translation tasks.
+    Based on OpenAI official guidance: translation = lightweight,
+    instruction-following task. Higher reasoning_effort HURTS instruction
+    adherence and adds latency/cost without quality gain on this task type.
+    """
+    family = _model_family(model_name)
+    return TRANSLATION_OPTIMAL_REASONING.get(family)
+
 # v3.2-0426d: New translation parameters (admin-controllable)
 translation_temperature = 0.0     # 0.0 = deterministic, 0.3 = slight variety. Translation should be 0~0.3.
 translation_top_p = 1.0           # Nucleus sampling. Keep 1.0 unless you know what you're doing.
@@ -490,7 +581,7 @@ paragraph_split_threshold = 50       # 訊息長度超過此值且含分段時,�
 stop_sequences_enabled = True        # Use stop sequences to prevent GPT adding explanations
 forbidden_words_zh = "註：,(註,(備註,以下是,翻譯如下,Translation:"  # zh forbidden phrases (comma-separated)
 forbidden_words_id = "Catatan:,(Catatan,Terjemahan:,Penjelasan:"  # id forbidden phrases
-reasoning_effort = "medium"          # For o-series: low / medium / high (more = better but slower/costlier)
+reasoning_effort = "low"             # v3.9.8: was 'medium'. For translation tasks, lower=more faithful. Auto-overridden by optimal_reasoning_for_translation().
 send_user_id_to_openai = True        # For abuse tracking compliance
 send_metadata_to_openai = True       # Tag each request with group_id for filtering
 
@@ -3787,6 +3878,39 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Bocor → 漏了 "
             "Mati → 停了"
             + extra_rule +
+            # v3.9.8: GOLDEN RULES (added 2026-05) — based on real production failures.
+            # These are XML-tagged for GPT-5's "surgical instruction following"
+            # (per OpenAI GPT-5 prompting guide best practices).
+            " <format_preservation_rules>"
+            " RULE 1 — Output format must MIRROR the source format exactly:"
+            " - If the source is plain prose without bullets/emoji/⚠️, the translation MUST be plain prose."
+            " - DO NOT split a single paragraph into bullet points or numbered lists."
+            " - DO NOT add ⚠️, ⚡, ‼️, or any emoji that the source doesn't have."
+            " - DO NOT reorganize sentences into a 'cleaner' structure."
+            " - DO NOT add introductory phrases like 'Here's the translation:' or '以下為翻譯:'."
+            " </format_preservation_rules>"
+            " <passive_voice_rules>"
+            " RULE 2 — Chinese passive structures with 「被」 must be translated as passive:"
+            " - 「將被X列管」 = 'will be supervised by X' (factory is the OBJECT, NOT subject)"
+            " - 「被開立罰單」 = 'received a fine' / 'kena denda' (we received it)"
+            " - 「interlock 被 bypass」 = 'interlock di-bypass' / 'interlock was bypassed'"
+            " - 「被職安署列管」 = 'akan kena pengawasan Dinas K3' (we will be put under supervision)"
+            " NEVER translate 「被」 as if the subject does the action to others."
+            " </passive_voice_rules>"
+            " <factory_terms_rules>"
+            " RULE 3 — Keep these factory/safety terms VERBATIM (do NOT translate):"
+            " interlock, bypass, MSDS, NG, OK, PPE, LOTO, SOP, OEE, JSA, SDS, EHS, K3, PMI"
+            " For 「記過/警告處分」 → use 'SP (Surat Peringatan)' in Indonesian."
+            " For 「職安署」 → use 'Dinas K3' in Indonesian."
+            " </factory_terms_rules>"
+            " <register_rules>"
+            " RULE 4 — Match the formality of the source:"
+            " - Casual chat (短句, 口語) → casual Indonesian (gak, udah, nih, dong)."
+            " - Formal announcement (含「公告/通知/重大職災/列管/停工/警告」) → formal Indonesian"
+            "   (use 'tidak', 'sudah', 'ini', avoid slang)."
+            " - Keep cause-effect chains intact: 「如果A,將B」 → 'Kalau A, akan B' (single sentence)."
+            " - Do NOT soften warnings into suggestions."
+            " </register_rules>"
             " IMPORTANT: Preserve the original line breaks and blank lines exactly. If the source has a blank line between paragraphs, keep a blank line in the same position in the translation."
             " Only output the translation. No quotes, no explanation, no prefix."
         )
@@ -3837,49 +3961,67 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # They reject temperature/top_p/logit_bias/max_tokens and require
         # max_completion_tokens. Without this fix, all GPT-5 calls return 400
         # and fall back to Google Translate — which is why 範例 didn't take effect.
-        _is_reasoning_model = _model.startswith(("o1", "o3", "o4", "gpt-5"))
+        # v3.9.7 (2026-05): 全面用 model_supports() 集中過濾。
+        # 不論使用者勾選什麼進階設定,後端永遠根據實際模型的能力決定要不要送到 API。
+        # 任何「誤勾」都會被靜默忽略,不會造成 400 BadRequest。
+        _is_reasoning_model = not model_supports(_model, "temperature")  # 保留給下游 code 用
         _kwargs = {
             "model": _model,
             "messages": _msgs,
         }
-        # temperature / top_p only for non-reasoning models
-        if not _is_reasoning_model:
+        # Sampling parameters
+        if model_supports(_model, "temperature"):
             _kwargs["temperature"] = translation_temperature
+        if model_supports(_model, "top_p"):
             _kwargs["top_p"] = translation_top_p
-        # max_tokens vs max_completion_tokens (reasoning models require the latter)
-        if _is_reasoning_model:
+        if model_supports(_model, "seed") and translation_seed and translation_seed != 0:
+            _kwargs["seed"] = int(translation_seed)
+        # Token limit (different parameter name per family)
+        if model_supports(_model, "max_completion_tokens"):
             _kwargs["max_completion_tokens"] = 2000
-            # reasoning_effort param (low/medium/high) — supported by o-series and gpt-5 series
-            if reasoning_effort in ("low", "medium", "high"):
-                _kwargs["reasoning_effort"] = reasoning_effort
-        else:
+        elif model_supports(_model, "max_tokens"):
             _kwargs["max_tokens"] = 2000
-        # Stop sequences (prevent GPT adding "Note: ..." or "(註: ...)")
-        _stops = _build_stop_sequences(tgt)
-        if _stops and not _is_reasoning_model:
-            _kwargs["stop"] = _stops
-        # User ID for OpenAI abuse tracking (compliance)
+        # v3.9.8 (2026-05): Translation-optimal reasoning_effort.
+        # OpenAI's official guide: "gpt-4.1: gpt-5.2 with `none` reasoning"
+        # Translation is a lightweight, instruction-following task. Higher
+        # reasoning_effort HURTS instruction adherence (arxiv 2505.14810).
+        # We auto-select the LOWEST viable effort for the model family,
+        # ignoring the admin's stored 'reasoning_effort' setting because
+        # that was tuned for o-series and is wrong for gpt-5 series.
+        if model_supports(_model, "reasoning_effort"):
+            _optimal_effort = optimal_reasoning_for_translation(_model)
+            if _optimal_effort:
+                _kwargs["reasoning_effort"] = _optimal_effort
+            elif reasoning_effort in ("low", "medium", "high"):
+                # Fallback to admin setting only if no optimal known
+                _kwargs["reasoning_effort"] = reasoning_effort
+        # v3.9.8: verbosity=low for GPT-5 family.
+        # Per OpenAI: "low is often a better starting point for concise responses"
+        # This prevents GPT-5 from spontaneously formatting output with bullets,
+        # ⚠️ markers, or structural rewrites that aren't in the source.
+        # Translation should preserve source format, not reorganize it.
+        if model_supports(_model, "verbosity"):
+            _kwargs["verbosity"] = "low"
+        # Stop sequences
+        if model_supports(_model, "stop"):
+            _stops = _build_stop_sequences(tgt)
+            if _stops:
+                _kwargs["stop"] = _stops
+        # User ID hash (always supported)
         _user_id = getattr(_tl, 'user_id', '')
         if send_user_id_to_openai and _user_id:
-            # Hash for privacy (don't send raw LINE user IDs)
             import hashlib as _h
             _kwargs["user"] = _h.sha256(_user_id.encode()).hexdigest()[:32]
-        # v3.2-0426e: logit_bias to forbid specific phrases (e.g. "Catatan:", "註:")
-        # Skip for o-series (reasoning models don't support logit_bias well)
-        if not _is_reasoning_model:
+        # logit_bias
+        if model_supports(_model, "logit_bias"):
             try:
                 _bias = _build_logit_bias(tgt, _model)
                 if _bias:
                     _kwargs["logit_bias"] = _bias
             except Exception as _be:
                 logger.warning("logit_bias skip: %s", _be)
-        # Metadata tag (for OpenAI dashboard filtering)
-        # v3.9.6 (2026-05): OpenAI changed the rules - 'metadata' parameter now
-        # requires 'store=true' to be set together. Without store=true, the API
-        # rejects every request with 400 BadRequestError. This single bug caused
-        # ALL OpenAI translations to fail and silently fall back to Google
-        # Translate, which is why custom examples appeared not to work.
-        if send_metadata_to_openai:
+        # Metadata (requires store=True since 2025)
+        if send_metadata_to_openai and model_supports(_model, "metadata"):
             _meta = {}
             _gid = getattr(_tl, 'group_id', '')
             if _gid:
@@ -3888,10 +4030,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _meta["tgt_lang"] = tgt or ""
             if _meta:
                 _kwargs["metadata"] = _meta
-                _kwargs["store"] = True   # Required since 2025 — without this, 400 error
-        # v3.2-0426e: Structured Outputs (response_format with json_schema)
-        if structured_output_enabled and not _model.startswith(("o1", "o3", "o4")):
-            # ★ v3.5:擴充 schema,讓 GPT 自我聲明資訊完整性
+                _kwargs["store"] = True
+        # Structured Outputs (json_schema)
+        if structured_output_enabled and model_supports(_model, "structured_output"):
             _kwargs["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -3934,24 +4075,18 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                     }
                 }
             }
-        if translation_seed and translation_seed != 0:
-            _kwargs["seed"] = int(translation_seed)
-        # Batch C: Logprobs (skip for reasoning models incl. gpt-5 which don't support)
-        # v3.9.2: gpt-5 series also rejects logprobs.
-        _supports_logprobs = not _is_reasoning_model
+        # Logprobs (信心度)
+        _supports_logprobs = model_supports(_model, "logprobs")
         if logprobs_enabled and _supports_logprobs:
             _kwargs["logprobs"] = True
-        # v3.2-0426e: prompt_caching_enabled triggers OpenAI's automatic caching
-        # of stable prefixes (>1024 tokens). Caching is automatic for gpt-4.1+ and
-        # gpt-4o; we just ensure system prompt is stable across requests.
-        # (No explicit param needed; just keep prefix consistent.)
-        # v3.8: also pass prompt_cache_key for sticky-routing → higher hit rate.
-        try:
-            _ck = _build_cache_key(getattr(_tl, 'group_id', ''), src, tgt, "trans")
-            if _ck and not _is_reasoning_model:
-                _kwargs["prompt_cache_key"] = _ck
-        except Exception:
-            pass
+        # Prompt cache key (sticky routing)
+        if model_supports(_model, "prompt_cache_key"):
+            try:
+                _ck = _build_cache_key(getattr(_tl, 'group_id', ''), src, tgt, "trans")
+                if _ck:
+                    _kwargs["prompt_cache_key"] = _ck
+            except Exception:
+                pass
         r = oai.chat.completions.create(**_kwargs)
         # v3.9.5: record raw OpenAI response into debug snapshot
         try:
@@ -8620,7 +8755,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="display:flex;gap:8px;margin-bottom:8px">
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
-<select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
 <option value="gpt-4.1-mini">⭐ gpt-4.1-mini（$0.40 / $1.60）</option>
 <option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
 <option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40）</option>
@@ -8639,7 +8774,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
-<select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
+<select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
 <option value="gpt-4.1">⭐ gpt-4.1（$2.00 / $8.00）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
 <option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
@@ -10342,12 +10477,199 @@ async function _loadFeatures(gid){
     var qi=document.getElementById('lineQuotaInfo');
     if(qi&&!qi.innerHTML.includes('Bot:'))qi.innerHTML+='<br>Bot: '+d.bot_info.name;
   }
+  // v3.9.7: 載入完成後立刻檢查相容性 + 標灰不適用設定(silent 模式不顯示提示)
+  setTimeout(function(){
+    try{
+      autoNormalizeIncompatibleSettings({silent:true});
+      updateSettingsCompatibility();
+    }catch(e){}
+  }, 100);
 }
 function toggleFeatureSetting(key,val){
   var body={};body[key]=val;
   if(_settingsGid)body.group_id=_settingsGid;
   api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'群組設定已更新':'全域設定已更新')});
 }
+// v3.9.7: 前端模型能力對照表(鏡像後端 MODEL_CAPABILITIES)
+function _modelFamily(name){
+  if(!name) return 'unknown';
+  var n=name.toLowerCase();
+  if(n.indexOf('gpt-5.5')===0||n.indexOf('gpt-5.4')===0||n.indexOf('gpt-5')===0) return 'gpt5';
+  if(n.indexOf('o1')===0||n.indexOf('o3')===0||n.indexOf('o4')===0) return 'oseries';
+  if(n.indexOf('gpt-4')===0) return 'gpt4';
+  return 'unknown';
+}
+var MODEL_CAPS_FRONT={
+  gpt5:    {temperature:false,top_p:false,seed:false,logprobs:false,logit_bias:false,stop:false,structured_output:true, reasoning_effort:true},
+  oseries: {temperature:false,top_p:false,seed:false,logprobs:false,logit_bias:false,stop:false,structured_output:false,reasoning_effort:true},
+  gpt4:    {temperature:true, top_p:true, seed:true, logprobs:true, logit_bias:true, stop:true, structured_output:true, reasoning_effort:false},
+  unknown: {temperature:true, top_p:true, seed:true, logprobs:true, logit_bias:true, stop:true, structured_output:true, reasoning_effort:false},
+};
+function _modelCap(model,cap){return MODEL_CAPS_FRONT[_modelFamily(model)][cap];}
+
+// v3.9.7 核心:autoNormalizeIncompatibleSettings()
+// 切換模型時,自動把對新模型「無效的設定」歸回中性值。
+// 這樣使用者切到 GPT-5 不需要再手動調 temperature/logprobs/seed,
+// 切回 GPT-4 也不會留著 GPT-5 殘留的 reasoning_effort 為唯一輸出控制。
+// 邏輯:檢查兩個翻譯模型(短訊息預設 + 長訊息升級),只要兩者都不支援的能力就歸零。
+function autoNormalizeIncompatibleSettings(opts){
+  opts=opts||{};
+  var silent=opts.silent;  // true 時不顯示提示(初始載入用)
+  var modelD=document.getElementById('modelDefault');
+  var modelU=document.getElementById('modelUpgrade');
+  if(!modelD||!modelU) return;
+  var mD=modelD.value, mU=modelU.value;
+
+  // helper:兩模型「都不支援」才歸零(避免單邊支援的設定被誤殺)
+  function bothLack(cap){return !_modelCap(mD,cap) && !_modelCap(mU,cap);}
+  function bothHave(cap){return _modelCap(mD,cap) && _modelCap(mU,cap);}
+
+  var changed=[];
+
+  // —— Temperature:reasoning model 強制 1.0 ——
+  var ttemp=document.getElementById('ttemp');
+  if(ttemp && bothLack('temperature') && parseFloat(ttemp.value)!==1.0){
+    ttemp.value='1.0';
+    changed.push('temperature → 1.0(reasoning model 不支援自訂)');
+  }
+  // —— Top_p ——
+  var ttopp=document.getElementById('ttopp');
+  if(ttopp && bothLack('top_p') && parseFloat(ttopp.value)!==1.0){
+    ttopp.value='1.0';
+    changed.push('top_p → 1.0');
+  }
+  // —— Seed ——
+  var tseed=document.getElementById('tseed');
+  if(tseed && bothLack('seed') && parseInt(tseed.value)!==0){
+    tseed.value='0';
+    changed.push('seed → 0(reasoning model 無法重現種子)');
+  }
+  // —— Logprobs(信心度計算)——
+  var lp=document.getElementById('logprobs');
+  if(lp && bothLack('logprobs') && lp.checked){
+    lp.checked=false;
+    changed.push('Logprobs 信心度 → 關閉(reasoning model 不支援)');
+  }
+  // —— Stop sequences + logit_bias ——
+  var ss=document.getElementById('ssEn');
+  if(ss && bothLack('logit_bias') && ss.checked){
+    ss.checked=false;
+    changed.push('Stop sequences/logit_bias → 關閉(reasoning model 不支援)');
+  }
+  // —— Structured Output(o-series 不支援,但 gpt-5/gpt-4 都支援)——
+  var so=document.getElementById('soutEn');
+  if(so && bothLack('structured_output') && so.checked){
+    so.checked=false;
+    changed.push('結構化輸出 → 關閉(o-series 不支援)');
+  }
+  // —— Reasoning effort(反向:GPT-4 系列不支援,變成擺設)——
+  // 不歸零,因為值留著對 reasoning model 切回時還能用,只在 UI 標灰
+
+  // —— 提示使用者哪些設定被自動還原 ——
+  if(changed.length>0 && !silent){
+    var msg='⚙️ 已自動調整以下設定以配合新模型:\n• '+changed.join('\n• ');
+    // 用 toast 而非 alert,不阻塞操作
+    if(typeof toast==='function'){
+      toast('已自動調整 '+changed.length+' 項設定');
+    }
+    // 詳細列表寫到模型旁邊的提示卡
+    var note=document.getElementById('autoNormalizeNote');
+    if(!note){
+      note=document.createElement('div');
+      note.id='autoNormalizeNote';
+      note.style.cssText='font-size:11px;margin-top:6px;padding:6px 8px;background:#1a3a2e;border:1px solid #43b581;border-radius:6px;color:#43b581;line-height:1.5';
+      var anchor=document.getElementById('modelSaveResult');
+      if(anchor && anchor.parentNode){
+        anchor.parentNode.insertBefore(note, anchor.nextSibling);
+      }
+    }
+    note.innerHTML='✅ <b>已自動配合新模型調整這些設定:</b><br>• '+changed.join('<br>• ');
+    // 8 秒後自動隱藏
+    setTimeout(function(){
+      if(note) note.style.display='none';
+    }, 10000);
+  }
+}
+
+// updateSettingsCompatibility:標灰 + 提示哪些欄位對目前模型無效
+function updateSettingsCompatibility(){
+  var modelD=document.getElementById('modelDefault');
+  var modelU=document.getElementById('modelUpgrade');
+  if(!modelD||!modelU) return;
+  var mD=modelD.value, mU=modelU.value;
+
+  function markField(elementId, capability){
+    var el=document.getElementById(elementId);
+    if(!el) return;
+    var sD=_modelCap(mD,capability), sU=_modelCap(mU,capability);
+    var hint=document.getElementById(elementId+'_compat_hint');
+    if(!hint){
+      hint=document.createElement('div');
+      hint.id=elementId+'_compat_hint';
+      hint.style.cssText='font-size:11px;margin-top:3px;line-height:1.4';
+      if(el.parentNode){el.parentNode.insertBefore(hint, el.nextSibling);}
+    }
+    if(sD && sU){
+      hint.innerHTML=''; hint.style.display='none';
+      el.style.opacity='1';
+    }else if(!sD && !sU){
+      hint.innerHTML='⚠️ <span style="color:#faa61a">此設定對目前兩個模型皆無效,系統會自動忽略</span>';
+      hint.style.display='block';
+      el.style.opacity='0.45';
+    }else{
+      hint.innerHTML='💡 <span style="color:#faa61a">僅對 '+(sD?mD:mU)+' 有效</span>';
+      hint.style.display='block';
+      el.style.opacity='0.7';
+    }
+  }
+  markField('ttemp','temperature');
+  markField('ttopp','top_p');
+  markField('tseed','seed');
+  markField('logprobs','logprobs');
+  markField('confTh','logprobs');
+  markField('ssEn','logit_bias');
+  markField('reEf','reasoning_effort');
+  markField('soutEn','structured_output');
+
+  // 模型類型摘要
+  var summary=document.getElementById('modelCapSummary');
+  if(!summary){
+    summary=document.createElement('div');
+    summary.id='modelCapSummary';
+    summary.style.cssText='font-size:11px;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.5';
+    var anchor=document.getElementById('modelSaveResult');
+    if(anchor && anchor.parentNode){
+      anchor.parentNode.insertBefore(summary, anchor);
+    }
+  }
+  var fL=function(f){
+    if(f==='gpt5') return 'GPT-5 系列(reasoning model)';
+    if(f==='oseries') return 'o-series(reasoning model)';
+    if(f==='gpt4') return 'GPT-4 系列(classical chat)';
+    return f;
+  };
+  var fD=_modelFamily(mD), fU=_modelFamily(mU);
+  var info='🤖 <b>目前模型類型:</b><br>';
+  info+='&nbsp;&nbsp;短訊息: <code style="color:#7c6fef">'+mD+'</code> → '+fL(fD)+'<br>';
+  if(mU!==mD) info+='&nbsp;&nbsp;長訊息: <code style="color:#7c6fef">'+mU+'</code> → '+fL(fU)+'<br>';
+  if(fD==='gpt5'||fU==='gpt5'||fD==='oseries'||fU==='oseries'){
+    info+='<span style="color:#43b581">✅ 不相容的進階設定會自動忽略,翻譯永遠不會中斷</span>';
+  }else{
+    info+='<span style="color:#43b581">✅ 所有進階設定都生效</span>';
+  }
+  summary.innerHTML=info;
+}
+
+// 模型下拉切換 onchange 統一入口:先自動還原,再標灰提示
+function onModelChange(){
+  autoNormalizeIncompatibleSettings({silent:false});
+  updateSettingsCompatibility();
+  // 自動把調整後的進階設定也存回後台,使用者免再點一次儲存
+  if(typeof saveAdvancedSettings==='function'){
+    try{ saveAdvancedSettings(); }catch(e){}
+  }
+}
+
 function saveModelSettings(){
   var md=document.getElementById('modelDefault').value;
   var mu=document.getElementById('modelUpgrade').value;
@@ -10357,6 +10679,7 @@ function saveModelSettings(){
       toast('模型設定已儲存');
       var info=mt>0?'≥'+mt+'字用 '+mu+'，其餘用 '+md:'全部用 '+md;
       document.getElementById('modelSaveResult').innerHTML='<span style="color:#43b581">✅ '+info+'</span>';
+      onModelChange();  // 儲存後立刻自動調整 + 提示
     }
   });
 }
@@ -13483,6 +13806,335 @@ def api_admin_translation_log_mark_wrong():
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok", "version": VERSION, "uptime": int(time.time() - bot_start_time)}
+
+
+@app.route("/admin/apply-best-defaults", methods=["GET", "POST"])
+def admin_apply_best_defaults():
+    """v3.9.8: One-click apply OpenAI's recommended optimal settings for translation.
+    
+    Based on:
+      - OpenAI GPT-5/5.1/5.2 prompting guides (cookbook.openai.com)
+      - GPT-5.5 official prompting guide (April 2026)
+      - arxiv 2505.14810 (reasoning vs instruction-following trade-off)
+      - Real production debugging (this bot's 5/1 incident)
+    
+    Sets all toggles to the proven-best combo for ZH↔ID factory translation.
+    Usage: GET/POST /admin/apply-best-defaults?key=YOUR_ADMIN_KEY[&dry_run=1]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    dry_run = request.args.get("dry_run") == "1"
+    
+    global model_default, model_upgrade, model_threshold
+    global translation_temperature, translation_top_p, translation_seed
+    global double_check_mode, double_check_threshold
+    global fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled
+    global prompt_caching_enabled, reasoning_effort
+    global send_user_id_to_openai, send_metadata_to_openai
+    global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled
+    global id_preprocessing_enabled, multi_path_backtrans_enabled
+    global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
+    global stop_sequences_enabled, translation_logging_enabled
+    
+    # The "best defaults" combo (researched May 2026)
+    best = {
+        # === Models ===
+        "model_default": "gpt-4.1-mini",      # ⭐ Stable, follows examples, cheapest fits-purpose
+        "model_upgrade": "gpt-4.1",           # Same family for consistency on long messages
+        "model_threshold": 150,               # Was 100 — most factory msgs <150 chars, save cost
+        
+        # === Sampling (only affects gpt-4 family; gpt-5 ignores) ===
+        "translation_temperature": 0.0,       # Deterministic
+        "translation_top_p": 1.0,             # No nucleus filtering
+        "translation_seed": 0,                # Random (no benefit for short translations)
+        
+        # === Quality controls ===
+        "fewshot_mode": "messages",           # OpenAI standard format (best quality)
+        "logprobs_enabled": True,             # Confidence calculation (gpt-4 only, auto-skip on gpt-5)
+        "confidence_threshold": 0.85,         # ⚠️ flag if below 85%
+        "structured_output_enabled": False,   # Off — adds latency, marginal gain for translation
+        "double_check_mode": "smart",         # Only re-translate suspect outputs
+        "double_check_threshold": 0.55,       # Permissive (lower = more flagged)
+        "prompt_caching_enabled": True,       # Free 75% discount when prefixes match
+        
+        # === Reasoning (auto-overridden per-model anyway, but for safety) ===
+        "reasoning_effort": "low",            # If model has no optimal mapping, low > medium
+        
+        # === ID→ZH quality ===
+        "id_zh_cot_enabled": True,            # Chain-of-Thought 二階段 (verified +20%)
+        "id_zh_cod_enabled": True,            # Chain-of-Dictionary (verified +5%)
+        "id_zh_pivot_enabled": False,         # Off — doubles cost, marginal gain
+        "id_preprocessing_enabled": True,     # Free dictionary normalization
+        "multi_path_backtrans_enabled": False,# Off — doubles cost
+        
+        # === Format preservation ===
+        "preserve_paragraphs_enabled": True,  # Honor original paragraph breaks
+        "paragraph_split_translate": True,    # Per-paragraph translation for long texts
+        "paragraph_split_threshold": 50,      # 50+ char + multi-paragraph = split mode
+        
+        # === Output cleanliness ===
+        "stop_sequences_enabled": True,       # Block "Note:", "Translation:" garbage (gpt-4 only)
+        
+        # === Compliance / monitoring ===
+        "translation_logging_enabled": True,  # Track for quality review
+        "send_user_id_to_openai": True,       # Hashed, for abuse tracking
+        "send_metadata_to_openai": True,      # Filter dashboard by group/lang
+    }
+    
+    # Snapshot current values for diff
+    current = {
+        "model_default": model_default, "model_upgrade": model_upgrade, "model_threshold": model_threshold,
+        "translation_temperature": translation_temperature, "translation_top_p": translation_top_p,
+        "translation_seed": translation_seed, "fewshot_mode": fewshot_mode,
+        "logprobs_enabled": logprobs_enabled, "confidence_threshold": confidence_threshold,
+        "structured_output_enabled": structured_output_enabled,
+        "double_check_mode": double_check_mode, "double_check_threshold": double_check_threshold,
+        "prompt_caching_enabled": prompt_caching_enabled, "reasoning_effort": reasoning_effort,
+        "id_zh_cot_enabled": id_zh_cot_enabled, "id_zh_cod_enabled": id_zh_cod_enabled,
+        "id_zh_pivot_enabled": id_zh_pivot_enabled, "id_preprocessing_enabled": id_preprocessing_enabled,
+        "multi_path_backtrans_enabled": multi_path_backtrans_enabled,
+        "preserve_paragraphs_enabled": preserve_paragraphs_enabled,
+        "paragraph_split_translate": paragraph_split_translate,
+        "paragraph_split_threshold": paragraph_split_threshold,
+        "stop_sequences_enabled": stop_sequences_enabled,
+        "translation_logging_enabled": translation_logging_enabled,
+        "send_user_id_to_openai": send_user_id_to_openai, "send_metadata_to_openai": send_metadata_to_openai,
+    }
+    diff = {k: {"old": current.get(k), "new": v} for k, v in best.items() if current.get(k) != v}
+    
+    if dry_run:
+        return jsonify({
+            "mode": "dry_run",
+            "would_change": diff,
+            "would_keep_unchanged": {k: v for k, v in best.items() if k not in diff},
+            "total_changes": len(diff),
+        })
+    
+    # Apply
+    model_default = best["model_default"]
+    model_upgrade = best["model_upgrade"]
+    model_threshold = best["model_threshold"]
+    translation_temperature = best["translation_temperature"]
+    translation_top_p = best["translation_top_p"]
+    translation_seed = best["translation_seed"]
+    fewshot_mode = best["fewshot_mode"]
+    logprobs_enabled = best["logprobs_enabled"]
+    confidence_threshold = best["confidence_threshold"]
+    structured_output_enabled = best["structured_output_enabled"]
+    double_check_mode = best["double_check_mode"]
+    double_check_threshold = best["double_check_threshold"]
+    prompt_caching_enabled = best["prompt_caching_enabled"]
+    reasoning_effort = best["reasoning_effort"]
+    id_zh_cot_enabled = best["id_zh_cot_enabled"]
+    id_zh_cod_enabled = best["id_zh_cod_enabled"]
+    id_zh_pivot_enabled = best["id_zh_pivot_enabled"]
+    id_preprocessing_enabled = best["id_preprocessing_enabled"]
+    multi_path_backtrans_enabled = best["multi_path_backtrans_enabled"]
+    preserve_paragraphs_enabled = best["preserve_paragraphs_enabled"]
+    paragraph_split_translate = best["paragraph_split_translate"]
+    paragraph_split_threshold = best["paragraph_split_threshold"]
+    stop_sequences_enabled = best["stop_sequences_enabled"]
+    translation_logging_enabled = best["translation_logging_enabled"]
+    send_user_id_to_openai = best["send_user_id_to_openai"]
+    send_metadata_to_openai = best["send_metadata_to_openai"]
+    
+    return jsonify({
+        "status": "applied",
+        "changed": diff,
+        "total_changes": len(diff),
+        "note": "All settings restored to OpenAI-recommended best defaults for translation. "
+                "Note: For GPT-5 series, reasoning_effort and verbosity are auto-set per request.",
+    })
+
+
+@app.route("/admin/health-check", methods=["GET"])
+def admin_health_check():
+    """v3.9.7: 完整健康檢查 — 一頁看完所有狀態:
+    模型設定、進階設定相容性、環境變數、最近翻譯、資料持久化、群組統計。
+    Usage: GET /admin/health-check?key=YOUR_ADMIN_KEY[&format=json]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden, append ?key=YOUR_ADMIN_KEY"}), 403
+
+    fmt = request.args.get("format", "html")
+    issues = []
+
+    # ── 環境變數檢查 ──
+    env_ok = {
+        "LINE_CHANNEL_ACCESS_TOKEN": bool(LINE_TOKEN),
+        "LINE_CHANNEL_SECRET": bool(LINE_SECRET),
+        "OPENAI_API_KEY": bool(OPENAI_KEY),
+        "ADMIN_KEY": bool(ADMIN_KEY) and ADMIN_KEY != "changeme",
+    }
+    try:
+        env_ok["GITHUB_TOKEN"] = bool(GITHUB_TOKEN)
+    except NameError:
+        env_ok["GITHUB_TOKEN"] = False
+    for k, v in env_ok.items():
+        if not v:
+            issues.append(("error", f"環境變數未設或使用預設值: {k}"))
+
+    # ── 模型相容性檢查 ──
+    incompat = []
+    if logprobs_enabled and not (model_supports(model_default, "logprobs") or model_supports(model_upgrade, "logprobs")):
+        incompat.append("Logprobs(信心度計算)— 目前模型不支援,已自動忽略")
+    if translation_temperature != 0 and not (model_supports(model_default, "temperature") or model_supports(model_upgrade, "temperature")):
+        incompat.append(f"temperature={translation_temperature} — reasoning model 強制 1.0")
+    if translation_seed != 0 and not (model_supports(model_default, "seed") or model_supports(model_upgrade, "seed")):
+        incompat.append(f"seed={translation_seed} — reasoning model 不支援可重現種子")
+    try:
+        if stop_sequences_enabled and not (model_supports(model_default, "logit_bias") or model_supports(model_upgrade, "logit_bias")):
+            incompat.append("Stop sequences + logit_bias — reasoning model 不支援")
+    except NameError:
+        pass
+    for s in incompat:
+        issues.append(("info", "進階設定自動忽略: " + s))
+
+    # ── 資料狀態 ──
+    try:
+        log_path = TRANSLATION_LOG_FILE
+        log_persistent = log_path.startswith(("/var/data", "/data"))
+    except NameError:
+        log_path = "?"; log_persistent = False
+    if not log_persistent:
+        issues.append(("warning", f"翻譯日誌路徑 {log_path},Render 重啟會清空(免費版限制)"))
+
+    last_status = "no_recent_translate"
+    last_err = ""
+    try:
+        if last_translate_debug:
+            last_status = last_translate_debug.get("openai_status", "unknown")
+            if last_status == "exception":
+                last_err = last_translate_debug.get("openai_error", "")[:300]
+                issues.append(("error", f"最近一次 OpenAI 翻譯失敗: {last_err}"))
+    except NameError:
+        pass
+
+    data = {
+        "status": "ok" if not any(s == "error" for s, _ in issues) else "issues",
+        "version": VERSION,
+        "uptime_seconds": int(time.time() - bot_start_time),
+        "environment": env_ok,
+        "models": {
+            "translate_default": {"name": model_default, "family": _model_family(model_default), "threshold": model_threshold},
+            "translate_upgrade": {"name": model_upgrade, "family": _model_family(model_upgrade)},
+        },
+        "advanced_settings_active": {
+            "fewshot_mode": fewshot_mode,
+            "tone": translation_tone,
+            "structured_output": structured_output_enabled,
+            "logprobs": logprobs_enabled,
+            "double_check": double_check_mode,
+            "send_metadata": send_metadata_to_openai,
+        },
+        "incompatible_auto_ignored": incompat,
+        "data_status": {
+            "custom_examples": len(custom_translation_examples),
+            "translation_log_entries": len(translation_log),
+            "translation_log_persistent": log_persistent,
+            "translation_cache_entries": len(translation_cache) if 'translation_cache' in globals() else 0,
+        },
+        "last_translate_status": last_status,
+        "last_translate_error": last_err,
+        "issues": [{"severity": s, "message": m} for s, m in issues],
+    }
+
+    try:
+        data["models"]["vision"] = {"name": VISION_MODEL, "family": _model_family(VISION_MODEL)}
+    except NameError:
+        pass
+
+    if fmt == "json":
+        return jsonify(data)
+
+    # ── HTML view ──
+    from flask import Response
+    h = ['<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">']
+    h.append('<title>Health Check</title>')
+    h.append('<style>body{font-family:-apple-system,sans-serif;background:#0d0d1a;color:#e0e0e0;padding:12px;font-size:14px;line-height:1.6}')
+    h.append('.card{background:#1a1a2e;border:1px solid #3a3a4e;border-radius:8px;padding:12px;margin-bottom:10px}')
+    h.append('h2{color:#7c6fef;margin:0 0 10px;font-size:15px;border-bottom:1px solid #3a3a4e;padding-bottom:6px}')
+    h.append('.k{color:#7c6fef}.ok{color:#43b581}.warn{color:#faa61a}.err{color:#f04747}.dim{color:#8a8a9a}')
+    h.append('table{width:100%;border-collapse:collapse;font-size:13px}td{padding:4px 8px;border-bottom:1px solid #2a2a3e;vertical-align:top}')
+    h.append('td:first-child{color:#8a8a9a;width:42%}')
+    h.append('.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold}')
+    h.append('.b-ok{background:#1a4a2e;color:#43b581}.b-warn{background:#4a3a1a;color:#faa61a}.b-err{background:#4a1a1a;color:#f04747}')
+    h.append('</style></head><body>')
+
+    overall = data["status"]
+    badge = '<span class="badge b-ok">✅ 全部正常</span>' if overall == "ok" else '<span class="badge b-err">⚠️ 有問題</span>'
+    h.append(f'<h1 style="font-size:18px;margin:0 0 12px">🩺 Health Check {badge}</h1>')
+    h.append(f'<div class="dim" style="font-size:12px;margin-bottom:12px">{VERSION} · uptime {data["uptime_seconds"]}s</div>')
+
+    if issues:
+        h.append('<div class="card"><h2>⚠️ 待處理 / 提醒</h2>')
+        for sev, msg in issues:
+            cls = "err" if sev == "error" else ("warn" if sev == "warning" else "dim")
+            icon = "❌" if sev == "error" else ("⚠️" if sev == "warning" else "💡")
+            h.append(f'<div class="{cls}" style="margin-bottom:6px">{icon} {msg}</div>')
+        h.append('</div>')
+    else:
+        h.append('<div class="card"><h2>✅ 沒有偵測到問題</h2><div class="ok">所有設定正常運作</div></div>')
+
+    h.append('<div class="card"><h2>🔐 環境變數</h2><table>')
+    for k, v in env_ok.items():
+        b = '<span class="badge b-ok">已設</span>' if v else '<span class="badge b-err">未設</span>'
+        h.append(f'<tr><td>{k}</td><td>{b}</td></tr>')
+    h.append('</table></div>')
+
+    fL = {"gpt5_reasoning": "GPT-5 系列(reasoning)", "oseries_reasoning": "o-series(reasoning)",
+          "gpt4_classic": "GPT-4 系列(classical)", "unknown": "未知"}
+    h.append('<div class="card"><h2>🤖 模型設定</h2><table>')
+    for label, key in [("短訊息預設", "translate_default"), ("長訊息升級", "translate_upgrade"), ("照片分析", "vision")]:
+        if key in data["models"]:
+            m = data["models"][key]
+            h.append(f'<tr><td>{label}</td><td><b>{m["name"]}</b><br><span class="dim">{fL.get(m["family"], m["family"])}</span></td></tr>')
+    h.append(f'<tr><td>切換門檻</td><td>{model_threshold} 字{("(未啟用自動切換)" if model_threshold == 0 else "")}</td></tr>')
+    h.append('</table></div>')
+
+    h.append('<div class="card"><h2>⚙️ 進階設定</h2><table>')
+    for k, v in data["advanced_settings_active"].items():
+        h.append(f'<tr><td>{k}</td><td>{v}</td></tr>')
+    h.append('</table>')
+    if incompat:
+        h.append('<div class="warn" style="margin-top:8px;font-size:12px;padding:6px 8px;background:#0d0d1a;border-radius:6px"><b>自動忽略中:</b><br>')
+        for s in incompat:
+            h.append('• ' + s + '<br>')
+        h.append('</div>')
+    h.append('</div>')
+
+    ds = data["data_status"]
+    h.append('<div class="card"><h2>📊 資料狀態</h2><table>')
+    h.append(f'<tr><td>自訂範例</td><td>{ds["custom_examples"]} 筆</td></tr>')
+    h.append(f'<tr><td>翻譯日誌</td><td>{ds["translation_log_entries"]} 筆 · {("✅ 持久化" if ds["translation_log_persistent"] else "⚠️ 重啟會清空")}</td></tr>')
+    h.append(f'<tr><td>翻譯快取</td><td>{ds["translation_cache_entries"]} 筆</td></tr>')
+    h.append('</table></div>')
+
+    h.append('<div class="card"><h2>📨 最近翻譯</h2>')
+    if last_status == "no_recent_translate":
+        h.append('<div class="dim">尚無翻譯紀錄(剛重啟)</div>')
+    elif last_status == "success":
+        try:
+            last = last_translate_debug
+            h.append('<table>')
+            h.append(f'<tr><td>狀態</td><td><span class="ok">✅ success</span></td></tr>')
+            h.append(f'<tr><td>原文</td><td>{last.get("src_text", "")[:80]}</td></tr>')
+            h.append(f'<tr><td>方向</td><td>{last.get("src_lang", "")} → {last.get("tgt_lang", "")}</td></tr>')
+            h.append(f'<tr><td>使用模型</td><td>{last.get("model_picked", "")}</td></tr>')
+            h.append(f'<tr><td>範例對</td><td>{last.get("example_pairs_in_prompt", 0)} 對</td></tr>')
+            h.append(f'<tr><td>譯文</td><td>{(last.get("openai_raw_response") or "")[:200]}</td></tr>')
+            h.append('</table>')
+        except Exception:
+            h.append('<div class="dim">資料解析失敗</div>')
+    else:
+        h.append(f'<div class="err">❌ {last_status}: {last_err[:300]}</div>')
+    key_param = request.args.get("key") or ""
+    h.append(f'<div style="margin-top:8px;font-size:12px"><a href="/debug/last-translate?key={key_param}&format=html" style="color:#7c6fef">→ 看完整 debug 資料</a></div>')
+    h.append('</div>')
+
+    h.append(f'<div class="dim" style="font-size:11px;text-align:center;margin-top:20px">JSON: <a href="?key={key_param}&format=json" style="color:#7c6fef">?format=json</a></div>')
+    h.append('</body></html>')
+    return Response("\n".join(h), mimetype="text/html; charset=utf-8")
 
 
 @app.route("/debug/last-translate", methods=["GET"])
