@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.13-0501-pending-disk-multiworker"
+VERSION = "v3.9.14-0501-vision-gpt5-fixed"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4950,6 +4950,13 @@ def _vision_call(messages, max_tokens, cache_key=None):
     Optional cache_key for sticky-routing prompt caching.
     v3.9: VISION_MODEL is now read fresh from globals on every call so admin
     panel changes take effect immediately without server restart.
+    
+    v3.9.14: 對 GPT-5 系列做 OCR 必須:
+      1. 不能用 verbosity=low(會讓 OCR 輸出被截斷成摘要,而非完整文字)
+      2. 不能用 reasoning_effort=minimal(圖像辨識需要實際思考)
+      3. max_completion_tokens 要拉高(GPT-5 reasoning 會吃掉一部分 tokens)
+    根據 OpenAI 官方文件:GPT-5 vision 模式預設 detail=auto 等同 original,
+    保留更多視覺細節。我們只需給它足夠 budget 跟 reasoning effort,不要用 verbosity 限制輸出。
     """
     last_err = None
     primary = VISION_MODEL  # snapshot at call time so reads are consistent
@@ -4957,38 +4964,55 @@ def _vision_call(messages, max_tokens, cache_key=None):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
-            # v3.9.8: model_supports() filter
             kwargs = {
                 "model": attempt_model,
                 "messages": messages,
             }
+            # v3.9.14: GPT-5 系列 reasoning 會吃 tokens,OCR 給 3x budget
+            _is_gpt5 = attempt_model.startswith("gpt-5")
+            _budget = max_tokens * 3 if _is_gpt5 else max_tokens
             if model_supports(attempt_model, "max_completion_tokens"):
-                kwargs["max_completion_tokens"] = max_tokens
+                kwargs["max_completion_tokens"] = _budget
             elif model_supports(attempt_model, "max_tokens"):
                 kwargs["max_tokens"] = max_tokens
             if model_supports(attempt_model, "temperature"):
                 kwargs["temperature"] = translation_temperature
-            # GPT-5 family: minimal reasoning + low verbosity for OCR
-            _opt = optimal_reasoning_for_translation(attempt_model)
-            if model_supports(attempt_model, "reasoning_effort") and _opt:
-                kwargs["reasoning_effort"] = _opt
-            if model_supports(attempt_model, "verbosity"):
-                kwargs["verbosity"] = "low"
+            # v3.9.14: OCR 用 reasoning_effort=low(不是 minimal),GPT-5 才會認真讀圖
+            # 'gpt5_none' 家族(5.1/5.2)用 'low';'gpt5_minimal' 家族(5/5.4/5.5)也用 'low'
+            if model_supports(attempt_model, "reasoning_effort"):
+                kwargs["reasoning_effort"] = "low"
+            # v3.9.14: 拿掉 verbosity=low — OCR 需要完整輸出,verbosity 會壓縮
+            # (verbosity 留給純翻譯任務用,不該用於 vision)
             if cache_key and model_supports(attempt_model, "prompt_cache_key"):
                 kwargs["prompt_cache_key"] = cache_key
             r = oai.chat.completions.create(**kwargs)
             if attempt_model != primary:
-                logger.warning("Vision fell back from %s to %s", primary, attempt_model)
+                logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
+            # v3.9.14: 偵錯 logging
+            try:
+                _content = r.choices[0].message.content if r.choices else None
+                _usage = r.usage if hasattr(r, 'usage') else None
+                logger.info("[Vision] model=%s ok, content_len=%d, usage=%s",
+                            attempt_model,
+                            len(_content) if _content else 0,
+                            str(_usage)[:200] if _usage else "n/a")
+            except Exception:
+                pass
             return r
         except Exception as e:
             last_err = e
-            logger.warning("Vision model %s failed: %s", attempt_model, e)
+            logger.warning("[Vision] model %s failed: %s", attempt_model, e)
             continue
     raise last_err if last_err else RuntimeError("vision call failed")
 
 
 def ocr_image_openai(image_base64):
-    """Use OpenAI Vision to extract text from image. v3.8: model upgraded."""
+    """Use OpenAI Vision to extract text from image. v3.8: model upgraded.
+    
+    v3.9.14: GPT-5 vision OCR 改良:
+      - prompt 改為更明確的指令,避免 GPT-5 過度解讀回 NO_TEXT_FOUND
+      - 失敗時詳細記錄 raw response,方便偵錯
+    """
     if not oai:
         return None
     try:
@@ -4996,9 +5020,13 @@ def ocr_image_openai(image_base64):
                 {
                     "role": "system",
                     "content": (
-                        "You are an OCR assistant. Extract ALL text visible in the image. "
-                        "Output ONLY the extracted text, preserving line breaks. "
-                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
+                        "你是一個 OCR 引擎。任務:把圖片中所有可見的文字,逐字輸出。\n"
+                        "規則:\n"
+                        "1. 保留原本的換行與順序\n"
+                        "2. 不要加註解、不要翻譯、不要總結\n"
+                        "3. 中文、英文、數字、印尼文、日文都原樣輸出\n"
+                        "4. 如果圖片中真的完全沒有任何文字(例如純風景、純物體照片),才輸出 NO_TEXT\n"
+                        "5. 只要看到任何文字(訊息截圖、招牌、標籤、印刷體、手寫),都要完整輸出"
                     )
                 },
                 {
@@ -5013,7 +5041,7 @@ def ocr_image_openai(image_base64):
                         },
                         {
                             "type": "text",
-                            "text": "Extract all text from this image."
+                            "text": "請輸出這張圖中所有看得到的文字。"
                         }
                     ]
                 }
@@ -5022,12 +5050,25 @@ def ocr_image_openai(image_base64):
                          cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
                                                     "img", "txt", "ocr"))
         track_tokens(r)
-        result = r.choices[0].message.content.strip()
-        if result == "NO_TEXT_FOUND" or not result:
+        result = (r.choices[0].message.content or "").strip()
+        # v3.9.14: 詳細 logging
+        logger.info("[OCR] raw result (%d chars): %s", len(result), result[:200])
+        # v3.9.14: 多種「沒文字」回應的辨識
+        no_text_markers = ("NO_TEXT_FOUND", "NO_TEXT", "沒有文字", "no text",
+                           "圖片中沒有", "圖中沒有")
+        result_lower = result.lower()
+        if not result:
+            logger.warning("[OCR] empty result")
             return None
+        # 結果過短且看起來像「沒文字」回應
+        if len(result) < 30:
+            for marker in no_text_markers:
+                if marker.lower() in result_lower:
+                    logger.info("[OCR] detected no-text marker: %s", marker)
+                    return None
         return result
     except Exception as e:
-        logger.error("OpenAI Vision OCR error: %s", e)
+        logger.exception("[OCR] OpenAI Vision OCR error: %s", e)
         return None
 
 
@@ -9281,12 +9322,14 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
-<b>📋 模型選擇指引(v3.9.9 後皆已最佳化)</b><br>
+<b>📋 模型選擇指引(v3.9.14 後皆已最佳化)</b><br>
 🔹 <b>gpt-4.1-mini</b>($0.40 / $1.60)— 經典款,翻譯特化,Intento 2025 評測 #1。便宜、快、對範例順從。<br>
 🔹 <b>gpt-5-mini</b>($0.25 / $2.00)— <b>更便宜</b>,有 reasoning 即使 minimal 模式也對複雜句更好。<br>
 🔹 <b>gpt-5.4-mini</b>($0.75 / $4.50)— 最新一代,複雜被動句、長公告處理更強。<br>
 🔹 <b>gpt-4.1</b>($2.00 / $8.00)— 4.1 家族旗艦,需穩定再現性時用。<br>
-<b>系統會自動套用 reasoning_effort=minimal、verbosity=low 給 GPT-5 系列</b>(實測有效防止 GPT-5 自由發揮拆條列、加 ⚠️)。價錢格式:每百萬 input/output token (USD)。
+<b>翻譯任務</b>:GPT-5 系列自動套用 <code>reasoning_effort=minimal</code> + <code>verbosity=low</code>(防止 GPT-5 自由發揮拆條列、加 ⚠️)。<br>
+<b>OCR / 視覺任務</b>:GPT-5 系列自動套用 <code>reasoning_effort=low</code>,<b>不</b>套用 verbosity(避免輸出被壓縮成摘要)。<br>
+價錢格式:每百萬 input/output token (USD)。
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
@@ -9307,8 +9350,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </select>
 <button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
 <div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
-<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
-⭐ <b>gpt-5-mini</b> 對工單 OCR 是甜蜜點。注意:gpt-5.5-mini 目前 OpenAI 未推出。
+<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
+⭐ <b>gpt-5-mini</b> 是 OCR 甜蜜點(OpenAI 官方:多模態評分超越 gpt-4o)。<br>
+🆕 <b>gpt-5.4-mini</b> 比 gpt-5-mini 快 2 倍,接近 gpt-5.4 旗艦品質,但貴 3 倍。<br>
+v3.9.14 後 vision call 已根據官方文件最佳化:<code>reasoning_effort=low</code> + 移除 verbosity 限制 + 3x token budget。<br>
+注意:<b>gpt-5.5-mini 目前 OpenAI 未推出</b>(只有 5.4-mini)。
 </div>
 </div>
 </div>
