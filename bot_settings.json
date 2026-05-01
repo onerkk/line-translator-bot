@@ -115,7 +115,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 77,
+    "text_translations": 78,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -250,7 +250,7 @@
   "send_user_id_to_openai": true,
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
-  "model_default": "gpt-5.5-mini",
+  "model_default": "gpt-5.4-mini",
   "model_upgrade": "gpt-5.5",
   "model_threshold": 60,
   "vision_model": "gpt-5-mini",
