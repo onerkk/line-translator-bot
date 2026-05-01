@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9-0501-vision-admin-selectable"
+VERSION = "v3.9.2-0501-fix-gpt5-compat"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1007,15 +1007,22 @@ def translate_id_zh_with_pivot(text, src, tgt):
             "Machine codes and English acronyms should stay in original. "
             "Output ONLY the Chinese translation."
         )
-        r2 = oai.chat.completions.create(
-            model=pick_model(text),
-            messages=[
+        # v3.9.2: gpt-5 series and o-series reject temperature/max_tokens.
+        _pivot_model = pick_model(text)
+        _pivot_is_reasoning = _pivot_model.startswith(("o1", "o3", "o4", "gpt-5"))
+        _pivot_kwargs = {
+            "model": _pivot_model,
+            "messages": [
                 {"role": "system", "content": zh_prompt},
                 {"role": "user", "content": english}
             ],
-            temperature=0.0,
-            max_tokens=800,
-        )
+        }
+        if _pivot_is_reasoning:
+            _pivot_kwargs["max_completion_tokens"] = 800
+        else:
+            _pivot_kwargs["temperature"] = 0.0
+            _pivot_kwargs["max_tokens"] = 800
+        r2 = oai.chat.completions.create(**_pivot_kwargs)
         track_tokens(r2)
         return (r2.choices[0].message.content or "").strip()
     except Exception as e:
@@ -3794,18 +3801,23 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 {"role": "user", "content": msg}
             ]
         # v3.2-0426e: build kwargs with all official OpenAI features
-        # Detect if model is o-series (reasoning model) - they use different params
-        _is_reasoning_model = _model.startswith(("o1", "o3", "o4"))
+        # v3.9.2 (2026-05): GPT-5 series (incl. 5.4, 5.5) are also reasoning models.
+        # They reject temperature/top_p/logit_bias/max_tokens and require
+        # max_completion_tokens. Without this fix, all GPT-5 calls return 400
+        # and fall back to Google Translate — which is why 範例 didn't take effect.
+        _is_reasoning_model = _model.startswith(("o1", "o3", "o4", "gpt-5"))
         _kwargs = {
             "model": _model,
             "messages": _msgs,
-            "temperature": translation_temperature,
-            "top_p": translation_top_p,
         }
-        # max_tokens vs max_completion_tokens (o-series requires the latter)
+        # temperature / top_p only for non-reasoning models
+        if not _is_reasoning_model:
+            _kwargs["temperature"] = translation_temperature
+            _kwargs["top_p"] = translation_top_p
+        # max_tokens vs max_completion_tokens (reasoning models require the latter)
         if _is_reasoning_model:
             _kwargs["max_completion_tokens"] = 2000
-            # reasoning_effort param for o-series (low/medium/high)
+            # reasoning_effort param (low/medium/high) — supported by o-series and gpt-5 series
             if reasoning_effort in ("low", "medium", "high"):
                 _kwargs["reasoning_effort"] = reasoning_effort
         else:
@@ -3886,8 +3898,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             }
         if translation_seed and translation_seed != 0:
             _kwargs["seed"] = int(translation_seed)
-        # Batch C: Logprobs (skip for o-series reasoning models which don't support)
-        _supports_logprobs = not _model.startswith(("o1", "o3", "o4"))
+        # Batch C: Logprobs (skip for reasoning models incl. gpt-5 which don't support)
+        # v3.9.2: gpt-5 series also rejects logprobs.
+        _supports_logprobs = not _is_reasoning_model
         if logprobs_enabled and _supports_logprobs:
             _kwargs["logprobs"] = True
         # v3.2-0426e: prompt_caching_enabled triggers OpenAI's automatic caching
@@ -8530,84 +8543,107 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="GPT-5.5 系列（最新，2026-04）">
-<option value="gpt-5.5-mini">gpt-5.5-mini 🆕</option>
-<option value="gpt-5.5">gpt-5.5 🆕</option>
+<optgroup label="⭐ 推薦給工廠翻譯">
+<option value="gpt-4.1-mini">gpt-4.1-mini ⭐ 推薦（$0.40 / $1.60）</option>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
 </optgroup>
-<optgroup label="GPT-4.1 系列（穩定推薦）">
-<option value="gpt-4.1-mini">gpt-4.1-mini ⭐</option>
-<option value="gpt-4.1-nano">gpt-4.1-nano（最便宜）</option>
-<option value="gpt-4.1">gpt-4.1</option>
+<optgroup label="GPT-5.5（最新，2026-04，價格高）">
+<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
 </optgroup>
-<optgroup label="GPT-5 系列（需 Tier 2+）">
-<option value="gpt-5-nano">gpt-5-nano</option>
-<option value="gpt-5-mini">gpt-5-mini</option>
-<option value="gpt-5">gpt-5</option>
+<optgroup label="GPT-5.4 系列（2026-03）">
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
+</optgroup>
+<optgroup label="GPT-5 系列">
+<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
+<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
+<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40，最便宜）</option>
+</optgroup>
+<optgroup label="GPT-4.1 系列">
+<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-4.1-nano">gpt-4.1-nano（$0.10 / $0.40）</option>
 </optgroup>
 <optgroup label="推理模型（複雜句更準）">
-<option value="o4-mini">o4-mini</option>
-<option value="o3-mini">o3-mini</option>
+<option value="o4-mini">o4-mini（$1.10 / $4.40）</option>
+<option value="o3-mini">o3-mini（$1.10 / $4.40）</option>
 </optgroup>
 <optgroup label="舊模型（已過時）">
-<option value="gpt-4o-mini">gpt-4o-mini</option>
-<option value="gpt-4o">gpt-4o</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60）</option>
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
 </optgroup>
 </select>
 </div>
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="GPT-5.5 系列（最新，2026-04）">
-<option value="gpt-5.5">gpt-5.5 🆕</option>
-<option value="gpt-5.5-mini">gpt-5.5-mini 🆕</option>
+<optgroup label="⭐ 推薦給長訊息">
+<option value="gpt-4.1">gpt-4.1 ⭐ 推薦（$2.00 / $8.00）</option>
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
 </optgroup>
-<optgroup label="GPT-4.1 系列（穩定推薦）">
-<option value="gpt-4.1">gpt-4.1 ⭐</option>
-<option value="gpt-4.1-mini">gpt-4.1-mini</option>
+<optgroup label="GPT-5.5（最新，2026-04，價格高）">
+<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
 </optgroup>
-<optgroup label="GPT-5 系列（需 Tier 2+）">
-<option value="gpt-5">gpt-5</option>
-<option value="gpt-5-mini">gpt-5-mini</option>
+<optgroup label="GPT-5.4 系列">
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
+</optgroup>
+<optgroup label="GPT-5 系列">
+<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
+<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
+</optgroup>
+<optgroup label="GPT-4.1 系列">
+<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
 </optgroup>
 <optgroup label="推理模型">
-<option value="o4-mini">o4-mini</option>
-<option value="o3-mini">o3-mini</option>
+<option value="o4-mini">o4-mini（$1.10 / $4.40）</option>
+<option value="o3-mini">o3-mini（$1.10 / $4.40）</option>
 </optgroup>
 <optgroup label="舊模型">
-<option value="gpt-4o">gpt-4o</option>
-<option value="gpt-4o-mini">gpt-4o-mini</option>
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60）</option>
 </optgroup>
 </select>
 </div>
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
+💡 <b>真實推薦（2026-05 查證）</b>：你目前的 <code style="color:#7c6fef">gpt-4.1-mini</code> 已穩定且性價比好（每百萬 token $0.40 in / $1.60 out），加上你已累積的 fine-tune 例子，模型差距會被弱化。<b>不建議切到 gpt-5.5</b>（貴 12 倍以上）。若想嘗鮮新一代,<code style="color:#7c6fef">gpt-5.4-mini</code> 是合理選項（OpenAI 官方推薦的高吞吐量首選）。
+</div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
 <div style="font-weight:600;margin-bottom:6px">📷 照片分析模型（Vision / OCR）</div>
 <div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖等。失敗時自動 fallback 到 gpt-4o-mini，避免單一模型不可用造成中斷。</div>
 <select id="visionModel" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:8px">
-<optgroup label="GPT-5.5 系列（最新，2026-04，視覺最強）">
-<option value="gpt-5.5">gpt-5.5 🆕（最強，較貴）</option>
-<option value="gpt-5.5-mini">gpt-5.5-mini 🆕（性價比高）</option>
+<optgroup label="⭐ 推薦給工單 OCR">
+<option value="gpt-5-mini">gpt-5-mini ⭐ 推薦（$0.25 / $2.00，視覺強+便宜）</option>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，新一代）</option>
 </optgroup>
-<optgroup label="GPT-5 系列（小字、手寫辨識佳）">
-<option value="gpt-5-mini">gpt-5-mini ⭐（目前預設）</option>
-<option value="gpt-5">gpt-5（最強，需 Tier 2+）</option>
-<option value="gpt-5-nano">gpt-5-nano（最便宜）</option>
+<optgroup label="GPT-5.5（最新，2026-04，最強但最貴）">
+<option value="gpt-5.5">gpt-5.5 🆕（$5.00 / $30.00）</option>
+</optgroup>
+<optgroup label="GPT-5.4 系列">
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最便宜新一代）</option>
+</optgroup>
+<optgroup label="GPT-5 系列">
+<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier 2+）</option>
+<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40）</option>
 </optgroup>
 <optgroup label="GPT-4.1 系列">
-<option value="gpt-4.1">gpt-4.1</option>
-<option value="gpt-4.1-mini">gpt-4.1-mini</option>
+<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
 </optgroup>
-<optgroup label="舊模型（已過時）">
-<option value="gpt-4o">gpt-4o</option>
-<option value="gpt-4o-mini">gpt-4o-mini（fallback 用）</option>
+<optgroup label="舊模型">
+<option value="gpt-4o">gpt-4o（$2.50 / $10.00）</option>
+<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，fallback 用）</option>
 </optgroup>
 </select>
 <button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
 <div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
-<div style="font-size:11px;color:#666;margin-top:6px">⚠️ 若新模型在你的 OpenAI 帳戶尚未開通,系統會自動 fallback 到 gpt-4o-mini,翻譯不會中斷。</div>
+<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
+💡 <b>真實推薦（2026-05 查證）</b>：<code style="color:#7c6fef">gpt-5-mini</code> 是工廠工單 OCR 的最佳甜蜜點 — 小字、手寫辨識能力比 gpt-4o-mini 強很多，但價錢只有 gpt-5.5 的 1/20。除非實測 gpt-5-mini 對你的特定工單辨識率不夠，否則沒必要升 5.5。<b>注意：「gpt-5.5-mini」目前 OpenAI 並未推出，不要選</b>。
+</div>
+<div style="font-size:11px;color:#999;margin-top:6px">⚠️ 若新模型在你的 OpenAI 帳戶尚未開通,系統會自動 fallback 到 gpt-4o-mini,翻譯不會中斷。<br>💰 價格格式：每百萬 input / output token 費用（USD）</div>
 </div>
 </div>
 </div>
