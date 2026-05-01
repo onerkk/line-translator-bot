@@ -251,8 +251,8 @@
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
   "model_default": "gpt-4.1-mini",
-  "model_upgrade": "gpt-4.1",
-  "model_threshold": 60,
+  "model_upgrade": "gpt-5.4-mini",
+  "model_threshold": 100,
   "vision_model": "gpt-5-mini",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
