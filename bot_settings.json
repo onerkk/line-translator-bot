@@ -2,7 +2,7 @@
   "group_settings": {},
   "group_target_lang": {},
   "group_img_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
+    "Cf5e2ea027bb3db193677e7ef3b51adea": true,
     "Cd188e1adc7792e407c90f3fa78850316": false
   },
   "group_img_ask_settings": {
@@ -123,8 +123,8 @@
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 927073,
-    "tokens_completion": 2548
+    "tokens_prompt": 978410,
+    "tokens_completion": 3560
   },
   "extra_customers": {
     "__all__": [
