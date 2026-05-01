@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.23-0501-reply-fallback-push"
+VERSION = "v3.9.24-0501-global-timeout-thread-guard"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -143,7 +143,7 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
-oai = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+oai = OpenAI(api_key=OPENAI_KEY, timeout=30.0) if OPENAI_KEY else None  # v3.9.24: 全域 30 秒 timeout
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -7113,15 +7113,35 @@ def handle_image(event):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     _event_log_write("image_step", {"step": "before_translate", "src": lang, "tgt": (tgt if lang == "zh" else "zh")})
-    try:
-        if lang == "zh":
-            result = translate(extracted, "zh", tgt)
-        else:
-            result = translate(extracted, lang, "zh")
-    except Exception as _te:
-        _event_log_write("image_step_error", {"step": "translate", "err": str(_te)[:300]})
-        logger.exception("Translate exception: %s", _te)
+    
+    # v3.9.24: 用 threading 強制限制 translate() 最多 50 秒,
+    # 因為 translate() 內部有多個 OpenAI 呼叫(分段、品質檢查、反譯),
+    # 即使各別都有 timeout,加總可能超過 LINE webhook 限制
+    import threading
+    _trans_result = [None]
+    _trans_exc = [None]
+    def _do_translate():
+        try:
+            if lang == "zh":
+                _trans_result[0] = translate(extracted, "zh", tgt)
+            else:
+                _trans_result[0] = translate(extracted, lang, "zh")
+        except Exception as e:
+            _trans_exc[0] = e
+    _t = threading.Thread(target=_do_translate, daemon=True)
+    _t.start()
+    _t.join(timeout=50.0)  # 最多等 50 秒
+    
+    if _t.is_alive():
+        # 超時,放棄等待(thread 會繼續但我們不管它)
+        _event_log_write("image_step_error", {"step": "translate", "err": "thread timeout after 50s"})
+        logger.error("Translate thread timeout after 50s")
         return
+    if _trans_exc[0]:
+        _event_log_write("image_step_error", {"step": "translate", "err": str(_trans_exc[0])[:300]})
+        logger.exception("Translate exception: %s", _trans_exc[0])
+        return
+    result = _trans_result[0]
     _event_log_write("image_step", {
         "step": "translate_done",
         "result_len": len(result) if result else 0,
