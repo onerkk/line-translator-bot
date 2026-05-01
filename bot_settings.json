@@ -115,13 +115,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 81,
+    "text_translations": 85,
     "image_translations": 2,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 783550,
-    "tokens_completion": 2283
+    "tokens_prompt": 927073,
+    "tokens_completion": 2548
   },
   "extra_customers": {
     "__all__": [
@@ -172,8 +172,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 605980,
-      "tokens_completion": 1375
+      "tokens_prompt": 749503,
+      "tokens_completion": 1640
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
@@ -251,7 +251,7 @@
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
   "model_default": "gpt-4.1-mini",
-  "model_upgrade": "gpt-5.4-mini",
+  "model_upgrade": "gpt-4.1",
   "model_threshold": 100,
   "vision_model": "gpt-5-mini",
   "user_pictures": {
