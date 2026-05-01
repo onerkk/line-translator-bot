@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.26-0501-bg-thread-with-tracking"
+VERSION = "v3.9.27-0501-ocr-paragraph-glossary-fixes"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -2986,7 +2986,56 @@ FACTORY_ZH_ID_POST_FIX = {
     "akan tertelan setelah dibersihkan": "bisa hilang atau tertutup setelah dibersihkan",
     "tertelan setelah dibersihkan": "hilang atau tertutup setelah dibersihkan",
     "tertelan": "hilang atau tertutup",
+    # v3.9.27: 台灣地名/廠區不該被當作專有名詞保留(必須翻譯成意譯或用印尼語常用詞)
+    "Pabrik Yanshui": "Pabrik Yanshui (鹽水廠)",  # 第一次出現加註中文
+    "Yanshui": "Yanshui (鹽水)",
+    "pabrik Taichung": "pabrik Taichung (台中廠)",
+    # 法規/管理術語(印尼工友更熟悉的講法)
+    "Dinas K3": "Departemen Keselamatan Kerja (職安署)",
+    "Biro K3": "Departemen Keselamatan Kerja (職安署)",
+    "Otoritas K3": "Departemen Keselamatan Kerja (職安署)",
+    "akan kena pengawasan": "akan diawasi ketat oleh",
+    "kena pengawasan": "diawasi ketat oleh",
+    # 罰單
+    "tilang": "surat denda",  # tilang 是交通罰單,不是工廠罰單
+    "kena 2 SP berat": "sudah dapat 2 surat peringatan berat",
+    "kena 1 SP berat": "sudah dapat 1 surat peringatan berat",
+    "SP berat": "surat peringatan berat",
+    # interlock / bypass(技術術語)
+    "interlock di-bypass": "interlock dipintas",
+    "bypass interlock": "memintas interlock",
+    "kena tangkap": "ketahuan",  # 抓到 ≠ 逮捕
+    "tertangkap": "ketahuan",
+    # 班組/管理階層
+    "kepala shift patroli": "kepala regu patroli",
+    "kepala shift": "kepala regu / 班長",
+    "班長": "ketua shift / kepala regu",
 }
+
+
+# v3.9.27: 台灣→印尼專有名詞翻譯前置詞庫(在 prompt 中強化)
+TAIWAN_FACTORY_GLOSSARY_HINT = """
+重要術語對照(中文 → 印尼文):
+- 鹽水廠 → Pabrik Yanshui (鹽水廠)
+- 台中廠 → Pabrik Taichung (台中廠)
+- 冷精棒冷抽課 → Bagian Cold-Drawn Bar
+- 職安署 → Departemen Keselamatan Kerja (職安署)
+- 職災 → Kecelakaan kerja serius
+- 罰單 → Surat denda / Surat peringatan
+- SP / 警告單 → Surat Peringatan
+- 重大職災 → Kecelakaan kerja parah
+- 列管 → Diawasi ketat
+- interlock → Interlock (保留原英文)
+- bypass → Memintas / Di-bypass
+- 班長 → Ketua shift / Kepala regu
+- 副總 → Wakil Direktur / Vice President
+- 帽扣 → Tali helm / Strap helm
+- 違規作業 → Pelanggaran prosedur kerja
+- 違規操作 → Pelanggaran operasi
+- 工安 → Keselamatan kerja
+- 巡視設備 → Inspeksi peralatan / Patroli mesin
+- 記過 → Surat peringatan / Catatan pelanggaran
+"""
 
 
 def detect_factory_semantic_error_zh_id(src_text, id_text):
@@ -3456,14 +3505,36 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "X到不行/X得要死/X到爆=X banget, 怎麼這麼X=kok X banget, 有夠X=X banget, "
             "ㄏㄏ=haha, QQ=sedih, 3Q=terima kasih, GG=tamat, XD=haha, @@=bingung. "
             "6. Target Traditional Chinese = Taiwan style, not mainland. "
-            "6.5 PARAGRAPH STRUCTURE (CRITICAL): "
-            "Preserve the original paragraph structure EXACTLY. "
-            "If the source has a blank line (\\n\\n) between paragraphs, "
-            "the translation MUST also have a blank line in the SAME position. "
-            "If the source has line breaks (\\n) within text, preserve them. "
-            "Do NOT merge separate paragraphs into one. Do NOT remove blank lines. "
+            "6.5 PARAGRAPH STRUCTURE (CRITICAL — most users complain about this when translating images): "
+            "**You MUST preserve the original paragraph structure EXACTLY.** "
+            "Rules: "
+            "(a) Every blank line (\\n\\n) in source = blank line in translation, in the SAME position. "
+            "(b) Every newline (\\n) in source = newline in translation. "
+            "(c) DO NOT merge paragraphs. DO NOT remove blank lines. DO NOT add extra blank lines. "
+            "(d) If source has timestamps or speaker labels (e.g., '13:48', '潘柏良'), keep them on their own lines. "
             "Example: source '段A\\n\\n段B\\n\\n段C' MUST translate to "
             "'translation_A\\n\\ntranslation_B\\n\\ntranslation_C', NOT 'translation_A translation_B translation_C'. "
+            "Test: count the blank lines in source. The translation MUST have the same count. "
+            # v3.9.27: 台灣工廠專用術語對照表(印尼工友常用講法)
+            "6.6 TAIWAN FACTORY TERMS (use these Indonesian translations, do NOT keep Chinese place names untranslated): "
+            "鹽水廠 → Pabrik Yanshui (鹽水廠) [keep Chinese in parens for clarity]; "
+            "台中廠 → Pabrik Taichung (台中廠); "
+            "冷精棒冷抽課 → Bagian Cold-Drawn Bar; "
+            "職安署 → Departemen Keselamatan Kerja (職安署) [NOT 'Dinas K3']; "
+            "重大職災 → Kecelakaan kerja parah; "
+            "罰單/警告單 → Surat Peringatan (SP); "
+            "列管 → Diawasi ketat; "
+            "interlock → Interlock (keep English); "
+            "bypass interlock → Memintas interlock (NOT 'di-bypass'); "
+            "班長 → Ketua shift / Kepala regu; "
+            "副總 → Wakil Direktur; "
+            "帽扣 → Tali helm; "
+            "違規作業 → Pelanggaran prosedur kerja; "
+            "違規操作 → Pelanggaran operasi; "
+            "工安 → Keselamatan kerja; "
+            "巡視設備 → Inspeksi peralatan; "
+            "記過 → Catatan pelanggaran; "
+            "抓到 → Ketahuan (NOT 'kena tangkap' which means arrested by police); "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
             "9. FACTORY VOCABULARY: "
@@ -4726,9 +4797,12 @@ def _translate_inner(text, src, tgt):
     
     # ★ v3.7 段落結構保留:訊息含分段時走分段翻譯路徑
     # 這個路徑不影響短訊息(沒分段就直接走原本流程)
+    # v3.9.27: 來自圖片 OCR 的文字一律走分段路徑(段落保留是首要需求)
+    _is_from_image = getattr(_tl, 'from_image_ocr', False)
     if paragraph_split_translate and _has_paragraph_structure(text):
         char_len = len(re.sub(r"\s+", "", text))
-        if char_len >= paragraph_split_threshold:
+        # v3.9.27: 圖片 OCR 不看 threshold,直接分段
+        if _is_from_image or char_len >= paragraph_split_threshold:
             try:
                 # 用內部 helper 來處理單段(會走 cache + custom_example)
                 def _single_para_translate(para, s, t):
@@ -5093,6 +5167,56 @@ def _vision_call(messages, max_tokens, cache_key=None):
     raise last_err if last_err else RuntimeError("vision call failed")
 
 
+def _clean_ocr_status_bar(text):
+    """v3.9.27: 從 OCR 結果中清除手機螢幕狀態列文字。
+    
+    狀態列特徵(這些行/段會被當作雜訊移除):
+    - 純時間: "09:40", "12:43", "23:59"  
+    - 訊號: "4G", "5G", "Wi-Fi", "wifi", "LTE"
+    - 電量: "99+", "100%", "63%", "電量 89"
+    - LINE 介面元素: "<99+", "輸入訊息", "已讀 1", "已讀 2"
+    
+    保留訊息內文字,即使有時間也不能誤殺(例如「會議於 09:40 開始」)
+    判斷原則:單獨一行只有狀態文字才移除;一行混在其他內容裡則保留。
+    """
+    if not text:
+        return text
+    
+    # 狀態列獨立 token 模式(整行匹配才移除)
+    status_patterns = [
+        r'^\d{1,2}:\d{2}$',                          # 純時間 "09:40"
+        r'^[345]G$',                                 # "4G" "5G"
+        r'^(Wi[-]?Fi|wifi|LTE|VoLTE|HSPA)$',        # 訊號類
+        r'^\d{1,3}\+?$',                             # "99+" "100" 純數字
+        r'^\d{1,3}\s*%$',                            # 電量百分比
+        r'^[<>]\s*99\+?$',                           # "<99+" LINE 未讀數
+        r'^已讀\s*\d+$',                              # "已讀 1" "已讀 2"
+        r'^輸入訊息$',                                 # LINE 輸入框
+        r'^換行$',                                    # 鍵盤
+        r'^(中|英|符|空白鍵|語音輸入)$',               # 鍵盤按鍵
+        r'^[\u3105-\u3129]+$',                       # 純注音
+        r'^\d{1,2}:\d{2}\s+[345]G\s+\d+',           # 時間+訊號+電量同行
+    ]
+    
+    import re
+    cleaned_lines = []
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            cleaned_lines.append(line)  # 保留空行(段落分隔)
+            continue
+        # 檢查是否為純狀態列
+        is_status = False
+        for pat in status_patterns:
+            if re.match(pat, stripped):
+                is_status = True
+                break
+        if not is_status:
+            cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
+
 def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     """Use OpenAI Vision to extract text from image. v3.8: model upgraded.
     
@@ -5112,13 +5236,16 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                 {
                     "role": "system",
                     "content": (
-                        "你是一個 OCR 引擎。任務:把圖片中所有可見的文字,逐字輸出。\n"
+                        "你是一個 OCR 引擎。任務:把圖片中所有可見的訊息文字,逐字輸出。\n"
                         "規則:\n"
-                        "1. 保留原本的換行與順序\n"
-                        "2. 不要加註解、不要翻譯、不要總結\n"
+                        "1. **嚴格保留段落結構**:原文中的空行(段落分隔)用空行輸出;原文中的換行用換行輸出。\n"
+                        "2. 不要加註解、不要翻譯、不要總結、不要編號\n"
                         "3. 中文、英文、數字、印尼文、日文都原樣輸出\n"
-                        "4. 如果圖片中真的完全沒有任何文字(例如純風景、純物體照片),才輸出 NO_TEXT\n"
-                        "5. 只要看到任何文字(訊息截圖、招牌、標籤、印刷體、手寫),都要完整輸出"
+                        "4. **忽略手機螢幕介面元素**:狀態列(時間 / 4G / 5G / WiFi / 電量百分比 / 訊號)、\n"
+                        "   未讀數(99+)、輸入框文字(輸入訊息)、鍵盤按鍵(注音、空白鍵、換行等)、\n"
+                        "   應用程式名稱、底部 navigation bar — 這些都不要輸出\n"
+                        "5. 只輸出訊息內容、貼文、文件、招牌、文章等實質文字\n"
+                        "6. 如果圖片中真的完全沒有任何訊息文字,才輸出 NO_TEXT"
                     )
                 },
                 {
@@ -5133,7 +5260,7 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                         },
                         {
                             "type": "text",
-                            "text": "請輸出這張圖中所有看得到的文字。"
+                            "text": "請輸出這張圖中的訊息文字內容(忽略手機介面元素),嚴格保留段落結構。"
                         }
                     ]
                 }
@@ -5158,6 +5285,12 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                 if marker.lower() in result_lower:
                     logger.info("[OCR] detected no-text marker: %s", marker)
                     return None
+        # v3.9.27: 後處理 — 清掉殘留的狀態列文字(雙重保險)
+        result = _clean_ocr_status_bar(result)
+        # 清完後若空,當沒文字
+        if not result.strip():
+            logger.info("[OCR] all content cleaned as status bar")
+            return None
         return result
     except Exception as e:
         logger.exception("[OCR] OpenAI Vision OCR error: %s", e)
@@ -7153,6 +7286,7 @@ def _handle_image_background(ctx):
         _tone, _tone_custom = get_group_tone(group_id)
         _tl.tone = _tone
         _tl.tone_custom = _tone_custom
+        _tl.from_image_ocr = True  # v3.9.27: 標記為圖片來源,觸發強制分段翻譯
         _event_log_write("image_step", {"step": "before_translate", "src": lang, "tgt": (tgt if lang == "zh" else "zh")})
 
         # v3.9.24: 用 threading 強制限制 translate() 最多 50 秒,
