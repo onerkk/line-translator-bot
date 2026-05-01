@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.8-0501-gpt5-optimal"
+VERSION = "v3.9.9-0501-all-paths-model-aware"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -477,6 +477,47 @@ def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
     return f"{kind}:{src}-{tgt}:{gid}"
 
 
+def _pick_aux_model(purpose="utility"):
+    """v3.9.9: Pick a fast, cheap model in the same family as the user's main model.
+    Used for auxiliary tasks (back-translation check, ID normalization, OCR, pivot).
+    Auto-adapts so if user upgrades to GPT-5, aux calls also use GPT-5 (no API mismatch).
+    """
+    md = model_default or ""
+    if md.startswith("gpt-5"):
+        return "gpt-5-nano"   # cheapest GPT-5 family
+    if md.startswith("gpt-4.1"):
+        return "gpt-4.1-nano"
+    return "gpt-4o-mini"
+
+
+def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0, cache_key=None):
+    """v3.9.9: Build OpenAI kwargs for an auxiliary call (NOT the main translation).
+    
+    Auto-filters parameters per model capability so the same call works on:
+      - GPT-4 family (uses temperature, max_tokens)
+      - GPT-5 family (uses max_completion_tokens, reasoning_effort=minimal, verbosity=low)
+      - o-series   (uses max_completion_tokens, reasoning_effort=low)
+    
+    Use this for: back-translation checks, normalization, pivot intermediate, etc.
+    Do NOT use for the MAIN translate_openai call (that has its own richer logic).
+    """
+    kwargs = {"model": model_name, "messages": messages}
+    if model_supports(model_name, "temperature"):
+        kwargs["temperature"] = temperature
+    if model_supports(model_name, "max_completion_tokens"):
+        kwargs["max_completion_tokens"] = max_out_tokens
+    elif model_supports(model_name, "max_tokens"):
+        kwargs["max_tokens"] = max_out_tokens
+    _opt = optimal_reasoning_for_translation(model_name)
+    if model_supports(model_name, "reasoning_effort") and _opt:
+        kwargs["reasoning_effort"] = _opt
+    if model_supports(model_name, "verbosity"):
+        kwargs["verbosity"] = "low"
+    if cache_key and model_supports(model_name, "prompt_cache_key"):
+        kwargs["prompt_cache_key"] = cache_key
+    return kwargs
+
+
 # v3.2-0426d Batch D: Translation logging + monitoring
 translation_logging_enabled = True   # Record every translation
 translation_log = []                 # In-memory ring buffer + persisted JSON file
@@ -658,22 +699,20 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
     if not oai or not translated_text:
         return True, 1.0, ""
     try:
-        check_model = "gpt-4.1-nano" if model_default.startswith("gpt-4.1") else "gpt-4o-mini"
+        # v3.9.9: aux helper handles all model families automatically.
+        check_model = _pick_aux_model("backcheck")
         if tgt_lang == "zh":
             back_prompt = "Translate this Chinese to Indonesian. Output ONLY the translation, no explanation:"
         elif tgt_lang == "id":
             back_prompt = "Translate this Indonesian to Chinese. Output ONLY the translation, no explanation:"
         else:
             return True, 1.0, ""
-        r = oai.chat.completions.create(
-            model=check_model,
-            messages=[
-                {"role": "system", "content": back_prompt},
-                {"role": "user", "content": translated_text}
-            ],
-            temperature=0.0,
-            max_tokens=500,
-        )
+        r = oai.chat.completions.create(**_build_aux_kwargs(
+            check_model,
+            [{"role": "system", "content": back_prompt},
+             {"role": "user", "content": translated_text}],
+            max_out_tokens=500
+        ))
         track_tokens(r)
         back = r.choices[0].message.content.strip()
         
@@ -923,15 +962,13 @@ def normalize_indonesian_text_with_nano(text):
             "(like BF2, CYA, CYB) or proper nouns. "
             "Output ONLY the normalized Indonesian text, no explanation."
         )
-        r = oai.chat.completions.create(
-            model="gpt-4.1-nano",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.0,
-            max_tokens=600,
-        )
+        # v3.9.9: aux helper auto-adapts to any model family
+        r = oai.chat.completions.create(**_build_aux_kwargs(
+            _pick_aux_model("normalize"),
+            [{"role": "system", "content": prompt},
+             {"role": "user", "content": text}],
+            max_out_tokens=600
+        ))
         track_tokens(r)
         normalized = (r.choices[0].message.content or "").strip()
         return normalized if normalized else text
@@ -966,7 +1003,9 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
     details = {}
     
     try:
-        check_model = "gpt-4.1-nano"
+        # v3.9.9: aux helper picks model in same family as user's main translator,
+        # so multi-path also works on GPT-5 family without errors.
+        check_model = _pick_aux_model("multipath")
         
         # ===== Path 1: 直接反譯 =====
         if tgt_lang == "zh":
@@ -976,15 +1015,12 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         else:
             return True, {"final_decision": "unsupported"}
         
-        r1 = oai.chat.completions.create(
-            model=check_model,
-            messages=[
-                {"role": "system", "content": back_prompt1},
-                {"role": "user", "content": translation}
-            ],
-            temperature=0.0,
-            max_tokens=500,
-        )
+        r1 = oai.chat.completions.create(**_build_aux_kwargs(
+            check_model,
+            [{"role": "system", "content": back_prompt1},
+             {"role": "user", "content": translation}],
+            max_out_tokens=500
+        ))
         track_tokens(r1)
         back1 = (r1.choices[0].message.content or "").strip()
         sim1 = _text_similarity(original, back1)
@@ -994,15 +1030,12 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         
         # ===== Path 2: 經英語反譯 (translation → English → back to source lang) =====
         # 第一段:translation → English
-        r2a = oai.chat.completions.create(
-            model=check_model,
-            messages=[
-                {"role": "system", "content": "Translate to English. Output ONLY translation:"},
-                {"role": "user", "content": translation}
-            ],
-            temperature=0.0,
-            max_tokens=500,
-        )
+        r2a = oai.chat.completions.create(**_build_aux_kwargs(
+            check_model,
+            [{"role": "system", "content": "Translate to English. Output ONLY translation:"},
+             {"role": "user", "content": translation}],
+            max_out_tokens=500
+        ))
         track_tokens(r2a)
         english = (r2a.choices[0].message.content or "").strip()
         
@@ -1012,15 +1045,12 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         else:
             back2_prompt = "Translate this English to Chinese. Output ONLY translation:"
         
-        r2b = oai.chat.completions.create(
-            model=check_model,
-            messages=[
-                {"role": "system", "content": back2_prompt},
-                {"role": "user", "content": english}
-            ],
-            temperature=0.0,
-            max_tokens=500,
-        )
+        r2b = oai.chat.completions.create(**_build_aux_kwargs(
+            check_model,
+            [{"role": "system", "content": back2_prompt},
+             {"role": "user", "content": english}],
+            max_out_tokens=500
+        ))
         track_tokens(r2b)
         back2 = (r2b.choices[0].message.content or "").strip()
         sim2 = _text_similarity(original, back2)
@@ -1075,50 +1105,39 @@ def translate_id_zh_with_pivot(text, src, tgt):
     if not oai or src != "id" or tgt != "zh":
         return None
     try:
-        # 第 1 段:ID → EN(用 nano,便宜快)
+        # 第 1 段:ID → EN(用 helper,自動配合主模型家族)
         en_prompt = (
             "Translate this Indonesian to fluent, complete English. "
             "Preserve ALL information including names, numbers, machine codes, "
             "place markers (BF, BF2, CYA, CYB etc). Output ONLY the English "
             "translation, no notes."
         )
-        r1 = oai.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": en_prompt},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.0,
-            max_tokens=800,
-        )
+        # v3.9.9: aux helper auto-adapts to GPT-5 if user upgrades
+        _pivot_aux = _pick_aux_model("pivot")
+        r1 = oai.chat.completions.create(**_build_aux_kwargs(
+            _pivot_aux,
+            [{"role": "system", "content": en_prompt},
+             {"role": "user", "content": text}],
+            max_out_tokens=800
+        ))
         track_tokens(r1)
         english = (r1.choices[0].message.content or "").strip()
         if not english:
             return None
         
-        # 第 2 段:EN → ZH(用主模型,品質更好)
+        # 第 2 段:EN → ZH(用主模型,品質更好)— v3.9.9 用 helper
         zh_prompt = (
             "Translate this English to Traditional Chinese (繁體中文) "
             "as used in Taiwan factories. Preserve all factory terminology. "
             "Machine codes and English acronyms should stay in original. "
             "Output ONLY the Chinese translation."
         )
-        # v3.9.2: gpt-5 series and o-series reject temperature/max_tokens.
-        _pivot_model = pick_model(text)
-        _pivot_is_reasoning = _pivot_model.startswith(("o1", "o3", "o4", "gpt-5"))
-        _pivot_kwargs = {
-            "model": _pivot_model,
-            "messages": [
-                {"role": "system", "content": zh_prompt},
-                {"role": "user", "content": english}
-            ],
-        }
-        if _pivot_is_reasoning:
-            _pivot_kwargs["max_completion_tokens"] = 800
-        else:
-            _pivot_kwargs["temperature"] = 0.0
-            _pivot_kwargs["max_tokens"] = 800
-        r2 = oai.chat.completions.create(**_pivot_kwargs)
+        r2 = oai.chat.completions.create(**_build_aux_kwargs(
+            pick_model(text),
+            [{"role": "system", "content": zh_prompt},
+             {"role": "user", "content": english}],
+            max_out_tokens=800
+        ))
         track_tokens(r2)
         return (r2.choices[0].message.content or "").strip()
     except Exception as e:
@@ -2736,31 +2755,38 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             )
             max_tok = 300
         
-        # v3.8: Predicted Outputs - bad_result is mostly correct, GPT just edits.
-        # Passing it as prediction lets OpenAI skip already-matching tokens,
-        # cutting latency 30-50% for repair-pipeline calls.
+        # v3.9.8: build kwargs with model_supports() filter so GPT-5 series doesn't 400.
         repair_kwargs = {
             "model": pick_model(src_text),
             "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "max_tokens": max_tok,
         }
+        _rmodel = repair_kwargs["model"]
+        if model_supports(_rmodel, "temperature"):
+            repair_kwargs["temperature"] = 0.0
+        if model_supports(_rmodel, "top_p"):
+            repair_kwargs["top_p"] = 1.0
+        if model_supports(_rmodel, "max_completion_tokens"):
+            repair_kwargs["max_completion_tokens"] = max_tok
+        elif model_supports(_rmodel, "max_tokens"):
+            repair_kwargs["max_tokens"] = max_tok
+        # Translation-optimal reasoning effort for GPT-5 family
+        _opt = optimal_reasoning_for_translation(_rmodel)
+        if model_supports(_rmodel, "reasoning_effort") and _opt:
+            repair_kwargs["reasoning_effort"] = _opt
+        if model_supports(_rmodel, "verbosity"):
+            repair_kwargs["verbosity"] = "low"
         try:
-            # `prediction` is the EAS feature for low-latency edits.
-            # Skip if model is reasoning-only (o-series) - they don't accept prediction.
-            _rmodel = repair_kwargs["model"]
-            if bad_result and not _rmodel.startswith(("o1", "o3", "o4")):
+            # `prediction` is for low-latency edits — only on classical models.
+            if bad_result and model_supports(_rmodel, "stop"):  # stop is a good proxy for "classical model"
                 repair_kwargs["prediction"] = {
                     "type": "content",
                     "content": bad_result,
                 }
-            # v3.8: cache key for sticky routing on repair pipeline
             _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "id", "zh", "repair")
-            if _ck_r and not _rmodel.startswith(("o1", "o3", "o4")):
+            if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
                 repair_kwargs["prompt_cache_key"] = _ck_r
         except Exception:
             pass
@@ -2952,24 +2978,33 @@ def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
         if deterministic:
             user_msg += f"可採用譯文：{deterministic}\n"
         user_msg += "請輸出修正後印尼文："
-        # v3.8: Predicted Outputs - bad_result is mostly correct, GPT just edits.
+        # v3.9.8: model_supports() filter
         repair_kwargs = {
             "model": pick_model(src_text),
             "messages": [{"role":"system","content":sys_prompt},{"role":"user","content":user_msg}],
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "max_tokens": 500,
         }
+        _rmodel = repair_kwargs["model"]
+        if model_supports(_rmodel, "temperature"):
+            repair_kwargs["temperature"] = 0.0
+        if model_supports(_rmodel, "top_p"):
+            repair_kwargs["top_p"] = 1.0
+        if model_supports(_rmodel, "max_completion_tokens"):
+            repair_kwargs["max_completion_tokens"] = 500
+        elif model_supports(_rmodel, "max_tokens"):
+            repair_kwargs["max_tokens"] = 500
+        _opt = optimal_reasoning_for_translation(_rmodel)
+        if model_supports(_rmodel, "reasoning_effort") and _opt:
+            repair_kwargs["reasoning_effort"] = _opt
+        if model_supports(_rmodel, "verbosity"):
+            repair_kwargs["verbosity"] = "low"
         try:
-            _rmodel = repair_kwargs["model"]
-            if bad_result and not _rmodel.startswith(("o1", "o3", "o4")):
+            if bad_result and model_supports(_rmodel, "stop"):
                 repair_kwargs["prediction"] = {
                     "type": "content",
                     "content": bad_result,
                 }
-            # v3.8: cache key for sticky routing
             _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "zh", "id", "repair")
-            if _ck_r and not _rmodel.startswith(("o1", "o3", "o4")):
+            if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
                 repair_kwargs["prompt_cache_key"] = _ck_r
         except Exception:
             pass
@@ -4772,13 +4807,15 @@ def format_storage_for_work_order(customer_name):
     return "\n".join(lines)
 
 
-    """Use OpenAI Vision to extract text from image."""
+    """Use OpenAI Vision to extract text from image. (legacy dead code, retained for safety)"""
     if not oai:
         return None
     try:
-        r = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        # v3.9.9: model-aware kwargs
+        _vm = VISION_MODEL
+        _vk = {
+            "model": _vm,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -4804,9 +4841,19 @@ def format_storage_for_work_order(customer_name):
                     ]
                 }
             ],
-            temperature=translation_temperature,
-            max_tokens=2000,
-        )
+        }
+        if model_supports(_vm, "temperature"):
+            _vk["temperature"] = translation_temperature
+        if model_supports(_vm, "max_completion_tokens"):
+            _vk["max_completion_tokens"] = 2000
+        elif model_supports(_vm, "max_tokens"):
+            _vk["max_tokens"] = 2000
+        if model_supports(_vm, "verbosity"):
+            _vk["verbosity"] = "low"
+        _opt = optimal_reasoning_for_translation(_vm)
+        if model_supports(_vm, "reasoning_effort") and _opt:
+            _vk["reasoning_effort"] = _opt
+        r = oai.chat.completions.create(**_vk)
         track_tokens(r)
         result = r.choices[0].message.content.strip()
         if result == "NO_TEXT_FOUND" or not result:
@@ -4844,16 +4891,24 @@ def _vision_call(messages, max_tokens, cache_key=None):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
+            # v3.9.8: model_supports() filter
             kwargs = {
                 "model": attempt_model,
                 "messages": messages,
-                "max_tokens": max_tokens,
             }
-            # gpt-5 family (incl. gpt-5.5) ignores temperature; only set for legacy models.
-            if not attempt_model.startswith("gpt-5"):
+            if model_supports(attempt_model, "max_completion_tokens"):
+                kwargs["max_completion_tokens"] = max_tokens
+            elif model_supports(attempt_model, "max_tokens"):
+                kwargs["max_tokens"] = max_tokens
+            if model_supports(attempt_model, "temperature"):
                 kwargs["temperature"] = translation_temperature
-            # v3.8: prompt_cache_key for sticky routing on OCR/vision calls.
-            if cache_key:
+            # GPT-5 family: minimal reasoning + low verbosity for OCR
+            _opt = optimal_reasoning_for_translation(attempt_model)
+            if model_supports(attempt_model, "reasoning_effort") and _opt:
+                kwargs["reasoning_effort"] = _opt
+            if model_supports(attempt_model, "verbosity"):
+                kwargs["verbosity"] = "low"
+            if cache_key and model_supports(attempt_model, "prompt_cache_key"):
                 kwargs["prompt_cache_key"] = cache_key
             r = oai.chat.completions.create(**kwargs)
             if attempt_model != primary:
@@ -10567,7 +10622,8 @@ function autoNormalizeIncompatibleSettings(opts){
 
   // —— 提示使用者哪些設定被自動還原 ——
   if(changed.length>0 && !silent){
-    var msg='⚙️ 已自動調整以下設定以配合新模型:\n• '+changed.join('\n• ');
+    // (避免在 Python 三引號內寫 backslash-n;改用 br 標籤)
+    var msg='⚙️ 已自動調整以下設定以配合新模型:<br>• '+changed.join('<br>• ');
     // 用 toast 而非 alert,不阻塞操作
     if(typeof toast==='function'){
       toast('已自動調整 '+changed.length+' 項設定');
