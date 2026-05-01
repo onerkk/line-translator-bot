@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.20-0501-step-by-step-log"
+VERSION = "v3.9.21-0501-vision-timeout-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4989,9 +4989,7 @@ VISION_FALLBACK_MODEL = "gpt-4o-mini"
 
 
 def _vision_call(messages, max_tokens, cache_key=None):
-    """v3.9.16: 極簡版,照官方文件最基本範例。
-    所有「優化」全部拿掉,只送 model + messages + token limit。
-    讓它**能跑**比讓它「最佳」重要。
+    """v3.9.21: 加 timeout + 磁碟 log + 縮短 GPT-5 token budget 加快回應
     
     Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
     """
@@ -5001,20 +4999,31 @@ def _vision_call(messages, max_tokens, cache_key=None):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
-            # v3.9.16: 極簡 — 只用 model + messages
-            # GPT-5 系列要用 max_completion_tokens,GPT-4 系列要用 max_tokens
-            # 給 8000 budget 確保 GPT-5 reasoning + 完整 OCR 輸出都夠
+            # v3.9.21: 縮短 GPT-5 token budget 加快回應(以前 8000 太多 → 慢)
             kwargs = {
                 "model": attempt_model,
                 "messages": messages,
+                # v3.9.21: 加 timeout 30 秒,避免無限等待
+                "timeout": 30,
             }
             if attempt_model.startswith("gpt-5") or attempt_model.startswith("o1") or attempt_model.startswith("o3") or attempt_model.startswith("o4"):
-                kwargs["max_completion_tokens"] = 8000
+                # GPT-5 reasoning 會吃 token,但我們不需要那麼多 OCR 輸出
+                kwargs["max_completion_tokens"] = 3000
+                # GPT-5 系列必須用 reasoning_effort=minimal 才不會吃太多 token 跟時間
+                kwargs["reasoning_effort"] = "minimal"
             else:
                 kwargs["max_tokens"] = max_tokens
                 kwargs["temperature"] = 0.0
             
-            logger.info("[Vision] calling %s with kwargs keys=%s", attempt_model, list(kwargs.keys()))
+            try:
+                _event_log_write("vision_call_start", {
+                    "model": attempt_model,
+                    "kwargs_keys": list(kwargs.keys()),
+                })
+            except Exception:
+                pass
+            
+            logger.info("[Vision] calling %s", attempt_model)
             r = oai.chat.completions.create(**kwargs)
             
             if attempt_model != primary:
@@ -5024,13 +5033,15 @@ def _vision_call(messages, max_tokens, cache_key=None):
             try:
                 _content = r.choices[0].message.content if r.choices else None
                 _finish = r.choices[0].finish_reason if r.choices else None
-                _usage = r.usage if hasattr(r, 'usage') else None
-                logger.info("[Vision] model=%s ok, finish=%s, content_len=%d, usage=%s",
-                            attempt_model,
-                            _finish,
-                            len(_content) if _content else 0,
-                            str(_usage)[:300] if _usage else "n/a")
-                # 如果 finish_reason 是 length 表示 token 不夠
+                _usage_dict = r.usage.model_dump() if hasattr(r, 'usage') and r.usage else None
+                _event_log_write("vision_call_done", {
+                    "model": attempt_model,
+                    "finish": _finish,
+                    "content_len": len(_content) if _content else 0,
+                    "usage": _usage_dict,
+                })
+                logger.info("[Vision] model=%s ok, finish=%s, content_len=%d",
+                            attempt_model, _finish, len(_content) if _content else 0)
                 if _finish == "length":
                     logger.warning("[Vision] WARNING: finish_reason=length, output truncated!")
             except Exception as _le:
@@ -5038,6 +5049,14 @@ def _vision_call(messages, max_tokens, cache_key=None):
             return r
         except Exception as e:
             last_err = e
+            try:
+                _event_log_write("vision_call_failed", {
+                    "model": attempt_model,
+                    "error": str(e)[:300],
+                    "error_type": type(e).__name__,
+                })
+            except Exception:
+                pass
             logger.warning("[Vision] model %s failed: %r", attempt_model, e)
             continue
     raise last_err if last_err else RuntimeError("vision call failed")
@@ -14968,6 +14987,7 @@ def debug_event_log():
     html += f"<a href='?key={ADMIN_KEY}&filter=image'>圖片</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=webhook_in'>Webhook 進入</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=image_skipped'>圖片被略過</a>"
+    html += f"<a href='?key={ADMIN_KEY}&filter=vision'>Vision 呼叫</a>"
     html += f"<a href='?key={ADMIN_KEY}&filter=ImgAsk'>詢問模式</a>"
     html += "</p>"
     
