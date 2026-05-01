@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.9-0501-all-paths-model-aware"
+VERSION = "v3.9.10-0501-image-ask-mode"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -150,6 +150,16 @@ group_settings = {}
 group_target_lang = {}
 # Image translation toggle per group, default True
 group_img_settings = {}
+# v3.9.10: 圖片翻譯詢問模式 — 收到圖片不自動翻,先問使用者要不要翻
+# 結構:group_img_settings=False AND group_img_ask_settings=True → 詢問模式
+#       group_img_settings=False AND group_img_ask_settings=False → 完全不翻
+#       group_img_settings=True → 自動翻譯(原本行為)
+group_img_ask_settings = {}
+# v3.9.10: 暫存待確認圖片(postback 時才下載+OCR+翻譯)
+# key: message_id(LINE 圖片 message_id);value: dict 含 group_id/user_id/timestamp
+# 30 分鐘後自動清掉沒按的
+_pending_image_translate = {}
+_PENDING_IMG_TTL = 1800  # 30 分鐘
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
 # Work order photo detection toggle per group, default True
@@ -5235,7 +5245,7 @@ HELP_COMMAND_SECTIONS = [
         "id_tag": "SAKELAR", "id_name": "TOMBOL",
         "items": [
             ("/on · /off",   "開啟 / 關閉翻譯",       "Aktif / nonaktif"),
-            ("/img on·off",  "圖片翻譯",              "Terjemahan gambar"),
+            ("/img on·off·ask",  "圖片翻譯(ask=按鈕詢問)", "Terjemahan gambar"),
             ("/voice on·off","語音翻譯",              "Terjemahan suara"),
             ("/wo on·off",   "拍工單查儲區",          "Foto WO cek gudang"),
         ],
@@ -6049,12 +6059,20 @@ def handle_command(text, group_id, user_id=None):
         return "\u274c \u7ffb\u8b6f\u5df2\u95dc\u9589 / Penerjemah nonaktif"
     elif cmd == "/img on":
         group_img_settings[group_id] = True
+        group_img_ask_settings.pop(group_id, None)  # 清掉 ask 旗標
         save_settings()
-        return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f / Terjemahan gambar aktif"
+        return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f(\u81ea\u52d5\u7ffb\u8b6f) / Terjemahan gambar otomatis"
     elif cmd == "/img off":
         group_img_settings[group_id] = False
+        group_img_ask_settings.pop(group_id, None)  # 清掉 ask 旗標
         save_settings()
         return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
+    elif cmd == "/img ask":
+        # v3.9.10: 詢問模式 — 收到圖片不自動翻,先問使用者按按鈕才翻
+        group_img_settings[group_id] = False
+        group_img_ask_settings[group_id] = True
+        save_settings()
+        return "\u2753 \u5716\u7247\u7ffb\u8b6f: \u8a62\u554f\u6a21\u5f0f\n\u6536\u5230\u5716\u7247\u6703\u51fa\u73fe\u300c\u7ffb\u8b6f\u9019\u5f35 / \u4e0d\u7528\u300d\u6309\u9215\nMode tanya: pesan gambar akan menanyakan dulu"
     elif cmd == "/voice on":
         group_audio_settings[group_id] = True
         save_settings()
@@ -6529,9 +6547,56 @@ def handle_image(event):
         if not dm_master_enabled and sender_id not in dm_whitelist:
             return
 
-    # Check if image translation is on
+    # v3.9.10: 三種圖片處理模式
+    # 1. group_img_settings=True → 自動翻譯(原本行為)
+    # 2. group_img_settings=False AND group_img_ask_settings=True → 詢問模式
+    # 3. group_img_settings=False AND group_img_ask_settings=False → 完全不處理
     img_on = group_img_settings.get(group_id, True)
+    img_ask = group_img_ask_settings.get(group_id, False)
     if not img_on:
+        if img_ask:
+            # === 詢問模式 ===
+            # 暫存圖片資訊,先不下載/OCR(節省成本),等使用者按了再執行
+            _now = int(time.time())
+            # 順便清理過期的待確認圖片
+            for _mid, _info in list(_pending_image_translate.items()):
+                if _now - _info.get("ts", 0) > _PENDING_IMG_TTL:
+                    _pending_image_translate.pop(_mid, None)
+            _pending_image_translate[event.message.id] = {
+                "group_id": group_id,
+                "user_id": user_id,
+                "ts": _now,
+                "reply_token": None,  # 不存 reply_token(只能用一次,而且過期快)
+            }
+            # 用 Quick Reply 發詢問訊息(可附在後續訊息上)
+            try:
+                from linebot.v3.messaging import (
+                    QuickReply, QuickReplyItem, PostbackAction
+                )
+                qr = QuickReply(items=[
+                    QuickReplyItem(action=PostbackAction(
+                        label="📝 翻譯這張",
+                        data="img_translate=" + event.message.id,
+                        display_text="翻譯這張圖"
+                    )),
+                    QuickReplyItem(action=PostbackAction(
+                        label="❌ 不用",
+                        data="img_skip=" + event.message.id,
+                        display_text="不用翻譯"
+                    )),
+                ])
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    msg = TextMessage(
+                        text="📷 收到圖片,要翻譯內容嗎?",
+                        quick_reply=qr
+                    )
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
+            except Exception as _e:
+                logger.warning("Image ask-mode quick reply failed: %s", _e)
         return
 
     # Need OpenAI for image OCR
@@ -6636,6 +6701,119 @@ def handle_image(event):
         api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
             messages=[msg_obj]
+        ))
+
+
+def _process_pending_image_translate(event, message_id):
+    """v3.9.10: 詢問模式下,使用者按了「翻譯這張」之後執行實際翻譯。
+    重用 handle_image 的下載/OCR/翻譯邏輯,但 reply_token 來自 postback event。
+    """
+    info = _pending_image_translate.pop(message_id, None)
+    if not info:
+        # 已過期或不存在
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="⚠️ 圖片資訊已過期(超過 30 分鐘),請重新傳一次")]
+                ))
+        except Exception:
+            pass
+        return
+
+    group_id = info["group_id"]
+    if not oai:
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="❌ 系統未設定 OpenAI,無法 OCR 圖片")]
+                ))
+        except Exception:
+            pass
+        return
+
+    show_loading(group_id)
+
+    # 下載圖片(這時候 LINE 還保留約 30 天,所以用 message_id 直接抓沒問題)
+    img_base64, img_raw = download_line_image(message_id)
+    if not img_base64:
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="❌ 下載圖片失敗(可能 LINE 端已過期)")]
+                ))
+        except Exception:
+            pass
+        return
+
+    tgt = group_target_lang.get(group_id, "id")
+    _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    extracted = ocr_image_openai(img_base64)
+    if not extracted or len(extracted.strip()) < 2:
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="ℹ️ 圖片中沒偵測到可翻譯的文字")]
+                ))
+        except Exception:
+            pass
+        return
+
+    # 工單偵測
+    try:
+        wo_customer = detect_work_order(extracted)
+        if wo_customer:
+            wo_on = group_wo_settings.get(group_id, True)
+            if wo_on:
+                reply = format_storage_for_work_order(wo_customer)
+                if reply:
+                    bot_stats["work_order_detections"] += 1
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=reply)]
+                        ))
+            track_group_usage(group_id, _bp, _bc)
+            return
+    except Exception as e:
+        logger.error("Work order detection error (postback): %s", e)
+
+    lang = detect_language(extracted)
+    if lang is None:
+        return
+    actual_tgt = tgt if lang == "zh" else "zh"
+
+    _tone, _tone_custom = get_group_tone(group_id)
+    _tl.tone = _tone
+    _tl.tone_custom = _tone_custom
+    if lang == "zh":
+        result = translate(extracted, "zh", tgt)
+    else:
+        result = translate(extracted, lang, "zh")
+
+    if not result:
+        track_group_usage(group_id, _bp, _bc)
+        return
+
+    reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+    if len(reply) > 5000:
+        reply = reply[:4990] + "\n..."
+
+    track_group_usage(group_id, _bp, _bc)
+    bot_stats["image_translations"] += 1
+    with ApiClient(configuration) as api_client:
+        api = MessagingApi(api_client)
+        api.reply_message(ReplyMessageRequest(
+            reply_token=event.reply_token,
+            messages=[TextMessage(text=reply)]
         ))
 
 
@@ -7012,6 +7190,24 @@ if PostbackEvent:
             if lang not in ("zh", "id"):
                 lang = "zh"
             send_help_flex(event.reply_token, primary_lang=lang)
+            return
+
+        # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」或「不用」
+        if "img_translate" in params:
+            _process_pending_image_translate(event, params["img_translate"])
+            return
+        if "img_skip" in params:
+            _msgid = params["img_skip"]
+            _pending_image_translate.pop(_msgid, None)
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="✅ 已跳過")]
+                    ))
+            except Exception:
+                pass
             return
 
 
@@ -8247,6 +8443,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .feat-badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:500}
 .feat-badge.on{background:rgba(67,181,129,.12);color:#43b581;border:1px solid rgba(67,181,129,.25)}
 .feat-badge.off{background:rgba(100,100,120,.12);color:#8a8a9a;border:1px solid rgba(100,100,120,.2)}
+.feat-badge.ask{background:rgba(124,111,239,.15);color:#a899ff;border:1px solid rgba(124,111,239,.35)}
 
 /* Select */
 .sel{appearance:none;background:#2a2a3e;color:#e0e0e0;border:1px solid #3a3a4e;border-radius:8px;padding:6px 28px 6px 12px;font-size:13px;cursor:pointer;outline:none}
@@ -9313,7 +9510,10 @@ async function loadGroups(){
       '<span class="card-sub">中文 ⇄ 🇮🇩 印尼文</span>'+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
       '<div class="feat-badges">'+
-      '<span class="feat-badge '+(g.image_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',1)">🖼️ '+(g.image_on?'圖片開':'圖片關')+'</span>'+
+      // v3.9.10: 圖片按鈕變 3 段循環:開 → 詢問 → 關
+      // 顯示文字 / 樣式根據 (image_on, image_ask_mode) 兩個欄位決定
+      '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
+        '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
       '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span></div>'+
       buildCmdBadges(g, i)+
@@ -9330,6 +9530,24 @@ function toggleFeat(idx,keyIdx){
   var key=FEAT_KEYS[keyIdx];
   var cur=g[key];
   var body={group_id:g.id};body[key]=!cur;
+  api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+}
+
+// v3.9.10: 圖片模式 3 段循環(開 → 詢問 → 關 → 開 ...)
+function cycleImageMode(idx){
+  var g=_groupList[idx];if(!g)return;
+  var body={group_id:g.id};
+  if(g.image_on){
+    // 目前=自動翻 → 切到詢問模式
+    body.image_ask_mode=true;
+  }else if(g.image_ask_mode){
+    // 目前=詢問 → 切到完全關閉
+    body.image_on=false;
+    body.image_ask_mode=false;
+  }else{
+    // 目前=關閉 → 切到自動翻
+    body.image_on=true;
+  }
   api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
 }
 var CMD_DEFS=[["pw1","🔑密碼1"],["pw2","🏭密碼2"],["pkg","📦包裝"],["scrap","🎨廢料"],["qry","🔍儲區"],["notice","📢公告"]];
@@ -11237,6 +11455,7 @@ def _do_save_impl():
             "group_settings": group_settings,
             "group_target_lang": group_target_lang,
             "group_img_settings": group_img_settings,
+            "group_img_ask_settings": group_img_ask_settings,
             "group_audio_settings": group_audio_settings,
             "group_wo_settings": group_wo_settings,
             "group_cmd_enabled": group_cmd_enabled,
@@ -11335,7 +11554,7 @@ def _do_save_impl():
 def load_settings():
     """Load bot settings from GitHub on startup."""
     global dm_master_enabled, dm_whitelist, dm_known_users, dm_target_lang
-    global group_settings, group_target_lang, group_img_settings, group_audio_settings
+    global group_settings, group_target_lang, group_img_settings, group_img_ask_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
@@ -11361,6 +11580,7 @@ def load_settings():
         group_settings.update(data.get("group_settings", {}))
         group_target_lang.update(data.get("group_target_lang", {}))
         group_img_settings.update(data.get("group_img_settings", {}))
+        group_img_ask_settings.update(data.get("group_img_ask_settings", {}))
         group_audio_settings.update(data.get("group_audio_settings", {}))
         group_wo_settings.update(data.get("group_wo_settings", {}))
         group_cmd_enabled.update(data.get("group_cmd_enabled", {}))
@@ -11882,6 +12102,7 @@ def api_admin_groups():
             "translation_on": group_settings.get(gid, True),
             "target_lang": group_target_lang.get(gid, "id"),
             "image_on": group_img_settings.get(gid, True),
+            "image_ask_mode": group_img_ask_settings.get(gid, False),
             "voice_on": group_audio_settings.get(gid, True),
             "work_order_on": group_wo_settings.get(gid, True),
             "cmd_enabled": {k: is_cmd_enabled(gid, k) for k, _, _, _ in CMD_DEFS},
@@ -12574,6 +12795,16 @@ def api_admin_group_settings():
         group_settings[gid] = bool(data["translation_on"])
     if "image_on" in data:
         group_img_settings[gid] = bool(data["image_on"])
+        # 開了自動翻譯就清掉 ask 旗標
+        if bool(data["image_on"]):
+            group_img_ask_settings.pop(gid, None)
+    if "image_ask_mode" in data:
+        # 詢問模式 = image_on=False AND image_ask_mode=True
+        if bool(data["image_ask_mode"]):
+            group_img_settings[gid] = False
+            group_img_ask_settings[gid] = True
+        else:
+            group_img_ask_settings.pop(gid, None)
     if "voice_on" in data:
         group_audio_settings[gid] = bool(data["voice_on"])
     if "work_order_on" in data:
