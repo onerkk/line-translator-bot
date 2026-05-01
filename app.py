@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.27-0501-ocr-paragraph-glossary-fixes"
+VERSION = "v3.9.29-0501-deep-audit-fix-7-bugs"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -967,13 +967,12 @@ ID_NORMALIZATION_MAP = {
     "gmn": "bagaimana", "gimana": "bagaimana", "gmna": "bagaimana",
     "bnr": "benar", "bnar": "benar",
     "ntr": "nanti", "ntar": "nanti",
-    "smua": "semua", "sma": "semua",
+    "smua": "semua",  # v3.9.29: 移除原本 "sma":"semua" 跟 line 952 衝突
     "krj": "kerja", "krja": "kerja",
     "kerjaan": "pekerjaan",
     "msk": "masuk",
     "klr": "keluar",
     "dh": "sudah",
-    "udh": "sudah",
     
     # ===== 雅加達/爪哇方言 =====
     "gw": "saya", "gue": "saya", "gua": "saya", "aku": "saya",
@@ -1760,6 +1759,58 @@ CUSTOM_EXAMPLES_MAX = 5000
 # Few-shot only uses N most semantically relevant examples per request:
 FEWSHOT_INJECT_MAX = 8
 custom_translation_examples = []
+
+
+# v3.9.29: 修補隱性 bug — 之前 reaction 升級為 example 後沒存磁碟,重啟丟失
+def _resolve_examples_path():
+    """同 translation_log 邏輯,Render persistent disk 優先。"""
+    env = os.environ.get("CUSTOM_EXAMPLES_FILE", "").strip()
+    if env:
+        return env
+    for candidate_dir in ("/var/data", "/data"):
+        if os.path.isdir(candidate_dir) and os.access(candidate_dir, os.W_OK):
+            return os.path.join(candidate_dir, "custom_examples.json")
+    return "custom_examples.json"
+
+CUSTOM_EXAMPLES_FILE = _resolve_examples_path()
+
+
+def _load_examples_from_disk():
+    """Load persisted custom examples on startup. Best effort."""
+    try:
+        path = CUSTOM_EXAMPLES_FILE
+        if not path or not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            custom_translation_examples[:] = data[-CUSTOM_EXAMPLES_MAX:]
+            logger.info("Loaded %d custom examples from %s",
+                        len(custom_translation_examples), path)
+    except Exception as e:
+        logger.warning("Failed to load custom examples: %s", e)
+
+
+def _save_examples_to_disk():
+    """Persist custom examples to JSON. Atomic write."""
+    try:
+        path = CUSTOM_EXAMPLES_FILE
+        if not path:
+            return
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder and not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(custom_translation_examples[-CUSTOM_EXAMPLES_MAX:],
+                      f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        logger.warning("Failed to save custom examples: %s", e)
+
+
+# 啟動時 load 一次
+_load_examples_from_disk()
 
 # ── Built-in factory examples (hardcoded, NOT visible in admin panel) ──
 BUILTIN_EXAMPLES = [
@@ -2986,10 +3037,8 @@ FACTORY_ZH_ID_POST_FIX = {
     "akan tertelan setelah dibersihkan": "bisa hilang atau tertutup setelah dibersihkan",
     "tertelan setelah dibersihkan": "hilang atau tertutup setelah dibersihkan",
     "tertelan": "hilang atau tertutup",
-    # v3.9.27: 台灣地名/廠區不該被當作專有名詞保留(必須翻譯成意譯或用印尼語常用詞)
-    "Pabrik Yanshui": "Pabrik Yanshui (鹽水廠)",  # 第一次出現加註中文
-    "Yanshui": "Yanshui (鹽水)",
-    "pabrik Taichung": "pabrik Taichung (台中廠)",
+    # v3.9.29: 廠區地名統一交給 post_fix 函式裡的 regex 處理(非詞庫)
+    # 原因:詞庫機制會被觸發兩次,導致「(鹽水廠) (鹽水廠)」重複註解
     # 法規/管理術語(印尼工友更熟悉的講法)
     "Dinas K3": "Departemen Keselamatan Kerja (職安署)",
     "Biro K3": "Departemen Keselamatan Kerja (職安署)",
@@ -3074,16 +3123,76 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
 
 
 def post_fix_factory_zh_to_id(src_text, id_text):
-    """Fix literal Indonesian outputs for Taiwan factory Chinese->ID translation."""
+    """Fix literal Indonesian outputs for Taiwan factory Chinese->ID translation.
+    
+    v3.9.29: 擴大 trigger keyword 範圍。之前只有「料/品保/清洗/研磨」等 11 個工廠製程詞,
+    導致「鹽水廠/職安署/警告/重大職災/interlock」這類安全/法規類訊息**完全沒套用詞庫**。
+    現在加入廠區地名、安全術語、法規詞,確保詞庫能命中 v3.9.27 加的全部規則。
+    
+    v3.9.29 修補 8: 加入 idempotent 處理 — 廠區名「Yanshui」可能已經被 GPT 翻成
+    「Pabrik Yanshui」或還是「Yanshui」,要避免重複套用「(鹽水廠)」標註。
+    """
     if not id_text:
         return id_text
     src = src_text or ""
     result = id_text.strip()
-    factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"])
-    if not factory_src:
+    # v3.9.29: 大幅擴充 trigger 詞庫
+    factory_keywords = [
+        # 製程(原本就有)
+        "料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別",
+        # v3.9.29 新增:廠區/地名
+        "鹽水廠", "鹽水", "台中廠", "冷精棒", "冷抽課",
+        # v3.9.29 新增:安全/法規
+        "職安", "工安", "職災", "重大職災", "警告", "罰單", "記過", "違規", "列管", "停工",
+        # v3.9.29 新增:設備/英文術語
+        "interlock", "bypass", "PMI", "MSDS", "SOP", "PPE", "LOTO", "K3",
+        # v3.9.29 新增:管理/操作
+        "班長", "副總", "巡視", "操作", "作業", "抓到", "帽扣",
+        # v3.9.29 新增:OCR 圖片常見的訊息類用語
+        "公告", "通知", "提醒", "今年", "目前",
+    ]
+    # 也檢查譯文(if 原文沒命中但譯文有 Yanshui / Dinas K3 等典型錯翻)
+    id_trigger_words = ["Yanshui", "Dinas K3", "tilang", "kena tangkap", "kepala shift",
+                        "bereaksi", "dicuri", "tertelan", "interlock di-bypass"]
+    factory_src = any(k in src for k in factory_keywords)
+    factory_id = any(k in result for k in id_trigger_words)
+    if not factory_src and not factory_id:
         return result
+    # v3.9.29 修補 8/10: idempotent 處理 — 避免「(鹽水廠) (鹽水廠)」重複註解
+    # Step 1: 把已經完整的版本暫存,套用詞庫時不會被重複處理
+    placeholders = []
+    def _stash(match):
+        placeholders.append(match.group(0))
+        return f"\x00PH{len(placeholders)-1}\x00"
+    # 先把已完整的詞藏起來
+    result = re.sub(r"Pabrik Yanshui\s*\(鹽水廠\)", _stash, result, flags=re.I)
+    result = re.sub(r"Pabrik Taichung\s*\(台中廠\)", _stash, result, flags=re.I)
+    result = re.sub(r"Departemen Keselamatan Kerja\s*\(職安署\)", _stash, result, flags=re.I)
+    
+    # Step 2: 套用詞庫(由長到短,避免短詞先吃掉長詞的部分)
     for wrong, correct in sorted(FACTORY_ZH_ID_POST_FIX.items(), key=lambda x: -len(x[0])):
         result = re.sub(re.escape(wrong), correct, result, flags=re.I)
+    
+    # Step 3: 處理 standalone Yanshui — 沒中文標註的 Yanshui 都升級成完整名稱
+    # 不管前面有沒有 "Pabrik",只要後面沒接 "(" 就升級
+    # 「Pabrik Yanshui sudah」→「Pabrik Yanshui (鹽水廠) sudah」(前面 Pabrik 被吃掉,重新加)
+    # 「Yanshui sudah」→「Pabrik Yanshui (鹽水廠) sudah」
+    # 「Pabrik Yanshui (鹽水廠)」→ 不變(已被 stash)
+    result = re.sub(
+        r"(?:Pabrik\s+|pabrik\s+)?\bYanshui\b(?!\s*\()",
+        "Pabrik Yanshui (鹽水廠)",
+        result
+    )
+    result = re.sub(
+        r"(?:Pabrik\s+|pabrik\s+)?\bTaichung\b(?!\s*\()",
+        "Pabrik Taichung (台中廠)",
+        result
+    )
+    
+    # Step 4: 把 placeholder 還原
+    for i, ph_text in enumerate(placeholders):
+        result = result.replace(f"\x00PH{i}\x00", ph_text)
+    
     result = re.sub(r"\s+", " ", result).strip()
     return result
 
@@ -5024,61 +5133,9 @@ def format_storage_for_work_order(customer_name):
     return "\n".join(lines)
 
 
-    """Use OpenAI Vision to extract text from image. (legacy dead code, retained for safety)"""
-    if not oai:
-        return None
-    try:
-        # v3.9.9: model-aware kwargs
-        _vm = VISION_MODEL
-        _vk = {
-            "model": _vm,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an OCR assistant. Extract ALL text visible in the image. "
-                        "Output ONLY the extracted text, preserving line breaks. "
-                        "If there is no text in the image, output exactly: NO_TEXT_FOUND"
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract all text from this image."
-                        }
-                    ]
-                }
-            ],
-        }
-        if model_supports(_vm, "temperature"):
-            _vk["temperature"] = translation_temperature
-        if model_supports(_vm, "max_completion_tokens"):
-            _vk["max_completion_tokens"] = 2000
-        elif model_supports(_vm, "max_tokens"):
-            _vk["max_tokens"] = 2000
-        if model_supports(_vm, "verbosity"):
-            _vk["verbosity"] = "low"
-        _opt = optimal_reasoning_for_translation(_vm)
-        if model_supports(_vm, "reasoning_effort") and _opt:
-            _vk["reasoning_effort"] = _opt
-        r = oai.chat.completions.create(**_vk)
-        track_tokens(r)
-        result = r.choices[0].message.content.strip()
-        if result == "NO_TEXT_FOUND" or not result:
-            return None
-        return result
-    except Exception as e:
-        logger.error("OpenAI Vision OCR error: %s", e)
-        return None
+# v3.9.29: 已移除此處的孤兒 OCR 死碼(原 line 5078-5135)
+# 該段沒有 def header,實際永遠不會執行,且使用未定義的 image_base64
+# 真正的 OCR 函式是 ocr_image_openai() (line 5198 附近)
 
 
 # v3.8: Vision model upgrade. gpt-4o-mini → gpt-5-mini for OCR.
@@ -5094,7 +5151,15 @@ VISION_FALLBACK_MODEL = "gpt-4o-mini"
 
 
 def _vision_call(messages, max_tokens, cache_key=None):
-    """v3.9.21: 加 timeout + 磁碟 log + 縮短 GPT-5 token budget 加快回應
+    """v3.9.28: 完全用 model_supports 過濾參數,符合 GPT-5 系列官方規格。
+    
+    關鍵差異(對比一般翻譯任務):
+    - verbosity = "high"  → OCR 要忠實轉錄,不能壓縮
+      (官方 GPT-5 cookbook: "Raise verbosity when you need
+       faithful transcription rather than compressed summaries")
+    - reasoning_effort = optimal_for_translation (minimal / none)
+      → OCR 純抄字,不需要 reasoning
+    - timeout=30 雙保險
     
     Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
     """
@@ -5104,21 +5169,28 @@ def _vision_call(messages, max_tokens, cache_key=None):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
-            # v3.9.21: 縮短 GPT-5 token budget 加快回應(以前 8000 太多 → 慢)
             kwargs = {
                 "model": attempt_model,
                 "messages": messages,
-                # v3.9.21: 加 timeout 30 秒,避免無限等待
                 "timeout": 30,
             }
-            if attempt_model.startswith("gpt-5") or attempt_model.startswith("o1") or attempt_model.startswith("o3") or attempt_model.startswith("o4"):
-                # GPT-5 reasoning 會吃 token,但我們不需要那麼多 OCR 輸出
-                kwargs["max_completion_tokens"] = 3000
-                # GPT-5 系列必須用 reasoning_effort=minimal 才不會吃太多 token 跟時間
-                kwargs["reasoning_effort"] = "minimal"
-            else:
+            # === 全部用 model_supports 過濾,確保 GPT-5 系列相容 ===
+            # Token limit
+            if model_supports(attempt_model, "max_completion_tokens"):
+                kwargs["max_completion_tokens"] = 3000  # OCR 輸出量限制
+            elif model_supports(attempt_model, "max_tokens"):
                 kwargs["max_tokens"] = max_tokens
+            # Temperature(GPT-5 系列不支援)
+            if model_supports(attempt_model, "temperature"):
                 kwargs["temperature"] = 0.0
+            # Reasoning effort(GPT-5/o-series 才有)
+            if model_supports(attempt_model, "reasoning_effort"):
+                _opt = optimal_reasoning_for_translation(attempt_model)
+                if _opt:
+                    kwargs["reasoning_effort"] = _opt
+            # Verbosity — OCR 用 HIGH(官方建議:忠實轉錄)
+            if model_supports(attempt_model, "verbosity"):
+                kwargs["verbosity"] = "high"
             
             try:
                 _event_log_write("vision_call_start", {
@@ -5128,13 +5200,12 @@ def _vision_call(messages, max_tokens, cache_key=None):
             except Exception:
                 pass
             
-            logger.info("[Vision] calling %s", attempt_model)
+            logger.info("[Vision] calling %s with kwargs=%s", attempt_model, list(kwargs.keys()))
             r = oai.chat.completions.create(**kwargs)
             
             if attempt_model != primary:
                 logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
             
-            # v3.9.16: 詳細 logging
             try:
                 _content = r.choices[0].message.content if r.choices else None
                 _finish = r.choices[0].finish_reason if r.choices else None
@@ -5168,50 +5239,77 @@ def _vision_call(messages, max_tokens, cache_key=None):
 
 
 def _clean_ocr_status_bar(text):
-    """v3.9.27: 從 OCR 結果中清除手機螢幕狀態列文字。
+    """v3.9.29: 改用 token-based 偵測,精準移除手機螢幕狀態列。
     
-    狀態列特徵(這些行/段會被當作雜訊移除):
-    - 純時間: "09:40", "12:43", "23:59"  
-    - 訊號: "4G", "5G", "Wi-Fi", "wifi", "LTE"
-    - 電量: "99+", "100%", "63%", "電量 89"
-    - LINE 介面元素: "<99+", "輸入訊息", "已讀 1", "已讀 2"
+    判斷邏輯:把每行拆成 tokens,如果**所有 tokens 都是狀態元素**就移除整行。
+    只要有一個 token 不是狀態元素就保留(避免誤殺正常內容)。
     
-    保留訊息內文字,即使有時間也不能誤殺(例如「會議於 09:40 開始」)
-    判斷原則:單獨一行只有狀態文字才移除;一行混在其他內容裡則保留。
+    狀態元素:
+    - 時間: "09:40", "12:43", "23:59"  
+    - 訊號: "4G", "5G", "Wi-Fi", "wifi", "LTE", "VoLTE"
+    - 電量: "99+", "100%", "63%", "<99+", ">99+"
+    - LINE 介面: "已讀 1/2/...", "輸入訊息", "換行", "中/英/符"
+    - 注音
     """
     if not text:
         return text
     
-    # 狀態列獨立 token 模式(整行匹配才移除)
-    status_patterns = [
-        r'^\d{1,2}:\d{2}$',                          # 純時間 "09:40"
-        r'^[345]G$',                                 # "4G" "5G"
-        r'^(Wi[-]?Fi|wifi|LTE|VoLTE|HSPA)$',        # 訊號類
-        r'^\d{1,3}\+?$',                             # "99+" "100" 純數字
-        r'^\d{1,3}\s*%$',                            # 電量百分比
-        r'^[<>]\s*99\+?$',                           # "<99+" LINE 未讀數
-        r'^已讀\s*\d+$',                              # "已讀 1" "已讀 2"
-        r'^輸入訊息$',                                 # LINE 輸入框
-        r'^換行$',                                    # 鍵盤
-        r'^(中|英|符|空白鍵|語音輸入)$',               # 鍵盤按鍵
-        r'^[\u3105-\u3129]+$',                       # 純注音
-        r'^\d{1,2}:\d{2}\s+[345]G\s+\d+',           # 時間+訊號+電量同行
+    import re
+    
+    # 單一 token 是否為狀態元素
+    def is_status_token(tok):
+        if not tok:
+            return True  # 空 token 視為狀態(允許)
+        # 純時間
+        if re.match(r'^\d{1,2}:\d{2}$', tok):
+            return True
+        # 訊號
+        if re.match(r'^[345]G$', tok):
+            return True
+        if re.match(r'^(Wi[-]?Fi|wifi|WIFI|LTE|VoLTE|HSPA|5G\+|5GE)$', tok, re.I):
+            return True
+        # 純數字 / 99+ / 帶 + 號
+        if re.match(r'^\d{1,3}\+?$', tok):
+            return True
+        # 百分比
+        if re.match(r'^\d{1,3}%$', tok):
+            return True
+        # <99+ / >99+
+        if re.match(r'^[<>]\d{1,3}\+?$', tok):
+            return True
+        return False
+    
+    # 整行匹配的特殊狀態
+    line_status_patterns = [
+        r'^已讀\s*\d+$',
+        r'^輸入訊息$',
+        r'^換行$',
+        r'^(中|英|符|空白鍵|語音輸入|注音|倉頡|嘸蝦米)$',
+        r'^[\u3105-\u3129]+$',  # 純注音字母
     ]
     
-    import re
     cleaned_lines = []
     for line in text.split('\n'):
         stripped = line.strip()
         if not stripped:
             cleaned_lines.append(line)  # 保留空行(段落分隔)
             continue
-        # 檢查是否為純狀態列
-        is_status = False
-        for pat in status_patterns:
+        
+        # 整行匹配檢查
+        is_status_line = False
+        for pat in line_status_patterns:
             if re.match(pat, stripped):
-                is_status = True
+                is_status_line = True
                 break
-        if not is_status:
+        
+        if not is_status_line:
+            # Token-based 檢查:用空白切 tokens,看是否每個都是狀態元素
+            tokens = re.split(r'\s+', stripped)
+            tokens = [t for t in tokens if t]  # 過濾空字串
+            if tokens and all(is_status_token(t) for t in tokens):
+                is_status_line = True
+        
+        if not is_status_line:
             cleaned_lines.append(line)
     
     return '\n'.join(cleaned_lines)
@@ -5409,26 +5507,36 @@ def ocr_and_translate_image(image_base64, tgt_lang):
 
 
 def detect_image_mime(raw_bytes):
-    """v3.9.17: 從 magic bytes 偵測圖片格式。
-    回傳 'image/jpeg', 'image/png', 'image/gif', 'image/webp' 之一。
+    """v3.9.29: 從 magic bytes 偵測圖片格式。
+    回傳 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic' 之一。
     無法辨識時回 'image/jpeg'(safest fallback)。
+    
+    v3.9.29 修正:之前 hard-code 12 bytes 最低長度,導致 8-byte 的 PNG signature
+    跟 6-byte 的 GIF 被當作未知。改成依格式分別判斷。
     """
-    if not raw_bytes or len(raw_bytes) < 12:
+    if not raw_bytes:
         return "image/jpeg"
-    if raw_bytes[:3] == b'\xff\xd8\xff':
+    # JPEG: 3 bytes
+    if len(raw_bytes) >= 3 and raw_bytes[:3] == b'\xff\xd8\xff':
         return "image/jpeg"
-    if raw_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+    # PNG: 8 bytes
+    if len(raw_bytes) >= 8 and raw_bytes[:8] == b'\x89PNG\r\n\x1a\n':
         return "image/png"
-    if raw_bytes[:6] in (b'GIF87a', b'GIF89a'):
+    # GIF: 6 bytes
+    if len(raw_bytes) >= 6 and raw_bytes[:6] in (b'GIF87a', b'GIF89a'):
         return "image/gif"
-    if raw_bytes[:4] == b'RIFF' and raw_bytes[8:12] == b'WEBP':
+    # WebP: 12 bytes (RIFF...WEBP)
+    if len(raw_bytes) >= 12 and raw_bytes[:4] == b'RIFF' and raw_bytes[8:12] == b'WEBP':
         return "image/webp"
-    # HEIC/HEIF — OpenAI 不支援,但至少標記出來
-    if raw_bytes[4:12] in (b'ftypheic', b'ftypheix', b'ftyphevc', b'ftypheim',
-                           b'ftypheis', b'ftyphevm', b'ftyphevs', b'ftypmif1'):
+    # HEIC/HEIF: 12 bytes (offset 4)
+    if len(raw_bytes) >= 12 and raw_bytes[4:12] in (
+        b'ftypheic', b'ftypheix', b'ftyphevc', b'ftypheim',
+        b'ftypheis', b'ftyphevm', b'ftyphevs', b'ftypmif1'
+    ):
         logger.warning("[Vision] HEIC/HEIF image detected, OpenAI may reject it")
-        return "image/heic"  # 讓 OpenAI 自己決定怎麼回應
-    logger.warning("[Vision] unknown image format, first bytes: %s", raw_bytes[:16].hex())
+        return "image/heic"
+    logger.warning("[Vision] unknown image format, first bytes: %s",
+                   raw_bytes[:16].hex() if raw_bytes else "<empty>")
     return "image/jpeg"  # safest fallback
 
 
@@ -6278,6 +6386,7 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
                 custom_translation_examples.append(new_ex)
                 if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
                     custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+                _save_examples_to_disk()  # v3.9.29: 修補隱性 bug
     _save_translation_log_to_disk()
     save_settings()
     return True, target.get("src", "")[:80]
@@ -12989,6 +13098,7 @@ def api_translation_log():
                     custom_translation_examples.append(new_ex)
                     if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
                         custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+                    _save_examples_to_disk()  # v3.9.29: 修補隱性 bug
                 _save_translation_log_to_disk()
                 return jsonify({"ok": True})
         return jsonify({"error": "not found"}), 404
@@ -15398,12 +15508,21 @@ def debug_vision_test():
                     ]
                 }
             ],
+            "timeout": 30,
         }
-        if target_model.startswith("gpt-5") or target_model.startswith("o1") or target_model.startswith("o3"):
-            kwargs["max_completion_tokens"] = 8000
-        else:
+        # v3.9.28: 用 model_supports 過濾,跟主流程一致
+        if model_supports(target_model, "max_completion_tokens"):
+            kwargs["max_completion_tokens"] = 3000
+        elif model_supports(target_model, "max_tokens"):
             kwargs["max_tokens"] = 500
+        if model_supports(target_model, "temperature"):
             kwargs["temperature"] = 0.0
+        if model_supports(target_model, "reasoning_effort"):
+            _opt = optimal_reasoning_for_translation(target_model)
+            if _opt:
+                kwargs["reasoning_effort"] = _opt
+        if model_supports(target_model, "verbosity"):
+            kwargs["verbosity"] = "high"  # vision/OCR 任務
         
         r = oai.chat.completions.create(**kwargs)
         content = r.choices[0].message.content if r.choices else None
