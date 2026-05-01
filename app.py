@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.14-0501-vision-gpt5-fixed"
+VERSION = "v3.9.16-0501-vision-minimal-debug"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4943,65 +4943,56 @@ VISION_FALLBACK_MODEL = "gpt-4o-mini"
 
 
 def _vision_call(messages, max_tokens, cache_key=None):
-    """v3.8: Centralised vision call with auto-fallback.
-
-    Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
-    Caller passes pre-built messages array.
-    Optional cache_key for sticky-routing prompt caching.
-    v3.9: VISION_MODEL is now read fresh from globals on every call so admin
-    panel changes take effect immediately without server restart.
+    """v3.9.16: 極簡版,照官方文件最基本範例。
+    所有「優化」全部拿掉,只送 model + messages + token limit。
+    讓它**能跑**比讓它「最佳」重要。
     
-    v3.9.14: 對 GPT-5 系列做 OCR 必須:
-      1. 不能用 verbosity=low(會讓 OCR 輸出被截斷成摘要,而非完整文字)
-      2. 不能用 reasoning_effort=minimal(圖像辨識需要實際思考)
-      3. max_completion_tokens 要拉高(GPT-5 reasoning 會吃掉一部分 tokens)
-    根據 OpenAI 官方文件:GPT-5 vision 模式預設 detail=auto 等同 original,
-    保留更多視覺細節。我們只需給它足夠 budget 跟 reasoning effort,不要用 verbosity 限制輸出。
+    Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
     """
     last_err = None
-    primary = VISION_MODEL  # snapshot at call time so reads are consistent
+    primary = VISION_MODEL
     for attempt_model in (primary, VISION_FALLBACK_MODEL):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
+            # v3.9.16: 極簡 — 只用 model + messages
+            # GPT-5 系列要用 max_completion_tokens,GPT-4 系列要用 max_tokens
+            # 給 8000 budget 確保 GPT-5 reasoning + 完整 OCR 輸出都夠
             kwargs = {
                 "model": attempt_model,
                 "messages": messages,
             }
-            # v3.9.14: GPT-5 系列 reasoning 會吃 tokens,OCR 給 3x budget
-            _is_gpt5 = attempt_model.startswith("gpt-5")
-            _budget = max_tokens * 3 if _is_gpt5 else max_tokens
-            if model_supports(attempt_model, "max_completion_tokens"):
-                kwargs["max_completion_tokens"] = _budget
-            elif model_supports(attempt_model, "max_tokens"):
+            if attempt_model.startswith("gpt-5") or attempt_model.startswith("o1") or attempt_model.startswith("o3") or attempt_model.startswith("o4"):
+                kwargs["max_completion_tokens"] = 8000
+            else:
                 kwargs["max_tokens"] = max_tokens
-            if model_supports(attempt_model, "temperature"):
-                kwargs["temperature"] = translation_temperature
-            # v3.9.14: OCR 用 reasoning_effort=low(不是 minimal),GPT-5 才會認真讀圖
-            # 'gpt5_none' 家族(5.1/5.2)用 'low';'gpt5_minimal' 家族(5/5.4/5.5)也用 'low'
-            if model_supports(attempt_model, "reasoning_effort"):
-                kwargs["reasoning_effort"] = "low"
-            # v3.9.14: 拿掉 verbosity=low — OCR 需要完整輸出,verbosity 會壓縮
-            # (verbosity 留給純翻譯任務用,不該用於 vision)
-            if cache_key and model_supports(attempt_model, "prompt_cache_key"):
-                kwargs["prompt_cache_key"] = cache_key
+                kwargs["temperature"] = 0.0
+            
+            logger.info("[Vision] calling %s with kwargs keys=%s", attempt_model, list(kwargs.keys()))
             r = oai.chat.completions.create(**kwargs)
+            
             if attempt_model != primary:
                 logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
-            # v3.9.14: 偵錯 logging
+            
+            # v3.9.16: 詳細 logging
             try:
                 _content = r.choices[0].message.content if r.choices else None
+                _finish = r.choices[0].finish_reason if r.choices else None
                 _usage = r.usage if hasattr(r, 'usage') else None
-                logger.info("[Vision] model=%s ok, content_len=%d, usage=%s",
+                logger.info("[Vision] model=%s ok, finish=%s, content_len=%d, usage=%s",
                             attempt_model,
+                            _finish,
                             len(_content) if _content else 0,
-                            str(_usage)[:200] if _usage else "n/a")
-            except Exception:
-                pass
+                            str(_usage)[:300] if _usage else "n/a")
+                # 如果 finish_reason 是 length 表示 token 不夠
+                if _finish == "length":
+                    logger.warning("[Vision] WARNING: finish_reason=length, output truncated!")
+            except Exception as _le:
+                logger.warning("[Vision] logging error: %s", _le)
             return r
         except Exception as e:
             last_err = e
-            logger.warning("[Vision] model %s failed: %s", attempt_model, e)
+            logger.warning("[Vision] model %s failed: %r", attempt_model, e)
             continue
     raise last_err if last_err else RuntimeError("vision call failed")
 
@@ -6972,32 +6963,31 @@ def _process_pending_image_translate_inner(event, message_id):
     logger.info("[ImgAsk] postback triggered for msg=%s, pending_count=%d",
                 message_id, len(_all_pending))
     
-    # 統一回覆 helper:reply_token 失效時改用 push_message
+    # v3.9.15: 直接 push(reply_token 已被外層 "🔄 正在翻譯圖片..." 用掉)
+    # 從 event.source 抓 group_id;若失敗才 fallback 用 info 裡的
+    _src = getattr(event, 'source', None)
+    _push_to = (getattr(_src, 'group_id', None) or
+                getattr(_src, 'room_id', None) or
+                getattr(_src, 'user_id', None))
+    
     def _reply_or_push(text):
+        target = _push_to
+        if not target and info:
+            target = info.get("group_id")
+        if not target:
+            logger.error("[ImgAsk] no push target! cannot send: %s", text[:80])
+            return False
         try:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
+                api.push_message(PushMessageRequest(
+                    to=target,
                     messages=[TextMessage(text=text)]
                 ))
-            logger.info("[ImgAsk] reply sent: %s", text[:80])
+            logger.info("[ImgAsk] push sent to %s: %s", target[:8], text[:80])
             return True
-        except Exception as _re:
-            logger.warning("[ImgAsk] reply_message failed (%s), trying push", _re)
-            try:
-                gid = info["group_id"] if info else None
-                if gid:
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        api.push_message(PushMessageRequest(
-                            to=gid,
-                            messages=[TextMessage(text=text)]
-                        ))
-                    logger.info("[ImgAsk] push sent")
-                    return True
-            except Exception as _pe:
-                logger.error("[ImgAsk] both reply and push failed: %s", _pe)
+        except Exception as _pe:
+            logger.error("[ImgAsk] push failed: %s | text=%s", _pe, text[:80])
             return False
 
     info = _pending_img_pop(message_id)
@@ -7472,7 +7462,22 @@ if PostbackEvent:
 
         # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」或「不用」
         if "img_translate" in params:
-            _process_pending_image_translate(event, params["img_translate"])
+            # v3.9.15: 立刻 reply 確認收到(reply_token 必須在 1 分鐘內用掉)
+            # 然後用 push 發實際翻譯結果(OCR + translate 可能需要 10+ 秒)
+            msg_id = params["img_translate"]
+            logger.info("[ImgAsk] postback received, msg_id=%s", msg_id)
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="🔄 正在翻譯圖片...")]
+                    ))
+                logger.info("[ImgAsk] ack reply sent")
+            except Exception as _ake:
+                logger.warning("[ImgAsk] ack reply failed (token may be expired): %s", _ake)
+            # 然後處理 OCR + 翻譯,用 push 送結果
+            _process_pending_image_translate(event, msg_id)
             return
         if "img_skip" in params:
             _msgid = params["img_skip"]
@@ -14710,6 +14715,134 @@ def admin_health_check():
     h.append(f'<div class="dim" style="font-size:11px;text-align:center;margin-top:20px">JSON: <a href="?key={key_param}&format=json" style="color:#7c6fef">?format=json</a></div>')
     h.append('</body></html>')
     return Response("\n".join(h), mimetype="text/html; charset=utf-8")
+
+
+@app.route("/debug/vision-test", methods=["GET"])
+def debug_vision_test():
+    """v3.9.16: 用 hardcode 的小圖測試 vision call,確認 OpenAI vision API 能否成功。
+    繞過 LINE webhook,從瀏覽器直接測試 _vision_call → ocr_image_openai。
+    
+    Usage: GET /debug/vision-test?key=YOUR_ADMIN_KEY[&model=gpt-5-mini]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    if not oai:
+        return jsonify({"error": "OpenAI client not initialized"}), 500
+    
+    # 1x1 紅色像素 PNG(最小可能的圖片,只是要測 API 通)
+    # 但 1x1 沒文字,所以也測試一張內含文字的小圖
+    # 這是「Hello」黑字白底 100x40 PNG(base64)
+    test_image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAoCAYAAAAIeF9DAAAAAXNSR0IArs4c6QAAAARnQU1BAACx"
+        "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAGRSURBVHhe7ZmxasMwFEUfSqFkKGRoll2X4MWL"
+        "wYsXf0E/IH/QH+gP9Av6B/2ALl26FDIE0iEZAumQDF1cP/skP1tWnGRpDF7uAYHss4xBz2/KkEcg"
+        "iVQYJEKKGFKEmFKEGCnFCKlSjJBSiZBShJpQUI2QQoaYRoeYRgcRhqQYEsOQGENiGBJjSAxDYgyJ"
+        "YUiMITEMiTEkhiExhsQwJMaQGAYoEsOQGENiDIkxJIYhMYbEMCSGITGGxDAkhiExDIkxJIYhMQyJ"
+        "MSSGITGGxDAkhiExhsQwJMaQGEZmEUg6+QFvdpqOOvB30AAAAABJRU5ErkJggg=="
+    )
+    
+    requested_model = request.args.get("model", "")
+    
+    result = {
+        "ok": False,
+        "vision_model_global": VISION_MODEL,
+        "vision_fallback_global": VISION_FALLBACK_MODEL,
+        "openai_client_set": bool(oai),
+        "stages": [],
+    }
+    
+    # Stage 1: 直接呼叫 OpenAI(不經過 _vision_call wrapper)
+    try:
+        target_model = requested_model or VISION_MODEL
+        result["stages"].append({"stage": "raw_call_attempt", "model": target_model})
+        
+        kwargs = {
+            "model": target_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What text do you see in this image? Output only the text."},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + test_image_b64}},
+                    ]
+                }
+            ],
+        }
+        if target_model.startswith("gpt-5") or target_model.startswith("o1") or target_model.startswith("o3"):
+            kwargs["max_completion_tokens"] = 8000
+        else:
+            kwargs["max_tokens"] = 200
+            kwargs["temperature"] = 0.0
+        
+        r = oai.chat.completions.create(**kwargs)
+        content = r.choices[0].message.content if r.choices else None
+        finish = r.choices[0].finish_reason if r.choices else None
+        usage = r.usage.model_dump() if hasattr(r, 'usage') and r.usage else None
+        
+        result["stages"].append({
+            "stage": "raw_call_ok",
+            "content": content,
+            "content_len": len(content) if content else 0,
+            "finish_reason": finish,
+            "usage": usage,
+        })
+        result["ok"] = True
+    except Exception as e:
+        import traceback
+        result["stages"].append({
+            "stage": "raw_call_failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc()[-2000:],
+        })
+    
+    # Stage 2: 透過 _vision_call wrapper
+    try:
+        result["stages"].append({"stage": "wrapper_call_attempt"})
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What text do you see in this image?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + test_image_b64}},
+                ]
+            }
+        ]
+        r2 = _vision_call(msgs, max_tokens=200)
+        content2 = r2.choices[0].message.content if r2.choices else None
+        result["stages"].append({
+            "stage": "wrapper_call_ok",
+            "content": content2,
+            "content_len": len(content2) if content2 else 0,
+        })
+    except Exception as e:
+        import traceback
+        result["stages"].append({
+            "stage": "wrapper_call_failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc()[-2000:],
+        })
+    
+    # 用 HTML 格式回應,手機方便看
+    html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    html += "<style>body{font-family:monospace;padding:10px;background:#0d0d1a;color:#e0e0e0;font-size:12px;}"
+    html += "pre{white-space:pre-wrap;word-break:break-all;background:#1a1a2e;padding:8px;border-radius:6px;border:1px solid #2a2a3e;}"
+    html += "h2{color:#7c6fef}.ok{color:#43b581}.err{color:#f04747}</style></head><body>"
+    html += "<h2>🔍 Vision Debug Report</h2>"
+    html += f"<p>VISION_MODEL: <b>{VISION_MODEL}</b></p>"
+    html += f"<p>VISION_FALLBACK: <b>{VISION_FALLBACK_MODEL}</b></p>"
+    html += f"<p>整體狀態: <span class='{'ok' if result['ok'] else 'err'}'>{'✅ 成功' if result['ok'] else '❌ 失敗'}</span></p>"
+    html += "<hr><h3>各階段結果:</h3>"
+    import json as _json
+    html += "<pre>" + _json.dumps(result["stages"], ensure_ascii=False, indent=2) + "</pre>"
+    html += "</body></html>"
+    
+    fmt = request.args.get("format", "html")
+    if fmt == "json":
+        return jsonify(result)
+    from flask import Response
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/debug/last-translate", methods=["GET"])
