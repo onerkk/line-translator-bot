@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.17-0501-mime-detect-fix"
+VERSION = "v3.9.18-0501-recent-images-debug"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -150,6 +150,8 @@ group_settings = {}
 group_target_lang = {}
 # Image translation toggle per group, default True
 group_img_settings = {}
+# v3.9.18: 記錄最後 5 張收到的 LINE 圖片 message_id(供 /debug/recent-images 使用)
+_last_image_received_msgs = []  # list of dicts: {msg_id, group_id, ts}
 # v3.9.10: 圖片翻譯詢問模式 — 收到圖片不自動翻,先問使用者要不要翻
 # 結構:group_img_settings=False AND group_img_ask_settings=True → 詢問模式
 #       group_img_settings=False AND group_img_ask_settings=False → 完全不翻
@@ -6769,6 +6771,19 @@ def handle_image(event):
     user_id = getattr(source, 'user_id', None)
     is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     logger.info("Image received from %s", group_id)
+    
+    # v3.9.18: 記錄到 recent images(供 /debug/recent-images 使用)
+    try:
+        _last_image_received_msgs.append({
+            "msg_id": event.message.id,
+            "group_id": group_id or "",
+            "ts": int(time.time()),
+        })
+        # 只保留最後 10 張
+        if len(_last_image_received_msgs) > 10:
+            _last_image_received_msgs.pop(0)
+    except Exception:
+        pass
 
     # Record user for whitelist (even if translation is off)
     if group_id and user_id and not is_dm_img:
@@ -14757,6 +14772,38 @@ def admin_health_check():
     h.append(f'<div class="dim" style="font-size:11px;text-align:center;margin-top:20px">JSON: <a href="?key={key_param}&format=json" style="color:#7c6fef">?format=json</a></div>')
     h.append('</body></html>')
     return Response("\n".join(h), mimetype="text/html; charset=utf-8")
+
+
+@app.route("/debug/recent-images", methods=["GET"])
+def debug_recent_images():
+    """v3.9.18: 列出最近收到的 LINE 圖片,點擊就能用 vision-test 測"""
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    
+    html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    html += "<style>body{font-family:monospace;padding:10px;background:#0d0d1a;color:#e0e0e0;font-size:13px;}"
+    html += "h2{color:#7c6fef}a{color:#7FB3FF;display:block;margin:10px 0;padding:10px;background:#1a1a2e;border-radius:6px;text-decoration:none;border:1px solid #2a2a3e}"
+    html += "a:hover{background:#2a2a3e}.ts{color:#8a8a9a;font-size:11px}</style></head><body>"
+    html += "<h2>📷 最近收到的 LINE 圖片</h2>"
+    
+    if not _last_image_received_msgs:
+        html += "<p>(目前還沒收到任何圖片)<br>請先在 LINE 群組傳一張圖,然後重新整理本頁。</p>"
+    else:
+        html += f"<p>共 {len(_last_image_received_msgs)} 張(最新在最上)</p>"
+        import datetime as _dt
+        for img in reversed(_last_image_received_msgs):
+            ts_str = _dt.datetime.fromtimestamp(img["ts"]).strftime("%H:%M:%S")
+            test_url = f"/debug/vision-test?key={ADMIN_KEY}&msg_id={img['msg_id']}"
+            html += f'<a href="{test_url}">'
+            html += f'<div>msg_id: {img["msg_id"]}</div>'
+            html += f'<div>group: {img["group_id"][:20] if img["group_id"] else "DM"}</div>'
+            html += f'<div class="ts">收到時間: {ts_str}</div>'
+            html += f'<div style="color:#43b581;margin-top:4px">▶ 點此用此圖測試 vision</div>'
+            html += '</a>'
+    
+    html += "</body></html>"
+    from flask import Response
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/debug/vision-test", methods=["GET"])
