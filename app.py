@@ -8846,8 +8846,13 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
-<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
-⭐ = 推薦。<b>gpt-4.1-mini</b> 是工廠翻譯最穩的選擇,你已累積的範例對它效果最好。GPT-5 系列是 reasoning model,對 fewshot 範例的順從度反而不如 GPT-4 系列。價錢格式:每百萬 input/output token (USD)。
+<div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
+<b>📋 模型選擇指引(v3.9.9 後皆已最佳化)</b><br>
+🔹 <b>gpt-4.1-mini</b>($0.40 / $1.60)— 經典款,翻譯特化,Intento 2025 評測 #1。便宜、快、對範例順從。<br>
+🔹 <b>gpt-5-mini</b>($0.25 / $2.00)— <b>更便宜</b>,有 reasoning 即使 minimal 模式也對複雜句更好。<br>
+🔹 <b>gpt-5.4-mini</b>($0.75 / $4.50)— 最新一代,複雜被動句、長公告處理更強。<br>
+🔹 <b>gpt-4.1</b>($2.00 / $8.00)— 4.1 家族旗艦,需穩定再現性時用。<br>
+<b>系統會自動套用 reasoning_effort=minimal、verbosity=low 給 GPT-5 系列</b>(實測有效防止 GPT-5 自由發揮拆條列、加 ⚠️)。價錢格式:每百萬 input/output token (USD)。
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
