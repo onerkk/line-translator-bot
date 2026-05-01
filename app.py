@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.5-0427-instant-feedback"
+VERSION = "v3.9-0501-vision-admin-selectable"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4612,7 +4612,11 @@ def format_storage_for_work_order(customer_name):
 # v3.8: Vision model upgrade. gpt-4o-mini → gpt-5-mini for OCR.
 # gpt-5-mini has noticeably better small-text + handwriting recognition,
 # critical for factory work-order photos and shift schedule snapshots.
-# Auto-fallback to gpt-4o-mini if gpt-5-mini unavailable.
+# Auto-fallback to gpt-4o-mini if primary unavailable.
+# v3.9 (2026-05): made into a runtime-mutable global so admin panel can change it
+# without redeploy, matching the behaviour of model_default / model_upgrade for translation.
+# GPT-5.5 (released 2026-04-23) is also supported here when API access is enabled
+# on your tier; it auto-falls back to gpt-5-mini → gpt-4o-mini on failure.
 VISION_MODEL = os.environ.get("VISION_MODEL", "gpt-5-mini")
 VISION_FALLBACK_MODEL = "gpt-4o-mini"
 
@@ -4623,10 +4627,13 @@ def _vision_call(messages, max_tokens, cache_key=None):
     Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
     Caller passes pre-built messages array.
     Optional cache_key for sticky-routing prompt caching.
+    v3.9: VISION_MODEL is now read fresh from globals on every call so admin
+    panel changes take effect immediately without server restart.
     """
     last_err = None
-    for attempt_model in (VISION_MODEL, VISION_FALLBACK_MODEL):
-        if attempt_model == VISION_FALLBACK_MODEL and VISION_MODEL == VISION_FALLBACK_MODEL:
+    primary = VISION_MODEL  # snapshot at call time so reads are consistent
+    for attempt_model in (primary, VISION_FALLBACK_MODEL):
+        if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
         try:
             kwargs = {
@@ -4634,15 +4641,15 @@ def _vision_call(messages, max_tokens, cache_key=None):
                 "messages": messages,
                 "max_tokens": max_tokens,
             }
-            # gpt-5 family ignores temperature; only set for legacy models.
+            # gpt-5 family (incl. gpt-5.5) ignores temperature; only set for legacy models.
             if not attempt_model.startswith("gpt-5"):
                 kwargs["temperature"] = translation_temperature
             # v3.8: prompt_cache_key for sticky routing on OCR/vision calls.
             if cache_key:
                 kwargs["prompt_cache_key"] = cache_key
             r = oai.chat.completions.create(**kwargs)
-            if attempt_model != VISION_MODEL:
-                logger.warning("Vision fell back from %s to %s", VISION_MODEL, attempt_model)
+            if attempt_model != primary:
+                logger.warning("Vision fell back from %s to %s", primary, attempt_model)
             return r
         except Exception as e:
             last_err = e
@@ -8523,7 +8530,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="GPT-4.1 系列（推薦）">
+<optgroup label="GPT-5.5 系列（最新，2026-04）">
+<option value="gpt-5.5-mini">gpt-5.5-mini 🆕</option>
+<option value="gpt-5.5">gpt-5.5 🆕</option>
+</optgroup>
+<optgroup label="GPT-4.1 系列（穩定推薦）">
 <option value="gpt-4.1-mini">gpt-4.1-mini ⭐</option>
 <option value="gpt-4.1-nano">gpt-4.1-nano（最便宜）</option>
 <option value="gpt-4.1">gpt-4.1</option>
@@ -8546,7 +8557,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<optgroup label="GPT-4.1 系列（推薦）">
+<optgroup label="GPT-5.5 系列（最新，2026-04）">
+<option value="gpt-5.5">gpt-5.5 🆕</option>
+<option value="gpt-5.5-mini">gpt-5.5-mini 🆕</option>
+</optgroup>
+<optgroup label="GPT-4.1 系列（穩定推薦）">
 <option value="gpt-4.1">gpt-4.1 ⭐</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini</option>
 </optgroup>
@@ -8567,6 +8582,33 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+
+<div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
+<div style="font-weight:600;margin-bottom:6px">📷 照片分析模型（Vision / OCR）</div>
+<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖等。失敗時自動 fallback 到 gpt-4o-mini，避免單一模型不可用造成中斷。</div>
+<select id="visionModel" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:8px">
+<optgroup label="GPT-5.5 系列（最新，2026-04，視覺最強）">
+<option value="gpt-5.5">gpt-5.5 🆕（最強，較貴）</option>
+<option value="gpt-5.5-mini">gpt-5.5-mini 🆕（性價比高）</option>
+</optgroup>
+<optgroup label="GPT-5 系列（小字、手寫辨識佳）">
+<option value="gpt-5-mini">gpt-5-mini ⭐（目前預設）</option>
+<option value="gpt-5">gpt-5（最強，需 Tier 2+）</option>
+<option value="gpt-5-nano">gpt-5-nano（最便宜）</option>
+</optgroup>
+<optgroup label="GPT-4.1 系列">
+<option value="gpt-4.1">gpt-4.1</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini</option>
+</optgroup>
+<optgroup label="舊模型（已過時）">
+<option value="gpt-4o">gpt-4o</option>
+<option value="gpt-4o-mini">gpt-4o-mini（fallback 用）</option>
+</optgroup>
+</select>
+<button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
+<div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+<div style="font-size:11px;color:#666;margin-top:6px">⚠️ 若新模型在你的 OpenAI 帳戶尚未開通,系統會自動 fallback 到 gpt-4o-mini,翻譯不會中斷。</div>
+</div>
 </div>
 </div>
 
@@ -10153,6 +10195,8 @@ async function _loadFeatures(gid){
   if(!gid){
     document.getElementById('modelDefault').value=d.model_default||'gpt-4.1-mini';
     document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-4.1';
+    // v3.9: vision (照片分析) model
+    if(document.getElementById('visionModel')) document.getElementById('visionModel').value=d.vision_model||'gpt-5-mini';
     // v3.2-0426d Batch B: load advanced settings
     if(document.getElementById('ttemp')) document.getElementById('ttemp').value=(d.translation_temperature!==undefined?d.translation_temperature:0);
     if(document.getElementById('ttopp')) document.getElementById('ttopp').value=(d.translation_top_p!==undefined?d.translation_top_p:1.0);
@@ -10213,6 +10257,15 @@ function saveModelSettings(){
       toast('模型設定已儲存');
       var info=mt>0?'≥'+mt+'字用 '+mu+'，其餘用 '+md:'全部用 '+md;
       document.getElementById('modelSaveResult').innerHTML='<span style="color:#43b581">✅ '+info+'</span>';
+    }
+  });
+}
+function saveVisionModel(){
+  var vm=document.getElementById('visionModel').value;
+  api('/features','POST',{vision_model:vm}).then(function(d){
+    if(d){
+      toast('照片分析模型已儲存');
+      document.getElementById('visionSaveResult').innerHTML='<span style="color:#43b581">✅ 照片分析改用 '+vm+'（失敗自動 fallback 到 gpt-4o-mini）</span>';
     }
   });
 }
@@ -10777,6 +10830,7 @@ def _do_save_impl():
             "model_default": model_default,
             "model_upgrade": model_upgrade,
             "model_threshold": model_threshold,
+            "vision_model": VISION_MODEL,
             "user_pictures": user_pictures,
             "pw1_text": pw1_text,
             "pw2_text": pw2_text,
@@ -10812,6 +10866,7 @@ def load_settings():
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
     global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
+    global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
     data = _load_file_from_github("bot_settings.json", branch="data")
@@ -11050,6 +11105,9 @@ def load_settings():
             model_upgrade = data["model_upgrade"]
         if "model_threshold" in data:
             model_threshold = int(data["model_threshold"])
+        # v3.9: vision (照片分析) model
+        if "vision_model" in data:
+            VISION_MODEL = str(data["vision_model"])
         user_pictures.update(data.get("user_pictures", {}))
         if "pw1_text" in data:
             pw1_text = data["pw1_text"]
@@ -11649,6 +11707,7 @@ def api_admin_features():
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
+    global VISION_MODEL
     if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
@@ -11731,6 +11790,9 @@ def api_admin_features():
                 model_upgrade = str(data["model_upgrade"])
             if "model_threshold" in data:
                 model_threshold = int(data["model_threshold"])
+            # v3.9: vision (照片分析) model selectable from admin panel
+            if "vision_model" in data:
+                VISION_MODEL = str(data["vision_model"])
         # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
@@ -11799,6 +11861,7 @@ def api_admin_features():
         "model_default": model_default,
         "model_upgrade": model_upgrade,
         "model_threshold": model_threshold,
+        "vision_model": VISION_MODEL,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
         "bot_info": get_bot_info(),
