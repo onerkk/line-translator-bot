@@ -250,8 +250,8 @@
   "send_user_id_to_openai": true,
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
-  "model_default": "gpt-4.1-mini",
-  "model_upgrade": "gpt-4.1",
+  "model_default": "gpt-5-mini",
+  "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
   "vision_model": "gpt-5-mini",
   "user_pictures": {
