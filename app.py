@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.22-0501-translate-timeout-fix"
+VERSION = "v3.9.23-0501-reply-fallback-push"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -7145,21 +7145,38 @@ def handle_image(event):
     # v3.8: thread quote_token onto image translation reply.
     qt = getattr(event.message, 'quote_token', None)
     try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            msg_obj = TextMessage(text=reply)
-            if qt:
-                try:
-                    msg_obj.quote_token = qt
-                except Exception:
-                    pass
-            api.reply_message(ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[msg_obj]
-            ))
-        _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply)})
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                msg_obj = TextMessage(text=reply)
+                if qt:
+                    try:
+                        msg_obj.quote_token = qt
+                    except Exception:
+                        pass
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[msg_obj]
+                ))
+            _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "reply"})
+        except Exception as _re_reply:
+            # v3.9.23: reply_token 過期或無效 → fallback 用 push
+            _event_log_write("image_step_error", {"step": "reply", "err": str(_re_reply)[:300], "fallback": "push"})
+            logger.warning("Reply failed, trying push: %s", _re_reply)
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    msg_obj = TextMessage(text=reply)
+                    api.push_message(PushMessageRequest(
+                        to=group_id,
+                        messages=[msg_obj]
+                    ))
+                _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "push"})
+            except Exception as _pe:
+                _event_log_write("image_step_error", {"step": "push", "err": str(_pe)[:300]})
+                logger.exception("Push also failed: %s", _pe)
     except Exception as _re:
-        _event_log_write("image_step_error", {"step": "reply", "err": str(_re)[:300]})
+        _event_log_write("image_step_error", {"step": "reply_outer", "err": str(_re)[:300]})
         logger.exception("Reply exception: %s", _re)
 
 
