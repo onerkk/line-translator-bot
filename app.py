@@ -13181,6 +13181,53 @@ def api_translation_log():
         return jsonify({"ok": True})
 
 
+@app.route("/api/admin/tlog-diag", methods=["GET"])
+def api_tlog_diag():
+    """v3.9.33 翻譯品質儀表板診斷端點。
+    回傳 translation_log 的記憶體狀態 + 磁碟狀態,協助判斷儀表板為什麼空白。
+    用法:GET /api/admin/tlog-diag?token=ADMIN_TOKEN
+    """
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    import os as _os
+    diag = {
+        "logging_enabled": translation_logging_enabled,
+        "memory_count": len(translation_log),
+        "disk_path": TRANSLATION_LOG_FILE,
+        "disk_exists": _os.path.exists(TRANSLATION_LOG_FILE) if TRANSLATION_LOG_FILE else False,
+        "disk_size_bytes": (_os.path.getsize(TRANSLATION_LOG_FILE)
+                            if TRANSLATION_LOG_FILE and _os.path.exists(TRANSLATION_LOG_FILE) else 0),
+        "disk_writable": False,
+        "now_ts": int(time.time()),
+        "now_readable": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+    }
+    # 檢測寫入權限
+    try:
+        folder = _os.path.dirname(_os.path.abspath(TRANSLATION_LOG_FILE)) if TRANSLATION_LOG_FILE else "."
+        diag["disk_writable"] = _os.access(folder or ".", _os.W_OK)
+        diag["disk_folder"] = folder
+    except Exception as _e:
+        diag["disk_check_error"] = str(_e)
+    # 顯示記憶體中最近 5 筆的時間戳和摘要
+    recent = []
+    for x in translation_log[-5:]:
+        recent.append({
+            "ts": x.get("ts"),
+            "ts_readable": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(x.get("ts", 0))) if x.get("ts") else "N/A",
+            "src_preview": (x.get("src") or "")[:40],
+            "tgt_preview": (x.get("tgt") or "")[:40],
+            "group_id": (x.get("group_id") or "")[:20],
+            "model": x.get("model"),
+        })
+    diag["recent_5_in_memory"] = recent
+    # 檢查 7 天內有多少筆
+    cutoff_7d = int(time.time()) - 7 * 86400
+    diag["count_last_7_days"] = sum(1 for x in translation_log if x.get("ts", 0) >= cutoff_7d)
+    cutoff_1d = int(time.time()) - 86400
+    diag["count_last_1_day"] = sum(1 for x in translation_log if x.get("ts", 0) >= cutoff_1d)
+    return jsonify(diag)
+
+
 @app.route("/api/admin/translation-stats", methods=["GET"])
 def api_translation_stats():
     """v3.6 翻譯品質監控儀表板 - 五大指標 + 各群組分數"""
