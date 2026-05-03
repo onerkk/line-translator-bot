@@ -6808,6 +6808,18 @@ def handle_command(text, group_id, user_id=None):
         if not is_cmd_enabled(group_id, "pkg"):
             return None
         return handle_pkg_command(text)
+    elif cmd == "/saran":
+        # v3.9.31: 提案系統網址 — 用純文字回傳,使用者可長按複製或用外部瀏覽器開啟
+        return ("💡 提案系統 / Sistem Saran\n"
+                "長按網址可複製或用外部瀏覽器開啟\n"
+                "Tekan lama untuk salin atau buka di browser luar\n\n"
+                "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList")
+    elif cmd == "/absen":
+        # v3.9.31: 差勤系統網址 — 同上
+        return ("📅 差勤系統 / Sistem Absen\n"
+                "長按網址可複製或用外部瀏覽器開啟\n"
+                "Tekan lama untuk salin atau buka di browser luar\n\n"
+                "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS")
     return None
 
 
@@ -9254,15 +9266,16 @@ def build_quick_reply(group_id=None):
                 items.append(QuickReplyItem(action=MsgLocationAction(label="📍 位置/Lokasi")))
             except Exception:
                 pass
-        # URI-based buttons (open external links)
+        # URI-based buttons → 改成 MessageAction,讓使用者能複製網址 / 用外部瀏覽器開啟
+        # (LINE 的 URIAction 強制用內建瀏覽器,無法複製網址)
         try:
-            items.append(QuickReplyItem(action=MsgURIAction(
+            items.append(QuickReplyItem(action=MessageAction(
                 label="💡 提案/Saran",
-                uri="https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList"
+                text="/saran"
             )))
-            items.append(QuickReplyItem(action=MsgURIAction(
+            items.append(QuickReplyItem(action=MessageAction(
                 label="📅 差勤/Absen",
-                uri="https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=人事_WS"
+                text="/absen"
             )))
         except Exception:
             pass
