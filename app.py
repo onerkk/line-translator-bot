@@ -7577,8 +7577,11 @@ def _process_pending_image_translate_inner(event, message_id):
 
     info = _pending_img_pop(message_id)
     if not info:
-        logger.warning("[ImgAsk] message %s not in pending file (expired or other worker fetched)", message_id)
-        _reply_or_push("⚠️ 圖片資訊已過期(超過 1 分鐘),請重新傳一次")
+        # v3.9.30: 完全靜默 — 兩種情況:
+        # (1) 外層已攔截過(已過期)→ 不應該到這裡,但保險
+        # (2) Race condition:另一個 worker 已搶先 pop 並處理中 → 那個 worker 會 push 翻譯結果
+        # 兩種情況都不該再發訊息打擾群組
+        logger.warning("[ImgAsk] message %s not in pending (expired or other worker fetched) → silent", message_id)
         return
 
     group_id = info["group_id"]
@@ -8047,12 +8050,21 @@ if PostbackEvent:
             send_help_flex(event.reply_token, primary_lang=lang)
             return
 
-        # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」或「不用」
+        # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」
         if "img_translate" in params:
-            # v3.9.15: 立刻 reply 確認收到(reply_token 必須在 1 分鐘內用掉)
-            # 然後用 push 發實際翻譯結果(OCR + translate 可能需要 10+ 秒)
             msg_id = params["img_translate"]
             logger.info("[ImgAsk] postback received, msg_id=%s", msg_id)
+
+            # v3.9.30: 過期 / 已處理 → 完全靜默,不發任何訊息(避免騷擾群組)
+            # 先檢查 pending 是否還在;不在就直接 return,連 ack 都不發
+            _pending_check = _load_pending_imgs()
+            if msg_id not in _pending_check:
+                logger.info("[ImgAsk] msg_id=%s not in pending (expired or already processed) → silent ignore", msg_id)
+                return
+
+            # 只有確認還在 pending 才 ack + 進入翻譯流程
+            # 立刻 reply 確認收到(reply_token 必須在 1 分鐘內用掉)
+            # 然後用 push 發實際翻譯結果(OCR + translate 可能需要 10+ 秒)
             try:
                 with ApiClient(configuration) as api_client:
                     api = MessagingApi(api_client)
@@ -8067,7 +8079,13 @@ if PostbackEvent:
             _process_pending_image_translate(event, msg_id)
             return
         if "img_skip" in params:
+            # v3.9.30: 舊版 Flex 殘留的按鈕(新版已移除「跳過」),保留處理避免 500
+            # 過期 → 完全靜默;還在 pending → pop 掉並回覆已跳過
             _msgid = params["img_skip"]
+            _pending_check = _load_pending_imgs()
+            if _msgid not in _pending_check:
+                logger.info("[ImgAsk] img_skip msg_id=%s expired → silent ignore", _msgid)
+                return
             _pending_img_pop(_msgid)
             try:
                 with ApiClient(configuration) as api_client:
