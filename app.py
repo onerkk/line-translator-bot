@@ -6193,14 +6193,14 @@ def build_image_ask_flex(message_id):
 
 
 def handle_lang_command(text, group_id):
-    return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯"
+    return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯\nBot ini hanya mendukung terjemahan Mandarin ⇄ Indonesia"
 
 
 def handle_qry_command(text):
     """Handle /qry <customer_name> command to lookup storage area."""
     parts = text.strip().split(None, 1)
     if len(parts) < 2:
-        return "\u26a0\ufe0f \u8acb\u8f38\u5165\u5ba2\u6236\u540d\u7a31\n\u7bc4\u4f8b: /qry ABE\n\u7bc4\u4f8b: /qry \u4f73\u6771"
+        return "⚠️ 請輸入客戶名稱 / Masukkan nama pelanggan\n範例 / Contoh: /qry ABE\n範例 / Contoh: /qry 佳東"
     query = parts[1].strip()
     # Try exact match first
     entries = STORAGE_LOOKUP.get(query)
@@ -6218,18 +6218,18 @@ def handle_qry_command(text):
             query = matches[0]
             entries = STORAGE_LOOKUP[query]
         elif len(matches) > 1:
-            result = "\U0001f50d \u627e\u5230\u591a\u7b46\u7b26\u5408:\n"
+            result = "🔍 找到多筆符合 / Beberapa hasil ditemukan:\n"
             for m in matches[:10]:
-                result += "  \u2022 " + m + "\n"
+                result += "  • " + m + "\n"
             if len(matches) > 10:
-                result += "  ...(\u5171" + str(len(matches)) + "\u7b46)\n"
-            result += "\n\u8acb\u8f38\u5165\u5b8c\u6574\u5ba2\u6236\u540d\u7a31"
+                result += "  ...(共 / Total " + str(len(matches)) + " 筆)\n"
+            result += "\n請輸入完整客戶名稱 / Masukkan nama lengkap"
             return result
     if not entries:
-        return "\u274c \u627e\u4e0d\u5230\u5ba2\u6236: " + query + "\n\u8acb\u78ba\u8a8d\u540d\u7a31\u662f\u5426\u6b63\u78ba"
+        return "❌ 找不到客戶 / Pelanggan tidak ditemukan: " + query + "\n請確認名稱是否正確 / Mohon periksa nama"
     # Build response
     lines = []
-    lines.append("\U0001f4e6 " + query + " \u5132\u5340\u67e5\u8a62")
+    lines.append("📦 " + query + " 儲區查詢 / Cek gudang")
     lines.append("=" * 18)
     for length, area in entries:
         zh = format_length_zh(length)
@@ -6267,12 +6267,12 @@ def handle_pkg_command(text):
             matched_key = matches[0]
             entry = PACKAGING_LOOKUP[matched_key]
         elif len(matches) > 1:
-            result = "🔍 找到多筆符合:\n"
+            result = "🔍 找到多筆符合 / Beberapa hasil ditemukan:\n"
             for m in matches[:15]:
                 result += "  • " + m + "\n"
             return result
     if not entry:
-        return "❌ 找不到包裝碼: " + query
+        return "❌ 找不到包裝碼 / Kode kemasan tidak ditemukan: " + query
     # Build response - show specific fields in order
     # Match Excel headers by keyword → display label
     PKG_DISPLAY = [
@@ -6283,7 +6283,7 @@ def handle_pkg_command(text):
         ("固定繩",     ["固定繩", "固定"]),
     ]
     lines = []
-    lines.append("📦 包裝碼: " + matched_key)
+    lines.append("📦 包裝碼 / Kode kemasan: " + matched_key)
     lines.append("=" * 20)
     if isinstance(entry, dict):
         for display_label, keywords in PKG_DISPLAY:
@@ -6642,11 +6642,11 @@ def handle_command(text, group_id, user_id=None):
         for e in translation_log:
             if e.get("marked_wrong") and e.get("ts", 0) > cutoff:
                 recent_30d += 1
-        return (f"📊 翻譯品質統計\n"
-                f"累積修正範例：{total} / {CUSTOM_EXAMPLES_MAX}\n"
-                f"日誌中標錯：{wrong_count} 筆\n"
-                f"近 30 天標錯：{recent_30d} 筆\n"
-                f"距 fine-tune 門檻：{max(0, 300 - total)} 筆")
+        return (f"📊 翻譯品質統計 / Statistik kualitas terjemahan\n"
+                f"累積修正範例 / Contoh koreksi: {total} / {CUSTOM_EXAMPLES_MAX}\n"
+                f"日誌中標錯 / Ditandai salah: {wrong_count} 筆\n"
+                f"近 30 天標錯 / 30 hari terakhir: {recent_30d} 筆\n"
+                f"距 fine-tune 門檻 / Sisa untuk fine-tune: {max(0, 300 - total)} 筆")
 
     elif cmd == "/on":
         group_settings[group_id] = True
@@ -6683,57 +6683,57 @@ def handle_command(text, group_id, user_id=None):
     elif cmd == "/wo on":
         group_wo_settings[group_id] = True
         save_settings()
-        return "\u2705 \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u958b\u555f"
+        return "✅ 拍工單查儲區已開啟 / Foto WO cek gudang aktif"
     elif cmd == "/wo off":
         group_wo_settings[group_id] = False
         save_settings()
-        return "\u274c \u62cd\u5de5\u55ae\u67e5\u5132\u5340\u5df2\u95dc\u9589"
+        return "❌ 拍工單查儲區已關閉 / Foto WO cek gudang nonaktif"
     elif cmd == "/skip":
         if not user_id:
-            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
+            return "⚠️ 無法識別你的身分 / Tidak bisa mengenali identitas Anda"
         if group_id not in group_skip_users:
             group_skip_users[group_id] = set()
         group_skip_users[group_id].add(user_id)
         save_settings()
-        return "\u2705 \u5df2\u5c07\u4f60\u52a0\u5165\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f\nAnda ditambahkan ke daftar skip"
+        return "✅ 已將你加入白名單,你的訊息不會被翻譯\nAnda ditambahkan ke daftar skip, pesan Anda tidak akan diterjemahkan"
     elif cmd == "/unskip":
         if not user_id:
-            return "\u26a0\ufe0f \u7121\u6cd5\u8b58\u5225\u4f60\u7684\u8eab\u4efd"
+            return "⚠️ 無法識別你的身分 / Tidak bisa mengenali identitas Anda"
         if group_id in group_skip_users:
             group_skip_users[group_id].discard(user_id)
         save_settings()
-        return "\u2705 \u5df2\u5c07\u4f60\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u4f60\u7684\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f\nAnda dihapus dari daftar skip"
+        return "✅ 已將你移出白名單,你的訊息會被翻譯\nAnda dihapus dari daftar skip, pesan Anda akan diterjemahkan"
     elif text.strip().lower().startswith("/skipadd"):
         name_query = text.strip()[8:].strip()
         if not name_query:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipadd \u79cb\u60c5"
+            return "⚠️ 請輸入名字 / Masukkan nama\n範例 / Contoh: /skipadd 秋情"
         matches = find_user_by_name(group_id, name_query)
         if len(matches) == 0:
-            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d\n\u8a72\u7528\u6236\u9700\u5148\u5728\u7fa4\u7d44\u767c\u904e\u8a0a\u606f\u624d\u80fd\u88ab\u8a8d\u5230"
+            return "❌ 找不到「" + name_query + "」 / Tidak ditemukan\n該用戶需先在群組發過訊息才能被認到\nUser harus pernah kirim pesan di grup dulu"
         if len(matches) > 1:
-            names = "\n".join(["  \u2022 " + m[1] for m in matches])
-            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
+            names = "\n".join(["  • " + m[1] for m in matches])
+            return "🔍 找到多人符合 / Beberapa user ditemukan:\n" + names + "\n請輸入更完整的名字 / Masukkan nama yang lebih lengkap"
         uid, dname = matches[0]
         if group_id not in group_skip_users:
             group_skip_users[group_id] = set()
         group_skip_users[group_id].add(uid)
         save_settings()
-        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u52a0\u5165\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u4e0d\u6703\u88ab\u7ffb\u8b6f"
+        return "✅ 已將「" + dname + "」加入白名單,訊息不會被翻譯\n" + dname + " ditambahkan ke daftar skip, pesan tidak akan diterjemahkan"
     elif text.strip().lower().startswith("/skipdel"):
         name_query = text.strip()[8:].strip()
         if not name_query:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u540d\u5b57\n\u7bc4\u4f8b: /skipdel \u79cb\u60c5"
+            return "⚠️ 請輸入名字 / Masukkan nama\n範例 / Contoh: /skipdel 秋情"
         matches = find_user_by_name(group_id, name_query)
         if len(matches) == 0:
-            return "\u274c \u627e\u4e0d\u5230\u300c" + name_query + "\u300d"
+            return "❌ 找不到「" + name_query + "」 / Tidak ditemukan"
         if len(matches) > 1:
-            names = "\n".join(["  \u2022 " + m[1] for m in matches])
-            return "\U0001f50d \u627e\u5230\u591a\u4eba\u7b26\u5408\uff1a\n" + names + "\n\u8acb\u8f38\u5165\u66f4\u5b8c\u6574\u7684\u540d\u5b57"
+            names = "\n".join(["  • " + m[1] for m in matches])
+            return "🔍 找到多人符合 / Beberapa user ditemukan:\n" + names + "\n請輸入更完整的名字 / Masukkan nama yang lebih lengkap"
         uid, dname = matches[0]
         if group_id in group_skip_users:
             group_skip_users[group_id].discard(uid)
         save_settings()
-        return "\u2705 \u5df2\u5c07\u300c" + dname + "\u300d\u79fb\u51fa\u767d\u540d\u55ae\uff0c\u8a0a\u606f\u6703\u88ab\u7ffb\u8b6f"
+        return "✅ 已將「" + dname + "」移出白名單,訊息會被翻譯\n" + dname + " dihapus dari daftar skip, pesan akan diterjemahkan"
     elif cmd == "/skiplist":
         skipped = group_skip_users.get(group_id, set())
         if not skipped:
@@ -6751,14 +6751,18 @@ def handle_command(text, group_id, user_id=None):
         is_on = group_settings.get(group_id, True)
         if is_on:
             img_on = group_img_settings.get(group_id, True)
-            img_status = "\u2705 開啟" if img_on else "\u274c 關閉"
+            img_status = "✅ 開啟 / Aktif" if img_on else "❌ 關閉 / Nonaktif"
             audio_on = group_audio_settings.get(group_id, True)
-            audio_status = "\u2705 開啟" if audio_on else "\u274c 關閉"
+            audio_status = "✅ 開啟 / Aktif" if audio_on else "❌ 關閉 / Nonaktif"
             wo_on = group_wo_settings.get(group_id, True)
-            wo_status = "\u2705 開啟" if wo_on else "\u274c 關閉"
-            return "\u2705 翻譯：開啟中 / Aktif\n中文 ⇄ 🇮🇩 印尼文\n\U0001f5bc\ufe0f 圖片翻譯：" + img_status + "\n\U0001f3a4 語音翻譯：" + audio_status + "\n\U0001f4cb 拍工單查儲區：" + wo_status
+            wo_status = "✅ 開啟 / Aktif" if wo_on else "❌ 關閉 / Nonaktif"
+            return ("✅ 翻譯:開啟中 / Penerjemah aktif\n"
+                    "中文 ⇄ 🇮🇩 印尼文 / Mandarin ⇄ Indonesia\n"
+                    "🖼️ 圖片翻譯 / Terjemahan gambar:" + img_status + "\n"
+                    "🎤 語音翻譯 / Terjemahan suara:" + audio_status + "\n"
+                    "📋 拍工單查儲區 / Foto WO cek gudang:" + wo_status)
         else:
-            return "\u274c 翻譯：已關閉 / Nonaktif"
+            return "❌ 翻譯:已關閉 / Penerjemah nonaktif"
     elif cmd == "/clearcache":
         # v3.9.3: clear translation cache (e.g. after fixing a bad translation
         # that got cached, or after switching to a new model). Anyone in the
@@ -6775,7 +6779,7 @@ def handle_command(text, group_id, user_id=None):
             return None
         content = text.strip()[8:].strip()
         if not content:
-            return "\u26a0\ufe0f \u8acb\u8f38\u5165\u516c\u544a\u5167\u5bb9\n\u4f8b\u5982 / Contoh: /notice \u660e\u5929\u653e\u5047\u4e00\u5929"
+            return "⚠️ 請輸入公告內容 / Masukkan isi pengumuman\n例如 / Contoh: /notice 明天放假一天"
         tgt = group_target_lang.get(group_id, "id")
         if has_chinese(content):
             return make_notice(content, tgt)
@@ -6873,7 +6877,7 @@ def handle_message(event):
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯")]
+                    messages=[TextMessage(text="ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯\nBot ini hanya mendukung terjemahan Mandarin ⇄ Indonesia")]
                 ))
             return
         # DM: handle /qry command
@@ -7516,7 +7520,7 @@ def _process_pending_image_translate(event, message_id):
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤:" + str(e)[:200])]
+                    messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤 / Error tak terduga saat proses gambar\n" + str(e)[:200])]
                 ))
         except Exception:
             # reply 失敗 → 試 push 到事件來源
@@ -7530,7 +7534,7 @@ def _process_pending_image_translate(event, message_id):
                         api = MessagingApi(api_client)
                         api.push_message(PushMessageRequest(
                             to=gid,
-                            messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤:" + str(e)[:200])]
+                            messages=[TextMessage(text="❌ 處理圖片時發生未預期錯誤 / Error tak terduga saat proses gambar\n" + str(e)[:200])]
                         ))
             except Exception as e2:
                 logger.error("[ImgAsk] emergency push also failed: %s", e2)
@@ -7586,7 +7590,7 @@ def _process_pending_image_translate_inner(event, message_id):
 
     group_id = info["group_id"]
     if not oai:
-        _reply_or_push("❌ 系統未設定 OpenAI,無法 OCR 圖片")
+        _reply_or_push("❌ 系統未設定 OpenAI,無法 OCR 圖片\nSistem belum diatur, tidak bisa OCR gambar")
         return
 
     show_loading(group_id)
@@ -7597,10 +7601,10 @@ def _process_pending_image_translate_inner(event, message_id):
         img_base64, img_raw = download_line_image(message_id)
     except Exception as _de:
         logger.error("[ImgAsk] download exception: %s", _de)
-        _reply_or_push("❌ 下載圖片失敗:" + str(_de)[:100])
+        _reply_or_push("❌ 下載圖片失敗 / Gagal unduh gambar\n" + str(_de)[:100])
         return
     if not img_base64:
-        _reply_or_push("❌ 下載圖片失敗(LINE 端已過期或網路錯誤)")
+        _reply_or_push("❌ 下載圖片失敗(LINE 端已過期或網路錯誤)\nGagal unduh gambar (kedaluwarsa di LINE atau error jaringan)")
         return
     # v3.9.17: 偵測 MIME 格式
     img_mime = detect_image_mime(img_raw)
@@ -7614,11 +7618,11 @@ def _process_pending_image_translate_inner(event, message_id):
         extracted = ocr_image_openai(img_base64, mime_type=img_mime)
     except Exception as _oe:
         logger.error("[ImgAsk] OCR exception: %s", _oe)
-        _reply_or_push("❌ OCR 失敗:" + str(_oe)[:100])
+        _reply_or_push("❌ OCR 失敗 / OCR gagal\n" + str(_oe)[:100])
         return
     if not extracted or len(extracted.strip()) < 2:
         logger.info("[ImgAsk] OCR returned no text")
-        _reply_or_push("ℹ️ 圖片中沒偵測到可翻譯的文字")
+        _reply_or_push("ℹ️ 圖片中沒偵測到可翻譯的文字\nTidak ada teks yang bisa diterjemahkan di gambar")
         return
     logger.info("[ImgAsk] OCR ok: %d chars", len(extracted))
 
@@ -7640,7 +7644,7 @@ def _process_pending_image_translate_inner(event, message_id):
     lang = detect_language(extracted)
     if lang is None:
         logger.warning("[ImgAsk] lang detection returned None for: %s", extracted[:80])
-        _reply_or_push("⚠️ 偵測不到語言,無法翻譯")
+        _reply_or_push("⚠️ 偵測不到語言,無法翻譯\nTidak bisa mendeteksi bahasa, gagal terjemahkan")
         return
     actual_tgt = tgt if lang == "zh" else "zh"
     logger.info("[ImgAsk] translating %s -> %s", lang, actual_tgt)
@@ -7656,12 +7660,12 @@ def _process_pending_image_translate_inner(event, message_id):
             result = translate(extracted, lang, "zh")
     except Exception as _te:
         logger.error("[ImgAsk] translate exception: %s", _te)
-        _reply_or_push("❌ 翻譯失敗:" + str(_te)[:100])
+        _reply_or_push("❌ 翻譯失敗 / Terjemahan gagal\n" + str(_te)[:100])
         return
 
     if not result:
         logger.warning("[ImgAsk] translate returned empty")
-        _reply_or_push("⚠️ 翻譯結果為空,請重試")
+        _reply_or_push("⚠️ 翻譯結果為空,請重試\nHasil terjemahan kosong, silakan coba lagi")
         track_group_usage(group_id, _bp, _bc)
         return
 
@@ -8070,7 +8074,7 @@ if PostbackEvent:
                     api = MessagingApi(api_client)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[TextMessage(text="🔄 正在翻譯圖片...")]
+                        messages=[TextMessage(text="🔄 正在翻譯圖片...\nSedang menerjemahkan gambar...")]
                     ))
                 logger.info("[ImgAsk] ack reply sent")
             except Exception as _ake:
@@ -8092,7 +8096,7 @@ if PostbackEvent:
                     api = MessagingApi(api_client)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[TextMessage(text="✅ 已跳過")]
+                        messages=[TextMessage(text="✅ 已跳過 / Dilewati")]
                     ))
             except Exception:
                 pass
