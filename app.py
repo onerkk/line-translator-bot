@@ -2515,6 +2515,17 @@ FACTORY_ID_ZH_POSITIONS = {
     "bagian depan": "前端",
     "ujung depan": "前端",
     "depan": "前端",
+    # 研磨工廠專用:自由端 / 夾頭端(rod 兩端在機台上的位置)
+    "ujung bebas": "自由端",
+    "ujung bebasnya": "自由端",
+    "bebas": "自由端",  # 在研磨語境下單獨出現的「bebas」幾乎都是指自由端
+    "ujung jepit": "夾頭端",
+    "ujung pencekam": "夾頭端",
+    "jepit": "夾頭端",
+    # 拼字容錯:ujing / ujong / ujug 都是 ujung 的常見誤寫
+    "ujing": "端",
+    "ujong": "端",
+    "ujug": "端",
     "bagian tengah": "中段",
     "tengah": "中段",
     "sebelah samping": "側邊",
@@ -3921,6 +3932,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "印勞打錯系統有提示 可是他們看不懂把他按掉了 → Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup. "
             "拋光機interlock都不要拿東西擋著，上面會查 → Pengunci keamanan polishing jangan ditahan pakai benda, atasan akan periksa. "
             "來料自由端偏小 → Material masuk ujung bebasnya under size. "
+            "自由端偏小 → Ujung bebasnya kecil / under size. "
+            "自由端直徑偏小 → Diameter ujung bebasnya kecil. "
+            "夾頭端偏大自由端偏小 → Ujung jepit besar, ujung bebas kecil. "
             "殺光痕嚴重但表粗有過 → Bekas grinding parah tapi surface roughness lulus. "
             "表粗有過目視沒過 → Surface roughness lulus tapi visual tidak lulus. "
             "涉及軋輥印痕的批次，請協助開立重工研磨至尺寸下限 → Lot kena roll mark, tolong buat WO rework grinding sampai batas bawah ukuran. "
@@ -4077,6 +4091,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup → 印勞打錯了系統有提示，但他們看不懂就按掉了 "
             "Pengunci keamanan polishing jangan ditahan pakai benda, atasan akan periksa → 拋光機interlock不要拿東西擋著，上面會查 "
             "Material masuk ujung bebasnya under size → 來料自由端偏小 "
+            "Barang kecil di ujung → 自由端偏小 "
+            "Barang kecil di ujing → 自由端偏小 "
+            "Kecil di ujung → 自由端偏小 "
+            "Ujung kecil → 自由端偏小 "
+            "Ujungnya kecil → 自由端偏小 "
+            "Ujung bebas kecil → 自由端偏小 "
+            "Diameter ujung kecil → 自由端直徑偏小 "
+            "Ujung jepit besar ujung bebas kecil → 夾頭端偏大自由端偏小 "
             "Bekas grinding parah tapi surface roughness lulus → 殺光痕嚴重但表粗有過 "
             "Surface roughness lulus tapi visual tidak lulus → 表粗有過目視沒過 "
             "Lot kena roll mark, tolong buat WO rework grinding sampai batas bawah ukuran → 有軋輥印痕的批次，請開重工研磨至尺寸下限 "
@@ -6585,10 +6607,11 @@ def handle_command(text, group_id, user_id=None):
             )
             if not ok:
                 return "⚠️ " + info
-            return ("✅ 已標記翻譯錯誤。若要同時加入正確譯文，請輸入：\n"
-                    "/wrong 正確翻譯（標最近一筆）\n"
-                    "/wrong 2 正確翻譯（標倒數第 2 筆）\n"
-                    "/wrong list（看最近 10 筆）")
+            return ("✅ 已標記翻譯錯誤 / Terjemahan ditandai salah\n"
+                    "若要同時加入正確譯文,請輸入 / Untuk menambahkan koreksi:\n"
+                    "/wrong 正確翻譯(標最近一筆)\n"
+                    "/wrong 2 正確翻譯(標倒數第 2 筆)\n"
+                    "/wrong list(看最近 10 筆)")
 
         # mode == "correct"
         correct = parsed.get("correct", "").strip()
@@ -6606,9 +6629,9 @@ def handle_command(text, group_id, user_id=None):
         if parsed.get("entry_id"):
             position_label = f"指定 ID 訊息"
         total = len(custom_translation_examples)
-        return (f"✅ 已標記{position_label}錯誤，並加入修正範例：\n"
+        return (f"✅ 已標記{position_label}錯誤,並加入修正範例 / Ditandai salah & ditambahkan ke contoh koreksi:\n"
                 f"{correct}\n"
-                f"📚 累積範例：{total} / {CUSTOM_EXAMPLES_MAX}")
+                f"📚 累積範例 / Total contoh: {total} / {CUSTOM_EXAMPLES_MAX}")
 
     elif cmd.startswith("/export"):
         # v3.4: export training data
