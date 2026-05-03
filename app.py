@@ -13185,10 +13185,12 @@ def api_translation_log():
 def api_tlog_diag():
     """v3.9.33 翻譯品質儀表板診斷端點。
     回傳 translation_log 的記憶體狀態 + 磁碟狀態,協助判斷儀表板為什麼空白。
-    用法:GET /api/admin/tlog-diag?token=ADMIN_TOKEN
+    用法:GET /api/admin/tlog-diag?key=ADMIN_KEY
     """
-    if not check_manager_access():
-        return jsonify({"error": "forbidden"}), 403
+    # 接受 query string token(方便手機瀏覽器直接訪問),或標準 admin/manager header
+    _key = request.args.get("key", "")
+    if _key != ADMIN_KEY and not check_manager_access():
+        return jsonify({"error": "forbidden", "hint": "use ?key=YOUR_ADMIN_KEY in URL"}), 403
     import os as _os
     diag = {
         "logging_enabled": translation_logging_enabled,
