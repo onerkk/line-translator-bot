@@ -6081,7 +6081,7 @@ def build_image_ask_flex(message_id):
                 },
                 {
                     "type": "text",
-                    "text": "翻譯這張圖?",
+                    "text": "翻譯上面這張圖?",
                     "size": "xl",
                     "color": "#FFFFFF",
                     "weight": "bold",
@@ -6089,7 +6089,7 @@ def build_image_ask_flex(message_id):
                 },
                 {
                     "type": "text",
-                    "text": "Terjemahkan gambar ini?",
+                    "text": "Terjemahkan gambar di atas?",
                     "size": "xs",
                     "color": c["desc_color"],
                     "margin": "xs",
@@ -6113,14 +6113,37 @@ def build_image_ask_flex(message_id):
                     "contents": [
                         {
                             "type": "text",
-                            "text": "📷 需要翻譯請點下方按鈕",
+                            "text": "📷 此按鈕僅翻譯上面那張圖片",
                             "size": "xxs",
                             "color": c["info_text"],
                             "wrap": True,
+                            "weight": "bold",
                         },
                         {
                             "type": "text",
-                            "text": "Tekan tombol untuk terjemahkan",
+                            "text": "Tombol ini hanya untuk gambar di atas",
+                            "size": "xxs",
+                            "color": c["info_text"],
+                            "wrap": True,
+                            "margin": "xs",
+                            "weight": "bold",
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "sm",
+                            "color": "#3a4a6a",
+                        },
+                        {
+                            "type": "text",
+                            "text": "💬 打字 / 語音 → 自動翻譯,不用按按鈕",
+                            "size": "xxs",
+                            "color": c["info_text"],
+                            "wrap": True,
+                            "margin": "sm",
+                        },
+                        {
+                            "type": "text",
+                            "text": "Chat teks / suara → otomatis, tanpa tombol",
                             "size": "xxs",
                             "color": c["info_text"],
                             "wrap": True,
@@ -6128,7 +6151,7 @@ def build_image_ask_flex(message_id):
                         },
                     ],
                 },
-                # 主按鈕:翻譯這張
+                # 主按鈕:翻譯上面那張圖
                 {
                     "type": "button",
                     "style": "primary",
@@ -6137,19 +6160,27 @@ def build_image_ask_flex(message_id):
                     "margin": "lg",
                     "action": {
                         "type": "postback",
-                        "label": "✨ 翻譯這張 / Terjemahkan",
+                        "label": "✨ 翻譯圖片 / Terjemahkan",
                         "data": "img_translate=" + message_id,
-                        "displayText": "✨ 翻譯這張圖",
+                        "displayText": "✨ 翻譯上面那張圖",
                     },
                 },
                 # 提示
+                {
+                    "type": "text",
+                    "text": "不需要就不用按 / Lewati jika tidak perlu",
+                    "size": "xxs",
+                    "color": c["plate_text"],
+                    "align": "center",
+                    "margin": "sm",
+                },
                 {
                     "type": "text",
                     "text": "1 分鐘後過期 / Kedaluwarsa 1 menit",
                     "size": "xxs",
                     "color": c["plate_text"],
                     "align": "center",
-                    "margin": "sm",
+                    "margin": "xs",
                 },
             ],
         },
@@ -7213,7 +7244,7 @@ def handle_image(event):
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
                         msg = TextMessage(
-                            text="📷 收到圖片,需要翻譯請點下方按鈕(1 分鐘內有效)",
+                            text="📷 收到圖片\n需要翻譯這張圖請按下方按鈕(1 分鐘內有效)\n\n💬 打字/語音會自動翻譯,不用按按鈕\nChat teks/suara otomatis, tanpa tombol",
                             quick_reply=qr
                         )
                         api.reply_message(ReplyMessageRequest(
