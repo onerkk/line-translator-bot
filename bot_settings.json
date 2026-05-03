@@ -116,13 +116,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 86,
+    "text_translations": 87,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1280202,
-    "tokens_completion": 4124
+    "tokens_prompt": 1297057,
+    "tokens_completion": 4215
   },
   "extra_customers": {
     "__all__": [
@@ -173,8 +173,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 1034892,
-      "tokens_completion": 2190
+      "tokens_prompt": 1051747,
+      "tokens_completion": 2281
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
