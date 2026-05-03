@@ -278,6 +278,11 @@
       "zh": "Micro",
       "id": "分離卡",
       "dir": "id2zh"
+    },
+    {
+      "zh": "自由端偏小",
+      "id": "Barang kecil di ujing",
+      "dir": "id2zh"
     }
   ],
   "forms_data": {},
