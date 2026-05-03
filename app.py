@@ -6152,6 +6152,8 @@ def build_image_ask_flex(message_id):
                     ],
                 },
                 # 主按鈕:翻譯上面那張圖
+                # v3.9.32: 移除 displayText,過期按按鈕時群組不會顯示「翻譯上面那張圖」字樣
+                # (LINE 的 displayText 是客戶端本地行為,後端管不到,只能不設)
                 {
                     "type": "button",
                     "style": "primary",
@@ -6162,7 +6164,6 @@ def build_image_ask_flex(message_id):
                         "type": "postback",
                         "label": "✨ 翻譯圖片 / Terjemahkan",
                         "data": "img_translate=" + message_id,
-                        "displayText": "✨ 翻譯上面那張圖",
                     },
                 },
                 # 提示
@@ -7254,7 +7255,7 @@ def handle_image(event):
                         QuickReplyItem(action=PostbackAction(
                             label="📝 翻譯這張",
                             data="img_translate=" + event.message.id,
-                            display_text="翻譯這張圖"
+                            # v3.9.32: 不設 display_text,過期按按鈕時不會在群組顯示
                         )),
                     ])
                     with ApiClient(configuration) as api_client:
