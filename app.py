@@ -202,8 +202,8 @@ def _event_log_write(event_type, data):
 #       group_img_settings=True → 自動翻譯(原本行為)
 group_img_ask_settings = {}
 # v3.9.13: pending image 跨 worker 共享 — 寫到本地檔案(避免 gunicorn 多 worker 看不到彼此)
-# 30 分鐘自動清掉沒按的
-_PENDING_IMG_TTL = 1800
+# 1 分鐘自動清掉沒按的(短 TTL 避免誤觸,需要翻譯會立刻按)
+_PENDING_IMG_TTL = 60
 def _pending_img_path():
     """選擇可寫入的暫存路徑 — 同 worker 共用,deploy 重啟即清空(這就是要的行為)"""
     for d in ("/var/data", "/data", "/tmp"):
@@ -6060,7 +6060,7 @@ def push_help_flex(to_id, primary_lang="zh"):
 def build_image_ask_flex(message_id):
     """v3.9.12: Build a Flex bubble asking whether to translate the received image.
     Same visual style as the help bubble (dark navy + cyan-blue accent).
-    Two large action buttons: 翻譯這張 (primary) / 跳過 (secondary).
+    Single action button: 翻譯這張 (primary). 1 分鐘後自動過期(避免誤觸)。
     """
     c = _HELP_COLORS["zh"]
     bubble = {
@@ -6113,14 +6113,14 @@ def build_image_ask_flex(message_id):
                     "contents": [
                         {
                             "type": "text",
-                            "text": "📷 點下方按鈕決定要不要翻譯",
+                            "text": "📷 需要翻譯請點下方按鈕",
                             "size": "xxs",
                             "color": c["info_text"],
                             "wrap": True,
                         },
                         {
                             "type": "text",
-                            "text": "Pilih: terjemahkan atau lewati",
+                            "text": "Tekan tombol untuk terjemahkan",
                             "size": "xxs",
                             "color": c["info_text"],
                             "wrap": True,
@@ -6142,22 +6142,10 @@ def build_image_ask_flex(message_id):
                         "displayText": "✨ 翻譯這張圖",
                     },
                 },
-                # 次按鈕:跳過
-                {
-                    "type": "button",
-                    "style": "secondary",
-                    "height": "sm",
-                    "action": {
-                        "type": "postback",
-                        "label": "跳過 / Lewati",
-                        "data": "img_skip=" + message_id,
-                        "displayText": "已跳過",
-                    },
-                },
                 # 提示
                 {
                     "type": "text",
-                    "text": "30 分鐘後過期",
+                    "text": "1 分鐘後過期 / Kedaluwarsa 1 menit",
                     "size": "xxs",
                     "color": c["plate_text"],
                     "align": "center",
@@ -7221,16 +7209,11 @@ def handle_image(event):
                             data="img_translate=" + event.message.id,
                             display_text="翻譯這張圖"
                         )),
-                        QuickReplyItem(action=PostbackAction(
-                            label="❌ 不用",
-                            data="img_skip=" + event.message.id,
-                            display_text="不用翻譯"
-                        )),
                     ])
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
                         msg = TextMessage(
-                            text="📷 收到圖片,要翻譯內容嗎?",
+                            text="📷 收到圖片,需要翻譯請點下方按鈕(1 分鐘內有效)",
                             quick_reply=qr
                         )
                         api.reply_message(ReplyMessageRequest(
@@ -7564,7 +7547,7 @@ def _process_pending_image_translate_inner(event, message_id):
     info = _pending_img_pop(message_id)
     if not info:
         logger.warning("[ImgAsk] message %s not in pending file (expired or other worker fetched)", message_id)
-        _reply_or_push("⚠️ 圖片資訊已過期(超過 30 分鐘),請重新傳一次")
+        _reply_or_push("⚠️ 圖片資訊已過期(超過 1 分鐘),請重新傳一次")
         return
 
     group_id = info["group_id"]
