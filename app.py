@@ -2230,6 +2230,23 @@ def restore_mentions(text, placeholders):
         for v in variants:
             restored = restored.replace(v, original)
 
+    # v3.9.30d B21 升級:萬一 GPT 用了我們沒列的變體,用正則兜底清掉所有 __提及_X__ / __MENTION_X__ 殘留
+    # 這個只在還有 placeholders 時跑,避免誤殺正常文字
+    if placeholders:
+        # 把所有 placeholder index 收集起來,任何含這些 index 的「提及」字樣都還原
+        indices = [ph.replace("__MENTION_", "").replace("__", "") for ph in placeholders.keys()]
+        # 取第一個 placeholder 對應的 mention 字串作為兜底還原值(通常只有一個 @All / @user)
+        fallback_mention = next(iter(placeholders.values())) if placeholders else ""
+        # 用正則清殘留
+        # 模式 1: __提及_N__ / _提及_N_ / 提及N / 提及_N
+        def _replace_residual(m):
+            return fallback_mention
+        restored = re.sub(r'_{0,2}提及[_\s]?\d+_{0,2}', _replace_residual, restored)
+        # 模式 2: __MENTION_N__ 殘留(英文未還原,通常已被上面 variants 處理,但保險)
+        restored = re.sub(r'_{0,2}MENTION[_\s]?\d+_{0,2}', _replace_residual, restored)
+        # 模式 3: 印尼文 sebutan 殘留
+        restored = re.sub(r'_{0,2}[Ss][Ee][Bb][Uu][Tt][Aa][Nn][_\s]?\d+_{0,2}', _replace_residual, restored)
+
     # Final safety net: if any original @mention disappeared during translation,
     # prepend it back so the tagged person is not lost.
     missing = [original for original in placeholders.values() if original not in restored]
