@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.29-0501-deep-audit-fix-7-bugs"
+VERSION = "v3.9.30-0504-jatuh-tempo-and-dup-keys-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -593,10 +593,23 @@ def _pick_aux_model(purpose="utility"):
     """v3.9.9: Pick a fast, cheap model in the same family as the user's main model.
     Used for auxiliary tasks (back-translation check, ID normalization, OCR, pivot).
     Auto-adapts so if user upgrades to GPT-5, aux calls also use GPT-5 (no API mismatch).
+    
+    v3.9.30 修正: 之前 startswith("gpt-5") 對 gpt-5.4-mini / gpt-5.5 等都回 gpt-5-nano,
+    跨代家族 — gpt-5.4 主模型配 gpt-5 aux 雖然能呼叫,但不是同代最佳搭配。
+    現在精準對應同代 nano。
     """
-    md = model_default or ""
+    md = (model_default or "").lower()
+    # GPT-5 系列(精細到子家族)
+    if md.startswith("gpt-5.5"):
+        return "gpt-5.5-nano" if md != "gpt-5.5-nano" else "gpt-5-nano"
+    if md.startswith("gpt-5.4"):
+        return "gpt-5.4-nano"  # 同代最便宜
+    if md.startswith("gpt-5.2"):
+        return "gpt-5.2-nano" if md != "gpt-5.2-nano" else "gpt-5-nano"
+    if md.startswith("gpt-5.1"):
+        return "gpt-5.1-nano" if md != "gpt-5.1-nano" else "gpt-5-nano"
     if md.startswith("gpt-5"):
-        return "gpt-5-nano"   # cheapest GPT-5 family
+        return "gpt-5-nano"   # 通用 GPT-5 nano
     if md.startswith("gpt-4.1"):
         return "gpt-4.1-nano"
     return "gpt-4o-mini"
@@ -962,7 +975,7 @@ ID_NORMALIZATION_MAP = {
     "nih": "ini",
     "tuh": "itu",
     "msh": "masih",
-    "udh": "sudah", "udeh": "sudah",
+    "udeh": "sudah",  # v3.9.30: 移除原本與 line 938 衝突的 "udh":"sudah" 重複定義
     "knp": "kenapa", "knpa": "kenapa",
     "gmn": "bagaimana", "gimana": "bagaimana", "gmna": "bagaimana",
     "bnr": "benar", "bnar": "benar",
@@ -986,8 +999,7 @@ ID_NORMALIZATION_MAP = {
     "ngambil": "mengambil",
     "ngomong": "berbicara",
     "ngerti": "mengerti",
-    "ngga": "tidak",
-    "kasian": "kasihan",
+    "kasian": "kasihan",  # v3.9.30: 移除原本與 line 935 衝突的 "ngga":"tidak" 重複定義
     "duit": "uang",
     "sip": "baik",
     "ngecek": "memeriksa", "cek": "memeriksa",
@@ -995,7 +1007,7 @@ ID_NORMALIZATION_MAP = {
     # ===== 工廠常見變體 =====
     "kerjaaan": "pekerjaan",  # 重複字
     "stp": "setiap",
-    "tlg": "tolong", "tlng": "tolong",
+    # v3.9.30: 移除原本與 line 953 衝突的 "tlg" / "tlng" 重複定義
     "msl": "misal", "msl-nya": "misalnya",
     "biar": "agar",  # 工廠語境,biar = agar/supaya 比 supaya 更常見
 }
@@ -2539,6 +2551,38 @@ FACTORY_ID_ZH_POSITIONS = {
     "dalam": "內側",
 }
 
+# v3.9.30: 期限/排程/積壓詞彙表
+# 這張表針對工廠最常被誤譯的時間/排程詞彙(印尼班長公告幾乎句句出現)
+# 重點: jatuh tempo 在工廠語境 ≠ 字面「到期」(機器壽命到期),而是「該工序積壓未處理」
+# 案例:歐那回報 "30 ton mesin pemoles yang jatuh tempo bulan lalu"
+#       → 錯翻成「30 噸的拋光機到期」(把料量翻成機器重量)
+#       → 正確「上月積壓 30 噸料(待拋光)」
+FACTORY_ID_ZH_TIME = {
+    "jatuh tempo": "積壓到期",
+    "sudah jatuh tempo": "已積壓",
+    "belum jatuh tempo": "尚未到期",
+    "jatuh tempo bulan lalu": "上月積壓未處理",
+    "jatuh tempo bulan ini": "本月到期要處理",
+    "jatuh tempo minggu lalu": "上週積壓未處理",
+    "jatuh tempo minggu ini": "本週到期要處理",
+    "jatuh tempo hari ini": "今日到期",
+    "tertunda": "遞延",
+    "tunggakan": "積壓量",
+    "menunggak": "積壓",
+    "deadline": "交期",
+    "tenggat": "期限",
+    "jadwal": "排程",
+    "schedule": "排程",
+    "overdue": "已逾期",
+    "tepat waktu": "準時",
+    "telat": "延遲",
+    "terlambat": "延遲",
+    "sebelum": "之前",
+    "setelah": "之後",
+    "mendesak": "急迫",
+    "urgent": "急迫",
+}
+
 FACTORY_DOMAIN_KEYWORDS_ID = {
     "quality_issue": [
         "rusak", "cacat", "lecet", "gores", "goresan", "tergores", "retak", "patah",
@@ -2549,10 +2593,15 @@ FACTORY_DOMAIN_KEYWORDS_ID = {
         "barang", "material", "bahan", "batang", "bundel", "lot", "work order", "wo",
         "masuk gudang", "gudang", "packing", "di-packing", "station", "stasiun", "line",
         "tag", "label", "heat number", "masuk", "keluar", "taruh", "letakkan",
+        # v3.9.30: 工序/排程相關詞(jatuh tempo / tertunda 等也算工廠語境)
+        "jatuh tempo", "tertunda", "tunggakan", "deadline", "urgent",
     ],
     "equipment": [
         "mesin", "batu gerinda", "gerinda", "bearing", "kopel", "as ", "roda", "pompa",
         "pipa", "oli", "bocor", "macet", "maintenance", "perbaiki", "mati", "jalan",
+        # v3.9.30: 工序動詞 / 機器名稱(讓「30 ton pemoles」這種短句也能命中工廠 domain)
+        "pemoles", "polishing", "pemolesan", "grinding", "sanding",
+        "drawing", "annealing", "straightening", "peeling",
     ],
     "safety": [
         "bahaya", "awas", "hati-hati", "pelindung", "interlock", "crane", "forklift",
@@ -2756,11 +2805,40 @@ def build_factory_context_hint(text, src, tgt):
     t = _clean_factory_id(text)
     
     # 收集出現的術語(供 hint 使用)
+    # v3.9.30: 加入 FACTORY_ID_ZH_TIME(jatuh tempo / deadline / tertunda 等)
     terms = []
     for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS,
-                       **FACTORY_ID_ZH_POSITIONS}.items():
+                       **FACTORY_ID_ZH_POSITIONS, **FACTORY_ID_ZH_TIME}.items():
         if re.search(r"(?<![a-z])" + re.escape(source) + r"(?![a-z])", t):
             terms.append(f"{source}={zh}")
+    
+    # v3.9.30: 句型歧義消解
+    # 工廠口語常見省略主詞,例如 "30 ton mesin pemoles yang jatuh tempo"
+    # 字面意思可被誤解為「30 噸的拋光機到期」(機器本身重量)
+    # 真實意思是「拋光機要處理的 30 噸料(已積壓上月)」
+    # 這個 hint 會在 announcement 跟 incident 都注入
+    has_ton_machine_pattern = bool(
+        re.search(r'\d+\s*ton\s+mesin\s+\w+', t) or
+        re.search(r'\d+\s*ton\s+(?:bahan|material|barang)\s+(?:mesin|untuk)', t)
+    )
+    has_jatuh_tempo = "jatuh tempo" in t
+    
+    pattern_hint = ""
+    if has_ton_machine_pattern:
+        pattern_hint += (
+            " 【關鍵句型1】「[數量] ton mesin [工序]」(例:30 ton mesin pemoles)在工廠語境下,"
+            "指該工序待處理/積壓的料量,**不是**機器本身的重量。"
+            "請翻成「[工序]要處理的[數量]噸料」或「積壓[數量]噸料(待[工序])」,"
+            "**禁止**翻成「[數量]噸的拋光機」「[數量]噸的研磨機」這類字面譯法。"
+        )
+    if has_jatuh_tempo:
+        pattern_hint += (
+            " 【關鍵句型2】「jatuh tempo」在工廠排程語境=「該完成卻未完成/積壓未處理」,"
+            "**不是**字面的「設備到期/壽命到期」。"
+            "「jatuh tempo bulan lalu」=上月該做沒做完(積壓單);"
+            "「jatuh tempo bulan ini」=本月排程要做。"
+            "翻成「積壓」「到期未處理」「該完成」皆可,**禁止**翻成「設備到期」「機器到期」。"
+        )
     
     if cls["type"] == "announcement":
         # 公告:絕不給 deterministic 結論,要求完整逐句翻譯
@@ -2771,6 +2849,8 @@ def build_factory_context_hint(text, src, tgt):
         )
         if terms:
             hint += " 術語對應：" + "、".join(terms) + "。"
+        if pattern_hint:
+            hint += pattern_hint
         return hint
     
     elif cls["type"] == "incident":
@@ -2784,6 +2864,8 @@ def build_factory_context_hint(text, src, tgt):
         )
         if terms:
             hint += " 強制術語：" + "、".join(terms) + "。"
+        if pattern_hint:
+            hint += pattern_hint
         deterministic = factory_semantic_translate_id_zh(text)
         if deterministic:
             hint += f" 槽位參考(僅供確認術語，實際翻譯仍需保留原文所有資訊):「{deterministic}」"
@@ -2793,6 +2875,8 @@ def build_factory_context_hint(text, src, tgt):
         hint = "【印尼→繁中工廠語境】請使用台灣工廠現場用語。"
         if terms:
             hint += " 術語對應：" + "、".join(terms) + "。"
+        if pattern_hint:
+            hint += pattern_hint
         return hint
 
 
@@ -2823,6 +2907,74 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
 
     for wrong, correct in sorted(FACTORY_ZH_LITERAL_RISK.items(), key=lambda x: -len(x[0])):
         result = result.replace(wrong, correct)
+
+    # v3.9.30: 「噸 + 機器/工序」誤譯修補
+    # 對應 Bug B3: GPT 把 "30 ton mesin pemoles" 翻成「30 噸的拋光機」
+    # 只要原文是 "[N] ton mesin [工序]" 句型,目標應該是料量,不是機器本身
+    src_lower = (src_text or "").lower()
+    if re.search(r'\d+\s*ton\s+mesin\s+\w+', src_lower):
+        # 把「N噸的[X]機」「N噸[X]機」改成「[X]要處理的N噸料」風格
+        # 規則:出現「噸的拋光機/研磨機/砂光機/壓光機/矯直機」就修
+        machine_words_zh = ["拋光機", "研磨機", "砂光機", "壓光機", "矯直機", "標籤機"]
+        for mword in machine_words_zh:
+            # 模式 A:「30噸的拋光機」「30 噸的拋光機」「30噸拋光機」「30 噸拋光機」
+            # 改寫為:「30噸料(待[拋光])」
+            ton_pattern = re.compile(
+                r'(\d+)\s*噸\s*(?:的)?\s*' + re.escape(mword)
+            )
+            # 對應「料」的描述:拋光機→拋光料,研磨機→研磨料 …
+            material_word = mword.replace("機", "料")  # 拋光機→拋光料
+            replacement_text = r'\1噸料(待' + mword.replace("機", "") + r')'
+            new_result, n_sub = ton_pattern.subn(replacement_text, result)
+            if n_sub > 0:
+                logger.info(
+                    "[post_fix v3.9.30] ton+%s pattern: %d match(es) repaired",
+                    mword, n_sub
+                )
+                result = new_result
+
+    # v3.9.30: 「jatuh tempo」字面誤譯修補
+    # 對應 Bug B3: GPT 把 jatuh tempo 翻成字面「到期」+ 機器名,造成「拋光機到期」歧義
+    if "jatuh tempo" in src_lower:
+        # (a) 固定字串修補
+        jt_fixes = {
+            "拋光機到期": "拋光積壓",
+            "研磨機到期": "研磨積壓",
+            "砂光機到期": "砂光積壓",
+            "壓光機到期": "壓光積壓",
+            "矯直機到期": "矯直積壓",
+            "拋光機已到期": "拋光已積壓",
+            "研磨機已到期": "研磨已積壓",
+            # 班長公告變體
+            "上個月到期的": "上月積壓的",
+            "本月到期的": "本月到期要處理的",
+            "上月到期的": "上月積壓的",
+        }
+        for wrong, correct in sorted(jt_fixes.items(), key=lambda x: -len(x[0])):
+            if wrong in result:
+                logger.info(
+                    "[post_fix v3.9.30] jatuh_tempo fix: %r -> %r",
+                    wrong, correct
+                )
+                result = result.replace(wrong, correct)
+        
+        # (b) 正則修補 — 涵蓋「拋光機到期 30 噸」「研磨機已到期,還有 20 噸」這類變體
+        # 抓「(機名)+到期/已到期」即使中間有空白/標點/數字也修
+        regex_jt_fixes = [
+            (re.compile(r'(拋光|研磨|砂光|壓光|矯直)機\s*(?:已)?到期'),
+             r'\1積壓'),
+            # 「N 噸的拋光機到期」這類雙重錯(若 ton+機器修補沒抓到,這裡兜底)
+            (re.compile(r'(\d+)\s*噸\s*(?:的)?\s*(拋光|研磨|砂光|壓光|矯直)機\s*(?:已)?到期'),
+             r'\2積壓\1噸料'),
+        ]
+        for pat, repl in regex_jt_fixes:
+            new_result, n_sub = pat.subn(repl, result)
+            if n_sub > 0:
+                logger.info(
+                    "[post_fix v3.9.30] jatuh_tempo regex fix: %d match(es), pattern=%s",
+                    n_sub, pat.pattern
+                )
+                result = new_result
 
     result = re.sub(r"[，,。．\s]+$", "", result)
     return result.strip()
@@ -3344,8 +3496,7 @@ ZH_TO_ID_HARD = {
     "標籤機": "mesin label",
     "台車": "troli",
     "天車": "crane",
-    "台車": "troli",
-    "天車": "crane",
+    # v3.9.30: 移除原本緊接著的 "台車"/"天車" 完全重複定義
     # 管理
     "品保": "QC",
     "儲運": "bagian gudang",
@@ -3915,6 +4066,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "人事有通知堆高機複訓課程，1/29 1700-2000三樓會議室。當天來上課就好，加班時數改天用忘卡補 → HRD info pelatihan forklift, 29/1 jam 17-20 ruang rapat lt.3. Datang ikut aja, jam lembur diinput lewat sistem lupa kartu di hari lain. "
             "處長走了 → Kepala divisi sudah pergi. "
             "有壓日期的急單再幫忙處理一下，很多未到站，拋光會一邊產出 → Order urgent deadline tolong diproses, banyak belum sampai, polishing produksi sambil jalan. "
+            # ===== v3.9.30 新增:積壓料量公告(配合班長公告反向訓練) =====
+            "上個月積壓的30噸料還沒拋,本月又有46噸料到期要拋 → Masih ada 30 ton pemolesan yang jatuh tempo bulan lalu, dan 46 ton yang jatuh tempo bulan ini. "
+            "拋光積壓20噸料 → Tunggakan polishing 20 ton. "
+            "本月到期的料要優先處理 → Material yang jatuh tempo bulan ini harus diprioritaskan. "
+            "拋光機人員一定要注意生產效率 → Personil mesin pemoles harus memperhatikan efisiensi produksi. "
+            "研磨積壓的料還很多 → Material grinding yang tertunda masih banyak. "
             "噴漆罐一定要打洞才能丟棄在太空包，本週被查核兩次缺失 → Kaleng spray HARUS dilubangi baru buang ke jumbo bag, minggu ini kena audit 2 kali. "
             "本月入庫目標2950，異型棒不擋，其餘非本月不入庫 → Target gudang 2950, batang khusus bebas, sisanya bukan bulan ini jangan masuk. "
             "本月入庫目標量已達標，目前只入急單、異型棒跟二月以前的遞延單 → Target tercapai, sekarang hanya urgent, batang khusus, dan order ditunda sebelum Feb. "
@@ -4116,6 +4273,20 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Tolong kejar materialnya → 幫追料 "
             "Tolong kejar data administrasinya → 幫追帳 "
             "Sudah 2900 jangan masukkan data lagi ya → 已2900別入帳了 "
+            # ===== v3.9.30 新增:工序+噸數=待加工料量 / jatuh tempo=積壓 =====
+            # 對應歐那實際遇到的誤譯案例(2026-05-04 班長公告)
+            "Masih ada 30 ton mesin pemoles yang jatuh tempo bulan lalu → 還有上個月積壓未拋的30噸料 "
+            "46 ton mesin pemoles yang jatuh tempo bulan ini → 本月到期的46噸料要拋 "
+            "Masih ada 30 ton mesin pemoles yang jatuh tempo bulan lalu, dan 46 ton mesin pemoles yang jatuh tempo bulan ini → 上個月積壓的30噸料還沒拋,本月又有46噸料到期要拋 "
+            "Personil mesin pemoles harus memperhatikan efisiensi produksi → 拋光機人員一定要注意生產效率 "
+            "Personil grinding harus memperhatikan efisiensi produksi → 研磨人員一定要注意生產效率 "
+            # 通則範例(讓模型抓住模式)
+            "20 ton mesin grinding jatuh tempo → 研磨積壓20噸料 "
+            "Bahan jatuh tempo bulan lalu masih banyak → 上月積壓的料還很多 "
+            "Order yang sudah jatuh tempo harus diprioritaskan → 已積壓的訂單要優先處理 "
+            "Belum jatuh tempo, jangan dulu produksi → 還沒到期,先別生產 "
+            "Material polishing yang tertunda → 拋光積壓的料 "
+            "Tunggakan grinding bulan ini 50 ton → 本月研磨積壓 50 噸 "
             "【印尼日常短句→中文】"
             "Iya → 對 "
             "Iya benar → 對，沒錯 "
@@ -4328,10 +4499,23 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if model_supports(_model, "seed") and translation_seed and translation_seed != 0:
             _kwargs["seed"] = int(translation_seed)
         # Token limit (different parameter name per family)
+        # v3.9.30: 動態 token 預算
+        # 之前寫死 2000:對 reasoning model(GPT-5 系列) max_completion_tokens 包含
+        # reasoning tokens + 輸出 tokens,長公告(>500 字)做不完,會被截斷或回空。
+        # 新邏輯:輸入越長,輸出空間越大;reasoning model 額外給 reasoning 預算。
+        _src_len = len(text or "")
+        # 估計輸出長度(中文/印尼文 ~1.5x 互譯,給 2x 安全係數)
+        _output_budget = max(800, int(_src_len * 2.5))
+        # reasoning model 還要額外給 reasoning 預算
+        if not model_supports(_model, "temperature"):  # 是 reasoning model
+            _output_budget = _output_budget + 4000  # 給 reasoning 4K 緩衝
+        # 上限 16K(防止意外炸掉)
+        _output_budget = min(_output_budget, 16000)
         if model_supports(_model, "max_completion_tokens"):
-            _kwargs["max_completion_tokens"] = 2000
+            _kwargs["max_completion_tokens"] = _output_budget
         elif model_supports(_model, "max_tokens"):
-            _kwargs["max_tokens"] = 2000
+            # 非 reasoning model 不需要 reasoning 緩衝
+            _kwargs["max_tokens"] = min(max(800, int(_src_len * 2.5)), 4000)
         # v3.9.8 (2026-05): Translation-optimal reasoning_effort.
         # OpenAI's official guide: "gpt-4.1: gpt-5.2 with `none` reasoning"
         # Translation is a lightweight, instruction-following task. Higher
