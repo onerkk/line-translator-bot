@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.30d-0504-mentions+stt+upload-cap+nested-handlers"
+VERSION = "v3.9.30e-0504-22bugs+night-shift-allowance"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -3405,6 +3405,8 @@ FACTORY_ZH_ID_POST_FIX = {
     "kepala shift patroli": "kepala regu patroli",
     "kepala shift": "kepala regu / 班長",
     "班長": "ketua shift / kepala regu",
+    # v3.9.30d B22:夜點費 ≠ uang lembur malam(夜班加班費)的修補在 post_fix_factory_zh_to_id 內條件式處理
+    # 不放這裡是因為合法的「夜班加班費」也會翻成 uang lembur malam,不能無條件改
 }
 
 
@@ -3496,6 +3498,10 @@ def post_fix_factory_zh_to_id(src_text, id_text):
         "班長", "副總", "巡視", "操作", "作業", "抓到", "帽扣",
         # v3.9.29 新增:OCR 圖片常見的訊息類用語
         "公告", "通知", "提醒", "今年", "目前",
+        # v3.9.30d B22 新增:薪資相關(夜點費誤譯案例)
+        "夜點", "夜點費", "日點費", "夜班津貼", "中班津貼",
+        "薪資", "薪水", "薪", "減項", "加項", "扣項",
+        "獎金", "底薪", "本薪", "勞保", "健保", "夜班費",
     ]
     # 也檢查譯文(if 原文沒命中但譯文有 Yanshui / Dinas K3 等典型錯翻)
     id_trigger_words = ["Yanshui", "Dinas K3", "tilang", "kena tangkap", "kepala shift",
@@ -3538,6 +3544,24 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     # Step 4: 把 placeholder 還原
     for i, ph_text in enumerate(placeholders):
         result = result.replace(f"\x00PH{i}\x00", ph_text)
+    
+    # v3.9.30d B22 修補:夜點費條件式翻譯
+    # 「夜點費」在台灣勞基法 = 因輪到夜班領的固定津貼,不論加班(uang shift malam)
+    # 「夜班加班費」才是 uang lembur malam
+    # GPT 常把兩者混淆,這裡只在原文明確含「夜點費」/「日點費」/「夜班津貼」時修
+    if "夜點費" in src or "夜班津貼" in src or "夜點" in src:
+        # 把譯文裡的 uang lembur malam 改成 uang shift malam
+        result = re.sub(r'\buang\s+lembur\s+malam\b', 'uang shift malam', result, flags=re.I)
+        # 處理變體:uang lembur shift malam / lembur shift malam(連 uang 一起包以免重複)
+        result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+malam\b', 'uang shift malam', result, flags=re.I)
+        # 處理已經是 shift 但前面誤加 lembur 的:lembur uang shift malam
+        result = re.sub(r'\blembur\s+uang\s+shift\s+malam\b', 'uang shift malam', result, flags=re.I)
+    if "日點費" in src or "日班津貼" in src:
+        result = re.sub(r'\buang\s+lembur\s+siang\b', 'uang shift siang', result, flags=re.I)
+        result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+siang\b', 'uang shift siang', result, flags=re.I)
+    if "中班津貼" in src:
+        result = re.sub(r'\buang\s+lembur\s+sore\b', 'uang shift sore', result, flags=re.I)
+        result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+sore\b', 'uang shift sore', result, flags=re.I)
     
     result = re.sub(r"\s+", " ", result).strip()
     return result
@@ -3682,6 +3706,30 @@ ZH_TO_ID_HARD = {
     "台車": "troli",
     "天車": "crane",
     # v3.9.30: 移除原本緊接著的 "台車"/"天車" 完全重複定義
+    # v3.9.30d B22 修補: 薪資/津貼類術語(夜點費誤譯案例)
+    # 台灣勞基法上「夜點費」≠「夜班加班費」:
+    #   夜點費 = 因輪到夜班而領的固定津貼,不論有沒有加班
+    #   加班費 = 超過正常工時才有
+    # GPT 之前誤翻成 "uang lembur malam"(夜班加班費),語意有偏差
+    "夜點費": "uang shift malam",
+    "夜班津貼": "uang shift malam",
+    "日點費": "uang shift siang",
+    "日班津貼": "uang shift siang",
+    "中班津貼": "uang shift sore",
+    "夜班費": "uang shift malam",
+    "減項": "potongan",
+    "加項": "tunjangan tambahan",
+    "扣項": "potongan",
+    "獎金": "bonus",
+    "全勤獎金": "bonus kehadiran penuh",
+    "績效獎金": "bonus kinerja",
+    "三節獎金": "bonus hari raya",
+    "底薪": "gaji pokok",
+    "本薪": "gaji pokok",
+    "薪資單": "slip gaji",
+    "扣稅": "potong pajak",
+    "勞保": "BPJS Ketenagakerjaan",
+    "健保": "BPJS Kesehatan",
     # 管理
     "品保": "QC",
     "儲運": "bagian gudang",
@@ -4108,6 +4156,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "【生活/薪資】"
             "宿舍=asrama, 便當=bekal makan, 餵狗=kasih makan anjing, "
             "薪水=gaji, 加班費=uang lembur, 績效=penilaian kinerja, 匯款=transfer, "
+            # v3.9.30d B22 修補:夜點費 ≠ 夜班加班費
+            # 夜點費 = 因輪到夜班領的「固定津貼」(不論加班),譯 uang shift malam
+            # 加班費 = 工時超出才有,譯 uang lembur
+            "夜點費=uang shift malam(NOT uang lembur,夜點費是固定夜班津貼非加班費), "
+            "日點費=uang shift siang, 夜班津貼=uang shift malam, 中班津貼=uang shift sore, "
+            "底薪=gaji pokok, 本薪=gaji pokok, 全勤獎金=bonus kehadiran penuh, "
+            "績效獎金=bonus kinerja, 三節獎金=bonus hari raya, "
+            "減項=potongan, 加項=tunjangan tambahan, 扣項=potongan, 獎金=bonus, "
+            "薪資單=slip gaji, 扣稅=potong pajak, 勞保=BPJS Ketenagakerjaan, 健保=BPJS Kesehatan, "
             "尾牙=pesta akhir tahun, 春酒=pesta tahun baru, 伴手禮=oleh-oleh, 便當費=biaya makan siang, "
             "量測=mengukur, 尺寸=diameter, 公差=toleransi, 校正=kalibrasi, "
             "【客戶 - NEVER translate】"
@@ -4297,6 +4354,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "幫追料 → Tolong kejar materialnya. "
             "幫追帳 → Tolong kejar data administrasinya. "
             "已2900別入帳了噢 → Sudah 2900 jangan masukkan data lagi ya. "
+            # v3.9.30d B22 修補:夜點費誤譯案例(歐那實際遇到)
+            "這個月薪資的減項應該是上個月夜點費計算錯誤扣回去的 → Pengurangan gaji bulan ini kemungkinan karena koreksi uang shift malam yang salah perhitungan bulan lalu. "
+            "核對三月跟前面幾個月份比薪就可以發現夜點費特別高 → Bandingkan gaji bulan Maret dengan beberapa bulan sebelumnya, akan kelihatan uang shift malamnya memang lebih tinggi. "
+            "夜點費算錯 → Uang shift malam salah hitung. "
+            "這個月夜點費比較多 → Bulan ini uang shift malamnya lebih banyak. "
+            "我的薪資減項多一個 → Pengurangan gaji saya ada tambahan satu lagi. "
+            "底薪加夜點費加全勤 → Gaji pokok plus uang shift malam plus bonus kehadiran penuh. "
             "【印尼→中文】"
             "Saya mau izin besok → 我明天要請假 "
             "Mesinnya rusak → 機台壞了 "
@@ -4314,6 +4378,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Ini material dari shift sebelumnya, belum selesai → 這是上一班留下來的料，還沒做完 "
             "Saya sudah cek, ukurannya lewat toleransi → 我檢查過了，尺寸超出公差 "
             "Mesin E5 ada masalah, sudah panggil maintenance → E5機台有問題，已經叫修護了 "
+            # v3.9.30d B22 修補:反向訓練(夜點費)
+            "Pengurangan gaji bulan ini kemungkinan karena koreksi uang shift malam yang salah perhitungan bulan lalu → 這個月薪資的減項應該是上個月夜點費計算錯誤扣回去的 "
+            "Uang shift malam bulan ini lebih banyak → 這個月夜點費比較多 "
+            "Pengurangan gaji saya ada tambahan satu lagi → 我的薪資減項多一個 "
+            "Cek slip gaji, ada tambahan potongan satu lagi → 看薪資單,多了一個減項 "
+            "Bandingkan gaji bulan Maret dengan bulan-bulan sebelumnya → 比對三月跟前面幾個月薪資 "
             "Barang ini mau dikirim ke mana? → 這個東西要送去哪裡？ "
             "Yang ini sudah di-packing, tinggal masuk gudang → 這個已經包好了，只剩入庫 "
             "Tolong cek material di line 3 → 麻煩去看一下3號線的料 "
