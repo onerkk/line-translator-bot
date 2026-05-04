@@ -126,10 +126,14 @@ import time
 import uuid
 
 app = Flask(__name__)
+# v3.9.30c B20 修補: 限制 upload 大小防 OOM
+# 沒設的話 Flask default 沒限,惡意/誤傳大檔會吃光 Render 256-512MB RAM
+# Storage Excel 通常 <2MB,Rich Menu image 1040x1040 PNG 通常 <1MB,給 8MB 緩衝
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.30b-0504-jatuh-tempo+B7-B10-fixes"
+VERSION = "v3.9.30d-0504-mentions+stt+upload-cap+nested-handlers"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -162,6 +166,76 @@ def _event_log_path():
 
 _EVENT_LOG_FILE = None
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
+
+# v3.9.30c B17 修補: LINE 訊息長度限制(5000 字)截斷工具
+# LINE 平台規定 text message 最多 5000 字,超過會被 reject。
+# 翻譯結果加上注解 / hint 可能超 5000;集中處理避免散落各處 [:4990]。
+LINE_TEXT_MAX = 5000
+def _clip_line_text(text, suffix="\n...(已截斷)"):
+    """Clip text to LINE's 5000-char limit. Adds suffix to indicate truncation."""
+    if not text:
+        return text
+    if len(text) <= LINE_TEXT_MAX:
+        return text
+    cap = LINE_TEXT_MAX - len(suffix)
+    return text[:cap] + suffix
+
+
+# v3.9.30c B19 修補: 安全 int 轉換
+# 之前 admin endpoint 用 int(request.args.get("xxx", 100)),如果 query 帶 ?xxx=abc
+# 會炸 ValueError → 500。改用此函式。
+def _safe_int(val, default=0, min_val=None, max_val=None):
+    """Safely convert val to int, return default on failure. Optionally clamp."""
+    try:
+        n = int(val)
+    except (ValueError, TypeError):
+        return default
+    if min_val is not None and n < min_val:
+        return min_val
+    if max_val is not None and n > max_val:
+        return max_val
+    return n
+
+
+# v3.9.30c B15 修補: LINE webhook 重發去重
+# LINE 在 server 1 秒內沒回 200 OK 時會重發 webhook。
+# OpenAI 翻譯通常 3-10 秒,LINE 會以為失敗 → 重發 → 同訊息翻譯兩次扣兩次錢。
+# 雙重保險:
+#   1. 用 event.delivery_context.is_redelivery 直接判斷(SDK 已暴露)
+#   2. 後備:用 message_id 去重(60 秒 TTL),即使 SDK 沒帶 redelivery flag 也能擋
+import collections as _collections_dedup
+_processed_msg_ids = _collections_dedup.OrderedDict()  # message_id → ts
+_PROCESSED_MSG_MAX = 1000
+_PROCESSED_MSG_TTL = 60  # 60 秒 TTL,LINE 重發通常在 30 秒內
+
+def _is_duplicate_message(message_id):
+    """判斷此 message_id 是否近期已處理過(LINE 重發保護)"""
+    if not message_id:
+        return False
+    now = int(time.time())
+    # 清過期
+    expired = [k for k, v in _processed_msg_ids.items() if now - v > _PROCESSED_MSG_TTL]
+    for k in expired:
+        _processed_msg_ids.pop(k, None)
+    # 檢查
+    if message_id in _processed_msg_ids:
+        return True
+    # 記錄
+    _processed_msg_ids[message_id] = now
+    if len(_processed_msg_ids) > _PROCESSED_MSG_MAX:
+        _processed_msg_ids.popitem(last=False)  # FIFO 移除最舊
+    return False
+
+def _is_redelivery(event):
+    """判斷 LINE webhook 是不是重發(SDK + message_id 雙重檢查)"""
+    try:
+        dc = getattr(event, 'delivery_context', None)
+        if dc and getattr(dc, 'is_redelivery', False):
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def _event_log_write(event_type, data):
     """寫一筆事件到磁碟 log。失敗安靜略過,不影響主流程。"""
@@ -685,12 +759,19 @@ def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0,
     
     Use this for: back-translation checks, normalization, pivot intermediate, etc.
     Do NOT use for the MAIN translate_openai call (that has its own richer logic).
+    
+    v3.9.30b B11 修補: reasoning model (GPT-5 系列) max_completion_tokens 包含
+    reasoning tokens,即使 effort=minimal 也會用一些。對 aux 任務(回譯/normalize)
+    額外加 2K reasoning 緩衝,避免短輸出被 reasoning 吃光。
     """
     kwargs = {"model": model_name, "messages": messages, "timeout": 30}
     if model_supports(model_name, "temperature"):
         kwargs["temperature"] = temperature
     if model_supports(model_name, "max_completion_tokens"):
-        kwargs["max_completion_tokens"] = max_out_tokens
+        # v3.9.30b: reasoning model 額外給 2K reasoning 預算(aux 任務用 minimal effort 夠了)
+        _is_reasoning = not model_supports(model_name, "temperature")
+        _budget = max_out_tokens + (2000 if _is_reasoning else 0)
+        kwargs["max_completion_tokens"] = _budget
     elif model_supports(model_name, "max_tokens"):
         kwargs["max_tokens"] = max_out_tokens
     _opt = optimal_reasoning_for_translation(model_name)
@@ -2135,6 +2216,16 @@ def restore_mentions(text, placeholders):
             f"MENTION {idx}",
             f"__MENTION {idx}__",
             f"[[MENTION_{idx}]]",
+            # v3.9.30c B21 修補: GPT 偶爾會把 __MENTION_ 字面翻譯成中文「提及」
+            # 歐那實際案例:_提及_0__ 殘留在輸出
+            f"__提及_{idx}__",
+            f"提及_{idx}",
+            f"_提及_{idx}_",
+            f"提及{idx}",
+            # 印尼語可能的字面翻譯
+            f"__SEBUTAN_{idx}__",
+            f"SEBUTAN_{idx}",
+            f"__sebutan_{idx}__",
         ]
         for v in variants:
             restored = restored.replace(v, original)
@@ -3165,8 +3256,12 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             repair_kwargs["temperature"] = 0.0
         if model_supports(_rmodel, "top_p"):
             repair_kwargs["top_p"] = 1.0
+        # v3.9.30b B11 修補: reasoning model 要加 reasoning 預算
         if model_supports(_rmodel, "max_completion_tokens"):
-            repair_kwargs["max_completion_tokens"] = max_tok
+            # reasoning model: max_tok(輸出) + 4000(reasoning 緩衝)
+            _is_reasoning = not model_supports(_rmodel, "temperature")
+            _budget = max_tok + (4000 if _is_reasoning else 0)
+            repair_kwargs["max_completion_tokens"] = _budget
         elif model_supports(_rmodel, "max_tokens"):
             repair_kwargs["max_tokens"] = max_tok
         # Translation-optimal reasoning effort for GPT-5 family
@@ -3492,8 +3587,10 @@ def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
             repair_kwargs["temperature"] = 0.0
         if model_supports(_rmodel, "top_p"):
             repair_kwargs["top_p"] = 1.0
+        # v3.9.30b B11 修補: reasoning model 加 reasoning 預算
         if model_supports(_rmodel, "max_completion_tokens"):
-            repair_kwargs["max_completion_tokens"] = 500
+            _is_reasoning = not model_supports(_rmodel, "temperature")
+            repair_kwargs["max_completion_tokens"] = 500 + (4000 if _is_reasoning else 0)
         elif model_supports(_rmodel, "max_tokens"):
             repair_kwargs["max_tokens"] = 500
         _opt = optimal_reasoning_for_translation(_rmodel)
@@ -5472,8 +5569,15 @@ def _vision_call(messages, max_tokens, cache_key=None):
             }
             # === 全部用 model_supports 過濾,確保 GPT-5 系列相容 ===
             # Token limit
+            # v3.9.30b B11 修補: 之前寫死 3000,reasoning model 會被 reasoning tokens 吃光
+            # 改成依 reasoning model 額外加 4K reasoning 緩衝
             if model_supports(attempt_model, "max_completion_tokens"):
-                kwargs["max_completion_tokens"] = 3000  # OCR 輸出量限制
+                # OCR 預設輸出 3000;若是 reasoning model 加 4K reasoning 預算
+                _vision_budget = 3000
+                if not model_supports(attempt_model, "temperature"):
+                    # 是 reasoning model,額外給 reasoning 預算
+                    _vision_budget = 3000 + 4000
+                kwargs["max_completion_tokens"] = _vision_budget
             elif model_supports(attempt_model, "max_tokens"):
                 kwargs["max_tokens"] = max_tokens
             # Temperature(GPT-5 系列不支援)
@@ -5923,13 +6027,19 @@ def transcribe_audio_openai(audio_bytes):
                 kwargs = {
                     "model": attempt_model,
                     "file": tmp,
+                    # v3.9.30c B16 修補: STT 也加 30 秒 timeout(其他 OpenAI 呼叫都有,只有這個沒)
+                    "timeout": 30,
                 }
                 # Only the new gpt-4o-transcribe family accepts the `prompt`
                 # vocabulary-bias parameter via the standard transcriptions endpoint.
                 if attempt_model.startswith("gpt-4o"):
                     kwargs["prompt"] = STT_PROMPT_HINT
                 r = oai.audio.transcriptions.create(**kwargs)
-                text = r.text.strip() if r.text else None
+                # v3.9.30c B16 修補: 防 r 為 None / r.text 為 None
+                if r is None:
+                    logger.warning("STT model %s returned None", attempt_model)
+                    continue
+                text = (getattr(r, 'text', None) or "").strip() or None
                 if attempt_model != primary:
                     logger.warning("STT fell back from %s to %s", primary, attempt_model)
                 return text
@@ -7163,6 +7273,12 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+    # v3.9.30c B15 修補: LINE webhook 重發保護
+    if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+        logger.warning("[handle_message] redelivery or duplicate, skipping msg_id=%s",
+                       getattr(event.message, 'id', None))
+        return
+    
     text = event.message.text.strip()
     if len(text) < 2:
         return
@@ -7171,6 +7287,20 @@ def handle_message(event):
     is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
     user_id = getattr(source, 'user_id', None)
+
+    # v3.9.30c B14 修補: 重置 _tl thread-local 殘留狀態
+    # gunicorn worker 會重用 thread,前一次處理可能殘留 from_image_ocr=True 等狀態
+    # 不重置會讓 text 訊息誤觸發 OCR 專用邏輯(例如強制分段翻譯)
+    try:
+        _tl.from_image_ocr = False
+        _tl.factory_audit = None
+        _tl.rtc_fail_reason = None
+        _tl.last_entry_id = None
+        _tl.gpt_says_announcement = None
+        _tl.struct_self_check = None
+        _tl.multi_path_fail = None
+    except Exception:
+        pass
 
     # --- DM (private message) mode ---
     if is_dm and user_id:
@@ -7206,7 +7336,7 @@ def handle_message(event):
                     api = MessagingApi(api_client)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[TextMessage(text=qry_result)]
+                        messages=[TextMessage(text=_clip_line_text(qry_result))]
                     ))
             return
         # DM: handle /pw1, /pw2, /scrap, /pkg commands
@@ -7224,7 +7354,7 @@ def handle_message(event):
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=dm_cmd_result)]
+                    messages=[TextMessage(text=_clip_line_text(dm_cmd_result))]
                 ))
             return
         # DM: skip other / commands
@@ -7265,7 +7395,7 @@ def handle_message(event):
             api = MessagingApi(api_client)
             api.reply_message(ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text=reply)]
+                messages=[TextMessage(text=_clip_line_text(reply))]
             ))
         return
 
@@ -7300,7 +7430,7 @@ def handle_message(event):
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text=cmd_result)]
+                    messages=[TextMessage(text=_clip_line_text(cmd_result))]
                 ))
         return
 
@@ -7430,7 +7560,7 @@ def handle_message(event):
             except TypeError:
                 _reply_resp = api_line.reply_message(req)
         else:
-            msg = TextMessage(text=reply)
+            msg = TextMessage(text=_clip_line_text(reply))
             if qr:
                 msg.quick_reply = qr
             if custom_sender:
@@ -7464,11 +7594,30 @@ def handle_message(event):
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
     """Handle image messages: OCR + translate with layout-preserving text."""
+    # v3.9.30c B15 修補: LINE webhook 重發保護
+    if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+        logger.warning("[handle_image] redelivery or duplicate, skipping msg_id=%s",
+                       getattr(event.message, 'id', None))
+        return
+    
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
     user_id = getattr(source, 'user_id', None)
     is_dm_img = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
     logger.info("Image received from %s", group_id)
+    
+    # v3.9.30c B13 修補: 設定 _tl thread-local,避免跨群組污染
+    # 之前 handle_image 完全沒設 _tl,OCR 翻譯時會讀到上一次翻譯殘留的 tone / group_id,
+    # 導致 A 群組 OCR 圖片用到 B 群組 tone 設定。
+    try:
+        _tone, _tone_custom = get_group_tone(group_id)
+        _tl.tone = _tone
+        _tl.tone_custom = _tone_custom
+        _tl.group_id = group_id or ""
+        _tl.user_id = user_id or ""
+        _tl.from_image_ocr = True  # 標記:這次翻譯是 OCR 來的,供下游函式區分
+    except Exception:
+        pass
     
     # v3.9.19: 寫磁碟 log(跨 worker 共享)
     _event_log_write("image_handler_entered", {
@@ -8000,10 +8149,28 @@ def _process_pending_image_translate_inner(event, message_id):
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio(event):
     """Handle audio/voice messages: Whisper STT + detect language + translate."""
+    # v3.9.30c B15 修補: LINE webhook 重發保護
+    if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+        logger.warning("[handle_audio] redelivery or duplicate, skipping msg_id=%s",
+                       getattr(event.message, 'id', None))
+        return
+    
     source = event.source
     group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
     user_id = getattr(source, 'user_id', None)
     is_dm_aud = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
+
+    # v3.9.30c B14 修補: 重置 _tl thread-local 殘留(同 handle_message)
+    try:
+        _tl.from_image_ocr = False
+        _tl.factory_audit = None
+        _tl.rtc_fail_reason = None
+        _tl.last_entry_id = None
+        _tl.gpt_says_announcement = None
+        _tl.struct_self_check = None
+        _tl.multi_path_fail = None
+    except Exception:
+        pass
 
     # Record user for whitelist
     if group_id and user_id and not is_dm_aud:
@@ -8081,7 +8248,7 @@ def handle_audio(event):
     qt = getattr(event.message, 'quote_token', None)
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
-        msg_obj = TextMessage(text=reply)
+        msg_obj = TextMessage(text=_clip_line_text(reply))
         if qt:
             try:
                 msg_obj.quote_token = qt
@@ -8110,6 +8277,11 @@ if VideoMessageContent:
     @handler.add(MessageEvent, message=VideoMessageContent)
     def handle_video(event):
         """Handle video messages: download thumbnail, OCR, translate."""
+        # v3.9.30c B18 修補: video OCR 也會跑 OpenAI(花錢),需要 redelivery 保護
+        if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+            logger.warning("[handle_video] redelivery or duplicate, skipping msg_id=%s",
+                           getattr(event.message, 'id', None))
+            return
         source = event.source
         group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
         user_id = getattr(source, 'user_id', None)
@@ -8159,7 +8331,7 @@ if VideoMessageContent:
                                     api2 = MessagingApi(ac2)
                                     api2.reply_message(ReplyMessageRequest(
                                         reply_token=event.reply_token,
-                                        messages=[TextMessage(text=reply)]
+                                        messages=[TextMessage(text=_clip_line_text(reply))]
                                     ))
                                 bot_stats["image_translations"] += 1
         except Exception as e:
@@ -8248,6 +8420,14 @@ if MemberJoinedEvent:
     @handler.add(MemberJoinedEvent)
     def handle_member_joined(event):
         """Send bilingual welcome when a new member joins the group."""
+        # v3.9.30c B18 修補: 避免重發歡迎訊息
+        if _is_redelivery(event):
+            logger.warning("[handle_member_joined] redelivery, skipping")
+            return
+        _rtok = getattr(event, 'reply_token', None)
+        if _rtok and _is_duplicate_message("mjn:" + _rtok):
+            logger.warning("[handle_member_joined] duplicate, skipping")
+            return
         source = event.source
         group_id = getattr(source, 'group_id', None)
         if not group_id:
@@ -8274,7 +8454,7 @@ if MemberJoinedEvent:
                     api = MessagingApi(api_client)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[TextMessage(text=welcome)]
+                        messages=[TextMessage(text=_clip_line_text(welcome))]
                     ))
         except Exception as e:
             logger.warning("Failed to send welcome: %s", e)
@@ -8353,6 +8533,15 @@ if PostbackEvent:
     @handler.add(PostbackEvent)
     def handle_postback(event):
         """Handle postback actions from Quick Reply / Flex buttons."""
+        # v3.9.30c B18 修補: postback 也會 redelivery,且會跑翻譯花錢
+        # postback 沒有 message.id,改用 reply_token 當 dedup key(每個 reply_token 唯一)
+        if _is_redelivery(event):
+            logger.warning("[handle_postback] redelivery, skipping")
+            return
+        _rtok = getattr(event, 'reply_token', None)
+        if _rtok and _is_duplicate_message("pbk:" + _rtok):
+            logger.warning("[handle_postback] duplicate reply_token, skipping")
+            return
         data = event.postback.data if hasattr(event.postback, 'data') else ""
         logger.info("Postback: %s", data)
 
@@ -10803,7 +10992,7 @@ async function loadDM(){
   var html='';
   for(var i=0;i<_dmUsers.length;i++){
     var u=_dmUsers[i];
-    html+='<div class="wl-item" style="border-color:#2a2a3e"><span>'+u.name+'</span>'+
+    html+='<div class="wl-item" style="border-color:#2a2a3e"><span>'+esc(u.name||'')+'</span>'+
     '<label class="toggle"><input type="checkbox" '+(u.whitelisted?'checked':'')+
     ' onchange="toggleDmWl('+i+',this.checked)"><span class="slider"></span></label></div>';
   }
@@ -10852,7 +11041,7 @@ async function loadSkipList(){
   var html='';
   for(var i=0;i<_skipUsers.length;i++){
     var u=_skipUsers[i];
-    html+='<div class="wl-item"><span style="font-size:15px">'+u.name+'</span>'+
+    html+='<div class="wl-item"><span style="font-size:15px">'+esc(u.name||'')+'</span>'+
     '<label class="toggle"><input type="checkbox" '+(u.skipped?'checked':'')+
     ' onchange="toggleSkip('+i+',this.checked)"><span class="slider"></span></label></div>';
   }
@@ -10899,7 +11088,7 @@ async function loadUsers(){
     var atabs=u.allowed_tabs||[];
     html+='<div class="user-card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
-      '<div><div class="user-name">'+u.name+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+langBadge+'</div>'+
+      '<div><div class="user-name">'+esc(u.name||'')+'</div><div class="user-id">ID: '+u.user_id+'</div></div>'+langBadge+'</div>'+
       '<div class="user-admin-row">'+
       '<span class="admin-label">🔑 管理員</span>'+
       '<label class="toggle"><input type="checkbox" '+(u.is_admin?'checked':'')+
@@ -13407,7 +13596,8 @@ def api_translation_log():
         return jsonify({"error": "forbidden"}), 403
     if request.method == "GET":
         # Optional filters
-        limit = int(request.args.get("limit", 100))
+        # v3.9.30c B19: 用 _safe_int 防 ?limit=abc 炸 500
+        limit = _safe_int(request.args.get("limit", 100), default=100, min_val=1, max_val=10000)
         only_warned = request.args.get("only_warned") == "1"
         only_wrong = request.args.get("only_wrong") == "1"
         items = list(translation_log)
@@ -13519,7 +13709,8 @@ def api_translation_stats():
         return jsonify({"error": "forbidden"}), 403
     
     # 時間範圍:預設過去 7 天
-    days = int(request.args.get("days", 7))
+    # v3.9.30c B19: 用 _safe_int 防炸
+    days = _safe_int(request.args.get("days", 7), default=7, min_val=1, max_val=365)
     cutoff_ts = int(time.time()) - days * 86400
     
     items = [x for x in translation_log if x.get("ts", 0) >= cutoff_ts]
@@ -13911,7 +14102,8 @@ def api_admin_insight_trend():
     """Get daily follower trend data (7 days)."""
     if not check_manager_access("insight"):
         return jsonify({"error": "forbidden"}), 403
-    days = min(int(request.args.get("days", 7)), 30)
+    # v3.9.30c B19: 用 _safe_int 防炸
+    days = _safe_int(request.args.get("days", 7), default=7, min_val=1, max_val=30)
     trend = get_statistics_per_unit(num_days=days)
     return jsonify({"trend": trend})
 
@@ -14855,7 +15047,8 @@ async function initLiff(){
       await loadFormList();
     }
   }catch(e){
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+    /* v3.9.30c B12 修補: e.message 用 esc() 防 XSS */
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
   }
 }
 
@@ -14877,7 +15070,8 @@ async function loadFormList(){
     html+='</div>';
     document.getElementById('app').innerHTML=html;
   }catch(e){
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+    /* v3.9.30c B12 修補: e.message 用 esc() */
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
   }
 }
 
@@ -14895,7 +15089,8 @@ async function loadForm(fid){
     }
     renderForm(data.form);
   }catch(e){
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+e.message+'</p></div>';
+    /* v3.9.30c B12 修補: e.message 用 esc() */
+    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
   }
 }
 
@@ -15719,7 +15914,8 @@ def debug_event_log():
         entries = []
     
     filter_str = request.args.get("filter", "").lower()
-    n = int(request.args.get("n", "50"))
+    # v3.9.30c B19: 用 _safe_int 防炸
+    n = _safe_int(request.args.get("n", "50"), default=50, min_val=1, max_val=1000)
     
     if filter_str:
         entries = [e for e in entries if filter_str in e.get("type", "").lower()]
