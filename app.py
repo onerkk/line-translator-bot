@@ -129,7 +129,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.30-0504-jatuh-tempo-and-dup-keys-fix"
+VERSION = "v3.9.30b-0504-jatuh-tempo+B7-B10-fixes"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -319,11 +319,31 @@ bot_stats = {
 
 
 def track_tokens(response):
-    """Track token usage from OpenAI API response."""
+    """Track token usage from OpenAI API response.
+    
+    v3.9.30 B8 修補: 加入 reasoning_tokens 記錄
+    GPT-5 系列(o1/o3/gpt-5*)會把推理 token 放在
+    response.usage.completion_tokens_details.reasoning_tokens,
+    這部分 OpenAI 同樣計費(以 completion 費率),不記錄會造成成本黑洞。
+    """
     try:
         if response and hasattr(response, 'usage') and response.usage:
             bot_stats["tokens_prompt"] += response.usage.prompt_tokens or 0
             bot_stats["tokens_completion"] += response.usage.completion_tokens or 0
+            # v3.9.30: reasoning_tokens 額外追蹤(已包含在 completion_tokens 中,
+            # 但需要分開知道才能算實際輸出 vs reasoning 比例)
+            try:
+                _details = getattr(response.usage, 'completion_tokens_details', None)
+                if _details:
+                    _rt = getattr(_details, 'reasoning_tokens', 0) or 0
+                    bot_stats["tokens_reasoning"] = bot_stats.get("tokens_reasoning", 0) + _rt
+                # cached prompt tokens(prompt cache hit 部分,計費較低)
+                _pt_details = getattr(response.usage, 'prompt_tokens_details', None)
+                if _pt_details:
+                    _ct = getattr(_pt_details, 'cached_tokens', 0) or 0
+                    bot_stats["tokens_prompt_cached"] = bot_stats.get("tokens_prompt_cached", 0) + _ct
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -340,11 +360,51 @@ def track_group_usage(group_id, before_prompt, before_completion):
 
 
 def calc_group_cost_twd(group_id):
-    """Calculate cost in TWD for a group."""
+    """Calculate cost in TWD for a group.
+    
+    v3.9.30 B9 修補: 舊版寫死 GPT-4 系列價格 (input $0.15/M, output $0.60/M),
+    用 GPT-5 系列時計費全錯。新版改用「當前主模型」的價格估算。
+    
+    這是估算值(因為單一群組可能混用多個模型),要精準計費需逐次記錄。
+    使用 model_default 作為估算基準(歐那實際使用情境符合)。
+    """
     u = group_api_usage.get(group_id, {})
     tp = u.get("tokens_prompt", 0)
     tc = u.get("tokens_completion", 0)
-    usd = (tp * 0.00000015) + (tc * 0.0000006)
+    # 依當前 model_default 估算單價(USD per token)
+    md = (model_default or "").lower()
+    # OpenAI 公開價格(2026-05);若未來價格有變更新此表即可
+    # 格式: (input_per_M, output_per_M) USD
+    PRICE_PER_M = {
+        "gpt-5-nano":      (0.05,  0.40),
+        "gpt-5-mini":      (0.25,  2.00),
+        "gpt-5":           (1.25, 10.00),
+        "gpt-5.4-nano":    (0.20,  1.25),
+        "gpt-5.4-mini":    (0.75,  4.50),
+        "gpt-5.4":         (2.50, 15.00),
+        "gpt-5.5":         (5.00, 30.00),
+        "gpt-4.1-nano":    (0.10,  0.40),
+        "gpt-4.1-mini":    (0.40,  1.60),
+        "gpt-4.1":         (2.00,  8.00),
+        "gpt-4o-mini":     (0.15,  0.60),
+        "gpt-4o":          (2.50, 10.00),
+    }
+    # 模糊匹配(歐那 UI 上的選項可能完整也可能 prefix)
+    # v3.9.30b: 修匹配優先級 — 完全相等優先;否則用「最長 prefix」匹配,避免 "gpt-5.4-mini" 誤匹到 "gpt-5"
+    in_rate, out_rate = (0.25, 2.00)  # 預設 gpt-5-mini
+    # 1. 完全相等
+    if md in PRICE_PER_M:
+        in_rate, out_rate = PRICE_PER_M[md]
+    else:
+        # 2. 最長 prefix 匹配(避免 gpt-5.4-mini 被 gpt-5 吃掉)
+        best_match = ""
+        for mk in PRICE_PER_M.keys():
+            if md.startswith(mk) and len(mk) > len(best_match):
+                best_match = mk
+        if best_match:
+            in_rate, out_rate = PRICE_PER_M[best_match]
+    # 換算:per_M → per_token
+    usd = (tp * in_rate / 1_000_000) + (tc * out_rate / 1_000_000)
     return round(usd * USD_TO_TWD, 2)
 
 # Admin users tracking: {user_id: {"is_admin": bool}}
@@ -839,7 +899,18 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
             max_out_tokens=500
         ))
         track_tokens(r)
-        back = r.choices[0].message.content.strip()
+        # v3.9.30 B7 修補: GPT-5 reasoning model 在 max_completion_tokens 不足時
+        # 會回 content=None + finish_reason='length',直接 .strip() 會 AttributeError
+        _content = r.choices[0].message.content if r.choices else None
+        if _content is None:
+            _finish = r.choices[0].finish_reason if r.choices else "unknown"
+            logger.warning(
+                "[back-trans] empty content from %s, finish_reason=%s — skip back check",
+                check_model, _finish
+            )
+            # 反譯失敗就跳過反譯檢查(不擋住主翻譯流程)
+            return True, 1.0, ""
+        back = _content.strip()
         
         # ★ v3.3:多維度檢查
         ok, reason, details = _translation_quality_check(original_text, translated_text, back)
@@ -3715,6 +3786,9 @@ def post_fix_translation(text):
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
     if not oai:
         return None
+    # v3.9.30 B10 修補: 空字串/純空白不該送到 OpenAI 浪費 token
+    if not text or not (text or "").strip():
+        return ""
     try:
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
@@ -4678,7 +4752,23 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _confidence = 1.0
         track_tokens(r)
         # v3.2-0426e: parse structured output if used
-        _raw = r.choices[0].message.content.strip()
+        # v3.9.30 B7 修補: GPT-5 reasoning model 在 max_completion_tokens 用光 reasoning 預算
+        # 後可能回 content=None + finish_reason='length'。要先檢查不要直接 .strip()。
+        _msg_content = r.choices[0].message.content if r.choices else None
+        if _msg_content is None:
+            _finish_reason = r.choices[0].finish_reason if r.choices else "no_choice"
+            logger.error(
+                "[translate_openai] empty content! model=%s finish=%s — return None to trigger fallback",
+                _model, _finish_reason
+            )
+            # 寫進 last_translate_debug 方便事後 debug
+            try:
+                last_translate_debug["openai_finish_reason"] = _finish_reason
+                last_translate_debug["empty_content"] = True
+            except Exception:
+                pass
+            return None  # 上游會 fallback 到 google translate
+        _raw = _msg_content.strip()
         _struct_self_check_failed = None  # v3.5: 記錄 self-check 失敗原因供日誌
         if structured_output_enabled and _raw.startswith("{"):
             try:
@@ -5702,7 +5792,15 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                          cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
                                                     "img", tgt_lang, "ocrtrans"))
         track_tokens(r)
-        result = r.choices[0].message.content.strip()
+        # v3.9.30 B7 修補: vision model 也可能回 content=None
+        _content = r.choices[0].message.content if r.choices else None
+        if _content is None:
+            _finish = r.choices[0].finish_reason if r.choices else "unknown"
+            logger.warning(
+                "[OCR+translate] empty content, finish_reason=%s", _finish
+            )
+            return None, f"empty_content:{_finish}"
+        result = _content.strip()
         if result == "NO_TEXT_FOUND" or not result:
             return None, None
         return result, None
