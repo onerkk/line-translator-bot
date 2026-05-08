@@ -67,7 +67,8 @@
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
-      "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁"
+      "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
+      "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin"
     }
   },
   "dm_master_enabled": true,
@@ -116,13 +117,15 @@
     }
   },
   "bot_stats": {
-    "text_translations": 87,
+    "text_translations": 91,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1297057,
-    "tokens_completion": 4215
+    "tokens_prompt": 1404553,
+    "tokens_completion": 4618,
+    "tokens_reasoning": 0,
+    "tokens_prompt_cached": 16128
   },
   "extra_customers": {
     "__all__": [
@@ -168,13 +171,14 @@
       "王文良",
       "詹秋情",
       "就是這個光 ✨༄",
-      "辰"
+      "辰",
+      "惟壬"
     ]
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 1051747,
-      "tokens_completion": 2281
+      "tokens_prompt": 1159243,
+      "tokens_completion": 2684
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
@@ -268,7 +272,8 @@
     "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
-    "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw"
+    "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
+    "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
