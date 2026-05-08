@@ -117,15 +117,15 @@
     }
   },
   "bot_stats": {
-    "text_translations": 91,
+    "text_translations": 89,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1404553,
-    "tokens_completion": 4618,
+    "tokens_prompt": 1333221,
+    "tokens_completion": 4306,
     "tokens_reasoning": 0,
-    "tokens_prompt_cached": 16128
+    "tokens_prompt_cached": 0
   },
   "extra_customers": {
     "__all__": [
@@ -177,12 +177,12 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 1159243,
-      "tokens_completion": 2684
+      "tokens_prompt": 1069653,
+      "tokens_completion": 2355
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 113915,
-      "tokens_completion": 853
+      "tokens_prompt": 132173,
+      "tokens_completion": 870
     },
     "__dm__": {
       "tokens_prompt": 46920,
