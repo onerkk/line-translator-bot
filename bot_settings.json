@@ -117,15 +117,15 @@
     }
   },
   "bot_stats": {
-    "text_translations": 94,
+    "text_translations": 97,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1458790,
-    "tokens_completion": 4797,
+    "tokens_prompt": 1548345,
+    "tokens_completion": 4880,
     "tokens_reasoning": 0,
-    "tokens_prompt_cached": 16128
+    "tokens_prompt_cached": 84992
   },
   "extra_customers": {
     "__all__": [
@@ -177,8 +177,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 1213480,
-      "tokens_completion": 2863
+      "tokens_prompt": 1303035,
+      "tokens_completion": 2946
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
@@ -292,6 +292,11 @@
     {
       "zh": "停機設備還是很常沒有維護，再注意一下",
       "id": "Data downtime mesin di sistem masih sering belum diisi alasan berhentinya. Tolong operator lebih teliti dan segera melakukan pengisian data downtime.",
+      "dir": "zh2id"
+    },
+    {
+      "zh": "歸剛欸",
+      "id": "Seharian begini terus.",
       "dir": "zh2id"
     }
   ],
