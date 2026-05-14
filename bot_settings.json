@@ -117,15 +117,15 @@
     }
   },
   "bot_stats": {
-    "text_translations": 97,
+    "text_translations": 108,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1548345,
-    "tokens_completion": 4880,
+    "tokens_prompt": 1728678,
+    "tokens_completion": 5267,
     "tokens_reasoning": 0,
-    "tokens_prompt_cached": 84992
+    "tokens_prompt_cached": 154880
   },
   "extra_customers": {
     "__all__": [
@@ -177,8 +177,8 @@
   },
   "group_api_usage": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 1303035,
-      "tokens_completion": 2946
+      "tokens_prompt": 1483368,
+      "tokens_completion": 3333
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "tokens_prompt": 113915,
@@ -200,7 +200,7 @@
   "quick_reply_enabled": true,
   "silent_mode": false,
   "sender_name": "AI機器人",
-  "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat.png",
+  "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
