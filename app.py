@@ -10604,16 +10604,51 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 
 <!-- Claude 專屬能力(切換到 Anthropic 時自動啟用)-->
 <div style="background:linear-gradient(135deg,#1f1a2e,#15101f);border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #d4a437">
-  <div style="margin:0 0 10px;color:#d4a437;font-size:13px;font-weight:700">⭐ Claude 專屬翻譯能力(切換到 Anthropic 自動啟用)</div>
+  <div style="margin:0 0 10px;color:#d4a437;font-size:13px;font-weight:700">⭐ Claude 專屬翻譯能力(切換到 Anthropic 全部自動啟用)</div>
   <div id="aip-claude-features-status" style="font-size:12px;color:#ddd;line-height:1.9">
-    <div>📦 <strong>Prompt Caching</strong>:<span id="aip-feat-cache">載入中…</span></div>
-    <div>🧠 <strong>Extended Thinking</strong>:<span id="aip-feat-think">載入中…</span> <span style="color:#888">(Sonnet/Opus 自動啟用,Haiku 不支援)</span></div>
-    <div>📚 <strong>Glossary Grounding</strong>:<span id="aip-feat-ground">載入中…</span> <span id="aip-feat-glossary-size" style="color:#888"></span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📦 <strong>Prompt Caching</strong> <span style="color:#888;font-size:10px">省錢 70-90%</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache" onchange="aipToggleFeature('prompt_caching',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🧠 <strong>Extended Thinking</strong> <span style="color:#888;font-size:10px">Sonnet/Opus 才有</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-think" onchange="aipToggleFeature('extended_thinking',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📚 <strong>Glossary Grounding</strong> <span id="aip-feat-glossary-size" style="color:#888;font-size:10px"></span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-ground" onchange="aipToggleFeature('glossary_grounding',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🚫 <strong>Stop Sequences</strong> <span style="color:#888;font-size:10px">防加註解</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-stop" onchange="aipToggleFeature('stop_sequences',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📐 <strong>XML System Prompt</strong> <span style="color:#888;font-size:10px">遵循度 +20-30%</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-xml" onchange="aipToggleFeature('xml_system_prompt',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📖 <strong>Multi-shot Examples</strong> <span style="color:#888;font-size:10px">自動相容</span></span>
+      <span style="color:#10b981;font-size:11px">✅ 自動</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📷 <strong>Native Vision</strong> <span style="color:#888;font-size:10px">圖片+PDF</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-vision" onchange="aipToggleFeature('native_vision',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+      <span>🔖 <strong>Citations</strong> <span style="color:#888;font-size:10px">引用標注</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cite" onchange="aipToggleFeature('citations',this.checked)"><span class="slider"></span></label>
+    </div>
   </div>
   <div style="margin-top:12px;padding:8px;background:#0a0a1a;border-radius:6px;color:#888;font-size:11px;line-height:1.5">
-    💡 <strong>實際運作</strong>:每次翻譯,Claude 會自動看到工廠術語表 → 引用標準印尼譯。<br>
-    💰 <strong>省錢機制</strong>:System prompt 自動 cache,輸入成本降 70-90%。<br>
-    🧠 <strong>翻譯品質</strong>:Sonnet/Opus 用 thinking 思考鏈,複雜句子翻得更準。
+    💡 <strong>實際運作</strong>:每次翻譯 Claude 看到工廠術語表 → 引用標準印尼譯。<br>
+    💰 <strong>省錢</strong>:System prompt + glossary 自動 cache,連續呼叫省 70-90% input 成本。<br>
+    🧠 <strong>翻譯品質</strong>:Sonnet/Opus thinking + XML system prompt + 停止序列三管齊下。<br>
+    📷 <strong>圖片翻譯</strong>:OCR 也走 Claude vision,工單照片可直翻。<br>
+    ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊。
   </div>
 </div>
 
@@ -10629,13 +10664,21 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <tbody>
       <tr><td style="padding:6px;color:#ddd">💬 文字翻譯</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
       <tr><td style="padding:6px;color:#ddd">🖼️ 圖片 OCR</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📄 PDF 原生讀取</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
       <tr><td style="padding:6px;color:#ddd">🎤 語音翻譯</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
-      <tr><td style="padding:6px;color:#ddd">📊 信心度</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
-      <tr><td style="padding:6px;color:#ddd">⚡ 修補加速</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
-      <tr><td style="padding:6px;color:#ddd">💰 Prompt Cache</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📊 信心度 (logprobs)</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
+      <tr><td style="padding:6px;color:#ddd">⚡ 修補加速 (Predicted)</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
+      <tr><td style="padding:6px;color:#ddd">💰 Prompt Cache</td><td style="text-align:center">✅ 5m</td><td style="text-align:center">✅ 5m + 1h</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🧠 Thinking 思考鏈</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📚 Search Result 引用</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🔖 Citations 標注</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🚫 Stop Sequences</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📐 XML Prompt 遵循</td><td style="text-align:center">普通</td><td style="text-align:center;color:#10b981">✅ 強</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📖 Few-shot Examples</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🌊 Streaming</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
     </tbody>
   </table>
-  <div style="margin-top:10px;padding:8px;background:#2a1f0f;border-radius:6px;color:#d4a437;font-size:11px;line-height:1.5">⚠️ <strong>切到 Anthropic 時</strong>:語音訊息會回覆「不支援」。其他功能正常。</div>
+  <div style="margin-top:10px;padding:8px;background:#2a1f0f;border-radius:6px;color:#d4a437;font-size:11px;line-height:1.5">⚠️ <strong>切到 Anthropic 時</strong>:語音訊息回「不支援」,信心度和修補加速失效。其他全部更強。</div>
 </div>
 
 <!-- 成本對比 -->
@@ -11242,25 +11285,54 @@ async function aipLoadStatus(){
       const sel = document.getElementById('aip-anthropic-model');
       if (sel) sel.value = currentModel;
     } catch(e) {}
-    // v2.0: Claude 專屬能力狀態
+    // v3.0: Claude 8 大專屬能力狀態
     try {
       const f = cfg.claude_features || {};
-      const cacheEl = document.getElementById('aip-feat-cache');
-      const thinkEl = document.getElementById('aip-feat-think');
-      const groundEl = document.getElementById('aip-feat-ground');
+      // 對應 8 個 toggle id → feature key
+      const toggleMap = {
+        'aip-toggle-cache':   'prompt_caching',
+        'aip-toggle-think':   'extended_thinking',
+        'aip-toggle-ground':  'glossary_grounding',
+        'aip-toggle-stop':    'stop_sequences',
+        'aip-toggle-xml':     'xml_system_prompt',
+        'aip-toggle-vision':  'native_vision',
+        'aip-toggle-cache1h': 'extended_cache_1h',
+        'aip-toggle-cite':    'citations',
+      };
+      Object.keys(toggleMap).forEach(function(id){
+        const el = document.getElementById(id);
+        if (el) el.checked = !!f[toggleMap[id]];
+      });
+      // glossary 數量顯示
       const glossEl = document.getElementById('aip-feat-glossary-size');
-      if (cacheEl) cacheEl.innerHTML = f.prompt_caching ? '<span style="color:#10b981">✅ 啟用</span>' : '<span style="color:#888">❌ 關閉</span>';
-      if (thinkEl) thinkEl.innerHTML = f.extended_thinking ? '<span style="color:#10b981">✅ 啟用</span> (budget ' + (f.thinking_budget || 2000) + ' tokens)' : '<span style="color:#888">❌ 關閉</span>';
-      if (groundEl) groundEl.innerHTML = f.glossary_grounding ? '<span style="color:#10b981">✅ 啟用</span>' : '<span style="color:#888">❌ 關閉</span>';
       if (glossEl) {
         if (cfg._glossary_registered) {
-          glossEl.textContent = '(' + cfg._glossary_size + ' 條工廠術語已註冊)';
+          glossEl.textContent = '(' + cfg._glossary_size + ' 條已註冊)';
         } else {
           glossEl.innerHTML = '<span style="color:#f59e0b">⚠️ glossary 未註冊</span>';
         }
       }
-    } catch(e) {}
+    } catch(e) { console.warn('Claude features load fail', e); }
   }catch(e){ console.warn('AIP error', e); }
+}
+
+// v3.0: 切換單一 Claude feature 開關
+async function aipToggleFeature(featureName, enabled){
+  try{
+    const r = await fetch('/api/admin/ai-provider/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({features: {[featureName]: enabled}})
+    });
+    const data = await r.json();
+    if(!data.ok){
+      alert('❌ 更新失敗:' + (data.message || ''));
+      aipLoadStatus(); // reload 還原狀態
+    }
+  }catch(e){
+    alert('錯誤:' + e);
+    aipLoadStatus();
+  }
 }
 async function aipSwitchProvider(p){
   if(!confirm('確定切換到 ' + p.toUpperCase() + '?\\n下次翻譯請求立即用新 provider。')) return;
@@ -11294,14 +11366,37 @@ async function aipTestProvider(){
     const data = await r.json();
     if(data.ok){
       box.style.color = '#10b981';
-      box.textContent = '✅ 測試成功\\n\\nProvider：' + data.provider + '\\n模型：' + (data.model_used||'?') + '\\n\\n翻譯結果：\\n' + (data.result||'(空)') + '\\n\\n用量：input=' + ((data.usage&&data.usage.input)||0) + ' / output=' + ((data.usage&&data.usage.output)||0) + ' tokens';
+      let txt = '✅ 測試成功\\n\\n';
+      txt += 'Provider:' + data.provider + '\\n';
+      txt += '模型:' + (data.model_used || '?') + '\\n\\n';
+      txt += '翻譯結果:\\n' + (data.result || '(空)') + '\\n\\n';
+      const u = data.usage || {};
+      txt += '用量:input=' + (u.input||0) + ' / output=' + (u.output||0) + ' tokens';
+      if (u.cache_read || u.cache_creation) {
+        txt += '\\n  cache讀=' + (u.cache_read||0) + ' / cache寫=' + (u.cache_creation||0);
+      }
+      // v3.0: 顯示實際啟用的 Claude 能力
+      if (data.claude_features_used) {
+        const f = data.claude_features_used;
+        txt += '\\n\\n🎯 這次用了的 Claude 能力:';
+        if (f.caching) txt += '\\n  ✅ Prompt Caching' + (f.caching_1h ? ' (1h TTL)' : '');
+        if (f.thinking) txt += '\\n  ✅ Extended Thinking';
+        if (f.grounding) txt += '\\n  ✅ Glossary Grounding (' + (f.grounding_terms_count||0) + ' 條術語)';
+        if (f.stop_sequences) txt += '\\n  ✅ Stop Sequences';
+        if (f.xml_system) txt += '\\n  ✅ XML System Prompt';
+        if (f.citations) txt += '\\n  ✅ Citations (' + (f.citation_count||0) + ' 條引用)';
+      }
+      if (data.citations && data.citations.length) {
+        txt += '\\n\\n📖 引用了的工廠術語:\\n  • ' + data.citations.join('\\n  • ');
+      }
+      box.textContent = txt;
     }else{
       box.style.color = '#ef4444';
       box.textContent = '❌ 測試失敗\\n\\n' + (data.error || '未知錯誤');
     }
   }catch(e){
     box.style.color = '#ef4444';
-    box.textContent = '❌ 網路錯誤：' + e;
+    box.textContent = '❌ 網路錯誤:' + e;
   }
 }
 
@@ -13917,21 +14012,21 @@ def api_admin_ai_provider_mapping():
 
 @app.route("/api/admin/ai-provider/test", methods=["POST"])
 def api_admin_ai_provider_test():
-    """測試呼叫:用目前 active provider 跑一個小翻譯,確認 key 可用"""
+    """測試呼叫:用目前 active provider 跑一個小翻譯,確認 key 可用 + 顯示用了哪些 Claude 能力"""
     if not check_manager_access("aiprovider"):
         return jsonify({"error": "forbidden"}), 403
     try:
         resp = ai_provider.chat_complete(
             model="gpt-4.1-mini",
             messages=[
-                {"role": "system", "content": "你是專業翻譯。"},
-                {"role": "user", "content": "請把這句翻成印尼文:你好,測試"},
+                {"role": "system", "content": "你是專業工廠翻譯。請忠實翻譯,不加註解。"},
+                {"role": "user", "content": "請把這句翻成印尼文:鋼帶不夠了,打包機停了"},
             ],
-            max_tokens=100,
+            max_tokens=200,
             temperature=0.0,
         )
         text = resp.choices[0].message.content if resp.choices else ""
-        return jsonify({
+        result = {
             "ok": True,
             "provider": ai_provider.get_active_provider(),
             "model_used": getattr(resp, "model", "?"),
@@ -13939,12 +14034,36 @@ def api_admin_ai_provider_test():
             "usage": {
                 "input": getattr(resp.usage, "prompt_tokens", 0),
                 "output": getattr(resp.usage, "completion_tokens", 0),
+                "cache_read": getattr(resp.usage, "cache_read_tokens", 0),
+                "cache_creation": getattr(resp.usage, "cache_creation_tokens", 0),
             } if resp.usage else {},
-        })
+        }
+        # v3.0: 帶上實際啟用的 Claude features(讓歐那看到真有跑)
+        claude_features_used = getattr(resp, "_jy_claude_features_used", None)
+        if claude_features_used:
+            result["claude_features_used"] = claude_features_used
+        # Citations(Phase 9)
+        citations = getattr(resp, "_jy_citations", None)
+        if citations:
+            result["citations"] = citations
+        return jsonify(result)
     except NotImplementedError as e:
         return jsonify({"ok": False, "error": "功能不支援:" + str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/ai-provider/features", methods=["POST"])
+def api_admin_ai_provider_features():
+    """v3.0: 更新 Claude 專屬能力 toggle 狀態"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    features = data.get("features")
+    if not isinstance(features, dict):
+        return jsonify({"ok": False, "message": "features 必須是 dict"}), 400
+    ok, msg = ai_provider.update_claude_features(features)
+    return jsonify({"ok": ok, "message": msg})
 
 
 @app.route("/admin")
