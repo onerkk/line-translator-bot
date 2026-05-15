@@ -91,6 +91,7 @@ DEFAULT_CONFIG = {
 
 _config_lock = threading.RLock()
 _current_config = None
+_last_config_mtime = 0  # 修跨 worker 同步 — 記錄上次讀 config 時磁碟檔 mtime
 _openai_client = None
 _anthropic_client = None
 _registered_glossary = None
@@ -125,10 +126,16 @@ def _load_config_from_disk():
 
 
 def _save_config_to_disk(cfg):
+    global _last_config_mtime
     try:
         cfg["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
         with open(PROVIDER_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        # 存檔後更新 mtime,避免自己的 _ensure_initialized 又 reload 一次
+        try:
+            _last_config_mtime = os.path.getmtime(PROVIDER_CONFIG_PATH)
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"[ai_provider] ERROR: 存 config 失敗 {e}", flush=True)
@@ -146,9 +153,28 @@ def _init_config():
 
 
 def _ensure_initialized():
+    """每次都重讀磁碟 — 修跨 Gunicorn worker 同步 bug
+    
+    為什麼這樣做:
+      Render 用 gunicorn --workers N 跑,每個 worker 是獨立 process
+      各自有自己的 _current_config global 變數
+      用戶在後台切換 provider → 只有「處理切換 request 的那個 worker」更新了
+      其他 worker 的 _current_config 還是舊值
+      → 用戶下次翻譯被別的 worker 處理時,讀到舊值,打到舊 provider
+    
+    解法:每次 _ensure_initialized() 都檢查磁碟檔有沒有更新,有就 reload
+    成本:每次多一個 stat() + 可能一次 read(磁碟很快,影響可忽略)
+    """
+    global _current_config, _last_config_mtime
     with _config_lock:
-        if _current_config is None:
+        try:
+            mtime = os.path.getmtime(PROVIDER_CONFIG_PATH) if os.path.exists(PROVIDER_CONFIG_PATH) else 0
+        except Exception:
+            mtime = 0
+        # 第一次 init,或磁碟檔有更新 → 重讀
+        if _current_config is None or mtime > _last_config_mtime:
             _init_config()
+            _last_config_mtime = mtime
 
 
 # ═══════════════════════════════════════════════════════════════════
