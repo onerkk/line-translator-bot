@@ -5754,9 +5754,32 @@ def _vision_call(messages, max_tokens, cache_key=None):
     - timeout=30 雙保險
     
     Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
+    
+    v3.2.2 Phase 19 (2026-05-15):
+      新增「圖片翻譯走 Claude vs OpenAI」獨立開關判斷:
+        - active=anthropic + image_use_claude=True  → 透過 ai (走 ai_provider → Claude vision)
+        - active=anthropic + image_use_claude=False → 強制 oai (繞過 ai_provider 走 OpenAI)
+        - active=openai                              → 一律 oai
+      用途:讓歐那「文字翻譯走 Claude,但圖片仍走 OpenAI」可獨立切換
+            避免 Claude 圖片 token 成本失控
     """
     last_err = None
     primary = VISION_MODEL
+    # === v3.2.2 Phase 19: 決定圖片走哪個 client ===
+    _vision_provider = ai_provider.get_active_provider()
+    _vision_use_claude = ai_provider.should_use_claude_for_images()
+    if _vision_provider == "anthropic" and _vision_use_claude:
+        # 圖片走 Claude — 用 ai (_AIProxy) 自動路由
+        _vision_client = ai
+        _vision_route = "claude"
+    else:
+        # 強制 OpenAI — 直接用 oai client,繞過 _AIProxy
+        if oai is None:
+            raise RuntimeError("OpenAI client 未初始化,且 image_translation_use_claude=False 強制 OpenAI")
+        _vision_client = oai
+        _vision_route = "openai_forced" if _vision_provider == "anthropic" else "openai"
+    logger.info("[Vision] route=%s (provider=%s, use_claude=%s)",
+                _vision_route, _vision_provider, _vision_use_claude)
     for attempt_model in (primary, VISION_FALLBACK_MODEL):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
@@ -5800,7 +5823,7 @@ def _vision_call(messages, max_tokens, cache_key=None):
                 pass
             
             logger.info("[Vision] calling %s with kwargs=%s", attempt_model, list(kwargs.keys()))
-            r = ai.chat.completions.create(**kwargs)
+            r = _vision_client.chat.completions.create(**kwargs)
             
             if attempt_model != primary:
                 logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
@@ -10660,6 +10683,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>📷 <strong>Native Vision</strong> <span style="color:#888;font-size:10px">圖片+PDF</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-vision" onchange="aipToggleFeature('native_vision',this.checked)"><span class="slider"></span></label>
     </div>
+    <!-- v3.2.2 D6 Phase 19: 圖片翻譯獨立開關 -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🖼️ <strong>圖片翻譯走 Claude</strong> <span style="color:#e0a437;font-size:10px">OFF=強制 OpenAI</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-imgclaude" onchange="aipToggleFeature('image_translation_use_claude',this.checked)"><span class="slider"></span></label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
@@ -10685,7 +10713,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     🪜 <strong>多層 cache</strong>:把 system 拆成「穩定區(1h)+ 動態區(5m)」,跨 group 共用 stable。<br>
     🎯 <strong>v3.2 Adaptive Thinking</strong>:Claude 自己判斷簡單句不思考、複雜句深思考,省 token + 提質。<br>
     🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
-    ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊。
+    🖼️ <strong>v3.2.2 圖片翻譯獨立開關</strong>:Claude vision 一張 ~1MP 圖約 1600 tokens($0.008 input)。<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:文字仍走 Claude,圖片強制走 OpenAI gpt-5-mini(省成本但失去 Claude vision 優勢)。<br>
+    ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊(圖片例外:按上方 toggle)。
   </div>
   <!-- D3: 工具按鈕區 -->
   <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
@@ -11346,6 +11376,8 @@ async function aipLoadStatus(){
         // v3.2 D4 新增
         'aip-toggle-adaptive':    'adaptive_thinking',
         'aip-toggle-smartcache':  'smart_cache_threshold',
+        // v3.2.2 D6 新增
+        'aip-toggle-imgclaude':   'image_translation_use_claude',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);

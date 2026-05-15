@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2.1 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.2 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -36,6 +36,11 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.1 / 2026-05-15)
 ✅ Phase 18: Image-then-text Reorder  — 官方 vision best practice:單圖+文字時
                                         自動把圖片排前面,翻譯/OCR 略佳
                                         多圖場景不重排(避免破壞 few-shot)
+
+【v3.2.2 D6 新增(2026-05-15)】
+✅ Phase 19: Image Translation Toggle  — 圖片翻譯是否走 Claude vision 的獨立開關
+                                          切到 Anthropic 時可獨立關閉圖片翻譯(成本控制)
+                                          OFF 時:文字仍走 Claude,圖片仍走 OpenAI
 
 【作者】onerkk@gmail.com
 """
@@ -110,6 +115,9 @@ DEFAULT_CONFIG = {
         "thinking_display": "auto",     # auto / summarized / omitted
                                         # auto = Opus 4.7→omitted(快); Sonnet/Opus 4.6→summarized
         "smart_cache_threshold": True,  # Phase 15 — 用 model-specific token 門檻,而非字元數 1024
+        # === D5 v3.2.2 新增 ===
+        "image_translation_use_claude": True,  # Phase 19 — 切到 Anthropic 時,圖片翻譯也走 Claude vision
+                                                # OFF 時:即使 active=anthropic,圖片仍走 OpenAI(節省成本/避開未驗證)
     },
     "last_updated": "",
 }
@@ -1452,6 +1460,32 @@ def _convert_openai_content_blocks_to_anthropic(blocks):
         result.insert(0, visual_block)
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2.2 Phase 19: Image Translation Toggle
+# ═══════════════════════════════════════════════════════════════════
+def should_use_claude_for_images():
+    """app.py 在做圖片 OCR/翻譯前呼叫,決定要用 Claude 還是 OpenAI
+    
+    Returns: True  → 走 Claude vision(若 active provider 是 anthropic)
+             False → 強制走 OpenAI vision(不管 active provider)
+    
+    用途:給歐那一個獨立開關,避免「切到 Anthropic 後圖片成本爆」
+         圖片 token 比文字貴(一張 1MP 圖 ≈ 1600 tokens × $5/M Claude = $0.008)
+         有時候只想讓文字翻譯走 Claude,圖片仍用 OpenAI gpt-5-mini
+    
+    呼叫例:
+        if ai_provider.get_active_provider() == "anthropic" and ai_provider.should_use_claude_for_images():
+            # 圖片走 Claude(透過 ai.chat.completions.create 自動路由)
+            ...
+        else:
+            # 強制 OpenAI:直接呼叫 oai client,繞過 _AIProxy
+            ...
+    """
+    _ensure_initialized()
+    features = _current_config.get("claude_features", {})
+    return features.get("image_translation_use_claude", True)
 
 
 # ═══════════════════════════════════════════════════════════════════
