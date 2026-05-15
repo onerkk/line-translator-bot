@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.31-0513-glossary-admin"
+VERSION = "v3.9.32-0515-idn-reverse-index"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -2997,17 +2997,26 @@ def factory_semantic_translate_id_zh(text):
 
 
 def inject_glossary_hint(text, src, tgt):
-    """v3.9.31: 從冷抽課專有名詞對照表挑出文中命中的條目,注入 prompt。
+    """v3.9.32: 從冷抽課專有名詞對照表挑出文中命中的條目,注入 prompt。
     
     只挑命中的(不把整本詞庫塞進 prompt),避免 token 浪費。
-    支援雙向:zh→id 用中文 key 比對,id→zh 用印尼名稱比對。
+    支援雙向:
+      - zh→id 用中文 key 在 text 中匹配(原邏輯)
+      - id→zh 用「反向索引(GLOSSARY_REVERSE_INDEX)」直接 O(1) 查詢
+                + 大小寫/連字號/多空格正規化
+                + 整合印尼工廠口語/簡寫表(INDONESIAN_SLANG_DICT)
+    
+    v3.9.32 改動:
+      1. 印→中改用模組載入時建好的 GLOSSARY_REVERSE_INDEX(避免每次 O(n) 重排)
+      2. 加 _normalize_idn_text 正規化:'Tali baja' / 'tali-baja' / 'tali  baja' 統一
+      3. 整合 ~80 條印尼工廠口語(bos/mandor/udh/gak/tianche/...)
+      4. 短詞門檻調為 2 字(slang 如 'pak' / 'bu' 也能命中)
     """
     if not text or not GLOSSARY_LOOKUP:
         return ""
     hits = []
     if src == "zh":
-        # 中→印:用中文 key 在 text 中匹配
-        # 按 key 長度由長到短排序,避免短詞遮蔽長詞
+        # 中→印:用中文 key 在 text 中匹配(原邏輯)
         keys = sorted(GLOSSARY_LOOKUP.keys(), key=len, reverse=True)
         seen = set()
         for k in keys:
@@ -3019,32 +3028,87 @@ def inject_glossary_hint(text, src, tgt):
                 if idn:
                     hits.append(f"{k}={idn}")
                     seen.add(k)
-                    if len(hits) >= 30:  # 上限保護:避免單則訊息塞太多
+                    if len(hits) >= 30:
                         break
     elif src == "id":
-        # 印→中:用印尼名稱在 text 中匹配(不分大小寫,word-boundary 友善)
-        low = text.lower()
-        seen = set()
-        # 先排序:idn 長度由長到短
-        items = []
-        for zh, v in GLOSSARY_LOOKUP.items():
-            idn = v.get("idn", "") if isinstance(v, dict) else str(v)
-            if idn and idn.strip():
-                items.append((zh, idn))
-        items.sort(key=lambda x: len(x[1]), reverse=True)
-        for zh, idn in items:
-            idn_clean = idn.lower().strip()
-            if not idn_clean or len(idn_clean) < 3:
+        # v3.9.32: 用預建的反向索引(O(1) 查詢) + 正規化
+        if not GLOSSARY_REVERSE_INDEX:
+            return ""
+        norm_text = _normalize_idn_text(text)
+        if not norm_text:
+            return ""
+        seen_zh = set()
+        # 紀錄已被命中的字元範圍,避免短詞被長詞重複覆蓋命中
+        # 例:'kepala shift' 已命中(0,12) → 'kepala' 在(0,6)會被視為已覆蓋,skip
+        # 例:'siap pak' 已命中(0,8) → 'siap'(0,4) 和 'pak'(5,8) 都已覆蓋,skip
+        import re as _re
+        covered_spans = []  # list of (start, end) tuples
+        # 按印尼 key 長度由長到短掃描,避免短詞遮蔽長詞
+        idn_keys_sorted = sorted(GLOSSARY_REVERSE_INDEX.keys(), key=len, reverse=True)
+        for idn_key in idn_keys_sorted:
+            if len(idn_key) < 2:
                 continue
-            # 避免 "kunci" 這種太通用詞硬塞,要求至少當作詞出現
-            if idn_clean in low and zh not in seen:
-                hits.append(f"{idn}={zh}")
-                seen.add(zh)
-                if len(hits) >= 30:
-                    break
+            zh_value = GLOSSARY_REVERSE_INDEX[idn_key]
+            # 已命中過同一個中文 → skip(避免 'tian che' 和 'tianche' 同時拋出)
+            if zh_value in seen_zh:
+                continue
+            # 找出本詞在 norm_text 中所有出現位置
+            spans = _find_idn_word_spans(norm_text, idn_key)
+            if not spans:
+                continue
+            # 檢查至少一個 span 沒被更長的 key 完全覆蓋過
+            # 若全部 spans 都已被覆蓋 → skip(已有更長的命中)
+            uncovered = [(s, e) for (s, e) in spans
+                         if not any(cs <= s and e <= ce for (cs, ce) in covered_spans)]
+            if not uncovered:
+                continue
+            hits.append(f"{idn_key}={zh_value}")
+            seen_zh.add(zh_value)
+            # 把本次命中的 spans 加入覆蓋範圍
+            covered_spans.extend(uncovered)
+            if len(hits) >= 30:
+                break
     if not hits:
         return ""
     return " 【冷抽課專有名詞對照(必須遵守)】" + "; ".join(hits) + ". "
+
+
+def _find_idn_word_spans(norm_text, idn_key):
+    """找出 idn_key 在 norm_text 中所有「以詞形式」出現的位置
+    
+    避免:
+      - 'pak' 在 'paket'(包裹) 中誤命中
+      - 'ga' 在 'gambar'(圖片) 中誤命中
+      - 'ya' 在 'kalya' / 'yakin' 中誤命中
+    
+    Returns: [(start, end), ...] — 0-based span list,沒命中則 []
+    """
+    if not norm_text or not idn_key:
+        return []
+    import re as _re
+    # 複合詞(含空格):直接 substring 即可,word boundary 用空格判斷
+    if " " in idn_key:
+        spans = []
+        start = 0
+        while True:
+            idx = norm_text.find(idn_key, start)
+            if idx < 0:
+                break
+            # 檢查前後字元是不是 word boundary
+            left_ok = (idx == 0) or (not norm_text[idx-1].isalpha())
+            right_ok = (idx + len(idn_key) >= len(norm_text)) or (not norm_text[idx + len(idn_key)].isalpha())
+            if left_ok and right_ok:
+                spans.append((idx, idx + len(idn_key)))
+            start = idx + 1
+        return spans
+    # 單詞:用 \b word boundary regex
+    pattern = r"\b" + _re.escape(idn_key) + r"\b"
+    return [(m.start(), m.end()) for m in _re.finditer(pattern, norm_text)]
+
+
+# 向後相容:保留舊函式名,內部呼叫 spans
+def _idn_word_match(norm_text, idn_key):
+    return bool(_find_idn_word_spans(norm_text, idn_key))
 
 
 def build_factory_context_hint(text, src, tgt):
@@ -3975,6 +4039,263 @@ try:
     ai_provider.register_glossary(GLOSSARY_LOOKUP)
 except Exception as _e:
     logger.warning("register_glossary 失敗: %s", _e)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.32 (2026-05-15): 印尼工廠口語/簡寫/變體擴充 + 反向索引
+# 解決問題:
+#   1. GLOSSARY_LOOKUP 是中→印單向,印→中匹配只能比對標準 idn 完整字串
+#   2. 印尼工人實際打字大量用簡寫(udh/gak/bgt)、口語(bos/mandor)、變體拼寫
+#   3. inject_glossary_hint 每次 O(n) 重排,且不處理大小寫/連字號
+# ═══════════════════════════════════════════════════════════════════
+
+# 印尼工廠常見口語、簡寫、變體 → 標準中文對照
+# 來源:LINE bot 翻譯實務經驗 + 印尼網路口語 Bahasa Gaul + 工廠群組訊息
+# 結構:{印尼詞: 中文譯}  (印尼詞統一小寫,匹配時對 input.lower() 比對)
+INDONESIAN_SLANG_DICT = {
+    # ── 工廠職務/人物 ────────────────────────────────────────
+    "bos": "老闆/主管",
+    "boss": "老闆/主管",
+    "atasan": "上司/主管",
+    "mandor": "領班/工頭",
+    "kepala": "頭/組長",
+    "kepala shift": "班長",
+    "kepala regu": "組長",
+    "operator": "操作員/操機手",
+    "teknisi": "技師/工程師",
+    "leader": "組長",
+    "supervisor": "主任/督導",
+    "manager": "經理",
+    "hrd": "人事部",
+    "qc": "品保",
+    "pemilik": "老闆",
+    "rekan": "同事",
+    "teman kerja": "同事",
+    # ── 班別/出勤 ─────────────────────────────────────────
+    "shift pagi": "早班",
+    "shift siang": "中班",
+    "shift malam": "夜班",
+    "shift mlm": "夜班",  # 工人簡寫
+    "lembur": "加班",
+    "off": "休假",
+    "izin": "請假",
+    "ijin": "請假",  # 印尼常見舊拼法
+    "cuti": "休假/特休",
+    "absen": "打卡/出勤",
+    "absensi": "出勤紀錄",
+    "telat": "遲到",
+    "terlambat": "遲到",
+    "pulang cepat": "早退",
+    "tukar shift": "換班",
+    "ganti shift": "換班",
+    # ── 高頻動詞/狀態 ───────────────────────────────────────
+    "rusak": "故障/壞掉",
+    "macet": "卡住/不動",
+    "error": "錯誤/異常",
+    "selesai": "完成/做好",
+    "beres": "搞定/完成",
+    "siap": "準備好",
+    "belum": "還沒",
+    "udah": "已經",  # sudah 口語
+    "udh": "已經",   # 簡寫
+    "sudah": "已經",
+    "blm": "還沒",
+    "lagi": "正在/再一次",
+    "stop": "停止",
+    "berhenti": "停",
+    "jalan": "運作中/走",
+    "jln": "走/運作",
+    "tunggu": "等",
+    "ttg": "關於",  # tentang 簡寫
+    "tlg": "幫忙",  # tolong 簡寫
+    "tolong": "幫忙",
+    "minta tolong": "請幫忙",
+    "bantu": "幫忙",
+    # ── 緊急/安全 ─────────────────────────────────────────
+    "bahaya": "危險",
+    "awas": "小心",
+    "hati-hati": "小心",
+    "hati hati": "小心",
+    "darurat": "緊急",
+    "emergency": "緊急",
+    "kecelakaan": "事故/意外",
+    "cedera": "受傷",
+    "luka": "受傷/傷口",
+    "stop darurat": "緊急停止",
+    "tombol darurat": "緊急按鈕",
+    # ── 常用簡寫(Bahasa Gaul 印尼網路口語) ────────────
+    "gak": "不/沒",
+    "ga": "不/沒",
+    "ngga": "不/沒",
+    "nggak": "不/沒",
+    "gk": "不/沒",
+    "bgt": "很",   # banget 簡寫
+    "banget": "很",
+    "gpp": "沒事/沒關係",
+    "g pp": "沒事/沒關係",
+    "kalo": "如果",  # kalau 口語
+    "klo": "如果",
+    "gimana": "怎樣/如何",
+    "bagaimana": "如何",
+    "kenapa": "為什麼",
+    "knp": "為什麼",
+    "gitu": "那樣",
+    "begitu": "那樣",
+    "ya": "對/是",
+    "iya": "對/是",
+    "ok": "好",
+    "oke": "好",
+    "siap pak": "好的(對男性主管)",
+    "siap bu": "好的(對女性主管)",
+    # ── 數量/程度 ────────────────────────────────────────
+    "banyak": "很多",
+    "sedikit": "少",
+    "dikit": "一點點",
+    "kurang": "不夠",
+    "lebih": "多/超過",
+    "cukup": "夠了",
+    # ── 材料/物品(工廠高頻) ───────────────────────────
+    "barang": "東西/貨/物料",
+    "bahan": "材料",
+    "produk": "產品",
+    "alat": "工具/設備",
+    "mesin": "機器/機台",
+    "tian che": "天車",   # 工人音譯
+    "tianche": "天車",
+    "tn che": "天車",     # 工人簡寫
+    "derek": "天車/吊車",
+    "crane": "天車/吊車",
+    "tali baja": "鋼帶/鋼索",
+    "tali bj": "鋼帶",    # 工人簡寫
+    "kawat": "鐵線/鋼絲",
+    "kawat baja": "鋼絲",
+    "pipa": "管/管件",
+    "batang": "棒材",
+    "coil": "盤元/盤條",
+    "gulungan": "盤元",
+    # ── 工序/動作(工廠) ──────────────────────────────
+    "kerja": "工作/做",
+    "kerjain": "做",
+    "ngerjain": "在做",
+    "ambil": "拿/取",
+    "taruh": "放",
+    "naro": "放",
+    "naik": "上升",
+    "turun": "下降",
+    "maju": "前進",
+    "mundur": "後退",
+    "buka": "打開",
+    "tutup": "關閉",
+    "nyala": "開啟",
+    "hidupkan": "啟動",
+    "matikan": "關閉",
+    "matiin": "關掉",
+    "nyalain": "開啟",
+    "tekan": "按",
+    "pencet": "按",
+    "putar": "轉",
+    # ── 詢問/請求 ────────────────────────────────────
+    "pak": "先生(對男性主管/同事)",
+    "bu": "女士",
+    "mbak": "小姐/姐",
+    "mas": "先生/哥",
+    "permisi": "不好意思/借過",
+    "maaf": "抱歉",
+}
+logger.info("Indonesian slang dict loaded: %d terms", len(INDONESIAN_SLANG_DICT))
+
+
+def _normalize_idn_text(s):
+    """正規化印尼文字:轉小寫 → 連字號轉空格 → 收斂多空格 → strip
+    
+    用途:讓 'Tali baja' / 'tali baja' / 'Tali-Baja' / 'tali  baja' 都被視為同一個 token
+    """
+    if not s:
+        return ""
+    s = s.lower()
+    # 連字號 / 底線 → 空格(printer-friendly / press-polish 變體統一)
+    s = s.replace("-", " ").replace("_", " ")
+    # 收斂多空格
+    s = " ".join(s.split())
+    return s
+
+
+def _build_idn_to_zh_index():
+    """建立印→中反向索引(模組載入時呼叫一次,後續 O(1) 查詢)
+    
+    來源:
+      1. GLOSSARY_LOOKUP — 把每條的 idn value 拆解,每個正規化變體都指向同一個中文 key
+      2. INDONESIAN_SLANG_DICT — 直接加入
+    
+    特殊處理:
+      - GLOSSARY 的 idn 常包含「/」「(」分隔多個譯名:'Tian Che / Derek tetap(Fixed crane)'
+        → 拆成 ['tian che', 'derek tetap', 'fixed crane'] 三個 key 都指到 '天車/固定式起重機'
+      - 太短 idn(<2 字)會跳過,避免噪音
+      - 不會覆蓋 slang dict 已有的條目(slang 優先,因為更口語)
+    
+    Returns: {normalized_idn: zh_key}
+    """
+    index = {}
+    # 先放 slang dict(口語/簡寫優先,較通用)
+    for idn, zh in INDONESIAN_SLANG_DICT.items():
+        normalized = _normalize_idn_text(idn)
+        if normalized and len(normalized) >= 2:
+            index[normalized] = zh
+    # 再放 GLOSSARY_LOOKUP 的反向(已正規化的不再覆蓋,因 slang 較通用)
+    for zh_key, v in GLOSSARY_LOOKUP.items():
+        idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
+        if not idn_raw:
+            continue
+        # v3.9.32: 過濾噪音 — 工單欄位類超長 key 不應參與通用反向匹配
+        # 例:zh='研磨股 無心研磨機自主檢驗紀錄表「班別」' idn='Shift'
+        #     如果工人說 'shift malam',不該被反向匹配成那個超長記錄表名
+        # 規則:zh key 超過 15 字 + 含「資訊」「紀錄表」「按鈕」 → 太具體,skip 反向
+        if len(zh_key) > 15 and any(t in zh_key for t in ("資訊", "紀錄表", "按鈕", "電氣箱", "標示")):
+            continue
+        # 拆解多重譯名:用 / 和 (...)分隔
+        # 例:'Tian Che / Derek tetap(Fixed crane)' → ['Tian Che', 'Derek tetap', 'Fixed crane']
+        variants = []
+        import re as _re
+        # 抓括號內內容
+        for m in _re.findall(r"\(([^)]+)\)", idn_raw):
+            variants.append(m.strip())
+        # 移除括號後用 / 拆
+        without_paren = _re.sub(r"\([^)]*\)", "", idn_raw)
+        for part in without_paren.split("/"):
+            variants.append(part.strip())
+        # 加入正規化版本
+        for var in variants:
+            normalized = _normalize_idn_text(var)
+            if normalized and len(normalized) >= 3:
+                # 已存在(slang)就不覆蓋
+                if normalized not in index:
+                    index[normalized] = zh_key
+    return index
+
+
+# 模組載入時建立,後續 inject_glossary_hint 直接讀
+try:
+    GLOSSARY_REVERSE_INDEX = _build_idn_to_zh_index()
+    logger.info("Glossary reverse index built: %d entries (from %d glossary + %d slang)",
+                len(GLOSSARY_REVERSE_INDEX), len(GLOSSARY_LOOKUP), len(INDONESIAN_SLANG_DICT))
+except Exception as _e:
+    logger.warning("Build reverse index failed: %s", _e)
+    GLOSSARY_REVERSE_INDEX = {}
+
+
+def rebuild_glossary_reverse_index():
+    """供 admin 上傳 Excel 後重建索引用"""
+    global GLOSSARY_REVERSE_INDEX
+    try:
+        GLOSSARY_REVERSE_INDEX = _build_idn_to_zh_index()
+        logger.info("Glossary reverse index rebuilt: %d entries", len(GLOSSARY_REVERSE_INDEX))
+        return True
+    except Exception as _e:
+        logger.warning("Rebuild reverse index failed: %s", _e)
+        return False
+
+
+
 # Extra customers not in storage Excel but appear in factory chat
 # Per-group protected names: {"__all__": [...], "group_id": [...]}
 _DEFAULT_NAMES = [
@@ -15518,6 +15839,28 @@ def api_admin_users_email():
     return jsonify({"ok": True})
 
 
+# v3.9.32: 反向索引診斷端點
+@app.route("/api/admin/glossary-reverse")
+def api_admin_glossary_reverse():
+    """檢查印→中反向索引狀態,並支援測試特定印尼文 input 會命中什麼"""
+    if not check_manager_access("glossary"):
+        return jsonify({"error": "forbidden"}), 403
+    test_input = request.args.get("test", "").strip()
+    result = {
+        "glossary_count": len(GLOSSARY_LOOKUP),
+        "slang_count": len(INDONESIAN_SLANG_DICT),
+        "reverse_index_count": len(GLOSSARY_REVERSE_INDEX),
+        "sample_entries": list(GLOSSARY_REVERSE_INDEX.items())[:20] if GLOSSARY_REVERSE_INDEX else [],
+    }
+    if test_input:
+        # 對測試輸入跑一次 inject_glossary_hint(src="id")
+        hint = inject_glossary_hint(test_input, "id", "zh")
+        result["test_input"] = test_input
+        result["test_input_normalized"] = _normalize_idn_text(test_input)
+        result["test_hits"] = hint if hint else "(沒命中)"
+    return jsonify(result)
+
+
 @app.route("/api/admin/names", methods=["GET", "POST"])
 def api_admin_names():
     if not check_manager_access("names"):
@@ -15718,6 +16061,11 @@ def api_admin_glossary_upload():
             ai_provider.register_glossary(GLOSSARY_LOOKUP)
         except Exception as _e:
             logger.warning("re-register_glossary 失敗: %s", _e)
+        # v3.9.32: 同步重建印→中反向索引
+        try:
+            rebuild_glossary_reverse_index()
+        except Exception as _e:
+            logger.warning("rebuild_glossary_reverse_index 失敗: %s", _e)
         # Auto-commit to GitHub
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_glossary_to_github(json_str)
