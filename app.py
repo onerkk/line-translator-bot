@@ -11167,7 +11167,6 @@ var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','p
 
 // ═════════════════════════════════════════════════════════════════
 // AI Provider 切換邏輯 (v1.0 2026-05-15)
-// ═════════════════════════════════════════════════════════════════
 async function aipLoadStatus(){
   try{
     const r = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}});
@@ -11175,9 +11174,9 @@ async function aipLoadStatus(){
     if(!data.ok){ console.warn('AIP load fail', data); return; }
     const provider = data.active_provider || 'openai';
     const cfg = data.config || {};
-    const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)'};
+    const displayMap = {openai:'\ud83d\udfe2 OpenAI (GPT)', anthropic:'\ud83d\udfe3 Anthropic (Claude)'};
     document.getElementById('aip-active-display').textContent = displayMap[provider] || provider;
-    document.getElementById('aip-last-updated').textContent = cfg.last_updated ? ('最後更新:' + cfg.last_updated) : '';
+    document.getElementById('aip-last-updated').textContent = cfg.last_updated ? ('\u6700\u5f8c\u66f4\u65b0\uff1a' + cfg.last_updated) : '';
     const btnOA = document.getElementById('aip-btn-openai');
     const btnAN = document.getElementById('aip-btn-anthropic');
     if(provider === 'openai'){
@@ -11195,61 +11194,50 @@ async function aipLoadStatus(){
       btnOA.style.borderColor = '#444';
       btnOA.style.color = '#fff';
     }
-    document.getElementById('aip-openai-preview').textContent = (cfg.openai && cfg.openai.api_key_preview) || '(未設定)';
-    document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
+    document.getElementById('aip-openai-preview').textContent = (cfg.openai && cfg.openai.api_key_preview) || '(\u672a\u8a2d\u5b9a)';
+    document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(\u672a\u8a2d\u5b9a)';
   }catch(e){ console.warn('AIP error', e); }
 }
 async function aipSwitchProvider(p){
-  if(!confirm('確定切換到 ' + p.toUpperCase() + '?
-下次翻譯請求立即用新 provider。')) return;
+  if(!confirm('\u78ba\u5b9a\u5207\u63db\u5230 ' + p.toUpperCase() + '?\\n\u4e0b\u6b21\u7ffb\u8b6f\u8acb\u6c42\u7acb\u5373\u7528\u65b0 provider\u3002')) return;
   try{
     const r = await fetch('/api/admin/ai-provider/switch', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p})});
     const data = await r.json();
-    if(data.ok){ alert('✅ ' + (data.message || '已切換')); aipLoadStatus(); }
-    else alert('❌ ' + (data.message || '切換失敗'));
-  }catch(e){ alert('錯誤:' + e); }
+    if(data.ok){ alert('\u2705 ' + (data.message || '\u5df2\u5207\u63db')); aipLoadStatus(); }
+    else alert('\u274c ' + (data.message || '\u5207\u63db\u5931\u6557'));
+  }catch(e){ alert('\u932f\u8aa4\uff1a' + e); }
 }
 async function aipUpdateKey(p){
   const input = document.getElementById('aip-' + p + '-key');
   const val = (input.value || '').trim();
-  if(!val){ alert('請輸入 API key'); return; }
-  if(p === 'openai' && !val.startsWith('sk-')){ if(!confirm('OpenAI key 通常 sk- 開頭,確定?')) return; }
-  if(p === 'anthropic' && !val.startsWith('sk-ant-')){ if(!confirm('Anthropic key 通常 sk-ant- 開頭,確定?')) return; }
+  if(!val){ alert('\u8acb\u8f38\u5165 API key'); return; }
+  if(p === 'openai' && !val.startsWith('sk-')){ if(!confirm('OpenAI key \u901a\u5e38 sk- \u958b\u982d\uff0c\u78ba\u5b9a\uff1f')) return; }
+  if(p === 'anthropic' && !val.startsWith('sk-ant-')){ if(!confirm('Anthropic key \u901a\u5e38 sk-ant- \u958b\u982d\uff0c\u78ba\u5b9a\uff1f')) return; }
   try{
     const r = await fetch('/api/admin/ai-provider/key', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p, api_key:val})});
     const data = await r.json();
-    if(data.ok){ alert('✅ ' + (data.message || 'Key 已更新')); input.value=''; aipLoadStatus(); }
-    else alert('❌ ' + (data.message || '更新失敗'));
-  }catch(e){ alert('錯誤:' + e); }
+    if(data.ok){ alert('\u2705 ' + (data.message || 'Key \u5df2\u66f4\u65b0')); input.value=''; aipLoadStatus(); }
+    else alert('\u274c ' + (data.message || '\u66f4\u65b0\u5931\u6557'));
+  }catch(e){ alert('\u932f\u8aa4\uff1a' + e); }
 }
 async function aipTestProvider(){
   const box = document.getElementById('aip-test-result');
   box.style.display = 'block';
   box.style.color = '#aaa';
-  box.textContent = '⏳ 測試呼叫中…(這會花一點點 token)';
+  box.textContent = '\u23f3 \u6e2c\u8a66\u547c\u53eb\u4e2d\u2026';
   try{
     const r = await fetch('/api/admin/ai-provider/test', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: '{}'});
     const data = await r.json();
     if(data.ok){
       box.style.color = '#10b981';
-      box.textContent = '✅ 測試成功
-
-Provider:' + data.provider + '
-模型:' + (data.model_used||'?') + '
-
-翻譯結果:
-' + (data.result||'(空)') + '
-
-用量:input=' + ((data.usage&&data.usage.input)||0) + ' / output=' + ((data.usage&&data.usage.output)||0) + ' tokens';
+      box.textContent = '\u2705 \u6e2c\u8a66\u6210\u529f\\n\\nProvider\uff1a' + data.provider + '\\n\u6a21\u578b\uff1a' + (data.model_used||'?') + '\\n\\n\u7ffb\u8b6f\u7d50\u679c\uff1a\\n' + (data.result||'(\u7a7a)') + '\\n\\n\u7528\u91cf\uff1ainput=' + ((data.usage&&data.usage.input)||0) + ' / output=' + ((data.usage&&data.usage.output)||0) + ' tokens';
     }else{
       box.style.color = '#ef4444';
-      box.textContent = '❌ 測試失敗
-
-' + (data.error || '未知錯誤');
+      box.textContent = '\u274c \u6e2c\u8a66\u5931\u6557\\n\\n' + (data.error || '\u672a\u77e5\u932f\u8aa4');
     }
   }catch(e){
     box.style.color = '#ef4444';
-    box.textContent = '❌ 網路錯誤:' + e;
+    box.textContent = '\u274c \u7db2\u8def\u932f\u8aa4\uff1a' + e;
   }
 }
 
