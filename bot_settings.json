@@ -95,7 +95,8 @@
         "users",
         "skip",
         "groups",
-        "overview"
+        "overview",
+        "aiprovider"
       ],
       "google_email": "onerkk@gmail.com"
     },
