@@ -10614,6 +10614,32 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>🧠 <strong>Extended Thinking</strong> <span style="color:#888;font-size:10px">Sonnet/Opus 才有</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-think" onchange="aipToggleFeature('extended_thinking',this.checked)"><span class="slider"></span></label>
     </div>
+    <!-- v3.2 D4 Phase 13/14: Adaptive Thinking + Effort + Display -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🎯 <strong>Adaptive Thinking</strong> <span style="color:#10b981;font-size:10px">Opus 4.7 強制 / 4.6 推薦</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-adaptive" onchange="aipToggleFeature('adaptive_thinking',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>⚙️ <strong>Effort 深度</strong> <span style="color:#888;font-size:10px">low=省/high=細</span></span>
+      <select id="aip-thinking-effort" onchange="aipSetThinkingEffort(this.value)" style="padding:4px 8px;border-radius:4px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px">
+        <option value="low">low(省錢/快)</option>
+        <option value="medium" selected>medium(平衡)</option>
+        <option value="high">high(深思考)</option>
+        <option value="xhigh">xhigh(只 Opus 4.7)</option>
+      </select>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📺 <strong>Display 模式</strong> <span style="color:#888;font-size:10px">omitted=最快首 token</span></span>
+      <select id="aip-thinking-display" onchange="aipSetThinkingDisplay(this.value)" style="padding:4px 8px;border-radius:4px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px">
+        <option value="auto" selected>auto(自動)</option>
+        <option value="summarized">summarized</option>
+        <option value="omitted">omitted(快)</option>
+      </select>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🎚️ <strong>Smart Cache 門檻</strong> <span style="color:#10b981;font-size:10px">修字元數→token 門檻 silent fail</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-smartcache" onchange="aipToggleFeature('smart_cache_threshold',this.checked)"><span class="slider"></span></label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>📚 <strong>Glossary Grounding</strong> <span id="aip-feat-glossary-size" style="color:#888;font-size:10px"></span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-ground" onchange="aipToggleFeature('glossary_grounding',this.checked)"><span class="slider"></span></label>
@@ -10657,6 +10683,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     🧠 <strong>翻譯品質</strong>:Sonnet/Opus thinking + XML system prompt + 停止序列三管齊下。<br>
     📷 <strong>圖片翻譯</strong>:OCR 也走 Claude vision,工單照片可直翻。<br>
     🪜 <strong>多層 cache</strong>:把 system 拆成「穩定區(1h)+ 動態區(5m)」,跨 group 共用 stable。<br>
+    🎯 <strong>v3.2 Adaptive Thinking</strong>:Claude 自己判斷簡單句不思考、複雜句深思考,省 token + 提質。<br>
+    🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
     ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊。
   </div>
   <!-- D3: 工具按鈕區 -->
@@ -11303,23 +11331,31 @@ async function aipLoadStatus(){
     // v3.0: Claude 8 大專屬能力狀態
     try {
       const f = cfg.claude_features || {};
-      // 對應 8 個 toggle id → feature key
+      // 對應 toggle id → feature key
       const toggleMap = {
-        'aip-toggle-cache':    'prompt_caching',
-        'aip-toggle-think':    'extended_thinking',
-        'aip-toggle-ground':   'glossary_grounding',
-        'aip-toggle-stop':     'stop_sequences',
-        'aip-toggle-xml':      'xml_system_prompt',
-        'aip-toggle-vision':   'native_vision',
-        'aip-toggle-cache1h':  'extended_cache_1h',
-        'aip-toggle-cite':     'citations',
-        'aip-toggle-multi':    'multi_block_caching',
-        'aip-toggle-filesapi': 'files_api_glossary',
+        'aip-toggle-cache':       'prompt_caching',
+        'aip-toggle-think':       'extended_thinking',
+        'aip-toggle-ground':      'glossary_grounding',
+        'aip-toggle-stop':        'stop_sequences',
+        'aip-toggle-xml':         'xml_system_prompt',
+        'aip-toggle-vision':      'native_vision',
+        'aip-toggle-cache1h':     'extended_cache_1h',
+        'aip-toggle-cite':        'citations',
+        'aip-toggle-multi':       'multi_block_caching',
+        'aip-toggle-filesapi':    'files_api_glossary',
+        // v3.2 D4 新增
+        'aip-toggle-adaptive':    'adaptive_thinking',
+        'aip-toggle-smartcache':  'smart_cache_threshold',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);
         if (el) el.checked = !!f[toggleMap[id]];
       });
+      // v3.2 D4: effort + display 下拉選單
+      const effortEl = document.getElementById('aip-thinking-effort');
+      if (effortEl && f.thinking_effort) effortEl.value = f.thinking_effort;
+      const dispEl = document.getElementById('aip-thinking-display');
+      if (dispEl && f.thinking_display) dispEl.value = f.thinking_display;
       // glossary 數量顯示
       const glossEl = document.getElementById('aip-feat-glossary-size');
       if (glossEl) {
@@ -11350,6 +11386,38 @@ async function aipToggleFeature(featureName, enabled){
     alert('錯誤:' + e);
     aipLoadStatus();
   }
+}
+
+// v3.2 D4 Phase 13: Adaptive Thinking effort 設定
+async function aipSetThinkingEffort(effort){
+  try{
+    const r = await fetch('/api/admin/ai-provider/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({features: {thinking_effort: effort}})
+    });
+    const data = await r.json();
+    if(!data.ok){
+      alert('❌ effort 更新失敗:' + (data.message || ''));
+      aipLoadStatus();
+    }
+  }catch(e){ alert('錯誤:' + e); }
+}
+
+// v3.2 D4 Phase 14: Thinking Display 模式
+async function aipSetThinkingDisplay(display){
+  try{
+    const r = await fetch('/api/admin/ai-provider/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({features: {thinking_display: display}})
+    });
+    const data = await r.json();
+    if(!data.ok){
+      alert('❌ display 更新失敗:' + (data.message || ''));
+      aipLoadStatus();
+    }
+  }catch(e){ alert('錯誤:' + e); }
 }
 
 // D3 Phase 16: Token Counting + 成本估算
@@ -11461,11 +11529,23 @@ async function aipTestProvider(){
         const f = data.claude_features_used;
         txt += '\\n\\n🎯 這次用了的 Claude 能力:';
         if (f.caching) txt += '\\n  ✅ Prompt Caching' + (f.caching_1h ? ' (1h TTL)' : '');
-        if (f.thinking) txt += '\\n  ✅ Extended Thinking';
+        if (f.thinking) {
+          // v3.2 D4: 顯示 adaptive/legacy 模式
+          const modeStr = f.thinking_mode || 'unknown';
+          txt += '\\n  ✅ Extended Thinking [' + modeStr + ']';
+        }
         if (f.grounding) txt += '\\n  ✅ Glossary Grounding (' + (f.grounding_terms_count||0) + ' 條術語)';
         if (f.stop_sequences) txt += '\\n  ✅ Stop Sequences';
         if (f.xml_system) txt += '\\n  ✅ XML System Prompt';
         if (f.citations) txt += '\\n  ✅ Citations (' + (f.citation_count||0) + ' 條引用)';
+        // v3.2 D4 Phase 15: cache 門檻診斷(看有沒有 silent fail)
+        if (f.cache_threshold_tokens && f.cache_est_tokens != null) {
+          const passed = f.cache_above_threshold;
+          const sym = passed ? '✅' : '⚠️';
+          const note = passed ? '達門檻' : '⚠️ 未達門檻,cache 不會寫入(silent fail)';
+          txt += '\\n\\n📐 Cache 門檻診斷:';
+          txt += '\\n  ' + sym + ' system 估 ' + f.cache_est_tokens + ' tokens / 門檻 ' + f.cache_threshold_tokens + ' tokens — ' + note;
+        }
       }
       if (data.citations && data.citations.length) {
         txt += '\\n\\n📖 引用了的工廠術語:\\n  • ' + data.citations.join('\\n  • ');

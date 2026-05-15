@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.1 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -17,6 +17,20 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.1 / 2026-05-15)
 ✅ Phase 12: Multi-block Caching       — system 拆 stable(1h)+ dynamic(5m),命中率 60%→95%
 ✅ Phase 16: Token Counting API        — 翻譯前可預估 token + 成本
 ✅ Phase 17: Files API for Glossary    — glossary 可上傳到 Anthropic 端,避免每次重傳
+
+【v3.2 D4 新增 — 修 3 個 BUG + 上 3 個新技術(2026-05-15)】
+🔴 BUG 修復:
+   1. Cache 門檻字元→token,按模型分(Haiku/Opus 4.7=4096 tok / Sonnet 4.6=2048 tok / 舊=1024)
+      官方:低於門檻 silent fail(cache_creation_input_tokens=0,照付全價)
+   2. Opus 4.7 強制 adaptive thinking — 不再丟 budget_tokens(會 400 + retry 浪費延遲)
+   3. Sonnet 4.6 預設改 adaptive(舊 type=enabled 已 deprecated,未來移除)
+
+✨ 新技術 (Phase 13-15):
+✅ Phase 13: Adaptive Thinking        — Claude 自己判斷簡單句不思考、複雜句深思考
+                                        effort: low/medium/high(+ Opus 4.7 xhigh)
+✅ Phase 14: Thinking Display Mode    — Opus 4.7 預設 omitted(快首 token),
+                                        Sonnet 4.6 預設 summarized
+✅ Phase 15: Smart Cache Threshold    — 用 model-specific token 門檻,避免 silent fail
 
 【作者】onerkk@gmail.com
 """
@@ -85,6 +99,12 @@ DEFAULT_CONFIG = {
         # === D3 v3.1 新增 ===
         "multi_block_caching": True,    # Phase 12 — 多層 cache(stable + dynamic)
         "files_api_glossary": False,    # Phase 17 — 把 glossary 上傳 Files API(預設 OFF,要先上傳)
+        # === D4 v3.2 新增 ===
+        "adaptive_thinking": True,      # Phase 13 — Opus 4.7 強制 / Sonnet 4.6 推薦
+        "thinking_effort": "medium",    # low / medium / high (Opus 4.7 加 xhigh)
+        "thinking_display": "auto",     # auto / summarized / omitted
+                                        # auto = Opus 4.7→omitted(快); Sonnet/Opus 4.6→summarized
+        "smart_cache_threshold": True,  # Phase 15 — 用 model-specific token 門檻,而非字元數 1024
     },
     "last_updated": "",
 }
@@ -314,6 +334,188 @@ def _resolve_anthropic_model(openai_model):
     if openai_model in mapping:
         return mapping[openai_model]
     return _current_config["anthropic"].get("default_model", "claude-haiku-4-5-20251001")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2 Phase 15: Smart Cache Threshold(按 model-specific token 門檻)
+# ═══════════════════════════════════════════════════════════════════
+# 官方公布的 cache 最小寫入門檻(低於此 → silent fail,cache_creation=0,照付全價):
+#   Opus 4.7:   4,096 tokens
+#   Haiku 4.5:  4,096 tokens
+#   Sonnet 4.6: 2,048 tokens
+#   舊模型(Sonnet 4.5 / Opus 4.1 / Sonnet 3.7): 1,024 tokens
+#
+# 舊版邏輯 `len(system_text) >= 1024` 是字元數,中文約 0.6 token/字
+# → 1024 字元 ≈ 600 tokens,對 Sonnet 4.6 / Haiku 4.5 都 silent fail!
+# ═══════════════════════════════════════════════════════════════════
+
+# 模型 → cache 最小 token 門檻
+_MODEL_CACHE_MIN_TOKENS = {
+    "claude-opus-4-7":          4096,
+    "claude-haiku-4-5":         4096,
+    "claude-sonnet-4-6":        2048,
+    # 舊模型 fallback
+    "claude-sonnet-4-5":        1024,
+    "claude-opus-4-5":          1024,
+    "claude-opus-4-1":          1024,
+    "claude-sonnet-3-7":        1024,
+}
+
+
+def _get_cache_min_tokens(anthropic_model):
+    """根據 model 名稱回傳 cache 最小 token 門檻"""
+    m = (anthropic_model or "").lower()
+    for key, threshold in _MODEL_CACHE_MIN_TOKENS.items():
+        if key in m:
+            return threshold
+    # 未知模型保守用最高門檻
+    return 4096
+
+
+def _estimate_tokens_from_text(text):
+    """粗估 text 的 token 數(不打 API,本機速算)
+    
+    經驗法則:
+      - 中文:1 字 ≈ 0.6 tokens
+      - 英文:1 字 ≈ 1.3 tokens(平均 4 字元 + 空白)
+      - 印尼文:同英文
+      - XML/markdown 標籤:當英文計
+    
+    LINE bot system prompt 是中英印混雜,取中位數 0.5 tokens/字元
+    """
+    if not text:
+        return 0
+    return int(len(text) * 0.5)
+
+
+def _should_apply_cache(system_text, anthropic_model, smart_mode=True):
+    """判斷是否該套 cache_control
+    
+    smart_mode=True  → 用 model-specific token 門檻(v3.2 修 BUG 後的正確邏輯)
+    smart_mode=False → 舊邏輯 len >= 1024 字元(留著當降級選項)
+    
+    Returns: (should_cache, threshold_used, estimated_tokens)
+    """
+    if not system_text:
+        return False, 0, 0
+    if not smart_mode:
+        # 舊邏輯
+        return len(system_text) >= 1024, 1024, len(system_text)
+    threshold = _get_cache_min_tokens(anthropic_model)
+    est_tokens = _estimate_tokens_from_text(system_text)
+    return est_tokens >= threshold, threshold, est_tokens
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2 Phase 13+14: Adaptive Thinking + Display Mode
+# ═══════════════════════════════════════════════════════════════════
+# Opus 4.7:     強制 adaptive(舊 enabled mode 已 removed,丟了會 400 error)
+# Sonnet 4.6:   推薦 adaptive(舊 enabled mode deprecated,未來移除)
+# Opus 4.5/4.6: 兩種都行,adaptive 較推薦
+# 其他:          只能舊的 enabled + budget_tokens
+# Haiku 全系:    無 thinking 功能
+#
+# effort:
+#   low     — 簡單問題不思考
+#   medium  — 平衡(Sonnet 4.6 官方推薦預設)
+#   high    — 幾乎總是思考(adaptive 預設值)
+#   xhigh   — 只有 Opus 4.7 支援
+#
+# display:
+#   summarized — 回傳 thinking 摘要(Sonnet/Opus 4.6 預設)
+#   omitted    — 不回 thinking 文字,只回最終翻譯(Opus 4.7 預設,加快首 token)
+# ═══════════════════════════════════════════════════════════════════
+
+def _model_supports_adaptive(anthropic_model):
+    """Opus 4.6+/4.7 + Sonnet 4.6+ 支援 adaptive thinking"""
+    m = (anthropic_model or "").lower()
+    return any(k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6"])
+
+
+def _model_requires_adaptive(anthropic_model):
+    """Opus 4.7 強制 adaptive(舊 mode 會 400)"""
+    return "opus-4-7" in (anthropic_model or "").lower()
+
+
+def _model_supports_thinking(anthropic_model):
+    """除 Haiku 系列外都支援 thinking"""
+    m = (anthropic_model or "").lower()
+    return "haiku" not in m
+
+
+def _normalize_effort(effort, anthropic_model):
+    """把 effort 字串標準化,避免不支援的值丟 400
+    
+    Sonnet 4.6 支援: low / medium / high
+    Opus 4.7      支援: low / medium / high / xhigh
+    Opus 4.6      支援: low / medium / high
+    """
+    valid_lmh = {"low", "medium", "high"}
+    eff = (effort or "medium").lower().strip()
+    if eff not in valid_lmh and eff != "xhigh":
+        eff = "medium"
+    # Opus 4.7 允許 xhigh,其他打回 high
+    if eff == "xhigh" and "opus-4-7" not in (anthropic_model or "").lower():
+        eff = "high"
+    return eff
+
+
+def _resolve_thinking_display(display_pref, anthropic_model):
+    """auto → Opus 4.7 omitted / 其他 summarized
+    summarized / omitted → 照原樣
+    """
+    pref = (display_pref or "auto").lower()
+    if pref in ("summarized", "omitted"):
+        return pref
+    # auto
+    if "opus-4-7" in (anthropic_model or "").lower():
+        return "omitted"
+    return "summarized"
+
+
+def _pick_thinking_config(features, anthropic_model):
+    """v3.2 核心:根據 model 自動選 adaptive 或 legacy thinking config
+    
+    Returns: 
+      thinking_dict | None  — 直接丟給 call_kwargs["thinking"]
+      mode_used: str        — "adaptive_high" / "legacy_2000" / "none"
+    
+    例:
+      Opus 4.7  + adaptive_thinking=True  → {"type":"adaptive","effort":"medium","display":"omitted"}
+      Sonnet 4.6 + adaptive_thinking=True  → {"type":"adaptive","effort":"medium","display":"summarized"}
+      Sonnet 4.6 + adaptive_thinking=False → {"type":"enabled","budget_tokens":2000}
+      Opus 4.5  + adaptive_thinking=True   → {"type":"adaptive","effort":"medium"}
+                                              (4.5 不支援會 fallback 到 legacy)
+      Opus 4.5  + adaptive_thinking=False  → {"type":"enabled","budget_tokens":2000}
+      Haiku     任何 → None
+    """
+    if not _model_supports_thinking(anthropic_model):
+        return None, "none"
+
+    use_thinking = features.get("extended_thinking", True)
+    if not use_thinking:
+        # 全關 thinking
+        return None, "none"
+
+    use_adaptive = features.get("adaptive_thinking", True)
+    effort_pref = features.get("thinking_effort", "medium")
+    display_pref = features.get("thinking_display", "auto")
+    legacy_budget = int(features.get("thinking_budget", 2000))
+
+    # Opus 4.7 強制 adaptive
+    if _model_requires_adaptive(anthropic_model):
+        eff = _normalize_effort(effort_pref, anthropic_model)
+        disp = _resolve_thinking_display(display_pref, anthropic_model)
+        return {"type": "adaptive", "effort": eff, "display": disp}, f"adaptive_{eff}"
+
+    # Opus 4.6 / Sonnet 4.6: 推薦 adaptive
+    if use_adaptive and _model_supports_adaptive(anthropic_model):
+        eff = _normalize_effort(effort_pref, anthropic_model)
+        disp = _resolve_thinking_display(display_pref, anthropic_model)
+        return {"type": "adaptive", "effort": eff, "display": disp}, f"adaptive_{eff}"
+
+    # 舊模型 / 使用者強制關 adaptive → legacy
+    return {"type": "enabled", "budget_tokens": legacy_budget}, f"legacy_{legacy_budget}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -759,6 +961,8 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     use_cache_1h = features.get("extended_cache_1h", True)
     use_multi_cache = features.get("multi_block_caching", True)  # D3 Phase 12
     use_files_api = features.get("files_api_glossary", False)    # D3 Phase 17
+    # === v3.2 D4 新增 ===
+    use_smart_threshold = features.get("smart_cache_threshold", True)  # Phase 15
 
     anthropic_model = _resolve_anthropic_model(model)
     is_haiku = "haiku" in anthropic_model.lower()
@@ -828,11 +1032,19 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         "max_tokens": int(max_tokens or 1024),
     }
 
-    # Phase 1 + 8 + 12: Prompt Caching(支援單層 / 多層)
+    # Phase 1 + 8 + 12 + 15: Prompt Caching
+    # v3.2 BUG 修:改用 model-specific token 門檻,不再 silent fail
     caching_applied = False
     multi_block_applied = False
+    cache_threshold_used = 0
+    cache_est_tokens = 0
     if system_text:
-        if use_cache and len(system_text) >= 1024:
+        should_cache, threshold, est_tok = _should_apply_cache(
+            system_text, anthropic_model, smart_mode=use_smart_threshold
+        )
+        cache_threshold_used = threshold
+        cache_est_tokens = est_tok
+        if use_cache and should_cache:
             if use_multi_cache:
                 # Phase 12: Multi-block — 把 system 拆 stable + dynamic 兩層 cache
                 blocks = _split_system_into_cache_blocks(
@@ -854,6 +1066,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                 }]
                 caching_applied = True
         else:
+            # 沒達門檻 → 純 system,不套 cache_control(避免 silent 浪費)
             call_kwargs["system"] = system_text
 
     # Phase 4: Stop Sequences
@@ -867,17 +1080,26 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         # Anthropic 上限 4 個 stop sequences,挑最重要的
         call_kwargs["stop_sequences"] = stops[:4]
 
-    # Phase 2: Extended Thinking(Sonnet/Opus only)
+    # Phase 2 + 13 + 14: Extended/Adaptive Thinking
+    # v3.2 BUG 修:Opus 4.7 強制 adaptive(舊 enabled mode 已 removed,丟了會 400)
+    #             Sonnet 4.6 預設改 adaptive(舊 enabled mode deprecated)
     thinking_applied = False
-    if use_thinking and not is_haiku:
-        needed_max = max(int(max_tokens or 1024), thinking_budget + 1024)
-        call_kwargs["max_tokens"] = needed_max
-        call_kwargs["thinking"] = {
-            "type": "enabled",
-            "budget_tokens": thinking_budget,
-        }
+    thinking_mode_used = "none"
+    thinking_cfg, thinking_mode_used = _pick_thinking_config(features, anthropic_model)
+    if thinking_cfg is not None:
+        # adaptive 模式不需要也不能設 budget_tokens
+        # enabled 模式需要確保 max_tokens >= budget + 1024
+        if thinking_cfg.get("type") == "enabled":
+            needed_max = max(
+                int(max_tokens or 1024),
+                int(thinking_cfg.get("budget_tokens", 2000)) + 1024
+            )
+            call_kwargs["max_tokens"] = needed_max
+        # adaptive 模式 — 直接設,不動 max_tokens(adaptive 的 budget 可超過 max_tokens)
+        call_kwargs["thinking"] = thinking_cfg
         thinking_applied = True
     else:
+        # 沒啟用 thinking(Haiku 或關 toggle)— 才能用 temperature
         if temperature is not None and not is_opus:
             call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
 
@@ -886,12 +1108,33 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         resp = client.messages.create(**call_kwargs)
     except Exception as e:
         err_msg = str(e).lower()
+        # Fallback 0 (v3.2 新): adaptive thinking 失敗 → 降回 legacy enabled
+        # 觸發條件:SDK 太舊 / model 不支援 adaptive
+        if (thinking_applied
+            and isinstance(call_kwargs.get("thinking"), dict)
+            and call_kwargs["thinking"].get("type") == "adaptive"
+            and ("adaptive" in err_msg or "effort" in err_msg
+                 or "display" in err_msg or "unknown" in err_msg
+                 or "invalid" in err_msg)):
+            print(f"[ai_provider] adaptive thinking 失敗,fallback to legacy: {e}", flush=True)
+            # 不能 fallback 到 enabled 的 model(只有 Opus 4.7)就完全關掉 thinking
+            if _model_requires_adaptive(anthropic_model):
+                call_kwargs.pop("thinking", None)
+                thinking_applied = False
+                thinking_mode_used = "none(opus47_adaptive_failed)"
+            else:
+                legacy_budget = int(features.get("thinking_budget", 2000))
+                call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": legacy_budget}
+                call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
+                thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
+            resp = client.messages.create(**call_kwargs)
         # Fallback 1: thinking 失敗 → 不啟用 thinking 重試
-        if thinking_applied and ("thinking" in err_msg or "budget" in err_msg):
+        elif thinking_applied and ("thinking" in err_msg or "budget" in err_msg):
             print(f"[ai_provider] thinking 失敗,fallback: {e}", flush=True)
             call_kwargs.pop("thinking", None)
             call_kwargs["max_tokens"] = int(max_tokens or 1024)
             thinking_applied = False
+            thinking_mode_used = "none(thinking_failed)"
             resp = client.messages.create(**call_kwargs)
         # Fallback 2: grounding/citation 失敗
         elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
@@ -967,12 +1210,17 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         "caching_1h": caching_applied and use_cache_1h,
         "multi_block_caching": multi_block_applied,  # D3 Phase 12
         "thinking": thinking_applied,
+        "thinking_mode": thinking_mode_used,         # v3.2 Phase 13:adaptive_medium / legacy_2000 / none
         "grounding": grounding_used,
         "grounding_terms_count": matched_terms_count,
         "stop_sequences": use_stop,
         "xml_system": use_xml,
         "citations": use_citations and len(citations_list) > 0,
         "citation_count": len(citations_list),
+        # v3.2 Phase 15:cache 門檻診斷
+        "cache_threshold_tokens": cache_threshold_used,
+        "cache_est_tokens": cache_est_tokens,
+        "cache_above_threshold": cache_est_tokens >= cache_threshold_used if cache_threshold_used > 0 else None,
     }
     return result
 
@@ -1069,8 +1317,13 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
         "max_tokens": int(max_tokens or 1024),
     }
 
+    # v3.2: 套 smart cache threshold
+    use_smart_threshold = features.get("smart_cache_threshold", True)
     if system_text:
-        if features.get("prompt_caching", True) and len(system_text) >= 1024:
+        should_cache, _, _ = _should_apply_cache(
+            system_text, anthropic_model, smart_mode=use_smart_threshold
+        )
+        if features.get("prompt_caching", True) and should_cache:
             cc = {"type": "ephemeral"}
             if features.get("extended_cache_1h", True):
                 cc["ttl"] = "1h"
@@ -1081,10 +1334,13 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
     if features.get("stop_sequences", True):
         call_kwargs["stop_sequences"] = _build_stop_sequences()[:4]
 
-    if features.get("extended_thinking", True) and not is_haiku:
-        budget = int(features.get("thinking_budget", 2000))
-        call_kwargs["max_tokens"] = max(call_kwargs["max_tokens"], budget + 1024)
-        call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    # v3.2: 用 _pick_thinking_config 自動處理 Opus 4.7 強制 adaptive 的問題
+    thinking_cfg, _ = _pick_thinking_config(features, anthropic_model)
+    if thinking_cfg is not None:
+        if thinking_cfg.get("type") == "enabled":
+            budget = int(thinking_cfg.get("budget_tokens", 2000))
+            call_kwargs["max_tokens"] = max(call_kwargs["max_tokens"], budget + 1024)
+        call_kwargs["thinking"] = thinking_cfg
     elif temperature is not None:
         call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
 
