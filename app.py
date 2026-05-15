@@ -139,6 +139,9 @@ LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
+
+# ★ AI Provider 統一介面(支援 OpenAI ↔ Anthropic 切換)
+import ai_provider
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
@@ -148,6 +151,36 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 oai = OpenAI(api_key=OPENAI_KEY, timeout=30.0) if OPENAI_KEY else None  # v3.9.24: 全域 30 秒 timeout
+
+
+# ★ AI Provider 統一介面(v1.0 2026-05-15)
+class _AIProxy:
+    """Drop-in replacement for ai.chat.completions.create()
+    內部呼叫 ai_provider.chat_complete(),自動路由到 OpenAI 或 Anthropic"""
+    class _Chat:
+        class _Completions:
+            @staticmethod
+            def create(**kwargs):
+                return ai_provider.chat_complete(**kwargs)
+        completions = _Completions()
+    chat = _Chat()
+
+    class _Audio:
+        class _Transcriptions:
+            @staticmethod
+            def create(model, file, **kwargs):
+                # 音訊轉文字:Anthropic 不支援,active=anthropic 時拋例外讓上層 catch
+                if ai_provider.get_active_provider() == "anthropic":
+                    raise NotImplementedError(
+                        "Anthropic 不支援語音轉文字,請切回 OpenAI 或回覆用戶改用文字"
+                    )
+                if oai is None:
+                    raise RuntimeError("OpenAI client 未初始化(OPENAI_API_KEY 缺?)")
+                return ai.audio.transcriptions.create(model=model, file=file, **kwargs)
+        transcriptions = _Transcriptions()
+    audio = _Audio()
+
+ai = _AIProxy()
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -973,7 +1006,7 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
             back_prompt = "Translate this Indonesian to Chinese. Output ONLY the translation, no explanation:"
         else:
             return True, 1.0, ""
-        r = oai.chat.completions.create(**_build_aux_kwargs(
+        r = ai.chat.completions.create(**_build_aux_kwargs(
             check_model,
             [{"role": "system", "content": back_prompt},
              {"role": "user", "content": translated_text}],
@@ -1238,7 +1271,7 @@ def normalize_indonesian_text_with_nano(text):
             "Output ONLY the normalized Indonesian text, no explanation."
         )
         # v3.9.9: aux helper auto-adapts to any model family
-        r = oai.chat.completions.create(**_build_aux_kwargs(
+        r = ai.chat.completions.create(**_build_aux_kwargs(
             _pick_aux_model("normalize"),
             [{"role": "system", "content": prompt},
              {"role": "user", "content": text}],
@@ -1290,7 +1323,7 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         else:
             return True, {"final_decision": "unsupported"}
         
-        r1 = oai.chat.completions.create(**_build_aux_kwargs(
+        r1 = ai.chat.completions.create(**_build_aux_kwargs(
             check_model,
             [{"role": "system", "content": back_prompt1},
              {"role": "user", "content": translation}],
@@ -1305,7 +1338,7 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         
         # ===== Path 2: 經英語反譯 (translation → English → back to source lang) =====
         # 第一段:translation → English
-        r2a = oai.chat.completions.create(**_build_aux_kwargs(
+        r2a = ai.chat.completions.create(**_build_aux_kwargs(
             check_model,
             [{"role": "system", "content": "Translate to English. Output ONLY translation:"},
              {"role": "user", "content": translation}],
@@ -1320,7 +1353,7 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
         else:
             back2_prompt = "Translate this English to Chinese. Output ONLY translation:"
         
-        r2b = oai.chat.completions.create(**_build_aux_kwargs(
+        r2b = ai.chat.completions.create(**_build_aux_kwargs(
             check_model,
             [{"role": "system", "content": back2_prompt},
              {"role": "user", "content": english}],
@@ -1389,7 +1422,7 @@ def translate_id_zh_with_pivot(text, src, tgt):
         )
         # v3.9.9: aux helper auto-adapts to GPT-5 if user upgrades
         _pivot_aux = _pick_aux_model("pivot")
-        r1 = oai.chat.completions.create(**_build_aux_kwargs(
+        r1 = ai.chat.completions.create(**_build_aux_kwargs(
             _pivot_aux,
             [{"role": "system", "content": en_prompt},
              {"role": "user", "content": text}],
@@ -1407,7 +1440,7 @@ def translate_id_zh_with_pivot(text, src, tgt):
             "Machine codes and English acronyms should stay in original. "
             "Output ONLY the Chinese translation."
         )
-        r2 = oai.chat.completions.create(**_build_aux_kwargs(
+        r2 = ai.chat.completions.create(**_build_aux_kwargs(
             pick_model(text),
             [{"role": "system", "content": zh_prompt},
              {"role": "user", "content": english}],
@@ -3350,7 +3383,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
                 repair_kwargs["prompt_cache_key"] = _ck_r
         except Exception:
             pass
-        r = oai.chat.completions.create(**repair_kwargs)
+        r = ai.chat.completions.create(**repair_kwargs)
         track_tokens(r)
         return (r.choices[0].message.content or "").strip()
     except Exception as e:
@@ -3701,7 +3734,7 @@ def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
                 repair_kwargs["prompt_cache_key"] = _ck_r
         except Exception:
             pass
-        r = oai.chat.completions.create(**repair_kwargs)
+        r = ai.chat.completions.create(**repair_kwargs)
         track_tokens(r)
         return (r.choices[0].message.content or "").strip()
     except Exception as e:
@@ -4964,7 +4997,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         except Exception:
             pass
         try:
-            r = oai.chat.completions.create(**_kwargs)
+            r = ai.chat.completions.create(**_kwargs)
         except Exception as _te:
             try:
                 _event_log_write("translate_call_failed", {
@@ -5761,7 +5794,7 @@ def _vision_call(messages, max_tokens, cache_key=None):
                 pass
             
             logger.info("[Vision] calling %s with kwargs=%s", attempt_model, list(kwargs.keys()))
-            r = oai.chat.completions.create(**kwargs)
+            r = ai.chat.completions.create(**kwargs)
             
             if attempt_model != primary:
                 logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
@@ -6194,7 +6227,7 @@ def transcribe_audio_openai(audio_bytes):
                 # vocabulary-bias parameter via the standard transcriptions endpoint.
                 if attempt_model.startswith("gpt-4o"):
                     kwargs["prompt"] = STT_PROMPT_HINT
-                r = oai.audio.transcriptions.create(**kwargs)
+                r = ai.audio.transcriptions.create(**kwargs)
                 # v3.9.30c B16 修補: 防 r 為 None / r.text 為 None
                 if r is None:
                     logger.warning("STT model %s returned None", attempt_model)
@@ -10164,6 +10197,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('insight')">數據</div>
 <div class="tab" onclick="switchTab('examples')">翻譯範例</div>
 <div class="tab" onclick="switchTab('forms')">表單</div>
+<div class="tab" onclick="switchTab('aiprovider')">🔄 AI</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
@@ -10492,6 +10526,100 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 
 <!-- Settings Panel -->
+
+<!-- AI Provider Panel (v1.0 2026-05-15) -->
+<div class="panel" id="panel-aiprovider">
+<div class="card" style="padding:18px">
+<div style="font-weight:700;font-size:16px;margin-bottom:14px;color:#7c6fef">🔄 AI Provider 切換</div>
+
+<!-- 目前狀態 -->
+<div id="aip-status" style="margin-bottom:18px;padding:14px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+  <div style="color:#888;font-size:12px;margin-bottom:6px">目前 Active Provider</div>
+  <div id="aip-active-display" style="font-size:20px;font-weight:600;color:#fff">載入中…</div>
+  <div id="aip-last-updated" style="margin-top:6px;font-size:11px;color:#666"></div>
+</div>
+
+<!-- 切換按鈕 -->
+<div style="display:flex;gap:10px;margin-bottom:18px">
+  <button id="aip-btn-openai" onclick="aipSwitchProvider(\'openai\')" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟢 OpenAI</button>
+  <button id="aip-btn-anthropic" onclick="aipSwitchProvider(\'anthropic\')" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟣 Anthropic</button>
+</div>
+
+<!-- 測試按鈕 -->
+<div style="margin-bottom:18px">
+  <button onclick="aipTestProvider()" style="width:100%;padding:11px;border-radius:30px;border:none;background:linear-gradient(135deg,#d4af37,#b8941f);color:#000;font-size:13px;cursor:pointer;font-weight:700">🧪 測試呼叫(確認 key 可用)</button>
+  <div id="aip-test-result" style="margin-top:10px;padding:10px;background:#0f0f1e;border-radius:8px;font-size:12px;color:#aaa;white-space:pre-wrap;display:none;border:1px solid #2a2a3e"></div>
+</div>
+
+<!-- API Key 設定 -->
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🔑 API Key 管理</div>
+
+  <div style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+      <label style="color:#fff;font-size:12px;font-weight:600">OpenAI Key</label>
+      <span id="aip-openai-preview" style="color:#666;font-size:10px;font-family:monospace">…</span>
+    </div>
+    <div style="display:flex;gap:6px">
+      <input id="aip-openai-key" type="password" placeholder="sk-..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
+      <button onclick="aipUpdateKey(\'openai\')" style="padding:8px 14px;border-radius:6px;border:none;background:#7c6fef;color:#fff;font-size:12px;cursor:pointer;font-weight:600">更新</button>
+    </div>
+  </div>
+
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+      <label style="color:#fff;font-size:12px;font-weight:600">Anthropic Key</label>
+      <span id="aip-anthropic-preview" style="color:#666;font-size:10px;font-family:monospace">…</span>
+    </div>
+    <div style="display:flex;gap:6px">
+      <input id="aip-anthropic-key" type="password" placeholder="sk-ant-api03-..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
+      <button onclick="aipUpdateKey(\'anthropic\')" style="padding:8px 14px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:12px;cursor:pointer;font-weight:600">更新</button>
+    </div>
+  </div>
+</div>
+
+<!-- 功能對照 -->
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">📊 功能對照</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="border-bottom:1px solid #2a2a3e">
+      <th style="text-align:left;padding:6px;color:#888;font-weight:500">功能</th>
+      <th style="text-align:center;padding:6px;color:#888;font-weight:500">OpenAI</th>
+      <th style="text-align:center;padding:6px;color:#888;font-weight:500">Anthropic</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="padding:6px;color:#ddd">💬 文字翻譯</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🖼️ 圖片 OCR</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+      <tr><td style="padding:6px;color:#ddd">🎤 語音翻譯</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
+      <tr><td style="padding:6px;color:#ddd">📊 信心度</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
+      <tr><td style="padding:6px;color:#ddd">⚡ 修補加速</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
+      <tr><td style="padding:6px;color:#ddd">💰 Prompt Cache</td><td style="text-align:center">✅</td><td style="text-align:center">✅</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:10px;padding:8px;background:#2a1f0f;border-radius:6px;color:#d4a437;font-size:11px;line-height:1.5">⚠️ <strong>切到 Anthropic 時</strong>:語音訊息會回覆「不支援」。其他功能正常。</div>
+</div>
+
+<!-- 成本對比 -->
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">💸 成本對比(每 1M tokens)</div>
+  <table style="width:100%;font-size:11px;color:#ddd">
+    <thead><tr style="border-bottom:1px solid #2a2a3e;color:#888">
+      <th style="text-align:left;padding:5px">模型</th>
+      <th style="text-align:right;padding:5px">Input</th>
+      <th style="text-align:right;padding:5px">Output</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="padding:5px">GPT-4.1-mini</td><td style="text-align:right">$0.40</td><td style="text-align:right">$1.60</td></tr>
+      <tr style="border-top:1px solid #2a2a3e"><td style="padding:5px;color:#d4a437">Claude Haiku 4.5</td><td style="text-align:right">$1.00</td><td style="text-align:right">$5.00</td></tr>
+      <tr><td style="padding:5px;color:#d4a437">Claude Sonnet 4.6</td><td style="text-align:right">$3.00</td><td style="text-align:right">$15.00</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">Anthropic 比 OpenAI 同級貴 2-3x。建議:Anthropic credits 用完就切回 OpenAI。</div>
+</div>
+
+</div>
+</div>
+
 <div class="panel" id="panel-settings">
 <div class="card">
 <div style="font-weight:700;font-size:15px;margin-bottom:12px">⚙️ 功能設定</div>
@@ -11035,7 +11163,98 @@ function doLogin(){
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
 var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','insight','examples','forms','settings'];
-function switchTab(name){
+
+
+// ═════════════════════════════════════════════════════════════════
+// AI Provider 切換邏輯 (v1.0 2026-05-15)
+// ═════════════════════════════════════════════════════════════════
+async function aipLoadStatus(){
+  try{
+    const r = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ console.warn('AIP load fail', data); return; }
+    const provider = data.active_provider || 'openai';
+    const cfg = data.config || {};
+    const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)'};
+    document.getElementById('aip-active-display').textContent = displayMap[provider] || provider;
+    document.getElementById('aip-last-updated').textContent = cfg.last_updated ? ('最後更新:' + cfg.last_updated) : '';
+    const btnOA = document.getElementById('aip-btn-openai');
+    const btnAN = document.getElementById('aip-btn-anthropic');
+    if(provider === 'openai'){
+      btnOA.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+      btnOA.style.borderColor = '#10b981';
+      btnOA.style.color = '#fff';
+      btnAN.style.background = '#1f1f30';
+      btnAN.style.borderColor = '#444';
+      btnAN.style.color = '#fff';
+    }else{
+      btnAN.style.background = 'linear-gradient(135deg, #d4a437, #b8941f)';
+      btnAN.style.borderColor = '#d4a437';
+      btnAN.style.color = '#000';
+      btnOA.style.background = '#1f1f30';
+      btnOA.style.borderColor = '#444';
+      btnOA.style.color = '#fff';
+    }
+    document.getElementById('aip-openai-preview').textContent = (cfg.openai && cfg.openai.api_key_preview) || '(未設定)';
+    document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
+  }catch(e){ console.warn('AIP error', e); }
+}
+async function aipSwitchProvider(p){
+  if(!confirm('確定切換到 ' + p.toUpperCase() + '?
+下次翻譯請求立即用新 provider。')) return;
+  try{
+    const r = await fetch('/api/admin/ai-provider/switch', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p})});
+    const data = await r.json();
+    if(data.ok){ alert('✅ ' + (data.message || '已切換')); aipLoadStatus(); }
+    else alert('❌ ' + (data.message || '切換失敗'));
+  }catch(e){ alert('錯誤:' + e); }
+}
+async function aipUpdateKey(p){
+  const input = document.getElementById('aip-' + p + '-key');
+  const val = (input.value || '').trim();
+  if(!val){ alert('請輸入 API key'); return; }
+  if(p === 'openai' && !val.startsWith('sk-')){ if(!confirm('OpenAI key 通常 sk- 開頭,確定?')) return; }
+  if(p === 'anthropic' && !val.startsWith('sk-ant-')){ if(!confirm('Anthropic key 通常 sk-ant- 開頭,確定?')) return; }
+  try{
+    const r = await fetch('/api/admin/ai-provider/key', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p, api_key:val})});
+    const data = await r.json();
+    if(data.ok){ alert('✅ ' + (data.message || 'Key 已更新')); input.value=''; aipLoadStatus(); }
+    else alert('❌ ' + (data.message || '更新失敗'));
+  }catch(e){ alert('錯誤:' + e); }
+}
+async function aipTestProvider(){
+  const box = document.getElementById('aip-test-result');
+  box.style.display = 'block';
+  box.style.color = '#aaa';
+  box.textContent = '⏳ 測試呼叫中…(這會花一點點 token)';
+  try{
+    const r = await fetch('/api/admin/ai-provider/test', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: '{}'});
+    const data = await r.json();
+    if(data.ok){
+      box.style.color = '#10b981';
+      box.textContent = '✅ 測試成功
+
+Provider:' + data.provider + '
+模型:' + (data.model_used||'?') + '
+
+翻譯結果:
+' + (data.result||'(空)') + '
+
+用量:input=' + ((data.usage&&data.usage.input)||0) + ' / output=' + ((data.usage&&data.usage.output)||0) + ' tokens';
+    }else{
+      box.style.color = '#ef4444';
+      box.textContent = '❌ 測試失敗
+
+' + (data.error || '未知錯誤');
+    }
+  }catch(e){
+    box.style.color = '#ef4444';
+    box.textContent = '❌ 網路錯誤:' + e;
+  }
+}
+
+
+function switchTab(name){if(name==='aiprovider')aipLoadStatus();
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',TAB_KEYS[i]===name);
   });
@@ -13545,6 +13764,94 @@ def check_manager_access(required_tab=None):
         allowed = admin_users[uid].get("allowed_tabs", [])
         return required_tab in allowed
     return True
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# AI Provider 切換 API(v1.0 2026-05-15)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/ai-provider", methods=["GET"])
+def api_admin_ai_provider_get():
+    """取得目前 AI provider 設定(API key 脫敏)"""
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({
+        "ok": True,
+        "config": ai_provider.get_current_config_safe(),
+        "active_provider": ai_provider.get_active_provider(),
+    })
+
+
+@app.route("/api/admin/ai-provider/switch", methods=["POST"])
+def api_admin_ai_provider_switch():
+    """切換 active provider"""
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    target = data.get("provider", "").strip().lower()
+    ok, msg = ai_provider.set_active_provider(target)
+    return jsonify({"ok": ok, "message": msg, "active_provider": ai_provider.get_active_provider()})
+
+
+@app.route("/api/admin/ai-provider/key", methods=["POST"])
+def api_admin_ai_provider_set_key():
+    """更新 API key(openai 或 anthropic)"""
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider", "").strip().lower()
+    api_key = data.get("api_key", "").strip()
+    if not api_key:
+        return jsonify({"ok": False, "message": "api_key 為空"}), 400
+    ok, msg = ai_provider.update_provider_key(provider, api_key)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/ai-provider/mapping", methods=["POST"])
+def api_admin_ai_provider_mapping():
+    """更新模型映射表(OpenAI → Anthropic)"""
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    mapping = data.get("mapping")
+    if not isinstance(mapping, dict):
+        return jsonify({"ok": False, "message": "mapping 必須是 dict"}), 400
+    ok, msg = ai_provider.update_model_mapping(mapping)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/ai-provider/test", methods=["POST"])
+def api_admin_ai_provider_test():
+    """測試呼叫:用目前 active provider 跑一個小翻譯,確認 key 可用"""
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        resp = ai_provider.chat_complete(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": "你是專業翻譯。"},
+                {"role": "user", "content": "請把這句翻成印尼文:你好,測試"},
+            ],
+            max_tokens=100,
+            temperature=0.0,
+        )
+        text = resp.choices[0].message.content if resp.choices else ""
+        return jsonify({
+            "ok": True,
+            "provider": ai_provider.get_active_provider(),
+            "model_used": getattr(resp, "model", "?"),
+            "result": text,
+            "usage": {
+                "input": getattr(resp.usage, "prompt_tokens", 0),
+                "output": getattr(resp.usage, "completion_tokens", 0),
+            } if resp.usage else {},
+        })
+    except NotImplementedError as e:
+        return jsonify({"ok": False, "error": "功能不支援:" + str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/admin")
@@ -16502,7 +16809,7 @@ def debug_vision_test():
         if model_supports(target_model, "verbosity"):
             kwargs["verbosity"] = "high"  # vision/OCR 任務
         
-        r = oai.chat.completions.create(**kwargs)
+        r = ai.chat.completions.create(**kwargs)
         content = r.choices[0].message.content if r.choices else None
         finish = r.choices[0].finish_reason if r.choices else None
         usage = r.usage.model_dump() if hasattr(r, 'usage') and r.usage else None

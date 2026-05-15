@@ -3,3 +3,4 @@ line-bot-sdk
 openai
 gunicorn
 openpyxl
+anthropic>=0.40.0
