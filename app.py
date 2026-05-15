@@ -10541,8 +10541,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 
 <!-- 切換按鈕 -->
 <div style="display:flex;gap:10px;margin-bottom:18px">
-  <button id="aip-btn-openai" onclick="aipSwitchProvider(\'openai\')" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟢 OpenAI</button>
-  <button id="aip-btn-anthropic" onclick="aipSwitchProvider(\'anthropic\')" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟣 Anthropic</button>
+  <button id="aip-btn-openai" onclick="aipSwitchProvider(&#39;openai&#39;)" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟢 OpenAI</button>
+  <button id="aip-btn-anthropic" onclick="aipSwitchProvider(&#39;anthropic&#39;)" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟣 Anthropic</button>
 </div>
 
 <!-- 測試按鈕 -->
@@ -10562,7 +10562,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     </div>
     <div style="display:flex;gap:6px">
       <input id="aip-openai-key" type="password" placeholder="sk-..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
-      <button onclick="aipUpdateKey(\'openai\')" style="padding:8px 14px;border-radius:6px;border:none;background:#7c6fef;color:#fff;font-size:12px;cursor:pointer;font-weight:600">更新</button>
+      <button onclick="aipUpdateKey(&#39;openai&#39;)" style="padding:8px 14px;border-radius:6px;border:none;background:#7c6fef;color:#fff;font-size:12px;cursor:pointer;font-weight:600">更新</button>
     </div>
   </div>
 
@@ -10573,7 +10573,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     </div>
     <div style="display:flex;gap:6px">
       <input id="aip-anthropic-key" type="password" placeholder="sk-ant-api03-..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
-      <button onclick="aipUpdateKey(\'anthropic\')" style="padding:8px 14px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:12px;cursor:pointer;font-weight:600">更新</button>
+      <button onclick="aipUpdateKey(&#39;anthropic&#39;)" style="padding:8px 14px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:12px;cursor:pointer;font-weight:600">更新</button>
     </div>
   </div>
 </div>
