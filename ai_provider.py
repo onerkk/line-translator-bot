@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2.2 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.3 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -41,6 +41,13 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.2 / 2026-05-15)
 ✅ Phase 19: Image Translation Toggle  — 圖片翻譯是否走 Claude vision 的獨立開關
                                           切到 Anthropic 時可獨立關閉圖片翻譯(成本控制)
                                           OFF 時:文字仍走 Claude,圖片仍走 OpenAI
+
+【v3.2.3 D7 新增 — LINE 視覺/排版品質升級(2026-05-15)】
+✅ Phase 20: LINE Plain Text Mode      — 防 Claude 輸出 markdown 廢字元污染 LINE 訊息
+                                          (LINE 不渲染 markdown,**粗體** ## 等會字面顯示)
+                                          官方根據:「reduce markdown in prompt → reduce markdown in output」
+✅ Phase 21: OCR Strict Layout         — 偵測訊息含圖片時,system prompt 加 XML 嚴格保版面指令
+                                          (行數 / 編號 / 縮排 / 表格欄位完全對應原文)
 
 【作者】onerkk@gmail.com
 """
@@ -118,6 +125,11 @@ DEFAULT_CONFIG = {
         # === D5 v3.2.2 新增 ===
         "image_translation_use_claude": True,  # Phase 19 — 切到 Anthropic 時,圖片翻譯也走 Claude vision
                                                 # OFF 時:即使 active=anthropic,圖片仍走 OpenAI(節省成本/避開未驗證)
+        # === D7 v3.2.3 新增 ===
+        "line_plain_text_mode": True,   # Phase 20 — 防 Claude 輸出 markdown 廢字元(LINE 不渲染)
+                                         # 禁:**粗體** *斜體* `code` # 標題 --- 分隔線 markdown table
+        "ocr_strict_layout": True,      # Phase 21 — OCR 翻譯場景嚴格保版面(行數 / 編號 / 縮排對齊)
+                                         # 偵測訊息含 image block 才啟動
     },
     "last_updated": "",
 }
@@ -841,7 +853,7 @@ def _build_stop_sequences():
 # ═══════════════════════════════════════════════════════════════════
 # Phase 5: XML System Prompt Wrapping
 # ═══════════════════════════════════════════════════════════════════
-def _wrap_system_prompt_xml(raw_system):
+def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False):
     """把純文字 system prompt 包成 XML 結構,Claude 遵循度提升 20-30%
     
     根據 Anthropic 官方 prompt engineering guide:
@@ -853,6 +865,19 @@ def _wrap_system_prompt_xml(raw_system):
     <rules>{原本的整段 system prompt}</rules>
     <glossary_priority>優先引用 search_result blocks 內的譯名</glossary_priority>
     <output_format>純翻譯文字,不加任何 metadata 或註解</output_format>
+    [v3.2.3 條件加入]
+    <line_message_format>LINE 不渲染 markdown,禁止輸出 ** # - 等廢字元</line_message_format>
+    <layout_preservation>OCR 場景:行數/編號/縮排嚴格對齊原文</layout_preservation>
+    
+    Parameters:
+        raw_system: 原始 system prompt 文字
+        line_plain (v3.2.3 Phase 20): 加入 LINE 純文字輸出規則,防 markdown 廢字元污染
+        ocr_strict (v3.2.3 Phase 21): 加入 OCR 嚴格保版面規則(行數/編號/縮排)
+    
+    官方根據:
+        "The formatting style used in your prompt may influence Claude's response style.
+         If you want minimal markdown, reduce markdown in your prompt."
+        — Anthropic prompt-engineering best practices, 2026
     """
     if not raw_system:
         return raw_system
@@ -861,22 +886,64 @@ def _wrap_system_prompt_xml(raw_system):
     if "<role>" in raw_system or "<task>" in raw_system:
         return raw_system
 
-    wrapped = (
-        "<role>\n你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。\n</role>\n\n"
-        "<task>\n忠實翻譯使用者訊息,不增刪內容,不加註解。\n</task>\n\n"
-        "<rules>\n" + raw_system.strip() + "\n</rules>\n\n"
+    parts = [
+        "<role>\n你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。\n</role>\n",
+        "<task>\n忠實翻譯使用者訊息,不增刪內容,不加註解。\n</task>\n",
+        "<rules>\n" + raw_system.strip() + "\n</rules>\n",
         "<glossary_priority>\n"
         "如果訊息中內附 search_result 標籤(工廠術語表),"
         "務必引用裡面的「標準印尼譯」作為翻譯,不要自己另創譯法。\n"
-        "</glossary_priority>\n\n"
+        "</glossary_priority>\n",
         "<output_format>\n"
         "直接輸出純翻譯文字。\n"
         "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
         "不要加任何說明、註解、解釋。\n"
         "不要使用 markdown 標記(除非原文有)。\n"
-        "</output_format>"
-    )
-    return wrapped
+        "</output_format>\n",
+    ]
+
+    # v3.2.3 Phase 20: LINE 純文字輸出 — 防 markdown 廢字元污染
+    # 為什麼放在 output_format 後面用獨立 tag:
+    #   官方說「重要規則要重複強調」,獨立 tag 比放在 output_format 內優先級更高
+    #   LINE 訊息不渲染 markdown,工人看到的會是字面字元
+    if line_plain:
+        parts.append(
+            "<line_message_format strict=\"true\">\n"
+            "本系統輸出會直接送到 LINE 純文字訊息,LINE 不渲染 markdown。\n"
+            "以下符號絕對禁止出現在輸出中(會在工人手機上顯示成字面字元,造成困擾):\n"
+            "- 禁用 **粗體** 與 *斜體* 標記 — 想強調直接寫「重要:」或加「!」\n"
+            "- 禁用 `inline code` 反引號 — 想標技術詞直接寫即可\n"
+            "- 禁用 # / ## / ### 等 markdown 標題符號\n"
+            "- 禁用 --- / *** / ___ 等分隔線\n"
+            "- 列點用「1. 2. 3.」或「・」「▪」「▶」,禁用 markdown 的 - 或 *\n"
+            "- 表格:用 | 簡單分隔即可,禁用 markdown table 的 |---|---| 對齊線\n"
+            "- 不要輸出 \\n、<br/>、&nbsp; 等 escape 字元,直接用真實換行\n"
+            "輸出純文字 + emoji + 真實換行,僅此而已。\n"
+            "</line_message_format>\n"
+        )
+
+    # v3.2.3 Phase 21: OCR 嚴格保版面 — 工單照片翻譯專用
+    # 觸發條件:訊息內含 image block(_chat_complete_anthropic 偵測)
+    # 為什麼必要:
+    #   工人拍工單 → OCR + 翻譯後,要能對照原文逐行核對
+    #   行數對不上 / 編號跑掉 / 縮排亂了 → 工人沒法用
+    if ocr_strict:
+        parts.append(
+            "<layout_preservation strict=\"true\">\n"
+            "這是工單/表格/便條照片的 OCR 翻譯場景,版面對應是首要需求。\n"
+            "規則(優先級高於其他):\n"
+            "1. 原文每一行 → 譯文也只能一行,行數必須完全相等\n"
+            "2. 原文的編號(1. 2. 3. / (一)(二)/ A. B. C.)→ 譯文用相同編號\n"
+            "3. 原文的縮排(空格 / Tab)→ 譯文保留相同縮排\n"
+            "4. 原文的空行(段落分隔)→ 譯文同位置也保留空行\n"
+            "5. 表格:行數、欄位數必須完全對應,欄位順序不變\n"
+            "6. 原文若有手寫塗改痕跡,只翻最終結果,不翻塗掉的字\n"
+            "7. 模糊看不清的字 → 標記 [模糊] 或 [tidak jelas],不要編造\n"
+            "8. 人名、公司名、料號、爐號 → 原樣保留,不翻譯\n"
+            "</layout_preservation>\n"
+        )
+
+    return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -999,9 +1066,32 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
             else:
                 anthropic_messages.append({"role": role, "content": str(content)})
 
-    # Phase 5: XML 包裝 system prompt
+    # v3.2.3 Phase 21: 偵測是否為 OCR 場景(訊息內含 image / document block)
+    # 偵測完整 anthropic_messages list,只要任一 user message 有視覺 block 就算
+    _has_visual_input = False
+    for _m in anthropic_messages:
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            for _blk in _c:
+                if isinstance(_blk, dict) and _blk.get("type") in ("image", "document"):
+                    _has_visual_input = True
+                    break
+        if _has_visual_input:
+            break
+
+    # v3.2.3 讀取新 toggle
+    use_line_plain = features.get("line_plain_text_mode", True)        # Phase 20
+    use_ocr_strict = features.get("ocr_strict_layout", True)           # Phase 21
+    # OCR 嚴格保版面只在有視覺輸入時觸發
+    _apply_ocr_strict = use_ocr_strict and _has_visual_input
+
+    # Phase 5 + 20 + 21: XML 包裝 system prompt(支援 line_plain / ocr_strict 模式)
     if use_xml and system_text:
-        system_text = _wrap_system_prompt_xml(system_text)
+        system_text = _wrap_system_prompt_xml(
+            system_text,
+            line_plain=use_line_plain,
+            ocr_strict=_apply_ocr_strict,
+        )
 
     # 連續 same-role 合併(Phase 6 few-shot 自動 OK,因為 user→assistant 交替)
     merged = []
@@ -1234,6 +1324,10 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         "cache_threshold_tokens": cache_threshold_used,
         "cache_est_tokens": cache_est_tokens,
         "cache_above_threshold": cache_est_tokens >= cache_threshold_used if cache_threshold_used > 0 else None,
+        # v3.2.3 Phase 20+21
+        "line_plain_text_mode": use_xml and use_line_plain,         # 防 LINE markdown 廢字元
+        "has_visual_input": _has_visual_input,                       # 偵測到圖片/PDF
+        "ocr_strict_layout_applied": use_xml and _apply_ocr_strict,  # OCR 嚴格保版面實際生效
     }
     return result
 
@@ -1303,8 +1397,24 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
         elif role in ("user", "assistant"):
             anthropic_messages.append({"role": role, "content": str(content) if not isinstance(content, list) else content})
 
+    # v3.2.3: streaming 路徑同步套 line_plain / ocr_strict
+    _has_visual_input = False
+    for _m in anthropic_messages:
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            for _blk in _c:
+                if isinstance(_blk, dict) and _blk.get("type") in ("image", "document"):
+                    _has_visual_input = True
+                    break
+        if _has_visual_input:
+            break
+
     if features.get("xml_system_prompt", True) and system_text:
-        system_text = _wrap_system_prompt_xml(system_text)
+        system_text = _wrap_system_prompt_xml(
+            system_text,
+            line_plain=features.get("line_plain_text_mode", True),
+            ocr_strict=features.get("ocr_strict_layout", True) and _has_visual_input,
+        )
 
     # Grounding
     merged = anthropic_messages

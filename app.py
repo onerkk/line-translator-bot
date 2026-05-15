@@ -10688,6 +10688,16 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>🖼️ <strong>圖片翻譯走 Claude</strong> <span style="color:#e0a437;font-size:10px">OFF=強制 OpenAI</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-imgclaude" onchange="aipToggleFeature('image_translation_use_claude',this.checked)"><span class="slider"></span></label>
     </div>
+    <!-- v3.2.3 D7 Phase 20: LINE 純文字模式 -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📝 <strong>LINE 純文字模式</strong> <span style="color:#10b981;font-size:10px">防 ** # 廢字元</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-lineplain" onchange="aipToggleFeature('line_plain_text_mode',this.checked)"><span class="slider"></span></label>
+    </div>
+    <!-- v3.2.3 D7 Phase 21: OCR 嚴格保版面 -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>📐 <strong>OCR 嚴格保版面</strong> <span style="color:#10b981;font-size:10px">工單行/欄/編號對齊</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-ocrlayout" onchange="aipToggleFeature('ocr_strict_layout',this.checked)"><span class="slider"></span></label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
@@ -10715,6 +10725,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
     🖼️ <strong>v3.2.2 圖片翻譯獨立開關</strong>:Claude vision 一張 ~1MP 圖約 1600 tokens($0.008 input)。<br>
     &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:文字仍走 Claude,圖片強制走 OpenAI gpt-5-mini(省成本但失去 Claude vision 優勢)。<br>
+    📝 <strong>v3.2.3 LINE 純文字模式</strong>:強制 Claude 不輸出 **粗體** # 標題 - bullet 等 markdown 廢字元。<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;LINE 不渲染 markdown,工人看到的是字面字元,關掉=容忍 Claude 自由發揮。<br>
+    📐 <strong>v3.2.3 OCR 嚴格保版面</strong>:偵測到圖片時自動套用「行/欄/編號完全對應」規則。<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;對工單照片翻譯特別關鍵,工人才能逐行核對。<br>
     ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊(圖片例外:按上方 toggle)。
   </div>
   <!-- D3: 工具按鈕區 -->
@@ -11378,6 +11392,9 @@ async function aipLoadStatus(){
         'aip-toggle-smartcache':  'smart_cache_threshold',
         // v3.2.2 D6 新增
         'aip-toggle-imgclaude':   'image_translation_use_claude',
+        // v3.2.3 D7 新增
+        'aip-toggle-lineplain':   'line_plain_text_mode',
+        'aip-toggle-ocrlayout':   'ocr_strict_layout',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);
@@ -11570,6 +11587,12 @@ async function aipTestProvider(){
         if (f.stop_sequences) txt += '\\n  ✅ Stop Sequences';
         if (f.xml_system) txt += '\\n  ✅ XML System Prompt';
         if (f.citations) txt += '\\n  ✅ Citations (' + (f.citation_count||0) + ' 條引用)';
+        // v3.2.3 D7 Phase 20+21: LINE 純文字模式 / OCR 保版面
+        if (f.line_plain_text_mode) txt += '\\n  ✅ LINE 純文字模式(防 markdown 廢字元)';
+        if (f.has_visual_input) {
+          txt += '\\n  📷 偵測到圖片/PDF';
+          if (f.ocr_strict_layout_applied) txt += ' → ✅ OCR 嚴格保版面已套用';
+        }
         // v3.2 D4 Phase 15: cache 門檻診斷(看有沒有 silent fail)
         if (f.cache_threshold_tokens && f.cache_est_tokens != null) {
           const passed = f.cache_above_threshold;
