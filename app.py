@@ -3969,6 +3969,12 @@ if os.path.exists(_glossary_json_path):
         logger.warning("Failed to load glossary_data.json, using embedded: %s", _e)
 else:
     logger.info("Using embedded glossary: %d terms", len(GLOSSARY_LOOKUP))
+
+# ★ v2.0: 把 glossary 註冊給 ai_provider,啟用 Claude grounding 能力
+try:
+    ai_provider.register_glossary(GLOSSARY_LOOKUP)
+except Exception as _e:
+    logger.warning("register_glossary 失敗: %s", _e)
 # Extra customers not in storage Excel but appear in factory chat
 # Per-group protected names: {"__all__": [...], "group_id": [...]}
 _DEFAULT_NAMES = [
@@ -10578,6 +10584,38 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 </div>
 
+<!-- Anthropic 模型選擇 -->
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 時用)</div>
+  <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
+    <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
+    <option value="claude-sonnet-4-6">🟡 Claude Sonnet 4.6(平衡,$3/$15 per M)</option>
+    <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
+  </select>
+  <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型</button>
+  <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.5">
+    💡 LINE bot 主翻譯走 gpt-4.1-mini → 自動映射到這個模型。<br>
+    🟢 Haiku 4.5:推薦,品質夠用,便宜。<br>
+    🟡 Sonnet 4.6:翻譯品質更好,但每筆貴 3 倍。<br>
+    🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。
+  </div>
+</div>
+
+<!-- Claude 專屬能力(切換到 Anthropic 時自動啟用)-->
+<div style="background:linear-gradient(135deg,#1f1a2e,#15101f);border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #d4a437">
+  <div style="margin:0 0 10px;color:#d4a437;font-size:13px;font-weight:700">⭐ Claude 專屬翻譯能力(切換到 Anthropic 自動啟用)</div>
+  <div id="aip-claude-features-status" style="font-size:12px;color:#ddd;line-height:1.9">
+    <div>📦 <strong>Prompt Caching</strong>:<span id="aip-feat-cache">載入中…</span></div>
+    <div>🧠 <strong>Extended Thinking</strong>:<span id="aip-feat-think">載入中…</span> <span style="color:#888">(Sonnet/Opus 自動啟用,Haiku 不支援)</span></div>
+    <div>📚 <strong>Glossary Grounding</strong>:<span id="aip-feat-ground">載入中…</span> <span id="aip-feat-glossary-size" style="color:#888"></span></div>
+  </div>
+  <div style="margin-top:12px;padding:8px;background:#0a0a1a;border-radius:6px;color:#888;font-size:11px;line-height:1.5">
+    💡 <strong>實際運作</strong>:每次翻譯,Claude 會自動看到工廠術語表 → 引用標準印尼譯。<br>
+    💰 <strong>省錢機制</strong>:System prompt 自動 cache,輸入成本降 70-90%。<br>
+    🧠 <strong>翻譯品質</strong>:Sonnet/Opus 用 thinking 思考鏈,複雜句子翻得更準。
+  </div>
+</div>
+
 <!-- 功能對照 -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
   <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">📊 功能對照</div>
@@ -11162,7 +11200,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','insight','examples','forms','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','insight','examples','forms','aiprovider','settings'];
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -11196,6 +11234,31 @@ async function aipLoadStatus(){
     }
     document.getElementById('aip-openai-preview').textContent = (cfg.openai && cfg.openai.api_key_preview) || '(未設定)';
     document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
+    // 載入當前 Anthropic 模型映射(gpt-4.1-mini 的對應)
+    try {
+      const mapping = cfg.model_mapping || {};
+      const currentModel = mapping['gpt-4.1-mini'] || 'claude-haiku-4-5-20251001';
+      const sel = document.getElementById('aip-anthropic-model');
+      if (sel) sel.value = currentModel;
+    } catch(e) {}
+    // v2.0: Claude 專屬能力狀態
+    try {
+      const f = cfg.claude_features || {};
+      const cacheEl = document.getElementById('aip-feat-cache');
+      const thinkEl = document.getElementById('aip-feat-think');
+      const groundEl = document.getElementById('aip-feat-ground');
+      const glossEl = document.getElementById('aip-feat-glossary-size');
+      if (cacheEl) cacheEl.innerHTML = f.prompt_caching ? '<span style="color:#10b981">✅ 啟用</span>' : '<span style="color:#888">❌ 關閉</span>';
+      if (thinkEl) thinkEl.innerHTML = f.extended_thinking ? '<span style="color:#10b981">✅ 啟用</span> (budget ' + (f.thinking_budget || 2000) + ' tokens)' : '<span style="color:#888">❌ 關閉</span>';
+      if (groundEl) groundEl.innerHTML = f.glossary_grounding ? '<span style="color:#10b981">✅ 啟用</span>' : '<span style="color:#888">❌ 關閉</span>';
+      if (glossEl) {
+        if (cfg._glossary_registered) {
+          glossEl.textContent = '(' + cfg._glossary_size + ' 條工廠術語已註冊)';
+        } else {
+          glossEl.innerHTML = '<span style="color:#f59e0b">⚠️ glossary 未註冊</span>';
+        }
+      }
+    } catch(e) {}
   }catch(e){ console.warn('AIP error', e); }
 }
 async function aipSwitchProvider(p){
@@ -11238,6 +11301,43 @@ async function aipTestProvider(){
   }catch(e){
     box.style.color = '#ef4444';
     box.textContent = '❌ 網路錯誤：' + e;
+  }
+}
+
+async function aipUpdateAnthropicModel(){
+  const sel = document.getElementById('aip-anthropic-model');
+  if (!sel) return;
+  const newModel = sel.value;
+  if (!confirm('套用 Anthropic 模型:' + newModel + '\\n\\n下次切換成 Anthropic 後,翻譯會用這個模型。確定?')) return;
+  try {
+    // 先取目前完整 mapping
+    const cur = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}}).then(r=>r.json());
+    if (!cur.ok) { alert('讀取設定失敗'); return; }
+    const mapping = (cur.config && cur.config.model_mapping) || {};
+    // 把 LINE bot 會用到的所有 OpenAI 模型都映射到新模型(主翻譯 + OCR + 修補等)
+    mapping['gpt-4.1'] = newModel;
+    mapping['gpt-4.1-mini'] = newModel;
+    mapping['gpt-4.1-nano'] = newModel;
+    mapping['gpt-4o'] = newModel;
+    mapping['gpt-4o-mini'] = newModel;
+    mapping['gpt-5'] = newModel;
+    mapping['gpt-5-mini'] = newModel;
+    mapping['gpt-5-nano'] = newModel;
+    // 送出
+    const r = await fetch('/api/admin/ai-provider/mapping', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({mapping})
+    });
+    const data = await r.json();
+    if (data.ok) {
+      alert('✅ 模型已套用:' + newModel + '\\n\\n切換成 Anthropic 後生效。');
+      aipLoadStatus();
+    } else {
+      alert('❌ ' + (data.message || '套用失敗'));
+    }
+  } catch(e) {
+    alert('錯誤:' + e);
   }
 }
 
@@ -11476,7 +11576,7 @@ async function loadUsers(){
   var el=document.getElementById('usersList');
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
-  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['settings','設定']];
+  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
@@ -13763,8 +13863,8 @@ def check_manager_access(required_tab=None):
 @app.route("/api/admin/ai-provider", methods=["GET"])
 def api_admin_ai_provider_get():
     """取得目前 AI provider 設定(API key 脫敏)"""
-    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
     return jsonify({
         "ok": True,
         "config": ai_provider.get_current_config_safe(),
@@ -13775,8 +13875,8 @@ def api_admin_ai_provider_get():
 @app.route("/api/admin/ai-provider/switch", methods=["POST"])
 def api_admin_ai_provider_switch():
     """切換 active provider"""
-    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
     data = request.get_json(silent=True) or {}
     target = data.get("provider", "").strip().lower()
     ok, msg = ai_provider.set_active_provider(target)
@@ -13786,8 +13886,8 @@ def api_admin_ai_provider_switch():
 @app.route("/api/admin/ai-provider/key", methods=["POST"])
 def api_admin_ai_provider_set_key():
     """更新 API key(openai 或 anthropic)"""
-    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
     data = request.get_json(silent=True) or {}
     provider = data.get("provider", "").strip().lower()
     api_key = data.get("api_key", "").strip()
@@ -13800,8 +13900,8 @@ def api_admin_ai_provider_set_key():
 @app.route("/api/admin/ai-provider/mapping", methods=["POST"])
 def api_admin_ai_provider_mapping():
     """更新模型映射表(OpenAI → Anthropic)"""
-    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
     data = request.get_json(silent=True) or {}
     mapping = data.get("mapping")
     if not isinstance(mapping, dict):
@@ -13813,8 +13913,8 @@ def api_admin_ai_provider_mapping():
 @app.route("/api/admin/ai-provider/test", methods=["POST"])
 def api_admin_ai_provider_test():
     """測試呼叫:用目前 active provider 跑一個小翻譯,確認 key 可用"""
-    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
-        return jsonify({"error": "unauthorized"}), 401
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
     try:
         resp = ai_provider.chat_complete(
             model="gpt-4.1-mini",
@@ -15224,6 +15324,11 @@ def api_admin_glossary_upload():
         # Update in-memory
         GLOSSARY_LOOKUP = new_data
         logger.info("Glossary updated via admin: %d terms from %d sheets", len(new_data), sheets_processed)
+        # ★ v2.0: 重新註冊給 ai_provider
+        try:
+            ai_provider.register_glossary(GLOSSARY_LOOKUP)
+        except Exception as _e:
+            logger.warning("re-register_glossary 失敗: %s", _e)
         # Auto-commit to GitHub
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_glossary_to_github(json_str)
