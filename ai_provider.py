@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.1 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -31,6 +31,11 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2 / 2026-05-15)
 ✅ Phase 14: Thinking Display Mode    — Opus 4.7 預設 omitted(快首 token),
                                         Sonnet 4.6 預設 summarized
 ✅ Phase 15: Smart Cache Threshold    — 用 model-specific token 門檻,避免 silent fail
+
+【v3.2.1 D5 新增(2026-05-15)】
+✅ Phase 18: Image-then-text Reorder  — 官方 vision best practice:單圖+文字時
+                                        自動把圖片排前面,翻譯/OCR 略佳
+                                        多圖場景不重排(避免破壞 few-shot)
 
 【作者】onerkk@gmail.com
 """
@@ -1375,6 +1380,22 @@ def _convert_openai_content_blocks_to_anthropic(blocks):
     """OpenAI multi-modal content → Anthropic content list
     
     Phase 7: 圖片(包含 PDF base64)直接走 Claude vision
+    
+    v3.2.1 Phase 18: image-then-text 自動重排
+      官方明文 best practice:
+        "Claude works best when images come before text.
+         Prefer image-then-text structure."
+        — platform.claude.com/docs/en/build-with-claude/vision
+      
+      重排規則(保守,避免破壞 few-shot vision):
+        - 若視覺 block(image/document) 剛好 1 個 + text block ≥ 1 個
+          → 把視覺 block 提到最前面
+        - 若多張視覺 block → 保持原順序(可能是 few-shot 範例)
+        - 若沒有視覺或沒有文字 → 保持原順序
+      
+      不重排的情況不會犧牲品質 — 官方說
+      "Images placed after text or interpolated with text still perform well"
+      只是 image-first 略佳。
     """
     result = []
     for b in blocks:
@@ -1414,6 +1435,22 @@ def _convert_openai_content_blocks_to_anthropic(blocks):
             result.append(b)
         else:
             result.append({"type": "text", "text": f"[unsupported block type: {btype}]"})
+
+    # v3.2.1 Phase 18: image-then-text 重排
+    # 找出視覺 block 的位置
+    visual_indices = [
+        i for i, blk in enumerate(result)
+        if isinstance(blk, dict) and blk.get("type") in ("image", "document")
+    ]
+    text_count = sum(
+        1 for blk in result
+        if isinstance(blk, dict) and blk.get("type") == "text"
+    )
+    # 規則:剛好 1 個視覺 block + ≥1 個文字 block + 視覺不在最前面 → 移到最前
+    if len(visual_indices) == 1 and text_count >= 1 and visual_indices[0] != 0:
+        visual_block = result.pop(visual_indices[0])
+        result.insert(0, visual_block)
+
     return result
 
 
