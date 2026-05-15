@@ -10586,18 +10586,19 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 
 <!-- Anthropic 模型選擇 -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
-  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 時用)</div>
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 後實際跑這個)</div>
   <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
     <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
     <option value="claude-sonnet-4-6">🟡 Claude Sonnet 4.6(平衡,$3/$15 per M)</option>
     <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
   </select>
   <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型</button>
-  <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.5">
-    💡 LINE bot 主翻譯走 gpt-4.1-mini → 自動映射到這個模型。<br>
+  <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.6">
+    ✅ <strong style="color:#10b981">說明清楚</strong>:切到 Anthropic 後,<strong>LINE bot 所有翻譯都用這個模型</strong>,跟「設定」tab 內 OpenAI 那套自動切換無關。<br>
     🟢 Haiku 4.5:推薦,品質夠用,便宜。<br>
     🟡 Sonnet 4.6:翻譯品質更好,但每筆貴 3 倍。<br>
-    🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。
+    🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。<br>
+    <span style="color:#666">註:LINE bot 內部呼叫 gpt-4.1-mini / gpt-5-mini / gpt-4o 等 OpenAI 模型時,全部會自動映射到上方選的這個 Claude 模型。</span>
   </div>
 </div>
 
@@ -11308,21 +11309,25 @@ async function aipUpdateAnthropicModel(){
   const sel = document.getElementById('aip-anthropic-model');
   if (!sel) return;
   const newModel = sel.value;
-  if (!confirm('套用 Anthropic 模型:' + newModel + '\\n\\n下次切換成 Anthropic 後,翻譯會用這個模型。確定?')) return;
+  if (!confirm('套用 Anthropic 模型:' + newModel + '\\n\\n所有 LINE bot 翻譯都會走這個模型(不管 OpenAI tab 內怎麼設)。\\n確定?')) return;
   try {
     // 先取目前完整 mapping
     const cur = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}}).then(r=>r.json());
     if (!cur.ok) { alert('讀取設定失敗'); return; }
     const mapping = (cur.config && cur.config.model_mapping) || {};
-    // 把 LINE bot 會用到的所有 OpenAI 模型都映射到新模型(主翻譯 + OCR + 修補等)
-    mapping['gpt-4.1'] = newModel;
-    mapping['gpt-4.1-mini'] = newModel;
-    mapping['gpt-4.1-nano'] = newModel;
-    mapping['gpt-4o'] = newModel;
-    mapping['gpt-4o-mini'] = newModel;
-    mapping['gpt-5'] = newModel;
-    mapping['gpt-5-mini'] = newModel;
-    mapping['gpt-5-nano'] = newModel;
+    // 把 LINE bot 內所有 OpenAI 模型(主翻譯 + OCR + 修補 + 輔助等)全部映射到新模型
+    const ALL_OPENAI_MODELS = [
+      'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+      'gpt-4o', 'gpt-4o-mini',
+      'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+      'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
+      'gpt-5.5', 'gpt-5.5-mini',
+      'gpt-5.1', 'gpt-5.2',
+      'o1', 'o3', 'o3-mini', 'o4-mini',
+    ];
+    for (const m of ALL_OPENAI_MODELS) {
+      mapping[m] = newModel;
+    }
     // 送出
     const r = await fetch('/api/admin/ai-provider/mapping', {
       method:'POST',
@@ -11331,7 +11336,7 @@ async function aipUpdateAnthropicModel(){
     });
     const data = await r.json();
     if (data.ok) {
-      alert('✅ 模型已套用:' + newModel + '\\n\\n切換成 Anthropic 後生效。');
+      alert('✅ 模型已套用:' + newModel + '\\n\\n所有 LINE bot 翻譯(主翻譯/OCR/修補/輔助)都會用這個 Claude 模型。');
       aipLoadStatus();
     } else {
       alert('❌ ' + (data.message || '套用失敗'));
