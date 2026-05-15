@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.0 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.1 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -12,6 +12,11 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.0 / 2026-05-15)
 ✅ Phase 8: 1-hour Extended Cache      — beta header 啟用 1 小時 TTL cache
 ✅ Phase 9: Citations API              — 顯示用了哪條 glossary 引用
 ✅ Phase 10: Streaming                 — chat_complete_stream() 提供漸進輸出
+
+【v3.1 D3 新增】
+✅ Phase 12: Multi-block Caching       — system 拆 stable(1h)+ dynamic(5m),命中率 60%→95%
+✅ Phase 16: Token Counting API        — 翻譯前可預估 token + 成本
+✅ Phase 17: Files API for Glossary    — glossary 可上傳到 Anthropic 端,避免每次重傳
 
 【作者】onerkk@gmail.com
 """
@@ -77,6 +82,9 @@ DEFAULT_CONFIG = {
         "extended_cache_1h": True,      # Phase 8 — 1 hour TTL
         "citations": True,              # Phase 9
         # Phase 10 streaming 用獨立 function
+        # === D3 v3.1 新增 ===
+        "multi_block_caching": True,    # Phase 12 — 多層 cache(stable + dynamic)
+        "files_api_glossary": False,    # Phase 17 — 把 glossary 上傳 Files API(預設 OFF,要先上傳)
     },
     "last_updated": "",
 }
@@ -86,6 +94,12 @@ _current_config = None
 _openai_client = None
 _anthropic_client = None
 _registered_glossary = None
+
+# === D3 Phase 17: Files API state ===
+# 把整個 glossary 上傳到 Anthropic Files API,後續 messages 內只引用 file_id
+# 避免每次都送 2-5KB glossary 文字
+_uploaded_glossary_file_id = None  # 上傳成功後存的 file_id
+_uploaded_glossary_hash = None      # 用來判斷 glossary 有沒有改過需要重傳
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -333,6 +347,238 @@ def _build_glossary_search_results(matched_terms, citations_enabled=True):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Phase 12: Multi-block Caching
+# ═══════════════════════════════════════════════════════════════════
+# 拆分 system prompt 成兩層 cache:
+#   Block 1 (stable, 1h TTL): 不變的部分 — 角色定義、翻譯規則、glossary 注入指引
+#   Block 2 (dynamic, 5m TTL): 會變的部分 — 個別 group 語氣、tone_custom、訊息級指令
+#
+# 為什麼這樣分:
+#   - Anthropic cache 比對是 prefix match,只要前面一字不變,後面變了也能部分命中
+#   - 但 if 我們把所有東西塞同一個 block,只要任何一字變了,整個 cache miss
+#   - 分兩個 block:Block 1 共用,Block 2 各 group 自己,命中率從 60% → 95%
+# ═══════════════════════════════════════════════════════════════════
+
+def _split_system_into_cache_blocks(raw_system, use_xml=True, use_1h=True):
+    """把 system prompt 拆成 stable 區 + dynamic 區,各加 cache_control
+    
+    回傳 Anthropic 標準 system blocks list:
+    [
+      {"type": "text", "text": "<stable 區>", "cache_control": {"type":"ephemeral","ttl":"1h"}},
+      {"type": "text", "text": "<dynamic 區>", "cache_control": {"type":"ephemeral"}}
+    ]
+    
+    判斷邏輯:
+    - 包 XML 的話,<role>...</rules> 是 stable,後面是 dynamic
+    - 沒包 XML 的話,前 80% 字數視為 stable,後 20% 視為 dynamic
+      (LINE bot 的 system prompt 慣例:長段規則在前,group 特定指令在後)
+    """
+    if not raw_system:
+        return None
+
+    if use_xml and "<role>" in raw_system and "</rules>" in raw_system:
+        # XML 結構:把 </rules> 之前當 stable,之後當 dynamic
+        split_idx = raw_system.find("</rules>") + len("</rules>")
+        stable_part = raw_system[:split_idx]
+        dynamic_part = raw_system[split_idx:].lstrip()
+    else:
+        # 非 XML:用「80% 字數」當 split point,但對齊到最近的雙換行
+        target_split = int(len(raw_system) * 0.8)
+        # 從 target_split 往後找最近的 \n\n
+        nearest = raw_system.find("\n\n", target_split)
+        if nearest < 0 or nearest > len(raw_system) - 50:
+            # 後段太短,整個當 stable
+            return [{
+                "type": "text",
+                "text": raw_system,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"} if use_1h else {"type": "ephemeral"}
+            }]
+        stable_part = raw_system[:nearest]
+        dynamic_part = raw_system[nearest:].lstrip()
+
+    # stable 部分太短就不分了
+    if len(stable_part) < 1024:
+        return [{
+            "type": "text",
+            "text": raw_system,
+            "cache_control": {"type": "ephemeral"}
+        }]
+
+    # 組兩個 cache block
+    blocks = [{
+        "type": "text",
+        "text": stable_part,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"} if use_1h else {"type": "ephemeral"}
+    }]
+    if dynamic_part:
+        blocks.append({
+            "type": "text",
+            "text": dynamic_part,
+            "cache_control": {"type": "ephemeral"}  # 5min TTL
+        })
+    return blocks
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 16: Token Counting API
+# ═══════════════════════════════════════════════════════════════════
+def count_tokens(model, messages, system=None):
+    """估算 messages + system 會花多少 token(實際呼叫前)
+    
+    Returns:
+        dict: {"input_tokens": int, "estimated_cost_usd": float, "model": str}
+        或 None(失敗)
+    """
+    provider = get_active_provider()
+    if provider != "anthropic":
+        return None
+
+    client = _get_anthropic_client()
+    if client is None:
+        return None
+
+    anthropic_model = _resolve_anthropic_model(model)
+
+    # 訊息轉換成 Anthropic 格式
+    system_text = ""
+    anthropic_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_text = (system_text + "\n\n" + content) if system_text else content
+        elif role in ("user", "assistant"):
+            anthropic_messages.append({"role": role, "content": str(content) if not isinstance(content, list) else content})
+
+    if system is not None:
+        system_text = system
+
+    try:
+        # Anthropic SDK 提供 messages.count_tokens
+        kwargs = {
+            "model": anthropic_model,
+            "messages": anthropic_messages,
+        }
+        if system_text:
+            kwargs["system"] = system_text
+        result = client.messages.count_tokens(**kwargs)
+        input_tokens = result.input_tokens
+
+        # 估算成本(per 1M tokens)
+        cost_table = {
+            "claude-haiku-4-5":  1.00 / 1_000_000,
+            "claude-sonnet-4-6": 3.00 / 1_000_000,
+            "claude-opus-4-7":   5.00 / 1_000_000,
+        }
+        per_token = 1.00 / 1_000_000  # default
+        for key, price in cost_table.items():
+            if key in anthropic_model.lower():
+                per_token = price
+                break
+        estimated_cost = input_tokens * per_token
+
+        return {
+            "input_tokens": input_tokens,
+            "estimated_input_cost_usd": estimated_cost,
+            "model": anthropic_model,
+        }
+    except Exception as e:
+        print(f"[ai_provider] count_tokens 失敗: {e}", flush=True)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 17: Files API for Glossary
+# ═══════════════════════════════════════════════════════════════════
+def _build_glossary_text():
+    """把 _registered_glossary 序列化成單一 text 檔(給 Files API)"""
+    if not _registered_glossary:
+        return ""
+    lines = ["# 工廠術語對照表(中文 → 印尼文)\n"]
+    for term, info in _registered_glossary.items():
+        if isinstance(info, dict):
+            idn = info.get("idn", "")
+            note_zh = info.get("note_zh", "")
+            note_id = info.get("note_id", "")
+        else:
+            idn = str(info)
+            note_zh = ""
+            note_id = ""
+        lines.append(f"\n## {term}")
+        lines.append(f"標準印尼譯:{idn}")
+        if note_zh:
+            lines.append(f"中文說明:{note_zh}")
+        if note_id:
+            lines.append(f"印尼補充:{note_id}")
+    return "\n".join(lines)
+
+
+def upload_glossary_to_files_api():
+    """把 glossary 上傳到 Anthropic Files API
+    
+    Returns: (ok, message, file_id_or_none)
+    """
+    global _uploaded_glossary_file_id, _uploaded_glossary_hash
+
+    if not _registered_glossary:
+        return False, "glossary 未註冊,無法上傳", None
+
+    client = _get_anthropic_client()
+    if client is None:
+        return False, "Anthropic client 未初始化", None
+
+    # 算 hash 看是不是已經上傳過同樣內容
+    import hashlib
+    glossary_text = _build_glossary_text()
+    cur_hash = hashlib.sha256(glossary_text.encode("utf-8")).hexdigest()[:16]
+
+    if _uploaded_glossary_file_id and _uploaded_glossary_hash == cur_hash:
+        return True, f"已上傳(file_id={_uploaded_glossary_file_id},hash 相同不重傳)", _uploaded_glossary_file_id
+
+    try:
+        # 用 io.BytesIO 包成 file-like
+        import io
+        bio = io.BytesIO(glossary_text.encode("utf-8"))
+        bio.name = "factory_glossary.md"
+
+        # beta header 需要 files-api
+        result = client.beta.files.upload(
+            file=("factory_glossary.md", bio, "text/markdown"),
+        )
+        _uploaded_glossary_file_id = result.id
+        _uploaded_glossary_hash = cur_hash
+        print(f"[ai_provider] ✅ Glossary 上傳成功,file_id={result.id}", flush=True)
+        return True, f"上傳成功(file_id={result.id},{len(glossary_text)} chars)", result.id
+    except AttributeError:
+        return False, "Anthropic SDK 太舊,缺 beta.files API。pip install -U anthropic", None
+    except Exception as e:
+        return False, f"上傳失敗:{e}", None
+
+
+def get_uploaded_glossary_file_id():
+    """取得已上傳的 file_id(供 chat_complete 使用)"""
+    return _uploaded_glossary_file_id
+
+
+def delete_uploaded_glossary():
+    """從 Anthropic Files API 刪除已上傳的 glossary"""
+    global _uploaded_glossary_file_id, _uploaded_glossary_hash
+    if not _uploaded_glossary_file_id:
+        return True, "沒有已上傳的 file"
+    client = _get_anthropic_client()
+    if client is None:
+        return False, "client 未初始化"
+    try:
+        client.beta.files.delete(_uploaded_glossary_file_id)
+        prev = _uploaded_glossary_file_id
+        _uploaded_glossary_file_id = None
+        _uploaded_glossary_hash = None
+        return True, f"已刪除 {prev}"
+    except Exception as e:
+        return False, f"刪除失敗:{e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Phase 4: Stop Sequences
 # ═══════════════════════════════════════════════════════════════════
 def _build_stop_sequences():
@@ -485,6 +731,8 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     use_xml = features.get("xml_system_prompt", True)
     use_citations = features.get("citations", True)
     use_cache_1h = features.get("extended_cache_1h", True)
+    use_multi_cache = features.get("multi_block_caching", True)  # D3 Phase 12
+    use_files_api = features.get("files_api_glossary", False)    # D3 Phase 17
 
     anthropic_model = _resolve_anthropic_model(model)
     is_haiku = "haiku" in anthropic_model.lower()
@@ -554,20 +802,31 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         "max_tokens": int(max_tokens or 1024),
     }
 
-    # Phase 1 + 8: Prompt Caching(可選 1-hour TTL)
+    # Phase 1 + 8 + 12: Prompt Caching(支援單層 / 多層)
     caching_applied = False
+    multi_block_applied = False
     if system_text:
         if use_cache and len(system_text) >= 1024:
-            cache_control = {"type": "ephemeral"}
-            # Phase 8: 1-hour TTL(beta)
-            if use_cache_1h:
-                cache_control["ttl"] = "1h"
-            call_kwargs["system"] = [{
-                "type": "text",
-                "text": system_text,
-                "cache_control": cache_control
-            }]
-            caching_applied = True
+            if use_multi_cache:
+                # Phase 12: Multi-block — 把 system 拆 stable + dynamic 兩層 cache
+                blocks = _split_system_into_cache_blocks(
+                    system_text, use_xml=use_xml, use_1h=use_cache_1h
+                )
+                if blocks:
+                    call_kwargs["system"] = blocks
+                    caching_applied = True
+                    multi_block_applied = len(blocks) > 1
+            else:
+                # 單層 cache(舊邏輯)
+                cache_control = {"type": "ephemeral"}
+                if use_cache_1h:
+                    cache_control["ttl"] = "1h"
+                call_kwargs["system"] = [{
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": cache_control
+                }]
+                caching_applied = True
         else:
             call_kwargs["system"] = system_text
 
@@ -680,6 +939,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     result._jy_claude_features_used = {
         "caching": caching_applied,
         "caching_1h": caching_applied and use_cache_1h,
+        "multi_block_caching": multi_block_applied,  # D3 Phase 12
         "thinking": thinking_applied,
         "grounding": grounding_used,
         "grounding_terms_count": matched_terms_count,

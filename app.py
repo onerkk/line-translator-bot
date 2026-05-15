@@ -10638,9 +10638,17 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>🔖 <strong>Citations</strong> <span style="color:#888;font-size:10px">引用標注</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cite" onchange="aipToggleFeature('citations',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🪜 <strong>Multi-block Cache</strong> <span style="color:#888;font-size:10px">命中率 60%→95%</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-multi" onchange="aipToggleFeature('multi_block_caching',this.checked)"><span class="slider"></span></label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+      <span>📦 <strong>Files API Glossary</strong> <span id="aip-files-status" style="color:#888;font-size:10px">未上傳</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-filesapi" onchange="aipToggleFeature('files_api_glossary',this.checked)"><span class="slider"></span></label>
     </div>
   </div>
   <div style="margin-top:12px;padding:8px;background:#0a0a1a;border-radius:6px;color:#888;font-size:11px;line-height:1.5">
@@ -10648,8 +10656,15 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     💰 <strong>省錢</strong>:System prompt + glossary 自動 cache,連續呼叫省 70-90% input 成本。<br>
     🧠 <strong>翻譯品質</strong>:Sonnet/Opus thinking + XML system prompt + 停止序列三管齊下。<br>
     📷 <strong>圖片翻譯</strong>:OCR 也走 Claude vision,工單照片可直翻。<br>
+    🪜 <strong>多層 cache</strong>:把 system 拆成「穩定區(1h)+ 動態區(5m)」,跨 group 共用 stable。<br>
     ⚠️ <strong>不會兩邊扣</strong>:路由分流,active provider 在哪就只扣那邊。
   </div>
+  <!-- D3: 工具按鈕區 -->
+  <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+    <button onclick="aipCountTokens()" style="flex:1;min-width:120px;padding:8px;border-radius:6px;border:1px solid #d4a437;background:#1a1a2e;color:#d4a437;font-size:11px;cursor:pointer">💰 估算成本</button>
+    <button onclick="aipUploadGlossary()" style="flex:1;min-width:120px;padding:8px;border-radius:6px;border:1px solid #d4a437;background:#1a1a2e;color:#d4a437;font-size:11px;cursor:pointer">📤 上傳 Glossary</button>
+  </div>
+  <div id="aip-tools-result" style="display:none;margin-top:8px;padding:8px;background:#0a0a1a;border-radius:6px;font-size:11px;font-family:monospace;color:#aaa;white-space:pre-wrap;line-height:1.5"></div>
 </div>
 
 <!-- 功能對照 -->
@@ -11290,14 +11305,16 @@ async function aipLoadStatus(){
       const f = cfg.claude_features || {};
       // 對應 8 個 toggle id → feature key
       const toggleMap = {
-        'aip-toggle-cache':   'prompt_caching',
-        'aip-toggle-think':   'extended_thinking',
-        'aip-toggle-ground':  'glossary_grounding',
-        'aip-toggle-stop':    'stop_sequences',
-        'aip-toggle-xml':     'xml_system_prompt',
-        'aip-toggle-vision':  'native_vision',
-        'aip-toggle-cache1h': 'extended_cache_1h',
-        'aip-toggle-cite':    'citations',
+        'aip-toggle-cache':    'prompt_caching',
+        'aip-toggle-think':    'extended_thinking',
+        'aip-toggle-ground':   'glossary_grounding',
+        'aip-toggle-stop':     'stop_sequences',
+        'aip-toggle-xml':      'xml_system_prompt',
+        'aip-toggle-vision':   'native_vision',
+        'aip-toggle-cache1h':  'extended_cache_1h',
+        'aip-toggle-cite':     'citations',
+        'aip-toggle-multi':    'multi_block_caching',
+        'aip-toggle-filesapi': 'files_api_glossary',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);
@@ -11332,6 +11349,70 @@ async function aipToggleFeature(featureName, enabled){
   }catch(e){
     alert('錯誤:' + e);
     aipLoadStatus();
+  }
+}
+
+// D3 Phase 16: Token Counting + 成本估算
+async function aipCountTokens(){
+  const box = document.getElementById('aip-tools-result');
+  box.style.display = 'block';
+  box.textContent = '⏳ 估算中…';
+  try{
+    const r = await fetch('/api/admin/ai-provider/count-tokens', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body:'{}'
+    });
+    const data = await r.json();
+    if(data.ok && data.result){
+      const cost = data.result.estimated_input_cost_usd || 0;
+      const tw = cost * 31; // USD → TWD
+      box.style.color = '#10b981';
+      box.textContent =
+        '💰 成本估算(基準 prompt + glossary)\\n\\n' +
+        '模型:' + data.result.model + '\\n' +
+        'Input tokens:' + data.result.input_tokens + '\\n' +
+        '單次 input 成本:US$' + cost.toFixed(6) + ' (~NT$' + tw.toFixed(4) + ')\\n\\n' +
+        '💡 一千次 LINE 翻譯 input 成本約 NT$' + (tw * 1000).toFixed(2) + '\\n' +
+        '(不含 output、不含 cache 折扣;有 cache 命中時實際更低)';
+    }else{
+      box.style.color = '#ef4444';
+      box.textContent = '❌ 估算失敗:' + (data.error || data.message || '請切到 Anthropic');
+    }
+  }catch(e){
+    box.style.color = '#ef4444';
+    box.textContent = '❌ 錯誤:' + e;
+  }
+}
+
+// D3 Phase 17: 上傳 Glossary 到 Anthropic Files API
+async function aipUploadGlossary(){
+  if(!confirm('把 232 條工廠 glossary 上傳到 Anthropic Files API?\\n\\n上傳後 messages 內可只引用 file_id,不用每次重傳。\\n上傳後請開「Files API Glossary」toggle 才會啟用。'))return;
+  const box = document.getElementById('aip-tools-result');
+  box.style.display = 'block';
+  box.style.color = '#aaa';
+  box.textContent = '⏳ 上傳中…';
+  try{
+    const r = await fetch('/api/admin/ai-provider/upload-glossary', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body:'{}'
+    });
+    const data = await r.json();
+    if(data.ok){
+      box.style.color = '#10b981';
+      box.textContent = '✅ ' + (data.message || '上傳成功') + '\\n\\nfile_id: ' + (data.file_id || '?');
+      // 同步更新狀態顯示
+      const stEl = document.getElementById('aip-files-status');
+      if(stEl) stEl.textContent = '已上傳:' + (data.file_id || '');
+      stEl.style.color = '#10b981';
+    }else{
+      box.style.color = '#ef4444';
+      box.textContent = '❌ ' + (data.message || data.error || '上傳失敗');
+    }
+  }catch(e){
+    box.style.color = '#ef4444';
+    box.textContent = '❌ 錯誤:' + e;
   }
 }
 async function aipSwitchProvider(p){
@@ -14064,6 +14145,55 @@ def api_admin_ai_provider_features():
         return jsonify({"ok": False, "message": "features 必須是 dict"}), 400
     ok, msg = ai_provider.update_claude_features(features)
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/ai-provider/count-tokens", methods=["POST"])
+def api_admin_ai_provider_count_tokens():
+    """v3.1 D3 Phase 16: 預估 token + 成本(基準 prompt + glossary)
+    
+    跑一個簡短的代表性翻譯場景,讓歐那看到一次完整翻譯會吃多少 token。
+    """
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    if ai_provider.get_active_provider() != "anthropic":
+        return jsonify({"ok": False, "message": "請先切到 Anthropic provider"}), 400
+    try:
+        # 用一個代表性 prompt + glossary 來估
+        sys_prompt = (
+            "你是專業的工廠中文↔印尼文翻譯助手。\n"
+            "規則:\n"
+            "1. 忠實翻譯,不增刪內容\n"
+            "2. 不加註解、不加禮貌前綴\n"
+            "3. 工廠語氣,直接明白\n"
+            "4. 引用 search_result 內的標準譯名\n"
+        )
+        sample_msg = "鋼帶不夠了,打包機停了,叫主管來看一下"
+        result = ai_provider.count_tokens(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": sample_msg},
+            ],
+        )
+        if result is None:
+            return jsonify({"ok": False, "message": "count_tokens 失敗,可能 SDK 版本太舊"})
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/ai-provider/upload-glossary", methods=["POST"])
+def api_admin_ai_provider_upload_glossary():
+    """v3.1 D3 Phase 17: 把 glossary 上傳到 Anthropic Files API"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    if ai_provider.get_active_provider() != "anthropic":
+        return jsonify({"ok": False, "message": "請先切到 Anthropic provider"}), 400
+    try:
+        ok, msg, file_id = ai_provider.upload_glossary_to_files_api()
+        return jsonify({"ok": ok, "message": msg, "file_id": file_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/admin")
