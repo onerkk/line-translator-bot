@@ -11843,6 +11843,23 @@ async function aipLoadStatus(){
         }
       }
     } catch(e) { console.warn('Claude features load fail', e); }
+    // v3.9.33: 額外載入 app.py 的 features(Claude 雙模型設定),避免使用者沒進設定 tab 時 UI 顯示預設值
+    try {
+      const fd = await api('/features');
+      if (fd) {
+        if (document.getElementById('aip-claude-autoswitch')) {
+          const ase = fd.claude_auto_switch_enabled !== false;
+          document.getElementById('aip-claude-autoswitch').checked = ase;
+          aipApplyAutoSwitchUI(ase);
+        }
+        if (document.getElementById('aip-claude-default'))
+          document.getElementById('aip-claude-default').value = fd.claude_model_default || 'claude-haiku-4-5-20251001';
+        if (document.getElementById('aip-claude-upgrade'))
+          document.getElementById('aip-claude-upgrade').value = fd.claude_model_upgrade || 'claude-sonnet-4-6';
+        if (document.getElementById('aip-shared-threshold'))
+          document.getElementById('aip-shared-threshold').textContent = (fd.model_threshold || 0);
+      }
+    } catch(e) { console.warn('Claude dual-model load fail', e); }
   }catch(e){ console.warn('AIP error', e); }
 }
 
