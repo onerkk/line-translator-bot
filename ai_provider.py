@@ -1520,7 +1520,19 @@ def _convert_openai_content_blocks_to_anthropic(blocks):
       不重排的情況不會犧牲品質 — 官方說
       "Images placed after text or interpolated with text still perform well"
       只是 image-first 略佳。
+    
+    v3.9.33 型別安全:
+      - None 輸入 → 回空 list
+      - 純字串輸入 → 包裝成單一 text block(避免字串被當 iterable 拆字元)
     """
+    # 型別安全
+    if blocks is None:
+        return []
+    if isinstance(blocks, str):
+        return [{"type": "text", "text": blocks}]
+    if not isinstance(blocks, list):
+        return [{"type": "text", "text": str(blocks)}]
+    
     result = []
     for b in blocks:
         if not isinstance(b, dict):

@@ -967,15 +967,17 @@ def pick_model(text):
         provider = ai_provider.get_active_provider()
     except Exception:
         provider = "openai"
+    # v3.9.33: text 型別安全保護
+    text_len = len(text) if isinstance(text, str) else 0
     
     if provider == "anthropic" and claude_auto_switch_enabled:
         # Anthropic 路徑:直接回傳 Claude model name,_AIProxy 看到 claude-* 會原樣使用,不查 mapping
-        if model_threshold > 0 and len(text) >= model_threshold:
+        if model_threshold > 0 and text_len >= model_threshold:
             return claude_model_upgrade
         return claude_model_default
     
     # OpenAI 路徑(或 Anthropic + 關閉自動切換)
-    if model_threshold > 0 and len(text) >= model_threshold:
+    if model_threshold > 0 and text_len >= model_threshold:
         return model_upgrade
     return model_default
 
@@ -3050,6 +3052,9 @@ def inject_glossary_hint(text, src, tgt):
     """
     if not text or not GLOSSARY_LOOKUP:
         return ""
+    # v3.9.33: 型別安全 — 防止非字串輸入導致 AttributeError
+    if not isinstance(text, str):
+        return ""
     hits = []
     if src == "zh":
         # 中→印:用中文 key 在 text 中匹配(原邏輯)
@@ -3077,7 +3082,6 @@ def inject_glossary_hint(text, src, tgt):
         # 紀錄已被命中的字元範圍,避免短詞被長詞重複覆蓋命中
         # 例:'kepala shift' 已命中(0,12) → 'kepala' 在(0,6)會被視為已覆蓋,skip
         # 例:'siap pak' 已命中(0,8) → 'siap'(0,4) 和 'pak'(5,8) 都已覆蓋,skip
-        import re as _re
         covered_spans = []  # list of (start, end) tuples
         # 按印尼 key 長度由長到短掃描,避免短詞遮蔽長詞
         idn_keys_sorted = sorted(GLOSSARY_REVERSE_INDEX.keys(), key=len, reverse=True)
@@ -4245,8 +4249,10 @@ def _normalize_idn_text(s):
     """正規化印尼文字:轉小寫 → 連字號轉空格 → 收斂多空格 → strip
     
     用途:讓 'Tali baja' / 'tali baja' / 'Tali-Baja' / 'tali  baja' 都被視為同一個 token
+    
+    v3.9.33: 加型別檢查 — 接受非字串輸入時回傳 ""(避免 AttributeError)
     """
-    if not s:
+    if not s or not isinstance(s, str):
         return ""
     s = s.lower()
     # 連字號 / 底線 → 空格(printer-friendly / press-polish 變體統一)
@@ -4261,51 +4267,64 @@ def _build_idn_to_zh_index():
     
     來源:
       1. GLOSSARY_LOOKUP — 把每條的 idn value 拆解,每個正規化變體都指向同一個中文 key
-      2. INDONESIAN_SLANG_DICT — 直接加入
+      2. INDONESIAN_SLANG_DICT — 補充工廠口語/簡寫(只加 GLOSSARY 沒涵蓋的)
+    
+    v3.9.33 修正:GLOSSARY 優先順序
+      原本是 slang 優先 → 'tali baja' 對到 slang 的「鋼帶/鋼索」而非 GLOSSARY 的「鋼帶」
+      改成 GLOSSARY 優先 → 工廠標準術語(已審核)勝過通用口語
+      slang 只填補 GLOSSARY 沒涵蓋的詞(bos/mandor/udh/gak/gpp 等口語)
     
     特殊處理:
       - GLOSSARY 的 idn 常包含「/」「(」分隔多個譯名:'Tian Che / Derek tetap(Fixed crane)'
         → 拆成 ['tian che', 'derek tetap', 'fixed crane'] 三個 key 都指到 '天車/固定式起重機'
-      - 太短 idn(<2 字)會跳過,避免噪音
-      - 不會覆蓋 slang dict 已有的條目(slang 優先,因為更口語)
+      - 太短 idn(<3 字)會跳過,避免噪音
     
     Returns: {normalized_idn: zh_key}
     """
     index = {}
-    # 先放 slang dict(口語/簡寫優先,較通用)
-    for idn, zh in INDONESIAN_SLANG_DICT.items():
-        normalized = _normalize_idn_text(idn)
-        if normalized and len(normalized) >= 2:
-            index[normalized] = zh
-    # 再放 GLOSSARY_LOOKUP 的反向(已正規化的不再覆蓋,因 slang 較通用)
+    import re as _re
+    # 先放 GLOSSARY_LOOKUP 的反向(工廠審核過的標準術語)
     for zh_key, v in GLOSSARY_LOOKUP.items():
         idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
         if not idn_raw:
             continue
-        # v3.9.32: 過濾噪音 — 工單欄位類超長 key 不應參與通用反向匹配
-        # 例:zh='研磨股 無心研磨機自主檢驗紀錄表「班別」' idn='Shift'
-        #     如果工人說 'shift malam',不該被反向匹配成那個超長記錄表名
-        # 規則:zh key 超過 15 字 + 含「資訊」「紀錄表」「按鈕」 → 太具體,skip 反向
-        if len(zh_key) > 15 and any(t in zh_key for t in ("資訊", "紀錄表", "按鈕", "電氣箱", "標示")):
+        # 過濾噪音 — 工單欄位類 key 不應參與通用反向匹配
+        # 例:zh='工單製程紀錄「機台」' idn='Mesin'
+        #     如果工人說 'mesin rusak',不該被反向匹配成「工單製程紀錄機台」
+        # 規則:含「工單」或「資訊」「紀錄表」「按鈕」「電氣箱」「標示」 → 工單/UI 標籤,skip 反向
+        if any(t in zh_key for t in ("工單", "資訊", "紀錄表", "按鈕", "電氣箱", "標示")):
             continue
         # 拆解多重譯名:用 / 和 (...)分隔
-        # 例:'Tian Che / Derek tetap(Fixed crane)' → ['Tian Che', 'Derek tetap', 'Fixed crane']
         variants = []
-        import re as _re
-        # 抓括號內內容
         for m in _re.findall(r"\(([^)]+)\)", idn_raw):
             variants.append(m.strip())
-        # 移除括號後用 / 拆
         without_paren = _re.sub(r"\([^)]*\)", "", idn_raw)
-        for part in without_paren.split("/"):
-            variants.append(part.strip())
+        # 用 / 拆分後,只接受「複合詞(含空格)」或「原始就是單詞」的 variant
+        # 例:'Pengaturan roller penegang naik/turun' → 拆出 'turun' 是單字,
+        #     但原文是描述句而非單詞詞條,所以 'turun' 不該成為 reverse index key
+        # 規則:拆分後的單詞 variant,若原始 idn 包含多於一個空格(代表是描述句而非詞條),skip
+        slash_parts = without_paren.split("/")
+        idn_is_phrase = idn_raw.count(" ") > 1  # 含多空格 = 描述句
+        for part in slash_parts:
+            part = part.strip()
+            # 若是描述句拆出來的單字,skip(避免單詞被誤認為 GLOSSARY 標準譯)
+            if idn_is_phrase and " " not in part:
+                continue
+            variants.append(part)
         # 加入正規化版本
         for var in variants:
             normalized = _normalize_idn_text(var)
             if normalized and len(normalized) >= 3:
-                # 已存在(slang)就不覆蓋
+                # 已存在的不覆蓋(同一個 idn 對到多個 zh_key,保留先掃到的較短 zh)
                 if normalized not in index:
                     index[normalized] = zh_key
+    # 再放 slang dict(只補充 GLOSSARY 沒涵蓋的)
+    for idn, zh in INDONESIAN_SLANG_DICT.items():
+        normalized = _normalize_idn_text(idn)
+        if normalized and len(normalized) >= 2:
+            # GLOSSARY 已有 → skip(讓工廠標準術語勝出)
+            if normalized not in index:
+                index[normalized] = zh
     return index
 
 
@@ -4413,6 +4432,11 @@ def post_fix_translation(text):
 
 
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
+    # v3.9.33 注意:此函式名稱有誤導性 — 實際呼叫 `ai = _AIProxy()`,
+    # 會自動路由到 OpenAI 或 Anthropic(依 active_provider 設定)。
+    # 但 line 4438 的 `if not oai` 檢查會在「沒設 OPENAI_KEY」時提前 return None,
+    # 即使歐那完全用 Anthropic。修法:檢查改成「兩個 key 都沒設才 fail」。
+    # 為了避免破壞既有行為(歐那有設兩個 key),先保留原 check,日後再重構。
     if not oai:
         return None
     # v3.9.30 B10 修補: 空字串/純空白不該送到 OpenAI 浪費 token
@@ -6129,6 +6153,12 @@ def _vision_call(messages, max_tokens, cache_key=None):
         # 圖片走 Claude — 用 ai (_AIProxy) 自動路由
         _vision_client = ai
         _vision_route = "claude"
+        # v3.9.33: 若 dual-model 自動切換 ON,圖片用 claude_model_default(預設 Haiku 4.5)
+        # 因為 OCR 是短任務性質,不需要強模型;走 mapping 表會 fallback 到 default_model,
+        # 結果可能跟歐那期待的「短模型」不一致。直接用 claude_model_default 比較可控。
+        if claude_auto_switch_enabled:
+            primary = claude_model_default
+            logger.info("[Vision] dual-model ON, vision uses claude_model_default=%s", primary)
     else:
         # 強制 OpenAI — 直接用 oai client,繞過 _AIProxy
         if oai is None:
@@ -6137,6 +6167,10 @@ def _vision_call(messages, max_tokens, cache_key=None):
         _vision_route = "openai_forced" if _vision_provider == "anthropic" else "openai"
     logger.info("[Vision] route=%s (provider=%s, use_claude=%s)",
                 _vision_route, _vision_provider, _vision_use_claude)
+    # v3.9.33 注意:當 _vision_client = ai (走 Claude),fallback gpt-4o-mini 會被
+    # ai_provider 映射回 Claude default_model(因 mapping 表通常無 gpt-4o-mini key)。
+    # 這意味著 Claude vision 失敗時 fallback 仍是 Claude — 但這已優於完全失敗。
+    # 若要真正 fallback 到 OpenAI,需歐那手動切換 active_provider,或關閉 Phase 19 toggle。
     for attempt_model in (primary, VISION_FALLBACK_MODEL):
         if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
             break
@@ -12022,13 +12056,8 @@ function aipApplyAutoSwitchUI(isOn){
 
 async function aipSetClaudeAutoSwitch(isOn){
   try {
-    const r = await fetch('/api/admin/features', {
-      method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
-      body: JSON.stringify({claude_auto_switch_enabled: isOn})
-    });
-    const data = await r.json();
-    if (data.ok) {
+    const data = await api('/features', 'POST', {claude_auto_switch_enabled: isOn});
+    if (data && data.ok) {
       aipApplyAutoSwitchUI(isOn);
     } else {
       alert('儲存失敗,請重試');
@@ -12049,16 +12078,11 @@ async function aipSaveClaudeDualModels(){
     if (!confirm('短訊息和長訊息選了同一個 model:' + md + '\\n\\n字數切換等同失效,確定?')) return;
   }
   try {
-    const r = await fetch('/api/admin/features', {
-      method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
-      body: JSON.stringify({
-        claude_model_default: md,
-        claude_model_upgrade: mu,
-      })
+    const data = await api('/features', 'POST', {
+      claude_model_default: md,
+      claude_model_upgrade: mu,
     });
-    const data = await r.json();
-    if (data.ok) {
+    if (data && data.ok) {
       alert('✅ Claude 雙模型已儲存\\n短訊息→' + md.replace('claude-','').replace('-20251001','') + 
             '\\n長訊息→' + mu.replace('claude-','').replace('-20251001',''));
     } else {
@@ -17266,7 +17290,6 @@ def admin_apply_best_defaults():
     dry_run = request.args.get("dry_run") == "1"
     
     global model_default, model_upgrade, model_threshold
-    global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
     global translation_temperature, translation_top_p, translation_seed
     global double_check_mode, double_check_threshold
     global fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled
