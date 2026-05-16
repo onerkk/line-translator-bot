@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2.3 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.4 / 2026-05-15)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -48,6 +48,17 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.3 / 2026-05-15)
                                           官方根據:「reduce markdown in prompt → reduce markdown in output」
 ✅ Phase 21: OCR Strict Layout         — 偵測訊息含圖片時,system prompt 加 XML 嚴格保版面指令
                                           (行數 / 編號 / 縮排 / 表格欄位完全對應原文)
+
+【v3.2.4 D8 新增 — Anthropic 官方 prompting 最佳實踐三件套(2026-05-15)】
+✅ Phase 22: Assistant Prefill          — 預填回應開頭跳過 preamble(歐那場景預設 OFF)
+                                          自動偵測 model(Sonnet 4.6 / Opus 4.6+ 不支援,跳過)
+                                          官方:「Prefill bypasses Claude's friendly preamble」
+✅ Phase 23: CoT Thinking Tag           — XML 引導 Claude 內部思考(Haiku 4.5 不支援 Extended
+                                          Thinking,靠這個補足)
+                                          官方:「Chain-of-thought via XML consistently improves accuracy」
+✅ Phase 24: Strong Role Prompting     — 強化 <role> 從「翻譯助手」變「20 年資深中印工廠譯者」
+                                          官方:「Detailed role with specific expertise produces
+                                          better quality responses」
 
 【作者】onerkk@gmail.com
 """
@@ -130,6 +141,13 @@ DEFAULT_CONFIG = {
                                          # 禁:**粗體** *斜體* `code` # 標題 --- 分隔線 markdown table
         "ocr_strict_layout": True,      # Phase 21 — OCR 翻譯場景嚴格保版面(行數 / 編號 / 縮排對齊)
                                          # 偵測訊息含 image block 才啟動
+        # === D8 v3.2.4 新增 ===
+        "assistant_prefill": False,     # Phase 22 — Assistant Prefill(預填回應開頭)
+                                         # 預設 OFF;歐那要時填 assistant_prefill_text 字串
+                                         # 自動偵測 model(Sonnet 4.6 / Opus 4.6+ 跳過)
+        "assistant_prefill_text": "",   # Phase 22 — 自訂 prefill 文字(空字串=不啟用)
+        "cot_thinking_tag": True,       # Phase 23 — XML CoT 引導(讓 Haiku 也能思考)
+        "role_strong": True,            # Phase 24 — 強化 Role(20 年資深譯者身分)
     },
     "last_updated": "",
 }
@@ -391,6 +409,33 @@ _MODEL_CACHE_MIN_TOKENS = {
     "claude-opus-4-1":          1024,
     "claude-sonnet-3-7":        1024,
 }
+
+
+# === v3.2.4 Phase 22: Assistant Prefill ===
+# Anthropic 官方明文(2026-02 起):部分模型不支援 prefill,送出會 400
+# https://platform.claude.com/docs/en/build-with-claude/working-with-messages
+# "Prefilling is not supported on Claude Mythos Preview, Claude Opus 4.7,
+#  Claude Opus 4.6, and Claude Sonnet 4.6."
+_MODELS_NO_PREFILL = (
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-mythos",
+)
+
+
+def _supports_prefill(anthropic_model):
+    """Check whether the given Anthropic model supports assistant prefill.
+    
+    回傳 True/False。歐那 Haiku 4.5 → True,Sonnet 4.6 / Opus 4.6+ → False
+    """
+    if not anthropic_model or not isinstance(anthropic_model, str):
+        return False
+    m = anthropic_model.lower()
+    for blocked in _MODELS_NO_PREFILL:
+        if blocked in m:
+            return False
+    return True
 
 
 def _get_cache_min_tokens(anthropic_model):
@@ -859,7 +904,8 @@ def _build_stop_sequences():
 # ═══════════════════════════════════════════════════════════════════
 # Phase 5: XML System Prompt Wrapping
 # ═══════════════════════════════════════════════════════════════════
-def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False):
+def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
+                             cot_tag=False, role_strong=False):
     """把純文字 system prompt 包成 XML 結構,Claude 遵循度提升 20-30%
     
     根據 Anthropic 官方 prompt engineering guide:
@@ -874,15 +920,20 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False):
     [v3.2.3 條件加入]
     <line_message_format>LINE 不渲染 markdown,禁止輸出 ** # - 等廢字元</line_message_format>
     <layout_preservation>OCR 場景:行數/編號/縮排嚴格對齊原文</layout_preservation>
+    [v3.2.4 條件加入]
+    <thinking_protocol>CoT 引導(讓 Haiku 也能思考,Sonnet/Opus 已有 Extended Thinking)</thinking_protocol>
     
     Parameters:
         raw_system: 原始 system prompt 文字
-        line_plain (v3.2.3 Phase 20): 加入 LINE 純文字輸出規則,防 markdown 廢字元污染
-        ocr_strict (v3.2.3 Phase 21): 加入 OCR 嚴格保版面規則(行數/編號/縮排)
+        line_plain (Phase 20): 加入 LINE 純文字輸出規則
+        ocr_strict (Phase 21): 加入 OCR 嚴格保版面規則
+        cot_tag (Phase 23): 加 <thinking></thinking> 區段引導 CoT
+                             對 Haiku 4.5 特別有用(它不支援 Extended Thinking)
+        role_strong (Phase 24): 強化 <role> 從「工廠翻譯助手」變「20 年資深中印工廠譯者」
     
     官方根據:
-        "The formatting style used in your prompt may influence Claude's response style.
-         If you want minimal markdown, reduce markdown in your prompt."
+        "The formatting style used in your prompt may influence Claude's response style."
+        "Detailed role with specific expertise produces better quality responses."
         — Anthropic prompt-engineering best practices, 2026
     """
     if not raw_system:
@@ -892,8 +943,24 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False):
     if "<role>" in raw_system or "<task>" in raw_system:
         return raw_system
 
+    # v3.2.4 Phase 24: 強化 role
+    # 官方:「Detailed role with specific expertise produces better quality responses」
+    # 對歐那場景:給 Claude「20 年工廠資深譯者」身分,輸出更貼近工廠用語
+    if role_strong:
+        role_content = (
+            "你是擁有 20 年實務經驗的台灣不銹鋼冷抽棒工廠資深中印雙語譯者。\n"
+            "專長:\n"
+            "- 中文 ↔ 印尼文工廠術語精準翻譯(冷抽機、矯直機、砂光機、研磨機)\n"
+            "- 熟悉印尼工人的 Bahasa Gaul 口語、簡寫(udh/gak/bgt/bos/mandor)\n"
+            "- 理解台灣中文工廠用語(早班/夜班、工單、料號、爐號、退料、補料)\n"
+            "- 翻譯風格:直白、不加修飾,工人能立刻聽懂\n"
+            "- 對印尼工人說話保持尊重(用 Pak/Bu/Mas/Mbak 等敬稱原樣保留)\n"
+        )
+    else:
+        role_content = "你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。"
+
     parts = [
-        "<role>\n你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。\n</role>\n",
+        "<role>\n" + role_content + "\n</role>\n",
         "<task>\n忠實翻譯使用者訊息,不增刪內容,不加註解。\n</task>\n",
         "<rules>\n" + raw_system.strip() + "\n</rules>\n",
         "<glossary_priority>\n"
@@ -947,6 +1014,26 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False):
             "7. 模糊看不清的字 → 標記 [模糊] 或 [tidak jelas],不要編造\n"
             "8. 人名、公司名、料號、爐號 → 原樣保留,不翻譯\n"
             "</layout_preservation>\n"
+        )
+
+    # v3.2.4 Phase 23: CoT thinking tag
+    # 對 Haiku 4.5 特別有用(它不支援 Extended Thinking,但會遵循 <thinking> 引導)
+    # Sonnet/Opus 已有 Extended Thinking,加這個 tag 是雙重保險
+    # 官方根據:「Chain-of-thought via XML tags consistently improves accuracy on harder problems」
+    # 風險:輸出會多出 <thinking>...</thinking> 段落,但 stop_sequences 可包含「</thinking>」吃掉
+    # 改進:用「先思考再翻譯,但只輸出最終翻譯」的引導,Claude 會在內部思考但輸出純翻譯
+    if cot_tag:
+        parts.append(
+            "<thinking_protocol>\n"
+            "翻譯前,先在心中執行下列檢查(不要輸出思考過程):\n"
+            "1. 識別原文語言 → 確認翻譯方向(中→印 / 印→中)\n"
+            "2. 偵測有沒有工廠術語 → 優先用 glossary 標準譯名\n"
+            "3. 偵測口語/簡寫(udh/gak/bgt/bos)→ 翻成對應的標準中文\n"
+            "4. 偵測敬稱(Pak/Bu/Mas/Mbak)→ 原樣保留不翻譯\n"
+            "5. 偵測人名/料號/爐號/公司名 → 原樣保留\n"
+            "6. 確定翻譯語氣(工廠現場用口語,工單用正式)\n"
+            "完成內部檢查後,直接輸出純翻譯,不要輸出檢查過程。\n"
+            "</thinking_protocol>\n"
         )
 
     return "\n".join(parts)
@@ -1091,12 +1178,18 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     # OCR 嚴格保版面只在有視覺輸入時觸發
     _apply_ocr_strict = use_ocr_strict and _has_visual_input
 
-    # Phase 5 + 20 + 21: XML 包裝 system prompt(支援 line_plain / ocr_strict 模式)
+    # v3.2.4 Phase 23+24
+    use_cot_tag = features.get("cot_thinking_tag", True)
+    use_role_strong = features.get("role_strong", True)
+
+    # Phase 5 + 20 + 21 + 23 + 24: XML 包裝 system prompt
     if use_xml and system_text:
         system_text = _wrap_system_prompt_xml(
             system_text,
             line_plain=use_line_plain,
             ocr_strict=_apply_ocr_strict,
+            cot_tag=use_cot_tag,
+            role_strong=use_role_strong,
         )
 
     # 連續 same-role 合併(Phase 6 few-shot 自動 OK,因為 user→assistant 交替)
@@ -1133,6 +1226,43 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                         merged[i]["content"] = grounding_blocks + cur_content
                     grounding_used = True
                     break
+
+    # ─── Step 2.5: v3.2.4 Phase 22: Assistant Prefill ───
+    # Anthropic 官方:prefill assistant turn 可跳過 preamble、強制輸出格式
+    # https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prefill-claudes-response
+    #
+    # 重要限制:
+    #   - Sonnet 4.6 / Opus 4.6+ / Opus 4.7 / Mythos 不支援(送出會 400)
+    #     歐那雙模型場景:Haiku 4.5 可用,Sonnet 4.6 跳過
+    #   - prefill 內容不能 trailing whitespace
+    #   - 必須是最後一個 message
+    #   - 含圖片場景不 prefill(避免 vision 行為被干擾)
+    #
+    # 預設 OFF,歐那要時可在後台填自訂 prefill text(例如「翻譯:」)
+    # 但建議**不填**,因 Phase 4 stop_sequences + Phase 5 XML output_format 已有效防前綴
+    prefill_applied = False
+    use_prefill = features.get("assistant_prefill", False)
+    prefill_text = features.get("assistant_prefill_text", "")
+    if use_prefill and prefill_text and isinstance(prefill_text, str):
+        if _supports_prefill(anthropic_model):
+            # 偵測上一條 user message 是純文字
+            last_user_is_text = False
+            if merged and merged[-1].get("role") == "user":
+                last_content = merged[-1].get("content")
+                if isinstance(last_content, str):
+                    last_user_is_text = True
+                elif isinstance(last_content, list):
+                    has_visual = any(
+                        isinstance(b, dict) and b.get("type") in ("image", "document")
+                        for b in last_content
+                    )
+                    last_user_is_text = not has_visual
+            if last_user_is_text:
+                # rstrip 確保無 trailing whitespace(官方明文禁止,否則 400)
+                clean_prefill = prefill_text.rstrip()
+                if clean_prefill:
+                    merged.append({"role": "assistant", "content": clean_prefill})
+                    prefill_applied = True
 
     # ─── Step 3: 組裝 call_kwargs ───
     call_kwargs = {
@@ -1334,6 +1464,9 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         "line_plain_text_mode": use_xml and use_line_plain,         # 防 LINE markdown 廢字元
         "has_visual_input": _has_visual_input,                       # 偵測到圖片/PDF
         "ocr_strict_layout_applied": use_xml and _apply_ocr_strict,  # OCR 嚴格保版面實際生效
+        # v3.2.4 Phase 22+23
+        "prefill_applied": prefill_applied,                          # Assistant Prefill 是否實際套用
+        "prefill_supports_model": _supports_prefill(anthropic_model),  # 此 model 是否支援 prefill
     }
     return result
 
@@ -1420,6 +1553,8 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
             system_text,
             line_plain=features.get("line_plain_text_mode", True),
             ocr_strict=features.get("ocr_strict_layout", True) and _has_visual_input,
+            cot_tag=features.get("cot_thinking_tag", True),
+            role_strong=features.get("role_strong", True),
         )
 
     # Grounding

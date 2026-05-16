@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.33-0515-claude-dual-models"
+VERSION = "v3.9.34-0515-claude-best-practices"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -11126,6 +11126,16 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>📐 <strong>OCR 嚴格保版面</strong> <span style="color:#10b981;font-size:10px">工單行/欄/編號對齊</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-ocrlayout" onchange="aipToggleFeature('ocr_strict_layout',this.checked)"><span class="slider"></span></label>
     </div>
+    <!-- v3.2.4 D8 Phase 23: CoT Thinking Tag(讓 Haiku 也能思考) -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🧩 <strong>CoT Thinking Tag</strong> <span style="color:#10b981;font-size:10px">補 Haiku 思考能力</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cottag" onchange="aipToggleFeature('cot_thinking_tag',this.checked)"><span class="slider"></span></label>
+    </div>
+    <!-- v3.2.4 D8 Phase 24: 強化 Role -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>👷 <strong>強化 Role</strong> <span style="color:#10b981;font-size:10px">20 年資深譯者身分</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-rolestrong" onchange="aipToggleFeature('role_strong',this.checked)"><span class="slider"></span></label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
@@ -11141,6 +11151,20 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
       <span>📦 <strong>Files API Glossary</strong> <span id="aip-files-status" style="color:#888;font-size:10px">未上傳</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-filesapi" onchange="aipToggleFeature('files_api_glossary',this.checked)"><span class="slider"></span></label>
+    </div>
+    <!-- v3.2.4 D8 Phase 22: Assistant Prefill(僅 Haiku 4.5 可用) -->
+    <div style="margin-top:8px;padding:8px;background:#0a0a1a;border-radius:6px;border:1px solid #2a2a3e">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span>📝 <strong>Assistant Prefill</strong> <span style="color:#e0a437;font-size:10px">僅 Haiku 4.5 可用</span></span>
+        <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-prefill" onchange="aipToggleFeature('assistant_prefill',this.checked)"><span class="slider"></span></label>
+      </div>
+      <input type="text" id="aip-prefill-text" placeholder="例如:翻譯:&#10;留空=不啟用(僅勾上方 toggle 不夠)" style="width:100%;padding:6px;border-radius:4px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;margin-bottom:6px">
+      <button onclick="aipSavePrefillText()" style="width:100%;padding:6px;border-radius:4px;border:none;background:#3a3a4e;color:#fff;font-size:11px;cursor:pointer">儲存 Prefill 文字</button>
+      <div style="font-size:10px;color:#888;margin-top:4px;line-height:1.4">
+        💡 預填回應開頭,Claude 直接從這裡續寫,跳過「翻譯:」「Catatan:」等前綴。<br>
+        ⚠️ Sonnet 4.6 / Opus 4.6+ 不支援(會 400),系統會自動跳過。<br>
+        ⚠️ 圖片翻譯場景不啟用。
+      </div>
     </div>
   </div>
   <div style="margin-top:12px;padding:8px;background:#0a0a1a;border-radius:6px;color:#888;font-size:11px;line-height:1.5">
@@ -11823,6 +11847,10 @@ async function aipLoadStatus(){
         // v3.2.3 D7 新增
         'aip-toggle-lineplain':   'line_plain_text_mode',
         'aip-toggle-ocrlayout':   'ocr_strict_layout',
+        // v3.2.4 D8 新增
+        'aip-toggle-cottag':      'cot_thinking_tag',
+        'aip-toggle-rolestrong':  'role_strong',
+        'aip-toggle-prefill':     'assistant_prefill',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);
@@ -11833,6 +11861,9 @@ async function aipLoadStatus(){
       if (effortEl && f.thinking_effort) effortEl.value = f.thinking_effort;
       const dispEl = document.getElementById('aip-thinking-display');
       if (dispEl && f.thinking_display) dispEl.value = f.thinking_display;
+      // v3.2.4 D8 Phase 22: prefill text input
+      const prefillTextEl = document.getElementById('aip-prefill-text');
+      if (prefillTextEl) prefillTextEl.value = f.assistant_prefill_text || '';
       // glossary 數量顯示
       const glossEl = document.getElementById('aip-feat-glossary-size');
       if (glossEl) {
@@ -12104,6 +12135,29 @@ async function aipSaveClaudeDualModels(){
             '\\n長訊息→' + mu.replace('claude-','').replace('-20251001',''));
     } else {
       alert('❌ 儲存失敗');
+    }
+  } catch(e) {
+    alert('網路錯誤:' + e);
+  }
+}
+
+// v3.2.4 D8 Phase 22: 儲存 Assistant Prefill 文字
+async function aipSavePrefillText(){
+  const el = document.getElementById('aip-prefill-text');
+  if (!el) return;
+  const text = el.value;  // 不 trim,讓 backend rstrip
+  try {
+    // 用 ai-provider/features endpoint(不是 admin/features),因為這是 ai_provider feature
+    const r = await fetch('/api/admin/ai-provider/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({features: {assistant_prefill_text: text}})
+    });
+    const data = await r.json();
+    if (data && data.ok) {
+      alert('✅ Prefill 文字已儲存:' + (text || '(空,等同關閉)'));
+    } else {
+      alert('❌ 儲存失敗:' + (data.message || ''));
     }
   } catch(e) {
     alert('網路錯誤:' + e);
