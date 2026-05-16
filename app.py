@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.34-0515-claude-best-practices"
+VERSION = "v3.9.36-0516-max-bilingual-bot"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -676,20 +676,25 @@ TRANSLATION_OPTIMAL_REASONING = {
 
 MODEL_CAPABILITIES = {
     # GPT-5 / 5.4 / 5.5 — reasoning models with minimal/low/medium/high effort
+    # v3.9.35: prompt_cache_retention 24h 支援:gpt-5.4 (確認), gpt-5.5 (默認 24h)
+    #          gpt-5 / gpt-5-mini / gpt-5-nano 官方未明列,保守設 False(送了會 400)
     "gpt5_minimal": {
         "temperature": False, "top_p": False, "max_tokens": False,
         "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
         "stop": False, "structured_output": True, "metadata": True,
         "prompt_cache_key": True, "reasoning_effort": True, "seed": False,
         "verbosity": True,
+        "prompt_cache_retention": False,  # gpt-5 / 5-mini / 5-nano 保守設 False
     },
     # GPT-5.1 / 5.2 — newer reasoning models with none/low/medium/high
+    # 官方確認 5.1+ 支援 24h cache retention
     "gpt5_none": {
         "temperature": False, "top_p": False, "max_tokens": False,
         "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
         "stop": False, "structured_output": True, "metadata": True,
         "prompt_cache_key": True, "reasoning_effort": True, "seed": False,
         "verbosity": True,
+        "prompt_cache_retention": True,  # ✅ 24h cache 支援
     },
     "oseries_reasoning": {
         "temperature": False, "top_p": False, "max_tokens": False,
@@ -697,6 +702,7 @@ MODEL_CAPABILITIES = {
         "stop": False, "structured_output": False, "metadata": True,
         "prompt_cache_key": False, "reasoning_effort": True, "seed": False,
         "verbosity": False,
+        "prompt_cache_retention": False,
     },
     "gpt4_classic": {
         "temperature": True, "top_p": True, "max_tokens": True,
@@ -704,6 +710,7 @@ MODEL_CAPABILITIES = {
         "stop": True, "structured_output": True, "metadata": True,
         "prompt_cache_key": True, "reasoning_effort": False, "seed": True,
         "verbosity": False,
+        "prompt_cache_retention": False,  # gpt-4 不支援
     },
     "unknown": {
         "temperature": True, "top_p": True, "max_tokens": True,
@@ -711,12 +718,27 @@ MODEL_CAPABILITIES = {
         "stop": True, "structured_output": True, "metadata": True,
         "prompt_cache_key": True, "reasoning_effort": False, "seed": True,
         "verbosity": False,
+        "prompt_cache_retention": False,
     },
 }
 
 def model_supports(model_name, capability):
     family = _model_family(model_name)
-    return MODEL_CAPABILITIES.get(family, MODEL_CAPABILITIES["unknown"]).get(capability, False)
+    base_support = MODEL_CAPABILITIES.get(family, MODEL_CAPABILITIES["unknown"]).get(capability, False)
+    
+    # v3.9.35: prompt_cache_retention 24h 精準偵測
+    # family 級設 False 是保守預設,這裡為已知支援的 model 開啟
+    # 官方確認支援:gpt-5.1+, gpt-5.2+, gpt-5.4 (含 mini/nano), gpt-5.5 (默認 24h)
+    # 官方未明列(保守 False):gpt-5, gpt-5-mini, gpt-5-nano
+    if capability == "prompt_cache_retention" and not base_support:
+        if not model_name:
+            return False
+        m = model_name.lower()
+        # 已確認支援的精準前綴
+        if m.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1")):
+            return True
+        # 其他 GPT-5 系列保守 False
+    return base_support
 
 def optimal_reasoning_for_translation(model_name):
     """v3.9.8: Get optimal reasoning_effort for translation tasks.
@@ -752,6 +774,14 @@ prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% d
 # rate from ~60% → ~87% in OpenAI's published cookbook benchmark.
 # Kept independently toggleable; default ON because it's free upside.
 prompt_cache_key_enabled = True
+
+# v3.9.35: OpenAI 24h Extended Prompt Cache Retention
+# 預設 OFF(保守) — 切到 ON 後,所有支援的 OpenAI model(gpt-5.1+, 5.2+, 5.4+, 5.5+)
+# 都會自動傳 prompt_cache_retention="24h",cache TTL 從 5-10 分鐘延長到 24 小時。
+# 對歐那 LINE bot 工廠 24/7 換班場景:夜班 dead time 後 cache 仍存活,早班直接命中。
+# 不支援的 model(gpt-5/5-mini/5-nano, gpt-4*)會自動 skip(防 400)。
+# 預估省下:夜班→早班 cache hit 從 0% → ~90%,輸入 token 成本省 70-90%。
+openai_24h_cache_enabled = False
 
 
 def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
@@ -824,6 +854,12 @@ def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0,
         kwargs["verbosity"] = "low"
     if cache_key and model_supports(model_name, "prompt_cache_key"):
         kwargs["prompt_cache_key"] = cache_key
+    # v3.9.35: 24h Extended Cache Retention
+    # 對歐那場景關鍵:LINE bot 工廠 24/7 換班,夜班 dead time 後 cache 仍存活
+    # 預設 in-memory 只 5-10 分鐘,夜班 OFF 後早班 cache miss
+    # 24h 啟用後省 90% input token,只在已知支援的 model 啟用(防 400)
+    if openai_24h_cache_enabled and model_supports(model_name, "prompt_cache_retention"):
+        kwargs["prompt_cache_retention"] = "24h"
     return kwargs
 
 
@@ -3485,6 +3521,9 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "id", "zh", "repair")
             if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
                 repair_kwargs["prompt_cache_key"] = _ck_r
+            # v3.9.35: 24h Extended Cache Retention(repair)
+            if openai_24h_cache_enabled and model_supports(_rmodel, "prompt_cache_retention"):
+                repair_kwargs["prompt_cache_retention"] = "24h"
         except Exception:
             pass
         r = ai.chat.completions.create(**repair_kwargs)
@@ -3836,6 +3875,9 @@ def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
             _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "zh", "id", "repair")
             if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
                 repair_kwargs["prompt_cache_key"] = _ck_r
+            # v3.9.35: 24h Extended Cache Retention(zh-id repair)
+            if openai_24h_cache_enabled and model_supports(_rmodel, "prompt_cache_retention"):
+                repair_kwargs["prompt_cache_retention"] = "24h"
         except Exception:
             pass
         r = ai.chat.completions.create(**repair_kwargs)
@@ -5373,6 +5415,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                     _kwargs["prompt_cache_key"] = _ck
             except Exception:
                 pass
+        # v3.9.35: 24h Extended Cache Retention(主翻譯)
+        # 工廠 24/7 夜班 dead time 後 cache 仍存活,早班 cache hit
+        if openai_24h_cache_enabled and model_supports(_model, "prompt_cache_retention"):
+            _kwargs["prompt_cache_retention"] = "24h"
         try:
             _event_log_write("translate_call_start", {
                 "model": _model,
@@ -11136,6 +11182,16 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <span>👷 <strong>強化 Role</strong> <span style="color:#10b981;font-size:10px">20 年資深譯者身分</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-rolestrong" onchange="aipToggleFeature('role_strong',this.checked)"><span class="slider"></span></label>
     </div>
+    <!-- v3.2.5 D9 Phase 25: <translation> output tag -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🏷️ <strong>Output Tag 包裝</strong> <span style="color:#e0a437;font-size:10px">徹底解決前綴問題</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-outputtag" onchange="aipToggleFeature('output_translation_tag',this.checked)"><span class="slider"></span></label>
+    </div>
+    <!-- v3.2.5 D9 Phase 26: success_criteria -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
+      <span>🎯 <strong>Success Criteria</strong> <span style="color:#10b981;font-size:10px">官方:明確成功標準</span></span>
+      <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-success" onchange="aipToggleFeature('success_criteria',this.checked)"><span class="slider"></span></label>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #2a2a3e">
       <span>⏰ <strong>1-Hour Cache</strong> <span style="color:#888;font-size:10px">省更多錢</span></span>
       <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-cache1h" onchange="aipToggleFeature('extended_cache_1h',this.checked)"><span class="slider"></span></label>
@@ -11379,6 +11435,20 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
+<!-- v3.9.35: OpenAI 24h Extended Cache Retention -->
+<div style="margin-top:10px;padding:8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="font-size:13px;color:#e0e0e0">⏰ <strong>24 小時延長 Cache</strong></div>
+      <div style="font-size:11px;color:#888;margin-top:2px">夜班 dead time 後 cache 仍存活,工廠 24/7 場景省 70-90%</div>
+    </div>
+    <label class="toggle" style="transform:scale(0.8)"><input type="checkbox" id="openai24hCache" onchange="saveOpenAI24hCache(this.checked)"><span class="slider"></span></label>
+  </div>
+  <div style="font-size:10px;color:#666;margin-top:6px;line-height:1.4">
+    ⚠️ 僅 GPT-5.1/5.2/5.4/5.5 系列支援。其他 model 自動 skip(不會 400)。<br>
+    💡 預設 OFF,因為部分 model 在某些區域可能不支援。先測試確認 cache hit 再開。
+  </div>
+</div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
 <b>📋 模型選擇指引(v3.9.14 後皆已最佳化)</b><br>
 🔹 <b>gpt-4.1-mini</b>($0.40 / $1.60)— 經典款,翻譯特化,Intento 2025 評測 #1。便宜、快、對範例順從。<br>
@@ -11851,6 +11921,9 @@ async function aipLoadStatus(){
         'aip-toggle-cottag':      'cot_thinking_tag',
         'aip-toggle-rolestrong':  'role_strong',
         'aip-toggle-prefill':     'assistant_prefill',
+        // v3.2.5 D9 新增
+        'aip-toggle-outputtag':   'output_translation_tag',
+        'aip-toggle-success':     'success_criteria',
       };
       Object.keys(toggleMap).forEach(function(id){
         const el = document.getElementById(id);
@@ -13610,6 +13683,9 @@ async function _loadFeatures(gid){
       document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-4-6';
     if(document.getElementById('aip-shared-threshold'))
       document.getElementById('aip-shared-threshold').textContent=(d.model_threshold||0);
+    // v3.9.35: OpenAI 24h cache toggle
+    if(document.getElementById('openai24hCache'))
+      document.getElementById('openai24hCache').checked=!!d.openai_24h_cache_enabled;
   }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
@@ -13827,6 +13903,19 @@ function saveModelSettings(){
       // v3.9.33: 同步更新 Claude 區的字數門檻顯示
       if(document.getElementById('aip-shared-threshold'))
         document.getElementById('aip-shared-threshold').textContent=mt;
+    }
+  });
+}
+
+// v3.9.35: OpenAI 24h Extended Cache Retention
+function saveOpenAI24hCache(enabled){
+  api('/features','POST',{openai_24h_cache_enabled: enabled}).then(function(d){
+    if(d && d.ok){
+      toast(enabled ? '✅ 24h cache 已啟用' : '24h cache 已關閉');
+    } else {
+      toast('❌ 儲存失敗');
+      var el=document.getElementById('openai24hCache');
+      if(el) el.checked=!enabled;
     }
   });
 }
@@ -14410,6 +14499,8 @@ def _do_save_impl():
             "claude_model_default": claude_model_default,
             "claude_model_upgrade": claude_model_upgrade,
             "claude_auto_switch_enabled": claude_auto_switch_enabled,
+            # v3.9.35: OpenAI 24h Extended Cache Retention
+            "openai_24h_cache_enabled": openai_24h_cache_enabled,
             "vision_model": VISION_MODEL,
             "user_pictures": user_pictures,
             "pw1_text": pw1_text,
@@ -14447,6 +14538,7 @@ def load_settings():
     global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global openai_24h_cache_enabled
     global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -14694,6 +14786,9 @@ def load_settings():
             claude_model_upgrade = str(data["claude_model_upgrade"])
         if "claude_auto_switch_enabled" in data:
             claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
+        # v3.9.35: OpenAI 24h cache retention
+        if "openai_24h_cache_enabled" in data:
+            openai_24h_cache_enabled = bool(data["openai_24h_cache_enabled"])
         # v3.9: vision (照片分析) model
         if "vision_model" in data:
             VISION_MODEL = str(data["vision_model"])
@@ -15511,6 +15606,7 @@ def api_admin_features():
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global openai_24h_cache_enabled
     global VISION_MODEL
     if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
@@ -15601,6 +15697,9 @@ def api_admin_features():
                 claude_model_upgrade = str(data["claude_model_upgrade"])
             if "claude_auto_switch_enabled" in data:
                 claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
+            # v3.9.35: OpenAI 24h cache retention
+            if "openai_24h_cache_enabled" in data:
+                openai_24h_cache_enabled = bool(data["openai_24h_cache_enabled"])
             # v3.9: vision (照片分析) model selectable from admin panel
             if "vision_model" in data:
                 VISION_MODEL = str(data["vision_model"])
@@ -15676,6 +15775,8 @@ def api_admin_features():
         "claude_model_default": claude_model_default,
         "claude_model_upgrade": claude_model_upgrade,
         "claude_auto_switch_enabled": claude_auto_switch_enabled,
+        # v3.9.35: OpenAI 24h cache retention
+        "openai_24h_cache_enabled": openai_24h_cache_enabled,
         "vision_model": VISION_MODEL,
         "sender_name": sender_name,
         "sender_icon": sender_icon,

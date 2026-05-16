@@ -1,5 +1,5 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2.4 / 2026-05-15)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.5 / 2026-05-16)
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -59,6 +59,15 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.4 / 2026-05-15)
 ✅ Phase 24: Strong Role Prompting     — 強化 <role> 從「翻譯助手」變「20 年資深中印工廠譯者」
                                           官方:「Detailed role with specific expertise produces
                                           better quality responses」
+
+【v3.2.5 D9 新增 — Anthropic 官方「Output Tag + Success Criteria」終局(2026-05-16)】
+✅ Phase 25: Output Translation Tag    — 強制 Claude 把翻譯包在 <translation>...</translation> tag
+                                          內,後端 regex 抽 tag 內內容,徹底解決前綴問題。
+                                          官方明文:「Having output in XML tags allows reliable extraction」
+                                          預設 OFF;歐那實測後可開啟取代 stop_sequences。
+✅ Phase 26: Success Criteria          — system prompt 加 <success_criteria> 6 條成功標準
+                                          官方明文:「State the expected outcome and success criteria」
+                                          預設 ON,直接影響 Claude 翻譯品質判斷基準。
 
 【作者】onerkk@gmail.com
 """
@@ -148,6 +157,12 @@ DEFAULT_CONFIG = {
         "assistant_prefill_text": "",   # Phase 22 — 自訂 prefill 文字(空字串=不啟用)
         "cot_thinking_tag": True,       # Phase 23 — XML CoT 引導(讓 Haiku 也能思考)
         "role_strong": True,            # Phase 24 — 強化 Role(20 年資深譯者身分)
+        # === D9 v3.2.5 新增 ===
+        "output_translation_tag": False, # Phase 25 — 強制 <translation>...</translation> XML 包裝
+                                         # 預設 OFF,因 Claude 已有 stop_sequences + plain text mode
+                                         # 開啟後徹底解決前綴問題,但需後端 parse tag
+        "success_criteria": True,       # Phase 26 — system prompt 加 <success_criteria> 段
+                                         # 官方:「State expected outcome and success criteria」
     },
     "last_updated": "",
 }
@@ -905,7 +920,8 @@ def _build_stop_sequences():
 # Phase 5: XML System Prompt Wrapping
 # ═══════════════════════════════════════════════════════════════════
 def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
-                             cot_tag=False, role_strong=False):
+                             cot_tag=False, role_strong=False,
+                             output_tag=False, success_criteria=False):
     """把純文字 system prompt 包成 XML 結構,Claude 遵循度提升 20-30%
     
     根據 Anthropic 官方 prompt engineering guide:
@@ -922,20 +938,20 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
     <layout_preservation>OCR 場景:行數/編號/縮排嚴格對齊原文</layout_preservation>
     [v3.2.4 條件加入]
     <thinking_protocol>CoT 引導(讓 Haiku 也能思考,Sonnet/Opus 已有 Extended Thinking)</thinking_protocol>
+    [v3.2.5 條件加入]
+    <success_criteria>明確的成功標準(官方建議:State expected outcome)</success_criteria>
+    <output_tag>強制 Claude 把翻譯包在 <translation> tag 內,後端 parse</output_tag>
     
     Parameters:
         raw_system: 原始 system prompt 文字
-        line_plain (Phase 20): 加入 LINE 純文字輸出規則
-        ocr_strict (Phase 21): 加入 OCR 嚴格保版面規則
-        cot_tag (Phase 23): 加 <thinking></thinking> 區段引導 CoT
-                             對 Haiku 4.5 特別有用(它不支援 Extended Thinking)
-        role_strong (Phase 24): 強化 <role> 從「工廠翻譯助手」變「20 年資深中印工廠譯者」
-    
-    官方根據:
-        "The formatting style used in your prompt may influence Claude's response style."
-        "Detailed role with specific expertise produces better quality responses."
-        — Anthropic prompt-engineering best practices, 2026
-    """
+        line_plain: 加入 LINE 純文字輸出規則
+        ocr_strict: 加入 OCR 嚴格保版面規則
+        cot_tag: 加 <thinking></thinking> 區段引導 CoT
+        role_strong: 強化 <role>
+        output_tag (v3.2.5 Phase 25): 強制 <translation>...</translation> XML 包裝
+                                       後端 parse tag 內內容,徹底解決前綴問題
+        success_criteria (v3.2.5 Phase 26): 加 <success_criteria> 段
+                                              官方:「State expected outcome and success criteria」"""
     if not raw_system:
         return raw_system
 
@@ -944,8 +960,6 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
         return raw_system
 
     # v3.2.4 Phase 24: 強化 role
-    # 官方:「Detailed role with specific expertise produces better quality responses」
-    # 對歐那場景:給 Claude「20 年工廠資深譯者」身分,輸出更貼近工廠用語
     if role_strong:
         role_content = (
             "你是擁有 20 年實務經驗的台灣不銹鋼冷抽棒工廠資深中印雙語譯者。\n"
@@ -959,6 +973,29 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
     else:
         role_content = "你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。"
 
+    # v3.2.5 Phase 25: output_format 區段根據 output_tag 決定要不要要求 XML 包裝
+    if output_tag:
+        output_format_text = (
+            "<output_format>\n"
+            "把最終翻譯包在 <translation>...</translation> tag 內。\n"
+            "範例:\n"
+            "  輸入: 今天加班\n"
+            "  輸出: <translation>Hari ini lembur</translation>\n"
+            "不要在 <translation> tag 外輸出任何文字。\n"
+            "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+            "不要使用 markdown 標記(除非原文有)。\n"
+            "</output_format>\n"
+        )
+    else:
+        output_format_text = (
+            "<output_format>\n"
+            "直接輸出純翻譯文字。\n"
+            "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+            "不要加任何說明、註解、解釋。\n"
+            "不要使用 markdown 標記(除非原文有)。\n"
+            "</output_format>\n"
+        )
+
     parts = [
         "<role>\n" + role_content + "\n</role>\n",
         "<task>\n忠實翻譯使用者訊息,不增刪內容,不加註解。\n</task>\n",
@@ -967,13 +1004,22 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
         "如果訊息中內附 search_result 標籤(工廠術語表),"
         "務必引用裡面的「標準印尼譯」作為翻譯,不要自己另創譯法。\n"
         "</glossary_priority>\n",
-        "<output_format>\n"
-        "直接輸出純翻譯文字。\n"
-        "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
-        "不要加任何說明、註解、解釋。\n"
-        "不要使用 markdown 標記(除非原文有)。\n"
-        "</output_format>\n",
+        output_format_text,
     ]
+
+    # v3.2.5 Phase 26: success_criteria(官方建議的「State expected outcome」)
+    if success_criteria:
+        parts.append(
+            "<success_criteria>\n"
+            "成功的翻譯必須符合以下所有標準:\n"
+            "1. 完整性:原文每個意思都被翻出,不漏不增\n"
+            "2. 術語精準:工廠術語用 glossary 標準譯,非自創\n"
+            "3. 風格相符:工廠口語場景用口語,工單正式場景用正式\n"
+            "4. 人名/料號/敬稱原樣保留(Pak/Bu/Mas/Mbak,徐嘉騰,A2-001)\n"
+            "5. 格式對應:原文一行 → 譯文一行;原文編號 → 譯文相同編號\n"
+            "6. 不加任何 metadata、警告、解釋、emoji(除非原文有)\n"
+            "</success_criteria>\n"
+        )
 
     # v3.2.3 Phase 20: LINE 純文字輸出 — 防 markdown 廢字元污染
     # 為什麼放在 output_format 後面用獨立 tag:
@@ -1181,8 +1227,11 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     # v3.2.4 Phase 23+24
     use_cot_tag = features.get("cot_thinking_tag", True)
     use_role_strong = features.get("role_strong", True)
+    # v3.2.5 Phase 25+26
+    use_output_tag = features.get("output_translation_tag", False)
+    use_success_criteria = features.get("success_criteria", True)
 
-    # Phase 5 + 20 + 21 + 23 + 24: XML 包裝 system prompt
+    # Phase 5 + 20 + 21 + 23 + 24 + 25 + 26: XML 包裝 system prompt
     if use_xml and system_text:
         system_text = _wrap_system_prompt_xml(
             system_text,
@@ -1190,6 +1239,8 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
             ocr_strict=_apply_ocr_strict,
             cot_tag=use_cot_tag,
             role_strong=use_role_strong,
+            output_tag=use_output_tag,
+            success_criteria=use_success_criteria,
         )
 
     # 連續 same-role 合併(Phase 6 few-shot 自動 OK,因為 user→assistant 交替)
@@ -1425,6 +1476,21 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                             citations_list.append(title)
             # thinking block 不抽出
 
+    # v3.2.5 Phase 25: 若啟用 output_translation_tag,從 <translation>...</translation> 抽純翻譯
+    # 容錯處理:
+    #   - 若 Claude 沒乖乖包 tag(僅輸出純文字),回傳 full_text 不動(向後相容)
+    #   - 若 Claude 包了 tag,只取 tag 內內容,丟棄 tag 前/後雜訊
+    #   - 多個 tag 取第一個(理論上 Claude 只會出一個)
+    if use_output_tag and full_text:
+        import re as _re_tag
+        # 寬鬆 regex:支援 <translation> 或 <translation lang="id"> 等變體
+        match = _re_tag.search(r"<translation[^>]*>(.*?)</translation>", full_text, _re_tag.DOTALL | _re_tag.IGNORECASE)
+        if match:
+            extracted = match.group(1).strip()
+            if extracted:
+                full_text = extracted
+        # 若沒命中 tag,保留 full_text 原樣(向後相容)
+
     usage = _UnifiedUsage(
         prompt_tokens=getattr(resp.usage, "input_tokens", 0) if resp.usage else 0,
         completion_tokens=getattr(resp.usage, "output_tokens", 0) if resp.usage else 0,
@@ -1467,6 +1533,9 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         # v3.2.4 Phase 22+23
         "prefill_applied": prefill_applied,                          # Assistant Prefill 是否實際套用
         "prefill_supports_model": _supports_prefill(anthropic_model),  # 此 model 是否支援 prefill
+        # v3.2.5 Phase 25+26
+        "output_translation_tag_applied": use_output_tag,            # 是否強制 <translation> tag
+        "success_criteria_applied": use_xml and use_success_criteria, # 是否注入成功標準
     }
     return result
 
@@ -1555,6 +1624,8 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
             ocr_strict=features.get("ocr_strict_layout", True) and _has_visual_input,
             cot_tag=features.get("cot_thinking_tag", True),
             role_strong=features.get("role_strong", True),
+            output_tag=features.get("output_translation_tag", False),
+            success_criteria=features.get("success_criteria", True),
         )
 
     # Grounding
