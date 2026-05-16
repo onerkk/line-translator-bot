@@ -354,7 +354,13 @@ def get_current_config_safe():
 
 
 def _resolve_anthropic_model(openai_model):
+    """v3.2.3 修正:若 caller 直接傳 claude-* model name(app.py v3.9.33 起的 pick_model
+    在 Anthropic 路徑下會這樣做),直接原樣使用,不查 mapping。
+    """
     _ensure_initialized()
+    # 若已是 Claude model 名稱,直接回傳
+    if openai_model and isinstance(openai_model, str) and openai_model.startswith("claude-"):
+        return openai_model
     mapping = _current_config.get("model_mapping", {})
     if openai_model in mapping:
         return mapping[openai_model]

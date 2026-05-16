@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.32-0515-idn-reverse-index"
+VERSION = "v3.9.33-0515-claude-dual-models"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -623,9 +623,19 @@ group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str
 # Model auto-switch: use gpt-4.1 for long messages, gpt-4.1-mini for short
 # v3.2-0426d: upgraded from gpt-4o family to gpt-4.1 family.
 # gpt-4.1 ranks #1 for translation in Intento State of Translation Automation 2025.
-model_default = "gpt-4.1-mini"    # model for short messages
-model_upgrade = "gpt-4.1"         # model for long messages
+model_default = "gpt-4.1-mini"    # model for short messages (OpenAI 路徑)
+model_upgrade = "gpt-4.1"         # model for long messages (OpenAI 路徑)
 model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
+
+# v3.9.33 (2026-05-15): Anthropic 路徑獨立的字數切換邏輯
+# 解決問題:切到 Anthropic 後,「套用模型」按鈕把所有 OpenAI model 映射到同一個 Claude model,
+#         字數門檻在 Anthropic 路徑下實質失效。
+# 新邏輯:切到 Anthropic 時,pick_model() 優先看以下兩個變數;
+#       共用 model_threshold(沿用同一個字數門檻,不另設)
+# 預設:短=Haiku 4.5 / 長=Sonnet 4.6,工人日常閒聊省 75% 成本,長工單才升級
+claude_model_default = "claude-haiku-4-5-20251001"  # 短訊息用 Haiku 4.5
+claude_model_upgrade = "claude-sonnet-4-6"           # 長訊息升級 Sonnet 4.6
+claude_auto_switch_enabled = True                    # 總開關:OFF 時走「套用模型」單一映射(舊行為)
 
 # v3.9.7 (2026-05): 模型能力對照表 — 讓使用者亂勾任何進階設定都不會 400。
 # 後端永遠根據實際模型過濾參數;UI 端會把不相容的設定自動還原成中性值。
@@ -938,7 +948,33 @@ def get_group_tone(group_id):
 
 
 def pick_model(text):
-    """Pick OpenAI model based on text length and threshold setting."""
+    """v3.9.33: Pick model based on text length, threshold, AND active provider.
+    
+    Anthropic 路徑(切到 Anthropic 且 claude_auto_switch_enabled=True):
+      - 字數 < threshold 或 threshold=0 → claude_model_default(預設 Haiku 4.5)
+      - 字數 ≥ threshold → claude_model_upgrade(預設 Sonnet 4.6)
+    
+    OpenAI 路徑(原邏輯):
+      - 字數 ≥ threshold → model_upgrade(預設 gpt-4.1)
+      - 否則 → model_default(預設 gpt-4.1-mini)
+    
+    特例:
+      - claude_auto_switch_enabled=False 時,Anthropic 路徑仍回傳 OpenAI model name
+        → 走 _AIProxy 的 model_mapping 機制(舊「套用模型」單一映射行為)
+      - 這給歐那一個 fallback:若新邏輯出問題,後台關掉 toggle 即恢復舊行為
+    """
+    try:
+        provider = ai_provider.get_active_provider()
+    except Exception:
+        provider = "openai"
+    
+    if provider == "anthropic" and claude_auto_switch_enabled:
+        # Anthropic 路徑:直接回傳 Claude model name,_AIProxy 看到 claude-* 會原樣使用,不查 mapping
+        if model_threshold > 0 and len(text) >= model_threshold:
+            return claude_model_upgrade
+        return claude_model_default
+    
+    # OpenAI 路徑(或 Anthropic + 關閉自動切換)
     if model_threshold > 0 and len(text) >= model_threshold:
         return model_upgrade
     return model_default
@@ -10928,21 +10964,58 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 </div>
 
-<!-- Anthropic 模型選擇 -->
+<!-- Anthropic 模型選擇 v3.9.33 — 短/長雙模型字數切換 -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
-  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 後實際跑這個)</div>
-  <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
-    <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
-    <option value="claude-sonnet-4-6">🟡 Claude Sonnet 4.6(平衡,$3/$15 per M)</option>
-    <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
-  </select>
-  <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型</button>
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 後實際跑這些)</div>
+
+  <!-- 自動切換開關 -->
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;margin-bottom:8px">
+    <span style="font-size:12px;color:#e0e0e0">⚡ <strong>字數自動切換</strong> <span style="color:#888;font-size:10px">短/長分別用不同 Claude model</span></span>
+    <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-claude-autoswitch" onchange="aipSetClaudeAutoSwitch(this.checked)"><span class="slider"></span></label>
+  </div>
+
+  <!-- 自動切換 ON 時:雙下拉 -->
+  <div id="aip-claude-dual-models" style="margin-bottom:8px">
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <div style="flex:1">
+        <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">短訊息(便宜)</div>
+        <select id="aip-claude-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+          <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5($1/$5)</option>
+          <option value="claude-sonnet-4-6">🟡 Sonnet 4.6($3/$15)</option>
+          <option value="claude-opus-4-7">🔴 Opus 4.7($5/$25)</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">長訊息(升級)</div>
+        <select id="aip-claude-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+          <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5</option>
+          <option value="claude-sonnet-4-6" selected>🟡 Sonnet 4.6</option>
+          <option value="claude-opus-4-7">🔴 Opus 4.7</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="aipSaveClaudeDualModels()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">儲存 Claude 雙模型設定</button>
+    <div style="font-size:11px;color:#888;margin-top:8px;line-height:1.5">
+      💡 共用「設定」tab 內的<strong>字數門檻</strong>(目前:<span id="aip-shared-threshold" style="color:#10b981">100</span> 字)<br>
+      字數 &lt; 門檻 → 短訊息模型;≥ 門檻 → 升級模型
+    </div>
+  </div>
+
+  <!-- 自動切換 OFF 時:單一下拉(舊行為) -->
+  <div id="aip-claude-single-model" style="display:none">
+    <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
+      <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
+      <option value="claude-sonnet-4-6">🟡 Claude Sonnet 4.6(平衡,$3/$15 per M)</option>
+      <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
+    </select>
+    <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型(全 LINE bot 翻譯都用同一個)</button>
+  </div>
+
   <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.6">
-    ✅ <strong style="color:#10b981">說明清楚</strong>:切到 Anthropic 後,<strong>LINE bot 所有翻譯都用這個模型</strong>,跟「設定」tab 內 OpenAI 那套自動切換無關。<br>
+    ✅ <strong style="color:#10b981">省錢策略</strong>:開啟字數切換,工人閒聊全走 Haiku 省 75%,工單長翻譯才升 Sonnet。<br>
     🟢 Haiku 4.5:推薦,品質夠用,便宜。<br>
     🟡 Sonnet 4.6:翻譯品質更好,但每筆貴 3 倍。<br>
-    🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。<br>
-    <span style="color:#666">註:LINE bot 內部呼叫 gpt-4.1-mini / gpt-5-mini / gpt-4o 等 OpenAI 模型時,全部會自動映射到上方選的這個 Claude 模型。</span>
+    🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。
   </div>
 </div>
 
@@ -11936,6 +12009,66 @@ async function aipTestProvider(){
     box.textContent = '❌ 網路錯誤:' + e;
   }
 }
+
+// v3.9.33: Claude 自動切換 UI 控制
+function aipApplyAutoSwitchUI(isOn){
+  const dual = document.getElementById('aip-claude-dual-models');
+  const single = document.getElementById('aip-claude-single-model');
+  if (dual && single) {
+    dual.style.display = isOn ? 'block' : 'none';
+    single.style.display = isOn ? 'none' : 'block';
+  }
+}
+
+async function aipSetClaudeAutoSwitch(isOn){
+  try {
+    const r = await fetch('/api/admin/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({claude_auto_switch_enabled: isOn})
+    });
+    const data = await r.json();
+    if (data.ok) {
+      aipApplyAutoSwitchUI(isOn);
+    } else {
+      alert('儲存失敗,請重試');
+      const chk = document.getElementById('aip-claude-autoswitch');
+      if (chk) chk.checked = !isOn;
+    }
+  } catch(e) {
+    alert('網路錯誤:' + e);
+  }
+}
+
+async function aipSaveClaudeDualModels(){
+  const dd = document.getElementById('aip-claude-default');
+  const du = document.getElementById('aip-claude-upgrade');
+  if (!dd || !du) return;
+  const md = dd.value, mu = du.value;
+  if (md === mu) {
+    if (!confirm('短訊息和長訊息選了同一個 model:' + md + '\\n\\n字數切換等同失效,確定?')) return;
+  }
+  try {
+    const r = await fetch('/api/admin/features', {
+      method:'POST',
+      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({
+        claude_model_default: md,
+        claude_model_upgrade: mu,
+      })
+    });
+    const data = await r.json();
+    if (data.ok) {
+      alert('✅ Claude 雙模型已儲存\\n短訊息→' + md.replace('claude-','').replace('-20251001','') + 
+            '\\n長訊息→' + mu.replace('claude-','').replace('-20251001',''));
+    } else {
+      alert('❌ 儲存失敗');
+    }
+  } catch(e) {
+    alert('網路錯誤:' + e);
+  }
+}
+
 
 async function aipUpdateAnthropicModel(){
   const sel = document.getElementById('aip-anthropic-model');
@@ -13370,6 +13503,18 @@ async function _loadFeatures(gid){
     if(document.getElementById('smeta')) document.getElementById('smeta').checked=d.send_metadata_to_openai!==false;
     if(typeof loadTransLog==='function') setTimeout(function(){loadTransLog('all')},500);
     document.getElementById('modelThreshold').value=d.model_threshold||0;
+    // v3.9.33: Claude 雙模型 + autoswitch 載入
+    if(document.getElementById('aip-claude-autoswitch')){
+      var ase=d.claude_auto_switch_enabled!==false;
+      document.getElementById('aip-claude-autoswitch').checked=ase;
+      aipApplyAutoSwitchUI(ase);
+    }
+    if(document.getElementById('aip-claude-default'))
+      document.getElementById('aip-claude-default').value=d.claude_model_default||'claude-haiku-4-5-20251001';
+    if(document.getElementById('aip-claude-upgrade'))
+      document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-4-6';
+    if(document.getElementById('aip-shared-threshold'))
+      document.getElementById('aip-shared-threshold').textContent=(d.model_threshold||0);
   }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
@@ -13584,6 +13729,9 @@ function saveModelSettings(){
       var info=mt>0?'≥'+mt+'字用 '+mu+'，其餘用 '+md:'全部用 '+md;
       document.getElementById('modelSaveResult').innerHTML='<span style="color:#43b581">✅ '+info+'</span>';
       onModelChange();  // 儲存後立刻自動調整 + 提示
+      // v3.9.33: 同步更新 Claude 區的字數門檻顯示
+      if(document.getElementById('aip-shared-threshold'))
+        document.getElementById('aip-shared-threshold').textContent=mt;
     }
   });
 }
@@ -14163,6 +14311,10 @@ def _do_save_impl():
             "model_default": model_default,
             "model_upgrade": model_upgrade,
             "model_threshold": model_threshold,
+            # v3.9.33: Anthropic 路徑獨立字數切換
+            "claude_model_default": claude_model_default,
+            "claude_model_upgrade": claude_model_upgrade,
+            "claude_auto_switch_enabled": claude_auto_switch_enabled,
             "vision_model": VISION_MODEL,
             "user_pictures": user_pictures,
             "pw1_text": pw1_text,
@@ -14199,6 +14351,7 @@ def load_settings():
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
     global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
+    global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
     global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global forms_data, forms_submissions
@@ -14439,6 +14592,13 @@ def load_settings():
             model_upgrade = data["model_upgrade"]
         if "model_threshold" in data:
             model_threshold = int(data["model_threshold"])
+        # v3.9.33: Anthropic 路徑獨立字數切換
+        if "claude_model_default" in data:
+            claude_model_default = str(data["claude_model_default"])
+        if "claude_model_upgrade" in data:
+            claude_model_upgrade = str(data["claude_model_upgrade"])
+        if "claude_auto_switch_enabled" in data:
+            claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
         # v3.9: vision (照片分析) model
         if "vision_model" in data:
             VISION_MODEL = str(data["vision_model"])
@@ -15255,6 +15415,7 @@ def api_admin_features():
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
+    global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
     global VISION_MODEL
     if not check_manager_access("groups"):
         return jsonify({"error": "forbidden"}), 403
@@ -15338,6 +15499,13 @@ def api_admin_features():
                 model_upgrade = str(data["model_upgrade"])
             if "model_threshold" in data:
                 model_threshold = int(data["model_threshold"])
+            # v3.9.33: Anthropic 字數切換設定
+            if "claude_model_default" in data:
+                claude_model_default = str(data["claude_model_default"])
+            if "claude_model_upgrade" in data:
+                claude_model_upgrade = str(data["claude_model_upgrade"])
+            if "claude_auto_switch_enabled" in data:
+                claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
             # v3.9: vision (照片分析) model selectable from admin panel
             if "vision_model" in data:
                 VISION_MODEL = str(data["vision_model"])
@@ -15409,6 +15577,10 @@ def api_admin_features():
         "model_default": model_default,
         "model_upgrade": model_upgrade,
         "model_threshold": model_threshold,
+        # v3.9.33: Anthropic 字數切換
+        "claude_model_default": claude_model_default,
+        "claude_model_upgrade": claude_model_upgrade,
+        "claude_auto_switch_enabled": claude_auto_switch_enabled,
         "vision_model": VISION_MODEL,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
@@ -17094,6 +17266,7 @@ def admin_apply_best_defaults():
     dry_run = request.args.get("dry_run") == "1"
     
     global model_default, model_upgrade, model_threshold
+    global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
     global translation_temperature, translation_top_p, translation_seed
     global double_check_mode, double_check_threshold
     global fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled
