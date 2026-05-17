@@ -262,6 +262,7 @@
   "claude_model_default": "claude-haiku-4-5-20251001",
   "claude_model_upgrade": "claude-sonnet-4-6",
   "claude_auto_switch_enabled": true,
+  "openai_24h_cache_enabled": false,
   "vision_model": "gpt-5-mini",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
