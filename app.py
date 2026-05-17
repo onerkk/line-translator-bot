@@ -9276,6 +9276,12 @@ if BotLeaveEvent:
             group_wo_settings.pop(group_id, None)
             group_skip_users.pop(group_id, None)
             group_user_names.pop(group_id, None)
+            # v3.10: 清掉新加的設定
+            try:
+                group_target_langs.pop(group_id, None)
+                group_tts_settings.pop(group_id, None)
+            except NameError:
+                pass
             save_settings()
             logger.info("Bot removed from group %s", group_id)
 
@@ -15350,6 +15356,14 @@ def api_admin_groups():
             "skip_count": skip_count,
             "cost_twd": calc_group_cost_twd(gid),
             "member_count": get_group_member_count(gid),
+            # v3.10: 多語廣播 + TTS 設定(後台目前不一定顯示,但 API 回傳供未來 UI 用)
+            # 用 globals().get() 因為 group_target_langs 在檔案後段才定義
+            "target_langs": (lambda: (
+                globals().get("group_target_langs", {}).get(gid)
+                if isinstance(globals().get("group_target_langs", {}).get(gid), list) and globals().get("group_target_langs", {}).get(gid)
+                else [group_target_lang.get(gid, "id")]
+            ))(),
+            "tts_on": bool(globals().get("group_tts_settings", {}).get(gid, False)),
         })
     groups.sort(key=lambda x: x["name"] or x["id"])
     return jsonify({"groups": groups})
@@ -15385,6 +15399,12 @@ def api_admin_leave_group():
     group_wo_settings.pop(gid, None)
     group_skip_users.pop(gid, None)
     group_user_names.pop(gid, None)
+    # v3.10: 清掉新加的設定
+    try:
+        group_target_langs.pop(gid, None)
+        group_tts_settings.pop(gid, None)
+    except NameError:
+        pass
     save_settings()
     return jsonify({"message": "已退出群組"})
 
@@ -16103,6 +16123,12 @@ def api_admin_group_settings():
         return jsonify({"error": "missing group_id"}), 400
     if "target_lang" in data:
         group_target_lang[gid] = data["target_lang"]
+        # v3.10: 後台改單一目標語言時,清掉 group_target_langs 讓單一語言生效
+        # (否則 get_group_target_langs 會優先讀 list,後台改的單一語言會被忽略)
+        try:
+            group_target_langs.pop(gid, None)
+        except NameError:
+            pass   # v310 ext not loaded yet
     if "translation_on" in data:
         group_settings[gid] = bool(data["translation_on"])
     if "image_on" in data:
