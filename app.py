@@ -2216,21 +2216,42 @@ message_cache = {}
 MESSAGE_CACHE_MAX = 200
 
 LANG_FLAGS = {
-    "zh": "\U0001f1f9\U0001f1fc",
-    "id": "\U0001f1ee\U0001f1e9",
+    "zh": "\U0001f1f9\U0001f1fc",   # 🇹🇼
+    "id": "\U0001f1ee\U0001f1e9",   # 🇮🇩
+    # v3.10: extended languages
+    "th": "\U0001f1f9\U0001f1ed",   # 🇹🇭
+    "hi": "\U0001f1ee\U0001f1f3",   # 🇮🇳  (Hindi → India flag)
+    "vi": "\U0001f1fb\U0001f1f3",   # 🇻🇳
+    "ja": "\U0001f1ef\U0001f1f5",   # 🇯🇵
+    "ko": "\U0001f1f0\U0001f1f7",   # 🇰🇷
+    "en": "\U0001f1ec\U0001f1e7",   # 🇬🇧
 }
 
 LANG_NAMES = {
     "zh": "Traditional Chinese",
     "id": "Indonesian",
+    # v3.10
+    "th": "Thai",
+    "hi": "Hindi",
+    "vi": "Vietnamese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "en": "English",
 }
 
 LANG_NAMES_ZH = {
     "id": "\u5370\u5c3c\u6587",
+    # v3.10
+    "th": "\u6cf0\u6587",       # 泰文
+    "hi": "\u5370\u5730\u6587",  # 印地文
+    "vi": "\u8d8a\u5357\u6587",  # 越南文
+    "ja": "\u65e5\u6587",        # 日文
+    "ko": "\u97d3\u6587",        # 韓文
+    "en": "\u82f1\u6587",        # 英文
 }
 
-# Valid target languages
-VALID_TARGETS = ["id"]
+# Valid target languages (v3.10: expanded from id-only)
+VALID_TARGETS = ["id", "th", "hi", "vi", "ja", "ko", "en"]
 
 
 def extract_mentions(text):
@@ -2697,29 +2718,62 @@ def has_english(text):
     return False
 
 
+def has_hindi(text):
+    """v3.10: detect Devanagari script (Hindi, Marathi, Sanskrit, etc.)"""
+    return len(re.findall(r'[\u0900-\u097f]', text or "")) >= 2
+
+
 def detect_language(text):
-    """Detect language: Chinese → 'zh', Latin text → 'id'.
-    For mixed messages (factory codes + Chinese), Chinese dominates."""
+    """v3.10: Multi-language detection.
+    Returns 'zh', 'ja', 'ko', 'th', 'hi', 'vi', 'id', 'en' or None.
+
+    Strategy (in order):
+      1. Script-based (most reliable): kana → ja, hangul → ko,
+         thai → th, devanagari → hi
+      2. CJK han with no kana → zh
+      3. Vietnamese (Latin + diacritics + markers) → vi
+      4. Indonesian (Latin + ID markers, no Asian script) → id
+      5. Plain Latin without ID markers → en
+    """
+    if not text:
+        return None
     clean = strip_mentions_for_detect(text).strip()
     if not clean or len(clean) < 2:
         return None
+
+    # --- Script-based first (most reliable) ---
+    if has_japanese(clean):
+        return "ja"
+    if has_korean(clean):
+        return "ko"
+    if has_thai(clean):
+        return "th"
+    if has_hindi(clean):
+        return "hi"
+
+    # CJK han block (Chinese only — ja+kanji would have been caught above by kana)
     zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
     latin_words = re.findall(r'[a-zA-Z]{2,}', clean.lower())
-    # Has Chinese characters — if Chinese dominates or Latin is minimal, it's Chinese
+
     if zh_count >= 2 and zh_count >= len(latin_words):
         return "zh"
-    # No Chinese but has Latin → Indonesian
-    if zh_count == 0 and latin_words:
+
+    # Vietnamese (Latin + diacritics + markers)
+    if has_vietnamese(clean):
+        return "vi"
+
+    # Indonesian (Latin + ID markers, no Asian script)
+    if has_indonesian(clean):
         return "id"
-    # Both exist but Latin dominates → Indonesian
-    if latin_words and len(latin_words) > zh_count:
-        return "id"
-    # Only Chinese (1+ chars)
-    if zh_count >= 1:
+
+    # Trailing single-Chinese-char fallback
+    if zh_count >= 1 and not latin_words:
         return "zh"
-    # Has some Latin words
+
+    # Plain Latin without ID markers → English
     if latin_words:
-        return "id"
+        return "en"
+
     return None
 
 
@@ -7778,6 +7832,18 @@ def handle_command(text, group_id, user_id=None):
             group_skip_users[group_id].discard(user_id)
         save_settings()
         return "✅ 已將你移出白名單,你的訊息會被翻譯\nAnda dihapus dari daftar skip, pesan Anda akan diterjemahkan"
+    # v3.10: 不翻譯詞動態管理
+    elif text.strip().lower().startswith("/skipterm"):
+        try:
+            return handle_skipterm_command(text, group_id)
+        except NameError:
+            return "⚠️ v3.10 模組未載入 / v3.10 module not loaded"
+    # v3.10: LIFF 設定頁
+    elif cmd == "/liff":
+        try:
+            return handle_liff_command(group_id, user_id)
+        except NameError:
+            return "⚠️ v3.10 模組未載入 / v3.10 module not loaded"
     elif text.strip().lower().startswith("/skipadd"):
         name_query = text.strip()[8:].strip()
         if not name_query:
@@ -8153,24 +8219,41 @@ def handle_message(event):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     _tl.group_id = group_id
+    # v3.10: 多語廣播 — 中文時翻成所有設定的目標語言
+    _tts_text = None    # 給 TTS 用的主要翻譯文字
+    _tts_lang = None
     if lang == "zh":
-        result = translate(text_to_translate, "zh", tgt)
-        if result and mention_placeholders:
-            result = restore_mentions(result, mention_placeholders)
-        if result:
-            reply = LANG_FLAGS.get(tgt, "") + " " + result
+        try:
+            _targets = get_group_target_langs(group_id)
+        except NameError:
+            _targets = [tgt]
+        _trs = translate_multi(text_to_translate, "zh", _targets, mention_placeholders)
+        if _trs:
+            reply = format_multi_reply(_trs)
+            _tts_lang, _tts_text = _trs[0]   # 第一個翻譯拿來 TTS
     else:
         result = translate(text_to_translate, lang, "zh")
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
+            _tts_lang, _tts_text = "zh", result
     track_group_usage(group_id, _bp, _bc)
 
     if reply is None:
         return
 
     bot_stats["text_translations"] += 1
+
+    # v3.10: TTS — 若該群組開了 TTS,額外推一條語音訊息
+    try:
+        if _tts_text and _tts_lang and get_tts_enabled(group_id):
+            import threading as _tts_thr
+            _tts_thr.Thread(target=push_tts_message,
+                            args=(group_id, _tts_text, _tts_lang),
+                            daemon=True).start()
+    except NameError:
+        pass   # v310 ext not loaded
 
     # Build reply message based on settings
     sender_display = None
@@ -9104,6 +9187,15 @@ if MemberJoinedEvent:
             return
         if not group_settings.get(group_id, True):
             return
+
+        # v3.10: 新群組(從沒設過語言)→ 送 onboarding Flex 引導選語言
+        try:
+            if is_new_group(group_id):
+                if send_onboarding_flex(event.reply_token, group_id):
+                    return   # onboarding 已送,不再送舊版 welcome
+        except NameError:
+            pass   # v310 not loaded — fall through to legacy welcome
+
         try:
             zh = ws.get("text_zh", "")
             id_text = ws.get("text_id", "")
@@ -9211,6 +9303,14 @@ if PostbackEvent:
             params = {}
 
         action = params.get("action", "")
+
+        # v3.10: onboarding 語言選擇按鈕
+        if action == "onboard_lang":
+            try:
+                if handle_onboarding_postback(event, params):
+                    return
+            except NameError:
+                pass
 
         # /help language switch: re-send Flex with the other language first
         if action == "help":
@@ -18119,6 +18219,919 @@ def debug_last_translate():
 
     # default: json
     return jsonify(last_translate_debug)
+
+
+# ============================================================================
+# ============================================================================
+# v3.10 EXTENSIONS — appended directly to app.py
+# ============================================================================
+# Adds:
+#   1. Thai (th) + Hindi (hi) language support (LANG_FLAGS/NAMES already
+#      extended above near line 2218 — this block adds helpers + handlers)
+#   2. Multilingual broadcast (one ZH msg → all configured target languages)
+#   3. /skipterm command (dynamic do-not-translate term list per group)
+#   4. TTS audio output (OpenAI TTS → ffmpeg → LINE AudioMessage)
+#   5. Onboarding flex (when bot joins a brand-new group)
+#   6. LIFF settings page (nonce-based auth, no LIFF SDK verify needed)
+# ============================================================================
+
+import secrets
+import subprocess
+import threading as _threading_v310
+
+# AudioMessage isn't imported earlier — pull it in here.
+try:
+    from linebot.v3.messaging import AudioMessage
+except ImportError:
+    AudioMessage = None
+
+
+# ----------------------------------------------------------------------------
+# A. MULTILINGUAL BROADCAST — group_target_langs (list)
+# ----------------------------------------------------------------------------
+# When admin sends Chinese, bot translates into ALL of these languages.
+# Backward compatible: empty → fall back to legacy group_target_lang.
+
+group_target_langs = {}   # {group_id: ["id", "th", ...]}
+
+
+def get_group_target_langs(group_id):
+    """Get target language list for a group. Falls back to legacy single-lang."""
+    if group_id and group_id in group_target_langs:
+        lst = [l for l in group_target_langs[group_id] if l in VALID_TARGETS]
+        if lst:
+            return lst
+    legacy = group_target_lang.get(group_id, "id") if group_id else "id"
+    return [legacy] if legacy in VALID_TARGETS else ["id"]
+
+
+def set_group_target_langs(group_id, langs):
+    """Set target langs for a group. langs = iterable of valid codes."""
+    valid = []
+    for l in langs:
+        l = (l or "").strip().lower()
+        if l in VALID_TARGETS and l not in valid:
+            valid.append(l)
+    if not valid:
+        valid = ["id"]
+    group_target_langs[group_id] = valid
+    # Keep legacy field in sync (first lang) for any code path still reading it
+    group_target_lang[group_id] = valid[0]
+    try:
+        save_settings()
+    except Exception as e:
+        logger.warning("save_settings failed after set_group_target_langs: %s", e)
+
+
+def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
+    """Translate one source text to multiple targets.
+    Returns list of (lang_code, translated_text). Skips failed/empty ones.
+    """
+    out = []
+    for tgt_lang in targets:
+        if tgt_lang == src:
+            continue   # don't translate to source lang
+        try:
+            res = translate(text_to_translate, src, tgt_lang)
+        except Exception as e:
+            logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
+            continue
+        if not res:
+            continue
+        if mention_placeholders:
+            try:
+                res = restore_mentions(res, mention_placeholders)
+            except Exception:
+                pass
+        out.append((tgt_lang, res))
+    return out
+
+
+def format_multi_reply(translations):
+    """translations = [(lang, text), ...] → multi-line bilingual reply.
+    Single lang: '🇮🇩 result'. Multi: each on its own paragraph."""
+    if not translations:
+        return None
+    lines = []
+    for tgt_lang, res in translations:
+        flag = LANG_FLAGS.get(tgt_lang, "")
+        lines.append(("%s %s" % (flag, res)).strip())
+    return "\n\n".join(lines) if len(translations) > 1 else lines[0]
+
+
+# ----------------------------------------------------------------------------
+# B. /skipterm — dynamic do-not-translate term list (per group)
+# ----------------------------------------------------------------------------
+# Uses existing `extra_names_by_group` + rebuild_customer_names() pipeline.
+
+SKIPTERM_MAX_PER_GROUP = 100
+SKIPTERM_MAX_LEN = 30
+
+
+def handle_skipterm_command(text, group_id):
+    """Handle /skipterm command family.
+    /skipterm              → list current group's terms
+    /skipterm <term>       → add term
+    /skipterm -<term>      → remove term
+    /skipterm del <term>   → remove term (alt syntax)
+    /skipterm clear        → clear this group's terms
+    """
+    if not group_id:
+        return "⚠️ 只能在群組使用 / Hanya di grup"
+    parts = text.strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) >= 2 else ""
+
+    if not arg:
+        # List
+        terms = extra_names_by_group.get(group_id, [])
+        if not terms:
+            return ("📋 此群組沒有設定不翻譯詞\n"
+                    "📋 Belum ada kata yang dikecualikan\n\n"
+                    "用法 / Cara pakai:\n"
+                    "  /skipterm <詞>      加入\n"
+                    "  /skipterm -<詞>     移除\n"
+                    "  /skipterm clear     全部清空")
+        body = "\n".join("• " + t for t in terms)
+        return "📋 不翻譯詞 ({}) / Kata dikecualikan:\n{}".format(len(terms), body)
+
+    if arg.lower() == "clear":
+        extra_names_by_group[group_id] = []
+        try:
+            rebuild_customer_names()
+            save_settings()
+        except Exception as e:
+            logger.warning("skipterm clear save failed: %s", e)
+        return "✅ 已清空此群組的不翻譯詞\n✅ Daftar dibersihkan"
+
+    # remove syntax: -term  or  del term
+    rm_term = None
+    if arg.startswith("-"):
+        rm_term = arg[1:].strip()
+    elif arg.lower().startswith("del "):
+        rm_term = arg[4:].strip()
+
+    if rm_term is not None:
+        if not rm_term:
+            return "⚠️ 請輸入要刪除的詞 / Masukkan kata yang akan dihapus"
+        cur = list(extra_names_by_group.get(group_id, []))
+        if rm_term in cur:
+            cur.remove(rm_term)
+            extra_names_by_group[group_id] = cur
+            try:
+                rebuild_customer_names()
+                save_settings()
+            except Exception:
+                pass
+            return "✅ 已移除「{}」/ Dihapus".format(rm_term)
+        return "⚠️ 找不到「{}」/ Tidak ditemukan".format(rm_term)
+
+    # Otherwise: add
+    term = arg
+    if len(term) < 1 or len(term) > SKIPTERM_MAX_LEN:
+        return "⚠️ 詞長度需 1-{} 字 / Panjang 1-{} karakter".format(
+            SKIPTERM_MAX_LEN, SKIPTERM_MAX_LEN)
+    cur = list(extra_names_by_group.get(group_id, []))
+    if term in cur:
+        return "⚠️「{}」已存在 / Sudah ada".format(term)
+    if len(cur) >= SKIPTERM_MAX_PER_GROUP:
+        return "⚠️ 已達上限 {} 個 / Maks {}".format(SKIPTERM_MAX_PER_GROUP, SKIPTERM_MAX_PER_GROUP)
+    cur.append(term)
+    extra_names_by_group[group_id] = cur
+    try:
+        rebuild_customer_names()
+        save_settings()
+    except Exception:
+        pass
+    return "✅ 已加入「{}」(共 {} 個)\n✅ Ditambah, total {}".format(term, len(cur), len(cur))
+
+
+# ----------------------------------------------------------------------------
+# C. TTS — OpenAI TTS → ffmpeg → m4a → LINE AudioMessage
+# ----------------------------------------------------------------------------
+# Requires ffmpeg on PATH (apt install ffmpeg, Render: in Build Command).
+# Requires env PUBLIC_URL = "https://yourbot.example.com" (no trailing slash).
+# Falls through silently if not configured.
+
+group_tts_settings = {}   # {group_id: bool}, default False (TTS costs money)
+
+_tts_cache = {}           # {token: (m4a_bytes, expires_at, duration_ms)}
+_tts_cache_lock = _threading_v310.Lock()
+TTS_CACHE_TTL = 300       # 5 min (LINE typically fetches within seconds)
+TTS_CACHE_MAX = 200
+TTS_TEXT_LIMIT = 500      # clip very long text
+
+
+def get_tts_enabled(group_id):
+    """Read per-group TTS toggle (default OFF — TTS uses extra money + bandwidth)."""
+    return bool(group_tts_settings.get(group_id, False))
+
+
+def _tts_cleanup():
+    now = time.time()
+    with _tts_cache_lock:
+        for k in [k for k, v in _tts_cache.items() if v[1] < now]:
+            _tts_cache.pop(k, None)
+        if len(_tts_cache) > TTS_CACHE_MAX:
+            for k, _ in sorted(_tts_cache.items(), key=lambda x: x[1][1])[: len(_tts_cache) - TTS_CACHE_MAX]:
+                _tts_cache.pop(k, None)
+
+
+def _ffmpeg_mp3_to_m4a(mp3_bytes):
+    """Pipe mp3 → m4a via ffmpeg. Returns m4a_bytes or None."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-i", "pipe:0",
+             "-c:a", "aac", "-b:a", "64k",
+             "-movflags", "+faststart",
+             "-f", "mp4", "pipe:1"],
+            input=mp3_bytes, capture_output=True, timeout=20, check=False,
+        )
+        if proc.returncode != 0:
+            logger.error("ffmpeg failed rc=%s err=%s", proc.returncode,
+                         (proc.stderr or b"")[:300].decode("utf-8", "ignore"))
+            return None
+        return proc.stdout
+    except FileNotFoundError:
+        logger.error("ffmpeg NOT FOUND on PATH — install it to enable TTS")
+        return None
+    except Exception as e:
+        logger.error("ffmpeg pipe error: %s", e)
+        return None
+
+
+def generate_tts(text, lang):
+    """text → (public_url, duration_ms) or (None, 0).
+    Uses OpenAI gpt-4o-mini-tts. Stores m4a in in-memory cache for 5 min.
+    """
+    if not text or not text.strip():
+        return None, 0
+    if not oai:
+        return None, 0
+    base_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+    if not base_url:
+        # silent miss — set PUBLIC_URL env to enable
+        return None, 0
+
+    text_clipped = text[:TTS_TEXT_LIMIT]
+    try:
+        resp = oai.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="alloy",         # voice is language-agnostic
+            input=text_clipped,
+            response_format="mp3",
+        )
+        # openai SDK returns a streaming response; handle both shapes
+        if hasattr(resp, "read"):
+            mp3_bytes = resp.read()
+        elif hasattr(resp, "content"):
+            mp3_bytes = resp.content
+        else:
+            mp3_bytes = bytes(resp)
+    except Exception as e:
+        logger.warning("OpenAI TTS failed: %s", e)
+        return None, 0
+
+    m4a_bytes = _ffmpeg_mp3_to_m4a(mp3_bytes)
+    if not m4a_bytes:
+        return None, 0
+
+    # Rough duration estimate. ~140 chars/min for natural narration.
+    duration_ms = min(60000, max(1000, len(text_clipped) * 400))
+
+    _tts_cleanup()
+    token = secrets.token_urlsafe(16)
+    expires_at = time.time() + TTS_CACHE_TTL
+    with _tts_cache_lock:
+        _tts_cache[token] = (m4a_bytes, expires_at, duration_ms)
+
+    url = "{}/tts/{}.m4a".format(base_url, token)
+    return url, duration_ms
+
+
+@app.route("/tts/<token>.m4a")
+def serve_tts(token):
+    """LINE servers fetch the m4a from here."""
+    _tts_cleanup()
+    with _tts_cache_lock:
+        entry = _tts_cache.get(token)
+    if not entry:
+        abort(404)
+    m4a_bytes, _, _ = entry
+    resp = app.response_class(m4a_bytes, mimetype="audio/mp4")
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+def push_tts_message(group_id, text, lang):
+    """Generate TTS and push as AudioMessage. Best-effort, never raises."""
+    if not AudioMessage:
+        return False
+    if not group_id or not text:
+        return False
+    try:
+        url, dur = generate_tts(text, lang)
+        if not url:
+            return False
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.push_message(PushMessageRequest(
+                to=group_id,
+                messages=[AudioMessage(originalContentUrl=url, duration=dur)],
+            ))
+        return True
+    except Exception as e:
+        logger.warning("push_tts_message failed: %s", e)
+        return False
+
+
+# ----------------------------------------------------------------------------
+# D. ONBOARDING FLEX — when bot joins a brand-new group
+# ----------------------------------------------------------------------------
+
+def build_onboarding_flex():
+    """Returns FlexContainer for new-group language picker."""
+    bubble = {
+        "type": "bubble", "size": "mega",
+        "header": {
+            "type": "box", "layout": "vertical",
+            "backgroundColor": "#7c6fef",
+            "paddingAll": "lg",
+            "contents": [
+                {"type": "text", "text": "🌐 翻譯機器人已加入", "color": "#ffffff", "weight": "bold", "size": "lg"},
+                {"type": "text", "text": "Translator Bot Aktif", "color": "#e0d7ff", "size": "sm", "margin": "xs"},
+            ],
+        },
+        "body": {
+            "type": "box", "layout": "vertical", "spacing": "md",
+            "contents": [
+                {"type": "text", "text": "請選擇翻譯語言", "size": "md", "weight": "bold"},
+                {"type": "text", "text": "Pilih bahasa terjemahan", "size": "xs", "color": "#888888"},
+                {"type": "separator", "margin": "sm"},
+                {"type": "box", "layout": "vertical", "spacing": "sm", "margin": "md", "contents": [
+                    {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
+                     "action": {"type": "postback",
+                                "label": "🇹🇼 中 ⇄ 🇮🇩 印尼",
+                                "data": "action=onboard_lang&v=id",
+                                "displayText": "設定:中文 ⇄ 印尼文"}},
+                    {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
+                     "action": {"type": "postback",
+                                "label": "🇹🇼 中 ⇄ 🇹🇭 泰",
+                                "data": "action=onboard_lang&v=th",
+                                "displayText": "設定:中文 ⇄ 泰文"}},
+                    {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
+                     "action": {"type": "postback",
+                                "label": "🇹🇼 中 ⇄ 🇮🇳 印地",
+                                "data": "action=onboard_lang&v=hi",
+                                "displayText": "設定:中文 ⇄ 印地文"}},
+                    {"type": "button", "style": "secondary", "height": "sm",
+                     "action": {"type": "postback",
+                                "label": "🇹🇼+🇮🇩+🇹🇭 三語廣播",
+                                "data": "action=onboard_lang&v=id,th",
+                                "displayText": "設定:中文 + 印尼 + 泰文"}},
+                    {"type": "button", "style": "secondary", "height": "sm",
+                     "action": {"type": "postback",
+                                "label": "🇹🇼+🇮🇩+🇹🇭+🇮🇳 四語廣播",
+                                "data": "action=onboard_lang&v=id,th,hi",
+                                "displayText": "設定:中文 + 印尼 + 泰 + 印地"}},
+                ]},
+                {"type": "separator", "margin": "md"},
+                {"type": "text", "text": "稍後可用 /lang 重新設定",
+                 "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "md"},
+                {"type": "text", "text": "Bisa diubah lagi dengan /lang",
+                 "size": "xxs", "color": "#aaaaaa", "align": "center"},
+                {"type": "text", "text": "輸入 /help 看完整功能",
+                 "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "sm"},
+            ],
+        },
+    }
+    return FlexContainer.from_dict(bubble)
+
+
+def send_onboarding_flex(reply_token, group_id):
+    """Send onboarding flex to a new group. Returns True on success."""
+    try:
+        flex = build_onboarding_flex()
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[FlexMessage(alt_text="請選擇翻譯語言 / Pilih bahasa", contents=flex)],
+            ))
+        return True
+    except Exception as e:
+        logger.warning("send_onboarding_flex failed: %s", e)
+        return False
+
+
+def is_new_group(group_id):
+    """A group is 'new' if it has neither group_target_langs nor a
+    customized group_target_lang entry."""
+    if not group_id:
+        return False
+    if group_id in group_target_langs and group_target_langs[group_id]:
+        return False
+    return group_id not in group_target_lang
+
+
+def handle_onboarding_postback(event, params):
+    """Handle action=onboard_lang postback from onboarding flex.
+    Returns True if handled, False otherwise."""
+    if params.get("action") != "onboard_lang":
+        return False
+    group_id = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None)
+    if not group_id:
+        return True
+    v = params.get("v", "id")
+    langs = [l.strip().lower() for l in v.split(",") if l.strip()]
+    set_group_target_langs(group_id, langs)
+    actual = get_group_target_langs(group_id)
+    confirm_zh = "✅ 翻譯語言已設定:" + " + ".join(
+        "{} {}".format(LANG_FLAGS.get(l, ""), LANG_NAMES_ZH.get(l, l)) for l in actual)
+    confirm_id = "✅ Bahasa diatur: " + " + ".join(LANG_NAMES.get(l, l) for l in actual)
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=confirm_zh + "\n" + confirm_id)],
+            ))
+    except Exception as e:
+        logger.warning("onboarding confirm reply failed: %s", e)
+    return True
+
+
+# ----------------------------------------------------------------------------
+# E. LIFF SETTINGS — nonce-based auth (no LIFF SDK verify needed)
+# ----------------------------------------------------------------------------
+
+LIFF_NONCE_TTL = 600   # 10 minutes
+_liff_nonces = {}       # {nonce: (group_id, user_id, expires_at)}
+_liff_lock = _threading_v310.Lock()
+
+
+def _liff_cleanup():
+    now = time.time()
+    with _liff_lock:
+        for k in [k for k, v in _liff_nonces.items() if v[2] < now]:
+            _liff_nonces.pop(k, None)
+
+
+def issue_liff_nonce(group_id, user_id=""):
+    """Create a short-lived nonce that authorizes editing this group's settings."""
+    _liff_cleanup()
+    nonce = secrets.token_urlsafe(20)
+    with _liff_lock:
+        _liff_nonces[nonce] = (group_id, user_id, time.time() + LIFF_NONCE_TTL)
+    return nonce
+
+
+def resolve_liff_nonce(nonce):
+    """Returns (group_id, user_id) if valid, else None."""
+    if not nonce:
+        return None
+    _liff_cleanup()
+    with _liff_lock:
+        entry = _liff_nonces.get(nonce)
+    if not entry:
+        return None
+    return entry[0], entry[1]
+
+
+def handle_liff_command(group_id, user_id):
+    """Handler for the `/liff` command. Returns the message to send back."""
+    liff_id = os.environ.get("LIFF_ID", "").strip()
+    public_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+
+    if not group_id:
+        return "⚠️ /liff 只能在群組使用 / Hanya di grup"
+
+    nonce = issue_liff_nonce(group_id, user_id or "")
+
+    if liff_id:
+        # Real LIFF URL — opens inside LINE
+        url = "https://liff.line.me/{}?nonce={}".format(liff_id, nonce)
+        label = "🔧 群組設定 / Setelan grup"
+    elif public_url:
+        # Fallback: plain web page (opens in browser)
+        url = "{}/liff/settings?nonce={}".format(public_url, nonce)
+        label = "🔧 群組設定(網頁)/ Setelan (web)"
+    else:
+        return ("⚠️ LIFF 未設定 / LIFF belum dikonfigurasi\n"
+                "管理員需設定 LIFF_ID 或 PUBLIC_URL 環境變數")
+
+    return ("{}\n{}\n\n"
+            "(10 分鐘內有效 / berlaku 10 menit)").format(label, url)
+
+
+@app.route("/api/liff/resolve", methods=["POST"])
+def api_liff_resolve():
+    """LIFF page calls this with the nonce → returns current group settings."""
+    data = request.get_json(silent=True) or {}
+    nonce = data.get("nonce", "")
+    resolved = resolve_liff_nonce(nonce)
+    if not resolved:
+        return jsonify({"ok": False, "error": "invalid_or_expired_nonce"}), 401
+    group_id, user_id = resolved
+
+    gname = group_tracking.get(group_id, {}).get("name", "")
+    langs = get_group_target_langs(group_id)
+    tts_on = get_tts_enabled(group_id)
+    skip_terms = list(extra_names_by_group.get(group_id, []))
+    audio_on = group_audio_settings.get(group_id, True)
+    enabled = group_settings.get(group_id, True)
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id,
+        "group_name": gname,
+        "langs": langs,
+        "tts_enabled": tts_on,
+        "skip_terms": skip_terms,
+        "audio_translate_enabled": audio_on,
+        "translation_enabled": enabled,
+        "valid_targets": [l for l in VALID_TARGETS if l != "zh"],
+        "lang_names_zh": {l: LANG_NAMES_ZH.get(l, l) for l in VALID_TARGETS},
+        "lang_flags": {l: LANG_FLAGS.get(l, "") for l in VALID_TARGETS},
+    })
+
+
+@app.route("/api/liff/save", methods=["POST"])
+def api_liff_save():
+    """Apply settings from LIFF page."""
+    data = request.get_json(silent=True) or {}
+    nonce = data.get("nonce", "")
+    resolved = resolve_liff_nonce(nonce)
+    if not resolved:
+        return jsonify({"ok": False, "error": "invalid_or_expired_nonce"}), 401
+    group_id, _ = resolved
+
+    # Languages
+    if "langs" in data and isinstance(data["langs"], list):
+        set_group_target_langs(group_id, data["langs"])
+
+    # TTS toggle
+    if "tts_enabled" in data:
+        group_tts_settings[group_id] = bool(data["tts_enabled"])
+
+    # Audio translate toggle
+    if "audio_translate_enabled" in data:
+        group_audio_settings[group_id] = bool(data["audio_translate_enabled"])
+
+    # Translation master toggle
+    if "translation_enabled" in data:
+        group_settings[group_id] = bool(data["translation_enabled"])
+
+    # Skip terms (full replace)
+    if "skip_terms" in data and isinstance(data["skip_terms"], list):
+        clean = []
+        for t in data["skip_terms"]:
+            t = (t or "").strip()
+            if 1 <= len(t) <= SKIPTERM_MAX_LEN and t not in clean:
+                clean.append(t)
+        clean = clean[:SKIPTERM_MAX_PER_GROUP]
+        extra_names_by_group[group_id] = clean
+        try:
+            rebuild_customer_names()
+        except Exception:
+            pass
+
+    try:
+        save_settings()
+    except Exception as e:
+        logger.warning("liff save save_settings failed: %s", e)
+
+    return jsonify({"ok": True})
+
+
+# LIFF settings HTML — full mobile-friendly page
+LIFF_SETTINGS_HTML = r"""<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>群組設定 / Setelan Grup</title>
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; padding:0; background:#f3f4f6; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans TC",sans-serif; color:#222; padding-bottom:80px; }
+  header { background:linear-gradient(135deg,#7c6fef 0%,#5a4be0 100%); color:#fff; padding:18px 18px 22px; }
+  header h1 { font-size:18px; margin:0 0 4px; }
+  header .sub { font-size:12px; opacity:.85; }
+  .group-name { font-size:13px; margin-top:8px; opacity:.95; }
+  section { background:#fff; margin:14px 14px 0; border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  section h2 { font-size:14px; margin:0 0 12px; color:#444; display:flex; align-items:center; gap:6px; }
+  .lang-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .lang-pill { padding:12px 10px; border:2px solid #e5e7eb; border-radius:10px; text-align:center; font-size:14px; cursor:pointer; transition:all .15s; background:#fafafa; }
+  .lang-pill.on { border-color:#7c6fef; background:#f3f0ff; color:#5a4be0; font-weight:600; }
+  .lang-pill .flag { font-size:22px; display:block; margin-bottom:4px; }
+  .toggle-row { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #f0f0f0; }
+  .toggle-row:last-child { border-bottom:none; }
+  .toggle-row .label { font-size:14px; }
+  .toggle-row .desc { font-size:11px; color:#999; margin-top:2px; }
+  .switch { position:relative; width:48px; height:26px; background:#d1d5db; border-radius:13px; cursor:pointer; transition:background .2s; flex-shrink:0; }
+  .switch.on { background:#7c6fef; }
+  .switch::after { content:""; position:absolute; top:2px; left:2px; width:22px; height:22px; background:#fff; border-radius:50%; transition:left .2s; }
+  .switch.on::after { left:24px; }
+  .skip-list { margin:8px 0 0; padding:0; list-style:none; }
+  .skip-item { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:#f9fafb; border-radius:8px; margin-bottom:6px; font-size:14px; }
+  .skip-item button { background:#fecaca; color:#b91c1c; border:none; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .skip-add { display:flex; gap:6px; margin-top:8px; }
+  .skip-add input { flex:1; padding:10px; border:1px solid #d1d5db; border-radius:8px; font-size:14px; }
+  .skip-add button { background:#7c6fef; color:#fff; border:none; padding:0 16px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; }
+  .save-bar { position:fixed; bottom:0; left:0; right:0; padding:12px 14px; background:rgba(255,255,255,.96); backdrop-filter:blur(10px); border-top:1px solid #e5e7eb; }
+  .save-btn { width:100%; padding:14px; background:#7c6fef; color:#fff; border:none; border-radius:10px; font-size:16px; font-weight:600; cursor:pointer; }
+  .save-btn:disabled { opacity:.5; }
+  .err { background:#fee2e2; color:#991b1b; padding:12px; margin:14px; border-radius:8px; font-size:13px; }
+  .ok-toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#10b981; color:#fff; padding:10px 18px; border-radius:20px; font-size:13px; opacity:0; transition:opacity .3s; z-index:1000; }
+  .ok-toast.show { opacity:1; }
+  .empty { font-size:12px; color:#9ca3af; text-align:center; padding:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌐 翻譯機器人設定</h1>
+  <div class="sub">Setelan Bot Penerjemah</div>
+  <div class="group-name" id="gn">載入中... / Memuat...</div>
+</header>
+
+<div id="err" class="err" style="display:none"></div>
+<div id="main" style="display:none">
+
+<section>
+  <h2>🌍 翻譯語言 / Bahasa Terjemahan</h2>
+  <div style="font-size:11px;color:#777;margin-bottom:10px;">中文訊息會翻譯成所有勾選的語言<br>Pesan Tionghoa diterjemahkan ke semua bahasa yang dipilih</div>
+  <div class="lang-grid" id="lg"></div>
+</section>
+
+<section>
+  <h2>⚙️ 功能開關 / Fitur</h2>
+  <div class="toggle-row">
+    <div>
+      <div class="label">翻譯總開關 / Terjemahan</div>
+      <div class="desc">關閉後此群組不翻譯任何訊息</div>
+    </div>
+    <div class="switch" id="sw-trans" data-key="translation_enabled"></div>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <div class="label">語音訊息翻譯 / Pesan Suara</div>
+      <div class="desc">收到語音時自動 STT 並翻譯</div>
+    </div>
+    <div class="switch" id="sw-audio" data-key="audio_translate_enabled"></div>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <div class="label">🔊 朗讀翻譯結果 / TTS</div>
+      <div class="desc">翻譯完成後額外推語音(額外費用)</div>
+    </div>
+    <div class="switch" id="sw-tts" data-key="tts_enabled"></div>
+  </div>
+</section>
+
+<section>
+  <h2>🚫 不翻譯詞 / Kata Dikecualikan</h2>
+  <div style="font-size:11px;color:#777;margin-bottom:6px;">列在此處的詞會保持原文不翻譯(人名、機台號、產品代碼)</div>
+  <ul class="skip-list" id="sl"></ul>
+  <div class="skip-add">
+    <input id="skipi" placeholder="輸入要保留的詞 / Kata yang dipertahankan" maxlength="30">
+    <button onclick="addSkip()">＋ 加入</button>
+  </div>
+</section>
+
+</div>
+
+<div class="save-bar"><button class="save-btn" id="sb" onclick="save()" disabled>💾 儲存設定 / Simpan</button></div>
+<div class="ok-toast" id="toast"></div>
+
+<script>
+let NONCE = new URLSearchParams(location.search).get("nonce") || "";
+let STATE = null;
+
+function showErr(m){
+  let e = document.getElementById("err");
+  e.textContent = m; e.style.display = "block";
+  document.getElementById("main").style.display = "none";
+}
+function toast(m){
+  let t = document.getElementById("toast");
+  t.textContent = m; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+async function init(){
+  // Try LIFF init (best-effort — falls through to nonce-only if not in LIFF)
+  try {
+    let liffId = document.querySelector('meta[name="liff-id"]');
+    if (window.liff && liffId) await liff.init({liffId: liffId.content});
+  } catch(e){ /* ignore — nonce flow doesn't need LIFF */ }
+
+  if (!NONCE) { showErr("⚠️ 缺少授權 token / Token tidak ada\n請從 LINE 群組打 /liff 重新取得連結"); return; }
+
+  try {
+    let r = await fetch("/api/liff/resolve", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({nonce: NONCE})
+    });
+    if (!r.ok) {
+      let d = await r.json().catch(() => ({}));
+      if (d.error === "invalid_or_expired_nonce")
+        showErr("⏰ 連結已過期 / Tautan kedaluwarsa\n請從 LINE 群組重新打 /liff");
+      else
+        showErr("❌ 載入失敗 / Gagal memuat: " + (d.error || r.status));
+      return;
+    }
+    STATE = await r.json();
+    render();
+  } catch(e) {
+    showErr("❌ 網路錯誤 / Kesalahan jaringan: " + e.message);
+  }
+}
+
+function render(){
+  document.getElementById("main").style.display = "block";
+  document.getElementById("sb").disabled = false;
+  document.getElementById("gn").textContent = STATE.group_name || "(未命名群組)";
+
+  // Languages
+  let lg = document.getElementById("lg"); lg.innerHTML = "";
+  for (let code of STATE.valid_targets) {
+    let on = STATE.langs.includes(code);
+    let pill = document.createElement("div");
+    pill.className = "lang-pill" + (on ? " on" : "");
+    pill.innerHTML = `<span class="flag">${STATE.lang_flags[code]||""}</span>${STATE.lang_names_zh[code]||code}`;
+    pill.onclick = () => {
+      if (STATE.langs.includes(code)) {
+        if (STATE.langs.length <= 1) { toast("至少要保留 1 種語言"); return; }
+        STATE.langs = STATE.langs.filter(x => x !== code);
+      } else {
+        if (STATE.langs.length >= 5) { toast("最多 5 種語言"); return; }
+        STATE.langs.push(code);
+      }
+      render();
+    };
+    lg.appendChild(pill);
+  }
+
+  // Toggles
+  for (let key of ["translation_enabled","audio_translate_enabled","tts_enabled"]) {
+    let id = {"translation_enabled":"sw-trans","audio_translate_enabled":"sw-audio","tts_enabled":"sw-tts"}[key];
+    let sw = document.getElementById(id);
+    sw.classList.toggle("on", !!STATE[key]);
+    sw.onclick = () => { STATE[key] = !STATE[key]; render(); };
+  }
+
+  // Skip terms
+  let sl = document.getElementById("sl"); sl.innerHTML = "";
+  if (!STATE.skip_terms || STATE.skip_terms.length === 0) {
+    sl.innerHTML = '<li class="empty">尚無 / Belum ada</li>';
+  } else {
+    for (let i=0; i<STATE.skip_terms.length; i++) {
+      let li = document.createElement("li");
+      li.className = "skip-item";
+      let t = STATE.skip_terms[i];
+      li.innerHTML = `<span>${escapeHtml(t)}</span>`;
+      let btn = document.createElement("button");
+      btn.textContent = "移除"; btn.onclick = () => { STATE.skip_terms.splice(i,1); render(); };
+      li.appendChild(btn);
+      sl.appendChild(li);
+    }
+  }
+}
+
+function addSkip(){
+  let input = document.getElementById("skipi");
+  let v = input.value.trim();
+  if (!v) return;
+  if (v.length > 30) { toast("最多 30 字 / Maks 30"); return; }
+  if (!STATE.skip_terms) STATE.skip_terms = [];
+  if (STATE.skip_terms.includes(v)) { toast("已存在 / Sudah ada"); return; }
+  if (STATE.skip_terms.length >= 100) { toast("已達上限 100 / Maks 100"); return; }
+  STATE.skip_terms.push(v);
+  input.value = "";
+  render();
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function save(){
+  let btn = document.getElementById("sb");
+  btn.disabled = true; btn.textContent = "儲存中... / Menyimpan...";
+  try {
+    let r = await fetch("/api/liff/save", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        nonce: NONCE,
+        langs: STATE.langs,
+        tts_enabled: STATE.tts_enabled,
+        audio_translate_enabled: STATE.audio_translate_enabled,
+        translation_enabled: STATE.translation_enabled,
+        skip_terms: STATE.skip_terms,
+      })
+    });
+    let d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) {
+      toast("❌ 儲存失敗: " + (d.error || r.status));
+      btn.disabled = false; btn.textContent = "💾 儲存設定 / Simpan";
+      return;
+    }
+    toast("✅ 已儲存 / Tersimpan");
+    btn.textContent = "✅ 已儲存 / Tersimpan";
+    setTimeout(() => {
+      btn.disabled = false; btn.textContent = "💾 儲存設定 / Simpan";
+    }, 1500);
+  } catch(e) {
+    toast("❌ 網路錯誤: " + e.message);
+    btn.disabled = false; btn.textContent = "💾 儲存設定 / Simpan";
+  }
+}
+
+init();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/liff/settings")
+def liff_settings_page():
+    """Serve the LIFF settings HTML."""
+    resp = app.response_class(LIFF_SETTINGS_HTML, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
+
+# ----------------------------------------------------------------------------
+# F. PERSISTENCE — extend save/load to include new v3.10 dicts
+# ----------------------------------------------------------------------------
+# We wrap the existing _do_save_impl and load_settings so the new dicts
+# (group_target_langs, group_tts_settings) are persisted to a sidecar file
+# on GitHub. The original save is preserved untouched.
+
+_v310_orig_save = _do_save_impl
+_v310_orig_load = load_settings
+
+
+def _do_save_impl_v310():
+    """Wrap original save to also persist v3.10 settings."""
+    try:
+        _v310_orig_save()
+    except Exception as e:
+        logger.warning("v310: orig save failed: %s", e)
+    # Sidecar
+    try:
+        sidecar = {
+            "group_target_langs": group_target_langs,
+            "group_tts_settings": group_tts_settings,
+        }
+        sc = json.dumps(sidecar, ensure_ascii=False, indent=2)
+        _commit_file_to_github("bot_settings_v310.json", sc,
+                               "v3.10 sidecar settings", branch="data")
+    except Exception as e:
+        logger.warning("v310 sidecar save failed: %s", e)
+
+
+def load_settings_v310():
+    """Wrap original load to also restore v3.10 settings."""
+    try:
+        _v310_orig_load()
+    except Exception as e:
+        logger.warning("v310: orig load failed: %s", e)
+    try:
+        raw = _load_file_from_github("bot_settings_v310.json", branch="data")
+        if raw:
+            d = json.loads(raw)
+            v = d.get("group_target_langs")
+            if isinstance(v, dict):
+                group_target_langs.clear()
+                group_target_langs.update(v)
+            v = d.get("group_tts_settings")
+            if isinstance(v, dict):
+                group_tts_settings.clear()
+                group_tts_settings.update(v)
+            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg)",
+                        len(group_target_langs), len(group_tts_settings))
+    except Exception as e:
+        logger.warning("v310 sidecar load failed: %s", e)
+
+
+# Replace globals so the rest of app.py picks up the v310 versions
+_do_save_impl = _do_save_impl_v310
+load_settings = load_settings_v310
+
+
+# Re-run load now that the wrapper is in place, so the sidecar gets restored
+# on boot (the original load_settings was already called near line 14522
+# before this wrapping happened, so this catches up on the sidecar).
+try:
+    load_settings()
+    logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF")
+except Exception as _e:
+    logger.warning("v3.10 boot reload failed: %s", _e)
+
+
+# ============================================================================
+# END OF v3.10 EXTENSIONS
+# ============================================================================
 
 
 if __name__ == "__main__":
