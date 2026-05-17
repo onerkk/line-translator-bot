@@ -118,13 +118,13 @@
     }
   },
   "bot_stats": {
-    "text_translations": 105,
+    "text_translations": 106,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 3,
-    "tokens_prompt": 1692490,
-    "tokens_completion": 5159,
+    "tokens_prompt": 1693427,
+    "tokens_completion": 5173,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -186,8 +186,8 @@
       "tokens_completion": 866
     },
     "__dm__": {
-      "tokens_prompt": 46920,
-      "tokens_completion": 28
+      "tokens_prompt": 47857,
+      "tokens_completion": 42
     }
   },
   "user_languages": {},
