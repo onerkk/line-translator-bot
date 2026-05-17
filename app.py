@@ -4563,6 +4563,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 extra_rule = " 10. IMPORTANT: Do not leave Korean text untranslated unless it is a person's name or __MENTION__ placeholder."
             elif src == "th":
                 extra_rule = " 10. IMPORTANT: Do not leave Thai text untranslated unless it is a person's name or __MENTION__ placeholder."
+            elif src == "hi":
+                # v3.10: 補上印地文
+                extra_rule = " 10. IMPORTANT: Do not leave Hindi/Devanagari text untranslated unless it is a person's name or __MENTION__ placeholder."
+            elif src == "vi":
+                # v3.10: 補上越南文
+                extra_rule = " 10. IMPORTANT: Do not leave Vietnamese text untranslated unless it is a person's name or __MENTION__ placeholder."
+            elif src == "id":
+                # v3.10: 補上印尼文 (避免 id→其他語言時殘留印尼字)
+                extra_rule = " 10. IMPORTANT: Do not leave Indonesian text untranslated unless it is a person's name or __MENTION__ placeholder."
 
         # Get tone from thread-local (set by handler before calling translate)
         _tone = getattr(_tl, 'tone', 'casual')
@@ -6846,12 +6855,16 @@ HELP_COMMAND_SECTIONS = [
         "items": [
             ("/skip",   "不翻譯我",   "Jangan terjemahkan saya"),
             ("/unskip", "恢復翻譯",   "Terjemahkan lagi"),
+            ("/whoami", "查我的 LINE ID", "Cek LINE ID saya"),
         ],
     },
     {
         "num": "III", "zh_tag": "ADMIN", "zh_name": "管理",
         "id_tag": "ADMIN", "id_name": "PENGELOLA",
         "items": [
+            ("/liff",         "圖形化群組設定", "Setelan grup grafis"),
+            ("/lang id,th",   "設定翻譯語言",   "Atur bahasa"),
+            ("/skipterm 詞",  "加不翻譯詞",     "Tambah kata skip"),
             ("/skipadd 名字", "加入白名單",   "Tambah whitelist"),
             ("/skipdel 名字", "移出白名單",   "Hapus whitelist"),
             ("/skiplist",     "查看白名單",   "Lihat whitelist"),
@@ -7321,7 +7334,74 @@ def build_image_ask_flex(message_id):
 
 
 def handle_lang_command(text, group_id):
-    return "ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯\nBot ini hanya mendukung terjemahan Mandarin ⇄ Indonesia"
+    """v3.10: 真正可用的 /lang 命令
+    用法:
+      /lang               → 顯示當前設定
+      /lang id            → 設單一語言
+      /lang id,th         → 設多語廣播
+      /lang id th hi      → 同上,空白分隔也行
+    """
+    if not group_id:
+        return "⚠️ /lang 只能在群組使用 / Hanya di grup"
+
+    parts = text.strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) >= 2 else ""
+
+    try:
+        cur = get_group_target_langs(group_id)
+    except NameError:
+        cur = [group_target_lang.get(group_id, "id")]
+
+    # 無參數 → 顯示當前 + 用法
+    if not arg:
+        cur_display = " + ".join(
+            "{} {}".format(LANG_FLAGS.get(l, ""), LANG_NAMES_ZH.get(l, l)) for l in cur)
+        return ("📋 當前翻譯語言 / Bahasa saat ini:\n"
+                "中文 ⇄ " + cur_display + "\n\n"
+                "用法 / Cara pakai:\n"
+                "  /lang id            單語 印尼\n"
+                "  /lang id,th         雙語 印尼+泰\n"
+                "  /lang id,th,hi      三語\n\n"
+                "可用代碼 / Kode tersedia:\n"
+                "  id (印尼) th (泰) hi (印地)\n"
+                "  vi (越南) ja (日) ko (韓) en (英)\n\n"
+                "💡 可改用 /liff 圖形化設定")
+
+    # 解析語言代碼 (逗號或空白分隔) - 用既有 module-level re
+    codes = [c.strip().lower() for c in re.split(r'[,\s\u3000]+', arg) if c.strip()]
+    valid = []
+    invalid = []
+    for c in codes:
+        if c in VALID_TARGETS and c != "zh" and c not in valid:
+            valid.append(c)
+        elif c not in VALID_TARGETS or c == "zh":
+            invalid.append(c)
+
+    if invalid:
+        return ("⚠️ 不支援的語言代碼 / Kode tidak didukung: " + ", ".join(invalid) +
+                "\n可用 / Tersedia: id, th, hi, vi, ja, ko, en")
+    if not valid:
+        return "⚠️ 請輸入至少 1 種語言 / Minimal 1 bahasa"
+    if len(valid) > 5:
+        return "⚠️ 最多 5 種語言 / Maks 5 bahasa"
+
+    try:
+        set_group_target_langs(group_id, valid)
+        new_cur = get_group_target_langs(group_id)
+    except NameError:
+        # fallback: 寫單一目標語言 (legacy)
+        group_target_lang[group_id] = valid[0]
+        try:
+            save_settings()
+        except Exception:
+            pass
+        new_cur = [valid[0]]
+
+    display_zh = " + ".join(
+        "{} {}".format(LANG_FLAGS.get(l, ""), LANG_NAMES_ZH.get(l, l)) for l in new_cur)
+    display_id = " + ".join(LANG_NAMES.get(l, l) for l in new_cur)
+    return ("✅ 翻譯語言已設為:中文 ⇄ " + display_zh + "\n"
+            "✅ Bahasa diatur: Mandarin ⇄ " + display_id)
 
 
 def handle_qry_command(text):
@@ -7690,9 +7770,49 @@ def export_examples_to_jsonl():
 def handle_command(text, group_id, user_id=None):
     bot_stats["commands"] += 1
     cmd = text.strip().lower()
+
+    # ========================================================================
+    # v3.10: Admin gate — 重要命令限管理員使用
+    # ========================================================================
+    # 判定為「群組裡」才執行 gate;DM (沒 group_id) 一律放行(只影響自己)
+    if group_id:
+        _gate_error = False
+        try:
+            _need_admin = _is_admin_only_command(text)
+            _is_admin = is_group_admin(user_id)
+        except NameError:
+            # v310 ext 還沒載入 — 用 legacy 行為,不擋
+            _need_admin = False
+            _is_admin = True
+        except Exception as _ge:
+            # 其他例外 → fail safe (擋下),log 警告便於追蹤
+            logger.error("admin gate check failed: %s; failing closed", _ge)
+            _need_admin = True
+            _is_admin = False
+            _gate_error = True
+        if _need_admin and not _is_admin:
+            if _gate_error:
+                return ("⚠️ 系統錯誤,命令暫時無法執行\n"
+                        "⚠️ Kesalahan sistem,coba lagi nanti\n"
+                        "(管理員請查 log)")
+            return ("⚠️ 此命令僅限管理員使用\n"
+                    "⚠️ Perintah ini khusus admin\n\n"
+                    "(打 /whoami 取得你的 LINE ID,請管理員加你為 admin)")
+
     if cmd == "/help":
         # Return sentinel; caller detects this and sends Flex instead of Text
         return "__FLEX_HELP__"
+    elif cmd == "/whoami":
+        # v3.10: 讓使用者查自己的 LINE userID (給 bootstrap admin 用)
+        if not user_id:
+            return "⚠️ 無法取得你的 LINE ID / Tidak bisa ambil LINE ID"
+        try:
+            _is_a = "✅" if is_group_admin(user_id) else "❌"
+        except NameError:
+            _is_a = "?"
+        return ("🪪 你的 LINE userID:\n" + user_id + "\n\n"
+                "管理員身分 / Status admin: " + _is_a + "\n\n"
+                "(把此 ID 加到環境變數 BOOTSTRAP_ADMIN_USER_IDS 即可成為管理員)")
     elif cmd.startswith("/wrong") or cmd.startswith("/markwrong") or cmd.startswith("/錯") or cmd.startswith("/標錯"):
         # v3.4: rich /wrong syntax (see parse_wrong_command for supported forms)
         parsed = parse_wrong_command(text)
@@ -8050,7 +8170,10 @@ def handle_message(event):
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="ℹ️ 本機器人僅支援 中文 ⇄ 🇮🇩 印尼文 互譯\nBot ini hanya mendukung terjemahan Mandarin ⇄ Indonesia")]
+                    messages=[TextMessage(text=(
+                        "ℹ️ DM 自動偵測語言並互譯\n"
+                        "ℹ️ DM otomatis deteksi & terjemahkan\n\n"
+                        "支援 / Didukung: 中文/印尼/泰/印地/越南/日/韓/英"))]
                 ))
             return
         # DM: handle /qry command
@@ -8080,6 +8203,22 @@ def handle_message(event):
                 api.reply_message(ReplyMessageRequest(
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=_clip_line_text(dm_cmd_result))]
+                ))
+            return
+        # v3.10: DM 支援 /whoami (admin bootstrap 用)
+        if cmd == "/whoami":
+            try:
+                _is_a = "✅" if is_group_admin(user_id) else "❌"
+            except NameError:
+                _is_a = "?"
+            whoami_text = ("🪪 你的 LINE userID:\n" + (user_id or "(未知)") + "\n\n"
+                           "管理員身分 / Status admin: " + _is_a + "\n\n"
+                           "(把此 ID 加到環境變數 BOOTSTRAP_ADMIN_USER_IDS 即可成為管理員)")
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=whoami_text)]
                 ))
             return
         # DM: skip other / commands
@@ -8232,6 +8371,16 @@ def handle_message(event):
             reply = format_multi_reply(_trs)
             _tts_lang, _tts_text = _trs[0]   # 第一個翻譯拿來 TTS
     else:
+        # v3.10: 安全保護 — 只有「該語言在此群組的目標語言清單中」才翻譯到中文。
+        # 避免印尼工人偶爾打英文 "OK"/"thanks" 也被當外語翻譯造成困惑。
+        # 群組要支援泰文工人 → 後台勾選泰文 → 泰文打字才會被翻譯。
+        try:
+            _group_targets = get_group_target_langs(group_id)
+        except NameError:
+            _group_targets = [tgt]
+        if lang not in _group_targets:
+            # 偵測到的語言沒在這個群組的配置中 → 跳過,當作雜訊不翻
+            return
         result = translate(text_to_translate, lang, "zh")
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
@@ -8243,7 +8392,12 @@ def handle_message(event):
     if reply is None:
         return
 
-    bot_stats["text_translations"] += 1
+    # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
+    try:
+        _trans_count = len(_trs) if (lang == "zh" and _trs) else 1
+    except (NameError, UnboundLocalError):
+        _trans_count = 1
+    bot_stats["text_translations"] += _trans_count
 
     # v3.10: TTS — 若該群組開了 TTS,額外推一條語音訊息
     try:
@@ -8262,13 +8416,55 @@ def handle_message(event):
                        get_display_name(group_id, sender_id))
 
     src_flag = LANG_FLAGS.get(lang, "")
-    tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else "id", "")
+    # v3.10: multi-broadcast 時 tgt_flag 顯示所有實際翻譯出來的語言旗幟串
+    try:
+        if lang == "zh" and _trs and len(_trs) > 1:
+            tgt_flag = "+".join(LANG_FLAGS.get(l, "") for l, _ in _trs)
+        else:
+            tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else (
+                _trs[0][0] if (lang == "zh" and _trs) else "id"), "")
+    except (NameError, UnboundLocalError):
+        tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else "id", "")
     translated_text = reply.split(" ", 1)[1] if " " in reply else reply
 
     # Flex or plain text based on setting
     flex_msg = None
+    _is_multi = False
+    try:
+        _is_multi = (lang == "zh" and _trs and len(_trs) > 1)
+    except (NameError, UnboundLocalError):
+        pass
     if get_group_feature(group_id, 'flex'):
-        flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
+        # v3.10: 改用 build_translation_flex_v2 (含 9 個視覺升級開關)
+        try:
+            _v2_multilang_on = get_flex_v2(group_id, "multilang")
+        except NameError:
+            _v2_multilang_on = False
+        if _is_multi and _v2_multilang_on:
+            # 多語廣播專屬 Flex (LV2 開啟才用)
+            try:
+                flex_msg = build_multilang_flex_v2(text, _trs, src_lang=lang,
+                                                   sender_name_display=sender_display,
+                                                   quoted_text=quoted_text,
+                                                   group_id=group_id)
+            except NameError:
+                flex_msg = None
+        elif not _is_multi:
+            # 單語翻譯,用 v2
+            try:
+                _msg_id = getattr(event.message, 'id', None)
+                flex_msg = build_translation_flex_v2(
+                    text, translated_text,
+                    src_lang=lang,
+                    tgt_lang=(tgt if lang == "zh" else "zh"),
+                    sender_name_display=sender_display,
+                    quoted_text=quoted_text,
+                    group_id=group_id,
+                    msg_id=_msg_id,
+                )
+            except NameError:
+                # v310 ext 沒載入 → 用舊版
+                flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
     qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
     custom_sender = get_sender_object()
     # Get quoteToken from original message for reply linking
@@ -8615,6 +8811,14 @@ def _handle_image_background(ctx):
         if lang == "zh":
             actual_tgt = tgt
         else:
+            # v3.10: 與 text/audio handler 一致 — 非中文時只翻已配置語言
+            try:
+                _gt = get_group_target_langs(group_id)
+            except NameError:
+                _gt = [tgt]
+            if lang not in _gt:
+                _event_log_write("image_aborted", {"reason": "lang_not_configured", "lang": lang})
+                return
             actual_tgt = "zh"
 
         # Translate OCR text using the same translation engine as text messages
@@ -8855,6 +9059,15 @@ def _process_pending_image_translate_inner(event, message_id):
         logger.warning("[ImgAsk] lang detection returned None for: %s", extracted[:80])
         _reply_or_push("⚠️ 偵測不到語言,無法翻譯\nTidak bisa mendeteksi bahasa, gagal terjemahkan")
         return
+    # v3.10: 非中文時只翻已配置語言
+    if lang != "zh":
+        try:
+            _gt = get_group_target_langs(group_id)
+        except NameError:
+            _gt = [tgt]
+        if lang not in _gt:
+            _reply_or_push("⚠️ 此群組未配置「" + (LANG_NAMES_ZH.get(lang, lang) or lang) + "」翻譯\n後台或 /liff 設定可調整")
+            return
     actual_tgt = tgt if lang == "zh" else "zh"
     logger.info("[ImgAsk] translating %s -> %s", lang, actual_tgt)
 
@@ -8976,6 +9189,13 @@ def handle_audio(event):
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get(tgt, "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
     else:
+        # v3.10: 與 text handler 一致 — 非中文時只翻已配置語言
+        try:
+            _gt = get_group_target_langs(group_id)
+        except NameError:
+            _gt = [tgt]
+        if lang not in _gt:
+            return
         result = translate(transcribed, lang, "zh")
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
@@ -9065,6 +9285,13 @@ if VideoMessageContent:
                                 result = translate(ocr_result, "zh", tgt)
                                 actual_tgt = tgt
                             else:
+                                # v3.10: 非中文時只翻已配置語言
+                                try:
+                                    _gt = get_group_target_langs(group_id)
+                                except NameError:
+                                    _gt = [group_target_lang.get(group_id, "id")]
+                                if lang not in _gt:
+                                    return
                                 result = translate(ocr_result, lang, "zh")
                                 actual_tgt = "zh"
                             if result:
@@ -9125,6 +9352,13 @@ if LocationMessageContent:
                     result = translate(loc_text, "zh", tgt)
                     actual_tgt = tgt
                 else:
+                    # v3.10: 非中文時只翻已配置語言
+                    try:
+                        _gt = get_group_target_langs(group_id)
+                    except NameError:
+                        _gt = [group_target_lang.get(group_id, "id")]
+                    if lang not in _gt:
+                        return
                     result = translate(loc_text, lang, "zh")
                     actual_tgt = "zh"
                 if result:
@@ -9143,6 +9377,15 @@ if JoinEvent:
     @handler.add(JoinEvent)
     def handle_join(event):
         """Track when bot joins a group."""
+        # v3.10: redelivery / duplicate 保護 (避免重送觸發兩次 onboarding flex)
+        if _is_redelivery(event):
+            logger.warning("[handle_join] redelivery, skipping")
+            return
+        _rtok = getattr(event, 'reply_token', None)
+        if _rtok and _is_duplicate_message("join:" + _rtok):
+            logger.warning("[handle_join] duplicate, skipping")
+            return
+
         source = event.source
         group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
         if not group_id:
@@ -9157,6 +9400,14 @@ if JoinEvent:
             pass
         group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
         save_settings()
+
+        # v3.10: Bot 第一次被邀請進群組時送 onboarding flex 引導選語言
+        try:
+            rtok = getattr(event, 'reply_token', None)
+            if rtok and is_new_group(group_id):
+                send_onboarding_flex(rtok, group_id)
+        except NameError:
+            pass   # v310 ext not loaded
 
 if MemberJoinedEvent:
     @handler.add(MemberJoinedEvent)
@@ -9188,13 +9439,8 @@ if MemberJoinedEvent:
         if not group_settings.get(group_id, True):
             return
 
-        # v3.10: 新群組(從沒設過語言)→ 送 onboarding Flex 引導選語言
-        try:
-            if is_new_group(group_id):
-                if send_onboarding_flex(event.reply_token, group_id):
-                    return   # onboarding 已送,不再送舊版 welcome
-        except NameError:
-            pass   # v310 not loaded — fall through to legacy welcome
+        # v3.10 NOTE: onboarding flex 已改在 JoinEvent (Bot 加群時) 觸發,
+        # 不再在這裡觸發 (避免每個新成員加入都送 onboarding 騷擾既有群組)
 
         try:
             zh = ws.get("text_zh", "")
@@ -9280,6 +9526,7 @@ if BotLeaveEvent:
             try:
                 group_target_langs.pop(group_id, None)
                 group_tts_settings.pop(group_id, None)
+                group_flex_v2.pop(group_id, None)
             except NameError:
                 pass
             save_settings()
@@ -9317,6 +9564,60 @@ if PostbackEvent:
                     return
             except NameError:
                 pass
+
+        # v3.10: LV4 flex card 互動按鈕 — 查儲區
+        if action == "qry":
+            q = params.get("q", "").strip()
+            if q:
+                _gid = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None) or ""
+                if not is_cmd_enabled(_gid, "qry"):
+                    return
+                try:
+                    qry_result = handle_qry_command("/qry " + q)
+                    # 即使查無結果也要 reply,避免工人按按鈕沒反應
+                    reply_text = qry_result or ("🔍 查無此單: " + q + "\n🔍 Tidak ada: " + q)
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=_clip_line_text(reply_text))],
+                        ))
+                except Exception as e:
+                    logger.warning("[postback qry] failed: %s", e)
+            return
+
+        # v3.10: LV4 flex card 互動按鈕 — 重唸 TTS
+        if action == "tts_replay":
+            _gid = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+            tts_text = params.get("t", "").strip()
+            tts_lang = params.get("lang", "id").strip()
+            if not _gid or not tts_text:
+                return
+            try:
+                if not get_tts_enabled(_gid):
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text="⚠️ TTS 未開啟,需 admin 用 /liff 設定")],
+                        ))
+                    return
+                # ack reply (reply_token 1 min 內必須用)
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="🔊 重唸中... / Memutar ulang...")],
+                    ))
+                # push TTS (背景)
+                _threading.Thread(
+                    target=push_tts_message,
+                    args=(_gid, tts_text, tts_lang),
+                    daemon=True,
+                ).start()
+            except Exception as e:
+                logger.warning("[postback tts_replay] failed: %s", e)
+            return
 
         # /help language switch: re-send Flex with the other language first
         if action == "help":
@@ -12439,7 +12740,18 @@ var _groupList=[];
 async function loadGroups(){
   var d=await api('/groups');
   if(!d)return;
+  // v3.10: 保留 _langPickerOpen UI 狀態 (重抓 API 不該關掉用戶開著的面板)
+  var prevOpen={};
+  var prevFlexV2Open={};
+  for(var p=0;p<_groupList.length;p++){
+    if(_groupList[p]&&_groupList[p]._langPickerOpen) prevOpen[_groupList[p].id]=true;
+    if(_groupList[p]&&_groupList[p]._flexV2Open) prevFlexV2Open[_groupList[p].id]=true;
+  }
   _groupList=d.groups||[];
+  for(var q=0;q<_groupList.length;q++){
+    if(prevOpen[_groupList[q].id]) _groupList[q]._langPickerOpen=true;
+    if(prevFlexV2Open[_groupList[q].id]) _groupList[q]._flexV2Open=true;
+  }
   var el=document.getElementById('groupList');
   if(!_groupList.length){el.innerHTML='<div class="empty">尚無群組紀錄<br>Bot 收到群組訊息後會自動記錄</div>';return}
   var html='';
@@ -12453,15 +12765,20 @@ async function loadGroups(){
     var langNames={id:'印尼',th:'泰',hi:'印地',vi:'越',ja:'日',ko:'韓',en:'英'};
     var flagStr=tlList.map(function(c){return (langFlags[c]||'')+(langNames[c]||c)}).join(' + ');
     var ttsOn=!!g.tts_on;
+    var _gn=escapeHtml(g.name||'(未知群組)');
+    var _gn_short=escapeHtml(g.name||g.id.substring(0,12));
     html+='<div class="card">'+
-      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
+      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+_gn+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
       '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
       '<span class="card-sub">中文 ⇄ '+flagStr+'</span>'+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span>'+
-      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span></div>'+
+      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span>'+
+      '<span class="card-sub" style="cursor:pointer;color:#fbbf24;font-weight:600" onclick="toggleFlexV2Picker('+i+')">🎨 視覺</span></div>'+
       // v3.10: 多語選擇 panel (預設隱藏)
       buildLangPicker(g, i)+
+      // v3.10: flex_v2 視覺升級 panel (預設隱藏)
+      buildFlexV2Picker(g, i)+
       '<div class="feat-badges">'+
       // v3.9.10: 圖片按鈕變 3 段循環:開 → 詢問 → 關
       // 顯示文字 / 樣式根據 (image_on, image_ask_mode) 兩個欄位決定
@@ -12475,7 +12792,7 @@ async function loadGroups(){
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
       '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
-      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button></div>';
+      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+_gn_short+'</button></div>';
   }
   el.innerHTML=html;
 }
@@ -12532,14 +12849,18 @@ function loadGroupsLocal(){
     var tlList=(g.target_langs&&g.target_langs.length)?g.target_langs:[g.target_lang||'id'];
     var flagStr=tlList.map(function(c){return (langFlags[c]||'')+(langNames[c]||c)}).join(' + ');
     var ttsOn=!!g.tts_on;
+    var _gn=escapeHtml(g.name||'(未知群組)');
+    var _gn_short=escapeHtml(g.name||g.id.substring(0,12));
     html+='<div class="card">'+
-      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
+      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+_gn+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
       '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
       '<span class="card-sub">中文 ⇄ '+flagStr+'</span>'+
       '<span class="card-sub">｜跳過: '+skipCt+'人</span>'+
-      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span></div>'+
+      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span>'+
+      '<span class="card-sub" style="cursor:pointer;color:#fbbf24;font-weight:600" onclick="toggleFlexV2Picker('+i+')">🎨 視覺</span></div>'+
       buildLangPicker(g, i)+
+      buildFlexV2Picker(g, i)+
       '<div class="feat-badges">'+
       '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
         '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
@@ -12550,7 +12871,7 @@ function loadGroupsLocal(){
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
       '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
-      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button></div>';
+      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+_gn_short+'</button></div>';
   }
   el.innerHTML=html;
 }
@@ -12565,12 +12886,22 @@ function toggleTargetLang(idx, code){
     if(cur.length>=5){toast('最多 5 種語言');return}
     cur.push(code);
   }
-  // 樂觀更新 (先更新本地畫面,API 失敗再重抓)
+  // 樂觀更新 (先更新本地畫面,API 失敗再 rollback)
+  var prev_langs=g.target_langs?g.target_langs.slice():null;
+  var prev_lang=g.target_lang;
   g.target_langs=cur;
   g.target_lang=cur[0];
   loadGroupsLocal();
   api('/groups/settings','POST',{group_id:g.id,target_langs:cur}).then(function(d){
-    if(d){toast('已更新')}else{loadGroups()}
+    if(d){
+      toast('已更新');
+    }else{
+      // rollback
+      g.target_langs=prev_langs;
+      g.target_lang=prev_lang;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
   });
 }
 function toggleTts(idx){
@@ -12579,7 +12910,74 @@ function toggleTts(idx){
   g.tts_on=nv;
   loadGroupsLocal();
   api('/groups/settings','POST',{group_id:g.id,tts_on:nv}).then(function(d){
-    if(d){toast(nv?'TTS 已開啟':'TTS 已關閉')}else{loadGroups()}
+    if(d){
+      toast(nv?'TTS 已開啟':'TTS 已關閉');
+    }else{
+      // 失敗 → 還原本地狀態,重新渲染
+      g.tts_on=!nv;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
+}
+
+// v3.10: 🎨 視覺升級 picker
+var FLEX_V2_DEFS=[
+  {k:'emphasis',  n:'原文淡化 / 譯文加粗',     desc:'譯文用大白字突出,給工人看',          d:true},
+  {k:'header',    n:'雙色 Header (旗幟)',      desc:'卡片頂部國旗色帶',                    d:true},
+  {k:'quote',     n:'Quote 引用視覺化',         desc:'回覆訊息用左邊框',                    d:true},
+  {k:'multilang', n:'多語廣播獨立 box',         desc:'多語翻譯各放各 box,不擠在一起',      d:true},
+  {k:'carousel',  n:'Carousel (3+ 語滑動)',     desc:'多語時改成左右滑卡,每張一語言',      d:false},
+  {k:'buttons',   n:'互動按鈕 (查儲區/標錯/重唸)',desc:'卡片下方加可點按鈕',                  d:true},
+  {k:'hero',      n:'Hero Image (圖片翻譯)',    desc:'拍工單時附原圖縮圖',                  d:false},
+  {k:'span',      n:'Span 高亮 (數字/時間)',    desc:'譯文內數字/時間用色塊強調',          d:false},
+  {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true}
+];
+
+function buildFlexV2Picker(g, idx){
+  if(!g._flexV2Open) return '';
+  var v2=g.flex_v2||{};
+  var h='<div style="margin:6px 0 10px;padding:12px;background:rgba(251,191,36,.06);border-radius:8px;border:1px solid rgba(251,191,36,.25)">';
+  h+='<div style="font-size:12px;color:#fbbf24;margin-bottom:8px;font-weight:600">🎨 視覺升級開關 (9 項,可個別開關)</div>';
+  for(var k=0;k<FLEX_V2_DEFS.length;k++){
+    var def=FLEX_V2_DEFS[k];
+    // 後端沒回該 key (undefined) 時用 client side default,確保 UI 跟後端 _V2_DEFAULTS 一致
+    var on = (v2[def.k]===true) || (v2[def.k]===undefined && def.d===true);
+    h+='<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(251,191,36,.1)">'+
+       '<div style="flex:1;min-width:0">'+
+       '<div style="font-size:13px;color:#e0e0e0;font-weight:600">'+escapeHtml(def.n)+'</div>'+
+       '<div style="font-size:11px;color:#888;margin-top:2px">'+escapeHtml(def.desc)+'</div>'+
+       '</div>'+
+       '<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer;min-width:36px;text-align:center" onclick="toggleFlexV2Key('+idx+',&apos;'+def.k+'&apos;)">'+(on?'ON':'OFF')+'</span>'+
+       '</div>';
+  }
+  h+='<div style="font-size:11px;color:#666;margin-top:8px">💡 設定立即生效。卡片總開關「Flex」要 ON 才會套用這些升級。</div>';
+  h+='</div>';
+  return h;
+}
+
+function toggleFlexV2Picker(idx){
+  var g=_groupList[idx];if(!g)return;
+  g._flexV2Open=!g._flexV2Open;
+  loadGroupsLocal();
+}
+
+function toggleFlexV2Key(idx, key){
+  var g=_groupList[idx];if(!g)return;
+  if(!g.flex_v2)g.flex_v2={};
+  var prev=g.flex_v2[key];
+  var nv=!prev;
+  g.flex_v2[key]=nv;
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,flex_v2_key:key,flex_v2_val:nv}).then(function(d){
+    if(d){
+      toast('🎨 '+key+': '+(nv?'ON':'OFF'));
+    }else{
+      // rollback
+      g.flex_v2[key]=prev;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
   });
 }
 
@@ -12800,7 +13198,7 @@ async function loadNames(){
   var html='<div style="display:flex;flex-wrap:wrap;gap:8px">';
   for(var i=0;i<_protectedNames.length;i++){
     html+='<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
-    _protectedNames[i]+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
+    escapeHtml(_protectedNames[i])+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
   }
   html+='</div>';
   el.innerHTML=html;
@@ -15470,6 +15868,13 @@ def api_admin_groups():
                 else [group_target_lang.get(gid, "id")]
             ))(),
             "tts_on": bool(globals().get("group_tts_settings", {}).get(gid, False)),
+            # v3.10: flex_v2 視覺升級開關 (含 fallback default)
+            "flex_v2": (lambda: (
+                {**globals().get("_V2_DEFAULTS", {}),
+                 **(globals().get("group_flex_v2", {}).get(gid, {})
+                    if isinstance(globals().get("group_flex_v2", {}).get(gid), dict)
+                    else {})}
+            ))(),
         })
     groups.sort(key=lambda x: x["name"] or x["id"])
     return jsonify({"groups": groups})
@@ -15509,6 +15914,7 @@ def api_admin_leave_group():
     try:
         group_target_langs.pop(gid, None)
         group_tts_settings.pop(gid, None)
+        group_flex_v2.pop(gid, None)
     except NameError:
         pass
     save_settings()
@@ -16272,6 +16678,14 @@ def api_admin_group_settings():
     if "tts_on" in data:
         try:
             group_tts_settings[gid] = bool(data["tts_on"])
+        except NameError:
+            pass
+    # v3.10: flex_v2 視覺升級開關 (單一 key)
+    if "flex_v2_key" in data:
+        _k = data["flex_v2_key"]
+        _v = bool(data.get("flex_v2_val", False))
+        try:
+            set_flex_v2(gid, _k, _v)
         except NameError:
             pass
     save_settings()
@@ -18394,20 +18808,115 @@ except ImportError:
 
 
 # ----------------------------------------------------------------------------
+# 0. ADMIN GATE — 重要群組命令限管理員使用
+# ----------------------------------------------------------------------------
+# Admin 判定:
+#   1. 環境變數 BOOTSTRAP_ADMIN_USER_IDS (逗號分隔的 LINE userID) — 永遠有效
+#   2. admin_users[user_id] = {"is_admin": True, ...} (後台設的)
+# 任何使用者打 /whoami 都會回傳自己的 LINE userID 以利 bootstrap。
+
+# 解析環境變數一次,boot 後快取
+# 支援逗號、空白、換行任一方式分隔多個 LINE userID
+_BOOTSTRAP_ADMIN_IDS = set()
+try:
+    _raw_admins = os.environ.get("BOOTSTRAP_ADMIN_USER_IDS", "")
+    # 用任意「非 LINE userID 合法字元」當分隔符 (LINE userID 是 U + 32 hex chars,純英數)
+    for _x in re.split(r'[^A-Za-z0-9_-]+', _raw_admins):
+        _x = _x.strip()
+        if _x:
+            _BOOTSTRAP_ADMIN_IDS.add(_x)
+    if _BOOTSTRAP_ADMIN_IDS:
+        logger.info("v3.10: BOOTSTRAP_ADMIN_USER_IDS loaded: %d ids", len(_BOOTSTRAP_ADMIN_IDS))
+except Exception as _e:
+    logger.warning("v3.10: BOOTSTRAP_ADMIN_USER_IDS parse failed: %s", _e)
+
+
+def is_group_admin(user_id):
+    """檢查使用者是否為管理員。
+    優先順序:
+      1. 環境變數 BOOTSTRAP_ADMIN_USER_IDS (永遠有效,bootstrap 後路)
+      2. admin_users[user_id]["is_admin"] = True (後台設的)
+    """
+    if not user_id:
+        return False
+    if user_id in _BOOTSTRAP_ADMIN_IDS:
+        return True
+    try:
+        entry = admin_users.get(user_id)
+        if isinstance(entry, dict) and entry.get("is_admin"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# 需要管理員權限的命令清單(根據截圖討論結果)
+# 注意:項目都是「精確 cmd」或「startswith 前綴」,執行時兩者都會 match
+_ADMIN_ONLY_EQ = {
+    "/on", "/off",
+    "/img on", "/img off", "/img ask",
+    "/voice on", "/voice off",
+    "/wo on", "/wo off",
+    "/liff",
+    "/clearcache",
+}
+_ADMIN_ONLY_STARTSWITH = (
+    "/wrong", "/markwrong", "/錯", "/標錯",
+    "/export",
+    "/skipterm",
+    "/skipadd",
+    "/skipdel",
+    "/lang",
+    "/notice",
+)
+
+
+def _is_admin_only_command(text):
+    """判斷一條訊息是否屬於需 admin 權限的命令。
+
+    嚴格匹配規則:
+    - eq:  cmd_lower 必須完全等於清單中的某項
+    - sw:  cmd_lower 必須是 'prefix' 或 'prefix' 後面接空白/全形空白/換行
+           (避免 '/skipxyz' 之類非命令被誤判為 '/skipadd' 系列而擋下)
+    """
+    if not text:
+        return False
+    cmd_lower = text.strip().lower()
+    if cmd_lower in _ADMIN_ONLY_EQ:
+        return True
+    for pref in _ADMIN_ONLY_STARTSWITH:
+        if cmd_lower == pref:
+            return True
+        # prefix 後面必須是分隔符(空白/全形空白/換行/tab),不能是字母數字
+        if cmd_lower.startswith(pref):
+            tail_char = cmd_lower[len(pref):len(pref)+1]
+            if tail_char in (' ', '\u3000', '\n', '\t', '\r'):
+                return True
+    return False
+
+
+# ----------------------------------------------------------------------------
 # A. MULTILINGUAL BROADCAST — group_target_langs (list)
 # ----------------------------------------------------------------------------
 # When admin sends Chinese, bot translates into ALL of these languages.
 # Backward compatible: empty → fall back to legacy group_target_lang.
 
 group_target_langs = {}   # {group_id: ["id", "th", ...]}
+# ⚠️ 注意:多 gunicorn worker 場景下,此 dict 在每個 worker 各自獨立。
+# admin 在 worker A 改設定 → 寫 GitHub sidecar → 但 worker B/C/D 記憶體不會立刻更新。
+# 同步時機:服務重啟時 load_settings_v310 從 GitHub 載最新。
+# 後果:改完設定後,下一條訊息可能被舊資料 worker 處理。等下次 deploy / restart 才完全同步。
+# 修法 (未實作):redis pub/sub 廣播 reload signal,成本太高暫不做。
 
 
 def get_group_target_langs(group_id):
     """Get target language list for a group. Falls back to legacy single-lang."""
     if group_id and group_id in group_target_langs:
-        lst = [l for l in group_target_langs[group_id] if l in VALID_TARGETS]
-        if lst:
-            return lst
+        v = group_target_langs[group_id]
+        if isinstance(v, list):
+            lst = [l for l in v if isinstance(l, str) and l in VALID_TARGETS]
+            if lst:
+                return lst
     legacy = group_target_lang.get(group_id, "id") if group_id else "id"
     return [legacy] if legacy in VALID_TARGETS else ["id"]
 
@@ -18415,8 +18924,13 @@ def get_group_target_langs(group_id):
 def set_group_target_langs(group_id, langs):
     """Set target langs for a group. langs = iterable of valid codes."""
     valid = []
-    for l in langs:
-        l = (l or "").strip().lower()
+    for l in (langs or []):
+        try:
+            if not isinstance(l, str):
+                continue
+            l = l.strip().lower()
+        except Exception:
+            continue
         if l in VALID_TARGETS and l not in valid:
             valid.append(l)
     if not valid:
@@ -18568,19 +19082,671 @@ TTS_CACHE_MAX = 200
 TTS_TEXT_LIMIT = 500      # clip very long text
 
 
+# ----------------------------------------------------------------------------
+# F. VISUAL UPGRADE — Flex card v2 (per-group toggles)
+# ----------------------------------------------------------------------------
+# 9 個視覺升級開關,各 per-group 獨立可開關。
+# 開關預設值根據「對 UX 影響+成本」決定:
+#   ON  = 一般工人能立即受惠且 token 成本 0
+#   OFF = 高成本 / 對舊版相容性敏感 / 偏好設定
+# 主開關 group_flex_settings (既有) 全關時所有 v2 開關失效。
+
+# 各 v2 開關獨立 dict,讓 admin per-group 微調
+group_flex_v2 = {
+    # {group_id: {key: bool}},未配置時用 _V2_DEFAULTS
+}
+
+# 預設值 (新加 v2 升級全部 ON,除了 carousel/hero/span 三個 OFF)
+_V2_DEFAULTS = {
+    "emphasis":  True,   # LV1.1 原文淡化譯文加粗
+    "header":    True,   # LV1.2 雙色 Header
+    "quote":     True,   # LV1.3 Quote 引用視覺化
+    "multilang": True,   # LV2 多語廣播專屬卡片
+    "carousel":  False,  # LV3 Carousel (3+ 語言才用,佔版面)
+    "buttons":   True,   # LV4 互動按鈕
+    "hero":      False,  # LV5 Hero Image (圖片翻譯才有用,預設 OFF 避免每次)
+    "span":      False,  # LV6 Span 高亮 (token 略增,預設 OFF)
+    "dynsize":   True,   # LV7 動態 size
+}
+
+# Per-language brand color (header 漸層用)
+_LANG_BRAND = {
+    "zh": "#dc2626",   # 紅 (台灣)
+    "id": "#dc2626",   # 紅 (印尼國旗紅)
+    "th": "#1d4ed8",   # 藍 (泰國)
+    "hi": "#f97316",   # 橘 (印度)
+    "vi": "#dc2626",   # 紅 (越南)
+    "ja": "#dc2626",   # 紅 (日本)
+    "ko": "#1e3a8a",   # 藍 (韓國)
+    "en": "#1e40af",   # 藍 (英國)
+}
+
+
+def get_flex_v2(group_id, key):
+    """讀單一 v2 開關,fallback 到 _V2_DEFAULTS。"""
+    if not group_id:
+        return _V2_DEFAULTS.get(key, False)
+    cfg = group_flex_v2.get(group_id) if isinstance(group_flex_v2.get(group_id), dict) else None
+    if cfg and key in cfg:
+        return bool(cfg[key])
+    return _V2_DEFAULTS.get(key, False)
+
+
+def set_flex_v2(group_id, key, value):
+    """設單一 v2 開關。"""
+    if not group_id or key not in _V2_DEFAULTS:
+        return False
+    if group_id not in group_flex_v2 or not isinstance(group_flex_v2.get(group_id), dict):
+        group_flex_v2[group_id] = {}
+    group_flex_v2[group_id][key] = bool(value)
+    try:
+        save_settings()
+    except Exception:
+        pass
+    return True
+
+
+def get_flex_v2_all(group_id):
+    """回傳該群組所有 v2 開關狀態 (fallback 到 default)。"""
+    result = dict(_V2_DEFAULTS)
+    if group_id:
+        cfg = group_flex_v2.get(group_id) if isinstance(group_flex_v2.get(group_id), dict) else None
+        if cfg:
+            for k in _V2_DEFAULTS:
+                if k in cfg:
+                    result[k] = bool(cfg[k])
+    return result
+
+
+def _flex_v2_size_for(text_len):
+    """LV7 動態 size — 根據文字長度自動選 size。"""
+    if text_len < 30:
+        return "micro"
+    elif text_len < 100:
+        return "kilo"
+    elif text_len < 300:
+        return "mega"
+    return "giga"
+
+
+def _byte_safe_truncate(s, max_bytes):
+    """UTF-8 byte 安全截斷:確保結果 encode 後 ≤ max_bytes,且不切碎多 byte 字元。"""
+    if not s:
+        return ""
+    enc = s.encode("utf-8")
+    if len(enc) <= max_bytes:
+        return s
+    # 二分逼近 (簡單版本:逐字 trim)
+    truncated = enc[:max_bytes]
+    # 修補:可能截到 utf-8 多 byte 字元中間
+    while truncated:
+        try:
+            return truncated.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
+    return ""
+
+
+def _flex_v2_header_bar(src_lang, tgt_lang):
+    """LV1.2 Header bar — 左右雙色 + 旗幟。"""
+    from_color = _LANG_BRAND.get(src_lang, "#7c6fef")
+    to_color = _LANG_BRAND.get(tgt_lang, "#7c6fef")
+    src_flag = LANG_FLAGS.get(src_lang, "🌐")
+    tgt_flag = LANG_FLAGS.get(tgt_lang, "🌐")
+    return {
+        "type": "box", "layout": "horizontal",
+        "contents": [
+            {
+                "type": "box", "layout": "vertical",
+                "backgroundColor": from_color,
+                "flex": 1,
+                "paddingAll": "10px",
+                "contents": [{
+                    "type": "text", "text": src_flag,
+                    "size": "lg", "align": "center", "color": "#ffffff",
+                }],
+            },
+            {
+                "type": "box", "layout": "vertical",
+                "backgroundColor": "#374151",
+                "width": "24px",
+                "contents": [{
+                    "type": "text", "text": "⇄",
+                    "size": "md", "align": "center", "color": "#ffffff",
+                    "weight": "bold",
+                    "gravity": "center",
+                }],
+            },
+            {
+                "type": "box", "layout": "vertical",
+                "backgroundColor": to_color,
+                "flex": 1,
+                "paddingAll": "10px",
+                "contents": [{
+                    "type": "text", "text": tgt_flag,
+                    "size": "lg", "align": "center", "color": "#ffffff",
+                }],
+            },
+        ],
+    }
+
+
+def _flex_v2_quote_box(quoted_text):
+    """LV1.3 Quote 引用視覺化 — 左邊框 + 灰色 italic。"""
+    qt = quoted_text[:80] + "..." if len(quoted_text) > 80 else quoted_text
+    return {
+        "type": "box", "layout": "vertical",
+        "borderColor": "#6b7280",
+        "borderWidth": "0px",
+        "paddingStart": "12px",
+        "paddingTop": "4px", "paddingBottom": "4px",
+        "margin": "sm",
+        "contents": [
+            # 模擬左邊框 (LINE Flex 沒 borderLeft,用左 padding + 灰背景 hack)
+            {
+                "type": "text", "text": "┃ " + qt,
+                "size": "xxs", "color": "#9ca3af", "wrap": True,
+                "style": "italic",
+            }
+        ],
+    }
+
+
+def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_id=None):
+    """LV4 互動按鈕 — 根據內容偵測決定要顯示哪幾顆按鈕。"""
+    buttons = []
+
+    # 偵測工單號 (ABC123, A-12345, 12345 等格式)
+    wo_match = re.search(r'[A-Z]{1,5}[-\s]?\d{3,8}|\b\d{5,10}\b', (original_text or "") + " " + (translated_text or ""))
+    if wo_match and is_cmd_enabled(group_id, "qry"):
+        wo_id = wo_match.group(0).strip()[:50]
+        # urlencode 避免特殊字元壞掉 postback parser
+        _qry_data = "action=qry&q=" + urllib.parse.quote(wo_id, safe="")
+        buttons.append({
+            "type": "button", "style": "secondary", "height": "sm",
+            "action": {"type": "postback",
+                       "label": "📋 查儲區",
+                       "data": _qry_data,
+                       "displayText": "/qry " + wo_id},
+        })
+
+    # 重唸 TTS (如果群組開了 TTS)
+    if get_tts_enabled(group_id) and translated_text:
+        # postback data LINE 限 300 bytes,前綴 ~30 bytes,留 ~230 bytes 給 text
+        # urlencode 後 byte 數會膨脹 (中文字 1 char -> 9 bytes 編碼),所以先截更短
+        _safe_text = _byte_safe_truncate(translated_text, 80)
+        _enc = urllib.parse.quote(_safe_text, safe="")
+        # 再次確保 urlencode 後總 length 安全
+        while len(("action=tts_replay&lang=" + tgt_lang + "&t=" + _enc).encode("utf-8")) > 280 and _safe_text:
+            _safe_text = _safe_text[:-1]
+            _enc = urllib.parse.quote(_safe_text, safe="")
+        if _safe_text:
+            buttons.append({
+                "type": "button", "style": "secondary", "height": "sm",
+                "action": {"type": "postback",
+                           "label": "🔊 重唸",
+                           "data": "action=tts_replay&lang=" + tgt_lang + "&t=" + _enc,
+                           "displayText": "🔊 重唸 / Putar ulang"},
+            })
+
+    # 標錯 — 用 MessageAction 直接發 "/wrong" 訊息
+    # ("/wrong" 不帶內容 = 標最新翻譯為錯,Bot 內已支援 mark_only 模式)
+    buttons.append({
+        "type": "button", "style": "secondary", "height": "sm",
+        "action": {"type": "message",
+                   "label": "👎 翻錯",
+                   "text": "/wrong"},
+    })
+
+    # 最多 4 顆,排成 2x2 或 vertical:
+    # - 1 顆: 單一橫排
+    # - 2-3 顆: 雙列 (避免 3 顆並排手機寬度被截)
+    if not buttons:
+        return None
+
+    if len(buttons) == 1:
+        rows = [{
+            "type": "box", "layout": "horizontal",
+            "spacing": "sm", "margin": "sm",
+            "contents": buttons,
+        }]
+    elif len(buttons) == 2:
+        rows = [{
+            "type": "box", "layout": "horizontal",
+            "spacing": "sm", "margin": "sm",
+            "contents": buttons,
+        }]
+    else:
+        # 3+ 顆:第一列 2 顆,第二列剩餘
+        rows = [
+            {
+                "type": "box", "layout": "horizontal",
+                "spacing": "sm", "margin": "sm",
+                "contents": buttons[:2],
+            },
+            {
+                "type": "box", "layout": "horizontal",
+                "spacing": "sm", "margin": "sm",
+                "contents": buttons[2:4],   # 最多再 2 顆
+            },
+        ]
+
+    return {
+        "type": "box", "layout": "vertical",
+        "margin": "md", "spacing": "none",
+        "contents": [{"type": "separator", "margin": "none"}] + rows,
+    }
+
+
+def _flex_v2_text_with_spans(text, highlights=None):
+    """LV6 Span — 高亮關鍵詞 (數字、客戶名、時間)。
+    highlights 是 [(start, end, style), ...]。"""
+    if not text or not highlights:
+        return {"type": "text", "text": text, "wrap": True, "color": "#ffffff", "size": "md"}
+    spans = []
+    last = 0
+    for start, end, style in highlights:
+        if start > last:
+            spans.append({"type": "span", "text": text[last:start], "color": "#ffffff"})
+        spans.append({
+            "type": "span", "text": text[start:end],
+            "color": style.get("color", "#fbbf24"),
+            "weight": style.get("weight", "bold"),
+            "decoration": style.get("decoration", "none"),
+        })
+        last = end
+    if last < len(text):
+        spans.append({"type": "span", "text": text[last:], "color": "#ffffff"})
+    return {"type": "text", "contents": spans, "wrap": True, "size": "md"}
+
+
+def _detect_v2_highlights(text):
+    """偵測文字內可以高亮的關鍵詞。回傳 [(start, end, style), ...]。
+    保守做法 — 只標數字 + 時間。客戶名因為要查表所以跳過。"""
+    if not text:
+        return []
+    spots = []
+    # 時間 HH:MM
+    for m in re.finditer(r'\b\d{1,2}:\d{2}\b', text):
+        spots.append((m.start(), m.end(), {"color": "#60a5fa", "weight": "bold"}))
+    # 工單號 / 大數字 (5+ 位數)
+    for m in re.finditer(r'\b\d{5,}\b', text):
+        spots.append((m.start(), m.end(), {"color": "#fbbf24", "weight": "bold"}))
+    # 中文「N把」「N根」等量詞 (數字+量詞)
+    for m in re.finditer(r'\d+\s*(把|根|噸|公斤|kg|m)', text):
+        spots.append((m.start(), m.end(), {"color": "#fb7185", "weight": "bold"}))
+    # 重疊去重 (取最早出現)
+    spots.sort()
+    cleaned = []
+    last_end = 0
+    for s, e, st in spots:
+        if s >= last_end:
+            cleaned.append((s, e, st))
+            last_end = e
+    return cleaned
+
+
+def build_translation_flex_v2(original, translated, src_lang, tgt_lang,
+                              sender_name_display=None, quoted_text=None,
+                              group_id=None, msg_id=None):
+    """v3.10 視覺升級版 translation flex。
+    所有 v2 升級都看 group_flex_v2 開關決定要不要套用。
+    若全部 OFF → 等同舊版 build_translation_flex 行為。
+    """
+    try:
+        v2 = get_flex_v2_all(group_id)
+        body_contents = []
+
+        # LV1.2 Header bar (取代原本的「原文上面什麼都沒有」)
+        header_block = None
+        if v2["header"]:
+            header_block = _flex_v2_header_bar(src_lang, tgt_lang)
+
+        # Quote 區
+        if quoted_text:
+            if v2["quote"]:
+                body_contents.append(_flex_v2_quote_box(quoted_text))
+            else:
+                # 舊版 fallback
+                qt = quoted_text[:50] + "..." if len(quoted_text) > 50 else quoted_text
+                body_contents.append({
+                    "type": "text", "text": "↩ " + qt,
+                    "size": "xxs", "color": "#6a6a7a", "wrap": True, "style": "italic",
+                })
+                body_contents.append({"type": "separator", "margin": "sm"})
+
+        # Sender name
+        if sender_name_display:
+            body_contents.append({
+                "type": "text", "text": sender_name_display,
+                "size": "xs", "color": "#8a8a9a", "margin": "sm",
+            })
+
+        # 原文 (LV1.1 emphasis 開:小灰字 / 關:跟譯文一樣)
+        src_flag_str = LANG_FLAGS.get(src_lang, "")
+        if v2["emphasis"]:
+            body_contents.append({
+                "type": "text", "text": src_flag_str + " " + original,
+                "size": "xs", "color": "#9ca3af", "wrap": True,
+                "margin": "sm",
+            })
+        else:
+            body_contents.append({
+                "type": "text", "text": src_flag_str + " " + original,
+                "size": "sm", "color": "#b0b0b0", "wrap": True, "margin": "sm",
+            })
+
+        body_contents.append({"type": "separator", "margin": "md"})
+
+        # 譯文 (LV1.1 emphasis 開:大白字粗體 / LV6 span 開:高亮關鍵詞)
+        tgt_flag_str = LANG_FLAGS.get(tgt_lang, "")
+        if v2["span"]:
+            highlights = _detect_v2_highlights(translated)
+            tx = _flex_v2_text_with_spans(translated, highlights)
+            tx_box = {
+                "type": "box", "layout": "horizontal",
+                "margin": "md",
+                "contents": [
+                    {"type": "text", "text": tgt_flag_str, "size": "lg", "flex": 0, "margin": "none"},
+                    tx,
+                ],
+            }
+            body_contents.append(tx_box)
+        elif v2["emphasis"]:
+            body_contents.append({
+                "type": "text", "text": tgt_flag_str + " " + translated,
+                "size": "lg", "color": "#ffffff", "wrap": True, "margin": "md",
+                "weight": "bold",
+            })
+        else:
+            body_contents.append({
+                "type": "text", "text": tgt_flag_str + " " + translated,
+                "size": "md", "color": "#ffffff", "wrap": True, "margin": "md",
+                "weight": "bold",
+            })
+
+        # LV4 互動按鈕
+        if v2["buttons"]:
+            btn_box = _flex_v2_button_row(group_id, original, translated, tgt_lang, msg_id)
+            if btn_box:
+                body_contents.append(btn_box)
+
+        # LV7 動態 size
+        size = _flex_v2_size_for(len(translated)) if v2["dynsize"] else "kilo"
+
+        bubble = {
+            "type": "bubble",
+            "size": size,
+            "body": {
+                "type": "box", "layout": "vertical",
+                "contents": body_contents,
+                "backgroundColor": "#1a1a2e",
+                "paddingAll": "16px",
+                "cornerRadius": "12px",
+            },
+        }
+        if header_block:
+            bubble["header"] = {
+                "type": "box", "layout": "vertical",
+                "contents": [header_block],
+                "paddingAll": "0px",
+            }
+
+        return FlexMessage(
+            alt_text=tgt_flag_str + " " + translated,
+            contents=FlexContainer.from_dict(bubble),
+        )
+    except Exception as e:
+        logger.warning("build_translation_flex_v2 failed, falling back: %s", e)
+        # Fallback 到舊版
+        try:
+            return build_translation_flex(
+                original, translated,
+                LANG_FLAGS.get(src_lang, ""),
+                LANG_FLAGS.get(tgt_lang, ""),
+                sender_name_display, quoted_text,
+            )
+        except Exception:
+            return None
+
+
+def build_multilang_flex_v2(original, translations, src_lang="zh",
+                            sender_name_display=None, quoted_text=None,
+                            group_id=None):
+    """LV2: 多語廣播專屬 Flex - 每個目標語言獨立 box。
+    translations = [(lang_code, text), ...]
+    若 v2.carousel 開啟且翻譯 >= 3 種 → 改 carousel 多 bubble。
+    """
+    try:
+        v2 = get_flex_v2_all(group_id)
+
+        # LV3 Carousel 模式 (3+ 語言 + carousel 開啟)
+        if v2["carousel"] and len(translations) >= 3:
+            bubbles = []
+            for lang_code, text in translations[:10]:  # carousel max 10 bubbles
+                bubbles.append(_build_single_lang_bubble(
+                    original, text, src_lang, lang_code,
+                    sender_name_display, quoted_text, group_id, v2,
+                ))
+            carousel = {"type": "carousel", "contents": bubbles}
+            return FlexMessage(
+                alt_text="🌐 " + " + ".join(LANG_FLAGS.get(l, "") for l, _ in translations),
+                contents=FlexContainer.from_dict(carousel),
+            )
+
+        # 預設:單一 bubble 包多個 sub-box
+        body_contents = []
+        if quoted_text and v2["quote"]:
+            body_contents.append(_flex_v2_quote_box(quoted_text))
+        if sender_name_display:
+            body_contents.append({
+                "type": "text", "text": sender_name_display,
+                "size": "xs", "color": "#8a8a9a", "margin": "sm",
+            })
+        # 原文
+        src_flag_str = LANG_FLAGS.get(src_lang, "")
+        body_contents.append({
+            "type": "text", "text": src_flag_str + " " + original,
+            "size": "xs" if v2["emphasis"] else "sm",
+            "color": "#9ca3af", "wrap": True, "margin": "sm",
+        })
+        body_contents.append({"type": "separator", "margin": "md"})
+
+        # 每個語言一個獨立 sub-box,不同背景色
+        sub_colors = ["#1f2937", "#1e293b", "#0f172a", "#172554", "#1e1b4b"]
+        for idx, (lang_code, text) in enumerate(translations):
+            flag = LANG_FLAGS.get(lang_code, "")
+            bg = sub_colors[idx % len(sub_colors)]
+            sub_box = {
+                "type": "box", "layout": "vertical",
+                "backgroundColor": bg,
+                "cornerRadius": "8px",
+                "paddingAll": "10px",
+                "margin": "sm",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": flag + " " + text,
+                        "size": "md", "color": "#ffffff", "wrap": True,
+                        "weight": "bold",
+                    },
+                ],
+            }
+            body_contents.append(sub_box)
+
+        # 按鈕
+        if v2["buttons"]:
+            # multi 模式下,只給「標錯」按鈕(查儲區/重唸沒意義因為不知道針對哪個語言)
+            body_contents.append({
+                "type": "box", "layout": "horizontal",
+                "margin": "md", "spacing": "sm",
+                "contents": [{
+                    "type": "button", "style": "secondary", "height": "sm",
+                    "action": {"type": "message", "label": "👎 翻錯", "text": "/wrong"},
+                }],
+            })
+
+        # Header
+        header_block = None
+        if v2["header"]:
+            # 多語 header:中文左 + 「⇄ 多」中間 + 右側放第一個目標旗
+            first_tgt = translations[0][0] if translations else "id"
+            header_block = _flex_v2_header_bar(src_lang, first_tgt)
+
+        # 動態 size
+        total_len = sum(len(t) for _, t in translations)
+        size = _flex_v2_size_for(total_len) if v2["dynsize"] else "mega"
+
+        bubble = {
+            "type": "bubble", "size": size,
+            "body": {
+                "type": "box", "layout": "vertical",
+                "contents": body_contents,
+                "backgroundColor": "#0f0f1e",
+                "paddingAll": "16px",
+                "cornerRadius": "12px",
+            },
+        }
+        if header_block:
+            bubble["header"] = {
+                "type": "box", "layout": "vertical",
+                "contents": [header_block],
+                "paddingAll": "0px",
+            }
+        alt = "🌐 " + " + ".join(LANG_FLAGS.get(l, "") for l, _ in translations[:3])
+        return FlexMessage(
+            alt_text=alt[:400],
+            contents=FlexContainer.from_dict(bubble),
+        )
+    except Exception as e:
+        logger.warning("build_multilang_flex_v2 failed: %s", e)
+        return None
+
+
+def _build_single_lang_bubble(original, translated, src_lang, tgt_lang,
+                              sender_name_display, quoted_text, group_id, v2):
+    """Carousel 用的單一 bubble (內部)。"""
+    body_contents = []
+    if quoted_text and v2["quote"]:
+        body_contents.append(_flex_v2_quote_box(quoted_text))
+    if sender_name_display:
+        body_contents.append({
+            "type": "text", "text": sender_name_display,
+            "size": "xs", "color": "#8a8a9a",
+        })
+    src_flag_str = LANG_FLAGS.get(src_lang, "")
+    body_contents.append({
+        "type": "text", "text": src_flag_str + " " + original,
+        "size": "xs", "color": "#9ca3af", "wrap": True, "margin": "sm",
+    })
+    body_contents.append({"type": "separator", "margin": "md"})
+    tgt_flag_str = LANG_FLAGS.get(tgt_lang, "")
+    body_contents.append({
+        "type": "text", "text": tgt_flag_str + " " + translated,
+        "size": "lg", "color": "#ffffff", "wrap": True, "margin": "md",
+        "weight": "bold",
+    })
+    bubble = {
+        "type": "bubble", "size": "kilo",
+        "body": {
+            "type": "box", "layout": "vertical",
+            "contents": body_contents,
+            "backgroundColor": "#1a1a2e",
+            "paddingAll": "16px",
+            "cornerRadius": "12px",
+        },
+    }
+    if v2["header"]:
+        bubble["header"] = {
+            "type": "box", "layout": "vertical",
+            "contents": [_flex_v2_header_bar(src_lang, tgt_lang)],
+            "paddingAll": "0px",
+        }
+    return bubble
+
+
+
+
+
 def get_tts_enabled(group_id):
     """Read per-group TTS toggle (default OFF — TTS uses extra money + bandwidth)."""
     return bool(group_tts_settings.get(group_id, False))
 
 
+def _tts_dir():
+    """選擇可寫入目錄存放 m4a 檔案。"""
+    for d in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return d
+    return "."
+
+
+def _tts_meta_path():
+    return os.path.join(_tts_dir(), "tts_meta.json")
+
+
+def _tts_m4a_path(token):
+    return os.path.join(_tts_dir(), "tts_{}.m4a".format(token))
+
+
+def _load_tts_meta():
+    """從 disk 載 TTS meta + 清過期。"""
+    try:
+        p = _tts_meta_path()
+        if not os.path.exists(p):
+            return {}
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        now = time.time()
+        clean = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(v, dict) and v.get("expires_at", 0) > now:
+                    clean[k] = v
+        return clean
+    except Exception as e:
+        logger.warning("TTS meta load failed: %s", e)
+        return {}
+
+
+def _save_tts_meta(meta):
+    try:
+        p = _tts_meta_path()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        os.replace(tmp, p)
+    except Exception as e:
+        logger.warning("TTS meta save failed: %s", e)
+
+
 def _tts_cleanup():
+    """清過期: 記憶體 cache + disk 檔案"""
     now = time.time()
     with _tts_cache_lock:
-        for k in [k for k, v in _tts_cache.items() if v[1] < now]:
+        for k in [k for k, v in list(_tts_cache.items()) if v[1] < now]:
             _tts_cache.pop(k, None)
         if len(_tts_cache) > TTS_CACHE_MAX:
             for k, _ in sorted(_tts_cache.items(), key=lambda x: x[1][1])[: len(_tts_cache) - TTS_CACHE_MAX]:
                 _tts_cache.pop(k, None)
+    # 清 disk
+    try:
+        meta = _load_tts_meta()
+        changed = False
+        for tk in list(meta.keys()):
+            if meta[tk].get("expires_at", 0) <= now:
+                meta.pop(tk, None)
+                changed = True
+                try:
+                    os.remove(_tts_m4a_path(tk))
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    pass
+        if changed:
+            _save_tts_meta(meta)
+    except Exception as e:
+        logger.warning("TTS disk cleanup failed: %s", e)
 
 
 def _ffmpeg_mp3_to_m4a(mp3_bytes):
@@ -18609,7 +19775,7 @@ def _ffmpeg_mp3_to_m4a(mp3_bytes):
 
 def generate_tts(text, lang):
     """text → (public_url, duration_ms) or (None, 0).
-    Uses OpenAI gpt-4o-mini-tts. Stores m4a in in-memory cache for 5 min.
+    v3.10: 改用 disk 儲存 m4a,跨 gunicorn worker 共享。
     """
     if not text or not text.strip():
         return None, 0
@@ -18642,6 +19808,10 @@ def generate_tts(text, lang):
     m4a_bytes = _ffmpeg_mp3_to_m4a(mp3_bytes)
     if not m4a_bytes:
         return None, 0
+    # v3.10: 大小檢查 — m4a 不該超過 5MB (LINE Audio 上限 200MB,但實際我們的 TTS 不會超過 100KB)
+    if len(m4a_bytes) > 5 * 1024 * 1024:
+        logger.warning("TTS m4a too large (%d bytes), skipping", len(m4a_bytes))
+        return None, 0
 
     # Rough duration estimate. ~140 chars/min for natural narration.
     duration_ms = min(60000, max(1000, len(text_clipped) * 400))
@@ -18649,6 +19819,24 @@ def generate_tts(text, lang):
     _tts_cleanup()
     token = secrets.token_urlsafe(16)
     expires_at = time.time() + TTS_CACHE_TTL
+
+    # 1. 寫 m4a 到 disk
+    try:
+        with open(_tts_m4a_path(token), "wb") as f:
+            f.write(m4a_bytes)
+    except Exception as e:
+        logger.error("TTS m4a write failed: %s", e)
+        return None, 0
+
+    # 2. 更新 meta
+    try:
+        meta = _load_tts_meta()
+        meta[token] = {"expires_at": expires_at, "duration_ms": duration_ms}
+        _save_tts_meta(meta)
+    except Exception as e:
+        logger.warning("TTS meta update failed: %s", e)
+
+    # 3. 也放記憶體 cache (同 worker 加速)
     with _tts_cache_lock:
         _tts_cache[token] = (m4a_bytes, expires_at, duration_ms)
 
@@ -18658,16 +19846,73 @@ def generate_tts(text, lang):
 
 @app.route("/tts/<token>.m4a")
 def serve_tts(token):
-    """LINE servers fetch the m4a from here."""
+    """LINE servers fetch the m4a from here.
+    v3.10: 跨 worker 從 disk 讀,記憶體 cache 加速。"""
+    # 安全檢查:token 必須 URL-safe 字元
+    if not re.match(r'^[A-Za-z0-9_-]+$', token or ""):
+        abort(400)
     _tts_cleanup()
+
+    # 記憶體 cache 優先
     with _tts_cache_lock:
         entry = _tts_cache.get(token)
-    if not entry:
+    if entry:
+        m4a_bytes, _, _ = entry
+        resp = app.response_class(m4a_bytes, mimetype="audio/mp4")
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
+
+    # disk fallback (其他 worker 產出的)
+    try:
+        path = _tts_m4a_path(token)
+        if not os.path.exists(path):
+            abort(404)
+        meta = _load_tts_meta()
+        if token not in meta or meta[token].get("expires_at", 0) <= time.time():
+            abort(404)
+        with open(path, "rb") as f:
+            m4a_bytes = f.read()
+        # 放進記憶體 cache 避免下次再讀 disk
+        with _tts_cache_lock:
+            _tts_cache[token] = (m4a_bytes, meta[token]["expires_at"], meta[token].get("duration_ms", 1000))
+        resp = app.response_class(m4a_bytes, mimetype="audio/mp4")
+        resp.headers["Cache-Control"] = "public, max-age=300"
+        return resp
+    except Exception as e:
+        logger.warning("serve_tts disk fallback failed: %s", e)
         abort(404)
-    m4a_bytes, _, _ = entry
-    resp = app.response_class(m4a_bytes, mimetype="audio/mp4")
-    resp.headers["Cache-Control"] = "public, max-age=300"
-    return resp
+
+
+# v3.10: TTS rate limit (per-group)
+# 防止惡意/失控:每群組每分鐘最多 10 次,每天最多 100 次
+_tts_usage = {}   # {group_id: [(ts1, ts2, ...), ...]}  (list of timestamps)
+_tts_usage_lock = _threading_v310.Lock()
+TTS_RATE_PER_MIN = 10
+TTS_RATE_PER_DAY = 100
+
+
+def _tts_check_rate_limit(group_id):
+    """檢查是否超過 TTS 速率限制。回傳 (ok, reason)。"""
+    if not group_id:
+        return False, "no_group"
+    now = time.time()
+    with _tts_usage_lock:
+        lst = _tts_usage.get(group_id, [])
+        # 清掉 24 小時前的
+        lst = [t for t in lst if now - t < 86400]
+        # per-minute check
+        recent_min = sum(1 for t in lst if now - t < 60)
+        if recent_min >= TTS_RATE_PER_MIN:
+            _tts_usage[group_id] = lst
+            return False, "rate_per_minute"
+        # per-day check
+        if len(lst) >= TTS_RATE_PER_DAY:
+            _tts_usage[group_id] = lst
+            return False, "rate_per_day"
+        # 通過 — 記錄
+        lst.append(now)
+        _tts_usage[group_id] = lst
+        return True, "ok"
 
 
 def push_tts_message(group_id, text, lang):
@@ -18675,6 +19920,11 @@ def push_tts_message(group_id, text, lang):
     if not AudioMessage:
         return False
     if not group_id or not text:
+        return False
+    # v3.10: rate limit check
+    ok, reason = _tts_check_rate_limit(group_id)
+    if not ok:
+        logger.info("TTS rate limited for group %s: %s", group_id, reason)
         return False
     try:
         url, dur = generate_tts(text, lang)
@@ -18712,42 +19962,42 @@ def build_onboarding_flex():
         "body": {
             "type": "box", "layout": "vertical", "spacing": "md",
             "contents": [
-                {"type": "text", "text": "請選擇翻譯語言", "size": "md", "weight": "bold"},
-                {"type": "text", "text": "Pilih bahasa terjemahan", "size": "xs", "color": "#888888"},
+                {"type": "text", "text": "請管理員選擇翻譯語言", "size": "md", "weight": "bold"},
+                {"type": "text", "text": "Admin pilih bahasa terjemahan", "size": "xs", "color": "#888888"},
                 {"type": "separator", "margin": "sm"},
                 {"type": "box", "layout": "vertical", "spacing": "sm", "margin": "md", "contents": [
                     {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
                      "action": {"type": "postback",
                                 "label": "🇹🇼 中 ⇄ 🇮🇩 印尼",
                                 "data": "action=onboard_lang&v=id",
-                                "displayText": "設定:中文 ⇄ 印尼文"}},
+                                "displayText": "🇹🇼 ⇄ 🇮🇩  (中文 ⇄ 印尼 / Mandarin ⇄ Indonesia)"}},
                     {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
                      "action": {"type": "postback",
                                 "label": "🇹🇼 中 ⇄ 🇹🇭 泰",
                                 "data": "action=onboard_lang&v=th",
-                                "displayText": "設定:中文 ⇄ 泰文"}},
+                                "displayText": "🇹🇼 ⇄ 🇹🇭  (中文 ⇄ 泰文 / Mandarin ⇄ Thai)"}},
                     {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
                      "action": {"type": "postback",
                                 "label": "🇹🇼 中 ⇄ 🇮🇳 印地",
                                 "data": "action=onboard_lang&v=hi",
-                                "displayText": "設定:中文 ⇄ 印地文"}},
+                                "displayText": "🇹🇼 ⇄ 🇮🇳  (中文 ⇄ 印地 / Mandarin ⇄ Hindi)"}},
                     {"type": "button", "style": "secondary", "height": "sm",
                      "action": {"type": "postback",
                                 "label": "🇹🇼+🇮🇩+🇹🇭 三語廣播",
                                 "data": "action=onboard_lang&v=id,th",
-                                "displayText": "設定:中文 + 印尼 + 泰文"}},
+                                "displayText": "🇹🇼 + 🇮🇩 + 🇹🇭  (3 languages)"}},
                     {"type": "button", "style": "secondary", "height": "sm",
                      "action": {"type": "postback",
                                 "label": "🇹🇼+🇮🇩+🇹🇭+🇮🇳 四語廣播",
                                 "data": "action=onboard_lang&v=id,th,hi",
-                                "displayText": "設定:中文 + 印尼 + 泰 + 印地"}},
+                                "displayText": "🇹🇼 + 🇮🇩 + 🇹🇭 + 🇮🇳  (4 languages)"}},
                 ]},
                 {"type": "separator", "margin": "md"},
-                {"type": "text", "text": "稍後可用 /lang 重新設定",
+                {"type": "text", "text": "稍後管理員可打 /liff 重新設定",
                  "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "md"},
-                {"type": "text", "text": "Bisa diubah lagi dengan /lang",
+                {"type": "text", "text": "Admin bisa atur ulang dengan /liff",
                  "size": "xxs", "color": "#aaaaaa", "align": "center"},
-                {"type": "text", "text": "輸入 /help 看完整功能",
+                {"type": "text", "text": "輸入 /help 看完整功能 / Ketik /help",
                  "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "sm"},
             ],
         },
@@ -18789,6 +20039,23 @@ def handle_onboarding_postback(event, params):
     group_id = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None)
     if not group_id:
         return True
+
+    # v3.10: 只有管理員才能改群組語言 (工人按按鈕不該生效)
+    user_id = getattr(event.source, "user_id", None)
+    if not is_group_admin(user_id):
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=(
+                        "⚠️ 語言設定僅限管理員\n"
+                        "⚠️ Setelan bahasa khusus admin"))],
+                ))
+        except Exception:
+            pass
+        return True
+
     v = params.get("v", "id")
     langs = [l.strip().lower() for l in v.split(",") if l.strip()]
     set_group_target_langs(group_id, langs)
@@ -18813,33 +20080,99 @@ def handle_onboarding_postback(event, params):
 # ----------------------------------------------------------------------------
 
 LIFF_NONCE_TTL = 600   # 10 minutes
-_liff_nonces = {}       # {nonce: (group_id, user_id, expires_at)}
+_liff_nonces = {}       # 記憶體 cache (單一 worker 內快取)
 _liff_lock = _threading_v310.Lock()
+
+# v3.10: 跨 worker 共享 — 寫到 disk (Render gunicorn 多 worker,記憶體不通)
+def _liff_nonce_path():
+    for d in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "liff_nonces.json")
+    return "liff_nonces.json"
+
+
+_LIFF_NONCE_FILE = None
+
+
+def _load_liff_nonces_from_disk():
+    """從 disk 載入所有 nonces (過期的會被自動過濾)。"""
+    global _LIFF_NONCE_FILE
+    if _LIFF_NONCE_FILE is None:
+        _LIFF_NONCE_FILE = _liff_nonce_path()
+    try:
+        if not os.path.exists(_LIFF_NONCE_FILE):
+            return {}
+        with open(_LIFF_NONCE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        now = time.time()
+        # 過濾過期 + 型別檢查
+        clean = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(v, list) and len(v) == 3 and v[2] > now:
+                    clean[k] = (v[0], v[1], v[2])
+        return clean
+    except Exception as e:
+        logger.warning("LIFF nonce load failed: %s", e)
+        return {}
+
+
+def _save_liff_nonces_to_disk(nonces_dict):
+    """寫所有 nonces 到 disk。"""
+    global _LIFF_NONCE_FILE
+    if _LIFF_NONCE_FILE is None:
+        _LIFF_NONCE_FILE = _liff_nonce_path()
+    try:
+        # tuple → list for JSON
+        serializable = {k: list(v) for k, v in nonces_dict.items()}
+        tmp = _LIFF_NONCE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(serializable, f)
+        os.replace(tmp, _LIFF_NONCE_FILE)
+    except Exception as e:
+        logger.warning("LIFF nonce save failed: %s", e)
 
 
 def _liff_cleanup():
+    """清過期 nonce (記憶體 + disk)"""
     now = time.time()
     with _liff_lock:
-        for k in [k for k, v in _liff_nonces.items() if v[2] < now]:
+        # 記憶體
+        for k in [k for k, v in list(_liff_nonces.items()) if v[2] < now]:
             _liff_nonces.pop(k, None)
 
 
 def issue_liff_nonce(group_id, user_id=""):
-    """Create a short-lived nonce that authorizes editing this group's settings."""
+    """產 nonce + 同時寫進 disk 跨 worker 共享。"""
     _liff_cleanup()
     nonce = secrets.token_urlsafe(20)
+    expires_at = time.time() + LIFF_NONCE_TTL
     with _liff_lock:
-        _liff_nonces[nonce] = (group_id, user_id, time.time() + LIFF_NONCE_TTL)
+        # 1. 先從 disk 載最新狀態 (其他 worker 可能也加了 nonce)
+        disk_state = _load_liff_nonces_from_disk()
+        # 2. 合併到記憶體
+        _liff_nonces.update(disk_state)
+        # 3. 加新 nonce
+        _liff_nonces[nonce] = (group_id, user_id, expires_at)
+        # 4. 寫回 disk
+        _save_liff_nonces_to_disk(dict(_liff_nonces))
     return nonce
 
 
 def resolve_liff_nonce(nonce):
-    """Returns (group_id, user_id) if valid, else None."""
+    """檢查 nonce (記憶體 → disk fallback,跨 worker)。"""
     if not nonce:
         return None
     _liff_cleanup()
     with _liff_lock:
         entry = _liff_nonces.get(nonce)
+        if not entry:
+            # 記憶體沒,從 disk 抓 (其他 worker 加的)
+            disk_state = _load_liff_nonces_from_disk()
+            entry = disk_state.get(nonce)
+            if entry:
+                # 加進記憶體 cache
+                _liff_nonces[nonce] = entry
     if not entry:
         return None
     return entry[0], entry[1]
@@ -18847,7 +20180,7 @@ def resolve_liff_nonce(nonce):
 
 def handle_liff_command(group_id, user_id):
     """Handler for the `/liff` command. Returns the message to send back."""
-    liff_id = os.environ.get("LIFF_ID", "").strip()
+    liff_id = (LIFF_ID or "").strip()   # global LIFF_ID from line 147
     public_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
 
     if not group_id:
@@ -18911,7 +20244,12 @@ def api_liff_save():
     resolved = resolve_liff_nonce(nonce)
     if not resolved:
         return jsonify({"ok": False, "error": "invalid_or_expired_nonce"}), 401
-    group_id, _ = resolved
+    group_id, requester_user_id = resolved
+
+    # v3.10: 即使持有有效 nonce,還是必須 admin 才能改設定
+    # (避免 nonce 被 leak 給工人後設定被亂改)
+    if not is_group_admin(requester_user_id):
+        return jsonify({"ok": False, "error": "admin_required"}), 403
 
     # Languages
     if "langs" in data and isinstance(data["langs"], list):
@@ -19178,7 +20516,12 @@ async function save(){
     });
     let d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) {
-      toast("❌ 儲存失敗: " + (d.error || r.status));
+      if (d.error === "admin_required")
+        toast("⚠️ 此功能僅限管理員 / Khusus admin");
+      else if (d.error === "invalid_or_expired_nonce")
+        toast("⏰ 連結過期,請重打 /liff");
+      else
+        toast("❌ 儲存失敗: " + (d.error || r.status));
       btn.disabled = false; btn.textContent = "💾 儲存設定 / Simpan";
       return;
     }
@@ -19224,11 +20567,17 @@ def _do_save_impl_v310():
         _v310_orig_save()
     except Exception as e:
         logger.warning("v310: orig save failed: %s", e)
-    # Sidecar
+    # Sidecar — 先拷貝再序列化,避免並發改寫造成 RuntimeError
     try:
+        # group_flex_v2 是 nested dict {gid: {key: bool}},深拷貝
+        _flex_v2_copy = {}
+        for gid, cfg in list(group_flex_v2.items()):
+            if isinstance(cfg, dict):
+                _flex_v2_copy[gid] = dict(cfg)
         sidecar = {
-            "group_target_langs": group_target_langs,
-            "group_tts_settings": group_tts_settings,
+            "group_target_langs": dict(group_target_langs),
+            "group_tts_settings": dict(group_tts_settings),
+            "group_flex_v2": _flex_v2_copy,
         }
         sc = json.dumps(sidecar, ensure_ascii=False, indent=2)
         _commit_file_to_github("bot_settings_v310.json", sc,
@@ -19251,12 +20600,28 @@ def load_settings_v310():
             if isinstance(v, dict):
                 group_target_langs.clear()
                 group_target_langs.update(v)
+            elif v is not None:
+                logger.warning("v310 sidecar: group_target_langs 不是 dict (是 %s),忽略",
+                               type(v).__name__)
             v = d.get("group_tts_settings")
             if isinstance(v, dict):
                 group_tts_settings.clear()
                 group_tts_settings.update(v)
-            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg)",
-                        len(group_target_langs), len(group_tts_settings))
+            elif v is not None:
+                logger.warning("v310 sidecar: group_tts_settings 不是 dict (是 %s),忽略",
+                               type(v).__name__)
+            v = d.get("group_flex_v2")
+            if isinstance(v, dict):
+                group_flex_v2.clear()
+                # 只接受 value 是 dict 的 entries
+                for gid, cfg in v.items():
+                    if isinstance(cfg, dict):
+                        group_flex_v2[gid] = {k: bool(val) for k, val in cfg.items() if k in _V2_DEFAULTS}
+            elif v is not None:
+                logger.warning("v310 sidecar: group_flex_v2 不是 dict (是 %s),忽略",
+                               type(v).__name__)
+            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg, %d flex-v2)",
+                        len(group_target_langs), len(group_tts_settings), len(group_flex_v2))
     except Exception as e:
         logger.warning("v310 sidecar load failed: %s", e)
 
@@ -19267,13 +20632,41 @@ load_settings = load_settings_v310
 
 
 # Re-run load now that the wrapper is in place, so the sidecar gets restored
-# on boot (the original load_settings was already called near line 14522
-# before this wrapping happened, so this catches up on the sidecar).
+# on boot. We DON'T call load_settings() here (that would re-fetch
+# bot_settings.json from GitHub a second time — wasteful). We only load
+# the sidecar directly.
 try:
-    load_settings()
-    logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF")
+    raw = _load_file_from_github("bot_settings_v310.json", branch="data")
+    if raw:
+        d = json.loads(raw)
+        v = d.get("group_target_langs")
+        if isinstance(v, dict):
+            group_target_langs.clear()
+            group_target_langs.update(v)
+        elif v is not None:
+            logger.warning("v310 boot sidecar: group_target_langs 不是 dict (是 %s),忽略",
+                           type(v).__name__)
+        v = d.get("group_tts_settings")
+        if isinstance(v, dict):
+            group_tts_settings.clear()
+            group_tts_settings.update(v)
+        elif v is not None:
+            logger.warning("v310 boot sidecar: group_tts_settings 不是 dict (是 %s),忽略",
+                           type(v).__name__)
+        v = d.get("group_flex_v2")
+        if isinstance(v, dict):
+            group_flex_v2.clear()
+            for gid, cfg in v.items():
+                if isinstance(cfg, dict):
+                    group_flex_v2[gid] = {k: bool(val) for k, val in cfg.items() if k in _V2_DEFAULTS}
+        elif v is not None:
+            logger.warning("v310 boot sidecar: group_flex_v2 不是 dict (是 %s),忽略",
+                           type(v).__name__)
+        logger.info("v310: sidecar loaded on boot (%d lang-cfg, %d tts-cfg, %d flex-v2)",
+                    len(group_target_langs), len(group_tts_settings), len(group_flex_v2))
+    logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF, flex-v2")
 except Exception as _e:
-    logger.warning("v3.10 boot reload failed: %s", _e)
+    logger.warning("v3.10 boot sidecar load failed: %s", _e)
 
 
 # ============================================================================
