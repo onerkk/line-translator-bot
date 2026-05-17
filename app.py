@@ -12447,19 +12447,30 @@ async function loadGroups(){
     var g=_groupList[i];
     var skipCt=g.skip_count||0;
     var memberCt=g.member_count?g.member_count+'人':'--';
+    // v3.10: 動態顯示所有目標語言旗幟
+    var tlList=(g.target_langs&&g.target_langs.length)?g.target_langs:[g.target_lang||'id'];
+    var langFlags={id:'🇮🇩',th:'🇹🇭',hi:'🇮🇳',vi:'🇻🇳',ja:'🇯🇵',ko:'🇰🇷',en:'🇬🇧'};
+    var langNames={id:'印尼',th:'泰',hi:'印地',vi:'越',ja:'日',ko:'韓',en:'英'};
+    var flagStr=tlList.map(function(c){return (langFlags[c]||'')+(langNames[c]||c)}).join(' + ');
+    var ttsOn=!!g.tts_on;
     html+='<div class="card">'+
       '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
       '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
-      '<span class="card-sub">中文 ⇄ 🇮🇩 印尼文</span>'+
-      '<span class="card-sub">｜跳過: '+skipCt+'人</span></div>'+
+      '<span class="card-sub">中文 ⇄ '+flagStr+'</span>'+
+      '<span class="card-sub">｜跳過: '+skipCt+'人</span>'+
+      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span></div>'+
+      // v3.10: 多語選擇 panel (預設隱藏)
+      buildLangPicker(g, i)+
       '<div class="feat-badges">'+
       // v3.9.10: 圖片按鈕變 3 段循環:開 → 詢問 → 關
       // 顯示文字 / 樣式根據 (image_on, image_ask_mode) 兩個欄位決定
       '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
         '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
-      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span></div>'+
+      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
+      // v3.10: TTS 開關
+      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span></div>'+
       buildCmdBadges(g, i)+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
@@ -12475,6 +12486,101 @@ function toggleFeat(idx,keyIdx){
   var cur=g[key];
   var body={group_id:g.id};body[key]=!cur;
   api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+}
+
+// v3.10: 多語選擇 panel HTML 建構
+function buildLangPicker(g, idx){
+  if(!g._langPickerOpen) return '';
+  var allLangs=[
+    {c:'id',f:'🇮🇩',n:'印尼'},
+    {c:'th',f:'🇹🇭',n:'泰文'},
+    {c:'hi',f:'🇮🇳',n:'印地'},
+    {c:'vi',f:'🇻🇳',n:'越南'},
+    {c:'ja',f:'🇯🇵',n:'日文'},
+    {c:'ko',f:'🇰🇷',n:'韓文'},
+    {c:'en',f:'🇬🇧',n:'英文'}
+  ];
+  var cur=(g.target_langs&&g.target_langs.length)?g.target_langs:[g.target_lang||'id'];
+  var h='<div style="margin:6px 0 10px;padding:12px;background:rgba(124,111,239,.06);border-radius:8px;border:1px solid rgba(124,111,239,.2)">';
+  h+='<div style="font-size:12px;color:#8a8a9a;margin-bottom:8px">勾選目標語言(可多選):</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:6px">';
+  for(var k=0;k<allLangs.length;k++){
+    var L=allLangs[k];
+    var on=cur.indexOf(L.c)>=0;
+    h+='<span class="feat-badge '+(on?'on':'off')+'" style="cursor:pointer" onclick="toggleTargetLang('+idx+',&apos;'+L.c+'&apos;)">'+L.f+' '+L.n+'</span>';
+  }
+  h+='</div>';
+  h+='<div style="font-size:11px;color:#666;margin-top:8px">💡 中文訊息會翻譯成所有勾選的語言。多語 = 多次 API 成本</div>';
+  h+='</div>';
+  return h;
+}
+function toggleLangPicker(idx){
+  var g=_groupList[idx];if(!g)return;
+  g._langPickerOpen=!g._langPickerOpen;
+  loadGroupsLocal();
+}
+function loadGroupsLocal(){
+  // 重新渲染但不重抓 API (保留 _langPickerOpen 狀態)
+  var el=document.getElementById('groupList');
+  var html='';
+  var langFlags={id:'🇮🇩',th:'🇹🇭',hi:'🇮🇳',vi:'🇻🇳',ja:'🇯🇵',ko:'🇰🇷',en:'🇬🇧'};
+  var langNames={id:'印尼',th:'泰',hi:'印地',vi:'越',ja:'日',ko:'韓',en:'英'};
+  for(var i=0;i<_groupList.length;i++){
+    var g=_groupList[i];
+    var skipCt=g.skip_count||0;
+    var memberCt=g.member_count?g.member_count+'人':'--';
+    var tlList=(g.target_langs&&g.target_langs.length)?g.target_langs:[g.target_lang||'id'];
+    var flagStr=tlList.map(function(c){return (langFlags[c]||'')+(langNames[c]||c)}).join(' + ');
+    var ttsOn=!!g.tts_on;
+    html+='<div class="card">'+
+      '<div class="card-title"><div><span style="font-weight:700;font-size:16px">#'+(g.name||'(未知群組)')+'</span><span style="font-size:12px;color:#8a8a9a;margin-left:8px">👥'+memberCt+'</span></div>'+
+      '<span class="badge '+(g.translation_on?'badge-on':'badge-off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',0)">'+(g.translation_on?'翻譯開':'翻譯關')+'</span></div>'+
+      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0">'+
+      '<span class="card-sub">中文 ⇄ '+flagStr+'</span>'+
+      '<span class="card-sub">｜跳過: '+skipCt+'人</span>'+
+      '<span class="card-sub" style="cursor:pointer;color:#7c6fef;font-weight:600" onclick="toggleLangPicker('+i+')">⚙️ 改</span></div>'+
+      buildLangPicker(g, i)+
+      '<div class="feat-badges">'+
+      '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
+        '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
+      '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
+      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
+      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span></div>'+
+      buildCmdBadges(g, i)+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
+      '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
+      '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
+      '<button class="btn btn-red btn-sm" onclick="leaveGroup('+i+')">退出群組: '+(g.name||g.id.substring(0,12))+'</button></div>';
+  }
+  el.innerHTML=html;
+}
+function toggleTargetLang(idx, code){
+  var g=_groupList[idx];if(!g)return;
+  var cur=(g.target_langs&&g.target_langs.length)?g.target_langs.slice():[g.target_lang||'id'];
+  var pos=cur.indexOf(code);
+  if(pos>=0){
+    if(cur.length<=1){toast('至少要保留 1 種語言');return}
+    cur.splice(pos,1);
+  }else{
+    if(cur.length>=5){toast('最多 5 種語言');return}
+    cur.push(code);
+  }
+  // 樂觀更新 (先更新本地畫面,API 失敗再重抓)
+  g.target_langs=cur;
+  g.target_lang=cur[0];
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,target_langs:cur}).then(function(d){
+    if(d){toast('已更新')}else{loadGroups()}
+  });
+}
+function toggleTts(idx){
+  var g=_groupList[idx];if(!g)return;
+  var nv=!g.tts_on;
+  g.tts_on=nv;
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,tts_on:nv}).then(function(d){
+    if(d){toast(nv?'TTS 已開啟':'TTS 已關閉')}else{loadGroups()}
+  });
 }
 
 // v3.9.10: 圖片模式 3 段循環(開 → 詢問 → 關 → 開 ...)
@@ -16153,6 +16259,21 @@ def api_admin_group_settings():
         if gid not in group_cmd_enabled:
             group_cmd_enabled[gid] = {}
         group_cmd_enabled[gid][cmd_key] = cmd_val
+    # v3.10: 多語廣播設定
+    if "target_langs" in data and isinstance(data["target_langs"], list):
+        try:
+            set_group_target_langs(gid, data["target_langs"])
+        except NameError:
+            # v310 ext 還沒載入時的 fallback (這在 admin API 應該不會發生)
+            valid = [l for l in data["target_langs"] if isinstance(l, str)]
+            if valid:
+                group_target_lang[gid] = valid[0]
+    # v3.10: TTS 開關
+    if "tts_on" in data:
+        try:
+            group_tts_settings[gid] = bool(data["tts_on"])
+        except NameError:
+            pass
     save_settings()
     return jsonify({"ok": True})
 
