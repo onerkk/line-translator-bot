@@ -9563,6 +9563,7 @@ if BotLeaveEvent:
                 group_target_langs.pop(group_id, None)
                 group_tts_settings.pop(group_id, None)
                 group_flex_v2.pop(group_id, None)
+                group_conv_settings.pop(group_id, None)
                 _conv_buffer_clear(group_id)
             except NameError:
                 pass
@@ -12824,7 +12825,9 @@ async function loadGroups(){
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
       '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
       // v3.10: TTS 開關
-      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span></div>'+
+      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span>'+
+      // v3.10: 上下文記憶開關 (純翻譯邏輯,跟 Flex 無關)
+      '<span class="feat-badge '+(g.conv_ctx!==false?'on':'off')+'" style="cursor:pointer" onclick="toggleConvCtx('+i+')" title="AI 看得懂接話/省略主詞,有 prompt cache 成本低">🧠 '+(g.conv_ctx!==false?'上下文開':'上下文關')+'</span></div>'+
       buildCmdBadges(g, i)+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
@@ -12903,7 +12906,8 @@ function loadGroupsLocal(){
         '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
       '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
-      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span></div>'+
+      '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span>'+
+      '<span class="feat-badge '+(g.conv_ctx!==false?'on':'off')+'" style="cursor:pointer" onclick="toggleConvCtx('+i+')" title="AI 看得懂接話/省略主詞,有 prompt cache 成本低">🧠 '+(g.conv_ctx!==false?'上下文開':'上下文關')+'</span></div>'+
       buildCmdBadges(g, i)+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
@@ -12958,6 +12962,26 @@ function toggleTts(idx){
   });
 }
 
+// v3.10: 上下文記憶開關 (純翻譯邏輯,跟 Flex 無關)
+function toggleConvCtx(idx){
+  var g=_groupList[idx];if(!g)return;
+  // 後端 default 是 ON,所以 undefined 也視為 ON
+  var cur=(g.conv_ctx!==false);
+  var nv=!cur;
+  g.conv_ctx=nv;
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,conv_ctx:nv}).then(function(d){
+    if(d){
+      toast(nv?'🧠 上下文記憶已開啟':'🧠 上下文記憶已關閉');
+    }else{
+      // rollback
+      g.conv_ctx=cur;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
+}
+
 // v3.10: 🎨 視覺升級 picker
 var FLEX_V2_DEFS=[
   {k:'emphasis',  n:'原文淡化 / 譯文加粗',     desc:'譯文用大白字突出,給工人看',          d:true},
@@ -12968,8 +12992,7 @@ var FLEX_V2_DEFS=[
   {k:'buttons',   n:'互動按鈕 (查儲區/標錯/重唸)',desc:'卡片下方加可點按鈕',                  d:true},
   {k:'hero',      n:'Hero Image (圖片翻譯)',    desc:'拍工單時附原圖縮圖',                  d:false},
   {k:'span',      n:'Span 高亮 (數字/時間)',    desc:'譯文內數字/時間用色塊強調',          d:false},
-  {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true},
-  {k:'convctx',   n:'🧠 上下文記憶 (4 對對話)', desc:'AI 看得懂接話/省略主詞 (有 prompt cache 成本低)',d:true}
+  {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true}
 ];
 
 function buildFlexV2Picker(g, idx){
@@ -15913,6 +15936,8 @@ def api_admin_groups():
                     if isinstance(globals().get("group_flex_v2", {}).get(gid), dict)
                     else {})}
             ))(),
+            # v3.10: 上下文記憶開關 (預設 ON,未設定也回 True)
+            "conv_ctx": bool(globals().get("group_conv_settings", {}).get(gid, True)),
         })
     groups.sort(key=lambda x: x["name"] or x["id"])
     return jsonify({"groups": groups})
@@ -15953,6 +15978,7 @@ def api_admin_leave_group():
         group_target_langs.pop(gid, None)
         group_tts_settings.pop(gid, None)
         group_flex_v2.pop(gid, None)
+        group_conv_settings.pop(gid, None)
         _conv_buffer_clear(gid)
     except NameError:
         pass
@@ -16725,6 +16751,12 @@ def api_admin_group_settings():
         _v = bool(data.get("flex_v2_val", False))
         try:
             set_flex_v2(gid, _k, _v)
+        except NameError:
+            pass
+    # v3.10: 上下文記憶開關 (獨立於 flex,翻譯邏輯)
+    if "conv_ctx" in data:
+        try:
+            set_conv_context_enabled(gid, bool(data["conv_ctx"]))
         except NameError:
             pass
     save_settings()
@@ -18970,6 +19002,9 @@ from collections import deque
 group_conversation_buffer = {}
 _conv_buffer_lock = _threading_v310.Lock()
 
+# {group_id: bool} — 上下文記憶 per-group 開關 (獨立於 flex_v2,因為這是翻譯邏輯不是視覺)
+group_conv_settings = {}
+
 # 預設保留最近 4 對對話 = 8 條 messages。可在後台 per-group 調整。
 CONV_BUFFER_DEFAULT_TURNS = 4
 CONV_BUFFER_MAX_TURNS = 8         # 上限,避免 token 爆炸
@@ -19022,14 +19057,26 @@ def _conv_buffer_clear(group_id):
 
 
 def get_conv_context_enabled(group_id):
-    """讀 per-group 上下文開關 (預設 ON,沒設定也開)。"""
+    """讀 per-group 上下文開關 (預設 ON,沒設定也開)。
+    跟視覺升級無關,獨立於 group_flex_v2 的 dict 儲存。
+    """
     if not group_id:
         return True
-    # 用 group_flex_v2 dict 共用機制,新增一個 key "convctx"
-    cfg = group_flex_v2.get(group_id) if isinstance(group_flex_v2.get(group_id), dict) else None
-    if cfg and "convctx" in cfg:
-        return bool(cfg["convctx"])
+    if group_id in group_conv_settings:
+        return bool(group_conv_settings[group_id])
     return True   # 預設開 (因為有 prompt caching,實際成本低)
+
+
+def set_conv_context_enabled(group_id, value):
+    """設 per-group 上下文開關。"""
+    if not group_id:
+        return False
+    group_conv_settings[group_id] = bool(value)
+    try:
+        save_settings()
+    except Exception:
+        pass
+    return True
 
 
 
@@ -19231,7 +19278,6 @@ _V2_DEFAULTS = {
     "hero":      False,  # LV5 Hero Image (圖片翻譯才有用,預設 OFF 避免每次)
     "span":      False,  # LV6 Span 高亮 (token 略增,預設 OFF)
     "dynsize":   True,   # LV7 動態 size
-    "convctx":   True,   # 上下文記憶 (4 對對話) — 有 prompt cache 成本低
 }
 
 # Per-language brand color (header 漸層用)
@@ -20703,6 +20749,7 @@ def _do_save_impl_v310():
             "group_target_langs": dict(group_target_langs),
             "group_tts_settings": dict(group_tts_settings),
             "group_flex_v2": _flex_v2_copy,
+            "group_conv_settings": dict(group_conv_settings),
         }
         sc = json.dumps(sidecar, ensure_ascii=False, indent=2)
         _commit_file_to_github("bot_settings_v310.json", sc,
@@ -20745,8 +20792,18 @@ def load_settings_v310():
             elif v is not None:
                 logger.warning("v310 sidecar: group_flex_v2 不是 dict (是 %s),忽略",
                                type(v).__name__)
-            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg, %d flex-v2)",
-                        len(group_target_langs), len(group_tts_settings), len(group_flex_v2))
+            v = d.get("group_conv_settings")
+            if isinstance(v, dict):
+                group_conv_settings.clear()
+                for gid, val in v.items():
+                    if isinstance(val, bool):
+                        group_conv_settings[gid] = val
+            elif v is not None:
+                logger.warning("v310 sidecar: group_conv_settings 不是 dict (是 %s),忽略",
+                               type(v).__name__)
+            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg, %d flex-v2, %d conv-cfg)",
+                        len(group_target_langs), len(group_tts_settings),
+                        len(group_flex_v2), len(group_conv_settings))
     except Exception as e:
         logger.warning("v310 sidecar load failed: %s", e)
 
@@ -20787,9 +20844,19 @@ try:
         elif v is not None:
             logger.warning("v310 boot sidecar: group_flex_v2 不是 dict (是 %s),忽略",
                            type(v).__name__)
-        logger.info("v310: sidecar loaded on boot (%d lang-cfg, %d tts-cfg, %d flex-v2)",
-                    len(group_target_langs), len(group_tts_settings), len(group_flex_v2))
-    logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF, flex-v2")
+        v = d.get("group_conv_settings")
+        if isinstance(v, dict):
+            group_conv_settings.clear()
+            for gid, val in v.items():
+                if isinstance(val, bool):
+                    group_conv_settings[gid] = val
+        elif v is not None:
+            logger.warning("v310 boot sidecar: group_conv_settings 不是 dict (是 %s),忽略",
+                           type(v).__name__)
+        logger.info("v310: sidecar loaded on boot (%d lang-cfg, %d tts-cfg, %d flex-v2, %d conv-cfg)",
+                    len(group_target_langs), len(group_tts_settings),
+                    len(group_flex_v2), len(group_conv_settings))
+    logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF, flex-v2, conv-ctx")
 except Exception as _e:
     logger.warning("v3.10 boot sidecar load failed: %s", _e)
 
