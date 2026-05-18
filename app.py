@@ -1678,7 +1678,7 @@ def _example_relevance_score(example_text, query_text):
     return (overlap / union) * 10.0 if union else 0.0
 
 
-def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
+def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
     {role: "system", name: "example_user"/"example_assistant"} pairs.
@@ -1687,6 +1687,11 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
     v3.4: When custom_examples grows large (we now allow up to 5000),
     pick the FEWSHOT_INJECT_MAX most relevant examples by character bigram overlap
     with the user message, instead of just taking the last N.
+
+    v3.10: 加入 group_id 參數,若該群組有開啟 conv context (預設開),
+    會在 few-shot 之後、本句之前插入最近 N 對對話歷史。
+    這讓 AI 能看懂「接話」「省略主詞」等需上下文的語境。
+    順序維持 [system, few-shot..., conv-history..., 本句] — caching 友善。
     """
     msgs = [{"role": "system", "content": sys_prompt}]
     all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
@@ -1733,6 +1738,24 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt):
         # 這是讓範例真正進入 prompt 並影響翻譯的關鍵修復。
         msgs.append({"role": "user", "content": user_eg})
         msgs.append({"role": "assistant", "content": assistant_eg})
+
+    # v3.10: 加入該群組最近對話歷史 (上下文記憶)
+    # 順序很重要:在 few-shot 之後、本句之前 → caching 友善
+    try:
+        if group_id and get_conv_context_enabled(group_id):
+            history = _conv_buffer_get(group_id)
+            for h in history:
+                # 只保留方向相符的歷史 (避免混淆,例如別人的印→中混進來)
+                if direction_key == "zh2id" and h["src"] == "zh":
+                    msgs.append({"role": "user", "content": h["src_text"]})
+                    msgs.append({"role": "assistant", "content": h["tgt_text"]})
+                elif direction_key == "id2zh" and h["src"] != "zh":
+                    msgs.append({"role": "user", "content": h["src_text"]})
+                    msgs.append({"role": "assistant", "content": h["tgt_text"]})
+    except (NameError, Exception):
+        # 上下文功能不可用就跳過,不影響翻譯
+        pass
+
     msgs.append({"role": "user", "content": user_msg})
     return msgs
 
@@ -5305,7 +5328,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # v3.2-0426e: build messages array, optionally using few-shot "messages" format
         # which separates examples into example_user/example_assistant pairs (OpenAI standard).
         if fewshot_mode == "messages":
-            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt)
+            _gid_for_ctx = getattr(_tl, 'group_id', None)
+            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt, group_id=_gid_for_ctx)
         else:
             _msgs = [
                 {"role": "system", "content": sys_prompt},
@@ -5826,6 +5850,18 @@ def translate(text, src, tgt):
     except Exception as e:
         import traceback
         logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
+    # v3.10: 翻譯成功後寫入該群組的對話 buffer (給後續訊息當上下文用)
+    try:
+        if result is not None:
+            _gid = getattr(_tl, 'group_id', None)
+            if _gid:
+                _conv_buffer_add(_gid, text, result, src, tgt)
+    except (NameError, Exception) as e:
+        # buffer 機制 fail 不影響翻譯結果
+        try:
+            logger.debug("conv buffer add failed: %s", e)
+        except Exception:
+            pass
     return result
 
 
@@ -9527,6 +9563,7 @@ if BotLeaveEvent:
                 group_target_langs.pop(group_id, None)
                 group_tts_settings.pop(group_id, None)
                 group_flex_v2.pop(group_id, None)
+                _conv_buffer_clear(group_id)
             except NameError:
                 pass
             save_settings()
@@ -12931,7 +12968,8 @@ var FLEX_V2_DEFS=[
   {k:'buttons',   n:'互動按鈕 (查儲區/標錯/重唸)',desc:'卡片下方加可點按鈕',                  d:true},
   {k:'hero',      n:'Hero Image (圖片翻譯)',    desc:'拍工單時附原圖縮圖',                  d:false},
   {k:'span',      n:'Span 高亮 (數字/時間)',    desc:'譯文內數字/時間用色塊強調',          d:false},
-  {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true}
+  {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true},
+  {k:'convctx',   n:'🧠 上下文記憶 (4 對對話)', desc:'AI 看得懂接話/省略主詞 (有 prompt cache 成本低)',d:true}
 ];
 
 function buildFlexV2Picker(g, idx){
@@ -15915,6 +15953,7 @@ def api_admin_leave_group():
         group_target_langs.pop(gid, None)
         group_tts_settings.pop(gid, None)
         group_flex_v2.pop(gid, None)
+        _conv_buffer_clear(gid)
     except NameError:
         pass
     save_settings()
@@ -18909,6 +18948,91 @@ group_target_langs = {}   # {group_id: ["id", "th", ...]}
 # 修法 (未實作):redis pub/sub 廣播 reload signal,成本太高暫不做。
 
 
+# ============================================================================
+# Conversation Context Ring Buffer (上下文記憶,讓 AI 看得懂接話)
+# ============================================================================
+# 目的:解決翻譯時看不到上下文導致誤譯的問題。
+#   範例:小麥說「什麼事都沒做就默默升官了」
+#        Dato 接話「要被調走了要升一下」
+#   沒上下文:AI 把「升一下」翻成 "dinaikkan" (物理抬起來) → 錯
+#   有上下文:AI 看到上一句「升官」→ 知道這裡的「升」是升職 → 翻成 "naik jabatan"
+#
+# 設計原則 (照官方文件):
+# 1. 只保留最近 N 對 (預設 4 對 = 8 條 user+assistant)
+# 2. 歷史對話只「附加」不「修改」 → 維持 prefix 穩定 → 兩家 API 都能 cache
+# 3. OpenAI 自動 prompt caching (≥1024 tokens 自動 50% off, 無需改 code)
+# 4. Anthropic 用 cache_control 標記 (cache reads 10% 原價, cache writes 125%)
+# 5. 第一次翻譯付 cache write 略貴,第二次起 cache hit 比原本還便宜
+
+from collections import deque
+
+# {group_id: deque([(原文,翻譯,src_lang,tgt_lang,timestamp), ...])}
+group_conversation_buffer = {}
+_conv_buffer_lock = _threading_v310.Lock()
+
+# 預設保留最近 4 對對話 = 8 條 messages。可在後台 per-group 調整。
+CONV_BUFFER_DEFAULT_TURNS = 4
+CONV_BUFFER_MAX_TURNS = 8         # 上限,避免 token 爆炸
+CONV_BUFFER_TTL_SECONDS = 600     # 10 分鐘無新訊息就清掉 (對話脫節了)
+CONV_BUFFER_MAX_LEN_PER_MSG = 200 # 單條訊息超過 200 字會截斷,避免大段文章吃掉 cache
+
+
+def _conv_buffer_get(group_id, max_turns=None):
+    """取出該群組最近 N 對對話。回傳 list of dict
+    [{src, tgt, src_text, tgt_text, ts}, ...]
+    舊到新排列。"""
+    if not group_id:
+        return []
+    n = max_turns or CONV_BUFFER_DEFAULT_TURNS
+    with _conv_buffer_lock:
+        buf = group_conversation_buffer.get(group_id)
+        if not buf:
+            return []
+        now = time.time()
+        # 過濾過期項目
+        valid = [e for e in buf if (now - e.get("ts", 0)) <= CONV_BUFFER_TTL_SECONDS]
+        return valid[-n:]
+
+
+def _conv_buffer_add(group_id, src_text, tgt_text, src_lang, tgt_lang):
+    """新增一對對話到 buffer。"""
+    if not group_id or not src_text or not tgt_text:
+        return
+    # 截長訊息 (整篇文章吃掉 cache 又對上下文沒幫助)
+    src_clip = (src_text or "")[:CONV_BUFFER_MAX_LEN_PER_MSG]
+    tgt_clip = (tgt_text or "")[:CONV_BUFFER_MAX_LEN_PER_MSG]
+    with _conv_buffer_lock:
+        if group_id not in group_conversation_buffer:
+            group_conversation_buffer[group_id] = deque(maxlen=CONV_BUFFER_MAX_TURNS)
+        group_conversation_buffer[group_id].append({
+            "src": src_lang,
+            "tgt": tgt_lang,
+            "src_text": src_clip,
+            "tgt_text": tgt_clip,
+            "ts": time.time(),
+        })
+
+
+def _conv_buffer_clear(group_id):
+    """清掉特定群組的 buffer (用於 admin command 或群組退出)。"""
+    if not group_id:
+        return
+    with _conv_buffer_lock:
+        group_conversation_buffer.pop(group_id, None)
+
+
+def get_conv_context_enabled(group_id):
+    """讀 per-group 上下文開關 (預設 ON,沒設定也開)。"""
+    if not group_id:
+        return True
+    # 用 group_flex_v2 dict 共用機制,新增一個 key "convctx"
+    cfg = group_flex_v2.get(group_id) if isinstance(group_flex_v2.get(group_id), dict) else None
+    if cfg and "convctx" in cfg:
+        return bool(cfg["convctx"])
+    return True   # 預設開 (因為有 prompt caching,實際成本低)
+
+
+
 def get_group_target_langs(group_id):
     """Get target language list for a group. Falls back to legacy single-lang."""
     if group_id and group_id in group_target_langs:
@@ -19107,6 +19231,7 @@ _V2_DEFAULTS = {
     "hero":      False,  # LV5 Hero Image (圖片翻譯才有用,預設 OFF 避免每次)
     "span":      False,  # LV6 Span 高亮 (token 略增,預設 OFF)
     "dynsize":   True,   # LV7 動態 size
+    "convctx":   True,   # 上下文記憶 (4 對對話) — 有 prompt cache 成本低
 }
 
 # Per-language brand color (header 漸層用)
