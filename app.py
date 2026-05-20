@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.41.2-0520-js-syntax-fix"
+VERSION = "v3.9.41.3-0520-js-batch-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -12501,9 +12501,9 @@ async function concordanceSearch(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'失敗')); return; }
     if(!data.results.length){ alert('沒找到匹配「'+phrase+'」的 TM 條目'); return; }
-    let msg = '找到 '+data.count+' 筆:\n\n';
+    let msg = '找到 '+data.count+' 筆:\\n\\n';
     for(const r of data.results.slice(0,10)){
-      msg += '['+r.matched_side+'] '+r.src_context+' → '+r.tgt_context+' (hits='+r.hit_count+')\n\n';
+      msg += '['+r.matched_side+'] '+r.src_context+' → '+r.tgt_context+' (hits='+r.hit_count+')\\n\\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -12515,10 +12515,10 @@ async function batchListJobs(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.jobs.length){ alert('沒有 batch jobs'); return; }
-    let msg = '最近 '+data.count+' 個 batch jobs:\n\n';
+    let msg = '最近 '+data.count+' 個 batch jobs:\\n\\n';
     for(const j of data.jobs){
       const ts = new Date(j.submitted_at*1000).toLocaleString();
-      msg += j.job_id+' | '+j.provider+' | tasks='+j.task_count+' | status='+(j.status||'?')+'\n  submitted '+ts+'\n\n';
+      msg += j.job_id+' | '+j.provider+' | tasks='+j.task_count+' | status='+(j.status||'?')+'\\n  submitted '+ts+'\\n\\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -12577,10 +12577,10 @@ async function alListCorrections(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.results.length){ alert('沒有人工修正紀錄'); return; }
-    let msg = '最近 '+data.count+' 筆修正:\n\n';
+    let msg = '最近 '+data.count+' 筆修正:\\n\\n';
     for(const r of data.results.slice(0,10)){
       const ts = new Date(r.created_at*1000).toLocaleString();
-      msg += '#'+r.id+' '+ts+' by '+(r.corrected_by||'?')+'\n  原:'+r.original_translation+'\n  正:'+r.corrected_translation+'\n  ('+(r.correction_reason||'無原因')+')\n\n';
+      msg += '#'+r.id+' '+ts+' by '+(r.corrected_by||'?')+'\\n  原:'+r.original_translation+'\\n  正:'+r.corrected_translation+'\\n  ('+(r.correction_reason||'無原因')+')\\n\\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -12596,8 +12596,8 @@ async function maintDedup(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('去重 ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found_dupes+' 條重複\n已刪除 '+res.removed+' 條\n'+
-          (res.details && res.details.length ? '\n前 3 個例子:\n' + res.details.slice(0,3).map(d=>'  '+d.src_text+' → 留下「'+d.kept_tgt+'」,刪 '+d.loser_count+' 條').join('\n') : ''));
+    alert('去重 ('+(res.dry_run?'dry_run':'實際執行')+'):\\n找到 '+res.found_dupes+' 條重複\\n已刪除 '+res.removed+' 條\\n'+
+          (res.details && res.details.length ? '\\n前 3 個例子:\\n' + res.details.slice(0,3).map(d=>'  '+d.src_text+' → 留下「'+d.kept_tgt+'」,刪 '+d.loser_count+' 條').join('\\n') : ''));
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -12619,7 +12619,7 @@ async function maintPrune(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('Prune ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found+' 條符合條件\n已刪除 '+res.removed+' 條');
+    alert('Prune ('+(res.dry_run?'dry_run':'實際執行')+'):\\n找到 '+res.found+' 條符合條件\\n已刪除 '+res.removed+' 條');
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -12640,7 +12640,7 @@ async function maintDecay(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('Decay ('+(res.dry_run?'dry_run':'實際執行')+'):\n影響 '+res.affected+' 條 entries\nfactor: '+res.factor);
+    alert('Decay ('+(res.dry_run?'dry_run':'實際執行')+'):\\n影響 '+res.affected+' 條 entries\\nfactor: '+res.factor);
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
