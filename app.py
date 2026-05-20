@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.39.1-0520-dual-system-fix"
+VERSION = "v3.9.41.1-0520-noq-real-integration"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -147,9 +147,18 @@ import translation_memory as tm_module
 # v3.9.39 Phase B-F: 業界全面技術升級
 import vector_tm as vec_tm_module             # Phase B: Vector RAG (semantic TM)
 import nmt_provider as nmt_module             # Phase C: Hybrid NMT + LLM
-import quality_estimation as qe_module        # Phase D: LLM-based Quality Estimation
+import quality_estimation as qe_module        # Phase D: LLM-based Quality Estimation + MQM
 import auto_post_edit as ape_module           # Phase E: LLM-based Auto Post-Editing
 import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
+# v3.9.40 Phase H-M: 業界更深度整合
+import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
+import batch_translation as batch_module      # Phase K: Batch API (50% off)
+import active_learning as al_module           # Phase L: Human-in-the-loop feedback
+import tm_maintenance as tm_maint_module      # Phase M: TM 資料治理
+# v3.9.41 Phase N/O/Q: 業界進階技術完成
+import in_context_learning as icl_module      # Phase N: Dynamic few-shot from TM
+import language_detection as ld_module        # Phase O: Language auto-detect
+import confidence_scoring as cs_module        # Phase Q: Translation confidence
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
@@ -4993,23 +5002,41 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
         
+        # v3.9.41 Phase N: In-context Learning — 動態 few-shot from TM
+        # 若有夠多高分 refs(score >= ICL_MIN_SCORE),改用 multi-turn user/assistant 對話
+        # 取代既有的 XML inject(多次研究證實 multi-turn ICL > XML reference 5-10 倍)
+        _tm_refs = getattr(_tl, 'tm_references', None)
+        _icl_messages = None
+        if _tm_refs and icl_module.should_use_icl(_tm_refs):
+            try:
+                _icl_messages = icl_module.build_few_shot_messages(_tm_refs, msg, src, tgt)
+                # 注意:_icl_messages 包含完整 user/assistant 對 + 最後 user(當前要翻的)
+                # 後面組裝 _msgs 時直接用,跳過 XML inject + few-shot wrapper
+                logger.info("[Pipeline] ICL multi-turn 啟用: %d messages", len(_icl_messages))
+            except Exception as _icl_e:
+                logger.warning("[ICL] build_few_shot_messages failed: %s", _icl_e)
+                _icl_messages = None
+        
         # v3.9.38 Phase A: TM fuzzy_inject references 注入 user message 前綴
         # 放在 user msg 而非 system prompt — 避免破壞 system prompt cache
         # 符合 Anthropic long-context-tips: 動態 context 放在 query 旁邊
-        _tm_refs = getattr(_tl, 'tm_references', None)
-        if _tm_refs:
+        # 注意:若 ICL 已啟用,跳過 XML inject(避免雙重注入)
+        if _tm_refs and not _icl_messages:
             try:
                 _tm_block = tm_module.tm_inject_prompt(_tm_refs)
                 if _tm_block:
                     msg = _tm_block + "\n\n" + msg
-                    logger.info("[TM] injected %d references into prompt", len(_tm_refs))
+                    logger.info("[TM] injected %d references into prompt (XML mode)", len(_tm_refs))
             except Exception as _tm_e:
                 logger.warning("[TM] inject failed: %s", _tm_e)
 
         _model = pick_model(text)
         # v3.2-0426e: build messages array, optionally using few-shot "messages" format
         # which separates examples into example_user/example_assistant pairs (OpenAI standard).
-        if fewshot_mode == "messages":
+        # v3.9.41 Phase N: 若 ICL 啟用,直接用 ICL messages(已含 user/assistant 對 + 最後 user)
+        if _icl_messages:
+            _msgs = [{"role": "system", "content": sys_prompt}] + _icl_messages
+        elif fewshot_mode == "messages":
             _gid_for_ctx = getattr(_tl, 'group_id', None)
             _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt, group_id=_gid_for_ctx)
         else:
@@ -5210,6 +5237,18 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             except Exception:
                 pass
             raise
+        # v3.9.41 Phase Q: 抽 confidence score(雙系統)
+        try:
+            _conf_provider = ai_provider.get_active_provider()
+            _max_tokens_hint = _kwargs.get("max_tokens") or _kwargs.get("max_completion_tokens") or 1024
+            _conf_score = cs_module.score_response(r, max_tokens=_max_tokens_hint, provider=_conf_provider)
+            if _conf_score is not None:
+                _tl.last_confidence = _conf_score
+                if _conf_score < 0.7:
+                    logger.warning("[CS] LOW confidence: %.3f for src=%s text=%r",
+                                   _conf_score, src, (text or "")[:60])
+        except Exception as _cs_e:
+            logger.debug("[CS] scoring failed: %s", _cs_e)
         try:
             _event_log_write("translate_call_done", {
                 "model": _model,
@@ -5533,6 +5572,22 @@ def translate(text, src, tgt):
     """
     _gid_for_tm = getattr(_tl, 'group_id', '') or ''
     
+    # ─── 0. Phase O: Language Auto-Detection ───
+    # 偵測訊息實際語言,若與宣告的 src 不符,記到 _tl 供日誌(不主動修正避免破壞使用者設定)
+    try:
+        _ld_result = ld_module.detect_language(text)
+        _detected_lang = _ld_result.get("primary", "unknown")
+        _tl.detected_lang = _detected_lang
+        _tl.detected_confidence = _ld_result.get("confidence", 0.0)
+        if (_detected_lang not in ("unknown", "mixed") and 
+            not src.lower().startswith(_detected_lang) and 
+            not _detected_lang.startswith(src.lower()) and
+            _ld_result.get("confidence", 0) > 0.7):
+            logger.warning("[LD] 語言不一致:宣告 src=%s 但偵測到 %s (conf=%.2f) text=%r",
+                           src, _detected_lang, _ld_result["confidence"], text[:60])
+    except Exception as _ld_e:
+        logger.debug("[LD] detect exception: %s", _ld_e)
+    
     # ─── 1+2: Lexical TM lookup ───
     _tm_result = None
     try:
@@ -5643,6 +5698,31 @@ def translate(text, src, tgt):
             import traceback
             logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
     
+    # ─── 後處理 0.5: Phase H Glossary Enforcement (在 QE 之前) ───
+    # 強制術語對照:譯文有無遵守 glossary
+    if result and isinstance(result, str) and not result.startswith("⚠"):
+        try:
+            _glossary_for_ge = GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}
+            if _glossary_for_ge:
+                _ge_result = ge_module.enforce_glossary(
+                    text, result, _glossary_for_ge, src, tgt,
+                    ai_client=ai_provider,
+                )
+                if _ge_result.get("action_taken") == "fixed":
+                    logger.info("[Pipeline] GE auto-fixed %d violations",
+                                len(_ge_result.get("violations", [])))
+                    result = _ge_result["final_text"]
+                elif _ge_result.get("action_taken") == "blocked":
+                    result = _ge_result["final_text"]
+                elif _ge_result.get("action_taken") == "warned" and _ge_result.get("violations"):
+                    # 把 violations 存 thread-local,供 QE 參考
+                    try:
+                        _tl.ge_violations = _ge_result["violations"]
+                    except Exception:
+                        pass
+        except Exception as _ge_e:
+            logger.warning("[GE] enforcement exception: %s", _ge_e)
+    
     # ─── 後處理 1: QE 評分(可選,若啟用) ───
     _qe_result = None
     if result and isinstance(result, str) and not result.startswith("⚠"):
@@ -5680,26 +5760,34 @@ def translate(text, src, tgt):
         except Exception:
             pass
     
-    # ─── 後處理 4: TM store back(累積資產) ───
+    # ─── 後處理 4: TM store back(累積資產,帶 confidence + QE 分數) ───
     if result and isinstance(result, str) and not result.startswith("⚠"):
+        # v3.9.41 Phase Q: 用 confidence score 當 quality_score 的補強訊號
+        _conf = getattr(_tl, 'last_confidence', None)
+        _qe_total = _qe_result.get("total") if _qe_result else None
+        # 優先 QE 分數,fallback confidence × 100
+        _quality_for_tm = _qe_total if _qe_total is not None else (
+            int(_conf * 100) if _conf is not None else None
+        )
         try:
             _model_used = getattr(_tl, 'last_model_used', '') or 'unknown'
-            _qe_score = _qe_result.get("total") if _qe_result else None
-            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used, _qe_score)
+            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used, _quality_for_tm)
         except Exception as _tm_e:
             logger.warning("[TM] store exception: %s", _tm_e)
         try:
             vec_tm_module.vector_store(text, result, src, tgt, _gid_for_tm,
-                                        _model_used, _qe_score)
+                                        _model_used, _quality_for_tm)
         except Exception as _vec_e:
             logger.warning("[VecTM] store exception: %s", _vec_e)
     
-    # 清掉 _tl 暫存避免污染
-    try:
-        if hasattr(_tl, 'tm_references'):
-            del _tl.tm_references
-    except Exception:
-        pass
+    # 清掉 _tl 暫存避免污染下一次翻譯
+    for _attr in ('tm_references', 'last_confidence', 'detected_lang',
+                  'detected_confidence', 'ge_violations'):
+        try:
+            if hasattr(_tl, _attr):
+                delattr(_tl, _attr)
+        except Exception:
+            pass
     
     return result
 
@@ -11651,6 +11739,57 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <button onclick="tbxImport()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⬆️ 匯入 TBX</button>
     </div>
   </details>
+  
+  <!-- v3.9.40 Phase H: Glossary Enforcement -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#ef4444;font-weight:600">🛡️ Phase H: Glossary Enforcement(強制術語對照)</summary>
+    <div id="dash-ge" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="geSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置(warn / auto_fix / block)</button>
+    </div>
+  </details>
+  
+  <!-- v3.9.40 Phase J: Concordance Search(觸發式) -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#06b6d4;font-weight:600">🔍 Phase J: Concordance Search(TM 詞組搜尋)</summary>
+    <div style="padding:10px;font-size:11px;color:#aaa">
+      在 TM 中搜尋詞組,看「這個術語通常怎麼翻」(CAT tool 標準功能)
+    </div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="concordanceSearch()" style="padding:6px 12px;background:#06b6d4;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">🔍 開始搜尋</button>
+    </div>
+  </details>
+  
+  <!-- v3.9.40 Phase K: Batch API -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#84cc16;font-weight:600">📦 Phase K: Batch API(50% off,24h 處理)</summary>
+    <div id="dash-batch" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="batchListJobs()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">📋 列出 jobs</button>
+      <button onclick="batchSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+    </div>
+  </details>
+  
+  <!-- v3.9.40 Phase L: Active Learning -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#f97316;font-weight:600">🎓 Phase L: Active Learning(人工修正回饋)</summary>
+    <div id="dash-al" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="alSubmitCorrection()" style="padding:6px 12px;background:#f97316;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">✏️ 提交人工修正</button>
+      <button onclick="alListCorrections()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">📋 查看修正紀錄</button>
+    </div>
+  </details>
+  
+  <!-- v3.9.40 Phase M: TM Maintenance -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#94a3b8;font-weight:600">🧹 Phase M: TM Maintenance(資料治理)</summary>
+    <div id="dash-maint" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="maintDedup()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">🔁 去重</button>
+      <button onclick="maintPrune()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">✂️ Prune 舊條目</button>
+      <button onclick="maintDecay()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">📉 Quality decay</button>
+    </div>
+  </details>
 </div>
 
 </div>
@@ -12292,9 +12431,218 @@ async function dashLoadStats(){
     document.getElementById('dash-tbx').innerHTML =
       'glossary entries: '+(tbx.glossary_entries||0)+'<br>'+
       'format: '+(tbx.supported_format||'?');
+    
+    // Phase H: Glossary Enforcement
+    const ge = ph.H_glossary_enforcement || {};
+    const topViolated = (ge.top_violated_terms||[]).slice(0,5).map(t=>t.term+'('+t.count+')').join(', ') || '無';
+    const dashGe = document.getElementById('dash-ge');
+    if(dashGe) dashGe.innerHTML =
+      'enabled: '+(ge.enabled?'✓':'✗')+' | action: '+(ge.action||'?')+'<br>'+
+      'checks: '+(ge.checks||0)+' | compliant: '+(ge.compliant||0)+' | violations: '+(ge.violations_found||0)+'<br>'+
+      'compliance_rate: '+((ge.compliance_rate||0)*100).toFixed(1)+'% | auto_fixed: '+(ge.auto_fixed||0)+' | blocked: '+(ge.blocked||0)+'<br>'+
+      'top violated terms: '+topViolated;
+    
+    // Phase K: Batch
+    const batch = ph.K_batch || {};
+    const bmodels = batch.model_by_provider || {};
+    const dashBatch = document.getElementById('dash-batch');
+    if(dashBatch) dashBatch.innerHTML =
+      'enabled: '+(batch.enabled?'✓':'✗')+' | active_provider: '+(batch.active_provider||'?')+'<br>'+
+      '<b>current model</b>: '+(batch.model_current||'?')+'<br>'+
+      '雙系統 mapping: openai→'+(bmodels.openai||'?')+' | anthropic→'+(bmodels.anthropic||'?')+'<br>'+
+      'submitted: '+(batch.submitted||0)+' | completed: '+(batch.completed||0)+' | failed: '+(batch.failed||0)+'<br>'+
+      'total_requests_batched: '+(batch.total_requests_batched||0)+' | jobs_in_registry: '+(batch.jobs_in_registry||0);
+    
+    // Phase L: Active Learning
+    const al = ph.L_active_learning || {};
+    const topCorr = (al.top_correctors||[]).slice(0,5).map(t=>(t.by||'?')+'('+t.count+')').join(', ') || '無';
+    const dashAl = document.getElementById('dash-al');
+    if(dashAl) dashAl.innerHTML =
+      'corrections_submitted: '+(al.corrections_submitted||0)+'<br>'+
+      'tm_updated: '+(al.tm_updated||0)+' | vec_tm_updated: '+(al.vec_tm_updated||0)+'<br>'+
+      'total_corrections in DB: '+(al.total_corrections||0)+'<br>'+
+      'top correctors: '+topCorr;
+    
+    // Phase M: TM Maintenance
+    const maint = ph.M_tm_maintenance || {};
+    const mstats = maint.maintenance_stats || {};
+    const dashMaint = document.getElementById('dash-maint');
+    if(dashMaint) dashMaint.innerHTML =
+      'total_entries: '+(maint.total_entries||0)+' | human_corrected: '+(maint.human_corrected||0)+'<br>'+
+      'duplicate_groups: '+(maint.duplicate_groups||0)+' | stale 180d+: '+(maint.stale_180d||0)+' | low_usage: '+(maint.low_usage||0)+'<br>'+
+      'older_than_365d: '+(maint.older_than_365d||0)+' | avg_quality: '+(maint.avg_quality_score==null?'—':maint.avg_quality_score)+'<br>'+
+      'dedup_runs: '+(mstats.dedup_runs||0)+' (removed '+(mstats.dedup_removed||0)+') | prune_runs: '+(mstats.prune_runs||0)+' (removed '+(mstats.prune_removed||0)+') | decay_runs: '+(mstats.decay_runs||0);
   } catch(e) {
     dashSummary.textContent = '✗ ' + e.message;
   }
+}
+
+async function geSetConfig(){
+  const enabled = confirm('啟用 Glossary Enforcement?(取消 = 停用)');
+  const action = prompt('Action 模式:warn(只警告)/ auto_fix(LLM 修正)/ block(嚴重時加 ⚠️ 前綴)\n預設 warn:', 'warn');
+  if(action === null) return;
+  try {
+    const r = await fetch('/api/admin/ge/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled, action:action})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function concordanceSearch(){
+  const phrase = prompt('搜尋 phrase(可中文或印尼文):', '');
+  if(!phrase) return;
+  try {
+    const r = await fetch('/api/admin/tm/concordance?phrase='+encodeURIComponent(phrase)+'&limit=20',
+                          {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'失敗')); return; }
+    if(!data.results.length){ alert('沒找到匹配「'+phrase+'」的 TM 條目'); return; }
+    let msg = '找到 '+data.count+' 筆:\n\n';
+    for(const r of data.results.slice(0,10)){
+      msg += '['+r.matched_side+'] '+r.src_context+' → '+r.tgt_context+' (hits='+r.hit_count+')\n\n';
+    }
+    alert(msg);
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function batchListJobs(){
+  try {
+    const r = await fetch('/api/admin/batch/list?limit=20', {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    if(!data.jobs.length){ alert('沒有 batch jobs'); return; }
+    let msg = '最近 '+data.count+' 個 batch jobs:\n\n';
+    for(const j of data.jobs){
+      const ts = new Date(j.submitted_at*1000).toLocaleString();
+      msg += j.job_id+' | '+j.provider+' | tasks='+j.task_count+' | status='+(j.status||'?')+'\n  submitted '+ts+'\n\n';
+    }
+    alert(msg);
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function batchSetConfig(){
+  const enabled = confirm('啟用 Batch API?(取消 = 停用)');
+  const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-4.1-mini):', 'gpt-4.1-mini');
+  if(openai_model === null) return;
+  const anthropic_model = prompt('Anthropic batch 用的模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
+  if(anthropic_model === null) return;
+  try {
+    const r = await fetch('/api/admin/batch/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function alSubmitCorrection(){
+  const src = prompt('原文:', '');
+  if(!src) return;
+  const original = prompt('原譯文(LLM 翻的,可空):', '');
+  if(original === null) return;
+  const corrected = prompt('正確譯文(你的修正):', '');
+  if(!corrected) return;
+  const reason = prompt('修正原因(可空):', '');
+  if(reason === null) return;
+  const src_lang = prompt('原文語言(zh / id / en...):', 'zh');
+  if(!src_lang) return;
+  const tgt_lang = prompt('目標語言:', 'id');
+  if(!tgt_lang) return;
+  try {
+    const r = await fetch('/api/admin/al/submit', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({
+        src_text:src, original_tgt:original, corrected_tgt:corrected,
+        reason:reason||null, src_lang:src_lang, tgt_lang:tgt_lang,
+        by: '歐那 (admin)'
+      })
+    });
+    const data = await r.json();
+    alert(data.ok 
+      ? '✓ 修正提交 (id='+data.correction_id+'),TM:'+(data.tm_updated?'✓':'✗')+' Vector:'+(data.vec_updated?'✓':'✗')+'。下次同樣訊息會直接用修正版,bypass LLM。'
+      : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function alListCorrections(){
+  try {
+    const r = await fetch('/api/admin/al/list?limit=20', {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    if(!data.results.length){ alert('沒有人工修正紀錄'); return; }
+    let msg = '最近 '+data.count+' 筆修正:\n\n';
+    for(const r of data.results.slice(0,10)){
+      const ts = new Date(r.created_at*1000).toLocaleString();
+      msg += '#'+r.id+' '+ts+' by '+(r.corrected_by||'?')+'\n  原:'+r.original_translation+'\n  正:'+r.corrected_translation+'\n  ('+(r.correction_reason||'無原因')+')\n\n';
+    }
+    alert(msg);
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function maintDedup(){
+  const real = confirm('去重操作:確定要實際刪除嗎?(取消 = dry_run 只報告)');
+  try {
+    const r = await fetch('/api/admin/tm-maint/dedup', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({dry_run: !real, preserve_human_corrected: true})
+    });
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    const res = data.result;
+    alert('去重 ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found_dupes+' 條重複\n已刪除 '+res.removed+' 條\n'+
+          (res.details && res.details.length ? '\n前 3 個例子:\n' + res.details.slice(0,3).map(d=>'  '+d.src_text+' → 留下「'+d.kept_tgt+'」,刪 '+d.loser_count+' 條').join('\n') : ''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function maintPrune(){
+  const days = prompt('Prune:多少天沒用算 stale?(預設 180 天 = 6 個月)', '180');
+  if(days === null) return;
+  const min_hits = prompt('Prune:hit_count <= 多少才刪?(預設 1)', '1');
+  if(min_hits === null) return;
+  const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\n注意:human_corrected 永遠保留');
+  try {
+    const r = await fetch('/api/admin/tm-maint/prune', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({
+        days_unused: parseInt(days), min_hits: parseInt(min_hits),
+        dry_run: !real, preserve_human_corrected: true
+      })
+    });
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    const res = data.result;
+    alert('Prune ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found+' 條符合條件\n已刪除 '+res.removed+' 條');
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function maintDecay(){
+  const days = prompt('Quality decay:多少天前建立的才衰減?(預設 365 天)', '365');
+  if(days === null) return;
+  const factor = prompt('衰減 factor(0-1,預設 0.9 = quality_score × 0.9):', '0.9');
+  if(factor === null) return;
+  const real = confirm('Quality decay:確定執行?(取消 = dry_run)\n注意:human_corrected 不衰減');
+  try {
+    const r = await fetch('/api/admin/tm-maint/decay', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({
+        days_old: parseInt(days), factor: parseFloat(factor), dry_run: !real
+      })
+    });
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    const res = data.result;
+    alert('Decay ('+(res.dry_run?'dry_run':'實際執行')+'):\n影響 '+res.affected+' 條 entries\nfactor: '+res.factor);
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
 }
 
 async function tmImportTMX(){
@@ -16186,6 +16534,361 @@ def api_admin_tbx_validate():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# v3.9.40 Phase H: Glossary Enforcement admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/ge/stats", methods=["GET"])
+def api_admin_ge_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": ge_module.ge_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/ge/config", methods=["POST"])
+def api_admin_ge_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = ge_module.ge_set_config(
+            enabled=data.get("enabled"),
+            action=data.get("action"),
+            min_term_len=data.get("min_term_len"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.40 Phase J: TM Concordance Search
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/tm/concordance", methods=["GET"])
+def api_admin_tm_concordance():
+    """CAT-tool 級詞組層搜尋:查 phrase 在 TM 內所有使用範例"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        phrase = request.args.get("phrase", "").strip()
+        if not phrase:
+            return jsonify({"ok": False, "error": "需提供 phrase"}), 400
+        src_lang = request.args.get("src_lang") or None
+        tgt_lang = request.args.get("tgt_lang") or None
+        side = request.args.get("side", "both")
+        limit = _safe_int(request.args.get("limit", "30"), default=30, min_val=1, max_val=200)
+        
+        results = tm_module.tm_concordance(phrase, src_lang, tgt_lang, side, limit)
+        return jsonify({"ok": True, "phrase": phrase, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.40 Phase K: Batch API admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/batch/submit", methods=["POST"])
+def api_admin_batch_submit():
+    """提交批次翻譯任務(雙系統自動)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        tasks = data.get("tasks", [])
+        if not isinstance(tasks, list) or not tasks:
+            return jsonify({"ok": False, "error": "tasks 必須是 list of {id, src_text, src_lang, tgt_lang}"}), 400
+        job_id = batch_module.submit_batch(tasks)
+        if not job_id:
+            return jsonify({"ok": False, "error": "提交失敗,請看 log"}), 500
+        return jsonify({"ok": True, "job_id": job_id, "task_count": len(tasks)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/batch/status/<job_id>", methods=["GET"])
+def api_admin_batch_status(job_id):
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        status = batch_module.check_batch_status(job_id)
+        if not status:
+            return jsonify({"ok": False, "error": "job_id 不存在"}), 404
+        return jsonify({"ok": True, "job": status})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/batch/results/<job_id>", methods=["GET"])
+def api_admin_batch_results(job_id):
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        results = batch_module.retrieve_batch_results(job_id)
+        return jsonify({"ok": True, "job_id": job_id, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/batch/list", methods=["GET"])
+def api_admin_batch_list():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        limit = _safe_int(request.args.get("limit", "50"), default=50, min_val=1, max_val=200)
+        jobs = batch_module.list_batches(limit)
+        return jsonify({"ok": True, "count": len(jobs), "jobs": jobs})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/batch/stats", methods=["GET"])
+def api_admin_batch_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": batch_module.batch_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/batch/config", methods=["POST"])
+def api_admin_batch_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = batch_module.batch_set_config(
+            enabled=data.get("enabled"),
+            openai_model=data.get("openai_model"),
+            anthropic_model=data.get("anthropic_model"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.40 Phase L: Active Learning admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/al/submit", methods=["POST"])
+def api_admin_al_submit():
+    """提交人工修正,同步寫回 TM + Vector TM(quality_score=100)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        result = al_module.submit_correction(
+            src_text=data.get("src_text", ""),
+            original_tgt=data.get("original_tgt", ""),
+            corrected_tgt=data.get("corrected_tgt", ""),
+            src_lang=data.get("src_lang", ""),
+            tgt_lang=data.get("tgt_lang", ""),
+            correction_reason=data.get("reason"),
+            corrected_by=data.get("by"),
+            group_id=data.get("group_id"),
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/list", methods=["GET"])
+def api_admin_al_list():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        limit = _safe_int(request.args.get("limit", "100"), default=100, min_val=1, max_val=500)
+        offset = _safe_int(request.args.get("offset", "0"), default=0, min_val=0)
+        results = al_module.list_corrections(
+            limit=limit, offset=offset,
+            src_lang=request.args.get("src_lang") or None,
+            tgt_lang=request.args.get("tgt_lang") or None,
+            keyword=request.args.get("keyword") or None,
+        )
+        return jsonify({"ok": True, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/entry/<int:correction_id>", methods=["DELETE"])
+def api_admin_al_delete(correction_id):
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        ok = al_module.delete_correction(correction_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/stats", methods=["GET"])
+def api_admin_al_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": al_module.al_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.40 Phase M: TM Maintenance admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/tm-maint/report", methods=["GET"])
+def api_admin_tm_maint_report():
+    """資料治理報告:dupes / stale / low-quality"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "report": tm_maint_module.maintenance_report()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm-maint/dedup", methods=["POST"])
+def api_admin_tm_maint_dedup():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        dry_run = data.get("dry_run", True)  # 預設 dry_run 防誤刪
+        result = tm_maint_module.deduplicate(
+            dry_run=bool(dry_run),
+            preserve_human_corrected=bool(data.get("preserve_human_corrected", True)),
+        )
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm-maint/prune", methods=["POST"])
+def api_admin_tm_maint_prune():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        dry_run = data.get("dry_run", True)
+        result = tm_maint_module.prune_unused(
+            days_unused=int(data.get("days_unused", 180)),
+            min_hits=int(data.get("min_hits", 1)),
+            dry_run=bool(dry_run),
+            preserve_human_corrected=bool(data.get("preserve_human_corrected", True)),
+        )
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm-maint/decay", methods=["POST"])
+def api_admin_tm_maint_decay():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        dry_run = data.get("dry_run", True)
+        result = tm_maint_module.decay_quality(
+            days_old=int(data.get("days_old", 365)),
+            factor=float(data.get("factor", 0.9)),
+            dry_run=bool(dry_run),
+        )
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.41 Phase N: In-context Learning admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/icl/stats", methods=["GET"])
+def api_admin_icl_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": icl_module.icl_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/icl/config", methods=["POST"])
+def api_admin_icl_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = icl_module.icl_set_config(
+            enabled=data.get("enabled"),
+            max_examples=data.get("max_examples"),
+            min_score=data.get("min_score"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.41 Phase O: Language Detection admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/ld/detect", methods=["POST"])
+def api_admin_ld_detect():
+    """測試語言偵測 — 後台輸入文字看偵測結果"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        text = data.get("text", "")
+        if not text:
+            return jsonify({"ok": False, "error": "需提供 text"}), 400
+        result = ld_module.detect_language(text)
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/ld/stats", methods=["GET"])
+def api_admin_ld_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": ld_module.ld_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.41 Phase Q: Confidence Scoring admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/cs/stats", methods=["GET"])
+def api_admin_cs_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": cs_module.cs_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/cs/config", methods=["POST"])
+def api_admin_cs_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = cs_module.cs_set_config(enabled=data.get("enabled"))
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
 # v3.9.39 Phase G: Unified Dashboard Stats (聚合所有 Phase 統計)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -16208,6 +16911,13 @@ def api_admin_dashboard_stats():
                     "glossary_entries": len(GLOSSARY_LOOKUP) if 'GLOSSARY_LOOKUP' in globals() else 0,
                     "supported_format": "TBX-Basic v2 (ISO 30042)",
                 },
+                "H_glossary_enforcement": ge_module.ge_stats(),
+                "K_batch": batch_module.batch_stats(),
+                "L_active_learning": al_module.al_stats(),
+                "M_tm_maintenance": tm_maint_module.maintenance_report(),
+                "N_icl": icl_module.icl_stats(),
+                "O_language_detection": ld_module.ld_stats(),
+                "Q_confidence_scoring": cs_module.cs_stats(),
             },
         }
         

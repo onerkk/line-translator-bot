@@ -72,13 +72,18 @@ _stats = {
     "retry_count": 0,
     "api_errors": 0,
     "score_distribution": {"90+": 0, "70-89": 0, "50-69": 0, "<50": 0},
+    # MQM(ISO 5060)分類統計
+    "mqm_by_dimension": {},  # {"accuracy": N, "fluency": N, ...}
+    "mqm_by_severity": {},   # {"critical": N, "major": N, "minor": N, "neutral": N}
 }
 
 
 # ═══════════════════════════════════════════════════════════════════
-# QE prompt 設計
+# QE prompt 設計 — v1.1 整合 MQM (ISO 5060) 錯誤分類
+# Multidimensional Quality Metrics:業界標準,每個錯誤有 dimension + severity
 # ═══════════════════════════════════════════════════════════════════
 QE_SYSTEM_PROMPT = """你是專業翻譯品質評估專家,評估台灣不銹鋼工廠中印雙語譯文品質。
+依據 MQM (Multidimensional Quality Metrics, ISO 5060) 標準。
 
 評估維度(各 0-25 分,合計 0-100):
 1. **Accuracy 準確性**(0-25):譯文是否完整傳達原文意思,沒有遺漏/誤譯
@@ -86,10 +91,25 @@ QE_SYSTEM_PROMPT = """你是專業翻譯品質評估專家,評估台灣不銹鋼
 3. **Terminology 術語**(0-25):工廠術語、機台代號、料號是否正確
 4. **Tone 語氣**(0-25):正式/口語/緊急程度是否相符原文
 
-**輸出格式**(嚴格 JSON,不要 markdown,不要任何說明):
-{"accuracy":整數,"fluency":整數,"terminology":整數,"tone":整數,"total":整數,"issues":["具體問題1","具體問題2"]}
+**MQM 錯誤分類**(若有錯誤,列入 issues 陣列):
+- dimension: "accuracy" | "fluency" | "terminology" | "style" | "locale"
+- severity: "critical"(嚴重誤譯/反義) | "major"(術語錯/重要遺漏) | "minor"(語氣/標點)| "neutral"(風格喜好)
+- description: 具體錯誤描述(20 字內)
 
-issues 列出具體錯誤(若有),最多 3 條,沒問題就空陣列。"""
+**輸出格式**(嚴格 JSON,不要 markdown,不要任何說明):
+{
+  "accuracy": 整數,
+  "fluency": 整數,
+  "terminology": 整數,
+  "tone": 整數,
+  "total": 整數,
+  "issues": [
+    {"dimension":"...","severity":"...","description":"..."},
+    ...
+  ]
+}
+
+issues 最多 5 條,沒問題就空陣列。"""
 
 
 def _build_qe_user_prompt(src_text: str, tgt_text: str,
@@ -208,7 +228,27 @@ def estimate_quality(src_text: str, tgt_text: str,
         issues = data.get("issues", []) or []
         if not isinstance(issues, list):
             issues = []
-        issues = [str(x)[:200] for x in issues[:3]]
+        # 統一 issues 結構為 dict(向後相容:string 也允許)
+        normalized_issues = []
+        for x in issues[:5]:
+            if isinstance(x, dict):
+                normalized_issues.append({
+                    "dimension": str(x.get("dimension", "other"))[:30],
+                    "severity": str(x.get("severity", "minor"))[:20],
+                    "description": str(x.get("description", ""))[:200],
+                })
+            elif isinstance(x, str):
+                # 舊格式 string,當 description 處理
+                normalized_issues.append({
+                    "dimension": "other",
+                    "severity": "minor",
+                    "description": x[:200],
+                })
+        issues = normalized_issues
+        
+        # MQM Severity 加權扣分(可選,只在統計用,不改 total)
+        severity_weight = {"critical": 25, "major": 5, "minor": 1, "neutral": 0}
+        mqm_penalty = sum(severity_weight.get(i["severity"], 1) for i in issues)
         
         # 決定 action
         if total < QE_THRESHOLD_RETRY:
@@ -234,8 +274,15 @@ def estimate_quality(src_text: str, tgt_text: str,
                 _stats["warn_count"] += 1
             elif action == "retry":
                 _stats["retry_count"] += 1
+            # MQM 分類統計
+            for iss in issues:
+                dim = iss.get("dimension", "other")
+                sev = iss.get("severity", "minor")
+                _stats["mqm_by_dimension"][dim] = _stats["mqm_by_dimension"].get(dim, 0) + 1
+                _stats["mqm_by_severity"][sev] = _stats["mqm_by_severity"].get(sev, 0) + 1
         
-        logger.info("[QE] score=%d action=%s issues=%d", total, action, len(issues))
+        logger.info("[QE] score=%d action=%s issues=%d mqm_penalty=%d",
+                    total, action, len(issues), mqm_penalty)
         
         return {
             "total": total,
@@ -244,6 +291,7 @@ def estimate_quality(src_text: str, tgt_text: str,
             "terminology": terminology,
             "tone": tone,
             "issues": issues,
+            "mqm_penalty": mqm_penalty,
             "action": action,
         }
     
@@ -261,6 +309,9 @@ def qe_stats() -> Dict[str, Any]:
     with _lock:
         s = dict(_stats)
         s["score_distribution"] = dict(s["score_distribution"])
+        # MQM 統計拷貝
+        s["mqm_by_dimension"] = dict(s["mqm_by_dimension"])
+        s["mqm_by_severity"] = dict(s["mqm_by_severity"])
     if s["evaluations"] > 0:
         s["avg_score"] = round(s["scores_sum"] / s["evaluations"], 2)
         s["warn_rate"] = round(s["warn_count"] / s["evaluations"], 4)

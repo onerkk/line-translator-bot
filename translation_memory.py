@@ -642,6 +642,99 @@ def tm_clear(group_id: Optional[str] = None, src_lang: Optional[str] = None,
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Phase J: Concordance Search(CAT tool 業界標準)
+# ═══════════════════════════════════════════════════════════════════
+def tm_concordance(phrase: str, src_lang: Optional[str] = None,
+                   tgt_lang: Optional[str] = None,
+                   side: str = "both",
+                   limit: int = 30) -> List[Dict[str, Any]]:
+    """詞組層級 concordance 搜尋 — CAT tool 標準功能
+    
+    跟 tm_search 不同:concordance 抽取每筆譯文中的 phrase 上下文,
+    讓使用者快速看到「這個術語/詞組通常怎麼翻」。
+    
+    Args:
+        phrase: 要搜尋的詞組(可以是中文或印尼文)
+        src_lang/tgt_lang: 限制語言對(None = 不限)
+        side: "source" 只搜原文 | "target" 只搜譯文 | "both" 兩邊都搜
+        limit: 最多回傳幾筆
+    
+    Returns: list of {
+        "src_text": str, "tgt_text": str, "src_lang": str, "tgt_lang": str,
+        "src_context": str (高亮 phrase 的上下文片段),
+        "tgt_context": str,
+        "matched_side": "source" | "target" | "both",
+        "hit_count": int (TM entry 命中次數)
+    }
+    """
+    if not _init_done:
+        init()
+    if not phrase or not phrase.strip():
+        return []
+    phrase = phrase.strip()
+    
+    where = []
+    params = []
+    
+    if side == "source":
+        where.append("src_text LIKE ?")
+        params.append(f"%{phrase}%")
+    elif side == "target":
+        where.append("tgt_text LIKE ?")
+        params.append(f"%{phrase}%")
+    else:  # both
+        where.append("(src_text LIKE ? OR tgt_text LIKE ?)")
+        params.extend([f"%{phrase}%", f"%{phrase}%"])
+    
+    if src_lang:
+        where.append("src_lang=?")
+        params.append(src_lang)
+    if tgt_lang:
+        where.append("tgt_lang=?")
+        params.append(tgt_lang)
+    
+    sql = ("SELECT src_text, tgt_text, src_lang, tgt_lang, hit_count FROM tm_entries WHERE "
+           + " AND ".join(where) + " ORDER BY hit_count DESC, last_used_at DESC LIMIT ?")
+    params.append(limit)
+    
+    results = []
+    try:
+        with sqlite3.connect(TM_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql, params).fetchall()
+            for r in rows:
+                src_match = phrase in r["src_text"]
+                tgt_match = phrase in r["tgt_text"]
+                matched_side = "both" if (src_match and tgt_match) else ("source" if src_match else "target")
+                results.append({
+                    "src_text": r["src_text"],
+                    "tgt_text": r["tgt_text"],
+                    "src_lang": r["src_lang"],
+                    "tgt_lang": r["tgt_lang"],
+                    "src_context": _highlight_context(r["src_text"], phrase, window=20) if src_match else "",
+                    "tgt_context": _highlight_context(r["tgt_text"], phrase, window=20) if tgt_match else "",
+                    "matched_side": matched_side,
+                    "hit_count": r["hit_count"],
+                })
+        return results
+    except Exception as e:
+        logger.error("[TM] concordance failed: %s", e)
+        return []
+
+
+def _highlight_context(text: str, phrase: str, window: int = 20) -> str:
+    """抽 phrase 前後 window 字當 context,phrase 包 【】 標記"""
+    idx = text.find(phrase)
+    if idx < 0:
+        return text[:80]
+    start = max(0, idx - window)
+    end = min(len(text), idx + len(phrase) + window)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:idx] + "【" + phrase + "】" + text[idx + len(phrase):end] + suffix
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 配置調整 API(後台可調 threshold)
 # ═══════════════════════════════════════════════════════════════════
 

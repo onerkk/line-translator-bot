@@ -1,32 +1,22 @@
-# v3.9.39 業界全面技術升級 — 新增依賴
-# 把下面的行加到 Render 的 requirements.txt 內,然後重新部署
+# v3.9.41 業界 COMPLETE 整合 — 依賴清單
+# 把這些加到 Render 的 requirements.txt 重新部署
 
-# Phase A: Lexical TM 需要(沒裝會 fallback stdlib difflib,慢 10-50x)
+# Phase A 必要
 rapidfuzz>=3.5.0
 
-# Phase B/C/D/E:沿用既有 openai SDK(已在 requirements 內)
-# 不需新增
+# 其他既有依賴(已在原 requirements.txt 內,確認有):
+# openai>=1.0     # Phase B/D/E/K/L/Q
+# anthropic>=0.40 # Phase D/E/K/Q
 
-# === 新環境變數(在 Render Dashboard → Environment 加) ===
-#
-# OPENAI_API_KEY=sk-...                      # Phase B 需要(text-embedding-3-small 產生 embedding)
-#                                            # 已有,不用動
-#
-# GOOGLE_TRANSLATE_API_KEY=AIza...           # Phase C 需要(若想啟用 NMT 路徑)
-#                                            # 用既有的 jingyue-auth project key 即可
-#                                            # 沒設也能 work,只是 NMT 路徑不啟用,全走 LLM
-#
-# DEEPL_API_KEY=...                          # Phase C 替代方案(若不想用 Google)
-#                                            # 印尼語品質次要,建議用 Google
-#
-# TM_DB_PATH=/var/data/translation_memory.db # Phase A DB 路徑(不設預設 /var/data)
-# VECTOR_TM_DB_PATH=/var/data/vector_tm.db   # Phase B DB 路徑(不設預設 /var/data)
+# === 環境變數 ===
+# OPENAI_API_KEY=...         必要 (B/D/E/K/L/Q)
+# ANTHROPIC_API_KEY=...      必要 (D/E/K/Q)
+# GOOGLE_TRANSLATE_API_KEY=  可選 (C,沒設則跳過 NMT)
+# TM_DB_PATH                 預設 /var/data/translation_memory.db
+# VECTOR_TM_DB_PATH          預設 /var/data/vector_tm.db
+# ACTIVE_LEARNING_DB_PATH    預設 /var/data/active_learning.db
 
-# === SQLite DB 會自動建立 ===
-# 部署後第一次跑會在 /var/data/ 自動建立兩個 DB:
-#   - translation_memory.db (Phase A Lexical TM)
-#   - vector_tm.db (Phase B Vector RAG)
-# 無需手動建表,模組 init() 會 CREATE IF NOT EXISTS
-
-# === 既有 translation_log.db 不會被影響 ===
-# 三個 DB 並存,各管各的,互不衝突
+# === SQLite DB(自動建立)===
+# /var/data/translation_memory.db   (Phase A)
+# /var/data/vector_tm.db            (Phase B)
+# /var/data/active_learning.db      (Phase L)
