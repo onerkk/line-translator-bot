@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.41.1-0520-noq-real-integration"
+VERSION = "v3.9.41.2-0520-js-syntax-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -12479,7 +12479,7 @@ async function dashLoadStats(){
 
 async function geSetConfig(){
   const enabled = confirm('啟用 Glossary Enforcement?(取消 = 停用)');
-  const action = prompt('Action 模式:warn(只警告)/ auto_fix(LLM 修正)/ block(嚴重時加 ⚠️ 前綴)\n預設 warn:', 'warn');
+  const action = prompt('Action 模式:warn(只警告)/ auto_fix(LLM 修正)/ block(嚴重時加 ⚠️ 前綴)\\n預設 warn:', 'warn');
   if(action === null) return;
   try {
     const r = await fetch('/api/admin/ge/config', {
@@ -12607,7 +12607,7 @@ async function maintPrune(){
   if(days === null) return;
   const min_hits = prompt('Prune:hit_count <= 多少才刪?(預設 1)', '1');
   if(min_hits === null) return;
-  const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\n注意:human_corrected 永遠保留');
+  const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\\n注意:human_corrected 永遠保留');
   try {
     const r = await fetch('/api/admin/tm-maint/prune', {
       method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
@@ -12629,7 +12629,7 @@ async function maintDecay(){
   if(days === null) return;
   const factor = prompt('衰減 factor(0-1,預設 0.9 = quality_score × 0.9):', '0.9');
   if(factor === null) return;
-  const real = confirm('Quality decay:確定執行?(取消 = dry_run)\n注意:human_corrected 不衰減');
+  const real = confirm('Quality decay:確定執行?(取消 = dry_run)\\n注意:human_corrected 不衰減');
   try {
     const r = await fetch('/api/admin/tm-maint/decay', {
       method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
