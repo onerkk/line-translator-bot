@@ -100,6 +100,9 @@ def detect_language(text: str) -> Dict[str, Any]:
         "block_ratios": {"cjk": 0.5, "latin": 0.3, ...} (詳細分布)
     }
     """
+    # 防呆:非 str 一律當 unknown
+    if not isinstance(text, str):
+        return {"primary": "unknown", "confidence": 0.0, "is_mixed": False, "block_ratios": {}}
     if not text or not text.strip():
         return {"primary": "unknown", "confidence": 0.0, "is_mixed": False, "block_ratios": {}}
     
