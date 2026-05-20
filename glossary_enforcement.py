@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 GE_ENABLED = True
 GE_MIN_TERM_LEN = 2  # 太短的術語(<2 字)易誤判,跳過
-GE_ACTION = "warn"  # "warn" | "auto_fix" | "block"
+GE_ACTION = "auto_fix"  # 預設 auto_fix:LLM 自動修術語違規(業界建議)
 GE_MAX_VIOLATIONS_BEFORE_BLOCK = 3  # action=block 時超過此數才 block
 
 # 從持久化載入(覆蓋預設)
