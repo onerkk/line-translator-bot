@@ -1,5 +1,20 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.2.5 / 2026-05-16)
+ai_provider.py — 統一 AI Provider 介面層 (v3.3 / 2026-05-20)
+
+【v3.3 新增 — 雙系統共用分區 XML system prompt(2026-05-20)】
+🎯 根治翻譯品質:
+   - 配合 app.py v3.9.37 的分區 XML sys_prompt(<role>/<critical_rules>/
+     <factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>)
+   - _wrap_system_prompt_xml 偵測新分區結構時不再 early return,改 append Anthropic
+     專屬條件 tag(<glossary_priority>/<line_message_format>/<layout_preservation>/
+     <thinking_protocol>/<success_criteria>)
+   - _split_system_into_cache_blocks 改用 </context_disambiguation> 等新 tag 邊界
+     當 cache split point(向後相容舊 </rules> 結構)
+   - 官方依據:
+     https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+     https://docs.anthropic.com/en/docs/long-context-window-tips
+     https://docs.claude.com/en/docs/build-with-claude/prompt-engineering/multishot-prompting
+   - 預期效果:Claude long-context 召回率提升,「分流消化/有好處理的」類誤譯根治
 
 【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
 ✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
@@ -695,9 +710,24 @@ def _split_system_into_cache_blocks(raw_system, use_xml=True, use_1h=True):
     if not raw_system:
         return None
 
-    if use_xml and "<role>" in raw_system and "</rules>" in raw_system:
-        # XML 結構:把 </rules> 之前當 stable,之後當 dynamic
-        split_idx = raw_system.find("</rules>") + len("</rules>")
+    # v3.3 (2026-05-20):新分區 XML 結構 cache split 邊界
+    # app.py 新結構:<role>/<critical_rules>/<factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>
+    # stable 區到 </context_disambiguation> 結束(含整本 glossary),後面是 custom_examples + extra_rule + format_rules + output_format
+    # 共 70-80% prompt 屬於 stable 區,cache hit 率 90%+
+    split_idx = -1
+    if use_xml:
+        # 優先找新分區邊界(v3.9.37 結構)
+        for boundary in ("</context_disambiguation>", "</factory_vocabulary>", "</format_rules>"):
+            idx = raw_system.find(boundary)
+            if idx > 0:
+                split_idx = idx + len(boundary)
+                break
+        # 向後相容:舊 <rules> 結構
+        if split_idx < 0 and "<role>" in raw_system and "</rules>" in raw_system:
+            split_idx = raw_system.find("</rules>") + len("</rules>")
+
+    if split_idx > 0:
+        # XML 結構:用 tag 邊界精準切
         stable_part = raw_system[:split_idx]
         dynamic_part = raw_system[split_idx:].lstrip()
     else:
@@ -955,8 +985,61 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
     if not raw_system:
         return raw_system
 
-    # 偵測是否已經是 XML 結構,避免重複包裝
-    if "<role>" in raw_system or "<task>" in raw_system:
+    # v3.3 (2026-05-20):偵測 raw_system 是否已是 app.py 提供的分區 XML 結構
+    # 新分區結構:<role>/<critical_rules>/<factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>
+    # 雙系統共用 — Anthropic 不再二次包裝,只 append Anthropic 專屬條件 tag(glossary_priority + 條件 tag)
+    # 官方:https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+    already_partitioned = (
+        "<role>" in raw_system
+        and ("<critical_rules>" in raw_system or "<rules>" in raw_system)
+    )
+    if already_partitioned:
+        # 只 append Anthropic 專屬 tag,不重包 <role>/<task>/<rules>/<output_format>(app.py 已提供)
+        appended_parts = [raw_system.rstrip(), ""]
+        # glossary_priority — 提示 Claude 優先用 search_result block 內譯名
+        appended_parts.append(
+            "<glossary_priority>\n"
+            "如果訊息中內附 search_result 標籤(工廠術語表),"
+            "務必引用裡面的「標準印尼譯」作為翻譯,不要自己另創譯法。\n"
+            "</glossary_priority>\n"
+        )
+        # 條件補:line_plain / ocr_strict / cot_tag / success_criteria(Anthropic 專屬)
+        if line_plain:
+            appended_parts.append(
+                "<line_message_format strict=\"true\">\n"
+                "本系統輸出會直接送到 LINE 純文字訊息,LINE 不渲染 markdown。\n"
+                "禁止輸出 **粗體**, *斜體*, `code`, # / ## / ### / --- / *** / ___ 等 markdown 標記。\n"
+                "列點用「1. 2. 3.」或「・」「▪」「▶」,禁用 markdown 的 - 或 *。\n"
+                "輸出純文字 + emoji + 真實換行,僅此而已。\n"
+                "</line_message_format>\n"
+            )
+        if ocr_strict:
+            appended_parts.append(
+                "<layout_preservation strict=\"true\">\n"
+                "OCR 場景:原文每一行 → 譯文一行,行數必須相等。\n"
+                "原文編號 → 譯文相同編號。原文縮排/空行 → 譯文保留。\n"
+                "人名、料號、爐號、公司名 → 原樣保留不翻譯。\n"
+                "模糊看不清的字 → 標 [模糊] 或 [tidak jelas],不要編造。\n"
+                "</layout_preservation>\n"
+            )
+        if cot_tag:
+            appended_parts.append(
+                "<thinking_protocol>\n"
+                "翻譯前內部執行(不輸出):確認翻譯方向、查 glossary、識別口語/敬稱/人名/料號。\n"
+                "完成內部檢查後,直接輸出純翻譯。\n"
+                "</thinking_protocol>\n"
+            )
+        if success_criteria:
+            appended_parts.append(
+                "<success_criteria>\n"
+                "成功的翻譯必須符合:1. 完整性 2. 術語精準(用 glossary) 3. 風格相符 "
+                "4. 人名/料號/敬稱原樣保留 5. 格式對應 6. 不加 metadata/警告/解釋/emoji(除非原文有)\n"
+                "</success_criteria>\n"
+            )
+        return "\n".join(appended_parts)
+
+    # 偵測是否已經是舊版 <role>/<task> 結構(向後相容)
+    if "<task>" in raw_system:
         return raw_system
 
     # v3.2.4 Phase 24: 強化 role

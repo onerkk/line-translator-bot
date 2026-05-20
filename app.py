@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.36-0516-max-bilingual-bot"
+VERSION = "v3.9.37-0520-xml-partition"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -3671,6 +3671,10 @@ FACTORY_ZH_ID_BAD_PATTERNS = {
     "derek QC": "factory_crane_qc_literal",
     "bereaksi": "factory_response_literal",
     "tertelan": "factory_swallowed_literal",
+    # v3.9.37: 「消化」誤譯為「serap material」偵測
+    # 「去化」(有新單接走) vs「消化」(分批處理掉現有) — Claude 常串聯誤譯
+    # 觸發條件:原文有「消化」但無「去化」,譯文卻出現 serap material
+    "serap material": "factory_consume_vs_absorb_literal",
 }
 
 FACTORY_ZH_ID_POST_FIX = {
@@ -3736,6 +3740,12 @@ TAIWAN_FACTORY_GLOSSARY_HINT = """
 - 工安 → Keselamatan kerja
 - 巡視設備 → Inspeksi peralatan / Patroli mesin
 - 記過 → Surat peringatan / Catatan pelanggaran
+# v3.9.37 新增:工廠口語精準對照(根治「分流消化/有好處理的」誤譯)
+- 有好處理的 → yang mudah/gampang diproses (容易處理的;NOT「sudah selesai」)
+- 分流消化 → dialihkan untuk diproses bertahap / dibagi-bagi diselesaikan (分批處理掉現有)
+- 消化(料/庫存) → habiskan/proses bertahap (material/stok) (分批處理掉現有)
+- 去化 → serap material (有新單接走 — 與「消化」不同,不可混譯)
+- 注意:「消化」≠「去化」。「消化」=現有料分批處理掉;「去化」=有新單來接走料
 """
 
 
@@ -3745,7 +3755,9 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
         return True, "empty", []
     src = src_text or ""
     low = id_text.lower()
-    factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"])
+    factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別",
+                                          # v3.9.37: 加入「消化/分流/異型棒」等口語觸發詞
+                                          "消化", "分流", "異型棒", "急單", "出貨"])
     if not factory_src:
         return False, "", []
     domains = ["factory"]
@@ -3761,6 +3773,12 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
         return True, "factory_response_literal:反應應為回報/通報", domains
     if "吃掉" in src and "tertelan" in low:
         return True, "factory_swallowed_literal:被吃掉不可直譯吞掉", domains
+    # v3.9.37: 「消化」≠「去化」誤譯偵測
+    # 去化 = 有新單接走 → serap material (合法)
+    # 消化 = 分批處理掉現有 → diproses bertahap / dihabiskan (正確)
+    # Claude 常把「消化」串聯誤譯為「serap material」
+    if "消化" in src and "去化" not in src and "serap material" in low:
+        return True, "factory_consume_vs_absorb_literal:消化不可譯為 serap material(serap material 是去化用語)", domains
     for bad, reason in FACTORY_ZH_ID_BAD_PATTERNS.items():
         b = bad.lower()
         if b in low:
@@ -3769,6 +3787,10 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
             if b == "bereaksi" and "反應" not in src:
                 continue
             if b == "tertelan" and "吃掉" not in src:
+                continue
+            # v3.9.37: serap material 只在「消化 in src 且 去化 not in src」時才算 bad
+            # 已在上方 if 處理過,for 迴圈內一律 skip 避免重複誤殺合法情況
+            if b == "serap material":
                 continue
             return True, reason + ":" + bad, domains
     return False, "", domains
@@ -3806,6 +3828,8 @@ def post_fix_factory_zh_to_id(src_text, id_text):
         "夜點", "夜點費", "日點費", "夜班津貼", "中班津貼",
         "薪資", "薪水", "薪", "減項", "加項", "扣項",
         "獎金", "底薪", "本薪", "勞保", "健保", "夜班費",
+        # v3.9.37 新增:訂單流動口語(分流消化誤譯案例)
+        "消化", "分流", "異型棒", "急單", "出貨", "去化", "有好處理",
     ]
     # 也檢查譯文(if 原文沒命中但譯文有 Yanshui / Dinas K3 等典型錯翻)
     id_trigger_words = ["Yanshui", "Dinas K3", "tilang", "kena tangkap", "kepala shift",
@@ -3866,6 +3890,41 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     if "中班津貼" in src:
         result = re.sub(r'\buang\s+lembur\s+sore\b', 'uang shift sore', result, flags=re.I)
         result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+sore\b', 'uang shift sore', result, flags=re.I)
+    
+    # v3.9.37: 「消化」≠「去化」reactive fix
+    # 去化 = 有新單接走 → serap material (合法保留)
+    # 消化 = 分批處理掉現有 → diproses bertahap / dihabiskan (要改)
+    # 只在「原文有消化、且沒有去化」時才改,避免誤殺合法的「去化→serap material」
+    if "消化" in src and "去化" not in src:
+        # alihkan/dialihkan untuk serap material → dialihkan untuk diproses bertahap
+        result = re.sub(
+            r'\b(di)?alihkan\s+untuk\s+serap\s+material\b',
+            'dialihkan untuk diproses bertahap',
+            result, flags=re.I
+        )
+        # untuk serap material → untuk diproses bertahap
+        result = re.sub(
+            r'\buntuk\s+serap\s+material\b',
+            'untuk diproses bertahap',
+            result, flags=re.I
+        )
+        # 單獨 serap material → habiskan secara bertahap
+        result = re.sub(
+            r'\bserap\s+material\b',
+            'habiskan secara bertahap',
+            result, flags=re.I
+        )
+    
+    # v3.9.37: 「有好處理的」≠「sudah selesai」reactive fix
+    # 「有好處理的料」= 容易處理的料(yang mudah/gampang diproses)
+    # 常被誤譯為 sudah selesai(已完成)— 完全相反意思
+    if "有好處理" in src or "好處理的" in src:
+        # batang ... yang sudah selesai → batang ... yang mudah diproses
+        result = re.sub(
+            r'\byang\s+sudah\s+selesai\b',
+            'yang mudah diproses',
+            result, flags=re.I
+        )
     
     result = re.sub(r"\s+", " ", result).strip()
     return result
@@ -4607,9 +4666,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             tone_instruction = _preset_text
 
         sys_prompt = (
+            # v3.9.37: 分區 XML 結構,符合 Anthropic 官方 use-xml-tags 規範
+            # https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+            # 雙系統共用:Anthropic 路徑 _wrap_system_prompt_xml 偵測 <role> 即 pass
+            "<role>\n"
             "You are a professional translator for a stainless steel factory (Walsin Lihwa/華新麗華, Yanshui plant) work group chat. "
             "This factory produces stainless steel bars, wire rods, peeled bars, cold-drawn bars using processes like rolling, annealing, pickling, peeling, cold drawing, and centerless grinding. "
-            "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment. "
+            "This is a group with Taiwanese managers and Indonesian migrant workers operating centerless grinding (無心研磨) equipment.\n"
+            "</role>\n"
+            "<critical_rules>\n"
             "CRITICAL RULES: "
             "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
             "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
@@ -4664,7 +4729,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "記過 → Catatan pelanggaran; "
             "抓到 → Ketahuan (NOT 'kena tangkap' which means arrested by police); "
             "7. Target Indonesian = simple clear daily language for factory workers. "
-            "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams. "
+            "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams.\n"
+            "</critical_rules>\n"
+            "<factory_vocabulary>\n"
             "9. FACTORY VOCABULARY: "
             "【製程/Process】"
             "無心研磨=centerless grinding, 研磨=grinding, 砂輪=batu gerinda, 調整輪=roda pengatur, 刀板=work rest blade, 冷卻液=cairan pendingin, "
@@ -4792,7 +4859,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "DACAPO, CASTLE, LOTUS, METALINOX, KANGRUI, SUNGEUN, STEELINC, GLH, shinko, wing keung, "
             "田華榕, 佳東, 蘋果, 常州眾山, 大順, 大成, 巨昌, 北澤, 鴻運, 畯圓, 名威, 右勝, 貝克休斯, 皇銘, "
             "台芝, 百堅, 津展, 曜麟, 廉錩, 盛昌遠, 永吉, 光輝, 寶麗金屬. "
-            "NOTE: 蘋果=customer NOT fruit. 光輝=customer OR 光輝退火(bright annealing), context determines. "
+            "NOTE: 蘋果=customer NOT fruit. 光輝=customer OR 光輝退火(bright annealing), context determines.\n"
+            "</factory_vocabulary>\n"
+            "<context_disambiguation>\n"
             "10. CRITICAL CONTEXT RULES: "
             "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
             "b) 把/捆=BUNDLE counters. 包2把=packing 2 bundel. "
@@ -4856,430 +4925,19 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Default mapping for bare quantity replies: 台=buah(generic) or keep context-neutral, 把=bundel, 支=batang, 個=buah, 件=potong(for items/pieces). "
             "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
-            "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently. "
-            + _build_custom_examples_prompt() +
-            " 11. TRANSLATION EXAMPLES (follow strictly): "
-            "【中→印尼】"
-            "乾 需不需要提報一下 → Aduh, perlu dilaporkan gak nih? "
-            "UT囤一堆料了 → UT udah numpuk banyak material. "
-            "品保還在下班 誇張 → QC udah pulang, keterlaluan. "
-            "三米上面放六米 → Batang 3 meter ditaruh di atas batang 6 meter. "
-            "麻煩他們不要這樣放料 → Tolong bilang ke mereka jangan taruh material kayak gini. "
-            "有人知道這些棒材誰放的嗎？ → Ada yang tahu siapa yang menaruh batang-batang ini? "
-            "這批料誰放這裡的？ → Siapa yang meletakkan material ini di sini? "
-            "這些東西誰放的？ → Siapa yang menaruh barang-barang ini? "
-            "高侑的今天包2把都這樣 → Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
-            "來料都短少4-5公斤 → Material masuk semuanya kurang 4-5 kilogram. "
-            "已轉達 → Sudah disampaikan. "
-            "這批料有問題 → Lot material ini ada masalah. "
-            "幫我盯一下 → Tolong awasin ya. "
-            "怎麼搞的啦 → Kok bisa kayak gini sih. "
-            "人咧 → Orangnya mana? "
-            "辛苦了 → Makasih kerja kerasnya. "
-            "靠 又壞了 → Astaga, rusak lagi. "
-            "先這樣 → Segitu dulu ya. "
-            "叫他快點 → Suruh dia cepatan. "
-            "砂輪要換了 → Batu gerinda harus diganti. "
-            "公差超過了 → Toleransinya udah lewat. "
-            "這6把再麻煩今晚入庫 → 6 bundel ini tolong masukin gudang malam ini. "
-            "明早業務要抓資料 謝謝 → Besok pagi sales perlu ambil data, makasih. "
-            "BF2拋光機維修中 → Mesin polishing BF2 sedang diperbaiki. "
-            "44.45前天有跟妳說超產，業務回覆了嗎 → Diameter 44.45 kemarin sudah bilang over produksi, sales udah balas belum? "
-            "噴漆後照訂單量拆包 → Setelah spray paint, bagi packing sesuai jumlah order. "
-            "品保點錯製程，麻煩退回400-無主 → QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik. "
-            "帳已回400、料要回去那一個單位？ → Data sudah dikembalikan ke 400, materialnya mau ke unit mana? "
-            "去削皮退火 感溫 → Ke proses peeling dan annealing, makasih. "
-            "削皮需要台車，再麻煩一下 → Bagian peeling butuh troli, tolong bantu ya. "
-            "兩台 → dua buah. "
-            "兩台台車 → dua troli. "
-            "三把 → tiga bundel. "
-            "5支 → 5 batang. "
-            "需要兩台 → Butuh dua buah. "
-            "再一台 → satu lagi. "
-            "削皮需要台車，再麻煩一下 → Bagian peeling butuh troli, tolong bantu ya. "
-            "兩台 → dua buah. "
-            "兩台台車 → dua troli. "
-            "要幾台？ → Perlu berapa? "
-            "三把 → tiga bundel. "
-            "5支 → 5 batang. "
-            "一個 → satu buah. "
-            "需要兩台 → Butuh dua buah. "
-            "再一台 → satu lagi. "
-            "7F414020 請幫放至480轉用收回400，要改制去化，謝謝 → 7F414020 tolong pindahkan ke station 480, lalu kembalikan ke 400, mau ubah proses, makasih. "
-            "業務說收～ 請包～ → Sales bilang terima, tolong di-packing. "
-            "班長～ 7F656502A 這把溢量請再入無主～ 謝謝! → Kepala shift, 7F656502A bundel ini kelebihan, tolong masukkan ke tanpa pemilik, makasih! "
-            "客需求支數7支、不收短 來料只有6支、其中一支短、剔除掉剩5支、能包嘛？ → Pelanggan minta 7 batang, gak terima pendek. Masuk cuma 6, 1 pendek dibuang sisa 5, bisa packing gak? "
-            "因為櫃子在路上 9點到 這樣可能可以等一下入庫 → Karena kontainer sedang di jalan, sampai jam 9, mungkin bisa tunggu sebentar baru masuk gudang. "
-            "DACAPO都入完了 → DACAPO semuanya sudah masuk gudang. "
-            "班長～ 請用2700大的木箱裝，再麻煩幫我抓一下幾點會好，業務下午要出，謝謝 → Kepala shift, tolong pakai kotak kayu 2700, cek jam berapa selesai, sales sore mau kirim, makasih. "
-            "那就是帳沒入到 → Berarti datanya belum masuk ke sistem. "
-            "資料異常，凱銘在處理了 → Data ada masalah, 凱銘 sedang urus. "
-            "研磨排程已更新，急單再麻煩安排洗料拋光 謝謝 → Jadwal grinding diupdate, order urgent tolong atur cuci material dan polishing, makasih. "
-            "粗拋完已放行 → Rough polishing selesai, sudah di-release. "
-            "麻煩先放這把 → Tolong release bundel ini dulu. "
-            "放了 → Sudah di-release. "
-            "先放這單 → Release order ini dulu. "
-            "幫放一下 → Tolong bantu release. "
-            "這批先不要放 → Lot ini jangan di-release dulu. "
-            "料放旁邊 → Material taruh di samping. "
-            "放地上 → Taruh di lantai. "
-            "今日出貨差 DACAPO 7G63837在490 7G687108A在420 OL → Hari ini pengiriman kurang: DACAPO 7G63837 di 490, 7G687108A di 420 sedang produksi. "
-            "METALINOX 差2噸等等K4會在出料 可以的在幫包裝 感謝 → METALINOX kurang 2 ton, nanti K4 keluarkan material, kalau bisa tolong packing, makasih. "
-            "7G108519D 請幫收回400，有單去化 謝謝 → 7G108519D tolong kembalikan ke 400, ada order baru untuk serap material, makasih. "
-            "洗給E7拋了 → Sudah dicuci dan dikasih ke E7 untuk polishing. "
-            "包裝遇到常州眾山再注意這個料號，剛接單後續才會投料生產，此訂單不收短尺需將短尺分捆 → Kalau packing ketemu 常州眾山 perhatikan nomor material ini, baru terima order nanti baru produksi, order ini gak terima pendek harus pisah bundel. "
-            "剛剛開會決議過年不停機，如果A班D班出勤人數不夠12人，想賺紅包可以代班 → Rapat keputusan Imlek tidak stop, shift A D kurang 12 orang, mau angpao bisa gantikan shift. "
-            "人事有通知堆高機複訓課程，1/29 1700-2000三樓會議室。當天來上課就好，加班時數改天用忘卡補 → HRD info pelatihan forklift, 29/1 jam 17-20 ruang rapat lt.3. Datang ikut aja, jam lembur diinput lewat sistem lupa kartu di hari lain. "
-            "處長走了 → Kepala divisi sudah pergi. "
-            "有壓日期的急單再幫忙處理一下，很多未到站，拋光會一邊產出 → Order urgent deadline tolong diproses, banyak belum sampai, polishing produksi sambil jalan. "
-            # ===== v3.9.30 新增:積壓料量公告(配合班長公告反向訓練) =====
-            "上個月積壓的30噸料還沒拋,本月又有46噸料到期要拋 → Masih ada 30 ton pemolesan yang jatuh tempo bulan lalu, dan 46 ton yang jatuh tempo bulan ini. "
-            "拋光積壓20噸料 → Tunggakan polishing 20 ton. "
-            "本月到期的料要優先處理 → Material yang jatuh tempo bulan ini harus diprioritaskan. "
-            "拋光機人員一定要注意生產效率 → Personil mesin pemoles harus memperhatikan efisiensi produksi. "
-            "研磨積壓的料還很多 → Material grinding yang tertunda masih banyak. "
-            "噴漆罐一定要打洞才能丟棄在太空包，本週被查核兩次缺失 → Kaleng spray HARUS dilubangi baru buang ke jumbo bag, minggu ini kena audit 2 kali. "
-            "本月入庫目標2950，異型棒不擋，其餘非本月不入庫 → Target gudang 2950, batang khusus bebas, sisanya bukan bulan ini jangan masuk. "
-            "本月入庫目標量已達標，目前只入急單、異型棒跟二月以前的遞延單 → Target tercapai, sekarang hanya urgent, batang khusus, dan order ditunda sebelum Feb. "
-            "今天沒點名，昨天來過了 → Hari ini gak ada inspeksi, kemarin sudah datang. "
-            "應該是上週四D班，傍晚要注意一下小趙跟處長行蹤，免得凱銘被釘 → Harusnya shift D Kamis kemarin, sore perhatikan 小趙 dan kepala divisi, supaya 凱銘 gak kena tegur. "
-            "自己稍微看一下設備的料源，有料就是要生產。月底我們不可能是停機的單位 → Cek material di mesin masing-masing, ada material ya produksi. Akhir bulan kita gak boleh mesin berhenti. "
-            "之後有包到寶麗金屬注意一下，有一批訂單會備註客戶不要爐號標籤 → Nanti kalau ada packing untuk 寶麗金屬 perhatikan, ada order dicatat pelanggan tidak mau label heat number. "
-            "非本月只有異型棒不管控，其他麻煩不要入了，昨天早班沒管控被檢討 → Bukan bulan ini cuma batang khusus bebas, sisanya jangan masuk, shift pagi kemarin gak kontrol kena tegur. "
-            "非本月包裝不入庫 → Yang bukan order bulan ini jangan packing masuk gudang. "
-            "急單再幫忙安排入庫 → Hanya order urgent yang tolong bantu atur masuk gudang. "
-            "大成、SUNGEUN/佳東/麒譯/津展/DACAPO不擋非本月，各班在注意一下 → 大成, SUNGEUN/佳東/麒譯/津展/DACAPO order bukan bulan ini boleh masuk gudang, semua shift tolong perhatikan ya. "
-            "H、S異型棒、大成、SUNGEUN、佳東……以上不擋非本月 → H, S, batang bentuk khusus, 大成, SUNGEUN, 佳東... yang di atas order bukan bulan ini boleh masuk gudang. "
-            "開天車務必遵守規定目視吊掛物 → Operasi crane WAJIB lihat beban gantung sesuai aturan. "
-            "護罩跟外勞宣導一下要蓋好 → Sosialisasi ke pekerja Indonesia pelindung mesin harus ditutup rapat. "
-            "印勞打錯系統有提示 可是他們看不懂把他按掉了 → Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup. "
-            "拋光機interlock都不要拿東西擋著，上面會查 → Pengunci keamanan polishing jangan ditahan pakai benda, atasan akan periksa. "
-            "來料自由端偏小 → Material masuk ujung bebasnya under size. "
-            "自由端偏小 → Ujung bebasnya kecil / under size. "
-            "自由端直徑偏小 → Diameter ujung bebasnya kecil. "
-            "夾頭端偏大自由端偏小 → Ujung jepit besar, ujung bebas kecil. "
-            "殺光痕嚴重但表粗有過 → Bekas grinding parah tapi surface roughness lulus. "
-            "表粗有過目視沒過 → Surface roughness lulus tapi visual tidak lulus. "
-            "涉及軋輥印痕的批次，請協助開立重工研磨至尺寸下限 → Lot kena roll mark, tolong buat WO rework grinding sampai batas bawah ukuran. "
-            "護罩要隨時關閉，卡料需關閉電源後再取料 → Pelindung mesin harus ditutup, material macet HARUS matikan listrik dulu baru ambil. "
-            "嚴禁運轉中設備直接以手搬動棒材 → DILARANG pindahkan batang baja dengan tangan saat mesin jalan. "
-            "矯直機前壓輪故障，卡死無法上昇，已請修護協助處理 → Roda tekan straightening rusak macet, sudah minta maintenance bantu. "
-            "氣壓缸更換備品回裝完成，測試OK正常生產 → Silinder pneumatik ganti spare part selesai, tes OK produksi normal. "
-            "來料盤元不佳退回線外修磨 → Wire rod masuk kualitas buruk, dikembalikan offline repair grinding. "
-            "不可側磨已宣導多次，納入劣項 → Larangan side grinding sudah disosialisasi berkali-kali, dicatat pelanggaran. "
-            "E5線速是否過慢，僅2.4～3.6m/min → Kecepatan lini E5 terlalu lambat, cuma 2.4-3.6 m/min? "
-            "眼模刮傷整修一次，無法改善，更換眼模 → Die tergores, perbaiki sekali tidak membaik, ganti die. "
-            "E11已抽完，要回精整，請放行過帳 → E11 selesai drawing, harus kembali ke finishing, tolong release dan input data. "
-            "更換備品後已恢復生產 → Setelah ganti spare part sudah kembali produksi. "
-            "報表要記得確實填寫，尤其是雷射校正部分 → Laporan produksi ingat diisi benar, terutama bagian kalibrasi laser. "
-            "幫追料 → Tolong kejar materialnya. "
-            "幫追帳 → Tolong kejar data administrasinya. "
-            "已2900別入帳了噢 → Sudah 2900 jangan masukkan data lagi ya. "
-            # v3.9.30d B22 修補:夜點費誤譯案例(歐那實際遇到)
-            "這個月薪資的減項應該是上個月夜點費計算錯誤扣回去的 → Pengurangan gaji bulan ini kemungkinan karena koreksi uang shift malam yang salah perhitungan bulan lalu. "
-            "核對三月跟前面幾個月份比薪就可以發現夜點費特別高 → Bandingkan gaji bulan Maret dengan beberapa bulan sebelumnya, akan kelihatan uang shift malamnya memang lebih tinggi. "
-            "夜點費算錯 → Uang shift malam salah hitung. "
-            "這個月夜點費比較多 → Bulan ini uang shift malamnya lebih banyak. "
-            "我的薪資減項多一個 → Pengurangan gaji saya ada tambahan satu lagi. "
-            "底薪加夜點費加全勤 → Gaji pokok plus uang shift malam plus bonus kehadiran penuh. "
-            "【印尼→中文】"
-            "Saya mau izin besok → 我明天要請假 "
-            "Mesinnya rusak → 機台壞了 "
-            "Materialnya udah habis → 料用完了 "
-            "Kapan gajinya keluar? → 薪水什麼時候發？ "
-            "Saya gak ngerti → 我聽不懂 "
-            "Boleh pulang duluan? → 可以先下班嗎？ "
-            "Lembur sampai jam berapa? → 加班到幾點？ "
-            "Bos, ini udah selesai → 老闆，這個好了 "
-            "Ukurannya gak pas → 尺寸不對 "
-            "Stoknya masih ada? → 庫存還有嗎？ "
-            "Tolong ajarin saya → 請教我一下 "
-            "Sudah rusak saat saya disana, saya lupa memberi tahu anda → 我在的時候就已經壞了，忘了跟你說 "
-            "Batu gerindanya udah habis, mau ganti → 砂輪用完了，要換新的 "
-            "Ini material dari shift sebelumnya, belum selesai → 這是上一班留下來的料，還沒做完 "
-            "Saya sudah cek, ukurannya lewat toleransi → 我檢查過了，尺寸超出公差 "
-            "Mesin E5 ada masalah, sudah panggil maintenance → E5機台有問題，已經叫修護了 "
-            # v3.9.30d B22 修補:反向訓練(夜點費)
-            "Pengurangan gaji bulan ini kemungkinan karena koreksi uang shift malam yang salah perhitungan bulan lalu → 這個月薪資的減項應該是上個月夜點費計算錯誤扣回去的 "
-            "Uang shift malam bulan ini lebih banyak → 這個月夜點費比較多 "
-            "Pengurangan gaji saya ada tambahan satu lagi → 我的薪資減項多一個 "
-            "Cek slip gaji, ada tambahan potongan satu lagi → 看薪資單,多了一個減項 "
-            "Bandingkan gaji bulan Maret dengan bulan-bulan sebelumnya → 比對三月跟前面幾個月薪資 "
-            "Barang ini mau dikirim ke mana? → 這個東西要送去哪裡？ "
-            "Yang ini sudah di-packing, tinggal masuk gudang → 這個已經包好了，只剩入庫 "
-            "Tolong cek material di line 3 → 麻煩去看一下3號線的料 "
-            "Saya sakit, hari ini gak bisa masuk → 我生病了，今天沒辦法上班 "
-            "Oli mesinnya bocor → 機台漏油了 "
-            "Hasil polishing ada goresan → 拋光後有刮痕 "
-            "Permukaan kasar, gak lulus visual → 表面粗糙，目視沒過 "
-            "Bos, die-nya udah aus, perlu ganti → 老闆，眼模磨損了，要換 "
-            "Siap, saya kerjakan sekarang → 好，我現在做 "
-            "Belum sempat, masih proses yang sebelumnya → 還沒來得及，前面的還在做 "
-            "Sudah disampaikan ke mereka → 已經跟他們說了 "
-            "Saya gak tahu harus taruh di mana → 我不知道要放哪裡 "
-            "Ini ordernya urgent gak? → 這張單急不急？ "
-            "Mau izin ke toilet sebentar → 我去一下廁所 "
-            "Mesin udah jalan normal → 機台已經恢復正常了 "
-            "Kemarin sudah bilang, tapi belum diperbaiki → 昨天就說了，但還沒修 "
-            "Kita kekurangan material untuk order ini → 這張單的料不夠 "
-            "Shift malam ada masalah di mesin I7 → 夜班I7機台出問題了 "
-            "Tunggu sebentar, sedang ganti batu gerinda → 等一下，正在換砂輪 "
-            "Sudah saya laporkan ke QC → 我已經跟品保回報了 "
-            "Packing-nya salah, harus bongkar ulang → 包裝包錯了，要拆掉重包 "
-            "Maaf bos, saya telat → 老闆抱歉，我遲到了 "
-            "Surface roughness lulus tapi ada bekas grinding → 表粗有過但有殺光痕 "
-            "Ini work order yang mana? → 這是哪一張工單？ "
-            "Tolong bantu input data ke sistem → 麻煩幫忙過帳 "
-            "Materialnya macet di mesin → 料卡在機台裡了 "
-            "Pelindung mesin jangan dibuka saat jalan → 機台運轉中不要打開護罩 "
-            "Sudah selesai semua, mau pulang → 全部做完了，要下班了 "
-            "Gak ada label heat number di material ini → 這批料沒有爐號標籤 "
-            "Diameter-nya under size, harus rework → 直徑偏小，要重工 "
-            "Saya mau tukar shift sama dia → 我要跟他換班 "
-            "Atasan bilang harus pakai pelindung → 上面說要戴護具 "
-            "Besok libur gak? → 明天放假嗎？ "
-            "Udah dicek, hasilnya OK → 已經檢查了，沒問題 "
-            "Belakangan ini atasan sering datang inspeksi → 最近主管常常來巡場 "
-            "Tadi pagi ditemukan banyak posisi kerja kosong → 今天早上發現很多工作崗位沒人 "
-            "Saya menjalankan mesin pelan dengan kecepatan 500 → 我降速跑機台，速度500 "
-            "Menjalankan mesin pelan → 降速跑機台 "
-            "Mesin jalan pelan → 機台跑很慢 "
-            "Naikkan kecepatan → 加速 "
-            "Turunkan kecepatan → 降速 "
-            "Kecepatan terlalu cepat → 速度太快了 "
-            "Kecepatan terlalu pelan → 速度太慢了 "
-            "Ganti batu gerinda → 換砂輪 "
-            "Ganti batu polishing → 換拋光輪 "
-            "Arus depan dan belakang tambah 0.3 → 前後電流加0.3 "
-            "Mesin I16 saya jalankan pelan → 我I16慢慢跑 "
-            "UT udah numpuk banyak material → UT囤一堆料了 "
-            "QC udah pulang, keterlaluan → 品保已經下班了，太扯了 "
-            "Batang 3 meter ditaruh di atas batang 6 meter → 三米放在六米上面 "
-            "Tolong bilang ke mereka jangan taruh material kayak gini → 麻煩跟他們說不要這樣放料 "
-            "Ada yang tahu siapa yang menaruh batang-batang ini? → 有人知道這些棒材誰放的嗎？ "
-            "Siapa yang meletakkan material ini di sini? → 這批料誰放這裡的？ "
-            "Yang di-packing hari ini 2 bundel semuanya kayak gini → 今天包的2把都這樣 "
-            "Material masuk semuanya kurang 4-5 kilogram → 來料全部短少4-5公斤 "
-            "Lot material ini ada masalah → 這批料有問題 "
-            "Tolong awasin ya → 幫盯一下 "
-            "Kok bisa kayak gini sih → 怎麼搞的啦 "
-            "Orangnya mana? → 人咧？ "
-            "6 bundel ini tolong masukin gudang malam ini → 這6把麻煩今晚入庫 "
-            "Besok pagi sales perlu ambil data, makasih → 明早業務要抓資料，謝謝 "
-            "Mesin polishing BF2 sedang diperbaiki → BF2拋光機維修中 "
-            "Diameter 44.45 kemarin sudah bilang over produksi, sales udah balas belum? → 44.45前天有說超產，業務回覆了嗎？ "
-            "Setelah spray paint, bagi packing sesuai jumlah order → 噴漆後照訂單量拆包 "
-            "QC salah pilih proses, tolong kembalikan ke station 400 tanpa pemilik → 品保點錯製程，麻煩退回400無主 "
-            "Data sudah dikembalikan ke 400, materialnya mau ke unit mana? → 帳已回400，料要回去哪個單位？ "
-            "Ke proses peeling dan annealing, makasih → 去削皮退火，謝謝 "
-            "Bagian peeling butuh troli, tolong bantu ya → 削皮需要台車，再麻煩一下 "
-            "dua buah → 兩個 "
-            "dua troli → 兩台台車 "
-            "Maaf kan saya 🙏 kedepan ya akan lebih teliti dalam bekerja → 對不起 🙏 以後我會更仔細地工作 "
-            "Maafkan saya 🙏 → 對不起 🙏 "
-            "Mafkan saya bos, saya salah → 老闆對不起，是我的錯 "
-            "Maf kan saya, gak akan ulang lagi → 對不起，不會再犯了 "
-            "Mohon maaf, sudah saya perbaiki → 真的很抱歉，已經修正了 "
-            "Minta maaf telat balas → 抱歉太晚回覆 "
-            "Bagian peeling butuh troli, tolong bantu ya → 削皮需要台車，再麻煩一下 "
-            "dua buah → 兩個 "
-            "dua troli → 兩台台車 "
-            "tiga bundel → 三把 "
-            "5 batang → 5支 "
-            "Sales bilang terima, tolong di-packing → 業務說收了，請包 "
-            "Bundel ini kelebihan, tolong masukkan ke tanpa pemilik → 這把溢量，請入無主 "
-            "Pelanggan minta 7 batang, gak terima pendek. Masuk cuma 6, 1 pendek dibuang sisa 5, bisa packing gak? → 客戶要7支不收短，來料只有6支其中1支短剔掉剩5支，能包嗎？ "
-            "Kontainer sedang di jalan, sampai jam 9, mungkin bisa tunggu sebentar baru masuk gudang → 櫃子在路上9點到，可以等一下再入庫 "
-            "DACAPO semuanya sudah masuk gudang → DACAPO都入完了 "
-            "Tolong pakai kotak kayu 2700, cek jam berapa selesai, sales sore mau kirim → 請用2700大木箱裝，看幾點會好，業務下午要出貨 "
-            "Berarti datanya belum masuk ke sistem → 那就是帳沒入到 "
-            "Data ada masalah, sedang diurus → 資料異常，正在處理 "
-            "Jadwal grinding diupdate, order urgent tolong atur cuci material dan polishing → 研磨排程更新了，急單麻煩安排洗料拋光 "
-            "Rough polishing selesai, sudah di-release → 粗拋完已放行 "
-            "Tolong release bundel ini dulu → 麻煩先放這把 "
-            "Sudah di-release → 放了 "
-            "Release order ini dulu → 先放這單 "
-            "Tolong bantu release → 幫放一下 "
-            "Lot ini jangan di-release dulu → 這批先不要放 "
-            "Material taruh di samping → 料放旁邊 "
-            "Taruh di lantai → 放地上 "
-            "Hari ini pengiriman kurang, di 490 sedang produksi → 今天出貨差，在490 OL中 "
-            "Kurang 2 ton, nanti keluarkan material, kalau bisa tolong packing → 差2噸，等等會出料，可以的話幫包裝 "
-            "Tolong kembalikan ke 400, ada order baru untuk serap material → 請收回400，有單去化 "
-            "Sudah dicuci dan dikasih ke E7 untuk polishing → 洗給E7拋了 "
-            "Kalau packing ketemu customer itu perhatikan nomor material ini, order ini gak terima pendek harus pisah bundel → 包裝遇到那個客戶注意這料號，不收短尺要把短的分開捆 "
-            "Rapat keputusan Imlek tidak stop mesin, shift kurang orang, mau angpao bisa gantikan shift → 開會決議過年不停機，班別出勤人數不夠，想賺紅包可以代班 "
-            "HRD info pelatihan forklift, datang ikut aja, jam lembur diinput lewat sistem → 人事通知堆高機複訓，來上課就好，加班時數用忘卡補 "
-            "Kepala divisi sudah pergi → 處長走了 "
-            "Order urgent deadline tolong diproses, banyak belum sampai, polishing produksi sambil jalan → 有壓日期的急單幫處理一下，很多未到站，拋光一邊產出 "
-            "Kaleng spray HARUS dilubangi baru buang ke jumbo bag → 噴漆罐一定要打洞才能丟到太空包 "
-            "Target gudang 2950, batang khusus bebas, sisanya bukan bulan ini jangan masuk → 本月入庫目標2950，異型棒不擋，其餘非本月不入庫 "
-            "Target tercapai, sekarang hanya urgent, batang khusus, dan order ditunda → 目標已達標，目前只入急單、異型棒跟遞延單 "
-            "Hari ini gak ada inspeksi, kemarin sudah datang → 今天沒點名，昨天來過了 "
-            "Cek material di mesin masing-masing, ada material ya produksi → 自己看設備的料源，有料就要生產 "
-            "Nanti kalau ada packing untuk customer itu perhatikan, ada order dicatat pelanggan tidak mau label heat number → 之後有包到那個客戶注意，有一批不要爐號標籤 "
-            "Bukan bulan ini cuma batang khusus bebas, sisanya jangan masuk, kemarin gak kontrol kena tegur → 非本月只有異型棒不管控，其他不要入了，昨天沒管控被檢討 "
-            "Yang bukan order bulan ini jangan packing masuk gudang → 非本月包裝不入庫 "
-            "Hanya order urgent yang tolong bantu atur masuk gudang → 急單再幫忙安排入庫 "
-            "Order bukan bulan ini boleh masuk gudang, semua shift tolong perhatikan → 不擋非本月，各班注意一下 "
-            "Operasi crane WAJIB lihat beban gantung sesuai aturan → 開天車務必遵守規定目視吊掛物 "
-            "Sosialisasi ke pekerja Indonesia pelindung mesin harus ditutup rapat → 跟外勞宣導護罩要蓋好 "
-            "Pekerja Indonesia salah input, sistem ada peringatan tapi mereka gak ngerti jadi ditutup → 印勞打錯了系統有提示，但他們看不懂就按掉了 "
-            "Pengunci keamanan polishing jangan ditahan pakai benda, atasan akan periksa → 拋光機interlock不要拿東西擋著，上面會查 "
-            "Material masuk ujung bebasnya under size → 來料自由端偏小 "
-            "Barang kecil di ujung → 自由端偏小 "
-            "Barang kecil di ujing → 自由端偏小 "
-            "Kecil di ujung → 自由端偏小 "
-            "Ujung kecil → 自由端偏小 "
-            "Ujungnya kecil → 自由端偏小 "
-            "Ujung bebas kecil → 自由端偏小 "
-            "Diameter ujung kecil → 自由端直徑偏小 "
-            "Ujung jepit besar ujung bebas kecil → 夾頭端偏大自由端偏小 "
-            "Bekas grinding parah tapi surface roughness lulus → 殺光痕嚴重但表粗有過 "
-            "Surface roughness lulus tapi visual tidak lulus → 表粗有過目視沒過 "
-            "Lot kena roll mark, tolong buat WO rework grinding sampai batas bawah ukuran → 有軋輥印痕的批次，請開重工研磨至尺寸下限 "
-            "Pelindung mesin harus ditutup, material macet HARUS matikan listrik dulu baru ambil → 護罩要隨時關，卡料要關電源再取料 "
-            "DILARANG pindahkan batang baja dengan tangan saat mesin jalan → 嚴禁運轉中用手搬棒材 "
-            "Roda tekan straightening rusak macet, sudah minta maintenance bantu → 矯直機前壓輪故障卡死，已請修護處理 "
-            "Silinder pneumatik ganti spare part selesai, tes OK produksi normal → 氣壓缸換備品完成，測試OK正常生產 "
-            "Wire rod masuk kualitas buruk, dikembalikan offline repair grinding → 來料盤元不佳，退回線外修磨 "
-            "Larangan side grinding sudah disosialisasi berkali-kali, dicatat pelanggaran → 不可側磨已宣導多次，納入劣項 "
-            "Kecepatan lini E5 terlalu lambat, cuma 2.4-3.6 m/min → E5線速太慢了，只有2.4到3.6 "
-            "Die tergores, perbaiki sekali tidak membaik, ganti die → 眼模刮傷修一次沒改善，換眼模 "
-            "E11 selesai drawing, harus kembali ke finishing, tolong release dan input data → E11抽完了要回精整，請放行過帳 "
-            "Setelah ganti spare part sudah kembali produksi → 換完備品已恢復生產 "
-            "Laporan produksi ingat diisi benar, terutama bagian kalibrasi laser → 報表要確實填，尤其雷射校正 "
-            "Tolong kejar materialnya → 幫追料 "
-            "Tolong kejar data administrasinya → 幫追帳 "
-            "Sudah 2900 jangan masukkan data lagi ya → 已2900別入帳了 "
-            # ===== v3.9.30 新增:工序+噸數=待加工料量 / jatuh tempo=積壓 =====
-            # 對應歐那實際遇到的誤譯案例(2026-05-04 班長公告)
-            "Masih ada 30 ton mesin pemoles yang jatuh tempo bulan lalu → 還有上個月積壓未拋的30噸料 "
-            "46 ton mesin pemoles yang jatuh tempo bulan ini → 本月到期的46噸料要拋 "
-            "Masih ada 30 ton mesin pemoles yang jatuh tempo bulan lalu, dan 46 ton mesin pemoles yang jatuh tempo bulan ini → 上個月積壓的30噸料還沒拋,本月又有46噸料到期要拋 "
-            "Personil mesin pemoles harus memperhatikan efisiensi produksi → 拋光機人員一定要注意生產效率 "
-            "Personil grinding harus memperhatikan efisiensi produksi → 研磨人員一定要注意生產效率 "
-            # 通則範例(讓模型抓住模式)
-            "20 ton mesin grinding jatuh tempo → 研磨積壓20噸料 "
-            "Bahan jatuh tempo bulan lalu masih banyak → 上月積壓的料還很多 "
-            "Order yang sudah jatuh tempo harus diprioritaskan → 已積壓的訂單要優先處理 "
-            "Belum jatuh tempo, jangan dulu produksi → 還沒到期,先別生產 "
-            "Material polishing yang tertunda → 拋光積壓的料 "
-            "Tunggakan grinding bulan ini 50 ton → 本月研磨積壓 50 噸 "
-            "【印尼日常短句→中文】"
-            "Iya → 對 "
-            "Iya benar → 對，沒錯 "
-            "Ini benar → 這是對的 "
-            "Benar → 對 "
-            "Betul → 對 "
-            "Bukan → 不是 "
-            "Salah → 錯了 "
-            "Bukan begitu → 不是這樣 "
-            "Siap → 收到 "
-            "Siap bos → 好的老闆 "
-            "Oke → 好 "
-            "Oke bos → 好的老闆 "
-            "Baik → 好的 "
-            "Udah selesai → 做好了 "
-            "Udah beres → 搞定了 "
-            "Belum → 還沒 "
-            "Belum selesai → 還沒好 "
-            "Belum sempat → 還沒來得及 "
-            "Gak tau → 不知道 "
-            "Gak ngerti → 看不懂 "
-            "Gak bisa → 沒辦法 "
-            "Gak ada → 沒有 "
-            "Gak mau → 不要 "
-            "Mau → 要 "
-            "Bisa → 可以 "
-            "Boleh → 可以 "
-            "Gak boleh → 不行 "
-            "Jangan → 不要 "
-            "Tunggu → 等一下 "
-            "Tunggu sebentar → 等一下 "
-            "Bentar → 等一下 "
-            "Nanti → 晚點 "
-            "Nanti dulu → 晚點再說 "
-            "Maaf → 抱歉 "
-            "Maaf bos → 老闆抱歉 "
-            "Sori → 不好意思 "
-            "Makasih → 謝謝 "
-            "Terima kasih → 謝謝 "
-            "Sama-sama → 不客氣 "
-            "Gak apa-apa → 沒關係 "
-            "Gpp → 沒關係 "
-            "Santai aja → 慢慢來 "
-            "Capek → 累了 "
-            "Capek banget → 累死了 "
-            "Sakit → 不舒服 "
-            "Pusing → 頭暈 "
-            "Lagi makan → 在吃飯 "
-            "Lagi istirahat → 在休息 "
-            "Sudah pulang → 已經下班了 "
-            "Mau pulang → 要下班了 "
-            "Izin → 請假 "
-            "Izin sakit → 病假 "
-            "Izin besok → 明天請假 "
-            "Telat → 遲到 "
-            "Saya telat → 我遲到了 "
-            "Masuk → 上班 "
-            "Gak masuk → 沒來上班 "
-            "Lembur → 加班 "
-            "Gak lembur → 不加班 "
-            "Mau lembur → 要加班 "
-            "Libur → 放假 "
-            "Cuti → 休假 "
-            "Mau cuti → 要請假 "
-            "Di mana? → 在哪裡？ "
-            "Yang mana? → 哪一個？ "
-            "Kapan? → 什麼時候？ "
-            "Kenapa? → 為什麼？ "
-            "Gimana? → 怎麼樣？ "
-            "Berapa? → 多少？ "
-            "Siapa? → 誰？ "
-            "Ada apa? → 怎麼了？ "
-            "Ngapain? → 在幹嘛？ "
-            "Serius? → 真的嗎？ "
-            "Masa? → 真的假的？ "
-            "Yang bener? → 真的嗎？ "
-            "Emang → 確實 "
-            "Kayaknya → 好像 "
-            "Mungkin → 可能 "
-            "Pasti → 一定 "
-            "Cepat → 快 "
-            "Cepatan → 快點 "
-            "Pelan-pelan → 慢慢來 "
-            "Hati-hati → 小心 "
-            "Awas → 小心 "
-            "Bahaya → 危險 "
-            "Tolong → 拜託 "
-            "Bantu → 幫忙 "
-            "Panggil → 叫過來 "
-            "Bilang → 跟他說 "
-            "Suruh → 叫他去 "
-            "Cek dulu → 先檢查 "
-            "Lihat dulu → 先看看 "
-            "Cobain → 試試看 "
-            "Ganti → 換 "
-            "Perbaiki → 修理 "
-            "Matikan → 關掉 "
-            "Nyalakan → 打開 "
-            "Tambah → 再加 "
-            "Kurang → 不夠 "
-            "Lebih → 多了 "
-            "Pas → 剛好 "
-            "Lewat → 超過了 "
-            "Habis → 用完了 "
-            "Penuh → 滿了 "
-            "Kosong → 沒有 "
-            "Rusak → 壞了 "
-            "Macet → 卡住了 "
-            "Bocor → 漏了 "
-            "Mati → 停了"
+            "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently.\n"
+            "</context_disambiguation>\n"
+            + _build_custom_examples_prompt()
+            # v3.9.37: 刪除原 line 4920~5337「11. TRANSLATION EXAMPLES」死 examples block
+            # 原 100+ 條中印對照 examples 已透過 _build_messages_with_fewshot() 動態注入
+            # 為 user/assistant pair (line 1681),符合 Anthropic multishot-prompting 官方規範
+            # 並節省 system prompt ~5000 tokens,提升 Claude long-context 召回率
             + extra_rule +
             # v3.9.8: GOLDEN RULES (added 2026-05) — based on real production failures.
             # These are XML-tagged for GPT-5's "surgical instruction following"
             # (per OpenAI GPT-5 prompting guide best practices).
+            # v3.9.37: 外包 <format_rules> 統一分區
+            " <format_rules>"
             " <format_preservation_rules>"
             " RULE 1 — Output format must MIRROR the source format exactly:"
             " - If the source is plain prose without bullets/emoji/⚠️, the translation MUST be plain prose."
@@ -5310,8 +4968,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             " - Keep cause-effect chains intact: 「如果A,將B」 → 'Kalau A, akan B' (single sentence)."
             " - Do NOT soften warnings into suggestions."
             " </register_rules>"
+            " </format_rules>"
+            " <output_format>"
             " IMPORTANT: Preserve the original line breaks and blank lines exactly. If the source has a blank line between paragraphs, keep a blank line in the same position in the translation."
             " Only output the translation. No quotes, no explanation, no prefix."
+            " </output_format>"
         )
 
         if repair_mode and bad_result:
