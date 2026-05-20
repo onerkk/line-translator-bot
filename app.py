@@ -11136,6 +11136,11 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" style="display:block;margin-top:12px;padding:10px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#7c6fef;font-size:13px;font-weight:600;text-decoration:none">💳 查看 API 餘額</a>
 </div>
+<!-- Claude API Balance Card -->
+<div class="card" style="margin:12px 16px 0">
+<div style="font-weight:700;font-size:15px;margin-bottom:10px">🧠 Claude API 餘額</div>
+<a href="https://console.anthropic.com/settings/billing" target="_blank" style="display:block;padding:10px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#cc785c;font-size:13px;font-weight:600;text-decoration:none">💳 查看 Claude 餘額</a>
+</div>
 </div>
 
 <!-- Groups Panel -->
