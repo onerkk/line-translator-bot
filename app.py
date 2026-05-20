@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.37-0520-xml-partition"
+VERSION = "v3.9.38-0520-phase-a-tm"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -142,6 +142,8 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 
 # ★ AI Provider 統一介面(支援 OpenAI ↔ Anthropic 切換)
 import ai_provider
+# v3.9.38 Phase A: Translation Memory(業界 30 年成熟技術,SQLite + fuzzy match)
+import translation_memory as tm_module
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
@@ -4984,6 +4986,19 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             )
         else:
             msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
+        
+        # v3.9.38 Phase A: TM fuzzy_inject references 注入 user message 前綴
+        # 放在 user msg 而非 system prompt — 避免破壞 system prompt cache
+        # 符合 Anthropic long-context-tips: 動態 context 放在 query 旁邊
+        _tm_refs = getattr(_tl, 'tm_references', None)
+        if _tm_refs:
+            try:
+                _tm_block = tm_module.tm_inject_prompt(_tm_refs)
+                if _tm_block:
+                    msg = _tm_block + "\n\n" + msg
+                    logger.info("[TM] injected %d references into prompt", len(_tm_refs))
+            except Exception as _tm_e:
+                logger.warning("[TM] inject failed: %s", _tm_e)
 
         _model = pick_model(text)
         # v3.2-0426e: build messages array, optionally using few-shot "messages" format
@@ -5499,7 +5514,45 @@ def translate(text, src, tgt):
 
     Inner function may also call _log_translation along its paths; we mark those entries
     with an internal flag so this wrapper does NOT double-log them.
+    
+    v3.9.38 Phase A: Translation Memory (TM) 整合
+    - Tier 1+2 (exact / fuzzy_bypass): bypass LLM,直接返回 TM 譯文
+    - Tier 3 (fuzzy_inject): 把 TM references 傳給 _translate_inner 透過 _tl
+    - 翻譯成功後 store back TM 累積資產
     """
+    # v3.9.38 Phase A: TM lookup(在 LLM 之前)
+    _gid_for_tm = getattr(_tl, 'group_id', '') or ''
+    _tm_result = None
+    try:
+        _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
+    except Exception as _tm_e:
+        logger.warning("[TM] lookup exception: %s", _tm_e)
+        _tm_result = None
+    
+    # Tier 1+2: bypass LLM
+    if _tm_result and _tm_result.get("match_type") in ("exact", "fuzzy_bypass"):
+        _bypass_result = _tm_result["tgt_text"]
+        try:
+            _log_translation(text, _bypass_result, src, tgt,
+                             f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0,
+                             _gid_for_tm)
+        except Exception:
+            pass
+        try:
+            if _gid_for_tm:
+                _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
+        except Exception:
+            pass
+        logger.info("[TM] bypass LLM: %s match score=%d", _tm_result["match_type"], _tm_result["score"])
+        return _bypass_result
+    
+    # Tier 3: 把 references 透過 thread-local 傳給 _translate_inner / translate_openai
+    if _tm_result and _tm_result.get("match_type") == "fuzzy_inject":
+        try:
+            _tl.tm_references = _tm_result["references"]
+        except Exception:
+            pass
+    
     # Snapshot log length before to detect whether inner already logged
     _len_before = len(translation_log)
     result = _translate_inner(text, src, tgt)
@@ -5523,6 +5576,23 @@ def translate(text, src, tgt):
             logger.debug("conv buffer add failed: %s", e)
         except Exception:
             pass
+    
+    # v3.9.38 Phase A: 翻譯成功 → store back TM 累積資產
+    # 跳過低品質譯文(⚠️ 前綴)— translation_memory.tm_store 內部已防,這裡再確保
+    if result and isinstance(result, str) and not result.startswith("⚠"):
+        try:
+            _model_used = getattr(_tl, 'last_model_used', '') or 'unknown'
+            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used)
+        except Exception as _tm_e:
+            logger.warning("[TM] store exception: %s", _tm_e)
+    
+    # 清掉 _tl.tm_references 避免污染下一次翻譯
+    try:
+        if hasattr(_tl, 'tm_references'):
+            del _tl.tm_references
+    except Exception:
+        pass
+    
     return result
 
 
@@ -15335,6 +15405,147 @@ def api_admin_ai_provider_upload_glossary():
     try:
         ok, msg, file_id = ai_provider.upload_glossary_to_files_api()
         return jsonify({"ok": ok, "message": msg, "file_id": file_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.38 Phase A: Translation Memory (TM) admin endpoints
+# 業界 30 年成熟技術,SQLite + rapidfuzz fuzzy match
+# 標準 TMX 1.4b ISO format 匯出/匯入(可跨平台到 Lokalise/SDL Trados/memoQ)
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/tm/stats", methods=["GET"])
+def api_admin_tm_stats():
+    """TM 統計:lookups / hit_rate / top_groups / lang_pairs"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": tm_module.tm_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/search", methods=["GET"])
+def api_admin_tm_search():
+    """搜尋 TM entries"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        keyword = request.args.get("keyword", "").strip()
+        src_lang = request.args.get("src_lang") or None
+        tgt_lang = request.args.get("tgt_lang") or None
+        group_id = request.args.get("group_id")
+        if group_id == "":
+            group_id = None  # 注意 group_id="" 是「全局」TM,空字串是有效值
+        limit = _safe_int(request.args.get("limit", "100"), default=100, min_val=1, max_val=1000)
+        offset = _safe_int(request.args.get("offset", "0"), default=0, min_val=0)
+        results = tm_module.tm_search(keyword, src_lang, tgt_lang, group_id, limit, offset)
+        return jsonify({"ok": True, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/entry/<int:entry_id>", methods=["DELETE"])
+def api_admin_tm_delete(entry_id):
+    """刪除指定 TM entry"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        ok = tm_module.tm_delete(entry_id)
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/clear", methods=["POST"])
+def api_admin_tm_clear():
+    """清空 TM(可指定 group / lang pair)— 危險操作"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        if not data.get("confirm"):
+            return jsonify({"ok": False, "error": "需要 confirm=true 才能清空"}), 400
+        group_id = data.get("group_id")
+        src_lang = data.get("src_lang")
+        tgt_lang = data.get("tgt_lang")
+        n = tm_module.tm_clear(group_id=group_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        return jsonify({"ok": True, "deleted": n})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/export", methods=["GET"])
+def api_admin_tm_export():
+    """匯出 TMX 1.4b 標準格式(可被 Lokalise/SDL Trados/memoQ 讀取)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        import tempfile
+        import os as _os_tm
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tmx", delete=False, encoding="utf-8") as tf:
+            tmp_path = tf.name
+        n = tm_module.tm_export_tmx(tmp_path)
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        try:
+            _os_tm.unlink(tmp_path)
+        except Exception:
+            pass
+        from flask import Response
+        resp = Response(content, mimetype="application/xml")
+        resp.headers["Content-Disposition"] = f'attachment; filename="tm_export_{int(time.time())}.tmx"'
+        resp.headers["X-TM-Entries"] = str(n)
+        return resp
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/import", methods=["POST"])
+def api_admin_tm_import():
+    """匯入 TMX 1.4b 標準格式"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        if "file" not in request.files:
+            # 純文字 body 也可
+            content = request.get_data(as_text=True)
+            if not content or "<tmx" not in content:
+                return jsonify({"ok": False, "error": "缺 TMX 內容(需 file upload 或 raw body)"}), 400
+        else:
+            content = request.files["file"].read().decode("utf-8")
+        
+        import tempfile
+        import os as _os_tm
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tmx", delete=False, encoding="utf-8") as tf:
+            tf.write(content)
+            tmp_path = tf.name
+        try:
+            n = tm_module.tm_import_tmx(tmp_path)
+        finally:
+            try:
+                _os_tm.unlink(tmp_path)
+            except Exception:
+                pass
+        return jsonify({"ok": True, "imported": n})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tm/thresholds", methods=["POST"])
+def api_admin_tm_thresholds():
+    """調整 fuzzy match 門檻"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        new_th = tm_module.tm_set_thresholds(
+            fuzzy_bypass=data.get("fuzzy_bypass"),
+            fuzzy_inject=data.get("fuzzy_inject"),
+            fuzzy_topk=data.get("fuzzy_topk"),
+        )
+        return jsonify({"ok": True, "thresholds": new_th})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

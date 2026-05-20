@@ -1,0 +1,7 @@
+# v3.9.38 Phase A — Translation Memory 新增依賴
+# 把下面這一行加到 Render 的 requirements.txt 內,然後重新部署
+rapidfuzz>=3.5.0
+# 說明:
+# - rapidfuzz 是工業標準 fuzzy match 套件,Lokalise/Smartcat 等業界平台都用
+# - 沒裝也能 work(會 fallback 到 stdlib difflib),但速度慢 10-50 倍
+# - 安裝後 fuzzy match 在 1000 條 TM candidates 仍可 <5ms 完成
