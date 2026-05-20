@@ -50,6 +50,18 @@ APE_TRIGGER_QE_SCORE = 70  # QE 分數 < 此值觸發 APE
 APE_MAX_RETRIES = 1  # APE 最多重試次數
 
 
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("ape")
+    if _saved:
+        APE_ENABLED = _saved.get("enabled", APE_ENABLED)
+        APE_MODEL_BY_PROVIDER.update(_saved.get("model_by_provider", {}))
+        APE_TRIGGER_QE_SCORE = _saved.get("trigger_qe_score", APE_TRIGGER_QE_SCORE)
+        logger.info("[APE] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[APE] load persisted config failed: %s", _e)
+
+
 def _resolve_ape_model() -> str:
     """根據當前 active provider 動態選 APE 模型"""
     try:
@@ -249,9 +261,19 @@ def ape_set_config(enabled: Optional[bool] = None,
         APE_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
     if trigger_qe_score is not None:
         APE_TRIGGER_QE_SCORE = max(0, min(100, int(trigger_qe_score)))
-    return {
+    cfg = {
         "enabled": APE_ENABLED,
         "model_by_provider": dict(APE_MODEL_BY_PROVIDER),
         "model_current": _resolve_ape_model(),
         "trigger_qe_score": APE_TRIGGER_QE_SCORE,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("ape", {
+            "enabled": APE_ENABLED,
+            "model_by_provider": dict(APE_MODEL_BY_PROVIDER),
+            "trigger_qe_score": APE_TRIGGER_QE_SCORE,
+        })
+    except Exception as _e:
+        logger.warning("[APE] save persisted config failed: %s", _e)
+    return cfg

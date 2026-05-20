@@ -37,6 +37,17 @@ ICL_MAX_EXAMPLES = 5  # 最多 5 個 few-shot
 ICL_MIN_SCORE = 75  # 最低 score(0-100)才入選 few-shot
 ICL_PREFER_HUMAN_CORRECTED = True  # 優先用 human_corrected TM 條目
 
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("icl")
+    if _saved:
+        ICL_ENABLED = _saved.get("enabled", ICL_ENABLED)
+        ICL_MAX_EXAMPLES = _saved.get("max_examples", ICL_MAX_EXAMPLES)
+        ICL_MIN_SCORE = _saved.get("min_score", ICL_MIN_SCORE)
+        logger.info("[ICL] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[ICL] load persisted config failed: %s", _e)
+
 import threading
 _lock = threading.RLock()
 _stats = {
@@ -127,8 +138,14 @@ def icl_set_config(enabled: Optional[bool] = None,
         ICL_MAX_EXAMPLES = max(1, min(20, int(max_examples)))
     if min_score is not None:
         ICL_MIN_SCORE = max(50, min(95, int(min_score)))
-    return {
+    cfg = {
         "enabled": ICL_ENABLED,
         "max_examples": ICL_MAX_EXAMPLES,
         "min_score": ICL_MIN_SCORE,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("icl", cfg)
+    except Exception as _e:
+        logger.warning("[ICL] save persisted config failed: %s", _e)
+    return cfg

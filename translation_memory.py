@@ -741,7 +741,7 @@ def _highlight_context(text: str, phrase: str, window: int = 20) -> str:
 def tm_set_thresholds(fuzzy_bypass: Optional[int] = None,
                       fuzzy_inject: Optional[int] = None,
                       fuzzy_topk: Optional[int] = None) -> Dict[str, int]:
-    """調整 fuzzy match 門檻(後台可調)
+    """調整 fuzzy match 門檻(後台可調,持久化)
     
     Returns: 當前 threshold 配置
     """
@@ -752,14 +752,30 @@ def tm_set_thresholds(fuzzy_bypass: Optional[int] = None,
         TM_FUZZY_THRESHOLD_INJECT = max(30, min(95, int(fuzzy_inject)))
     if fuzzy_topk is not None:
         TM_FUZZY_TOPK = max(1, min(10, int(fuzzy_topk)))
-    return {
+    cfg = {
         "fuzzy_bypass": TM_FUZZY_THRESHOLD_BYPASS,
         "fuzzy_inject": TM_FUZZY_THRESHOLD_INJECT,
         "fuzzy_topk": TM_FUZZY_TOPK,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("tm", cfg)
+    except Exception as _e:
+        logger.warning("[TM] save persisted config failed: %s", _e)
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 模組載入時自動 init
+# 模組載入時自動 init + 載入持久化 threshold
 # ═══════════════════════════════════════════════════════════════════
 init()
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("tm")
+    if _saved:
+        TM_FUZZY_THRESHOLD_BYPASS = _saved.get("fuzzy_bypass", TM_FUZZY_THRESHOLD_BYPASS)
+        TM_FUZZY_THRESHOLD_INJECT = _saved.get("fuzzy_inject", TM_FUZZY_THRESHOLD_INJECT)
+        TM_FUZZY_TOPK = _saved.get("fuzzy_topk", TM_FUZZY_TOPK)
+        logger.info("[TM] loaded persisted thresholds: %s", _saved)
+except Exception as _e:
+    logger.warning("[TM] load persisted thresholds failed: %s", _e)

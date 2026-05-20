@@ -50,6 +50,17 @@ NMT_SHORT_THRESHOLD = 30  # 字數 < 此值才考慮 NMT
 NMT_TIMEOUT = 10  # API timeout 秒
 NMT_POST_EDIT = False  # NMT 翻完是否再過 LLM 精修(預設關,需要時開)
 
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("nmt")
+    if _saved:
+        NMT_PROVIDER = _saved.get("provider", NMT_PROVIDER)
+        NMT_SHORT_THRESHOLD = _saved.get("short_threshold", NMT_SHORT_THRESHOLD)
+        NMT_POST_EDIT = _saved.get("post_edit", NMT_POST_EDIT)
+        logger.info("[NMT] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[NMT] load persisted config failed: %s", _e)
+
 _lock = threading.RLock()
 _stats = {
     "route_to_nmt": 0,
@@ -314,11 +325,17 @@ def nmt_set_config(provider: Optional[str] = None,
         NMT_SHORT_THRESHOLD = max(0, min(200, int(short_threshold)))
     if post_edit is not None:
         NMT_POST_EDIT = bool(post_edit)
-    return {
+    cfg = {
         "provider": NMT_PROVIDER,
         "short_threshold": NMT_SHORT_THRESHOLD,
         "post_edit": NMT_POST_EDIT,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("nmt", cfg)
+    except Exception as _e:
+        logger.warning("[NMT] save persisted config failed: %s", _e)
+    return cfg
 
 
 def nmt_record_llm_route():

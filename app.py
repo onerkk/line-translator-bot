@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.41.3-0520-js-batch-fix"
+VERSION = "v3.9.42-0520-config-persistence"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -11680,6 +11680,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   
   <button onclick="dashLoadStats()" style="width:100%;padding:11px;border-radius:8px;border:none;background:#7c6fef;color:#fff;font-size:13px;cursor:pointer;font-weight:600;margin-bottom:14px">🔄 更新儀表板</button>
   
+  <button onclick="enableAllRecommended()" style="width:100%;padding:11px;border-radius:8px;border:none;background:#10b981;color:#fff;font-size:13px;cursor:pointer;font-weight:600;margin-bottom:14px">⚡ 一鍵啟用所有建議設定(持久化)</button>
+  
   <div id="dash-summary" style="margin-bottom:14px;padding:12px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e;font-size:12px;color:#aaa">點上方按鈕載入</div>
   
   <!-- Phase A: Lexical TM -->
@@ -11788,6 +11790,36 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <button onclick="maintDedup()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">🔁 去重</button>
       <button onclick="maintPrune()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">✂️ Prune 舊條目</button>
       <button onclick="maintDecay()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">📉 Quality decay</button>
+    </div>
+  </details>
+  
+  <!-- v3.9.41.3 Phase N: In-context Learning -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#facc15;font-weight:600">🎯 Phase N: In-context Learning(動態 few-shot)</summary>
+    <div id="dash-icl" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="iclSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+      <span style="margin-left:8px;color:#666;font-size:10px">用 TM top-K 變 few-shot,大幅提升一致性</span>
+    </div>
+  </details>
+  
+  <!-- v3.9.41.3 Phase O: Language Detection -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#14b8a6;font-weight:600">🌐 Phase O: Language Detection(自動語言偵測)</summary>
+    <div id="dash-ld" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="ldTestDetect()" style="padding:6px 12px;background:#14b8a6;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">🔍 測試偵測</button>
+      <span style="margin-left:8px;color:#666;font-size:10px">8 種語言自動辨識</span>
+    </div>
+  </details>
+  
+  <!-- v3.9.41.3 Phase Q: Confidence Scoring -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#fb923c;font-weight:600">📈 Phase Q: Confidence Scoring(翻譯信心)</summary>
+    <div id="dash-cs" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="csSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+      <span style="margin-left:8px;color:#666;font-size:10px">抽 logprobs / stop_reason 算信心(雙系統)</span>
     </div>
   </details>
 </div>
@@ -12357,6 +12389,25 @@ var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','p
 // ═════════════════════════════════════════════════════════════════
 // v3.9.39 Phase G: 業界全面技術儀表板 JS
 // ═════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════
+// v3.9.39 Phase G: 業界全面技術儀表板 JS
+// ═════════════════════════════════════════════════════════════════
+async function enableAllRecommended(){
+  if(!confirm('一鍵啟用所有 phase 建議設定?\\n\\n會配置:\\n- Phase H 改 auto_fix(LLM 自動修術語)\\n- Phase D/E/N/Q 全部啟用\\n- 配置會持久化,重啟不還原')) return;
+  try {
+    const r = await fetch('/api/admin/all-phases/enable-recommended', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}
+    });
+    const data = await r.json();
+    if(data.ok){
+      alert('✓ '+data.message+'\\n\\n建議再到 Render Dashboard 加 rapidfuzz 跟 GOOGLE_TRANSLATE_API_KEY,效益更大');
+      dashLoadStats();
+    } else {
+      alert('✗ '+(data.error||'失敗'));
+    }
+  } catch(err) { alert('✗ '+err.message); }
+}
+
 async function dashLoadStats(){
   const dashSummary = document.getElementById('dash-summary');
   dashSummary.textContent = '載入中...';
@@ -12472,9 +12523,81 @@ async function dashLoadStats(){
       'duplicate_groups: '+(maint.duplicate_groups||0)+' | stale 180d+: '+(maint.stale_180d||0)+' | low_usage: '+(maint.low_usage||0)+'<br>'+
       'older_than_365d: '+(maint.older_than_365d||0)+' | avg_quality: '+(maint.avg_quality_score==null?'—':maint.avg_quality_score)+'<br>'+
       'dedup_runs: '+(mstats.dedup_runs||0)+' (removed '+(mstats.dedup_removed||0)+') | prune_runs: '+(mstats.prune_runs||0)+' (removed '+(mstats.prune_removed||0)+') | decay_runs: '+(mstats.decay_runs||0);
+    
+    // v3.9.41.3 Phase N: In-context Learning
+    const icl = ph.N_icl || {};
+    const dashIcl = document.getElementById('dash-icl');
+    if(dashIcl) dashIcl.innerHTML =
+      'enabled: '+(icl.enabled?'✓':'✗')+' | max_examples: '+(icl.max_examples||0)+' | min_score: '+(icl.min_score||0)+'<br>'+
+      'icl_applied: '+(icl.icl_applied||0)+' (累積觸發次數)<br>'+
+      'avg_examples_per_call: '+(icl.avg_examples_per_call||0)+'<br>'+
+      'examples_total: '+(icl.examples_total||0);
+    
+    // v3.9.41.3 Phase O: Language Detection
+    const ld = ph.O_language_detection || {};
+    const byLang = ld.by_language || {};
+    const langSummary = Object.entries(byLang).slice(0,8).map(([k,v])=>k+':'+v).join(' | ') || '無';
+    const dashLd = document.getElementById('dash-ld');
+    if(dashLd) dashLd.innerHTML =
+      'detections: '+(ld.detections||0)+'<br>'+
+      'by_language: '+langSummary;
+    
+    // v3.9.41.3 Phase Q: Confidence Scoring
+    const cs = ph.Q_confidence_scoring || {};
+    const dashCs = document.getElementById('dash-cs');
+    if(dashCs) dashCs.innerHTML =
+      'enabled: '+(cs.enabled?'✓':'✗')+'<br>'+
+      'total_scored: '+(cs.total_scored||0)+' (openai: '+(cs.scored_openai||0)+', anthropic: '+(cs.scored_anthropic||0)+')<br>'+
+      'avg_confidence: '+(cs.avg_confidence||0)+' | low_confidence_rate: '+((cs.low_confidence_rate||0)*100).toFixed(1)+'%<br>'+
+      'no_signal: '+(cs.no_signal||0)+' (LLM 沒回傳 logprobs/stop_reason 的次數)';
   } catch(e) {
     dashSummary.textContent = '✗ ' + e.message;
   }
+}
+
+async function iclSetConfig(){
+  const enabled = confirm('啟用 In-context Learning?(取消 = 停用)');
+  const max_examples = prompt('最多 few-shot 範例數(1-20,預設 5):', '5');
+  if(max_examples === null) return;
+  const min_score = prompt('最低分入選 few-shot(50-95,預設 75):', '75');
+  if(min_score === null) return;
+  try {
+    const r = await fetch('/api/admin/icl/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled, max_examples:parseInt(max_examples), min_score:parseInt(min_score)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function ldTestDetect(){
+  const text = prompt('輸入要偵測的文字:', '料卡住了');
+  if(!text) return;
+  try {
+    const r = await fetch('/api/admin/ld/detect', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({text:text})
+    });
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    const r2 = data.result;
+    alert('偵測結果:\\n語言: '+r2.primary+'\\n信心: '+r2.confidence+'\\n混合: '+r2.is_mixed+'\\nblocks: '+JSON.stringify(r2.block_ratios));
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function csSetConfig(){
+  const enabled = confirm('啟用 Confidence Scoring?(取消 = 停用)');
+  try {
+    const r = await fetch('/api/admin/cs/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
 }
 
 async function geSetConfig(){
@@ -16739,6 +16862,72 @@ def api_admin_al_stats():
 # ═══════════════════════════════════════════════════════════════════
 # v3.9.40 Phase M: TM Maintenance admin endpoints
 # ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/all-phases/enable-recommended", methods=["POST"])
+def api_admin_enable_recommended():
+    """一鍵啟用所有 phase 的建議設定(持久化)
+    
+    自動配置:
+    - GE: action=auto_fix(LLM 自動修術語違規)
+    - QE/APE/CS/ICL/H/N: 啟用
+    - 全部 set_config 都會寫到 /var/data/phase_config.json,重啟不會還原
+    """
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    results = {}
+    
+    # Phase H: auto_fix(最重要)
+    try:
+        results["ge"] = ge_module.ge_set_config(enabled=True, action="auto_fix")
+    except Exception as e:
+        results["ge"] = {"error": str(e)}
+    
+    # Phase D QE 啟用
+    try:
+        results["qe"] = qe_module.qe_set_config(enabled=True)
+    except Exception as e:
+        results["qe"] = {"error": str(e)}
+    
+    # Phase E APE 啟用
+    try:
+        results["ape"] = ape_module.ape_set_config(enabled=True)
+    except Exception as e:
+        results["ape"] = {"error": str(e)}
+    
+    # Phase N ICL 啟用
+    try:
+        results["icl"] = icl_module.icl_set_config(enabled=True)
+    except Exception as e:
+        results["icl"] = {"error": str(e)}
+    
+    # Phase Q CS 啟用
+    try:
+        results["cs"] = cs_module.cs_set_config(enabled=True)
+    except Exception as e:
+        results["cs"] = {"error": str(e)}
+    
+    return jsonify({
+        "ok": True,
+        "message": "已啟用所有 phase 建議設定,並持久化到 /var/data/phase_config.json,重啟不會還原",
+        "configs": results,
+    })
+
+
+@app.route("/api/admin/all-phases/persisted-config", methods=["GET"])
+def api_admin_view_persisted():
+    """查看所有 phase 的持久化 config(看磁碟上實際存了什麼)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        import phase_config_store as pcs
+        return jsonify({
+            "ok": True,
+            "path": pcs.get_path(),
+            "configs": pcs.load_all(),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/api/admin/tm-maint/report", methods=["GET"])
 def api_admin_tm_maint_report():

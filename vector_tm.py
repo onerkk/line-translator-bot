@@ -448,14 +448,30 @@ def vector_set_thresholds(bypass: Optional[float] = None,
         VECTOR_SIMILARITY_INJECT = max(0.3, min(0.95, float(inject)))
     if topk is not None:
         VECTOR_TOPK = max(1, min(20, int(topk)))
-    return {
+    cfg = {
         "bypass": VECTOR_SIMILARITY_BYPASS,
         "inject": VECTOR_SIMILARITY_INJECT,
         "topk": VECTOR_TOPK,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("vec_tm", cfg)
+    except Exception as _e:
+        logger.warning("[VecTM] save persisted config failed: %s", _e)
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 模組載入時自動 init
+# 模組載入時自動 init + 載入持久化 threshold
 # ═══════════════════════════════════════════════════════════════════
 init()
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("vec_tm")
+    if _saved:
+        VECTOR_SIMILARITY_BYPASS = _saved.get("bypass", VECTOR_SIMILARITY_BYPASS)
+        VECTOR_SIMILARITY_INJECT = _saved.get("inject", VECTOR_SIMILARITY_INJECT)
+        VECTOR_TOPK = _saved.get("topk", VECTOR_TOPK)
+        logger.info("[VecTM] loaded persisted thresholds: %s", _saved)
+except Exception as _e:
+    logger.warning("[VecTM] load persisted thresholds failed: %s", _e)

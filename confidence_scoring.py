@@ -40,6 +40,15 @@ CS_ENABLED = True
 CS_LOG = []  # in-memory 紀錄 last N(供 dashboard)
 CS_LOG_MAX = 100
 
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("cs")
+    if _saved:
+        CS_ENABLED = _saved.get("enabled", CS_ENABLED)
+        logger.info("[CS] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[CS] load persisted config failed: %s", _e)
+
 _lock = threading.RLock()
 _stats = {
     "calls": 0,
@@ -222,4 +231,10 @@ def cs_set_config(enabled: Optional[bool] = None) -> Dict[str, Any]:
     global CS_ENABLED
     if enabled is not None:
         CS_ENABLED = bool(enabled)
-    return {"enabled": CS_ENABLED}
+    cfg = {"enabled": CS_ENABLED}
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("cs", cfg)
+    except Exception as _e:
+        logger.warning("[CS] save persisted config failed: %s", _e)
+    return cfg

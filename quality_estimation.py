@@ -53,6 +53,21 @@ QE_MIN_LEN = 10  # 訊息字元 < 此值不評分(短句不值得)
 QE_SAMPLE_RATE = 1.0  # 評分採樣率(1.0 = 全部評,0.1 = 10%)
 
 
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("qe")
+    if _saved:
+        QE_ENABLED = _saved.get("enabled", QE_ENABLED)
+        QE_MODEL_BY_PROVIDER.update(_saved.get("model_by_provider", {}))
+        QE_THRESHOLD_WARN = _saved.get("threshold_warn", QE_THRESHOLD_WARN)
+        QE_THRESHOLD_RETRY = _saved.get("threshold_retry", QE_THRESHOLD_RETRY)
+        QE_MIN_LEN = _saved.get("min_len", QE_MIN_LEN)
+        QE_SAMPLE_RATE = _saved.get("sample_rate", QE_SAMPLE_RATE)
+        logger.info("[QE] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[QE] load persisted config failed: %s", _e)
+
+
 def _resolve_qe_model() -> str:
     """根據當前 active provider 動態選 QE 模型"""
     try:
@@ -359,7 +374,7 @@ def qe_set_config(enabled: Optional[bool] = None,
         QE_MIN_LEN = max(0, int(min_len))
     if sample_rate is not None:
         QE_SAMPLE_RATE = max(0.0, min(1.0, float(sample_rate)))
-    return {
+    cfg = {
         "enabled": QE_ENABLED,
         "model_by_provider": dict(QE_MODEL_BY_PROVIDER),
         "model_current": _resolve_qe_model(),
@@ -368,3 +383,16 @@ def qe_set_config(enabled: Optional[bool] = None,
         "min_len": QE_MIN_LEN,
         "sample_rate": QE_SAMPLE_RATE,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("qe", {
+            "enabled": QE_ENABLED,
+            "model_by_provider": dict(QE_MODEL_BY_PROVIDER),
+            "threshold_warn": QE_THRESHOLD_WARN,
+            "threshold_retry": QE_THRESHOLD_RETRY,
+            "min_len": QE_MIN_LEN,
+            "sample_rate": QE_SAMPLE_RATE,
+        })
+    except Exception as _e:
+        logger.warning("[QE] save persisted config failed: %s", _e)
+    return cfg

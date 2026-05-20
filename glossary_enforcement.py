@@ -41,6 +41,18 @@ GE_MIN_TERM_LEN = 2  # 太短的術語(<2 字)易誤判,跳過
 GE_ACTION = "warn"  # "warn" | "auto_fix" | "block"
 GE_MAX_VIOLATIONS_BEFORE_BLOCK = 3  # action=block 時超過此數才 block
 
+# 從持久化載入(覆蓋預設)
+try:
+    import phase_config_store as _pcs
+    _saved = _pcs.load_config("ge")
+    if _saved:
+        GE_ENABLED = _saved.get("enabled", GE_ENABLED)
+        GE_ACTION = _saved.get("action", GE_ACTION)
+        GE_MIN_TERM_LEN = _saved.get("min_term_len", GE_MIN_TERM_LEN)
+        logger.info("[GE] loaded persisted config: %s", _saved)
+except Exception as _e:
+    logger.warning("[GE] load persisted config failed: %s", _e)
+
 import threading
 _lock = threading.RLock()
 _stats = {
@@ -332,8 +344,14 @@ def ge_set_config(enabled: Optional[bool] = None,
         GE_ACTION = action
     if min_term_len is not None:
         GE_MIN_TERM_LEN = max(1, int(min_term_len))
-    return {
+    cfg = {
         "enabled": GE_ENABLED,
         "action": GE_ACTION,
         "min_term_len": GE_MIN_TERM_LEN,
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("ge", cfg)
+    except Exception as _e:
+        logger.warning("[GE] save persisted config failed: %s", _e)
+    return cfg
