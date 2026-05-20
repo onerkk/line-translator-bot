@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.38-0520-phase-a-tm"
+VERSION = "v3.9.39.1-0520-dual-system-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -144,6 +144,12 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 import ai_provider
 # v3.9.38 Phase A: Translation Memory(業界 30 年成熟技術,SQLite + fuzzy match)
 import translation_memory as tm_module
+# v3.9.39 Phase B-F: 業界全面技術升級
+import vector_tm as vec_tm_module             # Phase B: Vector RAG (semantic TM)
+import nmt_provider as nmt_module             # Phase C: Hybrid NMT + LLM
+import quality_estimation as qe_module        # Phase D: LLM-based Quality Estimation
+import auto_post_edit as ape_module           # Phase E: LLM-based Auto Post-Editing
+import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
@@ -5510,32 +5516,35 @@ def translate_with_retry(func, text, src, tgt, max_retries=2):
 
 
 def translate(text, src, tgt):
-    """Public translate wrapper: guarantees translation_log entry on every successful return.
-
-    Inner function may also call _log_translation along its paths; we mark those entries
-    with an internal flag so this wrapper does NOT double-log them.
+    """Public translate wrapper — v3.9.39 業界全面技術 hybrid pipeline
     
-    v3.9.38 Phase A: Translation Memory (TM) 整合
-    - Tier 1+2 (exact / fuzzy_bypass): bypass LLM,直接返回 TM 譯文
-    - Tier 3 (fuzzy_inject): 把 TM references 傳給 _translate_inner 透過 _tl
-    - 翻譯成功後 store back TM 累積資產
+    路由順序(命中越早,成本越低,延遲越低):
+      1. Lexical TM exact match (rapidfuzz=100)        → bypass LLM
+      2. Lexical TM fuzzy bypass (rapidfuzz>=95)       → bypass LLM
+      3. Vector TM semantic bypass (cosine>=0.95)      → bypass LLM
+      4. Vector TM inject (cosine 0.75-0.94)           → 注入 LLM prompt
+      5. Lexical TM inject (rapidfuzz 70-94)           → 注入 LLM prompt
+      6. NMT routable (短句/簡單)                       → Google Translate / DeepL
+      7. LLM 全翻 (預設路徑)
+    
+    後處理:
+      - QE 評分 → < 70 分 → APE 自動修正
+      - 翻譯成功 → store back lexical TM + vector TM(累積資產)
     """
-    # v3.9.38 Phase A: TM lookup(在 LLM 之前)
     _gid_for_tm = getattr(_tl, 'group_id', '') or ''
+    
+    # ─── 1+2: Lexical TM lookup ───
     _tm_result = None
     try:
         _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
     except Exception as _tm_e:
         logger.warning("[TM] lookup exception: %s", _tm_e)
-        _tm_result = None
     
-    # Tier 1+2: bypass LLM
     if _tm_result and _tm_result.get("match_type") in ("exact", "fuzzy_bypass"):
         _bypass_result = _tm_result["tgt_text"]
         try:
             _log_translation(text, _bypass_result, src, tgt,
-                             f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0,
-                             _gid_for_tm)
+                             f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0, _gid_for_tm)
         except Exception:
             pass
         try:
@@ -5543,50 +5552,149 @@ def translate(text, src, tgt):
                 _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
         except Exception:
             pass
-        logger.info("[TM] bypass LLM: %s match score=%d", _tm_result["match_type"], _tm_result["score"])
+        logger.info("[Pipeline] LexTM bypass: type=%s score=%d", _tm_result["match_type"], _tm_result["score"])
         return _bypass_result
     
-    # Tier 3: 把 references 透過 thread-local 傳給 _translate_inner / translate_openai
-    if _tm_result and _tm_result.get("match_type") == "fuzzy_inject":
+    # ─── 3+4: Vector TM lookup ───
+    _vec_result = None
+    try:
+        _vec_result = vec_tm_module.vector_lookup(text, src, tgt, _gid_for_tm)
+    except Exception as _vec_e:
+        logger.warning("[VecTM] lookup exception: %s", _vec_e)
+    
+    if _vec_result and _vec_result.get("match_type") == "vector_bypass":
+        _bypass_result = _vec_result["tgt_text"]
         try:
-            _tl.tm_references = _tm_result["references"]
+            _log_translation(text, _bypass_result, src, tgt,
+                             "vec_tm_bypass", 0, 1.0, False, _vec_result["similarity"], _gid_for_tm)
+        except Exception:
+            pass
+        try:
+            if _gid_for_tm:
+                _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
+        except Exception:
+            pass
+        logger.info("[Pipeline] VecTM bypass: sim=%.3f", _vec_result["similarity"])
+        return _bypass_result
+    
+    # ─── 5: 收集要注入的 references (lexical + vector inject) ───
+    _all_refs = []
+    if _tm_result and _tm_result.get("match_type") == "fuzzy_inject":
+        for s, src_t, tgt_t in _tm_result["references"]:
+            _all_refs.append((s, src_t, tgt_t, "lexical"))
+    if _vec_result and _vec_result.get("match_type") == "vector_inject":
+        for s, src_t, tgt_t in _vec_result["references"]:
+            _all_refs.append((int(s * 100), src_t, tgt_t, "semantic"))
+    
+    if _all_refs:
+        try:
+            _tl.tm_references = [(s, sr, tg) for s, sr, tg, _ in _all_refs[:5]]  # top-5 dedup
         except Exception:
             pass
     
-    # Snapshot log length before to detect whether inner already logged
-    _len_before = len(translation_log)
-    result = _translate_inner(text, src, tgt)
+    # ─── 6: NMT routing(短句 → Google/DeepL) ───
+    _factory_glossary_set = set()
     try:
-        if result is not None and len(translation_log) == _len_before:
-            # No inner path logged this turn — write a guaranteed entry now.
-            _log_translation(text, result, src, tgt, "wrapper", 0, 1.0, False, 1.0,
-                             getattr(_tl, 'group_id', ''))
-    except Exception as e:
-        import traceback
-        logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
-    # v3.10: 翻譯成功後寫入該群組的對話 buffer (給後續訊息當上下文用)
+        if 'GLOSSARY_LOOKUP' in globals():
+            _factory_glossary_set = set(GLOSSARY_LOOKUP.keys())
+    except Exception:
+        pass
+    
+    _use_nmt = False
+    try:
+        _use_nmt = nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+    except Exception:
+        _use_nmt = False
+    
+    if _use_nmt:
+        try:
+            nmt_result = nmt_module.nmt_translate(text, src, tgt)
+            if nmt_result:
+                # NMT 走完仍要進 QE + 可能 APE
+                logger.info("[Pipeline] NMT route success: %d chars", len(text))
+                result = nmt_result
+                # 跳過 LLM 全翻,直接進後處理
+                _skip_to_post = True
+            else:
+                _skip_to_post = False
+                try:
+                    nmt_module.nmt_record_llm_route()
+                except Exception:
+                    pass
+        except Exception as _nmt_e:
+            logger.warning("[NMT] failed, fallback to LLM: %s", _nmt_e)
+            _skip_to_post = False
+    else:
+        try:
+            nmt_module.nmt_record_llm_route()
+        except Exception:
+            pass
+        _skip_to_post = False
+    
+    # ─── 7: LLM 全翻 (預設路徑) ───
+    if not _skip_to_post:
+        _len_before = len(translation_log)
+        result = _translate_inner(text, src, tgt)
+        try:
+            if result is not None and len(translation_log) == _len_before:
+                _log_translation(text, result, src, tgt, "wrapper", 0, 1.0, False, 1.0,
+                                 getattr(_tl, 'group_id', ''))
+        except Exception as e:
+            import traceback
+            logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
+    
+    # ─── 後處理 1: QE 評分(可選,若啟用) ───
+    _qe_result = None
+    if result and isinstance(result, str) and not result.startswith("⚠"):
+        try:
+            _qe_result = qe_module.estimate_quality(text, result, src, tgt, ai_client=ai_provider)
+        except Exception as _qe_e:
+            logger.warning("[QE] failed: %s", _qe_e)
+    
+    # ─── 後處理 2: APE 觸發(若 QE 分數低) ───
+    if _qe_result and _qe_result.get("action") in ("warn", "retry"):
+        try:
+            ape_result = ape_module.auto_post_edit(
+                text, result, src, tgt,
+                issues=_qe_result.get("issues"),
+                qe_score=_qe_result.get("total"),
+                trigger="qe",
+                ai_client=ai_provider,
+            )
+            if ape_result and ape_result != result:
+                logger.info("[Pipeline] APE applied (QE %d → APE 新譯文)", _qe_result["total"])
+                result = ape_result
+                # APE 後再評一次(可選,先不評免成本)
+        except Exception as _ape_e:
+            logger.warning("[APE] failed: %s", _ape_e)
+    
+    # ─── 後處理 3: 對話 buffer ───
     try:
         if result is not None:
             _gid = getattr(_tl, 'group_id', None)
             if _gid:
                 _conv_buffer_add(_gid, text, result, src, tgt)
     except (NameError, Exception) as e:
-        # buffer 機制 fail 不影響翻譯結果
         try:
             logger.debug("conv buffer add failed: %s", e)
         except Exception:
             pass
     
-    # v3.9.38 Phase A: 翻譯成功 → store back TM 累積資產
-    # 跳過低品質譯文(⚠️ 前綴)— translation_memory.tm_store 內部已防,這裡再確保
+    # ─── 後處理 4: TM store back(累積資產) ───
     if result and isinstance(result, str) and not result.startswith("⚠"):
         try:
             _model_used = getattr(_tl, 'last_model_used', '') or 'unknown'
-            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used)
+            _qe_score = _qe_result.get("total") if _qe_result else None
+            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used, _qe_score)
         except Exception as _tm_e:
             logger.warning("[TM] store exception: %s", _tm_e)
+        try:
+            vec_tm_module.vector_store(text, result, src, tgt, _gid_for_tm,
+                                        _model_used, _qe_score)
+        except Exception as _vec_e:
+            logger.warning("[VecTM] store exception: %s", _vec_e)
     
-    # 清掉 _tl.tm_references 避免污染下一次翻譯
+    # 清掉 _tl 暫存避免污染
     try:
         if hasattr(_tl, 'tm_references'):
             del _tl.tm_references
@@ -11475,6 +11583,76 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">Anthropic 比 OpenAI 同級貴 2-3x。建議:Anthropic credits 用完就切回 OpenAI。</div>
 </div>
 
+<!-- v3.9.39 Phase G: 業界全面技術儀表板 -->
+<div class="card" style="margin-top:14px;padding:18px;background:linear-gradient(135deg,#0a0a1e,#1a1428);border:1px solid #7c6fef">
+  <div style="font-weight:700;font-size:15px;margin-bottom:12px;color:#7c6fef">🚀 業界全面技術儀表板(v3.9.39)</div>
+  <div style="font-size:11px;color:#888;margin-bottom:14px;line-height:1.5">
+    A. Lexical TM(rapidfuzz) · B. Vector RAG(OpenAI embeddings) · C. Hybrid NMT(Google) · D. Quality Estimation · E. Auto Post-Editing · F. TBX 1.0
+  </div>
+  
+  <button onclick="dashLoadStats()" style="width:100%;padding:11px;border-radius:8px;border:none;background:#7c6fef;color:#fff;font-size:13px;cursor:pointer;font-weight:600;margin-bottom:14px">🔄 更新儀表板</button>
+  
+  <div id="dash-summary" style="margin-bottom:14px;padding:12px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e;font-size:12px;color:#aaa">點上方按鈕載入</div>
+  
+  <!-- Phase A: Lexical TM -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#d4a437;font-weight:600">📚 Phase A: Lexical TM(SQLite + rapidfuzz)</summary>
+    <div id="dash-tm" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <a href="/api/admin/tm/export" target="_blank" style="display:inline-block;padding:6px 12px;background:#7c6fef;color:#fff;text-decoration:none;border-radius:6px;font-size:11px;margin-right:6px">⬇️ 匯出 TMX</a>
+      <button onclick="tmImportTMX()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">⬆️ 匯入 TMX</button>
+      <button onclick="tmAdjustThresholds()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 調 threshold</button>
+    </div>
+  </details>
+  
+  <!-- Phase B: Vector RAG -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#22c55e;font-weight:600">🧠 Phase B: Vector RAG TM(OpenAI embeddings)</summary>
+    <div id="dash-vec" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="vecAdjustThresholds()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 調 threshold</button>
+    </div>
+  </details>
+  
+  <!-- Phase C: Hybrid NMT -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#3b82f6;font-weight:600">🔀 Phase C: Hybrid NMT + LLM(Google Translate)</summary>
+    <div id="dash-nmt" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="nmtSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+      <span style="margin-left:8px;color:#666;font-size:10px">需要 env GOOGLE_TRANSLATE_API_KEY</span>
+    </div>
+  </details>
+  
+  <!-- Phase D: Quality Estimation -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#f59e0b;font-weight:600">📊 Phase D: Quality Estimation(LLM-as-judge)</summary>
+    <div id="dash-qe" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="qeSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+    </div>
+  </details>
+  
+  <!-- Phase E: Auto Post-Editing -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#ec4899;font-weight:600">✏️ Phase E: Auto Post-Editing(LLM 動態修錯)</summary>
+    <div id="dash-ape" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <button onclick="apeSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置</button>
+    </div>
+  </details>
+  
+  <!-- Phase F: TBX -->
+  <details style="margin-bottom:8px;background:#0f0f1e;border-radius:8px;border:1px solid #2a2a3e">
+    <summary style="padding:10px;cursor:pointer;font-size:13px;color:#a855f7;font-weight:600">📖 Phase F: TBX 1.0(ISO 30042 術語標準)</summary>
+    <div id="dash-tbx" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
+    <div style="padding:10px;border-top:1px solid #2a2a3e">
+      <a href="/api/admin/tbx/export" target="_blank" style="display:inline-block;padding:6px 12px;background:#7c6fef;color:#fff;text-decoration:none;border-radius:6px;font-size:11px;margin-right:6px">⬇️ 匯出 glossary TBX</a>
+      <button onclick="tbxImport()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⬆️ 匯入 TBX</button>
+    </div>
+  </details>
+</div>
+
 </div>
 </div>
 
@@ -12036,6 +12214,208 @@ var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
 var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','insight','examples','forms','aiprovider','settings'];
 
+
+// ═════════════════════════════════════════════════════════════════
+// v3.9.39 Phase G: 業界全面技術儀表板 JS
+// ═════════════════════════════════════════════════════════════════
+async function dashLoadStats(){
+  const dashSummary = document.getElementById('dash-summary');
+  dashSummary.textContent = '載入中...';
+  try {
+    const r = await fetch('/api/admin/dashboard/stats', {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ dashSummary.textContent = '✗ ' + (data.error||'載入失敗'); return; }
+    const ph = data.phases || {};
+    const sm = data.summary || {};
+    
+    // Summary
+    const bypassRate = Math.round((sm.llm_bypass_rate||0) * 10000) / 100;
+    dashSummary.innerHTML = 
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>版本</span><b style="color:#7c6fef">'+data.version+'</b></div>' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>總翻譯請求</span><b>'+(sm.total_translation_requests||0)+'</b></div>' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>LLM bypass(省成本)</span><b style="color:#22c55e">'+sm.llm_bypassed_count+' ('+bypassRate+'%)</b></div>' +
+      '<div style="display:flex;justify-content:space-between"><span>NMT 累積成本</span><b style="color:#f59e0b">$'+(sm.estimated_cost_saved_usd||0)+'</b></div>';
+    
+    // Phase A
+    const tm = ph.A_lexical_tm || {};
+    document.getElementById('dash-tm').innerHTML = 
+      'lookups: '+(tm.lookups||0)+'<br>'+
+      'exact: '+(tm.exact_hits||0)+' | fuzzy_bypass: '+(tm.fuzzy_bypass||0)+' | inject: '+(tm.fuzzy_inject||0)+' | miss: '+(tm.misses||0)+'<br>'+
+      'hit_rate_total: '+((tm.hit_rate_total||0)*100).toFixed(1)+'%<br>'+
+      'total_entries: '+(tm.total_entries||0)+' | rapidfuzz: '+(tm.rapidfuzz_available?'✓':'✗ fallback')+'<br>'+
+      'thresholds: bypass≥'+(tm.thresholds?tm.thresholds.fuzzy_bypass:'?')+', inject≥'+(tm.thresholds?tm.thresholds.fuzzy_inject:'?');
+    
+    // Phase B
+    const vec = ph.B_vector_tm || {};
+    document.getElementById('dash-vec').innerHTML =
+      'lookups: '+(vec.lookups||0)+' | bypass: '+(vec.bypass_hits||0)+' | inject: '+(vec.inject_hits||0)+'<br>'+
+      'embeddings: gen='+(vec.embeddings_generated||0)+' cached='+(vec.embeddings_cached||0)+' err='+(vec.api_errors||0)+'<br>'+
+      'total_entries: '+(vec.total_entries||0)+' | db: '+(vec.db_size_mb||0)+'MB<br>'+
+      'model: '+(vec.embedding_model||'?')+' (provider: '+(vec.embedding_provider||'?')+') | OPENAI_API_KEY: '+(vec.openai_key_available?'✓':'✗')+'<br>'+
+      '<span style="color:#888;font-size:10px">'+(vec.note||'')+'</span><br>'+
+      'thresholds: bypass≥'+(vec.thresholds?vec.thresholds.bypass:'?')+', inject≥'+(vec.thresholds?vec.thresholds.inject:'?');
+    
+    // Phase C
+    const nmt = ph.C_nmt || {};
+    document.getElementById('dash-nmt').innerHTML =
+      'provider: '+(nmt.provider||'none')+' | API key: '+(nmt.api_key_available?'✓':'✗')+'<br>'+
+      'route_NMT: '+(nmt.route_to_nmt||0)+' | route_LLM: '+(nmt.route_to_llm||0)+'<br>'+
+      'NMT success: '+(nmt.nmt_success||0)+' | failed: '+(nmt.nmt_failed||0)+'<br>'+
+      'chars: '+(nmt.nmt_chars_translated||0)+' | cost: $'+(nmt.estimated_cost_usd||0)+'<br>'+
+      'short_threshold: '+(nmt.short_threshold||0)+' | post_edit: '+(nmt.post_edit_enabled?'on':'off');
+    
+    // Phase D
+    const qe = ph.D_qe || {};
+    const sd = qe.score_distribution || {};
+    const qe_models = qe.model_by_provider || {};
+    document.getElementById('dash-qe').innerHTML =
+      'enabled: '+(qe.enabled?'✓':'✗')+' | active_provider: '+(qe.active_provider||'?')+'<br>'+
+      '<b>current model</b>: '+(qe.model_current||'?')+'<br>'+
+      '雙系統 mapping: openai→'+(qe_models.openai||'?')+' | anthropic→'+(qe_models.anthropic||'?')+'<br>'+
+      'evaluations: '+(qe.evaluations||0)+' | avg_score: '+(qe.avg_score||0)+'<br>'+
+      'warn: '+(qe.warn_count||0)+' ('+((qe.warn_rate||0)*100).toFixed(1)+'%) | retry: '+(qe.retry_count||0)+' ('+((qe.retry_rate||0)*100).toFixed(1)+'%)<br>'+
+      'distribution: 90+:'+(sd['90+']||0)+' | 70-89:'+(sd['70-89']||0)+' | 50-69:'+(sd['50-69']||0)+' | <50:'+(sd['<50']||0);
+    
+    // Phase E
+    const ape = ph.E_ape || {};
+    const ape_models = ape.model_by_provider || {};
+    document.getElementById('dash-ape').innerHTML =
+      'enabled: '+(ape.enabled?'✓':'✗')+' | active_provider: '+(ape.active_provider||'?')+'<br>'+
+      '<b>current model</b>: '+(ape.model_current||'?')+'<br>'+
+      '雙系統 mapping: openai→'+(ape_models.openai||'?')+' | anthropic→'+(ape_models.anthropic||'?')+'<br>'+
+      'total_triggered: '+(ape.total_triggered||0)+'<br>'+
+      'by_qe: '+(ape.triggered_by_qe||0)+' | by_roundtrip: '+(ape.triggered_by_roundtrip||0)+' | by_pattern: '+(ape.triggered_by_pattern||0)+'<br>'+
+      'successes: '+(ape.successes||0)+' ('+((ape.success_rate||0)*100).toFixed(1)+'%) | no_change: '+(ape.no_change||0);
+    
+    // Phase F
+    const tbx = ph.F_tbx || {};
+    document.getElementById('dash-tbx').innerHTML =
+      'glossary entries: '+(tbx.glossary_entries||0)+'<br>'+
+      'format: '+(tbx.supported_format||'?');
+  } catch(e) {
+    dashSummary.textContent = '✗ ' + e.message;
+  }
+}
+
+async function tmImportTMX(){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tmx,.xml';
+  input.onchange = async (e) => {
+    const file = e.target.files[0]; if(!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await fetch('/api/admin/tm/import', {method:'POST', headers:{'X-Admin-Key':KEY}, body: fd});
+      const data = await r.json();
+      alert(data.ok ? '匯入 '+data.imported+' 條' : '✗ '+(data.error||''));
+      dashLoadStats();
+    } catch(err) { alert('✗ '+err.message); }
+  };
+  input.click();
+}
+
+async function tmAdjustThresholds(){
+  const fb = prompt('Lexical TM fuzzy_bypass(>= 此分數直接用譯文,範圍 70-100,目前預設 95):', '95');
+  if(fb === null) return;
+  const fi = prompt('Lexical TM fuzzy_inject(>= 此分數注入 prompt,範圍 30-95,目前預設 70):', '70');
+  if(fi === null) return;
+  try {
+    const r = await fetch('/api/admin/tm/thresholds', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({fuzzy_bypass:parseInt(fb), fuzzy_inject:parseInt(fi)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.thresholds) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function vecAdjustThresholds(){
+  const fb = prompt('Vector bypass threshold(0.7-1.0,預設 0.95):', '0.95');
+  if(fb === null) return;
+  const fi = prompt('Vector inject threshold(0.3-0.95,預設 0.75):', '0.75');
+  if(fi === null) return;
+  try {
+    const r = await fetch('/api/admin/vec-tm/thresholds', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({bypass:parseFloat(fb), inject:parseFloat(fi)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.thresholds) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function nmtSetConfig(){
+  const provider = prompt('NMT provider(google / deepl / none,目前 google):', 'google');
+  if(provider === null) return;
+  const threshold = prompt('短句門檻(字元數 < 此值才走 NMT,預設 30):', '30');
+  if(threshold === null) return;
+  try {
+    const r = await fetch('/api/admin/nmt/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({provider:provider, short_threshold:parseInt(threshold)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function qeSetConfig(){
+  const enabled = confirm('啟用 Quality Estimation?(取消 = 停用)');
+  const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-4.1-mini):', 'gpt-4.1-mini');
+  if(openai_model === null) return;
+  const anthropic_model = prompt('Anthropic provider 時用的 QE 模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
+  if(anthropic_model === null) return;
+  const sample = prompt('採樣率(0.0-1.0,1.0=全部評,0.1=10% 採樣,預設 1.0):', '1.0');
+  if(sample === null) return;
+  try {
+    const r = await fetch('/api/admin/qe/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model, sample_rate:parseFloat(sample)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function apeSetConfig(){
+  const enabled = confirm('啟用 Auto Post-Editing?(取消 = 停用)');
+  const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-4.1):', 'gpt-4.1');
+  if(openai_model === null) return;
+  const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-4-6):', 'claude-sonnet-4-6');
+  if(anthropic_model === null) return;
+  const trigger = prompt('觸發門檻(QE 分數 < 此值才 APE,預設 70):', '70');
+  if(trigger === null) return;
+  try {
+    const r = await fetch('/api/admin/ape/config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model, trigger_qe_score:parseInt(trigger)})
+    });
+    const data = await r.json();
+    alert(data.ok ? '已更新: '+JSON.stringify(data.config) : '✗ '+(data.error||''));
+    dashLoadStats();
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function tbxImport(){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tbx,.xml';
+  input.onchange = async (e) => {
+    const file = e.target.files[0]; if(!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await fetch('/api/admin/tbx/import', {method:'POST', headers:{'X-Admin-Key':KEY}, body: fd});
+      const data = await r.json();
+      alert(data.ok ? '匯入 '+data.imported+' 條(新增 '+data.added_new+' 條)' : '✗ '+(data.error||''));
+      dashLoadStats();
+    } catch(err) { alert('✗ '+err.message); }
+  };
+  input.click();
+}
 
 // ═════════════════════════════════════════════════════════════════
 // AI Provider 切換邏輯 (v1.0 2026-05-15)
@@ -15548,6 +15928,315 @@ def api_admin_tm_thresholds():
         return jsonify({"ok": True, "thresholds": new_th})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase B: Vector RAG TM admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/vec-tm/stats", methods=["GET"])
+def api_admin_vec_tm_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": vec_tm_module.vector_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/vec-tm/thresholds", methods=["POST"])
+def api_admin_vec_tm_thresholds():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        new_th = vec_tm_module.vector_set_thresholds(
+            bypass=data.get("bypass"),
+            inject=data.get("inject"),
+            topk=data.get("topk"),
+        )
+        return jsonify({"ok": True, "thresholds": new_th})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/vec-tm/clear", methods=["POST"])
+def api_admin_vec_tm_clear():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        if not data.get("confirm"):
+            return jsonify({"ok": False, "error": "需要 confirm=true"}), 400
+        n = vec_tm_module.vector_clear(
+            group_id=data.get("group_id"),
+            src_lang=data.get("src_lang"),
+            tgt_lang=data.get("tgt_lang"),
+        )
+        return jsonify({"ok": True, "deleted": n})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase C: Hybrid NMT + LLM admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/nmt/stats", methods=["GET"])
+def api_admin_nmt_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": nmt_module.nmt_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/nmt/config", methods=["POST"])
+def api_admin_nmt_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = nmt_module.nmt_set_config(
+            provider=data.get("provider"),
+            short_threshold=data.get("short_threshold"),
+            post_edit=data.get("post_edit"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase D: Quality Estimation admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/qe/stats", methods=["GET"])
+def api_admin_qe_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": qe_module.qe_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/qe/config", methods=["POST"])
+def api_admin_qe_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = qe_module.qe_set_config(
+            enabled=data.get("enabled"),
+            openai_model=data.get("openai_model"),
+            anthropic_model=data.get("anthropic_model"),
+            threshold_warn=data.get("threshold_warn"),
+            threshold_retry=data.get("threshold_retry"),
+            min_len=data.get("min_len"),
+            sample_rate=data.get("sample_rate"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase E: Auto Post-Editing admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/ape/stats", methods=["GET"])
+def api_admin_ape_stats():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify({"ok": True, "stats": ape_module.ape_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/ape/config", methods=["POST"])
+def api_admin_ape_config():
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = ape_module.ape_set_config(
+            enabled=data.get("enabled"),
+            openai_model=data.get("openai_model"),
+            anthropic_model=data.get("anthropic_model"),
+            trigger_qe_score=data.get("trigger_qe_score"),
+        )
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase F: TBX (ISO 30042) terminology admin endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/tbx/export", methods=["GET"])
+def api_admin_tbx_export():
+    """匯出 glossary 為 TBX-Basic 格式(ISO 30042)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        import tempfile
+        import os as _os_tbx
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tbx", delete=False, encoding="utf-8") as tf:
+            tmp_path = tf.name
+        n = tbx_module.export_glossary_to_tbx(GLOSSARY_LOOKUP, tmp_path)
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        try:
+            _os_tbx.unlink(tmp_path)
+        except Exception:
+            pass
+        from flask import Response
+        resp = Response(content, mimetype="application/xml")
+        resp.headers["Content-Disposition"] = f'attachment; filename="glossary_export_{int(time.time())}.tbx"'
+        resp.headers["X-TBX-Entries"] = str(n)
+        return resp
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tbx/import", methods=["POST"])
+def api_admin_tbx_import():
+    """匯入 TBX-Basic 格式到 glossary"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    global GLOSSARY_LOOKUP
+    try:
+        if "file" not in request.files:
+            content = request.get_data(as_text=True)
+            if not content or "<martif" not in content:
+                return jsonify({"ok": False, "error": "缺 TBX 內容"}), 400
+        else:
+            content = request.files["file"].read().decode("utf-8")
+        
+        import tempfile
+        import os as _os_tbx
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tbx", delete=False, encoding="utf-8") as tf:
+            tf.write(content)
+            tmp_path = tf.name
+        
+        try:
+            parsed = tbx_module.import_tbx_to_glossary(tmp_path)
+        finally:
+            try:
+                _os_tbx.unlink(tmp_path)
+            except Exception:
+                pass
+        
+        if not isinstance(parsed, list):
+            return jsonify({"ok": False, "error": "parse failed"}), 500
+        
+        added = 0
+        for entry in parsed:
+            zh = entry["zh"]
+            idn = entry["id"]
+            if zh and idn:
+                if zh not in GLOSSARY_LOOKUP:
+                    GLOSSARY_LOOKUP[zh] = {
+                        "idn": idn,
+                        "note_zh": entry.get("note_zh", ""),
+                        "note_id": entry.get("note_id", ""),
+                    }
+                    added += 1
+        # 寫回 ai_provider glossary
+        try:
+            ai_provider.register_glossary(GLOSSARY_LOOKUP)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "imported": len(parsed), "added_new": added,
+                        "total_glossary": len(GLOSSARY_LOOKUP)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/tbx/validate", methods=["POST"])
+def api_admin_tbx_validate():
+    """驗證 TBX 檔結構是否正確(不寫入)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        if "file" not in request.files:
+            content = request.get_data(as_text=True)
+        else:
+            content = request.files["file"].read().decode("utf-8")
+        
+        import tempfile
+        import os as _os_tbx
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tbx", delete=False, encoding="utf-8") as tf:
+            tf.write(content)
+            tmp_path = tf.name
+        try:
+            result = tbx_module.validate_tbx(tmp_path)
+        finally:
+            try:
+                _os_tbx.unlink(tmp_path)
+            except Exception:
+                pass
+        return jsonify({"ok": True, "validation": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.39 Phase G: Unified Dashboard Stats (聚合所有 Phase 統計)
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/dashboard/stats", methods=["GET"])
+def api_admin_dashboard_stats():
+    """聚合所有業界全面技術的統計,供後台儀表板顯示"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        result = {
+            "ok": True,
+            "version": VERSION,
+            "phases": {
+                "A_lexical_tm": tm_module.tm_stats(),
+                "B_vector_tm": vec_tm_module.vector_stats(),
+                "C_nmt": nmt_module.nmt_stats(),
+                "D_qe": qe_module.qe_stats(),
+                "E_ape": ape_module.ape_stats(),
+                "F_tbx": {
+                    "glossary_entries": len(GLOSSARY_LOOKUP) if 'GLOSSARY_LOOKUP' in globals() else 0,
+                    "supported_format": "TBX-Basic v2 (ISO 30042)",
+                },
+            },
+        }
+        
+        # 計算 LLM bypass rate (A+B 合計)
+        lex_stats = result["phases"]["A_lexical_tm"]
+        vec_stats = result["phases"]["B_vector_tm"]
+        nmt_stats = result["phases"]["C_nmt"]
+        
+        total_translations = (
+            lex_stats.get("lookups", 0)  # lexical lookups 涵蓋所有翻譯請求(在 wrapper 開頭)
+        )
+        llm_bypass = (
+            lex_stats.get("exact_hits", 0)
+            + lex_stats.get("fuzzy_bypass", 0)
+            + vec_stats.get("bypass_hits", 0)
+            + nmt_stats.get("nmt_success", 0)
+        )
+        
+        result["summary"] = {
+            "total_translation_requests": total_translations,
+            "llm_bypassed_count": llm_bypass,
+            "llm_bypass_rate": round(llm_bypass / total_translations, 4) if total_translations > 0 else 0,
+            "estimated_cost_saved_usd": round(nmt_stats.get("estimated_cost_usd", 0), 4),
+        }
+        
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e), "trace": traceback.format_exc()[:500]}), 500
 
 
 @app.route("/admin")

@@ -1,7 +1,32 @@
-# v3.9.38 Phase A — Translation Memory 新增依賴
-# 把下面這一行加到 Render 的 requirements.txt 內,然後重新部署
+# v3.9.39 業界全面技術升級 — 新增依賴
+# 把下面的行加到 Render 的 requirements.txt 內,然後重新部署
+
+# Phase A: Lexical TM 需要(沒裝會 fallback stdlib difflib,慢 10-50x)
 rapidfuzz>=3.5.0
-# 說明:
-# - rapidfuzz 是工業標準 fuzzy match 套件,Lokalise/Smartcat 等業界平台都用
-# - 沒裝也能 work(會 fallback 到 stdlib difflib),但速度慢 10-50 倍
-# - 安裝後 fuzzy match 在 1000 條 TM candidates 仍可 <5ms 完成
+
+# Phase B/C/D/E:沿用既有 openai SDK(已在 requirements 內)
+# 不需新增
+
+# === 新環境變數(在 Render Dashboard → Environment 加) ===
+#
+# OPENAI_API_KEY=sk-...                      # Phase B 需要(text-embedding-3-small 產生 embedding)
+#                                            # 已有,不用動
+#
+# GOOGLE_TRANSLATE_API_KEY=AIza...           # Phase C 需要(若想啟用 NMT 路徑)
+#                                            # 用既有的 jingyue-auth project key 即可
+#                                            # 沒設也能 work,只是 NMT 路徑不啟用,全走 LLM
+#
+# DEEPL_API_KEY=...                          # Phase C 替代方案(若不想用 Google)
+#                                            # 印尼語品質次要,建議用 Google
+#
+# TM_DB_PATH=/var/data/translation_memory.db # Phase A DB 路徑(不設預設 /var/data)
+# VECTOR_TM_DB_PATH=/var/data/vector_tm.db   # Phase B DB 路徑(不設預設 /var/data)
+
+# === SQLite DB 會自動建立 ===
+# 部署後第一次跑會在 /var/data/ 自動建立兩個 DB:
+#   - translation_memory.db (Phase A Lexical TM)
+#   - vector_tm.db (Phase B Vector RAG)
+# 無需手動建表,模組 init() 會 CREATE IF NOT EXISTS
+
+# === 既有 translation_log.db 不會被影響 ===
+# 三個 DB 並存,各管各的,互不衝突
