@@ -2743,7 +2743,10 @@ def has_english(text):
     if has_vietnamese(text) or has_indonesian(text):
         return False
     words = re.findall(r'[a-zA-Z]+', text.lower())
-    if len(words) < 3:
+    # v3.10+: 原 < 3 太苛,「hello boss」「OK thanks」這類常見短句會落空,
+    # 結果 detect_language fallback 階段被 has_indonesian(loose) 抓走誤判 id
+    # (因 boss/shift/data/file 等英文常用詞也在 id_words 集合裡)
+    if len(words) < 2:
         return False
     en_words = set([
         'the', 'is', 'are', 'was', 'were', 'have', 'has', 'had',
@@ -2758,6 +2761,12 @@ def has_english(text):
         'come', 'make', 'like', 'time', 'good', 'new', 'first',
         'please', 'thank', 'thanks', 'sorry', 'hello', 'okay',
         'yes', 'yeah', 'already', 'still', 'here', 'there',
+        # v3.10+ 補:常見英文虛詞(原本漏,導致「no problem boss」「boss says ok」這類
+        # 含 boss/data/shift 等 id_words 重疊詞的英文短句被誤判 id
+        'no', 'ok', 'i', 'me', 'my', 'am', 'on', 'at', 'in', 'it',
+        'so', 'up', 'an', 'a', 'be', 'do', 'no', 'go', 'say', 'says',
+        'said', 'tell', 'told', 'get', 'got', 'put', 'see', 'saw',
+        'look', 'over', 'down', 'out', 'off', 'now', 'then',
     ])
     count = sum(1 for w in words if w in en_words)
     if count >= 2:
@@ -2819,18 +2828,19 @@ def detect_language(text):
     if zh_count >= 1 and not latin_words:
         return "zh"
 
-    # v3.10+ 根治 bug:「Tabung I01 pecah」這類短句被誤判為 en 後,
-    # handle_message 第 8353 行因 'en' 不在群組目標語言清單而靜默丟棄。
-    # 根本原因:id_words 白名單不可能涵蓋所有印尼詞(如 pecah/bolong/mampet),
-    # 嚴格版 has_indonesian(min_markers=2) 對 3 字短句的 0.4 比例閾值太苛。
-    # 解法:fallback 階段用寬鬆版 has_indonesian(min_markers=1) 攔截 —
-    # 只要含 1 個 id 工廠詞就視為印尼文,而非塞給 en 黑洞。
-    # 副作用評估:「OK thanks」等純英文短句因 id_words 完全不命中,仍回 en,行為不變。
-    if latin_words and has_indonesian(clean, min_markers=1):
-        return "id"
-
-    # Plain Latin without ID markers → English
+    # v3.10+ 三層 latin fallback (徹底重寫,根治「Tabung I01 pecah」死亡 + 避免英文含
+    # boss/shift/data/file/invoice/press/supervisor/forklift 等重疊詞被誤判 id):
+    # 規則執行順序很關鍵 ↓
+    #   ① 嚴格英文判定 (has_english 內部會看 en marker 命中數/比例) → 直接判 en
+    #     例: "hello boss" / "thank you" / "boss is here" → en marker 明確 → en
+    #   ② 嚴格英文失敗但寬鬆印尼至少有 1 個 id 詞 → 判 id (救工廠短句)
+    #     例: "Tabung I01 pecah" / "mesin patah" / "Pipa bolong" → id
+    #   ③ 兩邊都不明確 → 預設 en (handle_message 第 8353 行會兜底跳過)
     if latin_words:
+        if has_english(clean):
+            return "en"
+        if has_indonesian(clean, min_markers=1):
+            return "id"
         return "en"
 
     return None
