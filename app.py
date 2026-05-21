@@ -124,6 +124,67 @@ import base64
 import tempfile
 import time
 import uuid
+import threading
+import contextlib
+try:
+    import fcntl  # POSIX file lock,用於跨 worker 同步 file I/O
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+
+# === v3.10+ 並發控制基礎設施 (gunicorn multi-worker 必要) ===
+# 全域可變狀態保護鎖。Python GIL 救單一 dict 操作,但救不了:
+#   - 多步驟操作(讀-改-寫、遍歷期間改)
+#   - 跨檔案 I/O 操作
+# 這裡集中管理,避免散落多處。
+_state_lock = threading.RLock()          # 所有全域 dict 寫操作
+_message_cache_lock = threading.Lock()   # message_cache 修剪
+_stats_lock = threading.Lock()           # bot_stats counter 累加
+
+
+@contextlib.contextmanager
+def _file_lock(path, mode="r+", create=True):
+    """跨 worker file lock (基於 POSIX fcntl.flock,Render Linux 環境 OK)。
+    Windows 或不支援 fcntl 時 degraded 為純 thread lock + 原子 rename,
+    多 process 並發在沒 fcntl 的環境下仍可能 race,但生產環境 (Linux) 沒問題。
+    使用方式:
+        with _file_lock(path) as f:
+            data = json.load(f); ...; f.seek(0); f.truncate(); json.dump(...)
+    """
+    # 若檔案不存在且 create=True,先 touch
+    if create and not os.path.exists(path):
+        try:
+            with open(path, "a"):
+                pass
+        except Exception:
+            pass
+    f = None
+    try:
+        f = open(path, mode, encoding="utf-8" if "b" not in mode else None)
+        if _HAS_FCNTL:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except Exception:
+                pass  # NFS 等檔案系統不支援 flock 時 degraded
+        yield f
+    finally:
+        if f is not None:
+            try:
+                if _HAS_FCNTL:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
+def _stats_inc(key, n=1):
+    """原子累加 bot_stats[key]。修補 9 處 read-modify-write race。"""
+    with _stats_lock:
+        bot_stats[key] = bot_stats.get(key, 0) + n
+
 
 app = Flask(__name__)
 # v3.9.30c B20 修補: 限制 upload 大小防 OOM
@@ -288,36 +349,39 @@ def _is_redelivery(event):
 
 
 def _event_log_write(event_type, data):
-    """寫一筆事件到磁碟 log。失敗安靜略過,不影響主流程。"""
+    """寫一筆事件到磁碟 log。失敗安靜略過,不影響主流程。
+    v3.10+ 修補:用 file lock,避免多 worker 同時寫時互相覆蓋彼此的 log。"""
     global _EVENT_LOG_FILE
     try:
         if _EVENT_LOG_FILE is None:
             _EVENT_LOG_FILE = _event_log_path()
-        # 讀現有 log
-        existing = []
-        try:
-            if os.path.exists(_EVENT_LOG_FILE):
-                with open(_EVENT_LOG_FILE, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                if not isinstance(existing, list):
-                    existing = []
-        except Exception:
+        lock_path = _EVENT_LOG_FILE + ".lock"
+        with _file_lock(lock_path):
+            # 讀現有 log
             existing = []
-        # 追加
-        entry = {
-            "ts": int(time.time()),
-            "type": event_type,
-            "data": data,
-        }
-        existing.append(entry)
-        # 截尾保留最後 _EVENT_LOG_MAX 筆
-        if len(existing) > _EVENT_LOG_MAX:
-            existing = existing[-_EVENT_LOG_MAX:]
-        # 原子寫
-        tmp = _EVENT_LOG_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False)
-        os.replace(tmp, _EVENT_LOG_FILE)
+            try:
+                if os.path.exists(_EVENT_LOG_FILE):
+                    with open(_EVENT_LOG_FILE, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    if not isinstance(existing, list):
+                        existing = []
+            except Exception:
+                existing = []
+            # 追加
+            entry = {
+                "ts": int(time.time()),
+                "type": event_type,
+                "data": data,
+            }
+            existing.append(entry)
+            # 截尾保留最後 _EVENT_LOG_MAX 筆
+            if len(existing) > _EVENT_LOG_MAX:
+                existing = existing[-_EVENT_LOG_MAX:]
+            # 原子寫
+            tmp = _EVENT_LOG_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(existing, f, ensure_ascii=False)
+            os.replace(tmp, _EVENT_LOG_FILE)
     except Exception:
         pass  # 永遠不阻擋主流程
 # v3.9.10: 圖片翻譯詢問模式 — 收到圖片不自動翻,先問使用者要不要翻
@@ -374,18 +438,42 @@ def _save_pending_imgs(data):
         return False
 
 def _pending_img_set(message_id, info):
-    """加入一筆 pending,先 load 再 add 再 save(避免覆蓋其他 worker 寫的)"""
-    data = _load_pending_imgs()
-    data[message_id] = info
-    _save_pending_imgs(data)
+    """加入一筆 pending。v3.10+ 修補:用 file lock 確保 load-modify-save 原子,
+    否則 gunicorn 兩個 worker 同時收圖時 B 會覆蓋 A 的 pending,圖片遺失。"""
+    global _PENDING_IMG_FILE
+    if _PENDING_IMG_FILE is None:
+        _PENDING_IMG_FILE = _pending_img_path()
+    lock_path = _PENDING_IMG_FILE + ".lock"
+    try:
+        with _file_lock(lock_path):
+            data = _load_pending_imgs()
+            data[message_id] = info
+            _save_pending_imgs(data)
+    except Exception:
+        # lock 失敗也至少做一次 (退化為原本的非原子行為)
+        data = _load_pending_imgs()
+        data[message_id] = info
+        _save_pending_imgs(data)
 
 def _pending_img_pop(message_id):
-    """取出並刪除一筆 pending(類似 dict.pop)"""
-    data = _load_pending_imgs()
-    info = data.pop(message_id, None)
-    if info is not None:
-        _save_pending_imgs(data)
-    return info
+    """取出並刪除一筆 pending(類似 dict.pop)。v3.10+ 修補:加 file lock。"""
+    global _PENDING_IMG_FILE
+    if _PENDING_IMG_FILE is None:
+        _PENDING_IMG_FILE = _pending_img_path()
+    lock_path = _PENDING_IMG_FILE + ".lock"
+    try:
+        with _file_lock(lock_path):
+            data = _load_pending_imgs()
+            info = data.pop(message_id, None)
+            if info is not None:
+                _save_pending_imgs(data)
+            return info
+    except Exception:
+        data = _load_pending_imgs()
+        info = data.pop(message_id, None)
+        if info is not None:
+            _save_pending_imgs(data)
+        return info
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
 # Work order photo detection toggle per group, default True
@@ -452,20 +540,20 @@ def track_tokens(response):
     """
     try:
         if response and hasattr(response, 'usage') and response.usage:
-            bot_stats["tokens_prompt"] += response.usage.prompt_tokens or 0
-            bot_stats["tokens_completion"] += response.usage.completion_tokens or 0
+            _stats_inc("tokens_prompt", response).usage.prompt_tokens or 0
+            _stats_inc("tokens_completion", response).usage.completion_tokens or 0
             # v3.9.30: reasoning_tokens 額外追蹤(已包含在 completion_tokens 中,
             # 但需要分開知道才能算實際輸出 vs reasoning 比例)
             try:
                 _details = getattr(response.usage, 'completion_tokens_details', None)
                 if _details:
                     _rt = getattr(_details, 'reasoning_tokens', 0) or 0
-                    bot_stats["tokens_reasoning"] = bot_stats.get("tokens_reasoning", 0) + _rt
+                    _stats_inc("tokens_reasoning", _rt)
                 # cached prompt tokens(prompt cache hit 部分,計費較低)
                 _pt_details = getattr(response.usage, 'prompt_tokens_details', None)
                 if _pt_details:
                     _ct = getattr(_pt_details, 'cached_tokens', 0) or 0
-                    bot_stats["tokens_prompt_cached"] = bot_stats.get("tokens_prompt_cached", 0) + _ct
+                    _stats_inc("tokens_prompt_cached", _ct)
             except Exception:
                 pass
     except Exception:
@@ -2296,6 +2384,9 @@ VALID_TARGETS = ["id", "th", "hi", "vi", "ja", "ko", "en"]
 
 def extract_mentions(text):
     """Extract @mentions from text. Skip @Indonesian_word (not real mentions)."""
+    # v3.10+ 修補:加 None / 非字串守衛,避免上游不慎傳入 None 時 TypeError
+    if not text or not isinstance(text, str):
+        return []
     _id_skip = {
         'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
         'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
@@ -2340,6 +2431,9 @@ def extract_mentions(text):
 def extract_line_mentions(text, message):
     """Extract @mention strings using LINE's actual mention data (the blue text).
     Returns list of exact mention strings from the message."""
+    # v3.10+ 修補:加 None / 非字串守衛,避免 text[idx:length] 在 text=None 時 TypeError
+    if not text or not isinstance(text, str):
+        return []
     mentions = []
     try:
         mention_data = getattr(message, 'mention', None)
@@ -7765,7 +7859,7 @@ def export_examples_to_jsonl():
 
 
 def handle_command(text, group_id, user_id=None):
-    bot_stats["commands"] += 1
+    _stats_inc("commands")
     cmd = text.strip().lower()
 
     # ========================================================================
@@ -8249,11 +8343,24 @@ def handle_message(event):
         result = translate(text_clean, lang, tgt)
         track_group_usage("__dm__", _bp, _bc)
         if not result:
+            # v3.10+ 修補:DM 翻譯失敗時不該靜默,使用者會困惑 bot 為何不回。
+            # 群組情境不發失敗訊息以免噪音,但 DM 私訊只影響使用者本人,給簡訊比較友善。
+            logger.warning("[DM] translate returned empty for lang=%s tgt=%s text=%r",
+                           lang, tgt, text_clean[:60])
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="⚠️ 翻譯暫時失敗,請稍後再試 / Gagal menerjemahkan, coba lagi nanti")]
+                    ))
+            except Exception:
+                pass
             return
         reply = LANG_FLAGS.get(tgt, "") + " " + result
 
 
-        bot_stats["text_translations"] += 1
+        _stats_inc("text_translations")
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             api.reply_message(ReplyMessageRequest(
@@ -8319,10 +8426,22 @@ def handle_message(event):
     if msg_id:
         message_cache[msg_id] = {"text": text, "ts": time.time()}
         # Trim cache
+        # v3.10+ 修補:加 lock 避免並發時 sorted+pop 期間被其他 webhook thread 加新項目
+        # 造成 RuntimeError: dictionary changed size during iteration
         if len(message_cache) > MESSAGE_CACHE_MAX:
-            oldest = sorted(message_cache.items(), key=lambda x: x[1]["ts"])[:50]
-            for k, _ in oldest:
-                message_cache.pop(k, None)
+            with _message_cache_lock:
+                # 再檢查一次(double-check pattern,可能另一 thread 剛剛已修剪)
+                if len(message_cache) > MESSAGE_CACHE_MAX:
+                    try:
+                        # 用 list() 快照確保 sorted 期間不被改
+                        oldest = sorted(list(message_cache.items()),
+                                        key=lambda x: x[1].get("ts", 0))[:50]
+                        for k, _ in oldest:
+                            message_cache.pop(k, None)
+                    except RuntimeError:
+                        # 萬一還是 race,粗暴清掉前 50 個 key
+                        for k in list(message_cache.keys())[:50]:
+                            message_cache.pop(k, None)
 
     # Check if this is a reply to another message (quoted message)
     quoted_text = None
@@ -8391,6 +8510,17 @@ def handle_message(event):
     track_group_usage(group_id, _bp, _bc)
 
     if reply is None:
+        # v3.10+ 修補:群組翻譯失敗加 log 才能追,但不發群組噪音
+        logger.warning("[group %s] translate returned empty for lang=%s text=%r",
+                       group_id, lang, (text_to_translate or "")[:80])
+        try:
+            _event_log_write("translate_empty", {
+                "group_id": group_id or "",
+                "lang": lang,
+                "text_preview": (text_to_translate or "")[:100],
+            })
+        except Exception:
+            pass
         return
 
     # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
@@ -8398,7 +8528,7 @@ def handle_message(event):
         _trans_count = len(_trs) if (lang == "zh" and _trs) else 1
     except (NameError, UnboundLocalError):
         _trans_count = 1
-    bot_stats["text_translations"] += _trans_count
+    _stats_inc("text_translations", _trans_count)
 
     # v3.10: TTS — 若該群組開了 TTS,額外推一條語音訊息
     try:
@@ -8778,21 +8908,41 @@ def _handle_image_background(ctx):
                 if wo_on:
                     reply = format_storage_for_work_order(wo_customer)
                     if reply:
-                        bot_stats["work_order_detections"] += 1
+                        _stats_inc("work_order_detections")
                         qt_wo = ctx["quote_token"]
-                        with ApiClient(configuration) as api_client:
-                            api = MessagingApi(api_client)
-                            msg_obj = TextMessage(text=reply)
-                            if qt_wo:
-                                try:
-                                    msg_obj.quote_token = qt_wo
-                                except Exception:
-                                    pass
-                            api.reply_message(ReplyMessageRequest(
-                                reply_token=ctx["reply_token"],
-                                messages=[msg_obj]
-                            ))
-                        _event_log_write("image_done", {"path": "work_order"})
+                        # v3.10+ 修補:加 push fallback。原本只用 reply_message,
+                        # work_order 偵測 + storage lookup 若加 OCR 超過 30 秒,
+                        # reply_token 就過期,訊息靜默消失,使用者完全不知工單已處理。
+                        try:
+                            with ApiClient(configuration) as api_client:
+                                api = MessagingApi(api_client)
+                                msg_obj = TextMessage(text=reply)
+                                if qt_wo:
+                                    try:
+                                        msg_obj.quote_token = qt_wo
+                                    except Exception:
+                                        pass
+                                api.reply_message(ReplyMessageRequest(
+                                    reply_token=ctx["reply_token"],
+                                    messages=[msg_obj]
+                                ))
+                            _event_log_write("image_done", {"path": "work_order", "method": "reply"})
+                        except Exception as _wo_re:
+                            _event_log_write("image_step_error", {
+                                "step": "wo_reply", "err": str(_wo_re)[:300], "fallback": "push"
+                            })
+                            logger.warning("Work order reply failed, trying push: %s", _wo_re)
+                            try:
+                                with ApiClient(configuration) as api_client:
+                                    api = MessagingApi(api_client)
+                                    api.push_message(PushMessageRequest(
+                                        to=group_id,
+                                        messages=[TextMessage(text=reply)]
+                                    ))
+                                _event_log_write("image_done", {"path": "work_order", "method": "push"})
+                            except Exception as _wo_pe:
+                                _event_log_write("image_step_error", {"step": "wo_push", "err": str(_wo_pe)[:300]})
+                                logger.exception("Work order push also failed: %s", _wo_pe)
                 # Whether storage found or not, skip translation for work orders
                 track_group_usage(group_id, _bp, _bc)
                 return
@@ -8876,7 +9026,7 @@ def _handle_image_background(ctx):
             reply = reply[:4990] + "\n..."
 
         track_group_usage(group_id, _bp, _bc)
-        bot_stats["image_translations"] += 1
+        _stats_inc("image_translations")
         _event_log_write("image_step", {"step": "before_reply"})
         # v3.8: thread quote_token onto image translation reply.
         qt = ctx["quote_token"]
@@ -9048,7 +9198,7 @@ def _process_pending_image_translate_inner(event, message_id):
             if wo_on:
                 wo_reply = format_storage_for_work_order(wo_customer)
                 if wo_reply:
-                    bot_stats["work_order_detections"] += 1
+                    _stats_inc("work_order_detections")
                     _reply_or_push(wo_reply)
             track_group_usage(group_id, _bp, _bc)
             return
@@ -9097,7 +9247,7 @@ def _process_pending_image_translate_inner(event, message_id):
         reply_text = reply_text[:4990] + "\n..."
 
     track_group_usage(group_id, _bp, _bc)
-    bot_stats["image_translations"] += 1
+    _stats_inc("image_translations")
     _reply_or_push(reply_text)
     logger.info("[ImgAsk] DONE")
 
@@ -9203,9 +9353,20 @@ def handle_audio(event):
     track_group_usage(group_id, _bp, _bc)
 
     if reply is None:
+        # v3.10+ 修補:語音翻譯失敗加 log 才能追,但不發群組噪音
+        logger.warning("[audio %s] translate returned empty for lang=%s transcribed=%r",
+                       group_id, lang, (transcribed or "")[:80])
+        try:
+            _event_log_write("audio_translate_empty", {
+                "group_id": group_id or "",
+                "lang": lang,
+                "transcribed_preview": (transcribed or "")[:100],
+            })
+        except Exception:
+            pass
         return
 
-    bot_stats["voice_translations"] += 1
+    _stats_inc("voice_translations")
     # v3.8: thread quote_token onto the reply so the translation visually
     # references the original audio bubble. Important in busy group chats.
     qt = getattr(event.message, 'quote_token', None)
@@ -9303,7 +9464,7 @@ if VideoMessageContent:
                                         reply_token=event.reply_token,
                                         messages=[TextMessage(text=_clip_line_text(reply))]
                                     ))
-                                bot_stats["image_translations"] += 1
+                                _stats_inc("image_translations")
         except Exception as e:
             logger.warning("Video OCR failed: %s", e)
 
@@ -9327,6 +9488,11 @@ if LocationMessageContent:
     @handler.add(MessageEvent, message=LocationMessageContent)
     def handle_location(event):
         """Handle location messages: translate location info."""
+        # v3.10+ 修補:加 redelivery 守衛,LINE retry 時不重複翻譯
+        if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+            logger.warning("[handle_location] redelivery or duplicate, skipping msg_id=%s",
+                           getattr(event.message, 'id', None))
+            return
         source = event.source
         group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None) or getattr(source, 'user_id', None)
         user_id = getattr(source, 'user_id', None)
@@ -9494,7 +9660,7 @@ if FollowEvent:
                     user_languages[user_id] = lang
         except Exception:
             dm_known_users[user_id] = user_id
-        bot_stats["followers"] = bot_stats.get("followers", 0) + 1
+        _stats_inc("followers")
         save_settings()
         logger.info("New follower: %s", dm_known_users.get(user_id, user_id))
 
@@ -9505,7 +9671,7 @@ if UnfollowEvent:
         """Track when a user blocks/removes the bot."""
         user_id = getattr(event.source, 'user_id', None)
         if user_id:
-            bot_stats["unfollowers"] = bot_stats.get("unfollowers", 0) + 1
+            _stats_inc("unfollowers")
             logger.info("Unfollowed by: %s", user_id)
 
 
@@ -9701,7 +9867,7 @@ if VideoPlayCompleteEvent:
         user_id = getattr(source, 'user_id', '')
         tracking_id = getattr(event.video_play_complete, 'tracking_id', '') if hasattr(event, 'video_play_complete') else ''
         logger.info("VideoPlayComplete: group=%s user=%s tracking=%s", group_id, user_id, tracking_id)
-        bot_stats["video_play_complete"] = bot_stats.get("video_play_complete", 0) + 1
+        _stats_inc("video_play_complete")
 
 
 # v3.8: --- Reaction event feedback pipeline ---
@@ -15711,8 +15877,14 @@ def _flush_pending_save():
 
 def _do_save_impl():
     global _last_save_time
-    try:
-        data = {
+    # v3.10+ 修補:_do_save_impl 在 background thread 跑,讀 80+ 個全域 dict/set 期間
+    # webhook handler 可能正在寫(record_user_name / admin endpoint 等),導致
+    # RuntimeError: dictionary changed size during iteration → 整次 save 失敗。
+    # 修法:把 dict 快照塊用 retry 包起來,失敗最多重試 3 次,徹底失敗才跳過。
+    data = None
+    for attempt in range(3):
+        try:
+            data = {
             "group_settings": group_settings,
             "group_target_lang": group_target_lang,
             "group_img_settings": group_img_settings,
@@ -15808,7 +15980,26 @@ def _do_save_impl():
             "custom_translation_examples": custom_translation_examples,
             "forms_data": forms_data,
             "forms_submissions": forms_submissions,
-        }
+            }
+            break  # 快照成功跳出 retry 迴圈
+        except RuntimeError as _re:
+            # dict changed size during iteration — 重試
+            logger.warning("save_settings snapshot retry %d/%d: %s", attempt + 1, 3, _re)
+            time.sleep(0.05 * (attempt + 1))
+        except Exception as _re2:
+            # 其他錯誤 — 直接記錄並中止 save (不再重試,因為不是 race 問題)
+            logger.error("save_settings snapshot failed (non-race): %s", _re2)
+            with _save_lock:
+                _last_save_time = 0
+            return
+    else:
+        # 3 次都 RuntimeError → 跳過這次 save,30 秒後再試
+        logger.error("save_settings snapshot failed after 3 retries, skipping this save (next attempt in 30s)")
+        with _save_lock:
+            _last_save_time = 0
+        return
+
+    try:
         json_str = json.dumps(data, ensure_ascii=False, indent=2)
         _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
     except Exception as e:
