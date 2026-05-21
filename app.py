@@ -133,7 +133,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.42.2-0520-bug-audit"
+VERSION = "v3.9.43-0522-help-admin-gate"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -6824,6 +6824,7 @@ HELP_COMMAND_SECTIONS = [
     {
         "num": "III", "zh_tag": "ADMIN", "zh_name": "管理",
         "id_tag": "ADMIN", "id_name": "PENGELOLA",
+        "admin_only": True,
         "items": [
             ("/liff",         "圖形化群組設定", "Setelan grup grafis"),
             ("/lang id,th",   "設定翻譯語言",   "Atur bahasa"),
@@ -6958,8 +6959,10 @@ def _help_section(num, tag, name, items, lang):
     return rows
 
 
-def _build_help_bubble(lang):
-    """Build one Flex bubble for the given language ('zh' or 'id')."""
+def _build_help_bubble(lang, is_admin=False):
+    """Build one Flex bubble for the given language ('zh' or 'id').
+    非管理員(is_admin=False)會自動跳過標 admin_only 的 section(III / ADMIN)。
+    """
     c = _HELP_COLORS[lang]
     if lang == "zh":
         hdr_meta = "COMMAND REFERENCE · ZH-TW"
@@ -6980,6 +6983,8 @@ def _build_help_bubble(lang):
 
     body_contents = []
     for sect in HELP_COMMAND_SECTIONS:
+        if sect.get("admin_only") and not is_admin:
+            continue
         tag = sect["zh_tag"] if lang == "zh" else sect["id_tag"]
         name = sect["zh_name"] if lang == "zh" else sect["id_name"]
         body_contents.extend(_help_section(sect["num"], tag, name, sect["items"], lang))
@@ -7110,22 +7115,22 @@ def _build_help_bubble(lang):
     return bubble
 
 
-def build_help_flex(primary_lang="zh"):
+def build_help_flex(primary_lang="zh", is_admin=False):
     """Build the complete help Flex carousel (2 bubbles)."""
     if primary_lang == "id":
-        contents = [_build_help_bubble("id"), _build_help_bubble("zh")]
+        contents = [_build_help_bubble("id", is_admin=is_admin), _build_help_bubble("zh", is_admin=is_admin)]
         alt_text = "🌐 Daftar Perintah Bot Penerjemah / 翻譯機器人指令"
     else:
-        contents = [_build_help_bubble("zh"), _build_help_bubble("id")]
+        contents = [_build_help_bubble("zh", is_admin=is_admin), _build_help_bubble("id", is_admin=is_admin)]
         alt_text = "🌐 翻譯機器人指令 / Daftar Perintah"
     carousel = {"type": "carousel", "contents": contents}
     return alt_text, carousel
 
 
-def send_help_flex(reply_token, primary_lang="zh"):
+def send_help_flex(reply_token, primary_lang="zh", is_admin=False):
     """Send help Flex carousel via reply token."""
     try:
-        alt_text, carousel = build_help_flex(primary_lang)
+        alt_text, carousel = build_help_flex(primary_lang, is_admin=is_admin)
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             api.reply_message(ReplyMessageRequest(
@@ -7141,10 +7146,10 @@ def send_help_flex(reply_token, primary_lang="zh"):
         return False
 
 
-def push_help_flex(to_id, primary_lang="zh"):
+def push_help_flex(to_id, primary_lang="zh", is_admin=False):
     """Push help Flex to a group/user (for postback language switch)."""
     try:
-        alt_text, carousel = build_help_flex(primary_lang)
+        alt_text, carousel = build_help_flex(primary_lang, is_admin=is_admin)
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             api.push_message(PushMessageRequest(
@@ -8126,7 +8131,9 @@ def handle_message(event):
         cmd = text.strip().lower()
         if cmd == "/help":
             # DM /help also uses Flex carousel (ZH + ID bilingual)
-            send_help_flex(event.reply_token, primary_lang="zh")
+            # 非管理員不顯示 III / ADMIN 區塊
+            send_help_flex(event.reply_token, primary_lang="zh",
+                           is_admin=is_group_admin(user_id))
             return
         if cmd.startswith("/to"):
             with ApiClient(configuration) as api_client:
@@ -8251,7 +8258,9 @@ def handle_message(event):
         cmd_result = handle_command(text, group_id, user_id)
         if cmd_result == "__FLEX_HELP__":
             # /help uses Flex Message carousel (ZH + ID bilingual)
-            send_help_flex(event.reply_token, primary_lang="zh")
+            # 非管理員不顯示 III / ADMIN 區塊
+            send_help_flex(event.reply_token, primary_lang="zh",
+                           is_admin=is_group_admin(user_id))
         elif cmd_result:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
@@ -9589,7 +9598,10 @@ if PostbackEvent:
             lang = params.get("lang", "zh")
             if lang not in ("zh", "id"):
                 lang = "zh"
-            send_help_flex(event.reply_token, primary_lang=lang)
+            # 切換語言時也要重新檢查管理員身分(誰按按鈕就以誰的權限重建)
+            _uid = getattr(event.source, "user_id", None)
+            send_help_flex(event.reply_token, primary_lang=lang,
+                           is_admin=is_group_admin(_uid))
             return
 
         # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」
