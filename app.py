@@ -2495,7 +2495,10 @@ def has_vietnamese(text):
     return False
 
 
-def has_indonesian(text):
+def has_indonesian(text, min_markers=2):
+    """v3.10+: 加 min_markers 參數,detect_language 在 fallback 階段用 min_markers=1
+    救回「Tabung I01 pecah」這類有 1 個 id 詞但比例不足 40% 的工廠短句。
+    預設 min_markers=2 維持原本嚴格行為,所有舊呼叫點不受影響。"""
     if has_chinese(text) or has_thai(text) or has_korean(text) or has_japanese(text):
         return False
     words = re.findall(r'[a-zA-Z]+', text.lower())
@@ -2566,6 +2569,12 @@ def has_indonesian(text):
         'pipa', 'oli', 'besi', 'baja', 'batang', 'stok', 'material',
         'lantai', 'atas', 'bawah', 'ukuran', 'nomor',
         'bocor', 'macet', 'mati', 'hidup', 'nyala', 'jalan',
+        # ── Factory failure verbs (v3.10+ 補強,印尼文專屬高頻故障詞) ──
+        # 修補「Tabung I01 pecah」之類短句語言誤判的雙保險,這些詞英文絕對不會撞
+        'pecah', 'patah', 'bolong', 'mampet', 'meledak', 'meleleh',
+        'copot', 'lepas', 'terbakar', 'kebakar', 'ambruk', 'roboh',
+        'terjepit', 'tersangkut', 'jatuh', 'tumpah', 'berhamburan',
+        'longgar', 'kendor', 'kencang', 'goyang', 'oleng',
         # ── Factory actions ──
         'ukur', 'timbang', 'sortir', 'pisah', 'gabung', 'campur', 'cetak',
         'press', 'poles', 'tekuk', 'lipat', 'gulung', 'tarik', 'dorong',
@@ -2721,7 +2730,7 @@ def has_indonesian(text):
         'tolong', 'mohon', 'harap', 'silakan', 'silahkan',
     ])
     count = sum(1 for w in words if w in id_words)
-    if count >= 2:
+    if count >= min_markers:
         return True
     if count >= 1 and len(words) >= 2 and count / len(words) >= 0.4:
         return True
@@ -2809,6 +2818,16 @@ def detect_language(text):
     # Trailing single-Chinese-char fallback
     if zh_count >= 1 and not latin_words:
         return "zh"
+
+    # v3.10+ 根治 bug:「Tabung I01 pecah」這類短句被誤判為 en 後,
+    # handle_message 第 8353 行因 'en' 不在群組目標語言清單而靜默丟棄。
+    # 根本原因:id_words 白名單不可能涵蓋所有印尼詞(如 pecah/bolong/mampet),
+    # 嚴格版 has_indonesian(min_markers=2) 對 3 字短句的 0.4 比例閾值太苛。
+    # 解法:fallback 階段用寬鬆版 has_indonesian(min_markers=1) 攔截 —
+    # 只要含 1 個 id 工廠詞就視為印尼文,而非塞給 en 黑洞。
+    # 副作用評估:「OK thanks」等純英文短句因 id_words 完全不命中,仍回 en,行為不變。
+    if latin_words and has_indonesian(clean, min_markers=1):
+        return "id"
 
     # Plain Latin without ID markers → English
     if latin_words:
