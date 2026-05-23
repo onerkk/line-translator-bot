@@ -68,7 +68,9 @@
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
-      "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin"
+      "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
+      "Uae862fee4fb1ca1fc1ce94d58f93e10e": "Hasym",
+      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim "
     }
   },
   "dm_master_enabled": true,
@@ -118,7 +120,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 106,
+    "text_translations": 112,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -198,7 +200,7 @@
   },
   "group_welcome_settings": {},
   "flex_enabled": false,
-  "quick_reply_enabled": true,
+  "quick_reply_enabled": false,
   "silent_mode": false,
   "sender_name": "AI機器人",
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
@@ -278,7 +280,9 @@
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
     "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
-    "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw"
+    "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
+    "Uae862fee4fb1ca1fc1ce94d58f93e10e": "https://sprofile.line-scdn.net/0hgJjT8TLDOGVHLS_UgbRGGjd9Ow9kXGF3OU9zV3IsblYpSH0yPE4jVCAlZlR5GSpnPEsjAyd_M1dLPk8DWXvEUUAdZVR7FXo6bEhwgA",
+    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
