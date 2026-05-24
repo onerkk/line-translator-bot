@@ -201,7 +201,7 @@
   "group_welcome_settings": {},
   "flex_enabled": false,
   "quick_reply_enabled": false,
-  "silent_mode": false,
+  "silent_mode": true,
   "sender_name": "AI機器人",
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
   "video_ocr_enabled": true,
