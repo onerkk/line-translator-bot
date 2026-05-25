@@ -506,6 +506,12 @@ group_user_names = {}
 # Group tracking: {group_id: {"name": str, "joined_at": float}}
 group_tracking = {}
 
+# v3.9.39: 視覺媒體上下文(根治 rusak 語意歧義 — 媒體場景影響下一則文字翻譯)
+# 跨 worker 共享 — 用 disk(_load_media_ctx / _save_media_ctx)
+# 不能用 in-memory dict(Render gunicorn 多 worker 會 75% 失效率)
+MEDIA_CONTEXT_TTL = 120          # seconds — 同人 2 分鐘內的媒體當作上下文
+MEDIA_CONTEXT_PER_USER = 3       # 每人最多保留幾筆
+
 # DM (private message) target language per user, default "id"
 dm_target_lang = {}
 # DM master toggle (global on/off for all DM)
@@ -1294,6 +1300,31 @@ def detect_id_zh_risk_terms(text):
     for word, hint in ID_ZH_HIGH_RISK_TERMS.items():
         # 用 word boundary 避免誤判子字串
         if re.search(r"(?<![a-z])" + re.escape(word) + r"(?![a-z])", t):
+            # v3.9.38: rusak 上下文特化(設備故障 vs 料件缺陷)
+            # v3.9.39: 加上媒體場景判斷(同人剛發的圖片/影片場景)
+            if word == "rusak":
+                try:
+                    _is_eq = is_equipment_rusak_context(text)
+                    if not _is_eq:
+                        # 再查媒體場景
+                        try:
+                            _scene = get_recent_media_scene(
+                                getattr(_tl, 'group_id', None),
+                                getattr(_tl, 'user_id', None),
+                            )
+                            if _scene and any(kw in _scene for kw in [
+                                "設備", "操作盤", "控制盤", "工具", "機台",
+                                "電線", "管路", "感測器", "按鈕", "馬達",
+                                "儀表", "閥", "管", "線"
+                            ]):
+                                _is_eq = True
+                        except Exception:
+                            pass
+                    if _is_eq:
+                        found.append("  - rusak → 設備/工具(alat/mesin/panel/kontrol 或剛才影片/照片中的設備)故障時用「損壞」或「故障」(NOT 損傷;損傷只用於料件缺陷)")
+                        continue
+                except NameError:
+                    pass  # 函數還沒定義,fallback 到預設 hint
             found.append(f"  - {word} → {hint}")
     if not found:
         return ""
@@ -3105,6 +3136,11 @@ FACTORY_DOMAIN_KEYWORDS_ID = {
         # v3.9.30: 工序動詞 / 機器名稱(讓「30 ton pemoles」這種短句也能命中工廠 domain)
         "pemoles", "polishing", "pemolesan", "grinding", "sanding",
         "drawing", "annealing", "straightening", "peeling",
+        # v3.9.38: 設備故障訊號詞(讓「alat rusak tidak berfungsi」命中 equipment domain)
+        "alat", "alatnya", "panel", "kontrol", "tombol", "sakelar", "switch",
+        "sensor", "motor", "inverter", "kabel", "kabelnya",
+        "tidak berfungsi", "tidak berpungsi", "gak berfungsi",
+        "tidak nyala", "tidak hidup", "rusak parah", "rusak total",
     ],
     "safety": [
         "bahaya", "awas", "hati-hati", "pelindung", "interlock", "crane", "forklift",
@@ -3132,6 +3168,70 @@ FACTORY_BAD_ZH_PATTERNS = [
     r"材料從(後面|前面)(損壞|壞了|壞掉)",
     r"棒材從(後面|前面)(損壞|壞了|壞掉)",
 ]
+
+
+# ─── v3.9.38: 設備故障 vs 料件缺陷 上下文判斷 ──────────────────────────
+# 印尼文「rusak」在不同主詞下中文要翻不同詞:
+#   料件主詞(barang/batang/material/bahan) → 「損傷」(可修補的料件缺陷)
+#   設備主詞(alat/mesin/panel/kontrol 等)  → 「損壞」or「故障」(設備本身壞了)
+# 沒有上下文判斷就會把「alat rusak」誤譯成「工具損傷」,語義錯誤
+EQUIPMENT_RUSAK_SUBJECTS = {
+    # 工具/設備類主詞
+    "alat", "alatnya", "tool", "tools",
+    "mesin", "mesinnya", "mesinya",
+    "panel", "kontrol", "kontroler",
+    "tombol", "switch", "sakelar",
+    "sensor", "motor", "inverter",
+    "bearing", "lager", "pompa",
+    "pipa", "kabel", "kabelnya",
+    "pemoles", "gerinda", "plc",
+    "operasi", "operasional",  # 「操作盤 panel operasi」
+}
+
+EQUIPMENT_FAILURE_PHRASES = {
+    "tidak berfungsi", "tidak berpungsi",  # 後者是工人手機常見錯字
+    "gak berfungsi", "ga berfungsi", "ngga berfungsi",
+    "tidak bisa jalan", "tidak jalan",
+    "tidak bisa nyala", "tidak nyala", "ga nyala",
+    "tidak bisa hidup", "tidak hidup",
+    "rusak parah", "rusak total", "rusak berat",
+    "gak bisa dipakai", "tidak bisa dipakai",
+    "tidak bisa dioperasikan", "tidak bisa beroperasi",
+}
+
+# 設備類詞 → 中文對應(供 LLM term hint 注入)
+FACTORY_ID_ZH_EQUIPMENT = {
+    "alat": "工具",
+    "alatnya": "工具",
+    "panel": "操作盤",
+    "kontrol": "控制",
+    "tombol": "按鈕",
+    "sakelar": "開關",
+    "sensor": "感測器",
+    "kabel": "電線",
+    "kabelnya": "電線",
+}
+
+
+def is_equipment_rusak_context(text):
+    """判斷『rusak』是否在「設備故障」語境(非料件缺陷)。
+
+    回傳 True 時:rusak 應譯為「損壞」或「故障」,而非「損傷」
+    """
+    if not text:
+        return False
+    t = text.lower()
+    if "rusak" not in t:
+        return False
+    # 主詞檢查:同句出現設備類詞
+    for w in EQUIPMENT_RUSAK_SUBJECTS:
+        if re.search(r"(?<![a-z])" + re.escape(w) + r"(?![a-z])", t):
+            return True
+    # 片語檢查:出現設備故障描述
+    for p in EQUIPMENT_FAILURE_PHRASES:
+        if p in t:
+            return True
+    return False
 
 
 def _clean_factory_id(text):
@@ -3411,14 +3511,27 @@ def build_factory_context_hint(text, src, tgt):
       - 公告類:純術語表 + 「必須完整逐句翻譯」要求,不給 deterministic 結論
       - incident 類:給術語表 + deterministic 結論(明確標示為「參考」)
       - 一般訊息:純術語表
+    v3.9.39 變更:
+      - 媒體場景上下文:同人近期發送的圖/影片場景描述會附加進 hint
+      - 即使 text 本身不命中 factory domain,只要有媒體場景就走工廠語境
     """
     if src == "zh" and tgt == "id":
         return build_factory_context_hint_zh_id(text)
     if src != "id" or tgt != "zh":
         return ""
     
+    # v3.9.39: 先抓媒體場景(同人 120s 內發過的圖/影片)
+    _media_scene = ""
+    try:
+        gid = getattr(_tl, 'group_id', None)
+        uid = getattr(_tl, 'user_id', None)
+        _media_scene = get_recent_media_scene(gid, uid)
+    except Exception:
+        pass
+    
     domain = detect_factory_domain(text, src, tgt)
-    if not domain["is_factory"]:
+    # v3.9.39: 有媒體場景就算工廠語境(該員工剛發了工廠現場圖)
+    if not domain["is_factory"] and not _media_scene:
         return ""
     
     cls = classify_factory_message(text, src="id")
@@ -3426,9 +3539,11 @@ def build_factory_context_hint(text, src, tgt):
     
     # 收集出現的術語(供 hint 使用)
     # v3.9.30: 加入 FACTORY_ID_ZH_TIME(jatuh tempo / deadline / tertunda 等)
+    # v3.9.38: 加入 FACTORY_ID_ZH_EQUIPMENT(alat/panel/kontrol 等設備類)
     terms = []
     for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS,
-                       **FACTORY_ID_ZH_POSITIONS, **FACTORY_ID_ZH_TIME}.items():
+                       **FACTORY_ID_ZH_POSITIONS, **FACTORY_ID_ZH_TIME,
+                       **FACTORY_ID_ZH_EQUIPMENT}.items():
         if re.search(r"(?<![a-z])" + re.escape(source) + r"(?![a-z])", t):
             terms.append(f"{source}={zh}")
     
@@ -3460,6 +3575,18 @@ def build_factory_context_hint(text, src, tgt):
             "翻成「積壓」「到期未處理」「該完成」皆可,**禁止**翻成「設備到期」「機器到期」。"
         )
     
+    # v3.9.39: 媒體場景指令(放在 hint 結尾的共用區塊,所有 cls type 都會 append)
+    scene_hint = ""
+    if _media_scene:
+        scene_hint = (
+            f" 【視覺上下文 — 該使用者剛發送的媒體場景】:「{_media_scene}」。"
+            "**翻譯時把這個視覺事實納入判斷**:"
+            "場景顯示【設備/操作盤/工具/機台/電線/管路/感測器/按鈕】時,"
+            "rusak/壞掉/不能用 等詞 → 譯為「損壞」或「故障」(NOT 損傷);"
+            "場景顯示【料件/棒材/物料/包裝】時,rusak → 譯為「損傷」;"
+            "文字單獨歧義時,以場景為準。"
+        )
+    
     if cls["type"] == "announcement":
         # 公告:絕不給 deterministic 結論,要求完整逐句翻譯
         hint = (
@@ -3471,14 +3598,32 @@ def build_factory_context_hint(text, src, tgt):
             hint += " 術語對應：" + "、".join(terms) + "。"
         if pattern_hint:
             hint += pattern_hint
+        if scene_hint:
+            hint += scene_hint
         return hint
     
     elif cls["type"] == "incident":
         # 現場簡訊:可給 deterministic,但明確標示為「參考」
+        # v3.9.38: rusak 上下文特化(設備 vs 料件)
+        # v3.9.39: 若有媒體場景,也算設備證據之一
+        scene_says_equipment = bool(_media_scene and any(
+            kw in _media_scene for kw in
+            ["設備", "操作盤", "控制盤", "工具", "機台", "電線", "管路",
+             "感測器", "按鈕", "馬達", "儀表", "閥", "管", "線"]
+        ))
+        is_equipment = is_equipment_rusak_context(text) or scene_says_equipment
+        if is_equipment:
+            rusak_hint = (
+                "rusak 在【設備/工具(alat/mesin/panel/kontrol 等)】語境=「損壞」或「故障」"
+                "(**NOT 損傷**;損傷只用於料件缺陷,設備本身壞掉要用損壞/故障);"
+                "tidak berfungsi=無法運作/無法使用;"
+            )
+        else:
+            rusak_hint = "rusak 在【料件/材料(barang/batang/material)】語境=損傷/異常,不要只翻壞掉；"
         hint = (
             "【印尼→繁中工廠語義提示】這是台灣不鏽鋼棒材工廠的現場異常簡訊，"
             "barang 在工廠品質語境=料件/材料，不要翻物品；"
-            "rusak 在品質語境=損傷/異常，不要只翻壞掉；"
+            + rusak_hint +
             "belakang/depan 描述料件方向=後端/前端，不要翻從後面/前面；"
             "輸出繁體中文現場用語，短句保持短句。"
         )
@@ -3489,6 +3634,8 @@ def build_factory_context_hint(text, src, tgt):
         deterministic = factory_semantic_translate_id_zh(text)
         if deterministic:
             hint += f" 槽位參考(僅供確認術語，實際翻譯仍需保留原文所有資訊):「{deterministic}」"
+        if scene_hint:
+            hint += scene_hint
         return hint
     
     else:  # general
@@ -3497,6 +3644,8 @@ def build_factory_context_hint(text, src, tgt):
             hint += " 術語對應：" + "、".join(terms) + "。"
         if pattern_hint:
             hint += pattern_hint
+        if scene_hint:
+            hint += scene_hint
         return hint
 
 
@@ -3525,7 +3674,27 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
     for wrong, correct in sorted(high_risk.items(), key=lambda x: -len(x[0])):
         result = result.replace(wrong, correct)
 
+    # v3.9.38: 設備語境下「損壞/壞掉/壞了」是合法設備故障詞,不應被改成「損傷」
+    # (料件用「損傷」、設備用「損壞/故障」是工廠術語慣例)
+    # v3.9.39: 也納入媒體場景判斷 — 場景顯示設備時,即使 src_text 無設備詞也算設備語境
+    is_equipment = is_equipment_rusak_context(src_text)
+    if not is_equipment:
+        try:
+            _scene = get_recent_media_scene(
+                getattr(_tl, 'group_id', None),
+                getattr(_tl, 'user_id', None),
+            )
+            if _scene and any(kw in _scene for kw in [
+                "設備", "操作盤", "控制盤", "工具", "機台", "電線", "管路",
+                "感測器", "按鈕", "馬達", "儀表", "閥", "管", "線"
+            ]):
+                is_equipment = True
+        except Exception:
+            pass
+    equipment_safe_terms = {"損壞", "壞掉", "壞了"} if is_equipment else set()
     for wrong, correct in sorted(FACTORY_ZH_LITERAL_RISK.items(), key=lambda x: -len(x[0])):
+        if wrong in equipment_safe_terms:
+            continue
         result = result.replace(wrong, correct)
 
     # v3.9.30: 「噸 + 機器/工序」誤譯修補
@@ -6318,7 +6487,8 @@ VISION_MODEL = os.environ.get("VISION_MODEL", "gpt-5-mini")
 VISION_FALLBACK_MODEL = "gpt-4o-mini"
 
 
-def _vision_call(messages, max_tokens, cache_key=None):
+def _vision_call(messages, max_tokens, cache_key=None,
+                 task_type="ocr", reasoning_override=None):
     """v3.9.28: 完全用 model_supports 過濾參數,符合 GPT-5 系列官方規格。
     
     關鍵差異(對比一般翻譯任務):
@@ -6338,6 +6508,12 @@ def _vision_call(messages, max_tokens, cache_key=None):
         - active=openai                              → 一律 oai
       用途:讓歐那「文字翻譯走 Claude,但圖片仍走 OpenAI」可獨立切換
             避免 Claude 圖片 token 成本失控
+
+    v3.9.39 (2026-05-25):
+      新增 task_type 參數讓非 OCR 任務(場景描述)用不同調校:
+        - task_type="ocr"   → verbosity=high, 大 token budget (原行為)
+        - task_type="scene" → verbosity=low,  小 token budget (省成本+輸出短)
+      reasoning_override:強制覆寫 reasoning_effort(scene 用 minimal)
     """
     last_err = None
     primary = VISION_MODEL
@@ -6360,8 +6536,8 @@ def _vision_call(messages, max_tokens, cache_key=None):
             raise RuntimeError("OpenAI client 未初始化,且 image_translation_use_claude=False 強制 OpenAI")
         _vision_client = oai
         _vision_route = "openai_forced" if _vision_provider == "anthropic" else "openai"
-    logger.info("[Vision] route=%s (provider=%s, use_claude=%s)",
-                _vision_route, _vision_provider, _vision_use_claude)
+    logger.info("[Vision] route=%s (provider=%s, use_claude=%s, task=%s)",
+                _vision_route, _vision_provider, _vision_use_claude, task_type)
     # v3.9.33 注意:當 _vision_client = ai (走 Claude),fallback gpt-4o-mini 會被
     # ai_provider 映射回 Claude default_model(因 mapping 表通常無 gpt-4o-mini key)。
     # 這意味著 Claude vision 失敗時 fallback 仍是 Claude — 但這已優於完全失敗。
@@ -6379,12 +6555,18 @@ def _vision_call(messages, max_tokens, cache_key=None):
             # Token limit
             # v3.9.30b B11 修補: 之前寫死 3000,reasoning model 會被 reasoning tokens 吃光
             # 改成依 reasoning model 額外加 4K reasoning 緩衝
+            # v3.9.39: task_type=scene 用緊縮 budget(場景描述只要 ~50 字)
             if model_supports(attempt_model, "max_completion_tokens"):
-                # OCR 預設輸出 3000;若是 reasoning model 加 4K reasoning 預算
-                _vision_budget = 3000
-                if not model_supports(attempt_model, "temperature"):
-                    # 是 reasoning model,額外給 reasoning 預算
-                    _vision_budget = 3000 + 4000
+                if task_type == "scene":
+                    # 場景描述:短輸出,reasoning model 也只加 1K 緩衝
+                    _vision_budget = max_tokens if max_tokens > 0 else 300
+                    if not model_supports(attempt_model, "temperature"):
+                        _vision_budget = _vision_budget + 1000
+                else:
+                    # OCR 預設輸出 3000;若是 reasoning model 加 4K reasoning 預算
+                    _vision_budget = 3000
+                    if not model_supports(attempt_model, "temperature"):
+                        _vision_budget = 3000 + 4000
                 kwargs["max_completion_tokens"] = _vision_budget
             elif model_supports(attempt_model, "max_tokens"):
                 kwargs["max_tokens"] = max_tokens
@@ -6393,12 +6575,15 @@ def _vision_call(messages, max_tokens, cache_key=None):
                 kwargs["temperature"] = 0.0
             # Reasoning effort(GPT-5/o-series 才有)
             if model_supports(attempt_model, "reasoning_effort"):
-                _opt = optimal_reasoning_for_translation(attempt_model)
-                if _opt:
-                    kwargs["reasoning_effort"] = _opt
-            # Verbosity — OCR 用 HIGH(官方建議:忠實轉錄)
+                if reasoning_override:
+                    kwargs["reasoning_effort"] = reasoning_override
+                else:
+                    _opt = optimal_reasoning_for_translation(attempt_model)
+                    if _opt:
+                        kwargs["reasoning_effort"] = _opt
+            # Verbosity — OCR 用 HIGH,場景描述用 LOW
             if model_supports(attempt_model, "verbosity"):
-                kwargs["verbosity"] = "high"
+                kwargs["verbosity"] = "low" if task_type == "scene" else "high"
             
             try:
                 _event_log_write("vision_call_start", {
@@ -6601,6 +6786,222 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     except Exception as e:
         logger.exception("[OCR] OpenAI Vision OCR error: %s", e)
         return None
+
+
+# ─── v3.9.39: 場景描述 + 媒體上下文儲存(根治 rusak 語意歧義)──────────
+# 每張圖/影片進來,除了 OCR 抽字之外,額外做「主體+異常」場景描述。
+# 文字訊息翻譯前會去查近期同人媒體場景,把場景注入 hint。
+# 這樣 LLM 翻譯 "I15 rusak" 時就知道剛剛影片是「操作盤被燒毀」→ 譯成「損壞」。
+#
+# ⚠️ 跨 worker 共享:用 disk + file lock,符合 Render gunicorn 多 worker 架構
+# (in-memory dict 會讓 A worker 寫 / B worker 讀不到,75%+ 失效率)。
+# 模式照 _pending_img_set / _pending_img_pop(L440+)的 atomic write+rename。
+
+def _media_ctx_path():
+    """選擇可寫的暫存路徑 — 同 Render persistent disk"""
+    for d in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "media_context.json")
+    return "media_context.json"
+
+
+_MEDIA_CTX_FILE = None
+
+
+def _load_media_ctx():
+    """讀媒體場景檔。每次讀都過濾掉過期(TTL=MEDIA_CONTEXT_TTL)。"""
+    global _MEDIA_CTX_FILE
+    if _MEDIA_CTX_FILE is None:
+        _MEDIA_CTX_FILE = _media_ctx_path()
+    try:
+        if not os.path.exists(_MEDIA_CTX_FILE):
+            return {}
+        with open(_MEDIA_CTX_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        # 過濾過期 + 清理結構
+        now = time.time()
+        cleaned = {}
+        for gid, users in data.items():
+            if not isinstance(users, dict):
+                continue
+            user_dict = {}
+            for uid, entries in users.items():
+                if not isinstance(entries, list):
+                    continue
+                fresh = []
+                for e in entries:
+                    if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL:
+                        fresh.append(e)
+                if fresh:
+                    user_dict[uid] = fresh[-MEDIA_CONTEXT_PER_USER:]
+            if user_dict:
+                cleaned[gid] = user_dict
+        return cleaned
+    except Exception:
+        return {}
+
+
+def _save_media_ctx(data):
+    """原子寫入 — write+rename"""
+    global _MEDIA_CTX_FILE
+    if _MEDIA_CTX_FILE is None:
+        _MEDIA_CTX_FILE = _media_ctx_path()
+    try:
+        tmp = _MEDIA_CTX_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, _MEDIA_CTX_FILE)
+        return True
+    except Exception as e:
+        try:
+            logger.warning("[media_ctx] save failed: %s", e)
+        except Exception:
+            pass
+        return False
+
+
+def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
+    """以視覺方式描述工廠現場場景(主體+異常),供翻譯上下文使用。
+
+    v3.9.39 雙系統相容:不直接檢查 oai,而是檢查「整體能否做 vision」
+      - active=openai                    → 走 OpenAI(gpt-5-mini, ~$0.0001)
+      - active=anthropic + use_claude=T  → 走 Claude vision(~$0.001-0.005)
+      - active=anthropic + use_claude=F  → 走 OpenAI(若 oai 存在)
+    走 _vision_call(task_type="scene") 拿到的是低 verbosity + 小 token budget。
+    失敗或無法判讀 → 回 ""(不影響翻譯主流程)。
+    """
+    # v3.9.39 雙系統 guard:檢查至少一條 vision 路徑可走
+    # 不能用 `if not oai:` — Anthropic-only 設定下 oai 是 None 但 Claude vision OK
+    try:
+        _active = ai_provider.get_active_provider()
+        _use_claude = ai_provider.should_use_claude_for_images()
+        _has_claude_path = (_active == "anthropic" and _use_claude)
+        _has_openai_path = (oai is not None)
+        if not (_has_claude_path or _has_openai_path):
+            return ""
+    except Exception:
+        # ai_provider 沒載入時的 fallback:回到舊邏輯
+        if oai is None:
+            return ""
+        _has_claude_path = False
+    try:
+        msgs = [
+            {
+                "role": "system",
+                "content": (
+                    "你是工廠現場視覺判讀。看圖,用一句話客觀描述「主體 + 狀態」:\n"
+                    "1. 主體分類:設備類(機台/操作盤/控制盤/工具/儀表/管路/電線/感測器/按鈕/馬達)、"
+                    "料件類(棒材/物料/包裝/料件)、人員、文件、其他\n"
+                    "2. 狀態描述:正常/破損/燒毀/裂痕/凹陷/卡料/泄漏/熔斷/變形 等\n"
+                    "規則:\n"
+                    "- 嚴格 25 字內\n"
+                    "- 只描述看得見的,不推測\n"
+                    "- 用工廠術語(操作盤、按鈕、棒材、料件、機台)\n"
+                    "- 看不出來 → 輸出「無法判讀」\n"
+                    "範例:\n"
+                    "「操作盤,綠色按鈕被燒焦」\n"
+                    "「機台前棒材一捆,後端有刮痕」\n"
+                    "「電線接頭,絕緣外皮裂開」\n"
+                    "「控制盤,液晶顯示熄滅」\n"
+                    "「料件包裝,綁帶鬆脫」"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64," + image_base64,
+                            # detail=low 只對 OpenAI 有效;Claude path 由 ai_provider
+                            # 自動忽略此欄位(Claude 自有 image 處理)
+                            "detail": "low",
+                        },
+                    },
+                    {"type": "text", "text": "請用 25 字內描述「主體+狀態」。"},
+                ],
+            },
+        ]
+        # task_type="scene" → verbosity=low, max_completion_tokens 緊縮
+        # reasoning_override="minimal" → 場景描述不需要 reasoning,直出
+        r = _vision_call(msgs, max_tokens=300,
+                         cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
+                                                    "scene", "ctx", "desc"),
+                         task_type="scene",
+                         reasoning_override="minimal")
+        result = (r.choices[0].message.content or "").strip()
+        # 清掉常見冗詞和引號
+        result = re.sub(r'^[「『"\']+', '', result)
+        result = re.sub(r'[」』"\']+$', '', result)
+        result = result.strip()
+        if not result or "無法判讀" in result:
+            return ""
+        # 安全上限(避免 LLM 不聽 25 字限制)
+        return result[:60]
+    except Exception as e:
+        logger.warning("[scene_describe] failed: %s", e)
+        return ""
+
+
+def store_media_scene(group_id, user_id, msg_id, scene_summary):
+    """把場景描述存進 disk(跨 worker 共享),供下一則文字翻譯查用。
+
+    用 file lock 保 read-modify-write 原子;失敗 fallback 為 best-effort 非原子。
+    """
+    if not group_id or not user_id or not scene_summary:
+        return
+    global _MEDIA_CTX_FILE
+    if _MEDIA_CTX_FILE is None:
+        _MEDIA_CTX_FILE = _media_ctx_path()
+    lock_path = _MEDIA_CTX_FILE + ".lock"
+    entry = [time.time(), msg_id, scene_summary]
+    try:
+        with _file_lock(lock_path):
+            data = _load_media_ctx()
+            g = data.setdefault(group_id, {})
+            u = g.setdefault(user_id, [])
+            u.append(entry)
+            now = time.time()
+            fresh = [e for e in u if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL]
+            g[user_id] = fresh[-MEDIA_CONTEXT_PER_USER:]
+            _save_media_ctx(data)
+    except Exception:
+        # lock 失敗 → 非原子寫入(degraded)
+        try:
+            data = _load_media_ctx()
+            g = data.setdefault(group_id, {})
+            u = g.setdefault(user_id, [])
+            u.append(entry)
+            now = time.time()
+            fresh = [e for e in u if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL]
+            g[user_id] = fresh[-MEDIA_CONTEXT_PER_USER:]
+            _save_media_ctx(data)
+        except Exception:
+            pass
+    logger.info("[media_ctx] stored: group=%s user=%s scene=%r",
+                (group_id or "")[-8:], (user_id or "")[-6:], scene_summary[:30])
+
+
+def get_recent_media_scene(group_id, user_id):
+    """從 disk 查同人同群最近 TTL 內的場景描述。沒有就回 ""。
+
+    read-only,免 lock(write 用 atomic rename 確保讀到完整檔)。
+    """
+    if not group_id or not user_id:
+        return ""
+    data = _load_media_ctx()
+    g = data.get(group_id, {})
+    u = g.get(user_id, [])
+    if not u:
+        return ""
+    now = time.time()
+    fresh = [e for e in u if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL]
+    if not fresh:
+        return ""
+    # 回最新一筆的 scene_summary
+    return fresh[-1][2]
 
 
 def ocr_and_translate_image(image_base64, tgt_lang):
@@ -8894,6 +9295,20 @@ def _handle_image_background(ctx):
             "extracted_preview": (extracted[:100] if extracted else None),
         })
         logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
+
+        # v3.9.39: 場景描述(供下一則文字翻譯的視覺上下文)
+        # 這裡不管 OCR 有沒有抓到字都跑 — 場景描述跟 OCR 是不同維度的資訊
+        # 例:控制盤照片 OCR 可能空,但場景描述能說「操作盤,綠色按鈕燒焦」
+        try:
+            scene = describe_scene_for_context(img_base64, mime_type=img_mime)
+            if scene:
+                store_media_scene(group_id, user_id, message_id, scene)
+                _event_log_write("scene_described", {
+                    "msg_id": message_id, "scene": scene[:50]
+                })
+        except Exception as _sce:
+            logger.warning("scene describe error: %s", _sce)
+
         if not extracted or len(extracted.strip()) < 2:
             _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
             return
@@ -9427,6 +9842,16 @@ if VideoMessageContent:
                 content = blob_api.get_message_content_preview(msg_id)
                 if content and len(content) > 100:
                     b64 = base64.b64encode(content).decode()
+                    # v3.9.39: 場景描述(供下一則文字翻譯的視覺上下文)
+                    # 不論 OCR 抓不抓到字都跑 — 影片畫面常常沒可讀字但場景明確
+                    # (用戶實例:6 秒影片秀操作盤,OCR 空,但場景=「操作盤,按鈕損壞」)
+                    try:
+                        scene = describe_scene_for_context(b64, mime_type="image/jpeg")
+                        if scene:
+                            store_media_scene(group_id, user_id, msg_id, scene)
+                            logger.info("[video_scene] group=%s scene=%r", (group_id or "")[-8:], scene[:50])
+                    except Exception as _vse:
+                        logger.warning("video scene describe error: %s", _vse)
                     # OCR the preview frame
                     ocr_result = ocr_image_openai(b64)
                     if ocr_result and len(ocr_result.strip()) > 2:
