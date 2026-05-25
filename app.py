@@ -2176,6 +2176,59 @@ scrap_text = (
     "=================="
 )
 
+# ── External Links settings (editable from admin) ─────────────────────
+# v3.9.39+: 外連網址 + 按鈕標籤可從後台改
+# 預設兩條:saran(提案), absen(差勤)。新增其它條請直接擴充這個 dict
+# 結構說明:
+#   key            → command 觸發詞(不含 /)、quick reply MessageAction text 也用這個
+#   label_zh/id    → quick reply 按鈕顯示文字(中/印尼)
+#   name_zh/id     → 收到 command 時回覆訊息的標題(中/印尼)
+#   url            → 外連網址
+#   enabled        → 是否在 quick reply 顯示這顆按鈕(預設 True)
+external_links_settings = {
+    "saran": {
+        "label_zh": "💡 提案",
+        "label_id": "Saran",
+        "name_zh": "提案系統",
+        "name_id": "Sistem Saran",
+        "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList",
+        "enabled": True,
+    },
+    "absen": {
+        "label_zh": "📅 差勤",
+        "label_id": "Absen",
+        "name_zh": "差勤系統",
+        "name_id": "Sistem Absen",
+        "url": "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS",
+        "enabled": True,
+    },
+}
+
+
+def _format_external_link_reply(key):
+    """產生 /saran /absen 等 command 的回覆訊息文字。
+
+    回 None 表示該 key 不存在或被停用 → caller 應回傳 None 走原流程。
+    """
+    cfg = external_links_settings.get(key)
+    if not cfg or not cfg.get("enabled", True):
+        return None
+    label_zh = cfg.get("label_zh", "").strip() or key
+    label_id = cfg.get("label_id", "").strip() or key
+    name_zh = cfg.get("name_zh", "").strip() or label_zh
+    name_id = cfg.get("name_id", "").strip() or label_id
+    url = cfg.get("url", "").strip()
+    if not url:
+        return None
+    # 中印尼雙語標題,長按複製 hint,網址另起新行(LINE 會自動偵測成連結)
+    return (
+        f"{label_zh} {name_zh} / {name_id}\n"
+        f"長按網址可複製或用外部瀏覽器開啟\n"
+        f"Tekan lama untuk salin atau buka di browser luar\n\n"
+        f"{url}"
+    )
+
+
 # ── Packaging code lookup ──
 PACKAGING_LOOKUP = {}
 
@@ -8562,17 +8615,11 @@ def handle_command(text, group_id, user_id=None):
             return None
         return handle_pkg_command(text)
     elif cmd == "/saran":
-        # v3.9.31: 提案系統網址 — 用純文字回傳,使用者可長按複製或用外部瀏覽器開啟
-        return ("💡 提案系統 / Sistem Saran\n"
-                "長按網址可複製或用外部瀏覽器開啟\n"
-                "Tekan lama untuk salin atau buka di browser luar\n\n"
-                "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList")
+        # v3.9.39+: 改成可從後台變更的設定(external_links_settings)
+        return _format_external_link_reply("saran")
     elif cmd == "/absen":
-        # v3.9.31: 差勤系統網址 — 同上
-        return ("📅 差勤系統 / Sistem Absen\n"
-                "長按網址可複製或用外部瀏覽器開啟\n"
-                "Tekan lama untuk salin atau buka di browser luar\n\n"
-                "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS")
+        # v3.9.39+: 改成可從後台變更的設定
+        return _format_external_link_reply("absen")
     return None
 
 
@@ -11426,15 +11473,26 @@ def build_quick_reply(group_id=None):
                 pass
         # URI-based buttons → 改成 MessageAction,讓使用者能複製網址 / 用外部瀏覽器開啟
         # (LINE 的 URIAction 強制用內建瀏覽器,無法複製網址)
+        # v3.9.39+: label 與 url 改從 external_links_settings 動態讀取
         try:
-            items.append(QuickReplyItem(action=MessageAction(
-                label="💡 提案/Saran",
-                text="/saran"
-            )))
-            items.append(QuickReplyItem(action=MessageAction(
-                label="📅 差勤/Absen",
-                text="/absen"
-            )))
+            for _link_key, _link_cfg in external_links_settings.items():
+                if not _link_cfg.get("enabled", True):
+                    continue
+                if not _link_cfg.get("url", "").strip():
+                    continue
+                _btn_label_zh = _link_cfg.get("label_zh", "").strip()
+                _btn_label_id = _link_cfg.get("label_id", "").strip()
+                # 顯示中印尼雙語(走斜線),空值省略
+                if _btn_label_zh and _btn_label_id:
+                    _full_label = f"{_btn_label_zh}/{_btn_label_id}"
+                else:
+                    _full_label = _btn_label_zh or _btn_label_id or _link_key
+                # LINE 按鈕 label 最長 20 字,超過截斷
+                _full_label = _full_label[:20]
+                items.append(QuickReplyItem(action=MessageAction(
+                    label=_full_label,
+                    text=f"/{_link_key}"
+                )))
         except Exception:
             pass
         return QuickReply(items=items)
@@ -11664,6 +11722,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('packaging')">包裝碼</div>
 <div class="tab" onclick="switchTab('passwords')">密碼</div>
 <div class="tab" onclick="switchTab('scrap')">廢料色</div>
+<div class="tab" onclick="switchTab('extlinks')">外連</div>
 <div class="tab" onclick="switchTab('insight')">數據</div>
 <div class="tab" onclick="switchTab('examples')">翻譯範例</div>
 <div class="tab" onclick="switchTab('forms')">表單</div>
@@ -11849,10 +11908,29 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 </div>
 
+<!-- External Links Panel -->
+<div class="panel" id="panel-extlinks">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:8px">🔗 外連網址設定</div>
+<div class="card-sub" style="margin-bottom:14px">
+LINE 群組底下 Quick Reply 的按鈕。<br>
+key 對應 LINE command 觸發詞(例 key=saran → 輸入 /saran)。<br>
+label 是按鈕顯示文字、name 是回覆訊息抬頭、url 是要帶使用者去的網址。<br>
+關閉某條 → 該按鈕不出現,/key 指令也回不出訊息。
+</div>
+<div id="extlinksList" style="display:flex;flex-direction:column;gap:12px"></div>
+<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+<button class="btn btn-primary btn-sm" onclick="extlinksAdd()">＋ 新增</button>
+<button class="btn btn-sm" onclick="extlinksReset()" style="background:#3a2a3a;color:#e0a0a0">↺ 重設預設</button>
+</div>
+<div id="extlinksMsg" style="margin-top:10px;font-size:13px"></div>
+</div>
+</div>
+
 <!-- Insight Panel -->
 <div class="panel" id="panel-insight">
 <div class="card">
-<div style="font-weight:700;font-size:15px;margin-bottom:12px">📊 好友趨勢（近7日）</div>
+<div style="font-weight:700;font-size:15px;margin-bottom:12px">📊 好友趨勢(近7日)</div>
 <div id="insightTrendChart" style="min-height:160px;position:relative">
 <canvas id="trendCanvas" width="600" height="180" style="width:100%;height:180px"></canvas>
 </div>
@@ -13960,6 +14038,7 @@ function switchTab(name){if(name==='aiprovider')aipLoadStatus();
   if(name==='packaging') loadPackagingStats();
   if(name==='passwords') loadPasswords();
   if(name==='scrap') loadScrap();
+  if(name==='extlinks') loadExtlinks();
   if(name==='insight') loadInsightTab();
   if(name==='examples'){loadExamples();loadTranslationLog();}
   if(name==='forms') loadFormsTab();
@@ -14691,6 +14770,83 @@ async function saveScrap(){
   var d=await api('/scrap','POST',{text:text});
   document.getElementById('scrapSaveResult').textContent=d&&d.ok?'✅ 已儲存':'❌ 儲存失敗';
   if(d&&d.ok)toast('廢料色資訊已更新');
+}
+
+// ─── External Links(/saran /absen 等)──
+function escHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+async function loadExtlinks(){
+  var d=await api('/external-links');
+  if(!d||!d.links){document.getElementById('extlinksList').innerHTML='<div style="color:#888">載入失敗</div>';return}
+  var html='';
+  for(var i=0;i<d.links.length;i++){
+    var L=d.links[i];
+    var key=escHtml(L.key);
+    var border=L.enabled===false?'#5a3a3a':'#3a3a4e';
+    var statusBadge=L.enabled===false?'<span style="background:#5a3a3a;color:#ff9090;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:8px">已停用</span>':'';
+    html+='<div class="card" style="background:#1a1a26;border:1px solid '+border+';padding:14px">';
+    html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">';
+    html+='<div style="font-weight:700;font-size:14px">/'+key+statusBadge+'</div>';
+    html+='<div style="font-size:11px;color:#7a7a8a">LINE 按按鈕送出 /'+key+'</div>';
+    html+='</div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+    html+='<div><div style="font-size:11px;color:#9a9aaa;margin-bottom:3px">中文按鈕標籤</div>';
+    html+='<input id="extl_label_zh_'+key+'" value="'+escHtml(L.label_zh||'')+'" placeholder="💡 提案" maxlength="20" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>';
+    html+='<div><div style="font-size:11px;color:#9a9aaa;margin-bottom:3px">印尼文按鈕標籤</div>';
+    html+='<input id="extl_label_id_'+key+'" value="'+escHtml(L.label_id||'')+'" placeholder="Saran" maxlength="20" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>';
+    html+='</div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+    html+='<div><div style="font-size:11px;color:#9a9aaa;margin-bottom:3px">中文系統名稱</div>';
+    html+='<input id="extl_name_zh_'+key+'" value="'+escHtml(L.name_zh||'')+'" placeholder="提案系統" maxlength="60" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>';
+    html+='<div><div style="font-size:11px;color:#9a9aaa;margin-bottom:3px">印尼文系統名稱</div>';
+    html+='<input id="extl_name_id_'+key+'" value="'+escHtml(L.name_id||'')+'" placeholder="Sistem Saran" maxlength="60" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px"></div>';
+    html+='</div>';
+    html+='<div style="margin-bottom:10px"><div style="font-size:11px;color:#9a9aaa;margin-bottom:3px">網址(需以 http:// 或 https:// 開頭)</div>';
+    html+='<input id="extl_url_'+key+'" value="'+escHtml(L.url||'')+'" placeholder="https://..." style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;font-family:monospace"></div>';
+    html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+    html+='<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">';
+    html+='<input type="checkbox" id="extl_enabled_'+key+'" '+(L.enabled!==false?'checked':'')+'> 啟用</label>';
+    html+='<button class="btn btn-sm btn-primary" onclick="extlinksSave(\''+key+'\')">儲存</button>';
+    html+='<button class="btn btn-sm" onclick="extlinksDel(\''+key+'\')" style="background:#3a2a3a;color:#ff9090">刪除</button>';
+    html+='</div>';
+    html+='</div>';
+  }
+  if(!d.links.length)html='<div style="color:#888;padding:20px;text-align:center">尚無外連網址。點下方「新增」建立第一條。</div>';
+  document.getElementById('extlinksList').innerHTML=html;
+  document.getElementById('extlinksMsg').textContent='';
+}
+async function extlinksSave(key){
+  var body={key:key,fields:{
+    label_zh:document.getElementById('extl_label_zh_'+key).value,
+    label_id:document.getElementById('extl_label_id_'+key).value,
+    name_zh:document.getElementById('extl_name_zh_'+key).value,
+    name_id:document.getElementById('extl_name_id_'+key).value,
+    url:document.getElementById('extl_url_'+key).value,
+    enabled:document.getElementById('extl_enabled_'+key).checked
+  }};
+  var d=await api('/external-links','POST',body);
+  var msg=document.getElementById('extlinksMsg');
+  if(d&&d.ok){msg.textContent='✅ '+key+' 已儲存';msg.style.color='#90ff90';toast(key+' 已更新')}
+  else{msg.textContent='❌ 儲存失敗:'+(d&&d.error||'?');msg.style.color='#ff9090'}
+}
+async function extlinksAdd(){
+  var key=prompt('新外連 key(僅允許小寫英數+底線,例 hr、it、faq):');
+  if(!key)return;
+  key=key.trim().toLowerCase();
+  if(!/^[a-z0-9_]{1,20}$/.test(key)){alert('key 格式錯誤');return}
+  var d=await api('/external-links/add','POST',{key:key,label_zh:'',label_id:'',url:'',enabled:true});
+  if(d&&d.ok){toast('已新增 /'+key);loadExtlinks()}
+  else{alert('新增失敗:'+(d&&d.error||'?'))}
+}
+async function extlinksDel(key){
+  if(!confirm('確定刪除 /'+key+' ?'))return;
+  var d=await api('/external-links/delete','POST',{key:key});
+  if(d&&d.ok){toast('已刪除 /'+key);loadExtlinks()}
+  else{alert('刪除失敗:'+(d&&d.error||'?'))}
+}
+async function extlinksReset(){
+  if(!confirm('重設為內建預設?\n會清掉所有自訂條目,還原 saran/absen 兩條。'))return;
+  var d=await api('/external-links/reset','POST',{});
+  if(d&&d.ok){toast('已重設');loadExtlinks()}
 }
 
 // ─── Insight Tab ───
@@ -16402,6 +16558,7 @@ def _do_save_impl():
             "pw1_text": pw1_text,
             "pw2_text": pw2_text,
             "scrap_text": scrap_text,
+            "external_links_settings": external_links_settings,
             "custom_translation_examples": custom_translation_examples,
             "forms_data": forms_data,
             "forms_submissions": forms_submissions,
@@ -16456,6 +16613,7 @@ def load_settings():
     global openai_24h_cache_enabled
     global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
+    global external_links_settings
     global forms_data, forms_submissions
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
@@ -16714,6 +16872,23 @@ def load_settings():
             pw2_text = data["pw2_text"]
         if "scrap_text" in data:
             scrap_text = data["scrap_text"]
+        # v3.9.39+: 外連網址 + 標籤(預設兩條 saran/absen,可從後台增改)
+        # merge 而非覆寫:確保程式新增的預設 link 在舊存檔上也會出現
+        if "external_links_settings" in data and isinstance(data["external_links_settings"], dict):
+            for _ek, _ev in data["external_links_settings"].items():
+                if not isinstance(_ev, dict):
+                    continue
+                _existing = external_links_settings.get(_ek, {})
+                # 把磁碟值套上去,缺欄位用程式預設補
+                _merged = {
+                    "label_zh": _ev.get("label_zh", _existing.get("label_zh", "")),
+                    "label_id": _ev.get("label_id", _existing.get("label_id", "")),
+                    "name_zh":  _ev.get("name_zh",  _existing.get("name_zh", "")),
+                    "name_id":  _ev.get("name_id",  _existing.get("name_id", "")),
+                    "url":      _ev.get("url",      _existing.get("url", "")),
+                    "enabled":  bool(_ev.get("enabled", _existing.get("enabled", True))),
+                }
+                external_links_settings[_ek] = _merged
         if "custom_translation_examples" in data:
             custom_translation_examples = data["custom_translation_examples"]
         if "forms_data" in data:
@@ -19343,7 +19518,170 @@ def api_admin_scrap():
     return jsonify({"ok": True})
 
 
-# ─── Custom Translation Examples API ──────────────────
+# ─── External Links API ────────────────────────────────
+# v3.9.39+: /saran /absen 等外連網址 + 按鈕標籤可從後台改
+# GET    /api/admin/external-links            → 回所有 links
+# POST   /api/admin/external-links            → 更新指定 key(部分欄位即可)
+# POST   /api/admin/external-links/add        → 新增一條(key 不可重複)
+# POST   /api/admin/external-links/delete     → 刪除指定 key
+# POST   /api/admin/external-links/reset      → 重設為內建預設(saran/absen)
+
+_BUILTIN_EXTERNAL_LINKS_DEFAULTS = {
+    "saran": {
+        "label_zh": "💡 提案",
+        "label_id": "Saran",
+        "name_zh": "提案系統",
+        "name_id": "Sistem Saran",
+        "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList",
+        "enabled": True,
+    },
+    "absen": {
+        "label_zh": "📅 差勤",
+        "label_id": "Absen",
+        "name_zh": "差勤系統",
+        "name_id": "Sistem Absen",
+        "url": "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS",
+        "enabled": True,
+    },
+}
+
+
+def _validate_external_link_key(k):
+    """key 僅允許小寫英數 + 底線,1-20 字。理由:會被當 LINE command (/key) 跟 url path。"""
+    if not isinstance(k, str):
+        return False
+    if not (1 <= len(k) <= 20):
+        return False
+    return bool(re.fullmatch(r"[a-z0-9_]+", k))
+
+
+def _sanitize_external_link_field(field, val):
+    """逐欄位 sanitize。回 (new_val, error_msg)。error_msg=None 表示通過。"""
+    if val is None:
+        return None, None  # 該欄位未提供 → 不動
+    if field == "url":
+        if not isinstance(val, str):
+            return None, "url must be string"
+        v = val.strip()
+        if v and not (v.startswith("http://") or v.startswith("https://")):
+            return None, "url must start with http:// or https://"
+        if len(v) > 2000:
+            return None, "url too long (max 2000)"
+        return v, None
+    if field == "enabled":
+        return bool(val), None
+    # label/name 欄位:剝空白,長度上限,移除控制字元
+    if not isinstance(val, str):
+        return None, f"{field} must be string"
+    v = val.strip()
+    # 把換行 / tab 移掉,quick reply label 不能多行
+    v = re.sub(r"[\r\n\t]", " ", v)
+    # LINE quick reply label 最長 20 字(雙語拼起來);name 用在訊息抬頭給 60
+    max_len = 20 if field.startswith("label") else 60
+    if len(v) > max_len:
+        return None, f"{field} too long (max {max_len})"
+    return v, None
+
+
+@app.route("/api/admin/external-links", methods=["GET", "POST"])
+def api_admin_external_links():
+    """GET → 回所有 external links。POST → 部分更新指定 key 的欄位。"""
+    global external_links_settings
+    if not check_manager_access("external_links"):
+        return jsonify({"error": "forbidden"}), 403
+    if request.method == "GET":
+        # 回傳順序穩定 — 用 list 保留插入順序
+        items = []
+        for k, v in external_links_settings.items():
+            items.append({"key": k, **v})
+        return jsonify({"links": items})
+    # POST: 預期 {key: "saran", fields: {url: "...", label_zh: "...", ...}}
+    data = request.get_json(force=True) or {}
+    key = data.get("key", "")
+    fields = data.get("fields", {})
+    if not _validate_external_link_key(key):
+        return jsonify({"ok": False, "error": "invalid key (a-z0-9_ only, 1-20 chars)"}), 400
+    if key not in external_links_settings:
+        return jsonify({"ok": False, "error": f"key '{key}' not found"}), 404
+    if not isinstance(fields, dict):
+        return jsonify({"ok": False, "error": "fields must be object"}), 400
+    cfg = dict(external_links_settings[key])  # 拷貝
+    for f in ("label_zh", "label_id", "name_zh", "name_id", "url", "enabled"):
+        if f in fields:
+            new_val, err = _sanitize_external_link_field(f, fields[f])
+            if err:
+                return jsonify({"ok": False, "error": f"{f}: {err}"}), 400
+            cfg[f] = new_val
+    external_links_settings[key] = cfg
+    save_settings()
+    return jsonify({"ok": True, "key": key, "config": cfg})
+
+
+@app.route("/api/admin/external-links/add", methods=["POST"])
+def api_admin_external_links_add():
+    """新增一條 external link。key 不可與既有重複。"""
+    global external_links_settings
+    if not check_manager_access("external_links"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(force=True) or {}
+    key = data.get("key", "").strip().lower()
+    if not _validate_external_link_key(key):
+        return jsonify({"ok": False, "error": "invalid key (a-z0-9_ only, 1-20 chars)"}), 400
+    if key in external_links_settings:
+        return jsonify({"ok": False, "error": f"key '{key}' already exists"}), 409
+    # 數量上限:避免 quick reply 超過 LINE 的 13 顆按鈕上限(其他類型也要佔位)
+    if len(external_links_settings) >= 8:
+        return jsonify({"ok": False, "error": "external links limit reached (max 8)"}), 400
+    cfg = {
+        "label_zh": "",
+        "label_id": "",
+        "name_zh": "",
+        "name_id": "",
+        "url": "",
+        "enabled": True,
+    }
+    for f in ("label_zh", "label_id", "name_zh", "name_id", "url", "enabled"):
+        if f in data:
+            new_val, err = _sanitize_external_link_field(f, data[f])
+            if err:
+                return jsonify({"ok": False, "error": f"{f}: {err}"}), 400
+            cfg[f] = new_val
+    external_links_settings[key] = cfg
+    save_settings()
+    return jsonify({"ok": True, "key": key, "config": cfg})
+
+
+@app.route("/api/admin/external-links/delete", methods=["POST"])
+def api_admin_external_links_delete():
+    """刪除指定 key。"""
+    global external_links_settings
+    if not check_manager_access("external_links"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(force=True) or {}
+    key = data.get("key", "")
+    if key not in external_links_settings:
+        return jsonify({"ok": False, "error": f"key '{key}' not found"}), 404
+    del external_links_settings[key]
+    save_settings()
+    return jsonify({"ok": True, "key": key})
+
+
+@app.route("/api/admin/external-links/reset", methods=["POST"])
+def api_admin_external_links_reset():
+    """重設為內建預設(saran/absen),清掉所有自訂條目。"""
+    global external_links_settings
+    if not check_manager_access("external_links"):
+        return jsonify({"error": "forbidden"}), 403
+    external_links_settings.clear()
+    for k, v in _BUILTIN_EXTERNAL_LINKS_DEFAULTS.items():
+        external_links_settings[k] = dict(v)
+    save_settings()
+    return jsonify({"ok": True, "links": [
+        {"key": k, **v} for k, v in external_links_settings.items()
+    ]})
+
+
+
 @app.route("/api/admin/examples", methods=["GET"])
 def api_admin_examples_get():
     """Get all custom translation examples."""
