@@ -14805,8 +14805,8 @@ async function loadExtlinks(){
     html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
     html+='<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">';
     html+='<input type="checkbox" id="extl_enabled_'+key+'" '+(L.enabled!==false?'checked':'')+'> 啟用</label>';
-    html+='<button class="btn btn-sm btn-primary" onclick="extlinksSave(\''+key+'\')">儲存</button>';
-    html+='<button class="btn btn-sm" onclick="extlinksDel(\''+key+'\')" style="background:#3a2a3a;color:#ff9090">刪除</button>';
+    html+='<button class="btn btn-sm btn-primary" data-key="'+key+'" onclick="extlinksSave(this.dataset.key)">儲存</button>';
+    html+='<button class="btn btn-sm" data-key="'+key+'" onclick="extlinksDel(this.dataset.key)" style="background:#3a2a3a;color:#ff9090">刪除</button>';
     html+='</div>';
     html+='</div>';
   }
@@ -15314,7 +15314,7 @@ async function loadTranslationLog(){
       if(!e.marked_wrong || !e.correct_translation){
         html+='<div style="margin-top:6px;display:flex;gap:6px">';
         html+='<input type="text" id="fix_'+e.id+'" placeholder="輸入正確翻譯..." style="flex:1;padding:4px 6px;border-radius:4px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">';
-        html+='<button class="btn btn-sm" style="background:#5a2a2a;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px" onclick="markLogWrong(\\''+e.id+'\\')">標錯+修正</button>';
+        html+='<button class="btn btn-sm" style="background:#5a2a2a;color:#fff;border:none;padding:4px 10px;border-radius:4px;font-size:11px" data-id="'+e.id+'" onclick="markLogWrong(this.dataset.id)">標錯+修正</button>';
         html+='</div>';
       }
       html+='</div>';
