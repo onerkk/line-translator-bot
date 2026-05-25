@@ -11474,8 +11474,15 @@ def build_quick_reply(group_id=None):
         # URI-based buttons → 改成 MessageAction,讓使用者能複製網址 / 用外部瀏覽器開啟
         # (LINE 的 URIAction 強制用內建瀏覽器,無法複製網址)
         # v3.9.39+: label 與 url 改從 external_links_settings 動態讀取
+        # v3.9.39+ 修補:LINE Quick Reply 硬上限 13 顆,要留空間給既有 5 顆固定按鈕
+        # 若 items 已超過 12 就不再加(留 1 個 slot 給安全餘裕)
+        LINE_QR_HARD_LIMIT = 13
         try:
             for _link_key, _link_cfg in external_links_settings.items():
+                if len(items) >= LINE_QR_HARD_LIMIT:
+                    logger.warning("[QuickReply] hit %d-item LINE limit, skipping remaining external links",
+                                   LINE_QR_HARD_LIMIT)
+                    break
                 if not _link_cfg.get("enabled", True):
                     continue
                 if not _link_cfg.get("url", "").strip():
@@ -14483,7 +14490,7 @@ async function loadUsers(){
   var el=document.getElementById('usersList');
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
-  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
+  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
@@ -14844,7 +14851,7 @@ async function extlinksDel(key){
   else{alert('刪除失敗:'+(d&&d.error||'?'))}
 }
 async function extlinksReset(){
-  if(!confirm('重設為內建預設?\n會清掉所有自訂條目,還原 saran/absen 兩條。'))return;
+  if(!confirm('重設為內建預設?會清掉所有自訂條目,還原 saran/absen 兩條。'))return;
   var d=await api('/external-links/reset','POST',{});
   if(d&&d.ok){toast('已重設');loadExtlinks()}
 }
