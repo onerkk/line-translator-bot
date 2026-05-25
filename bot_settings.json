@@ -69,8 +69,8 @@
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
-      "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡",
-      "Uce34fd415b4014d6f0576ca3fcd3c266": "毓俊"
+      "Uae862fee4fb1ca1fc1ce94d58f93e10e": "Hasym",
+      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim "
     }
   },
   "dm_master_enabled": true,
@@ -120,11 +120,11 @@
     }
   },
   "bot_stats": {
-    "text_translations": 112,
+    "text_translations": 115,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
-    "commands": 4,
+    "commands": 3,
     "tokens_prompt": 1693427,
     "tokens_completion": 5173,
     "tokens_reasoning": 0,
@@ -200,7 +200,7 @@
   },
   "group_welcome_settings": {},
   "flex_enabled": false,
-  "quick_reply_enabled": true,
+  "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
   "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
@@ -209,7 +209,9 @@
   "group_flex_settings": {
     "Cd188e1adc7792e407c90f3fa78850316": false
   },
-  "group_qr_settings": {},
+  "group_qr_settings": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
   "group_silent_settings": {},
   "group_video_settings": {},
   "group_location_settings": {},
@@ -281,8 +283,8 @@
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
     "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
-    "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g",
-    "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA"
+    "Uae862fee4fb1ca1fc1ce94d58f93e10e": "https://sprofile.line-scdn.net/0hgJjT8TLDOGVHLS_UgbRGGjd9Ow9kXGF3OU9zV3IsblYpSH0yPE4jVCAlZlR5GSpnPEsjAyd_M1dLPk8DWXvEUUAdZVR7FXo6bEhwgA",
+    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
