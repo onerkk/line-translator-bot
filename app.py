@@ -2212,6 +2212,111 @@ external_links_settings = {
 }
 
 
+# v3.11: Quick Reply 完全後台化
+# ─────────────────────────────────────────────────────────────
+# 結構說明:list of dict,順序就是按鈕在 LINE 上的顯示順序。
+# 欄位:
+#   id        - 唯一識別(用來辨識同一顆按鈕,改 label 也不會丟設定)
+#   type      - message / camera / camera_roll / location / clipboard
+#   label     - 顯示文字(最長 20 字,LINE 硬上限)
+#   text      - MessageAction 的觸發字串(僅 type=message 用)
+#   clipboard_text - ClipboardAction 複製內容(僅 type=clipboard 用)
+#   enabled   - 是否顯示
+#   cmd_check - (選填)還要再檢查的群組 command toggle key,例如 "qry"。
+#               指令本身被停用時這顆按鈕也跳過。None = 不額外檢查。
+#   editable  - 是否可在後台編輯(False 表示連 label/text 都鎖住,
+#               但 enabled/順序仍可改)。預留給之後若有「絕對不能亂改」的核心按鈕。
+#
+# external_links_settings 不併入這個結構 — 它本來就是動態 + 多語 + URL 配置,
+# 由原本邏輯繼續追加在後面。
+QUICK_REPLY_DEFAULTS = [
+    {"id": "help",        "type": "message",     "label": "📖 說明/Info",      "text": "/help",   "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "qry",         "type": "message",     "label": "🔍 儲區/Gudang",    "text": "/qry ",   "clipboard_text": "", "enabled": True,  "cmd_check": "qry",   "editable": True},
+    {"id": "wrong",       "type": "message",     "label": "❌ 標錯/Wrong",     "text": "/wrong ", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "skip",        "type": "message",     "label": "❌ 不翻我/Skip",    "text": "/skip",   "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "unskip",      "type": "message",     "label": "✅ 翻譯我/Unskip",  "text": "/unskip", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "pw1",         "type": "message",     "label": "🔑 班長密碼/PW1",   "text": "/pw1",    "clipboard_text": "", "enabled": True,  "cmd_check": "pw1",   "editable": True},
+    {"id": "pw2",         "type": "message",     "label": "🏭 儲運密碼/PW2",   "text": "/pw2",    "clipboard_text": "", "enabled": True,  "cmd_check": "pw2",   "editable": True},
+    {"id": "pkg",         "type": "message",     "label": "📦 包裝碼/Kemas",   "text": "/pkg ",   "clipboard_text": "", "enabled": True,  "cmd_check": "pkg",   "editable": True},
+    {"id": "scrap",       "type": "message",     "label": "🎨 廢料色/Warna",   "text": "/scrap",  "clipboard_text": "", "enabled": True,  "cmd_check": "scrap", "editable": True},
+    {"id": "camera",      "type": "camera",      "label": "📷 拍照/Foto",      "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
+    {"id": "clipboard",   "type": "clipboard",   "label": "📋 複製儲區指令",   "text": "",        "clipboard_text": "/qry ", "enabled": False, "cmd_check": None, "editable": True},
+    {"id": "camera_roll", "type": "camera_roll", "label": "🖼️ 相簿/Album",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
+    {"id": "location",    "type": "location",    "label": "📍 位置/Lokasi",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
+]
+
+# 執行階段儲存(初始化成預設值的深拷貝,避免後續修改污染常數)
+import copy as _qr_copy
+quick_reply_items_settings = _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
+
+_QR_VALID_TYPES = {"message", "camera", "camera_roll", "location", "clipboard"}
+
+def _qr_sanitize_item(raw, fallback=None):
+    """清洗單一 quick reply 項目,確保結構完整、欄位合理。
+    raw 任何欄位有問題就用 fallback 的值;fallback 也沒有就用安全預設。
+    回傳 dict 或 None(表示這項根本壞掉、應該丟棄)。
+    """
+    if not isinstance(raw, dict):
+        return None
+    fb = fallback or {}
+    item_id = str(raw.get("id", fb.get("id", ""))).strip()
+    if not item_id:
+        return None  # 沒 id 一律丟棄
+    item_type = str(raw.get("type", fb.get("type", "message"))).strip()
+    if item_type not in _QR_VALID_TYPES:
+        item_type = "message"
+    label = str(raw.get("label", fb.get("label", ""))).strip()[:20]  # LINE 20 字硬上限
+    text = str(raw.get("text", fb.get("text", "")))[:300]
+    clipboard_text = str(raw.get("clipboard_text", fb.get("clipboard_text", "")))[:1000]
+    enabled = bool(raw.get("enabled", fb.get("enabled", True)))
+    cmd_check_raw = raw.get("cmd_check", fb.get("cmd_check", None))
+    cmd_check = str(cmd_check_raw).strip() if cmd_check_raw else None
+    if cmd_check == "" or cmd_check == "None":
+        cmd_check = None
+    editable = bool(raw.get("editable", fb.get("editable", True)))
+    return {
+        "id": item_id,
+        "type": item_type,
+        "label": label,
+        "text": text,
+        "clipboard_text": clipboard_text,
+        "enabled": enabled,
+        "cmd_check": cmd_check,
+        "editable": editable,
+    }
+
+
+def _qr_merge_loaded(loaded_list):
+    """從磁碟讀進來的 list 跟 QUICK_REPLY_DEFAULTS 做 merge:
+    - 磁碟上有的 id → 用磁碟值(經 sanitize)
+    - 磁碟上沒有但預設有的 id → 補進來(放最後),這樣未來新增預設按鈕舊存檔也會自動長出來
+    - 磁碟上多出來的 id(使用者自己加的) → 保留
+    - 順序以磁碟 list 為主
+    回傳 sanitized list。
+    """
+    if not isinstance(loaded_list, list):
+        return _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
+    defaults_by_id = {d["id"]: d for d in QUICK_REPLY_DEFAULTS}
+    seen_ids = set()
+    result = []
+    for raw in loaded_list:
+        if not isinstance(raw, dict):
+            continue
+        rid = str(raw.get("id", "")).strip()
+        if not rid or rid in seen_ids:
+            continue
+        fb = defaults_by_id.get(rid)
+        item = _qr_sanitize_item(raw, fallback=fb)
+        if item:
+            result.append(item)
+            seen_ids.add(rid)
+    # 補上磁碟沒有的預設按鈕(版本升級時新增的)
+    for d in QUICK_REPLY_DEFAULTS:
+        if d["id"] not in seen_ids:
+            result.append(_qr_copy.deepcopy(d))
+    return result
+
+
 def _format_external_link_reply(key):
     """產生 /saran /absen 等 command 的回覆訊息文字。
 
@@ -11456,59 +11561,55 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
 
 
 def build_quick_reply(group_id=None):
-    """Build Quick Reply buttons for translation messages, respecting per-group command toggles."""
+    """Build Quick Reply buttons from quick_reply_items_settings (v3.11 完全後台化).
+    
+    - 順序 / 顯示 / label / text 全部從後台設定。
+    - cmd_check 欄位仍會檢查 is_cmd_enabled(),指令本身被關掉時按鈕也跳過。
+    - external_links_settings 仍動態追加在最後(這個是另一個獨立管理層)。
+    - LINE Quick Reply 硬上限 13 顆。
+    """
+    LINE_QR_HARD_LIMIT = 13
+    items = []
     try:
-        # Core buttons always shown
-        items = [
-            QuickReplyItem(action=MessageAction(label="📖 說明/Info", text="/help")),
-        ]
-        # Command-linked buttons: only show if that command is enabled for the group
-        if is_cmd_enabled(group_id, 'qry'):
-            items.append(QuickReplyItem(action=MessageAction(label="🔍 儲區/Gudang", text="/qry ")))
-        items.append(QuickReplyItem(action=MessageAction(label="❌ 標錯/Wrong", text="/wrong ")))
-        items.append(QuickReplyItem(action=MessageAction(label="❌ 不翻我/Skip", text="/skip")))
-        items.append(QuickReplyItem(action=MessageAction(label="✅ 翻譯我/Unskip", text="/unskip")))
-        if is_cmd_enabled(group_id, 'pw1'):
-            items.append(QuickReplyItem(action=MessageAction(label="🔑 班長密碼/PW1", text="/pw1")))
-        if is_cmd_enabled(group_id, 'pw2'):
-            items.append(QuickReplyItem(action=MessageAction(label="🏭 儲運密碼/PW2", text="/pw2")))
-        if is_cmd_enabled(group_id, 'pkg'):
-            items.append(QuickReplyItem(action=MessageAction(label="📦 包裝碼/Kemas", text="/pkg ")))
-        if is_cmd_enabled(group_id, 'scrap'):
-            items.append(QuickReplyItem(action=MessageAction(label="🎨 廢料色/Warna", text="/scrap")))
-        # Camera quick reply button (opens camera directly)
-        if MsgCameraAction and get_group_feature(group_id, 'camera_qr'):
+        for cfg in quick_reply_items_settings:
+            if len(items) >= LINE_QR_HARD_LIMIT:
+                logger.warning("[QuickReply] hit %d-item LINE limit at custom-items stage", LINE_QR_HARD_LIMIT)
+                break
+            if not cfg.get("enabled", True):
+                continue
+            cmd_check = cfg.get("cmd_check")
+            if cmd_check and not is_cmd_enabled(group_id, cmd_check):
+                continue
+            label = (cfg.get("label", "") or "").strip()[:20]
+            if not label:
+                continue
+            t = cfg.get("type", "message")
             try:
-                items.append(QuickReplyItem(action=MsgCameraAction(label="📷 拍照/Foto")))
-            except Exception:
-                pass
-        # Clipboard quick reply button (copy useful text)
-        if MsgClipboardAction and get_group_feature(group_id, 'clipboard_qr'):
-            try:
-                items.append(QuickReplyItem(action=MsgClipboardAction(
-                    label="📋 複製儲區指令",
-                    clipboard_text="/qry "
-                )))
-            except Exception:
-                pass
-        # Camera Roll quick reply button (opens photo album)
-        if MsgCameraRollAction and get_group_feature(group_id, 'camera_roll_qr'):
-            try:
-                items.append(QuickReplyItem(action=MsgCameraRollAction(label="🖼️ 相簿/Album")))
-            except Exception:
-                pass
-        # Location quick reply button (share location)
-        if MsgLocationAction and get_group_feature(group_id, 'location_qr'):
-            try:
-                items.append(QuickReplyItem(action=MsgLocationAction(label="📍 位置/Lokasi")))
-            except Exception:
-                pass
-        # URI-based buttons → 改成 MessageAction,讓使用者能複製網址 / 用外部瀏覽器開啟
-        # (LINE 的 URIAction 強制用內建瀏覽器,無法複製網址)
-        # v3.9.39+: label 與 url 改從 external_links_settings 動態讀取
-        # v3.9.39+ 修補:LINE Quick Reply 硬上限 13 顆,要留空間給既有 5 顆固定按鈕
-        # 若 items 已超過 12 就不再加(留 1 個 slot 給安全餘裕)
-        LINE_QR_HARD_LIMIT = 13
+                if t == "message":
+                    text = (cfg.get("text", "") or "").strip()
+                    if not text:
+                        continue
+                    items.append(QuickReplyItem(action=MessageAction(label=label, text=text)))
+                elif t == "camera":
+                    if not MsgCameraAction:
+                        continue
+                    items.append(QuickReplyItem(action=MsgCameraAction(label=label)))
+                elif t == "camera_roll":
+                    if not MsgCameraRollAction:
+                        continue
+                    items.append(QuickReplyItem(action=MsgCameraRollAction(label=label)))
+                elif t == "location":
+                    if not MsgLocationAction:
+                        continue
+                    items.append(QuickReplyItem(action=MsgLocationAction(label=label)))
+                elif t == "clipboard":
+                    if not MsgClipboardAction:
+                        continue
+                    clip = cfg.get("clipboard_text", "") or ""
+                    items.append(QuickReplyItem(action=MsgClipboardAction(label=label, clipboard_text=clip)))
+            except Exception as _bie:
+                logger.warning("[QuickReply] build item failed id=%s: %s", cfg.get("id"), _bie)
+        # external_links_settings → 動態追加(保留 v3.9.39+ 行為)
         try:
             for _link_key, _link_cfg in external_links_settings.items():
                 if len(items) >= LINE_QR_HARD_LIMIT:
@@ -11521,12 +11622,10 @@ def build_quick_reply(group_id=None):
                     continue
                 _btn_label_zh = _link_cfg.get("label_zh", "").strip()
                 _btn_label_id = _link_cfg.get("label_id", "").strip()
-                # 顯示中印尼雙語(走斜線),空值省略
                 if _btn_label_zh and _btn_label_id:
                     _full_label = f"{_btn_label_zh}/{_btn_label_id}"
                 else:
                     _full_label = _btn_label_zh or _btn_label_id or _link_key
-                # LINE 按鈕 label 最長 20 字,超過截斷
                 _full_label = _full_label[:20]
                 items.append(QuickReplyItem(action=MessageAction(
                     label=_full_label,
@@ -11534,8 +11633,11 @@ def build_quick_reply(group_id=None):
                 )))
         except Exception:
             pass
+        if not items:
+            return None
         return QuickReply(items=items)
-    except Exception:
+    except Exception as e:
+        logger.warning("build_quick_reply failed: %s", e)
         return None
 
 
@@ -11762,6 +11864,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('passwords')">密碼</div>
 <div class="tab" onclick="switchTab('scrap')">廢料色</div>
 <div class="tab" onclick="switchTab('extlinks')">外連</div>
+<div class="tab" onclick="switchTab('quickreply')">快捷鍵</div>
 <div class="tab" onclick="switchTab('insight')">數據</div>
 <div class="tab" onclick="switchTab('examples')">翻譯範例</div>
 <div class="tab" onclick="switchTab('forms')">表單</div>
@@ -11963,6 +12066,26 @@ label 是按鈕顯示文字、name 是回覆訊息抬頭、url 是要帶使用�
 <button class="btn btn-sm" onclick="extlinksReset()" style="background:#3a2a3a;color:#e0a0a0">↺ 重設預設</button>
 </div>
 <div id="extlinksMsg" style="margin-top:10px;font-size:13px"></div>
+</div>
+</div>
+
+<!-- Quick Reply Panel (v3.11 完全後台化) -->
+<div class="panel" id="panel-quickreply">
+<div class="card">
+<div style="font-weight:700;font-size:15px;margin-bottom:8px">⚡ Quick Reply 按鈕設定</div>
+<div class="card-sub" style="margin-bottom:14px">
+LINE 每則翻譯訊息底下的快捷按鈕。順序、開關、文字、觸發指令都可調。<br>
+LINE 硬上限 13 顆;超過會自動截斷尾端,外連按鈕(/saran、/absen 等)會在這之後追加。<br>
+類型:訊息=送固定文字、相機=直接開相機、相簿=開相簿、位置=分享位置、剪貼簿=複製文字。<br>
+若按鈕綁定的指令本身被群組關閉(cmd_check 欄位),該群組就不顯示這顆。
+</div>
+<div id="quickreplyList" style="display:flex;flex-direction:column;gap:8px"></div>
+<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+<button class="btn btn-primary btn-sm" onclick="qrAdd()">＋ 新增按鈕</button>
+<button class="btn btn-primary btn-sm" onclick="qrSaveAll()">💾 儲存全部變更</button>
+<button class="btn btn-sm" onclick="qrReset()" style="background:#3a2a3a;color:#e0a0a0">↺ 重設預設</button>
+</div>
+<div id="quickreplyMsg" style="margin-top:10px;font-size:13px"></div>
 </div>
 </div>
 
@@ -13132,7 +13255,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','insight','examples','forms','aiprovider','settings'];
+var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','settings'];
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -14078,6 +14201,7 @@ function switchTab(name){if(name==='aiprovider')aipLoadStatus();
   if(name==='passwords') loadPasswords();
   if(name==='scrap') loadScrap();
   if(name==='extlinks') loadExtlinks();
+  if(name==='quickreply') qrLoad();
   if(name==='insight') loadInsightTab();
   if(name==='examples'){loadExamples();loadTranslationLog();}
   if(name==='forms') loadFormsTab();
@@ -14522,7 +14646,7 @@ async function loadUsers(){
   var el=document.getElementById('usersList');
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
-  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
+  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
@@ -14886,6 +15010,169 @@ async function extlinksReset(){
   if(!confirm('重設為內建預設?會清掉所有自訂條目,還原 saran/absen 兩條。'))return;
   var d=await api('/external-links/reset','POST',{});
   if(d&&d.ok){toast('已重設');loadExtlinks()}
+}
+
+// ─── Quick Reply Tab (v3.11) ───
+// 用最樸實的純 vanilla JS:全 var + function,字串用 + 拼接,
+// 不用 template literal、不用箭頭函式,避開上次截圖那種 SyntaxError。
+var _qrCache=[]; // 當前畫面狀態,點上下/刪除直接改這個 array,按儲存才送到 server
+
+function qrEscape(s){
+  if(s==null)return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function qrLoad(){
+  var d=await api('/quick-reply/list');
+  if(!d||!d.items){
+    document.getElementById('quickreplyList').innerHTML='<div style="color:#a04444">載入失敗</div>';
+    return;
+  }
+  _qrCache=d.items.slice(); // shallow copy,避免直接改 server 回來的 reference
+  qrRender();
+}
+
+function qrRender(){
+  var box=document.getElementById('quickreplyList');
+  if(!_qrCache.length){
+    box.innerHTML='<div style="color:#8a8a9a">沒有按鈕。點下方「新增按鈕」加一條,或「重設預設」還原。</div>';
+    return;
+  }
+  var html='';
+  for(var i=0;i<_qrCache.length;i++){
+    var it=_qrCache[i];
+    var idStr=qrEscape(it.id);
+    var labelStr=qrEscape(it.label);
+    var textStr=qrEscape(it.text||'');
+    var clipStr=qrEscape(it.clipboard_text||'');
+    var cmdStr=qrEscape(it.cmd_check||'');
+    var typeStr=qrEscape(it.type||'message');
+    var enabled=it.enabled?'checked':'';
+    var bgColor=it.enabled?'#1a2a1a':'#2a1a1a';
+    var borderColor=it.enabled?'#3a5a3a':'#5a3a3a';
+    // 順序按鈕
+    var upDisabled=(i===0)?'disabled':'';
+    var downDisabled=(i===_qrCache.length-1)?'disabled':'';
+    html+='<div style="background:'+bgColor+';border:1px solid '+borderColor+';border-radius:8px;padding:10px">';
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    html+='<div style="font-size:11px;color:#8a8a9a;width:24px">#'+(i+1)+'</div>';
+    html+='<button class="btn btn-sm" '+upDisabled+' onclick="qrMove('+i+',-1)" style="padding:2px 8px;font-size:14px">▲</button>';
+    html+='<button class="btn btn-sm" '+downDisabled+' onclick="qrMove('+i+',1)" style="padding:2px 8px;font-size:14px">▼</button>';
+    html+='<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#ccc">';
+    html+='<input type="checkbox" data-i="'+i+'" data-f="enabled" '+enabled+' onchange="qrFieldChange(this)"> 啟用';
+    html+='</label>';
+    html+='<div style="font-size:11px;color:#666;margin-left:auto">id: '+idStr+'</div>';
+    html+='<button class="btn btn-sm" onclick="qrDel('+i+')" style="padding:2px 8px;background:#3a2a2a;color:#e08080">刪除</button>';
+    html+='</div>';
+    // 第二排:類型 + label
+    html+='<div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;margin-bottom:6px">';
+    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">類型</div>';
+    html+='<select data-i="'+i+'" data-f="type" onchange="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px">';
+    var TYPES=[['message','訊息'],['camera','相機'],['camera_roll','相簿'],['location','位置'],['clipboard','剪貼簿']];
+    for(var j=0;j<TYPES.length;j++){
+      var sel=(TYPES[j][0]===typeStr)?'selected':'';
+      html+='<option value="'+TYPES[j][0]+'" '+sel+'>'+TYPES[j][1]+'</option>';
+    }
+    html+='</select></div>';
+    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">按鈕文字(最長 20 字)</div>';
+    html+='<input type="text" data-i="'+i+'" data-f="label" value="'+labelStr+'" maxlength="20" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
+    html+='</div>';
+    // 第三排:type 相關欄位
+    if(typeStr==='message'){
+      html+='<div style="margin-bottom:6px"><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">送出文字(例 /qry )</div>';
+      html+='<input type="text" data-i="'+i+'" data-f="text" value="'+textStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
+    }else if(typeStr==='clipboard'){
+      html+='<div style="margin-bottom:6px"><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">複製到剪貼簿的文字</div>';
+      html+='<input type="text" data-i="'+i+'" data-f="clipboard_text" value="'+clipStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
+    }
+    // cmd_check 選填
+    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">綁定指令開關 cmd_check(選填,例 qry / pw1 / pkg / scrap;指令本身被關時這顆按鈕也跳過)</div>';
+    html+='<input type="text" data-i="'+i+'" data-f="cmd_check" value="'+cmdStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" placeholder="留空 = 不檢查" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
+    html+='</div>';
+  }
+  box.innerHTML=html;
+  // 上限提示
+  var msg=document.getElementById('quickreplyMsg');
+  if(msg){
+    var enabledCount=0;
+    for(var k=0;k<_qrCache.length;k++){if(_qrCache[k].enabled)enabledCount++;}
+    var color=(enabledCount>13)?'#e0a040':'#8a8a9a';
+    msg.innerHTML='<span style="color:'+color+'">目前啟用 '+enabledCount+' 顆 / LINE 上限 13 顆(超過會被截斷,外連按鈕還會追加在後面)</span>';
+  }
+}
+
+function qrFieldChange(el){
+  var i=parseInt(el.getAttribute('data-i'),10);
+  var f=el.getAttribute('data-f');
+  if(isNaN(i)||!_qrCache[i])return;
+  var v;
+  if(el.type==='checkbox'){v=el.checked;}
+  else{v=el.value;}
+  _qrCache[i][f]=v;
+  // type 改變要重畫(才能切顯 text vs clipboard_text 欄)
+  // enabled 改變要重畫(才能更新上限提示)
+  if(f==='type'||f==='enabled'){
+    qrRender();
+  }
+}
+
+function qrMove(i,delta){
+  var j=i+delta;
+  if(j<0||j>=_qrCache.length)return;
+  var tmp=_qrCache[i];
+  _qrCache[i]=_qrCache[j];
+  _qrCache[j]=tmp;
+  qrRender();
+}
+
+function qrDel(i){
+  if(!_qrCache[i])return;
+  if(!confirm('刪除「'+(_qrCache[i].label||_qrCache[i].id)+'」?(按儲存後才生效)'))return;
+  _qrCache.splice(i,1);
+  qrRender();
+}
+
+function qrAdd(){
+  var newId=prompt('輸入新按鈕的唯一 id(英數字,例 myaction):','');
+  if(!newId)return;
+  newId=newId.trim();
+  if(!/^[a-zA-Z0-9_]+$/.test(newId)){alert('id 只能用英數底線');return;}
+  for(var i=0;i<_qrCache.length;i++){
+    if(_qrCache[i].id===newId){alert('id 已存在');return;}
+  }
+  _qrCache.push({
+    id:newId,type:'message',label:'新按鈕',text:'/'+newId,
+    clipboard_text:'',enabled:true,cmd_check:null,editable:true
+  });
+  qrRender();
+}
+
+async function qrSaveAll(){
+  if(!_qrCache||!_qrCache.length){alert('沒有資料');return;}
+  // 簡單前端驗證:label 不能空、message 類 text 不能空
+  for(var i=0;i<_qrCache.length;i++){
+    var it=_qrCache[i];
+    if(!it.label||!String(it.label).trim()){alert('第 '+(i+1)+' 條 label 不能空');return;}
+    if(it.type==='message'&&(!it.text||!String(it.text).trim())){
+      alert('第 '+(i+1)+' 條(訊息類型)送出文字不能空');return;
+    }
+  }
+  var d=await api('/quick-reply/save','POST',{items:_qrCache});
+  if(d&&d.ok){
+    toast('已儲存 '+d.count+' 條');
+    qrLoad(); // reload 拿回 server 端 sanitize 後的版本
+  }else{
+    toast('儲存失敗'+(d&&d.error?': '+d.error:''));
+  }
+}
+
+async function qrReset(){
+  if(!confirm('重設為內建預設?所有自訂改動會消失。'))return;
+  var d=await api('/quick-reply/reset','POST',{});
+  if(d&&d.ok){
+    toast('已重設');
+    qrLoad();
+  }
 }
 
 // ─── Insight Tab ───
@@ -16598,6 +16885,7 @@ def _do_save_impl():
             "pw2_text": pw2_text,
             "scrap_text": scrap_text,
             "external_links_settings": external_links_settings,
+            "quick_reply_items_settings": quick_reply_items_settings,
             "custom_translation_examples": custom_translation_examples,
             "forms_data": forms_data,
             "forms_submissions": forms_submissions,
@@ -16653,6 +16941,7 @@ def load_settings():
     global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
     global external_links_settings
+    global quick_reply_items_settings
     global forms_data, forms_submissions
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
@@ -16928,6 +17217,13 @@ def load_settings():
                     "enabled":  bool(_ev.get("enabled", _existing.get("enabled", True))),
                 }
                 external_links_settings[_ek] = _merged
+        # v3.11: Quick Reply 完全後台化 — 從磁碟讀進來後跟預設 merge
+        if "quick_reply_items_settings" in data:
+            try:
+                quick_reply_items_settings = _qr_merge_loaded(data["quick_reply_items_settings"])
+            except Exception as _qle:
+                logger.warning("Quick reply settings load failed, using defaults: %s", _qle)
+                quick_reply_items_settings = _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
         if "custom_translation_examples" in data:
             custom_translation_examples = data["custom_translation_examples"]
         if "forms_data" in data:
@@ -19718,6 +20014,96 @@ def api_admin_external_links_reset():
     return jsonify({"ok": True, "links": [
         {"key": k, **v} for k, v in external_links_settings.items()
     ]})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Quick Reply 管理 API(v3.11 完全後台化)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/api/admin/quick-reply/list", methods=["GET"])
+def api_admin_quick_reply_list():
+    """列出當前所有 quick reply 按鈕(含順序)。"""
+    if not check_manager_access("settings"):
+        return jsonify({"error": "forbidden"}), 403
+    # 用 dict 包一層,前端比較好處理
+    return jsonify({
+        "items": list(quick_reply_items_settings),
+        "max": 13,
+        "types": ["message", "camera", "camera_roll", "location", "clipboard"],
+    })
+
+
+@app.route("/api/admin/quick-reply/save", methods=["POST"])
+def api_admin_quick_reply_save():
+    """整批覆寫 quick_reply_items_settings。
+    
+    Body: { "items": [ {id, type, label, text, clipboard_text, enabled, cmd_check}, ... ] }
+    順序以送進來的 list 為主。
+    """
+    global quick_reply_items_settings
+    if not check_manager_access("settings"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        return jsonify({"error": "items must be a list"}), 400
+    if len(raw_items) > 30:
+        # 上限保護:後台最多儲存 30 條,實際展示時還會被 LINE 13 顆限制再切
+        return jsonify({"error": "too many items (max 30)"}), 400
+    # sanitize 每一條;掉重複 id;保留順序
+    defaults_by_id = {d["id"]: d for d in QUICK_REPLY_DEFAULTS}
+    seen = set()
+    cleaned = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        rid = str(raw.get("id", "")).strip()
+        if not rid or rid in seen:
+            continue
+        item = _qr_sanitize_item(raw, fallback=defaults_by_id.get(rid))
+        if item:
+            cleaned.append(item)
+            seen.add(rid)
+    if not cleaned:
+        return jsonify({"error": "no valid items"}), 400
+    quick_reply_items_settings = cleaned
+    save_settings()
+    return jsonify({"ok": True, "items": list(quick_reply_items_settings), "count": len(quick_reply_items_settings)})
+
+
+@app.route("/api/admin/quick-reply/reset", methods=["POST"])
+def api_admin_quick_reply_reset():
+    """重設為內建預設清單。"""
+    global quick_reply_items_settings
+    if not check_manager_access("settings"):
+        return jsonify({"error": "forbidden"}), 403
+    quick_reply_items_settings = _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
+    save_settings()
+    return jsonify({"ok": True, "items": list(quick_reply_items_settings)})
+
+
+@app.route("/api/admin/quick-reply/add", methods=["POST"])
+def api_admin_quick_reply_add():
+    """新增一條 quick reply。Body: 一個 item dict(會被 sanitize)。"""
+    global quick_reply_items_settings
+    if not check_manager_access("settings"):
+        return jsonify({"error": "forbidden"}), 403
+    raw = request.get_json(silent=True) or {}
+    if not isinstance(raw, dict):
+        return jsonify({"error": "body must be a dict"}), 400
+    rid = str(raw.get("id", "")).strip()
+    if not rid:
+        return jsonify({"error": "id required"}), 400
+    if any(it["id"] == rid for it in quick_reply_items_settings):
+        return jsonify({"error": "id already exists"}), 400
+    if len(quick_reply_items_settings) >= 30:
+        return jsonify({"error": "too many items (max 30)"}), 400
+    item = _qr_sanitize_item(raw)
+    if not item:
+        return jsonify({"error": "invalid item"}), 400
+    quick_reply_items_settings.append(item)
+    save_settings()
+    return jsonify({"ok": True, "item": item, "items": list(quick_reply_items_settings)})
 
 
 
