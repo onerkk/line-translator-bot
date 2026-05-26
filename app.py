@@ -32,6 +32,13 @@ try:
     from linebot.v3.messaging import MarkMessagesAsReadRequest
 except ImportError:
     MarkMessagesAsReadRequest = None
+# v3.11: LINE 2025/11/05 釋出的 token-based mark-as-read。
+# 優點:只標 webhook event 帶的單一訊息為已讀,不會影響真人客服未讀提示。
+# 舊版 SDK 沒這個 class,要 try import,沒有就 fallback 到舊 chat_id 版。
+try:
+    from linebot.v3.messaging import MarkMessagesAsReadByTokenRequest
+except ImportError:
+    MarkMessagesAsReadByTokenRequest = None
 try:
     from linebot.v3.messaging import (
         DatetimePickerAction as MsgDatetimePickerAction,
@@ -8911,7 +8918,8 @@ def handle_message(event):
     # Show typing indicator while translating
     show_loading(group_id)
     if get_group_feature(group_id, 'mark_read'):
-        mark_as_read(group_id)
+        # v3.11: 帶 mark_as_read_token,新 SDK 會用 token-based 精準標讀
+        mark_as_read(group_id, mark_as_read_token=getattr(event.message, 'mark_as_read_token', None))
 
     # Protect LINE mentions before translation
     text_to_translate = text
@@ -9258,6 +9266,8 @@ def handle_image(event):
         "message_id": event.message.id,
         "reply_token": event.reply_token,
         "quote_token": getattr(event.message, 'quote_token', None),
+        # v3.11: token-based mark-as-read,給背景 thread 用
+        "mark_as_read_token": getattr(event.message, 'mark_as_read_token', None),
         "group_id": group_id,
         "user_id": user_id,
         "tgt": group_target_lang.get(group_id, "id"),
@@ -9300,7 +9310,8 @@ def _handle_image_background(ctx):
             _event_log_write("image_step_error", {"step": "show_loading", "err": str(_sle)[:200]})
         if ctx.get("mark_read_setting"):
             try:
-                mark_as_read(group_id)
+                # v3.11: 從 ctx 拿 token,新 SDK 走 token 路徑
+                mark_as_read(group_id, mark_as_read_token=ctx.get("mark_as_read_token"))
             except Exception:
                 pass
         
@@ -9771,7 +9782,8 @@ def handle_audio(event):
 
     show_loading(group_id)
     if get_group_feature(group_id, 'mark_read'):
-        mark_as_read(group_id)
+        # v3.11: 帶 mark_as_read_token
+        mark_as_read(group_id, mark_as_read_token=getattr(event.message, 'mark_as_read_token', None))
 
     # Download audio from LINE
     message_id = event.message.id
@@ -10493,14 +10505,34 @@ def show_loading(chat_id):
         pass
 
 
-def mark_as_read(chat_id):
-    """Mark messages as read in the chat (shows 'read' indicator)."""
-    if not MarkMessagesAsReadRequest:
-        return
+def mark_as_read(chat_id, mark_as_read_token=None):
+    """Mark messages as read (shows 'read' indicator).
+    
+    v3.11: 優先用 2025/11/05 釋出的 token-based API(只標單一訊息),
+    舊 SDK 沒有 MarkMessagesAsReadByTokenRequest 或 event 沒帶 token 時,
+    退回原本 chat_id 版本(標整個聊天)。
+    
+    需要 OA 後台「聊天」功能開啟才會有實際效果,
+    否則 LINE 平台會自動標讀,此 API 不必要也不會出錯。
+    """
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
-            api.mark_messages_as_read(MarkMessagesAsReadRequest(chat_id=chat_id))
+            # 路徑 A:有 token + 新 SDK → 用 token 版本(精準標單一訊息)
+            if mark_as_read_token and MarkMessagesAsReadByTokenRequest:
+                try:
+                    api.mark_messages_as_read_by_token(
+                        MarkMessagesAsReadByTokenRequest(mark_as_read_token=mark_as_read_token)
+                    )
+                    return
+                except AttributeError:
+                    # SDK class 有但 method 名不同(極舊版本中間態),fallback
+                    pass
+                except Exception as _te:
+                    logger.debug("mark_as_read_by_token failed, fallback to chat_id: %s", _te)
+            # 路徑 B:舊 chat_id 版本(整個聊天)
+            if MarkMessagesAsReadRequest and chat_id:
+                api.mark_messages_as_read(MarkMessagesAsReadRequest(chat_id=chat_id))
     except Exception as e:
         logger.debug("mark_as_read failed: %s", e)
 
