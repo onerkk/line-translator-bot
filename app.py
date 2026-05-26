@@ -3405,6 +3405,291 @@ def is_equipment_rusak_context(text):
     return False
 
 
+# ══════════════════════════════════════════════════════════════════════
+# v3.11 (2026-05-26): 工廠 ERP 站別/設備完整對照表
+# 用途:根治「站別作為位置 vs 站別作為動作」的語意誤翻
+#
+# 來源:歐那提供的 5 張 ERP 截圖,2026-05-26 完整 OCR 後確認
+# 場景:工人/班長講「再麻煩削皮優先放行」「I18 跳機」「研磨那邊」時,
+#       Claude 需要知道「削皮」「I18」「研磨」是站別/設備代碼,不是動作。
+#
+# 結構:
+#   STATION_NAMES        - 站別中文名 → (站號, 股別, 印尼譯名)
+#   STATION_CODES        - 設備代碼 → (代碼, 站號, 中文設備名, 印尼譯名)
+#   STATION_DEPARTMENTS  - 股別中文 → 印尼譯名
+# ══════════════════════════════════════════════════════════════════════
+
+# 股別(整個生產區的部門概念,工人講「研磨股那邊」用)
+STATION_DEPARTMENTS = {
+    "削皮股":   "Bagian Peeling",
+    "冷抽一股": "Bagian Cold Drawing 1",
+    "冷抽二股": "Bagian Cold Drawing 2",
+    "研磨股":   "Bagian Grinding",
+    "品質管理課": "Bagian QC",
+}
+
+# 站別中文名 → dict {station_no, department, id_name}
+# 注意:同站號可能有多個站名(同站別不同處理用途),反查時用站名為 key
+# 印尼譯名原則:沿用 prompt line 5189 已有的「Bagian + 工序英文」格式
+STATION_NAMES = {
+    # 削皮股
+    "直棒連續退火爐": {"no": 401, "dept": "削皮股", "id": "Tungku annealing kontinu batang lurus"},
+    "直棒批次退火爐": {"no": 401, "dept": "削皮股", "id": "Tungku annealing batch batang lurus"},
+    "電阻爐":         {"no": 411, "dept": "削皮股", "id": "Tungku resistansi"},
+    "矯直機":         {"no": 402, "dept": "削皮股", "id": "Mesin pelurus"},        # 多站共用,402/405
+    "粗矯機":         {"no": 402, "dept": "削皮股", "id": "Mesin pelurus kasar"},
+    "解捲機":         {"no": 403, "dept": "削皮股", "id": "Mesin uncoiling"},
+    "削皮機":         {"no": 404, "dept": "削皮股", "id": "Mesin peeling"},
+    "削皮":           {"no": 404, "dept": "削皮股", "id": "Stasiun peeling"},      # 簡稱
+    "削皮站":         {"no": 404, "dept": "削皮股", "id": "Stasiun peeling"},
+    "切斷機":         {"no": 450, "dept": "削皮股", "id": "Mesin pemotong"},       # 多站共用,450
+    "圓鋸機":         {"no": 450, "dept": "削皮股", "id": "Mesin gergaji bulat"},
+    "切斷":           {"no": 450, "dept": "削皮股", "id": "Stasiun pemotongan"},
+    "切斷站":         {"no": 450, "dept": "削皮股", "id": "Stasiun pemotongan"},
+    "軋光機":         {"no": 451, "dept": "削皮股", "id": "Mesin pressing/polish"},
+    "壓光":           {"no": 451, "dept": "削皮股", "id": "Stasiun press polish"},
+    "壓光站":         {"no": 451, "dept": "削皮股", "id": "Stasiun press polish"},
+    # 冷抽一股
+    "酸洗站":         {"no": 334, "dept": "冷抽一股", "id": "Stasiun pickling"},
+    "酸洗":           {"no": 334, "dept": "冷抽一股", "id": "Stasiun pickling"},
+    "口付機":         {"no": 405, "dept": "冷抽一股", "id": "Mesin pointing(口付)"},
+    "口付":           {"no": 405, "dept": "冷抽一股", "id": "Stasiun pointing"},
+    "口付站":         {"no": 405, "dept": "冷抽一股", "id": "Stasiun pointing"},
+    "噴砂機":         {"no": 406, "dept": "冷抽一股", "id": "Mesin sandblasting"},
+    "噴砂":           {"no": 406, "dept": "冷抽一股", "id": "Stasiun sandblasting"},
+    "噴砂站":         {"no": 406, "dept": "冷抽一股", "id": "Stasiun sandblasting"},
+    "冷抽機":         {"no": 410, "dept": "冷抽一股", "id": "Mesin cold drawing"}, # 多股共用,410/420/430
+    "冷抽":           {"no": 410, "dept": "冷抽一股", "id": "Stasiun cold drawing"},
+    "直棒清洗槽站":   {"no": 422, "dept": "冷抽一股", "id": "Tangki pencucian batang lurus"},
+    "異型矯直機":     {"no": 460, "dept": "冷抽一股", "id": "Mesin pelurus profil khusus"},
+    "異型拋光機":     {"no": 461, "dept": "冷抽一股", "id": "Mesin polishing profil khusus"},
+    # 冷抽二股
+    "盤元修磨站":     {"no": 407, "dept": "冷抽二股", "id": "Stasiun repair grinding wire rod"},
+    "盤元修磨":       {"no": 407, "dept": "冷抽二股", "id": "Stasiun repair grinding wire rod"},
+    "倒角機":         {"no": 421, "dept": "冷抽二股", "id": "Mesin chamfer"},
+    "倒角":           {"no": 421, "dept": "冷抽二股", "id": "Stasiun chamfer"},
+    "倒角站":         {"no": 421, "dept": "冷抽二股", "id": "Stasiun chamfer"},
+    "手動倒角":       {"no": 421, "dept": "冷抽二股", "id": "Chamfer manual"},
+    "直線式冷抽機":   {"no": 430, "dept": "冷抽二股", "id": "Mesin cold drawing linear"},
+    "倒立式冷抽機":   {"no": 430, "dept": "冷抽二股", "id": "Mesin cold drawing inverted"},
+    "細線光輝退火爐": {"no": 431, "dept": "冷抽二股", "id": "Tungku bright annealing kawat halus"},
+    "光輝退火":       {"no": 431, "dept": "冷抽二股", "id": "Stasiun bright annealing"},
+    # 研磨股
+    "清洗槽站":       {"no": 422, "dept": "研磨股", "id": "Stasiun tangki pencucian"},
+    "矯直切斷機":     {"no": 433, "dept": "研磨股", "id": "Mesin pelurus pemotong"},
+    "矯直切斷":       {"no": 433, "dept": "研磨股", "id": "Stasiun pelurus pemotong"},
+    "圓棒拋光機":     {"no": 452, "dept": "研磨股", "id": "Mesin polishing batang bulat"},
+    "圓棒拋光":       {"no": 452, "dept": "研磨股", "id": "Stasiun polishing batang bulat"},
+    "拋光":           {"no": 452, "dept": "研磨股", "id": "Stasiun polishing"},
+    "拋光站":         {"no": 452, "dept": "研磨股", "id": "Stasiun polishing"},
+    "研磨機":         {"no": 453, "dept": "研磨股", "id": "Mesin grinding"},
+    "研磨":           {"no": 453, "dept": "研磨股", "id": "Stasiun grinding"},
+    "研磨站":         {"no": 453, "dept": "研磨股", "id": "Stasiun grinding"},
+    "秤重站":         {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
+    "秤重":           {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
+    "委外":           {"no": 490, "dept": "研磨股", "id": "Outsource"},
+    # 品質管理課
+    "過電流":         {"no": 470, "dept": "品質管理課", "id": "Eddy Current(ET)"},
+    "超音波":         {"no": 470, "dept": "品質管理課", "id": "Ultrasonic(UT)"},
+    "檢驗站":         {"no": 480, "dept": "品質管理課", "id": "Stasiun inspeksi"},
+}
+
+# 設備代碼 → dict {code, station_no, equipment_zh, equipment_id}
+# 代碼用大寫 key 統一存,反查時 .upper()
+# 注意:有些代碼在多個股別重複(例如 I5/I15 同時是研磨機跟拋光機),
+# 此處以「使用頻率較高」或「第一次出現」為準,翻譯時還是要靠上下文。
+STATION_CODES = {
+    # 削皮股 401 退火爐
+    "TC":   {"station": 401, "zh": "直棒連續退火爐 TC",   "id": "Tungku annealing kontinu TC"},
+    "BA1":  {"station": 401, "zh": "直棒批次退火爐 BA1", "id": "Tungku annealing batch BA1"},
+    # 削皮股 411 電阻爐
+    "RF":   {"station": 411, "zh": "電阻爐 RF",            "id": "Tungku resistansi RF"},
+    # 削皮股 402 矯直/粗矯
+    "KVS":  {"station": 402, "zh": "矯直機 KVS",          "id": "Mesin pelurus KVS"},
+    "SM80": {"station": 402, "zh": "矯直機 SM80",         "id": "Mesin pelurus SM80"},
+    "SM165":{"station": 402, "zh": "粗矯機 SM165",        "id": "Mesin pelurus kasar SM165"},
+    # 削皮股 403 解捲
+    "NAV":  {"station": 403, "zh": "解捲機 NAV",          "id": "Mesin uncoiling NAV"},
+    # 削皮股 404 削皮機
+    "BTH60":{"station": 404, "zh": "削皮機 BTH60",        "id": "Mesin peeling BTH60"},
+    "S80":  {"station": 404, "zh": "削皮機 S80",          "id": "Mesin peeling S80"},
+    "PM160":{"station": 404, "zh": "削皮機 PM160",        "id": "Mesin peeling PM160"},
+    # 削皮股 450 切斷
+    "H11":  {"station": 450, "zh": "切斷機 H11",          "id": "Mesin pemotong H11"},
+    "H12":  {"station": 450, "zh": "圓鋸機 H12",          "id": "Mesin gergaji bulat H12"},
+    # 削皮股 451 軋光
+    "K4":   {"station": 451, "zh": "軋光機 K4",           "id": "Mesin press polish K4"},
+    "K5":   {"station": 451, "zh": "軋光機 K5",           "id": "Mesin press polish K5"},
+    "K8":   {"station": 451, "zh": "軋光機 K8",           "id": "Mesin press polish K8"},
+    # 冷抽一股 334 酸洗
+    "PB1":  {"station": 334, "zh": "酸洗站 PB1",          "id": "Stasiun pickling PB1"},
+    # 冷抽一股 405 口付
+    "A4":   {"station": 405, "zh": "口付機 A4",           "id": "Mesin pointing A4"},
+    "A6":   {"station": 405, "zh": "口付機 A6",           "id": "Mesin pointing A6"},
+    "A8":   {"station": 405, "zh": "口付機 A8",           "id": "Mesin pointing A8"},
+    "CF0":  {"station": 405, "zh": "口付機 CF0",          "id": "Mesin pointing CF0"},
+    "C2":   {"station": 405, "zh": "矯直機 C2",           "id": "Mesin pelurus C2"},
+    "C3-R": {"station": 405, "zh": "矯直機 C3-R",         "id": "Mesin pelurus C3-R"},
+    # 冷抽一股 406 噴砂
+    "CB0":  {"station": 406, "zh": "噴砂機 CB0",          "id": "Mesin sandblasting CB0"},
+    "CB1":  {"station": 406, "zh": "噴砂機 CB1",          "id": "Mesin sandblasting CB1"},
+    # 冷抽一股 410 冷抽機
+    "D2":   {"station": 410, "zh": "冷抽機 D2",           "id": "Mesin cold drawing D2"},
+    "D5":   {"station": 410, "zh": "冷抽機 D5",           "id": "Mesin cold drawing D5"},
+    "D6":   {"station": 410, "zh": "冷抽機 D6",           "id": "Mesin cold drawing D6"},
+    # 冷抽一股 422 直棒清洗槽
+    "DB":   {"station": 422, "zh": "直棒清洗槽站 DB",     "id": "Tangki pencucian batang lurus DB"},
+    # 冷抽一股 450 切斷
+    "H9":   {"station": 450, "zh": "切斷機 H9",           "id": "Mesin pemotong H9"},
+    "H10":  {"station": 450, "zh": "切斷機 H10",          "id": "Mesin pemotong H10"},
+    # 冷抽一股 460 異型矯直
+    "C1":   {"station": 460, "zh": "異型矯直機 C1",       "id": "Mesin pelurus profil C1"},
+    "C3-F": {"station": 460, "zh": "異型矯直機 C3-F",     "id": "Mesin pelurus profil C3-F"},
+    "C6":   {"station": 460, "zh": "異型矯直機 C6",       "id": "Mesin pelurus profil C6"},
+    "C7":   {"station": 460, "zh": "異型矯直機 C7",       "id": "Mesin pelurus profil C7"},
+    # 冷抽一股 461 異型拋光
+    "BF0":  {"station": 461, "zh": "異型拋光機 BF0",      "id": "Mesin polishing profil BF0"},
+    "BF1":  {"station": 461, "zh": "異型拋光機 BF1",      "id": "Mesin polishing profil BF1"},
+    "BF4":  {"station": 461, "zh": "異型拋光機 BF4",      "id": "Mesin polishing profil BF4"},
+    # 冷抽二股 407 盤元修磨
+    "BG":   {"station": 407, "zh": "盤元修磨站 BG",       "id": "Stasiun repair grinding wire rod BG"},
+    # 冷抽二股 420 冷抽機
+    "E1":   {"station": 420, "zh": "冷抽機 E1",           "id": "Mesin cold drawing E1"},
+    "E2":   {"station": 420, "zh": "冷抽機 E2",           "id": "Mesin cold drawing E2"},
+    "E3":   {"station": 420, "zh": "冷抽機 E3",           "id": "Mesin cold drawing E3"},
+    "E4":   {"station": 420, "zh": "冷抽機 E4",           "id": "Mesin cold drawing E4"},
+    "E5":   {"station": 420, "zh": "冷抽機 E5",           "id": "Mesin cold drawing E5"},
+    "E6":   {"station": 420, "zh": "冷抽機 E6",           "id": "Mesin cold drawing E6"},
+    "E7":   {"station": 420, "zh": "冷抽機 E7",           "id": "Mesin cold drawing E7"},
+    # 冷抽二股 421 倒角
+    "CH0":  {"station": 421, "zh": "倒角機 CH0",          "id": "Mesin chamfer CH0"},
+    "CHS":  {"station": 421, "zh": "倒角機 CHS",          "id": "Mesin chamfer CHS"},
+    "E1-1": {"station": 421, "zh": "E1倒角機",            "id": "Mesin chamfer E1-1"},
+    "E2-1": {"station": 421, "zh": "E2倒角機",            "id": "Mesin chamfer E2-1"},
+    "E3-1": {"station": 421, "zh": "E3倒角機",            "id": "Mesin chamfer E3-1"},
+    "E5-1": {"station": 421, "zh": "E5倒角機",            "id": "Mesin chamfer E5-1"},
+    "E6-1": {"station": 421, "zh": "E6倒角機",            "id": "Mesin chamfer E6-1"},
+    "E7-1": {"station": 421, "zh": "E7倒角機",            "id": "Mesin chamfer E7-1"},
+    # 冷抽二股 430 直/倒立式冷抽
+    "E10":  {"station": 430, "zh": "直線式冷抽機 E10",    "id": "Mesin cold drawing linear E10"},
+    "E11":  {"station": 430, "zh": "倒立式冷抽機 E11",    "id": "Mesin cold drawing inverted E11"},
+    # 冷抽二股 431 細線光輝退火
+    "B1":   {"station": 431, "zh": "細線光輝退火爐 B1",   "id": "Tungku bright annealing kawat halus B1"},
+    "B1B":  {"station": 431, "zh": "細線光輝退火爐 B1B",  "id": "Tungku bright annealing kawat halus B1B"},
+    # 研磨股 422 清洗槽
+    "EC":   {"station": 422, "zh": "清洗槽站 EC",         "id": "Stasiun tangki pencucian EC"},
+    # 研磨股 433 矯直切斷
+    "CYA":  {"station": 433, "zh": "矯直切斷機 CYA",      "id": "Mesin pelurus pemotong CYA"},
+    "CYB":  {"station": 433, "zh": "矯直切斷機 CYB",      "id": "Mesin pelurus pemotong CYB"},
+    # 研磨股 452 圓棒拋光
+    "BF2":  {"station": 452, "zh": "圓棒拋光機 BF2",      "id": "Mesin polishing batang bulat BF2"},
+    "BF3":  {"station": 452, "zh": "圓棒拋光機 BF3",      "id": "Mesin polishing batang bulat BF3"},
+    "BF5":  {"station": 452, "zh": "圓棒拋光機 BF5",      "id": "Mesin polishing batang bulat BF5"},
+    "I15":  {"station": 452, "zh": "圓棒拋光機 I15",      "id": "Mesin polishing batang bulat I15"},
+    "I16":  {"station": 452, "zh": "圓棒拋光機 I16",      "id": "Mesin polishing batang bulat I16"},
+    "I5":   {"station": 452, "zh": "圓棒拋光機 I5",       "id": "Mesin polishing batang bulat I5"},
+    "B6-P": {"station": 452, "zh": "E6拋光機 B6-P",       "id": "Mesin polishing E6 (B6-P)"},
+    "B7-P": {"station": 452, "zh": "E7拋光機 B7-P",       "id": "Mesin polishing E7 (B7-P)"},
+    # 研磨股 453 研磨機(centerless grinding)
+    "I01":  {"station": 453, "zh": "研磨機 I01",          "id": "Mesin grinding I01"},
+    "I02":  {"station": 453, "zh": "研磨機 I02",          "id": "Mesin grinding I02"},
+    "I6":   {"station": 453, "zh": "研磨機 I6",           "id": "Mesin grinding I6"},
+    "I9":   {"station": 453, "zh": "研磨機 I9",           "id": "Mesin grinding I9"},
+    "I13":  {"station": 453, "zh": "研磨機 I13",          "id": "Mesin grinding I13"},
+    "I17":  {"station": 453, "zh": "研磨機 I17",          "id": "Mesin grinding I17"},
+    "I18":  {"station": 453, "zh": "研磨機 I18",          "id": "Mesin grinding I18"},
+    "I19":  {"station": 453, "zh": "研磨機 I19",          "id": "Mesin grinding I19"},
+    "I20":  {"station": 453, "zh": "研磨機 I20",          "id": "Mesin grinding I20"},
+    "I21":  {"station": 453, "zh": "研磨機 I21",          "id": "Mesin grinding I21"},
+    # 品管 470
+    "ET-R": {"station": 470, "zh": "過電流 ET-R",         "id": "Eddy Current ET-R"},
+    "UT手": {"station": 470, "zh": "超音波 UT手",         "id": "Ultrasonic UT manual"},
+    "UT自": {"station": 470, "zh": "超音波 UT自",         "id": "Ultrasonic UT otomatis"},
+    "ETUT": {"station": 470, "zh": "過電流+超音波 ETUT",  "id": "Eddy Current + Ultrasonic ETUT"},
+}
+
+
+def detect_station_context(text):
+    """v3.11 (2026-05-26): 偵測訊息中出現的工廠站別/設備代碼,
+    回傳要注入翻譯 prompt 的「站別解析提示」字串。
+    沒命中任何站別/設備 → 回空字串(不污染 prompt)。
+    
+    偵測規則:
+    - 中文站名:必須是 STATION_NAMES 的 key 出現在 text 裡(不分大小寫不適用,中文無大小寫)
+    - 設備代碼:必須以 word boundary 出現(避免 H9 把「H9 號倉庫」誤判;
+              工廠 ID 慣例 H9/I18/E1 在前後通常有空白/標點/換行)
+    - 股別:STATION_DEPARTMENTS 的 key 出現在 text 裡
+    """
+    if not text:
+        return ""
+    found_stations = []   # [(站名, info), ...]
+    found_codes = []      # [(代碼, info), ...]
+    found_depts = []      # [(中文, 印尼), ...]
+    
+    # 1) 中文站名 — 直接 substring match(中文無 word boundary 概念)
+    #    為了避免「研磨機」也匹配到「研磨」,要按 key 長度由長到短排序,
+    #    並用 seen_spans 避免重疊命中。
+    seen_spans = []
+    for name in sorted(STATION_NAMES.keys(), key=len, reverse=True):
+        idx = text.find(name)
+        while idx >= 0:
+            span = (idx, idx + len(name))
+            # 檢查是否跟已命中重疊
+            overlap = False
+            for s, e in seen_spans:
+                if not (span[1] <= s or span[0] >= e):
+                    overlap = True
+                    break
+            if not overlap:
+                seen_spans.append(span)
+                found_stations.append((name, STATION_NAMES[name]))
+                break  # 同站名只取第一次出現
+            idx = text.find(name, idx + 1)
+    
+    # 2) 設備代碼 — 用 word boundary(英數代碼)
+    #    text 不轉小寫,因為設備代碼是大寫(I18/BF2/E1),小寫版可能是別的意思(e1 在印尼文裡可能是其他)
+    for code in STATION_CODES.keys():
+        # 注意:UT手/UT自 含中文,不能用標準 \b
+        if re.search(r"[\u4e00-\u9fff]", code):
+            if code in text:
+                found_codes.append((code, STATION_CODES[code]))
+        else:
+            # 純英數代碼:前後不能是英數或 _,但可以是中文/空白/標點/開頭結尾
+            pat = r"(?<![A-Za-z0-9_])" + re.escape(code) + r"(?![A-Za-z0-9_])"
+            if re.search(pat, text):
+                found_codes.append((code, STATION_CODES[code]))
+    
+    # 3) 股別中文
+    for dept, dept_id in STATION_DEPARTMENTS.items():
+        if dept in text:
+            found_depts.append((dept, dept_id))
+    
+    # 都沒命中 → 回空(不污染 prompt)
+    if not found_stations and not found_codes and not found_depts:
+        return ""
+    
+    lines = ["【工廠 ERP 站別/設備識別(必須遵守)】"]
+    if found_depts:
+        lines.append("檢測到股別(department):")
+        for zh, idn in found_depts:
+            lines.append(f"  - {zh} → {idn}")
+    if found_stations:
+        lines.append("檢測到站別/工序(這些是料件當前位置或目的站,不是要做的動作):")
+        for name, info in found_stations:
+            lines.append(f"  - {name}(站號 {info['no']},{info['dept']}) → {info['id']}")
+    if found_codes:
+        lines.append("檢測到設備代碼(工廠 ERP 系統識別碼,不要翻譯成料件 ID 或音譯):")
+        for code, info in found_codes:
+            lines.append(f"  - {code}(站號 {info['station']}) → 中文「{info['zh']}」/ 印尼「{info['id']}」")
+    lines.append("規則:")
+    lines.append("  (a) 「再麻煩 X 優先放行/過帳/退庫」中的 X 是站別 → 翻成「stasiun X」,不是動作。")
+    lines.append("  (b) 「X 那邊」「X 站」「X 機」中的 X 是位置 → 翻成「di stasiun X」/「mesin X」。")
+    lines.append("  (c) 設備代碼(如 I18、BF2、E6)永遠保留原樣,不翻譯不音譯,加上中文/印尼設備名輔助理解。")
+    lines.append("  (d) 「放行」「過帳」「退庫」是 ERP 操作:放行=release data ke stasiun berikutnya,")
+    lines.append("      過帳=input data produksi ke sistem,退庫=kembalikan ke gudang。")
+    return "\n".join(lines) + "\n"
+
+
 def _clean_factory_id(text):
     t = (text or "").strip().lower()
     t = re.sub(r"[。．.！!？?，,：:；;()（）\[\]{}]+", " ", t)
@@ -5167,7 +5452,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # ★ v3.4 CoD:對 ID→ZH 注入高風險詞字典
             + ((detect_id_zh_risk_terms(text) + " ") if (id_zh_cod_enabled and src == "id" and tgt == "zh") else "")
             # ★ v3.4 CoT:對 ID→ZH 注入二階段思考指令
-            + ((build_id_zh_cot_instruction(text) + " ") if (id_zh_cot_enabled and src == "id" and tgt == "zh") else "") +
+            + ((build_id_zh_cot_instruction(text) + " ") if (id_zh_cot_enabled and src == "id" and tgt == "zh") else "")
+            # ★ v3.11:工廠 ERP 站別/設備識別 — 兩個方向都注入,只在命中時才有內容
+            #         解決「再麻煩削皮優先放行」「I18 跳機」這類站別/代碼誤翻
+            + (detect_station_context(text) + " " if detect_station_context(text) else "")
+            +
             "4. Indonesian slang: gak=tidak, udah=sudah, gimana=bagaimana, bgt=banget, org=orang, yg=yang, tdk=tidak, dg=dengan, krn=karena, blm=belum, hrs=harus, bs=bisa, lg=lagi, gw=saya, lu=kamu. "
             "5. TAIWANESE MANDARIN COLLOQUIAL (very important): "
             "乾/干=aduh/astaga, 靠=astaga/waduh, 幹=sial/buset, 傻眼=gak percaya, 扯/誇張=keterlaluan, 笑死=ngakak, 氣死=kesel banget, 累死=capek banget, "
@@ -5226,6 +5515,41 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "translate rusak as 損壞. If the subject is a piece of MATERIAL being processed, translate as 損傷. "
             "When in doubt and the message implies the thing cannot function (tida berfungsi / tida bisa dipakai), "
             "use 損壞 — because functional failure is equipment-level, not surface-level. "
+            # v3.11: 工廠 ERP 站別/設備識別常駐規則(2026-05-26「再麻煩削皮優先放行」案例根治)
+            # 這條規則一定要 Claude 永遠記住,因為它牽涉到「同一個中文詞,既可以是動作也可以是站別位置」
+            # 的語意決策,字典命中(detect_station_context)只是強化提示,規則本身要常駐。
+            "6.8 ERP STATION NAMES AS LOCATIONS (CRITICAL for factory shift-leader instructions): "
+            "Factory station names in Mandarin can refer to EITHER a process action OR a physical station location. "
+            "In shift-leader messages, they almost always mean LOCATION (where material currently is, or destination station). "
+            "Process names that frequently act as STATION LOCATIONS: "
+            "削皮(peeling), 矯直(straightening), 拋光/拋光站(polishing), 倒角(chamfer), 切斷(cutting), "
+            "酸洗(pickling), 退火(annealing), 噴砂(sandblasting), 研磨(grinding), 口付(pointing), 軋光/壓光(press polish), "
+            "解捲(uncoiling), 冷抽(cold drawing), 矯直切斷(straightening-cutting), 盤元修磨(wire rod repair grinding), "
+            "秤重(weighing), 委外(outsource), 過電流/ET, 超音波/UT, 檢驗(inspection). "
+            "DECISION RULES (apply in order): "
+            "(1) Pattern 『[V] [STATION] [優先/趕快/麻煩] [放行/過帳/退庫/領料]』 → [STATION] is a station location, "
+            "    NOT an action. Example: 『削皮優先放行』 = ask the peeling station to release(放行) priority, "
+            "    translate as 『tolong stasiun peeling release datanya sebagai prioritas』, "
+            "    NOT 『tolong peeling prioritas, di-pass dulu』 (this is wrong — it sounds like 'please peel and pass'). "
+            "(2) Pattern 『X 那邊/X 站/X 機/X 區』 → X is a location, translate as 『di stasiun X / mesin X / area X』. "
+            "(3) Pattern 『送去 X / 進 X / 從 X 出來 / X 在跑』 → X is a station location, translate with directional prepositions. "
+            "(4) Pattern 『要做 X / 在做 X / X 完了沒』 → X CAN be either action or station, judge by context; "
+            "    if X is preceded by quantity (e.g.『這兩捆要削皮』) it leans toward ACTION; "
+            "    if X has no object and stands alone (e.g.『削皮優先』『削皮那邊』) it leans toward STATION. "
+            "(5) ERP equipment codes (I18, BF2, CYA, E6, PM160, etc.) are NEVER translated or romanized; keep them VERBATIM. "
+            "    They are factory ERP identifiers, not material IDs or random letters. "
+            "(6) ERP operation verbs and their fixed translations: "
+            "    放行 → release data ke stasiun berikutnya (NOT 『di-pass』『lewat』『let pass』); "
+            "    過帳 → input data produksi ke sistem (book to ERP, NOT 『catat akun』); "
+            "    退庫 → kembalikan ke gudang (return to warehouse); "
+            "    退庫拆包 → keluarkan dari gudang bongkar packing untuk dibagi ulang; "
+            "    領料/發料 → issue material (NOT 『ambil bahan』 in informal sense, this is a system operation); "
+            "    轉用 → dialihkan untuk order lain. "
+            "EXAMPLE FOR PATTERN (1) — the 2026-05-26 case that motivated this rule: "
+            "  Source: 『@小麥 這兩捆再麻煩削皮優先放行』 "
+            "  Correct: 『@小麥 dua bundel ini ada di stasiun peeling, "
+            "  tolong stasiun peeling release datanya ke stasiun berikutnya sebagai prioritas』 "
+            "  Wrong (don't do this): 『dua bundel ini tolong peeling prioritas, di-pass dulu』 (lost ERP semantics). "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams.\n"
             "</critical_rules>\n"
