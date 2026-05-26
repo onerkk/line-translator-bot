@@ -3351,6 +3351,12 @@ EQUIPMENT_RUSAK_SUBJECTS = {
     "pipa", "kabel", "kabelnya",
     "pemoles", "gerinda", "plc",
     "operasi", "operasional",  # 「操作盤 panel operasi」
+    # v3.11: 安全設備類主詞(原本漏掉導致「pelindung satu rusak」被翻成「護罩損傷」)
+    # 這幾個詞 100% 是設備不是料件,rusak 必須翻「損壞」
+    "pelindung", "pelindungnya",        # 護罩 / 安全防護罩
+    "penutup", "penutupnya",            # 防護蓋 / 護蓋
+    "pintu",                             # 檢修門 / 安全門
+    "interlock",                         # 安全聯鎖裝置(本來就在 prompt 列出)
 }
 
 EQUIPMENT_FAILURE_PHRASES = {
@@ -5202,6 +5208,24 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "巡視設備 → Inspeksi peralatan; "
             "記過 → Catatan pelanggaran; "
             "抓到 → Ketahuan (NOT 'kena tangkap' which means arrested by police); "
+            # v3.11: ID→ZH 中文選詞 — 損壞 vs 損傷 區分(2026-05-26 截圖案例)
+            # 印尼文 rusak 涵蓋很廣,但中文「損壞」跟「損傷」在工廠語境意思不同,選錯會誤導主管判讀:
+            #   損壞 = 設備/工具/防護裝置故障、不能用、要修要換
+            #   損傷 = 料件/棒材表面缺陷、可能還能修補、不是設備本身壞
+            # 工人傳設備故障描述被翻成「損傷」會讓主管以為只是表面磨損還能撐,延誤修護
+            "6.7 ZH WORD CHOICE — 損壞 vs 損傷 (CRITICAL for safety/equipment context): "
+            "When translating ID→ZH, distinguish based on what is broken: "
+            "(a) EQUIPMENT/SAFETY DEVICES being broken/non-functional → use 『損壞』 or 『故障』, NEVER 『損傷』. "
+            "Examples: pelindung rusak=護罩損壞 (NOT 損傷), penutup rusak=護蓋損壞, alat rusak=工具損壞, "
+            "mesin rusak=機台損壞/故障, panel rusak=操作盤損壞, sensor rusak=感測器損壞, "
+            "tombol rusak=按鈕損壞, pintu rusak=檢修門損壞, interlock rusak=連鎖裝置故障. "
+            "(b) MATERIAL/PRODUCT surface defects → use 『損傷』 (preserves the nuance that it's repairable). "
+            "Examples: barang rusak di belakang=料件後端損傷, batang rusak=棒材損傷, "
+            "bagian depan rusak=前端損傷, permukaan rusak=表面損傷. "
+            "Decision rule: if the subject is a piece of EQUIPMENT (especially safety guards/covers/doors/panels), "
+            "translate rusak as 損壞. If the subject is a piece of MATERIAL being processed, translate as 損傷. "
+            "When in doubt and the message implies the thing cannot function (tida berfungsi / tida bisa dipakai), "
+            "use 損壞 — because functional failure is equipment-level, not surface-level. "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams.\n"
             "</critical_rules>\n"
