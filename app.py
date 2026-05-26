@@ -4714,7 +4714,12 @@ def factory_semantic_translate_zh_id(text):
 
 def build_factory_context_hint_zh_id(text):
     src = text or ""
-    if not any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別"]):
+    # v3.11(2026-05-26): 加上「放了/放好了/都放了」這類 ERP 放行口語化簡寫的觸發詞,
+    # 工廠裡這幾個是「資料已放行到下一站」的縮略,不是「東西放下了」。
+    triggers = ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑",
+                "工單", "包裝", "站別", "放了", "放好了", "都放了", "已放",
+                "放行", "過帳", "退庫"]
+    if not any(k in src for k in triggers):
         return ""
     return (
         "【繁中→印尼工廠語義提示】這是台灣不鏽鋼棒材工廠群組訊息，不可逐字翻。"
@@ -4723,6 +4728,13 @@ def build_factory_context_hint_zh_id(text):
         "偷跑=未照正常流程先拿走/先做/先跑，譯為 dibawa/diproses duluan tanpa konfirmasi，不是偷竊；"
         "反應=回報/通報，譯為 lapor/beri tahu，不是 bereaksi；"
         "被吃掉=痕跡被清洗/加工後消失或被蓋掉，譯為 hilang/tertutup，不是 tertelan。"
+        # v3.11: 「放了」家族(ERP 放行口語縮寫)
+        "放了/放好了/都放了/已放/放完了=ERP 系統放行(release data ke stasiun berikutnya)的口語縮寫，"
+        "在工廠群組裡幾乎都是這個意思，"
+        "譯為 sudah di-release ke stasiun berikutnya 或 sudah lulus untuk dilanjutkan，"
+        "**不要**譯為 sudah di-taruh / sudah dilepas / sudah ditempatkan(這些是字面物理放置，會誤導印尼工人)；"
+        "放行=release data ke stasiun berikutnya；過帳=input data produksi ke sistem；"
+        "退庫=kembalikan ke gudang。"
     )
 
 
@@ -5545,6 +5557,22 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "    退庫拆包 → keluarkan dari gudang bongkar packing untuk dibagi ulang; "
             "    領料/發料 → issue material (NOT 『ambil bahan』 in informal sense, this is a system operation); "
             "    轉用 → dialihkan untuk order lain. "
+            # v3.11 (2026-05-26): 「放了」家族 — ERP 放行的口語縮寫
+            "(7) ERP RELEASE COLLOQUIAL SHORTHAND (CRITICAL — 2026-05-26 reply-message case): "
+            "When a worker replies (especially with @mention) using 『放了』『都放了』『放好了』『已放』『放完了』 "
+            "WITHOUT explicitly saying 『放行』, they almost ALWAYS mean ERP release (放行), "
+            "NOT physically placing something down. This is factory shorthand. "
+            "Translate as 『sudah di-release ke stasiun berikutnya』 or 『sudah lulus untuk dilanjutkan』, "
+            "NEVER as 『sudah di-taruh / sudah dilepas / sudah ditempatkan』 (those are literal physical placement). "
+            "Example for the 2026-05-26 case: "
+            "  Source (a reply): 『@鄭黑輪 兩把都放了』 "
+            "  Context (prior message): 鄭黑輪 had asked the peeling station to release(放行) two bundles. "
+            "  Correct: 『@鄭黑輪 dua bundel sudah di-release ke stasiun berikutnya』 "
+            "  Wrong (don't do this): 『dua bundel sudah di-taruh』 (this means 'two bundles have been placed down' — lost ERP semantics). "
+            "If there's NO prior factory ERP context AND the message is about physical objects "
+            "(e.g.『工具放了』『箱子放下了』), then literal placement IS correct — but those cases need explicit "
+            "physical-object subject or non-factory context to overrule this default. In a factory group chat, "
+            "default to ERP release semantics unless physical context is clear. "
             "EXAMPLE FOR PATTERN (1) — the 2026-05-26 case that motivated this rule: "
             "  Source: 『@小麥 這兩捆再麻煩削皮優先放行』 "
             "  Correct: 『@小麥 dua bundel ini ada di stasiun peeling, "
@@ -22241,7 +22269,11 @@ group_conv_settings = {}
 # 預設保留最近 4 對對話 = 8 條 messages。可在後台 per-group 調整。
 CONV_BUFFER_DEFAULT_TURNS = 4
 CONV_BUFFER_MAX_TURNS = 8         # 上限,避免 token 爆炸
-CONV_BUFFER_TTL_SECONDS = 600     # 10 分鐘無新訊息就清掉 (對話脫節了)
+CONV_BUFFER_TTL_SECONDS = 3600    # v3.11(2026-05-26): 10 分鐘改 1 小時
+                                  # 原因:工廠對話節奏較慢,班長/組長回覆常隔 20-40 分鐘,
+                                  # 10 分鐘 TTL 會把上下文清掉,導致「兩把都放了」這種
+                                  # 接話訊息失去「放行」語意(誤譯成 sudah di-taruh)。
+                                  # 1 小時內主題不易跨大跳,副作用低。
 CONV_BUFFER_MAX_LEN_PER_MSG = 200 # 單條訊息超過 200 字會截斷,避免大段文章吃掉 cache
 
 
