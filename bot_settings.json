@@ -1,7 +1,7 @@
 {
   "group_settings": {},
   "group_target_lang": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
+    "Cd188e1adc7792e407c90f3fa78850316": "id"
   },
   "group_img_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
@@ -118,13 +118,12 @@
         "skip",
         "names",
         "storage",
-        "groups",
-        "glossary"
+        "groups"
       ]
     }
   },
   "bot_stats": {
-    "text_translations": 115,
+    "text_translations": 116,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -203,7 +202,7 @@
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
   "group_welcome_settings": {},
-  "flex_enabled": false,
+  "flex_enabled": true,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
