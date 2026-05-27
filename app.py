@@ -14742,9 +14742,24 @@ async function loadGroups(){
 function toggleFeat(idx,keyIdx){
   var g=_groupList[idx];if(!g)return;
   var key=FEAT_KEYS[keyIdx];
-  var cur=g[key];
-  var body={group_id:g.id};body[key]=!cur;
-  api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+  var prev=g[key];
+  var nv=!prev;
+  // v3.11: 樂觀更新 — 先改本地畫面,POST 失敗才 rollback
+  // 不再呼叫 loadGroups() 重抓,避免 multi-worker GitHub-write race condition
+  // (POST 進 Worker A 但 GET 可能進 Worker B → 看到舊狀態 → 看似沒生效)
+  g[key]=nv;
+  loadGroupsLocal();
+  var body={group_id:g.id};body[key]=nv;
+  api('/groups/settings','POST',body).then(function(d){
+    if(d){
+      toast('已更新');
+    }else{
+      // rollback
+      g[key]=prev;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
 }
 
 // v3.10: 多語選擇 panel HTML 建構
@@ -14945,21 +14960,44 @@ function toggleFlexV2Key(idx, key){
 }
 
 // v3.9.10: 圖片模式 3 段循環(開 → 詢問 → 關 → 開 ...)
+// v3.11: 改樂觀更新,避免 multi-worker race
 function cycleImageMode(idx){
   var g=_groupList[idx];if(!g)return;
+  // 記錄舊狀態給 rollback
+  var prev_on=g.image_on;
+  var prev_ask=g.image_ask_mode;
+  // 計算下一段狀態
   var body={group_id:g.id};
+  var newOn, newAsk;
   if(g.image_on){
     // 目前=自動翻 → 切到詢問模式
     body.image_ask_mode=true;
+    newOn=false; newAsk=true;
   }else if(g.image_ask_mode){
     // 目前=詢問 → 切到完全關閉
     body.image_on=false;
     body.image_ask_mode=false;
+    newOn=false; newAsk=false;
   }else{
     // 目前=關閉 → 切到自動翻
     body.image_on=true;
+    newOn=true; newAsk=false;
   }
-  api('/groups/settings','POST',body).then(function(d){if(d){toast('已更新');loadGroups()}});
+  // 樂觀更新
+  g.image_on=newOn;
+  g.image_ask_mode=newAsk;
+  loadGroupsLocal();
+  api('/groups/settings','POST',body).then(function(d){
+    if(d){
+      toast('已更新');
+    }else{
+      // rollback
+      g.image_on=prev_on;
+      g.image_ask_mode=prev_ask;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
 }
 var CMD_DEFS=[["pw1","🔑密碼1"],["pw2","🏭密碼2"],["pkg","📦包裝"],["scrap","🎨廢料"],["qry","🔍儲區"],["notice","📢公告"]];
 function buildCmdBadges(g,idx){
@@ -14974,7 +15012,21 @@ function buildCmdBadges(g,idx){
 }
 function toggleCmd(idx,key,val){
   var g=_groupList[idx];if(!g)return;
-  api('/groups/settings','POST',{group_id:g.id,cmd_toggle:key,cmd_val:val}).then(function(d){if(d){toast('已更新');loadGroups()}});
+  // v3.11: 樂觀更新,避免 multi-worker race
+  if(!g.cmd_enabled)g.cmd_enabled={};
+  var prev=g.cmd_enabled[key];
+  g.cmd_enabled[key]=val;
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,cmd_toggle:key,cmd_val:val}).then(function(d){
+    if(d){
+      toast('已更新');
+    }else{
+      // rollback
+      g.cmd_enabled[key]=prev;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
 }
 function leaveGroup(idx){
   var g=_groupList[idx];if(!g)return;
@@ -15084,7 +15136,17 @@ async function loadUsers(){
   var d=await api(path);
   if(!d)return;
   _allUsers=d.users||[];
+  _renderUsersList();
+}
+
+// v3.11: 純畫面重繪不打 API,給樂觀更新用
+function loadUsersLocal(){
+  _renderUsersList();
+}
+
+function _renderUsersList(){
   var el=document.getElementById('usersList');
+  if(!el)return;
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
   var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
@@ -15119,8 +15181,20 @@ async function loadUsers(){
 }
 function toggleAdmin(idx,on){
   var u=_allUsers[idx];if(!u)return;
+  // v3.11: 樂觀更新,避免 renderUsersList → loadUsers 重抓的 multi-worker race
+  var prev=u.is_admin;
+  u.is_admin=on;
+  // 只重畫本地不重抓 — 用 loadUsersLocal 取代 renderUsersList(它其實是 loadUsers 的別名,會打 GET)
+  loadUsersLocal();
   api('/users/admin','POST',{user_id:u.user_id,is_admin:on}).then(function(d){
-    if(d){toast(on?'已設為管理員':'已取消管理員');u.is_admin=on;renderUsersList()}
+    if(d){
+      toast(on?'已設為管理員':'已取消管理員');
+    }else{
+      // rollback
+      u.is_admin=prev;
+      loadUsersLocal();
+      toast('❌ 設定失敗');
+    }
   });
 }
 function saveUserEmail(el){
@@ -15136,18 +15210,27 @@ function toggleUserTab(el){
   var u=null;
   for(var i=0;i<_allUsers.length;i++){if(_allUsers[i].user_id===uid){u=_allUsers[i];break}}
   if(!u)return;
+  // v3.11: 記錄 prev 給 rollback,失敗時還原 + 還原 checkbox 狀態
+  var prev_tabs=(u.allowed_tabs||[]).slice();
+  var prev_checked=!el.checked; // checkbox 點完後 el.checked 已是新值,prev 是反向
   var tabs=u.allowed_tabs||[];
   if(el.checked){if(tabs.indexOf(tab)<0)tabs.push(tab)}
   else{tabs=tabs.filter(function(t){return t!==tab})}
   u.allowed_tabs=tabs;
   api('/users/tabs','POST',{user_id:uid,allowed_tabs:tabs}).then(function(d){
-    if(d)toast('已更新');
+    if(d){
+      toast('已更新');
+    }else{
+      // rollback
+      u.allowed_tabs=prev_tabs;
+      el.checked=prev_checked;
+      toast('❌ 設定失敗');
+    }
   });
 }
+// v3.11: renderUsersList 改成純本地重畫(舊版會打 GET 造成 race)
 function renderUsersList(){
-  var el=document.getElementById('usersListContainer');
-  if(!el)return;
-  loadUsers();
+  loadUsersLocal();
 }
 
 var _protectedNames=[];
@@ -16248,10 +16331,23 @@ async function submitCreateForm(){
   }
 }
 
+var _formsList=[]; // v3.11: 快取目前 forms,供樂觀更新
+
 async function loadFormsTab(){
   var r=await api('/forms');
   if(!r){document.getElementById('formsList').innerHTML='<div style="text-align:center;padding:20px;color:#f04747">載入失敗</div>';return}
-  var forms=r.forms||[];
+  _formsList=r.forms||[];
+  _renderFormsList();
+  document.getElementById('formDetailArea').style.display='none';
+}
+
+// v3.11: 純畫面重繪(本地),不打 API
+function loadFormsTabLocal(){
+  _renderFormsList();
+}
+
+function _renderFormsList(){
+  var forms=_formsList||[];
   var html='';
   if(forms.length===0){html='<div style="text-align:center;padding:20px;color:#8a8a9a">尚無表單</div>'}
   for(var i=0;i<forms.length;i++){
@@ -16275,12 +16371,25 @@ async function loadFormsTab(){
     html+='</div></div>';
   }
   document.getElementById('formsList').innerHTML=html;
-  document.getElementById('formDetailArea').style.display='none';
 }
 
 async function toggleFormStatus(fid,status){
-  await api('/forms/update','POST',{form_id:fid,status:status});
-  loadFormsTab();
+  // v3.11: 樂觀更新,避免 loadFormsTab GET 重抓的 multi-worker race
+  var f=null;
+  for(var i=0;i<_formsList.length;i++){if(_formsList[i].id===fid){f=_formsList[i];break}}
+  if(!f){toast('❌ 找不到表單');return}
+  var prev=f.status;
+  f.status=status;
+  loadFormsTabLocal();
+  var d=await api('/forms/update','POST',{form_id:fid,status:status});
+  if(d){
+    toast(status==='active'?'已啟用':'已停用');
+  }else{
+    // rollback
+    f.status=prev;
+    loadFormsTabLocal();
+    toast('❌ 設定失敗');
+  }
 }
 
 async function deleteForm(fid){
