@@ -91,11 +91,16 @@
         "settings",
         "forms",
         "packaging",
-        "storage",
         "examples",
         "skip",
         "groups",
-        "overview"
+        "overview",
+        "users",
+        "glossary",
+        "quickreply",
+        "aiprovider",
+        "external_links",
+        "insight"
       ],
       "google_email": "onerkk@gmail.com"
     },
@@ -117,7 +122,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 116,
+    "text_translations": 115,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -196,7 +201,7 @@
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
   "group_welcome_settings": {},
-  "flex_enabled": true,
+  "flex_enabled": false,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
