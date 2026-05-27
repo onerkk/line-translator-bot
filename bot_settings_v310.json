@@ -1,9 +1,5 @@
 {
   "group_target_langs": {
-    "Cd188e1adc7792e407c90f3fa78850316": [
-      "id",
-      "en"
-    ],
     "Cf5e2ea027bb3db193677e7ef3b51adea": [
       "id",
       "en"
@@ -11,11 +7,14 @@
   },
   "group_tts_settings": {},
   "group_flex_v2": {
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true
-    },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true
+      "carousel": true,
+      "hero": true,
+      "span": true
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "hero": true,
+      "span": true
     }
   },
   "group_conv_settings": {}
