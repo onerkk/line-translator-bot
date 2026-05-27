@@ -5479,6 +5479,23 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "X到不行/X得要死/X到爆=X banget, 怎麼這麼X=kok X banget, 有夠X=X banget, "
             "ㄏㄏ=haha, QQ=sedih, 3Q=terima kasih, GG=tamat, XD=haha, @@=bingung. "
             "6. Target Traditional Chinese = Taiwan style, not mainland. "
+            # v3.11 (2026-05-26): 6.4 OUTPUT FORMAT — 禁止 thinking/reasoning tag
+            # 09:02 截圖案例:Claude 因 6.7+6.8 規則複雜,自發在輸出加 <thinking>...</thinking>
+            # 包思考過程,結果整段 thinking 連同譯文被送進 LINE 群組,工人看到內部分析過程。
+            # 此規則放在輸出格式段,優先級高於下方各語意規則,治本。
+            "6.4 OUTPUT FORMAT (ABSOLUTE — applies to ALL rules below): "
+            "Output ONLY the final translation text. "
+            "DO NOT include any of the following in your output: "
+            "  - <thinking>...</thinking> blocks "
+            "  - <thought>, <reasoning>, <analysis>, <scratchpad>, <internal> tags "
+            "  - 『分析:』『思考:』『推理:』『讓我想想』『首先...其次...』meta-commentary "
+            "  - Numbered analysis steps before the translation "
+            "  - Explanations of why you chose certain words "
+            "If you need to reason internally to apply rules 6.7/6.8, do it SILENTLY. "
+            "The user sees ONLY your final output, so anything other than the translation "
+            "directly pollutes the chat interface and confuses non-technical factory workers. "
+            "RIGHT: just output 『dua bundel sudah di-release ke stasiun berikutnya』 "
+            "WRONG: output 『<thinking>分析:1. 放了=ERP 放行 2. 兩把=dua bundel...</thinking> dua bundel sudah di-release』 "
             "6.5 PARAGRAPH STRUCTURE (CRITICAL — most users complain about this when translating images): "
             "**You MUST preserve the original paragraph structure EXACTLY.** "
             "Rules: "
@@ -6387,6 +6404,41 @@ def translate_with_retry(func, text, src, tgt, max_retries=2):
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════
+# v3.11 (2026-05-26): <thinking> tag 過濾
+# 問題:當 sys_prompt 規則太複雜時(例如 6.7+6.8 七條子規則),Claude/GPT 會
+# 自發在 text response 開頭加 <thinking>...</thinking> 包思考過程,
+# 後續才是真正譯文。app.py 沒過濾就會把整段 thinking 連同譯文一起送進 LINE 群,
+# 工人看到一堆內部分析過程,介面被嚴重污染(2026-05-26 截圖 09:02 案例)。
+#
+# 此 helper 用正則移除 <thinking>...</thinking> 區塊(含換行),
+# 同時也移除 <thought>、<reasoning>、<analysis> 等常見變體 tag,
+# 並 strip 前後空白。在 translate() 的 final return 前統一處理。
+# ══════════════════════════════════════════════════════════════════════
+_THINKING_TAG_PATTERN = re.compile(
+    r"<\s*(thinking|thought|reasoning|analysis|scratchpad|internal)\s*>.*?</\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+# 沒有閉合的 <thinking> 開頭也要清(罕見但有可能,例如 Claude 被截斷時)
+_THINKING_OPEN_PATTERN = re.compile(
+    r"<\s*(thinking|thought|reasoning|analysis|scratchpad|internal)\s*>.*",
+    re.IGNORECASE | re.DOTALL,
+)
+
+def _strip_thinking_tags(text):
+    """移除 <thinking>...</thinking> 等內部思考 tag,只保留真正譯文。
+    若整個 text 都是 thinking(罕見) 則回傳空字串供上層 fallback。
+    """
+    if not text or not isinstance(text, str):
+        return text
+    cleaned = _THINKING_TAG_PATTERN.sub("", text)
+    # 處理沒閉合的開頭 tag — 但要先確認譯文部分還在
+    if "<thinking" in cleaned.lower() or "<thought" in cleaned.lower():
+        # 嘗試移除沒閉合的尾段
+        cleaned = _THINKING_OPEN_PATTERN.sub("", cleaned)
+    return cleaned.strip()
+
+
 def translate(text, src, tgt):
     """Public translate wrapper — v3.9.39 業界全面技術 hybrid pipeline
     
@@ -6621,6 +6673,19 @@ def translate(text, src, tgt):
                 delattr(_tl, _attr)
         except Exception:
             pass
+    
+    # v3.11 (2026-05-26): 過濾 LLM 可能輸出的 <thinking>...</thinking> 內部思考 tag
+    # 截圖 09:02 案例:6.7+6.8 規則太複雜激發 Claude 自發加 thinking,污染翻譯介面。
+    # strip 後若空了(極罕見),保留原 result 給下游 fallback,避免回空字串。
+    try:
+        _stripped = _strip_thinking_tags(result)
+        if _stripped:
+            result = _stripped
+        else:
+            logger.warning("[Thinking] strip 後 result 為空,保留原 result(可能整段都是 thinking): %r",
+                           (result or "")[:200])
+    except Exception as _ste:
+        logger.warning("[Thinking] strip exception: %s", _ste)
     
     return result
 
