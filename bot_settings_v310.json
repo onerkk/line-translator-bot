@@ -1,6 +1,6 @@
 {
   "group_target_langs": {
-    "Cd188e1adc7792e407c90f3fa78850316": [
+    "Cf5e2ea027bb3db193677e7ef3b51adea": [
       "id",
       "en"
     ]
@@ -8,12 +8,6 @@
   "group_tts_settings": {},
   "group_flex_v2": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
       "span": true
     }
   },
