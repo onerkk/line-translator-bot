@@ -5482,7 +5482,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.11 (2026-05-26): 6.4 OUTPUT FORMAT — 禁止 thinking/reasoning tag
             # 09:02 截圖案例:Claude 因 6.7+6.8 規則複雜,自發在輸出加 <thinking>...</thinking>
             # 包思考過程,結果整段 thinking 連同譯文被送進 LINE 群組,工人看到內部分析過程。
-            # 此規則放在輸出格式段,優先級高於下方各語意規則,治本。
+            # 18:16 截圖案例:Claude 規避 <thinking> 禁令後改用『(This appears to be...)』
+            # 括號注釋取代譯文,規則再次被洩漏。本版補完整禁令。
             "6.4 OUTPUT FORMAT (ABSOLUTE — applies to ALL rules below): "
             "Output ONLY the final translation text. "
             "DO NOT include any of the following in your output: "
@@ -5491,11 +5492,36 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "  - 『分析:』『思考:』『推理:』『讓我想想』『首先...其次...』meta-commentary "
             "  - Numbered analysis steps before the translation "
             "  - Explanations of why you chose certain words "
+            # v3.11 第二輪補強:禁止用括號注釋取代譯文
+            "  - Parenthesized explanations like 『(This appears to be...)』『(這是設備代碼...)』"
+            "『(This is an equipment code, not translated)』『(因此保留原樣)』— these ARE meta-commentary "
+            "  - Any output that starts with 『This appears to be』『This is a/an』『這是』『看起來是』"
+            "『It seems』『The message contains』 followed by an explanation instead of a translation "
+            "  - Any output containing 『not translated』『kept verbatim』『preserved as-is』"
+            "『equipment code identifier』『ERP identifier』as the BODY of the output "
             "If you need to reason internally to apply rules 6.7/6.8, do it SILENTLY. "
             "The user sees ONLY your final output, so anything other than the translation "
             "directly pollutes the chat interface and confuses non-technical factory workers. "
+            # v3.11 第二輪:純設備代碼訊息的處理 — 直接鏡像原文,不解釋
+            "SPECIAL CASE — Pure equipment code messages (e.g.『BF 2』『BF 3 i 16』『I5/i15』『E6』『PM160』"
+            "『CYA』『K8』— messages consisting ONLY of equipment codes / model numbers / station codes "
+            "with possibly some whitespace, slashes, or short connectors like 'i'/'/'/'-'): "
+            "Output the EXACT SAME text as the input, character-for-character, UNCHANGED. "
+            "DO NOT add explanations like 『(equipment code)』『(設備代碼,不翻譯)』『(kept as-is)』. "
+            "DO NOT add the target-language flag emoji prefix. "
+            "DO NOT add any commentary. "
+            "Just echo the original text back. "
+            "Examples: "
+            "  Input: 『BF 2』      → Output: 『BF 2』 "
+            "  Input: 『BF 3 i 16』  → Output: 『BF 3 i 16』 "
+            "  Input: 『I5/i15』     → Output: 『I5/i15』 "
+            "  Input: 『PM160 出問題』→ Output: regular translation (this has prose context, NOT pure code) "
+            "If unsure whether a message is 『pure equipment code』 or 『code in context』, look for any "
+            "Chinese/Indonesian/English words beyond connectors — if there's prose, translate normally; "
+            "if it's just codes + whitespace + simple connectors, echo verbatim. "
             "RIGHT: just output 『dua bundel sudah di-release ke stasiun berikutnya』 "
             "WRONG: output 『<thinking>分析:1. 放了=ERP 放行 2. 兩把=dua bundel...</thinking> dua bundel sudah di-release』 "
+            "WRONG: output 『(This appears to be an equipment code identifier, not translated)』 instead of the translation "
             "6.5 PARAGRAPH STRUCTURE (CRITICAL — most users complain about this when translating images): "
             "**You MUST preserve the original paragraph structure EXACTLY.** "
             "Rules: "
@@ -6439,6 +6465,178 @@ def _strip_thinking_tags(text):
     return cleaned.strip()
 
 
+# ══════════════════════════════════════════════════════════════════════
+# v3.11 (2026-05-26 18:16 截圖案例): 純設備代碼訊息 + 元注釋洩漏防護
+#
+# 情境 A:純設備代碼訊息(BF 2 / BF 3 i 16 / I5/i15 / E6 / PM160 / CYA / K8)
+#   → 工廠工人傳這種訊息時,通常是引用某設備代碼讓同事知道,
+#     不需要翻譯;翻譯反而會讓 Claude 困惑(因為沒有可翻的內容,
+#     就會自發加「(This appears to be an equipment code, not translated)」)
+#   → 直接判定為「不需翻譯」,讓上層 bypass(完全不送 LINE 訊息)
+#
+# 情境 B:Claude 還是輸出了元注釋(prompt 規則被洩漏)
+#   → 偵測譯文是否以括號注釋開頭、含「appears to be / not translated /
+#     equipment code / identifier / kept verbatim」等元注釋關鍵字
+#   → 命中時回傳 None,讓上層判定譯文不可用,fallback 原文
+# ══════════════════════════════════════════════════════════════════════
+
+# 純設備代碼判定:用 token-based 邏輯
+# 把訊息用空白/斜線切成 token,每個 token 必須符合「代碼長相」:
+#   - 純大寫字母 2+ 字 (CYA, ETUT, BF, RF)
+#   - 含數字 (PM160, I18, E6, BF2, K8)
+#   - 含破折號連接 (C3-R, B6-P, ET-R, E1-1)
+#   - 單字元的數字連接詞 (i / x / 等)
+#   - 純數字 (16, 2, 3)
+_CODE_TOKEN_PATTERN = re.compile(
+    r"^("
+    r"[A-Z]{2,}"                  # 純大寫 2+ 字
+    r"|[A-Za-z]*[0-9]+[A-Za-z0-9]*"  # 含數字的英數混合
+    r"|[A-Za-z0-9]+-[A-Za-z0-9]+"  # 破折號連接
+    r"|i|x"                       # 單字元連接詞 (小寫 i / x)
+    r"|[0-9]+"                    # 純數字
+    r")$"
+)
+
+def _is_pure_equipment_code(text):
+    """判斷訊息是否為純設備代碼/型號(沒有任何翻譯需求的純識別碼)。
+    
+    True 範例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8', 'C3-R'
+    False 範例:'PM160 出問題', 'BF 2 rusak', '請查 I18', 'hello world'
+    
+    演算法:tokenize(用空白/斜線分),每個 token 必須符合 _CODE_TOKEN_PATTERN。
+    任一 token 不符合 → 視為含真實內容,不是純代碼。
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    if not t:
+        return False
+    # 太長 通常含真實內容
+    if len(t) > 30:
+        return False
+    # 用空白+斜線+底線切 token (斜線是「I5/i15」這種,底線少見但保險)
+    tokens = re.split(r"[\s/_]+", t)
+    tokens = [tk for tk in tokens if tk]  # 移除空 token
+    if not tokens:
+        return False
+    # 至少要有 1 個「明顯像代碼」的 token (含數字 / 純大寫 / 破折號)
+    has_strong_code_token = False
+    for tk in tokens:
+        if not _CODE_TOKEN_PATTERN.match(tk):
+            return False
+        # 是否「明顯」是代碼(不是單字元連接詞)
+        if (len(tk) >= 2 and (
+            any(c.isdigit() for c in tk) or
+            tk.isupper() or
+            "-" in tk
+        )):
+            has_strong_code_token = True
+    return has_strong_code_token
+
+
+# 元注釋洩漏偵測:譯文整段是括號注釋 / 解釋句而非翻譯
+_META_COMMENTARY_OPENERS = (
+    "this appears to be",
+    "this is a",
+    "this is an",
+    "this message",
+    "the message contains",
+    "the input is",
+    "it seems",
+    "it appears",
+    "looks like",
+    "這是",
+    "看起來是",
+    "看起來像",
+    "這似乎是",
+    "這個訊息",
+    "這段訊息",
+)
+_META_COMMENTARY_KEYWORDS = (
+    "not translated",
+    "kept verbatim",
+    "kept as-is",
+    "preserved as",
+    "equipment code",
+    "equipment identifier",
+    "machine code",
+    "machine id",
+    "erp identifier",
+    "factory reference",
+    "設備代碼",
+    "保留原樣",
+    "不翻譯",
+    "不需翻譯",
+    "原文保留",
+    "識別碼",
+)
+
+def _is_meta_commentary_leak(text):
+    """判斷譯文是否為元注釋洩漏(Claude 輸出解釋而非翻譯)。
+    
+    特徵:
+    - 含元注釋關鍵字(『not translated』『設備代碼』『kept verbatim』)
+    - 含括號注釋區塊 (paragraph) 且內含元注釋特徵
+    - 開頭(去掉旗幟前綴)是元注釋開場白
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip()
+    if not t:
+        return False
+    t_lower = t.lower()
+    
+    # A. 全文搜尋元注釋關鍵字 — 命中即洩漏(最強訊號)
+    # 這些字串只會在 Claude 解釋時出現,正常翻譯不會包含
+    for kw in _META_COMMENTARY_KEYWORDS:
+        if kw in t_lower:
+            return True
+    
+    # B. 整段以括號包起來 — 提取括號內,看是否有元注釋開場白
+    paren_match = re.match(
+        r"^[\s🇨🇳🇹🇼🇮🇩🇹🇭🇮🇳🇻🇳🇯🇵🇰🇷🇬🇧⚠️\u200d\ufe0f]*[\(（](.+)[\)）][\s]*$",
+        t, re.DOTALL
+    )
+    if paren_match:
+        inner = paren_match.group(1).lower().lstrip()
+        for opener in _META_COMMENTARY_OPENERS:
+            if inner.startswith(opener):
+                return True
+    
+    # C. 有換行 + 後續段落以元注釋開頭 (截圖原案例)
+    # 例:「🇹🇼 BF 3 i 16\n\n(This appears to be...)」
+    # 找換行後的每一段
+    paragraphs = re.split(r"\n\s*\n|\n", t)
+    for para in paragraphs:
+        para_l = para.strip().lower()
+        if not para_l:
+            continue
+        # 該段是否以括號包起來 + 含元注釋開場白
+        para_paren = re.match(r"^[\(（](.+)[\)）][\s]*$", para.strip(), re.DOTALL)
+        if para_paren:
+            inner = para_paren.group(1).lower().lstrip()
+            for opener in _META_COMMENTARY_OPENERS:
+                if inner.startswith(opener):
+                    return True
+        # 該段直接以元注釋開場白開頭
+        for opener in _META_COMMENTARY_OPENERS:
+            if para_l.startswith(opener):
+                return True
+    
+    # D. 譯文(去掉旗幟前綴)開頭是元注釋
+    content_start = 0
+    for i, ch in enumerate(t):
+        if ch.isalnum() or ch in "(（":
+            content_start = i
+            break
+    content = t[content_start:].lower()
+    for opener in _META_COMMENTARY_OPENERS:
+        if content.startswith(opener):
+            return True
+    
+    return False
+
+
 def translate(text, src, tgt):
     """Public translate wrapper — v3.9.39 業界全面技術 hybrid pipeline
     
@@ -6456,6 +6654,22 @@ def translate(text, src, tgt):
       - 翻譯成功 → store back lexical TM + vector TM(累積資產)
     """
     _gid_for_tm = getattr(_tl, 'group_id', '') or ''
+    
+    # v3.11 (2026-05-26 18:16 截圖): 純設備代碼訊息直接 bypass,不送 LLM
+    # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
+    # 工人傳這種訊息通常只是讓同事知道某設備代碼,沒有翻譯需求。
+    # 送 LLM 會讓 Claude 自發加元注釋(『這是設備代碼,不翻譯』之類),污染群組。
+    # 直接 return None → 群組路徑會靜默(line 9689),完全不送 LINE。
+    if _is_pure_equipment_code(text):
+        logger.info("[Pipeline] pure equipment code bypass: %r", text[:60])
+        try:
+            _event_log_write("pure_code_bypass", {
+                "group_id": _gid_for_tm,
+                "text": text[:100],
+            })
+        except Exception:
+            pass
+        return None
     
     # ─── 0. Phase O: Language Auto-Detection ───
     # 偵測訊息實際語言,若與宣告的 src 不符,記到 _tl 供日誌(不主動修正避免破壞使用者設定)
@@ -6686,6 +6900,25 @@ def translate(text, src, tgt):
                            (result or "")[:200])
     except Exception as _ste:
         logger.warning("[Thinking] strip exception: %s", _ste)
+    
+    # v3.11 (2026-05-26 18:16 截圖): 元注釋洩漏偵測
+    # 若 Claude 輸出『(This appears to be...)』『這是設備代碼,不翻譯』之類元注釋,
+    # 視同翻譯失敗,return None 讓上層走 fallback(群組:靜默 / DM:友善失敗訊息)。
+    # 這是 prompt 規則 6.4 的最後一道防線 — Claude 規避規則時這層擋住。
+    try:
+        if _is_meta_commentary_leak(result):
+            logger.warning("[MetaLeak] 偵測到元注釋洩漏,放棄此次翻譯: %r", result[:200])
+            try:
+                _event_log_write("meta_commentary_leak", {
+                    "group_id": _gid_for_tm,
+                    "src_text": text[:100],
+                    "leaked": result[:200],
+                })
+            except Exception:
+                pass
+            return None
+    except Exception as _mle:
+        logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
     
     return result
 
@@ -22899,14 +23132,8 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
                            "displayText": "🔊 重唸 / Putar ulang"},
             })
 
-    # 標錯 — 用 MessageAction 直接發 "/wrong" 訊息
-    # ("/wrong" 不帶內容 = 標最新翻譯為錯,Bot 內已支援 mark_only 模式)
-    buttons.append({
-        "type": "button", "style": "secondary", "height": "sm",
-        "action": {"type": "message",
-                   "label": "👎 翻錯",
-                   "text": "/wrong"},
-    })
+    # v3.11 (2026-05-26): 拿掉「👎 翻錯」按鈕(歐那要求)
+    # 工人仍可用打字「/wrong」標錯,後端 mark_only 模式照常運作。
 
     # 最多 4 顆,排成 2x2 或 vertical:
     # - 1 顆: 單一橫排
@@ -23184,17 +23411,9 @@ def build_multilang_flex_v2(original, translations, src_lang="zh",
             }
             body_contents.append(sub_box)
 
-        # 按鈕
-        if v2["buttons"]:
-            # multi 模式下,只給「標錯」按鈕(查儲區/重唸沒意義因為不知道針對哪個語言)
-            body_contents.append({
-                "type": "box", "layout": "horizontal",
-                "margin": "md", "spacing": "sm",
-                "contents": [{
-                    "type": "button", "style": "secondary", "height": "sm",
-                    "action": {"type": "message", "label": "👎 翻錯", "text": "/wrong"},
-                }],
-            })
+        # v3.11 (2026-05-26): 拿掉「👎 翻錯」按鈕(歐那要求)
+        # 多語模式下整段按鈕區塊都拿掉(原本只有這一顆翻錯按鈕,沒按鈕就不加 box)
+        # 工人仍可用打字「/wrong」標錯。
 
         # Header
         header_block = None
