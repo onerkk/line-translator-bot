@@ -120,7 +120,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 112,
+    "text_translations": 116,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -199,7 +199,7 @@
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
   "group_welcome_settings": {},
-  "flex_enabled": false,
+  "flex_enabled": true,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
@@ -287,6 +287,156 @@
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
   "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
+  "external_links_settings": {
+    "saran": {
+      "label_zh": "💡 提案",
+      "label_id": "Saran",
+      "name_zh": "提案系統",
+      "name_id": "Sistem Saran",
+      "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList",
+      "enabled": true
+    },
+    "absen": {
+      "label_zh": "📅 差勤",
+      "label_id": "Absen",
+      "name_zh": "差勤系統",
+      "name_id": "Sistem Absen",
+      "url": "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS",
+      "enabled": true
+    }
+  },
+  "quick_reply_items_settings": [
+    {
+      "id": "help",
+      "type": "message",
+      "label": "📖 說明/Info",
+      "text": "/help",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "qry",
+      "type": "message",
+      "label": "🔍 儲區/Gudang",
+      "text": "/qry ",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": "qry",
+      "editable": true
+    },
+    {
+      "id": "wrong",
+      "type": "message",
+      "label": "❌ 標錯/Wrong",
+      "text": "/wrong ",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "skip",
+      "type": "message",
+      "label": "❌ 不翻我/Skip",
+      "text": "/skip",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "unskip",
+      "type": "message",
+      "label": "✅ 翻譯我/Unskip",
+      "text": "/unskip",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "pw1",
+      "type": "message",
+      "label": "🔑 班長密碼/PW1",
+      "text": "/pw1",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": "pw1",
+      "editable": true
+    },
+    {
+      "id": "pw2",
+      "type": "message",
+      "label": "🏭 儲運密碼/PW2",
+      "text": "/pw2",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": "pw2",
+      "editable": true
+    },
+    {
+      "id": "pkg",
+      "type": "message",
+      "label": "📦 包裝碼/Kemas",
+      "text": "/pkg ",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": "pkg",
+      "editable": true
+    },
+    {
+      "id": "scrap",
+      "type": "message",
+      "label": "🎨 廢料色/Warna",
+      "text": "/scrap",
+      "clipboard_text": "",
+      "enabled": true,
+      "cmd_check": "scrap",
+      "editable": true
+    },
+    {
+      "id": "camera",
+      "type": "camera",
+      "label": "📷 拍照/Foto",
+      "text": "",
+      "clipboard_text": "",
+      "enabled": false,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "clipboard",
+      "type": "clipboard",
+      "label": "📋 複製儲區指令",
+      "text": "",
+      "clipboard_text": "/qry ",
+      "enabled": false,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "camera_roll",
+      "type": "camera_roll",
+      "label": "🖼️ 相簿/Album",
+      "text": "",
+      "clipboard_text": "",
+      "enabled": false,
+      "cmd_check": null,
+      "editable": true
+    },
+    {
+      "id": "location",
+      "type": "location",
+      "label": "📍 位置/Lokasi",
+      "text": "",
+      "clipboard_text": "",
+      "enabled": false,
+      "cmd_check": null,
+      "editable": true
+    }
+  ],
   "custom_translation_examples": [
     {
       "zh": "Micro",
