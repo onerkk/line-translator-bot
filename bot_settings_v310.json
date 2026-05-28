@@ -1,9 +1,15 @@
 {
-  "group_target_langs": {},
+  "group_target_langs": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": [
+      "id",
+      "en"
+    ]
+  },
   "group_tts_settings": {},
   "group_flex_v2": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "hero": true
+      "carousel": true,
+      "span": true
     }
   },
   "group_conv_settings": {}
