@@ -9,7 +9,8 @@
   "group_flex_v2": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "span": true,
-      "carousel": true
+      "carousel": true,
+      "hero": true
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "span": true
