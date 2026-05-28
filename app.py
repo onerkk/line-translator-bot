@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.53-dual-ai-real-cost"
+VERSION = "v3.9.54-fangxing-context-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -4938,7 +4938,9 @@ def build_factory_context_hint_zh_id(text):
         "在工廠群組裡幾乎都是這個意思，"
         "譯為 sudah di-release ke stasiun berikutnya 或 sudah lulus untuk dilanjutkan，"
         "**不要**譯為 sudah di-taruh / sudah dilepas / sudah ditempatkan(這些是字面物理放置，會誤導印尼工人)；"
-        "放行=release data ke stasiun berikutnya；過帳=input data produksi ke sistem；"
+        "放行(站別/物料放行)=release data ke stasiun berikutnya；"
+        "放行(品保/QC放行,如「品保放行/品保有放行/QC放行」)=QC release / di-release oleh QC(不加 data)；"
+        "過帳=input data produksi ke sistem；"
         "退庫=kembalikan ke gudang。"
     )
 
@@ -5018,7 +5020,9 @@ ZH_TO_ID_HARD = {
     "光輝退火": "bright annealing",
     "退火爐": "tungku annealing",
     "過帳": "input data ke sistem",
-    "放行": "release data",
+    # v3.9.54: 「放行」從硬替換移除 — 語境依賴(站別放行=release data / 品保放行=QC release),
+    # 死替換會讓「品保有放行」變「品保有release data」誤譯。改交 LLM + 下方語境規則判斷。
+    # 官方依據:Anthropic prompting best practices — 語境依賴術語用 few-shot 軟引導,非 find-replace。
     # 品質/缺陷
     "殺光痕": "bekas grinding mark",
     "車刀痕": "bekas pisau bubut",
@@ -5869,6 +5873,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "  Correct: 『@小麥 dua bundel ini ada di stasiun peeling, "
             "  tolong stasiun peeling release datanya ke stasiun berikutnya sebagai prioritas』 "
             "  Wrong (don't do this): 『dua bundel ini tolong peeling prioritas, di-pass dulu』 (lost ERP semantics). "
+            "QC/品保 RELEASE — DIFFERENT FROM STATION RELEASE (2026-05-28 case): "
+            "When 放行 subject is 品保/QC (quality control passing/releasing goods after inspection), "
+            "translate as 『QC release』 or 『di-release oleh QC』 — do NOT append 『data』, because this means "
+            "passing QC inspection, not transferring data to the next station. "
+            "  Source: 『早上那三把螺紋缺陷,如果重工後品保有放行再跟我說一下』 "
+            "  Correct: 『tiga batang pagi itu ada cacat ulir, kalau setelah rework QC sudah release tolong kasih tahu saya』 "
+            "  Wrong (don't do this): 『...QC sudah release data...』 (the extra 『data』 is wrong for QC release). "
             "7. Target Indonesian = simple clear daily language for factory workers. "
             "8. Context: factory work - shifts, overtime, orders, tasks, meals, breaks, meetings, exams.\n"
             "</critical_rules>\n"
@@ -5894,7 +5905,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "改制=ubah proses, 去化=ada order baru mau terima, 有單去化=ada order baru untuk serap material, 改制去化=ubah proses produksi, "
             "帳/帳務=data administrasi(ERP), 帳已回400=data sudah dikembalikan ke station 400, "
             "過帳=input data produksi(jumlah&berat)ke sistem tanpa release ke stasiun berikutnya, "
-            "放行=release data ke stasiun berikutnya(setelah QC lulus), "
+            "放行(語境依賴,分兩種): "
+            "(a)站別/物料放行『[站別]放行/資料放行/放這把/放這單/放這批』=release data ke stasiun berikutnya; "
+            "(b)品保/QC放行『品保放行/QC放行/品保有放行/檢驗放行/品保放了/QC放了』=QC sudah release / di-release oleh QC "
+            "(JANGAN tambah kata『data』 — ini berarti lulus pemeriksaan QC, bukan transfer data ke stasiun lain), "
             "退庫=kembalikan ke gudang, 退庫拆包=keluarkan dari gudang bongkar packing untuk dibagi ulang, "
             "發料=issue material, 存檔=simpan data, 暫存=simpan sementara, 短尺=ukuran pendek, "
             "溢量=kelebihan produksi melebihi permintaan, 併包=gabung packing dari lot berbeda dalam order sama, "
@@ -8172,7 +8186,8 @@ def ocr_and_translate_image(image_base64, tgt_lang):
                         "入庫=masuk gudang, 退庫=kembalikan ke gudang, 出貨差=kekurangan pengiriman, "
                         "掛單/工單=work order, 重掛單=pasang ulang work order, 取樣=ambil sampel, "
                         "二道門=pintu kedua(gate 2), 捐血=donor darah, "
-                        "爐號=heat number(NEVER nomor panas), 過帳=input data ke sistem, 放行=release data\n"
+                        "爐號=heat number(NEVER nomor panas), 過帳=input data ke sistem, "
+                        "放行(站別/資料)=release data ke stasiun berikutnya; 放行(品保/QC)=QC release(JANGAN tambah『data』)\n"
                         "11. Only output the result. No extra explanation."
                     )
                 },
