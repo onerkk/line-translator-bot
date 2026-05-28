@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.43-0522-help-admin-gate"
+VERSION = "v3.9.44-fewshot-direction-fix"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1840,7 +1840,18 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
     # Pick examples matching translation direction (only show direction-relevant pairs)
     # If translating zh->id, show zh2id examples; reverse for id->zh
-    direction_key = "zh2id" if (src == "zh" and tgt != "zh") else "id2zh" if (src != "zh" and tgt == "zh") else None
+    # v3.9.44 (BUG FIX): direction_key 必須精確匹配 zh↔id 兩個方向。
+    # 舊邏輯把 "src=zh and tgt!=zh" 全部當成 zh2id,導致 zh→en/th/hi/vi 翻譯
+    # 都被注入「中文→印尼」的 few-shot 對話對,LLM 跟著 pattern 回印尼文,
+    # 無視 system prompt 要求的目標語言(多語廣播時英文 box 顯示印尼文 root cause)。
+    # BUILTIN_EXAMPLES 跟 custom_translation_examples 的 dir 欄位只支援 zh2id/id2zh,
+    # 其他方向直接 None → 不注入(避免污染 LLM)。
+    if src == "zh" and tgt == "id":
+        direction_key = "zh2id"
+    elif src == "id" and tgt == "zh":
+        direction_key = "id2zh"
+    else:
+        direction_key = None
     relevant = [ex for ex in all_examples if ex.get("dir", "zh2id") == direction_key] if direction_key else []
 
     # Score each example by relevance to user message and pick top N.
