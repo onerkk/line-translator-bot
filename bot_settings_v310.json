@@ -10,6 +10,10 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "carousel": true,
       "span": true
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "hero": true,
+      "span": true
     }
   },
   "group_conv_settings": {}
