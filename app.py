@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.45-fewshot-fix-and-header-color"
+VERSION = "v3.9.47-strict-target-lang-instruction"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -5887,7 +5887,21 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 ". Preserve names and __MENTION__ placeholders exactly. Translate every remaining source-language word."
             )
         else:
-            msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
+            # v3.9.47: 強化 target language 指令。
+            # 根因:system prompt 整體偏向「印尼工廠翻譯員」(role 設定 + 大量印尼俚語/術語 vocab),
+            # 當 tgt 不是 id 時(例如 zh→en 多語廣播),LLM 反射先吐印尼文,
+            # 然後 reasoning chain 介入自我糾正,把整個糾正過程 + 詢問用戶都吐到輸出。
+            # 09:59 截圖證據:zh→en 譯文被輸出成「印尼版 + 'Wait, I notice...' + 英版 + 
+            # 'Could you clarify' + 兩個 alternatives」整段元評論。
+            # 治本:user msg 開頭加絕對指令,壓過 system prompt 的隱性偏向。
+            # 治標就會堆 prompt,治本就要把『輸出契約』講死。
+            msg = (
+                "TARGET LANGUAGE: " + tgt_name + " (output ONLY this language, no others).\n"
+                "Output ONLY the translated text. "
+                "Do NOT explain, ask questions, self-correct mid-output, "
+                "provide alternatives, or use markdown formatting (no **bold**, no headers).\n\n"
+                "Translate from " + src_name + " to " + tgt_name + ": " + protected
+            )
         
         # v3.9.41 Phase N: In-context Learning — 動態 few-shot from TM
         # 若有夠多高分 refs(score >= ICL_MIN_SCORE),改用 multi-turn user/assistant 對話
@@ -17449,40 +17463,75 @@ def commit_glossary_to_github(json_data):
 
 
 def _commit_file_to_github(filename, content_str, message="Auto-update", branch="main"):
-    """Generic: commit a file to GitHub repo."""
+    """Generic: commit a file to GitHub repo.
+    
+    v3.9.46 (BUG FIX): 加 409 Conflict retry,治本 multi-worker race。
+    舊版若兩個 worker 並發 commit,GitHub 對「sha 已過時」的後到 PUT 回 409,
+    舊 except 只 log 不重試 → 後到的 commit 整段丟失 → 該 worker 改的設定
+    在 GitHub 上沒記錄到 → 下次重啟 load 讀到的版本沒這筆改動 →
+    使用者看到「後台設定跳回預設」。
+    現在偵測 409 (或其他暫時性錯誤) → 重新 GET 最新 sha → 再 PUT,最多 3 次。
+    """
     if not GITHUB_TOKEN:
         logger.warning("No GITHUB_TOKEN, skipping GitHub commit for %s", filename)
         return False
-    try:
-        api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
-        req = urllib.request.Request(api_url + "?ref=" + branch, headers={
-            "Authorization": "token " + GITHUB_TOKEN,
-            "Accept": "application/vnd.github.v3+json"
-        })
-        sha = None
+    api_url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + filename
+    for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                existing = json.loads(resp.read().decode())
-                sha = existing.get("sha")
+            # 每次 attempt 重新 GET sha(確保用最新版本,而非 stale sha)
+            req = urllib.request.Request(api_url + "?ref=" + branch, headers={
+                "Authorization": "token " + GITHUB_TOKEN,
+                "Accept": "application/vnd.github.v3+json"
+            })
+            sha = None
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    existing = json.loads(resp.read().decode())
+                    sha = existing.get("sha")
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    raise
+            content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+            body = {"message": message, "content": content_b64, "branch": branch}
+            if sha:
+                body["sha"] = sha
+            data = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(api_url, data=data, method="PUT", headers={
+                "Authorization": "token " + GITHUB_TOKEN,
+                "Accept": "application/vnd.github.v3+json",
+                "Content-Type": "application/json"
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if attempt > 0:
+                    logger.info("Committed %s to GitHub (%s, attempt %d/3 after retry)",
+                                filename, branch, attempt + 1)
+                else:
+                    logger.info("Committed %s to GitHub (%s)", filename, branch)
+                return True
         except urllib.error.HTTPError as e:
-            if e.code != 404:
-                raise
-        content_b64 = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
-        body = {"message": message, "content": content_b64, "branch": branch}
-        if sha:
-            body["sha"] = sha
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(api_url, data=data, method="PUT", headers={
-            "Authorization": "token " + GITHUB_TOKEN,
-            "Accept": "application/vnd.github.v3+json",
-            "Content-Type": "application/json"
-        })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            logger.info("Committed %s to GitHub (%s)", filename, branch)
-            return True
-    except Exception as e:
-        logger.error("GitHub commit %s failed: %s", filename, e)
-        return False
+            if e.code == 409 and attempt < 2:
+                # sha 過時:其他 worker 剛 commit。重新拿 sha 再試
+                logger.warning("GitHub commit %s 409 Conflict (sha stale), retry %d/3",
+                               filename, attempt + 2)
+                time.sleep(0.3 * (attempt + 1))
+                continue
+            if e.code in (502, 503, 504) and attempt < 2:
+                # GitHub 暫時性錯誤
+                logger.warning("GitHub commit %s HTTP %d transient, retry %d/3",
+                               filename, e.code, attempt + 2)
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error("GitHub commit %s failed: HTTP %s", filename, e.code)
+            return False
+        except Exception as e:
+            if attempt < 2:
+                logger.warning("GitHub commit %s exception, retry %d/3: %s",
+                               filename, attempt + 2, e)
+                time.sleep(0.3 * (attempt + 1))
+                continue
+            logger.error("GitHub commit %s failed after 3 attempts: %s", filename, e)
+            return False
+    return False
 
 
 def _ensure_data_branch():
@@ -17549,19 +17598,35 @@ def _load_file_from_github(filename, branch="main"):
 _last_save_time = 0
 _save_lock = _threading.Lock()
 _save_scheduled = False
+# v3.9.46: throttle 從 30s 縮短到 3s。
+# 舊 30s throttle 期間若 Render worker 重啟(部署/idle restart/health-check 失敗),
+# 記憶體中已改但未寫盤的設定全部丟失 → 重啟後 load 讀到的是 30s 前的版本,
+# 使用者看到「後台設定跳回預設」。3s 大幅降低 race window。
+SAVE_THROTTLE_SEC = 3
 
-def save_settings():
-    """Persist all bot settings to GitHub (background, throttled to max once per 30s).
-    If throttled, schedules a delayed save so no changes are lost."""
+def save_settings(force=False):
+    """Persist all bot settings to GitHub.
+    
+    force=False (預設,內部低頻呼叫用): 3s throttle + background thread,不阻塞
+    force=True  (API endpoint 用戶觸發改動用): 同步立即寫盤,return 之前確保 commit
+    
+    v3.9.46 修正:
+    - throttle 從 30s 縮短到 3s,降低 worker restart 期間設定丟失風險
+    - 加 force=True 模式,API endpoint(後台改設定)可選同步寫,徹底避免 throttle 期間丟失
+    """
+    if force:
+        # 同步立即寫,API endpoint return 之前完成 commit
+        _do_save_impl()
+        return
     global _last_save_time, _save_scheduled
     now = time.time()
     with _save_lock:
-        remaining = 30 - (now - _last_save_time)
+        remaining = SAVE_THROTTLE_SEC - (now - _last_save_time)
         if remaining > 0:
             # Throttled — schedule a delayed save if not already scheduled
             if not _save_scheduled:
                 _save_scheduled = True
-                _threading.Timer(remaining + 1, _flush_pending_save).start()
+                _threading.Timer(remaining + 0.1, _flush_pending_save).start()
             return
         _last_save_time = now
         _save_scheduled = False
@@ -19831,7 +19896,9 @@ def api_admin_features():
             sender_name = str(data["sender_name"])[:20]
         if "sender_icon" in data:
             sender_icon = str(data["sender_icon"])
-        save_settings()
+        # v3.9.46: force=True 同步寫盤 — 用戶在後台改 flex/qr/silent 等 toggle 後,
+        # 必須確保 commit 完成才 return,避免 throttle 期間 worker restart 造成設定丟失。
+        save_settings(force=True)
         return jsonify({"ok": True})
     # GET - return settings for specific group or global
     if gid:
@@ -20185,7 +20252,8 @@ def api_admin_group_settings():
             set_conv_context_enabled(gid, bool(data["conv_ctx"]))
         except NameError:
             pass
-    save_settings()
+    # v3.9.46: force=True 同步寫盤
+    save_settings(force=True)
     return jsonify({"ok": True})
 
 
