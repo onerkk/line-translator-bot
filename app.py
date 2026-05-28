@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.47-strict-target-lang-instruction"
+VERSION = "v3.9.48-multiworker-settings-sync"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -9436,6 +9436,12 @@ def handle_command(text, group_id, user_id=None):
 
 @app.route("/callback", methods=["POST"])
 def callback():
+    # v3.9.48: webhook 處理前也 reload(5s throttle),確保 multi-worker 下
+    # 後台剛改的群組 toggle(flex/qr/silent 等)能立刻在訊息處理時生效。
+    try:
+        _maybe_reload_from_github()
+    except Exception:
+        pass
     sig = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
     # v3.9.19: 記錄所有進來的 webhook(只記事件 type 跟 message type,不記內容)
@@ -18110,8 +18116,41 @@ def check_admin_key():
     return key == ADMIN_KEY
 
 
+# v3.9.48: multi-worker GitHub-based settings sync.
+# 根因:Render gunicorn multi-worker,Worker A 透過 admin POST 寫盤後,
+# Worker B 的記憶體仍是舊狀態。前端刷新發 GET 若路由到 Worker B,
+# 從 Worker B 記憶體讀回舊值 → 看起來「設定跳回預設」。
+# 修法:GET 請求進來前(5 秒 throttle 一次),從 GitHub 重 reload bot_settings.json,
+# 確保各 worker 不會用過於陳舊的記憶體版本應對前端 query。
+# POST 不 reload(會覆蓋剛寫入但還沒 commit 完成的記憶體)。
+_last_reload_time = 0
+_reload_lock = _threading.Lock()
+_RELOAD_THROTTLE_SEC = 5
+
+
+def _maybe_reload_from_github():
+    """5 秒 throttle 的 reload。GET admin endpoint 開頭呼叫,multi-worker 同步用。"""
+    global _last_reload_time
+    now = time.time()
+    with _reload_lock:
+        if now - _last_reload_time < _RELOAD_THROTTLE_SEC:
+            return
+        _last_reload_time = now
+    try:
+        load_settings()
+        logger.info("[Sync] reloaded settings from GitHub (multi-worker sync)")
+    except Exception as e:
+        logger.warning("[Sync] periodic reload failed: %s", e)
+
+
 def check_manager_access(required_tab=None):
     """Check if request is from super admin or authorized manager."""
+    # v3.9.48: GET 前 reload (multi-worker sync)。POST 不 reload (會覆蓋剛寫的記憶體)。
+    try:
+        if request.method == "GET":
+            _maybe_reload_from_github()
+    except Exception:
+        pass  # 不能讓 sync 機制阻擋正常權限檢查
     if check_admin_key():
         return True
     uid = request.headers.get("X-Manager-Id", "")
