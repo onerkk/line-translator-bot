@@ -6,6 +6,11 @@
     ]
   },
   "group_tts_settings": {},
-  "group_flex_v2": {},
+  "group_flex_v2": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "hero": true,
+      "carousel": true
+    }
+  },
   "group_conv_settings": {}
 }
