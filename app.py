@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.44-fewshot-direction-fix"
+VERSION = "v3.9.45-fewshot-fix-and-header-color"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -22964,15 +22964,19 @@ _V2_DEFAULTS = {
 }
 
 # Per-language brand color (header 漸層用)
+# v3.9.45: 改深色配色 — 舊版 zh/id/vi/ja 全部寫死 #dc2626 純紅,
+# 國旗 emoji 自身含紅色(台灣旗紅藍白、印尼旗紅白、日本旗白紅、越南旗紅黃)
+# 在純紅背景上紅吃紅,視覺融合導致看不清。
+# 新配色原則:每語言獨立深色系,中等飽和、暗度足夠讓白色/紅色國旗對比都強。
 _LANG_BRAND = {
-    "zh": "#dc2626",   # 紅 (台灣)
-    "id": "#dc2626",   # 紅 (印尼國旗紅)
-    "th": "#1d4ed8",   # 藍 (泰國)
-    "hi": "#f97316",   # 橘 (印度)
-    "vi": "#dc2626",   # 紅 (越南)
-    "ja": "#dc2626",   # 紅 (日本)
-    "ko": "#1e3a8a",   # 藍 (韓國)
-    "en": "#1e40af",   # 藍 (英國)
+    "zh": "#065f46",   # 深墨綠 (台灣)
+    "id": "#991b1b",   # 深紅 (印尼,保留紅意但深)
+    "th": "#1e40af",   # 深藍 (泰國)
+    "hi": "#c2410c",   # 深橘 (印度)
+    "vi": "#7c3aed",   # 深紫 (越南)
+    "ja": "#9d174d",   # 深玫紅 (日本)
+    "ko": "#1d4ed8",   # 藍 (韓國)
+    "en": "#0c4a6e",   # 深青 (英國)
 }
 
 
@@ -23042,7 +23046,13 @@ def _byte_safe_truncate(s, max_bytes):
 
 
 def _flex_v2_header_bar(src_lang, tgt_lang):
-    """LV1.2 Header bar — 左右雙色 + 旗幟。"""
+    """LV1.2 Header bar — 左右雙色 + 旗幟 + lang code 文字標籤。
+    
+    v3.9.45: 旗下加 lang code 文字(白色加粗 xxs)作為視覺保險。
+    舊版只靠國旗 emoji,當旗的紅色跟 brand 背景紅色重疊時(zh/id 兩旗都含紅)
+    視覺融合看不清楚。新版「旗 + 文字」雙重辨識,即使顯示問題也能讀方向。
+    paddingAll 從 10px → 8px 留空間給文字。
+    """
     from_color = _LANG_BRAND.get(src_lang, "#7c6fef")
     to_color = _LANG_BRAND.get(tgt_lang, "#7c6fef")
     src_flag = LANG_FLAGS.get(src_lang, "🌐")
@@ -23054,11 +23064,18 @@ def _flex_v2_header_bar(src_lang, tgt_lang):
                 "type": "box", "layout": "vertical",
                 "backgroundColor": from_color,
                 "flex": 1,
-                "paddingAll": "10px",
-                "contents": [{
-                    "type": "text", "text": src_flag,
-                    "size": "lg", "align": "center", "color": "#ffffff",
-                }],
+                "paddingAll": "8px",
+                "contents": [
+                    {
+                        "type": "text", "text": src_flag,
+                        "size": "xl", "align": "center", "color": "#ffffff",
+                    },
+                    {
+                        "type": "text", "text": src_lang.upper(),
+                        "size": "xxs", "align": "center", "color": "#ffffff",
+                        "weight": "bold", "margin": "xs",
+                    },
+                ],
             },
             {
                 "type": "box", "layout": "vertical",
@@ -23075,11 +23092,18 @@ def _flex_v2_header_bar(src_lang, tgt_lang):
                 "type": "box", "layout": "vertical",
                 "backgroundColor": to_color,
                 "flex": 1,
-                "paddingAll": "10px",
-                "contents": [{
-                    "type": "text", "text": tgt_flag,
-                    "size": "lg", "align": "center", "color": "#ffffff",
-                }],
+                "paddingAll": "8px",
+                "contents": [
+                    {
+                        "type": "text", "text": tgt_flag,
+                        "size": "xl", "align": "center", "color": "#ffffff",
+                    },
+                    {
+                        "type": "text", "text": tgt_lang.upper(),
+                        "size": "xxs", "align": "center", "color": "#ffffff",
+                        "weight": "bold", "margin": "xs",
+                    },
+                ],
             },
         ],
     }
