@@ -1,7 +1,21 @@
 """
-ai_provider.py — 統一 AI Provider 介面層 (v3.3 / 2026-05-20)
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.6 / 2026-05-28)
 
-【v3.3 新增 — 雙系統共用分區 XML system prompt(2026-05-20)】
+【v3.2.6 治本修法 — Phase 25 雙系統官方治本(2026-05-28)】
+🎯 根治 LLM 元評論洩漏(Wait — I notice / However / If English: / If Indonesian:):
+   - 修補 _wrap_system_prompt_xml 在 already_partitioned 模式下忽略 output_tag 的 bug
+     (app.py 已含 <role>+<critical_rules> 時,Phase 25 從未生效)
+   - OpenAI 路徑對稱實作 Phase 25:sys prompt 注入 <output_format> + response 抽 <translation> tag
+   - output_translation_tag 預設改 True
+   - 後端強制 regex 抽 <translation> tag 內容,丟棄所有 tag 外雜訊
+     → 不依賴 LLM 聽話,後端強制治本
+   - 雙系統官方依據:
+     OpenAI cookbook persistence + output_contract:
+       https://cookbook.openai.com/examples/gpt-5/gpt-5_troubleshooting_guide
+     Anthropic use-xml-tags 結構化 system prompt:
+       https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+
+【v3.3 — 雙系統共用分區 XML system prompt(2026-05-20)】
 🎯 根治翻譯品質:
    - 配合 app.py v3.9.37 的分區 XML sys_prompt(<role>/<critical_rules>/
      <factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>)
@@ -173,9 +187,10 @@ DEFAULT_CONFIG = {
         "cot_thinking_tag": True,       # Phase 23 — XML CoT 引導(讓 Haiku 也能思考)
         "role_strong": True,            # Phase 24 — 強化 Role(20 年資深譯者身分)
         # === D9 v3.2.5 新增 ===
-        "output_translation_tag": False, # Phase 25 — 強制 <translation>...</translation> XML 包裝
-                                         # 預設 OFF,因 Claude 已有 stop_sequences + plain text mode
-                                         # 開啟後徹底解決前綴問題,但需後端 parse tag
+        "output_translation_tag": True,  # Phase 25 — 強制 <translation>...</translation> XML 包裝
+                                         # v3.2.6 預設改 True:後端 regex 抽 tag 內內容,
+                                         # 徹底丟棄 LLM 元評論(Wait/I notice/However/If English:/markdown)
+                                         # 不依賴 LLM 聽話,後端強制抽取治本
         "success_criteria": True,       # Phase 26 — system prompt 加 <success_criteria> 段
                                          # 官方:「State expected outcome and success criteria」
     },
@@ -1036,6 +1051,25 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
                 "4. 人名/料號/敬稱原樣保留 5. 格式對應 6. 不加 metadata/警告/解釋/emoji(除非原文有)\n"
                 "</success_criteria>\n"
             )
+        # v3.2.6: 補修 Phase 25 在 already_partitioned 模式下被忽略的 bug
+        # app.py 已含 <role>+<critical_rules> 時,原本完全跳過 output_tag 處理,
+        # 導致 Claude 從未收到「包 tag」指令,line 1567 regex 永遠抽不到 → Phase 25 無聲失效
+        if output_tag:
+            appended_parts.append(
+                "<output_format priority=\"highest\">\n"
+                "你最終回答必須只包含一個 XML tag:<translation>...</translation>\n"
+                "把純翻譯文字放在 tag 內。範例:\n"
+                "  輸入: 今天加班\n"
+                "  輸出: <translation>Hari ini lembur</translation>\n"
+                "\n"
+                "嚴格規則:\n"
+                "1. <translation> tag 外不要輸出任何文字(包括解釋、註解、確認、自我糾正)。\n"
+                "2. 不要在 tag 內加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+                "3. 不要在 tag 內使用 markdown(**bold** / ## headers / - bullets),除非原文有。\n"
+                "4. 即使你想自我糾正或詢問,也不要輸出 tag 外的文字。直接給最終 tag。\n"
+                "5. 只輸出 <translation>...</translation> tag,不要多個 tag,不要嵌套。\n"
+                "</output_format>\n"
+            )
         return "\n".join(appended_parts)
 
     # 偵測是否已經是舊版 <role>/<task> 結構(向後相容)
@@ -1233,6 +1267,50 @@ def _chat_complete_openai(model, messages, **kwargs):
     client = _get_openai_client()
     if client is None:
         raise RuntimeError("OpenAI client 未初始化(api_key 缺?)")
+
+    # v3.2.6: Phase 25 對稱 — OpenAI 路徑也支援 output_translation_tag
+    # OpenAI GPT-5 reasoning model 跟 Claude 一樣會吐元評論(Wait/I notice/If English:),
+    # 後端 regex 抽 <translation> tag 內容是兩家通用的官方治本路徑。
+    # OpenAI 官方 cookbook 也推薦 XML structured output:
+    #   https://developers.openai.com/api/docs/guides/prompt-guidance (<output_contract> 範例)
+    _ensure_initialized()
+    features = _current_config.get("claude_features", {})
+    use_output_tag = features.get("output_translation_tag", False)
+
+    if use_output_tag and messages:
+        # 在 system / developer role 訊息末尾注入 <output_format> 指令
+        new_messages = []
+        injected = False
+        tag_instruction = (
+            "\n\n<output_format priority=\"highest\">\n"
+            "Your final answer must contain ONLY this XML tag: <translation>...</translation>\n"
+            "Put the pure translation text inside the tag. Example:\n"
+            "  Input: 今天加班\n"
+            "  Output: <translation>Hari ini lembur</translation>\n"
+            "\n"
+            "Strict rules:\n"
+            "1. Do NOT output any text outside the <translation> tag (no explanation, "
+            "no self-correction like 'Wait — I notice', no clarifying questions, no alternatives).\n"
+            "2. Do NOT add prefixes like 'Translation:' or 'Catatan:' inside the tag.\n"
+            "3. Do NOT use markdown (**bold**, ## headers, - bullets) inside the tag unless source has them.\n"
+            "4. Even if you want to self-correct or ask the user, do NOT output text outside the tag. "
+            "Just give the final <translation>...</translation>.\n"
+            "5. Output exactly ONE <translation> tag, not multiple, not nested.\n"
+            "</output_format>\n"
+        )
+        for m in messages:
+            if not injected and isinstance(m, dict) and m.get("role") in ("system", "developer"):
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    new_messages.append({**m, "content": content + tag_instruction})
+                    injected = True
+                    continue
+            new_messages.append(m)
+        if not injected:
+            # 訊息中沒 system/developer role,prepend 一個
+            new_messages.insert(0, {"role": "system", "content": tag_instruction.lstrip()})
+        messages = new_messages
+
     call_kwargs = {"model": model, "messages": messages}
     for k, v in kwargs.items():
         if v is None:
@@ -1240,7 +1318,34 @@ def _chat_complete_openai(model, messages, **kwargs):
         if k == "logprobs" and v is False:
             continue
         call_kwargs[k] = v
-    return client.chat.completions.create(**call_kwargs)
+    resp = client.chat.completions.create(**call_kwargs)
+
+    # v3.2.6: response 抽 <translation> tag(對稱 Anthropic line 1567-1574)
+    # 容錯:若 LLM 沒乖乖包 tag,保留原 content 不動(向後相容)
+    if use_output_tag and getattr(resp, "choices", None):
+        try:
+            first = resp.choices[0]
+            msg = getattr(first, "message", None)
+            content = getattr(msg, "content", None) if msg else None
+            if content:
+                import re as _re_tag
+                match = _re_tag.search(
+                    r"<translation[^>]*>(.*?)</translation>",
+                    content, _re_tag.DOTALL | _re_tag.IGNORECASE,
+                )
+                if match:
+                    extracted = match.group(1).strip()
+                    if extracted:
+                        try:
+                            first.message.content = extracted
+                        except Exception:
+                            # OpenAI response 物件不可寫 — 印警告但不 raise
+                            print(f"[ai_provider] WARN: OpenAI response.message.content 不可寫,"
+                                  f"無法抽 tag。原內容保留。", flush=True)
+        except Exception as _e:
+            print(f"[ai_provider] WARN: OpenAI 抽 <translation> tag 失敗: {_e}", flush=True)
+
+    return resp
 
 
 def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
