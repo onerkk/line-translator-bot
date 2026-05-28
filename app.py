@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.52-phase25-dual-ai-root-fix"
+VERSION = "v3.9.53-dual-ai-real-cost"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -540,96 +540,282 @@ bot_stats = {
     "commands": 0,
     "tokens_prompt": 0,
     "tokens_completion": 0,
+    # v3.9.53: 雙 provider 精確記帳 — 分 provider 分 token 類型累計
+    # OpenAI
+    "oai_input": 0,          # prompt(含 cached,計費時扣除)
+    "oai_cached": 0,         # prompt 中 cache 命中部分(折扣計費)
+    "oai_output": 0,         # completion(含 reasoning)
+    "oai_reasoning": 0,      # completion 中 reasoning 部分(同 output 價,僅供觀察)
+    "oai_cost_usd": 0.0,     # 即時累計精確花費
+    # Anthropic
+    "ant_input": 0,          # 純新 input(不含 cache)
+    "ant_cache_read": 0,     # cache 命中(base × 0.1)
+    "ant_cache_write": 0,    # cache 寫入(base × 1.25)
+    "ant_output": 0,         # output(含 thinking)
+    "ant_cost_usd": 0.0,     # 即時累計精確花費
 }
 
 
-def track_tokens(response):
-    """Track token usage from OpenAI API response.
-    
-    v3.9.30 B8 修補: 加入 reasoning_tokens 記錄
-    GPT-5 系列(o1/o3/gpt-5*)會把推理 token 放在
-    response.usage.completion_tokens_details.reasoning_tokens,
-    這部分 OpenAI 同樣計費(以 completion 費率),不記錄會造成成本黑洞。
+# ═══════════════════════════════════════════════════════════════════
+# v3.9.53 (2026-05-28): 雙 AI 統一價格引擎 — 真實 API 費用計算
+# ═══════════════════════════════════════════════════════════════════
+# 取代舊版「寫死 GPT-4o-mini 價格 / 只有 OpenAI 價格表 / 不算 cache」的錯誤計費。
+# 依當下實際 provider + 實際 model + 各類 token 精確計價,含技術消費:
+#   - Anthropic prompt caching: cache write × 1.25, cache read × 0.10
+#   - thinking/reasoning token: 算 output 價
+# 官方價格來源(2026-05, claude.com/pricing + platform.openai.com/pricing):
+# ═══════════════════════════════════════════════════════════════════
+
+# Anthropic 官方價格 (USD per 1M tokens) — (base_input, output)
+# cache 倍率業界官方標準:write_5m = base×1.25, read = base×0.10
+ANTHROPIC_PRICE_PER_M = {
+    "claude-opus-4-7":   (5.00, 25.00),
+    "claude-opus-4-6":   (5.00, 25.00),
+    "claude-opus-4-5":   (5.00, 25.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+    "claude-haiku-4-5":  (1.00,  5.00),
+}
+ANTHROPIC_CACHE_WRITE_MULT = 1.25   # 5m cache write
+ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
+
+# OpenAI 官方價格 (USD per 1M tokens) — (input, output)
+# cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
+OPENAI_PRICE_PER_M = {
+    "gpt-5-nano":   (0.05,  0.40),
+    "gpt-5-mini":   (0.25,  2.00),
+    "gpt-5":        (1.25, 10.00),
+    "gpt-5.4-nano": (0.20,  1.25),
+    "gpt-5.4-mini": (0.75,  4.50),
+    "gpt-5.4":      (2.50, 15.00),
+    "gpt-5.5":      (5.00, 30.00),
+    "gpt-4.1-nano": (0.10,  0.40),
+    "gpt-4.1-mini": (0.40,  1.60),
+    "gpt-4.1":      (2.00,  8.00),
+    "gpt-4o-mini":  (0.15,  0.60),
+    "gpt-4o":       (2.50, 10.00),
+}
+
+
+def _match_price(model_name, table, default_key):
+    """完全相等優先;否則最長 prefix 匹配(避免 gpt-5.4-mini 被 gpt-5 吃掉)。"""
+    md = (model_name or "").lower()
+    if md in table:
+        return table[md]
+    best = ""
+    for mk in table.keys():
+        if md.startswith(mk) and len(mk) > len(best):
+            best = mk
+    return table.get(best, table[default_key])
+
+
+def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
+                  cache_read=0, cache_write=0, cached_input=0):
+    """統一計價:依 provider + 實際 model + 各類 token → 精確 USD。
+
+    Anthropic:
+        input_tok    = 純新 input(不含 cache)
+        cache_read   = cache 命中(base × 0.10)
+        cache_write  = cache 寫入(base × 1.25)
+        output_tok   = output(含 thinking)
+    OpenAI:
+        input_tok    = prompt_tokens 總量(含 cached_input)
+        cached_input = 其中 cache 命中部分(享折扣)
+        output_tok   = completion_tokens(含 reasoning)
+    """
+    p = (provider or "").lower()
+    if p == "anthropic":
+        in_rate, out_rate = _match_price(model, ANTHROPIC_PRICE_PER_M, "claude-haiku-4-5")
+        cost = (
+            input_tok   * in_rate                              / 1_000_000
+            + cache_read  * in_rate * ANTHROPIC_CACHE_READ_MULT  / 1_000_000
+            + cache_write * in_rate * ANTHROPIC_CACHE_WRITE_MULT / 1_000_000
+            + output_tok  * out_rate                             / 1_000_000
+        )
+        return cost
+    # OpenAI
+    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5-mini")
+    # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
+    cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
+    non_cached = max(0, input_tok - cached_input)
+    cost = (
+        non_cached    * in_rate              / 1_000_000
+        + cached_input  * in_rate * cache_mult / 1_000_000
+        + output_tok    * out_rate             / 1_000_000
+    )
+    return cost
+
+
+def track_tokens(response, group_id=None):
+    """雙 AI token 追蹤 + 即時精確記帳 (v3.9.53 治本).
+
+    舊版 bug:
+      1. 括號錯位 `_stats_inc("tokens_prompt", response).usage...` → 把 response 物件
+         當 increment 傳入,0+物件 raise TypeError 被吞掉,token 永遠 0。
+      2. 只認 OpenAI usage 欄位,Anthropic cache token 完全沒記。
+      3. 費用用寫死 GPT-4o-mini 價格,跑 Claude 時差幾十倍。
+
+    新版:從 response.model + usage 偵測實際 provider/model,分類記 token,
+    當下即時用 calc_cost_usd() 算精確花費,累加到 bot_stats 與 group_api_usage。
     """
     try:
-        if response and hasattr(response, 'usage') and response.usage:
-            _stats_inc("tokens_prompt", response).usage.prompt_tokens or 0
-            _stats_inc("tokens_completion", response).usage.completion_tokens or 0
-            # v3.9.30: reasoning_tokens 額外追蹤(已包含在 completion_tokens 中,
-            # 但需要分開知道才能算實際輸出 vs reasoning 比例)
+        if not (response and getattr(response, 'usage', None)):
+            return
+        u = response.usage
+        model_used = getattr(response, 'model', '') or ''
+
+        # 偵測 provider:優先用 _UnifiedResponse._jy_provider(ai_provider 標記,最可靠)
+        # fallback:Anthropic _UnifiedUsage cache 屬性 / model 名以 claude- 開頭
+        _jy_prov = getattr(response, '_jy_provider', None)
+        if _jy_prov in ("anthropic", "openai"):
+            is_anthropic = (_jy_prov == "anthropic")
+        else:
+            is_anthropic = (
+                hasattr(u, 'cache_read_tokens') or hasattr(u, 'cache_creation_tokens')
+                or str(model_used).lower().startswith('claude-')
+            )
+
+        # 統一抽 token(兩家欄位名不同,都用 getattr 容錯)
+        in_tok  = int(getattr(u, 'prompt_tokens', 0) or 0)
+        out_tok = int(getattr(u, 'completion_tokens', 0) or 0)
+
+        if is_anthropic:
+            cache_read  = int(getattr(u, 'cache_read_tokens', 0) or 0)
+            cache_write = int(getattr(u, 'cache_creation_tokens', 0) or 0)
+            provider = "anthropic"
+            # 即時精確計價
+            cost = calc_cost_usd("anthropic", model_used,
+                                 input_tok=in_tok, output_tok=out_tok,
+                                 cache_read=cache_read, cache_write=cache_write)
+            with _stats_lock:
+                bot_stats["ant_input"]       = bot_stats.get("ant_input", 0) + in_tok
+                bot_stats["ant_output"]      = bot_stats.get("ant_output", 0) + out_tok
+                bot_stats["ant_cache_read"]  = bot_stats.get("ant_cache_read", 0) + cache_read
+                bot_stats["ant_cache_write"] = bot_stats.get("ant_cache_write", 0) + cache_write
+                bot_stats["ant_cost_usd"]    = bot_stats.get("ant_cost_usd", 0.0) + cost
+                # 相容舊欄位(總 token 顯示用):input 含 cache 全量
+                bot_stats["tokens_prompt"]     = bot_stats.get("tokens_prompt", 0) + in_tok + cache_read + cache_write
+                bot_stats["tokens_completion"] = bot_stats.get("tokens_completion", 0) + out_tok
+            _delta = {
+                "provider": "anthropic", "model": model_used, "cost_usd": cost,
+                "input": in_tok, "output": out_tok,
+                "cache_read": cache_read, "cache_write": cache_write, "reasoning": 0,
+            }
+        else:
+            # OpenAI:cached 在 prompt_tokens_details.cached_tokens;reasoning 在 completion_tokens_details
+            cached_input = 0
+            reasoning = 0
             try:
-                _details = getattr(response.usage, 'completion_tokens_details', None)
-                if _details:
-                    _rt = getattr(_details, 'reasoning_tokens', 0) or 0
-                    _stats_inc("tokens_reasoning", _rt)
-                # cached prompt tokens(prompt cache hit 部分,計費較低)
-                _pt_details = getattr(response.usage, 'prompt_tokens_details', None)
-                if _pt_details:
-                    _ct = getattr(_pt_details, 'cached_tokens', 0) or 0
-                    _stats_inc("tokens_prompt_cached", _ct)
+                _pt = getattr(u, 'prompt_tokens_details', None)
+                if _pt:
+                    cached_input = int(getattr(_pt, 'cached_tokens', 0) or 0)
+                _ct = getattr(u, 'completion_tokens_details', None)
+                if _ct:
+                    reasoning = int(getattr(_ct, 'reasoning_tokens', 0) or 0)
             except Exception:
                 pass
-    except Exception:
-        pass
+            provider = "openai"
+            cost = calc_cost_usd("openai", model_used,
+                                 input_tok=in_tok, output_tok=out_tok,
+                                 cached_input=cached_input)
+            with _stats_lock:
+                bot_stats["oai_input"]     = bot_stats.get("oai_input", 0) + in_tok
+                bot_stats["oai_cached"]    = bot_stats.get("oai_cached", 0) + cached_input
+                bot_stats["oai_output"]    = bot_stats.get("oai_output", 0) + out_tok
+                bot_stats["oai_reasoning"] = bot_stats.get("oai_reasoning", 0) + reasoning
+                bot_stats["oai_cost_usd"]  = bot_stats.get("oai_cost_usd", 0.0) + cost
+                bot_stats["tokens_prompt"]     = bot_stats.get("tokens_prompt", 0) + in_tok
+                bot_stats["tokens_completion"] = bot_stats.get("tokens_completion", 0) + out_tok
+            _delta = {
+                "provider": "openai", "model": model_used, "cost_usd": cost,
+                "input": in_tok, "output": out_tok,
+                "cache_read": cached_input, "cache_write": 0, "reasoning": reasoning,
+            }
+
+        # 即時歸帳到群組(不靠 snapshot diff,直接傳 delta)
+        if group_id:
+            _attribute_usage_to_group(group_id, _delta)
+    except Exception as e:
+        logger.warning("track_tokens error: %s", e)
 
 
-def track_group_usage(group_id, before_prompt, before_completion):
-    """Calculate token diff since snapshot and attribute to group."""
-    dp = bot_stats.get("tokens_prompt", 0) - before_prompt
-    dc = bot_stats.get("tokens_completion", 0) - before_completion
-    if group_id and (dp > 0 or dc > 0):
+def _attribute_usage_to_group(group_id, delta):
+    """把單次 API 用量精確歸帳到群組(v3.9.53)。"""
+    if not group_id:
+        return
+    with _stats_lock:
         if group_id not in group_api_usage:
-            group_api_usage[group_id] = {"tokens_prompt": 0, "tokens_completion": 0}
-        group_api_usage[group_id]["tokens_prompt"] += dp
-        group_api_usage[group_id]["tokens_completion"] += dc
+            group_api_usage[group_id] = {
+                "tokens_prompt": 0, "tokens_completion": 0,
+                "cache_read": 0, "cache_write": 0, "reasoning": 0,
+                "cost_usd": 0.0, "provider": "", "model": "",
+            }
+        g = group_api_usage[group_id]
+        # 相容舊欄位
+        g["tokens_prompt"]     = g.get("tokens_prompt", 0) + delta["input"] + delta.get("cache_read", 0) + delta.get("cache_write", 0)
+        g["tokens_completion"] = g.get("tokens_completion", 0) + delta["output"]
+        g["cache_read"]  = g.get("cache_read", 0) + delta.get("cache_read", 0)
+        g["cache_write"] = g.get("cache_write", 0) + delta.get("cache_write", 0)
+        g["reasoning"]   = g.get("reasoning", 0) + delta.get("reasoning", 0)
+        g["cost_usd"]    = g.get("cost_usd", 0.0) + delta["cost_usd"]
+        g["provider"]    = delta["provider"]
+        g["model"]       = delta["model"]
+
+
+
+def track_group_usage(group_id, before_prompt, before_completion, before_cost=0.0):
+    """snapshot diff 歸帳 token + 精確 cost (v3.9.53).
+
+    before_cost: 操作前的全域累計 cost(ant_cost_usd + oai_cost_usd)。
+    track_tokens 已在每次 API 回應後即時把精確 cost 累加進 bot_stats,
+    這裡 diff 出本批操作的真實花費,直接歸帳群組 — 不再事後用 token 估算。
+    """
+    after_prompt = bot_stats.get("tokens_prompt", 0)
+    after_completion = bot_stats.get("tokens_completion", 0)
+    after_cost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
+    dp = after_prompt - before_prompt
+    dc = after_completion - before_completion
+    dcost = after_cost - before_cost
+    if group_id and (dp > 0 or dc > 0 or dcost > 0):
+        with _stats_lock:
+            if group_id not in group_api_usage:
+                group_api_usage[group_id] = {
+                    "tokens_prompt": 0, "tokens_completion": 0,
+                    "cost_usd": 0.0, "provider": "", "model": "",
+                }
+            g = group_api_usage[group_id]
+            g["tokens_prompt"] = g.get("tokens_prompt", 0) + max(0, dp)
+            g["tokens_completion"] = g.get("tokens_completion", 0) + max(0, dc)
+            g["cost_usd"] = g.get("cost_usd", 0.0) + max(0.0, dcost)
+            # 記錄本批使用的 provider/model(供 fallback 估算 + UI 顯示)
+            _prov = ai_provider.get_active_provider()
+            g["provider"] = _prov
+            g["model"] = claude_model_default if _prov == "anthropic" else model_default
 
 
 def calc_group_cost_twd(group_id):
-    """Calculate cost in TWD for a group.
-    
-    v3.9.30 B9 修補: 舊版寫死 GPT-4 系列價格 (input $0.15/M, output $0.60/M),
-    用 GPT-5 系列時計費全錯。新版改用「當前主模型」的價格估算。
-    
-    這是估算值(因為單一群組可能混用多個模型),要精準計費需逐次記錄。
-    使用 model_default 作為估算基準(歐那實際使用情境符合)。
+    """群組累計花費 (TWD) — v3.9.53 治本.
+
+    舊版問題:寫死 OpenAI 價格表,跑 Claude 時計費全錯,且不算 cache 技術消費。
+    新版:
+      1. 優先用 track_tokens 即時記帳的精確 cost_usd(含 cache/thinking 技術消費)
+      2. 舊資料(只有 token,無 cost_usd)→ fallback 用該群組 provider+model 價格估算
     """
     u = group_api_usage.get(group_id, {})
+    # 1. 優先:即時精確記帳的 cost(已含雙 AI + cache + thinking)
+    if u.get("cost_usd", 0) > 0:
+        return round(u["cost_usd"] * USD_TO_TWD, 2)
+    # 2. fallback:舊資料只有 token,用對的 provider+model 價格估算
     tp = u.get("tokens_prompt", 0)
     tc = u.get("tokens_completion", 0)
-    # 依當前 model_default 估算單價(USD per token)
-    md = (model_default or "").lower()
-    # OpenAI 公開價格(2026-05);若未來價格有變更新此表即可
-    # 格式: (input_per_M, output_per_M) USD
-    PRICE_PER_M = {
-        "gpt-5-nano":      (0.05,  0.40),
-        "gpt-5-mini":      (0.25,  2.00),
-        "gpt-5":           (1.25, 10.00),
-        "gpt-5.4-nano":    (0.20,  1.25),
-        "gpt-5.4-mini":    (0.75,  4.50),
-        "gpt-5.4":         (2.50, 15.00),
-        "gpt-5.5":         (5.00, 30.00),
-        "gpt-4.1-nano":    (0.10,  0.40),
-        "gpt-4.1-mini":    (0.40,  1.60),
-        "gpt-4.1":         (2.00,  8.00),
-        "gpt-4o-mini":     (0.15,  0.60),
-        "gpt-4o":          (2.50, 10.00),
-    }
-    # 模糊匹配(歐那 UI 上的選項可能完整也可能 prefix)
-    # v3.9.30b: 修匹配優先級 — 完全相等優先;否則用「最長 prefix」匹配,避免 "gpt-5.4-mini" 誤匹到 "gpt-5"
-    in_rate, out_rate = (0.25, 2.00)  # 預設 gpt-5-mini
-    # 1. 完全相等
-    if md in PRICE_PER_M:
-        in_rate, out_rate = PRICE_PER_M[md]
+    if tp == 0 and tc == 0:
+        return 0.0
+    provider = u.get("provider") or ai_provider.get_active_provider()
+    if provider == "anthropic":
+        model = u.get("model") or claude_model_default
     else:
-        # 2. 最長 prefix 匹配(避免 gpt-5.4-mini 被 gpt-5 吃掉)
-        best_match = ""
-        for mk in PRICE_PER_M.keys():
-            if md.startswith(mk) and len(mk) > len(best_match):
-                best_match = mk
-        if best_match:
-            in_rate, out_rate = PRICE_PER_M[best_match]
-    # 換算:per_M → per_token
-    usd = (tp * in_rate / 1_000_000) + (tc * out_rate / 1_000_000)
+        model = u.get("model") or model_default
+    usd = calc_cost_usd(provider, model, input_tok=tp, output_tok=tc)
     return round(usd * USD_TO_TWD, 2)
 
 # Admin users tracking: {user_id: {"is_admin": bool}}
@@ -9641,8 +9827,9 @@ def handle_message(event):
         _tl.group_id = "__dm__"
 
         _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+        _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
         result = translate(text_clean, lang, tgt)
-        track_group_usage("__dm__", _bp, _bc)
+        track_group_usage("__dm__", _bp, _bc, _bcost)
         if not result:
             # v3.10+ 修補:DM 翻譯失敗時不該靜默,使用者會困惑 bot 為何不回。
             # 群組情境不發失敗訊息以免噪音,但 DM 私訊只影響使用者本人,給簡訊比較友善。
@@ -9775,6 +9962,7 @@ def handle_message(event):
 
     reply = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
     # Set translation tone for this group
     _tone, _tone_custom = get_group_tone(group_id)
     _tl.tone = _tone
@@ -9809,7 +9997,7 @@ def handle_message(event):
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
             _tts_lang, _tts_text = "zh", result
-    track_group_usage(group_id, _bp, _bc)
+    track_group_usage(group_id, _bp, _bc, _bcost)
 
     if reply is None:
         # v3.10+ 修補:群組翻譯失敗加 log 才能追,但不發群組噪音
@@ -10186,6 +10374,7 @@ def _handle_image_background(ctx):
 
         # Quick OCR to check if there's text and detect language
         _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+        _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
         _event_log_write("image_step", {"step": "before_ocr"})
         try:
             extracted = ocr_image_openai(img_base64, mime_type=img_mime)
@@ -10263,7 +10452,7 @@ def _handle_image_background(ctx):
                                 _event_log_write("image_step_error", {"step": "wo_push", "err": str(_wo_pe)[:300]})
                                 logger.exception("Work order push also failed: %s", _wo_pe)
                 # Whether storage found or not, skip translation for work orders
-                track_group_usage(group_id, _bp, _bc)
+                track_group_usage(group_id, _bp, _bc, _bcost)
                 return
         except Exception as e:
             _event_log_write("image_step_error", {"step": "work_order_detect", "err": str(e)[:200]})
@@ -10335,7 +10524,7 @@ def _handle_image_background(ctx):
 
         if not result:
             _event_log_write("image_aborted", {"reason": "translate_returned_empty"})
-            track_group_usage(group_id, _bp, _bc)
+            track_group_usage(group_id, _bp, _bc, _bcost)
             return
 
         reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
@@ -10344,7 +10533,7 @@ def _handle_image_background(ctx):
         if len(reply) > 5000:
             reply = reply[:4990] + "\n..."
 
-        track_group_usage(group_id, _bp, _bc)
+        track_group_usage(group_id, _bp, _bc, _bcost)
         _stats_inc("image_translations")
         _event_log_write("image_step", {"step": "before_reply"})
         # v3.8: thread quote_token onto image translation reply.
@@ -10495,6 +10684,7 @@ def _process_pending_image_translate_inner(event, message_id):
 
     tgt = group_target_lang.get(group_id, "id")
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
     
     logger.info("[ImgAsk] running OCR")
     try:
@@ -10519,7 +10709,7 @@ def _process_pending_image_translate_inner(event, message_id):
                 if wo_reply:
                     _stats_inc("work_order_detections")
                     _reply_or_push(wo_reply)
-            track_group_usage(group_id, _bp, _bc)
+            track_group_usage(group_id, _bp, _bc, _bcost)
             return
     except Exception as e:
         logger.error("[ImgAsk] Work order detection error: %s", e)
@@ -10558,14 +10748,14 @@ def _process_pending_image_translate_inner(event, message_id):
     if not result:
         logger.warning("[ImgAsk] translate returned empty")
         _reply_or_push("⚠️ 翻譯結果為空,請重試\nHasil terjemahan kosong, silakan coba lagi")
-        track_group_usage(group_id, _bp, _bc)
+        track_group_usage(group_id, _bp, _bc, _bcost)
         return
 
     reply_text = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
     if len(reply_text) > 5000:
         reply_text = reply_text[:4990] + "\n..."
 
-    track_group_usage(group_id, _bp, _bc)
+    track_group_usage(group_id, _bp, _bc, _bcost)
     _stats_inc("image_translations")
     _reply_or_push(reply_text)
     logger.info("[ImgAsk] DONE")
@@ -10651,6 +10841,7 @@ def handle_audio(event):
 
     reply = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
+    _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
     # Set translation tone for this group
     _tone, _tone_custom = get_group_tone(group_id)
     _tl.tone = _tone
@@ -10670,7 +10861,7 @@ def handle_audio(event):
         result = translate(transcribed, lang, "zh")
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
-    track_group_usage(group_id, _bp, _bc)
+    track_group_usage(group_id, _bp, _bc, _bcost)
 
     if reply is None:
         # v3.10+ 修補:語音翻譯失敗加 log 才能追,但不發群組噪音
@@ -12626,21 +12817,39 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="stat-card"><div class="stat-value highlight" id="st-groups">0</div><div class="stat-label">💬 群組</div></div>
 <div class="stat-card"><div class="stat-value" id="st-dm-users">0</div><div class="stat-label">👤 DM使用者</div></div>
 </div>
-<!-- API Usage Card -->
+<!-- API Usage Card (v3.9.53 雙 AI 真實費用) -->
 <div class="card" style="margin:16px 16px 0" id="apiUsageCard">
-<div style="font-weight:700;font-size:15px;margin-bottom:10px">🔑 OpenAI API 用量</div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-<div style="font-size:13px;color:#8a8a9a">Tokens（本次啟動）</div>
-<div style="font-size:13px;text-align:right" id="st-tokens">0</div>
-<div style="font-size:13px;color:#8a8a9a">預估花費</div>
-<div style="font-size:13px;text-align:right" id="st-cost">$0.00</div>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+<div style="font-weight:700;font-size:15px">💰 API 真實費用（本次啟動）</div>
+<div style="font-size:13px;font-weight:700;color:#7c6fef" id="st-cost-total">NT$0.0</div>
 </div>
-<a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" style="display:block;margin-top:12px;padding:10px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#7c6fef;font-size:13px;font-weight:600;text-decoration:none">💳 查看 API 餘額</a>
+<!-- 當前使用中標示 -->
+<div style="font-size:11px;color:#8a8a9a;margin-bottom:10px">目前主力：<span id="st-active-provider" style="color:#22c55e;font-weight:600">—</span></div>
+
+<!-- OpenAI 區 -->
+<div style="border:1px solid #2a2a3e;border-radius:8px;padding:10px;margin-bottom:8px">
+<div style="font-weight:600;font-size:13px;margin-bottom:6px;color:#7c6fef">🔑 OpenAI</div>
+<div style="display:grid;grid-template-columns:1fr auto;gap:4px;font-size:12px;color:#8a8a9a">
+<div>輸入 / 快取 / 輸出</div><div style="text-align:right;color:#ccc" id="st-oai-tok">0 / 0 / 0</div>
+<div>花費</div><div style="text-align:right;color:#ccc" id="st-oai-cost">$0.0000　NT$0.0</div>
 </div>
-<!-- Claude API Balance Card -->
-<div class="card" style="margin:12px 16px 0">
-<div style="font-weight:700;font-size:15px;margin-bottom:10px">🧠 Claude API 餘額</div>
-<a href="https://console.anthropic.com/settings/billing" target="_blank" style="display:block;padding:10px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#cc785c;font-size:13px;font-weight:600;text-decoration:none">💳 查看 Claude 餘額</a>
+</div>
+
+<!-- Claude 區 -->
+<div style="border:1px solid #2a2a3e;border-radius:8px;padding:10px">
+<div style="font-weight:600;font-size:13px;margin-bottom:6px;color:#cc785c">🧠 Claude</div>
+<div style="display:grid;grid-template-columns:1fr auto;gap:4px;font-size:12px;color:#8a8a9a">
+<div>輸入 / 輸出</div><div style="text-align:right;color:#ccc" id="st-ant-io">0 / 0</div>
+<div>快取讀 / 快取寫</div><div style="text-align:right;color:#ccc" id="st-ant-cache">0 / 0</div>
+<div>花費</div><div style="text-align:right;color:#ccc" id="st-ant-cost">$0.0000　NT$0.0</div>
+</div>
+</div>
+
+<div style="display:flex;gap:8px;margin-top:12px">
+<a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" style="flex:1;padding:9px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#7c6fef;font-size:12px;font-weight:600;text-decoration:none">💳 OpenAI 餘額</a>
+<a href="https://console.anthropic.com/settings/billing" target="_blank" style="flex:1;padding:9px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#cc785c;font-size:12px;font-weight:600;text-decoration:none">💳 Claude 餘額</a>
+</div>
+<div style="font-size:10px;color:#666;margin-top:8px;line-height:1.5">※ 即時精確記帳，已含 prompt cache（讀 ×0.1／寫 ×1.25）與 thinking 技術消費。匯率 1 USD = <span id="st-fx">32</span> TWD。</div>
 </div>
 </div>
 
@@ -14965,9 +15174,22 @@ async function loadStats(){
   setStatVal('st-cust',d.customers||0);
   setStatVal('st-groups',d.groups||0);
   setStatVal('st-dm-users',d.dm_users||0);
-  var tt=d.tokens_total||0;
-  document.getElementById('st-tokens').textContent=tt.toLocaleString();
-  document.getElementById('st-cost').textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
+  // v3.9.53 雙 AI 真實費用
+  var fx = 32;
+  var oai = d.openai || {}, ant = d.anthropic || {};
+  var _fmt = function(n){ return (n||0).toLocaleString(); };
+  var _setTxt = function(id,txt){ var e=document.getElementById(id); if(e) e.textContent=txt; };
+  _setTxt('st-cost-total', 'NT$'+(d.cost_total_twd||0).toFixed(1));
+  _setTxt('st-active-provider', (d.active_provider==='anthropic'?'Claude':(d.active_provider==='openai'?'OpenAI':'—')));
+  _setTxt('st-oai-tok', _fmt(oai.input)+' / '+_fmt(oai.cached)+' / '+_fmt(oai.output));
+  _setTxt('st-oai-cost', '$'+(oai.cost_usd||0).toFixed(4)+'　NT$'+(oai.cost_twd||0).toFixed(1));
+  _setTxt('st-ant-io', _fmt(ant.input)+' / '+_fmt(ant.output));
+  _setTxt('st-ant-cache', _fmt(ant.cache_read)+' / '+_fmt(ant.cache_write));
+  _setTxt('st-ant-cost', '$'+(ant.cost_usd||0).toFixed(4)+'　NT$'+(ant.cost_twd||0).toFixed(1));
+  _setTxt('st-fx', fx);
+  // 相容舊 id(若仍存在)
+  var _ot=document.getElementById('st-tokens'); if(_ot) _ot.textContent=(d.tokens_total||0).toLocaleString();
+  var _oc=document.getElementById('st-cost'); if(_oc) _oc.textContent='$'+(d.estimated_cost_usd||0).toFixed(4);
 }
 function setStatVal(id,val){
   var el=document.getElementById(id);
@@ -19524,10 +19746,13 @@ def api_admin_stats():
     if not check_manager_access():
         return jsonify({"error": "forbidden"}), 403
     uptime = time.time() - bot_start_time
-    # Calculate estimated cost (GPT-4o-mini pricing)
+    # v3.9.53: 真實費用 — 用 track_tokens 即時精確記帳(含 cache/thinking 技術消費)
     tp = bot_stats.get("tokens_prompt", 0)
     tc = bot_stats.get("tokens_completion", 0)
-    cost = (tp * 0.00000015) + (tc * 0.0000006)
+    oai_cost = bot_stats.get("oai_cost_usd", 0.0)
+    ant_cost = bot_stats.get("ant_cost_usd", 0.0)
+    total_cost = oai_cost + ant_cost
+    active_provider = ai_provider.get_active_provider()
     return jsonify({
         "uptime_seconds": int(uptime),
         "text_translations": bot_stats.get("text_translations", 0),
@@ -19541,7 +19766,28 @@ def api_admin_stats():
         "tokens_prompt": tp,
         "tokens_completion": tc,
         "tokens_total": tp + tc,
-        "estimated_cost_usd": round(cost, 4),
+        # 相容舊欄位:現在是雙 AI 真實總花費
+        "estimated_cost_usd": round(total_cost, 4),
+        # v3.9.53 雙 AI 精確明細
+        "active_provider": active_provider,
+        "cost_total_usd": round(total_cost, 4),
+        "cost_total_twd": round(total_cost * USD_TO_TWD, 2),
+        "openai": {
+            "input": bot_stats.get("oai_input", 0),
+            "cached": bot_stats.get("oai_cached", 0),
+            "output": bot_stats.get("oai_output", 0),
+            "reasoning": bot_stats.get("oai_reasoning", 0),
+            "cost_usd": round(oai_cost, 4),
+            "cost_twd": round(oai_cost * USD_TO_TWD, 2),
+        },
+        "anthropic": {
+            "input": bot_stats.get("ant_input", 0),
+            "cache_read": bot_stats.get("ant_cache_read", 0),
+            "cache_write": bot_stats.get("ant_cache_write", 0),
+            "output": bot_stats.get("ant_output", 0),
+            "cost_usd": round(ant_cost, 4),
+            "cost_twd": round(ant_cost * USD_TO_TWD, 2),
+        },
         "followers": bot_stats.get("followers", 0),
         "unfollowers": bot_stats.get("unfollowers", 0),
         "line_quota": get_line_quota(),

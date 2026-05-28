@@ -1224,6 +1224,9 @@ class _UnifiedUsage:
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
         self.total_tokens = total_tokens
+        # v3.2.6: cache token 預設 0,Anthropic 路徑會覆寫(計費用)
+        self.cache_read_tokens = 0
+        self.cache_creation_tokens = 0
 
 
 class _UnifiedResponse:
