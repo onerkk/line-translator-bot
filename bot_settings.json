@@ -124,7 +124,7 @@
     }
   },
   "bot_stats": {
-    "text_translations": 117,
+    "text_translations": 118,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
@@ -202,12 +202,7 @@
     "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
   },
-  "group_welcome_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
-      "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
-    }
-  },
+  "group_welcome_settings": {},
   "flex_enabled": true,
   "quick_reply_enabled": false,
   "silent_mode": true,
@@ -216,7 +211,7 @@
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": false
+    "Cd188e1adc7792e407c90f3fa78850316": true
   },
   "group_qr_settings": {},
   "group_silent_settings": {},
