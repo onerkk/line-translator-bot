@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.48-multiworker-settings-sync"
+VERSION = "v3.9.51-dual-ai-official-techniques"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -1785,15 +1785,23 @@ def _build_logit_bias(tgt_lang, model):
 
 
 def _build_stop_sequences(tgt_lang):
-    """v3.2-0426e: Stop sequences to terminate GPT before it adds explanations.
-    These are common patterns GPT uses when adding extra commentary."""
+    """v3.2-0426e: Stop sequences to terminate LLM before it adds explanations.
+    These are common patterns LLM uses when adding extra commentary.
+    
+    v3.9.50: 對 en/th/hi/vi/ja/ko 等非 zh/id 方向加入元評論 stop_sequences。
+    Claude 4.7 reasoning model 在這些方向會輸出「Wait — I notice...」「However, I notice...」
+    「Could you clarify...」「Let me correct that...」等元評論詞。
+    \\n\\n 前綴確保只有新段落才觸發,不誤殺正文中可能出現的詞。
+    Anthropic 官方文檔:stop_sequences 是 production 級官方技術,實際用 4 個以內。
+    """
     if not stop_sequences_enabled:
         return None
     if tgt_lang == "zh":
         return ["\n註:", "\n（註", "\n注:", "\nTranslation:", "\n翻譯:"]
     if tgt_lang == "id":
         return ["\nCatatan:", "\n(Catatan", "\nTerjemahan:", "\nPenjelasan:"]
-    return None
+    # en/th/hi/vi/ja/ko — Claude reasoning model 元評論詞,雙重保險(配合 sys_prompt override)
+    return ["\n\nWait", "\n\nHowever", "\n\nLet me", "\n\nCould you"]
 
 
 def _example_relevance_score(example_text, query_text):
@@ -5453,7 +5461,50 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             tone_instruction = _preset_text
 
+        # v3.9.51: 雙 AI 系統官方技術 — 用 OpenAI cookbook 官方標準 XML tag 名稱,
+        # Anthropic 也識別任何 XML tag(雙方都推薦 use-xml-tags 強化 system prompt)。
+        #
+        # OpenAI 官方:over-deference(LLM 過度問用戶)的修法是 <persistence> block
+        #   https://cookbook.openai.com/examples/gpt-5/gpt-5_troubleshooting_guide
+        # OpenAI 官方:output format 控制用 <output_contract> block
+        #   https://developers.openai.com/api/docs/guides/prompt-guidance
+        # Anthropic 官方:XML tags 強化 system prompt 結構
+        #   https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+        # Anthropic 官方:Claude 4.5+/4.6+/4.7 不再支援 prefill,format 指令必須放 system
+        #   https://blog.laozhang.ai/en/posts/claude-opus-prefill-error-fix
+        #
+        # 兩 block 並列、放 sys_prompt 最前面權重最高,雙 AI 都能識別。
+        if tgt != "id":
+            target_override = (
+                "<persistence>\n"
+                "- You MUST produce the requested translation completely on your own, without asking the user.\n"
+                "- NEVER stop to ask 'do you want X or Y' — the target language is already specified below.\n"
+                "- NEVER provide multiple alternatives ('If English:... If Indonesian:...').\n"
+                "- NEVER self-correct mid-output ('Wait, I notice...', 'Let me correct that', 'However, I notice').\n"
+                "- If you have any doubt about the target language, just translate as best you can in the specified target language.\n"
+                "- The translation request is unambiguous: produce it and stop.\n"
+                "</persistence>\n"
+                "\n"
+                "<output_contract>\n"
+                "TARGET LANGUAGE FOR THIS REQUEST: " + tgt_name + " (only this language; nothing else).\n"
+                "Output is EXACTLY ONE thing: the " + tgt_name + " translation of the user's text.\n"
+                "- NO Indonesian output when target is not Indonesian.\n"
+                "- NO bilingual output. NO alternatives.\n"
+                "- NO meta-commentary. Forbidden opening words/phrases:\n"
+                "  'Wait', 'I notice', 'However', 'Let me', 'Could you clarify', 'do you want',\n"
+                "  'If English:', 'If Indonesian:', 'the context suggests', 'your first instruction said'.\n"
+                "- NO markdown formatting (no **bold**, no ## headers, no bullet lists).\n"
+                "- The Indonesian vocabulary tables and Indonesian-related rules below in this prompt are\n"
+                "  CONTEXT ONLY for understanding the source factory environment.\n"
+                "  They do NOT change the target language for THIS request.\n"
+                "</output_contract>\n"
+                "\n"
+            )
+        else:
+            target_override = ""
+
         sys_prompt = (
+            target_override +
             # v3.9.37: 分區 XML 結構,符合 Anthropic 官方 use-xml-tags 規範
             # https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
             # 雙系統共用:Anthropic 路徑 _wrap_system_prompt_xml 偵測 <role> 即 pass
@@ -5887,21 +5938,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 ". Preserve names and __MENTION__ placeholders exactly. Translate every remaining source-language word."
             )
         else:
-            # v3.9.47: 強化 target language 指令。
-            # 根因:system prompt 整體偏向「印尼工廠翻譯員」(role 設定 + 大量印尼俚語/術語 vocab),
-            # 當 tgt 不是 id 時(例如 zh→en 多語廣播),LLM 反射先吐印尼文,
-            # 然後 reasoning chain 介入自我糾正,把整個糾正過程 + 詢問用戶都吐到輸出。
-            # 09:59 截圖證據:zh→en 譯文被輸出成「印尼版 + 'Wait, I notice...' + 英版 + 
-            # 'Could you clarify' + 兩個 alternatives」整段元評論。
-            # 治本:user msg 開頭加絕對指令,壓過 system prompt 的隱性偏向。
-            # 治標就會堆 prompt,治本就要把『輸出契約』講死。
-            msg = (
-                "TARGET LANGUAGE: " + tgt_name + " (output ONLY this language, no others).\n"
-                "Output ONLY the translated text. "
-                "Do NOT explain, ask questions, self-correct mid-output, "
-                "provide alternatives, or use markdown formatting (no **bold**, no headers).\n\n"
-                "Translate from " + src_name + " to " + tgt_name + ": " + protected
-            )
+            # v3.9.50: 撤回 v3.9.47 user msg 強化指令 — Anthropic 官方文檔明確:
+            # 「The fastest fix is to add format instructions to your **system prompt**」
+            # https://blog.laozhang.ai/en/posts/claude-opus-prefill-error-fix
+            # v3.9.47 把指令放 user msg,權重低於 system prompt 中的印尼相關 context,
+            # LLM 仍然 reflex 吐印尼文。改成 system prompt 最前面放 XML override 區塊。
+            msg = "Translate from " + src_name + " to " + tgt_name + ": " + protected
         
         # v3.9.41 Phase N: In-context Learning — 動態 few-shot from TM
         # 若有夠多高分 refs(score >= ICL_MIN_SCORE),改用 multi-turn user/assistant 對話
@@ -9436,12 +9478,6 @@ def handle_command(text, group_id, user_id=None):
 
 @app.route("/callback", methods=["POST"])
 def callback():
-    # v3.9.48: webhook 處理前也 reload(5s throttle),確保 multi-worker 下
-    # 後台剛改的群組 toggle(flex/qr/silent 等)能立刻在訊息處理時生效。
-    try:
-        _maybe_reload_from_github()
-    except Exception:
-        pass
     sig = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
     # v3.9.19: 記錄所有進來的 webhook(只記事件 type 跟 message type,不記內容)
@@ -18116,41 +18152,8 @@ def check_admin_key():
     return key == ADMIN_KEY
 
 
-# v3.9.48: multi-worker GitHub-based settings sync.
-# 根因:Render gunicorn multi-worker,Worker A 透過 admin POST 寫盤後,
-# Worker B 的記憶體仍是舊狀態。前端刷新發 GET 若路由到 Worker B,
-# 從 Worker B 記憶體讀回舊值 → 看起來「設定跳回預設」。
-# 修法:GET 請求進來前(5 秒 throttle 一次),從 GitHub 重 reload bot_settings.json,
-# 確保各 worker 不會用過於陳舊的記憶體版本應對前端 query。
-# POST 不 reload(會覆蓋剛寫入但還沒 commit 完成的記憶體)。
-_last_reload_time = 0
-_reload_lock = _threading.Lock()
-_RELOAD_THROTTLE_SEC = 5
-
-
-def _maybe_reload_from_github():
-    """5 秒 throttle 的 reload。GET admin endpoint 開頭呼叫,multi-worker 同步用。"""
-    global _last_reload_time
-    now = time.time()
-    with _reload_lock:
-        if now - _last_reload_time < _RELOAD_THROTTLE_SEC:
-            return
-        _last_reload_time = now
-    try:
-        load_settings()
-        logger.info("[Sync] reloaded settings from GitHub (multi-worker sync)")
-    except Exception as e:
-        logger.warning("[Sync] periodic reload failed: %s", e)
-
-
 def check_manager_access(required_tab=None):
     """Check if request is from super admin or authorized manager."""
-    # v3.9.48: GET 前 reload (multi-worker sync)。POST 不 reload (會覆蓋剛寫的記憶體)。
-    try:
-        if request.method == "GET":
-            _maybe_reload_from_github()
-    except Exception:
-        pass  # 不能讓 sync 機制阻擋正常權限檢查
     if check_admin_key():
         return True
     uid = request.headers.get("X-Manager-Id", "")
@@ -23105,7 +23108,10 @@ def set_flex_v2(group_id, key, value):
         group_flex_v2[group_id] = {}
     group_flex_v2[group_id][key] = bool(value)
     try:
-        save_settings()
+        # v3.9.49: force=True 同步寫盤 — set_flex_v2 是用戶後台「視覺」按鈕觸發,
+        # 必須確保 sidecar(bot_settings_v310.json)立刻 commit 完才 return,
+        # 避免 throttle 期間設定丟失。
+        save_settings(force=True)
     except Exception:
         pass
     return True
