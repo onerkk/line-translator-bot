@@ -14,7 +14,8 @@
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "hero": true,
-      "span": true
+      "span": true,
+      "carousel": true
     }
   },
   "group_conv_settings": {}
