@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.54-fangxing-context-fix"
+VERSION = "v3.9.56-translate-all-short-msg"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -2954,6 +2954,38 @@ def has_chinese(text):
     return len(re.findall(r'[\u4e00-\u9fff]', text)) >= 2
 
 
+def has_translatable_content(text):
+    """v3.9.56: 判斷訊息是否含「可翻譯的語言內容」。
+
+    全面短文翻譯:取代散落各處的 `len(text) < 2` 無條件門檻。
+    原本 len<2 會漏掉單字中文(好/對/是/懂)、單個假名/韓文/泰文字。
+
+    回 True 的條件(任一):
+      - 含至少 1 個 CJK/假名/韓文/泰文/天城文字
+      - 含至少 1 個「2 字母以上」的拉丁詞(maaf/ok/sudah...)
+      - 含至少 2 個拉丁字母(救 hi/no/ya 這類 2 字母詞)
+    回 False(跳過,不翻):
+      - 純 emoji / 純標點 / 純數字 / 純空白
+      - 單個拉丁字母(a/i/x 這類無意義)
+    """
+    if not text:
+        return False
+    s = text.strip()
+    if not s:
+        return False
+    # 任何 CJK / 假名 / 韓文 / 泰文 / 天城文 → 有內容
+    if re.search(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff'
+                 r'\uac00-\ud7af\u0e00-\u0e7f\u0900-\u097f]', s):
+        return True
+    # 2 字母以上的拉丁詞 → 有內容(maaf, ok, sudah)
+    if re.search(r'[a-zA-Z]{2,}', s):
+        return True
+    # 至少 2 個拉丁字母(救 "hi"=2字母已被上面抓,這裡兜底如 "a b")
+    if len(re.findall(r'[a-zA-Z]', s)) >= 2:
+        return True
+    return False
+
+
 def has_japanese(text):
     hira = len(re.findall(r'[\u3040-\u309f]', text))
     kata = len(re.findall(r'[\u30a0-\u30ff]', text))
@@ -3287,12 +3319,36 @@ def detect_language(text):
       3. Vietnamese (Latin + diacritics + markers) → vi
       4. Indonesian (Latin + ID markers, no Asian script) → id
       5. Plain Latin without ID markers → en
+
+    v3.9.55 (2026-05-30): 加「極短訊息字典查表」優先層。
+    根治「Maaf 🙏」漏譯 bug:
+      - has_indonesian/has_english 在 len(words)<2 直接 return False(統計式偵測不可靠)
+      - 結果 'Maaf' (4字母單字+emoji) 被 fallback 判 en, 因 en 不在群組目標而被丟棄
+    官方依據:FastText 文檔明示「樣本太短會降低準確度」,業界共識是「短訊息走字典查表
+    不走統計式偵測」(see fastlangml 官方文檔)。
     """
     if not text:
         return None
     clean = strip_mentions_for_detect(text).strip()
-    if not clean or len(clean) < 2:
+    if not clean:
         return None
+
+    # v3.9.56: 單字元 script 偵測 — 讓「好」「對」「は」「네」「ครับ」這類
+    # 單個非拉丁字也能判定語言(原本 has_* 門檻是 >=2 字元,單字漏判)。
+    # 全面短文翻譯:只要有一個 CJK/假名/韓文/泰文/天城文字,就能判語言。
+    if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', clean):  # 任何假名
+        return "ja"
+    if re.search(r'[\uac00-\ud7af]', clean):               # 任何韓文
+        return "ko"
+    if re.search(r'[\u0e00-\u0e7f]', clean):               # 任何泰文
+        return "th"
+    if re.search(r'[\u0900-\u097f]', clean):               # 任何天城文(印地)
+        return "hi"
+    # 單個中文字(無假名才算中文,日文漢字已被上面假名規則攔截大部分情況)
+    _zh_chars = re.findall(r'[\u4e00-\u9fff]', clean)
+    _latin_all = re.findall(r'[a-zA-Z]', clean)
+    if len(_zh_chars) >= 1 and not _latin_all:
+        return "zh"
 
     # --- Script-based first (most reliable) ---
     if has_japanese(clean):
@@ -3310,6 +3366,43 @@ def detect_language(text):
 
     if zh_count >= 2 and zh_count >= len(latin_words):
         return "zh"
+
+    # v3.9.55: 極短訊息查表 — 在統計式 has_english/has_indonesian 之前。
+    # 只在「latin word 數 < 2」時觸發(統計式必失敗的情境),避免影響正常句子。
+    # 命中表內常見短詞即直接返回語言,不命中則往下走原本邏輯。
+    if 1 <= len(latin_words) <= 1:
+        # 去掉所有非字母字元(emoji/標點/數字)後查表
+        tokens = re.findall(r'[a-z]+', clean.lower())
+        if len(tokens) == 1:
+            w = tokens[0]
+            # 印尼文常見短詞(問候、應答、情緒、確認)
+            _SHORT_ID = {
+                'maaf', 'maafkan', 'sori', 'mafkan', 'mhn',
+                'iya', 'yaa', 'yah', 'yes',  # yes 常用印尼語境亦可
+                'oke', 'okeh', 'okey', 'sip', 'siap',
+                'mantap', 'mantul', 'gas', 'oks',
+                'belum', 'sudah', 'udah', 'udh', 'blm',
+                'bisa', 'gak', 'enggak', 'ngga', 'nggak', 'tdk', 'tidak',
+                'ya', 'nih', 'kok', 'deh', 'dong', 'sih', 'aja',
+                'mas', 'mbak', 'pak', 'bu', 'bos', 'gan',
+                'tolong', 'terima', 'makasih', 'permisi',
+                'selamat', 'pagi', 'siang', 'sore', 'malam',
+                'lapor', 'masuk', 'pulang', 'cuti', 'libur',
+                'lembur', 'shift', 'absen',  # 工廠常用
+            }
+            # 英文常見短詞
+            _SHORT_EN = {
+                'ok', 'okay', 'okey', 'yep', 'yup', 'nope',
+                'hi', 'hello', 'hey', 'bye',
+                'thanks', 'thx', 'thank', 'sorry', 'pls', 'please',
+                'sure', 'fine', 'good', 'great', 'cool', 'nice',
+                'yeah', 'yea', 'noo',
+            }
+            if w in _SHORT_ID:
+                return "id"
+            if w in _SHORT_EN:
+                return "en"
+            # 不在表內 → 往下走原本邏輯
 
     # Vietnamese (Latin + diacritics + markers)
     if has_vietnamese(clean):
@@ -9718,7 +9811,9 @@ def handle_message(event):
         return
     
     text = event.message.text.strip()
-    if len(text) < 2:
+    # v3.9.56: 全面短文翻譯 — 改用 has_translatable_content,
+    # 放行單字中文(好/對/是)、單假名/韓/泰字;只擋純 emoji/標點/數字。
+    if not has_translatable_content(text):
         return
 
     source = event.source
@@ -9826,7 +9921,8 @@ def handle_message(event):
 
         # DM translation: strip mentions, detect language, translate
         text_clean = strip_mentions_for_detect(text).strip()
-        if not text_clean or len(text_clean) < 2:
+        # v3.9.56: 全面短文翻譯 — 放行單字內容
+        if not has_translatable_content(text_clean):
             return
 
         lang = detect_language(text_clean)
@@ -9954,7 +10050,8 @@ def handle_message(event):
 
     # Strip @mentions for language detection only
     text_for_detect = strip_mentions_for_detect(text, line_mentions).strip()
-    if not text_for_detect or len(text_for_detect) < 2:
+    # v3.9.56: 全面短文翻譯 — 放行單字內容,只擋純 emoji/標點
+    if not has_translatable_content(text_for_detect):
         return
 
     lang = detect_language(text_for_detect)
