@@ -201,7 +201,25 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.57-long-msg-fallback"
+VERSION = "v3.9.57-single-worker-root-fix"
+
+# v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
+# multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
+try:
+    import sys as _sys
+    _gunicorn_workers = None
+    for _i, _arg in enumerate(_sys.argv):
+        if _arg == '--workers' or _arg == '-w':
+            if _i + 1 < len(_sys.argv):
+                _gunicorn_workers = int(_sys.argv[_i + 1])
+        elif _arg.startswith('--workers='):
+            _gunicorn_workers = int(_arg.split('=')[1])
+    if _gunicorn_workers is not None and _gunicorn_workers > 1:
+        print(f"⚠️  [CRITICAL] gunicorn --workers={_gunicorn_workers} > 1！"
+              f"群組設定/tracking/費用 會各 worker 獨立、不同步。"
+              f"請改用 gunicorn.conf.py（強制 workers=1 threads=4）。", flush=True)
+except Exception:
+    pass
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
