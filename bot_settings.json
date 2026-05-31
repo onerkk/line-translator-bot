@@ -2,14 +2,16 @@
   "group_settings": {},
   "group_target_lang": {
     "Cd188e1adc7792e407c90f3fa78850316": "id",
-    "Cf5e2ea027bb3db193677e7ef3b51adea": "id",
-    "C6c708f629dd38d6864669ecacf7712f4": "id"
+    "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
   "group_img_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "C6c708f629dd38d6864669ecacf7712f4": false
   },
-  "group_img_ask_settings": {},
+  "group_img_ask_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": true
+  },
   "group_audio_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false
@@ -43,10 +45,6 @@
     "Cd188e1adc7792e407c90f3fa78850316": {
       "name": "研磨股印尼同事群",
       "joined_at": 1775524787.0752423
-    },
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "name": "寶貝相簿3",
-      "joined_at": 1780198687.6011326
     }
   },
   "group_user_names": {
@@ -134,18 +132,18 @@
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 4,
-    "tokens_prompt": 1847032,
-    "tokens_completion": 6245,
+    "tokens_prompt": 1982083,
+    "tokens_completion": 7121,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 21706,
+    "ant_input": 40817,
     "ant_cache_read": 98678,
-    "ant_cache_write": 33221,
-    "ant_output": 1072,
-    "ant_cost_usd": 0.12022964999999998,
+    "ant_cache_write": 149161,
+    "ant_output": 1948,
+    "ant_cost_usd": 0.35939214999999997,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -203,9 +201,9 @@
       "tokens_completion": 42
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 153605,
-      "tokens_completion": 1072,
-      "cost_usd": 0.12022964999999998,
+      "tokens_prompt": 288656,
+      "tokens_completion": 1948,
+      "cost_usd": 0.35939214999999997,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     }
