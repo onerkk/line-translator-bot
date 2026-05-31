@@ -124,23 +124,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 120,
+    "text_translations": 122,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 4,
-    "tokens_prompt": 1693427,
-    "tokens_completion": 5173,
+    "tokens_prompt": 1711977,
+    "tokens_completion": 5458,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 0,
+    "ant_input": 2591,
     "ant_cache_read": 0,
-    "ant_cache_write": 0,
-    "ant_output": 0,
-    "ant_cost_usd": 0.0,
+    "ant_cache_write": 15959,
+    "ant_output": 285,
+    "ant_cost_usd": 0.02841475,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -196,6 +196,13 @@
     "__dm__": {
       "tokens_prompt": 47857,
       "tokens_completion": 42
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "tokens_prompt": 18550,
+      "tokens_completion": 285,
+      "cost_usd": 0.02841475,
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001"
     }
   },
   "user_languages": {},
@@ -210,7 +217,7 @@
       "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
     }
   },
-  "flex_enabled": true,
+  "flex_enabled": false,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
