@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.56-translate-all-short-msg"
+VERSION = "v3.9.57-long-msg-fallback"
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
@@ -6313,8 +6313,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _kwargs = {
             "model": _model,
             "messages": _msgs,
-            # v3.9.22: 加 timeout 30 秒,避免無限等待
-            "timeout": 30,
+            # v3.9.57: timeout 30→90 秒。長訊息走 Sonnet 4.6 + extended thinking,
+            # 30 秒可能不夠(Anthropic client 自帶 120s,但 OpenAI 路徑走這個值)。
+            "timeout": 90,
         }
         # Sampling parameters
         if model_supports(_model, "temperature"):
@@ -10088,7 +10089,20 @@ def handle_message(event):
             _targets = get_group_target_langs(group_id)
         except NameError:
             _targets = [tgt]
-        _trs = translate_multi(text_to_translate, "zh", _targets, mention_placeholders)
+        _trs = None
+        try:
+            _trs = translate_multi(text_to_translate, "zh", _targets, mention_placeholders)
+        except Exception as _multi_ex:
+            logger.error("[group %s] translate_multi exception: %s %s",
+                         group_id, type(_multi_ex).__name__, str(_multi_ex)[:200])
+            try:
+                _event_log_write("translate_multi_exception", {
+                    "group_id": group_id or "",
+                    "text_len": len(text_to_translate or ""),
+                    "error": str(_multi_ex)[:300],
+                })
+            except Exception:
+                pass
         if _trs:
             reply = format_multi_reply(_trs)
             _tts_lang, _tts_text = _trs[0]   # 第一個翻譯拿來 TTS
@@ -10103,7 +10117,40 @@ def handle_message(event):
         if lang not in _group_targets:
             # 偵測到的語言沒在這個群組的配置中 → 跳過,當作雜訊不翻
             return
-        result = translate(text_to_translate, lang, "zh")
+        # v3.9.57: 長訊息翻譯防護 — try/except + fallback
+        # 長訊息走升級模型(Sonnet 4.6)可能因 API 錯誤/超時無聲失敗,
+        # 加 fallback:失敗時切回短訊息模型(Haiku 4.5)重試一次。
+        try:
+            result = translate(text_to_translate, lang, "zh")
+        except Exception as _trans_ex:
+            logger.error("[group %s] translate exception (will retry with fallback): %s %s",
+                         group_id, type(_trans_ex).__name__, str(_trans_ex)[:200])
+            try:
+                _event_log_write("translate_exception", {
+                    "group_id": group_id or "",
+                    "lang": lang,
+                    "text_len": len(text_to_translate or ""),
+                    "error": str(_trans_ex)[:300],
+                    "error_type": type(_trans_ex).__name__,
+                })
+            except Exception:
+                pass
+            # Fallback: 強制用短訊息模型重試(Haiku 4.5 快且穩)
+            result = None
+            try:
+                _fallback_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
+                logger.info("[group %s] fallback retry with %s", group_id, _fallback_model)
+                # 暫時覆蓋 pick_model 讓 translate 用短訊息模型
+                _orig_threshold = model_threshold
+                try:
+                    # 設 threshold=0 強制走短訊息模型
+                    global model_threshold
+                    model_threshold = 0
+                    result = translate(text_to_translate, lang, "zh")
+                finally:
+                    model_threshold = _orig_threshold
+            except Exception as _fb_ex:
+                logger.error("[group %s] fallback also failed: %s", group_id, str(_fb_ex)[:200])
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
         if result:
