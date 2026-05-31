@@ -18207,6 +18207,12 @@ def _do_save_impl():
             "custom_translation_examples": custom_translation_examples,
             "forms_data": forms_data,
             "forms_submissions": forms_submissions,
+            # v3.9.57: 以下 4 個欄位之前完全沒被 save/load — 重啟全歸零!
+            # 這就是「後台 toggle 重新整理就跳回預設」的根因。
+            "group_flex_v2": group_flex_v2,
+            "group_tts_settings": group_tts_settings,
+            "group_conv_settings": group_conv_settings,
+            "group_target_langs": group_target_langs,
             }
             break  # 快照成功跳出 retry 迴圈
         except RuntimeError as _re:
@@ -18261,6 +18267,7 @@ def load_settings():
     global external_links_settings
     global quick_reply_items_settings
     global forms_data, forms_submissions
+    global group_flex_v2, group_tts_settings, group_conv_settings, group_target_langs
     data = _load_file_from_github("bot_settings.json", branch="data")
     if not data:
         logger.info("No bot_settings.json found on GitHub, starting fresh")
@@ -18548,6 +18555,15 @@ def load_settings():
             forms_data = data["forms_data"]
         if "forms_submissions" in data:
             forms_submissions = data["forms_submissions"]
+        # v3.9.57: 以下 4 個欄位之前完全沒被 load — 重啟全歸零!
+        if "group_flex_v2" in data and isinstance(data["group_flex_v2"], dict):
+            group_flex_v2.update(data["group_flex_v2"])
+        if "group_tts_settings" in data and isinstance(data["group_tts_settings"], dict):
+            group_tts_settings.update(data["group_tts_settings"])
+        if "group_conv_settings" in data and isinstance(data["group_conv_settings"], dict):
+            group_conv_settings.update(data["group_conv_settings"])
+        if "group_target_langs" in data and isinstance(data["group_target_langs"], dict):
+            group_target_langs.update(data["group_target_langs"])
         logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names, %d custom examples, %d forms",
                      len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS), len(custom_translation_examples), len(forms_data))
     except Exception as e:
