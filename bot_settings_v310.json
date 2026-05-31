@@ -3,11 +3,19 @@
   "group_tts_settings": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
+      "carousel": true,
+      "span": true,
       "hero": true
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "carousel": true,
-      "hero": true
+      "hero": true,
+      "span": true
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "hero": true,
+      "span": true,
+      "carousel": true
     }
   },
   "group_conv_settings": {}
