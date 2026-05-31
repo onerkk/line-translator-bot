@@ -237,7 +237,7 @@
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": true,
+    "Cd188e1adc7792e407c90f3fa78850316": false,
     "C6c708f629dd38d6864669ecacf7712f4": true
   },
   "group_qr_settings": {},
