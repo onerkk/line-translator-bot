@@ -504,6 +504,9 @@
       "carousel": true,
       "hero": true,
       "span": true
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "carousel": true
     }
   },
   "group_tts_settings": {},
