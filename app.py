@@ -944,13 +944,18 @@ claude_auto_switch_enabled = True                    # 總開關:OFF 時走「�
 # v3.9.7 (2026-05): 模型能力對照表 — 讓使用者亂勾任何進階設定都不會 400。
 # 後端永遠根據實際模型過濾參數;UI 端會把不相容的設定自動還原成中性值。
 def _model_family(model_name):
-    """v3.9.8: GPT-5 series splits into two sub-families based on lowest reasoning effort:
-      - 'gpt5_minimal': gpt-5, gpt-5.4, gpt-5.5 — supports reasoning_effort='minimal'
-      - 'gpt5_none':    gpt-5.1, gpt-5.2 — supports reasoning_effort='none'
+    """v3.9.57: model family detection — 含 Claude 模型分類.
+    
+    Claude 模型必須有自己的 family,否則被歸類 'unknown' 繼承 OpenAI 能力表,
+    app.py 翻譯路徑會送 logprobs/logit_bias/metadata/store 等 OpenAI-only 參數。
     """
     if not model_name:
         return "unknown"
     m = model_name.lower()
+    # v3.9.57: Claude 模型 — ai_provider 內部處理所有 Claude 專屬參數,
+    # app.py 層只需送 model/messages/max_tokens/temperature(ai_provider 會過濾)
+    if m.startswith("claude-"):
+        return "claude"
     # GPT-5.1 / 5.2 family — supports 'none' as lowest reasoning effort
     if m.startswith(("gpt-5.2", "gpt-5.1")):
         return "gpt5_none"
@@ -971,6 +976,7 @@ def _model_family(model_name):
 # Confirmed by arxiv 2505.14810: "improving reasoning capability often comes at the
 # cost of instruction adherence" — exactly what we don't want for translation.
 TRANSLATION_OPTIMAL_REASONING = {
+    "claude": None,  # Claude 的 thinking 由 ai_provider 管理,app.py 不送 reasoning_effort
     "gpt5_minimal": "minimal",
     "gpt5_none": "none",
     "oseries_reasoning": "low",  # o-series doesn't have minimal/none
@@ -979,6 +985,18 @@ TRANSLATION_OPTIMAL_REASONING = {
 }
 
 MODEL_CAPABILITIES = {
+    # v3.9.57: Claude 模型 — ai_provider._chat_complete_anthropic 內部管理全部 Claude 專屬參數
+    # (thinking/caching/stop_sequences/grounding/citations/xml 等),
+    # app.py 翻譯層不應送任何 OpenAI-only 參數,全設 False。
+    # 只留 max_tokens=True（app.py 計算 output budget 用）+ temperature=True（ai_provider 會過濾）。
+    "claude": {
+        "temperature": True, "top_p": False, "max_tokens": True,
+        "max_completion_tokens": False, "logprobs": False, "logit_bias": False,
+        "stop": False, "structured_output": False, "metadata": False,
+        "prompt_cache_key": False, "reasoning_effort": False, "seed": False,
+        "verbosity": False,
+        "prompt_cache_retention": False,
+    },
     # GPT-5 / 5.4 / 5.5 — reasoning models with minimal/low/medium/high effort
     # v3.9.35: prompt_cache_retention 24h 支援:gpt-5.4 (確認), gpt-5.5 (默認 24h)
     #          gpt-5 / gpt-5-mini / gpt-5-nano 官方未明列,保守設 False(送了會 400)

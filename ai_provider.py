@@ -1589,35 +1589,43 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         resp = client.messages.create(**call_kwargs)
     except Exception as e:
         err_msg = str(e).lower()
-        # Fallback 0 (v3.2 新): adaptive thinking 失敗 → 降回 legacy enabled
-        # 觸發條件:SDK 太舊 / model 不支援 adaptive
-        if (thinking_applied
-            and isinstance(call_kwargs.get("thinking"), dict)
-            and call_kwargs["thinking"].get("type") == "adaptive"
-            and ("adaptive" in err_msg or "effort" in err_msg
-                 or "display" in err_msg or "unknown" in err_msg
-                 or "invalid" in err_msg)):
-            print(f"[ai_provider] adaptive thinking 失敗,fallback to legacy: {e}", flush=True)
-            # 不能 fallback 到 enabled 的 model(只有 Opus 4.7)就完全關掉 thinking
-            if _model_requires_adaptive(anthropic_model):
-                call_kwargs.pop("thinking", None)
-                thinking_applied = False
-                thinking_mode_used = "none(opus47_adaptive_failed)"
+        # v3.2.7 根治: 所有 thinking 相關錯誤都 fallback,不再只抓特定關鍵字。
+        # 原因:Sonnet 4.6 + adaptive thinking 失敗時,若錯誤訊息不含
+        # "adaptive"/"effort"/"display" 等字,原本直接 raise → 翻譯無聲消失。
+        # 新邏輯:只要 thinking_applied=True 且 API 呼叫失敗,一律 fallback。
+        if thinking_applied:
+            print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
+            # Fallback A: adaptive → legacy
+            if (isinstance(call_kwargs.get("thinking"), dict)
+                and call_kwargs["thinking"].get("type") == "adaptive"):
+                if _model_requires_adaptive(anthropic_model):
+                    # Opus 4.7 不支援 legacy → 完全關掉 thinking
+                    call_kwargs.pop("thinking", None)
+                    thinking_applied = False
+                    thinking_mode_used = "none(opus47_fallback)"
+                else:
+                    legacy_budget = int(features.get("thinking_budget", 2000))
+                    call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": legacy_budget}
+                    call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
+                    thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
+                try:
+                    resp = client.messages.create(**call_kwargs)
+                except Exception as e2:
+                    print(f"[ai_provider] legacy fallback 也失敗: {e2}", flush=True)
+                    # Fallback B: legacy → 完全關掉 thinking
+                    call_kwargs.pop("thinking", None)
+                    call_kwargs["max_tokens"] = int(max_tokens or 1024)
+                    thinking_applied = False
+                    thinking_mode_used = "none(all_thinking_failed)"
+                    resp = client.messages.create(**call_kwargs)
             else:
-                legacy_budget = int(features.get("thinking_budget", 2000))
-                call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": legacy_budget}
-                call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
-                thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
-            resp = client.messages.create(**call_kwargs)
-        # Fallback 1: thinking 失敗 → 不啟用 thinking 重試
-        elif thinking_applied and ("thinking" in err_msg or "budget" in err_msg):
-            print(f"[ai_provider] thinking 失敗,fallback: {e}", flush=True)
-            call_kwargs.pop("thinking", None)
-            call_kwargs["max_tokens"] = int(max_tokens or 1024)
-            thinking_applied = False
-            thinking_mode_used = "none(thinking_failed)"
-            resp = client.messages.create(**call_kwargs)
-        # Fallback 2: grounding/citation 失敗
+                # enabled mode 失敗 → 關掉 thinking
+                call_kwargs.pop("thinking", None)
+                call_kwargs["max_tokens"] = int(max_tokens or 1024)
+                thinking_applied = False
+                thinking_mode_used = "none(thinking_failed)"
+                resp = client.messages.create(**call_kwargs)
+        # 非 thinking 錯誤:grounding/citation/cache/stop 的 fallback
         elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
             print(f"[ai_provider] grounding/citation 失敗,fallback: {e}", flush=True)
             for i, m in enumerate(merged):
@@ -1631,7 +1639,6 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
             call_kwargs["messages"] = merged
             grounding_used = False
             resp = client.messages.create(**call_kwargs)
-        # Fallback 3: extended cache 1h beta header 失敗
         elif use_cache_1h and ("extended-cache" in err_msg or "beta" in err_msg or "ttl" in err_msg):
             print(f"[ai_provider] 1h cache fallback to 5min: {e}", flush=True)
             if isinstance(call_kwargs.get("system"), list):
@@ -1639,7 +1646,6 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                     if isinstance(blk, dict) and "cache_control" in blk:
                         blk["cache_control"] = {"type": "ephemeral"}
             resp = client.messages.create(**call_kwargs)
-        # Fallback 4: stop_sequences 太多
         elif use_stop and ("stop_sequence" in err_msg or "too many" in err_msg):
             print(f"[ai_provider] stop_sequences fallback: {e}", flush=True)
             call_kwargs.pop("stop_sequences", None)
