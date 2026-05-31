@@ -4,7 +4,8 @@
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
       "carousel": true,
-      "span": true
+      "span": true,
+      "hero": true
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "carousel": true,
