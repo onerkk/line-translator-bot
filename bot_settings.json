@@ -12,8 +12,7 @@
   "group_img_ask_settings": {},
   "group_audio_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false,
-    "C6c708f629dd38d6864669ecacf7712f4": false
+    "Cd188e1adc7792e407c90f3fa78850316": false
   },
   "group_wo_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
@@ -137,23 +136,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 123,
+    "text_translations": 124,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 4,
-    "tokens_prompt": 1982083,
-    "tokens_completion": 7121,
+    "tokens_prompt": 2001299,
+    "tokens_completion": 7279,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 40817,
+    "ant_input": 43272,
     "ant_cache_read": 98678,
-    "ant_cache_write": 149161,
-    "ant_output": 1948,
-    "ant_cost_usd": 0.35939214999999997,
+    "ant_cache_write": 165922,
+    "ant_output": 2106,
+    "ant_cost_usd": 0.3873483999999999,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -211,9 +210,9 @@
       "tokens_completion": 42
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 288656,
-      "tokens_completion": 1948,
-      "cost_usd": 0.35939214999999997,
+      "tokens_prompt": 307872,
+      "tokens_completion": 2106,
+      "cost_usd": 0.3873483999999999,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     }
@@ -230,7 +229,7 @@
       "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
     }
   },
-  "flex_enabled": true,
+  "flex_enabled": false,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
@@ -238,9 +237,8 @@
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": true,
-    "C6c708f629dd38d6864669ecacf7712f4": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "C6c708f629dd38d6864669ecacf7712f4": true
   },
   "group_qr_settings": {},
   "group_silent_settings": {},
