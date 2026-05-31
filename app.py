@@ -10176,15 +10176,14 @@ def handle_message(event):
             try:
                 _fallback_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
                 logger.info("[group %s] fallback retry with %s", group_id, _fallback_model)
-                # 暫時覆蓋 pick_model 讓 translate 用短訊息模型
-                _orig_threshold = model_threshold
+                # v3.9.57: 暫時覆蓋 pick_model → 強制回傳短訊息模型
+                _orig_pick = globals().get('pick_model')
+                globals()['pick_model'] = lambda text: _fallback_model
                 try:
-                    # 設 threshold=0 強制走短訊息模型
-                    global model_threshold
-                    model_threshold = 0
                     result = translate(text_to_translate, lang, "zh")
                 finally:
-                    model_threshold = _orig_threshold
+                    if _orig_pick:
+                        globals()['pick_model'] = _orig_pick
             except Exception as _fb_ex:
                 logger.error("[group %s] fallback also failed: %s", group_id, str(_fb_ex)[:200])
         if result and mention_placeholders:
@@ -23380,13 +23379,14 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
             logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
             # v3.9.57: fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
             try:
-                global model_threshold
-                _orig_mt = model_threshold
+                _fb_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
+                _orig_pick = globals().get('pick_model')
+                globals()['pick_model'] = lambda text: _fb_model
                 try:
-                    model_threshold = 0  # 強制走短訊息模型
                     res = translate(text_to_translate, src, tgt_lang)
                 finally:
-                    model_threshold = _orig_mt
+                    if _orig_pick:
+                        globals()['pick_model'] = _orig_pick
             except Exception as fb_e:
                 logger.warning("translate_multi fallback also failed tgt=%s: %s", tgt_lang, fb_e)
         if not res:
