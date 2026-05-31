@@ -230,7 +230,7 @@
       "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
     }
   },
-  "flex_enabled": true,
+  "flex_enabled": false,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
