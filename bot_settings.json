@@ -230,7 +230,7 @@
       "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
     }
   },
-  "flex_enabled": false,
+  "flex_enabled": true,
   "quick_reply_enabled": false,
   "silent_mode": true,
   "sender_name": "AI機器人",
@@ -238,7 +238,7 @@
   "video_ocr_enabled": true,
   "location_translate_enabled": true,
   "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "Cd188e1adc7792e407c90f3fa78850316": true,
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
@@ -501,18 +501,11 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "span": true,
-      "hero": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
       "hero": true,
       "span": true
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true
+      "span": true
     }
   },
   "group_tts_settings": {},
