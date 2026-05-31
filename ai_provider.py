@@ -299,7 +299,7 @@ def _get_openai_client():
             return _openai_client
         try:
             from openai import OpenAI
-            _openai_client = OpenAI(api_key=api_key, timeout=30.0)
+            _openai_client = OpenAI(api_key=api_key, timeout=90.0)  # v3.2.7: 30→90 配合長訊息翻譯
             _openai_client._jy_key = api_key
             return _openai_client
         except Exception as e:
@@ -1242,7 +1242,7 @@ class _UnifiedResponse:
 # 核心 chat_complete
 # ═══════════════════════════════════════════════════════════════════
 def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
-                  temperature=None, timeout=30, prompt_cache_key=None,
+                  temperature=None, timeout=90, prompt_cache_key=None,
                   reasoning_effort=None, verbosity=None, logprobs=False,
                   top_logprobs=None, logit_bias=None, stop=None, **kwargs):
     provider = get_active_provider()

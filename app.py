@@ -235,7 +235,7 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
-oai = OpenAI(api_key=OPENAI_KEY, timeout=30.0) if OPENAI_KEY else None  # v3.9.24: 全域 30 秒 timeout
+oai = OpenAI(api_key=OPENAI_KEY, timeout=90.0) if OPENAI_KEY else None  # v3.9.57: 30→90 長訊息需要
 
 
 # ★ AI Provider 統一介面(v1.0 2026-05-15)
@@ -23321,11 +23321,22 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     for tgt_lang in targets:
         if tgt_lang == src:
             continue   # don't translate to source lang
+        res = None
         try:
             res = translate(text_to_translate, src, tgt_lang)
         except Exception as e:
             logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
-            continue
+            # v3.9.57: fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
+            try:
+                global model_threshold
+                _orig_mt = model_threshold
+                try:
+                    model_threshold = 0  # 強制走短訊息模型
+                    res = translate(text_to_translate, src, tgt_lang)
+                finally:
+                    model_threshold = _orig_mt
+            except Exception as fb_e:
+                logger.warning("translate_multi fallback also failed tgt=%s: %s", tgt_lang, fb_e)
         if not res:
             continue
         if mention_placeholders:
