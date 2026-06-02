@@ -83,7 +83,8 @@
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
       "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡",
-      "Uce34fd415b4014d6f0576ca3fcd3c266": "毓俊"
+      "Uce34fd415b4014d6f0576ca3fcd3c266": "毓俊",
+      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim "
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
@@ -137,23 +138,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 123,
+    "text_translations": 129,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 4,
-    "tokens_prompt": 1982083,
-    "tokens_completion": 7121,
+    "tokens_prompt": 2085785,
+    "tokens_completion": 7650,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 40817,
-    "ant_cache_read": 98678,
-    "ant_cache_write": 149161,
-    "ant_output": 1948,
-    "ant_cost_usd": 0.35939214999999997,
+    "ant_input": 51060,
+    "ant_cache_read": 127204,
+    "ant_cache_write": 214094,
+    "ant_output": 2477,
+    "ant_cost_usd": 0.465755,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -214,6 +215,13 @@
       "tokens_prompt": 288656,
       "tokens_completion": 1948,
       "cost_usd": 0.35939214999999997,
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "tokens_prompt": 103702,
+      "tokens_completion": 529,
+      "cost_usd": 0.10636285000000001,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     }
@@ -295,7 +303,7 @@
   "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
   "claude_model_default": "claude-haiku-4-5-20251001",
-  "claude_model_upgrade": "claude-sonnet-4-6",
+  "claude_model_upgrade": "claude-haiku-4-5-20251001",
   "claude_auto_switch_enabled": true,
   "openai_24h_cache_enabled": false,
   "vision_model": "gpt-5-mini",
@@ -315,7 +323,8 @@
     "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
     "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g",
-    "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA"
+    "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
+    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
