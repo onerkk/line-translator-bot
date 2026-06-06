@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.57-single-worker-root-fix"
+VERSION = "v3.9.59-semantic-contract-root"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -935,6 +935,9 @@ TONE_PRESETS = {
         "(d) Are there ellipsed subjects/objects to fill in from context? "
         "(e) Could the translation be misread as the OPPOSITE meaning by an Indonesian worker? If yes, reword. "
         "(f) Is there an emoji that might mislead? (🙏 might suggest 'tolong' but with 'maaf' it means apology, not request) "
+        "(g) If any high-risk multi-meaning Chinese word appears, follow the runtime <semantic_contract> exactly. "
+        "23. CRITICAL POLYSEMY: Runtime semantic contracts override examples, TM, NMT, glossary, and generic dictionary meanings. "
+        "When a semantic contract specifies a sense, preferred translations, and forbidden translations, obey that contract exactly. "
         "After these internal checks, output ONLY the final translation, no explanation."
     ),
 }
@@ -2677,6 +2680,7 @@ BUILTIN_EXAMPLES = [
     {"zh": "台車再幫忙一下", "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.", "dir": "zh2id"},
     {"zh": "削皮那邊還需要一台", "id": "Bagian peeling masih butuh satu troli lagi.", "dir": "zh2id"},
     {"zh": "太凸", "id": "terlalu panjang", "dir": "zh2id"},
+    # v3.9.59: 中文多義詞不再靠單句 built-in example；改由 runtime semantic_contract 統一判斷與驗證。
     
     # ===== v3.5 新增:印尼文公告/長句的失敗案例修正 =====
     # 來源:歐那實際遇到的災難性壓縮 (Martin 訊息)
@@ -4751,6 +4755,8 @@ def finalize_factory_translation(src_text, result, src, tgt):
         raw = result
         bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, raw)
         result = post_fix_factory_zh_to_id(src_text, raw)
+        _contract = build_translation_semantic_contract(src_text, src, tgt)
+        result = enforce_translation_semantic_contract(_contract, src_text, result)
         bad2, reason2, _ = detect_factory_semantic_error_zh_id(src_text, result)
         if bad or bad2:
             _tl.factory_audit = {
@@ -4766,6 +4772,7 @@ def finalize_factory_translation(src_text, result, src, tgt):
             repaired = repair_factory_translation_openai_zh_id(src_text, result, reason2)
             if repaired:
                 result = post_fix_factory_zh_to_id(src_text, repaired)
+                result = enforce_translation_semantic_contract(_contract, src_text, result)
         fallback = factory_semantic_translate_zh_id(src_text)
         bad3, _, _ = detect_factory_semantic_error_zh_id(src_text, result)
         if bad3 and fallback:
@@ -4940,10 +4947,13 @@ def post_fix_factory_zh_to_id(src_text, id_text):
         "獎金", "底薪", "本薪", "勞保", "健保", "夜班費",
         # v3.9.37 新增:訂單流動口語(分流消化誤譯案例)
         "消化", "分流", "異型棒", "急單", "出貨", "去化", "有好處理",
+        # v3.9.58: 飲食/飲料福利場景的「請客 / X請的」
+        "請客", "請的", "飲料", "罐裝", "便當", "咖啡", "點心", "一人一罐", "每人一罐",
     ]
     # 也檢查譯文(if 原文沒命中但譯文有 Yanshui / Dinas K3 等典型錯翻)
     id_trigger_words = ["Yanshui", "Dinas K3", "tilang", "kena tangkap", "kepala shift",
-                        "bereaksi", "dicuri", "tertelan", "interlock di-bypass"]
+                        "bereaksi", "dicuri", "tertelan", "interlock di-bypass",
+                        "diminta", "permintaan", "dipesan"]
     factory_src = any(k in src for k in factory_keywords)
     factory_id = any(k in result for k in id_trigger_words)
     if not factory_src and not factory_id:
@@ -5036,12 +5046,318 @@ def post_fix_factory_zh_to_id(src_text, id_text):
             result, flags=re.I
         )
     
+    # v3.9.58: 飲食/飲料福利場景的「請客 / X請的」不可被翻成 request/diminta
+    result = fix_qing_treat_translation_zh_id(src, result)
     result = re.sub(r"\s+", " ", result).strip()
     return result
 
 
+
+# ══════════════════════════════════════════════════════════════════════
+# v3.9.59: Runtime semantic contract engine — 根治中文多義詞誤判
+# 目的:
+#   不是「看到錯字就替換」；而是在翻譯前先把高風險多義詞做語義分類，
+#   並把同一份 contract 串到 TM / Vector TM / NMT / LLM / GE / QE / APE / TM store。
+#   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
+# ══════════════════════════════════════════════════════════════════════
+
+_SEMANTIC_CONTRACT_VERSION = "v1-qing-polysemy-root"
+
+_SEM_QING_TREAT_FOOD_WORDS = (
+    "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
+    "便當", "飯", "餐", "吃", "喝", "點心", "零食", "餅乾", "麵包", "宵夜", "下午茶",
+    "冰箱", "一人一罐", "一人一瓶", "一人一份", "每人一罐", "每人一瓶", "每人一份",
+    "大家拿", "自己拿", "發給大家", "福利", "招待", "贊助",
+)
+_SEM_QING_REQUEST_WORDS = (
+    "請注意", "請大家注意", "請幫", "請幫忙", "請協助", "請確認", "請拿", "請放", "請問",
+    "請回覆", "請填", "請寫", "請記得", "請勿", "請不要", "請假", "申請", "邀請",
+    "請到", "請去", "請來", "請叫", "請看", "請查", "請處理", "請簽", "請給",
+)
+_SEM_QING_FORBIDDEN_ID = (
+    "diminta", "minta", "meminta", "permintaan", "dimohon", "mohon", "dipesan", "pesanan", "requested", "request",
+)
+_SEM_QING_PREFERRED_ID = (
+    "traktir", "ditraktir", "dibayarin", "dibayar", "disponsori", "sponsor", "traktiran",
+)
+_SEM_SPONSOR_ID_MAP = {
+    "台北總部": "kantor pusat Taipei",
+    "總部": "kantor pusat",
+    "台北": "Taipei",
+    "公司": "perusahaan",
+    "廠長": "kepala pabrik",
+    "副總": "Wakil Direktur",
+    "副總指示": "Wakil Direktur",  # 防止錯把「指示」吃進 sponsor 時仍可降回職稱
+    "班長": "ketua shift",
+    "組長": "kepala regu",
+    "主管": "atasan",
+}
+_SEM_BRAND_ID_MAP = {
+    "原萃": "Original Tea",
+}
+
+def _semantic_compact_zh(text):
+    return re.sub(r"\s+", "", text or "")
+
+def _semantic_hits(compact, words):
+    return [w for w in words if w and w in compact]
+
+def _extract_semantic_sponsor_before_qing(text):
+    """抽出 X請的 / X請客 的 X；只做語義證據，不直接決定翻譯。"""
+    compact = _semantic_compact_zh(text)
+    patterns = [
+        r"[（(]([^（）()，,。；;：:\s]{1,24})請的[）)]",
+        r"([^，,。；;：:\s]{1,18})請的",
+        r"([^，,。；;：:\s]{1,18})請客",
+        r"([^，,。；;：:\s]{1,18})請喝",
+        r"([^，,。；;：:\s]{1,18})請吃",
+    ]
+    for pat in patterns:
+        m = re.search(pat, compact)
+        if not m:
+            continue
+        sponsor = m.group(1).strip("：:，,。；;()（）")
+        sponsor = re.sub(r"^.*?(台北總部|總部|公司|廠長|副總|班長|組長|主管)$", r"\1", sponsor)
+        return sponsor
+    return ""
+
+def _semantic_sponsor_to_id(sponsor_zh):
+    if not sponsor_zh:
+        return ""
+    return _SEM_SPONSOR_ID_MAP.get(sponsor_zh, sponsor_zh)
+
+def _extract_semantic_item_brand_zh(text):
+    src = text or ""
+    m = re.search(r"飲料\s*[-－—:：]?\s*([^，,。；;（）()\s]{1,16})", src)
+    if m:
+        brand = m.group(1).strip()
+        return _SEM_BRAND_ID_MAP.get(brand, brand)
+    for zh, idn in _SEM_BRAND_ID_MAP.items():
+        if zh in src:
+            return idn
+    return ""
+
+def _classify_qing_sense_zh_id(text):
+    """把中文『請』分類成 request / treat_sponsor / none。
+    這是語義分類器，不是譯文替換器。
+    """
+    compact = _semantic_compact_zh(text)
+    if "請" not in compact:
+        return None
+    request_hits = _semantic_hits(compact, _SEM_QING_REQUEST_WORDS)
+    food_hits = _semantic_hits(compact, _SEM_QING_TREAT_FOOD_WORDS)
+    explicit_treat = any(k in compact for k in ("請客", "請的", "請喝", "請吃"))
+
+    # 明確請求動作，且沒有「請客/X請的」形態 → request。
+    if request_hits and not explicit_treat:
+        return {
+            "term": "請",
+            "sense": "request_action",
+            "confidence": 0.93,
+            "evidence": request_hits[:6],
+            "tm_bypass_allowed": True,
+            "nmt_allowed": True,
+        }
+
+    # 飲食/福利發放 + 請客形態 → treat/sponsor/pay for。
+    if explicit_treat and (food_hits or "請客" in compact):
+        sponsor_zh = _extract_semantic_sponsor_before_qing(text)
+        sponsor_id = _semantic_sponsor_to_id(sponsor_zh)
+        return {
+            "term": "請",
+            "sense": "treat_sponsor_pay_for",
+            "confidence": 0.99 if sponsor_zh else 0.94,
+            "evidence": (food_hits + (["explicit_treat_shape"] if explicit_treat else []))[:8],
+            "sponsor_zh": sponsor_zh,
+            "sponsor_id": sponsor_id,
+            "preferred_id_terms": list(_SEM_QING_PREFERRED_ID),
+            "forbidden_id_terms": list(_SEM_QING_FORBIDDEN_ID),
+            "tm_bypass_allowed": False,   # 舊 TM 容易把這類句子污染成 diminta；必須驗證才可 bypass
+            "nmt_allowed": False,         # Google/NMT 最容易把「請」當 request；高風險時一律走 LLM+contract
+            "requires_validation": True,
+        }
+
+    return {
+        "term": "請",
+        "sense": "ambiguous_qing",
+        "confidence": 0.60,
+        "evidence": (request_hits + food_hits)[:8],
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+        "requires_validation": False,
+    }
+
+def build_translation_semantic_contract(text, src, tgt):
+    """Build one runtime contract for the current translation request.
+    Contract is intentionally plain dict so every legacy module can consume it without new dependencies.
+    """
+    contract = {
+        "version": _SEMANTIC_CONTRACT_VERSION,
+        "src": src,
+        "tgt": tgt,
+        "has_risk": False,
+        "risks": [],
+        "tm_bypass_allowed": True,
+        "vector_bypass_allowed": True,
+        "nmt_allowed": True,
+        "requires_llm": False,
+    }
+    if src == "zh" and tgt == "id":
+        qing = _classify_qing_sense_zh_id(text)
+        if qing and qing.get("sense") in ("treat_sponsor_pay_for", "ambiguous_qing"):
+            contract["has_risk"] = True
+            contract["risks"].append(qing)
+            if not qing.get("tm_bypass_allowed", True):
+                contract["tm_bypass_allowed"] = False
+                contract["vector_bypass_allowed"] = False
+            if not qing.get("nmt_allowed", True):
+                contract["nmt_allowed"] = False
+                contract["requires_llm"] = True
+    return contract
+
+def semantic_contract_requires_llm(contract):
+    return bool(contract and contract.get("requires_llm"))
+
+def build_translation_semantic_contract_prompt(contract):
+    """Turn contract into a compact XML prompt block. Empty when no risk."""
+    if not contract or not contract.get("has_risk"):
+        return ""
+    lines = ["<semantic_contract>"]
+    lines.append("This block is generated by deterministic pre-translation semantic analysis. It overrides TM/NMT/examples/general dictionary meanings.")
+    for risk in contract.get("risks", []):
+        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+            sponsor = risk.get("sponsor_id") or "the sponsor/person/company"
+            ev = ", ".join(risk.get("evidence", [])[:6])
+            lines.append("<risk term='請' sense='treat_sponsor_pay_for'>")
+            lines.append(f"Evidence: {ev}.")
+            lines.append("Chinese 請 here means treat/sponsor/pay for, NOT request/ask/order.")
+            lines.append(f"Use Indonesian meaning: ditraktir/dibayarin/disponsori oleh {sponsor}.")
+            lines.append("Forbidden Indonesian words for this sense: diminta, minta, meminta, permintaan, dimohon, mohon, dipesan, pesanan, requested, request.")
+            lines.append("</risk>")
+        elif risk.get("term") == "請" and risk.get("sense") == "ambiguous_qing":
+            lines.append("<risk term='請' sense='ambiguous_qing'>")
+            lines.append("Decide 請 by context before translating; do not default to request if the surrounding words describe food, drinks, welfare distribution, or sponsorship.")
+            lines.append("</risk>")
+    lines.append("</semantic_contract>")
+    return " ".join(lines)
+
+def translation_satisfies_semantic_contract(contract, translation):
+    if not contract or not contract.get("has_risk"):
+        return True, ""
+    t = (translation or "").strip()
+    low = t.lower()
+    for risk in contract.get("risks", []):
+        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+            has_good = any(g in low for g in _SEM_QING_PREFERRED_ID)
+            has_bad = any(b in low for b in _SEM_QING_FORBIDDEN_ID)
+            if has_bad:
+                return False, "qing_treat_translated_as_request"
+            if not has_good:
+                return False, "qing_treat_missing_treat_sponsor_marker"
+    return True, ""
+
+def _semantic_rebuild_qing_treat_translation(src_text, contract, current_translation=""):
+    """Build a safe translation when every model route violates the contract.
+    This is not an exact-sentence replacement; it uses the classified sense + extracted slots.
+    """
+    compact = _semantic_compact_zh(src_text)
+    risk = None
+    for r in (contract or {}).get("risks", []):
+        if r.get("term") == "請" and r.get("sense") == "treat_sponsor_pay_for":
+            risk = r
+            break
+    if not risk:
+        return current_translation
+    sponsor_id = risk.get("sponsor_id") or _semantic_sponsor_to_id(_extract_semantic_sponsor_before_qing(src_text)) or "pihak yang traktir"
+    brand = _extract_semantic_item_brand_zh(src_text)
+
+    # Slot-based reconstruction for welfare announcements.
+    if "冰箱" in compact and any(k in compact for k in ("飲料", "罐裝", "罐")):
+        if "一人一罐" in compact or "每人一罐" in compact:
+            item = "minuman kaleng" + ((" " + brand) if brand else "")
+            return f"Di kulkas ada {item}, satu orang satu kaleng (ditraktir oleh {sponsor_id})."
+        if "一人一瓶" in compact or "每人一瓶" in compact:
+            item = "minuman botol" + ((" " + brand) if brand else "")
+            return f"Di kulkas ada {item}, satu orang satu botol (ditraktir oleh {sponsor_id})."
+        item = "minuman" + ((" " + brand) if brand else "")
+        return f"Di kulkas ada {item} (ditraktir oleh {sponsor_id})."
+
+    if "請客" in compact:
+        return f"Ini traktiran dari {sponsor_id}." if sponsor_id else "Ini traktiran."
+
+    # Generic safety: preserve model translation as much as possible, but remove request sense and add classified sponsor sense.
+    result = (current_translation or "").strip()
+    if result:
+        result = re.sub(r"\s*[（(]?\s*(?:diminta|minta|meminta|permintaan|dimohon|mohon|dipesan|pesanan|requested|request)[^）)]*[）)]?\s*", " ", result, flags=re.I).strip()
+        result = re.sub(r"\s+", " ", result)
+        if result:
+            return f"{result} (ditraktir oleh {sponsor_id})"
+    return f"Ini ditraktir oleh {sponsor_id}."
+
+def enforce_translation_semantic_contract(contract, src_text, translation):
+    """Validate a produced translation against contract; rebuild only if contract is violated."""
+    if not translation:
+        return translation
+    ok, reason = translation_satisfies_semantic_contract(contract, translation)
+    if ok:
+        return translation
+    logger.warning("[SemanticContract] enforce: %s src=%r out=%r", reason, (src_text or '')[:80], (translation or '')[:120])
+    try:
+        _event_log_write("semantic_contract_enforced", {
+            "reason": reason,
+            "src_text": (src_text or '')[:160],
+            "bad_translation": (translation or '')[:200],
+            "contract": contract,
+        })
+    except Exception:
+        pass
+    # Currently qing/treat is the only high-risk contract implemented.
+    for risk in (contract or {}).get("risks", []):
+        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+            return _semantic_rebuild_qing_treat_translation(src_text, contract, translation)
+    return translation
+
+def filter_semantic_contract_references(contract, refs):
+    """Remove TM/Vector references whose target side violates the active semantic contract."""
+    if not contract or not contract.get("has_risk"):
+        return refs
+    filtered = []
+    dropped = 0
+    for item in refs:
+        try:
+            score, src_t, tgt_t, kind = item
+            ok, _reason = translation_satisfies_semantic_contract(contract, tgt_t)
+            if ok:
+                filtered.append(item)
+            else:
+                dropped += 1
+        except Exception:
+            filtered.append(item)
+    if dropped:
+        logger.warning("[SemanticContract] dropped %d TM/Vec references violating semantic contract", dropped)
+    return filtered
+
+# Backward-compatible wrapper names used by older code/admin debug.
+def build_qing_treat_context_hint_zh_id(text):
+    return build_translation_semantic_contract_prompt(build_translation_semantic_contract(text, "zh", "id"))
+
+def factory_semantic_translate_qing_treat_zh_id(text):
+    contract = build_translation_semantic_contract(text, "zh", "id")
+    if not contract.get("has_risk"):
+        return None
+    for risk in contract.get("risks", []):
+        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+            return _semantic_rebuild_qing_treat_translation(text, contract, "")
+    return None
+
+def fix_qing_treat_translation_zh_id(src_text, id_text):
+    contract = build_translation_semantic_contract(src_text, "zh", "id")
+    return enforce_translation_semantic_contract(contract, src_text, id_text)
+
 def factory_semantic_translate_zh_id(text):
-    """Deterministic Chinese->Indonesian factory translation for high-risk known shapes."""
+    """Deterministic Chinese->Indonesian factory translation for high-risk known factory shapes.
+    Note: Chinese polysemy like『請』is handled by runtime semantic_contract, not by exact direct bypass here.
+    """
     src = text or ""
     compact = re.sub(r"\s+", "", src)
     if all(k in compact for k in ["清洗前", "料", "品保"]) and ("偷跑" in compact or "吊去" in compact) and "刮傷" in compact:
@@ -5851,6 +6167,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
             + build_factory_context_hint(text, src, tgt) + " "
+            + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
             + inject_glossary_hint(text, src, tgt)
             
             # ★ v3.4 CoD:對 ID→ZH 注入高風險詞字典
@@ -6195,7 +6512,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Default mapping: 兩台→dua buah(generic, NEVER 'dua unit'); 三把→tiga bundel; 5支→5 batang; 一個→satu buah; 兩件→dua potong. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese contains '單位'. "
             "q) 台車=troli(hard replacement applied). 削皮=peeling(hard replacement applied). "
-            "r) APOLOGY DETECTION (CRITICAL - MISTRANSLATING APOLOGIES AS REQUESTS IS A SEVERE ERROR): "
+            "r) 中文『請』多義規則(CRITICAL): 在飲料/便當/咖啡/點心/吃飯/福利發放語境中,『請客 / X請的 / 公司請的 / 總部請的』= treat/sponsor/pay for, "
+            "必須譯為 traktir / ditraktir oleh X / dibayarin oleh X / disponsori oleh X。嚴禁譯為 diminta/dimohon/requested。 "
+            "例如: 冰箱有罐裝飲料-原萃,一人一罐(台北總部請的) → Di kulkas ada minuman kaleng Original Tea, satu orang satu kaleng (ditraktir oleh kantor pusat Taipei). "
+            "只有在『請幫忙/請確認/請注意/請拿/請問/申請/請假』這類動作要求或行政詞時,才把請譯為 tolong/mohon/request。 "
+            "s) APOLOGY DETECTION (CRITICAL - MISTRANSLATING APOLOGIES AS REQUESTS IS A SEVERE ERROR): "
             "Indonesian 'maaf' family ALWAYS means SORRY/APOLOGY: 對不起/抱歉/請原諒我. "
             "It NEVER means 麻煩你了 (=tolong ya, asking favor) — they are OPPOSITE in meaning. "
             "RECOGNIZE THESE SPELLING VARIANTS as the same apology: "
@@ -6345,6 +6666,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "messages_sent": _msgs,  # full messages array
                 "strict_no_source_script": strict_no_source_script,
                 "repair_mode": repair_mode,
+                "semantic_contract": getattr(_tl, 'semantic_contract', None),
             }
         except Exception:
             pass
@@ -6692,9 +7014,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                             _fixed_zhid = post_fix_factory_zh_to_id(text, _repaired_zhid)
                     result = _fixed_zhid
                     _tl.factory_audit["corrected_translation"] = result
+            result = enforce_translation_semantic_contract(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt), text, result)
             result = post_fix_translation(result)
             if tgt == "id":
                 result = post_fix_factory_zh_to_id(text, result)
+                result = enforce_translation_semantic_contract(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt), text, result)
             result = restore_customers(result, cust_placeholders)
         # v3.2-0426d Batch B: Round-trip verification
         _did_double_check = False
@@ -7095,6 +7419,14 @@ def translate(text, src, tgt):
     except Exception as _ld_e:
         logger.debug("[LD] detect exception: %s", _ld_e)
     
+    # ─── 0.5: Runtime semantic contract (根治多義詞，不靠單句補丁) ───
+    # 高風險語義先分類，後面 TM / Vector TM / NMT / LLM / QE / APE 全部吃同一份 contract。
+    _semantic_contract = build_translation_semantic_contract(text, src, tgt)
+    try:
+        _tl.semantic_contract = _semantic_contract
+    except Exception:
+        pass
+
     # ─── 1+2: Lexical TM lookup ───
     _tm_result = None
     try:
@@ -7104,18 +7436,32 @@ def translate(text, src, tgt):
     
     if _tm_result and _tm_result.get("match_type") in ("exact", "fuzzy_bypass"):
         _bypass_result = _tm_result["tgt_text"]
-        try:
-            _log_translation(text, _bypass_result, src, tgt,
-                             f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0, _gid_for_tm)
-        except Exception:
-            pass
-        try:
-            if _gid_for_tm:
-                _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
-        except Exception:
-            pass
-        logger.info("[Pipeline] LexTM bypass: type=%s score=%d", _tm_result["match_type"], _tm_result["score"])
-        return _bypass_result
+        _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
+        if _tm_sem_ok:
+            try:
+                _log_translation(text, _bypass_result, src, tgt,
+                                 f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0, _gid_for_tm)
+            except Exception:
+                pass
+            try:
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
+            except Exception:
+                pass
+            logger.info("[Pipeline] LexTM bypass: type=%s score=%d", _tm_result["match_type"], _tm_result["score"])
+            return _bypass_result
+        else:
+            logger.warning("[SemanticContract] LexTM bypass blocked: %s text=%r tm=%r",
+                           _tm_sem_reason, text[:80], (_bypass_result or '')[:120])
+            try:
+                _event_log_write("semantic_tm_bypass_blocked", {
+                    "group_id": _gid_for_tm,
+                    "reason": _tm_sem_reason,
+                    "src_text": text[:120],
+                    "tm_text": (_bypass_result or '')[:160],
+                })
+            except Exception:
+                pass
     
     # ─── 3+4: Vector TM lookup ───
     _vec_result = None
@@ -7126,18 +7472,32 @@ def translate(text, src, tgt):
     
     if _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
-        try:
-            _log_translation(text, _bypass_result, src, tgt,
-                             "vec_tm_bypass", 0, 1.0, False, _vec_result["similarity"], _gid_for_tm)
-        except Exception:
-            pass
-        try:
-            if _gid_for_tm:
-                _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
-        except Exception:
-            pass
-        logger.info("[Pipeline] VecTM bypass: sim=%.3f", _vec_result["similarity"])
-        return _bypass_result
+        _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
+        if _vec_sem_ok:
+            try:
+                _log_translation(text, _bypass_result, src, tgt,
+                                 "vec_tm_bypass", 0, 1.0, False, _vec_result["similarity"], _gid_for_tm)
+            except Exception:
+                pass
+            try:
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _bypass_result, src, tgt)
+            except Exception:
+                pass
+            logger.info("[Pipeline] VecTM bypass: sim=%.3f", _vec_result["similarity"])
+            return _bypass_result
+        else:
+            logger.warning("[SemanticContract] VecTM bypass blocked: %s text=%r vec=%r",
+                           _vec_sem_reason, text[:80], (_bypass_result or '')[:120])
+            try:
+                _event_log_write("semantic_vec_bypass_blocked", {
+                    "group_id": _gid_for_tm,
+                    "reason": _vec_sem_reason,
+                    "src_text": text[:120],
+                    "vec_text": (_bypass_result or '')[:160],
+                })
+            except Exception:
+                pass
     
     # ─── 5: 收集要注入的 references (lexical + vector inject) ───
     _all_refs = []
@@ -7150,6 +7510,8 @@ def translate(text, src, tgt):
     
     if _all_refs:
         try:
+            if _semantic_contract.get("has_risk"):
+                _all_refs = filter_semantic_contract_references(_semantic_contract, _all_refs)
             _tl.tm_references = [(s, sr, tg) for s, sr, tg, _ in _all_refs[:5]]  # top-5 dedup
         except Exception:
             pass
@@ -7164,7 +7526,7 @@ def translate(text, src, tgt):
     
     _use_nmt = False
     try:
-        _use_nmt = nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+        _use_nmt = (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
     except Exception:
         _use_nmt = False
     
@@ -7205,6 +7567,10 @@ def translate(text, src, tgt):
             import traceback
             logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
     
+    # Runtime semantic contract enforcement after NMT/LLM/TM-inject.
+    if result and isinstance(result, str):
+        result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+
     # ─── 後處理 0.5: Phase H Glossary Enforcement (在 QE 之前) ───
     # 強制術語對照:譯文有無遵守 glossary
     if result and isinstance(result, str) and not result.startswith("⚠"):
@@ -7230,6 +7596,9 @@ def translate(text, src, tgt):
         except Exception as _ge_e:
             logger.warning("[GE] enforcement exception: %s", _ge_e)
     
+    if result and isinstance(result, str):
+        result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+
     # ─── 後處理 1: QE 評分(可選,若啟用) ───
     _qe_result = None
     if result and isinstance(result, str) and not result.startswith("⚠"):
@@ -7251,6 +7620,7 @@ def translate(text, src, tgt):
             if ape_result and ape_result != result:
                 logger.info("[Pipeline] APE applied (QE %d → APE 新譯文)", _qe_result["total"])
                 result = ape_result
+                result = enforce_translation_semantic_contract(_semantic_contract, text, result)
                 # APE 後再評一次(可選,先不評免成本)
         except Exception as _ape_e:
             logger.warning("[APE] failed: %s", _ape_e)
@@ -7289,7 +7659,7 @@ def translate(text, src, tgt):
     
     # 清掉 _tl 暫存避免污染下一次翻譯
     for _attr in ('tm_references', 'last_confidence', 'detected_lang',
-                  'detected_confidence', 'ge_violations'):
+                  'detected_confidence', 'ge_violations', 'semantic_contract'):
         try:
             if hasattr(_tl, _attr):
                 delattr(_tl, _attr)
@@ -7328,6 +7698,8 @@ def translate(text, src, tgt):
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
     
+    if result and isinstance(result, str):
+        result = enforce_translation_semantic_contract(_semantic_contract, text, result)
     return result
 
 
