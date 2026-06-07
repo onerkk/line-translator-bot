@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.59-semantic-contract-root"
+VERSION = "v3.9.60-name-protection-root"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -6164,7 +6164,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
             "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
-            "2. Any text like __MENTION_0__, __MENTION_1__ etc are placeholders - keep them exactly as is. "
+            "2. Any text like __MENTION_0__, __MENTION_1__, or ⟦PN1⟧ ⟦PN2⟧ etc are placeholders - keep them EXACTLY as is, do not translate, transliterate, remove, or alter the brackets. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
             + build_factory_context_hint(text, src, tgt) + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
@@ -7369,8 +7369,112 @@ def _is_meta_commentary_leak(text):
     return False
 
 
+# =====================================================================
+# v3.9.60 保護名單根治:邊界層名稱保護(統一所有翻譯路徑)
+# =====================================================================
+# 問題根因(2026-06-07 截圖 研磨C班「惟王→Weiren、祥啊→Xiang'a、法比恩→Fabien」):
+#   保護名單原本只在 translate_openai 內用 __CUST_X__ placeholder 保護,
+#   但 translate() 有多條 bypass 路徑會「繞過」translate_openai:
+#     - Lexical TM exact / fuzzy_bypass(回傳舊存譯文)
+#     - Vector TM 語義 bypass(回傳舊存譯文)
+#     - NMT 路徑(Google/DeepL 直翻原文 → 把人名音譯:惟王→Weiren)
+#     - cache 命中(回傳舊存譯文)
+#   任何一條 bypass 命中都會讓保護名漏翻。截圖即 NMT 或 stale cache/TM 所致。
+#
+# 治本(非補丁):把名稱保護提升到「邊界層」——在進入任何引擎/儲存之前,
+#   先把名稱換成 placeholder。名稱實體永遠不會進到 NMT / TM / cache /
+#   VecTM / LLM,出口再由 wrapper 統一還原。
+#   → TM/cache 存的全是 placeholder 化文字 → 名稱無關 → 永遠不會 stale。
+#   → 還原由持有 map 的 wrapper 執行 → 保證一定還原。
+#   → 一次修好三個子問題(bypass 漏翻 / stale 資產 / 脆弱的 __CUST__ 還原)。
+#
+# placeholder 格式:⟦PN{n}⟧(U+27E6/U+27E7 數學白括號 + PN=protected name)
+#   - 數學白括號正常文字幾乎不出現 → 不撞使用者內容、不撞機台代碼。
+#   - 帶字母核 PN → 即使 LLM 把括號弄壞,「PN+數字」仍可救回
+#     (沿用舊系統觀察:LLM 會保留 alphanumeric 核心,只弄壞外圍符號)。
+def protect_names(text):
+    """把保護名單內出現的名稱換成 placeholder。
+    回傳 (protected_text, {placeholder: name})。
+    名稱以長度遞減排序處理,避免短名(如「辰」)先吃掉長名(如「林宥辰」)。
+    對同一段輸入文字具決定性 → TM/cache key 穩定不漂移。
+    """
+    if not text or not isinstance(text, str):
+        return text, {}
+    try:
+        names = sorted(CUSTOMER_NAMES, key=lambda x: -len(x))
+    except Exception:
+        return text, {}
+    result = text
+    name_map = {}
+    n = 0
+    for name in names:
+        if name and name in result:
+            n += 1
+            ph = "⟦PN%d⟧" % n
+            name_map[ph] = name
+            result = result.replace(name, ph)
+    return result, name_map
+
+
+def restore_names(text, name_map):
+    """把 placeholder 還原成原始名稱。多層 fallback 保證還原:
+      1. 精確比對 ⟦PN{n}⟧(長 placeholder 先換,避免 ⟦PN1⟧ 被當 ⟦PN11⟧ 一部分)
+      2. regex 掃描「任何括號 + PN + 數字」(LLM 可能把 ⟦⟧ 在地化成 【】〔〕[]（）「」)
+      3. 最後手段:裸「PN+數字」(LLM 把括號完全移除),用 lookaround 避免吃機台代碼
+    僅還原 map 內存在的編號 → 不誤動正常文字。
+    """
+    if not text or not isinstance(text, str) or not name_map:
+        return text
+    result = text
+    # 1. 精確比對
+    for ph, name in sorted(name_map.items(), key=lambda kv: -len(kv[0])):
+        if ph in result:
+            result = result.replace(ph, name)
+
+    def _bracket_repl(mm):
+        return name_map.get("⟦PN%d⟧" % int(mm.group(1)), mm.group(0))
+
+    # 2. 括號變體 + 內部空白容錯
+    result = re.sub(
+        r"[⟦【〔\[（｟「『]\s*P\s*N\s*0*(\d+)\s*[⟧】〕\]）｠」』]",
+        _bracket_repl, result,
+    )
+    # 3. 裸 token(括號被 LLM 移除時的保險),lookaround 確保不吃機台代碼(如 PN2A / XPN2)
+    result = re.sub(r"(?<![A-Za-z0-9])PN0*(\d+)(?![A-Za-z0-9])", _bracket_repl, result)
+    return result
+
+
 def translate(text, src, tgt):
-    """Public translate wrapper — v3.9.39 業界全面技術 hybrid pipeline
+    """Public translate wrapper — v3.9.60 邊界層保護名單根治。
+
+    在進入 hybrid pipeline 之前,先把保護名單名稱換成 placeholder;
+    pipeline(_translate_core)全程跑 placeholder 化文字,出口統一還原。
+    保證所有路徑(LexTM/VecTM/NMT/cache/LLM)都不會漏翻保護名。
+    """
+    protected_text, _name_map = protect_names(text)
+    # 存 thread-local 供 _translate_core 路由判斷:有保護名時強制走 LLM,
+    # 不讓 NMT / 語義 bypass 把名稱音譯或誤配到別句的舊譯文。
+    _prev_pnm = getattr(_tl, 'protected_name_map', None)
+    try:
+        _tl.protected_name_map = _name_map
+        result = _translate_core(protected_text, src, tgt)
+    finally:
+        # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
+        try:
+            if _prev_pnm is None:
+                if hasattr(_tl, 'protected_name_map'):
+                    delattr(_tl, 'protected_name_map')
+            else:
+                _tl.protected_name_map = _prev_pnm
+        except Exception:
+            pass
+    if result and isinstance(result, str):
+        result = restore_names(result, _name_map)
+    return result
+
+
+def _translate_core(text, src, tgt):
+    """v3.9.39 業界全面技術 hybrid pipeline(被 translate() wrapper 包覆)
     
     路由順序(命中越早,成本越低,延遲越低):
       1. Lexical TM exact match (rapidfuzz=100)        → bypass LLM
@@ -7386,6 +7490,9 @@ def translate(text, src, tgt):
       - 翻譯成功 → store back lexical TM + vector TM(累積資產)
     """
     _gid_for_tm = getattr(_tl, 'group_id', '') or ''
+    # v3.9.60: 本次訊息是否含保護名(由 translate() wrapper 設定)。
+    # 有保護名時強制走 LLM:NMT 會音譯人名、語義/模糊 bypass 會誤配到別句舊譯文。
+    _has_protected_names = bool(getattr(_tl, 'protected_name_map', None))
     
     # v3.11 (2026-05-26 18:16 截圖): 純設備代碼訊息直接 bypass,不送 LLM
     # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
@@ -7434,7 +7541,10 @@ def translate(text, src, tgt):
     except Exception as _tm_e:
         logger.warning("[TM] lookup exception: %s", _tm_e)
     
-    if _tm_result and _tm_result.get("match_type") in ("exact", "fuzzy_bypass"):
+    # v3.9.60: 有保護名時只允許 exact bypass(key 精確相符,placeholder 化文字本就名稱無關);
+    # fuzzy_bypass 會在 placeholder 化文字上模糊配對 → 可能配到「同形不同名」的舊譯文 → 名字錯。
+    _tm_bypass_types = ("exact",) if _has_protected_names else ("exact", "fuzzy_bypass")
+    if _tm_result and _tm_result.get("match_type") in _tm_bypass_types:
         _bypass_result = _tm_result["tgt_text"]
         _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
         if _tm_sem_ok:
@@ -7470,7 +7580,9 @@ def translate(text, src, tgt):
     except Exception as _vec_e:
         logger.warning("[VecTM] lookup exception: %s", _vec_e)
     
-    if _vec_result and _vec_result.get("match_type") == "vector_bypass":
+    # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
+    # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
+    if (not _has_protected_names) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
         if _vec_sem_ok:
@@ -7526,7 +7638,8 @@ def translate(text, src, tgt):
     
     _use_nmt = False
     try:
-        _use_nmt = (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+        # v3.9.60: 有保護名時禁用 NMT(Google/DeepL 會把 placeholder 弄壞或音譯人名),強制走 LLM。
+        _use_nmt = (not _has_protected_names) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
     except Exception:
         _use_nmt = False
     
