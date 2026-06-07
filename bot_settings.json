@@ -138,23 +138,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 129,
+    "text_translations": 133,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 4,
-    "tokens_prompt": 2085785,
-    "tokens_completion": 7650,
+    "tokens_prompt": 2193146,
+    "tokens_completion": 8127,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 51060,
-    "ant_cache_read": 127204,
-    "ant_cache_write": 214094,
-    "ant_output": 2477,
-    "ant_cost_usd": 0.465755,
+    "ant_input": 60706,
+    "ant_cache_read": 157439,
+    "ant_cache_write": 281574,
+    "ant_output": 2954,
+    "ant_cost_usd": 0.5742095,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -203,7 +203,8 @@
       "詹秋情",
       "就是這個光 ✨༄",
       "辰",
-      "惟壬"
+      "惟壬",
+      "祥啊"
     ]
   },
   "group_api_usage": {
@@ -219,9 +220,9 @@
       "model": "claude-haiku-4-5-20251001"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 103702,
-      "tokens_completion": 529,
-      "cost_usd": 0.10636285000000001,
+      "tokens_prompt": 211063,
+      "tokens_completion": 1006,
+      "cost_usd": 0.21481735000000007,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     }
@@ -508,23 +509,7 @@
   ],
   "forms_data": {},
   "forms_submissions": {},
-  "group_flex_v2": {
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    }
-  },
+  "group_flex_v2": {},
   "group_tts_settings": {},
   "group_conv_settings": {},
   "group_target_langs": {}
