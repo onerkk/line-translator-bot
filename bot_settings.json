@@ -511,7 +511,9 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true
+      "carousel": true,
+      "hero": true,
+      "span": true
     }
   },
   "group_tts_settings": {},
