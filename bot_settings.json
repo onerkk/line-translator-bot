@@ -1,22 +1,18 @@
 {
   "group_settings": {},
   "group_target_lang": {
-    "Cd188e1adc7792e407c90f3fa78850316": "id",
-    "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
+    "Cd188e1adc7792e407c90f3fa78850316": "id"
   },
   "group_img_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "C6c708f629dd38d6864669ecacf7712f4": false
   },
   "group_img_ask_settings": {},
   "group_audio_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "C6c708f629dd38d6864669ecacf7712f4": false
   },
   "group_wo_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "C6c708f629dd38d6864669ecacf7712f4": false
   },
@@ -35,16 +31,8 @@
       "notice": true
     }
   },
-  "group_skip_users": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": [
-      "Uacd199ee8dc09268d0bab80702ebb2ac"
-    ]
-  },
+  "group_skip_users": {},
   "group_tracking": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "name": "研磨C班",
-      "joined_at": 1775182429.4926066
-    },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "name": "研磨股印尼同事群",
       "joined_at": 1775524787.0752423
@@ -55,22 +43,6 @@
     }
   },
   "group_user_names": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
-      "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪",
-      "U98def5ae6e4786c8ecc3e4a2f510cfb8": "辰",
-      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
-      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
-      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
-      "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
-      "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
-      "Uacd199ee8dc09268d0bab80702ebb2ac": "秋情",
-      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
-      "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂",
-      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
-      "U9a70db5b38f2b61dd0473cfff4c84b68": "十元"
-    },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
@@ -143,19 +115,19 @@
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
-    "commands": 7,
-    "tokens_prompt": 2351409,
-    "tokens_completion": 8848,
+    "commands": 8,
+    "tokens_prompt": 2370059,
+    "tokens_completion": 9056,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 74654,
+    "ant_input": 76947,
     "ant_cache_read": 229894,
-    "ant_cache_write": 353434,
-    "ant_output": 3675,
-    "ant_cost_usd": 0.7009730000000001,
+    "ant_cache_write": 369791,
+    "ant_output": 3883,
+    "ant_cost_usd": 0.7281102500000001,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -520,11 +492,6 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "carousel": true,
       "hero": true,
       "span": true
