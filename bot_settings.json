@@ -32,7 +32,7 @@
       "notice": false
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "notice": false
+      "notice": true
     }
   },
   "group_skip_users": {
@@ -68,7 +68,8 @@
       "Uacd199ee8dc09268d0bab80702ebb2ac": "秋情",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂",
-      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "U9a70db5b38f2b61dd0473cfff4c84b68": "十元"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
@@ -138,23 +139,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 133,
+    "text_translations": 142,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
-    "commands": 4,
-    "tokens_prompt": 2193146,
-    "tokens_completion": 8127,
+    "commands": 7,
+    "tokens_prompt": 2351409,
+    "tokens_completion": 8848,
     "oai_input": 0,
     "oai_cached": 0,
     "oai_output": 0,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.0,
-    "ant_input": 60706,
-    "ant_cache_read": 157439,
-    "ant_cache_write": 281574,
-    "ant_output": 2954,
-    "ant_cost_usd": 0.5742095,
+    "ant_input": 74654,
+    "ant_cache_read": 229894,
+    "ant_cache_write": 353434,
+    "ant_output": 3675,
+    "ant_cost_usd": 0.7009730000000001,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -220,9 +221,16 @@
       "model": "claude-haiku-4-5-20251001"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 211063,
-      "tokens_completion": 1006,
-      "cost_usd": 0.21481735000000007,
+      "tokens_prompt": 350791,
+      "tokens_completion": 1566,
+      "cost_usd": 0.31495960000000006,
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "tokens_prompt": 18535,
+      "tokens_completion": 161,
+      "cost_usd": 0.02662125000000004,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     }
@@ -325,7 +333,8 @@
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
     "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g",
     "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
-    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w"
+    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
+    "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
