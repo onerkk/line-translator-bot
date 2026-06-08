@@ -228,6 +228,13 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "changeme")
 
 # ★ AI Provider 統一介面(支援 OpenAI ↔ Anthropic 切換)
 import ai_provider
+# ── DB 快照 sidecar:必須在 import TM/Vector/AL「之前」把雲端副本還原到 /tmp ──
+#    (vector_tm / active_learning 在 import 當下就 init() 開檔,所以順序很重要)
+try:
+    import db_snapshot
+    db_snapshot.restore_all()
+except Exception as _snap_e:
+    logging.getLogger("app").warning("[snap] restore_all failed (continuing): %s", _snap_e)
 # v3.9.38 Phase A: Translation Memory(業界 30 年成熟技術,SQLite + fuzzy match)
 import translation_memory as tm_module
 # v3.9.39 Phase B-F: 業界全面技術升級
@@ -25725,6 +25732,13 @@ except Exception as _e:
 # ============================================================================
 # END OF v3.10 EXTENSIONS
 # ============================================================================
+
+
+# ── 啟動 DB 快照背景同步(模組已就緒;沒設 Upstash env 時此函式自動 no-op) ──
+try:
+    db_snapshot.start_autosnapshot()
+except Exception as _snap_e2:
+    logging.getLogger("app").warning("[snap] start_autosnapshot failed (continuing): %s", _snap_e2)
 
 
 if __name__ == "__main__":
