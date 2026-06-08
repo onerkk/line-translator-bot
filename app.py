@@ -2612,6 +2612,55 @@ custom_translation_examples = []
 
 
 # v3.9.29: 修補隱性 bug — 之前 reaction 升級為 example 後沒存磁碟,重啟丟失
+# ─────────────────────────────────────────────────────────────
+# Upstash Redis (REST) — 免費持久化後端,env-gated。
+#   設了 UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN 才啟用;
+#   沒設 → 完全維持原本寫本地檔的行為(可逆,降 Free 前後都安全)。
+#   用 stdlib urllib,不新增任何套件。任何失敗都吞掉、不影響翻譯主流程。
+# ─────────────────────────────────────────────────────────────
+_UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().rstrip("/")
+_UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+
+
+def _kv_enabled():
+    return bool(_UPSTASH_URL and _UPSTASH_TOKEN)
+
+
+def _kv_command(args, timeout=8):
+    """送一條 Redis 指令到 Upstash REST,例如 ['GET', key] / ['SET', key, val]。
+    回傳 result 欄位;失敗回 None(只記 warning,絕不丟例外)。"""
+    if not _kv_enabled():
+        return None
+    try:
+        body = json.dumps(args).encode("utf-8")
+        req = urllib.request.Request(
+            _UPSTASH_URL,
+            data=body,
+            headers={
+                "Authorization": "Bearer " + _UPSTASH_TOKEN,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return payload.get("result")
+    except Exception as e:
+        logger.warning("[KV] command %s failed: %s", (args[0] if args else "?"), e)
+        return None
+
+
+def _kv_get_str(key):
+    return _kv_command(["GET", key])
+
+
+def _kv_set_str(key, value):
+    return _kv_command(["SET", key, value])
+
+
+_KV_EXAMPLES_KEY = "line_bot:custom_examples"
+
+
 def _resolve_examples_path():
     """同 translation_log 邏輯,Render persistent disk 優先。"""
     env = os.environ.get("CUSTOM_EXAMPLES_FILE", "").strip()
@@ -2626,7 +2675,39 @@ CUSTOM_EXAMPLES_FILE = _resolve_examples_path()
 
 
 def _load_examples_from_disk():
-    """Load persisted custom examples on startup. Best effort."""
+    """載入自訂範例。優先 Upstash KV;沒有就讀本地檔。
+    若 KV 已啟用但還沒資料、而本地檔有 → 一次性把本地檔搬進 KV
+    (磁碟還在時自動遷移,之後拔磁碟也不丟)。"""
+    # 1) KV 優先
+    if _kv_enabled():
+        try:
+            raw = _kv_get_str(_KV_EXAMPLES_KEY)
+            if raw:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    custom_translation_examples[:] = data[-CUSTOM_EXAMPLES_MAX:]
+                    logger.info("[KV] Loaded %d custom examples from Upstash",
+                                len(custom_translation_examples))
+                    return
+            # KV 還沒資料 → 嘗試從本地檔遷移一次
+            path = CUSTOM_EXAMPLES_FILE
+            if path and os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list) and data:
+                    custom_translation_examples[:] = data[-CUSTOM_EXAMPLES_MAX:]
+                    _kv_set_str(_KV_EXAMPLES_KEY,
+                                json.dumps(custom_translation_examples[-CUSTOM_EXAMPLES_MAX:],
+                                           ensure_ascii=False))
+                    logger.info("[KV] Migrated %d custom examples: local file -> Upstash",
+                                len(custom_translation_examples))
+                    return
+            logger.info("[KV] No custom examples yet (Upstash empty, no local file)")
+            return
+        except Exception as e:
+            logger.warning("[KV] load failed, fallback to local file: %s", e)
+            # 落到本地檔讀取
+    # 2) 本地檔(KV 未啟用,或 KV 讀取失敗)
     try:
         path = CUSTOM_EXAMPLES_FILE
         if not path or not os.path.exists(path):
@@ -2642,7 +2723,17 @@ def _load_examples_from_disk():
 
 
 def _save_examples_to_disk():
-    """Persist custom examples to JSON. Atomic write."""
+    """儲存自訂範例。KV 啟用→寫 Upstash;否則→本地檔(atomic)。"""
+    # KV 優先
+    if _kv_enabled():
+        try:
+            _kv_set_str(_KV_EXAMPLES_KEY,
+                        json.dumps(custom_translation_examples[-CUSTOM_EXAMPLES_MAX:],
+                                   ensure_ascii=False))
+            return
+        except Exception as e:
+            logger.warning("[KV] save failed, fallback to local file: %s", e)
+    # 本地檔
     try:
         path = CUSTOM_EXAMPLES_FILE
         if not path:
