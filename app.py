@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.9.60-name-protection-root"
+VERSION = "v3.13-multilayer-context-grounding"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -921,6 +921,9 @@ TONE_PRESETS = {
         "- 「工單」固定用 work order"
         "- 「TAG」固定保留 TAG"
         "- 「站別」固定理解為 stasiun"
+        "- 「料」「料件」「來料」固定指不銹鋼原料/半成品/成品(棒材、盤元、線材、管件)，絕對不是飼料(pakan)、食物、資料或料理。"
+        "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在「吊料/上料/下料/入料/出料/置料/退料/送料」中一律是鋼材，相應動作為 angkat / naikkan / turunkan / masukkan / keluarkan material。"
+        "- 「股」固定指生產部門(研磨股 = bagian grinding、冷抽股、包裝股 等)，不是股票或大腿；「班」固定指輪班(早班/夜班/中班 = shift)，不是班級。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
         "【輸出規則】"
         "11. 只輸出最終譯文，不要解釋，不要加註解，不要說明原因，不要列出其他可能翻法。"
@@ -4419,7 +4422,26 @@ def build_factory_context_hint(text, src, tgt):
       - 即使 text 本身不命中 factory domain,只要有媒體場景就走工廠語境
     """
     if src == "zh" and tgt == "id":
-        return build_factory_context_hint_zh_id(text)
+        _hint_zh_id = build_factory_context_hint_zh_id(text) or ""
+        # v3.12 第3層:ZH→ID 也注入媒體場景(原本只有 ID→ZH 有 → 中文工人發現場圖時白存了)。
+        #   中文工人發棒材/設備現場圖 + 文字描述時,翻成印尼文也能用圖片場景消歧
+        #   (場景是棒材堆放 → 「吊料」的「料」確定是鋼材 material,非飼料 pakan)。
+        try:
+            _g = getattr(_tl, 'group_id', None)
+            _u = getattr(_tl, 'user_id', None)
+            _sc = get_recent_media_scene(_g, _u)
+        except Exception:
+            _sc = ""
+        if _sc:
+            _hint_zh_id += (
+                f" 【視覺上下文 — 該使用者剛發送的現場圖】:「{_sc}」。"
+                "翻譯時把這個視覺事實納入判斷:場景顯示【料件/棒材/物料/盤元/線材/包裝/鋼材】時,"
+                "「料」「吊料」「上料」「下料」「出料」中的「料」一律是不銹鋼材料(material / bahan),"
+                "絕非飼料(pakan)、食物或資料;「吊」是天車吊運(angkat dengan crane / tian che)。"
+                "場景顯示【設備/操作盤/機台/工具/電線/管路】時,相關詞依設備語境翻譯。"
+                "文字單獨有歧義時,以視覺場景為準。"
+            )
+        return _hint_zh_id
     if src != "id" or tgt != "zh":
         return ""
     
@@ -7571,6 +7593,27 @@ def translate(text, src, tgt):
     return result
 
 
+# v3.12 治本(2026-06-09):工廠材料/吊運語境偵測。
+#   根因:這類句(如「二股吊完料就放這樣」)不含 glossary 詞時,會被判為「簡單句」走 NMT
+#   (Google/DeepL)。NMT 缺工廠語境,把「料」直譯成 pakan(飼料)、「吊」吃掉;且 NMT 結果
+#   會回存 lexical+vector TM → 之後相似句被 vector/lexical bypass 直接吐舊錯誤,繞過 glossary/
+#   prompt 修正(這就是「之前修正卻無效」的主因)。
+#   治本:命中此語境 → 與「有保護名」同等待遇,跳過所有 bypass + NMT,強制走 LLM(LLM 看上下文
+#   + 工廠 prompt 能正確理解「吊料=吊運鋼材」),且不注入可能污染的 TM 參考。
+#   採語境路由而非窮舉詞條:glossary 是 substring 精確匹配,「吊料」配不到「吊完料」,變體無窮。
+_FACTORY_CTX_PAT = re.compile(
+    r'吊[^。，！？\s]{0,4}[料棒材鋼管貨捆包盤胚件]'      # 吊運材料:吊料/吊完料/吊鋼捲/吊棒材
+    r'|[上下入出置退來捆堆送]料'                          # 材料動作:上料/下料/入料/出料/置料/退料/來料/捆料/堆料/送料
+    r'|研磨|冷抽|退火|倒角|矯直|拋光|盤元|母材|棒材|線材|解捲|料床|無心|砂帶|砂光|盤條|盤捲'
+)
+def _is_factory_context(text):
+    """中文工廠材料/吊運/製程語境 → 強制走 LLM(避免 NMT 誤譯與舊快取 bypass)。
+    只偵測中文模式;印尼文原文不會誤觸,ID→ZH 仍走正常路徑。"""
+    if not text or not isinstance(text, str):
+        return False
+    return bool(_FACTORY_CTX_PAT.search(text))
+
+
 def _translate_core(text, src, tgt):
     """v3.9.39 業界全面技術 hybrid pipeline(被 translate() wrapper 包覆)
     
@@ -7591,6 +7634,8 @@ def _translate_core(text, src, tgt):
     # v3.9.60: 本次訊息是否含保護名(由 translate() wrapper 設定)。
     # 有保護名時強制走 LLM:NMT 會音譯人名、語義/模糊 bypass 會誤配到別句舊譯文。
     _has_protected_names = bool(getattr(_tl, 'protected_name_map', None))
+    # v3.12: 工廠材料/吊運語境 → 與「有保護名」同等待遇,跳過所有 bypass + NMT,強制走 LLM。
+    _factory_ctx = _is_factory_context(text)
     
     # v3.11 (2026-05-26 18:16 截圖): 純設備代碼訊息直接 bypass,不送 LLM
     # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
@@ -7641,7 +7686,8 @@ def _translate_core(text, src, tgt):
     
     # v3.9.60: 有保護名時只允許 exact bypass(key 精確相符,placeholder 化文字本就名稱無關);
     # fuzzy_bypass 會在 placeholder 化文字上模糊配對 → 可能配到「同形不同名」的舊譯文 → 名字錯。
-    _tm_bypass_types = ("exact",) if _has_protected_names else ("exact", "fuzzy_bypass")
+    # v3.12: 工廠語境連 exact bypass 都跳過(舊快取可能含 NMT 誤譯的 pakan),強制重新 LLM 翻譯。
+    _tm_bypass_types = () if _factory_ctx else (("exact",) if _has_protected_names else ("exact", "fuzzy_bypass"))
     if _tm_result and _tm_result.get("match_type") in _tm_bypass_types:
         _bypass_result = _tm_result["tgt_text"]
         _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
@@ -7680,7 +7726,7 @@ def _translate_core(text, src, tgt):
     
     # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
     # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
-    if (not _has_protected_names) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
+    if (not _has_protected_names) and (not _factory_ctx) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
         if _vec_sem_ok:
@@ -7718,6 +7764,9 @@ def _translate_core(text, src, tgt):
         for s, src_t, tgt_t in _vec_result["references"]:
             _all_refs.append((int(s * 100), src_t, tgt_t, "semantic"))
     
+    # v3.12: 工廠語境不注入 TM 參考(舊譯可能含 NMT 誤譯 pakan),純靠 glossary hint + 工廠 prompt。
+    if _factory_ctx:
+        _all_refs = []
     if _all_refs:
         try:
             if _semantic_contract.get("has_risk"):
@@ -7737,7 +7786,7 @@ def _translate_core(text, src, tgt):
     _use_nmt = False
     try:
         # v3.9.60: 有保護名時禁用 NMT(Google/DeepL 會把 placeholder 弄壞或音譯人名),強制走 LLM。
-        _use_nmt = (not _has_protected_names) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+        _use_nmt = (not _has_protected_names) and (not _factory_ctx) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
     except Exception:
         _use_nmt = False
     
@@ -9322,7 +9371,7 @@ def _build_help_bubble(lang, is_admin=False):
     if lang == "zh":
         hdr_meta = "COMMAND REFERENCE · ZH-TW"
         hdr_title = "翻譯機器人"
-        hdr_sub = "研磨股C班 · 不鏽鋼棒線部"
+        hdr_sub = "不鏽鋼棒線部"
         info_line_1 = "📷 拍工單　直接傳照片自動查儲區"
         info_line_2 = "中文 ⇄ 印尼文　即時互譯・免指令"
         switch_btn_label = "BAHASA INDONESIA  ›"
@@ -9330,7 +9379,7 @@ def _build_help_bubble(lang, is_admin=False):
     else:
         hdr_meta = "DAFTAR PERINTAH · ID"
         hdr_title = "Bot Penerjemah"
-        hdr_sub = "Grup Grinding C · Stainless Steel"
+        hdr_sub = "Stainless Steel"
         info_line_1 = "📷 Foto WO　Kirim foto otomatis cek gudang"
         info_line_2 = "Mandarin ⇄ Indonesia　Terjemah langsung"
         switch_btn_label = "中文版 / MANDARIN  ›"
