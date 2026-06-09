@@ -1,6 +1,8 @@
 {
   "group_settings": {},
-  "group_target_lang": {},
+  "group_target_lang": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
+  },
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false
   },
@@ -472,5 +474,9 @@
   "group_flex_v2": {},
   "group_tts_settings": {},
   "group_conv_settings": {},
-  "group_target_langs": {}
+  "group_target_langs": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": [
+      "id"
+    ]
+  }
 }
