@@ -25,7 +25,7 @@
       "pw1": false,
       "pw2": false,
       "pkg": false,
-      "scrap": true,
+      "scrap": false,
       "notice": true
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
