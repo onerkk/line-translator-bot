@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.13-multilayer-context-grounding"
+VERSION = "v3.15-process-verb-disambiguation"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -923,7 +923,8 @@ TONE_PRESETS = {
         "- 「站別」固定理解為 stasiun"
         "- 「料」「料件」「來料」固定指不銹鋼原料/半成品/成品(棒材、盤元、線材、管件)，絕對不是飼料(pakan)、食物、資料或料理。"
         "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在「吊料/上料/下料/入料/出料/置料/退料/送料」中一律是鋼材，相應動作為 angkat / naikkan / turunkan / masukkan / keluarkan material。"
-        "- 「股」固定指生產部門(研磨股 = bagian grinding、冷抽股、包裝股 等)，不是股票或大腿；「班」固定指輪班(早班/夜班/中班 = shift)，不是班級。"
+        "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班(早班/夜班/中班 = shift)，不是班級。"
+        "- 製程工序詞(研磨、削皮、拋光、倒角、酸洗、切斷、噴砂、口付 等)【雙義】:既是站別/部門(位置),也是對料做的工序(動作),**必須依上下文判斷,不可一律當位置直譯**——「送去研磨/研磨那邊/放研磨」=位置(stasiun grinding),「要研磨/研磨好了/研磨中/重研磨」=動作(digerinda / proses grinding)。翻譯前先想清楚:這句是在講『料在哪、送去哪』(位置),還是『對料做什麼』(動作),再決定譯法。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
         "【輸出規則】"
         "11. 只輸出最終譯文，不要解釋，不要加註解，不要說明原因，不要列出其他可能翻法。"
@@ -3876,6 +3877,10 @@ STATION_DEPARTMENTS = {
     "冷抽二股": "Bagian Cold Drawing 2",
     "研磨股":   "Bagian Grinding",
     "品質管理課": "Bagian QC",
+    # v3.13: 工人口語簡稱。整廠只有「冷抽」分一/二股,故「一股」「二股」=冷抽一/二股。
+    #   匹配邏輯已改先長後短,「冷抽二股」會優先吃掉,不會跟簡稱重複命中。
+    "一股":     "Bagian Cold Drawing 1",
+    "二股":     "Bagian Cold Drawing 2",
 }
 
 # 站別中文名 → dict {station_no, department, id_name}
@@ -4109,10 +4114,24 @@ def detect_station_context(text):
             if re.search(pat, text):
                 found_codes.append((code, STATION_CODES[code]))
     
-    # 3) 股別中文
-    for dept, dept_id in STATION_DEPARTMENTS.items():
-        if dept in text:
-            found_depts.append((dept, dept_id))
+    # 3) 股別中文 — v3.13: 改先長後短 + seen_spans(複用站名那段模式),
+    #    避免「冷抽二股」與新增簡稱「二股」對同一段文字重複命中。
+    #    「冷抽二股X」→ 只命中「冷抽二股」;單獨「二股X」→ 命中簡稱「二股」。
+    dept_seen_spans = []
+    for dept in sorted(STATION_DEPARTMENTS.keys(), key=len, reverse=True):
+        idx = text.find(dept)
+        while idx >= 0:
+            span = (idx, idx + len(dept))
+            overlap = False
+            for s, e in dept_seen_spans:
+                if not (span[1] <= s or span[0] >= e):
+                    overlap = True
+                    break
+            if not overlap:
+                dept_seen_spans.append(span)
+                found_depts.append((dept, STATION_DEPARTMENTS[dept]))
+                break  # 同股別只取第一次出現
+            idx = text.find(dept, idx + 1)
     
     # 都沒命中 → 回空(不污染 prompt)
     if not found_stations and not found_codes and not found_depts:
@@ -4123,10 +4142,24 @@ def detect_station_context(text):
         lines.append("檢測到股別(department):")
         for zh, idn in found_depts:
             lines.append(f"  - {zh} → {idn}")
+    # v3.15: 製程詞雙義處理 — 研磨/削皮/拋光等既是站別(位置)也是工序(動作),
+    #   不可硬性一律當位置(否則「這批要研磨」會被誤譯成「去研磨站」)。
+    _PROC_VERBS = {"研磨", "削皮", "拋光", "倒角", "酸洗", "壓光", "切斷", "噴砂", "口付"}
     if found_stations:
-        lines.append("檢測到站別/工序(這些是料件當前位置或目的站,不是要做的動作):")
-        for name, info in found_stations:
-            lines.append(f"  - {name}(站號 {info['no']},{info['dept']}) → {info['id']}")
+        _clear = [(n, i) for n, i in found_stations if n not in _PROC_VERBS]
+        _ambig = [(n, i) for n, i in found_stations if n in _PROC_VERBS]
+        if _clear:
+            lines.append("檢測到站別/設備(這些是料件當前位置或目的站,不是要做的動作):")
+            for name, info in _clear:
+                lines.append(f"  - {name}(站號 {info['no']},{info['dept']}) → {info['id']}")
+        if _ambig:
+            lines.append("檢測到製程詞【雙義,必須先判斷是位置還是動作,不可因為它在站別表就一律當位置】:")
+            for name, info in _ambig:
+                lines.append(f"  - 「{name}」:位置義→「{info['id']}」(料在{info['dept']}該站);動作義→該道工序本身")
+            lines.append("    動作義譯法參考:研磨=digerinda/menggerinda、削皮=dikupas/peeling、拋光=dipoles、倒角=di-chamfer、酸洗=proses pickling、切斷=dipotong、噴砂=sandblasting、壓光=press polish、口付=pointing。")
+            lines.append("    判斷依據(先想清楚:這句在講「料在哪/送去哪」還是「對料做什麼」):")
+            lines.append("    • 位置義線索:X那邊/X站/X區/送去X/放到X/在X/拿到X/X那裡 → 翻成 stasiun X(位置)")
+            lines.append("    • 動作義線索:要X/X好了/X完/X中/正在X/已X/還沒X/重X/X不良/X品質 → 翻成該工序動作")
     if found_codes:
         lines.append("檢測到設備代碼(工廠 ERP 系統識別碼,不要翻譯成料件 ID 或音譯):")
         for code, info in found_codes:
@@ -4137,6 +4170,7 @@ def detect_station_context(text):
     lines.append("  (c) 設備代碼(如 I18、BF2、E6)永遠保留原樣,不翻譯不音譯,加上中文/印尼設備名輔助理解。")
     lines.append("  (d) 「放行」「過帳」「退庫」是 ERP 操作:放行=release data ke stasiun berikutnya,")
     lines.append("      過帳=input data produksi ke sistem,退庫=kembalikan ke gudang。")
+    lines.append("  (e) 上方標【雙義】的製程詞:先判斷是位置還是動作再翻,不要因為它在站別表就一律翻成位置。")
     return "\n".join(lines) + "\n"
 
 
