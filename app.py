@@ -319,6 +319,10 @@ _MULTI_TGT_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="mtgt")    # �
 
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
+# v3.18 省錢預設:背景 QE smart gating。True = 要害句必評、普通句抽樣 10%
+# (背景 LLM 成本 -60~80%);False = 每句都評(回到 v3.13 行為)。
+QE_GATING_ENABLED = True
+
 # v3.9.30c B17 修補: LINE 訊息長度限制(5000 字)截斷工具
 # LINE 平台規定 text message 最多 5000 字,超過會被 reject。
 # 翻譯結果加上注解 / hint 可能超 5000;集中處理避免散落各處 [:4990]。
@@ -7271,7 +7275,7 @@ def translate_google(text, src, tgt):
         url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=" + sl + "&tl=" + tl + "&dt=t&q=" + q
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "Mozilla/5.0")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:  # v3.18: 10→4s,NMT 卡住最多多等 4 秒就 fallback LLM
             data = json.loads(resp.read().decode("utf-8"))
             parts = []
             for item in data[0]:
@@ -7673,11 +7677,26 @@ def _translate_core(text, src, tgt):
       - 翻譯成功 → store back lexical TM + vector TM(累積資產)
     """
     _gid_for_tm = getattr(_tl, 'group_id', '') or ''
+    # v3.18 速度根治:per-stage 計時。每句記一行 [Perf],之後再慢可直接從
+    # Render log 看出卡在哪一段,不再用猜的。
+    _perf = {"t0": time.time()}
     # v3.9.60: 本次訊息是否含保護名(由 translate() wrapper 設定)。
     # 有保護名時強制走 LLM:NMT 會音譯人名、語義/模糊 bypass 會誤配到別句舊譯文。
     _has_protected_names = bool(getattr(_tl, 'protected_name_map', None))
     # v3.12: 工廠材料/吊運語境 → 與「有保護名」同等待遇,跳過所有 bypass + NMT,強制走 LLM。
     _factory_ctx = _is_factory_context(text)
+
+    # v3.18 速度根治②:向量查詢提早並行發出。
+    # vector_lookup 內含 1 次 OpenAI embedding API(~0.3-0.8 秒),原本與
+    # 語言偵測/語意契約/LexTM「串行」— 但這些彼此獨立。改成 pipeline 一開始
+    # 就丟 future,本地步驟跑完後 future 多半已完成,省下整段 embedding 等待。
+    # (LexTM bypass 命中時白算一次 embedding ≈ $0.00002,可忽略;延遲省 0.3-0.8s)
+    _vec_future = None
+    try:
+        _vec_future = _BG_POST_EXECUTOR.submit(
+            vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm)
+    except Exception:
+        _vec_future = None
     
     # v3.11 (2026-05-26 18:16 截圖): 純設備代碼訊息直接 bypass,不送 LLM
     # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
@@ -7759,12 +7778,17 @@ def _translate_core(text, src, tgt):
             except Exception:
                 pass
     
-    # ─── 3+4: Vector TM lookup ───
+    # ─── 3+4: Vector TM lookup(v3.18:收並行 future 的結果) ───
+    _perf["tm"] = time.time()
     _vec_result = None
     try:
-        _vec_result = vec_tm_module.vector_lookup(text, src, tgt, _gid_for_tm)
+        if _vec_future is not None:
+            _vec_result = _vec_future.result(timeout=6)
+        else:
+            _vec_result = vec_tm_module.vector_lookup(text, src, tgt, _gid_for_tm)
     except Exception as _vec_e:
         logger.warning("[VecTM] lookup exception: %s", _vec_e)
+    _perf["vec"] = time.time()
     
     # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
     # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
@@ -7858,6 +7882,7 @@ def _translate_core(text, src, tgt):
         _skip_to_post = False
     
     # ─── 7: LLM 全翻 (預設路徑) ───
+    _perf["pre_llm"] = time.time()
     if not _skip_to_post:
         _len_before = len(translation_log)
         result = _translate_inner(text, src, tgt)
@@ -7977,6 +8002,20 @@ def _translate_core(text, src, tgt):
         except Exception as _bg_e:
             logger.warning("[BG] submit post-processing failed: %s", _bg_e)
 
+    # v3.18: per-stage 計時 — 每句一行,慢的時候直接看這行抓兇手
+    try:
+        _t_end = time.time()
+        logger.info(
+            "[Perf] total=%.0fms | prep+lex=%.0fms vec_wait=%.0fms llm+post=%.0fms | src=%s tgt=%s len=%d",
+            (_t_end - _perf["t0"]) * 1000,
+            (_perf.get("tm", _perf["t0"]) - _perf["t0"]) * 1000,
+            (_perf.get("vec", _perf["t0"]) - _perf.get("tm", _perf["t0"])) * 1000,
+            (_t_end - _perf.get("pre_llm", _t_end)) * 1000,
+            src, tgt, len(text or ""),
+        )
+    except Exception:
+        pass
+
     return result
 
 
@@ -7991,17 +8030,43 @@ def _post_translation_async(text, result, src, tgt, gid, model_used, conf, seman
     """
     final = result
     qe_result = None
-    try:
-        qe_result = qe_module.estimate_quality(text, final, src, tgt, ai_client=ai_provider)
-    except Exception as _qe_e:
-        logger.warning("[QE-bg] failed: %s", _qe_e)
+    _qe_skipped = False
+
+    # v3.18 省錢預設:QE smart gating(品質兼顧)
+    # 原本「每句都跑 QE」= 每句多 1 次背景 LLM 費用。改成:
+    #   必評:語意風險句(contract has_risk)、工廠語境、長句(>40字)、低信心句
+    #   其餘:抽樣 10%(維持品質監控統計訊號)
+    # 要害句的品質保護一個不少,背景 LLM 成本約 -60~80%。
+    # 想恢復全評:把 QE_GATING_ENABLED 改 False(本檔常數)。
+    if QE_GATING_ENABLED:
+        import random as _rnd
+        _worth_qe = (
+            bool(semantic_contract and semantic_contract.get("has_risk"))
+            or len(text or "") > 40
+            or (conf is not None and conf < confidence_threshold)
+            or _rnd.random() < 0.10
+        )
+        if not _worth_qe:
+            try:
+                _worth_qe = _is_factory_context(text)
+            except Exception:
+                pass
+        if not _worth_qe:
+            _qe_skipped = True
+
+    if not _qe_skipped:
+        try:
+            qe_result = qe_module.estimate_quality(text, final, src, tgt, ai_client=ai_provider)
+        except Exception as _qe_e:
+            logger.warning("[QE-bg] failed: %s", _qe_e)
 
     # v3.17: round-trip 反譯降級為「QE 不可用時的背景品質監控」。
     # 原本它是主路徑 blocking 雙API(每句 >30 字翻倍延遲);現在:
     #   - QE 正常 → 完全不跑反譯(QE 訊號嚴格更強)
     #   - QE 回 None/例外 且後台 double_check_mode != off → 背景跑一次反譯,
     #     失敗記 rtc_bg_fail 事件供監控,不影響已送出的訊息
-    if qe_result is None:
+    #   - v3.18: QE 被 gating 主動略過(省錢)時,反譯也不跑 — 否則省一個換一個
+    if qe_result is None and not _qe_skipped:
         try:
             if _should_double_check(text, src):
                 _rt_ok, _rt_sim, _rt_back = _round_trip_check(text, final, src, tgt)

@@ -151,7 +151,12 @@ DEFAULT_CONFIG = {
     # === v3.0 Claude 專屬能力(全部預設 ON)===
     "claude_features": {
         "prompt_caching": True,         # Phase 1
-        "extended_thinking": True,      # Phase 2
+        # v3.18 省錢省時預設:翻譯是輕量指令跟隨任務,thinking/reasoning 提高
+        # 反而傷指令遵循(arxiv 2505.14810,OpenAI 路徑 v3.9.8 同結論已套用)。
+        # Sonnet 升級路徑原本每句先吐最多 2000 thinking tokens 才出譯文
+        # = 多 3-8 秒延遲 + 2000 output tokens 費用,品質無增益。
+        # 預設改 OFF;後台 claude_features 開關照常可開回(存檔值優先)。
+        "extended_thinking": False,     # Phase 2(v3.18: True→False)
         "thinking_budget": 2000,
         "glossary_grounding": True,     # Phase 3
         "glossary_max_items": 50,
@@ -167,7 +172,7 @@ DEFAULT_CONFIG = {
         "files_api_glossary": False,    # Phase 17 — 把 glossary 上傳 Files API(預設 OFF,要先上傳)
         # === D4 v3.2 新增 ===
         "adaptive_thinking": True,      # Phase 13 — Opus 4.7 強制 / Sonnet 4.6 推薦
-        "thinking_effort": "medium",    # low / medium / high (Opus 4.7 加 xhigh)
+        "thinking_effort": "low",       # v3.18: medium→low(若開 thinking 也用最低檔)
         "thinking_display": "auto",     # auto / summarized / omitted
                                         # auto = Opus 4.7→omitted(快); Sonnet/Opus 4.6→summarized
         "smart_cache_threshold": True,  # Phase 15 — 用 model-specific token 門檻,而非字元數 1024
@@ -613,13 +618,13 @@ def _pick_thinking_config(features, anthropic_model):
     if not _model_supports_thinking(anthropic_model):
         return None, "none"
 
-    use_thinking = features.get("extended_thinking", True)
+    use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
     if not use_thinking:
         # 全關 thinking
         return None, "none"
 
     use_adaptive = features.get("adaptive_thinking", True)
-    effort_pref = features.get("thinking_effort", "medium")
+    effort_pref = features.get("thinking_effort", "low")  # v3.18: 預設 low
     display_pref = features.get("thinking_display", "auto")
     legacy_budget = int(features.get("thinking_budget", 2000))
 
@@ -1361,7 +1366,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     _ensure_initialized()
     features = _current_config.get("claude_features", {})
     use_cache = features.get("prompt_caching", True)
-    use_thinking = features.get("extended_thinking", True)
+    use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
     thinking_budget = int(features.get("thinking_budget", 2000))
     use_grounding = features.get("glossary_grounding", True)
     glossary_max = int(features.get("glossary_max_items", 50))
