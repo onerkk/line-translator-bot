@@ -7209,49 +7209,22 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 result = post_fix_factory_zh_to_id(text, result)
                 result = enforce_translation_semantic_contract(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt), text, result)
             result = restore_customers(result, cust_placeholders)
-        # v3.2-0426d Batch B: Round-trip verification
+        # ═══ v3.17 雙API根治(2026-06-10) ═══
+        # 原 v3.2-0426d Batch B blocking round-trip 反譯已移出主路徑。
+        # 真相:double_check_mode="smart" 讓「每句 >30 字」的訊息在回 LINE 前
+        # 多打一次完整 LLM 反譯(再算 Jaccard 相似度)→ 每句翻譯實際打 2 次 API,
+        # 使用者等待時間直接翻倍。這就是「雙API慢」的根因。
+        # QE 模組 docstring 自己早就寫明:round-trip「成本翻倍但訊號弱」,
+        # QE(MQM LLM-as-judge)就是為了取代它而生 — 但建了 QE 之後 round-trip
+        # 從來沒關,變成 主翻 + 反譯(blocking) + QE(背景) 三重。
+        # 根治:反譯檢查整段移到背景 _post_translation_async:
+        #   - QE 正常運作時由 QE 取代(訊號嚴格更強,低分還會 APE 修正入庫)
+        #   - QE 失敗/停用時,依 double_check_mode 在背景跑 round-trip 記事件
+        #   - 後台 dcMode 設定照常保存生效,只是不再擋使用者
+        # 確定性防線(semantic contract、factory 偵測修復、glossary、洩漏重試、
+        # logprobs 低信心 ⚠️)全部留在主路徑,擋錯的一個沒少。
         _did_double_check = False
         _similarity_val = 1.0
-        _multi_path_details = None
-        try:
-            if _should_double_check(text, src):
-                _did_double_check = True
-                
-                # ★ v3.6 多路徑反譯:長句 + 啟用時走兩條路徑
-                _orig_char_len = len(re.sub(r"\s+", "", text or ""))
-                _use_multi_path = (
-                    multi_path_backtrans_enabled 
-                    and _orig_char_len >= multi_path_min_chars
-                    and src in ("id", "zh") and tgt in ("zh", "id")
-                )
-                
-                if _use_multi_path:
-                    passes, _multi_path_details = _multi_path_back_translation(text, result, src, tgt)
-                    _similarity_val = _multi_path_details.get("path1_jaccard", 1.0)
-                    if not passes:
-                        decision = _multi_path_details.get("final_decision", "unknown")
-                        logger.warning(
-                            "Multi-path back-trans FAILED (%s): orig=%r trans=%r details=%s",
-                            decision, text[:80], result[:80], _multi_path_details
-                        )
-                        result = "⚠️ " + result
-                        # 記錄到 thread-local 供監控儀表板用
-                        try:
-                            _tl.multi_path_fail = _multi_path_details
-                        except Exception:
-                            pass
-                    else:
-                        logger.info("Multi-path back-trans passed: %s", _multi_path_details)
-                else:
-                    passes, _similarity_val, back = _round_trip_check(text, result, src, tgt)
-                    if not passes:
-                        logger.warning("Round-trip check FAILED: orig=%r trans=%r back=%r sim=%.2f",
-                                       text[:80], result[:80], back[:80], _similarity_val)
-                        result = "⚠️ " + result
-                    else:
-                        logger.info("Round-trip check passed: sim=%.2f", _similarity_val)
-        except Exception as _e:
-            logger.error("Round-trip wrap error: %s", _e)
         # ★ v3.3:低信心警告 - 只在反譯檢查未觸發時才加 ⚠️,避免雙重前綴
         try:
             if (logprobs_enabled and _confidence < confidence_threshold 
@@ -8022,6 +7995,28 @@ def _post_translation_async(text, result, src, tgt, gid, model_used, conf, seman
         qe_result = qe_module.estimate_quality(text, final, src, tgt, ai_client=ai_provider)
     except Exception as _qe_e:
         logger.warning("[QE-bg] failed: %s", _qe_e)
+
+    # v3.17: round-trip 反譯降級為「QE 不可用時的背景品質監控」。
+    # 原本它是主路徑 blocking 雙API(每句 >30 字翻倍延遲);現在:
+    #   - QE 正常 → 完全不跑反譯(QE 訊號嚴格更強)
+    #   - QE 回 None/例外 且後台 double_check_mode != off → 背景跑一次反譯,
+    #     失敗記 rtc_bg_fail 事件供監控,不影響已送出的訊息
+    if qe_result is None:
+        try:
+            if _should_double_check(text, src):
+                _rt_ok, _rt_sim, _rt_back = _round_trip_check(text, final, src, tgt)
+                if not _rt_ok:
+                    logger.warning("[RTC-bg] round-trip failed (QE unavailable): sim=%.2f orig=%r trans=%r",
+                                   _rt_sim, text[:80], (final or "")[:80])
+                    try:
+                        _event_log_write("rtc_bg_fail", {
+                            "group_id": gid, "similarity": round(_rt_sim, 3),
+                            "src_text": text[:120], "tgt_text": (final or "")[:120],
+                        })
+                    except Exception:
+                        pass
+        except Exception as _rt_e:
+            logger.warning("[RTC-bg] exception: %s", _rt_e)
 
     if qe_result and qe_result.get("action") in ("warn", "retry"):
         try:
