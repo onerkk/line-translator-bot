@@ -104,18 +104,18 @@
     }
   },
   "bot_stats": {
-    "text_translations": 143,
+    "text_translations": 144,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 8,
-    "tokens_prompt": 2382896,
-    "tokens_completion": 9073,
-    "oai_input": 12837,
+    "tokens_prompt": 2396349,
+    "tokens_completion": 9091,
+    "oai_input": 26290,
     "oai_cached": 0,
-    "oai_output": 17,
+    "oai_output": 35,
     "oai_reasoning": 0,
-    "oai_cost_usd": 0.00324325,
+    "oai_cost_usd": 0.0066425,
     "ant_input": 76947,
     "ant_cache_read": 229894,
     "ant_cache_write": 369791,
@@ -193,9 +193,9 @@
       "model": "claude-haiku-4-5-20251001"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "tokens_prompt": 31372,
-      "tokens_completion": 178,
-      "cost_usd": 0.02986450000000007,
+      "tokens_prompt": 44825,
+      "tokens_completion": 196,
+      "cost_usd": 0.033263750000000036,
       "provider": "openai",
       "model": "gpt-5-mini"
     }
@@ -485,29 +485,10 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
-      "span": true
+      "carousel": true
     }
   },
   "group_tts_settings": {},
   "group_conv_settings": {},
-  "group_target_langs": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": [
-      "id"
-    ],
-    "Cd188e1adc7792e407c90f3fa78850316": [
-      "id"
-    ]
-  }
+  "group_target_langs": {}
 }
