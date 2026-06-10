@@ -2932,6 +2932,9 @@ LANG_FLAGS = {
     "ja": "\U0001f1ef\U0001f1f5",   # 🇯🇵
     "ko": "\U0001f1f0\U0001f1f7",   # 🇰🇷
     "en": "\U0001f1ec\U0001f1e7",   # 🇬🇧
+    # v3.14: 菲律賓文(競品 JFETEK 僑語翻譯隨扈支援 zh/id/vi/tl;
+    # 菲律賓是台灣移工第三大族群,補上這個真實缺口)
+    "tl": "\U0001f1f5\U0001f1ed",   # 🇵🇭
 }
 
 LANG_NAMES = {
@@ -2944,6 +2947,8 @@ LANG_NAMES = {
     "ja": "Japanese",
     "ko": "Korean",
     "en": "English",
+    # v3.14
+    "tl": "Filipino (Tagalog)",
 }
 
 LANG_NAMES_ZH = {
@@ -2955,10 +2960,12 @@ LANG_NAMES_ZH = {
     "ja": "\u65e5\u6587",        # 日文
     "ko": "\u97d3\u6587",        # 韓文
     "en": "\u82f1\u6587",        # 英文
+    # v3.14
+    "tl": "\u83f2\u5f8b\u8cd3\u6587",  # 菲律賓文
 }
 
-# Valid target languages (v3.10: expanded from id-only)
-VALID_TARGETS = ["id", "th", "hi", "vi", "ja", "ko", "en"]
+# Valid target languages (v3.10: expanded from id-only / v3.14: +tl)
+VALID_TARGETS = ["id", "th", "hi", "vi", "ja", "ko", "en", "tl"]
 
 
 def extract_mentions(text):
@@ -10423,6 +10430,9 @@ def handle_command(text, group_id, user_id=None):
             return handle_liff_command(group_id, user_id)
         except NameError:
             return "⚠️ v3.10 模組未載入 / v3.10 module not loaded"
+    # v3.14: 群組內語言設定面板
+    elif cmd in ("/panel", "/lang", "/setting", "/settings"):
+        return "__FLEX_PANEL__"
     elif text.strip().lower().startswith("/skipadd"):
         name_query = text.strip()[8:].strip()
         if not name_query:
@@ -10763,6 +10773,12 @@ def handle_message(event):
             # 非管理員不顯示 III / ADMIN 區塊
             send_help_flex(event.reply_token, primary_lang="zh",
                            is_admin=is_group_admin(user_id))
+        elif cmd_result == "__FLEX_PANEL__":
+            # v3.14: /panel /lang /setting → 語言設定面板
+            try:
+                send_lang_panel_flex(event.reply_token, group_id)
+            except NameError:
+                pass
         elif cmd_result:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
@@ -10771,6 +10787,42 @@ def handle_message(event):
                     messages=[TextMessage(text=_clip_line_text(cmd_result))]
                 ))
         return
+
+    # ─── v3.14 競品 UX 升級:非 / 開頭的設定入口(僅群組,DM 不適用) ───
+    if group_id and not is_dm:
+        # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
+        #    工人記不住指令,給一個最自然的中文入口)
+        _t_strip = text.strip().lower()
+        if _t_strip in ("設定", "设定", "語言設定", "语言设定", "setting", "settings",
+                        "panel", "pengaturan"):
+            try:
+                if send_lang_panel_flex(event.reply_token, group_id):
+                    return
+            except NameError:
+                pass
+        # 2. Echonora 式自然語言設定:「翻譯 中文和印尼文」「設定語言 越南文 泰文」
+        try:
+            _nl = try_natural_lang_setup(text, group_id, getattr(source, 'user_id', None))
+        except NameError:
+            _nl = None
+        if _nl is not None:
+            _nl_status, _nl_langs = _nl
+            if _nl_status == "not_admin":
+                try:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text="⚠️ 語言設定僅限管理員\n⚠️ Setelan bahasa khusus admin")],
+                        ))
+                except Exception:
+                    pass
+            else:
+                _banner = "✅ 翻譯語言已設定:🇹🇼 中文 ⇄ " + " + ".join(
+                    "{} {}".format(LANG_FLAGS.get(l, ""), LANG_NAMES_ZH.get(l, l))
+                    for l in (_nl_langs or []))
+                send_lang_panel_flex(event.reply_token, group_id, banner=_banner)
+            return
 
     is_on = group_settings.get(group_id, True)
     if not is_on:
@@ -12181,6 +12233,24 @@ if PostbackEvent:
                     return
             except NameError:
                 pass
+
+        # v3.14: 語言設定面板切換按鈕(admin)
+        if action == "langtoggle":
+            try:
+                if handle_langtoggle_postback(event, params):
+                    return
+            except NameError:
+                pass
+
+        # v3.14: 開啟語言設定面板(任何人可看,改動仍 admin 限定)
+        if action == "langpanel":
+            _gid = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+            if _gid:
+                try:
+                    send_lang_panel_flex(event.reply_token, _gid)
+                except NameError:
+                    pass
+            return
 
         # v3.10: LV4 flex card 互動按鈕 — 查儲區
         if action == "qry":
@@ -25178,6 +25248,255 @@ def push_tts_message(group_id, text, lang):
 # D. ONBOARDING FLEX — when bot joins a brand-new group
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# v3.14 競品 UX 升級(2026-06-10)
+# 真實調查四家競品後的結論:Ligo/T2GO/Echonora/JFETEK 技術上都是 NMT/LLM
+# wrapper(無 TM/向量/QE/APE/術語強制),我們技術領先;值得寫入的是 UX:
+#   1. Echonora 自然語言設定:「@Echonora 中文和印尼文」一句話設定 → 本區實作
+#   2. 群組內語言設定面板 Flex(按按鈕切換,不打指令)→ build_lang_panel_flex
+#   3. JFETEK 支援菲律賓文 tl → 已加入 VALID_TARGETS
+#   4. Onboarding 卡補越南/菲律賓按鈕(台灣移工第二/三大族群)
+# ----------------------------------------------------------------------------
+
+# 語言別名表:中文名/英文名/當地語名 → 語言代碼(長詞優先比對)
+LANG_ALIASES = {
+    "id": ["印尼文", "印尼語", "印尼语", "印尼", "bahasa indonesia", "indonesian", "indonesia"],
+    "vi": ["越南文", "越南語", "越南语", "越南", "tiếng việt", "tieng viet", "vietnamese", "vietnam"],
+    "th": ["泰文", "泰語", "泰语", "泰國", "泰国", "ภาษาไทย", "thai", "ไทย"],
+    "tl": ["菲律賓文", "菲律賓語", "菲律宾文", "菲律賓", "菲律宾", "他加祿", "tagalog", "filipino", "philippines"],
+    "en": ["英文", "英語", "英语", "english"],
+    "ja": ["日文", "日語", "日语", "日本語", "japanese", "日本"],
+    "ko": ["韓文", "韓語", "韩文", "한국어", "korean", "韓國", "韩国"],
+    "hi": ["印地文", "印地語", "印地语", "hindi"],
+    "zh": ["繁體中文", "繁体中文", "中文", "華語", "华语", "國語", "国语", "華文", "mandarin", "chinese"],
+}
+# 長詞優先的扁平比對表 [(alias_lower, code), ...]
+_LANG_ALIAS_FLAT = sorted(
+    [(a.lower(), c) for c, lst in LANG_ALIASES.items() for a in lst],
+    key=lambda x: -len(x[0]),
+)
+
+_LANG_SETUP_TRIGGER_RE = re.compile(
+    r"(翻譯|翻译|設定|设定|語言|语言|translate|language|bahasa|ngôn ngữ|ภาษา|wika)",
+    re.IGNORECASE)
+# 設定語句裡允許出現的連接/雜訊字(剩餘內容超過這些就視為一般句子,不觸發)
+_LANG_SETUP_NOISE_RE = re.compile(
+    r"(翻譯|翻译|設定|设定|語言|语言|translate|language|bahasa|ngôn ngữ|ภาษา|wika"
+    r"|和|與|跟|及|加|還有|还有|改成|改為|改为|換成|换成|成|到|要|請|请|幫我|帮我"
+    r"|and|dan|to|set|use|pakai|ke|va|và"
+    r"|[@＠][^\s]*|[\s,，、+＋/／:：!！。.~～-])",
+    re.IGNORECASE)
+
+_PANEL_KEYWORDS = ("設定", "设定", "語言", "语言", "setting", "settings", "panel",
+                   "設定面板", "语言设定", "語言設定", "pengaturan", "bahasa?")
+
+
+def parse_lang_codes_natural(text):
+    """從自然語句解析語言代碼(出現順序、去重、長詞優先)。
+    回傳 (codes, stripped_text):codes 為解析到的代碼 list,
+    stripped_text 為移除所有語言別名後的剩餘文字(供雜訊判斷)。"""
+    low = (text or "").lower()
+    found_spans = []   # [(start, end, code)]
+    for alias, code in _LANG_ALIAS_FLAT:
+        start = 0
+        while True:
+            i = low.find(alias, start)
+            if i < 0:
+                break
+            j = i + len(alias)
+            # 不可與已找到的別名重疊(長詞已優先,確保「印尼文」不會再配到「印尼」)
+            if not any(i < e and j > s for s, e, _ in found_spans):
+                found_spans.append((i, j, code))
+            start = j
+    # v3.14: 按「出現位置」排序產生代碼(影響 legacy 首語言與廣播順序)
+    codes = []
+    for s, e, code in sorted(found_spans, key=lambda x: x[0]):
+        if code not in codes:
+            codes.append(code)
+    # 移除別名後的剩餘文字
+    chars = list(low)
+    for s, e, _ in found_spans:
+        for k in range(s, e):
+            chars[k] = " "
+    stripped = "".join(chars)
+    return codes, stripped
+
+
+def try_natural_lang_setup(text, group_id, user_id):
+    """v3.14 Echonora 式自然語言設定:
+    「翻譯 中文和印尼文」「設定語言 越南文 泰文」「translate Chinese and Vietnamese」
+    回傳:
+      None                → 不是設定語句,照常走翻譯
+      ("ok", new_langs)   → 已設定成功
+      ("not_admin", None) → 是設定語句但非管理員
+    嚴格觸發條件(避免一般句子誤判,例如「請幫我把這份越南文文件翻譯一下」):
+      訊息 ≤ 40 字、含觸發詞、解析出 ≥1 個非中文語言、
+      移除語言名+觸發詞+連接詞後剩餘 ≤ 4 個字元。"""
+    t = (text or "").strip()
+    if not t or len(t) > 40:
+        return None
+    if not _LANG_SETUP_TRIGGER_RE.search(t):
+        return None
+    codes, stripped = parse_lang_codes_natural(t)
+    targets = [c for c in codes if c != "zh" and c in VALID_TARGETS]
+    if not targets:
+        return None
+    # 剩餘雜訊檢查:把觸發詞/連接詞也清掉,剩下不能超過 4 字
+    residue = _LANG_SETUP_NOISE_RE.sub("", stripped)
+    residue = re.sub(r"\s+", "", residue)
+    if len(residue) > 4:
+        return None
+    # 與 onboarding 一致:僅管理員可改群組語言(工廠群組不能讓任何人亂改)
+    if not is_group_admin(user_id):
+        return ("not_admin", None)
+    set_group_target_langs(group_id, targets)
+    return ("ok", get_group_target_langs(group_id))
+
+
+def build_lang_panel_flex(group_id, banner=None):
+    """v3.14 語言設定面板:目前語言 + 每語言切換按鈕(postback)。
+    參考競品 UX 後重新設計:Ligo 要打 #set 指令、Echonora 要打整句,
+    我們直接給按鈕 — 手機上點一下就好。"""
+    cur = get_group_target_langs(group_id)
+    tts_on = False
+    try:
+        tts_on = bool(get_tts_enabled(group_id))
+    except Exception:
+        pass
+
+    # 目前語言列
+    cur_label = "🇹🇼 中文 ⇄ " + " + ".join(
+        "{} {}".format(LANG_FLAGS.get(l, ""), LANG_NAMES_ZH.get(l, l)) for l in cur)
+
+    # 語言按鈕(2 欄排列省高度)
+    def _lang_btn(code):
+        active = code in cur
+        return {
+            "type": "button", "height": "sm",
+            "style": "primary" if active else "secondary",
+            **({"color": "#7c6fef"} if active else {}),
+            "action": {
+                "type": "postback",
+                "label": "{} {}{}".format(LANG_FLAGS.get(code, ""),
+                                          LANG_NAMES_ZH.get(code, code),
+                                          " ✓" if active else ""),
+                "data": "action=langtoggle&v=" + code,
+                "displayText": "{} {} {}".format(
+                    "➖ 移除" if active else "➕ 加入",
+                    LANG_FLAGS.get(code, ""), LANG_NAMES_ZH.get(code, code)),
+            },
+        }
+
+    rows = []
+    for i in range(0, len(VALID_TARGETS), 2):
+        pair = VALID_TARGETS[i:i + 2]
+        rows.append({
+            "type": "box", "layout": "horizontal", "spacing": "sm",
+            "contents": [_lang_btn(c) for c in pair],
+        })
+
+    body_contents = []
+    if banner:
+        body_contents.append({"type": "text", "text": banner, "size": "sm",
+                              "weight": "bold", "color": "#1a7f37", "wrap": True})
+        body_contents.append({"type": "separator", "margin": "sm"})
+    body_contents += [
+        {"type": "text", "text": "目前翻譯語言 / Bahasa aktif", "size": "xs",
+         "color": "#888888", "margin": "sm"},
+        {"type": "text", "text": cur_label, "size": "sm", "weight": "bold",
+         "wrap": True, "margin": "xs"},
+        {"type": "separator", "margin": "md"},
+        {"type": "text", "text": "點按鈕加入/移除語言(管理員)", "size": "xs",
+         "color": "#888888", "margin": "md"},
+        {"type": "text", "text": "Ketuk untuk tambah/hapus (admin)", "size": "xxs",
+         "color": "#aaaaaa"},
+        {"type": "box", "layout": "vertical", "spacing": "sm", "margin": "md",
+         "contents": rows},
+        {"type": "separator", "margin": "md"},
+        {"type": "text",
+         "text": "🔊 語音 TTS:" + ("開啟" if tts_on else "關閉") + "(/liff 可改)",
+         "size": "xxs", "color": "#aaaaaa", "margin": "md"},
+        {"type": "text", "text": "💬 也可直接打:「翻譯 中文和越南文」",
+         "size": "xxs", "color": "#aaaaaa"},
+        {"type": "text", "text": "📋 完整功能:/help・進階設定:/liff",
+         "size": "xxs", "color": "#aaaaaa"},
+    ]
+
+    bubble = {
+        "type": "bubble", "size": "mega",
+        "header": {
+            "type": "box", "layout": "vertical",
+            "backgroundColor": "#7c6fef", "paddingAll": "lg",
+            "contents": [
+                {"type": "text", "text": "🌐 翻譯設定", "color": "#ffffff",
+                 "weight": "bold", "size": "lg"},
+                {"type": "text", "text": "Pengaturan Terjemahan", "color": "#e0d7ff",
+                 "size": "sm", "margin": "xs"},
+            ],
+        },
+        "body": {"type": "box", "layout": "vertical", "spacing": "sm",
+                 "contents": body_contents},
+    }
+    return FlexContainer.from_dict(bubble)
+
+
+def send_lang_panel_flex(reply_token, group_id, banner=None):
+    """送語言設定面板。回傳 True/False。"""
+    try:
+        flex = build_lang_panel_flex(group_id, banner=banner)
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            api.reply_message(ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[FlexMessage(alt_text="🌐 翻譯設定 / Pengaturan", contents=flex)],
+            ))
+        return True
+    except Exception as e:
+        logger.warning("send_lang_panel_flex failed: %s", e)
+        return False
+
+
+def handle_langtoggle_postback(event, params):
+    """v3.14: 設定面板語言切換按鈕。管理員限定,至少保留 1 個語言。"""
+    group_id = getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None)
+    if not group_id:
+        return True
+    user_id = getattr(event.source, "user_id", None)
+    if not is_group_admin(user_id):
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="⚠️ 語言設定僅限管理員\n⚠️ Setelan bahasa khusus admin")],
+                ))
+        except Exception:
+            pass
+        return True
+    code = (params.get("v") or "").strip().lower()
+    if code not in VALID_TARGETS:
+        return True
+    cur = list(get_group_target_langs(group_id))
+    if code in cur:
+        if len(cur) <= 1:
+            send_lang_panel_flex(event.reply_token, group_id,
+                                 banner="⚠️ 至少要保留一個語言 / Minimal satu bahasa")
+            return True
+        cur.remove(code)
+        banner = "✅ 已移除 {} {}".format(LANG_FLAGS.get(code, ""), LANG_NAMES_ZH.get(code, code))
+    else:
+        if len(cur) >= 5:
+            # Ligo MLT 上限也是 5 語;超過會讓每句譯文牆過長洗版
+            send_lang_panel_flex(event.reply_token, group_id,
+                                 banner="⚠️ 最多 5 個語言 / Maksimal 5 bahasa")
+            return True
+        cur.append(code)
+        banner = "✅ 已加入 {} {}".format(LANG_FLAGS.get(code, ""), LANG_NAMES_ZH.get(code, code))
+    set_group_target_langs(group_id, cur)
+    send_lang_panel_flex(event.reply_token, group_id, banner=banner)
+    return True
+
+
 def build_onboarding_flex():
     """Returns FlexContainer for new-group language picker."""
     bubble = {
@@ -25205,29 +25524,34 @@ def build_onboarding_flex():
                                 "displayText": "🇹🇼 ⇄ 🇮🇩  (中文 ⇄ 印尼 / Mandarin ⇄ Indonesia)"}},
                     {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
                      "action": {"type": "postback",
+                                "label": "🇹🇼 中 ⇄ 🇻🇳 越南",
+                                "data": "action=onboard_lang&v=vi",
+                                "displayText": "🇹🇼 ⇄ 🇻🇳  (中文 ⇄ 越南 / Mandarin ⇄ Việt)"}},
+                    {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
+                     "action": {"type": "postback",
                                 "label": "🇹🇼 中 ⇄ 🇹🇭 泰",
                                 "data": "action=onboard_lang&v=th",
                                 "displayText": "🇹🇼 ⇄ 🇹🇭  (中文 ⇄ 泰文 / Mandarin ⇄ Thai)"}},
                     {"type": "button", "style": "primary", "color": "#7c6fef", "height": "sm",
                      "action": {"type": "postback",
-                                "label": "🇹🇼 中 ⇄ 🇮🇳 印地",
-                                "data": "action=onboard_lang&v=hi",
-                                "displayText": "🇹🇼 ⇄ 🇮🇳  (中文 ⇄ 印地 / Mandarin ⇄ Hindi)"}},
+                                "label": "🇹🇼 中 ⇄ 🇵🇭 菲律賓",
+                                "data": "action=onboard_lang&v=tl",
+                                "displayText": "🇹🇼 ⇄ 🇵🇭  (中文 ⇄ 菲律賓 / Mandarin ⇄ Filipino)"}},
                     {"type": "button", "style": "secondary", "height": "sm",
                      "action": {"type": "postback",
-                                "label": "🇹🇼+🇮🇩+🇹🇭 三語廣播",
-                                "data": "action=onboard_lang&v=id,th",
-                                "displayText": "🇹🇼 + 🇮🇩 + 🇹🇭  (3 languages)"}},
+                                "label": "🇹🇼+🇮🇩+🇻🇳 三語廣播",
+                                "data": "action=onboard_lang&v=id,vi",
+                                "displayText": "🇹🇼 + 🇮🇩 + 🇻🇳  (3 languages)"}},
                     {"type": "button", "style": "secondary", "height": "sm",
                      "action": {"type": "postback",
-                                "label": "🇹🇼+🇮🇩+🇹🇭+🇮🇳 四語廣播",
-                                "data": "action=onboard_lang&v=id,th,hi",
-                                "displayText": "🇹🇼 + 🇮🇩 + 🇹🇭 + 🇮🇳  (4 languages)"}},
+                                "label": "🌐 更多語言(日/韓/英/印地…)",
+                                "data": "action=langpanel",
+                                "displayText": "🌐 開啟語言設定面板"}},
                 ]},
                 {"type": "separator", "margin": "md"},
-                {"type": "text", "text": "稍後管理員可打 /liff 重新設定",
+                {"type": "text", "text": "也可直接打:「翻譯 中文和越南文」",
                  "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "md"},
-                {"type": "text", "text": "Admin bisa atur ulang dengan /liff",
+                {"type": "text", "text": "打「設定」可隨時開設定面板 / Ketik 設定",
                  "size": "xxs", "color": "#aaaaaa", "align": "center"},
                 {"type": "text", "text": "輸入 /help 看完整功能 / Ketik /help",
                  "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "sm"},
