@@ -1089,6 +1089,10 @@ MODEL_CAPABILITIES = {
         "prompt_cache_key": True, "reasoning_effort": False, "seed": True,
         "verbosity": False,
         "prompt_cache_retention": False,  # gpt-4 不支援
+        # v3.19: OpenAI 官方 Predicted Outputs(speculative decoding)
+        # 官方支援:gpt-4o / gpt-4.1 家族 chat completions。
+        # reasoning 模型(o-series / gpt-5)不支援 → 其他 family .get 預設 False。
+        "prediction": True,
     },
     "unknown": {
         "temperature": True, "top_p": True, "max_tokens": True,
@@ -7014,6 +7018,32 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # 工廠 24/7 夜班 dead time 後 cache 仍存活,早班 cache hit
         if openai_24h_cache_enabled and model_supports(_model, "prompt_cache_retention"):
             _kwargs["prompt_cache_retention"] = "24h"
+        # ─── v3.19: OpenAI Predicted Outputs(官方 speculative decoding) ───
+        # 業界/官方最後一塊可用的延遲技術:高分 fuzzy TM 參考(score≥85)
+        # 當 prediction 丟給 API — 新譯文與舊譯大部分重合時,生成階段可達 2-5 倍速。
+        # 工廠口語高度重複(「料好了」「先吃飯」...的微變體),正是命中率最高的場景。
+        # 官方限制:與 logprobs 互斥 → 用 prediction 時改拿 TM 分數當信心來源;
+        #           reasoning 模型不支援(model_supports 已按 family 把關);
+        #           猜錯的 tokens 按 output 計費 → 限 score≥85 控成本。
+        # Anthropic 無對等功能(誠實註記),Claude 路徑不受影響。
+        _prediction_used = False
+        if model_supports(_model, "prediction"):
+            try:
+                _p_refs = getattr(_tl, 'tm_references', None) or []
+                _p_best = None
+                for _pr in _p_refs:
+                    if _pr and len(_pr) >= 3 and _pr[0] >= 85 and _pr[2]:
+                        if _p_best is None or _pr[0] > _p_best[0]:
+                            _p_best = _pr
+                if _p_best:
+                    _kwargs["prediction"] = {"type": "content", "content": str(_p_best[2])}
+                    _kwargs.pop("logprobs", None)
+                    _kwargs.pop("top_logprobs", None)
+                    _prediction_used = True
+                    logger.info("[Predicted] using TM ref score=%d as prediction", _p_best[0])
+            except Exception:
+                pass
+
         try:
             _event_log_write("translate_call_start", {
                 "model": _model,
@@ -7027,15 +7057,33 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         try:
             r = ai.chat.completions.create(**_kwargs)
         except Exception as _te:
-            try:
-                _event_log_write("translate_call_failed", {
-                    "model": _model,
-                    "error": str(_te)[:300],
-                    "error_type": type(_te).__name__,
-                })
-            except Exception:
-                pass
-            raise
+            # v3.19: prediction 參數被拒(模型/帳號不支援)→ 拿掉重試一次,不讓整句失敗
+            if _prediction_used:
+                logger.warning("[Predicted] call failed (%s), retry without prediction", str(_te)[:120])
+                _kwargs.pop("prediction", None)
+                _prediction_used = False
+                try:
+                    r = ai.chat.completions.create(**_kwargs)
+                except Exception as _te2:
+                    try:
+                        _event_log_write("translate_call_failed", {
+                            "model": _model,
+                            "error": str(_te2)[:300],
+                            "error_type": type(_te2).__name__,
+                        })
+                    except Exception:
+                        pass
+                    raise
+            else:
+                try:
+                    _event_log_write("translate_call_failed", {
+                        "model": _model,
+                        "error": str(_te)[:300],
+                        "error_type": type(_te).__name__,
+                    })
+                except Exception:
+                    pass
+                raise
         # v3.9.41 Phase Q: 抽 confidence score(雙系統)
         try:
             _conf_provider = ai_provider.get_active_provider()
