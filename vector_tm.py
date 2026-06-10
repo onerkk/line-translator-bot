@@ -156,6 +156,28 @@ def _cosine_similarity(a: List[float], b: Tuple[float, ...]) -> float:
 # ═══════════════════════════════════════════════════════════════════
 # Embedding API(OpenAI text-embedding-3-small)
 # ═══════════════════════════════════════════════════════════════════
+# v3.13 速度根治:OpenAI client 改模組級單例。
+# 原本每次 embedding 都 new 一個 OpenAI(...) → 每句翻譯多付 1~2 次 TLS 握手
+# (lookup 一次 + store 一次)。單例重用 HTTP 連線池,timeout 15→8 秒
+# (embedding 正常 <1 秒,15 秒等於讓一句卡死整條 pipeline 15 秒)。
+_OPENAI_CLIENT = None
+_OPENAI_CLIENT_LOCK = threading.Lock()
+
+
+def _get_openai_client():
+    global _OPENAI_CLIENT
+    if _OPENAI_CLIENT is not None:
+        return _OPENAI_CLIENT
+    with _OPENAI_CLIENT_LOCK:
+        if _OPENAI_CLIENT is None:
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                return None
+            from openai import OpenAI
+            _OPENAI_CLIENT = OpenAI(api_key=api_key, timeout=8.0)
+    return _OPENAI_CLIENT
+
+
 def _generate_embedding(text: str) -> Optional[List[float]]:
     """呼叫 OpenAI embedding API,with in-memory cache
     
@@ -173,13 +195,10 @@ def _generate_embedding(text: str) -> Optional[List[float]]:
         return _QUERY_EMBED_CACHE[cache_key]
     
     try:
-        from openai import OpenAI
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
+        client = _get_openai_client()
+        if client is None:
             logger.warning("[VecTM] no OPENAI_API_KEY, embedding unavailable")
             return None
-        
-        client = OpenAI(api_key=api_key, timeout=15.0)
         resp = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
         vec = list(resp.data[0].embedding)
         

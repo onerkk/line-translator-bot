@@ -308,6 +308,15 @@ def _event_log_path():
     return "bot_event_log.json"
 
 _EVENT_LOG_FILE = None
+# === v3.13 速度根治:背景後處理執行緒池 ===
+# 原本 QE 評分、APE 修正、TM/向量入庫、事件日誌整檔重寫全部「串在使用者等待路徑上」,
+# 一句話要等 3~5 個額外網路往返才回 LINE。業界做法(chat MT):譯文一好就回,
+# 評分/入庫/日誌全部丟背景。workers=1 前提下,行程內執行緒池即可,不需外部 queue。
+from concurrent.futures import ThreadPoolExecutor as _TPE_v313
+_EVENT_LOG_EXECUTOR = _TPE_v313(max_workers=1, thread_name_prefix="evlog")   # 單線程保序
+_BG_POST_EXECUTOR   = _TPE_v313(max_workers=2, thread_name_prefix="bgpost")  # QE/APE/TM 入庫
+_MULTI_TGT_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="mtgt")    # 多語廣播並行
+
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
 # v3.9.30c B17 修補: LINE 訊息長度限制(5000 字)截斷工具
@@ -381,6 +390,17 @@ def _is_redelivery(event):
 
 
 def _event_log_write(event_type, data):
+    """v3.13: 改走背景單一執行緒佇列。
+    原本每筆事件都在呼叫端「鎖檔 → 整檔讀 → JSON parse 200 筆 → 整檔重寫」,
+    每則 webhook 進來就先付一次整檔 I/O,還和其他執行緒搶同一把 file lock。
+    現在呼叫端只 submit,實際磁碟寫入由 evlog 單線程依序處理(保序、無鎖競爭)。"""
+    try:
+        _EVENT_LOG_EXECUTOR.submit(_event_log_write_sync, event_type, data)
+    except Exception:
+        pass
+
+
+def _event_log_write_sync(event_type, data):
     """寫一筆事件到磁碟 log。失敗安靜略過,不影響主流程。
     v3.10+ 修補:用 file lock,避免多 worker 同時寫時互相覆蓋彼此的 log。"""
     global _EVENT_LOG_FILE
@@ -1353,6 +1373,11 @@ def pick_model(text):
         → 走 _AIProxy 的 model_mapping 機制(舊「套用模型」單一映射行為)
       - 這給歐那一個 fallback:若新邏輯出問題,後台關掉 toggle 即恢復舊行為
     """
+    # v3.13: thread-local 強制模型(translate_multi 並行 fallback 用)。
+    # 取代原本 monkey-patch globals()['pick_model'] 的做法 — 那在並行下會互相污染。
+    _forced = getattr(_tl, 'force_model', None)
+    if _forced:
+        return _forced
     try:
         provider = ai_provider.get_active_provider()
     except Exception:
@@ -7893,76 +7918,19 @@ def _translate_core(text, src, tgt):
     if result and isinstance(result, str):
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
 
-    # ─── 後處理 1: QE 評分(可選,若啟用) ───
-    _qe_result = None
-    if result and isinstance(result, str) and not result.startswith("⚠"):
-        try:
-            _qe_result = qe_module.estimate_quality(text, result, src, tgt, ai_client=ai_provider)
-        except Exception as _qe_e:
-            logger.warning("[QE] failed: %s", _qe_e)
-    
-    # ─── 後處理 2: APE 觸發(若 QE 分數低) ───
-    if _qe_result and _qe_result.get("action") in ("warn", "retry"):
-        try:
-            ape_result = ape_module.auto_post_edit(
-                text, result, src, tgt,
-                issues=_qe_result.get("issues"),
-                qe_score=_qe_result.get("total"),
-                trigger="qe",
-                ai_client=ai_provider,
-            )
-            if ape_result and ape_result != result:
-                logger.info("[Pipeline] APE applied (QE %d → APE 新譯文)", _qe_result["total"])
-                result = ape_result
-                result = enforce_translation_semantic_contract(_semantic_contract, text, result)
-                # APE 後再評一次(可選,先不評免成本)
-        except Exception as _ape_e:
-            logger.warning("[APE] failed: %s", _ape_e)
-    
-    # ─── 後處理 3: 對話 buffer ───
-    try:
-        if result is not None:
-            _gid = getattr(_tl, 'group_id', None)
-            if _gid:
-                _conv_buffer_add(_gid, text, result, src, tgt)
-    except (NameError, Exception) as e:
-        try:
-            logger.debug("conv buffer add failed: %s", e)
-        except Exception:
-            pass
-    
-    # ─── 後處理 4: TM store back(累積資產,帶 confidence + QE 分數) ───
-    if result and isinstance(result, str) and not result.startswith("⚠"):
-        # v3.9.41 Phase Q: 用 confidence score 當 quality_score 的補強訊號
-        _conf = getattr(_tl, 'last_confidence', None)
-        _qe_total = _qe_result.get("total") if _qe_result else None
-        # 優先 QE 分數,fallback confidence × 100
-        _quality_for_tm = _qe_total if _qe_total is not None else (
-            int(_conf * 100) if _conf is not None else None
-        )
-        try:
-            _model_used = getattr(_tl, 'last_model_used', '') or 'unknown'
-            tm_module.tm_store(text, result, src, tgt, _gid_for_tm, _model_used, _quality_for_tm)
-        except Exception as _tm_e:
-            logger.warning("[TM] store exception: %s", _tm_e)
-        try:
-            vec_tm_module.vector_store(text, result, src, tgt, _gid_for_tm,
-                                        _model_used, _quality_for_tm)
-        except Exception as _vec_e:
-            logger.warning("[VecTM] store exception: %s", _vec_e)
-    
-    # 清掉 _tl 暫存避免污染下一次翻譯
-    for _attr in ('tm_references', 'last_confidence', 'detected_lang',
-                  'detected_confidence', 'ge_violations', 'semantic_contract'):
-        try:
-            if hasattr(_tl, _attr):
-                delattr(_tl, _attr)
-        except Exception:
-            pass
-    
-    # v3.11 (2026-05-26): 過濾 LLM 可能輸出的 <thinking>...</thinking> 內部思考 tag
-    # 截圖 09:02 案例:6.7+6.8 規則太複雜激發 Claude 自發加 thinking,污染翻譯介面。
-    # strip 後若空了(極罕見),保留原 result 給下游 fallback,避免回空字串。
+    # ═══ v3.13 速度根治:以下全部移出使用者等待路徑 ═══
+    # 原本順序:QE(1 次 LLM)→ APE(可能再 1 次 LLM)→ TM 入庫 → 向量入庫(1 次 embedding API)
+    # 全部跑完才 return → 才回 LINE。一句話多等 2~6 秒,純粹是內部品管/資產累積,
+    # 使用者完全感覺不到好處。業界 chat MT 標準:譯文一好就送,評分入庫走背景。
+    # 確定性防線(glossary 強制、semantic contract、工廠 finalize、語言洩漏重試)
+    # 全部保留在主路徑 — 擋錯的還在擋,只把「事後評分與資產累積」移走。
+    #
+    # 注意:APE 改在背景跑後,修正結果不再回到本次訊息(LINE 訊息本來就不能編輯,
+    # 原本 blocking APE 換到的只是「偶爾低分句多等幾秒換修正版」)。
+    # 修正版現在會更新 cache + TM,同句下次直接命中好譯文 — 資產品質不變。
+
+    # ─── 主路徑收尾 1: <thinking> tag 過濾(v3.11,移到入庫前 — 原本在入庫後,
+    #      導致 TM 可能存進含 thinking tag 的髒文字,順手治本) ───
     try:
         _stripped = _strip_thinking_tags(result)
         if _stripped:
@@ -7972,11 +7940,8 @@ def _translate_core(text, src, tgt):
                            (result or "")[:200])
     except Exception as _ste:
         logger.warning("[Thinking] strip exception: %s", _ste)
-    
-    # v3.11 (2026-05-26 18:16 截圖): 元注釋洩漏偵測
-    # 若 Claude 輸出『(This appears to be...)』『這是設備代碼,不翻譯』之類元注釋,
-    # 視同翻譯失敗,return None 讓上層走 fallback(群組:靜默 / DM:友善失敗訊息)。
-    # 這是 prompt 規則 6.4 的最後一道防線 — Claude 規避規則時這層擋住。
+
+    # ─── 主路徑收尾 2: 元注釋洩漏偵測(v3.11) ───
     try:
         if _is_meta_commentary_leak(result):
             logger.warning("[MetaLeak] 偵測到元注釋洩漏,放棄此次翻譯: %r", result[:200])
@@ -7991,10 +7956,98 @@ def _translate_core(text, src, tgt):
             return None
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
-    
+
     if result and isinstance(result, str):
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+
+    # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
+    try:
+        if result is not None and _gid_for_tm:
+            _conv_buffer_add(_gid_for_tm, text, result, src, tgt)
+    except Exception as e:
+        try:
+            logger.debug("conv buffer add failed: %s", e)
+        except Exception:
+            pass
+
+    # 把背景需要的 thread-local 值先抓成普通變數(背景執行緒看不到本執行緒的 _tl)
+    _conf_for_bg = getattr(_tl, 'last_confidence', None)
+    _model_for_bg = getattr(_tl, 'last_model_used', '') or 'unknown'
+
+    # 清掉 _tl 暫存避免污染下一次翻譯
+    for _attr in ('tm_references', 'last_confidence', 'detected_lang',
+                  'detected_confidence', 'ge_violations', 'semantic_contract'):
+        try:
+            if hasattr(_tl, _attr):
+                delattr(_tl, _attr)
+        except Exception:
+            pass
+
+    # ─── 背景後處理:QE 評分 → (低分)APE 修正入庫 → TM store → 向量 store ───
+    if result and isinstance(result, str) and not result.startswith("⚠"):
+        try:
+            _BG_POST_EXECUTOR.submit(
+                _post_translation_async,
+                text, result, src, tgt, _gid_for_tm,
+                _model_for_bg, _conf_for_bg, _semantic_contract,
+            )
+        except Exception as _bg_e:
+            logger.warning("[BG] submit post-processing failed: %s", _bg_e)
+
     return result
+
+
+def _post_translation_async(text, result, src, tgt, gid, model_used, conf, semantic_contract):
+    """v3.13: 翻譯後處理(背景執行緒)— 譯文已送出,這裡只做品管與資產累積。
+
+    流程(與原 blocking 版相同,只是不再讓使用者等):
+      1. QE 評分(LLM-as-judge,Haiku/4.1-mini)
+      2. 分數低 → APE 修正。修正版不回頭改已送出的訊息(LINE 不能編輯),
+         而是寫進 cache + TM:同句下次直接命中修正版。
+      3. TM store back + 向量 store back(帶 QE 分數),與原行為一致。
+    """
+    final = result
+    qe_result = None
+    try:
+        qe_result = qe_module.estimate_quality(text, final, src, tgt, ai_client=ai_provider)
+    except Exception as _qe_e:
+        logger.warning("[QE-bg] failed: %s", _qe_e)
+
+    if qe_result and qe_result.get("action") in ("warn", "retry"):
+        try:
+            ape_result = ape_module.auto_post_edit(
+                text, final, src, tgt,
+                issues=qe_result.get("issues"),
+                qe_score=qe_result.get("total"),
+                trigger="qe",
+                ai_client=ai_provider,
+            )
+            if ape_result and ape_result != final:
+                ape_result = enforce_translation_semantic_contract(semantic_contract, text, ape_result)
+            if ape_result and ape_result != final:
+                logger.info("[Pipeline-bg] APE 修正入庫 (QE %s);已送出訊息不變,cache/TM 更新為修正版",
+                            qe_result.get("total"))
+                final = ape_result
+                try:
+                    cache_set(text, src, tgt, final)
+                except Exception:
+                    pass
+        except Exception as _ape_e:
+            logger.warning("[APE-bg] failed: %s", _ape_e)
+
+    # TM store back(累積資產,帶 confidence + QE 分數)— 與原 v3.9.41 Phase Q 邏輯一致
+    qe_total = qe_result.get("total") if qe_result else None
+    quality_for_tm = qe_total if qe_total is not None else (
+        int(conf * 100) if conf is not None else None
+    )
+    try:
+        tm_module.tm_store(text, final, src, tgt, gid, model_used, quality_for_tm)
+    except Exception as _tm_e:
+        logger.warning("[TM-bg] store exception: %s", _tm_e)
+    try:
+        vec_tm_module.vector_store(text, final, src, tgt, gid, model_used, quality_for_tm)
+    except Exception as _vec_e:
+        logger.warning("[VecTM-bg] store exception: %s", _vec_e)
 
 
 # =====================================================================
@@ -10853,14 +10906,17 @@ def handle_message(event):
             try:
                 _fallback_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
                 logger.info("[group %s] fallback retry with %s", group_id, _fallback_model)
-                # v3.9.57: 暫時覆蓋 pick_model → 強制回傳短訊息模型
-                _orig_pick = globals().get('pick_model')
-                globals()['pick_model'] = lambda text: _fallback_model
+                # v3.13: 改 thread-local force_model(pick_model 已支援)。
+                # 原本覆蓋 globals()['pick_model'] 是全行程生效 — translate_multi
+                # 並行化後,別的執行緒正在翻譯時會被一起強制降模型。
+                _tl.force_model = _fallback_model
                 try:
                     result = translate(text_to_translate, lang, "zh")
                 finally:
-                    if _orig_pick:
-                        globals()['pick_model'] = _orig_pick
+                    try:
+                        delattr(_tl, 'force_model')
+                    except Exception:
+                        pass
             except Exception as _fb_ex:
                 logger.error("[group %s] fallback also failed: %s", group_id, str(_fb_ex)[:200])
         if result and mention_placeholders:
@@ -24044,36 +24100,90 @@ def set_group_target_langs(group_id, langs):
 def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     """Translate one source text to multiple targets.
     Returns list of (lang_code, translated_text). Skips failed/empty ones.
+
+    v3.13 速度根治:多目標改並行。原本逐語言串行,每個語言都要跑完整 pipeline
+    (embedding lookup + LLM + GE),2 語言 = 2 倍等待、3 語言 = 3 倍。
+    並行後總等待 ≈ 最慢的那一個語言。
+    fallback 改用 _tl.force_model(pick_model 已支援),取代原本
+    monkey-patch globals()['pick_model'] — 那在並行下會互相污染模型選擇。
     """
-    out = []
-    for tgt_lang in targets:
-        if tgt_lang == src:
-            continue   # don't translate to source lang
-        res = None
+    real_targets = [t for t in targets if t != src]
+    if not real_targets:
+        return []
+
+    # 複製當前 thread-local 上下文給 worker(pipeline 依賴這些)
+    _ctx = {}
+    for _a in ('group_id', 'user_id', 'from_image_ocr', 'tone', 'tone_custom'):
+        if hasattr(_tl, _a):
+            _ctx[_a] = getattr(_tl, _a)
+
+    def _translate_one(tgt_lang, _in_worker):
+        if _in_worker:
+            for _k, _v in _ctx.items():
+                setattr(_tl, _k, _v)
         try:
-            res = translate(text_to_translate, src, tgt_lang)
-        except Exception as e:
-            logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
-            # v3.9.57: fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
+            res = None
             try:
-                _fb_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
-                _orig_pick = globals().get('pick_model')
-                globals()['pick_model'] = lambda text: _fb_model
+                res = translate(text_to_translate, src, tgt_lang)
+            except Exception as e:
+                logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
+                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
                 try:
-                    res = translate(text_to_translate, src, tgt_lang)
-                finally:
-                    if _orig_pick:
-                        globals()['pick_model'] = _orig_pick
-            except Exception as fb_e:
-                logger.warning("translate_multi fallback also failed tgt=%s: %s", tgt_lang, fb_e)
-        if not res:
+                    _fb_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
+                    _tl.force_model = _fb_model
+                    try:
+                        res = translate(text_to_translate, src, tgt_lang)
+                    finally:
+                        try:
+                            delattr(_tl, 'force_model')
+                        except Exception:
+                            pass
+                except Exception as fb_e:
+                    logger.warning("translate_multi fallback also failed tgt=%s: %s", tgt_lang, fb_e)
+            if res and mention_placeholders:
+                try:
+                    res = restore_mentions(res, mention_placeholders)
+                except Exception:
+                    pass
+            _entry_id = getattr(_tl, 'last_entry_id', None)
+            return res, _entry_id
+        finally:
+            if _in_worker:
+                # 清 worker 執行緒殘留(executor 執行緒會被重用)
+                for _k in list(_ctx.keys()) + ['force_model', 'last_entry_id']:
+                    try:
+                        if hasattr(_tl, _k):
+                            delattr(_tl, _k)
+                    except Exception:
+                        pass
+
+    out = []
+    if len(real_targets) == 1:
+        # 單目標:同執行緒直接跑,_tl 原生可用,省一次執行緒切換
+        res, _ = _translate_one(real_targets[0], _in_worker=False)
+        if res:
+            out.append((real_targets[0], res))
+        return out
+
+    # 多目標:並行
+    futures = [(t, _MULTI_TGT_EXECUTOR.submit(_translate_one, t, True)) for t in real_targets]
+    _last_entry = None
+    for tgt_lang, fut in futures:
+        try:
+            res, _eid = fut.result(timeout=120)
+        except Exception as e:
+            logger.warning("translate_multi parallel future failed tgt=%s: %s", tgt_lang, e)
             continue
-        if mention_placeholders:
-            try:
-                res = restore_mentions(res, mention_placeholders)
-            except Exception:
-                pass
-        out.append((tgt_lang, res))
+        if _eid is not None:
+            _last_entry = _eid
+        if res:
+            out.append((tgt_lang, res))
+    # 保留原行為:_tl.last_entry_id 供回覆後 reaction 綁定(取最後一個成功 entry)
+    if _last_entry is not None:
+        try:
+            _tl.last_entry_id = _last_entry
+        except Exception:
+            pass
     return out
 
 
