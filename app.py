@@ -2175,15 +2175,18 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
 
     # v3.10: 加入該群組最近對話歷史 (上下文記憶)
     # 順序很重要:在 few-shot 之後、本句之前 → caching 友善
+    # v3.15 根治:歷史過濾改按 (src, tgt) 精確配對,不再綁 few-shot 的 direction_key。
+    # 舊邏輯兩個問題:
+    #   1. direction_key 只有 zh2id/id2zh → zh→vi/th/tl 等方向「完全沒有上下文記憶」
+    #      (v3.14 新增越南/菲律賓後這缺口變成實際問題)
+    #   2. 舊過濾只看 h["src"] → 多語廣播群裡 zh→id 的 prompt 會混進 zh→vi 的
+    #      歷史對(目標語污染,與 v3.9.44 修掉的 few-shot 污染同類 bug)
+    # buffer 本來就存了 src/tgt 兩欄,精確配對即可,所有方向通用。
     try:
         if group_id and get_conv_context_enabled(group_id):
             history = _conv_buffer_get(group_id)
             for h in history:
-                # 只保留方向相符的歷史 (避免混淆,例如別人的印→中混進來)
-                if direction_key == "zh2id" and h["src"] == "zh":
-                    msgs.append({"role": "user", "content": h["src_text"]})
-                    msgs.append({"role": "assistant", "content": h["tgt_text"]})
-                elif direction_key == "id2zh" and h["src"] != "zh":
+                if h.get("src") == src and h.get("tgt") == tgt:
                     msgs.append({"role": "user", "content": h["src_text"]})
                     msgs.append({"role": "assistant", "content": h["tgt_text"]})
     except (NameError, Exception):
@@ -24412,6 +24415,8 @@ _LANG_BRAND = {
     "ja": "#9d174d",   # 深玫紅 (日本)
     "ko": "#1d4ed8",   # 藍 (韓國)
     "en": "#0c4a6e",   # 深青 (英國)
+    # v3.16: 菲律賓(v3.14 新增 tl 目標語,品牌色補齊 — 深金,取國旗太陽黃)
+    "tl": "#a16207",
 }
 
 
@@ -24483,64 +24488,152 @@ def _byte_safe_truncate(s, max_bytes):
     return ""
 
 
-def _flex_v2_header_bar(src_lang, tgt_lang):
-    """LV1.2 Header bar — 左右雙色 + 旗幟 + lang code 文字標籤。
-    
-    v3.9.45: 旗下加 lang code 文字(白色加粗 xxs)作為視覺保險。
-    舊版只靠國旗 emoji,當旗的紅色跟 brand 背景紅色重疊時(zh/id 兩旗都含紅)
-    視覺融合看不清楚。新版「旗 + 文字」雙重辨識,即使顯示問題也能讀方向。
-    paddingAll 從 10px → 8px 留空間給文字。
+# ═══════════════════════════════════════════════════════════════════
+# v3.16 視覺系統 v3(2026-06-10)— 超越業界 LINE Flex 等級
+# 查證:Ligo/Echonora/T2GO/JFETEK 全是純文字或最簡 flex。
+# v3 使用 LINE Flex 官方最高階能力(競品皆未使用):
+#   • linearGradient 漸層 header(src 品牌色 → tgt 品牌色,視覺化「語言流向」)
+#   • filler + 窄 box = 真實左色條(取代「┃」字元 hack)
+#   • 語言品牌色語義化區塊(每語言固定色,不再隨機循環背景)
+#   • sender 色點 chip、footer 時間戳、alt_text 400 字上限防爆
+#   • 按鈕 adjustMode: shrink-to-fit 防截字
+# 所有 v2 開關(header/emphasis/quote/buttons/dynsize...)全部沿用,
+# 同名函式內升級 → 呼叫端與群組設定零改動;任何例外 fallback 舊版。
+# ═══════════════════════════════════════════════════════════════════
+_V3_BG        = "#0e1220"   # 卡片底:深靛黑
+_V3_SURFACE   = "#1a2036"   # 譯文區塊面
+_V3_SURFACE_2 = "#141a2c"   # 原文區塊面
+_V3_TEXT_SUB  = "#aeb6cc"   # 次要文字
+_V3_TEXT_MUTE = "#7c849c"   # 弱化文字
+_V3_BAR_MUTE  = "#3a4158"   # 原文左色條(中性)
+
+
+def _now_hhmm_tw():
+    """台灣時間 HH:MM(footer 時間戳用)。"""
+    try:
+        return time.strftime("%H:%M", time.gmtime(time.time() + 8 * 3600))
+    except Exception:
+        return ""
+
+
+def _flex_alt_text(prefix, text):
+    """alt_text 安全組裝:LINE 上限 400 字,超長譯文會整則發送失敗。
+    (順手治本:舊版直接 flag+譯文當 alt_text,長訊息有炸卡風險)"""
+    alt = ((prefix or "") + " " + (text or "")).strip()
+    return alt[:300] if len(alt) > 300 else (alt or "翻譯")
+
+
+def _flex_v3_accent_bar(color):
+    """真實垂直色條:4px 窄 box + filler,在 horizontal box 內自動撐滿高度。
+    這是 LINE Flex 官方做左邊框的正規技法,取代「┃」字元 hack。"""
+    return {
+        "type": "box", "layout": "vertical", "width": "4px",
+        "backgroundColor": color, "cornerRadius": "2px",
+        "contents": [{"type": "filler"}],
+    }
+
+
+def _flex_v3_lang_section(lang_code, text, big=True, label=None):
+    """語言區塊:品牌色左條 + 語言標籤 + 內文。單語譯文與多語廣播共用。"""
+    brand = _LANG_BRAND.get(lang_code, "#7c6fef")
+    flag = LANG_FLAGS.get(lang_code, "🌐")
+    lang_label = label if label is not None else (
+        flag + " " + (LANG_NAMES_ZH.get(lang_code, lang_code.upper())
+                      if lang_code != "zh" else "中文"))
+    return {
+        "type": "box", "layout": "horizontal", "margin": "sm",
+        "backgroundColor": _V3_SURFACE if big else _V3_SURFACE_2,
+        "cornerRadius": "8px", "paddingAll": "10px", "spacing": "md",
+        "contents": [
+            _flex_v3_accent_bar(brand if big else _V3_BAR_MUTE),
+            {
+                "type": "box", "layout": "vertical", "flex": 1,
+                "contents": [
+                    {"type": "text", "text": lang_label, "size": "xxs",
+                     "color": _V3_TEXT_MUTE, "weight": "bold"},
+                    {"type": "text", "text": text or " ",
+                     "size": "lg" if big else "xs",
+                     "color": "#ffffff" if big else "#9ca3af",
+                     "wrap": True, "margin": "xs",
+                     **({"weight": "bold"} if big else {})},
+                ],
+            },
+        ],
+    }
+
+
+def _flex_v3_sender_chip(sender_name, src_lang):
+    """Sender chip:語言品牌色點 + 名字(仿 IM avatar 視覺)。"""
+    brand = _LANG_BRAND.get(src_lang, "#7c6fef")
+    return {
+        "type": "box", "layout": "baseline", "margin": "sm", "spacing": "sm",
+        "contents": [
+            {"type": "text", "text": "●", "size": "xxs", "color": brand, "flex": 0},
+            {"type": "text", "text": sender_name, "size": "xs",
+             "color": _V3_TEXT_SUB, "flex": 1},
+        ],
+    }
+
+
+def _flex_v3_footer_row():
+    """Footer:AI 翻譯標識 + 台灣時間戳。"""
+    hhmm = _now_hhmm_tw()
+    return {
+        "type": "box", "layout": "horizontal", "margin": "md",
+        "contents": [
+            {"type": "text", "text": "AI 翻譯", "size": "xxs",
+             "color": _V3_TEXT_MUTE, "flex": 1},
+            {"type": "text", "text": hhmm or " ", "size": "xxs",
+             "color": _V3_TEXT_MUTE, "align": "end", "flex": 0},
+        ],
+    }
+
+
+def _flex_v2_header_bar(src_lang, tgt_lang, multi=False):
+    """v3.16 漸層 Header — src 品牌色 → tgt 品牌色 linearGradient,
+    視覺化「語言流向」。LINE Flex 官方功能,競品皆未使用。
+    保留 v3.9.45 的「旗 + lang code 文字」雙重辨識(旗色撞背景時仍可讀)。
     """
     from_color = _LANG_BRAND.get(src_lang, "#7c6fef")
     to_color = _LANG_BRAND.get(tgt_lang, "#7c6fef")
     src_flag = LANG_FLAGS.get(src_lang, "🌐")
     tgt_flag = LANG_FLAGS.get(tgt_lang, "🌐")
+    mid_label = "⇄ 多語" if multi else "⇄"
     return {
         "type": "box", "layout": "horizontal",
+        "background": {
+            "type": "linearGradient", "angle": "115deg",
+            "startColor": from_color, "endColor": to_color,
+        },
+        "paddingTop": "10px", "paddingBottom": "10px",
+        "paddingStart": "14px", "paddingEnd": "14px",
         "contents": [
             {
-                "type": "box", "layout": "vertical",
-                "backgroundColor": from_color,
-                "flex": 1,
-                "paddingAll": "8px",
+                "type": "box", "layout": "vertical", "flex": 1,
                 "contents": [
-                    {
-                        "type": "text", "text": src_flag,
-                        "size": "xl", "align": "center", "color": "#ffffff",
-                    },
-                    {
-                        "type": "text", "text": src_lang.upper(),
-                        "size": "xxs", "align": "center", "color": "#ffffff",
-                        "weight": "bold", "margin": "xs",
-                    },
+                    {"type": "text", "text": src_flag, "size": "xl",
+                     "align": "start", "color": "#ffffff"},
+                    {"type": "text", "text": src_lang.upper(), "size": "xxs",
+                     "align": "start", "color": "#ffffffcc", "weight": "bold",
+                     "margin": "xs"},
                 ],
             },
             {
-                "type": "box", "layout": "vertical",
-                "backgroundColor": "#374151",
-                "width": "24px",
-                "contents": [{
-                    "type": "text", "text": "⇄",
-                    "size": "md", "align": "center", "color": "#ffffff",
-                    "weight": "bold",
-                    "gravity": "center",
-                }],
+                "type": "box", "layout": "vertical", "flex": 1,
+                "justifyContent": "center",
+                "contents": [
+                    {"type": "text", "text": mid_label, "size": "sm",
+                     "align": "center", "color": "#ffffff", "weight": "bold"},
+                ],
             },
             {
-                "type": "box", "layout": "vertical",
-                "backgroundColor": to_color,
-                "flex": 1,
-                "paddingAll": "8px",
+                "type": "box", "layout": "vertical", "flex": 1,
                 "contents": [
-                    {
-                        "type": "text", "text": tgt_flag,
-                        "size": "xl", "align": "center", "color": "#ffffff",
-                    },
-                    {
-                        "type": "text", "text": tgt_lang.upper(),
-                        "size": "xxs", "align": "center", "color": "#ffffff",
-                        "weight": "bold", "margin": "xs",
-                    },
+                    {"type": "text", "text": tgt_flag, "size": "xl",
+                     "align": "end", "color": "#ffffff"},
+                    {"type": "text", "text": tgt_lang.upper(), "size": "xxs",
+                     "align": "end", "color": "#ffffffcc", "weight": "bold",
+                     "margin": "xs"},
                 ],
             },
         ],
@@ -24548,22 +24641,23 @@ def _flex_v2_header_bar(src_lang, tgt_lang):
 
 
 def _flex_v2_quote_box(quoted_text):
-    """LV1.3 Quote 引用視覺化 — 左邊框 + 灰色 italic。"""
+    """v3.16 Quote 引用 — 真實左色條(4px box + filler)取代「┃」字元 hack,
+    加「回覆」標籤。"""
     qt = quoted_text[:80] + "..." if len(quoted_text) > 80 else quoted_text
     return {
-        "type": "box", "layout": "vertical",
-        "borderColor": "#6b7280",
-        "borderWidth": "0px",
-        "paddingStart": "12px",
-        "paddingTop": "4px", "paddingBottom": "4px",
-        "margin": "sm",
+        "type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md",
         "contents": [
-            # 模擬左邊框 (LINE Flex 沒 borderLeft,用左 padding + 灰背景 hack)
+            _flex_v3_accent_bar("#6b7280"),
             {
-                "type": "text", "text": "┃ " + qt,
-                "size": "xxs", "color": "#9ca3af", "wrap": True,
-                "style": "italic",
-            }
+                "type": "box", "layout": "vertical", "flex": 1,
+                "contents": [
+                    {"type": "text", "text": "↩ 回覆 / Reply", "size": "xxs",
+                     "color": _V3_TEXT_MUTE, "weight": "bold"},
+                    {"type": "text", "text": qt, "size": "xxs",
+                     "color": "#9ca3af", "wrap": True, "style": "italic",
+                     "margin": "xs"},
+                ],
+            },
         ],
     }
 
@@ -24580,6 +24674,7 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
         _qry_data = "action=qry&q=" + urllib.parse.quote(wo_id, safe="")
         buttons.append({
             "type": "button", "style": "secondary", "height": "sm",
+            "adjustMode": "shrink-to-fit",
             "action": {"type": "postback",
                        "label": "📋 查儲區",
                        "data": _qry_data,
@@ -24599,6 +24694,7 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
         if _safe_text:
             buttons.append({
                 "type": "button", "style": "secondary", "height": "sm",
+                "adjustMode": "shrink-to-fit",
                 "action": {"type": "postback",
                            "label": "🔊 重唸",
                            "data": "action=tts_replay&lang=" + tgt_lang + "&t=" + _enc,
@@ -24725,61 +24821,61 @@ def build_translation_flex_v2(original, translated, src_lang, tgt_lang,
                 })
                 body_contents.append({"type": "separator", "margin": "sm"})
 
-        # Sender name
+        # Sender chip(v3.16:品牌色點 + 名字)
         if sender_name_display:
-            body_contents.append({
-                "type": "text", "text": sender_name_display,
-                "size": "xs", "color": "#8a8a9a", "margin": "sm",
-            })
+            body_contents.append(_flex_v3_sender_chip(sender_name_display, src_lang))
 
-        # 原文 (LV1.1 emphasis 開:小灰字 / 關:跟譯文一樣)
-        src_flag_str = LANG_FLAGS.get(src_lang, "")
+        # 原文區(v3.16:中性色條區塊;emphasis 關閉時放大字級)
         if v2["emphasis"]:
-            body_contents.append({
-                "type": "text", "text": src_flag_str + " " + original,
-                "size": "xs", "color": "#9ca3af", "wrap": True,
-                "margin": "sm",
-            })
+            body_contents.append(_flex_v3_lang_section(src_lang, original, big=False))
         else:
-            body_contents.append({
-                "type": "text", "text": src_flag_str + " " + original,
-                "size": "sm", "color": "#b0b0b0", "wrap": True, "margin": "sm",
-            })
+            sec = _flex_v3_lang_section(src_lang, original, big=False)
+            try:
+                sec["contents"][1]["contents"][1]["size"] = "sm"
+                sec["contents"][1]["contents"][1]["color"] = "#c3c9da"
+            except Exception:
+                pass
+            body_contents.append(sec)
 
-        body_contents.append({"type": "separator", "margin": "md"})
-
-        # 譯文 (LV1.1 emphasis 開:大白字粗體 / LV6 span 開:高亮關鍵詞)
+        # 譯文區(v3.16:目標語品牌色條 + 大字粗體;LV6 span 開:高亮關鍵詞)
         tgt_flag_str = LANG_FLAGS.get(tgt_lang, "")
         if v2["span"]:
             highlights = _detect_v2_highlights(translated)
             tx = _flex_v2_text_with_spans(translated, highlights)
-            tx_box = {
-                "type": "box", "layout": "horizontal",
-                "margin": "md",
-                "contents": [
-                    {"type": "text", "text": tgt_flag_str, "size": "lg", "flex": 0, "margin": "none"},
-                    tx,
-                ],
-            }
-            body_contents.append(tx_box)
-        elif v2["emphasis"]:
             body_contents.append({
-                "type": "text", "text": tgt_flag_str + " " + translated,
-                "size": "lg", "color": "#ffffff", "wrap": True, "margin": "md",
-                "weight": "bold",
+                "type": "box", "layout": "horizontal", "margin": "sm",
+                "backgroundColor": _V3_SURFACE, "cornerRadius": "8px",
+                "paddingAll": "10px", "spacing": "md",
+                "contents": [
+                    _flex_v3_accent_bar(_LANG_BRAND.get(tgt_lang, "#7c6fef")),
+                    {
+                        "type": "box", "layout": "vertical", "flex": 1,
+                        "contents": [
+                            {"type": "text",
+                             "text": tgt_flag_str + " " + LANG_NAMES_ZH.get(tgt_lang, tgt_lang.upper()),
+                             "size": "xxs", "color": _V3_TEXT_MUTE, "weight": "bold"},
+                            tx,
+                        ],
+                    },
+                ],
             })
         else:
-            body_contents.append({
-                "type": "text", "text": tgt_flag_str + " " + translated,
-                "size": "md", "color": "#ffffff", "wrap": True, "margin": "md",
-                "weight": "bold",
-            })
+            sec = _flex_v3_lang_section(tgt_lang, translated, big=True)
+            if not v2["emphasis"]:
+                try:
+                    sec["contents"][1]["contents"][1]["size"] = "md"
+                except Exception:
+                    pass
+            body_contents.append(sec)
 
         # LV4 互動按鈕
         if v2["buttons"]:
             btn_box = _flex_v2_button_row(group_id, original, translated, tgt_lang, msg_id)
             if btn_box:
                 body_contents.append(btn_box)
+
+        # v3.16 footer:AI 翻譯標識 + 時間戳
+        body_contents.append(_flex_v3_footer_row())
 
         # LV7 動態 size
         size = _flex_v2_size_for(len(translated)) if v2["dynsize"] else "kilo"
@@ -24790,8 +24886,8 @@ def build_translation_flex_v2(original, translated, src_lang, tgt_lang,
             "body": {
                 "type": "box", "layout": "vertical",
                 "contents": body_contents,
-                "backgroundColor": "#1a1a2e",
-                "paddingAll": "16px",
+                "backgroundColor": _V3_BG,
+                "paddingAll": "14px",
                 "cornerRadius": "12px",
             },
         }
@@ -24803,7 +24899,7 @@ def build_translation_flex_v2(original, translated, src_lang, tgt_lang,
             }
 
         return FlexMessage(
-            alt_text=tgt_flag_str + " " + translated,
+            alt_text=_flex_alt_text(tgt_flag_str, translated),
             contents=FlexContainer.from_dict(bubble),
         )
     except Exception as e:
@@ -24849,51 +24945,28 @@ def build_multilang_flex_v2(original, translations, src_lang="zh",
         if quoted_text and v2["quote"]:
             body_contents.append(_flex_v2_quote_box(quoted_text))
         if sender_name_display:
-            body_contents.append({
-                "type": "text", "text": sender_name_display,
-                "size": "xs", "color": "#8a8a9a", "margin": "sm",
-            })
-        # 原文
-        src_flag_str = LANG_FLAGS.get(src_lang, "")
-        body_contents.append({
-            "type": "text", "text": src_flag_str + " " + original,
-            "size": "xs" if v2["emphasis"] else "sm",
-            "color": "#9ca3af", "wrap": True, "margin": "sm",
-        })
-        body_contents.append({"type": "separator", "margin": "md"})
+            body_contents.append(_flex_v3_sender_chip(sender_name_display, src_lang))
+        # 原文(v3.16:中性色條區塊)
+        body_contents.append(_flex_v3_lang_section(src_lang, original, big=False))
 
-        # 每個語言一個獨立 sub-box,不同背景色
-        sub_colors = ["#1f2937", "#1e293b", "#0f172a", "#172554", "#1e1b4b"]
-        for idx, (lang_code, text) in enumerate(translations):
-            flag = LANG_FLAGS.get(lang_code, "")
-            bg = sub_colors[idx % len(sub_colors)]
-            sub_box = {
-                "type": "box", "layout": "vertical",
-                "backgroundColor": bg,
-                "cornerRadius": "8px",
-                "paddingAll": "10px",
-                "margin": "sm",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": flag + " " + text,
-                        "size": "md", "color": "#ffffff", "wrap": True,
-                        "weight": "bold",
-                    },
-                ],
-            }
-            body_contents.append(sub_box)
+        # v3.16:每個語言一個「品牌色」語義區塊(取代舊版隨機循環背景色 —
+        # 顏色現在有意義:工人看色就知道是自己的語言,跟 header 品牌色一致)
+        for lang_code, text in translations:
+            body_contents.append(_flex_v3_lang_section(lang_code, text, big=True))
 
         # v3.11 (2026-05-26): 拿掉「👎 翻錯」按鈕(歐那要求)
         # 多語模式下整段按鈕區塊都拿掉(原本只有這一顆翻錯按鈕,沒按鈕就不加 box)
         # 工人仍可用打字「/wrong」標錯。
 
-        # Header
+        # v3.16 footer
+        body_contents.append(_flex_v3_footer_row())
+
+        # Header(v3.16:漸層 + 多語標示)
         header_block = None
         if v2["header"]:
-            # 多語 header:中文左 + 「⇄ 多」中間 + 右側放第一個目標旗
             first_tgt = translations[0][0] if translations else "id"
-            header_block = _flex_v2_header_bar(src_lang, first_tgt)
+            header_block = _flex_v2_header_bar(src_lang, first_tgt,
+                                               multi=(len(translations) > 1))
 
         # 動態 size
         total_len = sum(len(t) for _, t in translations)
@@ -24904,8 +24977,8 @@ def build_multilang_flex_v2(original, translations, src_lang="zh",
             "body": {
                 "type": "box", "layout": "vertical",
                 "contents": body_contents,
-                "backgroundColor": "#0f0f1e",
-                "paddingAll": "16px",
+                "backgroundColor": _V3_BG,
+                "paddingAll": "14px",
                 "cornerRadius": "12px",
             },
         }
@@ -24927,34 +25000,22 @@ def build_multilang_flex_v2(original, translations, src_lang="zh",
 
 def _build_single_lang_bubble(original, translated, src_lang, tgt_lang,
                               sender_name_display, quoted_text, group_id, v2):
-    """Carousel 用的單一 bubble (內部)。"""
+    """Carousel 用的單一 bubble (內部)。v3.16:同步 v3 視覺系統。"""
     body_contents = []
     if quoted_text and v2["quote"]:
         body_contents.append(_flex_v2_quote_box(quoted_text))
     if sender_name_display:
-        body_contents.append({
-            "type": "text", "text": sender_name_display,
-            "size": "xs", "color": "#8a8a9a",
-        })
-    src_flag_str = LANG_FLAGS.get(src_lang, "")
-    body_contents.append({
-        "type": "text", "text": src_flag_str + " " + original,
-        "size": "xs", "color": "#9ca3af", "wrap": True, "margin": "sm",
-    })
-    body_contents.append({"type": "separator", "margin": "md"})
-    tgt_flag_str = LANG_FLAGS.get(tgt_lang, "")
-    body_contents.append({
-        "type": "text", "text": tgt_flag_str + " " + translated,
-        "size": "lg", "color": "#ffffff", "wrap": True, "margin": "md",
-        "weight": "bold",
-    })
+        body_contents.append(_flex_v3_sender_chip(sender_name_display, src_lang))
+    body_contents.append(_flex_v3_lang_section(src_lang, original, big=False))
+    body_contents.append(_flex_v3_lang_section(tgt_lang, translated, big=True))
+    body_contents.append(_flex_v3_footer_row())
     bubble = {
         "type": "bubble", "size": "kilo",
         "body": {
             "type": "box", "layout": "vertical",
             "contents": body_contents,
-            "backgroundColor": "#1a1a2e",
-            "paddingAll": "16px",
+            "backgroundColor": _V3_BG,
+            "paddingAll": "14px",
             "cornerRadius": "12px",
         },
     }
