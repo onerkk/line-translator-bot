@@ -449,6 +449,28 @@ def update_gemini_features(features):
         return False, "存檔失敗"
 
 
+def update_gemini_models(default_model=None, upgrade_model=None):
+    """v3.22: 後台更新 Gemini 短/長訊息模型(與 Claude 雙模型同模式)。"""
+    _ensure_initialized()
+    with _config_lock:
+        g = _current_config.setdefault("gemini", {})
+        if default_model:
+            g["default_model"] = str(default_model).strip()
+        if upgrade_model:
+            g["upgrade_model"] = str(upgrade_model).strip()
+        if _save_config_to_disk(_current_config):
+            return True, "Gemini 模型已更新"
+        return False, "存檔失敗"
+
+
+def get_gemini_models():
+    """v3.22: 回傳 (短訊息模型, 長訊息模型) — pick_model 用,後台改了立即生效。"""
+    _ensure_initialized()
+    g = _current_config.get("gemini", {}) if _current_config else {}
+    return (g.get("default_model") or "gemini-3.1-flash-lite",
+            g.get("upgrade_model") or "gemini-3.5-flash")
+
+
 def update_model_mapping(mapping):
     if not isinstance(mapping, dict):
         return False, "mapping 必須是 dict"

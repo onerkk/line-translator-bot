@@ -1427,10 +1427,15 @@ def pick_model(text):
         return claude_model_default
 
     # v3.21: Gemini 路徑 — 同 Claude 模式,直接回 gemini-* 名稱
+    # v3.22: 改讀 ai_provider 後台設定(後台改模型立即生效,不用重啟)
     if provider == "gemini":
+        try:
+            _g_default, _g_upgrade = ai_provider.get_gemini_models()
+        except Exception:
+            _g_default, _g_upgrade = gemini_model_default, gemini_model_upgrade
         if model_threshold > 0 and text_len >= model_threshold:
-            return gemini_model_upgrade
-        return gemini_model_default
+            return _g_upgrade
+        return _g_default
 
     # OpenAI 路徑(或 Anthropic + 關閉自動切換)
     if model_threshold > 0 and text_len >= model_threshold:
@@ -14419,7 +14424,49 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <input id="aip-gemini-key" type="password" placeholder="AIza..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
       <button onclick="aipUpdateKey(&#39;gemini&#39;)" style="padding:8px 14px;border-radius:6px;border:none;background:#4285f4;color:#fff;font-size:12px;cursor:pointer;font-weight:600">更新</button>
     </div>
-    <div style="color:#666;font-size:10px;margin-top:4px">短訊息 gemini-3.1-flash-lite / 長訊息 gemini-3.5-flash(三家最低價)</div>
+    <div style="color:#666;font-size:10px;margin-top:4px">用量/免費額度請看 aistudio.google.com 的 Dashboard</div>
+  </div>
+</div>
+
+<!-- v3.22: Gemini 翻譯模型完整面板(對標 Anthropic 區塊) -->
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🔵 Gemini 翻譯模型(切換成 Gemini 後實際跑這些)</div>
+
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="flex:1">
+      <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">短訊息(便宜)</div>
+      <select id="aip-gemini-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+        <option value="gemini-3.1-flash-lite">🟢 3.1 Flash-Lite(最省 ~$0.10/$0.40)</option>
+        <option value="gemini-3-flash">🟡 3 Flash</option>
+        <option value="gemini-3.5-flash">🔵 3.5 Flash(GA 最新 ~$0.30/$2.50)</option>
+      </select>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">長訊息(升級)</div>
+      <select id="aip-gemini-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+        <option value="gemini-3.1-flash-lite">🟢 3.1 Flash-Lite</option>
+        <option value="gemini-3-flash">🟡 3 Flash</option>
+        <option value="gemini-3.5-flash" selected>🔵 3.5 Flash</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="margin-bottom:8px">
+    <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">🧠 Reasoning(思考深度 — 翻譯建議 low,越高越慢越貴)</div>
+    <select id="aip-gemini-effort" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+      <option value="none">⚡ none(最快最省)</option>
+      <option value="low" selected>🟢 low(預設,品質兼顧)</option>
+      <option value="medium">🟡 medium</option>
+      <option value="high">🔴 high(翻譯不建議)</option>
+    </select>
+  </div>
+
+  <button onclick="aipSaveGeminiConfig()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#4285f4;color:#fff;font-size:13px;cursor:pointer;font-weight:600">儲存 Gemini 設定</button>
+
+  <div style="font-size:11px;color:#888;margin-top:8px;line-height:1.5">
+    💡 共用「設定」tab 內的<strong>字數門檻</strong>(與 Claude 同一個)<br>
+    字數 &lt; 門檻 → 短訊息模型;≥ 門檻 → 升級模型<br>
+    📌 語音/圖片翻譯仍走 OpenAI,OpenAI Key 請保留
   </div>
 </div>
 
@@ -15920,6 +15967,15 @@ async function aipLoadStatus(){
     document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
     const gemPrev = document.getElementById('aip-gemini-preview');
     if(gemPrev) gemPrev.textContent = (cfg.gemini && cfg.gemini.api_key_preview) || '(未設定)';
+    // v3.22: 載入 Gemini 模型/effort 目前值
+    try{
+      const gd = document.getElementById('aip-gemini-default');
+      const gu = document.getElementById('aip-gemini-upgrade');
+      const ge = document.getElementById('aip-gemini-effort');
+      if(gd && cfg.gemini && cfg.gemini.default_model) gd.value = cfg.gemini.default_model;
+      if(gu && cfg.gemini && cfg.gemini.upgrade_model) gu.value = cfg.gemini.upgrade_model;
+      if(ge && cfg.gemini_features && cfg.gemini_features.reasoning_effort) ge.value = cfg.gemini_features.reasoning_effort;
+    }catch(e){}
     // 載入當前 Anthropic 模型映射(gpt-4.1-mini 的對應)
     try {
       const mapping = cfg.model_mapping || {};
@@ -16246,6 +16302,29 @@ async function aipSaveClaudeDualModels(){
   } catch(e) {
     alert('網路錯誤:' + e);
   }
+}
+
+// v3.22: 儲存 Gemini 完整設定
+async function aipSaveGeminiConfig(){
+  const gd = document.getElementById('aip-gemini-default');
+  const gu = document.getElementById('aip-gemini-upgrade');
+  const ge = document.getElementById('aip-gemini-effort');
+  if(!gd || !gu || !ge) return;
+  if(gd.value === gu.value){
+    if(!confirm('短訊息和長訊息選了同一個 model:' + gd.value + '\\n\\n字數切換等同失效,確定?')) return;
+  }
+  try{
+    const r = await fetch('/api/admin/ai-provider/gemini-config', {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({default_model: gd.value, upgrade_model: gu.value, reasoning_effort: ge.value})
+    });
+    const data = await r.json();
+    if(data.ok){
+      alert('✅ Gemini 設定已儲存\\n短訊息→' + gd.value.replace('gemini-','') +
+            '\\n長訊息→' + gu.value.replace('gemini-','') + '\\nReasoning→' + ge.value);
+      aipLoadStatus();
+    }else alert('❌ ' + (data.message || '儲存失敗'));
+  }catch(e){ alert('網路錯誤:' + e); }
 }
 
 // v3.2.4 D8 Phase 22: 儲存 Assistant Prefill 文字
@@ -19695,6 +19774,37 @@ def api_admin_ai_provider_features():
         return jsonify({"ok": False, "message": "features 必須是 dict"}), 400
     ok, msg = ai_provider.update_claude_features(features)
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/ai-provider/gemini-config", methods=["POST"])
+def api_admin_ai_provider_gemini_config():
+    """v3.22: Gemini 完整後台設定 — 短/長模型 + reasoning effort,一個端點全收。"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    msgs = []
+    dm = (data.get("default_model") or "").strip()
+    um = (data.get("upgrade_model") or "").strip()
+    if dm or um:
+        # 防呆:只接受 gemini-* 名稱,避免誤存其他家模型名
+        for _m in (dm, um):
+            if _m and not _m.startswith("gemini"):
+                return jsonify({"ok": False, "message": f"模型名須為 gemini-* :{_m}"}), 400
+        ok, msg = ai_provider.update_gemini_models(dm or None, um or None)
+        if not ok:
+            return jsonify({"ok": False, "message": msg}), 500
+        msgs.append(msg)
+    effort = (data.get("reasoning_effort") or "").strip().lower()
+    if effort:
+        if effort not in ("none", "low", "medium", "high"):
+            return jsonify({"ok": False, "message": "reasoning_effort 須為 none/low/medium/high"}), 400
+        ok, msg = ai_provider.update_gemini_features({"reasoning_effort": effort})
+        if not ok:
+            return jsonify({"ok": False, "message": msg}), 500
+        msgs.append(msg)
+    if not msgs:
+        return jsonify({"ok": False, "message": "沒有可更新的欄位"}), 400
+    return jsonify({"ok": True, "message": ";".join(msgs)})
 
 
 @app.route("/api/admin/ai-provider/count-tokens", methods=["POST"])
