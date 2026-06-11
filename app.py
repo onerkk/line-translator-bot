@@ -1050,6 +1050,16 @@ claude_auto_switch_enabled = True                    # 總開關:OFF 時走「�
 gemini_model_default = "gemini-3.1-flash-lite"       # 短訊息(最省)
 gemini_model_upgrade = "gemini-3.5-flash"            # 長訊息(GA 穩定版)
 
+# v3.24: 商用販售資訊(Rich Menu 按鈕回覆用;價格可用 /setprice 指令改,持久化)
+service_price_text = (
+    "💰 收費標準 / Harga\n"
+    "─────────────\n"
+    "月費制,依群組數與用量報價\n"
+    "詳細方案請與我聯絡:\n"
+    "LINE ID: moneyshop\n"
+    "或加好友 @764menna"
+)
+
 # v3.9.7 (2026-05): 模型能力對照表 — 讓使用者亂勾任何進階設定都不會 400。
 # 後端永遠根據實際模型過濾參數;UI 端會把不相容的設定自動還原成中性值。
 def _model_family(model_name):
@@ -10908,6 +10918,71 @@ def handle_message(event):
 
         # DM commands
         cmd = text.strip().lower()
+
+        # ═══ v3.24: Rich Menu 商用按鈕回覆(販售版選單按鈕送出這些關鍵字)═══
+        _menu_reply = None
+        _t_exact = text.strip()
+        if _t_exact in ("功能說明", "功能说明"):
+            _menu_reply = (
+                "🌐 翻譯小助手 功能一覽\n"
+                "─────────────\n"
+                "💬 文字即時翻譯:中文 ⇄ 印尼/越南/泰/菲律賓/英/日/韓/印地\n"
+                "🌍 群組多語廣播(最多 5 語同時)\n"
+                "📷 圖片翻譯:工單/告示拍照即譯,保留版面\n"
+                "🎤 語音翻譯:語音訊息自動轉文字翻譯\n"
+                "🔊 TTS 語音播報譯文\n"
+                "📋 工單偵測 + 客戶儲區查詢(/qry)\n"
+                "🏭 232 條工廠專業術語庫(吊運/製程/設備)\n"
+                "🧠 翻譯記憶:重複句 0 秒即回\n"
+                "⚙️ 群組打「設定」開語言面板;/help 看完整指令"
+            )
+        elif _t_exact in ("收費標準", "收费标准"):
+            _menu_reply = service_price_text
+        elif _t_exact in ("使用說明", "使用说明"):
+            _menu_reply = (
+                "📖 使用說明\n"
+                "─────────────\n"
+                "1️⃣ 請先與我聯絡開通服務\n"
+                "　 LINE ID: moneyshop\n"
+                "2️⃣ 加機器人好友 @764menna\n"
+                "3️⃣ 把機器人邀進你的群組\n"
+                "4️⃣ 群組打「設定」選擇翻譯語言,即可使用\n"
+                "有任何問題隨時私訊我 🙌"
+            )
+        elif _t_exact in ("與我聯絡", "与我联络", "聯絡我"):
+            _menu_reply = (
+                "📞 與我聯絡\n"
+                "─────────────\n"
+                "LINE ID: moneyshop\n"
+                "機器人好友:@764menna\n"
+                "🛍️ 蝦皮賣場:https://tw.shp.ee/7f6j5kVT\n"
+                "看到訊息會盡快回覆您!"
+            )
+        elif cmd.startswith("/setprice"):
+            # 管理員修改收費標準文字(持久化,重啟不丟)
+            if not is_group_admin(user_id):
+                _menu_reply = "⚠️ 此指令僅限管理員"
+            else:
+                _new_price = text.strip()[9:].strip()
+                if not _new_price:
+                    _menu_reply = ("目前收費標準文字:\n─────\n" + service_price_text
+                                   + "\n─────\n修改方式:/setprice 新的收費內容(可多行)")
+                else:
+                    globals()["service_price_text"] = "💰 收費標準 / Harga\n─────────────\n" + _new_price
+                    try:
+                        save_settings(force=True)
+                    except Exception:
+                        pass
+                    _menu_reply = "✅ 收費標準已更新並保存:\n─────\n" + globals()["service_price_text"]
+        if _menu_reply:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=_menu_reply)]
+                ))
+            return
+
         if cmd == "/help":
             # DM /help also uses Flex carousel (ZH + ID bilingual)
             # 非管理員不顯示 III / ADMIN 區塊
@@ -14531,6 +14606,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="margin-bottom:18px">
   <button onclick="aipTestProvider()" style="width:100%;padding:11px;border-radius:30px;border:none;background:linear-gradient(135deg,#d4af37,#b8941f);color:#000;font-size:13px;cursor:pointer;font-weight:700">🧪 測試呼叫(確認 key 可用)</button>
   <div id="aip-test-result" style="margin-top:10px;padding:10px;background:#0f0f1e;border-radius:8px;font-size:12px;color:#aaa;white-space:pre-wrap;display:none;border:1px solid #2a2a3e"></div>
+  <button onclick="setupRichMenu()" style="width:100%;margin-top:10px;padding:11px;border-radius:30px;border:1px solid #d4af37;background:#1f1f30;color:#d4af37;font-size:13px;cursor:pointer;font-weight:700">🖼️ 一鍵安裝販售 Rich Menu(需 repo 有 richmenu.jpg)</button>
+  <div id="richmenu-result" style="margin-top:8px;padding:10px;background:#0f0f1e;border-radius:8px;font-size:12px;color:#aaa;white-space:pre-wrap;display:none;border:1px solid #2a2a3e"></div>
 </div>
 
 <!-- API Key 設定 -->
@@ -16335,6 +16412,15 @@ async function aipUpdateKey(p){
     if(data.ok){ alert('✅ ' + (data.message || 'Key 已更新')); input.value=''; aipLoadStatus(); }
     else alert('❌ ' + (data.message || '更新失敗'));
   }catch(e){ alert('錯誤：' + e); }
+}
+async function setupRichMenu(){
+  var el = document.getElementById('richmenu-result');
+  el.style.display='block'; el.textContent='安裝中…(建選單→傳圖→設預設)';
+  try{
+    const r = await fetch('/api/admin/richmenu/setup', {method:'POST', headers:{'X-Admin-Key':KEY}});
+    const d = await r.json();
+    el.textContent = d.ok ? ('✅ 完成!\n' + (d.steps||[]).join('\n')) : ('❌ 失敗: ' + (d.error||'') + '\n' + (d.steps||[]).join('\n'));
+  }catch(e){ el.textContent='❌ ' + e; }
 }
 async function aipTestProvider(){
   const box = document.getElementById('aip-test-result');
@@ -19401,6 +19487,7 @@ def _do_save_impl():
             "model_upgrade": model_upgrade,
             "model_threshold": model_threshold,
             # v3.9.33: Anthropic 路徑獨立字數切換
+            "service_price_text": service_price_text,
             "claude_model_default": claude_model_default,
             "claude_model_upgrade": claude_model_upgrade,
             "claude_auto_switch_enabled": claude_auto_switch_enabled,
@@ -19470,6 +19557,7 @@ def load_settings():
     global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global service_price_text
     global openai_24h_cache_enabled
     global VISION_MODEL
     global pw1_text, pw2_text, scrap_text, PACKAGING_LOOKUP, custom_translation_examples
@@ -19715,6 +19803,8 @@ def load_settings():
         if "model_threshold" in data:
             model_threshold = int(data["model_threshold"])
         # v3.9.33: Anthropic 路徑獨立字數切換
+        if "service_price_text" in data:
+            service_price_text = str(data["service_price_text"])
         if "claude_model_default" in data:
             claude_model_default = str(data["claude_model_default"])
         if "claude_model_upgrade" in data:
@@ -19836,6 +19926,99 @@ def api_admin_ai_provider_switch():
     target = data.get("provider", "").strip().lower()
     ok, msg = ai_provider.set_active_provider(target)
     return jsonify({"ok": ok, "message": msg, "active_provider": ai_provider.get_active_provider()})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.24: 一鍵安裝販售版 Rich Menu(不用進 OA Manager 手動點)
+# 流程:刪舊「販售選單」→ 建選單物件(3×2 六格動作)→ 上傳 richmenu.jpg
+#       → 設為全體預設。冪等:重打只會換新不會疊加。
+# 使用:把 richmenu.jpg 跟 app.py 一起上傳 repo → 部署後
+#       瀏覽器開 /api/admin/richmenu/setup?key=管理金鑰 即完成。
+# ═══════════════════════════════════════════════════════════════════
+_RICHMENU_NAME = "sales_menu_v1"
+
+
+@app.route("/api/admin/richmenu/setup", methods=["GET", "POST"])
+def api_admin_richmenu_setup():
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    import urllib.request as _ur
+    _hdr = {"Authorization": "Bearer " + LINE_TOKEN}
+    _hdr_json = dict(_hdr, **{"Content-Type": "application/json"})
+    log = []
+    try:
+        # 0. 找圖(repo 根目錄,jpg 優先)
+        img_path = None
+        for cand in ("richmenu.jpg", "richmenu.png"):
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), cand)
+            if os.path.exists(p):
+                img_path = p
+                break
+        if not img_path:
+            return jsonify({"ok": False, "error": "找不到 richmenu.jpg,請把圖跟 app.py 一起上傳 repo"}), 400
+
+        # 1. 刪同名舊選單(冪等)
+        req = _ur.Request("https://api.line.me/v2/bot/richmenu/list", headers=_hdr)
+        with _ur.urlopen(req, timeout=15) as r:
+            menus = json.loads(r.read().decode()).get("richmenus", [])
+        for m in menus:
+            if m.get("name") == _RICHMENU_NAME:
+                dreq = _ur.Request("https://api.line.me/v2/bot/richmenu/" + m["richMenuId"],
+                                   headers=_hdr, method="DELETE")
+                _ur.urlopen(dreq, timeout=15)
+                log.append("刪除舊選單 " + m["richMenuId"][:12])
+
+        # 2. 建選單物件:2500×1686,3×2 六格
+        cw, ch = [833, 833, 834], 843
+        xs = [0, 833, 1666]
+        def _area(col, row, action):
+            return {"bounds": {"x": xs[col], "y": row * ch,
+                               "width": cw[col], "height": ch},
+                    "action": action}
+        body = {
+            "size": {"width": 2500, "height": 1686},
+            "selected": True,
+            "name": _RICHMENU_NAME,
+            "chatBarText": "選單",
+            "areas": [
+                _area(0, 0, {"type": "uri", "uri": "https://tw.shp.ee/7f6j5kVT"}),
+                _area(1, 0, {"type": "message", "text": "與我聯絡"}),
+                _area(2, 0, {"type": "message", "text": "使用說明"}),
+                _area(0, 1, {"type": "message", "text": "功能說明"}),
+                _area(1, 1, {"type": "message", "text": "收費標準"}),
+                _area(2, 1, {"type": "message", "text": "/help"}),
+            ],
+        }
+        req = _ur.Request("https://api.line.me/v2/bot/richmenu",
+                          data=json.dumps(body).encode(), headers=_hdr_json, method="POST")
+        with _ur.urlopen(req, timeout=15) as r:
+            menu_id = json.loads(r.read().decode())["richMenuId"]
+        log.append("建立選單 " + menu_id[:12])
+
+        # 3. 上傳圖片
+        with open(img_path, "rb") as f:
+            img_bytes = f.read()
+        ctype = "image/jpeg" if img_path.endswith(".jpg") else "image/png"
+        req = _ur.Request("https://api-data.line.me/v2/bot/richmenu/" + menu_id + "/content",
+                          data=img_bytes,
+                          headers=dict(_hdr, **{"Content-Type": ctype}), method="POST")
+        _ur.urlopen(req, timeout=30)
+        log.append("圖片上傳 %.0fKB" % (len(img_bytes) / 1024))
+
+        # 4. 設為全體預設
+        req = _ur.Request("https://api.line.me/v2/bot/user/all/richmenu/" + menu_id,
+                          headers=_hdr, method="POST")
+        _ur.urlopen(req, timeout=15)
+        log.append("已設為全體預設 ✅")
+        return jsonify({"ok": True, "rich_menu_id": menu_id, "steps": log})
+    except Exception as e:
+        _err = str(e)
+        try:
+            if hasattr(e, "read"):
+                _err += " | " + e.read().decode()[:300]
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": _err, "steps": log}), 500
 
 
 @app.route("/api/admin/ai-provider/key", methods=["POST"])
@@ -21541,6 +21724,7 @@ def api_admin_features():
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global service_price_text
     global openai_24h_cache_enabled
     global VISION_MODEL
     if not check_manager_access("groups"):
