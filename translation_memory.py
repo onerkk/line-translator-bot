@@ -179,6 +179,8 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
         None — miss (score < 70)
         {
             "match_type": "exact" | "fuzzy_bypass" | "fuzzy_inject",
+            (v3.22: 排序加入 quality_score — 詞庫種子(100)與 APE 修正版
+             優先於低 QE 分的舊譯;群組專屬譯文仍最優先)
             "score": int (0-100),
             "tgt_text": str (僅 exact / fuzzy_bypass,可直接用作翻譯結果),
             "references": [(score, src, tgt), ...] (僅 fuzzy_inject,供 LLM prompt 注入),
@@ -205,7 +207,7 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
             row = conn.execute("""
                 SELECT * FROM tm_entries
                 WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
-                ORDER BY (group_id=?) DESC, hit_count DESC, last_used_at DESC
+                ORDER BY (group_id=?) DESC, COALESCE(quality_score,-1) DESC, hit_count DESC, last_used_at DESC
                 LIMIT 1
             """, (src_lang, tgt_lang, src_hash, group_id)).fetchone()
             
@@ -230,7 +232,7 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
                 SELECT id, src_text, tgt_text, group_id, hit_count
                 FROM tm_entries
                 WHERE src_lang=? AND tgt_lang=?
-                ORDER BY (group_id=?) DESC, hit_count DESC, last_used_at DESC
+                ORDER BY (group_id=?) DESC, COALESCE(quality_score,-1) DESC, hit_count DESC, last_used_at DESC
                 LIMIT ?
             """, (src_lang, tgt_lang, group_id, TM_MAX_CANDIDATES)).fetchall()
         

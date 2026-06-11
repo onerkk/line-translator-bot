@@ -4432,19 +4432,34 @@ def inject_glossary_hint(text, src, tgt):
     hits = []
     if src == "zh":
         # 中→印:用中文 key 在 text 中匹配(原邏輯)
+        # v3.22 ③:依目標語分流 —
+        #   tgt=id  → 「k=idn 必須遵守」(原行為,強制術語)
+        #   tgt=其他 → 原本也送「k=idn 必須遵守」= 把印尼術語強灌進越南/泰/菲譯文(污染!)
+        #             改為「術語定義上下文」:給 note_zh 定義,要求以目標語準確一致翻譯,
+        #             不提印尼譯名。這是 terminology hint 的標準做法,用現有資產不造假。
+        _to_id = (tgt == "id")
         keys = sorted(GLOSSARY_LOOKUP.keys(), key=len, reverse=True)
         seen = set()
+        _hit_cap = 30 if _to_id else 10
         for k in keys:
             if k in seen:
                 continue
             if k in text:
                 v = GLOSSARY_LOOKUP[k]
-                idn = v.get("idn", "") if isinstance(v, dict) else str(v)
-                if idn:
-                    hits.append(f"{k}={idn}")
+                if _to_id:
+                    idn = v.get("idn", "") if isinstance(v, dict) else str(v)
+                    if idn:
+                        hits.append(f"{k}={idn}")
+                        seen.add(k)
+                else:
+                    _note = (v.get("note_zh", "") if isinstance(v, dict) else "")[:30]
+                    hits.append(f"{k}({_note})" if _note else k)
                     seen.add(k)
-                    if len(hits) >= 30:
-                        break
+                if len(hits) >= _hit_cap:
+                    break
+        if hits and not _to_id:
+            return (" 【冷抽課設備/工序專有術語(以目標語準確翻譯,全文保持同一譯法,"
+                    "不可意譯成日常用語)】" + "; ".join(hits) + ". ")
     elif src == "id":
         # v3.9.32: 用預建的反向索引(O(1) 查詢) + 正規化
         if not GLOSSARY_REVERSE_INDEX:
@@ -5934,6 +5949,83 @@ try:
     ai_provider.register_glossary(GLOSSARY_LOOKUP)
 except Exception as _e:
     logger.warning("register_glossary 失敗: %s", _e)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.22 ①詞庫 → TM 種子(2026-06-11)
+# 232 個工廠詞條是歐那人工驗證過的「完美翻譯對」,但 TM 一直空著等慢慢累積:
+# 工人單發「布索」仍要打 LLM(2-4 秒 + 費用 + 偶爾翻錯)。
+# 種入後:工廠核心詞 0 API、0 秒、100% 正確;含詞句子的 fuzzy_inject 與
+# ICL 動態 few-shot 也立即有高品質參考可用。
+# 安全規則(實話:idn 欄位是「乾淨術語」與「描述句」的混合體,
+# 例:'Tongkat Pemisah' vs 'Tali kain yang di pakai di Tian Che'):
+#   - 取 '/' 前第一段、去掉括號註記
+#   - 含描述詞(yang/untuk/dipakai/...)或 >4 個字 → 不種(避免單詞譯出整句描述)
+#   - 反向(印→中)只在清洗後術語無歧義時種
+# 冪等:tm_store 是 UPSERT,重啟重種 = 詞庫即權威來源(改詞庫→TM 跟著更新)。
+# ═══════════════════════════════════════════════════════════════════
+_GLOSSARY_DESC_MARKERS = ("yang", "untuk", "dipakai", "di pakai", "dengan",
+                          "secara", "supaya", "agar", "adalah", "tempat")
+
+
+def _clean_glossary_idn_term(idn):
+    """清洗 idn 欄位 → 可當譯文的乾淨術語,不合格回 None。"""
+    if not idn or not isinstance(idn, str):
+        return None
+    t = idn.split("/")[0]                       # 'Kait/Hook' → 'Kait'
+    t = re.sub(r"[(（][^)）]*[)）]", "", t)      # 去括號註記
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t or len(t) > 40:
+        return None
+    low = " " + t.lower() + " "
+    if any((" " + m + " ") in low or low.strip().startswith(m + " ")
+           for m in _GLOSSARY_DESC_MARKERS):
+        return None                              # 描述句,不是術語
+    if len(t.split()) > 4 or "," in t:
+        return None
+    return t
+
+
+def seed_glossary_into_tm():
+    """把詞庫種入 Lexical TM(zh→id + 無歧義的 id→zh 反向)。boot 時呼叫。"""
+    seeded_fwd = seeded_rev = skipped = 0
+    rev_seen = {}
+    try:
+        for zh_term, v in GLOSSARY_LOOKUP.items():
+            idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
+            term = _clean_glossary_idn_term(idn_raw)
+            if not term:
+                skipped += 1
+                continue
+            try:
+                if tm_module.tm_store(zh_term, term, "zh", "id",
+                                      None, "glossary_seed", 100):
+                    seeded_fwd += 1
+            except Exception:
+                pass
+            # 反向:同一印尼術語對到多個中文 → 有歧義,全部不種
+            key = term.lower()
+            rev_seen.setdefault(key, []).append((term, zh_term))
+        for key, pairs in rev_seen.items():
+            if len(pairs) != 1:
+                continue
+            term, zh_term = pairs[0]
+            try:
+                if tm_module.tm_store(term, zh_term, "id", "zh",
+                                      None, "glossary_seed", 100):
+                    seeded_rev += 1
+            except Exception:
+                pass
+        logger.info("[GlossarySeed] TM 種子完成: zh→id %d 條, id→zh %d 條, 略過描述句 %d 條",
+                    seeded_fwd, seeded_rev, skipped)
+    except Exception as _se:
+        logger.warning("[GlossarySeed] 種子失敗(不影響啟動): %s", _se)
+
+
+try:
+    seed_glossary_into_tm()
+except Exception as _e:
+    logger.warning("seed_glossary_into_tm 失敗: %s", _e)
 
 
 # ═══════════════════════════════════════════════════════════════════
