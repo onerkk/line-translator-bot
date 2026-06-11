@@ -16419,7 +16419,7 @@ async function setupRichMenu(){
   try{
     const r = await fetch('/api/admin/richmenu/setup', {method:'POST', headers:{'X-Admin-Key':KEY}});
     const d = await r.json();
-    el.textContent = d.ok ? ('✅ 完成!\n' + (d.steps||[]).join('\n')) : ('❌ 失敗: ' + (d.error||'') + '\n' + (d.steps||[]).join('\n'));
+    el.textContent = d.ok ? ('✅ 完成!\\n' + (d.steps||[]).join('\\n')) : ('❌ 失敗: ' + (d.error||'') + '\\n' + (d.steps||[]).join('\\n'));
   }catch(e){ el.textContent='❌ ' + e; }
 }
 async function aipTestProvider(){
