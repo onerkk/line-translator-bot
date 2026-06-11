@@ -689,6 +689,16 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
             + output_tok  * out_rate                             / 1_000_000
         )
         return cost
+    if p == "gemini":
+        # v3.23: Gemini 計價(價格表同放 OPENAI_PRICE_PER_M,gemini-* key 已存在)
+        # 隱式快取折扣概估 ×0.25(Google 端自動,實際以 AI Studio 帳單為準)
+        in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gemini-3.1-flash-lite")
+        non_cached = max(0, input_tok - cached_input)
+        return (
+            non_cached    * in_rate         / 1_000_000
+            + cached_input  * in_rate * 0.25  / 1_000_000
+            + output_tok    * out_rate        / 1_000_000
+        )
     # OpenAI
     in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5-mini")
     # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
@@ -723,10 +733,14 @@ def track_tokens(response, group_id=None):
         # 偵測 provider:優先用 _UnifiedResponse._jy_provider(ai_provider 標記,最可靠)
         # fallback:Anthropic _UnifiedUsage cache 屬性 / model 名以 claude- 開頭
         _jy_prov = getattr(response, '_jy_provider', None)
+        # v3.23: Gemini 偵測 — 走 OpenAI 相容端點,response.model 為 gemini-*。
+        # 原本會掉進 OpenAI 分支:記進 oai_* bucket + 撞不到價格 fallback gpt-5-mini
+        # 費率 = 誤記提供者 + 算錯錢。現在獨立 bucket + 正確計價。
+        is_gemini = (_jy_prov == "gemini") or str(model_used).lower().startswith("gemini")
         if _jy_prov in ("anthropic", "openai"):
             is_anthropic = (_jy_prov == "anthropic")
         else:
-            is_anthropic = (
+            is_anthropic = (not is_gemini) and (
                 hasattr(u, 'cache_read_tokens') or hasattr(u, 'cache_creation_tokens')
                 or str(model_used).lower().startswith('claude-')
             )
@@ -734,6 +748,33 @@ def track_tokens(response, group_id=None):
         # 統一抽 token(兩家欄位名不同,都用 getattr 容錯)
         in_tok  = int(getattr(u, 'prompt_tokens', 0) or 0)
         out_tok = int(getattr(u, 'completion_tokens', 0) or 0)
+
+        if is_gemini:
+            cached_input = 0
+            try:
+                _pt = getattr(u, 'prompt_tokens_details', None)
+                if _pt:
+                    cached_input = int(getattr(_pt, 'cached_tokens', 0) or 0)
+            except Exception:
+                pass
+            cost = calc_cost_usd("gemini", model_used,
+                                 input_tok=in_tok, output_tok=out_tok,
+                                 cached_input=cached_input)
+            with _stats_lock:
+                bot_stats["gem_input"]    = bot_stats.get("gem_input", 0) + in_tok
+                bot_stats["gem_cached"]   = bot_stats.get("gem_cached", 0) + cached_input
+                bot_stats["gem_output"]   = bot_stats.get("gem_output", 0) + out_tok
+                bot_stats["gem_cost_usd"] = bot_stats.get("gem_cost_usd", 0.0) + cost
+                bot_stats["tokens_prompt"]     = bot_stats.get("tokens_prompt", 0) + in_tok
+                bot_stats["tokens_completion"] = bot_stats.get("tokens_completion", 0) + out_tok
+            _delta = {
+                "provider": "gemini", "model": model_used, "cost_usd": cost,
+                "input": in_tok, "output": out_tok,
+                "cache_read": cached_input, "cache_write": 0, "reasoning": 0,
+            }
+            if group_id:
+                _attribute_usage_to_group(group_id, _delta)
+            return
 
         if is_anthropic:
             cache_read  = int(getattr(u, 'cache_read_tokens', 0) or 0)
@@ -14110,9 +14151,19 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </div>
 </div>
 
+<!-- Gemini 區 (v3.23) -->
+<div style="border:1px solid #2a2a3e;border-radius:8px;padding:10px;margin-top:8px">
+<div style="font-weight:600;font-size:13px;margin-bottom:6px;color:#4285f4">🔵 Gemini</div>
+<div style="display:grid;grid-template-columns:1fr auto;gap:4px;font-size:12px;color:#8a8a9a">
+<div>輸入 / 快取 / 輸出</div><div style="text-align:right;color:#ccc" id="st-gem-tok">0 / 0 / 0</div>
+<div>花費</div><div style="text-align:right;color:#ccc" id="st-gem-cost">$0.0000　NT$0.0</div>
+</div>
+</div>
+
 <div style="display:flex;gap:8px;margin-top:12px">
 <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" style="flex:1;padding:9px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#7c6fef;font-size:12px;font-weight:600;text-decoration:none">💳 OpenAI 餘額</a>
 <a href="https://console.anthropic.com/settings/billing" target="_blank" style="flex:1;padding:9px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#cc785c;font-size:12px;font-weight:600;text-decoration:none">💳 Claude 餘額</a>
+<a href="https://aistudio.google.com/usage" target="_blank" style="flex:1;padding:9px;text-align:center;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;color:#4285f4;font-size:12px;font-weight:600;text-decoration:none">💳 Gemini 用量</a>
 </div>
 <div style="font-size:10px;color:#666;margin-top:8px;line-height:1.5">※ 即時精確記帳，已含 prompt cache（讀 ×0.1／寫 ×1.25）與 thinking 技術消費。匯率 1 USD = <span id="st-fx">32</span> TWD。</div>
 </div>
@@ -16527,16 +16578,18 @@ async function loadStats(){
   setStatVal('st-dm-users',d.dm_users||0);
   // v3.9.53 雙 AI 真實費用
   var fx = 32;
-  var oai = d.openai || {}, ant = d.anthropic || {};
+  var oai = d.openai || {}, ant = d.anthropic || {}, gem = d.gemini || {};
   var _fmt = function(n){ return (n||0).toLocaleString(); };
   var _setTxt = function(id,txt){ var e=document.getElementById(id); if(e) e.textContent=txt; };
   _setTxt('st-cost-total', 'NT$'+(d.cost_total_twd||0).toFixed(1));
-  _setTxt('st-active-provider', (d.active_provider==='anthropic'?'Claude':(d.active_provider==='openai'?'OpenAI':'—')));
+  _setTxt('st-active-provider', (d.active_provider==='anthropic'?'Claude':(d.active_provider==='openai'?'OpenAI':(d.active_provider==='gemini'?'Gemini':'—'))));
   _setTxt('st-oai-tok', _fmt(oai.input)+' / '+_fmt(oai.cached)+' / '+_fmt(oai.output));
   _setTxt('st-oai-cost', '$'+(oai.cost_usd||0).toFixed(4)+'　NT$'+(oai.cost_twd||0).toFixed(1));
   _setTxt('st-ant-io', _fmt(ant.input)+' / '+_fmt(ant.output));
   _setTxt('st-ant-cache', _fmt(ant.cache_read)+' / '+_fmt(ant.cache_write));
   _setTxt('st-ant-cost', '$'+(ant.cost_usd||0).toFixed(4)+'　NT$'+(ant.cost_twd||0).toFixed(1));
+  _setTxt('st-gem-tok', _fmt(gem.input)+' / '+_fmt(gem.cached)+' / '+_fmt(gem.output));
+  _setTxt('st-gem-cost', '$'+(gem.cost_usd||0).toFixed(4)+'　NT$'+(gem.cost_twd||0).toFixed(1));
   _setTxt('st-fx', fx);
   // 相容舊 id(若仍存在)
   var _ot=document.getElementById('st-tokens'); if(_ot) _ot.textContent=(d.tokens_total||0).toLocaleString();
@@ -21149,7 +21202,8 @@ def api_admin_stats():
     tc = bot_stats.get("tokens_completion", 0)
     oai_cost = bot_stats.get("oai_cost_usd", 0.0)
     ant_cost = bot_stats.get("ant_cost_usd", 0.0)
-    total_cost = oai_cost + ant_cost
+    gem_cost = bot_stats.get("gem_cost_usd", 0.0)   # v3.23
+    total_cost = oai_cost + ant_cost + gem_cost
     active_provider = ai_provider.get_active_provider()
     return jsonify({
         "uptime_seconds": int(uptime),
@@ -21170,6 +21224,13 @@ def api_admin_stats():
         "active_provider": active_provider,
         "cost_total_usd": round(total_cost, 4),
         "cost_total_twd": round(total_cost * USD_TO_TWD, 2),
+        "gemini": {
+            "input": bot_stats.get("gem_input", 0),
+            "cached": bot_stats.get("gem_cached", 0),
+            "output": bot_stats.get("gem_output", 0),
+            "cost_usd": round(gem_cost, 4),
+            "cost_twd": round(gem_cost * USD_TO_TWD, 2),
+        },
         "openai": {
             "input": bot_stats.get("oai_input", 0),
             "cached": bot_stats.get("oai_cached", 0),
