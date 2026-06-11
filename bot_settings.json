@@ -487,7 +487,8 @@
   "group_flex_v2": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "carousel": true,
-      "hero": true
+      "hero": true,
+      "span": true
     }
   },
   "group_tts_settings": {},
