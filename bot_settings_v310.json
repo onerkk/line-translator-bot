@@ -13,7 +13,8 @@
       "span": true
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true
+      "carousel": true,
+      "hero": true
     }
   },
   "group_conv_settings": {}
