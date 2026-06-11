@@ -127,6 +127,33 @@ DEFAULT_CONFIG = {
         "api_key": "",
         "default_model": "claude-haiku-4-5-20251001",
     },
+    # === v3.21 Gemini(第三 provider)===
+    # Google 官方把 Gemini 3.1 Flash-Lite 的第一使用場景明列為
+    # 「翻譯:快速、便宜、大量,例如處理聊天訊息」— 三家裡最低價位。
+    # 走 Gemini 官方 OpenAI 相容端點,重用 OpenAI SDK,不引入新依賴。
+    "gemini": {
+        "api_key": "",
+        "default_model": "gemini-3.1-flash-lite",   # 短訊息(最省)
+        "upgrade_model": "gemini-3.5-flash",        # 長訊息(GA 穩定版)
+    },
+    "gemini_features": {
+        # Gemini 3 系列預設 dynamic thinking — 翻譯不需要,壓低省錢省時。
+        # 相容端點參數名為 reasoning_effort;low 為安全最低檔
+        # (API 若拒絕此參數會自動退參數重試,見 _chat_complete_gemini)。
+        "reasoning_effort": "low",
+    },
+    # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
+    "gemini_model_mapping": {
+        "gpt-4.1":      "gemini-3.5-flash",
+        "gpt-4.1-mini": "gemini-3.1-flash-lite",
+        "gpt-4.1-nano": "gemini-3.1-flash-lite",
+        "gpt-4o":       "gemini-3.5-flash",
+        "gpt-4o-mini":  "gemini-3.1-flash-lite",
+        "gpt-5":        "gemini-3.5-flash",
+        "gpt-5-mini":   "gemini-3.1-flash-lite",
+        "gpt-5.2":      "gemini-3.5-flash",
+        "gpt-5.5":      "gemini-3.5-flash",
+    },
     "model_mapping": {
         "gpt-4.1":             "claude-sonnet-4-6",
         "gpt-4.1-mini":        "claude-haiku-4-5-20251001",
@@ -207,6 +234,7 @@ _current_config = None
 _last_config_mtime = 0  # 修跨 worker 同步 — 記錄上次讀 config 時磁碟檔 mtime
 _openai_client = None
 _anthropic_client = None
+_gemini_client = None   # v3.21
 _registered_glossary = None
 
 # === D3 Phase 17: Files API state ===
@@ -262,6 +290,10 @@ def _init_config():
         cfg["openai"]["api_key"] = os.environ.get("OPENAI_API_KEY", "")
     if not cfg["anthropic"].get("api_key"):
         cfg["anthropic"]["api_key"] = os.environ.get("ANTHROPIC_API_KEY", "")
+    # v3.21: Gemini key 環境變數(GEMINI_API_KEY 或 GOOGLE_API_KEY 都接受)
+    if not cfg.get("gemini", {}).get("api_key"):
+        cfg.setdefault("gemini", {})["api_key"] = (
+            os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", ""))
     _current_config = cfg
 
 
@@ -340,6 +372,32 @@ def _get_anthropic_client():
             return None
 
 
+def _get_gemini_client():
+    """v3.21: Gemini 走官方 OpenAI 相容端點 — 重用 OpenAI SDK,零新依賴。
+    https://ai.google.dev/gemini-api/docs/openai
+    """
+    global _gemini_client
+    _ensure_initialized()
+    with _config_lock:
+        api_key = _current_config.get("gemini", {}).get("api_key", "")
+        if not api_key:
+            return None
+        if _gemini_client is not None and getattr(_gemini_client, "_jy_key", None) == api_key:
+            return _gemini_client
+        try:
+            from openai import OpenAI
+            _gemini_client = OpenAI(
+                api_key=api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                timeout=90.0,
+            )
+            _gemini_client._jy_key = api_key
+            return _gemini_client
+        except Exception as e:
+            print(f"[ai_provider] Gemini client 建立失敗 {e}", flush=True)
+            return None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 對外 API
 # ═══════════════════════════════════════════════════════════════════
@@ -349,7 +407,7 @@ def get_active_provider():
 
 
 def set_active_provider(provider):
-    if provider not in ("openai", "anthropic"):
+    if provider not in ("openai", "anthropic", "gemini"):
         return False, f"unknown provider: {provider}"
     _ensure_initialized()
     with _config_lock:
@@ -360,18 +418,34 @@ def set_active_provider(provider):
 
 
 def update_provider_key(provider, api_key):
-    if provider not in ("openai", "anthropic"):
+    if provider not in ("openai", "anthropic", "gemini"):
         return False, f"unknown provider: {provider}"
     _ensure_initialized()
     with _config_lock:
-        _current_config[provider]["api_key"] = (api_key or "").strip()
+        _current_config.setdefault(provider, {})["api_key"] = (api_key or "").strip()
         if _save_config_to_disk(_current_config):
-            global _openai_client, _anthropic_client
+            global _openai_client, _anthropic_client, _gemini_client
             if provider == "openai":
                 _openai_client = None
+            elif provider == "gemini":
+                _gemini_client = None
             else:
                 _anthropic_client = None
             return True, f"{provider} key 已更新"
+        return False, "存檔失敗"
+
+
+def update_gemini_features(features):
+    """v3.21: 後台更新 Gemini 設定(reasoning_effort 等)。"""
+    if not isinstance(features, dict):
+        return False, "features 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        cur = _current_config.get("gemini_features", {})
+        cur.update(features)
+        _current_config["gemini_features"] = cur
+        if _save_config_to_disk(_current_config):
+            return True, "Gemini features 已更新"
         return False, "存檔失敗"
 
 
@@ -407,7 +481,9 @@ def get_current_config_safe():
     _ensure_initialized()
     with _config_lock:
         cfg = json.loads(json.dumps(_current_config))
-        for p in ("openai", "anthropic"):
+        for p in ("openai", "anthropic", "gemini"):
+            if p not in cfg or not isinstance(cfg.get(p), dict):
+                continue
             k = cfg[p].get("api_key", "")
             if k:
                 cfg[p]["api_key_preview"] = k[:8] + "..." + k[-4:] if len(k) > 12 else "***"
@@ -1246,6 +1322,72 @@ class _UnifiedResponse:
 # ═══════════════════════════════════════════════════════════════════
 # 核心 chat_complete
 # ═══════════════════════════════════════════════════════════════════
+def _resolve_gemini_model(model):
+    """v3.21: 模型名解析 — gemini-* 原樣用;OpenAI 名查 mapping;其他 fallback flash-lite。"""
+    _ensure_initialized()
+    m = (model or "").lower()
+    if m.startswith("gemini"):
+        return model
+    gcfg = _current_config.get("gemini", {})
+    mapping = _current_config.get("gemini_model_mapping", {})
+    if model in mapping:
+        return mapping[model]
+    # 啟發式:mini/nano/haiku 級 → 最省;其餘 → 升級模型
+    if any(t in m for t in ("mini", "nano", "haiku")):
+        return gcfg.get("default_model", "gemini-3.1-flash-lite")
+    return gcfg.get("upgrade_model", "gemini-3.5-flash")
+
+
+def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
+                          timeout=90, stop=None, **kwargs):
+    """v3.21: Gemini 路徑(官方 OpenAI 相容端點)。
+
+    設計:
+      - 模型解析:OpenAI 名 → gemini_model_mapping(與 Claude mapping 同模式)
+      - reasoning_effort:Gemini 3 預設 dynamic thinking,翻譯不需要 →
+        依 gemini_features 壓低(預設 low)。端點若拒絕參數 → 自動退參數重試,
+        確保任何相容性落差都不會讓翻譯失敗。
+      - 回傳原生 OpenAI 相容 response 物件,上游 _AIProxy/confidence 邏輯零改動。
+    """
+    client = _get_gemini_client()
+    if client is None:
+        raise RuntimeError("Gemini client 未初始化(api_key 缺?後台或 GEMINI_API_KEY 設定)")
+
+    g_model = _resolve_gemini_model(model)
+    features = _current_config.get("gemini_features", {}) if _current_config else {}
+
+    g_kwargs = {
+        "model": g_model,
+        "messages": messages,
+        "timeout": timeout,
+    }
+    if max_tokens:
+        g_kwargs["max_tokens"] = int(max_tokens)
+    if temperature is not None:
+        g_kwargs["temperature"] = temperature
+    if stop:
+        g_kwargs["stop"] = stop
+    _effort = (features.get("reasoning_effort") or "").strip().lower()
+    if _effort in ("none", "low", "medium", "high"):
+        g_kwargs["reasoning_effort"] = _effort
+
+    try:
+        return client.chat.completions.create(**g_kwargs)
+    except Exception as e:
+        # 相容端點對個別參數的支援可能隨版本變動 → 退掉可選參數重試一次
+        _msg = str(e).lower()
+        retried = False
+        for _opt in ("reasoning_effort", "stop"):
+            if _opt in g_kwargs and (_opt in _msg or "invalid" in _msg or "unrecognized" in _msg
+                                     or "unsupported" in _msg or "400" in _msg):
+                g_kwargs.pop(_opt, None)
+                retried = True
+        if retried:
+            print(f"[ai_provider] Gemini 參數退階重試: {str(e)[:120]}", flush=True)
+            return client.chat.completions.create(**g_kwargs)
+        raise
+
+
 def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                   temperature=None, timeout=90, prompt_cache_key=None,
                   reasoning_effort=None, verbosity=None, logprobs=False,
@@ -1258,6 +1400,13 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout,
             extra_stop=stop,
+        )
+
+    if provider == "gemini":
+        return _chat_complete_gemini(
+            model=model, messages=messages,
+            max_tokens=max_tokens or max_completion_tokens or 1024,
+            temperature=temperature, timeout=timeout, stop=stop,
         )
 
     return _chat_complete_openai(
@@ -1765,6 +1914,28 @@ def chat_complete_stream(model, messages, max_tokens=None, temperature=None, **k
     provider = get_active_provider()
     if provider == "anthropic":
         yield from _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **kwargs)
+    elif provider == "gemini":
+        # v3.21: Gemini 相容端點支援 OpenAI 式 streaming
+        client = _get_gemini_client()
+        if client is None:
+            raise RuntimeError("Gemini client 未初始化")
+        g_model = _resolve_gemini_model(model)
+        stream = client.chat.completions.create(
+            model=g_model, messages=messages, stream=True,
+            **({"max_tokens": int(max_tokens)} if max_tokens else {}),
+            **({"temperature": temperature} if temperature is not None else {}),
+        )
+        usage = None
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+            except Exception:
+                delta = None
+            if delta:
+                yield delta
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+        yield {"_final": True, "usage": usage, "model": g_model}
     else:
         yield from _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwargs)
 

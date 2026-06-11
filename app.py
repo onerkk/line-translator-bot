@@ -286,7 +286,9 @@ class _AIProxy:
                     )
                 if oai is None:
                     raise RuntimeError("OpenAI client 未初始化(OPENAI_API_KEY 缺?)")
-                return ai.audio.transcriptions.create(model=model, file=file, **kwargs)
+                # v3.21 治本:原寫 ai.audio...(呼叫自己=無限遞迴),改用原生 oai client。
+                # Gemini active 時語音轉文字也照常走 OpenAI(gpt-4o-transcribe)。
+                return oai.audio.transcriptions.create(model=model, file=file, **kwargs)
         transcriptions = _Transcriptions()
     audio = _Audio()
 
@@ -643,6 +645,11 @@ OPENAI_PRICE_PER_M = {
     "gpt-4.1":      (2.00,  8.00),
     "gpt-4o-mini":  (0.15,  0.60),
     "gpt-4o":       (2.50, 10.00),
+    # v3.21 Gemini(概估值,Google 官方定位 flash-lite 為最低價;
+    # 實際帳單以 Google AI Studio 為準,此表僅供後台成本儀表板估算)
+    "gemini-3.1-flash-lite": (0.10, 0.40),
+    "gemini-3.5-flash":      (0.30, 2.50),
+    "gemini-3-flash":        (0.30, 2.50),
 }
 
 
@@ -997,6 +1004,11 @@ claude_model_default = "claude-haiku-4-5-20251001"  # 短訊息用 Haiku 4.5
 claude_model_upgrade = "claude-sonnet-4-6"           # 長訊息升級 Sonnet 4.6
 claude_auto_switch_enabled = True                    # 總開關:OFF 時走「套用模型」單一映射(舊行為)
 
+# v3.21: Gemini 路徑模型(第三 provider — Google 官方定位 flash-lite 為
+# 「聊天訊息翻譯的大量/低價場景」首選,三家最低價位)
+gemini_model_default = "gemini-3.1-flash-lite"       # 短訊息(最省)
+gemini_model_upgrade = "gemini-3.5-flash"            # 長訊息(GA 穩定版)
+
 # v3.9.7 (2026-05): 模型能力對照表 — 讓使用者亂勾任何進階設定都不會 400。
 # 後端永遠根據實際模型過濾參數;UI 端會把不相容的設定自動還原成中性值。
 def _model_family(model_name):
@@ -1012,11 +1024,17 @@ def _model_family(model_name):
     # app.py 層只需送 model/messages/max_tokens/temperature(ai_provider 會過濾)
     if m.startswith("claude-"):
         return "claude"
-    # GPT-5.1 / 5.2 family — supports 'none' as lowest reasoning effort
-    if m.startswith(("gpt-5.2", "gpt-5.1")):
+    # v3.21: Gemini 模型 — ai_provider._chat_complete_gemini 內部管理參數,
+    # app.py 翻譯層比照 claude:只送 max_tokens/temperature
+    if m.startswith("gemini"):
+        return "gemini"
+    # GPT-5.1 / 5.2 / 5.5 family — supports 'none' as lowest reasoning effort
+    # v3.20: gpt-5.5 移入此組 — 官方 model 文件明列 5.5 支援
+    # 「none, low, medium (default), high, xhigh」→ 翻譯用 none 最快最省
+    if m.startswith(("gpt-5.5", "gpt-5.2", "gpt-5.1")):
         return "gpt5_none"
-    # GPT-5 / 5.4 / 5.5 family — supports 'minimal' as lowest
-    if m.startswith(("gpt-5.5", "gpt-5.4", "gpt-5")):
+    # GPT-5 / 5.4 family — supports 'minimal' as lowest(5.4 未確認支援 none,保守留此組)
+    if m.startswith(("gpt-5.4", "gpt-5")):
         return "gpt5_minimal"
     if m.startswith(("o1", "o3", "o4")):
         return "oseries_reasoning"
@@ -1046,6 +1064,15 @@ MODEL_CAPABILITIES = {
     # app.py 翻譯層不應送任何 OpenAI-only 參數,全設 False。
     # 只留 max_tokens=True（app.py 計算 output budget 用）+ temperature=True（ai_provider 會過濾）。
     "claude": {
+        "temperature": True, "top_p": False, "max_tokens": True,
+        "max_completion_tokens": False, "logprobs": False, "logit_bias": False,
+        "stop": False, "structured_output": False, "metadata": False,
+        "prompt_cache_key": False, "reasoning_effort": False, "seed": False,
+        "verbosity": False,
+        "prompt_cache_retention": False,
+    },
+    # v3.21: Gemini — ai_provider 內部處理 reasoning_effort 等專屬參數
+    "gemini": {
         "temperature": True, "top_p": False, "max_tokens": True,
         "max_completion_tokens": False, "logprobs": False, "logit_bias": False,
         "stop": False, "structured_output": False, "metadata": False,
@@ -1398,7 +1425,13 @@ def pick_model(text):
         if model_threshold > 0 and text_len >= model_threshold:
             return claude_model_upgrade
         return claude_model_default
-    
+
+    # v3.21: Gemini 路徑 — 同 Claude 模式,直接回 gemini-* 名稱
+    if provider == "gemini":
+        if model_threshold > 0 and text_len >= model_threshold:
+            return gemini_model_upgrade
+        return gemini_model_default
+
     # OpenAI 路徑(或 Anthropic + 關閉自動切換)
     if model_threshold > 0 and text_len >= model_threshold:
         return model_upgrade
@@ -11067,7 +11100,8 @@ def handle_message(event):
             # Fallback: 強制用短訊息模型重試(Haiku 4.5 快且穩)
             result = None
             try:
-                _fallback_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
+                _prov = ai_provider.get_active_provider()
+                _fallback_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
                 logger.info("[group %s] fallback retry with %s", group_id, _fallback_model)
                 # v3.13: 改 thread-local force_model(pick_model 已支援)。
                 # 原本覆蓋 globals()['pick_model'] 是全行程生效 — translate_multi
@@ -12639,13 +12673,30 @@ if MessageReactionEvent:
 
 
 def show_loading(chat_id):
-    """Show typing indicator before translation."""
+    """Show typing indicator before translation.
+
+    v3.20 根治(查 LINE 官方文件後):
+    1. 官方明定 loading animation 只支援 1對1 聊天(chatId 必須是 userId)。
+       原本群組路徑也呼叫 show_loading(group_id) → LINE 必回 400 被 except 吞掉,
+       等於每則群組訊息在翻譯前白付一次 blocking LINE API 往返(~100-300ms)。
+       LINE ID 規則:U=user / C=group / R=room → 只在 U 開頭時才打 API。
+    2. DM 真正有效的呼叫也改丟背景執行緒,不佔翻譯等待路徑。
+    """
     if not ShowLoadingAnimationRequest:
         return
+    if not chat_id or not str(chat_id).startswith("U"):
+        return  # 群組/聊天室不支援,直接省掉這次必失敗的往返
+
+    def _do():
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                api.show_loading_animation(ShowLoadingAnimationRequest(chat_id=chat_id))
+        except Exception:
+            pass
+
     try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            api.show_loading_animation(ShowLoadingAnimationRequest(chat_id=chat_id))
+        _BG_POST_EXECUTOR.submit(_do)
     except Exception:
         pass
 
@@ -12659,27 +12710,36 @@ def mark_as_read(chat_id, mark_as_read_token=None):
     
     需要 OA 後台「聊天」功能開啟才會有實際效果,
     否則 LINE 平台會自動標讀,此 API 不必要也不會出錯。
+
+    v3.20: 改丟背景執行緒 — 原本是翻譯前的 blocking LINE API 往返,
+    純 UX 標記不該佔使用者等待路徑。
     """
+    def _do():
+        try:
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                # 路徑 A:有 token + 新 SDK → 用 token 版本(精準標單一訊息)
+                if mark_as_read_token and MarkMessagesAsReadByTokenRequest:
+                    try:
+                        api.mark_messages_as_read_by_token(
+                            MarkMessagesAsReadByTokenRequest(mark_as_read_token=mark_as_read_token)
+                        )
+                        return
+                    except AttributeError:
+                        # SDK class 有但 method 名不同(極舊版本中間態),fallback
+                        pass
+                    except Exception as _te:
+                        logger.debug("mark_as_read_by_token failed, fallback to chat_id: %s", _te)
+                # 路徑 B:舊 chat_id 版本(整個聊天)— 官方同樣僅支援 1對1
+                if MarkMessagesAsReadRequest and chat_id and str(chat_id).startswith("U"):
+                    api.mark_messages_as_read(MarkMessagesAsReadRequest(chat_id=chat_id))
+        except Exception as e:
+            logger.debug("mark_as_read failed: %s", e)
+
     try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            # 路徑 A:有 token + 新 SDK → 用 token 版本(精準標單一訊息)
-            if mark_as_read_token and MarkMessagesAsReadByTokenRequest:
-                try:
-                    api.mark_messages_as_read_by_token(
-                        MarkMessagesAsReadByTokenRequest(mark_as_read_token=mark_as_read_token)
-                    )
-                    return
-                except AttributeError:
-                    # SDK class 有但 method 名不同(極舊版本中間態),fallback
-                    pass
-                except Exception as _te:
-                    logger.debug("mark_as_read_by_token failed, fallback to chat_id: %s", _te)
-            # 路徑 B:舊 chat_id 版本(整個聊天)
-            if MarkMessagesAsReadRequest and chat_id:
-                api.mark_messages_as_read(MarkMessagesAsReadRequest(chat_id=chat_id))
-    except Exception as e:
-        logger.debug("mark_as_read failed: %s", e)
+        _BG_POST_EXECUTOR.submit(_do)
+    except Exception:
+        pass
 
 
 def generate_retry_key():
@@ -14316,6 +14376,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="display:flex;gap:10px;margin-bottom:18px">
   <button id="aip-btn-openai" onclick="aipSwitchProvider(&#39;openai&#39;)" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟢 OpenAI</button>
   <button id="aip-btn-anthropic" onclick="aipSwitchProvider(&#39;anthropic&#39;)" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🟣 Anthropic</button>
+  <button id="aip-btn-gemini" onclick="aipSwitchProvider(&#39;gemini&#39;)" style="flex:1;padding:12px;border-radius:10px;border:2px solid #444;background:#1f1f30;color:#fff;font-size:14px;cursor:pointer;font-weight:600">🔵 Gemini</button>
 </div>
 
 <!-- 測試按鈕 -->
@@ -14348,6 +14409,17 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <input id="aip-anthropic-key" type="password" placeholder="sk-ant-api03-..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
       <button onclick="aipUpdateKey(&#39;anthropic&#39;)" style="padding:8px 14px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:12px;cursor:pointer;font-weight:600">更新</button>
     </div>
+  </div>
+  <div style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+      <label style="color:#fff;font-size:12px;font-weight:600">Gemini Key</label>
+      <span id="aip-gemini-preview" style="color:#666;font-size:10px;font-family:monospace">…</span>
+    </div>
+    <div style="display:flex;gap:6px">
+      <input id="aip-gemini-key" type="password" placeholder="AIza..." autocomplete="off" style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;font-family:monospace">
+      <button onclick="aipUpdateKey(&#39;gemini&#39;)" style="padding:8px 14px;border-radius:6px;border:none;background:#4285f4;color:#fff;font-size:12px;cursor:pointer;font-weight:600">更新</button>
+    </div>
+    <div style="color:#666;font-size:10px;margin-top:4px">短訊息 gemini-3.1-flash-lite / 長訊息 gemini-3.5-flash(三家最低價)</div>
   </div>
 </div>
 
@@ -15827,28 +15899,27 @@ async function aipLoadStatus(){
     if(!data.ok){ console.warn('AIP load fail', data); return; }
     const provider = data.active_provider || 'openai';
     const cfg = data.config || {};
-    const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)'};
+    const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)', gemini:'🔵 Google (Gemini)'};
     document.getElementById('aip-active-display').textContent = displayMap[provider] || provider;
     document.getElementById('aip-last-updated').textContent = cfg.last_updated ? ('最後更新：' + cfg.last_updated) : '';
-    const btnOA = document.getElementById('aip-btn-openai');
-    const btnAN = document.getElementById('aip-btn-anthropic');
-    if(provider === 'openai'){
-      btnOA.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-      btnOA.style.borderColor = '#10b981';
-      btnOA.style.color = '#fff';
-      btnAN.style.background = '#1f1f30';
-      btnAN.style.borderColor = '#444';
-      btnAN.style.color = '#fff';
-    }else{
-      btnAN.style.background = 'linear-gradient(135deg, #d4a437, #b8941f)';
-      btnAN.style.borderColor = '#d4a437';
-      btnAN.style.color = '#000';
-      btnOA.style.background = '#1f1f30';
-      btnOA.style.borderColor = '#444';
-      btnOA.style.color = '#fff';
+    // v3.21: 三 provider 高亮(active 上色、其餘灰底)
+    const provBtns = {
+      openai:    {el: document.getElementById('aip-btn-openai'),    bg:'linear-gradient(135deg, #10b981, #059669)', bd:'#10b981', fg:'#fff'},
+      anthropic: {el: document.getElementById('aip-btn-anthropic'), bg:'linear-gradient(135deg, #d4a437, #b8941f)', bd:'#d4a437', fg:'#000'},
+      gemini:    {el: document.getElementById('aip-btn-gemini'),    bg:'linear-gradient(135deg, #4285f4, #1a73e8)', bd:'#4285f4', fg:'#fff'},
+    };
+    for(const [p, b] of Object.entries(provBtns)){
+      if(!b.el) continue;
+      if(p === provider){
+        b.el.style.background = b.bg; b.el.style.borderColor = b.bd; b.el.style.color = b.fg;
+      }else{
+        b.el.style.background = '#1f1f30'; b.el.style.borderColor = '#444'; b.el.style.color = '#fff';
+      }
     }
     document.getElementById('aip-openai-preview').textContent = (cfg.openai && cfg.openai.api_key_preview) || '(未設定)';
     document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
+    const gemPrev = document.getElementById('aip-gemini-preview');
+    if(gemPrev) gemPrev.textContent = (cfg.gemini && cfg.gemini.api_key_preview) || '(未設定)';
     // 載入當前 Anthropic 模型映射(gpt-4.1-mini 的對應)
     try {
       const mapping = cfg.model_mapping || {};
@@ -16058,6 +16129,7 @@ async function aipUpdateKey(p){
   if(!val){ alert('請輸入 API key'); return; }
   if(p === 'openai' && !val.startsWith('sk-')){ if(!confirm('OpenAI key 通常 sk- 開頭，確定？')) return; }
   if(p === 'anthropic' && !val.startsWith('sk-ant-')){ if(!confirm('Anthropic key 通常 sk-ant- 開頭，確定？')) return; }
+  if(p === 'gemini' && !val.startsWith('AIza')){ if(!confirm('Gemini key 通常 AIza 開頭，確定？')) return; }
   try{
     const r = await fetch('/api/admin/ai-provider/key', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p, api_key:val})});
     const data = await r.json();
@@ -24310,7 +24382,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
                 # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
                 try:
-                    _fb_model = claude_model_default if ai_provider.get_active_provider() == "anthropic" else model_default
+                    _prov = ai_provider.get_active_provider()
+                    _fb_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
                     _tl.force_model = _fb_model
                     try:
                         res = translate(text_to_translate, src, tgt_lang)
