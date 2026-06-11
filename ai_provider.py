@@ -139,6 +139,8 @@ DEFAULT_CONFIG = {
     # v3.25: OpenAI 官方 Flex tier — 背景品檢呼叫(QE/APE)半價。
     # 官方定位:「較低費用換較慢回應與偶發資源不足,適合非即時任務」,
     # 背景執行緒不在使用者等待路徑上 = 零感知省 50%。
+    # v3.26: 跨 provider 自動容錯移轉(主力限流/過載/連線失敗時換備援家救句子)
+    "provider_failover": True,
     "openai_features": {
         "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
     },
@@ -1430,12 +1432,27 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         raise
 
 
-def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
-                  temperature=None, timeout=90, prompt_cache_key=None,
-                  reasoning_effort=None, verbosity=None, logprobs=False,
-                  top_logprobs=None, logit_bias=None, stop=None, **kwargs):
-    provider = get_active_provider()
+def _is_availability_error(e):
+    """v3.26: 判斷是否為「provider 暫時不可用」類錯誤(才值得容錯移轉)。
+    包含:連線/逾時、429 限流、5xx/529 過載。
+    排除:400(參數)、401/403(key 問題)— 這些換家也沒用,該浮出來修。"""
+    code = getattr(e, "status_code", None)
+    if code in (429, 500, 502, 503, 504, 529):
+        return True
+    if code in (400, 401, 403, 404, 422):
+        return False
+    m = str(e).lower()
+    return any(t in m for t in ("connection", "timed out", "timeout",
+                                "overloaded", "unavailable", "rate limit",
+                                "529", "503", "502"))
 
+
+def _dispatch_provider(provider, model, messages, max_tokens=None,
+                       max_completion_tokens=None, temperature=None, timeout=90,
+                       prompt_cache_key=None, reasoning_effort=None, verbosity=None,
+                       logprobs=False, top_logprobs=None, logit_bias=None,
+                       stop=None, **kwargs):
+    """單一 provider 呼叫分派(v3.26 自容錯重構抽出)。"""
     if provider == "anthropic":
         return _chat_complete_anthropic(
             model=model, messages=messages,
@@ -1443,14 +1460,12 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
             temperature=temperature, timeout=timeout,
             extra_stop=stop,
         )
-
     if provider == "gemini":
         return _chat_complete_gemini(
             model=model, messages=messages,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout, stop=stop,
         )
-
     return _chat_complete_openai(
         model=model, messages=messages,
         max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
@@ -1460,6 +1475,44 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         logprobs=logprobs, top_logprobs=top_logprobs,
         logit_bias=logit_bias, stop=stop, **kwargs,
     )
+
+
+def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
+                  temperature=None, timeout=90, prompt_cache_key=None,
+                  reasoning_effort=None, verbosity=None, logprobs=False,
+                  top_logprobs=None, logit_bias=None, stop=None, **kwargs):
+    provider = get_active_provider()
+    _all_kwargs = dict(
+        model=model, messages=messages, max_tokens=max_tokens,
+        max_completion_tokens=max_completion_tokens, temperature=temperature,
+        timeout=timeout, prompt_cache_key=prompt_cache_key,
+        reasoning_effort=reasoning_effort, verbosity=verbosity,
+        logprobs=logprobs, top_logprobs=top_logprobs,
+        logit_bias=logit_bias, stop=stop, **kwargs,
+    )
+    try:
+        return _dispatch_provider(provider, **_all_kwargs)
+    except Exception as e:
+        # ═══ v3.26: 跨 provider 自動容錯移轉 ═══
+        # 主力 provider 暫時掛掉(限流/過載/連線)時,自動換有 key 的備援家
+        # 救回這一句,工人端零感知。記帳不會錯:track_tokens 依 response.model
+        # 自動歸到實際出力的那一家。key/參數錯誤不移轉(換家也沒用,該浮出來)。
+        _ensure_initialized()
+        _fo_enabled = (_current_config or {}).get("provider_failover", True)
+        if not _fo_enabled or not _is_availability_error(e):
+            raise
+        for alt in ("openai", "gemini", "anthropic"):
+            if alt == provider:
+                continue
+            if not (_current_config or {}).get(alt, {}).get("api_key"):
+                continue
+            try:
+                print(f"[ai_provider] ⚠️ {provider} 不可用({str(e)[:80]}),容錯移轉 → {alt}", flush=True)
+                return _dispatch_provider(alt, **_all_kwargs)
+            except Exception as e2:
+                print(f"[ai_provider] 移轉 {alt} 也失敗: {str(e2)[:80]}", flush=True)
+                continue
+        raise
 
 
 def _chat_complete_openai(model, messages, **kwargs):

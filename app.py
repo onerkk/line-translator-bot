@@ -10974,6 +10974,72 @@ def handle_message(event):
                     except Exception:
                         pass
                     _menu_reply = "✅ 收費標準已更新並保存:\n─────\n" + globals()["service_price_text"]
+        # ═══ v3.26: 人工驗證工具(品質的最後一哩,做成可點可打的流程)═══
+        # /audit [n]      抽最近 n 句(預設 10)翻譯讓懂雙語的人檢查
+        # /mark 3 o       標第 3 句正確    /mark 3 x  標第 3 句錯誤
+        # /auditstats     看累計人工準確率(persisted,重啟不丟)
+        elif cmd.startswith("/audit") and not cmd.startswith("/auditstats"):
+            if not is_group_admin(user_id):
+                _menu_reply = "⚠️ 此指令僅限管理員"
+            else:
+                try:
+                    _n = int(cmd.replace("/audit", "").strip() or "10")
+                except Exception:
+                    _n = 10
+                _n = max(1, min(_n, 20))
+                _marked_ids = set((bot_stats.get("audit_marks") or {}).keys())
+                _sample = [e for e in reversed(translation_log)
+                           if e.get("src") and e.get("tgt")
+                           and str(e.get("id", "")) not in _marked_ids][:_n]
+                if not _sample:
+                    _menu_reply = "目前沒有可抽樣的翻譯紀錄(或全部已標註過)"
+                else:
+                    globals()["_audit_last_sample"] = _sample
+                    _lines = ["🔍 人工抽檢 %d 句(請懂雙語的人核對):" % len(_sample), "─────"]
+                    for _i, _e in enumerate(_sample, 1):
+                        _lines.append("%d. [%s→%s] %s\n   → %s" % (
+                            _i, _e.get("src_lang", "?"), _e.get("tgt_lang", "?"),
+                            _e.get("src", "")[:60], _e.get("tgt", "")[:60]))
+                    _lines.append("─────")
+                    _lines.append("標註:/mark 編號 o(對)或 x(錯)")
+                    _lines.append("例:/mark 1 o   /mark 3 x")
+                    _menu_reply = "\n".join(_lines)
+        elif cmd.startswith("/mark "):
+            if not is_group_admin(user_id):
+                _menu_reply = "⚠️ 此指令僅限管理員"
+            else:
+                _parts = cmd.split()
+                _sample = globals().get("_audit_last_sample") or []
+                if len(_parts) != 3 or _parts[2] not in ("o", "x") or not _parts[1].isdigit():
+                    _menu_reply = "格式:/mark 編號 o|x(先用 /audit 抽樣)"
+                elif not (1 <= int(_parts[1]) <= len(_sample)):
+                    _menu_reply = "⚠️ 編號超出範圍,先用 /audit 重新抽樣"
+                else:
+                    _e = _sample[int(_parts[1]) - 1]
+                    _marks = bot_stats.setdefault("audit_marks", {})
+                    _marks[str(_e.get("id", _e.get("src", "")[:40]))] = _parts[2]
+                    bot_stats["audit_ok"] = sum(1 for v in _marks.values() if v == "o")
+                    bot_stats["audit_bad"] = sum(1 for v in _marks.values() if v == "x")
+                    try:
+                        save_settings()
+                    except Exception:
+                        pass
+                    _tot = bot_stats["audit_ok"] + bot_stats["audit_bad"]
+                    _menu_reply = "✅ 已標註第 %s 句為「%s」\n累計:%d 句標註,正確率 %.0f%%" % (
+                        _parts[1], "正確" if _parts[2] == "o" else "錯誤",
+                        _tot, bot_stats["audit_ok"] * 100.0 / _tot if _tot else 0)
+        elif cmd == "/auditstats":
+            _ok = bot_stats.get("audit_ok", 0)
+            _bad = bot_stats.get("audit_bad", 0)
+            _tot = _ok + _bad
+            if _tot == 0:
+                _menu_reply = "尚無人工標註紀錄。用 /audit 抽樣開始。"
+            else:
+                _menu_reply = ("📊 人工驗證統計(累計)\n─────\n"
+                               "已標註:%d 句\n✅ 正確:%d\n❌ 錯誤:%d\n"
+                               "人工準確率:%.1f%%\n─────\n"
+                               "這是 QE 自評以外唯一的真實品質基準。"
+                               % (_tot, _ok, _bad, _ok * 100.0 / _tot))
         if _menu_reply:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
