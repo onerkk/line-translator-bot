@@ -136,6 +136,12 @@ DEFAULT_CONFIG = {
         "default_model": "gemini-3.1-flash-lite",   # 短訊息(最省)
         "upgrade_model": "gemini-3.5-flash",        # 長訊息(GA 穩定版)
     },
+    # v3.25: OpenAI 官方 Flex tier — 背景品檢呼叫(QE/APE)半價。
+    # 官方定位:「較低費用換較慢回應與偶發資源不足,適合非即時任務」,
+    # 背景執行緒不在使用者等待路徑上 = 零感知省 50%。
+    "openai_features": {
+        "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
+    },
     "gemini_features": {
         # Gemini 3 系列預設 dynamic thinking — 翻譯不需要,壓低省錢省時。
         # 相容端點參數名為 reasoning_effort;low 為安全最低檔
@@ -432,6 +438,20 @@ def update_provider_key(provider, api_key):
             else:
                 _anthropic_client = None
             return True, f"{provider} key 已更新"
+        return False, "存檔失敗"
+
+
+def update_openai_features(features):
+    """v3.25: 後台更新 OpenAI 設定(flex_background 等)。"""
+    if not isinstance(features, dict):
+        return False, "features 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        cur = _current_config.get("openai_features", {})
+        cur.update(features)
+        _current_config["openai_features"] = cur
+        if _save_config_to_disk(_current_config):
+            return True, "OpenAI features 已更新"
         return False, "存檔失敗"
 
 
@@ -1497,7 +1517,30 @@ def _chat_complete_openai(model, messages, **kwargs):
         if k == "logprobs" and v is False:
             continue
         call_kwargs[k] = v
-    resp = client.chat.completions.create(**call_kwargs)
+    # v3.25: 背景執行緒(bgpost/evlog)的呼叫走官方 Flex tier 半價。
+    # 偵測:thread 名稱(v3.13 背景池命名)+ config 開關 + 模型支援
+    # (官方 flex 支援 gpt-5 系/o 系;gpt-4.1 系不支援 → 自動略過)。
+    # 任何拒絕 → 退掉 service_tier 重試,不讓背景品檢失敗。
+    _flex_used = False
+    try:
+        _ofeat = (_current_config or {}).get("openai_features", {})
+        if _ofeat.get("flex_background", True):
+            import threading as _th
+            _tn = _th.current_thread().name or ""
+            _m = (call_kwargs.get("model") or "").lower()
+            if _tn.startswith(("bgpost", "evlog")) and _m.startswith(("gpt-5", "o3", "o4")):
+                call_kwargs["service_tier"] = "flex"
+                _flex_used = True
+    except Exception:
+        pass
+    try:
+        resp = client.chat.completions.create(**call_kwargs)
+    except Exception as _fe:
+        if _flex_used:
+            call_kwargs.pop("service_tier", None)
+            resp = client.chat.completions.create(**call_kwargs)
+        else:
+            raise
 
     # v3.2.6: response 抽 <translation> tag(對稱 Anthropic line 1567-1574)
     # 容錯:若 LLM 沒乖乖包 tag,保留原 content 不動(向後相容)

@@ -14648,6 +14648,50 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 </div>
 
+<!-- ═══ v3.25: 三 Provider 獨立分頁 ═══ -->
+<div style="display:flex;gap:6px;margin-bottom:14px">
+  <button id="aip-tab-openai" onclick="aipShowPage('openai')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #2a2a3e;background:#1f1f30;color:#888;font-size:13px;cursor:pointer;font-weight:700">🟢 OpenAI 設定</button>
+  <button id="aip-tab-claude" onclick="aipShowPage('claude')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #2a2a3e;background:#1f1f30;color:#888;font-size:13px;cursor:pointer;font-weight:700">🟣 Claude 設定</button>
+  <button id="aip-tab-gemini" onclick="aipShowPage('gemini')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #2a2a3e;background:#1f1f30;color:#888;font-size:13px;cursor:pointer;font-weight:700">🔵 Gemini 設定</button>
+</div>
+
+<!-- ── OpenAI 專屬頁 (v3.25) ── -->
+<div id="aip-page-openai" style="display:none">
+<div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
+  <div style="margin:0 0 10px;color:#10b981;font-size:13px;font-weight:600">🟢 OpenAI 翻譯模型(切換成 OpenAI 後實際跑這些)</div>
+  <div style="display:flex;gap:8px;margin-bottom:10px">
+    <div style="flex:1">
+      <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">短訊息(便宜)</label>
+      <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+        <option value="gpt-4.1-mini">🟢 4.1-mini(推薦 $0.4/$1.6)</option>
+        <option value="gpt-4.1-nano">🟢 4.1-nano(最省 $0.1/$0.4)</option>
+        <option value="gpt-5-mini">🔵 5-mini($0.25/$2)</option>
+        <option value="gpt-4.1">🟡 4.1($2/$8)</option>
+      </select>
+    </div>
+    <div style="flex:1">
+      <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
+      <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+        <option value="gpt-4.1">🟡 4.1($2/$8)</option>
+        <option value="gpt-4.1-mini">🟢 4.1-mini($0.4/$1.6)</option>
+        <option value="gpt-5">🔴 5($1.25/$10)</option>
+      </select>
+    </div>
+  </div>
+  <button onclick="aipSaveOpenAIModels()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#10b981;color:#000;font-size:13px;cursor:pointer;font-weight:600">儲存 OpenAI 設定</button>
+  <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <span style="color:#fff;font-size:12px;font-weight:600">⚡ Flex 背景半價</span>
+      <span style="color:#888;font-size:10px;display:block">背景品檢(QE/APE)走官方 Flex tier 省 50%;僅 gpt-5/o 系生效,4.1 系自動略過;主翻譯不受影響</span>
+    </div>
+    <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-oai-flex" onchange="aipSetFlexBg(this.checked)"><span class="slider"></span></label>
+  </div>
+  <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">已自動啟用:Predicted Outputs(TM 高分句加速 2-5 倍)・prompt cache key・logprobs 信心・最低 reasoning。共用「設定」tab 字數門檻。</div>
+</div>
+</div>
+
+<!-- ── Gemini 專屬頁 ── -->
+<div id="aip-page-gemini" style="display:none">
 <!-- v3.22: Gemini 翻譯模型完整面板(對標 Anthropic 區塊) -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
   <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🔵 Gemini 翻譯模型(切換成 Gemini 後實際跑這些)</div>
@@ -14690,6 +14734,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 </div>
 
+</div>
+
+<!-- ── Claude 專屬頁 ── -->
+<div id="aip-page-claude" style="display:none">
 <!-- Anthropic 模型選擇 v3.9.33 — 短/長雙模型字數切換 -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;margin-bottom:14px;border:1px solid #2a2a3e">
   <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">🤖 Anthropic 翻譯模型(切換成 Anthropic 後實際跑這些)</div>
@@ -14921,8 +14969,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </table>
   <div style="margin-top:10px;padding:8px;background:#2a1f0f;border-radius:6px;color:#d4a437;font-size:11px;line-height:1.5">⚠️ <strong>切到 Anthropic 時</strong>:語音訊息回「不支援」,信心度和修補加速失效。其他全部更強。</div>
 </div>
+</div>
 
-<!-- 成本對比 -->
+<!-- 成本對比(三家共用) -->
 <div style="background:#0f0f1e;border-radius:8px;padding:14px;border:1px solid #2a2a3e">
   <div style="margin:0 0 10px;color:#aaa;font-size:13px;font-weight:600">💸 成本對比(每 1M tokens)</div>
   <table style="width:100%;font-size:11px;color:#ddd">
@@ -16187,6 +16236,20 @@ async function aipLoadStatus(){
     document.getElementById('aip-anthropic-preview').textContent = (cfg.anthropic && cfg.anthropic.api_key_preview) || '(未設定)';
     const gemPrev = document.getElementById('aip-gemini-preview');
     if(gemPrev) gemPrev.textContent = (cfg.gemini && cfg.gemini.api_key_preview) || '(未設定)';
+    // v3.25: OpenAI 頁填值 + 首次載入自動開「目前主力」的分頁
+    try{
+      if(d.openai_models){
+        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-4.1-mini';
+        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-4.1';
+      }
+      var _fx=document.getElementById('aip-oai-flex');
+      if(_fx) _fx.checked = !(cfg.openai_features && cfg.openai_features.flex_background === false);
+      if(!_aipPageInit){
+        _aipPageInit = true;
+        var _ap = d.active_provider || 'openai';
+        aipShowPage(_ap === 'anthropic' ? 'claude' : _ap);
+      }
+    }catch(e){}
     // v3.22: 載入 Gemini 模型/effort 目前值
     try{
       const gd = document.getElementById('aip-gemini-default');
@@ -16412,6 +16475,37 @@ async function aipUpdateKey(p){
     if(data.ok){ alert('✅ ' + (data.message || 'Key 已更新')); input.value=''; aipLoadStatus(); }
     else alert('❌ ' + (data.message || '更新失敗'));
   }catch(e){ alert('錯誤：' + e); }
+}
+var _aipPageInit = false;
+function aipShowPage(p){
+  var pages = ['openai','claude','gemini'];
+  for(var i=0;i<pages.length;i++){
+    var x = pages[i];
+    var el = document.getElementById('aip-page-'+x);
+    if(el) el.style.display = (x===p ? 'block' : 'none');
+    var b = document.getElementById('aip-tab-'+x);
+    if(b){
+      b.style.background = (x===p ? '#7c6fef' : '#1f1f30');
+      b.style.color = (x===p ? '#fff' : '#888');
+      b.style.borderColor = (x===p ? '#7c6fef' : '#2a2a3e');
+    }
+  }
+}
+async function aipSaveOpenAIModels(){
+  var md = document.getElementById('aip-oai-default').value;
+  var mu = document.getElementById('aip-oai-upgrade').value;
+  try{
+    const r = await fetch('/api/admin/ai-provider/openai-models', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({model_default: md, model_upgrade: mu})});
+    const d = await r.json();
+    alert(d.ok ? '✅ OpenAI 模型已儲存' : ('❌ ' + (d.error||'失敗')));
+  }catch(e){ alert('❌ ' + e); }
+}
+async function aipSetFlexBg(on){
+  try{
+    const r = await fetch('/api/admin/ai-provider/openai-features', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({flex_background: !!on})});
+    const d = await r.json();
+    if(!d.ok) alert('❌ ' + (d.error||'失敗'));
+  }catch(e){ alert('❌ ' + e); }
 }
 async function setupRichMenu(){
   var el = document.getElementById('richmenu-result');
@@ -19914,7 +20008,40 @@ def api_admin_ai_provider_get():
         "ok": True,
         "config": ai_provider.get_current_config_safe(),
         "active_provider": ai_provider.get_active_provider(),
+        # v3.25: OpenAI 分頁填值用
+        "openai_models": {"default": model_default, "upgrade": model_upgrade},
     })
+
+
+@app.route("/api/admin/ai-provider/openai-models", methods=["POST"])
+def api_admin_openai_models():
+    """v3.25: OpenAI 分頁 — 短/長雙模型設定(持久化)"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    global model_default, model_upgrade
+    data = request.get_json(silent=True) or {}
+    _md = str(data.get("model_default", "")).strip()
+    _mu = str(data.get("model_upgrade", "")).strip()
+    if _md:
+        model_default = _md
+    if _mu:
+        model_upgrade = _mu
+    try:
+        save_settings(force=True)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "model_default": model_default, "model_upgrade": model_upgrade})
+
+
+@app.route("/api/admin/ai-provider/openai-features", methods=["POST"])
+def api_admin_openai_features():
+    """v3.25: OpenAI Flex 背景半價開關"""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    ok, msg = ai_provider.update_openai_features(
+        {"flex_background": bool(data.get("flex_background", True))})
+    return jsonify({"ok": ok, "message": msg})
 
 
 @app.route("/api/admin/ai-provider/switch", methods=["POST"])
