@@ -3,22 +3,6 @@
   "group_tts_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": true
   },
-  "group_flex_v2": {
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    }
-  },
+  "group_flex_v2": {},
   "group_conv_settings": {}
 }
