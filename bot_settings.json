@@ -105,23 +105,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 146,
+    "text_translations": 147,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 9,
-    "tokens_prompt": 2423295,
-    "tokens_completion": 9130,
+    "tokens_prompt": 2441296,
+    "tokens_completion": 9155,
     "oai_input": 53236,
     "oai_cached": 9088,
     "oai_output": 74,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.011412199999999999,
-    "ant_input": 76947,
+    "ant_input": 77956,
     "ant_cache_read": 229894,
-    "ant_cache_write": 369791,
-    "ant_output": 3883,
-    "ant_cost_usd": 0.7281102500000001,
+    "ant_cache_write": 386783,
+    "ant_output": 3908,
+    "ant_cost_usd": 0.7504842500000001,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -194,11 +194,11 @@
       "model": "claude-haiku-4-5-20251001"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "tokens_prompt": 71771,
-      "tokens_completion": 235,
-      "cost_usd": 0.038033450000000024,
-      "provider": "openai",
-      "model": "gpt-5-mini"
+      "tokens_prompt": 89772,
+      "tokens_completion": 260,
+      "cost_usd": 0.06040745000000003,
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001"
     }
   },
   "user_languages": {},
@@ -503,7 +503,7 @@
     }
   },
   "group_tts_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true
+    "C6c708f629dd38d6864669ecacf7712f4": false
   },
   "group_conv_settings": {},
   "group_target_langs": {}
