@@ -11032,6 +11032,28 @@ def handle_message(event):
                     _menu_reply = "✅ 已標註第 %s 句為「%s」\n累計:%d 句標註,正確率 %.0f%%" % (
                         _parts[1], "正確" if _parts[2] == "o" else "錯誤",
                         _tot, bot_stats["audit_ok"] * 100.0 / _tot if _tot else 0)
+        elif cmd == "/ttscheck":
+            # v3.29: TTS 三關卡自我診斷 — 不用看 Render log,機器人自己報告
+            if not is_group_admin(user_id):
+                _menu_reply = "⚠️ 此指令僅限管理員"
+            else:
+                _lines = ["🔊 TTS 診斷報告", "─────"]
+                _pu = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+                _lines.append(("✅ PUBLIC_URL:" + _pu) if _pu
+                              else "❌ PUBLIC_URL 未設定 → Render Environment 加 Key=PUBLIC_URL Value=你的 onrender.com 網址")
+                _ff = _resolve_ffmpeg()
+                _lines.append(("✅ ffmpeg:" + str(_ff)) if _ff
+                              else "❌ ffmpeg 不存在 → requirements.txt 加一行 imageio-ffmpeg 後重新部署")
+                _lines.append("✅ OpenAI key:已設定" if oai else "❌ OpenAI key 未設定(TTS 需要)")
+                _on = [g[:8] for g, v in group_tts_settings.items() if v]
+                _lines.append(("✅ 已開 TTS 的群組:" + ", ".join(_on)) if _on
+                              else "❌ 沒有任何群組開啟 TTS → 後台 /admin → 群組 → TTS 開關")
+                if _pu and _ff and oai:
+                    _u, _d = generate_tts("測試 tes", "id")
+                    _lines.append("─────")
+                    _lines.append(("✅ 實測合成成功!" + str(_u)) if _u
+                                  else "❌ 實測合成失敗 — 看 Render log 的 OpenAI TTS/ffmpeg 錯誤行")
+                _menu_reply = "\n".join(_lines)
         elif cmd == "/auditstats":
             _ok = bot_stats.get("audit_ok", 0)
             _bad = bot_stats.get("audit_bad", 0)
@@ -12724,12 +12746,25 @@ if PostbackEvent:
                         reply_token=event.reply_token,
                         messages=[TextMessage(text="🔊 重唸中... / Memutar ulang...")],
                     ))
-                # push TTS (背景)
-                _threading.Thread(
-                    target=push_tts_message,
-                    args=(_gid, tts_text, tts_lang),
-                    daemon=True,
-                ).start()
+                # push TTS (背景)— v3.29: 失敗時推具體原因,不再無聲消失
+                def _tts_replay_bg(gid=_gid, t=tts_text, lg=tts_lang):
+                    if push_tts_message(gid, t, lg):
+                        return
+                    _reason = "未知,請看 Render log"
+                    if not (os.environ.get("PUBLIC_URL") or "").strip():
+                        _reason = "PUBLIC_URL 環境變數未設定"
+                    elif not _resolve_ffmpeg():
+                        _reason = "ffmpeg 缺(requirements.txt 加 imageio-ffmpeg)"
+                    elif not oai:
+                        _reason = "OpenAI key 未設定"
+                    try:
+                        with ApiClient(configuration) as _ac:
+                            MessagingApi(_ac).push_message(PushMessageRequest(
+                                to=gid, messages=[TextMessage(
+                                    text="⚠️ 語音合成失敗:" + _reason)]))
+                    except Exception:
+                        pass
+                _threading.Thread(target=_tts_replay_bg, daemon=True).start()
             except Exception as e:
                 logger.warning("[postback tts_replay] failed: %s", e)
             return
