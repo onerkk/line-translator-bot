@@ -14295,7 +14295,11 @@ document.getElementById('loginBtn').addEventListener('click',function(){
       document.getElementById('loginPage').style.display='none';
       document.getElementById('mainPage').style.display='block';
       window._ADMIN_KEY=k;
-      try{localStorage.setItem('bot_admin_key',k)}catch(e){}
+      try{localStorage.setItem('bot_admin_key',k)}catch(e){
+    document.getElementById('aip-active-display').textContent = '⚠️ 連線失敗,3 秒後重試…';
+    if(!_aipRetried){ _aipRetried = true; setTimeout(aipLoadStatus, 3000); }
+    console.warn('AIP load error', e);
+  }
       if(typeof KEY!=='undefined') KEY=k;
       applyTabFilter(null);
       if(typeof loadAll==='function') loadAll();
@@ -16353,11 +16357,18 @@ async function tbxImport(){
 
 // ═════════════════════════════════════════════════════════════════
 // AI Provider 切換邏輯 (v1.0 2026-05-15)
+var _aipRetried = false;
 async function aipLoadStatus(){
   try{
     const r = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}});
     const data = await r.json();
-    if(!data.ok){ console.warn('AIP load fail', data); return; }
+    if(!data.ok){
+      // v3.32: 不再永遠卡「載入中…」— 顯示原因並自動重試一次(冷啟動常見)
+      document.getElementById('aip-active-display').textContent = '⚠️ 載入失敗,3 秒後重試…';
+      if(!_aipRetried){ _aipRetried = true; setTimeout(aipLoadStatus, 3000); }
+      console.warn('AIP load fail', data); return;
+    }
+    _aipRetried = false;
     const provider = data.active_provider || 'openai';
     const cfg = data.config || {};
     const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)', gemini:'🔵 Google (Gemini)'};
@@ -19727,6 +19738,18 @@ def _do_save_impl():
             "model_threshold": model_threshold,
             # v3.9.33: Anthropic 路徑獨立字數切換
             "service_price_text": service_price_text,
+            # v3.32: AI provider 設定持久化 — 原本存 Render 磁碟,重新部署即清空,
+            # 主力/模型/功能開關全跳回預設。改走 bot_settings(GitHub commit)管線。
+            # ⚠️ API keys 絕不放這裡(會進 GitHub repo),keys 走環境變數。
+            "ai_active_provider": (ai_provider.get_active_provider() if ai_provider else "openai"),
+            "ai_openai_features": (ai_provider._current_config or {}).get("openai_features", {}) if ai_provider else {},
+            "ai_gemini_features": (ai_provider._current_config or {}).get("gemini_features", {}) if ai_provider else {},
+            "ai_gemini_models": {
+                "default": ((ai_provider._current_config or {}).get("gemini", {}) or {}).get("default_model", ""),
+                "upgrade": ((ai_provider._current_config or {}).get("gemini", {}) or {}).get("upgrade_model", ""),
+            } if ai_provider else {},
+            "gemini_model_default": gemini_model_default,
+            "gemini_model_upgrade": gemini_model_upgrade,
             "claude_model_default": claude_model_default,
             "claude_model_upgrade": claude_model_upgrade,
             "claude_auto_switch_enabled": claude_auto_switch_enabled,
@@ -19796,6 +19819,7 @@ def load_settings():
     global preserve_paragraphs_enabled, paragraph_split_translate, paragraph_split_threshold
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global gemini_model_default, gemini_model_upgrade
     global service_price_text
     global openai_24h_cache_enabled
     global VISION_MODEL
@@ -20044,6 +20068,29 @@ def load_settings():
         # v3.9.33: Anthropic 路徑獨立字數切換
         if "service_price_text" in data:
             service_price_text = str(data["service_price_text"])
+        # v3.32: 還原 AI provider 設定(重新部署後不再跳回預設)
+        try:
+            if "gemini_model_default" in data:
+                gemini_model_default = str(data["gemini_model_default"])
+            if "gemini_model_upgrade" in data:
+                gemini_model_upgrade = str(data["gemini_model_upgrade"])
+            if data.get("ai_active_provider") in ("openai", "anthropic", "gemini"):
+                ai_provider.set_active_provider(data["ai_active_provider"])
+            if isinstance(data.get("ai_openai_features"), dict) and data["ai_openai_features"]:
+                ai_provider.update_openai_features(data["ai_openai_features"])
+            if isinstance(data.get("ai_gemini_features"), dict) and data["ai_gemini_features"]:
+                ai_provider.update_gemini_features(data["ai_gemini_features"])
+            _gm = data.get("ai_gemini_models") or {}
+            if _gm.get("default") or _gm.get("upgrade"):
+                with ai_provider._config_lock:
+                    _gc = ai_provider._current_config.setdefault("gemini", {})
+                    if _gm.get("default"):
+                        _gc["default_model"] = _gm["default"]
+                    if _gm.get("upgrade"):
+                        _gc["upgrade_model"] = _gm["upgrade"]
+                    ai_provider._save_config_to_disk(ai_provider._current_config)
+        except Exception as _aie:
+            logger.warning("[Load] AI provider 設定還原失敗: %s", _aie)
         if "claude_model_default" in data:
             claude_model_default = str(data["claude_model_default"])
         if "claude_model_upgrade" in data:
@@ -21996,6 +22043,7 @@ def api_admin_features():
     global camera_roll_qr_enabled, location_qr_enabled
     global model_default, model_upgrade, model_threshold
     global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global gemini_model_default, gemini_model_upgrade
     global service_price_text
     global openai_24h_cache_enabled
     global VISION_MODEL
