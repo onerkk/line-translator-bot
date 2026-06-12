@@ -141,6 +141,8 @@ DEFAULT_CONFIG = {
     # 背景執行緒不在使用者等待路徑上 = 零感知省 50%。
     # v3.26: 跨 provider 自動容錯移轉(主力限流/過載/連線失敗時換備援家救句子)
     "provider_failover": True,
+    # v3.28: 額度耗盡 → 永久切換主力 + LINE 通知管理員
+    "auto_switch_on_exhaust": True,
     "openai_features": {
         "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
     },
@@ -1432,6 +1434,82 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         raise
 
 
+# ═══ v3.28: 額度耗盡自動切換 + LINE 通知 ═══
+_NOTIFY_CB = None            # app.py 註冊:fn(msg_text) → 推播給管理員
+_quota_fail_log = {}         # {provider: [timestamps]} 連續 429 計數
+_last_auto_switch_ts = 0.0   # 切換冷卻,防迴圈狂切
+
+
+def register_notify_callback(fn):
+    """app.py 啟動時註冊推播函式,額度耗盡自動切換時通知管理員。"""
+    global _NOTIFY_CB
+    _NOTIFY_CB = fn
+
+
+def _notify_admin(msg):
+    try:
+        if _NOTIFY_CB:
+            _NOTIFY_CB(msg)
+    except Exception as _ne:
+        print(f"[ai_provider] notify failed: {_ne}", flush=True)
+
+
+def _is_quota_exhausted_error(e):
+    """判斷是否「額度/儲值耗盡」類錯誤(該永久切換主力,不只救單句):
+      OpenAI:    insufficient_quota / exceeded your current quota
+      Anthropic: credit balance is too low
+      Gemini:    RESOURCE_EXHAUSTED(免費層每日額度用完也算 — 切走,明天歸零可手動切回)
+    """
+    m = str(e).lower()
+    return any(t in m for t in (
+        "insufficient_quota", "exceeded your current quota",
+        "credit balance is too low", "billing", "quota exceeded",
+        "resource_exhausted", "resource exhausted",
+    ))
+
+
+def _bump_quota_counter(provider):
+    """連續 429 軟判定:同一家 10 分鐘內第 3 次限流 → 視同額度問題。
+    (Gemini 免費層分不出「每分鐘限流」和「每日用完」,用頻率判)"""
+    import time as _t
+    now = _t.time()
+    lst = [t for t in _quota_fail_log.get(provider, []) if now - t < 600]
+    lst.append(now)
+    _quota_fail_log[provider] = lst
+    return len(lst) >= 3
+
+
+def _auto_switch_on_exhaust(dead_provider, err):
+    """額度耗盡 → 永久切換主力到下一個有 key 的 provider + 推播通知。
+    切換順序取 CP 值:gemini(免費)→ openai → anthropic。60 秒冷卻防狂切。"""
+    global _last_auto_switch_ts
+    import time as _t
+    if not (_current_config or {}).get("auto_switch_on_exhaust", True):
+        return None
+    if _t.time() - _last_auto_switch_ts < 60:
+        return None
+    for alt in ("gemini", "openai", "anthropic"):
+        if alt == dead_provider:
+            continue
+        if not (_current_config or {}).get(alt, {}).get("api_key"):
+            continue
+        ok, _ = set_active_provider(alt)
+        if ok:
+            _last_auto_switch_ts = _t.time()
+            _label = {"openai": "🟢 OpenAI", "anthropic": "🟣 Claude", "gemini": "🔵 Gemini"}
+            _notify_admin(
+                "⛽ AI 額度警報\n─────\n"
+                + _label.get(dead_provider, dead_provider) + " 額度耗盡/限流\n"
+                + "錯誤:" + str(err)[:80] + "\n─────\n"
+                + "✅ 已自動切換主力 → " + _label.get(alt, alt) + "\n"
+                + "翻譯服務不中斷。儲值後可至後台 /admin 切回。")
+            print(f"[ai_provider] ⛽ {dead_provider} 額度耗盡 → 主力自動切換 {alt}", flush=True)
+            return alt
+    _notify_admin("🚨 AI 額度警報:" + dead_provider + " 額度耗盡,且無其他可用 provider!"
+                  "\n請立即儲值或到後台補 key,翻譯服務目前中斷。")
+    return None
+
+
 def _is_availability_error(e):
     """v3.26: 判斷是否為「provider 暫時不可用」類錯誤(才值得容錯移轉)。
     包含:連線/逾時、429 限流、5xx/529 過載。
@@ -1498,6 +1576,15 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         # 救回這一句,工人端零感知。記帳不會錯:track_tokens 依 response.model
         # 自動歸到實際出力的那一家。key/參數錯誤不移轉(換家也沒用,該浮出來)。
         _ensure_initialized()
+        # v3.28: 額度耗盡 → 永久切換主力 + 通知(在單句容錯之前判斷)
+        _is_429 = getattr(e, "status_code", None) == 429 or "429" in str(e)
+        if _is_quota_exhausted_error(e) or (_is_429 and _bump_quota_counter(provider)):
+            _switched = _auto_switch_on_exhaust(provider, e)
+            if _switched:
+                try:
+                    return _dispatch_provider(_switched, **_all_kwargs)
+                except Exception:
+                    pass  # 新主力也失敗 → 繼續走下面的逐家容錯
         _fo_enabled = (_current_config or {}).get("provider_failover", True)
         if not _fo_enabled or not _is_availability_error(e):
             raise

@@ -318,6 +318,10 @@ from concurrent.futures import ThreadPoolExecutor as _TPE_v313
 _EVENT_LOG_EXECUTOR = _TPE_v313(max_workers=1, thread_name_prefix="evlog")   # 單線程保序
 _BG_POST_EXECUTOR   = _TPE_v313(max_workers=2, thread_name_prefix="bgpost")  # QE/APE/TM 入庫
 _MULTI_TGT_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="mtgt")    # 多語廣播並行
+# v3.27 全檢修正:向量查詢「專用」池。原本與背景 QE 共用 bgpost(2 workers)—
+# 高峰期 QE(每次 1-3 秒)佔滿兩個 worker,關鍵路徑的 vec future 排隊到
+# 6 秒 timeout,主路徑反被卡住 — 比不並行更糟。隔離後互不影響。
+_VEC_LOOKUP_EXECUTOR = _TPE_v313(max_workers=3, thread_name_prefix="veclk")
 
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
@@ -7922,7 +7926,7 @@ def _translate_core(text, src, tgt):
     # (LexTM bypass 命中時白算一次 embedding ≈ $0.00002,可忽略;延遲省 0.3-0.8s)
     _vec_future = None
     try:
-        _vec_future = _BG_POST_EXECUTOR.submit(
+        _vec_future = _VEC_LOOKUP_EXECUTOR.submit(
             vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm)
     except Exception:
         _vec_future = None
@@ -11021,7 +11025,7 @@ def handle_message(event):
                     bot_stats["audit_ok"] = sum(1 for v in _marks.values() if v == "o")
                     bot_stats["audit_bad"] = sum(1 for v in _marks.values() if v == "x")
                     try:
-                        save_settings()
+                        save_settings(force=True)
                     except Exception:
                         pass
                     _tot = bot_stats["audit_ok"] + bot_stats["audit_bad"]
@@ -24790,6 +24794,36 @@ def is_group_admin(user_id):
     except Exception:
         pass
     return False
+
+
+# ═══ v3.28: AI 額度耗盡通知 — 推播給所有管理員 ═══
+def _push_text_to_admins(msg):
+    """ai_provider 額度耗盡自動切換時的通知回呼。
+    推播對象:BOOTSTRAP_ADMIN_USER_IDS 環境變數 + 後台設定的 admin_users。"""
+    targets = set(_BOOTSTRAP_ADMIN_IDS)
+    try:
+        for _uid, _e in admin_users.items():
+            if isinstance(_e, dict) and _e.get("is_admin"):
+                targets.add(_uid)
+    except Exception:
+        pass
+    if not targets:
+        logger.warning("[ExhaustNotify] 無管理員可通知(設 BOOTSTRAP_ADMIN_USER_IDS 環境變數):%s", msg[:80])
+        return
+    for _uid in targets:
+        try:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).push_message(PushMessageRequest(
+                    to=_uid, messages=[TextMessage(text=msg)]))
+        except Exception as _pe:
+            logger.warning("[ExhaustNotify] 推播 %s 失敗: %s", _uid[:12], _pe)
+
+
+try:
+    ai_provider.register_notify_callback(_push_text_to_admins)
+    logger.info("[ExhaustNotify] 額度耗盡通知回呼已註冊")
+except Exception as _e:
+    logger.warning("register_notify_callback 失敗: %s", _e)
 
 
 # 需要管理員權限的命令清單(根據截圖討論結果)
