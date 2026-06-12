@@ -278,6 +278,19 @@
   "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
   "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
+  "ai_active_provider": "openai",
+  "ai_openai_features": {
+    "flex_background": true
+  },
+  "ai_gemini_features": {
+    "reasoning_effort": "low"
+  },
+  "ai_gemini_models": {
+    "default": "gemini-3.1-flash-lite",
+    "upgrade": "gemini-3.5-flash"
+  },
+  "gemini_model_default": "gemini-3.1-flash-lite",
+  "gemini_model_upgrade": "gemini-3.5-flash",
   "claude_model_default": "claude-haiku-4-5-20251001",
   "claude_model_upgrade": "claude-haiku-4-5-20251001",
   "claude_auto_switch_enabled": true,
@@ -487,19 +500,7 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
-      "span": true
+      "carousel": true
     }
   },
   "group_tts_settings": {},
