@@ -25967,11 +25967,40 @@ def _tts_cleanup():
         logger.warning("TTS disk cleanup failed: %s", e)
 
 
+_FFMPEG_BIN = None
+
+
+def _resolve_ffmpeg():
+    """v3.29: 找 ffmpeg 執行檔。
+    Render Free 的 Python 環境「沒有」系統 ffmpeg(也不能 apt 安裝)—
+    這是 TTS 一直無聲的根因之一。根治:requirements.txt 加 imageio-ffmpeg
+    (pip 套件,內含靜態 ffmpeg 二進位),這裡自動 fallback 找它。"""
+    global _FFMPEG_BIN
+    if _FFMPEG_BIN:
+        return _FFMPEG_BIN
+    import shutil
+    p = shutil.which("ffmpeg")
+    if p:
+        _FFMPEG_BIN = p
+        return p
+    try:
+        import imageio_ffmpeg
+        _FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+        logger.info("[TTS] 使用 imageio-ffmpeg 靜態二進位: %s", _FFMPEG_BIN)
+        return _FFMPEG_BIN
+    except Exception:
+        return None
+
+
 def _ffmpeg_mp3_to_m4a(mp3_bytes):
     """Pipe mp3 → m4a via ffmpeg. Returns m4a_bytes or None."""
+    _bin = _resolve_ffmpeg()
+    if not _bin:
+        logger.error("ffmpeg NOT FOUND — requirements.txt 加 imageio-ffmpeg 後重新部署即可啟用 TTS")
+        return None
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
+            [_bin, "-y", "-loglevel", "error",
              "-i", "pipe:0",
              "-c:a", "aac", "-b:a", "64k",
              "-movflags", "+faststart",
