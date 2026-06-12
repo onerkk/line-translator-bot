@@ -7239,8 +7239,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             })
         except Exception:
             pass
+        _llm_t0 = time.time()
         try:
             r = ai.chat.completions.create(**_kwargs)
+            _tl.llm_api_ms = (time.time() - _llm_t0) * 1000  # v3.31: API 純耗時
         except Exception as _te:
             # v3.19: prediction 參數被拒(模型/帳號不支援)→ 拿掉重試一次,不讓整句失敗
             if _prediction_used:
@@ -7249,6 +7251,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 _prediction_used = False
                 try:
                     r = ai.chat.completions.create(**_kwargs)
+                    _tl.llm_api_ms = (time.time() - _llm_t0) * 1000
                 except Exception as _te2:
                     try:
                         _event_log_write("translate_call_failed", {
@@ -7913,6 +7916,10 @@ def _translate_core(text, src, tgt):
     # v3.18 速度根治:per-stage 計時。每句記一行 [Perf],之後再慢可直接從
     # Render log 看出卡在哪一段,不再用猜的。
     _perf = {"t0": time.time()}
+    try:
+        _tl.llm_api_ms = 0.0  # v3.31: 本句 API 純耗時歸零
+    except Exception:
+        pass
     # v3.9.60: 本次訊息是否含保護名(由 translate() wrapper 設定)。
     # 有保護名時強制走 LLM:NMT 會音譯人名、語義/模糊 bypass 會誤配到別句舊譯文。
     _has_protected_names = bool(getattr(_tl, 'protected_name_map', None))
@@ -8239,11 +8246,12 @@ def _translate_core(text, src, tgt):
     try:
         _t_end = time.time()
         logger.info(
-            "[Perf] total=%.0fms | prep+lex=%.0fms vec_wait=%.0fms llm+post=%.0fms | src=%s tgt=%s len=%d",
+            "[Perf] total=%.0fms | prep+lex=%.0fms vec_wait=%.0fms api=%.0fms local_post=%.0fms | src=%s tgt=%s len=%d",
             (_t_end - _perf["t0"]) * 1000,
             (_perf.get("tm", _perf["t0"]) - _perf["t0"]) * 1000,
             (_perf.get("vec", _perf["t0"]) - _perf.get("tm", _perf["t0"])) * 1000,
-            (_t_end - _perf.get("pre_llm", _t_end)) * 1000,
+            float(getattr(_tl, "llm_api_ms", 0) or 0),
+            max(0.0, (_t_end - _perf.get("pre_llm", _t_end)) * 1000 - float(getattr(_tl, "llm_api_ms", 0) or 0)),
             src, tgt, len(text or ""),
         )
     except Exception:
