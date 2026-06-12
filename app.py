@@ -12748,15 +12748,9 @@ if PostbackEvent:
                     ))
                 # push TTS (背景)— v3.29: 失敗時推具體原因,不再無聲消失
                 def _tts_replay_bg(gid=_gid, t=tts_text, lg=tts_lang):
-                    if push_tts_message(gid, t, lg):
+                    _ok, _reason = push_tts_message(gid, t, lg, want_reason=True)
+                    if _ok:
                         return
-                    _reason = "未知,請看 Render log"
-                    if not (os.environ.get("PUBLIC_URL") or "").strip():
-                        _reason = "PUBLIC_URL 環境變數未設定"
-                    elif not _resolve_ffmpeg():
-                        _reason = "ffmpeg 缺(requirements.txt 加 imageio-ffmpeg)"
-                    elif not oai:
-                        _reason = "OpenAI key 未設定"
                     try:
                         with ApiClient(configuration) as _ac:
                             MessagingApi(_ac).push_message(PushMessageRequest(
@@ -26028,31 +26022,42 @@ def _resolve_ffmpeg():
 
 
 def _ffmpeg_mp3_to_m4a(mp3_bytes):
-    """Pipe mp3 → m4a via ffmpeg. Returns m4a_bytes or None."""
+    """Pipe mp3 → m4a via ffmpeg. Returns m4a_bytes or None.
+    v3.29c 根治:mp4 的 +faststart 需要「可 seek」的輸出(要回頭改寫檔頭),
+    寫到 pipe 必炸 `muxer does not support non seekable output`(Render log 實證)。
+    改為輸出到暫存檔再讀回 — faststart 保留(LINE 播放需要 moov 在前)。"""
     _bin = _resolve_ffmpeg()
     if not _bin:
         logger.error("ffmpeg NOT FOUND — requirements.txt 加 imageio-ffmpeg 後重新部署即可啟用 TTS")
         return None
+    import tempfile
+    _tmp = tempfile.mktemp(suffix=".m4a", dir="/tmp")
     try:
         proc = subprocess.run(
             [_bin, "-y", "-loglevel", "error",
              "-i", "pipe:0",
              "-c:a", "aac", "-b:a", "64k",
              "-movflags", "+faststart",
-             "-f", "mp4", "pipe:1"],
+             _tmp],
             input=mp3_bytes, capture_output=True, timeout=20, check=False,
         )
         if proc.returncode != 0:
             logger.error("ffmpeg failed rc=%s err=%s", proc.returncode,
                          (proc.stderr or b"")[:300].decode("utf-8", "ignore"))
             return None
-        return proc.stdout
+        with open(_tmp, "rb") as f:
+            return f.read()
     except FileNotFoundError:
         logger.error("ffmpeg NOT FOUND on PATH — install it to enable TTS")
         return None
     except Exception as e:
         logger.error("ffmpeg pipe error: %s", e)
         return None
+    finally:
+        try:
+            os.remove(_tmp)
+        except Exception:
+            pass
 
 
 def generate_tts(text, lang):
@@ -26197,31 +26202,43 @@ def _tts_check_rate_limit(group_id):
         return True, "ok"
 
 
-def push_tts_message(group_id, text, lang):
-    """Generate TTS and push as AudioMessage. Best-effort, never raises."""
+def push_tts_message(group_id, text, lang, want_reason=False):
+    """Generate TTS and push as AudioMessage. Best-effort, never raises.
+    v3.29: want_reason=True 時回傳 (ok, reason) 供失敗回報。"""
+    def _ret(ok, reason):
+        return (ok, reason) if want_reason else ok
     if not AudioMessage:
-        return False
+        return _ret(False, "SDK 缺 AudioMessage")
     if not group_id or not text:
-        return False
+        return _ret(False, "參數缺")
     # v3.10: rate limit check
     ok, reason = _tts_check_rate_limit(group_id)
     if not ok:
         logger.info("TTS rate limited for group %s: %s", group_id, reason)
-        return False
+        _zh = {"rate_per_minute": "本群每分鐘 %d 次上限(連按太快,等 1 分鐘)" % TTS_RATE_PER_MIN,
+               "rate_per_day": "本群每日 %d 次上限(明天重置)" % TTS_RATE_PER_DAY}
+        return _ret(False, _zh.get(reason, reason))
     try:
         url, dur = generate_tts(text, lang)
         if not url:
-            return False
+            # generate_tts 內部三關:PUBLIC_URL / OpenAI 合成 / ffmpeg 轉檔
+            if not (os.environ.get("PUBLIC_URL") or "").strip():
+                return _ret(False, "PUBLIC_URL 環境變數未設定")
+            if not _resolve_ffmpeg():
+                return _ret(False, "ffmpeg 缺(requirements.txt 加 imageio-ffmpeg)")
+            if not oai:
+                return _ret(False, "OpenAI key 未設定")
+            return _ret(False, "合成/轉檔失敗(看 Render log 的 OpenAI TTS 或 ffmpeg 錯誤行)")
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             api.push_message(PushMessageRequest(
                 to=group_id,
                 messages=[AudioMessage(originalContentUrl=url, duration=dur)],
             ))
-        return True
+        return _ret(True, "ok")
     except Exception as e:
         logger.warning("push_tts_message failed: %s", e)
-        return False
+        return _ret(False, "推送失敗: " + str(e)[:80])
 
 
 # ----------------------------------------------------------------------------
