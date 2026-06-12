@@ -11291,7 +11291,9 @@ def handle_message(event):
     # Cache this message for future quote references
     msg_id = getattr(event.message, 'id', None)
     if msg_id:
-        message_cache[msg_id] = {"text": text, "ts": time.time()}
+        message_cache[msg_id] = {"text": text, "ts": time.time(), "tr": {}}
+        # v3.30: "tr" = {目標語: 譯文}。翻譯完成後回填(見 _cache_translation),
+        # 之後別人「回覆引用」這句時,引用框能顯示讀者語言的譯文而非原文。
         # Trim cache
         # v3.10+ 修補:加 lock 避免並發時 sorted+pop 期間被其他 webhook thread 加新項目
         # 造成 RuntimeError: dictionary changed size during iteration
@@ -11311,10 +11313,32 @@ def handle_message(event):
                             message_cache.pop(k, None)
 
     # Check if this is a reply to another message (quoted message)
+    # v3.30: 引用框語言修正 — 原本永遠顯示「被引用句的原文」,
+    # 印尼同事回覆中文句時,中文讀者在引用框看到的卻是…原中文沒錯,
+    # 但中文同事回覆印尼句時引用框是印尼文、反之亦然 = 引用框對「看的人」常是外文。
+    # 修正:出卡時依該卡的目標語言,優先取被引用句的「該語言譯文」(回填快取),
+    # 沒有譯文才退回原文。
     quoted_text = None
+    _quoted_entry = None
     quoted_id = getattr(event.message, 'quoted_message_id', None)
     if quoted_id and quoted_id in message_cache:
-        quoted_text = message_cache[quoted_id].get("text", "")
+        _quoted_entry = message_cache[quoted_id]
+        quoted_text = _quoted_entry.get("text", "")
+
+    def _quoted_for(tgt_lang):
+        """取引用句在指定語言的最佳顯示版本:譯文優先,退回原文。"""
+        if not _quoted_entry:
+            return None
+        return (_quoted_entry.get("tr") or {}).get(tgt_lang) or _quoted_entry.get("text", "")
+
+    def _cache_translation(tgt_lang, translated):
+        """翻譯完成回填快取,供未來引用使用。"""
+        try:
+            _mid = getattr(event.message, 'id', None)
+            if _mid and _mid in message_cache and translated:
+                message_cache[_mid].setdefault("tr", {})[tgt_lang] = translated
+        except Exception:
+            pass
 
     # Strip @mentions for language detection only
     text_for_detect = strip_mentions_for_detect(text, line_mentions).strip()
@@ -11477,6 +11501,18 @@ def handle_message(event):
         tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else "id", "")
     translated_text = reply.split(" ", 1)[1] if " " in reply else reply
 
+    # v3.30: 譯文回填引用快取(未來有人回覆這句時,引用框能顯示對方語言)
+    try:
+        if '_trs' in dir() and _trs:
+            for _l, _t in _trs.items():
+                _cache_translation(_l, _t)
+        if translated_text:
+            _cache_translation((tgt if lang == "zh" else "zh"), translated_text)
+        if lang != "zh":
+            _cache_translation("zh", translated_text)
+    except Exception:
+        pass
+
     # Flex or plain text based on setting
     flex_msg = None
     _is_multi = False
@@ -11503,18 +11539,20 @@ def handle_message(event):
             # 單語翻譯,用 v2
             try:
                 _msg_id = getattr(event.message, 'id', None)
+                _card_tgt = (tgt if lang == "zh" else "zh")
                 flex_msg = build_translation_flex_v2(
                     text, translated_text,
                     src_lang=lang,
-                    tgt_lang=(tgt if lang == "zh" else "zh"),
+                    tgt_lang=_card_tgt,
                     sender_name_display=sender_display,
-                    quoted_text=quoted_text,
+                    quoted_text=_quoted_for(_card_tgt) or quoted_text,
                     group_id=group_id,
                     msg_id=_msg_id,
                 )
             except NameError:
                 # v310 ext 沒載入 → 用舊版
-                flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display, quoted_text)
+                flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display,
+                                                  _quoted_for(tgt if lang == "zh" else "zh") or quoted_text)
     qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
     custom_sender = get_sender_object()
     # Get quoteToken from original message for reply linking
