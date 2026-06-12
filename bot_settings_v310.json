@@ -3,6 +3,11 @@
   "group_tts_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": true
   },
-  "group_flex_v2": {},
+  "group_flex_v2": {
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "carousel": true,
+      "hero": true
+    }
+  },
   "group_conv_settings": {}
 }
