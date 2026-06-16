@@ -201,7 +201,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.15-process-verb-disambiguation"
+VERSION = "v3.16-openai-model-refresh-2026-06-16"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -637,16 +637,14 @@ ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
 # OpenAI 官方價格 (USD per 1M tokens) — (input, output)
 # cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
 OPENAI_PRICE_PER_M = {
-    "gpt-5-nano":   (0.05,  0.40),
-    "gpt-5-mini":   (0.25,  2.00),
-    "gpt-5":        (1.25, 10.00),
+    # 現行翻譯選單
     "gpt-5.4-nano": (0.20,  1.25),
     "gpt-5.4-mini": (0.75,  4.50),
     "gpt-5.4":      (2.50, 15.00),
     "gpt-5.5":      (5.00, 30.00),
-    "gpt-4.1-nano": (0.10,  0.40),
     "gpt-4.1-mini": (0.40,  1.60),
     "gpt-4.1":      (2.00,  8.00),
+    # 只保留成本追蹤相容；不再顯示於後台選單
     "gpt-4o-mini":  (0.15,  0.60),
     "gpt-4o":       (2.50, 10.00),
     # v3.21 Gemini(概估值,Google 官方定位 flash-lite 為最低價;
@@ -704,7 +702,7 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
             + output_tok    * out_rate        / 1_000_000
         )
     # OpenAI
-    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5-mini")
+    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5.4-mini")
     # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
     cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
     non_cached = max(0, input_tok - cached_input)
@@ -738,7 +736,7 @@ def track_tokens(response, group_id=None):
         # fallback:Anthropic _UnifiedUsage cache 屬性 / model 名以 claude- 開頭
         _jy_prov = getattr(response, '_jy_provider', None)
         # v3.23: Gemini 偵測 — 走 OpenAI 相容端點,response.model 為 gemini-*。
-        # 原本會掉進 OpenAI 分支:記進 oai_* bucket + 撞不到價格 fallback gpt-5-mini
+        # 原本會掉進 OpenAI 分支:記進 oai_* bucket + 撞不到價格 fallback gpt-5.4-mini
         # 費率 = 誤記提供者 + 算錯錢。現在獨立 bucket + 正確計價。
         is_gemini = (_jy_prov == "gemini") or str(model_used).lower().startswith("gemini")
         if _jy_prov in ("anthropic", "openai"):
@@ -1032,11 +1030,10 @@ translation_tone = "factory"      # global default: factory / casual / natural /
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
 group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
 
-# Model auto-switch: use gpt-4.1 for long messages, gpt-4.1-mini for short
-# v3.2-0426d: upgraded from gpt-4o family to gpt-4.1 family.
-# gpt-4.1 ranks #1 for translation in Intento State of Translation Automation 2025.
-model_default = "gpt-4.1-mini"    # model for short messages (OpenAI 路徑)
-model_upgrade = "gpt-4.1"         # model for long messages (OpenAI 路徑)
+# OpenAI 文字翻譯預設：GPT-5.4 mini 處理日常訊息，GPT-5.4 處理長公告。
+# 所有舊設定在載入與 API 儲存時都會經 ai_provider 白名單遷移。
+model_default = ai_provider.DEFAULT_OPENAI_MODEL
+model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
 model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
 
 # v3.9.33 (2026-05-15): Anthropic 路徑獨立的字數切換邏輯
@@ -1083,13 +1080,11 @@ def _model_family(model_name):
     # app.py 翻譯層比照 claude:只送 max_tokens/temperature
     if m.startswith("gemini"):
         return "gemini"
-    # GPT-5.1 / 5.2 / 5.5 family — supports 'none' as lowest reasoning effort
-    # v3.20: gpt-5.5 移入此組 — 官方 model 文件明列 5.5 支援
-    # 「none, low, medium (default), high, xhigh」→ 翻譯用 none 最快最省
-    if m.startswith(("gpt-5.5", "gpt-5.2", "gpt-5.1")):
+    # GPT-5.4 / 5.5 官方皆支援 reasoning_effort=none；翻譯用 none 最快最省。
+    if m.startswith(("gpt-5.5", "gpt-5.4")):
         return "gpt5_none"
-    # GPT-5 / 5.4 family — supports 'minimal' as lowest(5.4 未確認支援 none,保守留此組)
-    if m.startswith(("gpt-5.4", "gpt-5")):
+    # 只為讀取舊紀錄保留；正式設定會先遷移到 5.4 / 5.5。
+    if m.startswith(("gpt-5.2", "gpt-5.1", "gpt-5")):
         return "gpt5_minimal"
     if m.startswith(("o1", "o3", "o4")):
         return "oseries_reasoning"
@@ -1137,7 +1132,7 @@ MODEL_CAPABILITIES = {
     },
     # GPT-5 / 5.4 / 5.5 — reasoning models with minimal/low/medium/high effort
     # v3.9.35: prompt_cache_retention 24h 支援:gpt-5.4 (確認), gpt-5.5 (默認 24h)
-    #          gpt-5 / gpt-5-mini / gpt-5-nano 官方未明列,保守設 False(送了會 400)
+    #          舊 GPT-5 aliases 僅為讀取歷史紀錄保留，正式設定會先遷移
     "gpt5_minimal": {
         "temperature": False, "top_p": False, "max_tokens": False,
         "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
@@ -1193,13 +1188,13 @@ def model_supports(model_name, capability):
     # v3.9.35: prompt_cache_retention 24h 精準偵測
     # family 級設 False 是保守預設,這裡為已知支援的 model 開啟
     # 官方確認支援:gpt-5.1+, gpt-5.2+, gpt-5.4 (含 mini/nano), gpt-5.5 (默認 24h)
-    # 官方未明列(保守 False):gpt-5, gpt-5-mini, gpt-5-nano
+    # 舊 GPT-5 aliases 維持保守 False；正式設定會先遷移
     if capability == "prompt_cache_retention" and not base_support:
         if not model_name:
             return False
         m = model_name.lower()
         # 已確認支援的精準前綴
-        if m.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1")):
+        if m.startswith(("gpt-5.5", "gpt-5.4")):
             return True
         # 其他 GPT-5 系列保守 False
     return base_support
@@ -1261,29 +1256,15 @@ def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
 
 
 def _pick_aux_model(purpose="utility"):
-    """v3.9.9: Pick a fast, cheap model in the same family as the user's main model.
-    Used for auxiliary tasks (back-translation check, ID normalization, OCR, pivot).
-    Auto-adapts so if user upgrades to GPT-5, aux calls also use GPT-5 (no API mismatch).
-    
-    v3.9.30 修正: 之前 startswith("gpt-5") 對 gpt-5.4-mini / gpt-5.5 等都回 gpt-5-nano,
-    跨代家族 — gpt-5.4 主模型配 gpt-5 aux 雖然能呼叫,但不是同代最佳搭配。
-    現在精準對應同代 nano。
+    """挑選目前仍在服役的低成本輔助模型。
+
+    以前會拼出 gpt-5.5-nano / gpt-5.2-nano 等不存在的名稱，
+    造成反譯、OCR 輔助或正規化流程 404。現統一使用 gpt-5.4-nano。
     """
-    md = (model_default or "").lower()
-    # GPT-5 系列(精細到子家族)
-    if md.startswith("gpt-5.5"):
-        return "gpt-5.5-nano" if md != "gpt-5.5-nano" else "gpt-5-nano"
-    if md.startswith("gpt-5.4"):
-        return "gpt-5.4-nano"  # 同代最便宜
-    if md.startswith("gpt-5.2"):
-        return "gpt-5.2-nano" if md != "gpt-5.2-nano" else "gpt-5-nano"
-    if md.startswith("gpt-5.1"):
-        return "gpt-5.1-nano" if md != "gpt-5.1-nano" else "gpt-5-nano"
-    if md.startswith("gpt-5"):
-        return "gpt-5-nano"   # 通用 GPT-5 nano
-    if md.startswith("gpt-4.1"):
-        return "gpt-4.1-nano"
-    return "gpt-4o-mini"
+    md = ai_provider.normalize_openai_model(model_default)
+    if md.startswith(("gpt-5.4", "gpt-5.5", "gpt-4.1")):
+        return ai_provider.DEFAULT_OPENAI_AUX_MODEL
+    return ai_provider.DEFAULT_OPENAI_MODEL
 
 
 def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0, cache_key=None):
@@ -1455,8 +1436,8 @@ def pick_model(text):
       - 字數 ≥ threshold → claude_model_upgrade(預設 Sonnet 4.6)
     
     OpenAI 路徑(原邏輯):
-      - 字數 ≥ threshold → model_upgrade(預設 gpt-4.1)
-      - 否則 → model_default(預設 gpt-4.1-mini)
+      - 字數 ≥ threshold → model_upgrade(預設 gpt-5.4)
+      - 否則 → model_default(預設 gpt-5.4-mini)
     
     特例:
       - claude_auto_switch_enabled=False 時,Anthropic 路徑仍回傳 OpenAI model name
@@ -1494,8 +1475,10 @@ def pick_model(text):
 
     # OpenAI 路徑(或 Anthropic + 關閉自動切換)
     if model_threshold > 0 and text_len >= model_threshold:
-        return model_upgrade
-    return model_default
+        return ai_provider.normalize_translation_model(
+            model_upgrade, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
+    return ai_provider.normalize_translation_model(
+        model_default, ai_provider.DEFAULT_OPENAI_MODEL)
 
 
 def _translation_quality_check(original, translation, back_translation):
@@ -8752,16 +8735,11 @@ def format_storage_for_work_order(customer_name):
 # 真正的 OCR 函式是 ocr_image_openai() (line 5198 附近)
 
 
-# v3.8: Vision model upgrade. gpt-4o-mini → gpt-5-mini for OCR.
-# gpt-5-mini has noticeably better small-text + handwriting recognition,
-# critical for factory work-order photos and shift schedule snapshots.
-# Auto-fallback to gpt-4o-mini if primary unavailable.
-# v3.9 (2026-05): made into a runtime-mutable global so admin panel can change it
-# without redeploy, matching the behaviour of model_default / model_upgrade for translation.
-# GPT-5.5 (released 2026-04-23) is also supported here when API access is enabled
-# on your tier; it auto-falls back to gpt-5-mini → gpt-4o-mini on failure.
-VISION_MODEL = os.environ.get("VISION_MODEL", "gpt-5-mini")
-VISION_FALLBACK_MODEL = "gpt-4o-mini"
+# Vision / OCR：GPT-5.4 mini 為預設，gpt-4.1-mini 為非推理備援。
+# 環境變數若仍填舊型號，啟動時會自動遷移到現行白名單。
+VISION_MODEL = ai_provider.normalize_vision_model(
+    os.environ.get("VISION_MODEL", ai_provider.DEFAULT_OPENAI_VISION_MODEL))
+VISION_FALLBACK_MODEL = ai_provider.DEFAULT_OPENAI_VISION_FALLBACK_MODEL
 
 
 def _vision_call(messages, max_tokens, cache_key=None,
@@ -8776,7 +8754,7 @@ def _vision_call(messages, max_tokens, cache_key=None,
       → OCR 純抄字,不需要 reasoning
     - timeout=30 雙保險
     
-    Tries VISION_MODEL first, falls back to gpt-4o-mini on failure.
+    Tries VISION_MODEL first, falls back to gpt-4.1-mini on failure.
     
     v3.2.2 Phase 19 (2026-05-15):
       新增「圖片翻譯走 Claude vs OpenAI」獨立開關判斷:
@@ -8815,8 +8793,8 @@ def _vision_call(messages, max_tokens, cache_key=None,
         _vision_route = "openai_forced" if _vision_provider == "anthropic" else "openai"
     logger.info("[Vision] route=%s (provider=%s, use_claude=%s, task=%s)",
                 _vision_route, _vision_provider, _vision_use_claude, task_type)
-    # v3.9.33 注意:當 _vision_client = ai (走 Claude),fallback gpt-4o-mini 會被
-    # ai_provider 映射回 Claude default_model(因 mapping 表通常無 gpt-4o-mini key)。
+    # v3.9.33 注意:當 _vision_client = ai (走 Claude),OpenAI fallback 型號會先
+    # 經 ai_provider 映射回 Claude 對應模型；OpenAI 路徑則直接使用 gpt-4.1-mini。
     # 這意味著 Claude vision 失敗時 fallback 仍是 Claude — 但這已優於完全失敗。
     # 若要真正 fallback 到 OpenAI,需歐那手動切換 active_provider,或關閉 Phase 19 toggle。
     for attempt_model in (primary, VISION_FALLBACK_MODEL):
@@ -9143,7 +9121,7 @@ def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
     """以視覺方式描述工廠現場場景(主體+異常),供翻譯上下文使用。
 
     v3.9.39 雙系統相容:不直接檢查 oai,而是檢查「整體能否做 vision」
-      - active=openai                    → 走 OpenAI(gpt-5-mini, ~$0.0001)
+      - active=openai                    → 走 OpenAI(gpt-5.4-mini)
       - active=anthropic + use_claude=T  → 走 Claude vision(~$0.001-0.005)
       - active=anthropic + use_claude=F  → 走 OpenAI(若 oai 存在)
     走 _vision_call(task_type="scene") 拿到的是低 verbosity + 小 token budget。
@@ -14812,18 +14790,19 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">短訊息(便宜)</label>
       <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-4.1-mini">🟢 4.1-mini(推薦 $0.4/$1.6)</option>
-        <option value="gpt-4.1-nano">🟢 4.1-nano(最省 $0.1/$0.4)</option>
-        <option value="gpt-5-mini">🔵 5-mini($0.25/$2)</option>
+        <option value="gpt-5.4-mini">⭐ 5.4-mini($0.75/$4.50)</option>
+        <option value="gpt-4.1-mini">🟢 4.1-mini($0.40/$1.60)</option>
+        <option value="gpt-5.4-nano">💰 5.4-nano($0.20/$1.25)</option>
         <option value="gpt-4.1">🟡 4.1($2/$8)</option>
       </select>
     </div>
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
       <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
+        <option value="gpt-5.4">⭐ 5.4($2.50/$15)</option>
+        <option value="gpt-5.4-mini">🟢 5.4-mini($0.75/$4.50)</option>
         <option value="gpt-4.1">🟡 4.1($2/$8)</option>
-        <option value="gpt-4.1-mini">🟢 4.1-mini($0.4/$1.6)</option>
-        <option value="gpt-5">🔴 5($1.25/$10)</option>
+        <option value="gpt-5.5">🔴 5.5($5/$30)</option>
       </select>
     </div>
   </div>
@@ -14831,7 +14810,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
     <div>
       <span style="color:#fff;font-size:12px;font-weight:600">⚡ Flex 背景半價</span>
-      <span style="color:#888;font-size:10px;display:block">背景品檢(QE/APE)走官方 Flex tier 省 50%;僅 gpt-5/o 系生效,4.1 系自動略過;主翻譯不受影響</span>
+      <span style="color:#888;font-size:10px;display:block">背景品檢(QE/APE)走官方 Flex tier 省 50%;僅 GPT-5.4/5.5 系生效,4.1 系自動略過;主翻譯不受影響</span>
     </div>
     <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-oai-flex" onchange="aipSetFlexBg(this.checked)"><span class="slider"></span></label>
   </div>
@@ -15075,7 +15054,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     🎯 <strong>v3.2 Adaptive Thinking</strong>:Claude 自己判斷簡單句不思考、複雜句深思考,省 token + 提質。<br>
     🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
     🖼️ <strong>v3.2.2 圖片翻譯獨立開關</strong>:Claude vision 一張 ~1MP 圖約 1600 tokens($0.008 input)。<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:文字仍走 Claude,圖片強制走 OpenAI gpt-5-mini(省成本但失去 Claude vision 優勢)。<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:文字仍走 Claude,圖片強制走 OpenAI gpt-5.4-mini(省成本但失去 Claude vision 優勢)。<br>
     📝 <strong>v3.2.3 LINE 純文字模式</strong>:強制 Claude 不輸出 **粗體** # 標題 - bullet 等 markdown 廢字元。<br>
     &nbsp;&nbsp;&nbsp;&nbsp;LINE 不渲染 markdown,工人看到的是字面字元,關掉=容忍 Claude 自由發揮。<br>
     📐 <strong>v3.2.3 OCR 嚴格保版面</strong>:偵測到圖片時自動套用「行/欄/編號完全對應」規則。<br>
@@ -15387,7 +15366,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:4px">
 <div style="font-weight:600;margin-bottom:8px">🤖 AI 模型自動切換</div>
-<div class="card-sub" style="margin-bottom:8px">訊息超過指定字數自動升級為 GPT-4o（翻譯更流暢但較貴）。設為 0 表示全部用預設模型。</div>
+<div class="card-sub" style="margin-bottom:8px">訊息超過指定字數自動升級為較強模型；設為 0 表示全部使用短訊息模型。</div>
 <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
 <div style="font-size:13px;color:#8a8a9a;white-space:nowrap">字數門檻</div>
 <input id="modelThreshold" type="number" min="0" value="0" style="width:80px;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;text-align:center">
@@ -15397,36 +15376,22 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-4.1-mini">⭐ gpt-4.1-mini（$0.40 / $1.60）</option>
-<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
-<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40）</option>
-<option value="gpt-4.1-nano">gpt-4.1-nano（$0.10 / $0.40）</option>
-<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
-<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊）</option>
+<option value="gpt-5.4-mini">⭐ gpt-5.4-mini（$0.75 / $4.50，推薦）</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60，穩定）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最省）</option>
 <option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
-<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier2+）</option>
 <option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
-<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，貴）</option>
-<option value="o4-mini">o4-mini（推理模型）</option>
-<option value="o3-mini">o3-mini（推理模型）</option>
+<option value="gpt-5.5">gpt-5.5（$5.00 / $30.00，最高品質）</option>
 </select>
 </div>
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-4.1">⭐ gpt-4.1（$2.00 / $8.00）</option>
-<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
-<option value="gpt-5-mini">gpt-5-mini（$0.25 / $2.00）</option>
+<option value="gpt-5.4">⭐ gpt-5.4（$2.50 / $15.00，推薦長文）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
-<option value="gpt-5">gpt-5（$1.25 / $10.00，需 Tier2+）</option>
-<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
-<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，貴）</option>
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊）</option>
-<option value="o4-mini">o4-mini（推理模型）</option>
-<option value="o3-mini">o3-mini（推理模型）</option>
+<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00，穩定）</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
+<option value="gpt-5.5">gpt-5.5（$5.00 / $30.00，最高品質）</option>
 </select>
 </div>
 </div>
@@ -15442,44 +15407,38 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <label class="toggle" style="transform:scale(0.8)"><input type="checkbox" id="openai24hCache" onchange="saveOpenAI24hCache(this.checked)"><span class="slider"></span></label>
   </div>
   <div style="font-size:10px;color:#666;margin-top:6px;line-height:1.4">
-    ⚠️ 僅 GPT-5.1/5.2/5.4/5.5 系列支援。其他 model 自動 skip(不會 400)。<br>
+    ⚠️ 僅 GPT-5.4/5.5 系列啟用；GPT-4.1 系會自動略過，不會送出不相容參數。<br>
     💡 預設 OFF,因為部分 model 在某些區域可能不支援。先測試確認 cache hit 再開。
   </div>
 </div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
-<b>📋 模型選擇指引(v3.9.14 後皆已最佳化)</b><br>
-🔹 <b>gpt-4.1-mini</b>($0.40 / $1.60)— 經典款,翻譯特化,Intento 2025 評測 #1。便宜、快、對範例順從。<br>
-🔹 <b>gpt-5-mini</b>($0.25 / $2.00)— <b>更便宜</b>,有 reasoning 即使 minimal 模式也對複雜句更好。<br>
-🔹 <b>gpt-5.4-mini</b>($0.75 / $4.50)— 最新一代,複雜被動句、長公告處理更強。<br>
-🔹 <b>gpt-4.1</b>($2.00 / $8.00)— 4.1 家族旗艦,需穩定再現性時用。<br>
-<b>翻譯任務</b>:GPT-5 系列自動套用 <code>reasoning_effort=minimal</code> + <code>verbosity=low</code>(防止 GPT-5 自由發揮拆條列、加 ⚠️)。<br>
-<b>OCR / 視覺任務</b>:GPT-5 系列自動套用 <code>reasoning_effort=low</code>,<b>不</b>套用 verbosity(避免輸出被壓縮成摘要)。<br>
-價錢格式:每百萬 input/output token (USD)。
+<b>📋 OpenAI 翻譯模型指引（2026-06-16）</b><br>
+🔹 <b>gpt-5.4-mini</b>— 日常翻譯首選，兼顧品質、速度與成本。<br>
+🔹 <b>gpt-4.1-mini</b>— 非推理模型，輸出穩定、成本低。<br>
+🔹 <b>gpt-5.4-nano</b>— 適合大量簡短訊息；複雜公告不建議。<br>
+🔹 <b>gpt-5.4</b>— 長公告、被動句與複雜工廠語境。<br>
+🔹 <b>gpt-5.5</b>— 最高品質但成本最高，只建議重要內容。<br>
+<b>GPT-5.4/5.5</b> 翻譯會自動使用 <code>reasoning_effort=none</code>，避免不必要延遲與推理費用。<br>
+價格格式：每百萬 input/output token（USD）。
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
 <div style="font-weight:600;margin-bottom:6px">📷 照片分析模型（Vision / OCR）</div>
-<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖。失敗自動 fallback 到 gpt-4o-mini。</div>
+<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖。失敗自動 fallback 到 gpt-4.1-mini。</div>
 <select id="visionModel" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:8px">
-<option value="gpt-5-mini">⭐ gpt-5-mini（$0.25 / $2.00，視覺強+便宜）</option>
-<option value="gpt-5-nano">gpt-5-nano（$0.05 / $0.40，最便宜）</option>
-<option value="gpt-4o-mini">gpt-4o-mini（$0.15 / $0.60，舊但穩）</option>
-<option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25）</option>
-<option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
-<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
-<option value="gpt-5">gpt-5（$1.25 / $10.00）</option>
-<option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
-<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00）</option>
-<option value="gpt-4o">gpt-4o（$2.50 / $10.00，舊）</option>
-<option value="gpt-5.5">gpt-5.5🆕（$5.00 / $30.00，最貴）</option>
+<option value="gpt-5.4-mini">⭐ gpt-5.4-mini（推薦 OCR / 圖片翻譯）</option>
+<option value="gpt-4.1-mini">gpt-4.1-mini（穩定、成本較低）</option>
+<option value="gpt-5.4-nano">gpt-5.4-nano（最省，細字辨識較弱）</option>
+<option value="gpt-4.1">gpt-4.1（非推理高品質）</option>
+<option value="gpt-5.4">gpt-5.4（複雜圖片）</option>
+<option value="gpt-5.5">gpt-5.5（最高品質、最貴）</option>
 </select>
 <button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
 <div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
-⭐ <b>gpt-5-mini</b> 是 OCR 甜蜜點(OpenAI 官方:多模態評分超越 gpt-4o)。<br>
-🆕 <b>gpt-5.4-mini</b> 比 gpt-5-mini 快 2 倍,接近 gpt-5.4 旗艦品質,但貴 3 倍。<br>
-v3.9.14 後 vision call 已根據官方文件最佳化:<code>reasoning_effort=low</code> + 移除 verbosity 限制 + 3x token budget。<br>
-注意:<b>gpt-5.5-mini 目前 OpenAI 未推出</b>(只有 5.4-mini)。
+⭐ <b>gpt-5.4-mini</b> 是目前預設 OCR 模型，支援文字與圖片輸入。<br>
+🟢 <b>gpt-4.1-mini</b> 作為穩定備援，避免 reasoning 模型參數不相容。<br>
+Vision call 會依模型能力自動切換 <code>max_completion_tokens</code> / <code>max_tokens</code>，並過濾不支援參數。
 </div>
 </div>
 </div>
@@ -16116,7 +16075,7 @@ async function batchListJobs(){
 
 async function batchSetConfig(){
   const enabled = confirm('啟用 Batch API?(取消 = 停用)');
-  const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-4.1-mini):', 'gpt-4.1-mini');
+  const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-5.4-mini):', 'gpt-5.4-mini');
   if(openai_model === null) return;
   const anthropic_model = prompt('Anthropic batch 用的模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
   if(anthropic_model === null) return;
@@ -16302,7 +16261,7 @@ async function nmtSetConfig(){
 
 async function qeSetConfig(){
   const enabled = confirm('啟用 Quality Estimation?(取消 = 停用)');
-  const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-4.1-mini):', 'gpt-4.1-mini');
+  const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-5.4-mini):', 'gpt-5.4-mini');
   if(openai_model === null) return;
   const anthropic_model = prompt('Anthropic provider 時用的 QE 模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
   if(anthropic_model === null) return;
@@ -16321,7 +16280,7 @@ async function qeSetConfig(){
 
 async function apeSetConfig(){
   const enabled = confirm('啟用 Auto Post-Editing?(取消 = 停用)');
-  const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-4.1):', 'gpt-4.1');
+  const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-5.4):', 'gpt-5.4');
   if(openai_model === null) return;
   const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-4-6):', 'claude-sonnet-4-6');
   if(anthropic_model === null) return;
@@ -16395,8 +16354,8 @@ async function aipLoadStatus(){
     // v3.25: OpenAI 頁填值 + 首次載入自動開「目前主力」的分頁
     try{
       if(d.openai_models){
-        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-4.1-mini';
-        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-4.1';
+        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-5.4-mini';
+        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-5.4';
       }
       var _fx=document.getElementById('aip-oai-flex');
       if(_fx) _fx.checked = !(cfg.openai_features && cfg.openai_features.flex_background === false);
@@ -16415,10 +16374,10 @@ async function aipLoadStatus(){
       if(gu && cfg.gemini && cfg.gemini.upgrade_model) gu.value = cfg.gemini.upgrade_model;
       if(ge && cfg.gemini_features && cfg.gemini_features.reasoning_effort) ge.value = cfg.gemini_features.reasoning_effort;
     }catch(e){}
-    // 載入當前 Anthropic 模型映射(gpt-4.1-mini 的對應)
+    // 載入當前 Anthropic 模型映射(gpt-5.4-mini 的對應)
     try {
       const mapping = cfg.model_mapping || {};
-      const currentModel = mapping['gpt-4.1-mini'] || 'claude-haiku-4-5-20251001';
+      const currentModel = mapping['gpt-5.4-mini'] || 'claude-haiku-4-5-20251001';
       const sel = document.getElementById('aip-anthropic-model');
       if (sel) sel.value = currentModel;
     } catch(e) {}
@@ -16842,13 +16801,8 @@ async function aipUpdateAnthropicModel(){
     const mapping = (cur.config && cur.config.model_mapping) || {};
     // 把 LINE bot 內所有 OpenAI 模型(主翻譯 + OCR + 修補 + 輔助等)全部映射到新模型
     const ALL_OPENAI_MODELS = [
-      'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
-      'gpt-4o', 'gpt-4o-mini',
-      'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
-      'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
-      'gpt-5.5', 'gpt-5.5-mini',
-      'gpt-5.1', 'gpt-5.2',
-      'o1', 'o3', 'o3-mini', 'o4-mini',
+      'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-5.4-nano',
+      'gpt-4.1', 'gpt-5.4', 'gpt-5.5'
     ];
     for (const m of ALL_OPENAI_MODELS) {
       mapping[m] = newModel;
@@ -18816,10 +18770,10 @@ async function _loadFeatures(gid){
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   // Model settings (global only, not per-group)
   if(!gid){
-    document.getElementById('modelDefault').value=d.model_default||'gpt-4.1-mini';
-    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-4.1';
+    document.getElementById('modelDefault').value=d.model_default||'gpt-5.4-mini';
+    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-5.4';
     // v3.9: vision (照片分析) model
-    if(document.getElementById('visionModel')) document.getElementById('visionModel').value=d.vision_model||'gpt-5-mini';
+    if(document.getElementById('visionModel')) document.getElementById('visionModel').value=d.vision_model||'gpt-5.4-mini';
     // v3.2-0426d Batch B: load advanced settings
     if(document.getElementById('ttemp')) document.getElementById('ttemp').value=(d.translation_temperature!==undefined?d.translation_temperature:0);
     if(document.getElementById('ttopp')) document.getElementById('ttopp').value=(d.translation_top_p!==undefined?d.translation_top_p:1.0);
@@ -19108,7 +19062,7 @@ function saveVisionModel(){
   api('/features','POST',{vision_model:vm}).then(function(d){
     if(d){
       toast('照片分析模型已儲存');
-      document.getElementById('visionSaveResult').innerHTML='<span style="color:#43b581">✅ 照片分析改用 '+vm+'（失敗自動 fallback 到 gpt-4o-mini）</span>';
+      document.getElementById('visionSaveResult').innerHTML='<span style="color:#43b581">✅ 照片分析改用 '+vm+'（失敗自動 fallback 到 gpt-4.1-mini）</span>';
     }
   });
 }
@@ -20060,9 +20014,11 @@ def load_settings():
             send_metadata_to_openai = bool(data["send_metadata_to_openai"])
         group_tone_settings.update(data.get("group_tone_settings", {}))
         if "model_default" in data:
-            model_default = data["model_default"]
+            model_default = ai_provider.normalize_translation_model(
+                data["model_default"], ai_provider.DEFAULT_OPENAI_MODEL)
         if "model_upgrade" in data:
-            model_upgrade = data["model_upgrade"]
+            model_upgrade = ai_provider.normalize_translation_model(
+                data["model_upgrade"], ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
         if "model_threshold" in data:
             model_threshold = int(data["model_threshold"])
         # v3.9.33: Anthropic 路徑獨立字數切換
@@ -20102,7 +20058,7 @@ def load_settings():
             openai_24h_cache_enabled = bool(data["openai_24h_cache_enabled"])
         # v3.9: vision (照片分析) model
         if "vision_model" in data:
-            VISION_MODEL = str(data["vision_model"])
+            VISION_MODEL = ai_provider.normalize_vision_model(data["vision_model"])
         user_pictures.update(data.get("user_pictures", {}))
         if "pw1_text" in data:
             pw1_text = data["pw1_text"]
@@ -20215,9 +20171,11 @@ def api_admin_openai_models():
     _md = str(data.get("model_default", "")).strip()
     _mu = str(data.get("model_upgrade", "")).strip()
     if _md:
-        model_default = _md
+        model_default = ai_provider.normalize_translation_model(
+            _md, ai_provider.DEFAULT_OPENAI_MODEL)
     if _mu:
-        model_upgrade = _mu
+        model_upgrade = ai_provider.normalize_translation_model(
+            _mu, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
     try:
         save_settings(force=True)
     except Exception:
@@ -20374,7 +20332,7 @@ def api_admin_ai_provider_test():
         return jsonify({"error": "forbidden"}), 403
     try:
         resp = ai_provider.chat_complete(
-            model="gpt-4.1-mini",
+            model=ai_provider.DEFAULT_OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": "你是專業工廠翻譯。請忠實翻譯,不加註解。"},
                 {"role": "user", "content": "請把這句翻成印尼文:鋼帶不夠了,打包機停了"},
@@ -20476,7 +20434,7 @@ def api_admin_ai_provider_count_tokens():
         )
         sample_msg = "鋼帶不夠了,打包機停了,叫主管來看一下"
         result = ai_provider.count_tokens(
-            model="gpt-4.1-mini",
+            model=ai_provider.DEFAULT_OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": sample_msg},
@@ -22124,9 +22082,11 @@ def api_admin_features():
             if "translation_tone_custom" in data:
                 translation_tone_custom = str(data["translation_tone_custom"])
             if "model_default" in data:
-                model_default = str(data["model_default"])
+                model_default = ai_provider.normalize_translation_model(
+                    data["model_default"], ai_provider.DEFAULT_OPENAI_MODEL)
             if "model_upgrade" in data:
-                model_upgrade = str(data["model_upgrade"])
+                model_upgrade = ai_provider.normalize_translation_model(
+                    data["model_upgrade"], ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
             if "model_threshold" in data:
                 model_threshold = int(data["model_threshold"])
             # v3.9.33: Anthropic 字數切換設定
@@ -22141,7 +22101,7 @@ def api_admin_features():
                 openai_24h_cache_enabled = bool(data["openai_24h_cache_enabled"])
             # v3.9: vision (照片分析) model selectable from admin panel
             if "vision_model" in data:
-                VISION_MODEL = str(data["vision_model"])
+                VISION_MODEL = ai_provider.normalize_vision_model(data["vision_model"])
         # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
@@ -24205,8 +24165,8 @@ def admin_apply_best_defaults():
     # The "best defaults" combo (researched May 2026)
     best = {
         # === Models ===
-        "model_default": "gpt-4.1-mini",      # ⭐ Stable, follows examples, cheapest fits-purpose
-        "model_upgrade": "gpt-4.1",           # Same family for consistency on long messages
+        "model_default": "gpt-5.4-mini",      # 現行翻譯首選
+        "model_upgrade": "gpt-5.4",           # 長公告與複雜工廠語境
         "model_threshold": 150,               # Was 100 — most factory msgs <150 chars, save cost
         
         # === Sampling (only affects gpt-4 family; gpt-5 ignores) ===
@@ -24622,7 +24582,7 @@ def debug_vision_test():
     Usage:
       GET /debug/vision-test?key=KEY                      → 用 hardcode 簡單測試圖
       GET /debug/vision-test?key=KEY&msg_id=XXX           → 用指定的 LINE message_id 測
-      GET /debug/vision-test?key=KEY&model=gpt-4o-mini   → 指定模型
+      GET /debug/vision-test?key=KEY&model=gpt-5.4-mini → 指定模型
     """
     if request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
@@ -24772,7 +24732,7 @@ def debug_vision_test():
     html += "<p><b>用法:</b><br>"
     html += "&bull; <code>?key=KEY</code> → 用合成的 PNG 測試<br>"
     html += "&bull; <code>?key=KEY&amp;msg_id=LINE_MSG_ID</code> → 用真實 LINE 圖片測試<br>"
-    html += "&bull; <code>?key=KEY&amp;model=gpt-4o-mini</code> → 換模型測<br>"
+    html += "&bull; <code>?key=KEY&amp;model=gpt-5.4-mini</code> → 換模型測<br>"
     html += "</p><hr>"
     html += "<h3>各階段:</h3>"
     import json as _json
@@ -25177,7 +25137,7 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 res = translate(text_to_translate, src, tgt_lang)
             except Exception as e:
                 logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
-                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5-mini)重試
+                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5.4-mini)重試
                 try:
                     _prov = ai_provider.get_active_provider()
                     _fb_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
@@ -25350,6 +25310,9 @@ _tts_cache_lock = _threading_v310.Lock()
 TTS_CACHE_TTL = 300       # 5 min (LINE typically fetches within seconds)
 TTS_CACHE_MAX = 200
 TTS_TEXT_LIMIT = 500      # clip very long text
+# GPT-4o mini TTS family 已標示 deprecated；預設遷移到仍在服務的 tts-1。
+TTS_MODEL = ai_provider.normalize_tts_model(
+    os.environ.get("TTS_MODEL", ai_provider.DEFAULT_OPENAI_TTS_MODEL))
 
 
 # ----------------------------------------------------------------------------
@@ -26170,7 +26133,7 @@ def generate_tts(text, lang):
     text_clipped = text[:TTS_TEXT_LIMIT]
     try:
         resp = oai.audio.speech.create(
-            model="gpt-4o-mini-tts",
+            model=TTS_MODEL,
             voice="alloy",         # voice is language-agnostic
             input=text_clipped,
             response_format="mp3",

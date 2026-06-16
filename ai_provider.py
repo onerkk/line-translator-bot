@@ -118,6 +118,126 @@ def _resolve_provider_config_path():
 PROVIDER_CONFIG_PATH = _resolve_provider_config_path()
 
 # ═══════════════════════════════════════════════════════════════════
+# v3.3.0 (2026-06-16): OpenAI 模型生命週期與翻譯模型政策
+# ═══════════════════════════════════════════════════════════════════
+# 後台只提供仍在服役、適合文字/圖片翻譯的模型。舊設定不直接丟棄，
+# 而是在呼叫前遷移到官方建議替代型號，避免重新部署後因舊 model id 404。
+ACTIVE_OPENAI_TRANSLATION_MODELS = (
+    "gpt-5.4-mini",   # 一般翻譯首選：速度、品質、成本平衡
+    "gpt-4.1-mini",   # 穩定的非推理翻譯模型
+    "gpt-5.4-nano",   # 大量簡短訊息 / 最低成本
+    "gpt-4.1",        # 高一致性非推理模型
+    "gpt-5.4",        # 長公告、複雜工廠語境
+    "gpt-5.5",        # 最高品質，成本最高
+)
+ACTIVE_OPENAI_VISION_MODELS = (
+    "gpt-5.4-mini",
+    "gpt-4.1-mini",
+    "gpt-5.4-nano",
+    "gpt-4.1",
+    "gpt-5.4",
+    "gpt-5.5",
+)
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
+DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-5.4"
+DEFAULT_OPENAI_AUX_MODEL = "gpt-5.4-nano"
+DEFAULT_OPENAI_VISION_MODEL = "gpt-5.4-mini"
+DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-4.1-mini"
+# GPT-4o mini TTS family is deprecated. Use the still-active Speech API model
+# tts-1 by default; keep tts-1-hd as an optional quality-first choice.
+DEFAULT_OPENAI_TTS_MODEL = "tts-1"
+ACTIVE_OPENAI_TTS_MODELS = (
+    "tts-1",
+    "tts-1-hd",
+)
+
+# 官方 deprecations 頁面列出的替代關係，以及本專案過去曾產生的無效名稱。
+# floating alias 的遷移是本專案的主動升級政策；dated snapshot 的替代則依官方公告。
+OPENAI_MODEL_REPLACEMENTS = {
+    # 2026-12-11 shutdown（官方替代）
+    "gpt-5-2025-08-07": "gpt-5.5",
+    "gpt-5-mini-2025-08-07": "gpt-5.4-mini",
+    "gpt-5-nano-2025-08-07": "gpt-5.4-nano",
+    "gpt-5-pro-2025-10-06": "gpt-5.5-pro",
+    "o3-2025-04-16": "gpt-5.5",
+    "o3-pro-2025-06-10": "gpt-5.5-pro",
+    # 2026-10-23 shutdown（官方替代）
+    "gpt-4.1-nano": "gpt-5.4-nano",
+    "gpt-4.1-nano-2025-04-14": "gpt-5.4-nano",
+    "o1": "gpt-5.5",
+    "o1-2024-12-17": "gpt-5.5",
+    "o1-pro": "gpt-5.5-pro",
+    "o1-pro-2025-03-19": "gpt-5.5-pro",
+    "o3-mini": "gpt-5.5",
+    "o3-mini-2025-01-31": "gpt-5.5",
+    "o4-mini": "gpt-5.4-mini",
+    "o4-mini-2025-04-16": "gpt-5.4-mini",
+    # 2026-07-23 shutdown / legacy aliases
+    "gpt-5-chat-latest": "gpt-5.5",
+    "gpt-5-codex": "gpt-5.5",
+    "gpt-5.1-chat-latest": "gpt-5.5",
+    "gpt-5.1-codex": "gpt-5.5",
+    "gpt-5.1-codex-max": "gpt-5.5",
+    "gpt-5.1-codex-mini": "gpt-5.4-mini",
+    "gpt-5.2-codex": "gpt-5.5",
+    # 本專案舊選單 / 過去程式可能留下的名稱
+    "gpt-5": "gpt-5.5",
+    "gpt-5-mini": "gpt-5.4-mini",
+    "gpt-5-nano": "gpt-5.4-nano",
+    "gpt-5.1": "gpt-5.4",
+    "gpt-5.2": "gpt-5.4",
+    "gpt-5.5-mini": "gpt-5.4-mini",  # OpenAI 未提供
+    "gpt-5.5-nano": "gpt-5.4-nano",  # OpenAI 未提供
+    "gpt-5.2-nano": "gpt-5.4-nano",  # OpenAI 未提供
+    "gpt-5.1-nano": "gpt-5.4-nano",  # OpenAI 未提供
+}
+
+
+def normalize_openai_model(model, fallback=None, allowed=None):
+    """遷移舊 OpenAI model id，並可選擇限制在白名單內。
+
+    Claude / Gemini 名稱原樣保留。未知 OpenAI 名稱在沒有 allowed 時保留，
+    讓未來新模型仍可由進階程式呼叫；後台與持久化設定會傳 allowed，
+    因而不會把拼錯或已移除的名稱送進正式翻譯流程。
+    """
+    fallback = fallback or DEFAULT_OPENAI_MODEL
+    if model is None:
+        return fallback
+    raw = str(model).strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if low.startswith(("claude-", "gemini")):
+        return raw
+    normalized = OPENAI_MODEL_REPLACEMENTS.get(low, raw)
+    if allowed is not None and normalized not in tuple(allowed):
+        return fallback
+    return normalized
+
+
+def normalize_translation_model(model, fallback=None):
+    return normalize_openai_model(
+        model, fallback or DEFAULT_OPENAI_MODEL, ACTIVE_OPENAI_TRANSLATION_MODELS)
+
+
+def normalize_vision_model(model, fallback=None):
+    return normalize_openai_model(
+        model, fallback or DEFAULT_OPENAI_VISION_MODEL, ACTIVE_OPENAI_VISION_MODELS)
+
+
+def normalize_tts_model(model, fallback=None):
+    """遷移已公告停用的 TTS snapshot，並限制為 Speech API 可用型號。"""
+    fallback = fallback or DEFAULT_OPENAI_TTS_MODEL
+    raw = str(model or "").strip().lower()
+    replacements = {
+        "gpt-4o-mini-tts": DEFAULT_OPENAI_TTS_MODEL,
+        "gpt-4o-mini-tts-2025-03-20": DEFAULT_OPENAI_TTS_MODEL,
+        "gpt-4o-mini-tts-2025-12-15": DEFAULT_OPENAI_TTS_MODEL,
+    }
+    normalized = replacements.get(raw, raw or fallback)
+    return normalized if normalized in ACTIVE_OPENAI_TTS_MODELS else fallback
+
+# ═══════════════════════════════════════════════════════════════════
 # 預設配置
 # ═══════════════════════════════════════════════════════════════════
 DEFAULT_CONFIG = {
@@ -154,36 +274,26 @@ DEFAULT_CONFIG = {
     },
     # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
     "gemini_model_mapping": {
-        "gpt-4.1":      "gemini-3.5-flash",
+        "gpt-5.4-mini": "gemini-3.1-flash-lite",
         "gpt-4.1-mini": "gemini-3.1-flash-lite",
-        "gpt-4.1-nano": "gemini-3.1-flash-lite",
-        "gpt-4o":       "gemini-3.5-flash",
-        "gpt-4o-mini":  "gemini-3.1-flash-lite",
-        "gpt-5":        "gemini-3.5-flash",
-        "gpt-5-mini":   "gemini-3.1-flash-lite",
-        "gpt-5.2":      "gemini-3.5-flash",
+        "gpt-5.4-nano": "gemini-3.1-flash-lite",
+        "gpt-4.1":      "gemini-3.5-flash",
+        "gpt-5.4":      "gemini-3.5-flash",
         "gpt-5.5":      "gemini-3.5-flash",
+        # 相容仍在服役但不再列入本專案新選單的舊多模態模型
+        "gpt-4o-mini":  "gemini-3.1-flash-lite",
+        "gpt-4o":       "gemini-3.5-flash",
     },
     "model_mapping": {
-        "gpt-4.1":             "claude-sonnet-4-6",
-        "gpt-4.1-mini":        "claude-haiku-4-5-20251001",
-        "gpt-4.1-nano":        "claude-haiku-4-5-20251001",
-        "gpt-4o":              "claude-sonnet-4-6",
-        "gpt-4o-mini":         "claude-haiku-4-5-20251001",
-        "gpt-5":               "claude-opus-4-7",
-        "gpt-5-mini":          "claude-haiku-4-5-20251001",
-        "gpt-5-nano":          "claude-haiku-4-5-20251001",
-        "gpt-5.4":             "claude-sonnet-4-6",
-        "gpt-5.4-mini":        "claude-haiku-4-5-20251001",
-        "gpt-5.4-nano":        "claude-haiku-4-5-20251001",
-        "gpt-5.5":             "claude-opus-4-7",
-        "gpt-5.5-mini":        "claude-haiku-4-5-20251001",
-        "gpt-5.1":             "claude-sonnet-4-6",
-        "gpt-5.2":             "claude-sonnet-4-6",
-        "o1":                  "claude-opus-4-7",
-        "o3":                  "claude-opus-4-7",
-        "o3-mini":             "claude-haiku-4-5-20251001",
-        "o4-mini":             "claude-haiku-4-5-20251001",
+        "gpt-5.4-mini": "claude-haiku-4-5-20251001",
+        "gpt-4.1-mini": "claude-haiku-4-5-20251001",
+        "gpt-5.4-nano": "claude-haiku-4-5-20251001",
+        "gpt-4.1":      "claude-sonnet-4-6",
+        "gpt-5.4":      "claude-sonnet-4-6",
+        "gpt-5.5":      "claude-opus-4-7",
+        # 相容仍在服役但不再列入本專案新選單的舊多模態模型
+        "gpt-4o-mini":  "claude-haiku-4-5-20251001",
+        "gpt-4o":       "claude-sonnet-4-6",
     },
     # === v3.0 Claude 專屬能力(全部預設 ON)===
     "claude_features": {
@@ -257,6 +367,19 @@ _uploaded_glossary_hash = None      # 用來判斷 glossary 有沒有改過需�
 # ═══════════════════════════════════════════════════════════════════
 # Config 讀寫
 # ═══════════════════════════════════════════════════════════════════
+def _migrate_config_models(cfg):
+    """把磁碟中的舊 mapping key 遷移到現行 OpenAI model id。"""
+    for field in ("model_mapping", "gemini_model_mapping"):
+        defaults = dict(DEFAULT_CONFIG.get(field, {}))
+        saved = cfg.get(field, {})
+        if isinstance(saved, dict):
+            for old_key, target in saved.items():
+                new_key = normalize_openai_model(old_key)
+                defaults[new_key] = target
+        cfg[field] = defaults
+    return cfg
+
+
 def _load_config_from_disk():
     try:
         if os.path.exists(PROVIDER_CONFIG_PATH):
@@ -270,7 +393,7 @@ def _load_config_from_disk():
                     else:
                         dst[k] = v
             _deep_merge(merged, disk_cfg)
-            return merged
+            return _migrate_config_models(merged)
     except Exception as e:
         print(f"[ai_provider] WARN: 讀 config 失敗 {e}", flush=True)
     return json.loads(json.dumps(DEFAULT_CONFIG))
@@ -544,16 +667,14 @@ def get_current_config_safe():
 
 
 def _resolve_anthropic_model(openai_model):
-    """v3.2.3 修正:若 caller 直接傳 claude-* model name(app.py v3.9.33 起的 pick_model
-    在 Anthropic 路徑下會這樣做),直接原樣使用,不查 mapping。
-    """
+    """Claude 名稱原樣使用；OpenAI 舊名稱先遷移，再查現行 mapping。"""
     _ensure_initialized()
-    # 若已是 Claude model 名稱,直接回傳
     if openai_model and isinstance(openai_model, str) and openai_model.startswith("claude-"):
         return openai_model
+    normalized = normalize_openai_model(openai_model)
     mapping = _current_config.get("model_mapping", {})
-    if openai_model in mapping:
-        return mapping[openai_model]
+    if normalized in mapping:
+        return mapping[normalized]
     return _current_config["anthropic"].get("default_model", "claude-haiku-4-5-20251001")
 
 
@@ -1369,17 +1490,18 @@ class _UnifiedResponse:
 # 核心 chat_complete
 # ═══════════════════════════════════════════════════════════════════
 def _resolve_gemini_model(model):
-    """v3.21: 模型名解析 — gemini-* 原樣用;OpenAI 名查 mapping;其他 fallback flash-lite。"""
+    """Gemini 名稱原樣使用；OpenAI 舊名稱先遷移，再查現行 mapping。"""
     _ensure_initialized()
     m = (model or "").lower()
     if m.startswith("gemini"):
         return model
+    normalized = normalize_openai_model(model)
+    nm = (normalized or "").lower()
     gcfg = _current_config.get("gemini", {})
     mapping = _current_config.get("gemini_model_mapping", {})
-    if model in mapping:
-        return mapping[model]
-    # 啟發式:mini/nano/haiku 級 → 最省;其餘 → 升級模型
-    if any(t in m for t in ("mini", "nano", "haiku")):
+    if normalized in mapping:
+        return mapping[normalized]
+    if any(t in nm for t in ("mini", "nano", "haiku")):
         return gcfg.get("default_model", "gemini-3.1-flash-lite")
     return gcfg.get("upgrade_model", "gemini-3.5-flash")
 
@@ -1544,6 +1666,7 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout, stop=stop,
         )
+    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
     return _chat_complete_openai(
         model=model, messages=messages,
         max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
@@ -1607,6 +1730,9 @@ def _chat_complete_openai(model, messages, **kwargs):
     if client is None:
         raise RuntimeError("OpenAI client 未初始化(api_key 缺?)")
 
+    # 最後一道模型生命週期保護：任何內部模組傳入舊 ID 都先遷移。
+    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
+
     # v3.2.6: Phase 25 對稱 — OpenAI 路徑也支援 output_translation_tag
     # OpenAI GPT-5 reasoning model 跟 Claude 一樣會吐元評論(Wait/I notice/If English:),
     # 後端 regex 抽 <translation> tag 內容是兩家通用的官方治本路徑。
@@ -1657,6 +1783,20 @@ def _chat_complete_openai(model, messages, **kwargs):
         if k == "logprobs" and v is False:
             continue
         call_kwargs[k] = v
+
+    # GPT-5.4 / GPT-5.5 是 reasoning family：Chat Completions 使用
+    # max_completion_tokens；純翻譯預設 reasoning=none，並移除不相容採樣參數。
+    _model_lower = (model or "").lower()
+    if _model_lower.startswith(("gpt-5.4", "gpt-5.5")):
+        if "max_tokens" in call_kwargs and "max_completion_tokens" not in call_kwargs:
+            call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
+        for _unsupported in (
+            "temperature", "top_p", "seed", "stop", "logprobs",
+            "top_logprobs", "logit_bias",
+        ):
+            call_kwargs.pop(_unsupported, None)
+        if not _model_lower.endswith("-pro"):
+            call_kwargs.setdefault("reasoning_effort", "none")
     # v3.25: 背景執行緒(bgpost/evlog)的呼叫走官方 Flex tier 半價。
     # 偵測:thread 名稱(v3.13 背景池命名)+ config 開關 + 模型支援
     # (官方 flex 支援 gpt-5 系/o 系;gpt-4.1 系不支援 → 自動略過)。
@@ -2149,11 +2289,18 @@ def _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwa
     client = _get_openai_client()
     if client is None:
         raise RuntimeError("OpenAI client 未初始化")
+    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
     call_kwargs = {"model": model, "messages": messages, "stream": True}
-    if max_tokens is not None:
-        call_kwargs["max_tokens"] = max_tokens
-    if temperature is not None:
-        call_kwargs["temperature"] = temperature
+    if model.lower().startswith(("gpt-5.4", "gpt-5.5")):
+        if max_tokens is not None:
+            call_kwargs["max_completion_tokens"] = max_tokens
+        if not model.lower().endswith("-pro"):
+            call_kwargs["reasoning_effort"] = "none"
+    else:
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
     stream = client.chat.completions.create(**call_kwargs)
     for chunk in stream:
         if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -2385,7 +2532,7 @@ def should_use_claude_for_images():
     
     用途:給歐那一個獨立開關,避免「切到 Anthropic 後圖片成本爆」
          圖片 token 比文字貴(一張 1MP 圖 ≈ 1600 tokens × $5/M Claude = $0.008)
-         有時候只想讓文字翻譯走 Claude,圖片仍用 OpenAI gpt-5-mini
+         有時候只想讓文字翻譯走 Claude,圖片仍用 OpenAI gpt-5.4-mini
     
     呼叫例:
         if ai_provider.get_active_provider() == "anthropic" and ai_provider.should_use_claude_for_images():

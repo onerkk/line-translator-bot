@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 BATCH_ENABLED = True
 
 BATCH_MODEL_BY_PROVIDER = {
-    "openai": "gpt-4.1-mini",                    # batch 翻譯用便宜模型
+    "openai": "gpt-5.4-mini",                    # 批次翻譯品質/成本平衡
     "anthropic": "claude-haiku-4-5-20251001",
 }
 
@@ -390,7 +390,12 @@ def batch_set_config(enabled: Optional[bool] = None,
     if enabled is not None:
         BATCH_ENABLED = bool(enabled)
     if openai_model:
-        BATCH_MODEL_BY_PROVIDER["openai"] = str(openai_model)
+        try:
+            import ai_provider as _aip
+            BATCH_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
+                openai_model, _aip.DEFAULT_OPENAI_MODEL)
+        except Exception:
+            BATCH_MODEL_BY_PROVIDER["openai"] = "gpt-5.4-mini"
     if anthropic_model:
         BATCH_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
     return {

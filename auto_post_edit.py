@@ -42,8 +42,8 @@ APE_ENABLED = True
 
 # 雙系統模型 mapping(APE 修錯需要好模型,品質優先)
 APE_MODEL_BY_PROVIDER = {
-    "openai": "gpt-4.1",                # $2/M input, $8/M output
-    "anthropic": "claude-sonnet-4-6",   # $3/M input, $15/M output
+    "openai": "gpt-5.4",               # 長句修譯品質優先
+    "anthropic": "claude-sonnet-4-6",
 }
 
 APE_TRIGGER_QE_SCORE = 70  # QE 分數 < 此值觸發 APE
@@ -56,6 +56,12 @@ try:
     if _saved:
         APE_ENABLED = _saved.get("enabled", APE_ENABLED)
         APE_MODEL_BY_PROVIDER.update(_saved.get("model_by_provider", {}))
+        try:
+            import ai_provider as _aip
+            APE_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
+                APE_MODEL_BY_PROVIDER.get("openai"), _aip.DEFAULT_OPENAI_UPGRADE_MODEL)
+        except Exception:
+            pass
         APE_TRIGGER_QE_SCORE = _saved.get("trigger_qe_score", APE_TRIGGER_QE_SCORE)
         logger.info("[APE] loaded persisted config: %s", _saved)
 except Exception as _e:
@@ -256,7 +262,12 @@ def ape_set_config(enabled: Optional[bool] = None,
     if enabled is not None:
         APE_ENABLED = bool(enabled)
     if openai_model:
-        APE_MODEL_BY_PROVIDER["openai"] = str(openai_model)
+        try:
+            import ai_provider as _aip
+            APE_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
+                openai_model, _aip.DEFAULT_OPENAI_UPGRADE_MODEL)
+        except Exception:
+            APE_MODEL_BY_PROVIDER["openai"] = "gpt-5.4"
     if anthropic_model:
         APE_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
     if trigger_qe_score is not None:

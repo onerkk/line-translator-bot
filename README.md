@@ -30,7 +30,7 @@
 
 1. 到 [OpenAI Platform](https://platform.openai.com/api-keys) 申請
 2. 建立一組 API Key
-3. 儲值一點額度（gpt-4o-mini 非常便宜，一天幾百則翻譯大概幾塊台幣）
+3. 儲值一點額度（預設使用 gpt-5.4-mini；需要最低成本可改用 gpt-5.4-nano）
 
 ### 3. 一台伺服器（以下任選一個）
 
@@ -79,7 +79,7 @@ railway up
 3. 連結你的 GitHub repo
 4. 設定：
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn --bind 0.0.0.0:8080 --workers 2 app:app`
+   - **Start Command**: `gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 4 --timeout 180 app:app`
 5. 在 Environment 頁面加入三個環境變數
 6. 部署完成後取得網址
 
@@ -160,8 +160,8 @@ Dewi：Terima kasih, bos
 
 ### 費用大概多少？
 - LINE Bot：免費
-- OpenAI：gpt-4o-mini 大約 $0.15 / 1M input tokens，非常便宜
-  - 一天 500 則訊息大概不到 NT$1
+- OpenAI：`gpt-5.4-mini` 為預設翻譯模型；`gpt-5.4-nano` 適合大量簡短訊息
+  - 實際費用依訊息長度、圖片、快取命中與背景品檢次數計算
 - 伺服器：看你選的平台，Railway 免費額度夠小群組用
 
 ---

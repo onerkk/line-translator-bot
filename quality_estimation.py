@@ -43,8 +43,8 @@ QE_ENABLED = True  # 全局開關
 
 # 雙系統模型 mapping(用便宜模型評分即可,QE 是 LLM-as-judge 不需頂級模型)
 QE_MODEL_BY_PROVIDER = {
-    "openai": "gpt-4.1-mini",                    # $0.4/M input, $1.6/M output
-    "anthropic": "claude-haiku-4-5-20251001",    # $1/M input, $5/M output
+    "openai": "gpt-5.4-mini",                    # 現行翻譯品質評估首選
+    "anthropic": "claude-haiku-4-5-20251001",
 }
 
 QE_THRESHOLD_WARN = 70  # 分數 < 此值 → ⚠️ 警告
@@ -59,6 +59,12 @@ try:
     if _saved:
         QE_ENABLED = _saved.get("enabled", QE_ENABLED)
         QE_MODEL_BY_PROVIDER.update(_saved.get("model_by_provider", {}))
+        try:
+            import ai_provider as _aip
+            QE_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
+                QE_MODEL_BY_PROVIDER.get("openai"), _aip.DEFAULT_OPENAI_MODEL)
+        except Exception:
+            pass
         QE_THRESHOLD_WARN = _saved.get("threshold_warn", QE_THRESHOLD_WARN)
         QE_THRESHOLD_RETRY = _saved.get("threshold_retry", QE_THRESHOLD_RETRY)
         QE_MIN_LEN = _saved.get("min_len", QE_MIN_LEN)
@@ -363,7 +369,12 @@ def qe_set_config(enabled: Optional[bool] = None,
     if enabled is not None:
         QE_ENABLED = bool(enabled)
     if openai_model:
-        QE_MODEL_BY_PROVIDER["openai"] = str(openai_model)
+        try:
+            import ai_provider as _aip
+            QE_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
+                openai_model, _aip.DEFAULT_OPENAI_MODEL)
+        except Exception:
+            QE_MODEL_BY_PROVIDER["openai"] = "gpt-5.4-mini"
     if anthropic_model:
         QE_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
     if threshold_warn is not None:
