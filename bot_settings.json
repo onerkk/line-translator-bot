@@ -274,7 +274,7 @@
   "send_user_id_to_openai": true,
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
-  "model_default": "gpt-5-mini",
+  "model_default": "gpt-5.4-mini",
   "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 100,
   "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
@@ -295,7 +295,7 @@
   "claude_model_upgrade": "claude-haiku-4-5-20251001",
   "claude_auto_switch_enabled": true,
   "openai_24h_cache_enabled": false,
-  "vision_model": "gpt-5-mini",
+  "vision_model": "gpt-5.4-mini",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
     "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomgWc9OXpCFCeJpptHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
@@ -500,19 +500,7 @@
   "forms_submissions": {},
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "carousel": true,
-      "hero": true,
-      "span": true
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "carousel": true,
-      "hero": true,
-      "span": true
+      "carousel": true
     }
   },
   "group_tts_settings": {},
