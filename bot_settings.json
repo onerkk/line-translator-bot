@@ -293,7 +293,7 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "claude_model_default": "claude-haiku-4-5-20251001",
   "claude_model_upgrade": "claude-haiku-4-5-20251001",
-  "claude_auto_switch_enabled": false,
+  "claude_auto_switch_enabled": true,
   "openai_24h_cache_enabled": false,
   "vision_model": "gpt-5.4-mini",
   "user_pictures": {
