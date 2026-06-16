@@ -54,6 +54,9 @@
   "group_user_names": {
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     }
   },
   "dm_master_enabled": true,
@@ -105,23 +108,23 @@
     }
   },
   "bot_stats": {
-    "text_translations": 148,
+    "text_translations": 150,
     "image_translations": 3,
     "voice_translations": 0,
     "work_order_detections": 0,
     "commands": 9,
-    "tokens_prompt": 2441296,
-    "tokens_completion": 9155,
+    "tokens_prompt": 2477350,
+    "tokens_completion": 9248,
     "oai_input": 53236,
     "oai_cached": 9088,
     "oai_output": 74,
     "oai_reasoning": 0,
     "oai_cost_usd": 0.011412199999999999,
-    "ant_input": 77956,
-    "ant_cache_read": 229894,
-    "ant_cache_write": 386783,
-    "ant_output": 3908,
-    "ant_cost_usd": 0.7504842500000001,
+    "ant_input": 80026,
+    "ant_cache_read": 246886,
+    "ant_cache_write": 403775,
+    "ant_output": 4001,
+    "ant_cost_usd": 0.7759584500000001,
     "tokens_reasoning": 0,
     "tokens_prompt_cached": 138368
   },
@@ -187,9 +190,9 @@
       "model": "claude-haiku-4-5-20251001"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 350791,
-      "tokens_completion": 1566,
-      "cost_usd": 0.31495960000000006,
+      "tokens_prompt": 386845,
+      "tokens_completion": 1659,
+      "cost_usd": 0.34043380000000006,
       "provider": "anthropic",
       "model": "claude-haiku-4-5-20251001"
     },
@@ -276,9 +279,9 @@
   "group_tone_settings": {},
   "model_default": "gpt-5.4-mini",
   "model_upgrade": "gpt-5.4-mini",
-  "model_threshold": 200,
+  "model_threshold": 500,
   "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
-  "ai_active_provider": "anthropic",
+  "ai_active_provider": "openai",
   "ai_openai_features": {
     "flex_background": true
   },
@@ -314,7 +317,8 @@
     "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g",
     "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
     "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
-    "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg"
+    "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
+    "Ucbc2c71e01fb7b1fc12b756eed45c042": "https://sprofile.line-scdn.net/0hIOhM9VhOFmBFNAi-3MNoXjVkFQpmRU9yYVAOA3IzGgJ8UFdmPAcOVnMzTwB-DVM_PFAJVnE0TVhnAFB3FBEuBTs3ECl8fw9QDhAFVDtNMAorZilCNVAQUClnDxBkegtGN04BXRsyNjMaYwQ2aRJYQAZxA1IEAAdvFWN6NkAGeOMqNmE1aFNRA3kzS1f7"
   },
   "pw1_text": "UR00179\nCcc0972315373",
   "pw2_text": "UR00644\nJj0973550210",
