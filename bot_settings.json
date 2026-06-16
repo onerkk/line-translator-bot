@@ -275,7 +275,7 @@
   "send_metadata_to_openai": true,
   "group_tone_settings": {},
   "model_default": "gpt-5.4-mini",
-  "model_upgrade": "gpt-5.4",
+  "model_upgrade": "gpt-5.4-mini",
   "model_threshold": 200,
   "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
   "ai_active_provider": "anthropic",
