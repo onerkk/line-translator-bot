@@ -9,7 +9,9 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
     "Cd188e1adc7792e407c90f3fa78850316": false
   },
-  "group_img_ask_settings": {},
+  "group_img_ask_settings": {
+    "Cd188e1adc7792e407c90f3fa78850316": true
+  },
   "group_audio_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
