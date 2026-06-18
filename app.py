@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.23-protected-review-quality-pipeline-2026-06-18"
+VERSION = "v3.24-target-language-purity-gate-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -8016,6 +8016,37 @@ def _is_factory_context(text):
     return bool(_FACTORY_CTX_PAT.search(text))
 
 
+def _tm_bypass_integrity_ok(source_text, candidate, src, tgt):
+    """Deterministically validate a TM/Vector-TM result before early return.
+
+    TM bypasses intentionally skip the normal LLM/post-processing path.  Without
+    this boundary check, a stale historical translation can evade every new
+    quality rule forever.  The check is provider-free and uses the same target-
+    language purity, immutable-token and glossary validation as fresh output.
+    """
+    try:
+        envelope = tqg_module.protect_immutable_spans(source_text)
+        pairs = ge_module.collect_applicable_pairs(
+            source_text,
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            src,
+            tgt,
+        )
+        report = tqg_module.validate_translation(
+            source_text,
+            candidate,
+            src,
+            tgt,
+            immutable_literals=envelope.mapping.values(),
+            glossary_pairs=pairs,
+            require_paragraph_fidelity=False,
+        )
+        return report.ok, report.hard_issues
+    except Exception as exc:
+        logger.warning("[TMIntegrity] validation failed closed: %s", exc)
+        return False, ["integrity_check_exception"]
+
+
 def _translate_core(text, src, tgt):
     """v3.9.39 業界全面技術 hybrid pipeline(被 translate() wrapper 包覆)
     
@@ -8199,7 +8230,8 @@ def _translate_core(text, src, tgt):
     if _tm_result and _tm_result.get("match_type") in _tm_bypass_types:
         _bypass_result = _tm_result["tgt_text"]
         _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
-        if _tm_sem_ok:
+        _tm_integrity_ok, _tm_integrity_issues = _tm_bypass_integrity_ok(text, _bypass_result, src, tgt)
+        if _tm_sem_ok and _tm_integrity_ok:
             try:
                 _log_translation(text, _bypass_result, src, tgt,
                                  f"tm_{_tm_result['match_type']}", 0, 1.0, False, 1.0, _gid_for_tm)
@@ -8213,12 +8245,13 @@ def _translate_core(text, src, tgt):
             logger.info("[Pipeline] LexTM bypass: type=%s score=%d", _tm_result["match_type"], _tm_result["score"])
             return _bypass_result
         else:
-            logger.warning("[SemanticContract] LexTM bypass blocked: %s text=%r tm=%r",
-                           _tm_sem_reason, text[:80], (_bypass_result or '')[:120])
+            _tm_block_reason = _tm_sem_reason or ",".join(_tm_integrity_issues[:6]) or "integrity_failed"
+            logger.warning("[TMIntegrity] LexTM bypass blocked: %s text=%r tm=%r",
+                           _tm_block_reason, text[:80], (_bypass_result or '')[:120])
             try:
                 _event_log_write("semantic_tm_bypass_blocked", {
                     "group_id": _gid_for_tm,
-                    "reason": _tm_sem_reason,
+                    "reason": _tm_block_reason,
                     "src_text": text[:120],
                     "tm_text": (_bypass_result or '')[:160],
                 })
@@ -8242,7 +8275,8 @@ def _translate_core(text, src, tgt):
     if (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
-        if _vec_sem_ok:
+        _vec_integrity_ok, _vec_integrity_issues = _tm_bypass_integrity_ok(text, _bypass_result, src, tgt)
+        if _vec_sem_ok and _vec_integrity_ok:
             try:
                 _log_translation(text, _bypass_result, src, tgt,
                                  "vec_tm_bypass", 0, 1.0, False, _vec_result["similarity"], _gid_for_tm)
@@ -8256,12 +8290,13 @@ def _translate_core(text, src, tgt):
             logger.info("[Pipeline] VecTM bypass: sim=%.3f", _vec_result["similarity"])
             return _bypass_result
         else:
-            logger.warning("[SemanticContract] VecTM bypass blocked: %s text=%r vec=%r",
-                           _vec_sem_reason, text[:80], (_bypass_result or '')[:120])
+            _vec_block_reason = _vec_sem_reason or ",".join(_vec_integrity_issues[:6]) or "integrity_failed"
+            logger.warning("[TMIntegrity] VecTM bypass blocked: %s text=%r vec=%r",
+                           _vec_block_reason, text[:80], (_bypass_result or '')[:120])
             try:
                 _event_log_write("semantic_vec_bypass_blocked", {
                     "group_id": _gid_for_tm,
-                    "reason": _vec_sem_reason,
+                    "reason": _vec_block_reason,
                     "src_text": text[:120],
                     "vec_text": (_bypass_result or '')[:160],
                 })
