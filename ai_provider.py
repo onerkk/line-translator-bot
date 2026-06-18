@@ -267,10 +267,9 @@ DEFAULT_CONFIG = {
         "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
     },
     "gemini_features": {
-        # Gemini 3 系列預設 dynamic thinking — 翻譯不需要,壓低省錢省時。
-        # 相容端點參數名為 reasoning_effort;low 為安全最低檔
-        # (API 若拒絕此參數會自動退參數重試,見 _chat_complete_gemini)。
-        "reasoning_effort": "low",
+        # Gemini 3 系列翻譯使用 minimal：保留模型與 prompt，只壓低不必要的思考延遲。
+        # 相容端點若暫不接受 minimal，會先退到 low，再移除可選參數重試。
+        "reasoning_effort": "minimal",
     },
     # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
     "gemini_model_mapping": {
@@ -1507,13 +1506,13 @@ def _resolve_gemini_model(model):
 
 
 def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
-                          timeout=90, stop=None, **kwargs):
+                          timeout=90, stop=None, fast_quality=False, **kwargs):
     """v3.21: Gemini 路徑(官方 OpenAI 相容端點)。
 
     設計:
       - 模型解析:OpenAI 名 → gemini_model_mapping(與 Claude mapping 同模式)
       - reasoning_effort:Gemini 3 預設 dynamic thinking,翻譯不需要 →
-        依 gemini_features 壓低(預設 low)。端點若拒絕參數 → 自動退參數重試,
+        翻譯快速品質模式固定 minimal；一般呼叫依 gemini_features。端點若拒絕參數 → 自動退階重試,
         確保任何相容性落差都不會讓翻譯失敗。
       - 回傳原生 OpenAI 相容 response 物件,上游 _AIProxy/confidence 邏輯零改動。
     """
@@ -1535,15 +1534,30 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         g_kwargs["temperature"] = temperature
     if stop:
         g_kwargs["stop"] = stop
-    _effort = (features.get("reasoning_effort") or "").strip().lower()
-    if _effort in ("none", "low", "medium", "high"):
+    _effort = "minimal" if fast_quality else (features.get("reasoning_effort") or "minimal").strip().lower()
+    # 舊版後台可能存 none；Gemini 3 相容端點使用 minimal 作為最低延遲檔。
+    if _effort == "none":
+        _effort = "minimal"
+    if _effort in ("minimal", "low", "medium", "high"):
         g_kwargs["reasoning_effort"] = _effort
 
     try:
         return client.chat.completions.create(**g_kwargs)
     except Exception as e:
-        # 相容端點對個別參數的支援可能隨版本變動 → 退掉可選參數重試一次
+        # 相容端點對參數支援可能隨版本變動：minimal 不接受時先退 low，
+        # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
         _msg = str(e).lower()
+        _param_error = any(x in _msg for x in (
+            "reasoning_effort", "invalid", "unrecognized", "unsupported", "400"
+        ))
+        if g_kwargs.get("reasoning_effort") == "minimal" and _param_error:
+            g_kwargs["reasoning_effort"] = "low"
+            try:
+                print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
+                return client.chat.completions.create(**g_kwargs)
+            except Exception as e2:
+                e = e2
+                _msg = str(e2).lower()
         retried = False
         for _opt in ("reasoning_effort", "stop"):
             if _opt in g_kwargs and (_opt in _msg or "invalid" in _msg or "unrecognized" in _msg
@@ -1653,20 +1667,30 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
                        logprobs=False, top_logprobs=None, logit_bias=None,
                        stop=None, **kwargs):
     """單一 provider 呼叫分派(v3.26 自容錯重構抽出)。"""
+    # 內部旗標只控制翻譯延遲，不送到任何第三方 API。
+    fast_quality = bool(kwargs.pop("translation_fast_quality", False))
     if provider == "anthropic":
         return _chat_complete_anthropic(
             model=model, messages=messages,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout,
-            extra_stop=stop,
+            extra_stop=stop, fast_quality=fast_quality,
         )
     if provider == "gemini":
         return _chat_complete_gemini(
             model=model, messages=messages,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout, stop=stop,
+            fast_quality=fast_quality,
         )
     model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
+    if fast_quality and reasoning_effort not in ("none", "minimal"):
+        # 只對 reasoning family 覆寫；GPT-4.1 等非 reasoning 模型不送此參數。
+        m = (model or "").lower()
+        if m.startswith(("gpt-5.4", "gpt-5.5")):
+            reasoning_effort = "none"
+        elif m.startswith(("gpt-5", "o1", "o3", "o4")):
+            reasoning_effort = "minimal"
     return _chat_complete_openai(
         model=model, messages=messages,
         max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
@@ -1851,14 +1875,19 @@ def _chat_complete_openai(model, messages, **kwargs):
 
 
 def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
-                              timeout=120, extra_stop=None):
+                              timeout=120, extra_stop=None, fast_quality=False):
     """Anthropic 路徑 — v3.0 完整 Claude 能力全部自動啟用"""
     client = _get_anthropic_client()
     if client is None:
         raise RuntimeError("Anthropic client 未初始化(api_key 缺?或 pip install anthropic)")
 
     _ensure_initialized()
-    features = _current_config.get("claude_features", {})
+    features = dict(_current_config.get("claude_features", {}))
+    # 翻譯快速品質模式只關閉 Extended/Adaptive Thinking；模型、system prompt、
+    # glossary grounding、cache、stop sequence 與輸出後處理全部維持不變。
+    if fast_quality:
+        features["extended_thinking"] = False
+        features["adaptive_thinking"] = False
     use_cache = features.get("prompt_caching", True)
     use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
     thinking_budget = int(features.get("thinking_budget", 2000))

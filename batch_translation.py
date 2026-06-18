@@ -50,6 +50,21 @@ BATCH_MODEL_BY_PROVIDER = {
     "anthropic": "claude-haiku-4-5-20251001",
 }
 
+# Restore backend configuration from the unified cloud phase store.
+try:
+    import phase_config_store as _pcs
+    _saved_batch = _pcs.load_config("batch")
+    if isinstance(_saved_batch, dict):
+        if "enabled" in _saved_batch:
+            BATCH_ENABLED = bool(_saved_batch["enabled"])
+        _models = _saved_batch.get("model_by_provider")
+        if isinstance(_models, dict):
+            for _provider in ("openai", "anthropic"):
+                if _models.get(_provider):
+                    BATCH_MODEL_BY_PROVIDER[_provider] = str(_models[_provider])
+except Exception as _e:
+    logger.warning("[Batch] load persisted config failed: %s", _e)
+
 # In-memory job registry(重啟會清掉,重要 job 要持久化到 DB)
 # 結構:{job_id: {"provider":..., "batch_id":..., "submitted_at":..., "status":...}}
 _jobs: Dict[str, Dict[str, Any]] = {}
@@ -398,8 +413,17 @@ def batch_set_config(enabled: Optional[bool] = None,
             BATCH_MODEL_BY_PROVIDER["openai"] = "gpt-5.4-mini"
     if anthropic_model:
         BATCH_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
-    return {
+    cfg = {
         "enabled": BATCH_ENABLED,
         "model_by_provider": dict(BATCH_MODEL_BY_PROVIDER),
         "model_current": _resolve_batch_model(),
     }
+    try:
+        import phase_config_store as _pcs
+        _pcs.save_config("batch", {
+            "enabled": BATCH_ENABLED,
+            "model_by_provider": dict(BATCH_MODEL_BY_PROVIDER),
+        })
+    except Exception as _e:
+        logger.warning("[Batch] save persisted config failed: %s", _e)
+    return cfg

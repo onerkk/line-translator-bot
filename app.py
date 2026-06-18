@@ -4,7 +4,8 @@ import json
 import urllib.request
 import urllib.parse
 import logging
-from flask import Flask, request, abort, jsonify
+from datetime import datetime, timezone
+from flask import Flask, request, abort, jsonify, g, has_request_context
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, MessagingApiBlob,
@@ -133,6 +134,8 @@ import time
 import uuid
 import threading
 import contextlib
+import hashlib
+import copy
 try:
     import fcntl  # POSIX file lock,用於跨 worker 同步 file I/O
     _HAS_FCNTL = True
@@ -201,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.16-openai-model-refresh-2026-06-16"
+VERSION = "v3.18-fast-quality-cloud-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -253,7 +256,7 @@ import in_context_learning as icl_module      # Phase N: Dynamic few-shot from T
 import language_detection as ld_module        # Phase O: Language auto-detect
 import confidence_scoring as cs_module        # Phase Q: Translation confidence
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO = "onerkk/line-translator-bot"
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "onerkk/line-translator-bot").strip() or "onerkk/line-translator-bot"
 LIFF_ID = os.environ.get("LIFF_ID", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
@@ -265,8 +268,9 @@ oai = OpenAI(api_key=OPENAI_KEY, timeout=90.0) if OPENAI_KEY else None  # v3.9.5
 
 # ★ AI Provider 統一介面(v1.0 2026-05-15)
 class _AIProxy:
-    """Drop-in replacement for ai.chat.completions.create()
-    內部呼叫 ai_provider.chat_complete(),自動路由到 OpenAI 或 Anthropic"""
+    """Drop-in replacement for ai.chat.completions.create().
+    文字翻譯由 ai_provider 自動路由到 OpenAI、Claude 或 Gemini。
+    """
     class _Chat:
         class _Completions:
             @staticmethod
@@ -299,6 +303,15 @@ group_settings = {}
 group_target_lang = {}
 # Image translation toggle per group, default True
 group_img_settings = {}
+
+# v3.17: These containers MUST exist before the first load_settings() call.
+# Older code declared them near the end of app.py, so startup loaded the main
+# cloud snapshot before the containers existed; the load then aborted and the
+# late declarations reset the 9 visual toggles to defaults.
+group_target_langs = {}     # {group_id: ["id", "th", ...]}
+group_tts_settings = {}     # {group_id: bool}
+group_conv_settings = {}    # {group_id: bool}
+group_flex_v2 = {}          # {group_id: {visual_key: bool}}
 # v3.9.18: 記錄最後 5 張收到的 LINE 圖片 message_id(供 /debug/recent-images 使用)
 _last_image_received_msgs = []  # list of dicts: {msg_id, group_id, ts}
 
@@ -318,6 +331,7 @@ from concurrent.futures import ThreadPoolExecutor as _TPE_v313
 _EVENT_LOG_EXECUTOR = _TPE_v313(max_workers=1, thread_name_prefix="evlog")   # 單線程保序
 _BG_POST_EXECUTOR   = _TPE_v313(max_workers=2, thread_name_prefix="bgpost")  # QE/APE/TM 入庫
 _MULTI_TGT_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="mtgt")    # 多語廣播並行
+_PARAGRAPH_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="para")    # 長公告段落並行；保持段落順序與相同翻譯流程
 # v3.27 全檢修正:向量查詢「專用」池。原本與背景 QE 共用 bgpost(2 workers)—
 # 高峰期 QE(每次 1-3 秒)佔滿兩個 worker,關鍵路徑的 vec future 排隊到
 # 6 秒 timeout,主路徑反被卡住 — 比不並行更糟。隔離後互不影響。
@@ -1034,7 +1048,7 @@ group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str
 # 所有舊設定在載入與 API 儲存時都會經 ai_provider 白名單遷移。
 model_default = ai_provider.DEFAULT_OPENAI_MODEL
 model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
-model_threshold = 0               # char count threshold (0 = always use default, no auto-switch)
+model_threshold = 150             # 短訊息走低延遲模型；長公告才升級強模型，兼顧速度與品質
 
 # v3.9.33 (2026-05-15): Anthropic 路徑獨立的字數切換邏輯
 # 解決問題:切到 Anthropic 後,「套用模型」按鈕把所有 OpenAI model 映射到同一個 Claude model,
@@ -1240,7 +1254,7 @@ prompt_cache_key_enabled = True
 # 對歐那 LINE bot 工廠 24/7 換班場景:夜班 dead time 後 cache 仍存活,早班直接命中。
 # 不支援的 model(gpt-5/5-mini/5-nano, gpt-4*)會自動 skip(防 400)。
 # 預估省下:夜班→早班 cache hit 從 0% → ~90%,輸入 token 成本省 70-90%。
-openai_24h_cache_enabled = False
+openai_24h_cache_enabled = True
 
 
 def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
@@ -3220,6 +3234,87 @@ def strip_mentions_for_detect(text, line_mentions=None):
     # Strip Chinese @mentions
     clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', ' ', clean)
     return clean
+
+
+# v3.17: @mention-only / name-call guard.
+# LINE 群組常見「@甲 乙」只是叫兩個人，不是要翻譯。舊邏輯把真正的
+# LINE mention 去掉後，只剩 1~4 個中文字（例如「君立」），仍被判定為中文
+# 並送翻譯，造成截圖中的誤觸發。這裡在語言偵測前做語意邊界判斷。
+_MENTION_SHORT_ACTION_TERMS = {
+    "快來", "過來", "回來", "來一下", "看一下", "等一下", "先不要", "不要",
+    "停機", "開機", "確認", "收到", "好了", "可以", "不行", "小心", "注意",
+    "幫忙", "麻煩", "處理", "重做", "重洗", "退回", "放行", "拿走", "帶走",
+    "下來", "上來", "過去", "開始", "結束", "休息", "吃飯", "換班", "加班",
+    "下班", "上班", "辛苦了", "謝謝", "早安", "晚安", "請問", "有空嗎",
+    "在哪", "要嗎", "好了嗎", "可以嗎", "來了嗎", "知道了", "再看", "先看",
+}
+_MENTION_SENTENCE_PARTICLES = set("嗎呢吧啊呀喔哦欸啦嘛了請要別再先快幫看等停開回來去做拿放換")
+
+
+def _normalized_known_names_for_group(group_id):
+    """Return normalized protected/display names for mention-only detection."""
+    names = set()
+    try:
+        names.update(str(x).strip() for x in CUSTOMER_NAMES if str(x).strip())
+    except Exception:
+        pass
+    try:
+        for value in (group_user_names.get(group_id, {}) or {}).values():
+            value = str(value or "").strip()
+            if not value:
+                continue
+            names.add(value)
+            # LINE display names often append role in parentheses.
+            base = re.sub(r'\s*[（(][^）)]*[）)]\s*$', '', value).strip()
+            if base:
+                names.add(base)
+    except Exception:
+        pass
+    return names
+
+
+def is_mention_only_or_name_call(text, line_mentions=None, group_id=None):
+    """True when a message is only mentions / short addressee names, not a sentence.
+
+    Conservative rule:
+    - no mention => never intercept;
+    - mention(s) only => intercept;
+    - remainder matching a known name => intercept;
+    - unknown 1~4 Han-character remainder with no action/sentence cue => treat as a name call.
+    This fixes ``@小麥（研磨股班長） 君立`` while still allowing
+    ``@小麥 停機`` / ``@小麥 可以嗎`` to translate.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    mentions = list(line_mentions or extract_mentions(text))
+    if not mentions:
+        return False
+    remainder = text
+    for mention in sorted(set(mentions), key=len, reverse=True):
+        remainder = remainder.replace(mention, ' ')
+    # Remove separators commonly used between addressees.
+    remainder = re.sub(r'[\s,，、。.!！?？:：;；/\\|·•]+', '', remainder)
+    if not remainder:
+        return True
+
+    known_names = _normalized_known_names_for_group(group_id)
+    if remainder in known_names:
+        return True
+
+    # Multiple short name chunks typed without LINE mention metadata.
+    raw_tail = strip_mentions_for_detect(text, mentions).strip()
+    chunks = [c for c in re.split(r'[\s,，、/|]+', raw_tail) if c]
+    if chunks and all(c in known_names for c in chunks):
+        return True
+
+    if re.fullmatch(r'[\u4e00-\u9fff]{1,4}', remainder):
+        if any(term in remainder for term in _MENTION_SHORT_ACTION_TERMS):
+            return False
+        # Common sentence/action cues mean it is likely an actual instruction/question.
+        if any(ch in _MENTION_SENTENCE_PARTICLES for ch in remainder):
+            return False
+        return True
+    return False
 
 
 def has_chinese(text):
@@ -6417,13 +6512,9 @@ def post_fix_translation(text):
 
 
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
-    # v3.9.33 注意:此函式名稱有誤導性 — 實際呼叫 `ai = _AIProxy()`,
-    # 會自動路由到 OpenAI 或 Anthropic(依 active_provider 設定)。
-    # 但 line 4438 的 `if not oai` 檢查會在「沒設 OPENAI_KEY」時提前 return None,
-    # 即使歐那完全用 Anthropic。修法:檢查改成「兩個 key 都沒設才 fail」。
-    # 為了避免破壞既有行為(歐那有設兩個 key),先保留原 check,日後再重構。
-    if not oai:
-        return None
+    # 函式名稱為歷史相容名稱；實際文字翻譯統一經 _AIProxy 路由到
+    # OpenAI / Claude / Gemini。不可再用原生 OpenAI client 是否存在作為前置條件，
+    # 否則只設定 Claude 或 Gemini Key 時會在送出前就被錯誤攔截。
     # v3.9.30 B10 修補: 空字串/純空白不該送到 OpenAI 浪費 token
     if not text or not (text or "").strip():
         return ""
@@ -7050,6 +7141,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.9.57: timeout 30→90 秒。長訊息走 Sonnet 4.6 + extended thinking,
             # 30 秒可能不夠(Anthropic client 自帶 120s,但 OpenAI 路徑走這個值)。
             "timeout": 90,
+            # v3.18: 三 provider 共用的低延遲翻譯模式。
+            # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
+            "translation_fast_quality": True,
         }
         # Sampling parameters
         if model_supports(_model, "temperature"):
@@ -8430,37 +8524,71 @@ def _translate_single_paragraph(text, src, tgt):
     return result
 
 
+def _snapshot_translation_thread_context():
+    """複製目前翻譯 thread-local 狀態，供段落工作執行緒沿用。
+
+    多執行緒若沒有複製 group/tone/semantic-contract/TM 等上下文，速度雖快，
+    但各段可能失去同一套術語與語氣。這裡只搬移執行緒本身已有的資料，
+    不改 prompt、不換模型，因此並行化不會犧牲翻譯品質。
+    """
+    snapshot = {}
+    for key, value in getattr(_tl, "__dict__", {}).items():
+        try:
+            snapshot[key] = copy.deepcopy(value)
+        except Exception:
+            snapshot[key] = value
+    return snapshot
+
+
+def _translate_with_thread_context(translate_fn, para_text, src, tgt, context_snapshot):
+    """在可重用 worker 內乾淨地套用/還原翻譯上下文，避免跨訊息污染。"""
+    previous = dict(getattr(_tl, "__dict__", {}))
+    try:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(context_snapshot)
+        return translate_fn(para_text, src, tgt)
+    finally:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous)
+
+
 def _translate_paragraphs_separately(text, src, tgt, translate_fn):
-    """分段獨立翻譯,然後用原分隔符拼回
-    
-    Args:
-      text: 原文
-      src, tgt: 語言對
-      translate_fn: 實際翻譯函數(通常是 translate_openai)
-    
-    Returns:
-      拼接後的譯文(段落結構與原文一致),失敗時 None
+    """分段並行翻譯，再依原順序與分隔符拼回。
+
+    每一段仍走原本完全相同的模型、prompt、術語、cache 與後處理；唯一差異是
+    多段同時送出，總等待時間由「各段耗時相加」降為「最慢一段的耗時」。
+    任一段失敗時仍回傳 None，交回既有整段 fallback，維持可靠性。
     """
     parts = _split_into_paragraphs(text)
     if len(parts) <= 1:
         return None  # 沒分段,讓主流程處理
-    
+
     logger.info(
-        "Paragraph-split translation: %d paragraphs, lengths=%s",
+        "Paragraph-split parallel translation: %d paragraphs, lengths=%s",
         len(parts), [len(p[0]) for p in parts]
     )
-    
-    translated_parts = []
+
+    context_snapshot = _snapshot_translation_thread_context()
+    jobs = []
     for idx, (para_text, sep) in enumerate(parts):
         para_clean = para_text.strip()
         if not para_clean:
+            jobs.append((idx, sep, None))
+            continue
+        future = _PARAGRAPH_EXECUTOR.submit(
+            _translate_with_thread_context,
+            translate_fn, para_clean, src, tgt, context_snapshot,
+        )
+        jobs.append((idx, sep, future))
+
+    translated_parts = []
+    for idx, sep, future in jobs:
+        if future is None:
             translated_parts.append(("", sep))
             continue
-        
         try:
-            tr = translate_fn(para_clean, src, tgt)
+            tr = future.result()
             if not tr:
-                # 任一段失敗,放棄分段策略,讓主流程整段重翻
                 logger.warning(
                     "Paragraph-split: paragraph %d/%d failed, falling back",
                     idx + 1, len(parts)
@@ -8470,13 +8598,8 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
         except Exception as e:
             logger.error("Paragraph-split error on paragraph %d: %s", idx + 1, e)
             return None
-    
-    # 拼接
-    result = ""
-    for tr_text, sep in translated_parts:
-        result += tr_text + sep
-    
-    return result.strip()
+
+    return "".join(tr_text + sep for tr_text, sep in translated_parts).strip()
 
 
 def _translate_inner(text, src, tgt):
@@ -11273,6 +11396,13 @@ def handle_message(event):
 
     # Extract LINE's actual @mention data (blue text = 100% accurate)
     line_mentions = extract_line_mentions(text, event.message)
+
+    # v3.17 根治：只有 @mention / 人名點名的訊息不送翻譯。
+    # 實際案例：@小麥（研磨股班長） 君立。
+    if is_mention_only_or_name_call(text, line_mentions, group_id):
+        logger.info("[mention-guard] skip name-call message group=%s text=%r",
+                    group_id, text[:80])
+        return
 
     # Cache this message for future quote references
     msg_id = getattr(event.message, 'id', None)
@@ -14844,10 +14974,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 
   <div style="margin-bottom:8px">
-    <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">🧠 Reasoning(思考深度 — 翻譯建議 low,越高越慢越貴)</div>
+    <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">🧠 Reasoning(思考深度 — 翻譯建議 minimal,延遲最低)</div>
     <select id="aip-gemini-effort" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-      <option value="none">⚡ none(最快最省)</option>
-      <option value="low" selected>🟢 low(預設,品質兼顧)</option>
+      <option value="minimal" selected>⚡ minimal(翻譯預設,延遲最低)</option>
+      <option value="low">🟢 low</option>
       <option value="medium">🟡 medium</option>
       <option value="high">🔴 high(翻譯不建議)</option>
     </select>
@@ -19553,6 +19683,257 @@ def _load_file_from_github(filename, branch="main"):
         return None
 
 
+# v3.17: Unified durable settings storage.
+# - Upstash Redis: primary low-latency cloud copy when configured.
+# - GitHub data branch: cloud backup / deployment-independent copy.
+# - Persistent/local file: last-resort cache and disaster recovery.
+# A settings write is only reported as cloud-persisted when at least one cloud
+# backend confirms success; this prevents the admin UI from saying "saved"
+# while a restart would actually discard the change.
+_SETTINGS_FILENAME = "bot_settings.json"
+_SETTINGS_BRANCH = "data"
+_SETTINGS_KV_KEY = os.environ.get("BOT_SETTINGS_KV_KEY", "line_bot:bot_settings:v2").strip() or "line_bot:bot_settings:v2"
+_SETTINGS_SCHEMA_VERSION = 2
+_SETTINGS_REQUIRE_CLOUD = os.environ.get("REQUIRE_CLOUD_SETTINGS", "1").strip().lower() not in ("0", "false", "no", "off")
+_settings_io_lock = _threading.RLock()
+_last_persisted_state_hash = ""
+_last_settings_load_source = "none"
+_last_settings_save_status = {
+    "ok": False,
+    "cloud_ok": False,
+    "cloud_configured": False,
+    "upstash": None,
+    "github": None,
+    "local": None,
+    "error": "not_saved_yet",
+    "updated_at": None,
+}
+
+
+def _parse_loaded_json(raw):
+    """Accept already-parsed JSON or JSON text and return a dict/list.
+
+    `_load_file_from_github()` already returns parsed JSON.  The legacy v3.10
+    sidecar called json.loads() on that dict, which raised TypeError and made
+    every sidecar restore silently fail.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        return json.loads(raw)
+    raise TypeError("Unsupported JSON payload type: %s" % type(raw).__name__)
+
+
+def _resolve_settings_cache_path():
+    env_path = os.environ.get("BOT_SETTINGS_CACHE_FILE", "").strip()
+    if env_path:
+        return env_path
+    for directory in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(directory) and os.access(directory, os.W_OK):
+            return os.path.join(directory, _SETTINGS_FILENAME)
+    return _SETTINGS_FILENAME
+
+
+_SETTINGS_CACHE_FILE = _resolve_settings_cache_path()
+
+
+def _write_text_atomic(path, text):
+    """Atomic UTF-8 file replacement; returns bool."""
+    try:
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+        tmp = "%s.tmp.%s.%s" % (path, os.getpid(), _threading.get_ident())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        logger.warning("Settings local cache write failed (%s): %s", path, exc)
+        try:
+            if 'tmp' in locals() and os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+def _read_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            parsed = json.load(fh)
+        return parsed if isinstance(parsed, dict) else None
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.warning("Settings local cache read failed (%s): %s", path, exc)
+        return None
+
+
+def _settings_state_hash(document):
+    """Stable SHA-256 of settings excluding volatile metadata."""
+    core = dict(document or {})
+    core.pop("_meta", None)
+    raw = json.dumps(core, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _settings_updated_at(document):
+    try:
+        meta = document.get("_meta") or {}
+        return float(meta.get("updated_at_unix") or 0)
+    except Exception:
+        return 0.0
+
+
+def _load_settings_document():
+    """Load the newest valid settings copy across all configured stores."""
+    global _last_settings_load_source
+    candidates = []
+
+    # Source priority only breaks timestamp ties.  Newest timestamp always wins.
+    if _kv_enabled():
+        try:
+            doc = _parse_loaded_json(_kv_get_str(_SETTINGS_KV_KEY))
+            if isinstance(doc, dict):
+                candidates.append(("upstash", doc, 3))
+        except Exception as exc:
+            logger.warning("Settings load from Upstash failed: %s", exc)
+
+    try:
+        doc = _load_file_from_github(_SETTINGS_FILENAME, branch=_SETTINGS_BRANCH)
+        if isinstance(doc, dict):
+            candidates.append(("github", doc, 2))
+    except Exception as exc:
+        logger.warning("Settings load from GitHub failed: %s", exc)
+
+    doc = _read_json_file(_SETTINGS_CACHE_FILE)
+    if isinstance(doc, dict):
+        candidates.append(("local", doc, 1))
+
+    if not candidates:
+        _last_settings_load_source = "none"
+        return None
+
+    source, document, _priority = max(
+        candidates,
+        key=lambda item: (_settings_updated_at(item[1]), item[2]),
+    )
+    _last_settings_load_source = source
+    logger.info("Loaded newest settings copy from %s (candidates=%s)",
+                source, ",".join(x[0] for x in candidates))
+    return document
+
+
+def _persist_settings_document(document):
+    """Write one immutable snapshot to local cache and every cloud backend."""
+    global _last_settings_save_status
+    text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
+    status = {
+        "ok": False,
+        "cloud_ok": False,
+        "cloud_configured": bool(_kv_enabled() or GITHUB_TOKEN),
+        "upstash": None,
+        "github": None,
+        "local": None,
+        "error": None,
+        "updated_at": time.time(),
+    }
+    with _settings_io_lock:
+        status["local"] = _write_text_atomic(_SETTINGS_CACHE_FILE, text)
+
+        if _kv_enabled():
+            try:
+                status["upstash"] = (_kv_set_str(_SETTINGS_KV_KEY, text) in ("OK", True, 1))
+            except Exception as exc:
+                status["upstash"] = False
+                logger.warning("Settings save to Upstash failed: %s", exc)
+
+        if GITHUB_TOKEN:
+            try:
+                status["github"] = bool(_commit_file_to_github(
+                    _SETTINGS_FILENAME, text, "Auto-save bot settings",
+                    branch=_SETTINGS_BRANCH))
+            except Exception as exc:
+                status["github"] = False
+                logger.warning("Settings save to GitHub failed: %s", exc)
+
+    status["cloud_ok"] = bool(status.get("upstash") or status.get("github"))
+    if _SETTINGS_REQUIRE_CLOUD:
+        status["ok"] = bool(status["cloud_ok"])
+        if not status["cloud_configured"]:
+            status["error"] = "no_cloud_backend_configured"
+        elif not status["cloud_ok"]:
+            status["error"] = "cloud_write_failed"
+        elif not status["local"]:
+            # Cloud durability succeeded; local cache is only an extra fallback.
+            status["error"] = "local_cache_write_failed_but_cloud_ok"
+    else:
+        status["ok"] = bool(status["local"] or status["cloud_ok"])
+        if not status["ok"]:
+            status["error"] = "all_writes_failed"
+
+    _last_settings_save_status = status
+    if not status["ok"]:
+        logger.error("Settings persistence incomplete: %s", status)
+    return bool(status["ok"])
+
+
+def _safe_ai_provider_config_snapshot():
+    """Copy all AI backend settings except API secrets."""
+    try:
+        ai_provider._ensure_initialized()
+        cfg = copy.deepcopy(ai_provider._current_config or {})
+        for provider in ("openai", "anthropic", "gemini"):
+            if isinstance(cfg.get(provider), dict):
+                cfg[provider].pop("api_key", None)
+        return cfg
+    except Exception as exc:
+        logger.warning("AI provider config snapshot failed: %s", exc)
+        return {}
+
+
+def _restore_ai_provider_config(saved):
+    """Restore non-secret AI settings while preserving runtime/env API keys."""
+    if not isinstance(saved, dict) or not saved:
+        return
+    try:
+        ai_provider._ensure_initialized()
+        with ai_provider._config_lock:
+            current = copy.deepcopy(ai_provider._current_config or ai_provider.DEFAULT_CONFIG)
+            merged = copy.deepcopy(current)
+            for key, value in saved.items():
+                if key in ("openai", "anthropic", "gemini") and isinstance(value, dict):
+                    secret = (current.get(key) or {}).get("api_key", "")
+                    target = merged.setdefault(key, {})
+                    target.update(copy.deepcopy(value))
+                    target["api_key"] = secret
+                else:
+                    merged[key] = copy.deepcopy(value)
+            try:
+                merged = ai_provider._migrate_config_models(merged)
+            except Exception:
+                pass
+            ai_provider._current_config = merged
+            ai_provider._save_config_to_disk(merged)
+            ai_provider._openai_client = None
+            ai_provider._anthropic_client = None
+            ai_provider._gemini_client = None
+    except Exception as exc:
+        logger.warning("AI provider config restore failed: %s", exc)
+
+
 _last_save_time = 0
 _save_lock = _threading.Lock()
 _save_scheduled = False
@@ -19563,32 +19944,34 @@ _save_scheduled = False
 SAVE_THROTTLE_SEC = 3
 
 def save_settings(force=False):
-    """Persist all bot settings to GitHub.
-    
-    force=False (預設,內部低頻呼叫用): 3s throttle + background thread,不阻塞
-    force=True  (API endpoint 用戶觸發改動用): 同步立即寫盤,return 之前確保 commit
-    
-    v3.9.46 修正:
-    - throttle 從 30s 縮短到 3s,降低 worker restart 期間設定丟失風險
-    - 加 force=True 模式,API endpoint(後台改設定)可選同步寫,徹底避免 throttle 期間丟失
+    """Persist all settings to durable cloud storage.
+
+    Calls originating from an admin API are automatically synchronous, even
+    when an older endpoint still calls save_settings() without force=True.
     """
+    if not force and has_request_context() and request.path.startswith("/api/admin/"):
+        force = True
     if force:
-        # 同步立即寫,API endpoint return 之前完成 commit
-        _do_save_impl()
-        return
+        ok = bool(_do_save_impl())
+        if has_request_context():
+            g.settings_persist_attempted = True
+            g.settings_persist_ok = ok
+        return ok
     global _last_save_time, _save_scheduled
     now = time.time()
     with _save_lock:
         remaining = SAVE_THROTTLE_SEC - (now - _last_save_time)
         if remaining > 0:
-            # Throttled — schedule a delayed save if not already scheduled
             if not _save_scheduled:
                 _save_scheduled = True
-                _threading.Timer(remaining + 0.1, _flush_pending_save).start()
-            return
+                timer = _threading.Timer(remaining + 0.1, _flush_pending_save)
+                timer.daemon = True
+                timer.start()
+            return True
         _last_save_time = now
         _save_scheduled = False
     _threading.Thread(target=_do_save_impl, daemon=True).start()
+    return True
 
 
 def _flush_pending_save():
@@ -19600,7 +19983,7 @@ def _flush_pending_save():
 
 
 def _do_save_impl():
-    global _last_save_time
+    global _last_save_time, _last_persisted_state_hash
     # v3.10+ 修補:_do_save_impl 在 background thread 跑,讀 80+ 個全域 dict/set 期間
     # webhook handler 可能正在寫(record_user_name / admin endpoint 等),導致
     # RuntimeError: dictionary changed size during iteration → 整次 save 失敗。
@@ -19683,6 +20066,8 @@ def _do_save_impl():
             "paragraph_split_translate": paragraph_split_translate,
             "paragraph_split_threshold": paragraph_split_threshold,
             "stop_sequences_enabled": stop_sequences_enabled,
+            "forbidden_words_zh": forbidden_words_zh,
+            "forbidden_words_id": forbidden_words_id,
             "reasoning_effort": reasoning_effort,
             "send_user_id_to_openai": send_user_id_to_openai,
             "send_metadata_to_openai": send_metadata_to_openai,
@@ -19702,6 +20087,8 @@ def _do_save_impl():
                 "default": ((ai_provider._current_config or {}).get("gemini", {}) or {}).get("default_model", ""),
                 "upgrade": ((ai_provider._current_config or {}).get("gemini", {}) or {}).get("upgrade_model", ""),
             } if ai_provider else {},
+            # Full non-secret provider config: models, mappings, failover and every feature toggle.
+            "ai_provider_config": _safe_ai_provider_config_snapshot(),
             "gemini_model_default": gemini_model_default,
             "gemini_model_upgrade": gemini_model_upgrade,
             "claude_model_default": claude_model_default,
@@ -19736,22 +20123,40 @@ def _do_save_impl():
             logger.error("save_settings snapshot failed (non-race): %s", _re2)
             with _save_lock:
                 _last_save_time = 0
-            return
+            return False
     else:
         # 3 次都 RuntimeError → 跳過這次 save,30 秒後再試
         logger.error("save_settings snapshot failed after 3 retries, skipping this save (next attempt in 30s)")
         with _save_lock:
             _last_save_time = 0
-        return
+        return False
 
     try:
-        json_str = json.dumps(data, ensure_ascii=False, indent=2)
-        _commit_file_to_github("bot_settings.json", json_str, "Auto-save bot settings", branch="data")
-    except Exception as e:
-        logger.error("Background save_settings failed: %s", e)
-        # Reset timer so next call will retry instead of being throttled
+        # Detach the snapshot from live mutable globals before I/O.
+        data = json.loads(json.dumps(data, ensure_ascii=False, default=str))
+        state_hash = _settings_state_hash(data)
+        if state_hash == _last_persisted_state_hash and _last_settings_save_status.get("ok"):
+            return True
+        now = time.time()
+        data["_meta"] = {
+            "schema_version": _SETTINGS_SCHEMA_VERSION,
+            "updated_at_unix": now,
+            "updated_at_iso": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+            "state_hash": state_hash,
+            "app_version": VERSION,
+        }
+        ok = _persist_settings_document(data)
+        if ok:
+            _last_persisted_state_hash = state_hash
+            return True
         with _save_lock:
             _last_save_time = 0
+        return False
+    except Exception as e:
+        logger.error("Background save_settings failed: %s", e)
+        with _save_lock:
+            _last_save_time = 0
+        return False
 
 
 def load_settings():
@@ -19782,9 +20187,10 @@ def load_settings():
     global quick_reply_items_settings
     global forms_data, forms_submissions
     global group_flex_v2, group_tts_settings, group_conv_settings, group_target_langs
-    data = _load_file_from_github("bot_settings.json", branch="data")
+    global _last_persisted_state_hash
+    data = _load_settings_document()
     if not data:
-        logger.info("No bot_settings.json found on GitHub, starting fresh")
+        logger.info("No durable bot settings found, starting fresh")
         return
     try:
         group_settings.update(data.get("group_settings", {}))
@@ -19925,6 +20331,10 @@ def load_settings():
             except (ValueError, TypeError): pass
         if "stop_sequences_enabled" in data:
             stop_sequences_enabled = bool(data["stop_sequences_enabled"])
+        if "forbidden_words_zh" in data:
+            forbidden_words_zh = str(data["forbidden_words_zh"])
+        if "forbidden_words_id" in data:
+            forbidden_words_id = str(data["forbidden_words_id"])
         if "reasoning_effort" in data:
             v = str(data["reasoning_effort"])
             if v in ("low", "medium", "high"):
@@ -20024,6 +20434,9 @@ def load_settings():
         # v3.9.33: Anthropic 路徑獨立字數切換
         if "service_price_text" in data:
             service_price_text = str(data["service_price_text"])
+        # v3.17: restore the complete non-secret provider configuration first.
+        # Legacy individual fields below remain for backward compatibility.
+        _restore_ai_provider_config(data.get("ai_provider_config"))
         # v3.32: 還原 AI provider 設定(重新部署後不再跳回預設)
         try:
             if "gemini_model_default" in data:
@@ -20105,8 +20518,11 @@ def load_settings():
             group_conv_settings.update(data["group_conv_settings"])
         if "group_target_langs" in data and isinstance(data["group_target_langs"], dict):
             group_target_langs.update(data["group_target_langs"])
-        logger.info("Loaded bot settings from GitHub: %d groups, %d DM users, %d protected names, %d custom examples, %d forms",
-                     len(group_tracking), len(dm_known_users), len(EXTRA_CUSTOMERS), len(custom_translation_examples), len(forms_data))
+        _last_persisted_state_hash = ((data.get("_meta") or {}).get("state_hash")
+                                      or _settings_state_hash(data))
+        logger.info("Loaded bot settings from %s: %d groups, %d DM users, %d protected names, %d custom examples, %d forms",
+                     _last_settings_load_source, len(group_tracking), len(dm_known_users),
+                     len(EXTRA_CUSTOMERS), len(custom_translation_examples), len(forms_data))
     except Exception as e:
         logger.error("Error loading bot settings: %s", e)
 
@@ -20139,6 +20555,57 @@ def check_manager_access(required_tab=None):
         allowed = admin_users[uid].get("allowed_tabs", [])
         return required_tab in allowed
     return True
+
+
+@app.after_request
+def _surface_settings_persistence_result(response):
+    """Never let an admin settings endpoint silently claim an unsaved change."""
+    attempted = bool(getattr(g, "settings_persist_attempted", False))
+    if not attempted:
+        return response
+    ok = bool(getattr(g, "settings_persist_ok", False))
+    response.headers["X-Settings-Persisted"] = "1" if ok else "0"
+    response.headers["X-Settings-Load-Source"] = _last_settings_load_source
+    if ok or response.status_code >= 400:
+        return response
+
+    payload = response.get_json(silent=True) if response.is_json else None
+    if not isinstance(payload, dict):
+        payload = {"ok": False}
+    else:
+        payload = dict(payload)
+        payload["ok"] = False
+    persist_status = getattr(g, "settings_persist_status", None)
+    if not isinstance(persist_status, dict):
+        persist_status = dict(_last_settings_save_status)
+    payload["persistence_error"] = persist_status.get("error") or "cloud_write_failed"
+    payload["message"] = "設定已在記憶體更新，但雲端寫入失敗；本次操作不視為完成。"
+    payload["persistence"] = persist_status
+    failed = jsonify(payload)
+    failed.status_code = 503
+    failed.headers["X-Settings-Persisted"] = "0"
+    failed.headers["X-Settings-Load-Source"] = _last_settings_load_source
+    return failed
+
+
+@app.route("/api/admin/settings/persistence", methods=["GET"])
+def api_admin_settings_persistence():
+    """Cloud persistence health/status for the admin panel."""
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify({
+        "ok": True,
+        "load_source": _last_settings_load_source,
+        "cache_file": _SETTINGS_CACHE_FILE,
+        "require_cloud": _SETTINGS_REQUIRE_CLOUD,
+        "cloud_configured": bool(_kv_enabled() or GITHUB_TOKEN),
+        "upstash_configured": _kv_enabled(),
+        "github_configured": bool(GITHUB_TOKEN),
+        "github_repo": GITHUB_REPO,
+        "last_save": dict(_last_settings_save_status),
+        "state_hash": _last_persisted_state_hash,
+        "schema_version": _SETTINGS_SCHEMA_VERSION,
+    })
 
 
 
@@ -20191,6 +20658,8 @@ def api_admin_openai_features():
     data = request.get_json(silent=True) or {}
     ok, msg = ai_provider.update_openai_features(
         {"flex_background": bool(data.get("flex_background", True))})
+    if ok:
+        save_settings(force=True)
     return jsonify({"ok": ok, "message": msg})
 
 
@@ -20202,6 +20671,8 @@ def api_admin_ai_provider_switch():
     data = request.get_json(silent=True) or {}
     target = data.get("provider", "").strip().lower()
     ok, msg = ai_provider.set_active_provider(target)
+    if ok:
+        save_settings(force=True)
     return jsonify({"ok": ok, "message": msg, "active_provider": ai_provider.get_active_provider()})
 
 
@@ -20322,6 +20793,8 @@ def api_admin_ai_provider_mapping():
     if not isinstance(mapping, dict):
         return jsonify({"ok": False, "message": "mapping 必須是 dict"}), 400
     ok, msg = ai_provider.update_model_mapping(mapping)
+    if ok:
+        save_settings(force=True)
     return jsonify({"ok": ok, "message": msg})
 
 
@@ -20378,6 +20851,8 @@ def api_admin_ai_provider_features():
     if not isinstance(features, dict):
         return jsonify({"ok": False, "message": "features 必須是 dict"}), 400
     ok, msg = ai_provider.update_claude_features(features)
+    if ok:
+        save_settings(force=True)
     return jsonify({"ok": ok, "message": msg})
 
 
@@ -20401,14 +20876,15 @@ def api_admin_ai_provider_gemini_config():
         msgs.append(msg)
     effort = (data.get("reasoning_effort") or "").strip().lower()
     if effort:
-        if effort not in ("none", "low", "medium", "high"):
-            return jsonify({"ok": False, "message": "reasoning_effort 須為 none/low/medium/high"}), 400
+        if effort not in ("minimal", "low", "medium", "high"):
+            return jsonify({"ok": False, "message": "reasoning_effort 須為 minimal/low/medium/high"}), 400
         ok, msg = ai_provider.update_gemini_features({"reasoning_effort": effort})
         if not ok:
             return jsonify({"ok": False, "message": msg}), 500
         msgs.append(msg)
     if not msgs:
         return jsonify({"ok": False, "message": "沒有可更新的欄位"}), 400
+    save_settings(force=True)
     return jsonify({"ok": True, "message": ";".join(msgs)})
 
 
@@ -24152,10 +24628,12 @@ def admin_apply_best_defaults():
     dry_run = request.args.get("dry_run") == "1"
     
     global model_default, model_upgrade, model_threshold
+    global claude_model_default, claude_model_upgrade, claude_auto_switch_enabled
+    global gemini_model_default, gemini_model_upgrade
     global translation_temperature, translation_top_p, translation_seed
     global double_check_mode, double_check_threshold
     global fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled
-    global prompt_caching_enabled, reasoning_effort
+    global prompt_caching_enabled, reasoning_effort, openai_24h_cache_enabled
     global send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled
     global id_preprocessing_enabled, multi_path_backtrans_enabled
@@ -24167,7 +24645,12 @@ def admin_apply_best_defaults():
         # === Models ===
         "model_default": "gpt-5.4-mini",      # 現行翻譯首選
         "model_upgrade": "gpt-5.4",           # 長公告與複雜工廠語境
-        "model_threshold": 150,               # Was 100 — most factory msgs <150 chars, save cost
+        "model_threshold": 150,               # 短訊息低延遲；長公告升級強模型
+        "claude_model_default": "claude-haiku-4-5-20251001",
+        "claude_model_upgrade": "claude-sonnet-4-6",
+        "claude_auto_switch_enabled": True,
+        "gemini_model_default": "gemini-3.1-flash-lite",
+        "gemini_model_upgrade": "gemini-3.5-flash",
         
         # === Sampling (only affects gpt-4 family; gpt-5 ignores) ===
         "translation_temperature": 0.0,       # Deterministic
@@ -24181,10 +24664,11 @@ def admin_apply_best_defaults():
         "structured_output_enabled": False,   # Off — adds latency, marginal gain for translation
         "double_check_mode": "smart",         # Only re-translate suspect outputs
         "double_check_threshold": 0.55,       # Permissive (lower = more flagged)
-        "prompt_caching_enabled": True,       # Free 75% discount when prefixes match
+        "prompt_caching_enabled": True,       # 共用固定 prompt，命中 cache 可降低延遲
+        "openai_24h_cache_enabled": True,      # 延長 OpenAI 共用 prompt cache 壽命
         
         # === Reasoning (auto-overridden per-model anyway, but for safety) ===
-        "reasoning_effort": "low",            # If model has no optimal mapping, low > medium
+        "reasoning_effort": "low",            # OpenAI 實際翻譯仍按模型自動降到 none/minimal
         
         # === ID→ZH quality ===
         "id_zh_cot_enabled": True,            # Chain-of-Thought 二階段 (verified +20%)
@@ -24210,12 +24694,16 @@ def admin_apply_best_defaults():
     # Snapshot current values for diff
     current = {
         "model_default": model_default, "model_upgrade": model_upgrade, "model_threshold": model_threshold,
+        "claude_model_default": claude_model_default, "claude_model_upgrade": claude_model_upgrade,
+        "claude_auto_switch_enabled": claude_auto_switch_enabled,
+        "gemini_model_default": gemini_model_default, "gemini_model_upgrade": gemini_model_upgrade,
         "translation_temperature": translation_temperature, "translation_top_p": translation_top_p,
         "translation_seed": translation_seed, "fewshot_mode": fewshot_mode,
         "logprobs_enabled": logprobs_enabled, "confidence_threshold": confidence_threshold,
         "structured_output_enabled": structured_output_enabled,
         "double_check_mode": double_check_mode, "double_check_threshold": double_check_threshold,
         "prompt_caching_enabled": prompt_caching_enabled, "reasoning_effort": reasoning_effort,
+        "openai_24h_cache_enabled": openai_24h_cache_enabled,
         "id_zh_cot_enabled": id_zh_cot_enabled, "id_zh_cod_enabled": id_zh_cod_enabled,
         "id_zh_pivot_enabled": id_zh_pivot_enabled, "id_preprocessing_enabled": id_preprocessing_enabled,
         "multi_path_backtrans_enabled": multi_path_backtrans_enabled,
@@ -24240,6 +24728,11 @@ def admin_apply_best_defaults():
     model_default = best["model_default"]
     model_upgrade = best["model_upgrade"]
     model_threshold = best["model_threshold"]
+    claude_model_default = best["claude_model_default"]
+    claude_model_upgrade = best["claude_model_upgrade"]
+    claude_auto_switch_enabled = best["claude_auto_switch_enabled"]
+    gemini_model_default = best["gemini_model_default"]
+    gemini_model_upgrade = best["gemini_model_upgrade"]
     translation_temperature = best["translation_temperature"]
     translation_top_p = best["translation_top_p"]
     translation_seed = best["translation_seed"]
@@ -24250,6 +24743,7 @@ def admin_apply_best_defaults():
     double_check_mode = best["double_check_mode"]
     double_check_threshold = best["double_check_threshold"]
     prompt_caching_enabled = best["prompt_caching_enabled"]
+    openai_24h_cache_enabled = best["openai_24h_cache_enabled"]
     reasoning_effort = best["reasoning_effort"]
     id_zh_cot_enabled = best["id_zh_cot_enabled"]
     id_zh_cod_enabled = best["id_zh_cod_enabled"]
@@ -24264,12 +24758,27 @@ def admin_apply_best_defaults():
     send_user_id_to_openai = best["send_user_id_to_openai"]
     send_metadata_to_openai = best["send_metadata_to_openai"]
     
+    if ai_provider:
+        ai_provider.update_gemini_models(gemini_model_default, gemini_model_upgrade)
+        ai_provider.update_gemini_features({"reasoning_effort": "minimal"})
+        ai_provider.update_claude_features({
+            "extended_thinking": False,
+            "prompt_caching": True,
+        })
+
+    persisted = save_settings(force=True)
+    if persisted is False:
+        return jsonify({
+            "status": "applied_runtime_but_not_persisted",
+            "changed": diff,
+            "error": "雲端設定寫入失敗；本次執行有效，但重啟後可能不保留。",
+        }), 503
+
     return jsonify({
         "status": "applied",
         "changed": diff,
         "total_changes": len(diff),
-        "note": "All settings restored to OpenAI-recommended best defaults for translation. "
-                "Note: For GPT-5 series, reasoning_effort and verbosity are auto-set per request.",
+        "note": "三家 AI 已套用低延遲翻譯設定；模型、prompt、術語與品質後處理均保留。",
     })
 
 
@@ -24960,7 +25469,7 @@ def _is_admin_only_command(text):
 # When admin sends Chinese, bot translates into ALL of these languages.
 # Backward compatible: empty → fall back to legacy group_target_lang.
 
-group_target_langs = {}   # {group_id: ["id", "th", ...]}
+group_target_langs = globals().get("group_target_langs", {})   # preserve cloud-loaded state
 # ⚠️ 注意:多 gunicorn worker 場景下,此 dict 在每個 worker 各自獨立。
 # admin 在 worker A 改設定 → 寫 GitHub sidecar → 但 worker B/C/D 記憶體不會立刻更新。
 # 同步時機:服務重啟時 load_settings_v310 從 GitHub 載最新。
@@ -24991,7 +25500,7 @@ group_conversation_buffer = {}
 _conv_buffer_lock = _threading_v310.Lock()
 
 # {group_id: bool} — 上下文記憶 per-group 開關 (獨立於 flex_v2,因為這是翻譯邏輯不是視覺)
-group_conv_settings = {}
+group_conv_settings = globals().get("group_conv_settings", {})
 
 # 預設保留最近 4 對對話 = 8 條 messages。可在後台 per-group 調整。
 CONV_BUFFER_DEFAULT_TURNS = 4
@@ -25303,7 +25812,7 @@ def handle_skipterm_command(text, group_id):
 # Requires env PUBLIC_URL = "https://yourbot.example.com" (no trailing slash).
 # Falls through silently if not configured.
 
-group_tts_settings = {}   # {group_id: bool}, default False (TTS costs money)
+group_tts_settings = globals().get("group_tts_settings", {})   # preserve cloud-loaded state
 
 _tts_cache = {}           # {token: (m4a_bytes, expires_at, duration_ms)}
 _tts_cache_lock = _threading_v310.Lock()
@@ -25325,9 +25834,8 @@ TTS_MODEL = ai_provider.normalize_tts_model(
 # 主開關 group_flex_settings (既有) 全關時所有 v2 開關失效。
 
 # 各 v2 開關獨立 dict,讓 admin per-group 微調
-group_flex_v2 = {
-    # {group_id: {key: bool}},未配置時用 _V2_DEFAULTS
-}
+group_flex_v2 = globals().get("group_flex_v2", {})
+# {group_id: {key: bool}},未配置時用 _V2_DEFAULTS
 
 # 預設值 (新加 v2 升級全部 ON,除了 carousel/hero/span 三個 OFF)
 _V2_DEFAULTS = {
@@ -27161,143 +27669,96 @@ def liff_settings_page():
 
 
 # ----------------------------------------------------------------------------
-# F. PERSISTENCE — extend save/load to include new v3.10 dicts
+# F. PERSISTENCE — legacy v3.10 sidecar migration
 # ----------------------------------------------------------------------------
-# We wrap the existing _do_save_impl and load_settings so the new dicts
-# (group_target_langs, group_tts_settings) are persisted to a sidecar file
-# on GitHub. The original save is preserved untouched.
+# v3.17 stores these dictionaries in the unified bot_settings.json snapshot.
+# The old sidecar is read only as a one-time migration source.  It never
+# overwrites a value already restored from the main snapshot.
 
 _v310_orig_save = _do_save_impl
 _v310_orig_load = load_settings
 
 
+def _merge_v310_sidecar(raw):
+    """Merge legacy sidecar values without replacing newer main settings."""
+    try:
+        data = _parse_loaded_json(raw)
+    except Exception as exc:
+        logger.warning("v310 sidecar parse failed: %s", exc)
+        return False
+    if not isinstance(data, dict):
+        return False
+
+    changed = False
+    value = data.get("group_target_langs")
+    if isinstance(value, dict):
+        for gid, langs in value.items():
+            if gid not in group_target_langs and isinstance(langs, list):
+                group_target_langs[gid] = list(langs)
+                changed = True
+
+    value = data.get("group_tts_settings")
+    if isinstance(value, dict):
+        for gid, enabled in value.items():
+            if gid not in group_tts_settings and isinstance(enabled, bool):
+                group_tts_settings[gid] = enabled
+                changed = True
+
+    value = data.get("group_conv_settings")
+    if isinstance(value, dict):
+        for gid, enabled in value.items():
+            if gid not in group_conv_settings and isinstance(enabled, bool):
+                group_conv_settings[gid] = enabled
+                changed = True
+
+    value = data.get("group_flex_v2")
+    if isinstance(value, dict):
+        for gid, cfg in value.items():
+            if not isinstance(cfg, dict):
+                continue
+            current = group_flex_v2.setdefault(gid, {})
+            if not isinstance(current, dict):
+                current = {}
+                group_flex_v2[gid] = current
+            for key, enabled in cfg.items():
+                if key in _V2_DEFAULTS and key not in current:
+                    current[key] = bool(enabled)
+                    changed = True
+    return changed
+
+
+def _load_v310_legacy_sidecar():
+    raw = _load_file_from_github("bot_settings_v310.json", branch="data")
+    changed = _merge_v310_sidecar(raw)
+    if changed:
+        logger.info("v310 legacy sidecar migrated into unified settings")
+    return changed
+
+
 def _do_save_impl_v310():
-    """Wrap original save to also persist v3.10 settings."""
-    try:
-        _v310_orig_save()
-    except Exception as e:
-        logger.warning("v310: orig save failed: %s", e)
-    # Sidecar — 先拷貝再序列化,避免並發改寫造成 RuntimeError
-    try:
-        # group_flex_v2 是 nested dict {gid: {key: bool}},深拷貝
-        _flex_v2_copy = {}
-        for gid, cfg in list(group_flex_v2.items()):
-            if isinstance(cfg, dict):
-                _flex_v2_copy[gid] = dict(cfg)
-        sidecar = {
-            "group_target_langs": dict(group_target_langs),
-            "group_tts_settings": dict(group_tts_settings),
-            "group_flex_v2": _flex_v2_copy,
-            "group_conv_settings": dict(group_conv_settings),
-        }
-        sc = json.dumps(sidecar, ensure_ascii=False, indent=2)
-        _commit_file_to_github("bot_settings_v310.json", sc,
-                               "v3.10 sidecar settings", branch="data")
-    except Exception as e:
-        logger.warning("v310 sidecar save failed: %s", e)
+    """Compatibility alias; unified snapshot already includes v3.10 fields."""
+    return _v310_orig_save()
 
 
 def load_settings_v310():
-    """Wrap original load to also restore v3.10 settings."""
-    try:
-        _v310_orig_load()
-    except Exception as e:
-        logger.warning("v310: orig load failed: %s", e)
-    try:
-        raw = _load_file_from_github("bot_settings_v310.json", branch="data")
-        if raw:
-            d = json.loads(raw)
-            v = d.get("group_target_langs")
-            if isinstance(v, dict):
-                group_target_langs.clear()
-                group_target_langs.update(v)
-            elif v is not None:
-                logger.warning("v310 sidecar: group_target_langs 不是 dict (是 %s),忽略",
-                               type(v).__name__)
-            v = d.get("group_tts_settings")
-            if isinstance(v, dict):
-                group_tts_settings.clear()
-                group_tts_settings.update(v)
-            elif v is not None:
-                logger.warning("v310 sidecar: group_tts_settings 不是 dict (是 %s),忽略",
-                               type(v).__name__)
-            v = d.get("group_flex_v2")
-            if isinstance(v, dict):
-                group_flex_v2.clear()
-                # 只接受 value 是 dict 的 entries
-                for gid, cfg in v.items():
-                    if isinstance(cfg, dict):
-                        group_flex_v2[gid] = {k: bool(val) for k, val in cfg.items() if k in _V2_DEFAULTS}
-            elif v is not None:
-                logger.warning("v310 sidecar: group_flex_v2 不是 dict (是 %s),忽略",
-                               type(v).__name__)
-            v = d.get("group_conv_settings")
-            if isinstance(v, dict):
-                group_conv_settings.clear()
-                for gid, val in v.items():
-                    if isinstance(val, bool):
-                        group_conv_settings[gid] = val
-            elif v is not None:
-                logger.warning("v310 sidecar: group_conv_settings 不是 dict (是 %s),忽略",
-                               type(v).__name__)
-            logger.info("v310: sidecar loaded (%d lang-cfg, %d tts-cfg, %d flex-v2, %d conv-cfg)",
-                        len(group_target_langs), len(group_tts_settings),
-                        len(group_flex_v2), len(group_conv_settings))
-    except Exception as e:
-        logger.warning("v310 sidecar load failed: %s", e)
+    _v310_orig_load()
+    changed = _load_v310_legacy_sidecar()
+    if changed:
+        save_settings(force=True)
 
 
-# Replace globals so the rest of app.py picks up the v310 versions
+# Keep compatibility for code below that captured these names.
 _do_save_impl = _do_save_impl_v310
 load_settings = load_settings_v310
 
 
-# Re-run load now that the wrapper is in place, so the sidecar gets restored
-# on boot. We DON'T call load_settings() here (that would re-fetch
-# bot_settings.json from GitHub a second time — wasteful). We only load
-# the sidecar directly.
 try:
-    raw = _load_file_from_github("bot_settings_v310.json", branch="data")
-    if raw:
-        d = json.loads(raw)
-        v = d.get("group_target_langs")
-        if isinstance(v, dict):
-            group_target_langs.clear()
-            group_target_langs.update(v)
-        elif v is not None:
-            logger.warning("v310 boot sidecar: group_target_langs 不是 dict (是 %s),忽略",
-                           type(v).__name__)
-        v = d.get("group_tts_settings")
-        if isinstance(v, dict):
-            group_tts_settings.clear()
-            group_tts_settings.update(v)
-        elif v is not None:
-            logger.warning("v310 boot sidecar: group_tts_settings 不是 dict (是 %s),忽略",
-                           type(v).__name__)
-        v = d.get("group_flex_v2")
-        if isinstance(v, dict):
-            group_flex_v2.clear()
-            for gid, cfg in v.items():
-                if isinstance(cfg, dict):
-                    group_flex_v2[gid] = {k: bool(val) for k, val in cfg.items() if k in _V2_DEFAULTS}
-        elif v is not None:
-            logger.warning("v310 boot sidecar: group_flex_v2 不是 dict (是 %s),忽略",
-                           type(v).__name__)
-        v = d.get("group_conv_settings")
-        if isinstance(v, dict):
-            group_conv_settings.clear()
-            for gid, val in v.items():
-                if isinstance(val, bool):
-                    group_conv_settings[gid] = val
-        elif v is not None:
-            logger.warning("v310 boot sidecar: group_conv_settings 不是 dict (是 %s),忽略",
-                           type(v).__name__)
-        logger.info("v310: sidecar loaded on boot (%d lang-cfg, %d tts-cfg, %d flex-v2, %d conv-cfg)",
-                    len(group_target_langs), len(group_tts_settings),
-                    len(group_flex_v2), len(group_conv_settings))
+    _legacy_changed = _load_v310_legacy_sidecar()
+    if _legacy_changed:
+        save_settings(force=True)
     logger.info("v3.10 extensions loaded: +th/+hi, multilang, skipterm, TTS, onboarding, LIFF, flex-v2, conv-ctx")
 except Exception as _e:
-    logger.warning("v3.10 boot sidecar load failed: %s", _e)
+    logger.warning("v3.10 legacy sidecar migration failed: %s", _e)
 
 
 # ============================================================================
