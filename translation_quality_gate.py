@@ -24,6 +24,10 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 logger = logging.getLogger(__name__)
 
+# Deployment contract: app.py verifies this exact build at startup.
+QUALITY_GATE_API_VERSION = 2
+QUALITY_GATE_BUILD_ID = "2026-06-18.2-target-language-purity"
+
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
 _PLACEHOLDER_RE = re.compile(r"__QG_KEEP_(\d{3})_([0-9A-F]{8})__")

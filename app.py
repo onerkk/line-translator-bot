@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.24-target-language-purity-gate-2026-06-18"
+VERSION = "v3.25-quality-gate-deployment-contract-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -249,6 +249,29 @@ import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 # v3.9.40 Phase H-M: 業界更深度整合
 import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
+
+# Fail fast when only one of the two production files was replaced or when the
+# archive was extracted into a nested directory. Running with a stale quality
+# gate is worse than an explicit deployment failure because invalid mixed-
+# language output could otherwise still be delivered to LINE.
+_EXPECTED_QG_API_VERSION = 2
+_EXPECTED_QG_BUILD_ID = "2026-06-18.2-target-language-purity"
+_ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
+_ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
+if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
+        or _ACTUAL_QG_BUILD_ID != _EXPECTED_QG_BUILD_ID):
+    raise RuntimeError(
+        "translation_quality_gate deployment mismatch: "
+        f"expected api={_EXPECTED_QG_API_VERSION} build={_EXPECTED_QG_BUILD_ID}, "
+        f"loaded api={_ACTUAL_QG_API_VERSION!r} build={_ACTUAL_QG_BUILD_ID!r} "
+        f"from {getattr(tqg_module, '__file__', '<unknown>')}. "
+        "Replace app.py and translation_quality_gate.py together in the project root."
+    )
+logger.info(
+    "[QualityGate] deployment verified api=%s build=%s module=%s",
+    _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
+    getattr(tqg_module, "__file__", "<unknown>"),
+)
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
 import tm_maintenance as tm_maint_module      # Phase M: TM 資料治理
@@ -24963,7 +24986,7 @@ def api_admin_translation_log_mark_wrong():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": VERSION, "uptime": int(time.time() - bot_start_time)}
+    return {"status": "ok", "version": VERSION, "quality_gate_build": _ACTUAL_QG_BUILD_ID, "uptime": int(time.time() - bot_start_time)}
 
 
 @app.route("/admin/apply-best-defaults", methods=["GET", "POST"])
