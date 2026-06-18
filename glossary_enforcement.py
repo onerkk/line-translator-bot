@@ -29,6 +29,7 @@ glossary_enforcement.py — Glossary Post-Validation Enforcement v1.0 (2026-05-2
 
 import logging
 import re
+from collections import defaultdict
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
 logger = logging.getLogger(__name__)
@@ -68,88 +69,129 @@ _stats = {
 # ═══════════════════════════════════════════════════════════════════
 # 核心檢查
 # ═══════════════════════════════════════════════════════════════════
+def _extract_target_term(term_value: Any) -> str:
+    if isinstance(term_value, dict):
+        return str(term_value.get("idn", "") or "").strip()
+    return str(term_value or "").strip()
+
+
+def _normalize_reverse_term(term: str) -> str:
+    term = (term or "").lower().replace("_", " ").replace("-", " ")
+    term = re.sub(r"\s+", " ", term).strip()
+    return term
+
+
+def _reverse_metadata(term_value: Any, key: str, default=None):
+    if isinstance(term_value, dict):
+        return term_value.get(key, default)
+    return default
+
+
+def _looks_like_code(term: str) -> bool:
+    compact = re.sub(r"\s+", "", term or "")
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9._/+:%-]{1,31}", compact, re.I)
+                and any(ch.isdigit() for ch in compact))
+
+
+def _looks_like_ui_label(zh_term: str) -> bool:
+    """Structural detector for field/button labels, not a phrase blacklist."""
+    return bool(re.search(r'[「」『』【】\[\]（）()]', zh_term or ""))
+
+
+def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """Build an Indonesian→Chinese index containing only unambiguous entries.
+
+    Forward glossary enforcement (ZH→ID) is naturally safe because the Chinese
+    source key is explicit.  Reverse enforcement is not symmetric: a common
+    Indonesian word can be the label of many UI fields.  The old implementation
+    reversed every row, which let a generic word force an unrelated field label.
+
+    Rules are data/structure based:
+      * explicit ``reverse_safe`` metadata wins;
+      * ambiguous duplicate targets are rejected;
+      * a single common alphabetic word is not reverse-enforced by default;
+      * compact technical codes are allowed;
+      * short field/button labels with quoted UI text are rejected unless marked
+        ``reverse_safe``.
+    """
+    candidates: Dict[str, List[Tuple[str, str, Any]]] = defaultdict(list)
+    for zh_term, value in (glossary or {}).items():
+        target = _extract_target_term(value)
+        norm = _normalize_reverse_term(target)
+        if not zh_term or not target or len(norm) < GE_MIN_TERM_LEN:
+            continue
+        if _reverse_metadata(value, "reverse_safe", None) is False:
+            continue
+        candidates[norm].append((str(zh_term), target, value))
+
+    safe: Dict[str, Dict[str, str]] = {}
+    for norm, rows in candidates.items():
+        explicit = [r for r in rows if _reverse_metadata(r[2], "reverse_safe", None) is True]
+        pool = explicit or rows
+        unique_zh = {r[0] for r in pool}
+        if len(unique_zh) != 1:
+            continue
+        zh_term, target, value = pool[0]
+        if not explicit:
+            tokens = re.findall(r"[A-Za-z0-9]+", norm)
+            # One ordinary alphabetic word is too polysemous to force in reverse.
+            if len(tokens) == 1 and tokens[0].isalpha() and not _looks_like_code(target):
+                continue
+            if _looks_like_ui_label(zh_term) and len(tokens) <= 2:
+                continue
+        safe[norm] = {"source_term": target, "target_term": zh_term}
+    return safe
+
+
+def collect_applicable_pairs(src_text: str, glossary: Dict[str, Any],
+                             src_lang: str, tgt_lang: str) -> List[Tuple[str, str]]:
+    """Return only source-grounded, direction-safe terminology constraints."""
+    src_text = src_text or ""
+    is_zh_to_id = src_lang.lower().startswith("zh") and tgt_lang.lower().startswith("id")
+    is_id_to_zh = src_lang.lower().startswith("id") and tgt_lang.lower().startswith("zh")
+    pairs: List[Tuple[str, str]] = []
+    if is_zh_to_id:
+        for zh_term, value in (glossary or {}).items():
+            target = _extract_target_term(value)
+            if zh_term and target and len(zh_term) >= GE_MIN_TERM_LEN and zh_term in src_text:
+                pairs.append((str(zh_term), target))
+    elif is_id_to_zh:
+        norm_source = _normalize_reverse_term(src_text)
+        for norm, row in build_safe_reverse_index(glossary).items():
+            if re.search(r'(?<![a-z0-9])' + re.escape(norm) + r'(?![a-z0-9])', norm_source):
+                pairs.append((row["source_term"], row["target_term"]))
+    return pairs
+
+
 def check_glossary_compliance(src_text: str, tgt_text: str,
                               glossary: Dict[str, Any],
                               src_lang: str, tgt_lang: str) -> Tuple[bool, List[Dict[str, str]]]:
-    """檢查譯文是否符合 glossary 強制對照
-    
-    Args:
-        src_text: 原文
-        tgt_text: 譯文
-        glossary: { zh_term: {"idn": "印尼譯", ...} } 或 { zh_term: "印尼譯" }
-        src_lang, tgt_lang: 語言碼
-    
-    Returns:
-        (compliant: bool, violations: list of dict)
-        violations 元素: {"src_term": str, "expected_tgt": str, "context": str}
-    """
+    """Check only direction-safe terminology pairs grounded in the source."""
     if not src_text or not tgt_text or not glossary:
         return True, []
-    
-    src_text = src_text.strip()
-    tgt_text = tgt_text.strip()
-    
+
     with _lock:
         _stats["checks"] += 1
-    
-    violations = []
-    src_lower = src_text  # 中文不用 lower
+
+    violations: List[Dict[str, str]] = []
     tgt_lower = tgt_text.lower()
-    
-    # 雙向支援:zh→id 走 zh→idn,id→zh 走 idn→zh
-    is_zh_to_id = src_lang.lower().startswith("zh") and tgt_lang.lower().startswith("id")
-    is_id_to_zh = src_lang.lower().startswith("id") and tgt_lang.lower().startswith("zh")
-    
-    if not (is_zh_to_id or is_id_to_zh):
-        # 不在主要語言對範圍,不檢查
-        return True, []
-    
-    for term_key, term_value in glossary.items():
-        if not term_key or len(term_key) < GE_MIN_TERM_LEN:
-            continue
-        
-        # 統一取 target term
-        if isinstance(term_value, dict):
-            target_term = term_value.get("idn", "")
-        else:
-            target_term = str(term_value)
-        if not target_term or len(target_term) < GE_MIN_TERM_LEN:
-            continue
-        
-        if is_zh_to_id:
-            # zh→id: source 是 zh,要找 term_key(中文);target 是 id,要找 target_term(印尼)
-            if term_key in src_text:
-                # source 出現中文術語
-                # target 應出現對應印尼譯(case-insensitive)
-                if target_term.lower() not in tgt_lower:
-                    # 違規!
-                    violations.append({
-                        "src_term": term_key,
-                        "expected_tgt": target_term,
-                        "context": _extract_context(src_text, term_key, window=10),
-                    })
-                    with _lock:
-                        _stats["by_term"][term_key] = _stats["by_term"].get(term_key, 0) + 1
-        elif is_id_to_zh:
-            # id→zh: source 是 id,要找 target_term(印尼);target 是 zh,要找 term_key(中文)
-            if target_term.lower() in src_text.lower():
-                if term_key not in tgt_text:
-                    violations.append({
-                        "src_term": target_term,
-                        "expected_tgt": term_key,
-                        "context": _extract_context(src_text, target_term, window=10),
-                    })
-                    with _lock:
-                        _stats["by_term"][term_key] = _stats["by_term"].get(term_key, 0) + 1
-    
-    compliant = len(violations) == 0
+    for source_term, expected_tgt in collect_applicable_pairs(
+            src_text, glossary, src_lang, tgt_lang):
+        if expected_tgt.lower() not in tgt_lower:
+            violations.append({
+                "src_term": source_term,
+                "expected_tgt": expected_tgt,
+                "context": _extract_context(src_text, source_term, window=10),
+            })
+            with _lock:
+                _stats["by_term"][expected_tgt] = _stats["by_term"].get(expected_tgt, 0) + 1
+
+    compliant = not violations
     with _lock:
         if compliant:
             _stats["compliant"] += 1
         _stats["violations_found"] += len(violations)
-    
     return compliant, violations
-
 
 def _extract_context(text: str, term: str, window: int = 10) -> str:
     """抓術語前後 window 字當 context"""

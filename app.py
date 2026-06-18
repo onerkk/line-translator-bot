@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.19-idzh-integrity-2026-06-18"
+VERSION = "v3.21-clean-document-quality-pipeline-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -248,6 +248,7 @@ import auto_post_edit as ape_module           # Phase E: LLM-based Auto Post-Edi
 import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 # v3.9.40 Phase H-M: 業界更深度整合
 import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
+import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
 import tm_maintenance as tm_maint_module      # Phase M: TM 資料治理
@@ -1496,12 +1497,7 @@ def pick_model(text):
 
 
 def _active_upgrade_model():
-    """Return the quality/long-text model for the currently selected provider.
-
-    Paragraph splitting used to choose a model from each short paragraph length, so a
-    long formal announcement silently fell back to the fast model.  This helper lets
-    every provider keep its intended upgrade model for the whole announcement.
-    """
+    """Return the quality model for the active OpenAI/Gemini/Claude provider."""
     try:
         provider = ai_provider.get_active_provider()
     except Exception:
@@ -1831,6 +1827,12 @@ def normalize_indonesian_text(text):
     
     if not id_preprocessing_enabled:
         return text, 0
+
+    # Protect data-like spans before slang normalization.  This is the boundary
+    # that prevents a quoted field value such as “Y” from being normalized by
+    # the chat-abbreviation rule y -> ya.
+    _immutable = tqg_module.protect_immutable_spans(text)
+    text = _immutable.protected
     
     # 1. 找出需要保護的大寫專有名詞,用 placeholder 暫存
     protected = {}
@@ -1861,7 +1863,8 @@ def normalize_indonesian_text(text):
     # 3. 還原保護的專有名詞
     for ph, token in protected.items():
         text_protected = text_protected.replace(ph, token)
-    
+
+    text_protected = tqg_module.restore_immutable_spans(text_protected, _immutable.mapping)
     return text_protected, replacements
 
 
@@ -3878,13 +3881,25 @@ def is_translation_valid(result, src, tgt):
 
 
 def is_translation_acceptable(src_text, result, src, tgt):
-    """Final synchronous gate used before a translation can be cached or sent."""
+    """Synchronous generic integrity gate used before cache/send."""
     if not is_translation_valid(result, src, tgt):
         return False
-    if src == "id" and tgt == "zh":
-        ok, _reason = validate_factory_translation(src_text, result, src, tgt)
-        return ok
-    return True
+    try:
+        _env = tqg_module.protect_immutable_spans(src_text)
+        _pairs = ge_module.collect_applicable_pairs(src_text, GLOSSARY_LOOKUP, src, tgt) if 'GLOSSARY_LOOKUP' in globals() else []
+        _report = tqg_module.validate_translation(
+            src_text, result, src, tgt,
+            immutable_literals=_env.mapping.values(),
+            glossary_pairs=_pairs,
+            require_paragraph_fidelity=bool(getattr(_tl, 'quality_gate_critical', False)),
+        )
+        if not _report.ok:
+            logger.warning("[QualityGate] deterministic rejection: %s", _report.issues)
+        return _report.ok
+    except Exception as _e:
+        logger.warning("[QualityGate] deterministic validation failed open: %s", _e)
+        return True
+
 
 
 # === Factory semantic translation engine (ID -> ZH) ===
@@ -5011,15 +5026,6 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
                 )
                 result = new_result
 
-    # v3.19: canonical factory terminology + unsourced fragment cleanup.
-    src_low = (src_text or "").lower()
-    if "kondom pelindung" in src_low:
-        for wrong in ("保險套", "安全套", "避孕套", "保護套"):
-            result = result.replace(wrong, "防護套罩")
-        result = re.sub(r"防護套(?!罩)", "防護套罩", result)
-        result = re.sub(r"防護套罩罩+", "防護套罩", result)
-    result = _remove_unsourced_inline_latin(src_text, result)
-
     result = re.sub(r"[，,。．\s]+$", "", result)
     return result.strip()
 
@@ -5075,30 +5081,26 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
 
 
 def validate_factory_translation(src_text, zh_text, src, tgt):
-    """Validate semantic correctness plus source-grounded integrity invariants."""
+    """Validate Chinese translation against factory literal-risk rules."""
     bad, reason, _domains = detect_factory_semantic_error(src_text, zh_text, src, tgt)
     if bad:
         return False, reason
-    if src == "id" and tgt == "zh":
-        ok, integrity_reason = validate_id_zh_integrity(src_text, zh_text)
-        if not ok:
-            return False, integrity_reason
     return True, ""
 
 
 def repair_factory_translation_openai(src_text, bad_result, reason):
-    """Repair ID→ZH through the currently active provider (OpenAI/Gemini/Claude).
+    """v3.3 修復直譯錯誤的 ID->ZH 翻譯
     
     v3.3 變更:
       - 移除 deterministic 強斷言注入(那會讓 GPT 直接複製短答案)
       - 公告類訊息要求完整翻譯,max_tokens 提升到 600
       - 依分類調整 user message 口徑
     """
+    if not oai:
+        return None
     try:
         cls = classify_factory_message(src_text, src="id")
         hint = build_factory_context_hint(src_text, "id", "zh")
-        protected_src, _repair_terms = protect_directional_translation_terms(src_text, "id", "zh")
-        protected_src, _repair_literals = protect_translation_literals(protected_src)
         
         sys_prompt = (
             "你是台灣不鏽鋼棒材工廠的印尼文→繁體中文現場翻譯審核器。"
@@ -5106,17 +5108,13 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             "不要解釋，不要加註解，只輸出修正後譯文。"
             "規則：barang 在工廠品質語境=料件/材料；batang=棒材；rusak=損傷/異常；"
             "belakang/depan 描述料件方向=後端/前端，不可翻成從後面/從前面。"
-            "所有 __TERM_n__、__LITERAL_n__ 必須原樣保留；引號內 Y、-、代碼不可翻譯。"
-            "kondom pelindung(套罩語境)=防護套罩，禁止翻成保險套/安全套；"
-            "sebelum mulai produksi=開始生產前；lembar kerja=工作單；Book Order 保留或譯為工單。"
-            "禁止輸出原文沒有的英文字母碎片；必須保留原段落、✅/❌及每個操作條件。"
         )
         
         # ★ v3.3:依分類調整 user message
         if cls["type"] == "announcement":
             sys_prompt += "重要：這是公告訊息，必須完整翻譯每個資訊點，不可簡化成短語或只翻關鍵詞。"
             user_msg = (
-                f"原印尼文：{protected_src}\n"
+                f"原印尼文：{src_text}\n"
                 f"錯誤中文(可能因簡化或漏譯)：{bad_result}\n"
                 f"錯誤原因：{reason}\n"
                 f"術語提示：{hint}\n"
@@ -5125,7 +5123,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             max_tok = 600  # 公告需要長譯文
         else:
             user_msg = (
-                f"原印尼文：{protected_src}\n"
+                f"原印尼文：{src_text}\n"
                 f"錯誤中文：{bad_result}\n"
                 f"錯誤原因：{reason}\n"
                 f"語境提示：{hint}\n"
@@ -5135,7 +5133,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
         
         # v3.9.8: build kwargs with model_supports() filter so GPT-5 series doesn't 400.
         repair_kwargs = {
-            "model": (_active_upgrade_model() if (cls["type"] == "announcement" or str(reason).startswith("integrity_")) else pick_model(src_text)),
+            "model": pick_model(src_text),
             "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}
@@ -5162,9 +5160,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             repair_kwargs["verbosity"] = "low"
         try:
             # `prediction` is for low-latency edits — only on classical models.
-            if (bad_result and cls["type"] != "announcement"
-                    and not str(reason).startswith("integrity_")
-                    and model_supports(_rmodel, "stop")):
+            if bad_result and model_supports(_rmodel, "stop"):  # stop is a good proxy for "classical model"
                 repair_kwargs["prediction"] = {
                     "type": "content",
                     "content": bad_result,
@@ -5179,11 +5175,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
             pass
         r = ai.chat.completions.create(**repair_kwargs)
         track_tokens(r)
-        repaired = (r.choices[0].message.content or "").strip()
-        repaired = _strip_thinking_tags(repaired)
-        repaired = restore_translation_literals(repaired, _repair_literals)
-        repaired = restore_directional_translation_terms(repaired, _repair_terms)
-        return repaired
+        return (r.choices[0].message.content or "").strip()
     except Exception as e:
         logger.error("Factory repair error: %s", e)
         return None
@@ -5212,10 +5204,9 @@ def finalize_factory_translation(src_text, result, src, tgt):
             fallback = factory_semantic_translate_id_zh(src_text)
             if fallback:
                 return fallback
-        # 公告/一般訊息:不得把已知仍不合格的 repaired 直接送出。
-        # 保留後處理後原結果，讓上層 strict retry / fallback 繼續接手。
+        # 公告/一般訊息:回傳 repaired 或原 result
         if repaired:
-            logger.warning("[IDZH integrity] repair still invalid; reason=%s", reason)
+            return repaired
     if src == "zh" and tgt == "id":
         raw = result
         bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, raw)
@@ -5867,6 +5858,8 @@ def build_factory_context_hint_zh_id(text):
 
 
 def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
+    if not oai:
+        return None
     try:
         deterministic = factory_semantic_translate_zh_id(src_text)
         sys_prompt = (
@@ -6423,68 +6416,28 @@ def _normalize_idn_text(s):
 
 
 def _build_idn_to_zh_index():
-    """建立印→中反向索引(模組載入時呼叫一次,後續 O(1) 查詢)
-    
-    來源:
-      1. GLOSSARY_LOOKUP — 把每條的 idn value 拆解,每個正規化變體都指向同一個中文 key
-      2. INDONESIAN_SLANG_DICT — 補充工廠口語/簡寫(只加 GLOSSARY 沒涵蓋的)
-    
-    v3.9.33 修正:GLOSSARY 優先順序
-      原本是 slang 優先 → 'tali baja' 對到 slang 的「鋼帶/鋼索」而非 GLOSSARY 的「鋼帶」
-      改成 GLOSSARY 優先 → 工廠標準術語(已審核)勝過通用口語
-      slang 只填補 GLOSSARY 沒涵蓋的詞(bos/mandor/udh/gak/gpp 等口語)
-    
-    特殊處理:
-      - GLOSSARY 的 idn 常包含「/」「(」分隔多個譯名:'Tian Che / Derek tetap(Fixed crane)'
-        → 拆成 ['tian che', 'derek tetap', 'fixed crane'] 三個 key 都指到 '天車/固定式起重機'
-      - 太短 idn(<3 字)會跳過,避免噪音
-    
-    Returns: {normalized_idn: zh_key}
+    """Build a safe ID→ZH hint index from unambiguous glossary rows.
+
+    The previous implementation treated every reverse glossary mapping as
+    authoritative.  A generic Indonesian word could therefore be mapped to a
+    specific UI field label.  Reverse hints now share the same ambiguity rules
+    as glossary enforcement; ordinary slang remains a non-binding language hint.
     """
     index = {}
-    import re as _re
-    # 先放 GLOSSARY_LOOKUP 的反向(工廠審核過的標準術語)
-    for zh_key, v in GLOSSARY_LOOKUP.items():
-        idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
-        if not idn_raw:
-            continue
-        # 過濾噪音 — 工單欄位類 key 不應參與通用反向匹配
-        # 例:zh='工單製程紀錄「機台」' idn='Mesin'
-        #     如果工人說 'mesin rusak',不該被反向匹配成「工單製程紀錄機台」
-        # 規則:含「工單」或「資訊」「紀錄表」「按鈕」「電氣箱」「標示」 → 工單/UI 標籤,skip 反向
-        if any(t in zh_key for t in ("工單", "資訊", "紀錄表", "按鈕", "電氣箱", "標示")):
-            continue
-        # 拆解多重譯名:用 / 和 (...)分隔
-        variants = []
-        for m in _re.findall(r"\(([^)]+)\)", idn_raw):
-            variants.append(m.strip())
-        without_paren = _re.sub(r"\([^)]*\)", "", idn_raw)
-        # 用 / 拆分後,只接受「複合詞(含空格)」或「原始就是單詞」的 variant
-        # 例:'Pengaturan roller penegang naik/turun' → 拆出 'turun' 是單字,
-        #     但原文是描述句而非單詞詞條,所以 'turun' 不該成為 reverse index key
-        # 規則:拆分後的單詞 variant,若原始 idn 包含多於一個空格(代表是描述句而非詞條),skip
-        slash_parts = without_paren.split("/")
-        idn_is_phrase = idn_raw.count(" ") > 1  # 含多空格 = 描述句
-        for part in slash_parts:
-            part = part.strip()
-            # 若是描述句拆出來的單字,skip(避免單詞被誤認為 GLOSSARY 標準譯)
-            if idn_is_phrase and " " not in part:
-                continue
-            variants.append(part)
-        # 加入正規化版本
-        for var in variants:
-            normalized = _normalize_idn_text(var)
-            if normalized and len(normalized) >= 3:
-                # 已存在的不覆蓋(同一個 idn 對到多個 zh_key,保留先掃到的較短 zh)
-                if normalized not in index:
-                    index[normalized] = zh_key
-    # 再放 slang dict(只補充 GLOSSARY 沒涵蓋的)
+    try:
+        safe = ge_module.build_safe_reverse_index(GLOSSARY_LOOKUP)
+        for normalized, row in safe.items():
+            index[normalized] = row.get("target_term", "")
+    except Exception as _e:
+        logger.warning("Build safe reverse glossary index failed: %s", _e)
+
+    # Slang dictionary is curated for general language normalization and does not
+    # contain UI-label reverse mappings.  It may fill gaps but never override an
+    # approved glossary constraint.
     for idn, zh in INDONESIAN_SLANG_DICT.items():
         normalized = _normalize_idn_text(idn)
-        if normalized and len(normalized) >= 2:
-            # GLOSSARY 已有 → skip(讓工廠標準術語勝出)
-            if normalized not in index:
-                index[normalized] = zh
+        if normalized and len(normalized) >= 2 and normalized not in index:
+            index[normalized] = zh
     return index
 
 
@@ -6591,185 +6544,6 @@ def post_fix_translation(text):
     return result
 
 
-
-# v3.19 ID→ZH integrity guard -------------------------------------------------
-# These rules run before provider routing, so OpenAI / Gemini / Claude receive
-# the same protected source and the same deterministic terminology contract.
-_QUOTE_CHARS = '"“”„‟＂「」『』‘’'
-_QUOTED_LITERAL_RE = re.compile(
-    r'(?P<open>[' + re.escape(_QUOTE_CHARS) + r'])\s*'
-    r'(?P<value>(?:[A-Z][A-Z0-9._/+-]{0,20}|[-–—]|\d+(?:\.\d+)?%?))\s*'
-    r'(?P<close>[' + re.escape(_QUOTE_CHARS) + r'])'
-)
-
-# Directional glossary: source phrase -> canonical target phrase.  Only terms
-# whose mistranslation changes an operation or field value belong here.
-_DIRECTIONAL_TRANSLATION_TERMS = {
-    ("id", "zh"): [
-        ("sebelum mulai produksi", "開始生產前"),
-        ("kondom pelindung", "防護套罩"),
-        ("mulai produksi", "開始生產"),
-        ("lembar kerja", "工作單"),
-        ("book order", "Book Order"),
-    ],
-}
-
-
-def _replace_case_insensitive_with_placeholders(text, pairs, prefix):
-    result = text or ""
-    mapping = {}
-    # Longest first prevents "mulai produksi" from consuming the longer phrase.
-    for source_phrase, target_phrase in sorted(pairs, key=lambda x: len(x[0]), reverse=True):
-        pat = re.compile(r'(?<![A-Za-z])' + re.escape(source_phrase) + r'(?![A-Za-z])', re.I)
-        while True:
-            m = pat.search(result)
-            if not m:
-                break
-            ph = f"__{prefix}_{len(mapping)}__"
-            mapping[ph] = {
-                "source": m.group(0),
-                "target": target_phrase,
-            }
-            result = result[:m.start()] + ph + result[m.end():]
-    return result, mapping
-
-
-def protect_directional_translation_terms(text, src, tgt):
-    pairs = _DIRECTIONAL_TRANSLATION_TERMS.get((src, tgt), ())
-    if not pairs:
-        return text, {}
-    return _replace_case_insensitive_with_placeholders(text, pairs, "TERM")
-
-
-def protect_translation_literals(text):
-    if not text:
-        return text, {}
-    mapping = {}
-
-    def repl(match):
-        ph = f"__LITERAL_{len(mapping)}__"
-        mapping[ph] = match.group(0)
-        return ph
-
-    return _QUOTED_LITERAL_RE.sub(repl, text), mapping
-
-
-def _restore_placeholder_variants(text, placeholder, replacement):
-    if not text:
-        return text
-    result = text
-    idx = re.sub(r'\D', '', placeholder)
-    stem = "TERM" if "TERM" in placeholder else "LITERAL"
-    variants = {
-        placeholder,
-        placeholder.replace("_", " "),
-        f"{stem}_{idx}", f"{stem} {idx}",
-        f"[{stem}_{idx}]", f"<{stem}_{idx}>",
-        f"__{stem} {idx}__",
-    }
-    for variant in sorted(variants, key=len, reverse=True):
-        result = result.replace(variant, replacement)
-    return result
-
-
-def restore_directional_translation_terms(text, mapping):
-    result = text
-    for ph, item in (mapping or {}).items():
-        result = _restore_placeholder_variants(result, ph, item["target"])
-    return result
-
-
-def restore_translation_literals(text, mapping):
-    result = text
-    for ph, literal in (mapping or {}).items():
-        result = _restore_placeholder_variants(result, ph, literal)
-    return result
-
-
-def _source_quoted_literal_values(text):
-    return [m.group("value") for m in _QUOTED_LITERAL_RE.finditer(text or "")]
-
-
-_ALLOWED_INLINE_LATIN_ZH = {
-    "QC", "ERP", "PMI", "TAG", "ID", "NG", "OK", "SOP", "PPE", "LOTO",
-    "OEE", "JSA", "SDS", "EHS", "K3", "UT", "OL", "AP", "BF", "CYA", "CYB",
-}
-
-
-def _remove_unsourced_inline_latin(src_text, zh_text):
-    """Remove accidental fragments such as '不能LE使用' without touching QC/ERP codes."""
-    if not zh_text:
-        return zh_text
-    source_tokens = {t.upper() for t in re.findall(r'\b[A-Za-z][A-Za-z0-9._/-]*\b', src_text or "")}
-
-    def repl(match):
-        token = match.group(1)
-        up = token.upper()
-        if up in source_tokens or up in _ALLOWED_INLINE_LATIN_ZH:
-            return token
-        logger.warning("[IDZH integrity] removed unsourced inline Latin fragment: %r", token)
-        return ""
-
-    return re.sub(r'(?<=[\u3400-\u9fff])([A-Za-z]{1,8})(?=[\u3400-\u9fff])', repl, zh_text)
-
-
-def validate_id_zh_integrity(src_text, zh_text):
-    """Deterministic checks for field values, terminology, contamination and coverage."""
-    if not zh_text or not zh_text.strip():
-        return False, "integrity_empty"
-    src_low = (src_text or "").lower()
-    target = zh_text.strip()
-
-    # Quoted field values are data, not words.  Y must never become 是; '-' must remain '-'.
-    for value in _source_quoted_literal_values(src_text):
-        if value in ("-", "–", "—"):
-            present = bool(re.search(r'(?<![A-Za-z0-9])' + re.escape(value) + r'(?![A-Za-z0-9])', target))
-        elif re.fullmatch(r'[A-Z][A-Z0-9._/+-]{0,20}', value):
-            present = bool(re.search(r'(?<![A-Za-z0-9])' + re.escape(value) + r'(?![A-Za-z0-9])', target, re.I))
-        else:
-            present = value in target
-        if not present:
-            return False, f"integrity_missing_literal:{value}"
-
-    if "kondom pelindung" in src_low:
-        if not any(term in target for term in ("防護套罩", "套罩")):
-            return False, "integrity_term:kondom_pelindung"
-        if any(term in target for term in ("保險套", "安全套", "避孕套")):
-            return False, "integrity_wrong_term:kondom_pelindung"
-
-    if "sebelum mulai produksi" in src_low:
-        if not any(term in target for term in ("開始生產前", "生產開始前", "開始製造前")):
-            return False, "integrity_term:sebelum_mulai_produksi"
-    elif "mulai produksi" in src_low:
-        if not any(term in target for term in ("開始生產", "開始製造")):
-            return False, "integrity_term:mulai_produksi"
-
-    if "lembar kerja" in src_low and not any(term in target for term in ("工作單", "作業單")):
-        return False, "integrity_term:lembar_kerja"
-    if "book order" in src_low and not any(term.lower() in target.lower() for term in ("Book Order", "工單")):
-        return False, "integrity_term:book_order"
-
-    # Symbols carrying instruction polarity must survive.
-    for marker in ("✅", "❌"):
-        if marker in (src_text or "") and marker not in target:
-            return False, f"integrity_missing_marker:{marker}"
-
-    source_tokens = {t.upper() for t in re.findall(r'\b[A-Za-z][A-Za-z0-9._/-]*\b', src_text or "")}
-    for m in re.finditer(r'(?<=[\u3400-\u9fff])([A-Za-z]{1,8})(?=[\u3400-\u9fff])', target):
-        token = m.group(1).upper()
-        if token not in source_tokens and token not in _ALLOWED_INLINE_LATIN_ZH:
-            return False, f"integrity_inline_latin:{token}"
-
-    # Catch catastrophic omission on long announcements; Chinese is naturally shorter,
-    # therefore the threshold is intentionally conservative.
-    src_nonspace = len(re.sub(r'\s+', '', src_text or ""))
-    zh_info = len(re.findall(r'[\u3400-\u9fffA-Za-z0-9]', target))
-    if src_nonspace >= 120 and zh_info < max(24, int(src_nonspace * 0.16)):
-        return False, "integrity_catastrophic_compression"
-
-    return True, ""
-
-
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
     # 函式名稱為歷史相容名稱；實際文字翻譯統一經 _AIProxy 路由到
     # OpenAI / Claude / Gemini。不可再用原生 OpenAI client 是否存在作為前置條件，
@@ -6787,9 +6561,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if src == "zh":
             input_text, cust_placeholders = pre_replace_zh(text)
 
-        # Shared deterministic guards before provider routing.
-        input_text, term_placeholders = protect_directional_translation_terms(input_text, src, tgt)
-        input_text, literal_placeholders = protect_translation_literals(input_text)
+        # Provider-neutral immutable-data envelope.  The same protected source is
+        # sent to OpenAI, Gemini and Claude; values/codes are restored afterward.
+        _immutable = tqg_module.protect_immutable_spans(input_text)
+        input_text = _immutable.protected
         protected, placeholders = protect_mentions(input_text)
 
         extra_rule = ""
@@ -6882,9 +6657,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
             "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
-            "2. Any text like __MENTION_0__, __MENTION_1__, __TERM_0__, __LITERAL_0__, or ⟦PN1⟧ ⟦PN2⟧ etc are placeholders - keep them EXACTLY as is, do not translate, transliterate, remove, or alter them. "
-            "2.1 Quoted field values and symbols such as ‘Y’, ‘N’, ‘-’, machine codes, dimensions and lot numbers are DATA, not language. Preserve them exactly; never translate Y into 是 or yes. "
-            "2.2 For Indonesian factory messages: kondom pelindung in a 套罩 context means 防護套罩, never 保險套/安全套; sebelum mulai produksi means 開始生產前; lembar kerja means 工作單; Book Order remains Book Order or 工單. "
+            "2. Any text like __MENTION_0__, __MENTION_1__, ⟦IMM0_XXXXXXXX⟧, or ⟦PN1⟧ ⟦PN2⟧ etc are placeholders - keep them EXACTLY as is, do not translate, transliterate, remove, or alter the brackets. "
+            "2.1 Field values, codes, numbers, dimensions and symbols are DATA, not language. Preserve every placeholder exactly. "
+            "2.2 If the source contains a parenthetical phrase already written in the target language, treat it as a terminology annotation for the adjacent source phrase and use it consistently; do not reinterpret it as ordinary prose. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
             + build_factory_context_hint(text, src, tgt) + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
@@ -7747,8 +7522,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             result = _raw
         result = restore_mentions(result, placeholders)
-        result = restore_translation_literals(result, literal_placeholders)
-        result = restore_directional_translation_terms(result, term_placeholders)
+        result = tqg_module.restore_immutable_spans(result, _immutable.mapping)
         if src == "id" and tgt == "zh":
             _raw_factory_result = result
             _bad, _reason, _domains = detect_factory_semantic_error(text, _raw_factory_result, src, tgt)
@@ -7884,8 +7658,11 @@ def cache_get(text, src, tgt):
     return None
 
 
-def cache_set(text, src, tgt, result):
-    """Store translation in cache, evict oldest if full."""
+def cache_set(text, src, tgt, result, force=False):
+    """Store translation in cache only after the synchronous gate has passed."""
+    if getattr(_tl, 'quality_gate_pending', False) and not force:
+        logger.debug("[QualityGate] deferred cache write until final review")
+        return
     key = (text.strip(), src, tgt)
     with _cache_lock:
         if len(translation_cache) >= CACHE_MAX_SIZE:
@@ -8266,19 +8043,68 @@ def _translate_core(text, src, tgt):
     # v3.9.60: 本次訊息是否含保護名(由 translate() wrapper 設定)。
     # 有保護名時強制走 LLM:NMT 會音譯人名、語義/模糊 bypass 會誤配到別句舊譯文。
     _has_protected_names = bool(getattr(_tl, 'protected_name_map', None))
-    # v3.12: 工廠材料/吊運語境 → 與「有保護名」同等待遇,跳過所有 bypass + NMT,強制走 LLM。
+    # Determine quality-critical messages structurally.  Long announcements,
+    # multi-paragraph instructions and checklist-style factory messages bypass
+    # stale TM/NMT routes and receive an independent review before send.
     _factory_ctx = _is_factory_context(text)
     try:
         _factory_domain_ctx = bool(detect_factory_domain(text, src, tgt).get("is_factory"))
     except Exception:
         _factory_domain_ctx = False
     try:
-        _announcement_ctx = classify_factory_message(text, src=src).get("type") == "announcement"
+        _message_type = classify_factory_message(text, src=src).get("type")
     except Exception:
-        _announcement_ctx = False
-    # ID→ZH previously allowed old TM/NMT results to bypass all new prompt fixes.
-    # Treat any factory-domain or announcement message as quality-critical in both directions.
-    _factory_quality_ctx = bool(_factory_ctx or _factory_domain_ctx or _announcement_ctx)
+        _message_type = None
+    _quality_critical = tqg_module.is_quality_critical(
+        text, src, tgt, message_type=_message_type, factory_domain=_factory_domain_ctx or _factory_ctx
+    )
+
+    # Formal announcements and other quality-critical documents use a clean,
+    # whole-document path.  This deliberately bypasses the legacy shortcut /
+    # reverse-glossary / paragraph-fanout / phrase-postfix stack that caused the
+    # observed corruption.  Only a reviewed and validated result may be sent.
+    if _quality_critical:
+        try:
+            _safe_pairs = ge_module.collect_applicable_pairs(
+                text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
+            )
+            _clean = tqg_module.translate_quality_critical_document(
+                text, src, tgt,
+                model=_active_upgrade_model(),
+                glossary_pairs=_safe_pairs,
+                ai_client=ai_provider,
+            )
+            if not _clean.get("ok") or not _clean.get("text"):
+                logger.error("[CleanDocument] blocked before send: %s", _clean.get("issues"))
+                try:
+                    _event_log_write("clean_document_translation_blocked", {
+                        "group_id": _gid_for_tm,
+                        "src": src, "tgt": tgt,
+                        "issues": _clean.get("issues", [])[:12],
+                        "source": text[:300],
+                    })
+                except Exception:
+                    pass
+                return None
+            _clean_text = _clean["text"].strip()
+            cache_set(text, src, tgt, _clean_text, force=True)
+            try:
+                _log_translation(
+                    text, _clean_text, src, tgt,
+                    "clean-document-reviewed", 0, 1.0, True, 1.0, _gid_for_tm
+                )
+            except Exception:
+                pass
+            try:
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _clean_text, src, tgt)
+            except Exception:
+                pass
+            logger.info("[CleanDocument] reviewed whole-document translation accepted")
+            return _clean_text
+        except Exception as _clean_e:
+            logger.exception("[CleanDocument] pipeline failure; fail closed: %s", _clean_e)
+            return None
 
     # v3.18 速度根治②:向量查詢提早並行發出。
     # vector_lookup 內含 1 次 OpenAI embedding API(~0.3-0.8 秒),原本與
@@ -8342,7 +8168,7 @@ def _translate_core(text, src, tgt):
     # v3.9.60: 有保護名時只允許 exact bypass(key 精確相符,placeholder 化文字本就名稱無關);
     # fuzzy_bypass 會在 placeholder 化文字上模糊配對 → 可能配到「同形不同名」的舊譯文 → 名字錯。
     # v3.12: 工廠語境連 exact bypass 都跳過(舊快取可能含 NMT 誤譯的 pakan),強制重新 LLM 翻譯。
-    _tm_bypass_types = () if _factory_quality_ctx else (("exact",) if _has_protected_names else ("exact", "fuzzy_bypass"))
+    _tm_bypass_types = () if (_factory_ctx or _quality_critical) else (("exact",) if _has_protected_names else ("exact", "fuzzy_bypass"))
     if _tm_result and _tm_result.get("match_type") in _tm_bypass_types:
         _bypass_result = _tm_result["tgt_text"]
         _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
@@ -8386,7 +8212,7 @@ def _translate_core(text, src, tgt):
     
     # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
     # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
-    if (not _has_protected_names) and (not _factory_quality_ctx) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
+    if (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
         if _vec_sem_ok:
@@ -8425,7 +8251,7 @@ def _translate_core(text, src, tgt):
             _all_refs.append((int(s * 100), src_t, tgt_t, "semantic"))
     
     # v3.12: 工廠語境不注入 TM 參考(舊譯可能含 NMT 誤譯 pakan),純靠 glossary hint + 工廠 prompt。
-    if _factory_quality_ctx:
+    if _factory_ctx or _quality_critical:
         _all_refs = []
     if _all_refs:
         try:
@@ -8446,7 +8272,7 @@ def _translate_core(text, src, tgt):
     _use_nmt = False
     try:
         # v3.9.60: 有保護名時禁用 NMT(Google/DeepL 會把 placeholder 弄壞或音譯人名),強制走 LLM。
-        _use_nmt = (not _has_protected_names) and (not _factory_quality_ctx) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+        _use_nmt = (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
     except Exception:
         _use_nmt = False
     
@@ -8479,7 +8305,35 @@ def _translate_core(text, src, tgt):
     _perf["pre_llm"] = time.time()
     if not _skip_to_post:
         _len_before = len(translation_log)
-        result = _translate_inner(text, src, tgt)
+        _prev_qg = getattr(_tl, 'quality_gate_pending', None)
+        _prev_qgc = getattr(_tl, 'quality_gate_critical', None)
+        _prev_force_model = getattr(_tl, 'force_model', None)
+        try:
+            # Defer every new cache write until the final deterministic gate.
+            _tl.quality_gate_pending = True
+            _tl.quality_gate_critical = _quality_critical
+            if _quality_critical:
+                _tl.force_model = _active_upgrade_model()
+            result = _translate_inner(text, src, tgt)
+        finally:
+            try:
+                if _prev_qg is None:
+                    if hasattr(_tl, 'quality_gate_pending'):
+                        delattr(_tl, 'quality_gate_pending')
+                else:
+                    _tl.quality_gate_pending = _prev_qg
+                if _prev_qgc is None:
+                    if hasattr(_tl, 'quality_gate_critical'):
+                        delattr(_tl, 'quality_gate_critical')
+                else:
+                    _tl.quality_gate_critical = _prev_qgc
+                if _prev_force_model is None:
+                    if hasattr(_tl, 'force_model'):
+                        delattr(_tl, 'force_model')
+                else:
+                    _tl.force_model = _prev_force_model
+            except Exception:
+                pass
         try:
             if result is not None and len(translation_log) == _len_before:
                 _log_translation(text, result, src, tgt, "wrapper", 0, 1.0, False, 1.0,
@@ -8559,8 +8413,48 @@ def _translate_core(text, src, tgt):
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
 
+    # ─── 主路徑收尾 2.5:同步品質閘門 ───
+    # Quality-critical messages receive an independent semantic review before
+    # LINE delivery.  The rules are structural and glossary-driven; there are no
+    # phrase-specific replacement patches here.
     if result and isinstance(result, str):
-        result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+        try:
+            _immutable_env = tqg_module.protect_immutable_spans(text)
+            _safe_pairs = ge_module.collect_applicable_pairs(
+                text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
+            )
+            _gate = tqg_module.gate_and_revise(
+                text, result, src, tgt,
+                critical=_quality_critical,
+                model=_active_upgrade_model(),
+                immutable_literals=_immutable_env.mapping.values(),
+                glossary_pairs=_safe_pairs,
+                ai_client=ai_provider,
+            )
+            if not _gate.get("ok") or not _gate.get("text"):
+                logger.error("[QualityGate] blocked translation before send: %s", _gate.get("issues"))
+                try:
+                    _event_log_write("translation_quality_gate_blocked", {
+                        "group_id": _gid_for_tm,
+                        "src": src, "tgt": tgt,
+                        "issues": _gate.get("issues", [])[:10],
+                        "source": text[:300],
+                    })
+                except Exception:
+                    pass
+                return None
+            result = _gate["text"].strip()
+            result = _strip_thinking_tags(result) or result
+            if _is_meta_commentary_leak(result):
+                logger.error("[QualityGate] reviewer returned meta commentary; blocked")
+                return None
+            result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+            # The candidate cache writes inside _translate_inner were deferred.
+            # Only the reviewed/validated final translation is allowed into cache.
+            cache_set(text, src, tgt, result, force=True)
+        except Exception as _qge:
+            logger.exception("[QualityGate] unexpected failure; blocking unsafe output: %s", _qge)
+            return None
 
     # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
     try:
@@ -8786,20 +8680,12 @@ def _translate_single_paragraph(text, src, tgt):
     # 1. Check exact custom example
     exact = _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
-        checked = finalize_factory_translation(text, exact, src, tgt)
-        if checked and is_translation_acceptable(text, checked, src, tgt):
-            return checked
-        logger.warning("[IDZH integrity] blocked invalid custom example for paragraph")
+        return exact
     
     # 2. Check cache
     cached = cache_get(text, src, tgt)
     if cached:
-        checked = finalize_factory_translation(text, cached, src, tgt)
-        if checked and checked != cached:
-            cache_set(text, src, tgt, checked)
-        if checked and is_translation_acceptable(text, checked, src, tgt):
-            return checked
-        logger.warning("[IDZH integrity] blocked invalid paragraph cache")
+        return cached
     
     # 3. Translate via OpenAI(用 retry,確保穩定)
     result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
@@ -8854,12 +8740,6 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
     )
 
     context_snapshot = _snapshot_translation_thread_context()
-    try:
-        if classify_factory_message(text, src=src).get("type") == "announcement":
-            context_snapshot["parent_message_type"] = "announcement"
-            context_snapshot["force_model"] = _active_upgrade_model()
-    except Exception:
-        pass
     jobs = []
     for idx, (para_text, sep) in enumerate(parts):
         para_clean = para_text.strip()
@@ -8894,6 +8774,7 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
 
 
 def _translate_inner(text, src, tgt):
+    _quality_critical = bool(getattr(_tl, 'quality_gate_critical', False))
     # ★ v3.6 印尼文預處理:在所有後續路徑之前先標準化
     _preprocessing_log = None
     if src == "id" and id_preprocessing_enabled:
@@ -8919,7 +8800,7 @@ def _translate_inner(text, src, tgt):
     # 這個路徑不影響短訊息(沒分段就直接走原本流程)
     # v3.9.27: 來自圖片 OCR 的文字一律走分段路徑(段落保留是首要需求)
     _is_from_image = getattr(_tl, 'from_image_ocr', False)
-    if paragraph_split_translate and _has_paragraph_structure(text):
+    if (not _quality_critical) and paragraph_split_translate and _has_paragraph_structure(text):
         char_len = len(re.sub(r"\s+", "", text))
         # v3.9.27: 圖片 OCR 不看 threshold,直接分段
         if _is_from_image or char_len >= paragraph_split_threshold:
@@ -8931,31 +8812,26 @@ def _translate_inner(text, src, tgt):
                 
                 multi_result = _translate_paragraphs_separately(text, src, tgt, _single_para_translate)
                 if multi_result:
-                    # Whole-document validation catches omitted literals/markers across paragraphs.
-                    multi_result = finalize_factory_translation(text, multi_result, src, tgt)
-                    if multi_result and is_translation_acceptable(text, multi_result, src, tgt):
-                        cache_set(text, src, tgt, multi_result)
-                        logger.info("Paragraph-split SUCCESS: orig=%d chars, result=%d chars",
-                                    len(text), len(multi_result))
-                        return multi_result
-                    logger.warning("[IDZH integrity] paragraph result rejected; falling back to single-shot")
+                    logger.info("Paragraph-split SUCCESS: orig=%d chars, result=%d chars",
+                                len(text), len(multi_result))
+                    return multi_result
                 else:
                     logger.info("Paragraph-split returned None, falling back to single-shot")
             except Exception as _e:
                 logger.error("Paragraph-split exception: %s", _e)
     
     # Check custom examples for exact match first (free, no API call)
-    exact = _check_custom_example_exact(text.strip(), src, tgt)
+    exact = None if _quality_critical else _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
         checked = finalize_factory_translation(text, exact, src, tgt)
         if checked and is_translation_acceptable(text, checked, src, tgt):
             logger.info("Custom example exact match: %s -> %s", src, tgt)
             return checked
-        logger.warning("[IDZH integrity] blocked invalid custom example; using live translation")
+        logger.warning("[QualityGate] invalid custom example ignored")
 
     # Deterministic factory semantic engine before cache/OpenAI.
     # This prevents short factory defect/direction reports from being treated as daily language.
-    if src == "id" and tgt == "zh":
+    if (not _quality_critical) and src == "id" and tgt == "zh":
         semantic = factory_semantic_translate_id_zh(text)
         if semantic:
             logger.info("Factory semantic translation hit: %r -> %r", text[:80], semantic[:80])
@@ -8972,7 +8848,7 @@ def _translate_inner(text, src, tgt):
             cache_set(text, src, tgt, semantic)
             return semantic
 
-    if src == "zh" and tgt == "id":
+    if (not _quality_critical) and src == "zh" and tgt == "id":
         semantic = factory_semantic_translate_zh_id(text)
         if semantic:
             logger.info("Factory ZH->ID semantic translation hit: %r -> %r", text[:80], semantic[:80])
@@ -8990,16 +8866,13 @@ def _translate_inner(text, src, tgt):
             return semantic
 
     # Check cache first
-    cached = cache_get(text, src, tgt)
+    cached = None if _quality_critical else cache_get(text, src, tgt)
     if cached:
-        original_cached = cached
         cached = finalize_factory_translation(text, cached, src, tgt)
-        if cached and cached != original_cached:
-            cache_set(text, src, tgt, cached)
         if cached and is_translation_acceptable(text, cached, src, tgt):
             _log_translation(text, cached, src, tgt, "cache", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
             return cached
-        logger.warning("[IDZH integrity] blocked invalid exact cache; using live translation")
+        logger.warning("[QualityGate] invalid cache entry ignored")
 
     # ★ v3.4:長 ID→ZH 訊息嘗試 pivot via English(若啟用)
     pivot_result = None
