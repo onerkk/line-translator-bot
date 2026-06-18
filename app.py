@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.21-clean-document-quality-pipeline-2026-06-18"
+VERSION = "v3.22-availability-safe-quality-pipeline-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -8060,24 +8060,43 @@ def _translate_core(text, src, tgt):
     )
 
     # Formal announcements and other quality-critical documents use a clean,
-    # whole-document path.  This deliberately bypasses the legacy shortcut /
+    # whole-document path. This deliberately bypasses the legacy shortcut /
     # reverse-glossary / paragraph-fanout / phrase-postfix stack that caused the
-    # observed corruption.  Only a reviewed and validated result may be sent.
+    # observed corruption. A reviewed result is preferred; a first-pass result
+    # may still be sent only after hard integrity checks pass.
     if _quality_critical:
         try:
             _safe_pairs = ge_module.collect_applicable_pairs(
                 text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
             )
+            def _validated_document_fallback(protected_source, fallback_src, fallback_tgt):
+                # Final availability layer only. The quality module validates the
+                # restored result before it can be returned, and this fallback is
+                # never cached. This prevents provider/reviewer outages from
+                # becoming silent no-reply events.
+                try:
+                    return translate_with_retry(
+                        translate_google,
+                        protected_source,
+                        fallback_src,
+                        fallback_tgt,
+                        max_retries=1,
+                    )
+                except Exception as _fallback_e:
+                    logger.warning("[CleanDocument] fallback translator failed: %s", _fallback_e)
+                    return None
+
             _clean = tqg_module.translate_quality_critical_document(
                 text, src, tgt,
                 model=_active_upgrade_model(),
                 glossary_pairs=_safe_pairs,
                 ai_client=ai_provider,
+                fallback_translate=_validated_document_fallback,
             )
             if not _clean.get("ok") or not _clean.get("text"):
-                logger.error("[CleanDocument] blocked before send: %s", _clean.get("issues"))
+                logger.error("[CleanDocument] all validated candidates failed: %s", _clean.get("issues"))
                 try:
-                    _event_log_write("clean_document_translation_blocked", {
+                    _event_log_write("clean_document_translation_failed", {
                         "group_id": _gid_for_tm,
                         "src": src, "tgt": tgt,
                         "issues": _clean.get("issues", [])[:12],
@@ -8085,9 +8104,13 @@ def _translate_core(text, src, tgt):
                     })
                 except Exception:
                     pass
-                return None
+                # Never fail silently. If every provider and validated fallback
+                # failed, send a clear retry notice instead of appearing as if
+                # translation were disabled.
+                return tqg_module.translation_failure_message(tgt)
             _clean_text = _clean["text"].strip()
-            cache_set(text, src, tgt, _clean_text, force=True)
+            if _clean.get("cacheable", True):
+                cache_set(text, src, tgt, _clean_text, force=True)
             try:
                 _log_translation(
                     text, _clean_text, src, tgt,
@@ -8100,11 +8123,15 @@ def _translate_core(text, src, tgt):
                     _conv_buffer_add(_gid_for_tm, text, _clean_text, src, tgt)
             except Exception:
                 pass
-            logger.info("[CleanDocument] reviewed whole-document translation accepted")
+            logger.info(
+                "[CleanDocument] accepted path=%s reviewed=%s degraded=%s cacheable=%s",
+                _clean.get("path"), _clean.get("reviewed"),
+                _clean.get("degraded"), _clean.get("cacheable", True),
+            )
             return _clean_text
         except Exception as _clean_e:
-            logger.exception("[CleanDocument] pipeline failure; fail closed: %s", _clean_e)
-            return None
+            logger.exception("[CleanDocument] unexpected pipeline failure: %s", _clean_e)
+            return tqg_module.translation_failure_message(tgt)
 
     # v3.18 速度根治②:向量查詢提早並行發出。
     # vector_lookup 內含 1 次 OpenAI embedding API(~0.3-0.8 秒),原本與
