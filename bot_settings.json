@@ -1,78 +1,14 @@
 {
-  "group_settings": {},
-  "group_target_lang": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": "id",
-    "Cd188e1adc7792e407c90f3fa78850316": "id"
+  "_meta": {
+    "app_version": "v3.27-speaker-sender-name-2026-06-18",
+    "schema_version": 2,
+    "state_hash": "8f85f5095b5e0c8c623f2ee9092a4a20f019088f40282dfebdc63e5029cae4b5",
+    "updated_at_iso": "2026-06-18T10:23:00.560345+00:00",
+    "updated_at_unix": 1781778180.5603454
   },
-  "group_img_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false
-  },
-  "group_img_ask_settings": {},
-  "group_audio_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false
-  },
-  "group_wo_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false
-  },
-  "group_cmd_enabled": {
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "pw1": false,
-      "pw2": false,
-      "pkg": false,
-      "scrap": false,
-      "notice": true,
-      "qry": false
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "notice": true
-    },
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "notice": true
-    }
-  },
-  "group_skip_users": {},
-  "group_tracking": {
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "name": "寶貝相簿3",
-      "joined_at": 1780198990.8479366
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "name": "研磨C班",
-      "joined_at": 1780996222.8925776
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "name": "研磨股印尼同事群",
-      "joined_at": 1780996296.822199
-    }
-  },
-  "group_user_names": {
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
-    }
-  },
-  "dm_master_enabled": true,
-  "dm_whitelist": [
-    "Uaf4dc8fc636bc8f6060521c398514dc1"
-  ],
-  "dm_known_users": {
-    "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
-  },
-  "dm_target_lang": {},
+  "ab_test_enabled": false,
   "admin_users": {
     "Uaf4dc8fc636bc8f6060521c398514dc1": {
-      "is_admin": true,
       "allowed_tabs": [
         "names",
         "scrap",
@@ -92,11 +28,10 @@
         "insight",
         "storage"
       ],
-      "google_email": "onerkk@gmail.com"
+      "google_email": "onerkk@gmail.com",
+      "is_admin": true
     },
     "Ucbc2c71e01fb7b1fc12b756eed45c042": {
-      "is_admin": true,
-      "google_email": "asus0814999@gmail.com",
       "allowed_tabs": [
         "passwords",
         "packaging",
@@ -107,29 +42,174 @@
         "names",
         "storage",
         "groups"
-      ]
+      ],
+      "google_email": "asus0814999@gmail.com",
+      "is_admin": true
     }
   },
+  "ai_active_provider": "anthropic",
+  "ai_gemini_features": {
+    "reasoning_effort": "low"
+  },
+  "ai_gemini_models": {
+    "default": "gemini-3.1-flash-lite",
+    "upgrade": "gemini-3.5-flash"
+  },
+  "ai_openai_features": {
+    "flex_background": true
+  },
+  "ai_provider_config": {
+    "active_provider": "anthropic",
+    "anthropic": {
+      "default_model": "claude-haiku-4-5-20251001"
+    },
+    "auto_switch_on_exhaust": true,
+    "claude_features": {
+      "adaptive_thinking": true,
+      "assistant_prefill": false,
+      "assistant_prefill_text": "",
+      "citations": true,
+      "cot_thinking_tag": true,
+      "extended_cache_1h": true,
+      "extended_thinking": false,
+      "files_api_glossary": false,
+      "glossary_grounding": true,
+      "glossary_max_items": 50,
+      "image_translation_use_claude": true,
+      "line_plain_text_mode": true,
+      "multi_block_caching": true,
+      "native_vision": true,
+      "ocr_strict_layout": true,
+      "output_translation_tag": true,
+      "prompt_caching": true,
+      "role_strong": true,
+      "smart_cache_threshold": true,
+      "stop_sequences": true,
+      "success_criteria": true,
+      "thinking_budget": 2000,
+      "thinking_display": "auto",
+      "thinking_effort": "low",
+      "xml_system_prompt": true
+    },
+    "gemini": {
+      "default_model": "gemini-3.1-flash-lite",
+      "upgrade_model": "gemini-3.5-flash"
+    },
+    "gemini_features": {
+      "reasoning_effort": "low"
+    },
+    "gemini_model_mapping": {
+      "gpt-4.1": "gemini-3.5-flash",
+      "gpt-4.1-mini": "gemini-3.1-flash-lite",
+      "gpt-4o": "gemini-3.5-flash",
+      "gpt-4o-mini": "gemini-3.1-flash-lite",
+      "gpt-5.4": "gemini-3.5-flash",
+      "gpt-5.4-mini": "gemini-3.1-flash-lite",
+      "gpt-5.4-nano": "gemini-3.1-flash-lite",
+      "gpt-5.5": "gemini-3.5-flash"
+    },
+    "last_updated": "2026-06-18 10:23:00",
+    "model_mapping": {
+      "gpt-4.1": "claude-sonnet-4-6",
+      "gpt-4.1-mini": "claude-haiku-4-5-20251001",
+      "gpt-4o": "claude-sonnet-4-6",
+      "gpt-4o-mini": "claude-haiku-4-5-20251001",
+      "gpt-5.4": "claude-sonnet-4-6",
+      "gpt-5.4-mini": "claude-haiku-4-5-20251001",
+      "gpt-5.4-nano": "claude-haiku-4-5-20251001",
+      "gpt-5.5": "claude-opus-4-7"
+    },
+    "openai": {
+      "base_url": null
+    },
+    "openai_features": {
+      "flex_background": true
+    },
+    "provider_failover": true
+  },
   "bot_stats": {
-    "text_translations": 150,
-    "image_translations": 3,
-    "voice_translations": 0,
-    "work_order_detections": 0,
-    "commands": 9,
-    "tokens_prompt": 2477350,
-    "tokens_completion": 9248,
-    "oai_input": 53236,
-    "oai_cached": 9088,
-    "oai_output": 74,
-    "oai_reasoning": 0,
-    "oai_cost_usd": 0.011412199999999999,
-    "ant_input": 80026,
     "ant_cache_read": 246886,
     "ant_cache_write": 403775,
-    "ant_output": 4001,
     "ant_cost_usd": 0.7759584500000001,
+    "ant_input": 80026,
+    "ant_output": 4001,
+    "commands": 9,
+    "image_translations": 3,
+    "oai_cached": 9088,
+    "oai_cost_usd": 0.011412199999999999,
+    "oai_input": 53236,
+    "oai_output": 74,
+    "oai_reasoning": 0,
+    "text_translations": 152,
+    "tokens_completion": 9248,
+    "tokens_prompt": 2477350,
+    "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
-    "tokens_prompt_cached": 138368
+    "voice_translations": 0,
+    "work_order_detections": 0
+  },
+  "camera_qr_enabled": false,
+  "camera_roll_qr_enabled": false,
+  "claude_auto_switch_enabled": false,
+  "claude_model_default": "claude-haiku-4-5-20251001",
+  "claude_model_upgrade": "claude-haiku-4-5-20251001",
+  "clipboard_qr_enabled": true,
+  "confidence_threshold": 0.85,
+  "custom_translation_examples": [
+    {
+      "dir": "id2zh",
+      "id": "分離卡",
+      "zh": "Micro"
+    },
+    {
+      "dir": "id2zh",
+      "id": "Barang kecil di ujing",
+      "zh": "自由端偏小"
+    },
+    {
+      "dir": "zh2id",
+      "id": "Data downtime mesin di sistem masih sering belum diisi alasan berhentinya. Tolong operator lebih teliti dan segera melakukan pengisian data downtime.",
+      "zh": "停機設備還是很常沒有維護，再注意一下"
+    },
+    {
+      "dir": "zh2id",
+      "id": "Seharian begini terus.",
+      "zh": "歸剛欸"
+    },
+    {
+      "dir": "zh2id",
+      "id": "邱凱達（Petugas K3）",
+      "zh": "邱凱達"
+    }
+  ],
+  "dm_known_users": {
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+  },
+  "dm_master_enabled": true,
+  "dm_target_lang": {},
+  "dm_whitelist": [
+    "Uaf4dc8fc636bc8f6060521c398514dc1"
+  ],
+  "double_check_keywords": "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混",
+  "double_check_mode": "smart",
+  "double_check_threshold": 0.55,
+  "external_links_settings": {
+    "absen": {
+      "enabled": true,
+      "label_id": "Absen",
+      "label_zh": "📅 差勤",
+      "name_id": "Sistem Absen",
+      "name_zh": "差勤系統",
+      "url": "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS"
+    },
+    "saran": {
+      "enabled": true,
+      "label_id": "Saran",
+      "label_zh": "💡 提案",
+      "name_id": "Sistem Saran",
+      "name_zh": "提案系統",
+      "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList"
+    }
   },
   "extra_customers": {
     "__all__": [
@@ -180,349 +260,349 @@
       "祥啊"
     ]
   },
-  "group_api_usage": {
-    "__dm__": {
-      "tokens_prompt": 47857,
-      "tokens_completion": 42
-    },
-    "Cd188e1adc7792e407c90f3fa78850316": {
-      "tokens_prompt": 288656,
-      "tokens_completion": 1948,
-      "cost_usd": 0.35939214999999997,
-      "provider": "anthropic",
-      "model": "claude-haiku-4-5-20251001"
-    },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "tokens_prompt": 386845,
-      "tokens_completion": 1659,
-      "cost_usd": 0.34043380000000006,
-      "provider": "anthropic",
-      "model": "claude-haiku-4-5-20251001"
-    },
-    "C6c708f629dd38d6864669ecacf7712f4": {
-      "tokens_prompt": 89772,
-      "tokens_completion": 260,
-      "cost_usd": 0.06040745000000003,
-      "provider": "anthropic",
-      "model": "claude-haiku-4-5-20251001"
-    }
-  },
-  "user_languages": {},
-  "welcome_settings": {
-    "enabled": true,
-    "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
-    "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
-  },
-  "group_welcome_settings": {
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。",
-      "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis."
-    }
-  },
-  "flex_enabled": false,
-  "quick_reply_enabled": false,
-  "silent_mode": true,
-  "sender_name": "AI機器人",
-  "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
-  "video_ocr_enabled": true,
-  "location_translate_enabled": true,
-  "group_flex_settings": {
-    "Cd188e1adc7792e407c90f3fa78850316": false,
-    "C6c708f629dd38d6864669ecacf7712f4": true,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
-  },
-  "group_qr_settings": {},
-  "group_silent_settings": {},
-  "group_video_settings": {},
-  "group_location_settings": {},
-  "mark_read_enabled": true,
-  "retry_key_enabled": true,
-  "camera_qr_enabled": false,
-  "clipboard_qr_enabled": true,
-  "group_mark_read_settings": {},
-  "group_retry_key_settings": {},
-  "group_camera_qr_settings": {},
-  "group_clipboard_qr_settings": {},
-  "camera_roll_qr_enabled": false,
-  "location_qr_enabled": false,
-  "group_camera_roll_qr_settings": {},
-  "group_location_qr_settings": {},
-  "translation_tone": "factory",
-  "translation_tone_custom": "",
-  "translation_temperature": 0.0,
-  "translation_top_p": 1.0,
-  "translation_seed": 0,
-  "double_check_mode": "smart",
-  "double_check_threshold": 0.55,
-  "double_check_keywords": "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混",
   "fewshot_mode": "messages",
-  "logprobs_enabled": true,
-  "confidence_threshold": 0.85,
-  "structured_output_enabled": false,
-  "prompt_caching_enabled": true,
-  "translation_logging_enabled": true,
-  "ab_test_enabled": false,
-  "id_zh_cot_enabled": true,
-  "id_zh_cod_enabled": true,
-  "id_zh_pivot_enabled": false,
-  "id_zh_pivot_threshold": 80,
-  "id_zh_double_translation": false,
-  "id_preprocessing_enabled": true,
-  "id_preprocessing_nano": false,
-  "multi_path_backtrans_enabled": false,
-  "multi_path_min_chars": 60,
-  "quality_metrics_enabled": true,
-  "preserve_paragraphs_enabled": true,
-  "paragraph_split_translate": true,
-  "paragraph_split_threshold": 50,
-  "stop_sequences_enabled": true,
-  "reasoning_effort": "medium",
-  "send_user_id_to_openai": true,
-  "send_metadata_to_openai": true,
-  "group_tone_settings": {},
-  "model_default": "gpt-5.4-mini",
-  "model_upgrade": "gpt-5.4-mini",
-  "model_threshold": 500,
-  "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
-  "ai_active_provider": "openai",
-  "ai_openai_features": {
-    "flex_background": true
-  },
-  "ai_gemini_features": {
-    "reasoning_effort": "low"
-  },
-  "ai_gemini_models": {
-    "default": "gemini-3.1-flash-lite",
-    "upgrade": "gemini-3.5-flash"
-  },
-  "gemini_model_default": "gemini-3.1-flash-lite",
-  "gemini_model_upgrade": "gemini-3.5-flash",
-  "claude_model_default": "claude-haiku-4-5-20251001",
-  "claude_model_upgrade": "claude-haiku-4-5-20251001",
-  "claude_auto_switch_enabled": false,
-  "openai_24h_cache_enabled": false,
-  "vision_model": "gpt-5.4-mini",
-  "user_pictures": {
-    "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
-    "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomAvwPOXpCFCUsXDJHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
-    "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
-    "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
-    "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
-    "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb7YPqQGVhPTgUwsG5nZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
-    "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
-    "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R",
-    "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
-    "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
-    "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
-    "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
-    "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
-    "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
-    "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g",
-    "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
-    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
-    "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
-    "Ucbc2c71e01fb7b1fc12b756eed45c042": "https://sprofile.line-scdn.net/0hIOhM9VhOFmBFNAi-3MNoXjVkFQpmRU9yYVAOA3IzGgJ8UFdmPAcOVnMzTwB-DVM_PFAJVnE0TVhnAFB3FBEuBTs3ECl8fw9QDhAFVDtNMAorZilCNVAQUClnDxBkegtGN04BXRsyNjMaYwQ2aRJYQAZxA1IEAAdvFWN6NkAGeOMqNmE1aFNRA3kzS1f7"
-  },
-  "pw1_text": "UR00179\nCcc0972315373",
-  "pw2_text": "UR00644\nJj0973550210",
-  "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
-  "external_links_settings": {
-    "saran": {
-      "label_zh": "💡 提案",
-      "label_id": "Saran",
-      "name_zh": "提案系統",
-      "name_id": "Sistem Saran",
-      "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList",
-      "enabled": true
-    },
-    "absen": {
-      "label_zh": "📅 差勤",
-      "label_id": "Absen",
-      "name_zh": "差勤系統",
-      "name_id": "Sistem Absen",
-      "url": "https://hrm.walsin.com/servlet/jform?file=hrm8w.pkg,hrm8aw.pkg,BPM_JS.pkg,hrm8w_walsin.pkg,hrm8w_walsinhrisp.pkg&locale=US&init_func=%E4%BA%BA%E4%BA%8B_WS",
-      "enabled": true
-    }
-  },
-  "quick_reply_items_settings": [
-    {
-      "id": "help",
-      "type": "message",
-      "label": "📖 說明/Info",
-      "text": "/help",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "qry",
-      "type": "message",
-      "label": "🔍 儲區/Gudang",
-      "text": "/qry ",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": "qry",
-      "editable": true
-    },
-    {
-      "id": "wrong",
-      "type": "message",
-      "label": "❌ 標錯/Wrong",
-      "text": "/wrong ",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "skip",
-      "type": "message",
-      "label": "❌ 不翻我/Skip",
-      "text": "/skip",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "unskip",
-      "type": "message",
-      "label": "✅ 翻譯我/Unskip",
-      "text": "/unskip",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "pw1",
-      "type": "message",
-      "label": "🔑 班長密碼/PW1",
-      "text": "/pw1",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": "pw1",
-      "editable": true
-    },
-    {
-      "id": "pw2",
-      "type": "message",
-      "label": "🏭 儲運密碼/PW2",
-      "text": "/pw2",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": "pw2",
-      "editable": true
-    },
-    {
-      "id": "pkg",
-      "type": "message",
-      "label": "📦 包裝碼/Kemas",
-      "text": "/pkg ",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": "pkg",
-      "editable": true
-    },
-    {
-      "id": "scrap",
-      "type": "message",
-      "label": "🎨 廢料色/Warna",
-      "text": "/scrap",
-      "clipboard_text": "",
-      "enabled": true,
-      "cmd_check": "scrap",
-      "editable": true
-    },
-    {
-      "id": "camera",
-      "type": "camera",
-      "label": "📷 拍照/Foto",
-      "text": "",
-      "clipboard_text": "",
-      "enabled": false,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "clipboard",
-      "type": "clipboard",
-      "label": "📋 複製儲區指令",
-      "text": "",
-      "clipboard_text": "/qry ",
-      "enabled": false,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "camera_roll",
-      "type": "camera_roll",
-      "label": "🖼️ 相簿/Album",
-      "text": "",
-      "clipboard_text": "",
-      "enabled": false,
-      "cmd_check": null,
-      "editable": true
-    },
-    {
-      "id": "location",
-      "type": "location",
-      "label": "📍 位置/Lokasi",
-      "text": "",
-      "clipboard_text": "",
-      "enabled": false,
-      "cmd_check": null,
-      "editable": true
-    }
-  ],
-  "custom_translation_examples": [
-    {
-      "zh": "Micro",
-      "id": "分離卡",
-      "dir": "id2zh"
-    },
-    {
-      "zh": "自由端偏小",
-      "id": "Barang kecil di ujing",
-      "dir": "id2zh"
-    },
-    {
-      "zh": "停機設備還是很常沒有維護，再注意一下",
-      "id": "Data downtime mesin di sistem masih sering belum diisi alasan berhentinya. Tolong operator lebih teliti dan segera melakukan pengisian data downtime.",
-      "dir": "zh2id"
-    },
-    {
-      "zh": "歸剛欸",
-      "id": "Seharian begini terus.",
-      "dir": "zh2id"
-    },
-    {
-      "zh": "邱凱達",
-      "id": "邱凱達（Petugas K3）",
-      "dir": "zh2id"
-    }
-  ],
+  "flex_enabled": false,
+  "forbidden_words_id": "Catatan:,(Catatan,Terjemahan:,Penjelasan:",
+  "forbidden_words_zh": "註：,(註,(備註,以下是,翻譯如下,Translation:",
   "forms_data": {},
   "forms_submissions": {},
+  "gemini_model_default": "gemini-3.1-flash-lite",
+  "gemini_model_upgrade": "gemini-3.5-flash",
+  "group_api_usage": {
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "cost_usd": 0.06040745000000003,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "tokens_completion": 260,
+      "tokens_prompt": 89772
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "cost_usd": 0.35939214999999997,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "tokens_completion": 1948,
+      "tokens_prompt": 288656
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "cost_usd": 0.34043380000000006,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "tokens_completion": 1659,
+      "tokens_prompt": 386845
+    },
+    "__dm__": {
+      "tokens_completion": 42,
+      "tokens_prompt": 47857
+    }
+  },
+  "group_audio_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
+  "group_camera_qr_settings": {},
+  "group_camera_roll_qr_settings": {},
+  "group_clipboard_qr_settings": {},
+  "group_cmd_enabled": {
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "notice": true
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "notice": true,
+      "pkg": false,
+      "pw1": false,
+      "pw2": false,
+      "qry": false,
+      "scrap": false
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "notice": true
+    }
+  },
+  "group_conv_settings": {},
+  "group_flex_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": true,
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
   "group_flex_v2": {
     "C6c708f629dd38d6864669ecacf7712f4": {
       "carousel": true,
       "hero": true,
       "span": true
     },
-    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+    "Cd188e1adc7792e407c90f3fa78850316": {
       "carousel": true,
       "hero": true,
       "span": true
     },
-    "Cd188e1adc7792e407c90f3fa78850316": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "carousel": true,
       "hero": true,
       "span": true
     }
   },
+  "group_img_ask_settings": {},
+  "group_img_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
+  "group_location_qr_settings": {},
+  "group_location_settings": {},
+  "group_mark_read_settings": {},
+  "group_qr_settings": {},
+  "group_retry_key_settings": {},
+  "group_settings": {},
+  "group_silent_settings": {},
+  "group_skip_users": {},
+  "group_target_lang": {
+    "Cd188e1adc7792e407c90f3fa78850316": "id",
+    "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
+  },
+  "group_target_langs": {},
+  "group_tone_settings": {},
+  "group_tracking": {
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "joined_at": 1780198990.8479366,
+      "name": "寶貝相簿3"
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "joined_at": 1780996296.822199,
+      "name": "研磨股印尼同事群"
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "joined_at": 1780996222.8925776,
+      "name": "研磨C班"
+    }
+  },
   "group_tts_settings": {},
-  "group_conv_settings": {},
-  "group_target_langs": {}
+  "group_user_names": {
+    "C6c708f629dd38d6864669ecacf7712f4": {
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
+    },
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+    }
+  },
+  "group_video_settings": {},
+  "group_welcome_settings": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis.",
+      "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。"
+    }
+  },
+  "group_wo_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "Cd188e1adc7792e407c90f3fa78850316": false,
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+  },
+  "id_preprocessing_enabled": true,
+  "id_preprocessing_nano": false,
+  "id_zh_cod_enabled": true,
+  "id_zh_cot_enabled": true,
+  "id_zh_double_translation": false,
+  "id_zh_pivot_enabled": false,
+  "id_zh_pivot_threshold": 80,
+  "location_qr_enabled": false,
+  "location_translate_enabled": true,
+  "logprobs_enabled": true,
+  "mark_read_enabled": true,
+  "model_default": "gpt-5.4-mini",
+  "model_threshold": 500,
+  "model_upgrade": "gpt-5.4-mini",
+  "multi_path_backtrans_enabled": false,
+  "multi_path_min_chars": 60,
+  "openai_24h_cache_enabled": false,
+  "paragraph_split_threshold": 50,
+  "paragraph_split_translate": true,
+  "preserve_paragraphs_enabled": true,
+  "prompt_caching_enabled": true,
+  "pw1_text": "UR00179\nCcc0972315373",
+  "pw2_text": "UR00644\nJj0973550210",
+  "quality_metrics_enabled": true,
+  "quick_reply_enabled": false,
+  "quick_reply_items_settings": [
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "help",
+      "label": "📖 說明/Info",
+      "text": "/help",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": "qry",
+      "editable": true,
+      "enabled": true,
+      "id": "qry",
+      "label": "🔍 儲區/Gudang",
+      "text": "/qry ",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "wrong",
+      "label": "❌ 標錯/Wrong",
+      "text": "/wrong ",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "skip",
+      "label": "❌ 不翻我/Skip",
+      "text": "/skip",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "unskip",
+      "label": "✅ 翻譯我/Unskip",
+      "text": "/unskip",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": "pw1",
+      "editable": true,
+      "enabled": true,
+      "id": "pw1",
+      "label": "🔑 班長密碼/PW1",
+      "text": "/pw1",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": "pw2",
+      "editable": true,
+      "enabled": true,
+      "id": "pw2",
+      "label": "🏭 儲運密碼/PW2",
+      "text": "/pw2",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": "pkg",
+      "editable": true,
+      "enabled": true,
+      "id": "pkg",
+      "label": "📦 包裝碼/Kemas",
+      "text": "/pkg ",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": "scrap",
+      "editable": true,
+      "enabled": true,
+      "id": "scrap",
+      "label": "🎨 廢料色/Warna",
+      "text": "/scrap",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": false,
+      "id": "camera",
+      "label": "📷 拍照/Foto",
+      "text": "",
+      "type": "camera"
+    },
+    {
+      "clipboard_text": "/qry ",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": false,
+      "id": "clipboard",
+      "label": "📋 複製儲區指令",
+      "text": "",
+      "type": "clipboard"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": false,
+      "id": "camera_roll",
+      "label": "🖼️ 相簿/Album",
+      "text": "",
+      "type": "camera_roll"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": false,
+      "id": "location",
+      "label": "📍 位置/Lokasi",
+      "text": "",
+      "type": "location"
+    }
+  ],
+  "reasoning_effort": "medium",
+  "retry_key_enabled": true,
+  "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
+  "send_metadata_to_openai": true,
+  "send_user_id_to_openai": true,
+  "sender_avatar_mode": "speaker",
+  "sender_icon": "https://raw.githubusercontent.com/onerkk/line-translator-bot/main/Chat1.png",
+  "sender_name": "AI機器人",
+  "sender_name_mode": "speaker",
+  "service_price_text": "💰 收費標準 / Harga\n─────────────\n月費制,依群組數與用量報價\n詳細方案請與我聯絡:\nLINE ID: moneyshop\n或加好友 @764menna",
+  "silent_mode": true,
+  "stop_sequences_enabled": true,
+  "structured_output_enabled": false,
+  "translation_logging_enabled": true,
+  "translation_seed": 0,
+  "translation_temperature": 0.0,
+  "translation_tone": "factory",
+  "translation_tone_custom": "",
+  "translation_top_p": 1.0,
+  "user_languages": {},
+  "user_pictures": {
+    "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
+    "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
+    "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
+    "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
+    "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
+    "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
+    "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
+    "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
+    "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
+    "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
+    "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb7YPqQGVhPTgUwsG5nZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
+    "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
+    "Ucbc2c71e01fb7b1fc12b756eed45c042": "https://sprofile.line-scdn.net/0hIOhM9VhOFmBFNAi-3MNoXjVkFQpmRU9yYVAOA3IzGgJ8UFdmPAcOVnMzTwB-DVM_PFAJVnE0TVhnAFB3FBEuBTs3ECl8fw9QDhAFVDtNMAorZilCNVAQUClnDxBkegtGN04BXRsyNjMaYwQ2aRJYQAZxA1IEAAdvFWN6NkAGeOMqNmE1aFNRA3kzS1f7",
+    "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
+    "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R",
+    "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
+    "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomAvwPOXpCFCUsXDJHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
+    "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g"
+  },
+  "video_ocr_enabled": true,
+  "vision_model": "gpt-5.4-mini",
+  "welcome_settings": {
+    "enabled": true,
+    "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis.",
+    "text_zh": "👋 歡迎新成員加入！\n本群組有 AI 翻譯助手，中文和印尼文會自動互譯。"
+  }
 }
