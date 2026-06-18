@@ -1,15 +1,17 @@
-"""translation_quality_gate.py
+"""Provider-neutral translation quality pipeline.
 
-Provider-neutral, availability-safe translation quality pipeline.
+Design goals
+------------
+1. Protect data values before normalization or model calls.
+2. Keep protected placeholders through translation *and* semantic review.
+3. Restore literals only once, after a candidate has passed structural checks.
+4. Validate semantic data values independently from quote glyphs/typography.
+5. Never discard a structurally valid first-pass translation only because the
+   optional reviewer is unavailable.
+6. No sentence-specific translation replacements live in this module.
 
-Core properties:
-- immutable data is protected before any normalization/model call;
-- validation separates hard corruption from advisory formatting warnings;
-- critical documents are translated as a whole and independently reviewed;
-- reviewer/model outages never discard an already valid translation;
-- if the first candidate is invalid, a fresh source-grounded retry is attempted;
-- an optional non-LLM fallback may be used only after deterministic validation;
-- no phrase-specific translation replacements are embedded in this module.
+The module is intentionally provider-neutral and works with the project's
+``ai_provider.chat_complete`` interface for OpenAI, Gemini and Claude.
 """
 
 from __future__ import annotations
@@ -22,12 +24,26 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 logger = logging.getLogger(__name__)
 
-_QUOTES = '"“”„‟＂「」『』‘’\'`'
+# ASCII placeholders survive all three providers more reliably than decorative
+# Unicode brackets.  The hash prevents accidental collision with ordinary text.
+_PLACEHOLDER_RE = re.compile(r"__QG_KEEP_(\d{3})_([0-9A-F]{8})__")
+_UNKNOWN_PLACEHOLDER_RE = re.compile(r"QG[\s_-]*KEEP[\s_-]*\d{1,4}[\s_-]*[0-9A-F]{6,10}", re.I)
+_PIPELINE_TOKEN_RE = re.compile(r'(?:__QG_KEEP_\d{3}_[0-9A-F]{8}__|⟦PN\d+⟧|__MENTION_\d+__|__CUST_\d+__)')
+
+_QUOTES_OPEN = '"“”„‟＂「」『』‘’\'`'
+_QUOTES_CLOSE = _QUOTES_OPEN
+_QUOTES_ALL = _QUOTES_OPEN
+
+# Quote-wrapped field values.  The *inner value* is protected, while the quote
+# characters remain visible to the model so it can naturally use target-language
+# typography without changing the data value itself.
 _QUOTED_DATA_RE = re.compile(
-    r'(?P<open>[' + re.escape(_QUOTES) + r'])\s*'
+    r'(?P<open>[' + re.escape(_QUOTES_OPEN) + r'])\s*'
     r'(?P<value>(?:[-–—]|[A-Z0-9][A-Z0-9._/+:%×x-]{0,31}))\s*'
-    r'(?P<close>[' + re.escape(_QUOTES) + r'])'
+    r'(?P<close>[' + re.escape(_QUOTES_CLOSE) + r'])'
 )
+
+_MENTION_RE = re.compile(r'@[A-Za-z0-9_.-]+|@[^\s,，。!?！？:：;；]{1,48}')
 _TECH_TOKEN_RE = re.compile(
     r'(?<![\w])('
     r'(?:[A-Z]{1,4}\d[A-Z0-9._/+:%×x-]{0,24})|'
@@ -37,14 +53,13 @@ _TECH_TOKEN_RE = re.compile(
     r'(?:[A-Z]{1,4})'
     r')(?![\w])'
 )
-_PLACEHOLDER_RE = re.compile(r'⟦IMM\d+_[0-9A-F]{8}⟧')
-_MENTION_RE = re.compile(r'@[A-Za-z0-9_.-]+|@[^\s,，。!?！？:：;；]{1,48}')
-_PIPELINE_TOKEN_RE = re.compile(r'(?:⟦PN\d+⟧|__MENTION_\d+__|__CUST_\d+__)')
+
 _LATIN_RUN_RE = re.compile(r'(?:\b[A-Za-z]{2,}\b(?:[\s,;:/()\-]+|$)){4,}', re.I)
 _MARKERS = ("✅", "❌", "⚠️", "📢", "•", "▪", "▫", "→")
 _HAN_RE = re.compile(r'[\u3400-\u9fff]')
 _LATIN_WORD_RE = re.compile(r'(?<![A-Za-z])([A-Za-z]{1,32})(?![A-Za-z])')
 _INLINE_LATIN_IN_HAN_RE = re.compile(r'(?<=[\u3400-\u9fff])([A-Za-z]{1,12})(?=[\u3400-\u9fff])')
+_DASHES = "-–—−"
 
 
 @dataclass(frozen=True)
@@ -56,8 +71,6 @@ class ProtectedText:
 
 @dataclass
 class ValidationResult:
-    # ``ok`` means no hard integrity failure. Warnings may still exist and are
-    # suitable for reviewer guidance, but they must not cause silent message loss.
     ok: bool
     issues: List[str]
     hard_issues: List[str] = field(default_factory=list)
@@ -66,52 +79,90 @@ class ValidationResult:
 
 def _placeholder(index: int, literal: str) -> str:
     digest = hashlib.sha1(literal.encode("utf-8")).hexdigest()[:8].upper()
-    return f"⟦IMM{index}_{digest}⟧"
+    return f"__QG_KEEP_{index:03d}_{digest}__"
+
+
+def _new_placeholder(mapping: Dict[str, str], literal: str) -> str:
+    ph = _placeholder(len(mapping), literal)
+    mapping[ph] = literal
+    return ph
 
 
 def _replace_matches(text: str, regex: re.Pattern, mapping: Dict[str, str]) -> str:
     def repl(match: re.Match) -> str:
         literal = match.group(0)
-        if "IMM" in literal or "MENTION" in literal or "PN" in literal:
+        if _PLACEHOLDER_RE.search(literal):
             return literal
-        ph = _placeholder(len(mapping), literal)
-        mapping[ph] = literal
-        return ph
+        return _new_placeholder(mapping, literal)
     return regex.sub(repl, text)
 
 
-def protect_immutable_spans(text: str) -> ProtectedText:
-    """Protect mentions, quoted field values, codes and measurements.
+def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
+    def repl(match: re.Match) -> str:
+        value = match.group("value")
+        # A technical token (e.g. Y) may already have been protected before this
+        # pass.  In that case leave the quote-wrapped placeholder untouched.
+        if _PLACEHOLDER_RE.fullmatch(value or ""):
+            return match.group(0)
+        return f'{match.group("open")}{_new_placeholder(mapping, value)}{match.group("close")}'
+    return _QUOTED_DATA_RE.sub(repl, text)
 
-    This must run before Indonesian abbreviation normalization so a field value
-    such as quoted ``Y`` can never become ``ya``.
+
+def protect_immutable_spans(text: str) -> ProtectedText:
+    """Protect mentions, field values, codes and measurements.
+
+    Ordering is deliberate:
+    - mentions are protected first;
+    - technical tokens next (so quoted ``Y`` becomes a protected atom);
+    - quote-wrapped punctuation values such as ``"-"`` last.
+
+    Therefore Indonesian slang normalization can never convert a field value
+    ``Y`` into ``ya``.
     """
     if not text or not isinstance(text, str):
         return ProtectedText(text or "", text or "", {})
     mapping: Dict[str, str] = {}
     protected = _replace_matches(text, _MENTION_RE, mapping)
-    protected = _replace_matches(protected, _QUOTED_DATA_RE, mapping)
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
+    protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
 
 
-def _placeholder_variants(ph: str) -> Sequence[str]:
-    core = ph.strip("⟦⟧")
-    return (ph, f"【{core}】", f"[{core}]", f"({core})", core, core.replace("_", " "))
+def _placeholder_pattern(ph: str) -> re.Pattern:
+    m = _PLACEHOLDER_RE.fullmatch(ph)
+    if not m:
+        return re.compile(re.escape(ph))
+    idx, digest = m.groups()
+    # Tolerate brackets, omitted underscores and whitespace inserted by a model,
+    # while still requiring the exact index+hash identity.
+    return re.compile(
+        r'(?:__|\[\[|\[|【|⟦|\()?\s*QG[\s_-]*KEEP[\s_-]*0*'
+        + re.escape(str(int(idx)))
+        + r'[\s_-]*' + re.escape(digest)
+        + r'\s*(?:__|\]\]|\]|】|⟧|\))?',
+        re.I,
+    )
+
+
+def canonicalize_placeholders(text: str, mapping: Mapping[str, str]) -> str:
+    result = text or ""
+    for ph in mapping:
+        result = _placeholder_pattern(ph).sub(ph, result)
+    return result
 
 
 def restore_immutable_spans(text: str, mapping: Mapping[str, str]) -> str:
     if not text or not mapping:
         return text
-    result = text
+    result = canonicalize_placeholders(text, mapping)
     for ph, literal in sorted(mapping.items(), key=lambda item: -len(item[0])):
-        for variant in _placeholder_variants(ph):
-            result = result.replace(variant, literal)
+        result = result.replace(ph, literal)
     return result
 
 
 def protected_placeholders_present(text: str, mapping: Mapping[str, str]) -> Tuple[bool, List[str]]:
-    missing = [ph for ph in mapping if ph not in (text or "")]
+    canonical = canonicalize_placeholders(text or "", mapping)
+    missing = [ph for ph in mapping if canonical.count(ph) < 1]
     return not missing, missing
 
 
@@ -142,21 +193,44 @@ def _dedupe(items: Iterable[str]) -> List[str]:
 
 
 def _partition_issues(issues: Sequence[str]) -> Tuple[List[str], List[str]]:
-    """Separate integrity failures from advisory layout/style warnings.
-
-    Exact paragraph-count equality is intentionally advisory. Models may merge a
-    heading with its following paragraph without losing meaning; treating that as
-    fatal caused valid translations to disappear from LINE.
-    """
     warning_prefixes = ("paragraph_count:",)
     hard: List[str] = []
     warnings: List[str] = []
     for issue in _dedupe(issues):
-        if issue.startswith(warning_prefixes):
-            warnings.append(issue)
-        else:
-            hard.append(issue)
+        (warnings if issue.startswith(warning_prefixes) else hard).append(issue)
     return hard, warnings
+
+
+def _normalize_data_atom(value: str) -> str:
+    v = (value or "").strip()
+    if v and all(ch in _DASHES for ch in v):
+        return "-"
+    return v
+
+
+def _source_atom_is_quoted(source: str, atom: str) -> bool:
+    a = re.escape(atom)
+    if atom == "-":
+        a = "[" + re.escape(_DASHES) + "]"
+    return bool(re.search(r'[' + re.escape(_QUOTES_OPEN) + r']\s*' + a + r'\s*[' + re.escape(_QUOTES_CLOSE) + r']', source or ""))
+
+
+def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False) -> int:
+    atom = _normalize_data_atom(atom)
+    if not atom:
+        return 0
+    if atom == "-":
+        if quoted_preferred:
+            return len(re.findall(
+                r'[' + re.escape(_QUOTES_ALL) + r']\s*[' + re.escape(_DASHES) + r']\s*[' + re.escape(_QUOTES_ALL) + r']',
+                text or "",
+            ))
+        return len(re.findall(r'[' + re.escape(_DASHES) + r']', text or ""))
+    if atom.startswith("@"):
+        return (text or "").count(atom)
+    if re.fullmatch(r'[A-Za-z0-9._/+:%×x-]+', atom):
+        return len(re.findall(r'(?<![A-Za-z0-9])' + re.escape(atom) + r'(?![A-Za-z0-9])', text or ""))
+    return (text or "").count(atom)
 
 
 def validate_translation(
@@ -169,11 +243,11 @@ def validate_translation(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     require_paragraph_fidelity: bool = False,
 ) -> ValidationResult:
-    """Deterministic integrity checks.
+    """Deterministic integrity checks on a restored translation.
 
-    The validator does not prescribe sentence-level wording. It only blocks
-    empty/untranslated/corrupted output, lost immutable data, missing semantic
-    markers and catastrophic omissions. Formatting differences are warnings.
+    Immutable values are compared semantically.  Quote glyphs may legitimately
+    change from Indonesian curly quotes to Taiwanese corner quotes; the field
+    value itself must remain unchanged.
     """
     issues: List[str] = []
     source = source or ""
@@ -183,8 +257,9 @@ def validate_translation(
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
-    if _PLACEHOLDER_RE.search(candidate):
+    if _PLACEHOLDER_RE.search(candidate) or _UNKNOWN_PLACEHOLDER_RE.search(candidate):
         issues.append("placeholder_leak")
+
     for token in _PIPELINE_TOKEN_RE.findall(source):
         if candidate.count(token) < source.count(token):
             issues.append(f"missing_pipeline_token:{token}")
@@ -193,9 +268,15 @@ def validate_translation(
             issues.append(f"invented_pipeline_token:{token}")
 
     for literal in immutable_literals or ():
-        src_count = source.count(literal)
-        if src_count and candidate.count(literal) < src_count:
-            issues.append(f"missing_literal:{literal}")
+        atom = _normalize_data_atom(str(literal))
+        quoted = _source_atom_is_quoted(source, atom)
+        src_count = _count_semantic_atom(source, atom, quoted_preferred=quoted)
+        # For quoted atoms, accept any target-language quote pair but not a
+        # completely missing value.  For ordinary codes/mentions require token
+        # identity.
+        cand_count = _count_semantic_atom(candidate, atom, quoted_preferred=quoted)
+        if src_count and cand_count < src_count:
+            issues.append(f"missing_literal:{atom}")
 
     for marker in _MARKERS:
         if source.count(marker) > candidate.count(marker):
@@ -247,6 +328,42 @@ def validate_translation(
     return ValidationResult(not hard, issues, hard, warnings)
 
 
+def _validate_protected_candidate(
+    protected_source: str,
+    protected_candidate: str,
+    mapping: Mapping[str, str],
+    src_lang: str,
+    tgt_lang: str,
+    *,
+    glossary_pairs: Sequence[Tuple[str, str]],
+    require_paragraph_fidelity: bool,
+) -> ValidationResult:
+    candidate = canonicalize_placeholders(protected_candidate or "", mapping)
+    issues: List[str] = []
+    for ph in mapping:
+        if candidate.count(ph) < protected_source.count(ph):
+            issues.append(f"missing_placeholder:{ph}")
+    for m in _UNKNOWN_PLACEHOLDER_RE.findall(candidate):
+        if not any(_placeholder_pattern(ph).fullmatch(m) for ph in mapping):
+            issues.append("unknown_placeholder")
+    # Restore only for language/marker/length checks; semantic literal checks are
+    # skipped here because placeholder identity was already checked exactly.
+    restored_source = restore_immutable_spans(protected_source, mapping)
+    restored_candidate = restore_immutable_spans(candidate, mapping)
+    base = validate_translation(
+        restored_source,
+        restored_candidate,
+        src_lang,
+        tgt_lang,
+        immutable_literals=(),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    issues.extend(base.issues)
+    hard, warnings = _partition_issues(_dedupe(issues))
+    return ValidationResult(not hard, _dedupe(issues), hard, warnings)
+
+
 def is_quality_critical(
     text: str,
     src_lang: str,
@@ -292,12 +409,12 @@ def _build_review_messages(
     system = (
         "You are an independent bilingual translation quality editor. Compare the source and current "
         "translation sentence by sentence and return one corrected final translation. Preserve every "
-        "instruction, condition, negation, actor, object and sequence. Do not add information. Preserve "
-        "field values, codes, numbers, symbols, @mentions, emoji and list markers exactly. Preserve the "
-        "document's logical sections; minor paragraph reflow is allowed only when meaning is unchanged. "
-        "A parenthetical term already written in the target language is contextual terminology for the "
-        "adjacent source phrase. Apply only explicitly supplied terminology pairs. Remove accidental "
-        "mixed-language fragments not grounded in the source. Output only the final translation."
+        "instruction, condition, negation, actor, object and sequence. Do not add information. Tokens "
+        "matching __QG_KEEP_000_XXXXXXXX__ are immutable identifiers and must be copied exactly. Preserve "
+        "numbers, symbols, @mentions, emoji and list markers. Preserve the document's logical sections; "
+        "minor paragraph reflow is allowed only when meaning is unchanged. Apply only explicitly supplied "
+        "terminology pairs. Remove accidental mixed-language fragments not grounded in the source. Output "
+        "only the final translation."
     )
     user = (
         f"SOURCE LANGUAGE: {src_lang}\nTARGET LANGUAGE: {_target_name(tgt_lang)}\n\n"
@@ -326,14 +443,13 @@ def _build_translation_messages(
         )
     system = (
         "You are a professional whole-document translator for a factory work group. Translate the complete "
-        "source into " + _target_name(tgt_lang) + ". Read the whole document before writing. Preserve every "
-        "instruction, condition, negation, actor, object and sequence. Preserve list markers, emoji, @mentions, "
-        "field values, codes, numbers and symbols exactly. Tokens such as ⟦IMM0_XXXXXXXX⟧, ⟦PN1⟧ and "
-        "__MENTION_0__ are immutable and must be copied exactly. Preserve the logical section order and spacing "
-        "well enough for a LINE announcement; do not summarize. A parenthetical expression already in the target "
-        "language is terminology guidance for the adjacent phrase. Use only explicit unambiguous glossary pairs; "
-        "never infer a reversed mapping from a common word. Do not explain, add headings, mix languages or output "
-        "alternatives. Output only the translation."
+        "source into " + _target_name(tgt_lang) + ". Read the whole document before writing and internally "
+        "verify the result before output. Preserve every instruction, condition, negation, actor, object and "
+        "sequence. Preserve list markers, emoji and section order. Tokens matching "
+        "__QG_KEEP_000_XXXXXXXX__ are immutable identifiers: copy each token exactly once wherever it appears. "
+        "Do not translate, rename, split or decorate these tokens. Use only explicit unambiguous glossary pairs; "
+        "never infer a reversed mapping from a common word. Do not summarize, explain, add headings, mix "
+        "languages or output alternatives. Output only the complete translation."
     )
     user = (
         f"SOURCE LANGUAGE: {src_lang}\nTARGET LANGUAGE: {_target_name(tgt_lang)}\n\n"
@@ -351,12 +467,6 @@ def _call_chat_complete(
     max_tokens: int,
     timeout: int = 90,
 ) -> Any:
-    """Call the unified provider with parameter-compatible degradation.
-
-    The unified provider normally accepts all parameters, but a provider SDK or
-    proxy may reject optional controls. Retrying without optional controls fixes
-    availability without changing the translation prompt or model policy.
-    """
     attempts = (
         dict(model=model, messages=list(messages), max_tokens=max_tokens, temperature=0.0,
              reasoning_effort="none", verbosity="low", timeout=timeout),
@@ -434,11 +544,10 @@ def gate_and_revise(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
 ) -> Dict[str, Any]:
-    """Validate, review and choose the safest available candidate.
+    """Validate an already-restored candidate and optionally review it.
 
-    A valid first-pass translation is never discarded merely because the
-    independent reviewer timed out. This prevents the quality system itself from
-    turning a translation into silence.
+    This compatibility entry point is used by the legacy translation path.  The
+    dedicated whole-document path below keeps placeholders protected throughout.
     """
     glossary_pairs = list(glossary_pairs or ())
     immutable_literals = list(immutable_literals or ())
@@ -448,26 +557,17 @@ def gate_and_revise(
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=critical,
     )
-
     if not critical:
         return {
-            "ok": initial.ok,
-            "text": candidate if initial.ok else None,
-            "issues": initial.issues,
-            "hard_issues": initial.hard_issues,
-            "warnings": initial.warnings,
-            "reviewed": False,
-            "degraded": False,
-            "cacheable": initial.ok,
-            "path": "single_pass",
+            "ok": initial.ok, "text": candidate if initial.ok else None,
+            "issues": initial.issues, "hard_issues": initial.hard_issues,
+            "warnings": initial.warnings, "reviewed": False,
+            "degraded": False, "cacheable": initial.ok, "path": "single_pass",
         }
 
     reviewed = review_translation(
         source, candidate, src_lang, tgt_lang,
-        model=model,
-        issues=initial.issues,
-        glossary_pairs=glossary_pairs,
-        ai_client=ai_client,
+        model=model, issues=initial.issues, glossary_pairs=glossary_pairs, ai_client=ai_client,
     )
     if reviewed:
         checked = validate_translation(
@@ -479,60 +579,24 @@ def gate_and_revise(
         if checked.ok:
             return {
                 "ok": True, "text": reviewed, "issues": checked.issues,
-                "hard_issues": [], "warnings": checked.warnings,
-                "reviewed": True, "degraded": False, "cacheable": True,
-                "path": "reviewed",
+                "hard_issues": [], "warnings": checked.warnings, "reviewed": True,
+                "degraded": False, "cacheable": True, "path": "reviewed",
             }
 
-        reviewed2 = review_translation(
-            source, reviewed, src_lang, tgt_lang,
-            model=model,
-            issues=checked.issues,
-            glossary_pairs=glossary_pairs,
-            ai_client=ai_client,
-        )
-        if reviewed2:
-            checked2 = validate_translation(
-                source, reviewed2, src_lang, tgt_lang,
-                immutable_literals=immutable_literals,
-                glossary_pairs=glossary_pairs,
-                require_paragraph_fidelity=True,
-            )
-            if checked2.ok:
-                return {
-                    "ok": True, "text": reviewed2, "issues": checked2.issues,
-                    "hard_issues": [], "warnings": checked2.warnings,
-                    "reviewed": True, "degraded": False, "cacheable": True,
-                    "path": "reviewed_retry",
-                }
-
-    # Availability-safe choice: if the original candidate passed all hard
-    # invariants, it is safer to deliver it than to discard it because the
-    # reviewer was unavailable or introduced new corruption.
     if initial.ok:
-        fallback_warnings = list(initial.warnings)
-        fallback_warnings.append("semantic_review_unavailable_or_rejected")
         return {
-            "ok": True,
-            "text": candidate,
+            "ok": True, "text": candidate,
             "issues": _dedupe(initial.issues + ["semantic_review_unavailable_or_rejected"]),
             "hard_issues": [],
-            "warnings": _dedupe(fallback_warnings),
-            "reviewed": False,
-            "degraded": True,
-            "cacheable": True,
+            "warnings": _dedupe(initial.warnings + ["semantic_review_unavailable_or_rejected"]),
+            "reviewed": False, "degraded": True, "cacheable": True,
             "path": "validated_first_pass",
         }
-
     return {
-        "ok": False,
-        "text": None,
+        "ok": False, "text": None,
         "issues": _dedupe(initial.issues + ["no_valid_review_candidate"]),
-        "hard_issues": initial.hard_issues,
-        "warnings": initial.warnings,
-        "reviewed": bool(reviewed),
-        "degraded": True,
-        "cacheable": False,
+        "hard_issues": initial.hard_issues, "warnings": initial.warnings,
+        "reviewed": bool(reviewed), "degraded": True, "cacheable": False,
         "path": "blocked",
     }
 
@@ -555,6 +619,35 @@ def _translate_candidate(
     return _extract_response_text(resp)
 
 
+def _finalize_protected_candidate(
+    source: str,
+    protected_source: str,
+    protected_candidate: str,
+    envelope: ProtectedText,
+    src_lang: str,
+    tgt_lang: str,
+    glossary_pairs: Sequence[Tuple[str, str]],
+    *,
+    require_paragraph_fidelity: bool,
+) -> Tuple[Optional[str], ValidationResult]:
+    canonical = canonicalize_placeholders(protected_candidate or "", envelope.mapping)
+    protected_report = _validate_protected_candidate(
+        protected_source, canonical, envelope.mapping, src_lang, tgt_lang,
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    if not protected_report.ok:
+        return None, protected_report
+    restored = restore_immutable_spans(canonical, envelope.mapping).strip()
+    final_report = validate_translation(
+        source, restored, src_lang, tgt_lang,
+        immutable_literals=envelope.mapping.values(),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    return (restored if final_report.ok else None), final_report
+
+
 def translate_quality_critical_document(
     source: str,
     src_lang: str,
@@ -565,15 +658,12 @@ def translate_quality_critical_document(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """Whole-document translation with review, retry and graceful degradation.
+    """Translate a complete critical document with protected-data continuity.
 
-    Candidate order:
-      1. high-quality whole-document translation;
-      2. independent semantic review;
-      3. fresh source-grounded retry if hard validation failed;
-      4. optional validated fallback translator.
-
-    At no point is a valid candidate discarded solely due to reviewer outage.
+    The same placeholders remain in place through first-pass translation and
+    optional semantic review.  They are restored only once at the end.  This
+    prevents quote-style changes, reviewer edits or provider formatting from
+    turning a valid field value into a false integrity failure.
     """
     if ai_client is None:
         try:
@@ -583,104 +673,120 @@ def translate_quality_critical_document(
 
     glossary_pairs = list(glossary_pairs or ())
     envelope = protect_immutable_spans(source)
+    protected_source = envelope.protected
     all_issues: List[str] = []
 
     if ai_client is not None:
+        # First high-quality whole-document translation.
         try:
             raw = _translate_candidate(
-                envelope.protected, src_lang, tgt_lang,
+                protected_source, src_lang, tgt_lang,
                 model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
             )
-            candidate = restore_immutable_spans(raw, envelope.mapping)
-            if candidate:
-                gated = gate_and_revise(
-                    source, candidate, src_lang, tgt_lang,
-                    critical=True, model=model,
-                    immutable_literals=envelope.mapping.values(),
+            raw = canonicalize_placeholders(raw, envelope.mapping)
+            first_text, first_report = _finalize_protected_candidate(
+                source, protected_source, raw, envelope, src_lang, tgt_lang,
+                glossary_pairs, require_paragraph_fidelity=True,
+            )
+            all_issues.extend(first_report.issues)
+
+            if first_text:
+                # Review stays protected.  A reviewer outage or bad edit cannot
+                # invalidate the already valid first pass.
+                reviewed_raw = review_translation(
+                    protected_source, raw, src_lang, tgt_lang,
+                    model=model, issues=first_report.issues,
                     glossary_pairs=glossary_pairs, ai_client=ai_client,
                 )
-                if gated.get("ok") and gated.get("text"):
-                    gated["provider_path"] = "primary"
-                    return gated
-                all_issues.extend(gated.get("issues", []))
-            else:
-                all_issues.append("empty_first_pass")
+                if reviewed_raw:
+                    reviewed_raw = canonicalize_placeholders(reviewed_raw, envelope.mapping)
+                    reviewed_text, reviewed_report = _finalize_protected_candidate(
+                        source, protected_source, reviewed_raw, envelope, src_lang, tgt_lang,
+                        glossary_pairs, require_paragraph_fidelity=True,
+                    )
+                    if reviewed_text:
+                        return {
+                            "ok": True, "text": reviewed_text,
+                            "issues": reviewed_report.issues,
+                            "hard_issues": [], "warnings": reviewed_report.warnings,
+                            "reviewed": True, "degraded": False, "cacheable": True,
+                            "path": "protected_reviewed", "provider_path": "primary",
+                        }
+                    all_issues.extend(reviewed_report.issues)
+
+                return {
+                    "ok": True, "text": first_text,
+                    "issues": _dedupe(first_report.issues + ["semantic_review_unavailable_or_rejected"]),
+                    "hard_issues": [],
+                    "warnings": _dedupe(first_report.warnings + ["semantic_review_unavailable_or_rejected"]),
+                    "reviewed": False, "degraded": True, "cacheable": True,
+                    "path": "protected_first_pass", "provider_path": "primary",
+                }
         except Exception as exc:
             logger.warning("[QualityGate] critical first pass unavailable: %s", exc)
             all_issues.append("first_pass_unavailable")
 
-        # Fresh retry from protected source. This is not a string patch and does
-        # not reuse the bad translation; it receives only structural failure codes.
+        # One fresh source-grounded retry.  It receives only integrity codes, not
+        # the failed wording, so this is not a string patch.
         try:
             raw_retry = _translate_candidate(
-                envelope.protected, src_lang, tgt_lang,
+                protected_source, src_lang, tgt_lang,
                 model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
                 retry_issues=all_issues,
             )
-            retry_candidate = restore_immutable_spans(raw_retry, envelope.mapping)
-            if retry_candidate:
-                retry_gate = gate_and_revise(
-                    source, retry_candidate, src_lang, tgt_lang,
-                    critical=True, model=model,
-                    immutable_literals=envelope.mapping.values(),
-                    glossary_pairs=glossary_pairs, ai_client=ai_client,
-                )
-                if retry_gate.get("ok") and retry_gate.get("text"):
-                    retry_gate["provider_path"] = "fresh_retry"
-                    return retry_gate
-                all_issues.extend(retry_gate.get("issues", []))
-            else:
-                all_issues.append("empty_fresh_retry")
+            raw_retry = canonicalize_placeholders(raw_retry, envelope.mapping)
+            retry_text, retry_report = _finalize_protected_candidate(
+                source, protected_source, raw_retry, envelope, src_lang, tgt_lang,
+                glossary_pairs, require_paragraph_fidelity=True,
+            )
+            if retry_text:
+                return {
+                    "ok": True, "text": retry_text, "issues": retry_report.issues,
+                    "hard_issues": [], "warnings": _dedupe(retry_report.warnings + ["used_fresh_retry"]),
+                    "reviewed": False, "degraded": True, "cacheable": True,
+                    "path": "protected_fresh_retry", "provider_path": "fresh_retry",
+                }
+            all_issues.extend(retry_report.issues)
         except Exception as exc:
             logger.warning("[QualityGate] fresh critical retry unavailable: %s", exc)
             all_issues.append("fresh_retry_unavailable")
 
+    # Optional non-LLM fallback.  It receives the protected document and must
+    # preserve the same placeholder identities before it can be accepted.
     if fallback_translate is not None:
         try:
-            fallback_raw = fallback_translate(envelope.protected, src_lang, tgt_lang)
-            fallback_candidate = restore_immutable_spans(fallback_raw or "", envelope.mapping)
-            checked = validate_translation(
-                source, fallback_candidate, src_lang, tgt_lang,
-                immutable_literals=envelope.mapping.values(),
-                glossary_pairs=glossary_pairs,
-                require_paragraph_fidelity=True,
+            fallback_raw = fallback_translate(protected_source, src_lang, tgt_lang) or ""
+            fallback_raw = canonicalize_placeholders(fallback_raw, envelope.mapping)
+            fallback_text, fallback_report = _finalize_protected_candidate(
+                source, protected_source, fallback_raw, envelope, src_lang, tgt_lang,
+                glossary_pairs, require_paragraph_fidelity=True,
             )
-            if checked.ok:
+            if fallback_text:
                 return {
-                    "ok": True,
-                    "text": fallback_candidate,
-                    "issues": checked.issues,
+                    "ok": True, "text": fallback_text, "issues": fallback_report.issues,
                     "hard_issues": [],
-                    "warnings": _dedupe(checked.warnings + ["used_validated_fallback"]),
-                    "reviewed": False,
-                    "degraded": True,
-                    "cacheable": False,
-                    "path": "validated_fallback",
-                    "provider_path": "fallback",
+                    "warnings": _dedupe(fallback_report.warnings + ["used_validated_fallback"]),
+                    "reviewed": False, "degraded": True, "cacheable": False,
+                    "path": "protected_validated_fallback", "provider_path": "fallback",
                 }
-            all_issues.extend(checked.issues)
+            all_issues.extend(fallback_report.issues)
         except Exception as exc:
             logger.warning("[QualityGate] fallback translator unavailable: %s", exc)
             all_issues.append("fallback_unavailable")
 
     return {
-        "ok": False,
-        "text": None,
+        "ok": False, "text": None,
         "issues": _dedupe(all_issues or ["no_translation_candidate"]),
         "hard_issues": _dedupe(all_issues or ["no_translation_candidate"]),
-        "warnings": [],
-        "reviewed": False,
-        "degraded": True,
-        "cacheable": False,
-        "path": "all_candidates_failed",
-        "provider_path": "none",
+        "warnings": [], "reviewed": False, "degraded": True,
+        "cacheable": False, "path": "all_candidates_failed", "provider_path": "none",
     }
 
 
 def translation_failure_message(tgt_lang: str) -> str:
     low = (tgt_lang or "").lower()
     if low.startswith("id"):
-        return "⚠️ Terjemahan sementara gagal diperiksa. Silakan kirim ulang pesan ini."
+        return "⚠️ Terjemahan gagal karena semua layanan penerjemahan sedang tidak tersedia. Silakan kirim ulang."
     if low.startswith("zh"):
-        return "⚠️ 翻譯暫時無法完成品質檢查，請重新傳送這則訊息。"
-    return "⚠️ Translation could not be completed safely. Please resend the message."
+        return "⚠️ 目前所有翻譯服務皆無法取得結果，請稍後重新傳送。"
+    return "⚠️ All translation services are temporarily unavailable. Please resend later."
