@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 2
-QUALITY_GATE_BUILD_ID = "2026-06-18.2-target-language-purity"
+QUALITY_GATE_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1024,6 +1024,83 @@ def translate_quality_critical_document(
         "cacheable": False, "path": "all_candidates_failed", "provider_path": "none",
     }
 
+
+
+def ensure_delivery_safe_translation(
+    source: str,
+    candidate: str,
+    src_lang: str,
+    tgt_lang: str,
+    *,
+    model: str,
+    glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
+    ai_client: Any = None,
+    fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
+) -> Dict[str, Any]:
+    """Final delivery-boundary validator and source-grounded recovery.
+
+    This function is deliberately called *after* every legacy translation path
+    and immediately before LINE delivery.  It does not trust where the candidate
+    came from (LLM, NMT, lexical TM, vector TM, cache, reviewer, OCR or another
+    wrapper).  A candidate is deliverable only after deterministic validation.
+
+    If validation fails, the bad wording is never edited or string-replaced.
+    Instead, a fresh whole-document translation is generated from the source and
+    independently validated.  If no safe candidate exists, the caller receives a
+    clear failure result and must not deliver the unsafe text.
+    """
+    source = source or ""
+    candidate = (candidate or "").strip()
+    glossary_pairs = _merge_runtime_glossary_pairs(
+        source, src_lang, tgt_lang, list(glossary_pairs or ())
+    )
+    envelope = protect_immutable_spans(source)
+
+    initial = validate_translation(
+        source, candidate, src_lang, tgt_lang,
+        immutable_literals=envelope.mapping.values(),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
+    )
+    if initial.ok:
+        return {
+            "ok": True, "text": candidate, "issues": initial.issues,
+            "hard_issues": [], "warnings": initial.warnings,
+            "reviewed": False, "degraded": False, "cacheable": True,
+            "path": "final_boundary_validated",
+        }
+
+    repaired = translate_quality_critical_document(
+        source, src_lang, tgt_lang,
+        model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
+        fallback_translate=fallback_translate,
+    )
+    repaired_text = (repaired.get("text") or "").strip()
+    if repaired.get("ok") and repaired_text:
+        final = validate_translation(
+            source, repaired_text, src_lang, tgt_lang,
+            immutable_literals=envelope.mapping.values(),
+            glossary_pairs=glossary_pairs,
+            require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
+        )
+        if final.ok:
+            return {
+                "ok": True, "text": repaired_text,
+                "issues": _dedupe(initial.issues + repaired.get("issues", []) + final.issues),
+                "hard_issues": [], "warnings": final.warnings,
+                "reviewed": bool(repaired.get("reviewed")),
+                "degraded": bool(repaired.get("degraded")),
+                "cacheable": bool(repaired.get("cacheable", True)),
+                "path": "final_boundary_retranslated:" + str(repaired.get("path", "unknown")),
+            }
+
+    return {
+        "ok": False, "text": None,
+        "issues": _dedupe(initial.issues + list(repaired.get("issues", []))),
+        "hard_issues": _dedupe(initial.hard_issues + list(repaired.get("hard_issues", []))),
+        "warnings": initial.warnings, "reviewed": bool(repaired.get("reviewed")),
+        "degraded": True, "cacheable": False, "path": "final_boundary_blocked",
+    }
 
 def translation_failure_message(tgt_lang: str) -> str:
     low = (tgt_lang or "").lower()

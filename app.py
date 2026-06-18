@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.25-quality-gate-deployment-contract-2026-06-18"
+VERSION = "v3.27-speaker-sender-name-2026-06-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -255,7 +255,7 @@ import translation_quality_gate as tqg_module  # synchronous provider-neutral in
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 2
-_EXPECTED_QG_BUILD_ID = "2026-06-18.2-target-language-purity"
+_EXPECTED_QG_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -271,6 +271,28 @@ logger.info(
     "[QualityGate] deployment verified api=%s build=%s module=%s",
     _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
     getattr(tqg_module, "__file__", "<unknown>"),
+)
+
+# Boot-time invariant test: a normal source-language word embedded in a Chinese
+# target must be rejected.  This proves that the loaded module is not merely the
+# right filename/build label; its actual validation behavior is active.
+_QG_BOOT_SELFTEST = tqg_module.validate_translation(
+    "pekerja harus mengikuti aturan",
+    "作業員 HARUS 遵守規定",
+    "id", "zh",
+    immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if _QG_BOOT_SELFTEST.ok:
+    raise RuntimeError(
+        "translation quality gate behavioral self-test failed: "
+        "source-language leakage was incorrectly accepted"
+    )
+_QG_BOOT_SELFTEST_OK = True
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
+logger.info(
+    "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
+    _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
 )
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
@@ -2598,8 +2620,12 @@ def _check_custom_example_exact(text, src, tgt):
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
 sender_icon = ""  # URL to custom icon image, empty = LINE bot default
+# Name source for translation messages:
+#   "speaker" = use the original author's LINE display name (default)
+#   "custom"  = always use sender_name
+sender_name_mode = "speaker"
 # Avatar source for translation messages:
-#   "custom"  = always use sender_icon (original behavior)
+#   "custom"  = always use sender_icon
 #   "speaker" = use the speaker's LINE avatar; if unavailable, fall back to sender_icon
 sender_avatar_mode = "speaker"
 # User profile pictures cache: {user_id: url}
@@ -7989,6 +8015,76 @@ def restore_names(text, name_map):
     return result
 
 
+def _final_delivery_guard(source_text, candidate, src, tgt):
+    """Last mandatory boundary before any translation can leave the process.
+
+    Every upstream path is treated as untrusted.  The guard validates the final
+    restored text, performs a fresh source-grounded retranslation when needed,
+    and otherwise returns a visible failure notice.  Unsafe mixed-language text
+    is never returned to the LINE handler.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return None
+    failure_text = tqg_module.translation_failure_message(tgt)
+    if candidate.strip() == failure_text:
+        return failure_text
+    try:
+        pairs = ge_module.collect_applicable_pairs(
+            source_text,
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            src, tgt,
+        )
+
+        def _validated_fallback(protected_source, fallback_src, fallback_tgt):
+            try:
+                return translate_with_retry(
+                    translate_google, protected_source, fallback_src, fallback_tgt,
+                    max_retries=1,
+                )
+            except Exception as exc:
+                logger.warning("[FinalDeliveryGuard] fallback failed: %s", exc)
+                return None
+
+        checked = tqg_module.ensure_delivery_safe_translation(
+            source_text, candidate, src, tgt,
+            model=_active_upgrade_model(),
+            glossary_pairs=pairs,
+            ai_client=ai_provider,
+            fallback_translate=_validated_fallback,
+        )
+        if checked.get("ok") and checked.get("text"):
+            safe_text = checked["text"].strip()
+            if safe_text != candidate.strip():
+                logger.warning(
+                    "[FinalDeliveryGuard] unsafe candidate replaced path=%s issues=%s",
+                    checked.get("path"), checked.get("issues", [])[:8],
+                )
+            try:
+                cache_set(source_text, src, tgt, safe_text, force=True)
+            except Exception:
+                pass
+            return safe_text
+
+        logger.error(
+            "[FinalDeliveryGuard] blocked unsafe translation path=%s issues=%s",
+            checked.get("path"), checked.get("issues", [])[:12],
+        )
+        try:
+            _event_log_write("final_delivery_guard_blocked", {
+                "group_id": getattr(_tl, 'group_id', '') or '',
+                "src": src, "tgt": tgt,
+                "issues": checked.get("issues", [])[:12],
+                "source": (source_text or '')[:300],
+                "candidate": (candidate or '')[:300],
+            })
+        except Exception:
+            pass
+        return failure_text
+    except Exception as exc:
+        logger.exception("[FinalDeliveryGuard] fail-closed exception: %s", exc)
+        return failure_text
+
+
 def translate(text, src, tgt):
     """Public translate wrapper — v3.9.60 邊界層保護名單根治。
 
@@ -8015,6 +8111,7 @@ def translate(text, src, tgt):
             pass
     if result and isinstance(result, str):
         result = restore_names(result, _name_map)
+        result = _final_delivery_guard(text, result, src, tgt)
     return result
 
 
@@ -10640,30 +10737,52 @@ def handle_pkg_command(text):
 
 
 def get_display_name(group_id, user_id):
-    """Get user display name from cache or LINE API. Also caches user language."""
+    """Get the author's LINE display name without exposing raw user IDs.
+
+    Group, room and direct-profile APIs are tried in order because ``group_id``
+    may actually be a room ID or a DM target in shared translation paths.
+    Successful lookups are cached for sender-name and sender-avatar modes.
+    """
+    if not user_id:
+        return None
     if group_id in group_user_names and user_id in group_user_names[group_id]:
         return group_user_names[group_id][user_id]
+
+    profile = None
     try:
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
-            profile = api.get_group_member_profile(group_id, user_id)
-            name = profile.display_name
-            if name:
-                if group_id not in group_user_names:
-                    group_user_names[group_id] = {}
-                group_user_names[group_id][user_id] = name
-            # Cache user language and picture from LINE profile
-            lang = getattr(profile, 'language', None)
-            if lang and user_id not in user_languages:
-                user_languages[user_id] = lang
-                logger.info("User %s language: %s", name or user_id, lang)
-            pic = getattr(profile, 'picture_url', None)
-            if pic:
-                user_pictures[user_id] = pic
-            return name
+            if group_id:
+                try:
+                    profile = api.get_group_member_profile(group_id, user_id)
+                except Exception:
+                    try:
+                        profile = api.get_room_member_profile(group_id, user_id)
+                    except Exception:
+                        profile = None
+            if profile is None:
+                try:
+                    profile = api.get_profile(user_id)
+                except Exception:
+                    profile = None
     except Exception as e:
-        logger.warning("Failed to get display name for %s: %s", user_id, e)
-    return None
+        logger.debug("Failed to create LINE profile client for %s: %s", user_id, e)
+
+    if profile is None:
+        logger.warning("Failed to get display name for %s", user_id)
+        return None
+
+    name = str(getattr(profile, 'display_name', '') or '').strip()
+    lang = getattr(profile, 'language', None)
+    pic = str(getattr(profile, 'picture_url', '') or '').strip()
+    if name and group_id:
+        group_user_names.setdefault(group_id, {})[user_id] = name
+    if lang and user_id not in user_languages:
+        user_languages[user_id] = lang
+        logger.info("User %s language: %s", name or "(unknown)", lang)
+    if pic.startswith("https://"):
+        user_pictures[user_id] = pic
+    return name or None
 
 
 def get_user_picture_url(chat_id, user_id):
@@ -11878,6 +11997,11 @@ def handle_message(event):
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
         if result:
+            # Final handler boundary. This second deterministic pass is cheap and
+            # protects against any mutation introduced after translate() returned
+            # (mention restoration, future formatting code, or legacy callers).
+            result = _final_delivery_guard(text, result, lang, "zh")
+        if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
             _tts_lang, _tts_text = "zh", result
     track_group_usage(group_id, _bp, _bc, _bcost)
@@ -11986,7 +12110,7 @@ def handle_message(event):
                 flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display,
                                                   _quoted_for(tgt if lang == "zh" else "zh") or quoted_text)
     qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
-    custom_sender = get_sender_object(icon_url_override=sender_picture)
+    custom_sender = get_sender_object(name_override=sender_display, icon_url_override=sender_picture)
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
 
@@ -12443,6 +12567,7 @@ def _handle_image_background(ctx):
                     api = MessagingApi(api_client)
                     msg_obj = TextMessage(text=reply)
                     _img_sender = get_sender_object(
+                        name_override=get_display_name(group_id, user_id),
                         icon_url_override=get_user_picture_url(group_id, user_id)
                     )
                     if _img_sender:
@@ -12466,6 +12591,7 @@ def _handle_image_background(ctx):
                         api = MessagingApi(api_client)
                         msg_obj = TextMessage(text=reply)
                         _img_sender = get_sender_object(
+                            name_override=get_display_name(group_id, user_id),
                             icon_url_override=get_user_picture_url(group_id, user_id)
                         )
                         if _img_sender:
@@ -12553,6 +12679,7 @@ def _process_pending_image_translate_inner(event, message_id):
                 _msg = TextMessage(text=text)
                 _original_uid = (info or {}).get("user_id", "")
                 _img_sender = get_sender_object(
+                    name_override=get_display_name(target, _original_uid),
                     icon_url_override=get_user_picture_url(target, _original_uid)
                 )
                 if _img_sender:
@@ -12801,6 +12928,7 @@ def handle_audio(event):
         api = MessagingApi(api_client)
         msg_obj = TextMessage(text=_clip_line_text(reply))
         _audio_sender = get_sender_object(
+            name_override=get_display_name(group_id, user_id),
             icon_url_override=get_user_picture_url(group_id, user_id)
         )
         if _audio_sender:
@@ -13900,32 +14028,38 @@ def delete_rich_menu():
     return deleted
 
 
-def get_sender_object(icon_url_override=None):
-    """Build LINE's custom Sender object using the admin-selected avatar mode.
+def get_sender_object(name_override=None, icon_url_override=None):
+    """Build LINE's per-message Sender object.
 
-    ``custom`` always uses the configured ``sender_icon``. ``speaker`` uses
-    the message author's LINE avatar when available and automatically falls
-    back to ``sender_icon`` when the author has no avatar or LINE profile
-    access fails.  An empty custom icon naturally falls back to the bot's
-    normal LINE avatar.
+    Name and avatar are controlled independently from the admin panel.
+    The default name mode is ``speaker``: use the original author's LINE
+    display name. If LINE profile lookup fails, fall back to the configured
+    custom name instead of exposing the raw LINE user ID.
     """
     if not MessageSender:
         return None
     try:
-        mode = str(sender_avatar_mode or "speaker").strip().lower()
-        if mode not in ("custom", "speaker"):
-            mode = "speaker"
+        name_mode = str(sender_name_mode or "speaker").strip().lower()
+        if name_mode not in ("custom", "speaker"):
+            name_mode = "speaker"
+        avatar_mode = str(sender_avatar_mode or "speaker").strip().lower()
+        if avatar_mode not in ("custom", "speaker"):
+            avatar_mode = "speaker"
+
+        custom_name = str(sender_name or "翻譯小助手").strip()
+        speaker_name = str(name_override or "").strip()
+        effective_name = speaker_name if name_mode == "speaker" and speaker_name else custom_name
+        effective_name = effective_name[:20]
+        if not effective_name:
+            return None
 
         custom_icon = str(sender_icon or "").strip()
         speaker_icon = str(icon_url_override or "").strip()
-        if mode == "speaker" and speaker_icon.startswith("https://"):
+        if avatar_mode == "speaker" and speaker_icon.startswith("https://"):
             effective_icon = speaker_icon
         else:
             effective_icon = custom_icon
 
-        effective_name = str(sender_name or ("翻譯小助手" if effective_icon else "")).strip()[:20]
-        if not effective_name:
-            return None
         kwargs = {"name": effective_name}
         if effective_icon.startswith("https://"):
             kwargs["icon_url"] = effective_icon[:1000]
@@ -16222,19 +16356,24 @@ Vision call 會依模型能力自動切換 <code>max_completion_tokens</code> / 
 
 <div class="card" style="margin-top:12px">
 <div style="font-weight:700;font-size:15px;margin-bottom:10px">🤖 Bot 顯示設定</div>
-<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">名稱</div>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">翻譯名稱模式</div>
+<select id="senderNameMode" onchange="updateSenderNameModeUI()" style="width:100%;padding:9px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:8px">
+<option value="speaker">使用發話者原始 LINE 名稱（預設）</option>
+<option value="custom">使用自定義名稱</option>
+</select>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">自定義名稱</div>
 <div style="display:flex;gap:8px;margin-bottom:8px">
 <input id="senderNameInput" type="text" placeholder="翻譯小助手" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
 <button class="btn btn-primary btn-sm" onclick="saveSenderSettings()">儲存</button>
 </div>
 <div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">翻譯頭像模式</div>
 <select id="senderAvatarMode" style="width:100%;padding:9px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:8px">
-<option value="custom">自定義頭像（原路徑）</option>
-<option value="speaker">使用發話者頭像（無頭像自動改用自定義頭像）</option>
+<option value="speaker">使用發話者頭像（預設）</option>
+<option value="custom">使用自定義頭像</option>
 </select>
 <div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">自定義頭像 URL（選填）</div>
 <input id="senderIconInput" type="text" placeholder="https://example.com/icon.png" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
-<div style="font-size:11px;color:#6f6f82;margin-top:6px;line-height:1.5">使用發話者頭像時，若成員沒有頭像或 LINE 無法讀取，會自動改用上方自定義頭像；自定義 URL 留空則使用 Bot 原本頭像。</div>
+<div style="font-size:11px;color:#6f6f82;margin-top:6px;line-height:1.5">預設會使用原發文者的 LINE 顯示名稱與頭像。LINE 無法取得成員資料時，名稱會改用自定義名稱；頭像會改用自定義頭像，自定義 URL 留空則使用 Bot 原本頭像。</div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -19323,8 +19462,11 @@ async function _loadFeatures(gid){
   }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
+  var nameMode=document.getElementById('senderNameMode');
+  if(nameMode)nameMode.value=(d.sender_name_mode==='custom'?'custom':'speaker');
   var avatarMode=document.getElementById('senderAvatarMode');
   if(avatarMode)avatarMode.value=(d.sender_avatar_mode==='custom'?'custom':'speaker');
+  updateSenderNameModeUI();
   var cb=document.getElementById('settingsCustomBadge');
   if(gid&&d.is_customized)cb.style.display='block';
   else cb.style.display='none';
@@ -19753,13 +19895,21 @@ async function resetGroupSettings(){
   if(d&&d.ok){toast('已重設');loadFeatureSettingsForGroup()}
   else toast('重設失敗');
 }
+function updateSenderNameModeUI(){
+  var mode=(document.getElementById('senderNameMode')||{}).value||'speaker';
+  var input=document.getElementById('senderNameInput');
+  if(!input)return;
+  input.disabled=(mode!=='custom');
+  input.style.opacity=(mode==='custom'?'1':'0.55');
+}
 function saveSenderSettings(){
   var name=document.getElementById('senderNameInput').value.trim();
   var icon=document.getElementById('senderIconInput').value.trim();
-  var mode=(document.getElementById('senderAvatarMode')||{}).value||'speaker';
-  if(!name){toast('請輸入名稱');return}
+  var nameMode=(document.getElementById('senderNameMode')||{}).value||'speaker';
+  var avatarMode=(document.getElementById('senderAvatarMode')||{}).value||'speaker';
+  if(nameMode==='custom'&&!name){toast('請輸入自定義名稱');return}
   if(icon&&icon.toLowerCase().indexOf('https://')!==0){toast('頭像 URL 必須以 https:// 開頭');return}
-  api('/features','POST',{sender_name:name,sender_icon:icon,sender_avatar_mode:mode}).then(function(d){if(d)toast('已更新')});
+  api('/features','POST',{sender_name:name,sender_icon:icon,sender_name_mode:nameMode,sender_avatar_mode:avatarMode}).then(function(d){if(d)toast('已更新')});
 }
 async function broadcastMessage(){
   var text=document.getElementById('pushText').value.trim();
@@ -20388,6 +20538,7 @@ def _do_save_impl():
             "silent_mode": silent_mode,
             "sender_name": sender_name,
             "sender_icon": sender_icon,
+            "sender_name_mode": sender_name_mode,
             "sender_avatar_mode": sender_avatar_mode,
             "video_ocr_enabled": video_ocr_enabled,
             "location_translate_enabled": location_translate_enabled,
@@ -20537,7 +20688,7 @@ def load_settings():
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
-    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
+    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, sender_name_mode, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
     global group_camera_roll_qr_settings, group_location_qr_settings
@@ -20602,6 +20753,9 @@ def load_settings():
             sender_name = data["sender_name"]
         if "sender_icon" in data:
             sender_icon = data["sender_icon"]
+        if "sender_name_mode" in data:
+            _name_mode = str(data["sender_name_mode"] or "speaker").strip().lower()
+            sender_name_mode = _name_mode if _name_mode in ("custom", "speaker") else "speaker"
         if "sender_avatar_mode" in data:
             _avatar_mode = str(data["sender_avatar_mode"] or "speaker").strip().lower()
             sender_avatar_mode = _avatar_mode if _avatar_mode in ("custom", "speaker") else "speaker"
@@ -22842,7 +22996,7 @@ def api_translation_stats():
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
-    global sender_name, sender_icon, sender_avatar_mode, video_ocr_enabled, location_translate_enabled
+    global sender_name, sender_icon, sender_name_mode, sender_avatar_mode, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
@@ -22957,6 +23111,9 @@ def api_admin_features():
             sender_name = str(data["sender_name"])[:20]
         if "sender_icon" in data:
             sender_icon = str(data["sender_icon"]).strip()
+        if "sender_name_mode" in data:
+            _name_mode = str(data["sender_name_mode"] or "speaker").strip().lower()
+            sender_name_mode = _name_mode if _name_mode in ("custom", "speaker") else "speaker"
         if "sender_avatar_mode" in data:
             _avatar_mode = str(data["sender_avatar_mode"] or "speaker").strip().lower()
             sender_avatar_mode = _avatar_mode if _avatar_mode in ("custom", "speaker") else "speaker"
@@ -22987,6 +23144,7 @@ def api_admin_features():
             "translation_tone_custom": get_group_tone(gid)[1],
             "sender_name": sender_name,
             "sender_icon": sender_icon,
+            "sender_name_mode": sender_name_mode,
             "sender_avatar_mode": sender_avatar_mode,
             "bot_info": get_bot_info(),
             # Include global defaults for reference
@@ -23035,6 +23193,7 @@ def api_admin_features():
         "vision_model": VISION_MODEL,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
+        "sender_name_mode": sender_name_mode,
         "sender_avatar_mode": sender_avatar_mode,
         "bot_info": get_bot_info(),
     })
@@ -24986,7 +25145,14 @@ def api_admin_translation_log_mark_wrong():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": VERSION, "quality_gate_build": _ACTUAL_QG_BUILD_ID, "uptime": int(time.time() - bot_start_time)}
+    return {
+        "status": "ok",
+        "version": VERSION,
+        "quality_gate_build": _ACTUAL_QG_BUILD_ID,
+        "quality_gate_selftest": bool(_QG_BOOT_SELFTEST_OK),
+        "final_delivery_guard": _FINAL_DELIVERY_GUARD_BUILD_ID,
+        "uptime": int(time.time() - bot_start_time),
+    }
 
 
 @app.route("/admin/apply-best-defaults", methods=["GET", "POST"])
