@@ -7,7 +7,7 @@
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false,
-    "Cd188e1adc7792e407c90f3fa78850316": false
+    "Cd188e1adc7792e407c90f3fa78850316": true
   },
   "group_img_ask_settings": {},
   "group_audio_settings": {
@@ -57,6 +57,9 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+    },
+    "Cd188e1adc7792e407c90f3fa78850316": {
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
     }
   },
   "dm_master_enabled": true,
@@ -301,7 +304,7 @@
   "vision_model": "gpt-5.4-mini",
   "user_pictures": {
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
-    "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomgWc9OXpCFCeJpptHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
+    "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomAvwPOXpCFCUsXDJHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
     "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
     "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
     "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
