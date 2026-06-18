@@ -2547,7 +2547,11 @@ def _check_custom_example_exact(text, src, tgt):
 
 # Custom sender name/icon for translation messages
 sender_name = "翻譯小助手"
-sender_icon = ""  # URL to icon image, empty = default
+sender_icon = ""  # URL to custom icon image, empty = LINE bot default
+# Avatar source for translation messages:
+#   "custom"  = always use sender_icon (original behavior)
+#   "speaker" = use the speaker's LINE avatar; if unavailable, fall back to sender_icon
+sender_avatar_mode = "speaker"
 # User profile pictures cache: {user_id: url}
 user_pictures = {}
 
@@ -13660,18 +13664,28 @@ def delete_rich_menu():
 
 
 def get_sender_object(icon_url_override=None):
-    """Build LINE's custom Sender object.
+    """Build LINE's custom Sender object using the admin-selected avatar mode.
 
-    Translation replies keep the configured sender name, but when a valid
-    speaker avatar is supplied it takes precedence over the global bot icon.
-    This makes the translated bubble visually follow the person who spoke.
+    ``custom`` always uses the configured ``sender_icon``. ``speaker`` uses
+    the message author's LINE avatar when available and automatically falls
+    back to ``sender_icon`` when the author has no avatar or LINE profile
+    access fails.  An empty custom icon naturally falls back to the bot's
+    normal LINE avatar.
     """
     if not MessageSender:
         return None
     try:
-        effective_icon = str(icon_url_override or "").strip()
-        if not effective_icon.startswith("https://"):
-            effective_icon = str(sender_icon or "").strip()
+        mode = str(sender_avatar_mode or "speaker").strip().lower()
+        if mode not in ("custom", "speaker"):
+            mode = "speaker"
+
+        custom_icon = str(sender_icon or "").strip()
+        speaker_icon = str(icon_url_override or "").strip()
+        if mode == "speaker" and speaker_icon.startswith("https://"):
+            effective_icon = speaker_icon
+        else:
+            effective_icon = custom_icon
+
         effective_name = str(sender_name or ("翻譯小助手" if effective_icon else "")).strip()[:20]
         if not effective_name:
             return None
@@ -15976,8 +15990,14 @@ Vision call 會依模型能力自動切換 <code>max_completion_tokens</code> / 
 <input id="senderNameInput" type="text" placeholder="翻譯小助手" style="flex:1;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
 <button class="btn btn-primary btn-sm" onclick="saveSenderSettings()">儲存</button>
 </div>
-<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">圖示 URL（選填）</div>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">翻譯頭像模式</div>
+<select id="senderAvatarMode" style="width:100%;padding:9px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px;margin-bottom:8px">
+<option value="custom">自定義頭像（原路徑）</option>
+<option value="speaker">使用發話者頭像（無頭像自動改用自定義頭像）</option>
+</select>
+<div style="font-size:13px;color:#8a8a9a;margin-bottom:6px">自定義頭像 URL（選填）</div>
 <input id="senderIconInput" type="text" placeholder="https://example.com/icon.png" style="width:100%;padding:8px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:13px">
+<div style="font-size:11px;color:#6f6f82;margin-top:6px;line-height:1.5">使用發話者頭像時，若成員沒有頭像或 LINE 無法讀取，會自動改用上方自定義頭像；自定義 URL 留空則使用 Bot 原本頭像。</div>
 </div>
 
 <div class="card" style="margin-top:12px">
@@ -19066,6 +19086,8 @@ async function _loadFeatures(gid){
   }
   document.getElementById('senderNameInput').value=d.sender_name||'翻譯小助手';
   document.getElementById('senderIconInput').value=d.sender_icon||'';
+  var avatarMode=document.getElementById('senderAvatarMode');
+  if(avatarMode)avatarMode.value=(d.sender_avatar_mode==='custom'?'custom':'speaker');
   var cb=document.getElementById('settingsCustomBadge');
   if(gid&&d.is_customized)cb.style.display='block';
   else cb.style.display='none';
@@ -19497,8 +19519,10 @@ async function resetGroupSettings(){
 function saveSenderSettings(){
   var name=document.getElementById('senderNameInput').value.trim();
   var icon=document.getElementById('senderIconInput').value.trim();
+  var mode=(document.getElementById('senderAvatarMode')||{}).value||'speaker';
   if(!name){toast('請輸入名稱');return}
-  api('/features','POST',{sender_name:name,sender_icon:icon}).then(function(d){if(d)toast('已更新')});
+  if(icon&&icon.toLowerCase().indexOf('https://')!==0){toast('頭像 URL 必須以 https:// 開頭');return}
+  api('/features','POST',{sender_name:name,sender_icon:icon,sender_avatar_mode:mode}).then(function(d){if(d)toast('已更新')});
 }
 async function broadcastMessage(){
   var text=document.getElementById('pushText').value.trim();
@@ -20127,6 +20151,7 @@ def _do_save_impl():
             "silent_mode": silent_mode,
             "sender_name": sender_name,
             "sender_icon": sender_icon,
+            "sender_avatar_mode": sender_avatar_mode,
             "video_ocr_enabled": video_ocr_enabled,
             "location_translate_enabled": location_translate_enabled,
             "group_flex_settings": group_flex_settings,
@@ -20275,7 +20300,7 @@ def load_settings():
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
-    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, user_pictures, video_ocr_enabled, location_translate_enabled
+    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
     global group_camera_roll_qr_settings, group_location_qr_settings
@@ -20340,6 +20365,9 @@ def load_settings():
             sender_name = data["sender_name"]
         if "sender_icon" in data:
             sender_icon = data["sender_icon"]
+        if "sender_avatar_mode" in data:
+            _avatar_mode = str(data["sender_avatar_mode"] or "speaker").strip().lower()
+            sender_avatar_mode = _avatar_mode if _avatar_mode in ("custom", "speaker") else "speaker"
         if "video_ocr_enabled" in data:
             video_ocr_enabled = data["video_ocr_enabled"]
         if "location_translate_enabled" in data:
@@ -22577,7 +22605,7 @@ def api_translation_stats():
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
-    global sender_name, sender_icon, video_ocr_enabled, location_translate_enabled
+    global sender_name, sender_icon, sender_avatar_mode, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
     global id_preprocessing_enabled, id_preprocessing_nano, multi_path_backtrans_enabled, multi_path_min_chars, quality_metrics_enabled
@@ -22691,7 +22719,10 @@ def api_admin_features():
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
         if "sender_icon" in data:
-            sender_icon = str(data["sender_icon"])
+            sender_icon = str(data["sender_icon"]).strip()
+        if "sender_avatar_mode" in data:
+            _avatar_mode = str(data["sender_avatar_mode"] or "speaker").strip().lower()
+            sender_avatar_mode = _avatar_mode if _avatar_mode in ("custom", "speaker") else "speaker"
         # v3.9.46: force=True 同步寫盤 — 用戶在後台改 flex/qr/silent 等 toggle 後,
         # 必須確保 commit 完成才 return,避免 throttle 期間 worker restart 造成設定丟失。
         save_settings(force=True)
@@ -22719,6 +22750,7 @@ def api_admin_features():
             "translation_tone_custom": get_group_tone(gid)[1],
             "sender_name": sender_name,
             "sender_icon": sender_icon,
+            "sender_avatar_mode": sender_avatar_mode,
             "bot_info": get_bot_info(),
             # Include global defaults for reference
             "global_defaults": {
@@ -22766,6 +22798,7 @@ def api_admin_features():
         "vision_model": VISION_MODEL,
         "sender_name": sender_name,
         "sender_icon": sender_icon,
+        "sender_avatar_mode": sender_avatar_mode,
         "bot_info": get_bot_info(),
     })
 
