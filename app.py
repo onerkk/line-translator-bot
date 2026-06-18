@@ -3731,6 +3731,27 @@ def detect_language(text):
     zh_count = len(re.findall(r'[\u4e00-\u9fff]', clean))
     latin_words = re.findall(r'[a-zA-Z]{2,}', clean.lower())
 
+    # v3.18: mixed-script dominant-language guard.
+    # Factory messages are often written mainly in Indonesian/English but include a short
+    # Chinese annotation such as ``(套罩)`` or a Chinese name.  The old detector passed the
+    # whole message to has_indonesian()/has_english(); both intentionally reject any text
+    # containing >=2 Chinese characters, so the message fell through to ``en`` and was then
+    # skipped in groups configured only for Indonesian.
+    #
+    # Only use the Latin probe when Latin words clearly dominate, so ordinary Chinese
+    # messages containing model numbers / English factory terms still remain Chinese.
+    if zh_count >= 1 and latin_words and len(latin_words) >= max(4, zh_count * 2):
+        latin_probe = re.sub(r'[\u4e00-\u9fff]+', ' ', clean)
+        if has_vietnamese(latin_probe):
+            return "vi"
+        if has_indonesian(latin_probe):
+            return "id"
+        if has_english(latin_probe):
+            return "en"
+        # Rescue short factory sentences with only one strong Indonesian marker.
+        if has_indonesian(latin_probe, min_markers=1):
+            return "id"
+
     if zh_count >= 2 and zh_count >= len(latin_words):
         return "zh"
 
@@ -10404,13 +10425,65 @@ def get_display_name(group_id, user_id):
     return None
 
 
+def get_user_picture_url(chat_id, user_id):
+    """Return the LINE profile picture URL for a group/room member.
+
+    The URL is cached per user.  A cached display name alone is not enough:
+    older settings may contain names but no picture URLs, so this function
+    independently fills the avatar cache.  Group, room, and direct-profile
+    APIs are tried in that order and all failures are non-fatal.
+    """
+    if not user_id:
+        return ""
+    cached = str(user_pictures.get(user_id, "") or "").strip()
+    if cached.startswith("https://"):
+        return cached
+
+    profile = None
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            if chat_id:
+                try:
+                    profile = api.get_group_member_profile(chat_id, user_id)
+                except Exception:
+                    try:
+                        profile = api.get_room_member_profile(chat_id, user_id)
+                    except Exception:
+                        profile = None
+            if profile is None:
+                try:
+                    profile = api.get_profile(user_id)
+                except Exception:
+                    profile = None
+    except Exception as e:
+        logger.debug("Failed to create LINE profile client for %s: %s", user_id, e)
+
+    if profile is None:
+        return ""
+
+    pic = str(getattr(profile, "picture_url", "") or "").strip()
+    name = str(getattr(profile, "display_name", "") or "").strip()
+    lang = getattr(profile, "language", None)
+    if pic.startswith("https://"):
+        user_pictures[user_id] = pic
+    if name and chat_id:
+        group_user_names.setdefault(chat_id, {})[user_id] = name
+    if lang and user_id not in user_languages:
+        user_languages[user_id] = lang
+    return pic if pic.startswith("https://") else ""
+
+
 def record_user_name(group_id, user_id):
-    """Record user display name in background (best effort)."""
+    """Record user display name and avatar (best effort)."""
     if not group_id or not user_id:
         return
-    if group_id in group_user_names and user_id in group_user_names[group_id]:
-        return
-    get_display_name(group_id, user_id)
+    has_name = user_id in group_user_names.get(group_id, {})
+    has_picture = str(user_pictures.get(user_id, "") or "").startswith("https://")
+    if not has_name:
+        get_display_name(group_id, user_id)
+    if not has_picture:
+        get_user_picture_url(group_id, user_id)
 
 
 def find_user_by_name(group_id, name_query):
@@ -11601,9 +11674,11 @@ def handle_message(event):
 
     # Build reply message based on settings
     sender_display = None
+    sender_picture = ""
     if sender_id:
         sender_display = (group_user_names.get(group_id, {}).get(sender_id) or
                        get_display_name(group_id, sender_id))
+        sender_picture = get_user_picture_url(group_id, sender_id)
 
     src_flag = LANG_FLAGS.get(lang, "")
     # v3.10: multi-broadcast 時 tgt_flag 顯示所有實際翻譯出來的語言旗幟串
@@ -11670,7 +11745,7 @@ def handle_message(event):
                 flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display,
                                                   _quoted_for(tgt if lang == "zh" else "zh") or quoted_text)
     qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
-    custom_sender = get_sender_object()
+    custom_sender = get_sender_object(icon_url_override=sender_picture)
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
 
@@ -12126,6 +12201,11 @@ def _handle_image_background(ctx):
                 with ApiClient(configuration) as api_client:
                     api = MessagingApi(api_client)
                     msg_obj = TextMessage(text=reply)
+                    _img_sender = get_sender_object(
+                        icon_url_override=get_user_picture_url(group_id, user_id)
+                    )
+                    if _img_sender:
+                        msg_obj.sender = _img_sender
                     if qt:
                         try:
                             msg_obj.quote_token = qt
@@ -12144,6 +12224,11 @@ def _handle_image_background(ctx):
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
                         msg_obj = TextMessage(text=reply)
+                        _img_sender = get_sender_object(
+                            icon_url_override=get_user_picture_url(group_id, user_id)
+                        )
+                        if _img_sender:
+                            msg_obj.sender = _img_sender
                         api.push_message(PushMessageRequest(
                             to=group_id,
                             messages=[msg_obj]
@@ -12224,9 +12309,16 @@ def _process_pending_image_translate_inner(event, message_id):
         try:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
+                _msg = TextMessage(text=text)
+                _original_uid = (info or {}).get("user_id", "")
+                _img_sender = get_sender_object(
+                    icon_url_override=get_user_picture_url(target, _original_uid)
+                )
+                if _img_sender:
+                    _msg.sender = _img_sender
                 api.push_message(PushMessageRequest(
                     to=target,
-                    messages=[TextMessage(text=text)]
+                    messages=[_msg]
                 ))
             logger.info("[ImgAsk] push sent to %s: %s", target[:8], text[:80])
             return True
@@ -12467,6 +12559,11 @@ def handle_audio(event):
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
         msg_obj = TextMessage(text=_clip_line_text(reply))
+        _audio_sender = get_sender_object(
+            icon_url_override=get_user_picture_url(group_id, user_id)
+        )
+        if _audio_sender:
+            msg_obj.sender = _audio_sender
         if qt:
             try:
                 msg_obj.quote_token = qt
@@ -13562,16 +13659,28 @@ def delete_rich_menu():
     return deleted
 
 
-def get_sender_object():
-    """Build Sender object for customized bot display name/icon."""
-    if not MessageSender or not sender_name:
+def get_sender_object(icon_url_override=None):
+    """Build LINE's custom Sender object.
+
+    Translation replies keep the configured sender name, but when a valid
+    speaker avatar is supplied it takes precedence over the global bot icon.
+    This makes the translated bubble visually follow the person who spoke.
+    """
+    if not MessageSender:
         return None
     try:
-        kwargs = {"name": sender_name}
-        if sender_icon and sender_icon.startswith("http"):
-            kwargs["icon_url"] = sender_icon
+        effective_icon = str(icon_url_override or "").strip()
+        if not effective_icon.startswith("https://"):
+            effective_icon = str(sender_icon or "").strip()
+        effective_name = str(sender_name or ("翻譯小助手" if effective_icon else "")).strip()[:20]
+        if not effective_name:
+            return None
+        kwargs = {"name": effective_name}
+        if effective_icon.startswith("https://"):
+            kwargs["icon_url"] = effective_icon[:1000]
         return MessageSender(**kwargs)
-    except Exception:
+    except Exception as e:
+        logger.debug("Build custom sender failed: %s", e)
         return None
 
 
