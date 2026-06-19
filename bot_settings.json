@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.27-speaker-sender-name-2026-06-18",
     "schema_version": 2,
-    "state_hash": "8f85f5095b5e0c8c623f2ee9092a4a20f019088f40282dfebdc63e5029cae4b5",
-    "updated_at_iso": "2026-06-18T10:23:00.560345+00:00",
-    "updated_at_unix": 1781778180.5603454
+    "state_hash": "ed50e32c958235812adbdf9515fa51612dde90278c0912a1adfa77eb0ecd3be0",
+    "updated_at_iso": "2026-06-19T04:45:23.327813+00:00",
+    "updated_at_unix": 1781844323.327813
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -128,21 +128,21 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 246886,
-    "ant_cache_write": 403775,
-    "ant_cost_usd": 0.7759584500000001,
-    "ant_input": 80026,
-    "ant_output": 4001,
-    "commands": 9,
+    "ant_cache_read": 279627,
+    "ant_cache_write": 440965,
+    "ant_cost_usd": 0.8299870500000002,
+    "ant_input": 83663,
+    "ant_output": 4127,
+    "commands": 11,
     "image_translations": 3,
     "oai_cached": 9088,
     "oai_cost_usd": 0.011412199999999999,
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 152,
-    "tokens_completion": 9248,
-    "tokens_prompt": 2477350,
+    "text_translations": 155,
+    "tokens_completion": 9374,
+    "tokens_prompt": 2550918,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -257,7 +257,8 @@
       "就是這個光 ✨༄",
       "辰",
       "惟壬",
-      "祥啊"
+      "祥啊",
+      "祥阿"
     ]
   },
   "fewshot_mode": "messages",
@@ -284,11 +285,11 @@
       "tokens_prompt": 288656
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 0.34043380000000006,
+      "cost_usd": 0.39446240000000016,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1659,
-      "tokens_prompt": 386845
+      "tokens_completion": 1785,
+      "tokens_prompt": 460413
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -382,9 +383,11 @@
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     }
   },
