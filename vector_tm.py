@@ -431,6 +431,34 @@ def vector_stats() -> Dict[str, Any]:
     return s
 
 
+def vector_delete_target_texts(target_texts: List[str], src_lang: Optional[str] = None,
+                               tgt_lang: Optional[str] = None) -> int:
+    """Delete vector-TM rows whose target is a known-invalid derived label."""
+    if not _init_done:
+        init()
+    values = sorted({str(x).strip() for x in (target_texts or []) if str(x).strip()})
+    if not values:
+        return 0
+    placeholders = ",".join("?" for _ in values)
+    where = [f"tgt_text IN ({placeholders})"]
+    params: List[Any] = list(values)
+    if src_lang:
+        where.append("src_lang=?")
+        params.append(src_lang)
+    if tgt_lang:
+        where.append("tgt_lang=?")
+        params.append(tgt_lang)
+    try:
+        with sqlite3.connect(VECTOR_DB_PATH) as conn:
+            cur = conn.execute("DELETE FROM vector_entries WHERE " + " AND ".join(where), params)
+            count = cur.rowcount
+        logger.info("[VecTM] deleted %d rows with invalid derived targets", count)
+        return count
+    except Exception as e:
+        logger.error("[VecTM] delete_target_texts failed: %s", e)
+        return 0
+
+
 def vector_clear(group_id: Optional[str] = None, src_lang: Optional[str] = None,
                  tgt_lang: Optional[str] = None) -> int:
     if not _init_done:

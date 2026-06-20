@@ -4002,6 +4002,19 @@ FACTORY_ID_ZH_DEFECTS = {
     "kurang": "短少",
     "salah": "錯誤",
     "tercampur": "混料",
+    "terbakar": "著火了",
+    "kebakar": "著火了",
+}
+
+# Equipment-specific states use operational Chinese rather than material-defect wording.
+FACTORY_ID_ZH_EQUIPMENT_OBJECTS = {"mesin", "mesinnya", "troli", "trolley"}
+FACTORY_ID_ZH_EQUIPMENT_STATES = {
+    "rusak": "故障了",
+    "macet": "卡住了",
+    "bocor": "漏了",
+    "patah": "斷了",
+    "terbakar": "著火了",
+    "kebakar": "著火了",
 }
 
 FACTORY_ID_ZH_POSITIONS = {
@@ -4635,6 +4648,9 @@ def factory_semantic_translate_id_zh(text):
     if obj_zh and defect_zh:
         if pos_zh:
             result = (prefix + f"{obj_zh}{pos_zh}{defect_zh}").strip()
+        elif obj_key in FACTORY_ID_ZH_EQUIPMENT_OBJECTS:
+            equipment_state = FACTORY_ID_ZH_EQUIPMENT_STATES.get(defect_key, defect_zh)
+            result = (prefix + f"{obj_zh}{equipment_state}").strip()
         elif obj_key in ("barang", "barangnya", "material", "materialnya",
                          "bahan", "batang", "batangnya", "batang baja"):
             result = (prefix + f"{obj_zh}{defect_zh}").strip()
@@ -6242,10 +6258,27 @@ def _clean_glossary_idn_term(idn):
 
 
 def seed_glossary_into_tm():
-    """把詞庫種入 Lexical TM(zh→id + 無歧義的 id→zh 反向)。boot 時呼叫。"""
+    """Synchronize glossary-derived TM rows from the current source of truth.
+
+    Forward ZH→ID rows are explicit and safe.  Reverse ID→ZH rows are generated
+    only from ``build_safe_reverse_index``; common words and UI/field labels are
+    never reversed.  Existing ``glossary_seed`` rows are purged first because
+    they are derived data, preventing a previously unsafe exact match from
+    surviving a code/glossary update forever.
+    """
     seeded_fwd = seeded_rev = skipped = 0
-    rev_seen = {}
     try:
+        purged = tm_module.tm_delete_by_model("glossary_seed")
+        unsafe_ui_targets = ge_module.build_unsafe_reverse_ui_targets(GLOSSARY_LOOKUP)
+        purged_unsafe_tm = tm_module.tm_delete_target_texts(
+            list(unsafe_ui_targets), src_lang="id", tgt_lang="zh"
+        )
+        try:
+            purged_unsafe_vec = vec_tm_module.vector_delete_target_texts(
+                list(unsafe_ui_targets), src_lang="id", tgt_lang="zh"
+            )
+        except Exception:
+            purged_unsafe_vec = 0
         for zh_term, v in GLOSSARY_LOOKUP.items():
             idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
             term = _clean_glossary_idn_term(idn_raw)
@@ -6258,23 +6291,25 @@ def seed_glossary_into_tm():
                     seeded_fwd += 1
             except Exception:
                 pass
-            # 反向:同一印尼術語對到多個中文 → 有歧義,全部不種
-            key = term.lower()
-            rev_seen.setdefault(key, []).append((term, zh_term))
-        for key, pairs in rev_seen.items():
-            if len(pairs) != 1:
+
+        safe_reverse = ge_module.build_safe_reverse_index(GLOSSARY_LOOKUP)
+        for row in safe_reverse.values():
+            source_term = (row.get("source_term") or "").strip()
+            target_term = (row.get("target_term") or "").strip()
+            if not source_term or not target_term:
                 continue
-            term, zh_term = pairs[0]
             try:
-                if tm_module.tm_store(term, zh_term, "id", "zh",
+                if tm_module.tm_store(source_term, target_term, "id", "zh",
                                       None, "glossary_seed", 100):
                     seeded_rev += 1
             except Exception:
                 pass
-        logger.info("[GlossarySeed] TM 種子完成: zh→id %d 條, id→zh %d 條, 略過描述句 %d 條",
-                    seeded_fwd, seeded_rev, skipped)
+        logger.info(
+            "[GlossarySeed] TM 同步完成: seed_purged=%d, unsafe_tm=%d, unsafe_vec=%d, zh→id=%d, safe id→zh=%d, skipped=%d",
+            purged, purged_unsafe_tm, purged_unsafe_vec, seeded_fwd, seeded_rev, skipped,
+        )
     except Exception as _se:
-        logger.warning("[GlossarySeed] 種子失敗(不影響啟動): %s", _se)
+        logger.warning("[GlossarySeed] 同步失敗(不影響啟動): %s", _se)
 
 
 try:
@@ -6333,6 +6368,8 @@ INDONESIAN_SLANG_DICT = {
     # ── 高頻動詞/狀態 ───────────────────────────────────────
     "rusak": "故障/壞掉",
     "macet": "卡住/不動",
+    "terbakar": "著火/燒起來",
+    "kebakar": "著火/燒起來",
     "error": "錯誤/異常",
     "selesai": "完成/做好",
     "beres": "搞定/完成",
@@ -8045,8 +8082,19 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
                 logger.warning("[FinalDeliveryGuard] fallback failed: %s", exc)
                 return None
 
+        leaked_label = ge_module.find_reverse_glossary_ui_leak(
+            source_text,
+            candidate,
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            src,
+            tgt,
+        )
+        candidate_for_gate = "" if leaked_label else candidate
+        if leaked_label:
+            logger.warning("[FinalDeliveryGuard] reverse glossary UI-label leak blocked: %s", leaked_label)
+
         checked = tqg_module.ensure_delivery_safe_translation(
-            source_text, candidate, src, tgt,
+            source_text, candidate_for_gate, src, tgt,
             model=_active_upgrade_model(),
             glossary_pairs=pairs,
             ai_client=ai_provider,
@@ -8054,6 +8102,16 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         )
         if checked.get("ok") and checked.get("text"):
             safe_text = checked["text"].strip()
+            leaked_after_recovery = ge_module.find_reverse_glossary_ui_leak(
+                source_text,
+                safe_text,
+                GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+                src,
+                tgt,
+            )
+            if leaked_after_recovery:
+                logger.error("[FinalDeliveryGuard] recovered result still leaked UI label: %s", leaked_after_recovery)
+                return failure_text
             if safe_text != candidate.strip():
                 logger.warning(
                     "[FinalDeliveryGuard] unsafe candidate replaced path=%s issues=%s",
@@ -8145,6 +8203,15 @@ def _tm_bypass_integrity_ok(source_text, candidate, src, tgt):
     language purity, immutable-token and glossary validation as fresh output.
     """
     try:
+        leaked_label = ge_module.find_reverse_glossary_ui_leak(
+            source_text,
+            candidate,
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            src,
+            tgt,
+        )
+        if leaked_label:
+            return False, ["reverse_glossary_ui_label_leak:" + leaked_label]
         envelope = tqg_module.protect_immutable_spans(source_text)
         pairs = ge_module.collect_applicable_pairs(
             source_text,

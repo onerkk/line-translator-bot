@@ -571,6 +571,73 @@ def tm_delete(entry_id: int) -> bool:
         return False
 
 
+def tm_delete_by_model(model: str, src_lang: Optional[str] = None,
+                       tgt_lang: Optional[str] = None,
+                       group_id: Optional[str] = None) -> int:
+    """Delete derived TM rows by provenance, optionally limited by direction.
+
+    Glossary-seeded rows are generated assets, not user history.  They must be
+    rebuilt from the current glossary so removed or newly-ambiguous reverse rows
+    cannot survive indefinitely as exact/fuzzy bypasses.
+    """
+    if not _init_done:
+        init()
+    if not model:
+        return 0
+    where = ["model=?"]
+    params: List[Any] = [model]
+    if src_lang:
+        where.append("src_lang=?")
+        params.append(src_lang)
+    if tgt_lang:
+        where.append("tgt_lang=?")
+        params.append(tgt_lang)
+    if group_id is not None:
+        where.append("group_id=?")
+        params.append(group_id)
+    try:
+        with sqlite3.connect(TM_DB_PATH) as conn:
+            cur = conn.execute(
+                "DELETE FROM tm_entries WHERE " + " AND ".join(where),
+                params,
+            )
+            count = cur.rowcount
+        logger.info("[TM] deleted %d derived rows model=%s direction=%s→%s",
+                    count, model, src_lang or "*", tgt_lang or "*")
+        return count
+    except Exception as e:
+        logger.error("[TM] delete_by_model failed: %s", e)
+        return 0
+
+
+def tm_delete_target_texts(target_texts: List[str], src_lang: Optional[str] = None,
+                           tgt_lang: Optional[str] = None) -> int:
+    """Delete rows whose target exactly matches known-invalid derived labels."""
+    if not _init_done:
+        init()
+    values = sorted({str(x).strip() for x in (target_texts or []) if str(x).strip()})
+    if not values:
+        return 0
+    placeholders = ",".join("?" for _ in values)
+    where = [f"tgt_text IN ({placeholders})"]
+    params: List[Any] = list(values)
+    if src_lang:
+        where.append("src_lang=?")
+        params.append(src_lang)
+    if tgt_lang:
+        where.append("tgt_lang=?")
+        params.append(tgt_lang)
+    try:
+        with sqlite3.connect(TM_DB_PATH) as conn:
+            cur = conn.execute("DELETE FROM tm_entries WHERE " + " AND ".join(where), params)
+            count = cur.rowcount
+        logger.info("[TM] deleted %d rows with invalid derived targets", count)
+        return count
+    except Exception as e:
+        logger.error("[TM] delete_target_texts failed: %s", e)
+        return 0
+
+
 def tm_search(keyword: str = "", src_lang: Optional[str] = None,
               tgt_lang: Optional[str] = None, group_id: Optional[str] = None,
               limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:

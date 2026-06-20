@@ -143,6 +143,54 @@ def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, st
     return safe
 
 
+def build_unsafe_reverse_ui_targets(glossary: Dict[str, Any]) -> set[str]:
+    """Return UI/field-label Chinese keys that must never be inferred in reverse.
+
+    A glossary row such as ``工單製程紀錄「機台」 => Mesin`` is valid only in
+    the forward ZH→ID direction.  Reversing the ordinary word ``mesin`` into the
+    full database/UI path is a category error.  The set is derived from glossary
+    structure and the same safe-index rules used by prompt injection, so it stays
+    correct when the glossary changes.
+    """
+    safe_targets = {
+        row.get("target_term", "")
+        for row in build_safe_reverse_index(glossary).values()
+        if row.get("target_term")
+    }
+    unsafe: set[str] = set()
+    for zh_term, value in (glossary or {}).items():
+        target = _extract_target_term(value)
+        if not zh_term or not target:
+            continue
+        if _looks_like_ui_label(str(zh_term)) and str(zh_term) not in safe_targets:
+            unsafe.add(str(zh_term))
+    return unsafe
+
+
+def find_reverse_glossary_ui_leak(src_text: str, tgt_text: str,
+                                  glossary: Dict[str, Any],
+                                  src_lang: str, tgt_lang: str) -> Optional[str]:
+    """Detect a leaked forward-only UI label in an ID→ZH result.
+
+    This intentionally checks exact short-result leakage rather than banning
+    Chinese quote marks globally.  A legitimate longer sentence may mention a
+    quoted field name; a candidate that is *only* a forward-only glossary key is
+    stale derived data and must be retranslated from the source.
+    """
+    if not (str(src_lang or "").lower().startswith("id") and
+            str(tgt_lang or "").lower().startswith("zh")):
+        return None
+    candidate = (tgt_text or "").strip()
+    if not candidate:
+        return None
+    candidate = re.sub(r'^[\s🇹🇼🇨🇳]+', '', candidate).strip()
+    candidate = re.sub(r'[，,。.!！?？;；:：]+$', '', candidate).strip()
+    for label in build_unsafe_reverse_ui_targets(glossary):
+        if candidate == label:
+            return label
+    return None
+
+
 def collect_applicable_pairs(src_text: str, glossary: Dict[str, Any],
                              src_lang: str, tgt_lang: str) -> List[Tuple[str, str]]:
     """Return only source-grounded, direction-safe terminology constraints."""
