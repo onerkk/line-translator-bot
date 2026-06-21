@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.29-line-mention-protected-name-root-fix-2026-06-21"
+VERSION = "v3.30-station-alias-root-fix-2026-06-21"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -4314,6 +4314,9 @@ STATION_NAMES = {
     "秤重站":         {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
     "秤重":           {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
     "委外":           {"no": 490, "dept": "研磨股", "id": "Outsource"},
+    # 包裝站（使用者提供的現場固定稱呼；無 ERP 站號）
+    "異型包裝站":     {"no": None, "dept": "包裝", "id": "Stasiun packing barang bentuk khusus"},
+    "異型包裝":       {"no": None, "dept": "包裝", "id": "Stasiun packing barang bentuk khusus"},
     # 品質管理課
     "過電流":         {"no": 470, "dept": "品質管理課", "id": "Eddy Current(ET)"},
     "超音波":         {"no": 470, "dept": "品質管理課", "id": "Ultrasonic(UT)"},
@@ -4435,6 +4438,54 @@ STATION_CODES = {
 }
 
 
+# 現場口語站別別名 → 正式站名。
+# 這一層只做「有明確站別語法證據」的正規化，避免把產品名「異型棒」誤當站別。
+# 新增其他口語站名時，只需在此表加入規則，不必往 prompt 或輸出後處理堆補丁。
+FACTORY_STATION_ALIAS_RULES = (
+    {
+        "canonical_zh": "異型包裝站",
+        "canonical_id": "Stasiun packing barang bentuk khusus",
+        "patterns": (
+            # 異型那站／異型這一站／異型那邊／異型包裝區
+            r"異型\s*(?:包裝\s*)?(?:那|這)?\s*(?:一)?\s*(?:站|邊|區)",
+            # 現場把站名省略成主詞：異型支援、異型幫忙、異型缺人
+            r"異型\s*(?=(?:支援|幫忙|協助|缺人|有人|沒人))",
+        ),
+    },
+)
+
+
+def resolve_factory_station_aliases(text):
+    """把有站別語法證據的現場簡稱正規化為正式站名。
+
+    Returns:
+        (normalized_text, matches)
+        matches: [{original, canonical_zh, canonical_id}]
+
+    不處理「異型棒／異型矯直機／異型拋光機」等產品或設備名稱；
+    因為規則要求後面必須出現站／邊／區或支援、幫忙等站別角色語法。
+    """
+    if not text or not isinstance(text, str):
+        return text, []
+    result = text
+    matches = []
+    for rule in FACTORY_STATION_ALIAS_RULES:
+        canonical = rule["canonical_zh"]
+        canonical_id = rule["canonical_id"]
+        for pattern in rule.get("patterns", ()):
+            def _replace(match, _canonical=canonical, _id=canonical_id):
+                original = match.group(0)
+                if original != _canonical:
+                    matches.append({
+                        "original": original,
+                        "canonical_zh": _canonical,
+                        "canonical_id": _id,
+                    })
+                return _canonical
+            result = re.sub(pattern, _replace, result)
+    return result, matches
+
+
 def detect_station_context(text):
     """v3.11 (2026-05-26): 偵測訊息中出現的工廠站別/設備代碼,
     回傳要注入翻譯 prompt 的「站別解析提示」字串。
@@ -4448,6 +4499,7 @@ def detect_station_context(text):
     """
     if not text:
         return ""
+    station_text, found_aliases = resolve_factory_station_aliases(text)
     found_stations = []   # [(站名, info), ...]
     found_codes = []      # [(代碼, info), ...]
     found_depts = []      # [(中文, 印尼), ...]
@@ -4457,7 +4509,7 @@ def detect_station_context(text):
     #    並用 seen_spans 避免重疊命中。
     seen_spans = []
     for name in sorted(STATION_NAMES.keys(), key=len, reverse=True):
-        idx = text.find(name)
+        idx = station_text.find(name)
         while idx >= 0:
             span = (idx, idx + len(name))
             # 檢查是否跟已命中重疊
@@ -4470,19 +4522,19 @@ def detect_station_context(text):
                 seen_spans.append(span)
                 found_stations.append((name, STATION_NAMES[name]))
                 break  # 同站名只取第一次出現
-            idx = text.find(name, idx + 1)
+            idx = station_text.find(name, idx + 1)
     
     # 2) 設備代碼 — 用 word boundary(英數代碼)
     #    text 不轉小寫,因為設備代碼是大寫(I18/BF2/E1),小寫版可能是別的意思(e1 在印尼文裡可能是其他)
     for code in STATION_CODES.keys():
         # 注意:UT手/UT自 含中文,不能用標準 \b
         if re.search(r"[\u4e00-\u9fff]", code):
-            if code in text:
+            if code in station_text:
                 found_codes.append((code, STATION_CODES[code]))
         else:
             # 純英數代碼:前後不能是英數或 _,但可以是中文/空白/標點/開頭結尾
             pat = r"(?<![A-Za-z0-9_])" + re.escape(code) + r"(?![A-Za-z0-9_])"
-            if re.search(pat, text):
+            if re.search(pat, station_text):
                 found_codes.append((code, STATION_CODES[code]))
     
     # 3) 股別中文 — v3.13: 改先長後短 + seen_spans(複用站名那段模式),
@@ -4490,7 +4542,7 @@ def detect_station_context(text):
     #    「冷抽二股X」→ 只命中「冷抽二股」;單獨「二股X」→ 命中簡稱「二股」。
     dept_seen_spans = []
     for dept in sorted(STATION_DEPARTMENTS.keys(), key=len, reverse=True):
-        idx = text.find(dept)
+        idx = station_text.find(dept)
         while idx >= 0:
             span = (idx, idx + len(dept))
             overlap = False
@@ -4502,13 +4554,18 @@ def detect_station_context(text):
                 dept_seen_spans.append(span)
                 found_depts.append((dept, STATION_DEPARTMENTS[dept]))
                 break  # 同股別只取第一次出現
-            idx = text.find(dept, idx + 1)
+            idx = station_text.find(dept, idx + 1)
     
     # 都沒命中 → 回空(不污染 prompt)
-    if not found_stations and not found_codes and not found_depts:
+    if not found_stations and not found_codes and not found_depts and not found_aliases:
         return ""
     
     lines = ["【工廠 ERP 站別/設備識別(必須遵守)】"]
+    if found_aliases:
+        lines.append("檢測到現場口語站名（已正規化，必須使用正式站名）:")
+        for row in found_aliases:
+            lines.append(f"  - {row['original']} → {row['canonical_zh']} → {row['canonical_id']}")
+        lines.append("  注意：這裡的『異型』是異型包裝站，不是產品『異型棒』，也不是異型矯直／拋光設備。")
     if found_depts:
         lines.append("檢測到股別(department):")
         for zh, idn in found_depts:
@@ -4522,7 +4579,13 @@ def detect_station_context(text):
         if _clear:
             lines.append("檢測到站別/設備(這些是料件當前位置或目的站,不是要做的動作):")
             for name, info in _clear:
-                lines.append(f"  - {name}(站號 {info['no']},{info['dept']}) → {info['id']}")
+                meta = []
+                if info.get('no') is not None:
+                    meta.append(f"站號 {info['no']}")
+                if info.get('dept'):
+                    meta.append(str(info['dept']))
+                meta_text = ("(" + ",".join(meta) + ")") if meta else ""
+                lines.append(f"  - {name}{meta_text} → {info['id']}")
         if _ambig:
             lines.append("檢測到製程詞【雙義,必須先判斷是位置還是動作,不可因為它在站別表就一律當位置】:")
             for name, info in _ambig:
@@ -5730,6 +5793,25 @@ def _classify_qing_sense_zh_id(text):
         "requires_validation": False,
     }
 
+def _classify_factory_station_alias_zh_id(text):
+    """辨識中文現場站名簡稱，產生固定站名語義契約。"""
+    normalized, alias_matches = resolve_factory_station_aliases(text)
+    canonical = "異型包裝站"
+    if canonical not in (normalized or ""):
+        return None
+    return {
+        "term": canonical,
+        "sense": "factory_station_canonical_name",
+        "confidence": 1.0,
+        "evidence": [m.get("original", canonical) for m in alias_matches] or [canonical],
+        "canonical_zh": canonical,
+        "required_id": "stasiun packing barang bentuk khusus",
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+        "requires_validation": True,
+    }
+
+
 def build_translation_semantic_contract(text, src, tgt):
     """Build one runtime contract for the current translation request.
     Contract is intentionally plain dict so every legacy module can consume it without new dependencies.
@@ -5756,6 +5838,15 @@ def build_translation_semantic_contract(text, src, tgt):
             if not qing.get("nmt_allowed", True):
                 contract["nmt_allowed"] = False
                 contract["requires_llm"] = True
+
+        station = _classify_factory_station_alias_zh_id(text)
+        if station:
+            contract["has_risk"] = True
+            contract["risks"].append(station)
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -5781,6 +5872,12 @@ def build_translation_semantic_contract_prompt(contract):
             lines.append("<risk term='請' sense='ambiguous_qing'>")
             lines.append("Decide 請 by context before translating; do not default to request if the surrounding words describe food, drinks, welfare distribution, or sponsorship.")
             lines.append("</risk>")
+        elif risk.get("sense") == "factory_station_canonical_name":
+            lines.append("<risk term='異型包裝站' sense='factory_station_canonical_name'>")
+            lines.append("In this factory context, 異型那站/異型那邊 is the official station name 異型包裝站, not a product category and not a generic 'special goods station'.")
+            lines.append("Translate the station name exactly as: Stasiun packing barang bentuk khusus.")
+            lines.append("Keep 異型棒 separate: 異型棒 means batang bentuk khusus.")
+            lines.append("</risk>")
     lines.append("</semantic_contract>")
     return " ".join(lines)
 
@@ -5797,6 +5894,10 @@ def translation_satisfies_semantic_contract(contract, translation):
                 return False, "qing_treat_translated_as_request"
             if not has_good:
                 return False, "qing_treat_missing_treat_sponsor_marker"
+        elif risk.get("sense") == "factory_station_canonical_name":
+            required = (risk.get("required_id") or "").lower().strip()
+            if required and required not in low:
+                return False, "factory_station_canonical_name_missing"
     return True, ""
 
 def _semantic_rebuild_qing_treat_translation(src_text, contract, current_translation=""):
@@ -5837,6 +5938,33 @@ def _semantic_rebuild_qing_treat_translation(src_text, contract, current_transla
             return f"{result} (ditraktir oleh {sponsor_id})"
     return f"Ini ditraktir oleh {sponsor_id}."
 
+def _repair_factory_station_canonical_name(translation, required_id):
+    """最後安全網：只修正已分類為異型包裝站的目標站名片段。
+
+    正常路徑應由來源正規化 + glossary 完成；此函式只處理模型仍輸出
+    「stasiun barang khusus」等同義誤名的情況，不改動句中其他內容。
+    """
+    result = (translation or "").strip()
+    if not result or not required_id:
+        return result
+    if required_id.lower() in result.lower():
+        return result
+    variants = (
+        r"stasiun\s+barang\s+khusus",
+        r"stasiun\s+bentuk\s+khusus",
+        r"stasiun\s+khusus",
+        r"stasiun\s+packing\s+khusus",
+        r"bagian\s+barang\s+khusus",
+        r"bagian\s+packing\s+khusus",
+        r"station\s+barang\s+khusus",
+    )
+    for pattern in variants:
+        repaired, count = re.subn(pattern, required_id, result, count=1, flags=re.I)
+        if count:
+            return repaired
+    return result
+
+
 def enforce_translation_semantic_contract(contract, src_text, translation):
     """Validate a produced translation against contract; rebuild only if contract is violated."""
     if not translation:
@@ -5854,10 +5982,14 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
         })
     except Exception:
         pass
-    # Currently qing/treat is the only high-risk contract implemented.
     for risk in (contract or {}).get("risks", []):
         if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             return _semantic_rebuild_qing_treat_translation(src_text, contract, translation)
+        if risk.get("sense") == "factory_station_canonical_name":
+            return _repair_factory_station_canonical_name(
+                translation,
+                risk.get("required_id") or "stasiun packing barang bentuk khusus",
+            )
     return translation
 
 def filter_semantic_contract_references(contract, refs):
@@ -8166,13 +8298,16 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
 
 
 def translate(text, src, tgt):
-    """Public translate wrapper — v3.9.60 邊界層保護名單根治。
+    """Public translate wrapper — 邊界層正規化與保護。
 
-    在進入 hybrid pipeline 之前,先把保護名單名稱換成 placeholder;
-    pipeline(_translate_core)全程跑 placeholder 化文字,出口統一還原。
-    保證所有路徑(LexTM/VecTM/NMT/cache/LLM)都不會漏翻保護名。
+    中文→印尼文先把有明確站別語法的現場簡稱正規化為正式站名，
+    再做保護名 placeholder。如此 LexTM/VecTM/NMT/cache/LLM 全部吃同一份
+    canonical source，舊錯誤快取不會繼續命中，站名也不再靠模型猜。
     """
-    protected_text, _name_map = protect_names(text)
+    canonical_text = text
+    if src == "zh" and tgt == "id":
+        canonical_text, _station_alias_matches = resolve_factory_station_aliases(text)
+    protected_text, _name_map = protect_names(canonical_text)
     # 存 thread-local 供 _translate_core 路由判斷:有保護名時強制走 LLM,
     # 不讓 NMT / 語義 bypass 把名稱音譯或誤配到別句的舊譯文。
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
@@ -8191,7 +8326,7 @@ def translate(text, src, tgt):
             pass
     if result and isinstance(result, str):
         result = restore_names(result, _name_map)
-        result = _final_delivery_guard(text, result, src, tgt)
+        result = _final_delivery_guard(canonical_text, result, src, tgt)
     return result
 
 
