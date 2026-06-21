@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.27-speaker-sender-name-2026-06-18"
+VERSION = "v3.28-mention-short-fragment-root-fix-2026-06-21"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -3316,10 +3316,12 @@ def strip_mentions_for_detect(text, line_mentions=None):
     return clean
 
 
-# v3.17: @mention-only / name-call guard.
-# LINE 群組常見「@甲 乙」只是叫兩個人，不是要翻譯。舊邏輯把真正的
-# LINE mention 去掉後，只剩 1~4 個中文字（例如「君立」），仍被判定為中文
-# 並送翻譯，造成截圖中的誤觸發。這裡在語言偵測前做語意邊界判斷。
+# @mention-only / name-call guard.
+#
+# Design rule: only suppress a message when there is POSITIVE evidence that the
+# remainder is an addressee/name.  A previous version treated every unknown
+# 1~4-character Chinese remainder as a name.  That made valid factory fragments
+# such as「第一把」「第二把」「兩捆」silently disappear after an @mention.
 _MENTION_SHORT_ACTION_TERMS = {
     "快來", "過來", "回來", "來一下", "看一下", "等一下", "先不要", "不要",
     "停機", "開機", "確認", "收到", "好了", "可以", "不行", "小心", "注意",
@@ -3329,6 +3331,62 @@ _MENTION_SHORT_ACTION_TERMS = {
     "在哪", "要嗎", "好了嗎", "可以嗎", "來了嗎", "知道了", "再看", "先看",
 }
 _MENTION_SENTENCE_PARTICLES = set("嗎呢吧啊呀喔哦欸啦嘛了請要別再先快幫看等停開回來去做拿放換")
+
+# Chinese numeric/ordinal and measure-word grammar.  This is deliberately a
+# grammar class, not a list of one-off phrases, so all short quantity fragments
+# pass through translation instead of being mistaken for names.
+_CHINESE_NUMBER_CHARS = "零〇一二三四五六七八九十百千萬億两兩俩幾几半壹貳參肆伍陸柒捌玖拾佰仟"
+_CHINESE_MEASURE_WORDS = (
+    "把|個|件|台|支|根|捆|批|箱|片|顆|颗|包|張|张|組|组|次|趟|份|本|杯|"
+    "桶|車|车|爐|炉|卷|捲|盒|袋|罐|套|只|條|条|堆|盤|盘|棒|號|号|段|排|"
+    "班|爐次|炉次|批次|捆次|支次|件次"
+)
+_SHORT_FACTORY_NOUNS = {
+    "早班", "晚班", "白班", "夜班", "上班", "下班", "左邊", "右邊", "前面",
+    "後面", "裡面", "外面", "這把", "那把", "這捆", "那捆", "這批", "那批",
+    "第一", "第二", "第三", "最後", "前一", "後一", "上面", "下面", "中間",
+}
+
+
+def _looks_like_translatable_short_fragment(text):
+    """Return True for short Chinese content that carries message semantics.
+
+    The mention guard must not decide that a fragment is a person name merely
+    because it is short.  We therefore recognize productive grammar classes:
+    ordinals, quantities, classifiers, directions, shifts and action/status
+    words.  Unknown name-like tails can still be suppressed by the caller.
+    """
+    compact = re.sub(r'[\s,，、。.!！?？:：;；/\\|·•]+', '', str(text or ''))
+    if not compact:
+        return False
+
+    if any(term in compact for term in _MENTION_SHORT_ACTION_TERMS):
+        return True
+    if any(ch in _MENTION_SENTENCE_PARTICLES for ch in compact):
+        return True
+    if compact in _SHORT_FACTORY_NOUNS:
+        return True
+
+    # Arabic-number quantity: 1把 / 2捆 / 第3批 / 03號.
+    if re.fullmatch(rf'第?\d+(?:{_CHINESE_MEASURE_WORDS})?', compact):
+        return True
+
+    # Chinese-number quantity/ordinal: 第一把 / 第二捆 / 兩件 / 三號.
+    if re.fullmatch(
+        rf'第?[{_CHINESE_NUMBER_CHARS}]+(?:{_CHINESE_MEASURE_WORDS})?',
+        compact,
+    ):
+        return True
+
+    # Demonstrative + classifier/noun: 這一把 / 那兩捆 / 這批.
+    if re.fullmatch(
+        rf'[這这那前後后上下左右]?(?:第?[{_CHINESE_NUMBER_CHARS}\d]+)?'
+        rf'(?:{_CHINESE_MEASURE_WORDS})',
+        compact,
+    ):
+        return True
+
+    return False
 
 
 def _normalized_known_names_for_group(group_id):
@@ -3387,13 +3445,16 @@ def is_mention_only_or_name_call(text, line_mentions=None, group_id=None):
     if chunks and all(c in known_names for c in chunks):
         return True
 
-    if re.fullmatch(r'[\u4e00-\u9fff]{1,4}', remainder):
-        if any(term in remainder for term in _MENTION_SHORT_ACTION_TERMS):
+    if re.fullmatch(r'[\u4e00-\u9fff]{1,6}', remainder):
+        # Productive short grammar (ordinal/quantity/action/status) must be
+        # translated.  This is the root fix for @mention +「第一把/第二把」.
+        if _looks_like_translatable_short_fragment(remainder):
             return False
-        # Common sentence/action cues mean it is likely an actual instruction/question.
-        if any(ch in _MENTION_SENTENCE_PARTICLES for ch in remainder):
-            return False
-        return True
+
+        # Preserve the original name-call use case for very short unknown tails
+        # (e.g.「君立」), but do not suppress longer work content merely because
+        # it is written without punctuation.
+        return len(remainder) <= 3
     return False
 
 
