@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.28-mention-short-fragment-root-fix-2026-06-21"
+VERSION = "v3.29-line-mention-protected-name-root-fix-2026-06-21"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -3318,143 +3318,104 @@ def strip_mentions_for_detect(text, line_mentions=None):
 
 # @mention-only / name-call guard.
 #
-# Design rule: only suppress a message when there is POSITIVE evidence that the
-# remainder is an addressee/name.  A previous version treated every unknown
-# 1~4-character Chinese remainder as a name.  That made valid factory fragments
-# such as「第一把」「第二把」「兩捆」silently disappear after an @mention.
-_MENTION_SHORT_ACTION_TERMS = {
-    "快來", "過來", "回來", "來一下", "看一下", "等一下", "先不要", "不要",
-    "停機", "開機", "確認", "收到", "好了", "可以", "不行", "小心", "注意",
-    "幫忙", "麻煩", "處理", "重做", "重洗", "退回", "放行", "拿走", "帶走",
-    "下來", "上來", "過去", "開始", "結束", "休息", "吃飯", "換班", "加班",
-    "下班", "上班", "辛苦了", "謝謝", "早安", "晚安", "請問", "有空嗎",
-    "在哪", "要嗎", "好了嗎", "可以嗎", "來了嗎", "知道了", "再看", "先看",
-}
-_MENTION_SENTENCE_PARTICLES = set("嗎呢吧啊呀喔哦欸啦嘛了請要別再先快幫看等停開回來去做拿放換")
-
-# Chinese numeric/ordinal and measure-word grammar.  This is deliberately a
-# grammar class, not a list of one-off phrases, so all short quantity fragments
-# pass through translation instead of being mistaken for names.
-_CHINESE_NUMBER_CHARS = "零〇一二三四五六七八九十百千萬億两兩俩幾几半壹貳參肆伍陸柒捌玖拾佰仟"
-_CHINESE_MEASURE_WORDS = (
-    "把|個|件|台|支|根|捆|批|箱|片|顆|颗|包|張|张|組|组|次|趟|份|本|杯|"
-    "桶|車|车|爐|炉|卷|捲|盒|袋|罐|套|只|條|条|堆|盤|盘|棒|號|号|段|排|"
-    "班|爐次|炉次|批次|捆次|支次|件次"
-)
-_SHORT_FACTORY_NOUNS = {
-    "早班", "晚班", "白班", "夜班", "上班", "下班", "左邊", "右邊", "前面",
-    "後面", "裡面", "外面", "這把", "那把", "這捆", "那捆", "這批", "那批",
-    "第一", "第二", "第三", "最後", "前一", "後一", "上面", "下面", "中間",
-}
+# Root rule:
+#   1. LINE's webhook mention metadata is the authority for real blue @mentions.
+#   2. Plain text after the mention is considered a name ONLY when it exactly
+#      matches a protected name or a cached LINE group display name.
+#   3. Never infer "1~4 Chinese characters == a person name".  That heuristic
+#      silently swallowed valid factory messages such as「第一把」「第二把」.
+#
+# The protected-name list has two separate responsibilities:
+#   - this guard may use an exact match to suppress a pure name call;
+#   - protect_names() preserves a name inside a real sentence during translation.
+# It must never suppress an otherwise unknown short message merely because it is short.
 
 
-def _looks_like_translatable_short_fragment(text):
-    """Return True for short Chinese content that carries message semantics.
-
-    The mention guard must not decide that a fragment is a person name merely
-    because it is short.  We therefore recognize productive grammar classes:
-    ordinals, quantities, classifiers, directions, shifts and action/status
-    words.  Unknown name-like tails can still be suppressed by the caller.
-    """
-    compact = re.sub(r'[\s,，、。.!！?？:：;；/\\|·•]+', '', str(text or ''))
-    if not compact:
-        return False
-
-    if any(term in compact for term in _MENTION_SHORT_ACTION_TERMS):
-        return True
-    if any(ch in _MENTION_SENTENCE_PARTICLES for ch in compact):
-        return True
-    if compact in _SHORT_FACTORY_NOUNS:
-        return True
-
-    # Arabic-number quantity: 1把 / 2捆 / 第3批 / 03號.
-    if re.fullmatch(rf'第?\d+(?:{_CHINESE_MEASURE_WORDS})?', compact):
-        return True
-
-    # Chinese-number quantity/ordinal: 第一把 / 第二捆 / 兩件 / 三號.
-    if re.fullmatch(
-        rf'第?[{_CHINESE_NUMBER_CHARS}]+(?:{_CHINESE_MEASURE_WORDS})?',
-        compact,
-    ):
-        return True
-
-    # Demonstrative + classifier/noun: 這一把 / 那兩捆 / 這批.
-    if re.fullmatch(
-        rf'[這这那前後后上下左右]?(?:第?[{_CHINESE_NUMBER_CHARS}\d]+)?'
-        rf'(?:{_CHINESE_MEASURE_WORDS})',
-        compact,
-    ):
-        return True
-
-    return False
+def _normalize_person_name(value):
+    """Normalize a LINE/protected display name for exact name-call comparison."""
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    # Normalize full-width/half-width surrounding whitespace and remove a trailing
+    # role label such as「（研磨股班長）」for base-name comparison.
+    value = re.sub(r'\s+', '', value)
+    value = re.sub(r'[（(][^）)]*[）)]$', '', value).strip()
+    return value
 
 
 def _normalized_known_names_for_group(group_id):
-    """Return normalized protected/display names for mention-only detection."""
+    """Return exact protected names and cached LINE display names for a group."""
     names = set()
     try:
-        names.update(str(x).strip() for x in CUSTOMER_NAMES if str(x).strip())
+        for item in CUSTOMER_NAMES:
+            raw = str(item or '').strip()
+            normalized = _normalize_person_name(raw)
+            if raw:
+                names.add(raw)
+            if normalized:
+                names.add(normalized)
     except Exception:
         pass
+
     try:
         for value in (group_user_names.get(group_id, {}) or {}).values():
-            value = str(value or "").strip()
-            if not value:
-                continue
-            names.add(value)
-            # LINE display names often append role in parentheses.
-            base = re.sub(r'\s*[（(][^）)]*[）)]\s*$', '', value).strip()
-            if base:
-                names.add(base)
+            raw = str(value or '').strip()
+            normalized = _normalize_person_name(raw)
+            if raw:
+                names.add(raw)
+            if normalized:
+                names.add(normalized)
     except Exception:
         pass
+
     return names
 
 
 def is_mention_only_or_name_call(text, line_mentions=None, group_id=None):
-    """True when a message is only mentions / short addressee names, not a sentence.
+    """Return True only for a pure LINE mention or an exact known-name call.
 
-    Conservative rule:
-    - no mention => never intercept;
-    - mention(s) only => intercept;
-    - remainder matching a known name => intercept;
-    - unknown 1~4 Han-character remainder with no action/sentence cue => treat as a name call.
-    This fixes ``@小麥（研磨股班長） 君立`` while still allowing
-    ``@小麥 停機`` / ``@小麥 可以嗎`` to translate.
+    Reliable evidence accepted by this guard:
+      - after removing LINE-reported @mention spans, nothing remains;
+      - the remaining text exactly matches a protected name or a cached LINE
+        group display name;
+      - every separated remainder chunk is an exact known name.
+
+    Unknown short Chinese text is always allowed through to translation.  This
+    intentionally prefers an occasional translated unknown name over silently
+    dropping a real work instruction.
     """
     if not text or not isinstance(text, str):
         return False
+
+    # line_mentions comes from message.mention.mentionees index/length data.
+    # Regex extraction is only a compatibility fallback when that metadata is
+    # unavailable in an older event/SDK path.
     mentions = list(line_mentions or extract_mentions(text))
     if not mentions:
         return False
+
     remainder = text
     for mention in sorted(set(mentions), key=len, reverse=True):
         remainder = remainder.replace(mention, ' ')
-    # Remove separators commonly used between addressees.
-    remainder = re.sub(r'[\s,，、。.!！?？:：;；/\\|·•]+', '', remainder)
-    if not remainder:
+
+    raw_tail = remainder.strip()
+    compact_tail = re.sub(r'[\s,，、。.!！?？:：;；/\\|·•]+', '', raw_tail)
+    if not compact_tail:
         return True
 
     known_names = _normalized_known_names_for_group(group_id)
-    if remainder in known_names:
+    normalized_tail = _normalize_person_name(compact_tail)
+    if compact_tail in known_names or (normalized_tail and normalized_tail in known_names):
         return True
 
-    # Multiple short name chunks typed without LINE mention metadata.
-    raw_tail = strip_mentions_for_detect(text, mentions).strip()
     chunks = [c for c in re.split(r'[\s,，、/|]+', raw_tail) if c]
-    if chunks and all(c in known_names for c in chunks):
-        return True
+    if chunks:
+        normalized_chunks = [_normalize_person_name(c) for c in chunks]
+        if all(c and (c in known_names or n in known_names)
+               for c, n in zip(chunks, normalized_chunks)):
+            return True
 
-    if re.fullmatch(r'[\u4e00-\u9fff]{1,6}', remainder):
-        # Productive short grammar (ordinal/quantity/action/status) must be
-        # translated.  This is the root fix for @mention +「第一把/第二把」.
-        if _looks_like_translatable_short_fragment(remainder):
-            return False
-
-        # Preserve the original name-call use case for very short unknown tails
-        # (e.g.「君立」), but do not suppress longer work content merely because
-        # it is written without punctuation.
-        return len(remainder) <= 3
+    # No authoritative name evidence: translate it.  Do not guess from length.
     return False
 
 
