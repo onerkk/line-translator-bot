@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "977b595ebe4bf95d59a2895adf41d01e25bfcf0f8b3c265f4cbad9f1487963d6",
-    "updated_at_iso": "2026-06-21T02:59:29.537059+00:00",
-    "updated_at_unix": 1782010769.5370586
+    "state_hash": "986575b81aba5af23fcd4125babb2713f1322ad25370fc3d4062e1b64fa1c0d7",
+    "updated_at_iso": "2026-06-29T08:02:42.033164+00:00",
+    "updated_at_unix": 1782720162.033164
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -128,21 +128,22 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 279627,
-    "ant_cache_write": 459203,
-    "ant_cost_usd": 0.8555315500000001,
-    "ant_input": 85855,
-    "ant_output": 4238,
-    "commands": 11,
+    "ant_cache_read": 372774,
+    "ant_cache_write": 958663,
+    "ant_cost_usd": 1.5545632500000002,
+    "ant_input": 140367,
+    "ant_output": 6414,
+    "commands": 13,
+    "followers": 1,
     "image_translations": 3,
     "oai_cached": 9088,
     "oai_cost_usd": 0.011412199999999999,
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 156,
-    "tokens_completion": 9485,
-    "tokens_prompt": 2571348,
+    "text_translations": 185,
+    "tokens_completion": 11661,
+    "tokens_prompt": 3218467,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -183,6 +184,7 @@
     }
   ],
   "dm_known_users": {
+    "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
     "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
   },
   "dm_master_enabled": true,
@@ -278,18 +280,18 @@
       "tokens_prompt": 110202
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cost_usd": 0.35939214999999997,
+      "cost_usd": 0.40597690000000003,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1948,
-      "tokens_prompt": 288656
+      "tokens_completion": 1989,
+      "tokens_prompt": 326332
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 0.39446240000000016,
+      "cost_usd": 1.0372523500000002,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1785,
-      "tokens_prompt": 460413
+      "tokens_completion": 3435,
+      "tokens_prompt": 1062624
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -383,11 +385,24 @@
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
+      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
+      "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
+      "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
-      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
+      "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
+      "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
+      "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
+      "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂",
+      "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪",
       "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
+      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "U9a70db5b38f2b61dd0473cfff4c84b68": "十元",
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     }
   },
@@ -579,18 +594,22 @@
   "translation_tone": "factory",
   "translation_tone_custom": "",
   "translation_top_p": 1.0,
-  "user_languages": {},
+  "user_languages": {
+    "U78ae67bff0f53d01e513be10be1d7162": "id"
+  },
   "user_pictures": {
     "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
-    "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hZwm_XA04BVhAJhtbJv17JzB2BjJjV1xKZBIeOiYgDj98RhAGPERIPSYmWWp7H0VdaBcfbHBzW2hMNXI-XnD5bEcWWGl8HkcHa0NNvQ",
+    "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hIWUl7wTBFnh4FQoD-XBoRghFFRJbZE9qXCENGh4THR9EdQMmBHdbHR4VSkpDLFZ9UCQMTEhASEhaZ01FOgobGwlTMC0sfTpVCS8ebTpcTzgRdgt6DxcdHEVmMko4Iyl6FCMxQkxgNDgyQlFNVBgdaT1oKwowcRp6N0J6Ln0nePsXF2EtVXJRG0QSS0_G",
     "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
     "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
+    "U66a8711792ba58d51144dac2f8c4c47c": "https://sprofile.line-scdn.net/0hNuZNVyr1EVp3Nw0yEN5vZAdnEjBURkhIW1kMOktjRzlDAF8MXAVfPxUxT21DAgFZU1hbPxFiHz5VRi4EBxoOXCM1MQgwfiVWHhhaPhs0CDMkew9pAU1eRD9VEQEcXVZnBycGVERcRgghdC8KMgIDTD8rNixWQgRJD2B9DHIFf9kYNWYPWlBWOUswTG3J",
     "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
     "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
     "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
     "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
+    "Ua29c1bea13a5a3b288d0eeed13d90049": "https://sprofile.line-scdn.net/0hP4lfdP5lDxtBHx-vsdVxZDFPDHFiblYJOHlFKnxNUH8oLkofanBEf3xLA34vKxwdPnAXKnQZUn5NDHh9X0nzL0YvUip9J01EanpH_g",
     "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
     "Uaf4dc8fc636bc8f6060521c398514dc1": "https://sprofile.line-scdn.net/0hFwb7YPqQGVhPTgUwsG5nZj8eGjJsP0BKYXsCaihNRGAnKg4IZCBUOn1KRG5xf1lbYC9TbS8eFGttPQRRCk4tPDgaLgkOGVoSZlYlVnsFJggCCwlKOFEkYDsJIQwPfTlSN1MUbCAuHhMEDQwMME4tPwE3HmE6HwB3Ixl1Dkp8d9sgTG4NYileO3NJRG_x",
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
