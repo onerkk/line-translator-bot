@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "d6bda89f424ea7ee88bc0275f920836e7680fcacdb411328b3193be4f98edca7",
-    "updated_at_iso": "2026-07-02T05:57:22.382583+00:00",
-    "updated_at_unix": 1782971842.3825834
+    "state_hash": "b4ba15486f4f126556e8b125c57141534f1535b7c6832c61b2ea41141553e959",
+    "updated_at_iso": "2026-07-02T05:57:27.347675+00:00",
+    "updated_at_unix": 1782971847.3476748
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -367,25 +367,17 @@
   "group_silent_settings": {},
   "group_skip_users": {},
   "group_target_lang": {
-    "C29e9ff7afe20f272309c167f2f251910": "id",
     "C877181c163a0602eb24635d365f7bb98": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
     "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
   "group_target_langs": {
-    "C29e9ff7afe20f272309c167f2f251910": [
-      "id"
-    ],
     "C877181c163a0602eb24635d365f7bb98": [
       "id"
     ]
   },
   "group_tone_settings": {},
   "group_tracking": {
-    "C29e9ff7afe20f272309c167f2f251910": {
-      "joined_at": 1782971679.9955962,
-      "name": "就是這個光 ✨༄, 翻譯小助手, 伊努滿 Sumertha"
-    },
     "C54150e8e3e64a3cbdc1f240068859b74": {
       "joined_at": 1782971457.9091883,
       "name": "就是這個光 ✨༄, 翻譯小助手, 迪弟 kampret"
@@ -409,9 +401,6 @@
   },
   "group_tts_settings": {},
   "group_user_names": {
-    "C29e9ff7afe20f272309c167f2f251910": {
-      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
-    },
     "C54150e8e3e64a3cbdc1f240068859b74": {
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
     },
