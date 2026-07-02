@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "986575b81aba5af23fcd4125babb2713f1322ad25370fc3d4062e1b64fa1c0d7",
-    "updated_at_iso": "2026-06-29T08:02:42.033164+00:00",
-    "updated_at_unix": 1782720162.033164
+    "state_hash": "997c57b987301c97e8b117be0fbe5e88e82d0ef7c00191e7670c9d3b14ce85be",
+    "updated_at_iso": "2026-07-02T05:46:56.485264+00:00",
+    "updated_at_unix": 1782971216.4852643
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -128,11 +128,11 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 372774,
-    "ant_cache_write": 958663,
-    "ant_cost_usd": 1.5545632500000002,
-    "ant_input": 140367,
-    "ant_output": 6414,
+    "ant_cache_read": 464844,
+    "ant_cache_write": 1408174,
+    "ant_cost_usd": 2.184707,
+    "ant_input": 189685,
+    "ant_output": 8360,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -141,9 +141,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 185,
-    "tokens_completion": 11661,
-    "tokens_prompt": 3218467,
+    "text_translations": 210,
+    "tokens_completion": 13607,
+    "tokens_prompt": 3809366,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -280,18 +280,18 @@
       "tokens_prompt": 110202
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cost_usd": 0.40597690000000003,
+      "cost_usd": 0.4289089,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1989,
-      "tokens_prompt": 326332
+      "tokens_completion": 2043,
+      "tokens_prompt": 344722
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.0372523500000002,
+      "cost_usd": 1.6366051,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 3435,
-      "tokens_prompt": 1062624
+      "tokens_completion": 4922,
+      "tokens_prompt": 1629299
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -374,6 +374,10 @@
       "joined_at": 1780996296.822199,
       "name": "研磨股印尼同事群"
     },
+    "Ce494607afbd4516a8992c788f05cbbdc": {
+      "joined_at": 1782971216.4789076,
+      "name": "就是這個光 ✨༄, 翻譯小助手, budi santoso 山多"
+    },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "joined_at": 1780996222.8925776,
       "name": "研磨C班"
@@ -389,6 +393,7 @@
       "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
+      "Ud6d80f6f0662aae57ef286998a0f83ad": "武駿",
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
       "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡"
@@ -399,11 +404,13 @@
       "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂",
       "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪",
       "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
+      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "U9a70db5b38f2b61dd0473cfff4c84b68": "十元",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
     }
   },
   "group_video_settings": {},
@@ -615,6 +622,7 @@
     "Ub4f75efd0e7288220ed7e98eda4fb9e4": "https://sprofile.line-scdn.net/0hiUGHwBwwNnpqMSNrr39IBRphNRBJQG9oQ1Z_G1ZmPE9WAXQlFldxGAxkYR4EUnckE154Hwg1OE5mIkEcdGfKTm0Ba0tWCXQlQVR-nw",
     "Ucbc2c71e01fb7b1fc12b756eed45c042": "https://sprofile.line-scdn.net/0hIOhM9VhOFmBFNAi-3MNoXjVkFQpmRU9yYVAOA3IzGgJ8UFdmPAcOVnMzTwB-DVM_PFAJVnE0TVhnAFB3FBEuBTs3ECl8fw9QDhAFVDtNMAorZilCNVAQUClnDxBkegtGN04BXRsyNjMaYwQ2aRJYQAZxA1IEAAdvFWN6NkAGeOMqNmE1aFNRA3kzS1f7",
     "Uce34fd415b4014d6f0576ca3fcd3c266": "https://sprofile.line-scdn.net/0hrBT3zNdgLW15SgQUkrNTEgkaLgdaO3R_AX43DEoZdVoTLm9oAnsyDUlCeg4TemNuVH4xDEwYdl51WVoLZxzRWX56cFxFcm8yUi9liA",
+    "Ud6d80f6f0662aae57ef286998a0f83ad": "https://sprofile.line-scdn.net/0hQ06YEAq7Dh8bIB7imItwYGtwDXU4UVcNYBRDfSZwAykvFkxLZ04WKn4hV3p2E0wcPxMTKSh3US4XM3l5BXbyKxwQUy4nGExAMEVG-g",
     "Udf71d63c9e7e225acbb13015cf4e4660": "https://sprofile.line-scdn.net/0ha5BvVHfmPhpvDyFNeI5AJB9fPXBMfmcIFjokeA4IZH0GaCsZETslKVINNC4CPn9ESzkkdA9cMitNTzAKIQwsPz1qEk4ybyw2NxZ3GjJJC2szWT4qRQ4rexsMJlY0SH82CG8jEgJ_FUMwSXk1GjwzDiJfCG4gdhAUFVhSTGo9UJkADUlPQmh5eVMIYy3R",
     "Uf06787ceefc8da42cb0edd6a252a009a": "https://sprofile.line-scdn.net/0h2En_QR08bWpDJnyirqUTFTN2bgBgVzR4aRAnXH8vMVN_ECpoOBckBXB1ZlMtFyg9aUhxWHd2NglPNRoMXXCRXkQWMFt_Hi81aEMljw",
     "Uf42a7e934d7baa697797662c31721c08": "https://sprofile.line-scdn.net/0hfUomAvwPOXpCFCUsXDJHRDJEOhBhZWBoPnV1HXYXZBotIXcsbiB-FH9AZkl8cXl5ZiVySSJDZxhgJX9SCyA0dywdPxhjJDlzCXF_QClKBhclQSVyEAUhfTVkMwg_JQRMMCcSVR9tDiQZdgh5PA1yeSVQLzYlewVnCENVLEcmV_ktFk4vb3N-GX4TZE38",
