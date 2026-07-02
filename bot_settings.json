@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "b7896bb6a3b2c67e0081a95123cec26d572d9c40e40f32cdbe6f7af633616e46",
-    "updated_at_iso": "2026-07-02T05:57:38.653711+00:00",
-    "updated_at_unix": 1782971858.6537106
+    "state_hash": "c782445f3cbe30765abc91418ce0ab314b7ec2224ef583104e80d69edff02a24",
+    "updated_at_iso": "2026-07-02T07:35:53.471092+00:00",
+    "updated_at_unix": 1782977753.4710922
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -108,7 +108,7 @@
       "gpt-5.4-nano": "gemini-3.1-flash-lite",
       "gpt-5.5": "gemini-3.5-flash"
     },
-    "last_updated": "2026-06-21 02:53:37",
+    "last_updated": "2026-07-02 06:11:08",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-4-6",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -128,11 +128,11 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 496629,
-    "ant_cache_write": 1427803,
-    "ant_cost_usd": 2.21755475,
-    "ant_input": 193783,
-    "ant_output": 8567,
+    "ant_cache_read": 543126,
+    "ant_cache_write": 1467076,
+    "ant_cost_usd": 2.2818567,
+    "ant_input": 201994,
+    "ant_output": 9037,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -141,9 +141,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 211,
-    "tokens_completion": 13814,
-    "tokens_prompt": 3864878,
+    "text_translations": 214,
+    "tokens_completion": 14284,
+    "tokens_prompt": 3958859,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -260,7 +260,8 @@
       "辰",
       "惟壬",
       "祥啊",
-      "祥阿"
+      "祥阿",
+      "邱凱達"
     ]
   },
   "fewshot_mode": "messages",
@@ -294,11 +295,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.6366051,
+      "cost_usd": 1.69903005,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 4922,
-      "tokens_prompt": 1629299
+      "tokens_completion": 5308,
+      "tokens_prompt": 1721823
     },
     "__dm__": {
       "tokens_completion": 42,
