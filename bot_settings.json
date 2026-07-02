@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "da587bafd048ff97d234c9846b2897c6a65ae2841beab90e2993e684288c7936",
-    "updated_at_iso": "2026-07-02T05:47:01.255517+00:00",
-    "updated_at_unix": 1782971221.2555175
+    "state_hash": "29ee7106ff0b17a2c1a466b8aefd7b93bbc486cfa752a8ec24ee2cd148fb8c19",
+    "updated_at_iso": "2026-07-02T05:49:09.187252+00:00",
+    "updated_at_unix": 1782971349.187252
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -128,11 +128,11 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 464844,
-    "ant_cache_write": 1408174,
-    "ant_cost_usd": 2.184707,
-    "ant_input": 189685,
-    "ant_output": 8360,
+    "ant_cache_read": 496629,
+    "ant_cache_write": 1427803,
+    "ant_cost_usd": 2.21755475,
+    "ant_input": 193783,
+    "ant_output": 8567,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -141,9 +141,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 210,
-    "tokens_completion": 13607,
-    "tokens_prompt": 3809366,
+    "text_translations": 211,
+    "tokens_completion": 13814,
+    "tokens_prompt": 3864878,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -286,6 +286,13 @@
       "tokens_completion": 2043,
       "tokens_prompt": 344722
     },
+    "Ce494607afbd4516a8992c788f05cbbdc": {
+      "cost_usd": 0.032847750000000175,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "tokens_completion": 207,
+      "tokens_prompt": 55512
+    },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cost_usd": 1.6366051,
       "model": "claude-haiku-4-5-20251001",
@@ -371,6 +378,10 @@
   },
   "group_tone_settings": {},
   "group_tracking": {
+    "C0cab1be0d81a026c99bb26045784f522": {
+      "joined_at": 1782971349.183131,
+      "name": "就是這個光 ✨༄, 翻譯小助手, Irwan 布納萬"
+    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "joined_at": 1780198990.8479366,
       "name": "寶貝相簿3"
@@ -402,6 +413,9 @@
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
       "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡"
+    },
+    "Ce494607afbd4516a8992c788f05cbbdc": {
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
