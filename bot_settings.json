@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "29ee7106ff0b17a2c1a466b8aefd7b93bbc486cfa752a8ec24ee2cd148fb8c19",
-    "updated_at_iso": "2026-07-02T05:49:09.187252+00:00",
-    "updated_at_unix": 1782971349.187252
+    "state_hash": "bfefc6799c5ce8116cd1ea6f0cd1cc2ff4a89f2cfd5f7c66ed74c8bc6475e58e",
+    "updated_at_iso": "2026-07-02T05:49:12.286133+00:00",
+    "updated_at_unix": 1782971352.2861328
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -367,11 +367,15 @@
   "group_silent_settings": {},
   "group_skip_users": {},
   "group_target_lang": {
+    "C0cab1be0d81a026c99bb26045784f522": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
     "Ce494607afbd4516a8992c788f05cbbdc": "id",
     "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
   "group_target_langs": {
+    "C0cab1be0d81a026c99bb26045784f522": [
+      "id"
+    ],
     "Ce494607afbd4516a8992c788f05cbbdc": [
       "id"
     ]
@@ -401,6 +405,9 @@
   },
   "group_tts_settings": {},
   "group_user_names": {
+    "C0cab1be0d81a026c99bb26045784f522": {
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬"
+    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
