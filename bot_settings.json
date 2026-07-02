@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "73f7dba0af34cfb5bcf55f3f84506e7ef3d285321a11eebaf06633dc5b8d3011",
-    "updated_at_iso": "2026-07-02T05:57:07.697774+00:00",
-    "updated_at_unix": 1782971827.6977744
+    "state_hash": "030d8bf2c98ffa742c48f855ab42a13cb66ba53632cfa11fd02fc85a11a4cf67",
+    "updated_at_iso": "2026-07-02T05:57:14.444683+00:00",
+    "updated_at_unix": 1782971834.4446828
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -367,7 +367,6 @@
   "group_silent_settings": {},
   "group_skip_users": {},
   "group_target_lang": {
-    "C0cab1be0d81a026c99bb26045784f522": "id",
     "C29e9ff7afe20f272309c167f2f251910": "id",
     "C877181c163a0602eb24635d365f7bb98": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
@@ -375,9 +374,6 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
   "group_target_langs": {
-    "C0cab1be0d81a026c99bb26045784f522": [
-      "id"
-    ],
     "C29e9ff7afe20f272309c167f2f251910": [
       "id"
     ],
@@ -390,10 +386,6 @@
   },
   "group_tone_settings": {},
   "group_tracking": {
-    "C0cab1be0d81a026c99bb26045784f522": {
-      "joined_at": 1782971349.183131,
-      "name": "就是這個光 ✨༄, 翻譯小助手, Irwan 布納萬"
-    },
     "C29e9ff7afe20f272309c167f2f251910": {
       "joined_at": 1782971679.9955962,
       "name": "就是這個光 ✨༄, 翻譯小助手, 伊努滿 Sumertha"
@@ -425,9 +417,6 @@
   },
   "group_tts_settings": {},
   "group_user_names": {
-    "C0cab1be0d81a026c99bb26045784f522": {
-      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬"
-    },
     "C29e9ff7afe20f272309c167f2f251910": {
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
     },
