@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "78163cddd98f9075e227cc90b35ab1356a789d04aafb87871fb855169d091266",
-    "updated_at_iso": "2026-07-02T05:57:02.719786+00:00",
-    "updated_at_unix": 1782971822.7197857
+    "state_hash": "73f7dba0af34cfb5bcf55f3f84506e7ef3d285321a11eebaf06633dc5b8d3011",
+    "updated_at_iso": "2026-07-02T05:57:07.427625+00:00",
+    "updated_at_unix": 1782971827.4276252
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -368,7 +368,6 @@
   "group_skip_users": {},
   "group_target_lang": {
     "C0cab1be0d81a026c99bb26045784f522": "id",
-    "C0f1f0f8acd85ea2a8e650fe230b71613": "id",
     "C29e9ff7afe20f272309c167f2f251910": "id",
     "C877181c163a0602eb24635d365f7bb98": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
@@ -377,9 +376,6 @@
   },
   "group_target_langs": {
     "C0cab1be0d81a026c99bb26045784f522": [
-      "id"
-    ],
-    "C0f1f0f8acd85ea2a8e650fe230b71613": [
       "id"
     ],
     "C29e9ff7afe20f272309c167f2f251910": [
@@ -397,10 +393,6 @@
     "C0cab1be0d81a026c99bb26045784f522": {
       "joined_at": 1782971349.183131,
       "name": "就是這個光 ✨༄, 翻譯小助手, Irwan 布納萬"
-    },
-    "C0f1f0f8acd85ea2a8e650fe230b71613": {
-      "joined_at": 1782971398.1861317,
-      "name": "就是這個光 ✨༄, 法比恩 Fabian"
     },
     "C29e9ff7afe20f272309c167f2f251910": {
       "joined_at": 1782971679.9955962,
