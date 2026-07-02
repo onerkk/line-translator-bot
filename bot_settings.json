@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "bfefc6799c5ce8116cd1ea6f0cd1cc2ff4a89f2cfd5f7c66ed74c8bc6475e58e",
-    "updated_at_iso": "2026-07-02T05:49:12.286133+00:00",
-    "updated_at_unix": 1782971352.2861328
+    "state_hash": "7abf28971a6305891006f73c76b68154373e59e4fdff9c6a28dff5c628901d58",
+    "updated_at_iso": "2026-07-02T05:49:58.187596+00:00",
+    "updated_at_unix": 1782971398.1875958
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -385,6 +385,10 @@
     "C0cab1be0d81a026c99bb26045784f522": {
       "joined_at": 1782971349.183131,
       "name": "就是這個光 ✨༄, 翻譯小助手, Irwan 布納萬"
+    },
+    "C0f1f0f8acd85ea2a8e650fe230b71613": {
+      "joined_at": 1782971398.1861317,
+      "name": "就是這個光 ✨༄, 法比恩 Fabian"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "joined_at": 1780198990.8479366,
