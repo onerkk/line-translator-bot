@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "b66d83b89aaf7d4569bf29bce2761c9d35a14eb5ac629d62f18da422326fac99",
-    "updated_at_iso": "2026-07-02T05:54:43.098066+00:00",
-    "updated_at_unix": 1782971683.098066
+    "state_hash": "78163cddd98f9075e227cc90b35ab1356a789d04aafb87871fb855169d091266",
+    "updated_at_iso": "2026-07-02T05:57:01.977039+00:00",
+    "updated_at_unix": 1782971821.9770393
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -370,7 +370,6 @@
     "C0cab1be0d81a026c99bb26045784f522": "id",
     "C0f1f0f8acd85ea2a8e650fe230b71613": "id",
     "C29e9ff7afe20f272309c167f2f251910": "id",
-    "C77fb20e451860ae25efe5f4f0262a4ca": "id",
     "C877181c163a0602eb24635d365f7bb98": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
     "Ce494607afbd4516a8992c788f05cbbdc": "id",
@@ -384,9 +383,6 @@
       "id"
     ],
     "C29e9ff7afe20f272309c167f2f251910": [
-      "id"
-    ],
-    "C77fb20e451860ae25efe5f4f0262a4ca": [
       "id"
     ],
     "C877181c163a0602eb24635d365f7bb98": [
@@ -418,10 +414,6 @@
       "joined_at": 1780198990.8479366,
       "name": "寶貝相簿3"
     },
-    "C77fb20e451860ae25efe5f4f0262a4ca": {
-      "joined_at": 1782971507.2815344,
-      "name": "就是這個光 ✨༄, Hasim , 翻譯小助手"
-    },
     "C877181c163a0602eb24635d365f7bb98": {
       "joined_at": 1782971602.6168234,
       "name": "就是這個光 ✨༄, 翻譯小助手, 伊努滿 Sumertha"
@@ -452,9 +444,6 @@
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
-    },
-    "C77fb20e451860ae25efe5f4f0262a4ca": {
-      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim"
     },
     "C877181c163a0602eb24635d365f7bb98": {
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
