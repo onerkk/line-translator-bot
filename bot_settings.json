@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "eaff405f8b2f5e8e7927d054fbed1e5e25a88bc711a5c2e2fa9d58bd7fd66ecb",
-    "updated_at_iso": "2026-07-02T05:50:57.913349+00:00",
-    "updated_at_unix": 1782971457.9133494
+    "state_hash": "ab142d52feedc08a65e4a941763d84fad4d00e785387a7a5e0e97a6603270cb5",
+    "updated_at_iso": "2026-07-02T05:51:47.285747+00:00",
+    "updated_at_unix": 1782971507.2857466
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -402,6 +402,10 @@
       "joined_at": 1780198990.8479366,
       "name": "寶貝相簿3"
     },
+    "C77fb20e451860ae25efe5f4f0262a4ca": {
+      "joined_at": 1782971507.2815344,
+      "name": "就是這個光 ✨༄, Hasim , 翻譯小助手"
+    },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "joined_at": 1780996296.822199,
       "name": "研磨股印尼同事群"
@@ -419,6 +423,9 @@
   "group_user_names": {
     "C0cab1be0d81a026c99bb26045784f522": {
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬"
+    },
+    "C54150e8e3e64a3cbdc1f240068859b74": {
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
