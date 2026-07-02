@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "f82bac78d7f90751451a33d1ea0efb6080061b0d36fc55d5cadbc578bee88603",
-    "updated_at_iso": "2026-07-02T05:57:33.631365+00:00",
-    "updated_at_unix": 1782971853.6313648
+    "state_hash": "b7896bb6a3b2c67e0081a95123cec26d572d9c40e40f32cdbe6f7af633616e46",
+    "updated_at_iso": "2026-07-02T05:57:38.319861+00:00",
+    "updated_at_unix": 1782971858.319861
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -373,10 +373,6 @@
   "group_target_langs": {},
   "group_tone_settings": {},
   "group_tracking": {
-    "C54150e8e3e64a3cbdc1f240068859b74": {
-      "joined_at": 1782971457.9091883,
-      "name": "就是這個光 ✨༄, 翻譯小助手, 迪弟 kampret"
-    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "joined_at": 1780198990.8479366,
       "name": "寶貝相簿3"
@@ -392,9 +388,6 @@
   },
   "group_tts_settings": {},
   "group_user_names": {
-    "C54150e8e3e64a3cbdc1f240068859b74": {
-      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
-    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
