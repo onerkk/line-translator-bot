@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "997c57b987301c97e8b117be0fbe5e88e82d0ef7c00191e7670c9d3b14ce85be",
-    "updated_at_iso": "2026-07-02T05:46:56.485264+00:00",
-    "updated_at_unix": 1782971216.4852643
+    "state_hash": "da587bafd048ff97d234c9846b2897c6a65ae2841beab90e2993e684288c7936",
+    "updated_at_iso": "2026-07-02T05:47:01.255517+00:00",
+    "updated_at_unix": 1782971221.2555175
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -361,9 +361,14 @@
   "group_skip_users": {},
   "group_target_lang": {
     "Cd188e1adc7792e407c90f3fa78850316": "id",
+    "Ce494607afbd4516a8992c788f05cbbdc": "id",
     "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
-  "group_target_langs": {},
+  "group_target_langs": {
+    "Ce494607afbd4516a8992c788f05cbbdc": [
+      "id"
+    ]
+  },
   "group_tone_settings": {},
   "group_tracking": {
     "C6c708f629dd38d6864669ecacf7712f4": {
