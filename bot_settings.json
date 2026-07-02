@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "030d8bf2c98ffa742c48f855ab42a13cb66ba53632cfa11fd02fc85a11a4cf67",
-    "updated_at_iso": "2026-07-02T05:57:14.855754+00:00",
-    "updated_at_unix": 1782971834.8557541
+    "state_hash": "d6bda89f424ea7ee88bc0275f920836e7680fcacdb411328b3193be4f98edca7",
+    "updated_at_iso": "2026-07-02T05:57:22.118203+00:00",
+    "updated_at_unix": 1782971842.1182027
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -370,7 +370,6 @@
     "C29e9ff7afe20f272309c167f2f251910": "id",
     "C877181c163a0602eb24635d365f7bb98": "id",
     "Cd188e1adc7792e407c90f3fa78850316": "id",
-    "Ce494607afbd4516a8992c788f05cbbdc": "id",
     "Cf5e2ea027bb3db193677e7ef3b51adea": "id"
   },
   "group_target_langs": {
@@ -378,9 +377,6 @@
       "id"
     ],
     "C877181c163a0602eb24635d365f7bb98": [
-      "id"
-    ],
-    "Ce494607afbd4516a8992c788f05cbbdc": [
       "id"
     ]
   },
@@ -405,10 +401,6 @@
     "Cd188e1adc7792e407c90f3fa78850316": {
       "joined_at": 1780996296.822199,
       "name": "研磨股印尼同事群"
-    },
-    "Ce494607afbd4516a8992c788f05cbbdc": {
-      "joined_at": 1782971216.4789076,
-      "name": "就是這個光 ✨༄, 翻譯小助手, budi santoso 山多"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "joined_at": 1780996222.8925776,
@@ -438,9 +430,6 @@
       "Uf06787ceefc8da42cb0edd6a252a009a": "Martin 馬丁",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian",
       "Uff3f3fd8afbec93efe07adea31a70dd6": "汶錡"
-    },
-    "Ce494607afbd4516a8992c788f05cbbdc": {
-      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
