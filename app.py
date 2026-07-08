@@ -4026,6 +4026,13 @@ FACTORY_ID_ZH_DEFECTS = {
     "tercampur": "混料",
     "terbakar": "著火了",
     "kebakar": "著火了",
+    # v3.40: Indonesian shop-floor issue wording.
+    # "masalah" is not always a physical defect like rusak, but in material
+    # quality chat it must still trigger the ID->ZH factory semantic safeguards.
+    "ada sedikit masalah": "有一點問題",
+    "sedikit masalah": "有一點問題",
+    "ada masalah": "有問題",
+    "masalah": "有問題",
 }
 
 # Equipment-specific states use operational Chinese rather than material-defect wording.
@@ -4108,6 +4115,7 @@ FACTORY_DOMAIN_KEYWORDS_ID = {
     "quality_issue": [
         "rusak", "cacat", "lecet", "gores", "goresan", "tergores", "retak", "patah",
         "bengkok", "penyok", "aus", "kasar", "karat", "berkarat", "visual", "qc",
+        "masalah", "ada masalah", "sedikit masalah",
         "lulus", "tidak lulus", "reject", "rework", "toleransi", "diameter", "ukuran",
     ],
     "material_flow": [
@@ -4144,6 +4152,10 @@ FACTORY_ZH_LITERAL_RISK = {
     "前面損壞": "前端損傷",
     "後面壞了": "後端損傷",
     "前面壞了": "前端損傷",
+    "後面有一點問題": "後端有一點問題",
+    "前面有一點問題": "前端有一點問題",
+    "後面有問題": "後端有問題",
+    "前面有問題": "前端有問題",
     "損壞": "損傷",
     "壞掉": "損傷",
     "壞了": "損傷",
@@ -4641,6 +4653,139 @@ def _find_longest_phrase(table, text):
     return None, None
 
 
+
+# v3.40: temporal + material-direction contract for ID->ZH.
+# Indonesian workers often write: "sebelum di jalankan ... dari belakang".
+# The old pipeline could merge the time phrase and direction into Chinese
+# "加工前後端".  These rules keep "加工前" (time) and "後端/前端" (position)
+# as separate semantic slots, and are intentionally pattern-based rather than
+# a one-sentence hard replacement.
+FACTORY_ID_ZH_PRE_OPERATION_PATTERNS = {
+    "sebelum di jalankan": "加工前",
+    "sebelum dijalankan": "加工前",
+    "sebelum jalan": "加工前",
+    "sebelum di proses": "加工前",
+    "sebelum diproses": "加工前",
+    "sebelum proses": "加工前",
+    "sebelum dikerjakan": "加工前",
+    "sebelum di kerjakan": "加工前",
+    "sebelum mulai produksi": "生產前",
+    "sebelum produksi": "生產前",
+}
+
+FACTORY_ID_ZH_ISSUE_PHRASES = {
+    "ada sedikit masalah": "有一點問題",
+    "sedikit masalah": "有一點問題",
+    "ada masalah sedikit": "有一點問題",
+    "ada masalah": "有問題",
+    "masalah": "有問題",
+}
+
+
+def _factory_find_phrase(table, text):
+    """Return the longest table phrase found as a word-bounded Indonesian phrase."""
+    if not text:
+        return None, None
+    for k in sorted(table.keys(), key=len, reverse=True):
+        if re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", text):
+            return k, table[k]
+    return None, None
+
+
+def _factory_material_subject_zh_id_to_zh(clean_text):
+    """Choose a natural Chinese material subject without collapsing possible ID text."""
+    t = " " + (clean_text or "") + " "
+    if re.search(r"\bbarang\s+id\s+ini\b", t):
+        return "這個料件 ID"
+    if re.search(r"\bbarang\s+ini\b|\bbarangnya\b|\bbarang\b", t):
+        return "這個料件"
+    if re.search(r"\bbatang\s+ini\b|\bbatangnya\b|\bbatang\s+baja\b|\bbatang\b", t):
+        return "這支棒材"
+    if re.search(r"\bmaterial\s+ini\b|\bmaterialnya\b|\bmaterial\b|\bbahan\s+ini\b|\bbahannya\b|\bbahan\b", t):
+        return "這個材料"
+    return None
+
+
+def _has_factory_pre_operation_marker(clean_text):
+    return _factory_find_phrase(FACTORY_ID_ZH_PRE_OPERATION_PATTERNS, clean_text)[0] is not None
+
+
+def _fix_zh_temporal_direction_boundary(src_text, zh_text):
+    """Separate Chinese time phrase and material direction for ID->ZH output.
+
+    Example fixed: 「加工前後端」→「加工前，後端」, but only when the source
+    itself contains both a pre-operation marker and a front/rear direction.
+    """
+    if not zh_text:
+        return zh_text
+    t = _clean_factory_id(src_text)
+    if not _has_factory_pre_operation_marker(t):
+        return zh_text
+    has_direction = any(
+        re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t)
+        for k in FACTORY_ID_ZH_POSITIONS.keys()
+    )
+    if not has_direction:
+        return zh_text
+
+    result = zh_text
+    # 「加工前後端」is the observed corruption.  Cover common equivalent time
+    # words so cache/TM/NMT/LLM variants are repaired at the same boundary.
+    result = re.sub(
+        r"(加工|處理|作業|生產|啟動|運行|操作|使用)前(後端|前端|尾端|自由端|夾頭端|中段|側邊)",
+        r"\1前，\2",
+        result,
+    )
+    result = re.sub(
+        r"(加工|處理|作業|生產|啟動|運行|操作|使用)之前(後端|前端|尾端|自由端|夾頭端|中段|側邊)",
+        r"\1之前，\2",
+        result,
+    )
+    return result
+
+
+def factory_semantic_translate_pre_operation_issue_id_zh(text):
+    """Slot translation for ID shop-floor sentences with time + direction + issue.
+
+    This is deliberately narrower than a general sentence translator: it only
+    fires when the source has a material subject, a pre-operation marker, a
+    front/rear material direction, and an issue word.  It prevents the exact
+    class of errors where Chinese merges time and direction into one phrase.
+    """
+    raw = text or ""
+    t = _clean_factory_id(raw)
+    if not t:
+        return None
+    char_len = len(re.sub(r"\s+", "", raw))
+    if char_len > 100:
+        return None
+
+    subject = _factory_material_subject_zh_id_to_zh(t)
+    if not subject:
+        return None
+    _time_key, time_zh = _factory_find_phrase(FACTORY_ID_ZH_PRE_OPERATION_PATTERNS, t)
+    if not time_zh:
+        return None
+    _pos_key, pos_zh = _factory_find_phrase(FACTORY_ID_ZH_POSITIONS, t)
+    if not pos_zh:
+        return None
+    _issue_key, issue_zh = _factory_find_phrase(FACTORY_ID_ZH_ISSUE_PHRASES, t)
+    if not issue_zh:
+        # fall back to ordinary defect table for rusak/cacat/etc.
+        _issue_key, issue_zh = _factory_find_phrase(FACTORY_ID_ZH_DEFECTS, t)
+    if not issue_zh:
+        return None
+
+    leading_codes = re.findall(r"\b(?:[A-Z]\d[A-Z0-9-]{3,}|\d+[A-Z][A-Z0-9-]{2,})\b", raw)
+    prefix = (" ".join(dict.fromkeys(leading_codes)) + " ") if leading_codes else ""
+
+    if issue_zh in ("有一點問題", "有問題"):
+        tail = issue_zh
+    else:
+        tail = "有" + issue_zh if not issue_zh.startswith("有") else issue_zh
+    subject_sep = " " if re.search(r"[A-Za-z0-9]$", subject) else ""
+    return (prefix + f"{subject}{subject_sep}在{time_zh}，{pos_zh}就已經{tail}了").strip()
+
 # ===== v3.3 訊息分類器(工廠翻譯架構 v2)=====
 # 公告/廣播訊號詞 - 命中即視為 announcement,絕不走槽位拼接
 ANNOUNCEMENT_SIGNALS = [
@@ -4712,6 +4857,15 @@ def factory_semantic_translate_id_zh(text):
     t = _clean_factory_id(raw)
     if not t:
         return None
+
+    # v3.40: safe deterministic path for messages combining
+    # pre-operation time + material front/rear direction + issue.
+    # This runs before the legacy incident length cap because these sentences
+    # are often 50-80 chars but still have a complete, low-risk slot structure.
+    _preop_issue_fn = globals().get("factory_semantic_translate_pre_operation_issue_id_zh")
+    preop_issue = _preop_issue_fn(raw) if _preop_issue_fn else None
+    if preop_issue:
+        return preop_issue
     
     # ★ v3.3:分類保護 - 公告/一般訊息不走槽位
     cls = classify_factory_message(raw, src="id")
@@ -5108,6 +5262,9 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
             continue
         result = result.replace(wrong, correct)
 
+    # v3.40: repair missing boundary between temporal phrase and material direction.
+    result = _fix_zh_temporal_direction_boundary(src_text, result)
+
     # v3.9.30: 「噸 + 機器/工序」誤譯修補
     # 對應 Bug B3: GPT 把 "30 ton mesin pemoles" 翻成「30 噸的拋光機」
     # 只要原文是 "[N] ton mesin [工序]" 句型,目標應該是料量,不是機器本身
@@ -5201,6 +5358,14 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
     has_defect = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_DEFECTS.keys())
     has_pos = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_POSITIONS.keys())
     quality_context = has_defect and (has_obj or has_pos or "quality" in domains or "material_direction" in domains)
+
+    # v3.40: even when 後端/前端 appears, it is invalid if merged with the
+    # pre-operation time phrase as 「加工前後端」.
+    if quality_context and has_pos and _has_factory_pre_operation_marker(t):
+        if re.search(r"(加工|處理|作業|生產|啟動|運行|操作|使用)前(?:後端|前端|尾端|自由端|夾頭端|中段|側邊)", zh_text):
+            return True, "temporal_direction_boundary_missing", domains
+        if re.search(r"(加工|處理|作業|生產|啟動|運行|操作|使用)之前(?:後端|前端|尾端|自由端|夾頭端|中段|側邊)", zh_text):
+            return True, "temporal_direction_boundary_missing", domains
 
     # Hard invalid patterns in quality/material direction context.
     for pat in FACTORY_BAD_ZH_PATTERNS:
@@ -5827,6 +5992,32 @@ def build_translation_semantic_contract(text, src, tgt):
         "nmt_allowed": True,
         "requires_llm": False,
     }
+    if src == "id" and tgt == "zh":
+        try:
+            t_id = _clean_factory_id(text)
+            preop_direction = (
+                _has_factory_pre_operation_marker(t_id)
+                and any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t_id) for k in FACTORY_ID_ZH_POSITIONS.keys())
+                and (
+                    _factory_material_subject_zh_id_to_zh(t_id) is not None
+                    or any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t_id) for k in FACTORY_ID_ZH_DEFECTS.keys())
+                )
+            )
+            if preop_direction:
+                contract["has_risk"] = True
+                contract["risks"].append({
+                    "term": "sebelum+belakang/depan",
+                    "sense": "id_zh_temporal_direction_boundary",
+                    "tm_bypass_allowed": False,
+                    "nmt_allowed": False,
+                })
+                contract["tm_bypass_allowed"] = False
+                contract["vector_bypass_allowed"] = False
+                contract["nmt_allowed"] = False
+                contract["requires_llm"] = True
+        except Exception:
+            pass
+
     if src == "zh" and tgt == "id":
         qing = _classify_qing_sense_zh_id(text)
         if qing and qing.get("sense") in ("treat_sponsor_pay_for", "ambiguous_qing"):
@@ -5872,6 +6063,12 @@ def build_translation_semantic_contract_prompt(contract):
             lines.append("<risk term='請' sense='ambiguous_qing'>")
             lines.append("Decide 請 by context before translating; do not default to request if the surrounding words describe food, drinks, welfare distribution, or sponsorship.")
             lines.append("</risk>")
+        elif risk.get("sense") == "id_zh_temporal_direction_boundary":
+            lines.append("<risk term='sebelum+belakang/depan' sense='id_zh_temporal_direction_boundary'>")
+            lines.append("For Indonesian source containing sebelum di-jalankan/diproses and belakang/depan, keep time and material direction separate in Chinese.")
+            lines.append("Correct pattern: 加工前，後端/前端... Forbidden merged pattern: 加工前後端 / 啟動前後端 / 運行前後端.")
+            lines.append("Use material terminology: barang=料件, batang=棒材, belakang=後端, depan=前端, masalah=問題/異常.")
+            lines.append("</risk>")
         elif risk.get("sense") == "factory_station_canonical_name":
             lines.append("<risk term='異型包裝站' sense='factory_station_canonical_name'>")
             lines.append("In this factory context, 異型那站/異型那邊 is the official station name 異型包裝站, not a product category and not a generic 'special goods station'.")
@@ -5894,6 +6091,13 @@ def translation_satisfies_semantic_contract(contract, translation):
                 return False, "qing_treat_translated_as_request"
             if not has_good:
                 return False, "qing_treat_missing_treat_sponsor_marker"
+        elif risk.get("sense") == "id_zh_temporal_direction_boundary":
+            if re.search(r"(加工|處理|作業|生產|啟動|運行|操作|使用)前(?:後端|前端|尾端|自由端|夾頭端|中段|側邊)", t):
+                return False, "id_zh_temporal_direction_boundary_missing"
+            if re.search(r"(加工|處理|作業|生產|啟動|運行|操作|使用)之前(?:後端|前端|尾端|自由端|夾頭端|中段|側邊)", t):
+                return False, "id_zh_temporal_direction_boundary_missing"
+            if not any(d in t for d in ("後端", "前端", "尾端", "自由端", "夾頭端", "中段", "側邊")):
+                return False, "id_zh_temporal_direction_missing"
         elif risk.get("sense") == "factory_station_canonical_name":
             required = (risk.get("required_id") or "").lower().strip()
             if required and required not in low:
@@ -5985,6 +6189,15 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
     for risk in (contract or {}).get("risks", []):
         if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             return _semantic_rebuild_qing_treat_translation(src_text, contract, translation)
+        if risk.get("sense") == "id_zh_temporal_direction_boundary":
+            fixed = _fix_zh_temporal_direction_boundary(src_text, translation)
+            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
+            if ok2:
+                return fixed
+            fallback = factory_semantic_translate_pre_operation_issue_id_zh(src_text)
+            if fallback:
+                return fallback
+            return fixed
         if risk.get("sense") == "factory_station_canonical_name":
             return _repair_factory_station_canonical_name(
                 translation,
@@ -8570,7 +8783,7 @@ def _translate_core(text, src, tgt):
     # v3.9.60: 有保護名時只允許 exact bypass(key 精確相符,placeholder 化文字本就名稱無關);
     # fuzzy_bypass 會在 placeholder 化文字上模糊配對 → 可能配到「同形不同名」的舊譯文 → 名字錯。
     # v3.12: 工廠語境連 exact bypass 都跳過(舊快取可能含 NMT 誤譯的 pakan),強制重新 LLM 翻譯。
-    _tm_bypass_types = () if (_factory_ctx or _quality_critical) else (("exact",) if _has_protected_names else ("exact", "fuzzy_bypass"))
+    _tm_bypass_types = () if (_factory_ctx or _quality_critical or not _semantic_contract.get("tm_bypass_allowed", True)) else (("exact",) if _has_protected_names else ("exact", "fuzzy_bypass"))
     if _tm_result and _tm_result.get("match_type") in _tm_bypass_types:
         _bypass_result = _tm_result["tgt_text"]
         _tm_sem_ok, _tm_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
@@ -8616,7 +8829,7 @@ def _translate_core(text, src, tgt):
     
     # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
     # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
-    if (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
+    if (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _semantic_contract.get("vector_bypass_allowed", True) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
         _vec_integrity_ok, _vec_integrity_issues = _tm_bypass_integrity_ok(text, _bypass_result, src, tgt)
@@ -8678,7 +8891,7 @@ def _translate_core(text, src, tgt):
     _use_nmt = False
     try:
         # v3.9.60: 有保護名時禁用 NMT(Google/DeepL 會把 placeholder 弄壞或音譯人名),強制走 LLM。
-        _use_nmt = (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
+        _use_nmt = (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _semantic_contract.get("nmt_allowed", True) and (not semantic_contract_requires_llm(_semantic_contract)) and nmt_module.should_use_nmt(text, src, tgt, _factory_glossary_set)
     except Exception:
         _use_nmt = False
     
