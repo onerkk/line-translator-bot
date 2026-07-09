@@ -92,6 +92,7 @@ def _exec_factory_reason_semantic_subset():
         "translation_satisfies_semantic_contract",
         "enforce_translation_semantic_contract",
         "_factory_reason_ocr_row_count",
+        "_factory_reason_ocr_incomplete_against_visual_count",
         "_should_run_factory_reason_table_ocr",
         "_strict_factory_reason_ocr_is_better",
     }
@@ -226,3 +227,50 @@ def test_factory_reason_short_labels_are_flexible_but_do_not_rewrite_normal_stat
     assert ns["_factory_reason_semantic_translate_zh_id"]("改TAG") == "Input ulang data dan tempel ulang TAG"
     assert ns["_factory_reason_semantic_translate_zh_id"]("毛重") == "Timbang ulang berat kotor"
     assert ns["_factory_reason_contract_risk"]("削皮那邊優先放行") is None
+
+
+
+def test_factory_reason_visual_count_guard_blocks_incomplete_image_ocr():
+    ns = _exec_factory_reason_semantic_subset()
+    incomplete = (
+        "ID | 原因\n"
+        "7H885503A | 改端漆\n"
+        "7H347507 | 改端漆\n"
+        "7H110003 | 補毛重\n"
+        "7G319512B | 退火\n"
+        "7H431029 | 退火\n"
+        "7H431029B | 退火\n"
+        "7H431029A | 退火\n"
+        "7H720110B | 退火\n"
+        "7G726107 | 退火\n"
+        "7G966501A | 削皮\n"
+        "7G552302 | 削皮\n"
+        "7H679210 | 削皮\n"
+        "7H719113D | 削皮\n"
+        "7H719113C | 削皮\n"
+        "7H060307 | 削皮\n"
+        "7H799315 | 削皮\n"
+        "7H799315A | 削皮\n"
+        "7B466010C | 削皮\n"
+        "7H503104A | 削皮\n"
+        "7I006004A | 改包裝\n"
+        "7G830028B | 改包裝"
+    )
+    assert ns["_factory_reason_ocr_row_count"]("ID | 原因\n7H885503A | 改端漆\n7H347507 | 改端漆") == 2
+    assert ns["_factory_reason_ocr_incomplete_against_visual_count"](incomplete, 24) is True
+    assert ns["_factory_reason_ocr_incomplete_against_visual_count"](incomplete, 22) is False
+
+
+def test_factory_reason_row_crop_ocr_path_exists_before_full_table_fallback():
+    source = _source()
+    strict_fn = _function_source("ocr_factory_reason_table_openai")
+    row_fn = _function_source("ocr_factory_reason_table_rows_openai")
+    translate_fn = _function_source("translate")
+    core_fn = _function_source("_translate_core")
+    assert "_factory_reason_visual_row_bands_from_image" in source
+    assert "contact sheet" in row_fn
+    assert "Rxx | <ID> | <原因>" in row_fn
+    assert "row_result = ocr_factory_reason_table_rows_openai" in strict_fn
+    assert "factory_reason_image_expected_rows" in row_fn
+    assert "_factory_reason_ocr_incomplete_against_visual_count" in translate_fn
+    assert "factory_reason_ocr_visual_count_failed" in core_fn

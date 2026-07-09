@@ -9034,6 +9034,13 @@ def translate(text, src, tgt):
     if src == "zh" and tgt == "id":
         reason_semantic = _factory_reason_semantic_translate_zh_id(canonical_text)
         if reason_semantic:
+            _expected_rows = getattr(_tl, 'factory_reason_image_expected_rows', 0) if getattr(_tl, 'from_image_ocr', False) else 0
+            if _factory_reason_ocr_incomplete_against_visual_count(canonical_text, _expected_rows):
+                logger.warning(
+                    "[FactoryReasonOCR] fail-closed visual row mismatch expected=%s actual=%s",
+                    _expected_rows, _factory_reason_ocr_row_count(canonical_text)
+                )
+                return _factory_reason_alignment_failure_message(tgt)
             try:
                 cache_set(canonical_text, src, tgt, reason_semantic, force=True)
             except Exception:
@@ -9192,6 +9199,22 @@ def _translate_core(text, src, tgt):
                     pass
                 return _factory_reason_alignment_failure_message(tgt)
         if _reason_semantic:
+            _expected_rows = getattr(_tl, 'factory_reason_image_expected_rows', 0) if getattr(_tl, 'from_image_ocr', False) else 0
+            if _factory_reason_ocr_incomplete_against_visual_count(text, _expected_rows):
+                logger.warning(
+                    "[FactoryReasonOCR] fail-closed visual row mismatch expected=%s actual=%s",
+                    _expected_rows, _factory_reason_ocr_row_count(text)
+                )
+                try:
+                    _event_log_write("factory_reason_ocr_visual_count_failed", {
+                        "group_id": _gid_for_tm,
+                        "expected_rows": _expected_rows,
+                        "actual_rows": _factory_reason_ocr_row_count(text),
+                        "ocr_text": text[:500],
+                    })
+                except Exception:
+                    pass
+                return _factory_reason_alignment_failure_message(tgt)
             logger.info("Factory reason semantic translation hit: %r -> %r", text[:80], _reason_semantic[:80])
             try:
                 _tl.factory_audit = {
@@ -10463,6 +10486,28 @@ def _factory_reason_ocr_row_count(text):
     )
 
 
+def _factory_reason_ocr_incomplete_against_visual_count(text, expected_rows):
+    """Fail closed when visual row segmentation saw more ERP rows than OCR text.
+
+    The dangerous failure mode is not a bad Indonesian word; it is an omitted or
+    duplicated source row.  Once an ID/原因 screenshot loses rows, the deterministic
+    reason semantic layer will faithfully translate the wrong source table.  This
+    guard compares parsed source rows with the row count estimated from the
+    image's visible row bands.  One row of tolerance is allowed for bottom-edge
+    partial crops, but larger gaps are blocked instead of shifted onto IDs.
+    """
+    try:
+        expected = int(expected_rows or 0)
+    except Exception:
+        expected = 0
+    if expected < 4:
+        return False
+    actual = _factory_reason_ocr_row_count(text)
+    if actual <= 0:
+        return False
+    return actual < max(2, expected - 1)
+
+
 def _should_run_factory_reason_table_ocr(text):
     if not text or not isinstance(text, str):
         return False
@@ -10495,6 +10540,305 @@ def _strict_factory_reason_ocr_is_better(generic_text, strict_text):
     return strict_rows >= 2 and strict_rows >= generic_rows
 
 
+def _factory_reason_visual_row_bands_from_image(image_base64, mime_type="image/jpeg"):
+    """Return visible data-row bands for an ID/原因 table using local image geometry.
+
+    This is an optional CV pre-pass used only to prevent row-shift OCR.  It does
+    not read text and it does not translate.  It estimates the horizontal row
+    bands, then the row-crop OCR pass asks Vision to read each cropped row as an
+    independent item.  If OpenCV/Pillow are unavailable, callers fall back to the
+    normal full-image OCR path.
+    """
+    try:
+        import base64 as _b64
+        import io as _io
+        from PIL import Image as _Image
+        import cv2 as _cv2
+        import numpy as _np
+    except Exception as exc:
+        logger.info("[FactoryReasonOCR] CV row segmentation unavailable: %s", exc)
+        return []
+    try:
+        raw = _b64.b64decode(image_base64)
+        img = _Image.open(_io.BytesIO(raw)).convert("RGB")
+        # Upscale narrow phone crops before line detection; coordinates are kept
+        # in the processed image and row crops are made from that same image.
+        w0, h0 = img.size
+        scale = 1.0
+        if w0 < 1200:
+            scale = 1200.0 / float(max(1, w0))
+            img = img.resize((int(round(w0 * scale)), int(round(h0 * scale))), _Image.Resampling.LANCZOS)
+        arr = _np.array(img)
+        gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
+        h, w = gray.shape[:2]
+
+        def _candidate_lines(_gray):
+            scores = {}
+            widths = [max(60, min(140, w // 7)), max(80, min(220, w // 4))]
+            for block, cval in ((31, 10), (41, 12), (51, 15)):
+                try:
+                    bw = _cv2.adaptiveThreshold(_gray, 255, _cv2.ADAPTIVE_THRESH_MEAN_C, _cv2.THRESH_BINARY_INV, block, cval)
+                except Exception:
+                    continue
+                for kw in widths:
+                    kernel = _cv2.getStructuringElement(_cv2.MORPH_RECT, (kw, 1))
+                    hline = _cv2.morphologyEx(bw, _cv2.MORPH_OPEN, kernel, iterations=1)
+                    hline = _cv2.dilate(hline, _cv2.getStructuringElement(_cv2.MORPH_RECT, (3, 2)), iterations=1)
+                    proj = (hline > 0).mean(axis=1)
+                    # Low threshold catches faint lower grid lines; later sequencing
+                    # rejects text-stroke false positives by expected row pitch.
+                    ys = _np.where(proj > 0.05)[0]
+                    if len(ys) == 0:
+                        continue
+                    groups = []
+                    start = int(ys[0]); prev = int(ys[0])
+                    for yv in ys[1:]:
+                        yv = int(yv)
+                        if yv <= prev + 2:
+                            prev = yv
+                        else:
+                            groups.append((start, prev))
+                            start = prev = yv
+                    groups.append((start, prev))
+                    for a, b in groups:
+                        cy = int((a + b) // 2)
+                        sc = float(proj[cy]) if 0 <= cy < len(proj) else 0.0
+                        # Merge near-duplicates, preserving the strongest candidate.
+                        merged_y = None
+                        for old_y in list(scores.keys()):
+                            if abs(old_y - cy) <= 4:
+                                merged_y = old_y
+                                break
+                        if merged_y is None or sc > scores.get(merged_y, 0.0):
+                            if merged_y is not None:
+                                scores.pop(merged_y, None)
+                            scores[cy] = sc
+            return sorted(scores.items())
+
+        cands = _candidate_lines(gray)
+        if len(cands) < 5:
+            return []
+        ys = [y for y, _sc in cands]
+        score = {y: sc for y, sc in cands}
+
+        # Find the first stable header/data grid triple.  For ID/原因 tables this
+        # normally corresponds to: header top, header bottom, first data-row bottom.
+        start_idx = None
+        for i in range(len(ys) - 3):
+            d1 = ys[i + 1] - ys[i]
+            d2 = ys[i + 2] - ys[i + 1]
+            d3 = ys[i + 3] - ys[i + 2]
+            if 35 <= d1 <= 140 and 35 <= d2 <= 140 and 35 <= d3 <= 140 and abs(d2 - d3) <= 28:
+                start_idx = i
+                break
+        if start_idx is None:
+            return []
+
+        seq = [ys[start_idx], ys[start_idx + 1], ys[start_idx + 2]]
+        pitch = float(max(35, ys[start_idx + 2] - ys[start_idx + 1]))
+        inferred = 0
+        while True:
+            last = seq[-1]
+            expected = last + pitch
+            if expected >= h - 3:
+                break
+            lo = last + max(24, int(round(0.55 * pitch)))
+            hi = last + min(160, int(round(1.60 * pitch)))
+            window = [y for y in ys if lo <= y <= hi]
+            if window:
+                # Prefer real gridline strength, but reject weak far-away false
+                # positives; inserting the expected boundary is safer than
+                # accepting a text-stroke as a row line.
+                cand = min(window, key=lambda yy: abs(yy - expected) - 60.0 * score.get(yy, 0.0))
+                gap = cand - last
+                if (abs(cand - expected) > 0.25 * pitch or gap > 1.28 * pitch) and score.get(cand, 0.0) < 0.16:
+                    nxt = int(round(expected)); inferred += 1
+                else:
+                    nxt = int(cand)
+                    pitch = 0.90 * pitch + 0.10 * float(max(20, gap))
+            else:
+                nxt = int(round(expected)); inferred += 1
+            if nxt <= last + 15:
+                break
+            seq.append(nxt)
+            if len(seq) > 80:
+                break
+
+        # Convert boundaries to data-row bands.  First band is header, so skip it.
+        bands = []
+        for y0, y1 in zip(seq[1:-1], seq[2:]):
+            if y1 - y0 < 18:
+                continue
+            bands.append((max(0, y0 - 2), min(h, y1 + 2)))
+        if len(bands) < 4:
+            return []
+        # Use a broad crop from the visible ID column through the reason column.
+        x0 = max(0, int(w * 0.035))
+        x1 = w
+        return [(x0, y0, x1, y1, img) for (y0, y1) in bands]
+    except Exception as exc:
+        logger.warning("[FactoryReasonOCR] visual row-band detection failed: %s", exc)
+        return []
+
+
+def _factory_reason_visual_expected_rows_from_image(image_base64, mime_type="image/jpeg"):
+    try:
+        return len(_factory_reason_visual_row_bands_from_image(image_base64, mime_type=mime_type))
+    except Exception:
+        return 0
+
+
+def _factory_reason_row_contact_sheets(image_base64, mime_type="image/jpeg", rows_per_sheet=8):
+    """Build row-numbered contact sheets from detected table rows.
+
+    Each strip contains exactly one original table row.  The row labels are only
+    anchors for the OCR model, not source cells.  The returned expected count is
+    later used to fail closed if OCR still drops rows.
+    """
+    try:
+        import base64 as _b64
+        import io as _io
+        from PIL import Image as _Image, ImageDraw as _ImageDraw, ImageEnhance as _ImageEnhance
+    except Exception:
+        return 0, []
+    bands = _factory_reason_visual_row_bands_from_image(image_base64, mime_type=mime_type)
+    if not bands:
+        return 0, []
+    sheets = []
+    target_row_width = 1350
+    label_w = 115
+    pad = 10
+    for chunk_start in range(0, len(bands), max(1, int(rows_per_sheet))):
+        chunk = bands[chunk_start:chunk_start + rows_per_sheet]
+        row_imgs = []
+        for idx, (x0, y0, x1, y1, img) in enumerate(chunk, start=chunk_start + 1):
+            crop = img.crop((x0, y0, x1, y1))
+            # Strengthen text/grid contrast for phone-photo moiré screenshots.
+            crop = _ImageEnhance.Contrast(crop).enhance(1.55)
+            crop = _ImageEnhance.Sharpness(crop).enhance(1.8)
+            scale = min(4.0, max(1.4, float(target_row_width - label_w) / float(max(1, crop.width))))
+            crop = crop.resize((int(round(crop.width * scale)), int(round(crop.height * scale))), _Image.Resampling.LANCZOS)
+            strip_h = crop.height + pad * 2
+            strip_w = label_w + crop.width + pad * 2
+            strip = _Image.new("RGB", (strip_w, strip_h), "white")
+            draw = _ImageDraw.Draw(strip)
+            draw.rectangle((0, 0, label_w - 1, strip_h - 1), outline="black", width=2)
+            draw.text((12, max(4, strip_h // 2 - 10)), f"R{idx:02d}", fill="black")
+            strip.paste(crop, (label_w + pad, pad))
+            draw.line((0, strip_h - 1, strip_w, strip_h - 1), fill="black", width=2)
+            row_imgs.append(strip)
+        if not row_imgs:
+            continue
+        sheet_w = max(im.width for im in row_imgs)
+        sheet_h = sum(im.height for im in row_imgs)
+        sheet = _Image.new("RGB", (sheet_w, sheet_h), "white")
+        y = 0
+        for im in row_imgs:
+            sheet.paste(im, (0, y))
+            y += im.height
+        bio = _io.BytesIO()
+        sheet.save(bio, format="PNG")
+        sheets.append({
+            "start_row": chunk_start + 1,
+            "end_row": chunk_start + len(chunk),
+            "mime_type": "image/png",
+            "base64": _b64.b64encode(bio.getvalue()).decode("ascii"),
+        })
+    return len(bands), sheets
+
+
+def ocr_factory_reason_table_rows_openai(image_base64, mime_type="image/jpeg"):
+    """Row-crop OCR for ERP ID/原因 tables.
+
+    Full-table Vision OCR can silently skip visually crowded rows or smear one
+    reason label down several rows.  This pass first slices the table by visible
+    row bands, then asks Vision to OCR each isolated row.  The result is still
+    source OCR only; translation is handled later by the shared factory reason
+    semantic layer.
+    """
+    if not oai:
+        return None
+    expected_rows, sheets = _factory_reason_row_contact_sheets(image_base64, mime_type=mime_type)
+    try:
+        _tl.factory_reason_image_expected_rows = expected_rows or 0
+    except Exception:
+        pass
+    if not sheets or expected_rows < 4:
+        return None
+    parsed_lines = []
+    try:
+        for sheet in sheets:
+            msgs = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是工廠 ERP / Excel 的逐列 OCR 引擎，只負責轉錄原文，不得翻譯。\n"
+                        "圖片是原表格逐列裁切後的 contact sheet，每一條 Rxx 橫列就是原表格的一列。\n"
+                        "規則:\n"
+                        "1. 每個 Rxx 都要輸出一行，格式: Rxx | <ID> | <原因>。\n"
+                        "2. ID 逐字 OCR，保留 7H/7G/7I/7B、A/B/C/D 尾碼，不得校正或猜測。\n"
+                        "3. 原因只輸出中文原文，不得翻譯；常見值包含 改端漆、補毛重、退火、倒角、削皮、拋光、併包、改包裝、改Tag、取樣。\n"
+                        "4. 看不清楚的單一字元用 ?；整格看不清楚用 ?。不要把上一列原因複製到下一列。\n"
+                        "5. Rxx 是輔助列號，不是表格內容。不要輸出說明。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{sheet['mime_type']};base64," + sheet["base64"],
+                                "detail": "high",
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": f"請逐列 OCR R{sheet['start_row']:02d} 到 R{sheet['end_row']:02d}。只輸出 Rxx | ID | 原因。",
+                        },
+                    ],
+                },
+            ]
+            r = _vision_call(
+                msgs,
+                max_tokens=1800,
+                cache_key=_build_cache_key(getattr(_tl, 'group_id', ''), "img", "txt", f"ocr_factory_reason_rows_{sheet['start_row']}_{sheet['end_row']}"),
+                task_type="ocr",
+            )
+            track_tokens(r)
+            raw = (r.choices[0].message.content or "").strip()
+            logger.info("[FactoryReasonOCR] row-crop raw R%02d-R%02d (%d chars): %s", sheet['start_row'], sheet['end_row'], len(raw), raw[:300])
+            for line in raw.splitlines():
+                s = (line or "").strip()
+                if not s:
+                    continue
+                # Drop the OCR helper row label R01/R1 if present.
+                s = re.sub(r"^R\s*\d{1,3}\s*(?:\||｜|:|：|-|—)\s*", "", s, flags=re.I).strip()
+                if _is_factory_reason_header_line(s):
+                    continue
+                row = _parse_factory_reason_table_row(s)
+                if row:
+                    parsed_lines.append(f"{row[0]} | {row[1]['key']}")
+        if not parsed_lines:
+            return None
+        # Deduplicate consecutive duplicate OCR lines only; do not remove repeated
+        # reasons or similar IDs because each visible row matters.
+        cleaned = []
+        for ln in parsed_lines:
+            if not cleaned or cleaned[-1] != ln:
+                cleaned.append(ln)
+        result = "ID | 原因\n" + "\n".join(cleaned)
+        actual_rows = _factory_reason_ocr_row_count(result)
+        if actual_rows >= max(2, expected_rows - 1):
+            logger.info("[FactoryReasonOCR] row-crop OCR accepted expected_rows=%d actual_rows=%d", expected_rows, actual_rows)
+            return result
+        logger.warning("[FactoryReasonOCR] row-crop OCR incomplete expected_rows=%d actual_rows=%d", expected_rows, actual_rows)
+        return None
+    except Exception as exc:
+        logger.warning("[FactoryReasonOCR] row-crop OCR failed: %s", exc)
+        return None
+
+
 def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
     """Dedicated source-OCR for ERP ID/原因 tables. Does not translate.
 
@@ -10507,6 +10851,13 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
     if mime_type == "image/heic":
         mime_type = "image/jpeg"
+    # v3.17: root fix for row-shift/row-omission OCR.  Before asking Vision to
+    # read the entire crowded Excel screenshot, locally slice visible row bands
+    # and OCR each row strip.  This keeps ID and 原因 bound to the same row and
+    # gives us a visual expected-row count for fail-closed validation.
+    row_result = ocr_factory_reason_table_rows_openai(image_base64, mime_type=mime_type)
+    if row_result:
+        return row_result
     try:
         msgs = [
             {
