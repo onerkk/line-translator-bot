@@ -10298,6 +10298,183 @@ def ocr_and_translate_image(image_base64, tgt_lang):
 
 
 
+# ─── v3.12.1: 敏感表格圖片「精準 OCR → 標準文字翻譯管線」──────────
+# 根因：一般 OCR 先把表格拍照轉成純文字後，若 8/3/6、0/O、B/8 這類 ID 字元
+# 被看錯，後面的 translate() 已經沒有原圖可回查。上一版直接在 Vision 端翻譯表格，
+# 雖然能回看圖片，但會繞過文字翻譯的 glossary、factory context、semantic contract、
+# quality gate、TM/cache 與使用者後台工廠用語。正確根治是：表格只用 Vision 做「原文
+# 精準轉錄」，翻譯仍一律交回 translate() 標準管線。
+_IMAGE_TABLE_CODE_RE = re.compile(
+    r"(?<![A-Z0-9])"
+    r"(?=[A-Z0-9._/+:%×x-]{5,}(?![A-Z0-9]))"
+    r"(?=[A-Z0-9._/+:%×x-]*[A-Z])"
+    r"(?=[A-Z0-9._/+:%×x-]*\d)"
+    r"[A-Z0-9][A-Z0-9._/+:%×x-]{4,}"
+    r"(?![A-Z0-9])",
+    re.I,
+)
+_IMAGE_TABLE_HINT_RE = re.compile(
+    r"(\bID\b|原因|料號|材料|爐號|批號|工單|訂單|規格|鋼種|材質|客戶|TAG|現況|流程|儲區|站別)",
+    re.I,
+)
+_IMAGE_TABLE_SEPARATOR_RE = re.compile(r"[|｜\t]| {2,}")
+_IMAGE_TABLE_META_RE = re.compile(
+    r"(i can't|i cannot|sorry|not enough|translation:|terjemahan:|以下是|翻譯如下|抱歉|無法)",
+    re.I,
+)
+
+
+def _extract_sensitive_table_codes(text):
+    """Return code-like immutable tokens seen in OCR/table text."""
+    if not text:
+        return []
+    seen = []
+    for m in _IMAGE_TABLE_CODE_RE.finditer(str(text).upper()):
+        tok = m.group(0)
+        if tok not in seen:
+            seen.append(tok)
+    return seen
+
+
+def _looks_like_sensitive_ocr_table(text):
+    """Detect OCR text that needs image-backed precision OCR before translation.
+
+    This is intentionally generic: it does not know any user's specific IDs.  It
+    fires on spreadsheet/ERP-like text containing immutable alphanumeric codes
+    plus table/header signals.
+    """
+    if not text or not str(text).strip():
+        return False
+    raw = str(text)
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return False
+    codes = _extract_sensitive_table_codes(raw)
+    if len(codes) < 2:
+        return False
+    has_header_hint = bool(_IMAGE_TABLE_HINT_RE.search(raw))
+    has_separator = any(_IMAGE_TABLE_SEPARATOR_RE.search(ln) for ln in lines)
+    rows_with_codes = sum(1 for ln in lines if _IMAGE_TABLE_CODE_RE.search(ln.upper()))
+    # 表格照片常被 OCR 成「每列一行」沒有 |；多列都有 ID/code 時仍視為表格。
+    return bool(has_header_hint or has_separator or rows_with_codes >= 3)
+
+
+def _has_cjk_text(text):
+    return bool(text and re.search(r"[\u3400-\u9fff]", str(text)))
+
+
+def _validate_sensitive_image_ocr(ocr_hint, extracted_table):
+    """Validate precision OCR output before feeding it into translate().
+
+    The output must still be source text, not a translation.  Code equality is not
+    enforced against the hint because the hint may be the thing being corrected;
+    we only require that the table/code structure survives and obvious translated
+    or meta outputs are rejected.
+    """
+    if not extracted_table or not str(extracted_table).strip():
+        return False, "empty"
+    out = str(extracted_table).strip()
+    if _IMAGE_TABLE_META_RE.search(out):
+        return False, "meta_or_refusal"
+    in_codes = _extract_sensitive_table_codes(ocr_hint)
+    out_codes = _extract_sensitive_table_codes(out)
+    if len(in_codes) >= 2 and len(out_codes) < max(1, min(len(in_codes), 3)):
+        return False, "too_few_codes"
+    if len(in_codes) >= 3 and out.count("\n") < 1:
+        return False, "lost_rows"
+    # 若原 OCR hint 明顯含中文表格欄位/原因，精準 OCR 不應直接變成印尼文翻譯。
+    if _has_cjk_text(ocr_hint) and not _has_cjk_text(out):
+        return False, "translated_instead_of_ocr"
+    return True, "ok"
+
+
+def extract_sensitive_image_table_text(image_base64, mime_type="image/jpeg", ocr_hint=None):
+    """Run high-precision source transcription for ERP/spreadsheet screenshots.
+
+    This function deliberately does NOT translate.  Its output is fed into
+    translate(), so image translation uses the exact same glossary/factory-term
+    logic as ordinary text translation.
+    """
+    if not oai:
+        return None
+    if not image_base64:
+        return None
+    if mime_type == "image/heic":
+        logger.warning("[ImgTableOCR] HEIC not supported, sending as jpeg compatibility label")
+        mime_type = "image/jpeg"
+
+    hint_text = (ocr_hint or "").strip()
+    hint_codes = _extract_sensitive_table_codes(hint_text)
+    hint_block = ""
+    if hint_text:
+        hint_block = (
+            "\n\nUNTRUSTED OCR HINT (may contain recognition mistakes; use only to locate rows/columns; "
+            "prefer the image when it conflicts):\n" + hint_text[:2500]
+        )
+    if hint_codes:
+        hint_block += "\n\nCode-like tokens from the hint to audit against, not to blindly copy: " + ", ".join(hint_codes[:40])
+
+    system_prompt = (
+        "You are a high-precision OCR engine for Taiwanese stainless-steel factory ERP/spreadsheet screenshots.\n"
+        "Task: read the IMAGE and output ONLY the visible source text as a compact plain-text table.\n\n"
+        "ROOT RULES:\n"
+        "1. OCR ONLY. Do NOT translate any word. Do NOT add target-language words. Do NOT explain.\n"
+        "2. Preserve all source-language cells exactly as visible, including Chinese cells such as 原因、改價格、判色、加火、削皮、改TAG.\n"
+        "3. Alphanumeric data tokens are immutable: IDs, material numbers, heat numbers, order numbers, TAGs, station codes, batch codes, dimensions, dates, quantities.\n"
+        "   Preserve every visible character exactly. Never normalize, autocorrect, reorder, or invent them.\n"
+        "4. When reading IDs/codes, inspect each character visually. Distinguish 8/3/6/5/S, 0/O, 1/I/L, B/8, A/4 carefully.\n"
+        "   If one character is genuinely unreadable, put ? for that character instead of guessing.\n"
+        "5. The OCR hint is not truth. If it conflicts with the image, follow the image.\n"
+        "6. Keep row count and row order. One source row becomes one output row. Do not merge rows and do not drop rows.\n"
+        "7. Output a compact plain-text table using ` | ` separators. Do not use markdown tables, bullets, explanation, or section titles.\n"
+        "8. Column headers must remain in the source language exactly as visible: ID stays ID; 原因 stays 原因.\n"
+        "Return only the source OCR table."
+    )
+    try:
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64," + image_base64,
+                            "detail": "high",
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Transcribe this ERP/spreadsheet image as source text only. "
+                            "Do not translate. Preserve all IDs/codes exactly and keep a compact table."
+                            + hint_block
+                        ),
+                    },
+                ],
+            },
+        ]
+        r = _vision_call(
+            msgs,
+            max_tokens=3000,
+            cache_key=_build_cache_key(getattr(_tl, 'group_id', ''), "imgtable", "source", "ocr_v3121"),
+            task_type="ocr",
+            reasoning_override="minimal",
+        )
+        track_tokens(r)
+        content = r.choices[0].message.content if getattr(r, "choices", None) else None
+        result = (content or "").strip()
+        ok, reason = _validate_sensitive_image_ocr(hint_text, result)
+        if not ok:
+            logger.warning("[ImgTableOCR] precision OCR result rejected: %s | preview=%s", reason, result[:160])
+            return None
+        logger.info("[ImgTableOCR] precision source table accepted: %d chars", len(result))
+        return result
+    except Exception as e:
+        logger.warning("[ImgTableOCR] precision OCR failed: %s", e)
+        return None
+
+
 def detect_image_mime(raw_bytes):
     """v3.9.29: 從 magic bytes 偵測圖片格式。
     回傳 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic' 之一。
@@ -12940,13 +13117,61 @@ def _handle_image_background(ctx):
                 return
             actual_tgt = "zh"
 
-        # Translate OCR text using the same translation engine as text messages
+        # Translate image text using the same translation engine as ordinary text messages.
+        # v3.12.1: 對 ERP/試算表圖片只額外做「原圖精準 OCR」，不在 Vision 端翻譯；
+        # 翻譯仍一律進 translate()，讓後台工廠用語 / glossary / GE / quality gate 全部生效。
         # Set translation tone for this group
         _tone, _tone_custom = get_group_tone(group_id)
         _tl.tone = _tone
         _tl.tone_custom = _tone_custom
         _tl.from_image_ocr = True  # v3.9.27: 標記為圖片來源,觸發強制分段翻譯
-        _event_log_write("image_step", {"step": "before_translate", "src": lang, "tgt": (tgt if lang == "zh" else "zh")})
+
+        source_text_for_translate = extracted
+        if _looks_like_sensitive_ocr_table(extracted):
+            _event_log_write("image_step", {"step": "before_precision_image_table_ocr"})
+            try:
+                _precise_table = extract_sensitive_image_table_text(
+                    img_base64,
+                    mime_type=img_mime,
+                    ocr_hint=extracted,
+                )
+                if _precise_table:
+                    source_text_for_translate = _precise_table
+                    _event_log_write("image_step", {
+                        "step": "precision_image_table_ocr_done",
+                        "source_len": len(source_text_for_translate),
+                        "source_preview": source_text_for_translate[:100],
+                    })
+                    _precise_lang = detect_language(source_text_for_translate)
+                    if _precise_lang:
+                        lang = _precise_lang
+                        if lang == "zh":
+                            actual_tgt = tgt
+                        else:
+                            try:
+                                _gt = get_group_target_langs(group_id)
+                            except NameError:
+                                _gt = [tgt]
+                            if lang not in _gt:
+                                _event_log_write("image_aborted", {
+                                    "reason": "precision_table_lang_not_configured",
+                                    "lang": lang,
+                                })
+                                return
+                            actual_tgt = "zh"
+            except Exception as _ite:
+                _event_log_write("image_step_error", {
+                    "step": "precision_image_table_ocr", "err": str(_ite)[:300],
+                    "fallback": "standard_text_translate_with_initial_ocr",
+                })
+                logger.warning("Precision image table OCR failed, fallback to initial OCR text: %s", _ite)
+
+        _event_log_write("image_step", {
+            "step": "before_translate",
+            "src": lang,
+            "tgt": (tgt if lang == "zh" else "zh"),
+            "source": "precision_table_ocr" if source_text_for_translate != extracted else "initial_ocr",
+        })
 
         # v3.9.24: 用 threading 強制限制 translate() 最多 50 秒,
         # 因為 translate() 內部有多個 OpenAI 呼叫(分段、品質檢查、反譯),
@@ -12957,9 +13182,9 @@ def _handle_image_background(ctx):
         def _do_translate():
             try:
                 if lang == "zh":
-                    _trans_result[0] = translate(extracted, "zh", tgt)
+                    _trans_result[0] = translate(source_text_for_translate, "zh", tgt)
                 else:
-                    _trans_result[0] = translate(extracted, lang, "zh")
+                    _trans_result[0] = translate(source_text_for_translate, lang, "zh")
             except Exception as e:
                 _trans_exc[0] = e
         _t = threading.Thread(target=_do_translate, daemon=True)
@@ -13215,11 +13440,38 @@ def _process_pending_image_translate_inner(event, message_id):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     _tl.group_id = group_id
+
+    source_text_for_translate = extracted
+    if _looks_like_sensitive_ocr_table(extracted):
+        try:
+            logger.info("[ImgAsk] using precision image table OCR, then standard translate()")
+            _precise_table = extract_sensitive_image_table_text(
+                img_base64,
+                mime_type=img_mime,
+                ocr_hint=extracted,
+            )
+            if _precise_table:
+                source_text_for_translate = _precise_table
+                _precise_lang = detect_language(source_text_for_translate)
+                if _precise_lang:
+                    lang = _precise_lang
+                    if lang != "zh":
+                        try:
+                            _gt = get_group_target_langs(group_id)
+                        except NameError:
+                            _gt = [tgt]
+                        if lang not in _gt:
+                            _reply_or_push("⚠️ 此群組未配置「" + (LANG_NAMES_ZH.get(lang, lang) or lang) + "」翻譯\n後台或 /liff 設定可調整")
+                            return
+                    actual_tgt = tgt if lang == "zh" else "zh"
+        except Exception as _ite:
+            logger.warning("[ImgAsk] precision image table OCR failed, fallback to initial OCR text: %s", _ite)
+
     try:
         if lang == "zh":
-            result = translate(extracted, "zh", tgt)
+            result = translate(source_text_for_translate, "zh", tgt)
         else:
-            result = translate(extracted, lang, "zh")
+            result = translate(source_text_for_translate, lang, "zh")
     except Exception as _te:
         logger.error("[ImgAsk] translate exception: %s", _te)
         _reply_or_push("❌ 翻譯失敗 / Terjemahan gagal\n" + str(_te)[:100])
