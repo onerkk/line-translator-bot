@@ -1,136 +1,61 @@
 import ast
-import re
 from pathlib import Path
-from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent
+APP = ROOT / "app.py"
 
 
-SAMPLE_OCR = """ID | 原因
-7H885503A | 改價格
-7H847507 | 改價格
-7H110003 | 判色
-7G319512B | 加火
-7G681208A | 削皮
-7H347508 | 改TAG"""
+def _source():
+    return APP.read_text(encoding="utf-8")
 
 
-def load_image_table_namespace():
-    source = (ROOT / "app.py").read_text(encoding="utf-8")
+def _function_source(name: str) -> str:
+    source = _source()
     tree = ast.parse(source)
-    wanted_assigns = {
-        "_IMAGE_TABLE_CODE_RE",
-        "_IMAGE_TABLE_HINT_RE",
-        "_IMAGE_TABLE_SEPARATOR_RE",
-        "_IMAGE_TABLE_META_RE",
-    }
-    wanted_defs = {
-        "_extract_sensitive_table_codes",
-        "_looks_like_sensitive_ocr_table",
-        "_has_cjk_text",
-        "_validate_sensitive_image_ocr",
-        "extract_sensitive_image_table_text",
-    }
-    nodes = []
     for node in tree.body:
-        if isinstance(node, ast.Assign):
-            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
-            if names & wanted_assigns:
-                nodes.append(node)
-        elif isinstance(node, ast.FunctionDef) and node.name in wanted_defs:
-            nodes.append(node)
-    module = ast.Module(body=nodes, type_ignores=[])
-    ast.fix_missing_locations(module)
-    ns = {
-        "re": re,
-        "logger": SimpleNamespace(
-            warning=lambda *a, **k: None,
-            info=lambda *a, **k: None,
-        ),
-        "oai": object(),
-        "_tl": SimpleNamespace(group_id="G1"),
-        "_build_cache_key": lambda *parts: "|".join(str(p) for p in parts),
-        "track_tokens": lambda r: None,
-    }
-    exec(compile(module, str(ROOT / "app.py"), "exec"), ns)
-    return ns
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(source, node) or ""
+    raise AssertionError(f"function not found: {name}")
 
 
-def _fake_response(text):
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=text))]
-    )
+def test_image_direct_translation_route_is_removed():
+    """Image tables must not bypass the normal text translation pipeline."""
+    source = _source()
+    assert "def translate_sensitive_image_table" not in source
+    assert "_looks_like_sensitive_ocr_table" not in source
+    assert "before_direct_image_table_translate" not in source
+    assert "direct_image_table_translate" not in source
 
 
-def test_sensitive_ocr_table_detector_hits_erp_id_reason_table():
-    ns = load_image_table_namespace()
-    assert ns["_looks_like_sensitive_ocr_table"](SAMPLE_OCR) is True
-    assert ns["_extract_sensitive_table_codes"](SAMPLE_OCR)[:3] == [
-        "7H885503A",
-        "7H847507",
-        "7H110003",
-    ]
+def test_ocr_prompt_outputs_source_table_not_translation():
+    source = _source()
+    ocr_fn = _function_source("ocr_image_openai")
+    assert "不要翻譯" in ocr_fn
+    assert "表格 / Excel / ERP 截圖" in ocr_fn
+    assert "` | ` 分隔欄位" in ocr_fn
+    assert "ID / 料號 / 爐號 / TAG / 批號保護" in ocr_fn
+    assert "不得翻譯、不得自動校正、不得補字" in ocr_fn
 
 
-def test_sensitive_ocr_table_detector_ignores_plain_chat():
-    ns = load_image_table_namespace()
-    plain = "今天加班到八點\n麻煩通知印尼同仁"
-    assert ns["_looks_like_sensitive_ocr_table"](plain) is False
+def test_auto_image_translation_uses_standard_translate_with_context_snapshot():
+    fn = _function_source("_handle_image_background")
+    assert "translate_sensitive_image_table" not in fn
+    assert "result = translate(" not in fn  # timeout worker must use context wrapper
+    assert "_tl.group_id = group_id or" in fn
+    assert "_tl.user_id = user_id or" in fn
+    assert "_tl.from_image_ocr = True" in fn
+    assert "_ctx_snapshot = _snapshot_translation_thread_context()" in fn
+    assert "_translate_with_thread_context(" in fn
+    assert "translate, extracted, \"zh\", actual_tgt" in fn
+    assert "translate, extracted, lang, actual_tgt" in fn
 
 
-def test_precision_image_table_ocr_keeps_source_text_not_translation():
-    ns = load_image_table_namespace()
-    captured = {}
-
-    def fake_vision_call(messages, max_tokens, cache_key=None, task_type=None, reasoning_override=None):
-        captured["messages"] = messages
-        captured["max_tokens"] = max_tokens
-        captured["cache_key"] = cache_key
-        captured["task_type"] = task_type
-        captured["reasoning_override"] = reasoning_override
-        return _fake_response(
-            "ID | 原因\n"
-            "7H885503A | 改價格\n"
-            "7H847507 | 改價格\n"
-            "7H110003 | 判色\n"
-            "7G319512B | 加火\n"
-            "7G681208A | 削皮"
-        )
-
-    ns["_vision_call"] = fake_vision_call
-
-    result = ns["extract_sensitive_image_table_text"](
-        "BASE64DATA",
-        mime_type="image/png",
-        ocr_hint=SAMPLE_OCR,
-    )
-
-    assert "7H885503A" in result
-    assert "原因" in result
-    assert "改價格" in result
-    assert "Alasan" not in result
-    assert "Ubah harga" not in result
-    assert "Nomor Material" not in result
-    assert "Sedang" not in result
-    assert captured["max_tokens"] == 3000
-    assert captured["task_type"] == "ocr"
-    assert captured["reasoning_override"] == "minimal"
-
-    system_prompt = captured["messages"][0]["content"]
-    user_content = captured["messages"][1]["content"]
-    assert "OCR ONLY" in system_prompt
-    assert "Do NOT translate" in system_prompt
-    assert "原因 stays 原因" in system_prompt
-    assert "UNTRUSTED OCR HINT" in user_content[1]["text"]
-    assert user_content[0]["image_url"]["url"].startswith("data:image/png;base64,BASE64DATA")
-
-
-def test_precision_image_table_ocr_rejects_translated_output():
-    ns = load_image_table_namespace()
-    ns["_vision_call"] = lambda *a, **k: _fake_response(
-        "ID | Alasan\n7H885503A | Ubah harga\n7H847507 | Ubah harga"
-    )
-
-    assert ns["extract_sensitive_image_table_text"](
-        "BASE64DATA", mime_type="image/jpeg", ocr_hint=SAMPLE_OCR
-    ) is None
+def test_ask_mode_image_translation_uses_same_standard_pipeline():
+    fn = _function_source("_process_pending_image_translate_inner")
+    assert "translate_sensitive_image_table" not in fn
+    assert "_looks_like_sensitive_ocr_table" not in fn
+    assert "_tl.group_id = group_id or" in fn
+    assert "_tl.user_id = (info or {}).get(\"user_id\", \"\")" in fn
+    assert "_tl.from_image_ocr = True" in fn
+    assert "result = translate(extracted, \"zh\", actual_tgt)" in fn
+    assert "result = translate(extracted, lang, actual_tgt)" in fn
