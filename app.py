@@ -5585,6 +5585,16 @@ FACTORY_ZH_ID_POST_FIX = {
     "Dinas K3": "Departemen Keselamatan Kerja (職安署)",
     "Biro K3": "Departemen Keselamatan Kerja (職安署)",
     "Otoritas K3": "Departemen Keselamatan Kerja (職安署)",
+    # v3.20:工單/短尺維護錯譯由 source-grounded semantic contract 驗證; 這些只作舊輸出清理。
+    "Tempat Buku bahan": "work order",
+    "tempat buku bahan": "work order",
+    "Buku bahan": "work order",
+    "buku bahan": "work order",
+    "perintah kerja": "work order",
+    "lembar kerja": "work order",
+    "pemeliharaan penggaris pendek": "penanganan material pendek",
+    "perawatan penggaris pendek": "penanganan material pendek",
+    "penggaris pendek": "material pendek",
     "akan kena pengawasan": "akan diawasi ketat oleh",
     "kena pengawasan": "diawasi ketat oleh",
     # 罰單
@@ -6155,7 +6165,9 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
     low = id_text.lower()
     factory_src = any(k in src for k in ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑", "工單", "包裝", "站別",
                                           # v3.9.37: 加入「消化/分流/異型棒」等口語觸發詞
-                                          "消化", "分流", "異型棒", "急單", "出貨"])
+                                          "消化", "分流", "異型棒", "急單", "出貨",
+                                          # v3.20: 工單公告/短尺維護術語
+                                          "短尺", "來料尺寸", "表面品質", "重量確認", "噴漆"])
     if not factory_src:
         return False, "", []
     domains = ["factory"]
@@ -6171,6 +6183,10 @@ def detect_factory_semantic_error_zh_id(src_text, id_text):
         return True, "factory_response_literal:反應應為回報/通報", domains
     if "吃掉" in src and "tertelan" in low:
         return True, "factory_swallowed_literal:被吃掉不可直譯吞掉", domains
+    if "工單" in src and any(x in low for x in ["tempat buku bahan", "buku bahan", "perintah kerja", "lembar kerja", "order kerja"]):
+        return True, "factory_work_order_literal:工單固定用 work order", domains
+    if "短尺" in src and "penggaris" in low:
+        return True, "factory_short_material_literal:短尺不可翻成 penggaris", domains
     # v3.9.37: 「消化」≠「去化」誤譯偵測
     # 去化 = 有新單接走 → serap material (合法)
     # 消化 = 分批處理掉現有 → diproses bertahap / dihabiskan (正確)
@@ -6228,13 +6244,16 @@ def post_fix_factory_zh_to_id(src_text, id_text):
         "獎金", "底薪", "本薪", "勞保", "健保", "夜班費",
         # v3.9.37 新增:訂單流動口語(分流消化誤譯案例)
         "消化", "分流", "異型棒", "急單", "出貨", "去化", "有好處理",
+        # v3.20: 工單公告與短尺維護語義
+        "工單資訊", "來料尺寸", "表面品質", "短尺", "短尺維護", "重量確認", "噴漆",
         # v3.9.58: 飲食/飲料福利場景的「請客 / X請的」
         "請客", "請的", "飲料", "罐裝", "便當", "咖啡", "點心", "一人一罐", "每人一罐",
     ]
     # 也檢查譯文(if 原文沒命中但譯文有 Yanshui / Dinas K3 等典型錯翻)
     id_trigger_words = ["Yanshui", "Dinas K3", "tilang", "kena tangkap", "kepala shift",
                         "bereaksi", "dicuri", "tertelan", "interlock di-bypass",
-                        "diminta", "permintaan", "dipesan"]
+                        "diminta", "permintaan", "dipesan",
+                        "perintah kerja", "lembar kerja", "Tempat Buku bahan", "penggaris pendek"]
     factory_src = any(k in src for k in factory_keywords)
     factory_id = any(k in result for k in id_trigger_words)
     if not factory_src and not factory_id:
@@ -6253,6 +6272,14 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     # Step 2: 套用詞庫(由長到短,避免短詞先吃掉長詞的部分)
     for wrong, correct in sorted(FACTORY_ZH_ID_POST_FIX.items(), key=lambda x: -len(x[0])):
         result = re.sub(re.escape(wrong), correct, result, flags=re.I)
+    # v3.20: source-grounded factory term repair.  This uses the same semantic contract
+    # as the pre-LLM route and is not a blind global replacement.
+    try:
+        _domain_risk = _classify_factory_domain_terms_zh_id(src)
+        if _domain_risk:
+            result = _repair_factory_domain_term_translation(result, _domain_risk)
+    except Exception:
+        pass
     
     # Step 3: 處理 standalone Yanshui — 沒中文標註的 Yanshui 都升級成完整名稱
     # 不管前面有沒有 "Pabrik",只要後面沒接 "(" 就升級
@@ -6329,9 +6356,6 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     
     # v3.9.58: 飲食/飲料福利場景的「請客 / X請的」不可被翻成 request/diminta
     result = fix_qing_treat_translation_zh_id(src, result)
-
-    # v3.18: 工單公告術語 deterministic safety net.
-    result = _repair_factory_work_order_terms_zh_id(src, result)
     result = re.sub(r"\s+", " ", result).strip()
     return result
 
@@ -6345,7 +6369,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v1-qing-polysemy-root"
+_SEMANTIC_CONTRACT_VERSION = "v2-factory-domain-terms-root"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -6379,6 +6403,86 @@ _SEM_SPONSOR_ID_MAP = {
 _SEM_BRAND_ID_MAP = {
     "原萃": "Original Tea",
 }
+
+
+# v3.20: Factory domain term contract — root fix for word-boundary / dictionary-sense drift.
+# Why this exists:
+#   「工單」and「短尺維護」are not generic dictionary words in factory announcements.
+#   A generic translator may split「短尺維護」into「短尺/維護」and then translate 尺 as
+#   penggaris(ruler), producing pemeliharaan penggaris pendek.  This registry defines
+#   source-side factory concepts once, then feeds the same concept contract to TM/NMT/LLM/QE.
+_FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
+    {
+        "key": "work_order",
+        "source_terms": ("工單資訊", "工單"),
+        "preferred_id": "work order",
+        "required_groups": (("work order",),),
+        "forbidden_id_terms": (
+            "tempat buku bahan", "buku bahan", "perintah kerja", "lembar kerja",
+            "surat perintah kerja", "order kerja", "book order", "order book",
+        ),
+        "note": "工廠製造單/流程依據,固定用 work order,不是材料簿或一般命令。",
+    },
+    {
+        "key": "spray_cat",
+        "source_terms": ("噴漆", "噴漆標示"),
+        "preferred_id": "spray cat",
+        "required_groups": (("spray cat",),),
+        "forbidden_id_terms": (),
+        "note": "現場標示噴漆作業,保留現場常用 spray cat。",
+    },
+    {
+        "key": "incoming_material_size",
+        "source_terms": ("來料尺寸", "来料尺寸"),
+        "preferred_id": "ukuran material masuk",
+        "required_groups": (("ukuran",), ("material", "bahan"), ("masuk",)),
+        "forbidden_id_terms": (),
+        "note": "來料的尺寸確認,不是一般到貨大小描述。",
+    },
+    {
+        "key": "surface_quality",
+        "source_terms": ("表面品質", "表面质量"),
+        "preferred_id": "kualitas permukaan",
+        "required_groups": (("kualitas", "mutu"), ("permukaan",)),
+        "forbidden_id_terms": (),
+        "note": "材料表面品質檢查。",
+    },
+    {
+        "key": "short_material_handling",
+        "source_terms": ("短尺維護", "短尺维护", "短尺料維護", "短尺料维护", "短尺處理", "短尺处理"),
+        "preferred_id": "penanganan material pendek",
+        "required_groups": (("penanganan", "perawatan", "maintenance"), ("material", "batang", "bahan"), ("pendek",)),
+        "forbidden_id_terms": (
+            "penggaris pendek", "pemeliharaan penggaris pendek", "perawatan penggaris pendek",
+            "pemeliharaan ukuran pendek", "perawatan ukuran pendek",
+        ),
+        "note": "短尺材料/短尺料的處理維護,不是短尺規或量尺。",
+    },
+    {
+        "key": "weight_confirmation",
+        "source_terms": ("重量確認", "重量确认"),
+        "preferred_id": "konfirmasi berat",
+        "required_groups": (("konfirmasi", "pastikan", "memastikan"), ("berat",)),
+        "forbidden_id_terms": (),
+        "note": "確認重量。",
+    },
+    {
+        "key": "workflow",
+        "source_terms": ("作業流程", "作业流程", "工作流程"),
+        "preferred_id": "alur kerja",
+        "required_groups": (("alur kerja", "proses operasi", "prosedur kerja"),),
+        "forbidden_id_terms": (),
+        "note": "現場標準作業流程。",
+    },
+]
+
+_FACTORY_DOMAIN_TERM_MAP_ZH_ID = {r["key"]: r for r in _FACTORY_DOMAIN_TERM_RULES_ZH_ID}
+
+_FACTORY_DOMAIN_CONTEXT_ZH = (
+    "工單", "噴漆", "來料", "表面品質", "短尺", "重量", "流程", "作業", "各站",
+    "站", "來料尺寸", "品質", "尺寸", "材料", "料", "工作站", "公司宣導", "規定",
+)
+
 
 def _semantic_compact_zh(text):
     return re.sub(r"\s+", "", text or "")
@@ -6491,124 +6595,136 @@ def _classify_factory_station_alias_zh_id(text):
 
 
 
+def _factory_domain_terms_in_text_zh_id(text):
+    """Return domain term rules that are grounded in the Chinese source.
 
-# v3.18 root fix: 工單公告語境不得被 glossary/TM 誤導成「Tempat Buku bahan」。
-# 這不是單句替換，而是針對「工單=work order」這個現場語義建立:
-#   1) source-side 風險分類
-#   2) prompt contract
-#   3) output validator
-#   4) deterministic repair fallback
-_FACTORY_WORK_ORDER_BAD_ID_PATTERNS = (
-    "tempat buku bahan",
-    "tempat buku material",
-    "buku bahan",
-    "buku material",
-    "lembar kerja",
-    "buku kerja",
-    "book order",
-    "order book",
-)
-
-_FACTORY_WORK_ORDER_CONTEXT_ZH = (
-    "工單資訊", "按照工單", "依照工單", "照工單", "工單上", "工單內",
-    "工單也不寫", "工單不寫", "工單沒寫", "不寫工單", "寫工單", "填寫工單",
-)
-
-_FACTORY_WORK_ORDER_REQUIRED_ID = {
-    "工單": ("work order",),
-    "工單資訊": ("informasi pada work order", "informasi work order", "informasi di work order"),
-    "來料尺寸": ("ukuran material masuk", "ukuran material yang masuk"),
-    "表面品質": ("kualitas permukaan",),
-    "短尺維護": ("penanganan material pendek",),
-    "重量確認": ("konfirmasi berat",),
-}
-
-_FACTORY_WORK_ORDER_TERM_NOTES = {
-    "工單": "Translate 工單 as 'work order'. It is a work instruction/order document, not a place to put a material book.",
-    "工單資訊": "Translate 工單資訊 as 'informasi pada work order' or equivalent with both informasi + work order.",
-    "來料尺寸": "Translate 來料尺寸 as 'ukuran material masuk'.",
-    "表面品質": "Translate 表面品質 as 'kualitas permukaan'.",
-    "短尺維護": "Translate 短尺維護 as 'penanganan material pendek', not 'perawatan ukuran pendek'.",
-    "重量確認": "Translate 重量確認 as 'konfirmasi berat'.",
-}
-
-
-def _compact_zh_for_work_order(text):
-    return re.sub(r"\s+", "", text or "")
-
-
-def _classify_factory_work_order_zh_id(text):
-    """Classify natural-language work-order announcement messages.
-
-    UI labels such as 工單訂單資訊「訂單編號」 remain handled by the glossary; this
-    classifier only fires when 工單 appears in sentence/action context.
+    This is source-side concept matching, not target-side find/replace.  The goal is to
+    prevent the model from splitting compact factory terms into wrong dictionary senses.
     """
-    compact = _compact_zh_for_work_order(text)
-    if "工單" not in compact:
+    if not text or not isinstance(text, str):
+        return []
+    compact = _semantic_compact_zh(text)
+    if not compact:
+        return []
+    # Only activate inside manufacturing / work-order context, so general non-factory wording
+    # does not get over-constrained.
+    if not any(k in compact for k in _FACTORY_DOMAIN_CONTEXT_ZH):
+        return []
+    found = []
+    seen = set()
+    for rule in _FACTORY_DOMAIN_TERM_RULES_ZH_ID:
+        if rule["key"] in seen:
+            continue
+        for term in rule.get("source_terms", ()): 
+            if term and term in compact:
+                found.append(rule)
+                seen.add(rule["key"])
+                break
+    return found
+
+
+def _classify_factory_domain_terms_zh_id(text):
+    entries = _factory_domain_terms_in_text_zh_id(text)
+    if not entries:
         return None
-    if not any(k in compact for k in _FACTORY_WORK_ORDER_CONTEXT_ZH):
-        return None
-    entries = ["工單"]
-    for term in ("工單資訊", "來料尺寸", "表面品質", "短尺維護", "重量確認"):
-        if term in compact:
-            entries.append(term)
-    if "噴漆" in compact:
-        entries.append("噴漆")
     return {
-        "term": "工單",
-        "sense": "factory_work_order_document",
-        "entries": entries,
-        "forbidden_id": list(_FACTORY_WORK_ORDER_BAD_ID_PATTERNS),
+        "term": "factory_domain_terms",
+        "sense": "factory_domain_term_semantics",
+        "entries": [e["key"] for e in entries],
+        "preferred": {e["key"]: e.get("preferred_id", "") for e in entries},
         "tm_bypass_allowed": False,
         "nmt_allowed": False,
+        "requires_validation": True,
     }
 
 
-def _translation_has_any(low_text, alternatives):
-    return any((alt or "").lower() in low_text for alt in alternatives)
+def _factory_domain_translation_contains(entry, translation_lower):
+    if not entry:
+        return True
+    for bad in entry.get("forbidden_id_terms", ()):
+        if bad and bad.lower() in translation_lower:
+            return False
+    for group in entry.get("required_groups", ()): 
+        if not any(token.lower() in translation_lower for token in group):
+            return False
+    return True
 
 
-def _repair_factory_work_order_terms_zh_id(src_text, id_text):
-    """Deterministically repair work-order terminology without calling an LLM."""
-    result = (id_text or "").strip()
+def _factory_domain_forbidden_hit(entry, translation_lower):
+    for bad in entry.get("forbidden_id_terms", ()):
+        if bad and bad.lower() in translation_lower:
+            return bad.lower()
+    return ""
+
+
+def _build_factory_domain_term_contract_lines(risk):
+    lines = ["<risk term='factory_domain_terms' sense='factory_domain_term_semantics'>"]
+    lines.append("The source contains Taiwan factory work-order / process-control terms. Do not split compact Chinese terms into generic dictionary meanings.")
+    for key in risk.get("entries", []):
+        e = _FACTORY_DOMAIN_TERM_MAP_ZH_ID.get(key)
+        if not e:
+            continue
+        src_terms = "/".join(e.get("source_terms", ())[:4])
+        bad_terms = ", ".join(e.get("forbidden_id_terms", ())[:8])
+        lines.append(f"{src_terms} => {e.get('preferred_id', '')}; meaning: {e.get('note', '')}.")
+        if bad_terms:
+            lines.append(f"Forbidden for {src_terms}: {bad_terms}.")
+    lines.append("</risk>")
+    return lines
+
+
+def _repair_factory_domain_term_translation(translation, risk):
+    """Repair only target fragments that violate an active factory-domain term contract.
+
+    This is the last deterministic safety net for already-classified source terms.  It is
+    deliberately driven by the source-side risk entries above, not by a global blind replace.
+    """
+    result = (translation or "").strip()
     if not result:
         return result
-    compact = _compact_zh_for_work_order(src_text)
-    if "工單" not in compact:
-        return result
+    active = set((risk or {}).get("entries") or [])
 
-    # Root cause repair: old glossary contained 工單 => Tempat Buku bahan.
-    for bad in _FACTORY_WORK_ORDER_BAD_ID_PATTERNS:
-        result = re.sub(r"(?<![A-Za-z])" + re.escape(bad) + r"(?![A-Za-z])", "work order", result, flags=re.I)
-    result = re.sub(r"\bwork\s+order\s+work\s+order\b", "work order", result, flags=re.I)
+    def sub(pattern, repl):
+        nonlocal result
+        result = re.sub(pattern, repl, result, flags=re.I)
 
-    if "工單資訊" in compact or "按照工單" in compact or "依照工單" in compact or "照工單" in compact:
-        result = re.sub(r"\binformasi\s+pesanan\b", "informasi pada work order", result, flags=re.I)
-        result = re.sub(r"\binformasi\s+(?:pada\s+)?order\b", "informasi pada work order", result, flags=re.I)
-
-    if "來料尺寸" in compact:
-        result = re.sub(r"\bukuran\s+(?:bahan|barang)\s+masuk\b", "ukuran material masuk", result, flags=re.I)
-        result = re.sub(r"\bukuran\s+material\s+yang\s+masuk\b", "ukuran material masuk", result, flags=re.I)
-
-    if "表面品質" in compact:
-        result = re.sub(r"\bmutu\s+permukaan\b", "kualitas permukaan", result, flags=re.I)
-        result = re.sub(r"\bkualitas\s+surface\b", "kualitas permukaan", result, flags=re.I)
-
-    if "短尺維護" in compact:
-        result = re.sub(r"\bperawatan\s+ukuran\s+pendek\b", "penanganan material pendek", result, flags=re.I)
-        result = re.sub(r"\bpemeliharaan\s+ukuran\s+pendek\b", "penanganan material pendek", result, flags=re.I)
-        result = re.sub(r"\bperawatan\s+(?:bahan|material)\s+pendek\b", "penanganan material pendek", result, flags=re.I)
-
-    if "重量確認" in compact:
-        result = re.sub(r"\bkonfirmasi\s+bobot\b", "konfirmasi berat", result, flags=re.I)
-        result = re.sub(r"\bpemeriksaan\s+berat\b", "konfirmasi berat", result, flags=re.I)
-
-    if "噴漆" in compact:
-        result = re.sub(r"\bspray\s+paint\b", "spray cat", result, flags=re.I)
-        result = re.sub(r"\bcat\s+semprot\b", "spray cat", result, flags=re.I)
-
-    result = re.sub(r"[ \t]{2,}", " ", result).strip()
+    if "work_order" in active:
+        for pattern in (
+            r"\btempat\s+buku\s+bahan\b",
+            r"\bbuku\s+bahan\b",
+            r"\bsurat\s+perintah\s+kerja\b",
+            r"\bperintah\s+kerja\b",
+            r"\blembar\s+kerja\b",
+            r"\border\s+kerja\b",
+            r"\bbook\s+order\b",
+            r"\border\s+book\b",
+        ):
+            sub(pattern, "work order")
+    if "spray_cat" in active:
+        sub(r"\bmenyemprot\s+cat\b", "melakukan spray cat")
+        sub(r"\bpenyemprotan\s+cat\b", "spray cat")
+        sub(r"\bcat\s+semprot\b", "spray cat")
+    if "incoming_material_size" in active:
+        sub(r"\bukuran\s+material\s+yang\s+masuk\b", "ukuran material masuk")
+        sub(r"\bukuran\s+bahan\s+yang\s+masuk\b", "ukuran material masuk")
+    if "short_material_handling" in active:
+        for pattern in (
+            r"\bpemeliharaan\s+penggaris\s+pendek\b",
+            r"\bperawatan\s+penggaris\s+pendek\b",
+            r"\bpemeliharaan\s+ukuran\s+pendek\b",
+            r"\bperawatan\s+ukuran\s+pendek\b",
+            r"\bpemeliharaan\s+material\s+pendek\b",
+            r"\bperawatan\s+material\s+pendek\b",
+            r"\bpenggaris\s+pendek\b",
+        ):
+            sub(pattern, "penanganan material pendek")
+    if "weight_confirmation" in active:
+        sub(r"\bkonfirmasi\s+berat\s+badan\b", "konfirmasi berat")
+    if "workflow" in active:
+        sub(r"\bproses\s+operasi\b", "alur kerja")
+    result = re.sub(r"\s+", " ", result).strip()
     return result
+
 
 def build_translation_semantic_contract(text, src, tgt):
     """Build one runtime contract for the current translation request.
@@ -6672,16 +6788,14 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
 
-        _work_order_contract_fn = globals().get("_classify_factory_work_order_zh_id")
-        work_order_risk = _work_order_contract_fn(text) if callable(_work_order_contract_fn) else None
-        if work_order_risk:
+        _factory_terms_fn = globals().get("_classify_factory_domain_terms_zh_id")
+        factory_terms = _factory_terms_fn(text) if callable(_factory_terms_fn) else None
+        if factory_terms:
             contract["has_risk"] = True
-            contract["risks"].append(work_order_risk)
+            contract["risks"].append(factory_terms)
             contract["tm_bypass_allowed"] = False
             contract["vector_bypass_allowed"] = False
             contract["nmt_allowed"] = False
-            # LLM is preferred because this is usually a formal announcement and
-            # NMT/old TM can reintroduce stale glossary terms.
             contract["requires_llm"] = True
 
         _reason_contract_fn = globals().get("_factory_reason_contract_risk")
@@ -6730,16 +6844,8 @@ def build_translation_semantic_contract_prompt(contract):
             lines.append("Translate the station name exactly as: Stasiun packing barang bentuk khusus.")
             lines.append("Keep 異型棒 separate: 異型棒 means batang bentuk khusus.")
             lines.append("</risk>")
-        elif risk.get("sense") == "factory_work_order_document":
-            lines.append("<risk term='工單' sense='factory_work_order_document'>")
-            lines.append("工單 in this factory announcement means work order / job instruction document.")
-            lines.append("Translate 工單 exactly as 'work order'. Do NOT translate it as Tempat Buku bahan, Buku bahan, lembar kerja, book order, or order book.")
-            entries = risk.get("entries", [])
-            for term in entries:
-                note = _FACTORY_WORK_ORDER_TERM_NOTES.get(term)
-                if note:
-                    lines.append(note)
-            lines.append("</risk>")
+        elif risk.get("sense") == "factory_domain_term_semantics":
+            lines.extend(_build_factory_domain_term_contract_lines(risk))
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
     lines.append("</semantic_contract>")
@@ -6769,17 +6875,16 @@ def translation_satisfies_semantic_contract(contract, translation):
             required = (risk.get("required_id") or "").lower().strip()
             if required and required not in low:
                 return False, "factory_station_canonical_name_missing"
-        elif risk.get("sense") == "factory_work_order_document":
-            for bad in _FACTORY_WORK_ORDER_BAD_ID_PATTERNS:
-                if bad in low:
-                    return False, "factory_work_order_bad_term:" + bad
-            for term in risk.get("entries", []):
-                if term == "噴漆":
-                    # 噴漆 is allowed to be rendered as spray cat / spray paint / pengecatan.
+        elif risk.get("sense") == "factory_domain_term_semantics":
+            for key in risk.get("entries", []):
+                entry = _FACTORY_DOMAIN_TERM_MAP_ZH_ID.get(key)
+                if not entry:
                     continue
-                alternatives = _FACTORY_WORK_ORDER_REQUIRED_ID.get(term)
-                if alternatives and not _translation_has_any(low, alternatives):
-                    return False, "factory_work_order_required_missing:" + term
+                bad_hit = _factory_domain_forbidden_hit(entry, low)
+                if bad_hit:
+                    return False, "factory_domain_forbidden:" + key + ":" + bad_hit
+                if not _factory_domain_translation_contains(entry, low):
+                    return False, "factory_domain_term_missing:" + key
         elif risk.get("sense") == "factory_reason_action_semantics":
             for bad in _FACTORY_REASON_WRONG_ID_PATTERNS:
                 if bad in low:
@@ -6890,8 +6995,8 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
                 translation,
                 risk.get("required_id") or "stasiun packing barang bentuk khusus",
             )
-        if risk.get("sense") == "factory_work_order_document":
-            fixed = _repair_factory_work_order_terms_zh_id(src_text, translation)
+        if risk.get("sense") == "factory_domain_term_semantics":
+            fixed = _repair_factory_domain_term_translation(translation, risk)
             ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
             if ok2:
                 return fixed
@@ -6987,6 +7092,11 @@ def build_factory_context_hint_zh_id(text):
         "放行(品保/QC放行,如「品保放行/品保有放行/QC放行」)=QC release / di-release oleh QC(不加 data)；"
         "過帳=input data produksi ke sistem；"
         "退庫=kembalikan ke gudang。"
+        "工單=work order(不是 perintah kerja/lembar kerja/buku bahan)；"
+        "工單資訊=informasi pada work order；噴漆=現場 spray cat；"
+        "來料尺寸=ukuran material masuk；表面品質=kualitas permukaan；"
+        "短尺維護=penanganan material pendek(短尺材料處理,不是 penggaris/尺規)；"
+        "重量確認=konfirmasi berat；作業流程=alur kerja。"
     )
 
 
@@ -7065,6 +7175,20 @@ ZH_TO_ID_HARD = {
     "光輝退火": "bright annealing",
     "退火爐": "tungku annealing",
     "過帳": "input data ke sistem",
+    # v3.20: 工單公告 / 工序基本工作術語。放在前置術語層,讓 LLM 不再把複合詞拆成字典義。
+    "工單資訊": "informasi pada work order",
+    "短尺維護": "penanganan material pendek",
+    "短尺維护": "penanganan material pendek",
+    "來料尺寸": "ukuran material masuk",
+    "来料尺寸": "ukuran material masuk",
+    "表面品質": "kualitas permukaan",
+    "表面质量": "kualitas permukaan",
+    "重量確認": "konfirmasi berat",
+    "重量确认": "konfirmasi berat",
+    "作業流程": "alur kerja",
+    "作业流程": "alur kerja",
+    "工單": "work order",
+    "噴漆": "spray cat",
     # v3.9.54: 「放行」從硬替換移除 — 語境依賴(站別放行=release data / 品保放行=QC release),
     # 死替換會讓「品保有放行」變「品保有release data」誤譯。改交 LLM + 下方語境規則判斷。
     # 官方依據:Anthropic prompting best practices — 語境依賴術語用 few-shot 軟引導,非 find-replace。
@@ -7265,7 +7389,7 @@ if os.path.exists(_packaging_json_path):
 # v3.9.31: 印尼文範例詞庫(冷抽課專有名詞對照表,從 02_專有名詞對照表FN_冷抽課.xlsx)
 # 結構:{中文: {"idn": 印尼文, "note_zh": 中文說明, "note_id": 印尼文說明}}
 # 來源 = 嵌入式 default(232 條)→ glossary_data.json 覆蓋(如存在)
-_GLOSSARY_JSON = '{"M7導板":{"idn":"Tongkat Pemisah","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Untuk misahin barang yang besar(1ton)"},"電子磅秤":{"idn":"Timbangan Gantung","note_zh":"安裝於天車上，用以即時測量並顯示吊運物體重量的電子裝置，具備精確測量、過載警示與數據記錄功能，確保起重作業的安全與準確性","note_id":"Untuk menimbang barang yang digantung"},"天車/固定式起重機":{"idn":"Tian Che / Derek tetap(Fixed crane)","note_zh":"天車是用於廠內吊運不銹鋼原料、半成品及成品的起重設備，具備移動、升降與定位功能的起重機，用以安全、精準地進行不銹鋼材料在各生產工序間的搬運與裝卸作業","note_id":"Alat untuk angkat dan pindah barang berat secara efisien dan aman"},"掛勾":{"idn":"Kait/Hook","note_zh":"懸掛與固定不銹鋼原料、半成品或成品的起重配件，是具有足夠承載強度與防脫設計的金屬吊具，用以安全連接起重索具與吊運物件，確保吊運過程中的穩定與安全。","note_id":"untuk mengait dan mengangkat barang"},"布索":{"idn":"Tali kain yang di pakai di Tian Che","note_zh":"天車上的「布索」是一種強韌的吊繩，用來把不銹鋼材料安全地吊起來並運送到不同地方，確保吊運過程穩定不會斷或滑脫。","note_id":"Untuk mengangkat dan mengikat barang saat proses pengangkatan"},"標籤":{"idn":"Faktur Pemesanan","note_zh":"貼在產品外部，標示出貨資訊，如重量、單號、客戶、儲存位置等","note_id":"Surat pesanan pelanggan yang ditaro pada bahannya (ada yang bulat ada yang persegi)"},"秤重台":{"idn":"Meja Timbangan","note_zh":"包裝站的「秤重台」用來稱出包裝好後的不銹鋼產品重量，確保貨物重量正確，不會裝太多或裝太少。","note_id":"Untuk menimbang barang yang ada di bawah"},"顯示器":{"idn":"Monitor","note_zh":"顯示稱出包裝好後的不銹鋼產品重量","note_id":"Untuk memantau kerjaan yang ada di layar monitor"},"打包機":{"idn":"Plester/Alat pengikat","note_zh":"是一種用手拿的機器，用來把鋼帶拉緊並扣緊固定，讓不銹鋼產品包裝得牢固又不會鬆脫。","note_id":"Alat untuk Membungkus, mengepak, menyegel produk"},"鋼帶":{"idn":"Tali baja","note_zh":"是一種堅硬又強韌的金屬帶子，用來環繞並固定包裝好的不銹鋼產品，讓貨物在運送時不會鬆開或受損。","note_id":"Digunakan untuk mengikat barang/mengamankan barang agar tidak bergerak saat pengiriman atau penyimpanan"},"鋼扣":{"idn":"Klem Baja","note_zh":"包裝站的「鋼扣」是一種用來把包裝鋼帶扣緊的金屬配件，像是一個小鈕扣，讓鋼帶牢牢固定住貨物，不會在運送中鬆開。","note_id":"Digunakan bersama 鋼帶 (steel strapping / tali baja) untuk mengunci atau mengencangkan ikatan di sekitar barang."},"膠膜":{"idn":"Sejenis Bubble Wrap","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan."},"PP布":{"idn":"Untuk melindungi bahan (PP bu bahannya semacam goni)","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk mencegah karatan"},"膠帶":{"idn":"Selotip","note_zh":"用來把紙箱或包裝封起來，讓貨物不會鬆開或掉出來，確保運送時安全又整齊。","note_id":"Untuk merekatkan bahan atau kemasan seperti (Kardus atau kertas yang mau di bungkus)"},"敲齊工具":{"idn":"Alignment/leveling tool","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Digunakan untuk menyelaraskan benda agar sejajar"},"剪刀":{"idn":"Gunting","note_zh":"剪斷膠帶、塑膠膜或紙箱的工具，讓包裝作業更快速、整齊又方便","note_id":"Untuk menggunting Selotip atau pembungkus lainnya."},"CYA矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYA)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"CYB矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYB)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"梅花板手":{"idn":"Kunci Ring","note_zh":"是一種用來轉動並固定六角螺帽的工具，讓螺絲可以緊緊固定或輕鬆拆卸，不會損傷螺絲角。","note_id":"Mengencangkan atau melepaskan mur kepala yang berbentuk heksagonal (6sisi)."},"六角板手":{"idn":"Kunci L","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur yang berbentuk heksagonal dalam"},"開口板手":{"idn":"Kunci Pas Terbuka","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur dengan satu sisi terbuka, cocok untuk ruang yang sempit(yang sulit dijangkau)."},"CYA操作盤":{"idn":"CYA control panel","note_zh":"矯直機的控制面盤","note_id":"Untuk memonitor/mengontrol kerjanya mesin CYA."},"棉繩搬運台車":{"idn":"Troli pengangkat dengan tali katun","note_zh":"是一種用來搬運棉繩的小推車","note_id":"Troli untuk memindahkan tali katun yang di gantung."},"BF235圓棒拋光機":{"idn":"Mesin Pemoles Batang","note_zh":"「圓棒拋光機」是一種用來把不銹鋼圓棒表面磨得光滑亮麗的機器","note_id":"Digunakan untuk memoles/menghaluskan batang logam agar permukaan lebih rata, bersih dan mengkilap."},"束帶":{"idn":"Tali pengikat","note_zh":"是一種用來把材料捆綁在一起的塑料帶","note_id":"Digunakan untuk mengikat atau mengencangkan barang agar tetap stabil selama penyimpanan/pengiriman."},"捲尺":{"idn":"Meteran Gulung","note_zh":"是一種可以伸縮的測量工具，用來量測長度或尺寸","note_id":"Untuk mengukur panjang, tinggi, lebar suatu benda."},"刮刀":{"idn":"Pengikis","note_zh":"是一種用來清除表面雜質或油污的工具","note_id":"Untuk mengikis, membersihkan atau meratakan permukaan"},"檔桿":{"idn":"Pipa Besi Penghadang","note_zh":"於入料過程中，放置於入料區邊緣，避免生產中棒材滾落","note_id":"Untuk menghadang barang tidak berlebihan"},"防鏽油":{"idn":"Oli anti karat","note_zh":"是一種塗在不銹鋼表面的油，可以防止鋼材生鏽，讓產品在存放或運送時保持乾淨又光亮。","note_id":"untuk mencegah karat pada permukaan bahan."},"研磨機":{"idn":"Mesin Penghalus cetakkan","note_zh":"是一種用來把不銹鋼棒材表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Untuk menghaluskan, meratakan atau memperbaiki permukaan cetakkan."},"調機工作台車":{"idn":"Troli Peralatan kerja","note_zh":"1.特別留意：工具箱中梅花板手翻譯錯誤，建議修正\\n\\n2.定義：是一種可以移動的小推車，上面放著調整機器用的手工具，讓工人方便拿取和維修設備。","note_id":"Troli Peralatan kerja"},"I9置料台":{"idn":"Station Pelurusan Material I9","note_zh":"是一個用來暫時放置棒材的工作台","note_id":"Station Pelurusan Material I9"},"I9置料台 旁按鈕「置料台前進」":{"idn":"Mesin Pelurusan Maju","note_zh":"1.特別留意：「置料台前進」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 往前","note_id":"Mesin pelurusan bergerak maju ke depan"},"I9置料台旁按鈕「置料台後退」":{"idn":"Mesin Pelurusan Mundur","note_zh":"1.特別留意：「置料台後退」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 後退","note_id":"Mesin Pelurusan bergerak mundur ke belakang"},"I9置料台旁按鈕「緊急停水」":{"idn":"Tombol darurat berhenti air","note_zh":"1.特別留意：緊急停止按鈕有兩個，黑色的是停水；紅色是機台緊急停止，但兩者的標示都一樣，建議更新\\n2.定義：是一個在發生突發狀況時，可以立刻關閉冷卻水供應的裝置，用來保護設備和確保操作安全。","note_id":"紅(緊急停機)-tombol berhenti darurat\\n黑(緊急停水)-tombol untuk mematikan air"},"I9置料台旁「緊急停止拉索」":{"idn":"Tali tarik darurat untuk menghentikan mesin","note_zh":"1.特別留意：緊急停止拉索，印尼文有誤(寫成緊急停止按鈕)，建議更新\\n2.定義：是一條拉一下就能立刻關掉機器的繩子，用來在發生危險時快速停機，保護工人安全。","note_id":"Tali tarik darurat untuk menghentikan mesin"},"422清洗槽":{"idn":"422 Tangki Pencucian","note_zh":"「清洗槽」是一個裝有清潔液的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"Tempat untuk membersihkan cetakkan."},"清水槽":{"idn":"Tangki Air Bersih","note_zh":"「清洗槽」是一個裝有清水的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"tangki untuk membersihkan/membilas debu sisa minyak ringan"},"藥水槽":{"idn":"Tangki Larutan Kimia","note_zh":"「清洗槽」是一個裝有藥水的容器，用來浸泡或沖洗不銹鋼棒材。","note_id":"untuk menghilangkan karat, minyak atau residu keras."},"天車遙控器":{"idn":"Remote control crane(tian che)","note_zh":"是一個用來遙控吊車移動的控制器，讓工人可以遠距離搬運不銹鋼棒材","note_id":"alat digunakan untuk mengontrol crane(tian che) dari jarak jauh."},"I9入料床收集架電氣箱 下方控制鈕「滾輪 前/停/後」":{"idn":"Roda bergerak Maju/Berhenti/Mundur","note_zh":"1.特別留意：滾輪控制棒材輸送方向\\n2.特別留意中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往後方跑；但標示是”前”\\n(2)旋鈕往右旋，棒材會往前方跑 ；但標示是”後”","note_id":"Roda bergerak Maju/Berhenti/Mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「上料台上升」":{"idn":"Meja Pengumpan naik","note_zh":"是一個讓放置不銹鋼棒材的平台自動升高的裝置，方便工人把棒材送入置料台後，進行生產","note_id":"Membuat material naik secara otomatis"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台後退」":{"idn":"Roll roda mundur ke belakang","note_zh":"此按鈕用於使入料床收集架的滾輪平台向後移動，以清空材料或調整材料位置。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台上升」":{"idn":"Roll roda naik ke atas","note_zh":"此按鈕用於使入料床收集架的滾輪平台升起，將材料送至下一工序。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak naik ketas, mendorong ke proses berikutnya."},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台下降」":{"idn":"Roda turun ke bawah","note_zh":"此按鈕用於使入料床收集架的滾輪平台下降，以便取下或調整材料位置。","note_id":"Tombol ini digunakan untuk menurunkan meja roller pada rak pengumpan I9, agar material bisa diambil atau disesuaikan posisinya"},"I1出料床收集架電氣箱「開、關」":{"idn":"Buka , Tutup","note_zh":"開、關","note_id":"Buka, Tutup"},"I1入料床收集架電氣箱 下方控制鈕「滾輪 後退/停止/前進」":{"idn":"Roda Mundur ke belakang/berhenti/maju kedepan","note_zh":"1.滾輪控制棒材輸送方向\\n2.中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往前方跑；但標示是”後退”\\n(2)旋鈕往右旋，棒材會往後方跑 ；但標示是”前進”","note_id":"Roda Mundur ke belakang/berhenti/maju kedepan"},"無心研磨機 I18":{"idn":"Mesin grinding tanpa pusat I18","note_zh":"是一種用來把不銹鋼表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Mesin yang digunakan untuk mengahaluskan dan mempoles permukaan steel, sehingga produk terlihat lebih rapi dan kualirasnya lebih baik."},"無心研磨機 I18料床電器盤 「手動 自動」":{"idn":"Manual Otomatis","note_zh":"1.特別留意：標示全白，字已消失","note_id":"Manual Otomatis"},"研磨股 無心研磨機自主檢驗紀錄表":{"idn":"Formulir catatan pemeriksaan mandiri mesin grinding tanpa pusat","note_zh":"讓操作研磨機操機手能夠自動依循檢驗生產狀況","note_id":"memungkinkan oprator mesin grinding untuk secara otomatis memeriksa dan mengikuti kondisi produksi."},"研磨股 無心研磨機自主檢驗紀錄表「設備」":{"idn":"Peralatan","note_zh":"紀錄生產設備名稱","note_id":"Peralatan"},"研磨股 無心研磨機自主檢驗紀錄表「時間」":{"idn":"Waktu","note_zh":"紀錄生產時間","note_id":"Waktu"},"研磨股 無心研磨機自主檢驗紀錄表「來料尺寸」":{"idn":"Ukuran material yang masuk (max/min)","note_zh":"紀錄來料尺寸","note_id":"Ukuran material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「來料粗糙度」":{"idn":"Kasar/halus material yang masuk (max/min)","note_zh":"紀錄來料尺寸來料粗糙度(max/min)","note_id":"Kasar/halus material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「成品尺寸前/中／後」":{"idn":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang","note_zh":"紀錄研磨股 無心研磨機自主檢驗紀錄表\\n「成品尺寸(max/min) 前/中／後」","note_id":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang"},"研磨股 無心研磨機自主檢驗紀錄表「長度」":{"idn":"Panjang (mm)","note_zh":"長度(mm)","note_id":"Panjang (mm)"},"研磨股 無心研磨機自主檢驗紀錄表「產出粗糙度」":{"idn":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)","note_zh":"產出粗糙度(max/min)","note_id":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「外觀」":{"idn":"Tampilan Luar","note_zh":"外觀","note_id":"Tampilan Luar"},"研磨股 無心研磨機自主檢驗紀錄表「工號」":{"idn":"Nomor karyawan","note_zh":"工號","note_id":"Nomor kerja"},"研磨股 無心研磨機自主檢驗紀錄表「量具編號」":{"idn":"Nomor alat ukur yang digunakan","note_zh":"量具編號","note_id":"Nomor alat ukur yang digunakan"},"研磨股 無心研磨機自主檢驗紀錄表「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"研磨股 無心研磨機自主檢驗紀錄表「班別」":{"idn":"Shift","note_zh":"班別","note_id":"Shift"},"冷抽上料區":{"idn":"Mesin produksi Coil","note_zh":"在 冷抽上料區，操作員將管件放置在導軌上，準備送入冷抽機進行加工。","note_id":"Operator menaruh pipa di rel, siap proses untuk memotong besi sesuai pesanan konsumen. contoh pemotongan :R,H,S,F."},"AIR管":{"idn":"Pipa udara","note_zh":"用於清理/吹除","note_id":"untuk membersihkan, untuk mengeklem"},"鐵線剪":{"idn":"Gunting kawat","note_zh":"操作員使用 鐵線剪 剪掉多餘的鐵線，確保材料整齊。","note_id":"Untuk menggunting kawat kecil."},"塑膠槌":{"idn":"Palu","note_zh":"操作員使用 塑膠槌 輕輕敲打材料，避免損壞表面。","note_id":"Untuk memukul atau menekan benda tanpa merusak permukaan."},"PE帶剪刀":{"idn":"Gunting besi plat","note_zh":"操作員使用 PE帶剪刀 將金屬帶切割成所需長度。","note_id":"Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan."},"鐵管":{"idn":"Pipa besi","note_zh":"操作員使用 鐵管 輕輕敲齊材料，避免損壞表面。","note_id":"Untuk membengkokkan/meluruskan produk."},"工單":{"idn":"work order","note_zh":"工廠現場作業用的工單／作業指示單，不是材料簿放置處。","note_id":"Work order yang berisi instruksi/informasi kerja; bukan tempat buku bahan.","reverse_safe":true},"E6冷抽機─張力輥向下/向上":{"idn":"Pengaturan roller penegang naik/turun","note_zh":"操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力","note_id":"Operator bisa mengatur tension roller naik atau turun supaya pipa tetap lurus dan tegangan merata selama proses penarikan."},"E6冷抽機─張力輥下部大槌向下/向上":{"idn":"Palu besar bagian bawah tension roller naik/turun","note_zh":"操作員可控制 張力輥下部大槌向下或向上，以調整壓力並確保材料穩定通過","note_id":"Untuk mengatur tekanan agar material tetap stabil saat lewat."},"E6冷抽機─張力輥上部大槌向下/向上":{"idn":"Palu besar bagian atas tension roller naik/turun","note_zh":"操作員可控制 張力輥上部大槌向下或向上，以調整上方壓力，確保材料穩定運行。","note_id":"Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan."},"綜合冷抽機E6─放線架拉置單元關":{"idn":"Rak gulungan -  Unit penarik Off","note_zh":"如需停止拉拔動作，可按下 拉置單元關，使設備停止運轉。","note_id":"Jika ingin menarik proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja."},"綜合冷抽機E6─放線架轉盤開關":{"idn":"Saklar putaran cepat dan lambatnya nampan","note_zh":"轉盤快/慢速按鈕","note_id":"Tombol putaran cepat dan lambatnya nampan"},"綜合冷抽機E6─放線架矯直板 傾斜/水平":{"idn":"Pelat pelurus miring/datar","note_zh":"材料剛從放線架出來時，可以將矯直板調整為傾斜，讓材料更容易進入；當運行穩定後，再調整為水平位置。","note_id":"Saat material baru keluar dari rak gulungan, plat dibuat miring supaya mudah masuk; setelah stabil diubah ke posisi datar."},"綜合冷抽機E6─放線架矯直板 升高/垂直":{"idn":"Pelat pelurus naik/posisi vertikal","note_zh":"可將矯直板升高或調整為垂直位置，以配合材料進入並保持穩定。","note_id":"Plat pelurus bisa di naikkan atau dibuat tegak untuk menyesuaikan masuknya material dan menjaga tetap stabil."},"綜合冷抽機E6─放線架矯直板 向後/向前轉":{"idn":"Pelat pelurus berputar ke depan/ atau berputar ke belakang","note_zh":"可將矯直板向前或向後轉動，以調整材料通過方向並保持平直。","note_id":"Pengaturan putaran pelat pelurus kedepan/belakang agar arah material tetap lurus dan stabil."},"綜合冷抽機E6─放線架液壓關":{"idn":"Tombol mengatur mesin hidrolik off","note_zh":"液壓關","note_id":"Tombol mengatur mesin hidrolik off / mati"},"綜合冷抽機E6─放線架液壓開":{"idn":"Tombol mengatur mesin hidrolik on","note_zh":"液壓開","note_id":"Tombol mengatur mesin hidrolis on/hidup"},"綜合冷抽機E6─放線架設定開":{"idn":"Rak gulungan bahan Pengaturan on","note_zh":"設定開","note_id":"Mode pengaturan mesin ON"},"綜合冷抽機E6─放線架設定自動":{"idn":"Rak gulungan bahan Penganturan Auto","note_zh":"設定自動","note_id":"Rak gulungan bahan Pengaturan Auto"},"綜合冷抽機E6─放線架故障重置":{"idn":"Lampu sensor error","note_zh":"當設備出現問題時，故障指示燈會亮起，提示操作員進行檢查和維護。","note_id":"Lampu untuk mendeteksi adanya error pada mesin"},"砂光機":{"idn":"Alat Mengamplas","note_zh":"砂光機用於打磨材料表面，使其平滑並去除毛刺。","note_id":"Mesin amplas digunakan untuk menghaluskan permukaan material agar rata dan menghilangkan burr."},"T桿":{"idn":"Engkol T","note_zh":"T桿用於固定材料或調整設備的位置，使操作更加穩定。","note_id":"untuk menahan material atau mengatur posisi peralatan agar operasi menjadi lebih stabil."},"E822冷抽機":{"idn":"Mesin produksi bar (Vital)","note_zh":"將金屬材料拉細，提升其強度和表面品質。","note_id":"Menipiskan material logam, meningkatkan kekuatan dan kualitas permukaaannya."},"by pass安全裝置":{"idn":"Kunci By Pass","note_zh":"1.特別注意：by pass安全裝置 沒有任何標示，確認是否需要特別標示\\n2.定義：在維護或測試時，可使用 By pass安全裝置，暫時繞過部分安全功能，但需謹慎操作。","note_id":"Perangkat pengaman bypass dapat digunakan untuk sementara melewati sebagian fungsi pengaman, tetapi harus dioperasikan dengan hati-hati."},"綜合冷抽機E6─精矯直設備拉製單元 關":{"idn":"Unit Penarikan Off","note_zh":"拉製單元 關","note_id":"Mematikan unit penarikan agar material berhenti bergerak dari mesin."},"綜合冷抽機E6─精矯直設備拉製單元 開":{"idn":"Unit Penarikan ON","note_zh":"拉製單元 開","note_id":"Menghidupkan unit penarikan agar material mulai bergerak melalui mesin."},"綜合冷抽機E6─精矯直設備TRAPO後端測試關閉依主管建議調整成「後夾輪 夾緊/鬆開」":{"idn":"TRAPO ujung belakang dimatikan","note_zh":"1.TRAPO後端測試關閉\\n依主管建議調整成「後夾輪 夾緊/鬆開」\\n\\n2.定義：後夾輪，就是位於後端固定棒材的夾具","note_id":"Roda penjepit belakang : menjepit/melepas"},"綜合冷抽機E6─精矯直設備TRAPO前端測試關閉依主管建議調整成「前夾輪 夾緊/鬆開」":{"idn":"Mesin Uji TRAPO dibagian depan off","note_zh":"1.TRAPO前端測試關閉\\n依主管建議調整成「前夾輪 夾緊/鬆開」\\n2.定義：前夾輪，是位於前端固定棒材的夾具","note_id":"Roda penjepit depan : menjepit/melepas"},"綜合冷抽機E6─精矯直設備使用/不使用測量輪依主管建議調整成「計長輪 啟動/停用」":{"idn":"Lampu indikator (penggunaan/tidak penggunaan roda pengukur)","note_zh":"1.使用/不使用測量輪\\n依主管建議調整成「計長輪 啟動/停用」\\n2.定義：計長輪，就是測量棒材 長度的工具","note_id":"Roda penghitung panjang adalah alat untuk mengukur panjang batang material."},"綜合冷抽機E6─精矯直設備TRAPO前端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan depan","note_zh":"TRAPO前輸送輪測試升降設定","note_id":"Pengaturan naik/turun untuk roda pengumpan depan TRAPO saat tes agar aliran bahan stabil."},"綜合冷抽機E6─精矯直設備TRAPO後端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan belakang","note_zh":"TRAPO後輸送輪升降設定","note_id":"Pengaturan naik/turun untuk roda belakang TRAPO agar aliran bahan keluar stabil."},"綜合冷抽機E6─精矯直設備設定 開":{"idn":"Pengaturan ON (Lampu indikator manual)","note_zh":"精矯直設備 設定 開（手動指示燈）","note_id":"Mengaktifkan mode pengaturan pada pelurus presisi dengan lampu indikator yang menyala sebagai tanda manual aktif."},"綜合冷抽機E6─精矯直設備設定 自動":{"idn":"Pengaturan Otomatis","note_zh":"精矯直設備 設定 自動（手動/自動）","note_id":"Mode pengaturan pelurus presisi bisa diatur manual/otomatis."},"綜合冷抽機E6─精矯直設備謢蓋確認":{"idn":"Konfirmasi Penutup pelindung","note_zh":"精矯直設備 護蓋確認","note_id":"Pengecekan apakah penutup pelindung mesin sudah aman/tertutup."},"中置料床套筒":{"idn":"Pipa MC","note_zh":"是一個 喇叭口形狀的導引管，讓棒材順利通過置料床，避免卡料","note_id":"Sebagai penahan agar tetap lurus dan stabil saat di proses. (untuk mengantar bahan pipa)"},"導線輪9.0":{"idn":"Roda pemutar","note_zh":"導線輪9.0用於引導材料，使其在機器中平穩運行並保持直線","note_id":"Menuntun material agar berjalan stabil di mesin dan tetap lurus."},"皮膜粉":{"idn":"Bubuk untuk menghaluskan bahan","note_zh":"可以在金屬表面形成保護層，提供潤滑，減少損傷","note_id":"Bubuk untuk menghaluskan bahan, pada saat pipa masih berminyak."},"切斷座":{"idn":"Tempat pemotongan pipa","note_zh":"用來精確切割管件的設備，確保每根材料長度一致。","note_id":"Digunakan untuk memotong pipa secara presisi, memastikan setiap material memiliki panjang yang sama."},"切斷座─右方按鈕「管件向上」":{"idn":"Tombol untuk pipa naik","note_zh":"管件向上","note_id":"Tempat pemotongan - tombol pipa naik."},"切斷座─右方按鈕「管件向下」":{"idn":"Tombol untuk pipa turun","note_zh":"管件向下","note_id":"Tempat pemotongan - tombol pipa turun."},"切斷座─右方按鈕入口側緩慢向下/向上":{"idn":"Bagian masuk pipa bergerak perlahan turun/naik.","note_zh":"可以精確調整管件高度，使其順利進入切割區域。","note_id":"Menyesuaikan tinggi pipa agar masuk lancar ke area pemotongan."},"切斷座─右方按鈕就位":{"idn":"Lampu indikator posisi siap","note_zh":"確認管件已到達正確位置以便切割。","note_id":"Untuk memastikan pipa sudah berada di posisi yang tepat agar bisa dipotong"},"切斷座─右方按鈕手動/自動":{"idn":"Tombol manual/auto","note_zh":"手動/自動","note_id":"Tombol manual/auto di stan pemotongan"},"切斷座─右方按鈕覆歸 昇最高":{"idn":"Tombol reset","note_zh":"切斷座上的按鈕，用於將管件返回至最高位置","note_id":"Tombol yang ada di cutting station untuk mengembalikan pipa ke posisi tertinggi setelah pemotongan."},"切斷座─右方按鈕下降 上昇":{"idn":"Tombol Turun/ naik","note_zh":"切斷座上的按鈕，用於手動調整管件上下","note_id":"Tombol yang ada di cutting station untuk mengatur pipa turun/naik secara manual."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"Memastikan sensor di box conveyor depan-belakang bekerja dengan baik sehingga material dapat melewati dengan aman."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌頂出材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"1.依主管建議調整成「夾輪 出料」\\n2.料床內導管夾輪出料；材料會被導軌推送到下一個加工位置或出料區。","note_id":"Di dalam bed material, roda penjepit pada pipa pemandu untuk proses pengeluaran material; material akan didorong oleh rel pemandu ke posisi proses berikutnya atau ke area keluaran."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌插入材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa memasukkan material","note_zh":"1.依主管建議調整成「夾輪 入料」\\n2.定義：料床內導管夾入材料會被導軌進入到加工位置，準備進行下一步作業。","note_id":"Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌清空」":{"idn":"Rel pipa dikosongkan","note_zh":"導軌上的所有管件會被推送出去，為下一批材料做好準備。","note_id":"Tekan rombol ini, semua pipa di rel akan terdorong keluar, siap untuk batch material berikutnya."},"綜合冷抽機E6-RIPO矯直機":{"idn":"Mesin Ring pelurus","note_zh":"用於將金屬材料拉細並拉直，以便進行下一步加工。","note_id":"Untuk menarik dan meluruskan material agar siap untuk proses berikutnya."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 開」":{"idn":"RIPO on","note_zh":"RIPO 開","note_id":"Mesin RIPO menyala"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 關」":{"idn":"RIPO off","note_zh":"RIPO 關","note_id":"Mesin RIPO Mati"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 關」":{"idn":"Unit penarikan dimatikan","note_zh":"拉製單元 關","note_id":"Tombol untuk mematikan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 開」":{"idn":"Unit penarikan di hidupkan","note_zh":"拉製單元 開","note_id":"Tombol untuk menghidupkan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「材料進入 RIPO」":{"idn":"Bahan masuk ke mesin RIPO","note_zh":"材料進入 RIPO","note_id":"Bahan masuk ke mesin RIPO"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 減速」":{"idn":"Memperlambat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動減速，單元會以較慢速度拉動材料，以確保精度和安全。","note_id":"Unit akan menarik material dengan kecepatan lebih lambat untuk memastikan presisi dan keamanan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 加速」":{"idn":"Mempercepat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動加速，單元會以更高速度拉動材料，加快生產。","note_id":"Unit akan menarik material dengan kecepatan lebih tinggi untuk mempercepat produksi."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 開」":{"idn":"Lampu pengaturan hidup","note_zh":"手動 開","note_id":"Lampu manual hidup"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 自動」":{"idn":"Pengaturan auto","note_zh":"手動 / 自動","note_id":"Tombol pengaturan Auto/Manual."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋請求」":{"idn":"Permintaan Pelindung penutup","note_zh":"操作 E6-RIPO 矯直機前，按下 護蓋請求，系統會確認護蓋位置，確保機器可以安全啟動。","note_id":"Dengan menekan tombol ini sistem akan memeriksa posisi penutup untuk memastikan mesin bisa dijalankan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋重置」":{"idn":"Reset penutup pelindung","note_zh":"當 E6-RIPO 矯直機的護蓋打開後，按下 護蓋重置，護蓋會回到原位，確保操作安全。","note_id":"Setelah penutup pelindung mesin E6-RIPO dibuka, tekan reset penutup pelindung, sehingga penutup kembali ke posisi awalnya dan memastikan operasi aman."},"中置料床":{"idn":"Meja mengantar bahan tengah","note_zh":"材料在進入冷抽機前會放在 中置料床上，便於操作員進行整理和送入下一工序。","note_id":"Material diletakkan di meja bahan tengah sebelum masuk ke mesin cold drawing, sehingga operator lebih mudah menata dan memasukkannnya ke proses berikutnya."},"中置料床 旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"中置料床 旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"中置料床 旁按鈕「管件導軌 頂出材料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"操作中置料床時，按下 管件導軌 頂出材料，材料會被導軌推送到下一工序或取料位置。","note_id":"Setelah menekan tombol 管件導軌 頂出材料 ini, nanti material akan terdorong ke proses berikutnya."},"中置料床 旁按鈕「管件導軌 插入材料」":{"idn":"Rel pipa memasukkan material","note_zh":"操作中置料床時，按下管件導軌插入材料，材料會被導軌進入到加工位置，準備進行下一步作業","note_id":"Setelah menekan tombol  管件導軌 插入材料 ini, nanti material masuk ke posisi pemrosesan, siap untuk langkah kerja berikutnya."},"中置料床 旁按鈕「管件導軌 清空」":{"idn":"Rel pipa dikosongkan","note_zh":"操作中置料床時，按下管件導軌清空，導軌上的所有材料會被推送出去，確保下一批材料能順利進入。","note_id":"Tekan tombol 管件導軌 清空 ini maka semua material akan terdorong keluar memastikan batch material berikutnya bisa masuk dengan lancar"},"綜合冷抽機E6-雙輥矯直設備":{"idn":"Mesin Pelurus dua roller","note_zh":"雙輥矯直，用兩個輥輪的壓力將材料拉直","note_id":"Dua roller lurus untuk meluruskan material dengan tekanan dari dua roller."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「拋光段開連線 關」":{"idn":"Koneksi bagian polishing off","note_zh":"斷開後方製程，倒角機與拋光機的連線；主要目的為特定客戶訂單不需拋光，倒角後就可以進到包裝","note_id":"Tombol untuk mematikan koneksi ke bagian polishing sehingga proses polishing tidak ikut berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「解除控制」":{"idn":"Lepas kontrol","note_zh":"取消設備的自動控制，使設備可以獨立或手動操作","note_id":"Tombol ini digunakan untuk melepas kendali otomatis atau interlock dari mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 開」":{"idn":"Kontrol ON","note_zh":"啟動設備的控制系統，使設備進入受控運轉狀態","note_id":"mengaktifkan kembali sistem kontrol mesin agar berjalan normal."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「設定/自動」":{"idn":"Otomatis/Manual","note_zh":"用來切換設備手動模式與自動運轉模式之間","note_id":"Tombol untuk ganti mode dari otomatis ke manual."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 關」":{"idn":"Kontrol Off","note_zh":"關閉設備的控制系統，使設備停止受控運轉","note_id":"Menonaktifkan sistem kontrol mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 檢索」":{"idn":"Tombol Safety door/ pengecekan","note_zh":"檢查修門的狀態（是否關閉或安全）","note_id":"Tombol untuk mengecek apakah pintu perawatan sudah aman tertutup sebelum mesin berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 確認」":{"idn":"Tombol Safety door/ konfirmasi","note_zh":"確認檢修門已關閉並處於安全狀態，使設備可以運轉","note_id":"Tombol untuk konfirmasi bahwa Safety door sudah aman dan mesin bisa berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「機器燈 開/關」":{"idn":"Lampu mesin On /Off","note_zh":"機器燈 開/關","note_id":"Lampu mesin On /Off"},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「故障重置」":{"idn":"Reset Error","note_zh":"當E6雙輥矯直設備發生故障時，按下故障重置，系統會清除錯誤訊號，使設備恢復正常運行","note_id":"Saat mesin Pelurus dua roller mengalami kesalahan, tekan Reset error, sistem akan menghapus sinyal error dan mengembalikan mesin ke kondisi operasi normal."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「指示燈測試」":{"idn":"Uji lampu indikator","note_zh":"指示燈測試按鈕，確保所有指示燈亮起並正常工作","note_id":"Tombol uji lampu indikator untuk memastikan semua lampu indikator menyala dan berfungsi dengan baik."},"倒角機":{"idn":"Mesin Peraut/Chamfer","note_zh":"冷抽機矯直後，因應客戶需求，於頭尾進行倒角加工","note_id":"Untuk menajamkan ujung kawat/besi agar berbentuk sesuai dengan pesanan pelanggan."},"倒角機旁按鈕「對準器 向後/向前」":{"idn":"Alat geser penjuruator kebelakang / kedepan.","note_zh":"用來調整對準器的位置，使材料正確對準加工位置","note_id":"Tombol untuk mengatur posisi alignment agar material tepat di mesin chamfering"},"倒角機旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"倒角機旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"倒角機旁按鈕「輸送帶彎槽向下」":{"idn":"Menurunkan alur sabuk pengantar.","note_zh":"輸送帶處於高位，物料還不能正確進入機器，按下 輸送帶彎槽向下，彎槽下降，物料可以正確進入倒角機。","note_id":"Pada saat conveyor/sabuk pengantar berada di posisi tinggi (benda belum pas masuk mesin) tekan tombol ini agar benda bisa masuk mesin chamfering dengan posisi tepat."},"倒角機旁按鈕「輸送帶彎槽向上」":{"idn":"Menaikkan alur sabuk pengantar.","note_zh":"輸送帶處於低位，物料需要提升，按下 輸送帶彎槽向上，彎槽升高，物料可以順利進入倒角機。","note_id":"Conveyor berada di posisi rendah, benda kerja perlu diangkat. Tekan tombol ini agar alur naik, sehingga benda kerja bisa masuk mesin chamfering dengan lancar."},"倒角機旁按鈕「輸送帶彎槽已清空」":{"idn":"Alur conveyor sudah kosong","note_zh":"操作前需確認物料已被取出，按下 輸送帶彎槽已清空，系統確認彎槽內無物料，可以安全開始下一步操作","note_id":"Tombol ini akan memastikan alur conveyor kosong sehingga aman untuk memulai langkah berikutnya."},"E824拋光設備區":{"idn":"Mesin Polishing","note_zh":"在 E824 拋光設備區，操作員將工件放入拋光機，設備運行後，工件表面會變得光滑平整。","note_id":"Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."},"E824拋光設備區 旁按鈕「停用煞車」":{"idn":"Rem (brake)","note_zh":"停用煞車","note_id":"Tombol untuk mengerem."},"E824拋光設備區 旁按鈕「門開啟」":{"idn":"Pintu terbuka","note_zh":"門開啟","note_id":"Pintu terbuka"},"E824拋光設備區 旁按鈕「電燈 0 1」":{"idn":"Lampu Indikator 0 1","note_zh":"此按紐用於在電燈關閉及電燈開啟","note_id":"Lampu Indikator 0 (tutup) , 1(buka)"},"E824拋光設備區 旁按鈕「緊急開關」":{"idn":"Saklar Darurat","note_zh":"此按钮用於在緊急情况下直接停止機器。","note_id":"Tombol ini digunakan untuk menghentikan mesin secara langsung dalam keadaan darurat."},"盤元修磨架":{"idn":"Tempat perbaikan/pengasahan coil.","note_zh":"操作員將受損的盤元放在 盤元修磨架 上，使用磨具進行修磨，使盤元表面恢復平整光滑。","note_id":"Operator meletakkan coil yang rusak di rak perbaikan dan pengasahan, lalu menggunakan alat pengasah untuk membuat permukaan coil kembali halus dan rata."},"手持式砂輪機":{"idn":"alat penggrinda barang","note_zh":"手持式砂輪機","note_id":"Alat penggrinda barang."},"盤元修磨架旁按鈕「緊急停止」":{"idn":"Tombol Berhenti darurat","note_zh":"緊急停止","note_id":"Tombol Berhenti darurat"},"盤元修磨架旁按鈕「後退」":{"idn":"Mundur","note_zh":"後退 (西)","note_id":"Mundur"},"盤元修磨架旁按鈕「電氣遙控」":{"idn":"Tombol pengontrol elektrik","note_zh":"操作員按下 盤元修磨架旁按鈕  電氣遙控，可以從操作台遠程控制修磨架的升降或旋轉。","note_id":"Operator menekan tombol kontrol jarak jauh listrik di samping rak perbaikan coil, sehingga dapat mengendalikan naik-turun atau putaran rak dari meja operasi."},"E1冷抽機":{"idn":"Mesin Produksi Bar E1","note_zh":"E1冷抽機","note_id":"Mesin Produksi Bar E1"},"E1冷抽機旁標示「生產特殊鋼種 174 209 431 注意 盤元尾端彈開」":{"idn":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul","note_zh":"1.特別注意：無中印標示\\n生產特殊鋼種 174 209 431 注意 盤元尾端彈開","note_id":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul"},"E1冷抽機旁按鈕「砂帶降速」":{"idn":"Penurunan kecepatan Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶降速」","note_id":"Penurunan kecepatan Tali Amplas"},"E1冷抽機旁按鈕「砂帶重置」":{"idn":"Reset Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶重置」","note_id":"Reset Sabuk Amplas"},"E1冷抽機旁按鈕「砂帶吋動」":{"idn":"Gerakan Sedikit demi sedikit Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶作動」","note_id":"Gerakan Sedikit demi sedikit Sabuk Amplas"},"E1冷抽機 後段按鈕「N6.夾輪夾持」":{"idn":"N6. Roda penjepit dijepit","note_zh":"夾棒材的夾輪作動","note_id":"N6. Roda penjepit dijepit"},"E1冷抽機 後段按鈕「檔板氣壓缸作動」":{"idn":"Papan penghalang sedang bergerak.","note_zh":"檔板會移動到指定位置，固定或導引材料，確保加工安全順利","note_id":"Papan penghalang yang bergerak untuk menahan atau mengatur posisi material."},"工單「訂單資訊」":{"idn":"Informasi pesanan","note_zh":"讓操機手能夠工單資訊，製造棒材","note_id":"Informasi pesanan pelanggan"},"工單訂單資訊「訂單編號」":{"idn":"Nomor Pesanan","note_zh":"訂單編號","note_id":"Nomor Pesanan"},"工單訂單資訊「客戶名稱」":{"idn":"Nama Pelanggan","note_zh":"客戶名稱","note_id":"Nama Pelanggan"},"工單訂單資訊「收貨人」":{"idn":"Nama Penerima","note_zh":"收貨人","note_id":"Nama Penerima"},"工單訂單資訊「生計交期」":{"idn":"Tanggal Pemesanan Produk","note_zh":"生計交期","note_id":"Tanggal Pemesanan Produk"},"工單訂單資訊「性質碼」":{"idn":"Kode Jenis","note_zh":"性質碼","note_id":"Kode Jenis"},"工單訂單資訊「倒角」":{"idn":"Sudut yang diinginkan","note_zh":"倒角","note_id":"Sudut yang diinginkan"},"工單訂單資訊「砂光痕等級」":{"idn":"Tingkat bekas pengamplasan","note_zh":"棒材表面砂光帶造成的砂光痕嚴重程度分級","note_id":"Klasifikasi tingkat keparahan bekas pengamplasan yang muncul di permukaan batang."},"工單訂單資訊「分級」":{"idn":"Grade","note_zh":"依照棒材表面砂光痕嚴重程度分級","note_id":"Dikelompokkan berdasarkan tingkat keparahan bekas pengamplasan pada permukaan batang."},"工單訂單資訊「ET」":{"idn":"Eddy Current Testing","note_zh":"渦電流檢測(ET)是一種基於電磁感應原理的非破壞性檢測技術，專門用於金屬導體表面及近表面的缺陷檢測（如裂紋、腐蝕、孔洞）","note_id":"ET adalah metode pemeriksaan non-destruktif berbasis induksi elektromagnetik, digunakan untuk mendeteksi cacat pada permukaan dan dekat permukaan logam (seperti retak, korosi dan lubang)."},"工單訂單資訊「UT」":{"idn":"Ultrasonic Testing","note_zh":"UT 檢測(超音波檢測，Ultrasonic Testing)是一種無損檢測(NDT)技術，利用高頻聲波深入材料內部，檢測裂紋、夾渣、氣孔或測量厚度","note_id":"UT adalah metode pemeriksaan non-destruktif yang menggunakan gelombang suara frekuensi tinggi untuk masuk ke dalam materal, guna mendeteksi retakan, inklusi pori-pori atau mengkur ketebalan."},"工單訂單資訊「重量/支」":{"idn":"Berat batang / pcs","note_zh":"重量/支","note_id":"Berat batang / pcs"},"工單訂單資訊「冷抽數」":{"idn":"Jumlah proses Cold Drawing","note_zh":"冷抽數","note_id":"Jumlah proses Cold Drawing"},"工單訂單資訊「取樣/重量cm」":{"idn":"Sampel/berat cm","note_zh":"取樣/重量cm","note_id":"Sampel/berat cm"},"工單訂單資訊「成品尺寸 MIN」":{"idn":"Ukuran produk MIN","note_zh":"成品尺寸 MIN","note_id":"Ukuran produk MIN"},"工單訂單資訊「成品尺寸MAX」":{"idn":"Ukuran produk MAX","note_zh":"成品尺寸MAX","note_id":"Ukuran produk MAX"},"工單訂單資訊「短邊 MIN」":{"idn":"Sisi pendek MIN","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最小長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang minimum sisi pendek."},"工單訂單資訊「短邊 MAX」":{"idn":"Sisi pendek MAX","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最大長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang maximum sisi pendek."},"工單訂單資訊「厚度 MIN」":{"idn":"Ketebalan MIN","note_zh":"厚度 MIN","note_id":"Ketebalan MIN"},"工單訂單資訊「厚度 MAX」":{"idn":"Ketebalan MAX","note_zh":"厚度 MAX","note_id":"Ketebalan MAX"},"工單訂單資訊「長度 MIN」":{"idn":"Ketinggian MIN","note_zh":"長度 MIN","note_id":"Ketinggian MIN"},"工單訂單資訊「長度 MAX」":{"idn":"Ketinggian MAX","note_zh":"長度 MAX","note_id":"Ketinggian MAX"},"工單訂單資訊「計畫量」":{"idn":"Jumlah rencana produksi","note_zh":"計畫量","note_id":"Jumlah rencana produksi"},"工單訂單資訊「計畫支數」":{"idn":"Rencana Jumlah batang","note_zh":"計畫支數","note_id":"Rencana Jumlah batang"},"工單訂單資訊「短尺支數」":{"idn":"Jumlah batang pendek","note_zh":"可以接受短尺的支數","note_id":"Jumlah batang pendek yang masih dapat diterima."},"工單訂單資訊「短尺MIN」":{"idn":"Batang pendek","note_zh":"可以接受短尺的長度，最小是幾公分","note_id":"Bisa menerima seberapa pendek Ukurannya, paling kecil berapa cm."},"工單訂單資訊「捆重/MIN/MAX」":{"idn":"Berat per Bundel/MIN/MAX","note_zh":"捆重/MIN/MAX","note_id":"Berat per Bundel/MIN/MAX"},"工單訂單資訊「噴漆位置」":{"idn":"Posisi pengecatan","note_zh":"噴漆位置","note_id":"Posisi pengecatan"},"工單訂單資訊「套環」":{"idn":"Cincin Pelindung","note_zh":"套環","note_id":"Cincin Pelindung"},"工單訂單資訊「顏色」":{"idn":"Warna","note_zh":"顏色","note_id":"Warna"},"工單訂單資訊「包裝代碼」":{"idn":"Kode Kemasan","note_zh":"包裝代碼","note_id":"Kode Kemasan"},"工單備註資訊「品保」":{"idn":"Quality Control","note_zh":"呈現品保檢驗等級","note_id":"Menampilkan tingkat inspeksi QC"},"工單備註資訊「特殊」":{"idn":"Khusus","note_zh":"此單特殊備註事項","note_id":"catatan khusus untuk order ini"},"工單備註資訊「訂單」":{"idn":"Pesanan","note_zh":"呈現訂單特別備註資訊","note_id":"menampilkan catatan khusus dari pesanan"},"工單備註資訊「製造」":{"idn":"Produksi","note_zh":"呈現訂單製造備註資訊","note_id":"menampilkan catatan produksi pada order."},"工單備註資訊「客需」":{"idn":"Kebutuhan pelanggan","note_zh":"呈現訂單中客戶特殊需求資訊","note_id":"menampilakn permintaan khusus dari pelanggan"},"工單「母材」":{"idn":"bahan asal","note_zh":"顯示此工單原始材料來源","note_id":"menampilkan sumber bahan awal dari work order."},"工單母材資訊「尺寸1」":{"idn":"Ukuran 1","note_zh":"尺寸1","note_id":"Ukuran 1"},"工單母材資訊「尺寸2」":{"idn":"Ukuran 2","note_zh":"尺寸2","note_id":"Ukuran 2"},"工單母材資訊「型態」":{"idn":"Tipe/bentuk","note_zh":"型態","note_id":"Tipe/bentuk"},"工單母材資訊「批次」":{"idn":"Batch","note_zh":"批次","note_id":"Batch"},"工單母材資訊「口付 MIN」":{"idn":"Ukuran ujung minimum","note_zh":"口付 MIN","note_id":"Ukuran ujung minimum"},"工單母材資訊「退料重」":{"idn":"Berat material retur","note_zh":"退料重","note_id":"Berat material retur"},"工單母材資訊「現況流程」":{"idn":"Proses saat ini","note_zh":"現況流程","note_id":"Proses saat ini"},"工單母材資訊「解捲支數」":{"idn":"Jumlah batang hasil uncoiling","note_zh":"解捲支數","note_id":"Jumlah batang hasil uncoiling"},"工單母材資訊「400現況儲區」":{"idn":"Area penyimpanan saat ini 400","note_zh":"400站為原料站","note_id":"Stasiun 400 adalah stasiun bahan baku."},"工單製造資訊「退火代碼」":{"idn":"Kode annealing","note_zh":"技術單位提供的建議退火製程參數","note_id":"Parameter proses anealing yang direkomendasikan oleh bagian teknisi."},"工單製造資訊「頻率」":{"idn":"Frekuensi","note_zh":"頻率","note_id":"Frekuensi"},"工單製造資訊「眼膜」":{"idn":"Dies (alat untuk membentuk ukuran & bentuk material saat proses produksi)","note_zh":"眼模可以讓棒材經過加工，變成客戶指定的尺寸與形狀。","note_id":"Memproses batang agar menjadi ukuran dan bentuk sesuai permintaan pelanggan."},"工單製造資訊  眼膜「放置點」":{"idn":"titik penempatan","note_zh":"放置點","note_id":"titik penempatan"},"工單製造資訊  眼膜「進入角」":{"idn":"sudut masuk","note_zh":"進入角","note_id":"sudut masuk"},"工單製造資訊「減面率」":{"idn":"Reduction Ratio","note_zh":"技術單位提供的建議投料尺寸","note_id":"Tingkat Perubahan luas penampang batang (semakin besar, gaya tarik saat drawing semakin besar)"},"工單製造資訊「投料形狀」":{"idn":"Bentuk material masuk","note_zh":"投料形狀","note_id":"Bentuk material masuk"},"工單製造資訊「產出 尺寸」":{"idn":"Ukuran hasil produksi","note_zh":"產出 尺寸","note_id":"Ukuran hasil produksi"},"工單製造資訊「產出 短邊」":{"idn":"Sisi pendek hasil","note_zh":"產出 短邊","note_id":"Sisi pendek hasil"},"工單製造資訊「產出 厚度」":{"idn":"Ketebalan hasil","note_zh":"產出 厚度","note_id":"Ketebalan hasil"},"工單製造資訊「產出 有效長度」":{"idn":"Panjang efektif hasil","note_zh":"產出 有效長度","note_id":"Panjang efektif hasil"},"工單製造資訊「長度模組長度」":{"idn":"Panjang modul","note_zh":"技術單位提供的建議切長長度","note_id":"Panjang potong yang di hasilkan teknisi"},"工單製造資訊「模組投入尺寸」":{"idn":"Ukuran input modul","note_zh":"技術單位提供的建議投料尺寸","note_id":"ukuran material masuk yang direkomendasikan oleh teknisi."},"工單製造資訊「工作站」":{"idn":"Stasiun kerja","note_zh":"工作站","note_id":"Stasiun kerja"},"工單製程紀錄「機台」":{"idn":"Mesin","note_zh":"機台","note_id":"Mesin"},"工單製程紀錄「尺寸一/二/三」":{"idn":"Ukuran 1, 2,3","note_zh":"尺寸一/二/三","note_id":"Ukuran 1, 2,3"},"工單製程紀錄「長度」":{"idn":"Ketinggian","note_zh":"長度","note_id":"Ketinggian"},"工單製程紀錄「重量/支數」":{"idn":"Berat batang/pcs","note_zh":"重量/支數","note_id":"Berat batang/pcs"},"工單製程紀錄「主機手」":{"idn":"Operator utama","note_zh":"主機手","note_id":"Operator utama"},"工單製程紀錄「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"工單製程紀錄「來料確認」":{"idn":"Konfirmasi material masuk","note_zh":"來料確認","note_id":"Konfirmasi material masuk"},"工單資訊":{"idn":"informasi pada work order","note_zh":"依照工單上的資訊執行作業。","note_id":"Informasi yang tercantum pada work order untuk pelaksanaan kerja."},"噴漆":{"idn":"spray cat","note_zh":"現場對材料做噴漆標示的動作。","note_id":"Tindakan memberi tanda cat pada material; istilah lapangan: spray cat."},"來料尺寸":{"idn":"ukuran material masuk","note_zh":"進入該站或該流程的材料尺寸。","note_id":"Ukuran material yang masuk ke stasiun/proses."},"表面品質":{"idn":"kualitas permukaan","note_zh":"材料或產品表面的品質狀態。","note_id":"Kondisi kualitas permukaan material atau produk."},"短尺維護":{"idn":"penanganan material pendek","note_zh":"短尺料的處理、維護或系統/紀錄處置。","note_id":"Penanganan material berukuran pendek dalam proses/record kerja."},"重量確認":{"idn":"konfirmasi berat","note_zh":"確認材料或產品重量。","note_id":"Konfirmasi berat material atau produk."}}'
+_GLOSSARY_JSON = '{"M7導板":{"idn":"Tongkat Pemisah","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Untuk misahin barang yang besar(1ton)"},"電子磅秤":{"idn":"Timbangan Gantung","note_zh":"安裝於天車上，用以即時測量並顯示吊運物體重量的電子裝置，具備精確測量、過載警示與數據記錄功能，確保起重作業的安全與準確性","note_id":"Untuk menimbang barang yang digantung"},"天車/固定式起重機":{"idn":"Tian Che / Derek tetap(Fixed crane)","note_zh":"天車是用於廠內吊運不銹鋼原料、半成品及成品的起重設備，具備移動、升降與定位功能的起重機，用以安全、精準地進行不銹鋼材料在各生產工序間的搬運與裝卸作業","note_id":"Alat untuk angkat dan pindah barang berat secara efisien dan aman"},"掛勾":{"idn":"Kait/Hook","note_zh":"懸掛與固定不銹鋼原料、半成品或成品的起重配件，是具有足夠承載強度與防脫設計的金屬吊具，用以安全連接起重索具與吊運物件，確保吊運過程中的穩定與安全。","note_id":"untuk mengait dan mengangkat barang"},"布索":{"idn":"Tali kain yang di pakai di Tian Che","note_zh":"天車上的「布索」是一種強韌的吊繩，用來把不銹鋼材料安全地吊起來並運送到不同地方，確保吊運過程穩定不會斷或滑脫。","note_id":"Untuk mengangkat dan mengikat barang saat proses pengangkatan"},"標籤":{"idn":"Faktur Pemesanan","note_zh":"貼在產品外部，標示出貨資訊，如重量、單號、客戶、儲存位置等","note_id":"Surat pesanan pelanggan yang ditaro pada bahannya (ada yang bulat ada yang persegi)"},"秤重台":{"idn":"Meja Timbangan","note_zh":"包裝站的「秤重台」用來稱出包裝好後的不銹鋼產品重量，確保貨物重量正確，不會裝太多或裝太少。","note_id":"Untuk menimbang barang yang ada di bawah"},"顯示器":{"idn":"Monitor","note_zh":"顯示稱出包裝好後的不銹鋼產品重量","note_id":"Untuk memantau kerjaan yang ada di layar monitor"},"打包機":{"idn":"Plester/Alat pengikat","note_zh":"是一種用手拿的機器，用來把鋼帶拉緊並扣緊固定，讓不銹鋼產品包裝得牢固又不會鬆脫。","note_id":"Alat untuk Membungkus, mengepak, menyegel produk"},"鋼帶":{"idn":"Tali baja","note_zh":"是一種堅硬又強韌的金屬帶子，用來環繞並固定包裝好的不銹鋼產品，讓貨物在運送時不會鬆開或受損。","note_id":"Digunakan untuk mengikat barang/mengamankan barang agar tidak bergerak saat pengiriman atau penyimpanan"},"鋼扣":{"idn":"Klem Baja","note_zh":"包裝站的「鋼扣」是一種用來把包裝鋼帶扣緊的金屬配件，像是一個小鈕扣，讓鋼帶牢牢固定住貨物，不會在運送中鬆開。","note_id":"Digunakan bersama 鋼帶 (steel strapping / tali baja) untuk mengunci atau mengencangkan ikatan di sekitar barang."},"膠膜":{"idn":"Sejenis Bubble Wrap","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan."},"PP布":{"idn":"Untuk melindungi bahan (PP bu bahannya semacam goni)","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk mencegah karatan"},"膠帶":{"idn":"Selotip","note_zh":"用來把紙箱或包裝封起來，讓貨物不會鬆開或掉出來，確保運送時安全又整齊。","note_id":"Untuk merekatkan bahan atau kemasan seperti (Kardus atau kertas yang mau di bungkus)"},"敲齊工具":{"idn":"Alignment/leveling tool","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Digunakan untuk menyelaraskan benda agar sejajar"},"剪刀":{"idn":"Gunting","note_zh":"剪斷膠帶、塑膠膜或紙箱的工具，讓包裝作業更快速、整齊又方便","note_id":"Untuk menggunting Selotip atau pembungkus lainnya."},"CYA矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYA)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"CYB矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYB)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"梅花板手":{"idn":"Kunci Ring","note_zh":"是一種用來轉動並固定六角螺帽的工具，讓螺絲可以緊緊固定或輕鬆拆卸，不會損傷螺絲角。","note_id":"Mengencangkan atau melepaskan mur kepala yang berbentuk heksagonal (6sisi)."},"六角板手":{"idn":"Kunci L","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur yang berbentuk heksagonal dalam"},"開口板手":{"idn":"Kunci Pas Terbuka","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur dengan satu sisi terbuka, cocok untuk ruang yang sempit(yang sulit dijangkau)."},"CYA操作盤":{"idn":"CYA control panel","note_zh":"矯直機的控制面盤","note_id":"Untuk memonitor/mengontrol kerjanya mesin CYA."},"棉繩搬運台車":{"idn":"Troli pengangkat dengan tali katun","note_zh":"是一種用來搬運棉繩的小推車","note_id":"Troli untuk memindahkan tali katun yang di gantung."},"BF235圓棒拋光機":{"idn":"Mesin Pemoles Batang","note_zh":"「圓棒拋光機」是一種用來把不銹鋼圓棒表面磨得光滑亮麗的機器","note_id":"Digunakan untuk memoles/menghaluskan batang logam agar permukaan lebih rata, bersih dan mengkilap."},"束帶":{"idn":"Tali pengikat","note_zh":"是一種用來把材料捆綁在一起的塑料帶","note_id":"Digunakan untuk mengikat atau mengencangkan barang agar tetap stabil selama penyimpanan/pengiriman."},"捲尺":{"idn":"Meteran Gulung","note_zh":"是一種可以伸縮的測量工具，用來量測長度或尺寸","note_id":"Untuk mengukur panjang, tinggi, lebar suatu benda."},"刮刀":{"idn":"Pengikis","note_zh":"是一種用來清除表面雜質或油污的工具","note_id":"Untuk mengikis, membersihkan atau meratakan permukaan"},"檔桿":{"idn":"Pipa Besi Penghadang","note_zh":"於入料過程中，放置於入料區邊緣，避免生產中棒材滾落","note_id":"Untuk menghadang barang tidak berlebihan"},"防鏽油":{"idn":"Oli anti karat","note_zh":"是一種塗在不銹鋼表面的油，可以防止鋼材生鏽，讓產品在存放或運送時保持乾淨又光亮。","note_id":"untuk mencegah karat pada permukaan bahan."},"研磨機":{"idn":"Mesin Penghalus cetakkan","note_zh":"是一種用來把不銹鋼棒材表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Untuk menghaluskan, meratakan atau memperbaiki permukaan cetakkan."},"調機工作台車":{"idn":"Troli Peralatan kerja","note_zh":"1.特別留意：工具箱中梅花板手翻譯錯誤，建議修正\\n\\n2.定義：是一種可以移動的小推車，上面放著調整機器用的手工具，讓工人方便拿取和維修設備。","note_id":"Troli Peralatan kerja"},"I9置料台":{"idn":"Station Pelurusan Material I9","note_zh":"是一個用來暫時放置棒材的工作台","note_id":"Station Pelurusan Material I9"},"I9置料台 旁按鈕「置料台前進」":{"idn":"Mesin Pelurusan Maju","note_zh":"1.特別留意：「置料台前進」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 往前","note_id":"Mesin pelurusan bergerak maju ke depan"},"I9置料台旁按鈕「置料台後退」":{"idn":"Mesin Pelurusan Mundur","note_zh":"1.特別留意：「置料台後退」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 後退","note_id":"Mesin Pelurusan bergerak mundur ke belakang"},"I9置料台旁按鈕「緊急停水」":{"idn":"Tombol darurat berhenti air","note_zh":"1.特別留意：緊急停止按鈕有兩個，黑色的是停水；紅色是機台緊急停止，但兩者的標示都一樣，建議更新\\n2.定義：是一個在發生突發狀況時，可以立刻關閉冷卻水供應的裝置，用來保護設備和確保操作安全。","note_id":"紅(緊急停機)-tombol berhenti darurat\\n黑(緊急停水)-tombol untuk mematikan air"},"I9置料台旁「緊急停止拉索」":{"idn":"Tali tarik darurat untuk menghentikan mesin","note_zh":"1.特別留意：緊急停止拉索，印尼文有誤(寫成緊急停止按鈕)，建議更新\\n2.定義：是一條拉一下就能立刻關掉機器的繩子，用來在發生危險時快速停機，保護工人安全。","note_id":"Tali tarik darurat untuk menghentikan mesin"},"422清洗槽":{"idn":"422 Tangki Pencucian","note_zh":"「清洗槽」是一個裝有清潔液的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"Tempat untuk membersihkan cetakkan."},"清水槽":{"idn":"Tangki Air Bersih","note_zh":"「清洗槽」是一個裝有清水的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"tangki untuk membersihkan/membilas debu sisa minyak ringan"},"藥水槽":{"idn":"Tangki Larutan Kimia","note_zh":"「清洗槽」是一個裝有藥水的容器，用來浸泡或沖洗不銹鋼棒材。","note_id":"untuk menghilangkan karat, minyak atau residu keras."},"天車遙控器":{"idn":"Remote control crane(tian che)","note_zh":"是一個用來遙控吊車移動的控制器，讓工人可以遠距離搬運不銹鋼棒材","note_id":"alat digunakan untuk mengontrol crane(tian che) dari jarak jauh."},"I9入料床收集架電氣箱 下方控制鈕「滾輪 前/停/後」":{"idn":"Roda bergerak Maju/Berhenti/Mundur","note_zh":"1.特別留意：滾輪控制棒材輸送方向\\n2.特別留意中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往後方跑；但標示是”前”\\n(2)旋鈕往右旋，棒材會往前方跑 ；但標示是”後”","note_id":"Roda bergerak Maju/Berhenti/Mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「上料台上升」":{"idn":"Meja Pengumpan naik","note_zh":"是一個讓放置不銹鋼棒材的平台自動升高的裝置，方便工人把棒材送入置料台後，進行生產","note_id":"Membuat material naik secara otomatis"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台後退」":{"idn":"Roll roda mundur ke belakang","note_zh":"此按鈕用於使入料床收集架的滾輪平台向後移動，以清空材料或調整材料位置。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台上升」":{"idn":"Roll roda naik ke atas","note_zh":"此按鈕用於使入料床收集架的滾輪平台升起，將材料送至下一工序。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak naik ketas, mendorong ke proses berikutnya."},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台下降」":{"idn":"Roda turun ke bawah","note_zh":"此按鈕用於使入料床收集架的滾輪平台下降，以便取下或調整材料位置。","note_id":"Tombol ini digunakan untuk menurunkan meja roller pada rak pengumpan I9, agar material bisa diambil atau disesuaikan posisinya"},"I1出料床收集架電氣箱「開、關」":{"idn":"Buka , Tutup","note_zh":"開、關","note_id":"Buka, Tutup"},"I1入料床收集架電氣箱 下方控制鈕「滾輪 後退/停止/前進」":{"idn":"Roda Mundur ke belakang/berhenti/maju kedepan","note_zh":"1.滾輪控制棒材輸送方向\\n2.中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往前方跑；但標示是”後退”\\n(2)旋鈕往右旋，棒材會往後方跑 ；但標示是”前進”","note_id":"Roda Mundur ke belakang/berhenti/maju kedepan"},"無心研磨機 I18":{"idn":"Mesin grinding tanpa pusat I18","note_zh":"是一種用來把不銹鋼表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Mesin yang digunakan untuk mengahaluskan dan mempoles permukaan steel, sehingga produk terlihat lebih rapi dan kualirasnya lebih baik."},"無心研磨機 I18料床電器盤 「手動 自動」":{"idn":"Manual Otomatis","note_zh":"1.特別留意：標示全白，字已消失","note_id":"Manual Otomatis"},"研磨股 無心研磨機自主檢驗紀錄表":{"idn":"Formulir catatan pemeriksaan mandiri mesin grinding tanpa pusat","note_zh":"讓操作研磨機操機手能夠自動依循檢驗生產狀況","note_id":"memungkinkan oprator mesin grinding untuk secara otomatis memeriksa dan mengikuti kondisi produksi."},"研磨股 無心研磨機自主檢驗紀錄表「設備」":{"idn":"Peralatan","note_zh":"紀錄生產設備名稱","note_id":"Peralatan"},"研磨股 無心研磨機自主檢驗紀錄表「時間」":{"idn":"Waktu","note_zh":"紀錄生產時間","note_id":"Waktu"},"研磨股 無心研磨機自主檢驗紀錄表「來料尺寸」":{"idn":"Ukuran material yang masuk (max/min)","note_zh":"紀錄來料尺寸","note_id":"Ukuran material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「來料粗糙度」":{"idn":"Kasar/halus material yang masuk (max/min)","note_zh":"紀錄來料尺寸來料粗糙度(max/min)","note_id":"Kasar/halus material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「成品尺寸前/中／後」":{"idn":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang","note_zh":"紀錄研磨股 無心研磨機自主檢驗紀錄表\\n「成品尺寸(max/min) 前/中／後」","note_id":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang"},"研磨股 無心研磨機自主檢驗紀錄表「長度」":{"idn":"Panjang (mm)","note_zh":"長度(mm)","note_id":"Panjang (mm)"},"研磨股 無心研磨機自主檢驗紀錄表「產出粗糙度」":{"idn":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)","note_zh":"產出粗糙度(max/min)","note_id":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「外觀」":{"idn":"Tampilan Luar","note_zh":"外觀","note_id":"Tampilan Luar"},"研磨股 無心研磨機自主檢驗紀錄表「工號」":{"idn":"Nomor karyawan","note_zh":"工號","note_id":"Nomor kerja"},"研磨股 無心研磨機自主檢驗紀錄表「量具編號」":{"idn":"Nomor alat ukur yang digunakan","note_zh":"量具編號","note_id":"Nomor alat ukur yang digunakan"},"研磨股 無心研磨機自主檢驗紀錄表「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"研磨股 無心研磨機自主檢驗紀錄表「班別」":{"idn":"Shift","note_zh":"班別","note_id":"Shift"},"冷抽上料區":{"idn":"Mesin produksi Coil","note_zh":"在 冷抽上料區，操作員將管件放置在導軌上，準備送入冷抽機進行加工。","note_id":"Operator menaruh pipa di rel, siap proses untuk memotong besi sesuai pesanan konsumen. contoh pemotongan :R,H,S,F."},"AIR管":{"idn":"Pipa udara","note_zh":"用於清理/吹除","note_id":"untuk membersihkan, untuk mengeklem"},"鐵線剪":{"idn":"Gunting kawat","note_zh":"操作員使用 鐵線剪 剪掉多餘的鐵線，確保材料整齊。","note_id":"Untuk menggunting kawat kecil."},"塑膠槌":{"idn":"Palu","note_zh":"操作員使用 塑膠槌 輕輕敲打材料，避免損壞表面。","note_id":"Untuk memukul atau menekan benda tanpa merusak permukaan."},"PE帶剪刀":{"idn":"Gunting besi plat","note_zh":"操作員使用 PE帶剪刀 將金屬帶切割成所需長度。","note_id":"Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan."},"鐵管":{"idn":"Pipa besi","note_zh":"操作員使用 鐵管 輕輕敲齊材料，避免損壞表面。","note_id":"Untuk membengkokkan/meluruskan produk."},"工單":{"idn":"Tempat Buku bahan","note_zh":"操作員將材料資訊記錄在 工單 上，以便後續加工使用。","note_id":"Operator mencatat informasi material di work order supaya bisa digunakan untuk proses produksi berikutnya."},"E6冷抽機─張力輥向下/向上":{"idn":"Pengaturan roller penegang naik/turun","note_zh":"操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力","note_id":"Operator bisa mengatur tension roller naik atau turun supaya pipa tetap lurus dan tegangan merata selama proses penarikan."},"E6冷抽機─張力輥下部大槌向下/向上":{"idn":"Palu besar bagian bawah tension roller naik/turun","note_zh":"操作員可控制 張力輥下部大槌向下或向上，以調整壓力並確保材料穩定通過","note_id":"Untuk mengatur tekanan agar material tetap stabil saat lewat."},"E6冷抽機─張力輥上部大槌向下/向上":{"idn":"Palu besar bagian atas tension roller naik/turun","note_zh":"操作員可控制 張力輥上部大槌向下或向上，以調整上方壓力，確保材料穩定運行。","note_id":"Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan."},"綜合冷抽機E6─放線架拉置單元關":{"idn":"Rak gulungan -  Unit penarik Off","note_zh":"如需停止拉拔動作，可按下 拉置單元關，使設備停止運轉。","note_id":"Jika ingin menarik proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja."},"綜合冷抽機E6─放線架轉盤開關":{"idn":"Saklar putaran cepat dan lambatnya nampan","note_zh":"轉盤快/慢速按鈕","note_id":"Tombol putaran cepat dan lambatnya nampan"},"綜合冷抽機E6─放線架矯直板 傾斜/水平":{"idn":"Pelat pelurus miring/datar","note_zh":"材料剛從放線架出來時，可以將矯直板調整為傾斜，讓材料更容易進入；當運行穩定後，再調整為水平位置。","note_id":"Saat material baru keluar dari rak gulungan, plat dibuat miring supaya mudah masuk; setelah stabil diubah ke posisi datar."},"綜合冷抽機E6─放線架矯直板 升高/垂直":{"idn":"Pelat pelurus naik/posisi vertikal","note_zh":"可將矯直板升高或調整為垂直位置，以配合材料進入並保持穩定。","note_id":"Plat pelurus bisa di naikkan atau dibuat tegak untuk menyesuaikan masuknya material dan menjaga tetap stabil."},"綜合冷抽機E6─放線架矯直板 向後/向前轉":{"idn":"Pelat pelurus berputar ke depan/ atau berputar ke belakang","note_zh":"可將矯直板向前或向後轉動，以調整材料通過方向並保持平直。","note_id":"Pengaturan putaran pelat pelurus kedepan/belakang agar arah material tetap lurus dan stabil."},"綜合冷抽機E6─放線架液壓關":{"idn":"Tombol mengatur mesin hidrolik off","note_zh":"液壓關","note_id":"Tombol mengatur mesin hidrolik off / mati"},"綜合冷抽機E6─放線架液壓開":{"idn":"Tombol mengatur mesin hidrolik on","note_zh":"液壓開","note_id":"Tombol mengatur mesin hidrolis on/hidup"},"綜合冷抽機E6─放線架設定開":{"idn":"Rak gulungan bahan Pengaturan on","note_zh":"設定開","note_id":"Mode pengaturan mesin ON"},"綜合冷抽機E6─放線架設定自動":{"idn":"Rak gulungan bahan Penganturan Auto","note_zh":"設定自動","note_id":"Rak gulungan bahan Pengaturan Auto"},"綜合冷抽機E6─放線架故障重置":{"idn":"Lampu sensor error","note_zh":"當設備出現問題時，故障指示燈會亮起，提示操作員進行檢查和維護。","note_id":"Lampu untuk mendeteksi adanya error pada mesin"},"砂光機":{"idn":"Alat Mengamplas","note_zh":"砂光機用於打磨材料表面，使其平滑並去除毛刺。","note_id":"Mesin amplas digunakan untuk menghaluskan permukaan material agar rata dan menghilangkan burr."},"T桿":{"idn":"Engkol T","note_zh":"T桿用於固定材料或調整設備的位置，使操作更加穩定。","note_id":"untuk menahan material atau mengatur posisi peralatan agar operasi menjadi lebih stabil."},"E822冷抽機":{"idn":"Mesin produksi bar (Vital)","note_zh":"將金屬材料拉細，提升其強度和表面品質。","note_id":"Menipiskan material logam, meningkatkan kekuatan dan kualitas permukaaannya."},"by pass安全裝置":{"idn":"Kunci By Pass","note_zh":"1.特別注意：by pass安全裝置 沒有任何標示，確認是否需要特別標示\\n2.定義：在維護或測試時，可使用 By pass安全裝置，暫時繞過部分安全功能，但需謹慎操作。","note_id":"Perangkat pengaman bypass dapat digunakan untuk sementara melewati sebagian fungsi pengaman, tetapi harus dioperasikan dengan hati-hati."},"綜合冷抽機E6─精矯直設備拉製單元 關":{"idn":"Unit Penarikan Off","note_zh":"拉製單元 關","note_id":"Mematikan unit penarikan agar material berhenti bergerak dari mesin."},"綜合冷抽機E6─精矯直設備拉製單元 開":{"idn":"Unit Penarikan ON","note_zh":"拉製單元 開","note_id":"Menghidupkan unit penarikan agar material mulai bergerak melalui mesin."},"綜合冷抽機E6─精矯直設備TRAPO後端測試關閉依主管建議調整成「後夾輪 夾緊/鬆開」":{"idn":"TRAPO ujung belakang dimatikan","note_zh":"1.TRAPO後端測試關閉\\n依主管建議調整成「後夾輪 夾緊/鬆開」\\n\\n2.定義：後夾輪，就是位於後端固定棒材的夾具","note_id":"Roda penjepit belakang : menjepit/melepas"},"綜合冷抽機E6─精矯直設備TRAPO前端測試關閉依主管建議調整成「前夾輪 夾緊/鬆開」":{"idn":"Mesin Uji TRAPO dibagian depan off","note_zh":"1.TRAPO前端測試關閉\\n依主管建議調整成「前夾輪 夾緊/鬆開」\\n2.定義：前夾輪，是位於前端固定棒材的夾具","note_id":"Roda penjepit depan : menjepit/melepas"},"綜合冷抽機E6─精矯直設備使用/不使用測量輪依主管建議調整成「計長輪 啟動/停用」":{"idn":"Lampu indikator (penggunaan/tidak penggunaan roda pengukur)","note_zh":"1.使用/不使用測量輪\\n依主管建議調整成「計長輪 啟動/停用」\\n2.定義：計長輪，就是測量棒材 長度的工具","note_id":"Roda penghitung panjang adalah alat untuk mengukur panjang batang material."},"綜合冷抽機E6─精矯直設備TRAPO前端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan depan","note_zh":"TRAPO前輸送輪測試升降設定","note_id":"Pengaturan naik/turun untuk roda pengumpan depan TRAPO saat tes agar aliran bahan stabil."},"綜合冷抽機E6─精矯直設備TRAPO後端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan belakang","note_zh":"TRAPO後輸送輪升降設定","note_id":"Pengaturan naik/turun untuk roda belakang TRAPO agar aliran bahan keluar stabil."},"綜合冷抽機E6─精矯直設備設定 開":{"idn":"Pengaturan ON (Lampu indikator manual)","note_zh":"精矯直設備 設定 開（手動指示燈）","note_id":"Mengaktifkan mode pengaturan pada pelurus presisi dengan lampu indikator yang menyala sebagai tanda manual aktif."},"綜合冷抽機E6─精矯直設備設定 自動":{"idn":"Pengaturan Otomatis","note_zh":"精矯直設備 設定 自動（手動/自動）","note_id":"Mode pengaturan pelurus presisi bisa diatur manual/otomatis."},"綜合冷抽機E6─精矯直設備謢蓋確認":{"idn":"Konfirmasi Penutup pelindung","note_zh":"精矯直設備 護蓋確認","note_id":"Pengecekan apakah penutup pelindung mesin sudah aman/tertutup."},"中置料床套筒":{"idn":"Pipa MC","note_zh":"是一個 喇叭口形狀的導引管，讓棒材順利通過置料床，避免卡料","note_id":"Sebagai penahan agar tetap lurus dan stabil saat di proses. (untuk mengantar bahan pipa)"},"導線輪9.0":{"idn":"Roda pemutar","note_zh":"導線輪9.0用於引導材料，使其在機器中平穩運行並保持直線","note_id":"Menuntun material agar berjalan stabil di mesin dan tetap lurus."},"皮膜粉":{"idn":"Bubuk untuk menghaluskan bahan","note_zh":"可以在金屬表面形成保護層，提供潤滑，減少損傷","note_id":"Bubuk untuk menghaluskan bahan, pada saat pipa masih berminyak."},"切斷座":{"idn":"Tempat pemotongan pipa","note_zh":"用來精確切割管件的設備，確保每根材料長度一致。","note_id":"Digunakan untuk memotong pipa secara presisi, memastikan setiap material memiliki panjang yang sama."},"切斷座─右方按鈕「管件向上」":{"idn":"Tombol untuk pipa naik","note_zh":"管件向上","note_id":"Tempat pemotongan - tombol pipa naik."},"切斷座─右方按鈕「管件向下」":{"idn":"Tombol untuk pipa turun","note_zh":"管件向下","note_id":"Tempat pemotongan - tombol pipa turun."},"切斷座─右方按鈕入口側緩慢向下/向上":{"idn":"Bagian masuk pipa bergerak perlahan turun/naik.","note_zh":"可以精確調整管件高度，使其順利進入切割區域。","note_id":"Menyesuaikan tinggi pipa agar masuk lancar ke area pemotongan."},"切斷座─右方按鈕就位":{"idn":"Lampu indikator posisi siap","note_zh":"確認管件已到達正確位置以便切割。","note_id":"Untuk memastikan pipa sudah berada di posisi yang tepat agar bisa dipotong"},"切斷座─右方按鈕手動/自動":{"idn":"Tombol manual/auto","note_zh":"手動/自動","note_id":"Tombol manual/auto di stan pemotongan"},"切斷座─右方按鈕覆歸 昇最高":{"idn":"Tombol reset","note_zh":"切斷座上的按鈕，用於將管件返回至最高位置","note_id":"Tombol yang ada di cutting station untuk mengembalikan pipa ke posisi tertinggi setelah pemotongan."},"切斷座─右方按鈕下降 上昇":{"idn":"Tombol Turun/ naik","note_zh":"切斷座上的按鈕，用於手動調整管件上下","note_id":"Tombol yang ada di cutting station untuk mengatur pipa turun/naik secara manual."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"Memastikan sensor di box conveyor depan-belakang bekerja dengan baik sehingga material dapat melewati dengan aman."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌頂出材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"1.依主管建議調整成「夾輪 出料」\\n2.料床內導管夾輪出料；材料會被導軌推送到下一個加工位置或出料區。","note_id":"Di dalam bed material, roda penjepit pada pipa pemandu untuk proses pengeluaran material; material akan didorong oleh rel pemandu ke posisi proses berikutnya atau ke area keluaran."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌插入材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa memasukkan material","note_zh":"1.依主管建議調整成「夾輪 入料」\\n2.定義：料床內導管夾入材料會被導軌進入到加工位置，準備進行下一步作業。","note_id":"Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌清空」":{"idn":"Rel pipa dikosongkan","note_zh":"導軌上的所有管件會被推送出去，為下一批材料做好準備。","note_id":"Tekan rombol ini, semua pipa di rel akan terdorong keluar, siap untuk batch material berikutnya."},"綜合冷抽機E6-RIPO矯直機":{"idn":"Mesin Ring pelurus","note_zh":"用於將金屬材料拉細並拉直，以便進行下一步加工。","note_id":"Untuk menarik dan meluruskan material agar siap untuk proses berikutnya."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 開」":{"idn":"RIPO on","note_zh":"RIPO 開","note_id":"Mesin RIPO menyala"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 關」":{"idn":"RIPO off","note_zh":"RIPO 關","note_id":"Mesin RIPO Mati"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 關」":{"idn":"Unit penarikan dimatikan","note_zh":"拉製單元 關","note_id":"Tombol untuk mematikan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 開」":{"idn":"Unit penarikan di hidupkan","note_zh":"拉製單元 開","note_id":"Tombol untuk menghidupkan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「材料進入 RIPO」":{"idn":"Bahan masuk ke mesin RIPO","note_zh":"材料進入 RIPO","note_id":"Bahan masuk ke mesin RIPO"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 減速」":{"idn":"Memperlambat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動減速，單元會以較慢速度拉動材料，以確保精度和安全。","note_id":"Unit akan menarik material dengan kecepatan lebih lambat untuk memastikan presisi dan keamanan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 加速」":{"idn":"Mempercepat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動加速，單元會以更高速度拉動材料，加快生產。","note_id":"Unit akan menarik material dengan kecepatan lebih tinggi untuk mempercepat produksi."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 開」":{"idn":"Lampu pengaturan hidup","note_zh":"手動 開","note_id":"Lampu manual hidup"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 自動」":{"idn":"Pengaturan auto","note_zh":"手動 / 自動","note_id":"Tombol pengaturan Auto/Manual."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋請求」":{"idn":"Permintaan Pelindung penutup","note_zh":"操作 E6-RIPO 矯直機前，按下 護蓋請求，系統會確認護蓋位置，確保機器可以安全啟動。","note_id":"Dengan menekan tombol ini sistem akan memeriksa posisi penutup untuk memastikan mesin bisa dijalankan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋重置」":{"idn":"Reset penutup pelindung","note_zh":"當 E6-RIPO 矯直機的護蓋打開後，按下 護蓋重置，護蓋會回到原位，確保操作安全。","note_id":"Setelah penutup pelindung mesin E6-RIPO dibuka, tekan reset penutup pelindung, sehingga penutup kembali ke posisi awalnya dan memastikan operasi aman."},"中置料床":{"idn":"Meja mengantar bahan tengah","note_zh":"材料在進入冷抽機前會放在 中置料床上，便於操作員進行整理和送入下一工序。","note_id":"Material diletakkan di meja bahan tengah sebelum masuk ke mesin cold drawing, sehingga operator lebih mudah menata dan memasukkannnya ke proses berikutnya."},"中置料床 旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"中置料床 旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"中置料床 旁按鈕「管件導軌 頂出材料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"操作中置料床時，按下 管件導軌 頂出材料，材料會被導軌推送到下一工序或取料位置。","note_id":"Setelah menekan tombol 管件導軌 頂出材料 ini, nanti material akan terdorong ke proses berikutnya."},"中置料床 旁按鈕「管件導軌 插入材料」":{"idn":"Rel pipa memasukkan material","note_zh":"操作中置料床時，按下管件導軌插入材料，材料會被導軌進入到加工位置，準備進行下一步作業","note_id":"Setelah menekan tombol  管件導軌 插入材料 ini, nanti material masuk ke posisi pemrosesan, siap untuk langkah kerja berikutnya."},"中置料床 旁按鈕「管件導軌 清空」":{"idn":"Rel pipa dikosongkan","note_zh":"操作中置料床時，按下管件導軌清空，導軌上的所有材料會被推送出去，確保下一批材料能順利進入。","note_id":"Tekan tombol 管件導軌 清空 ini maka semua material akan terdorong keluar memastikan batch material berikutnya bisa masuk dengan lancar"},"綜合冷抽機E6-雙輥矯直設備":{"idn":"Mesin Pelurus dua roller","note_zh":"雙輥矯直，用兩個輥輪的壓力將材料拉直","note_id":"Dua roller lurus untuk meluruskan material dengan tekanan dari dua roller."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「拋光段開連線 關」":{"idn":"Koneksi bagian polishing off","note_zh":"斷開後方製程，倒角機與拋光機的連線；主要目的為特定客戶訂單不需拋光，倒角後就可以進到包裝","note_id":"Tombol untuk mematikan koneksi ke bagian polishing sehingga proses polishing tidak ikut berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「解除控制」":{"idn":"Lepas kontrol","note_zh":"取消設備的自動控制，使設備可以獨立或手動操作","note_id":"Tombol ini digunakan untuk melepas kendali otomatis atau interlock dari mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 開」":{"idn":"Kontrol ON","note_zh":"啟動設備的控制系統，使設備進入受控運轉狀態","note_id":"mengaktifkan kembali sistem kontrol mesin agar berjalan normal."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「設定/自動」":{"idn":"Otomatis/Manual","note_zh":"用來切換設備手動模式與自動運轉模式之間","note_id":"Tombol untuk ganti mode dari otomatis ke manual."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 關」":{"idn":"Kontrol Off","note_zh":"關閉設備的控制系統，使設備停止受控運轉","note_id":"Menonaktifkan sistem kontrol mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 檢索」":{"idn":"Tombol Safety door/ pengecekan","note_zh":"檢查修門的狀態（是否關閉或安全）","note_id":"Tombol untuk mengecek apakah pintu perawatan sudah aman tertutup sebelum mesin berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 確認」":{"idn":"Tombol Safety door/ konfirmasi","note_zh":"確認檢修門已關閉並處於安全狀態，使設備可以運轉","note_id":"Tombol untuk konfirmasi bahwa Safety door sudah aman dan mesin bisa berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「機器燈 開/關」":{"idn":"Lampu mesin On /Off","note_zh":"機器燈 開/關","note_id":"Lampu mesin On /Off"},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「故障重置」":{"idn":"Reset Error","note_zh":"當E6雙輥矯直設備發生故障時，按下故障重置，系統會清除錯誤訊號，使設備恢復正常運行","note_id":"Saat mesin Pelurus dua roller mengalami kesalahan, tekan Reset error, sistem akan menghapus sinyal error dan mengembalikan mesin ke kondisi operasi normal."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「指示燈測試」":{"idn":"Uji lampu indikator","note_zh":"指示燈測試按鈕，確保所有指示燈亮起並正常工作","note_id":"Tombol uji lampu indikator untuk memastikan semua lampu indikator menyala dan berfungsi dengan baik."},"倒角機":{"idn":"Mesin Peraut/Chamfer","note_zh":"冷抽機矯直後，因應客戶需求，於頭尾進行倒角加工","note_id":"Untuk menajamkan ujung kawat/besi agar berbentuk sesuai dengan pesanan pelanggan."},"倒角機旁按鈕「對準器 向後/向前」":{"idn":"Alat geser penjuruator kebelakang / kedepan.","note_zh":"用來調整對準器的位置，使材料正確對準加工位置","note_id":"Tombol untuk mengatur posisi alignment agar material tepat di mesin chamfering"},"倒角機旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"倒角機旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"倒角機旁按鈕「輸送帶彎槽向下」":{"idn":"Menurunkan alur sabuk pengantar.","note_zh":"輸送帶處於高位，物料還不能正確進入機器，按下 輸送帶彎槽向下，彎槽下降，物料可以正確進入倒角機。","note_id":"Pada saat conveyor/sabuk pengantar berada di posisi tinggi (benda belum pas masuk mesin) tekan tombol ini agar benda bisa masuk mesin chamfering dengan posisi tepat."},"倒角機旁按鈕「輸送帶彎槽向上」":{"idn":"Menaikkan alur sabuk pengantar.","note_zh":"輸送帶處於低位，物料需要提升，按下 輸送帶彎槽向上，彎槽升高，物料可以順利進入倒角機。","note_id":"Conveyor berada di posisi rendah, benda kerja perlu diangkat. Tekan tombol ini agar alur naik, sehingga benda kerja bisa masuk mesin chamfering dengan lancar."},"倒角機旁按鈕「輸送帶彎槽已清空」":{"idn":"Alur conveyor sudah kosong","note_zh":"操作前需確認物料已被取出，按下 輸送帶彎槽已清空，系統確認彎槽內無物料，可以安全開始下一步操作","note_id":"Tombol ini akan memastikan alur conveyor kosong sehingga aman untuk memulai langkah berikutnya."},"E824拋光設備區":{"idn":"Mesin Polishing","note_zh":"在 E824 拋光設備區，操作員將工件放入拋光機，設備運行後，工件表面會變得光滑平整。","note_id":"Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."},"E824拋光設備區 旁按鈕「停用煞車」":{"idn":"Rem (brake)","note_zh":"停用煞車","note_id":"Tombol untuk mengerem."},"E824拋光設備區 旁按鈕「門開啟」":{"idn":"Pintu terbuka","note_zh":"門開啟","note_id":"Pintu terbuka"},"E824拋光設備區 旁按鈕「電燈 0 1」":{"idn":"Lampu Indikator 0 1","note_zh":"此按紐用於在電燈關閉及電燈開啟","note_id":"Lampu Indikator 0 (tutup) , 1(buka)"},"E824拋光設備區 旁按鈕「緊急開關」":{"idn":"Saklar Darurat","note_zh":"此按钮用於在緊急情况下直接停止機器。","note_id":"Tombol ini digunakan untuk menghentikan mesin secara langsung dalam keadaan darurat."},"盤元修磨架":{"idn":"Tempat perbaikan/pengasahan coil.","note_zh":"操作員將受損的盤元放在 盤元修磨架 上，使用磨具進行修磨，使盤元表面恢復平整光滑。","note_id":"Operator meletakkan coil yang rusak di rak perbaikan dan pengasahan, lalu menggunakan alat pengasah untuk membuat permukaan coil kembali halus dan rata."},"手持式砂輪機":{"idn":"alat penggrinda barang","note_zh":"手持式砂輪機","note_id":"Alat penggrinda barang."},"盤元修磨架旁按鈕「緊急停止」":{"idn":"Tombol Berhenti darurat","note_zh":"緊急停止","note_id":"Tombol Berhenti darurat"},"盤元修磨架旁按鈕「後退」":{"idn":"Mundur","note_zh":"後退 (西)","note_id":"Mundur"},"盤元修磨架旁按鈕「電氣遙控」":{"idn":"Tombol pengontrol elektrik","note_zh":"操作員按下 盤元修磨架旁按鈕  電氣遙控，可以從操作台遠程控制修磨架的升降或旋轉。","note_id":"Operator menekan tombol kontrol jarak jauh listrik di samping rak perbaikan coil, sehingga dapat mengendalikan naik-turun atau putaran rak dari meja operasi."},"E1冷抽機":{"idn":"Mesin Produksi Bar E1","note_zh":"E1冷抽機","note_id":"Mesin Produksi Bar E1"},"E1冷抽機旁標示「生產特殊鋼種 174 209 431 注意 盤元尾端彈開」":{"idn":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul","note_zh":"1.特別注意：無中印標示\\n生產特殊鋼種 174 209 431 注意 盤元尾端彈開","note_id":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul"},"E1冷抽機旁按鈕「砂帶降速」":{"idn":"Penurunan kecepatan Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶降速」","note_id":"Penurunan kecepatan Tali Amplas"},"E1冷抽機旁按鈕「砂帶重置」":{"idn":"Reset Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶重置」","note_id":"Reset Sabuk Amplas"},"E1冷抽機旁按鈕「砂帶吋動」":{"idn":"Gerakan Sedikit demi sedikit Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶作動」","note_id":"Gerakan Sedikit demi sedikit Sabuk Amplas"},"E1冷抽機 後段按鈕「N6.夾輪夾持」":{"idn":"N6. Roda penjepit dijepit","note_zh":"夾棒材的夾輪作動","note_id":"N6. Roda penjepit dijepit"},"E1冷抽機 後段按鈕「檔板氣壓缸作動」":{"idn":"Papan penghalang sedang bergerak.","note_zh":"檔板會移動到指定位置，固定或導引材料，確保加工安全順利","note_id":"Papan penghalang yang bergerak untuk menahan atau mengatur posisi material."},"工單「訂單資訊」":{"idn":"Informasi pesanan","note_zh":"讓操機手能夠工單資訊，製造棒材","note_id":"Informasi pesanan pelanggan"},"工單訂單資訊「訂單編號」":{"idn":"Nomor Pesanan","note_zh":"訂單編號","note_id":"Nomor Pesanan"},"工單訂單資訊「客戶名稱」":{"idn":"Nama Pelanggan","note_zh":"客戶名稱","note_id":"Nama Pelanggan"},"工單訂單資訊「收貨人」":{"idn":"Nama Penerima","note_zh":"收貨人","note_id":"Nama Penerima"},"工單訂單資訊「生計交期」":{"idn":"Tanggal Pemesanan Produk","note_zh":"生計交期","note_id":"Tanggal Pemesanan Produk"},"工單訂單資訊「性質碼」":{"idn":"Kode Jenis","note_zh":"性質碼","note_id":"Kode Jenis"},"工單訂單資訊「倒角」":{"idn":"Sudut yang diinginkan","note_zh":"倒角","note_id":"Sudut yang diinginkan"},"工單訂單資訊「砂光痕等級」":{"idn":"Tingkat bekas pengamplasan","note_zh":"棒材表面砂光帶造成的砂光痕嚴重程度分級","note_id":"Klasifikasi tingkat keparahan bekas pengamplasan yang muncul di permukaan batang."},"工單訂單資訊「分級」":{"idn":"Grade","note_zh":"依照棒材表面砂光痕嚴重程度分級","note_id":"Dikelompokkan berdasarkan tingkat keparahan bekas pengamplasan pada permukaan batang."},"工單訂單資訊「ET」":{"idn":"Eddy Current Testing","note_zh":"渦電流檢測(ET)是一種基於電磁感應原理的非破壞性檢測技術，專門用於金屬導體表面及近表面的缺陷檢測（如裂紋、腐蝕、孔洞）","note_id":"ET adalah metode pemeriksaan non-destruktif berbasis induksi elektromagnetik, digunakan untuk mendeteksi cacat pada permukaan dan dekat permukaan logam (seperti retak, korosi dan lubang)."},"工單訂單資訊「UT」":{"idn":"Ultrasonic Testing","note_zh":"UT 檢測(超音波檢測，Ultrasonic Testing)是一種無損檢測(NDT)技術，利用高頻聲波深入材料內部，檢測裂紋、夾渣、氣孔或測量厚度","note_id":"UT adalah metode pemeriksaan non-destruktif yang menggunakan gelombang suara frekuensi tinggi untuk masuk ke dalam materal, guna mendeteksi retakan, inklusi pori-pori atau mengkur ketebalan."},"工單訂單資訊「重量/支」":{"idn":"Berat batang / pcs","note_zh":"重量/支","note_id":"Berat batang / pcs"},"工單訂單資訊「冷抽數」":{"idn":"Jumlah proses Cold Drawing","note_zh":"冷抽數","note_id":"Jumlah proses Cold Drawing"},"工單訂單資訊「取樣/重量cm」":{"idn":"Sampel/berat cm","note_zh":"取樣/重量cm","note_id":"Sampel/berat cm"},"工單訂單資訊「成品尺寸 MIN」":{"idn":"Ukuran produk MIN","note_zh":"成品尺寸 MIN","note_id":"Ukuran produk MIN"},"工單訂單資訊「成品尺寸MAX」":{"idn":"Ukuran produk MAX","note_zh":"成品尺寸MAX","note_id":"Ukuran produk MAX"},"工單訂單資訊「短邊 MIN」":{"idn":"Sisi pendek MIN","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最小長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang minimum sisi pendek."},"工單訂單資訊「短邊 MAX」":{"idn":"Sisi pendek MAX","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最大長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang maximum sisi pendek."},"工單訂單資訊「厚度 MIN」":{"idn":"Ketebalan MIN","note_zh":"厚度 MIN","note_id":"Ketebalan MIN"},"工單訂單資訊「厚度 MAX」":{"idn":"Ketebalan MAX","note_zh":"厚度 MAX","note_id":"Ketebalan MAX"},"工單訂單資訊「長度 MIN」":{"idn":"Ketinggian MIN","note_zh":"長度 MIN","note_id":"Ketinggian MIN"},"工單訂單資訊「長度 MAX」":{"idn":"Ketinggian MAX","note_zh":"長度 MAX","note_id":"Ketinggian MAX"},"工單訂單資訊「計畫量」":{"idn":"Jumlah rencana produksi","note_zh":"計畫量","note_id":"Jumlah rencana produksi"},"工單訂單資訊「計畫支數」":{"idn":"Rencana Jumlah batang","note_zh":"計畫支數","note_id":"Rencana Jumlah batang"},"工單訂單資訊「短尺支數」":{"idn":"Jumlah batang pendek","note_zh":"可以接受短尺的支數","note_id":"Jumlah batang pendek yang masih dapat diterima."},"工單訂單資訊「短尺MIN」":{"idn":"Batang pendek","note_zh":"可以接受短尺的長度，最小是幾公分","note_id":"Bisa menerima seberapa pendek Ukurannya, paling kecil berapa cm."},"工單訂單資訊「捆重/MIN/MAX」":{"idn":"Berat per Bundel/MIN/MAX","note_zh":"捆重/MIN/MAX","note_id":"Berat per Bundel/MIN/MAX"},"工單訂單資訊「噴漆位置」":{"idn":"Posisi pengecatan","note_zh":"噴漆位置","note_id":"Posisi pengecatan"},"工單訂單資訊「套環」":{"idn":"Cincin Pelindung","note_zh":"套環","note_id":"Cincin Pelindung"},"工單訂單資訊「顏色」":{"idn":"Warna","note_zh":"顏色","note_id":"Warna"},"工單訂單資訊「包裝代碼」":{"idn":"Kode Kemasan","note_zh":"包裝代碼","note_id":"Kode Kemasan"},"工單備註資訊「品保」":{"idn":"Quality Control","note_zh":"呈現品保檢驗等級","note_id":"Menampilkan tingkat inspeksi QC"},"工單備註資訊「特殊」":{"idn":"Khusus","note_zh":"此單特殊備註事項","note_id":"catatan khusus untuk order ini"},"工單備註資訊「訂單」":{"idn":"Pesanan","note_zh":"呈現訂單特別備註資訊","note_id":"menampilkan catatan khusus dari pesanan"},"工單備註資訊「製造」":{"idn":"Produksi","note_zh":"呈現訂單製造備註資訊","note_id":"menampilkan catatan produksi pada order."},"工單備註資訊「客需」":{"idn":"Kebutuhan pelanggan","note_zh":"呈現訂單中客戶特殊需求資訊","note_id":"menampilakn permintaan khusus dari pelanggan"},"工單「母材」":{"idn":"bahan asal","note_zh":"顯示此工單原始材料來源","note_id":"menampilkan sumber bahan awal dari work order."},"工單母材資訊「尺寸1」":{"idn":"Ukuran 1","note_zh":"尺寸1","note_id":"Ukuran 1"},"工單母材資訊「尺寸2」":{"idn":"Ukuran 2","note_zh":"尺寸2","note_id":"Ukuran 2"},"工單母材資訊「型態」":{"idn":"Tipe/bentuk","note_zh":"型態","note_id":"Tipe/bentuk"},"工單母材資訊「批次」":{"idn":"Batch","note_zh":"批次","note_id":"Batch"},"工單母材資訊「口付 MIN」":{"idn":"Ukuran ujung minimum","note_zh":"口付 MIN","note_id":"Ukuran ujung minimum"},"工單母材資訊「退料重」":{"idn":"Berat material retur","note_zh":"退料重","note_id":"Berat material retur"},"工單母材資訊「現況流程」":{"idn":"Proses saat ini","note_zh":"現況流程","note_id":"Proses saat ini"},"工單母材資訊「解捲支數」":{"idn":"Jumlah batang hasil uncoiling","note_zh":"解捲支數","note_id":"Jumlah batang hasil uncoiling"},"工單母材資訊「400現況儲區」":{"idn":"Area penyimpanan saat ini 400","note_zh":"400站為原料站","note_id":"Stasiun 400 adalah stasiun bahan baku."},"工單製造資訊「退火代碼」":{"idn":"Kode annealing","note_zh":"技術單位提供的建議退火製程參數","note_id":"Parameter proses anealing yang direkomendasikan oleh bagian teknisi."},"工單製造資訊「頻率」":{"idn":"Frekuensi","note_zh":"頻率","note_id":"Frekuensi"},"工單製造資訊「眼膜」":{"idn":"Dies (alat untuk membentuk ukuran & bentuk material saat proses produksi)","note_zh":"眼模可以讓棒材經過加工，變成客戶指定的尺寸與形狀。","note_id":"Memproses batang agar menjadi ukuran dan bentuk sesuai permintaan pelanggan."},"工單製造資訊  眼膜「放置點」":{"idn":"titik penempatan","note_zh":"放置點","note_id":"titik penempatan"},"工單製造資訊  眼膜「進入角」":{"idn":"sudut masuk","note_zh":"進入角","note_id":"sudut masuk"},"工單製造資訊「減面率」":{"idn":"Reduction Ratio","note_zh":"技術單位提供的建議投料尺寸","note_id":"Tingkat Perubahan luas penampang batang (semakin besar, gaya tarik saat drawing semakin besar)"},"工單製造資訊「投料形狀」":{"idn":"Bentuk material masuk","note_zh":"投料形狀","note_id":"Bentuk material masuk"},"工單製造資訊「產出 尺寸」":{"idn":"Ukuran hasil produksi","note_zh":"產出 尺寸","note_id":"Ukuran hasil produksi"},"工單製造資訊「產出 短邊」":{"idn":"Sisi pendek hasil","note_zh":"產出 短邊","note_id":"Sisi pendek hasil"},"工單製造資訊「產出 厚度」":{"idn":"Ketebalan hasil","note_zh":"產出 厚度","note_id":"Ketebalan hasil"},"工單製造資訊「產出 有效長度」":{"idn":"Panjang efektif hasil","note_zh":"產出 有效長度","note_id":"Panjang efektif hasil"},"工單製造資訊「長度模組長度」":{"idn":"Panjang modul","note_zh":"技術單位提供的建議切長長度","note_id":"Panjang potong yang di hasilkan teknisi"},"工單製造資訊「模組投入尺寸」":{"idn":"Ukuran input modul","note_zh":"技術單位提供的建議投料尺寸","note_id":"ukuran material masuk yang direkomendasikan oleh teknisi."},"工單製造資訊「工作站」":{"idn":"Stasiun kerja","note_zh":"工作站","note_id":"Stasiun kerja"},"工單製程紀錄「機台」":{"idn":"Mesin","note_zh":"機台","note_id":"Mesin"},"工單製程紀錄「尺寸一/二/三」":{"idn":"Ukuran 1, 2,3","note_zh":"尺寸一/二/三","note_id":"Ukuran 1, 2,3"},"工單製程紀錄「長度」":{"idn":"Ketinggian","note_zh":"長度","note_id":"Ketinggian"},"工單製程紀錄「重量/支數」":{"idn":"Berat batang/pcs","note_zh":"重量/支數","note_id":"Berat batang/pcs"},"工單製程紀錄「主機手」":{"idn":"Operator utama","note_zh":"主機手","note_id":"Operator utama"},"工單製程紀錄「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"工單製程紀錄「來料確認」":{"idn":"Konfirmasi material masuk","note_zh":"來料確認","note_id":"Konfirmasi material masuk"}}'
 try:
     GLOSSARY_LOOKUP = json.loads(_GLOSSARY_JSON)
 except Exception as _e:
@@ -9746,10 +9870,6 @@ def _translate_core(text, src, tgt):
     
     # Runtime semantic contract enforcement after NMT/LLM/TM-inject.
     if result and isinstance(result, str):
-        if src == "zh" and tgt == "id":
-            # NMT and stale TM/cache routes can bypass _translate_inner() post-fixes.
-            # Apply the deterministic factory ZH→ID safety net here as well.
-            result = post_fix_factory_zh_to_id(text, result)
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
 
     # ─── 後處理 0.5: Phase H Glossary Enforcement (在 QE 之前) ───
@@ -9778,8 +9898,6 @@ def _translate_core(text, src, tgt):
             logger.warning("[GE] enforcement exception: %s", _ge_e)
     
     if result and isinstance(result, str):
-        if src == "zh" and tgt == "id":
-            result = post_fix_factory_zh_to_id(text, result)
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
 
     # ═══ v3.13 速度根治:以下全部移出使用者等待路徑 ═══
