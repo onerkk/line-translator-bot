@@ -70,6 +70,7 @@ def _exec_factory_reason_semantic_subset():
         "_FACTORY_REASON_ACTIONS",
         "_FACTORY_REASON_WRONG_ID_PATTERNS",
         "_FACTORY_REASON_ID_RE",
+        "_FACTORY_REASON_OCR_FAIL_SENTINEL",
     }
     wanted_defs = {
         "_compact_factory_reason_text",
@@ -94,7 +95,14 @@ def _exec_factory_reason_semantic_subset():
         "_factory_reason_ocr_row_count",
         "_factory_reason_ocr_incomplete_against_visual_count",
         "_should_run_factory_reason_table_ocr",
+        "_factory_reason_parsed_rows",
+        "_factory_reason_ocr_has_uncertain_cells",
+        "_factory_reason_ocr_rows_conflict",
+        "_factory_reason_ocr_strict_safety_issue",
         "_strict_factory_reason_ocr_is_better",
+        "_factory_reason_ocr_failure_payload",
+        "_is_factory_reason_ocr_failure_text",
+        "_factory_reason_user_failure_reply",
     }
     nodes = []
     for node in tree.body:
@@ -274,3 +282,51 @@ def test_factory_reason_row_crop_ocr_path_exists_before_full_table_fallback():
     assert "factory_reason_image_expected_rows" in row_fn
     assert "_factory_reason_ocr_incomplete_against_visual_count" in translate_fn
     assert "factory_reason_ocr_visual_count_failed" in core_fn
+
+
+
+def test_factory_reason_image_ocr_fail_closed_on_conflict_and_incomplete_strict():
+    ns = _exec_factory_reason_semantic_subset()
+    generic = (
+        "ID | 原因\n"
+        "7G681208A | 倒角\n"
+        "7H834313 | 倒角\n"
+        "7H060307 | 拋光"
+    )
+    shifted = (
+        "ID | 原因\n"
+        "7G681208A | 併包\n"
+        "7H834313 | 併包\n"
+        "7H060307 | 削皮"
+    )
+    assert ns["_factory_reason_ocr_rows_conflict"](generic, shifted) is True
+    assert ns["_factory_reason_ocr_strict_safety_issue"](generic, shifted, 3) == "strict_ocr_conflicts_with_generic"
+
+    incomplete = "ID | 原因\n7G681208A | 倒角\n7H834313 | 倒角"
+    assert ns["_factory_reason_ocr_strict_safety_issue"](generic, incomplete, 4) == "strict_ocr_visual_row_mismatch"
+
+
+def test_factory_reason_image_ocr_fail_payload_is_interceptable():
+    ns = _exec_factory_reason_semantic_subset()
+    payload = ns["_factory_reason_ocr_failure_payload"]("strict_ocr_visual_row_mismatch")
+    assert ns["_is_factory_reason_ocr_failure_text"](payload) is True
+    reply = ns["_factory_reason_user_failure_reply"]()
+    assert "已停止翻譯" in reply
+    assert "ID 與原因欄" in reply
+    assert "mencocokkan ID dan Alasan" in reply
+
+
+def test_ocr_image_openai_has_no_generic_fallback_for_factory_reason_tables():
+    fn = _function_source("ocr_image_openai")
+    assert "fail-closed; no generic fallback" in fn
+    assert "return _factory_reason_ocr_failure_payload" in fn
+    assert "factory_reason_ocr_fail_closed" in fn
+
+
+def test_image_handlers_intercept_factory_reason_ocr_failure_payload():
+    bg_fn = _function_source("_handle_image_background")
+    ask_fn = _function_source("_process_pending_image_translate_inner")
+    assert "_is_factory_reason_ocr_failure_text(extracted)" in bg_fn
+    assert "_factory_reason_user_failure_reply()" in bg_fn
+    assert "_is_factory_reason_ocr_failure_text(extracted)" in ask_fn
+    assert "_factory_reason_user_failure_reply()" in ask_fn

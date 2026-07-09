@@ -5739,6 +5739,10 @@ _FACTORY_REASON_ID_RE = re.compile(
     re.I,
 )
 
+# v3.18: ERP 圖片表格 fail-closed sentinel. 這不是給使用者看的譯文，
+# 而是 OCR 邊界層通知 LINE handler：不要再把不可靠 OCR 丟進一般翻譯管線。
+_FACTORY_REASON_OCR_FAIL_SENTINEL = "__FACTORY_REASON_OCR_UNRELIABLE__"
+
 
 def _compact_factory_reason_text(text):
     """Normalize OCR/table reason cells without losing Tag case semantics."""
@@ -5939,6 +5943,31 @@ def _factory_reason_alignment_failure_message(tgt="id"):
     if (tgt or "").lower().startswith("zh"):
         return "OCR 無法可靠對齊 ID 與原因欄，請重拍較清楚，或只裁切表格後再傳。"
     return "OCR tabel tidak cukup jelas untuk mencocokkan ID dan Alasan. Mohon kirim foto yang lebih jelas, atau crop hanya bagian tabel lalu kirim ulang."
+
+
+def _factory_reason_ocr_failure_payload(reason="unreliable_alignment"):
+    """Internal OCR failure payload for ERP ID/原因 screenshots.
+
+    Image handlers intercept this before language detection.  Returning this is
+    safer than falling back to generic OCR, because generic OCR can silently shift
+    operations onto the wrong material IDs.
+    """
+    return f"{_FACTORY_REASON_OCR_FAIL_SENTINEL}:{reason}"
+
+
+def _is_factory_reason_ocr_failure_text(text):
+    return bool(isinstance(text, str) and text.strip().startswith(_FACTORY_REASON_OCR_FAIL_SENTINEL))
+
+
+def _factory_reason_user_failure_reply():
+    return (
+        "🖼️ ⚠️\n"
+        "OCR 無法可靠對齊 ID 與原因欄，已停止翻譯，避免把錯誤製程套到錯誤 ID。\n"
+        "請重拍較清楚，或只裁切表格後再傳。\n\n"
+        "OCR tabel tidak cukup jelas untuk mencocokkan ID dan Alasan.\n"
+        "Terjemahan dihentikan agar proses tidak dipasang ke ID yang salah.\n"
+        "Mohon foto ulang lebih jelas, atau crop hanya bagian tabel lalu kirim ulang."
+    )
 
 
 def _is_factory_reason_header_only_text(text):
@@ -9072,6 +9101,13 @@ def translate(text, src, tgt):
         if src == "zh" and tgt == "id":
             reason_semantic = _factory_reason_semantic_translate_zh_id(canonical_text)
             if reason_semantic:
+                _expected_rows = getattr(_tl, 'factory_reason_image_expected_rows', 0) if getattr(_tl, 'from_image_ocr', False) else 0
+                if _factory_reason_ocr_incomplete_against_visual_count(canonical_text, _expected_rows):
+                    logger.warning(
+                        "[FactoryReasonOCR] final-boundary fail-closed visual row mismatch expected=%s actual=%s",
+                        _expected_rows, _factory_reason_ocr_row_count(canonical_text)
+                    )
+                    return _factory_reason_alignment_failure_message(tgt)
                 return reason_semantic
     return result
 
@@ -10521,22 +10557,91 @@ def _should_run_factory_reason_table_ocr(text):
     return bool(has_code and (has_reason_header or (has_id and has_reason_word)))
 
 
-def _strict_factory_reason_ocr_is_better(generic_text, strict_text):
-    if not strict_text or not isinstance(strict_text, str):
+def _factory_reason_parsed_rows(text):
+    """Return parsed source rows as [(id, reason_key)] without translating."""
+    if not text or not isinstance(text, str):
+        return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    same_raw = [_parse_factory_reason_table_row(ln) for ln in lines]
+    same = [(row[0], row[1]["key"]) for row in same_raw if row and row[0] and row[1]]
+    split = [(mid, entry["key"]) for mid, entry in _parse_factory_reason_split_rows(lines)]
+    column = [(mid, entry["key"]) for mid, entry in _parse_factory_reason_column_major_rows(lines)]
+    return max((same, split, column), key=len)
+
+
+def _factory_reason_ocr_has_uncertain_cells(text):
+    if not text or not isinstance(text, str):
+        return True
+    for mid, key in _factory_reason_parsed_rows(text):
+        if "?" in (mid or "") or "？" in (mid or "") or not key:
+            return True
+    return False
+
+
+def _factory_reason_ocr_rows_conflict(left_text, right_text):
+    """Compare two independent OCR readings.  Shared IDs must agree.
+
+    Generic OCR is not trusted as the final source, but when it already contains
+    same-line rows and disagrees with strict row OCR, that is positive evidence
+    of row/cell instability, so we fail closed instead of choosing a side.
+    """
+    left = _factory_reason_parsed_rows(left_text)
+    right = _factory_reason_parsed_rows(right_text)
+    if len(left) < 2 or len(right) < 2:
         return False
+    lm = {}
+    for mid, key in left:
+        lm.setdefault(mid, key)
+    for mid, key in right:
+        if mid in lm and lm[mid] != key:
+            return True
+    return False
+
+
+def _factory_reason_ocr_strict_safety_issue(generic_text, strict_text, expected_rows=0):
+    """Return empty string only when strict ERP reason OCR is safe to translate.
+
+    Safety means source-grounded rows only.  If the image looked like an ID/原因
+    table but strict OCR did not produce a complete, source-Chinese table, the
+    caller must not fall back to generic OCR/translation.
+    """
+    if not strict_text or not isinstance(strict_text, str):
+        return "strict_ocr_empty"
     st = strict_text.strip()
     if not st or "NO_TABLE" in st.upper():
-        return False
+        return "strict_ocr_no_table"
     low = st.lower()
-    # Dedicated OCR must remain source text. Reject if it already translated cells.
     if any(bad in low for bad in _FACTORY_REASON_WRONG_ID_PATTERNS):
-        return False
+        return "strict_ocr_translated_or_bad_source"
     if not _should_run_factory_reason_table_ocr(st):
+        return "strict_ocr_not_reason_table"
+    rows = _factory_reason_parsed_rows(st)
+    if len(rows) < 2:
+        return "strict_ocr_too_few_rows"
+    if _factory_reason_ocr_has_uncertain_cells(st):
+        return "strict_ocr_uncertain_cells"
+    try:
+        expected = int(expected_rows or 0)
+    except Exception:
+        expected = 0
+    if expected >= 4 and len(rows) < expected:
+        return "strict_ocr_visual_row_mismatch"
+    # If generic OCR independently read same-line rows and disagrees, neither
+    # source is reliable enough for an ID/process assignment.
+    if _factory_reason_ocr_rows_conflict(generic_text, st):
+        return "strict_ocr_conflicts_with_generic"
+    return ""
+
+
+def _strict_factory_reason_ocr_is_better(generic_text, strict_text):
+    _tls = globals().get('_tl', None)
+    _expected = getattr(_tls, 'factory_reason_image_expected_rows', 0) if _tls is not None else 0
+    if _factory_reason_ocr_strict_safety_issue(generic_text, strict_text, _expected):
         return False
-    strict_rows = _factory_reason_ocr_row_count(st)
+    strict_rows = _factory_reason_ocr_row_count(strict_text)
     generic_rows = _factory_reason_ocr_row_count(generic_text)
-    # Prefer the strict row-grid pass when it produces a real reason table and
-    # does not lose rows compared with the generic pass.
+    # Prefer the strict row-grid pass only when it produces a complete real
+    # reason table and does not lose rows compared with generic OCR.
     return strict_rows >= 2 and strict_rows >= generic_rows
 
 
@@ -10668,6 +10773,11 @@ def _factory_reason_visual_row_bands_from_image(image_base64, mime_type="image/j
         bands = []
         for y0, y1 in zip(seq[1:-1], seq[2:]):
             if y1 - y0 < 18:
+                continue
+            # Fail-safe: a row cut by the bottom edge must not be OCR'd and
+            # assigned a guessed reason.  The user can resend a lower crop if
+            # that partial row is needed.
+            if y1 >= h - max(6, int(round(0.12 * pitch))):
                 continue
             bands.append((max(0, y0 - 2), min(h, y1 + 2)))
         if len(bands) < 4:
@@ -10992,18 +11102,36 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
         # 表格時加跑一次 row-grid OCR；只接受仍為中文原文且列數不倒退的結果。
         if _should_run_factory_reason_table_ocr(result):
             strict_result = ocr_factory_reason_table_openai(image_base64, mime_type=mime_type)
-            if _strict_factory_reason_ocr_is_better(result, strict_result):
+            expected_rows = getattr(_tl, 'factory_reason_image_expected_rows', 0)
+            safety_issue = _factory_reason_ocr_strict_safety_issue(result, strict_result, expected_rows)
+            if not safety_issue and _strict_factory_reason_ocr_is_better(result, strict_result):
                 logger.info(
-                    "[FactoryReasonOCR] using strict row-grid OCR generic_rows=%d strict_rows=%d",
+                    "[FactoryReasonOCR] using strict row-grid OCR generic_rows=%d strict_rows=%d expected_rows=%s",
                     _factory_reason_ocr_row_count(result),
                     _factory_reason_ocr_row_count(strict_result),
+                    expected_rows,
                 )
                 return strict_result
             logger.warning(
-                "[FactoryReasonOCR] strict OCR rejected/unused generic_rows=%d strict_rows=%d",
+                "[FactoryReasonOCR] fail-closed; no generic fallback issue=%s generic_rows=%d strict_rows=%d expected_rows=%s",
+                safety_issue or "strict_not_better",
                 _factory_reason_ocr_row_count(result),
                 _factory_reason_ocr_row_count(strict_result),
+                expected_rows,
             )
+            try:
+                _event_log_write("factory_reason_ocr_fail_closed", {
+                    "group_id": getattr(_tl, 'group_id', '') or '',
+                    "issue": safety_issue or "strict_not_better",
+                    "generic_rows": _factory_reason_ocr_row_count(result),
+                    "strict_rows": _factory_reason_ocr_row_count(strict_result),
+                    "expected_rows": expected_rows,
+                    "generic_preview": (result or '')[:300],
+                    "strict_preview": (strict_result or '')[:300],
+                })
+            except Exception:
+                pass
+            return _factory_reason_ocr_failure_payload(safety_issue or "strict_not_better")
         return result
     except Exception as e:
         logger.exception("[OCR] OpenAI Vision OCR error: %s", e)
@@ -13919,6 +14047,29 @@ def _handle_image_background(ctx):
             _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
             return
 
+        if _is_factory_reason_ocr_failure_text(extracted):
+            _event_log_write("image_aborted", {"reason": "factory_reason_ocr_fail_closed", "payload": extracted[:120]})
+            reply = _factory_reason_user_failure_reply()
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    msg_obj = TextMessage(text=_clip_line_text(reply))
+                    qt_fail = ctx["quote_token"]
+                    if qt_fail:
+                        try:
+                            msg_obj.quote_token = qt_fail
+                        except Exception:
+                            pass
+                    api.reply_message(ReplyMessageRequest(reply_token=ctx["reply_token"], messages=[msg_obj]))
+            except Exception:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.push_message(PushMessageRequest(to=group_id, messages=[TextMessage(text=_clip_line_text(reply))]))
+                except Exception as _push_exc:
+                    logger.warning("factory reason OCR fail-closed reply failed: %s", _push_exc)
+            return
+
         # === Check if this is a work order (製造指示書) ===
         try:
             wo_customer = detect_work_order(extracted)
@@ -14243,6 +14394,10 @@ def _process_pending_image_translate_inner(event, message_id):
     if not extracted or len(extracted.strip()) < 2:
         logger.info("[ImgAsk] OCR returned no text")
         _reply_or_push("ℹ️ 圖片中沒偵測到可翻譯的文字\nTidak ada teks yang bisa diterjemahkan di gambar")
+        return
+    if _is_factory_reason_ocr_failure_text(extracted):
+        logger.warning("[ImgAsk] factory reason OCR fail-closed: %s", extracted[:120])
+        _reply_or_push(_factory_reason_user_failure_reply())
         return
     logger.info("[ImgAsk] OCR ok: %d chars", len(extracted))
 
