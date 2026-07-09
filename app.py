@@ -5648,70 +5648,80 @@ TAIWAN_FACTORY_GLOSSARY_HINT = """
 _FACTORY_REASON_ACTIONS = [
     {
         "key": "削皮",
-        "variants": ("削皮", "回削皮", "退削皮", "退回削皮", "削皮站", "削"),
+        "variants": ("削皮", "回削皮", "退削皮", "退回削皮", "削皮站", "削皮暫別", "削皮站別"),
+        "reason_only_variants": ("削", "削站", "回削", "退削", "退回削", "剝皮", "剥皮"),
         "id": "Kembalikan ke stasiun peeling",
         "required_groups": (("peeling",), ("kembali", "kembalikan", "dikembalikan")),
         "note": "要退回削皮站別",
     },
     {
         "key": "拋光",
-        "variants": ("拋光", "抛光", "進拋光", "回拋光", "退拋光", "做拋光"),
+        "variants": ("拋光", "抛光", "進拋光", "回拋光", "退拋光", "做拋光", "拋光製程"),
+        "reason_only_variants": ("拋", "抛", "進拋", "進抛", "回拋", "回抛"),
         "id": "Masuk proses polishing",
         "required_groups": (("polishing", "poles"), ("proses", "masuk")),
         "note": "要進行拋光製程",
     },
     {
         "key": "倒角",
-        "variants": ("倒角", "端倒角", "端部倒角", "做倒角", "倒角處理"),
+        "variants": ("倒角", "端倒角", "端部倒角", "做倒角", "倒角處理", "端部需倒角"),
+        "reason_only_variants": ("倒", "角", "端角", "需倒角"),
         "id": "Ujung perlu di-chamfer",
         "required_groups": (("chamfer",), ("ujung",)),
         "note": "端部需進行倒角",
     },
     {
         "key": "退火",
-        "variants": ("退火", "回退火", "退回退火", "退火製程", "做退火"),
+        "variants": ("退火", "回退火", "退回退火", "退火製程", "做退火", "退火站"),
+        "reason_only_variants": ("退", "回退", "退回", "回火"),
         "id": "Kembalikan ke proses annealing",
         "required_groups": (("annealing",), ("kembali", "kembalikan", "dikembalikan")),
         "note": "要退回退火製程",
     },
     {
         "key": "改端漆",
-        "variants": ("改端漆", "端漆", "改漆", "改噴漆", "端部改漆", "改端部漆", "改端噴漆"),
+        "variants": ("改端漆", "端漆", "改漆", "改噴漆", "端部改漆", "改端部漆", "改端噴漆", "改端噴", "端部噴漆"),
+        "reason_only_variants": ("改端", "端", "端噴", "噴漆", "喷漆", "改喷漆", "端部漆"),
         "id": "Ubah warna cat ujung",
         "required_groups": (("cat", "warna"), ("ujung",)),
         "note": "端部要改噴漆顏色",
     },
     {
         "key": "補毛重",
-        "variants": ("補毛重", "毛重", "補重", "重稱", "重秤", "重新稱重", "重新秤重"),
-        "id": "Timbang ulang berat bruto",
+        "variants": ("補毛重", "毛重", "補重", "重稱", "重秤", "重新稱重", "重新秤重", "補秤重", "補稱重"),
+        "reason_only_variants": ("補毛", "補", "秤重", "稱重", "重", "毛"),
+        "id": "Timbang ulang berat kotor",
         "required_groups": (("timbang",), ("ulang",), ("bruto", "kotor")),
         "note": "重新稱重",
     },
     {
         "key": "改Tag",
-        "variants": ("改tag", "改tag", "改TAG", "改 Tag", "改標籤", "改标签", "重貼tag", "重貼TAG", "重貼標籤"),
+        "variants": ("改tag", "改TAG", "改 Tag", "改標籤", "改标签", "重貼tag", "重貼TAG", "重貼標籤", "重新貼tag", "重新貼TAG", "改牌"),
+        "reason_only_variants": ("tag", "TAG", "改標", "改标", "重貼", "重贴", "貼tag", "贴tag"),
         "id": "Input ulang data dan tempel ulang TAG",
         "required_groups": (("tag",), ("input", "data", "tempel"), ("ulang",)),
         "note": "重新入帳,重新張貼 TAG",
     },
     {
         "key": "取樣",
-        "variants": ("取樣", "取样", "480取樣", "給480取樣", "拆包取樣"),
+        "variants": ("取樣", "取样", "480取樣", "給480取樣", "拆包取樣", "採樣", "采样", "給480採樣"),
+        "reason_only_variants": ("取", "採", "采", "480", "拆取", "拆包取"),
         "id": "Bongkar packing, serahkan ke station 480 untuk sampling",
         "required_groups": (("480",), ("sampling", "sampel"), ("bongkar", "packing")),
         "note": "拆包給 480 取樣",
     },
     {
         "key": "併包",
-        "variants": ("併包", "并包", "合包", "併", "併包作業", "合併包裝"),
-        "id": "Bongkar packing lalu gabung packing",
+        "variants": ("併包", "并包", "合包", "併", "并", "併包作業", "合併包裝", "合并包装", "合併包"),
+        "reason_only_variants": ("合併", "合并", "合", "併裝", "并裝"),
+        "id": "Bongkar packing lalu gabungkan",
         "required_groups": (("gabung",), ("packing",), ("bongkar",)),
         "note": "拆包要合併作業",
     },
     {
         "key": "改包裝",
-        "variants": ("改包裝", "改包装", "改包", "重包裝", "重包装", "重新包裝", "重新包装"),
+        "variants": ("改包裝", "改包装", "改包", "重包裝", "重包装", "重新包裝", "重新包装", "改包材"),
+        "reason_only_variants": ("包裝", "包装", "重包", "改裝", "改装"),
         "id": "Packing ulang",
         "required_groups": (("packing",), ("ulang",)),
         "note": "重新包裝",
@@ -5721,6 +5731,7 @@ _FACTORY_REASON_ACTIONS = [
 _FACTORY_REASON_WRONG_ID_PATTERNS = (
     "nomor material", "sedang", "air palsu", "mengubah cetakan", "mengalir",
     "hentikan furnace", "inspeksi tengah", "menentukan spesifikasi", "ubah harga",
+    "nomor tungku", "nomor heat", "anil", "gerinda", "pasir halus", "material sudah dikirim",
 )
 _FACTORY_REASON_ID_RE = re.compile(
     r"^\s*(?P<id>(?=[A-Z0-9._/-]*\d)(?=[A-Z0-9._/-]*[A-Z])[A-Z0-9][A-Z0-9._/-]{4,30})"
@@ -5747,15 +5758,17 @@ def _match_factory_reason_action(cell, reason_context=False):
     """Return a reason-action entry for exact/near-exact factory reason cells.
 
     reason_context=True is allowed only after deterministic context is present
-    (原因欄、ID 列、短標籤、圖片 OCR 表格). This is what gives flexibility for
-    OCR 少字/大小寫/空白 without turning every occurrence of 製程詞 into a forced
-    ERP reason action.
+    (原因欄、ID 列、短標籤、圖片 OCR 表格). This gives OCR tolerance without
+    rewriting normal sentences such as「削皮那邊優先放行」.
     """
     c = _compact_factory_reason_text(cell)
     if not c:
         return None
     for entry in _FACTORY_REASON_ACTIONS:
-        for v in entry.get("variants", (entry["key"],)):
+        variants = list(entry.get("variants", (entry["key"],)))
+        if reason_context:
+            variants.extend(entry.get("reason_only_variants", ()))
+        for v in variants:
             vc = _compact_factory_reason_text(v)
             if not vc:
                 continue
@@ -5766,11 +5779,12 @@ def _match_factory_reason_action(cell, reason_context=False):
                 return entry
     return None
 
-
 def _is_factory_reason_header_line(line):
     s = line or ""
-    return bool(re.search(r"(?<![A-Za-z0-9])ID(?![A-Za-z0-9])", s, re.I) and "原因" in s)
-
+    if not re.search(r"(?<![A-Za-z0-9])ID(?![A-Za-z0-9])", s, re.I):
+        return False
+    # OCR may read 原因 as 原囚/原因欄, but it must remain a reason column, not 爐號/料號.
+    return bool(re.search(r"原\s*[因囚困]|原因|理由|原因欄|原因栏|處理原因|处理原因", s))
 
 def _parse_factory_reason_table_row(line):
     if not line or _is_factory_reason_header_line(line):
@@ -5785,6 +5799,56 @@ def _parse_factory_reason_table_row(line):
         return None
     return material_id, entry
 
+
+
+def _factory_reason_line_id_only(line):
+    """Return ID/code when a table row was OCR'd as code-only in one line."""
+    if not line or not isinstance(line, str):
+        return None
+    t = line.strip()
+    if not t or _is_factory_reason_header_line(t):
+        return None
+    # Must be one compact code token. Avoid treating normal sentences as IDs.
+    if re.fullmatch(r"(?=[A-Z0-9._/-]*\d)(?=[A-Z0-9._/-]*[A-Z])[A-Z0-9][A-Z0-9._/-]{4,30}", t, re.I):
+        return t
+    return None
+
+
+def _parse_factory_reason_split_rows(lines):
+    """Parse OCR tables where left/right columns were emitted as alternating lines.
+
+    Examples:
+        ID | 原因\n7H385503A\n改端漆\n7H347507\n補毛重
+    """
+    if not lines:
+        return []
+    rows = []
+    i = 0
+    while i < len(lines):
+        cur = (lines[i] or "").strip()
+        # Normal same-line row first.
+        row = _parse_factory_reason_table_row(cur)
+        if row:
+            rows.append(row)
+            i += 1
+            continue
+        code = _factory_reason_line_id_only(cur)
+        if code and i + 1 < len(lines):
+            nxt = (lines[i + 1] or "").strip()
+            entry = _match_factory_reason_action(nxt, reason_context=True)
+            if entry:
+                rows.append((code, entry))
+                i += 2
+                continue
+        i += 1
+    return rows
+
+
+def _is_factory_reason_header_only_text(text):
+    if not text or not isinstance(text, str):
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return len(lines) == 1 and _is_factory_reason_header_line(lines[0])
 
 def _factory_reason_entries_in_text(text, reason_context=False):
     """Collect distinct reason-action entries grounded in source text."""
@@ -5817,7 +5881,10 @@ def _factory_reason_entries_in_text(text, reason_context=False):
         for entry in _FACTORY_REASON_ACTIONS:
             if entry["key"] in seen:
                 continue
-            for v in entry.get("variants", (entry["key"],)):
+            _variants = list(entry.get("variants", (entry["key"],)))
+            if effective_reason_context:
+                _variants.extend(entry.get("reason_only_variants", ()))
+            for v in _variants:
                 vc = _compact_factory_reason_text(v)
                 if vc and vc in compact:
                     seen.add(entry["key"])
@@ -5832,10 +5899,10 @@ def _looks_like_factory_reason_table_text(text):
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return False
-    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:5])
+    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:6])
     row_hits = sum(1 for ln in lines if _parse_factory_reason_table_row(ln))
-    return bool((has_header and row_hits >= 1) or row_hits >= 2)
-
+    split_hits = len(_parse_factory_reason_split_rows(lines))
+    return bool((has_header and (row_hits >= 1 or split_hits >= 1)) or row_hits >= 2 or split_hits >= 2)
 
 def _factory_reason_semantic_translate_zh_id(text):
     """Deterministic translation for ERP reason labels and reason tables.
@@ -5844,35 +5911,51 @@ def _factory_reason_semantic_translate_zh_id(text):
     - ID/code cells are copied verbatim;
     - 原因 header becomes Alasan;
     - reason cells become the user-provided factory action semantics;
+    - OCR split-column tables are repaired structurally;
     - unknown/non-table prose is not rewritten here, it goes through LLM with
       semantic_contract hints instead.
     """
     if not text or not isinstance(text, str):
         return None
     lines = [ln.rstrip() for ln in text.splitlines()]
-    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:5])
-    parsed_rows = []
+    nonempty = [ln.strip() for ln in lines if ln.strip()]
+
+    if _is_factory_reason_header_only_text(text):
+        return "ID | Alasan"
+
+    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:6])
+    same_line_rows = []
     for line in lines:
         row = _parse_factory_reason_table_row(line)
         if row:
-            parsed_rows.append((line, row[0], row[1]))
+            same_line_rows.append(row)
+    split_rows = _parse_factory_reason_split_rows(nonempty)
+    parsed_rows = split_rows if len(split_rows) > len(same_line_rows) else same_line_rows
+
     if (has_header and parsed_rows) or len(parsed_rows) >= 2:
-        out = []
-        header_written = False
-        for line in lines:
-            if not line.strip():
+        out = ["ID | Alasan"]
+        seen = set()
+        # Preserve OCR row order. split_rows already includes same-line rows when present.
+        source_rows = parsed_rows
+        for material_id, entry in source_rows:
+            key = (material_id, entry["key"])
+            if key in seen:
                 continue
-            if _is_factory_reason_header_line(line):
-                if not header_written:
-                    out.append("ID | Alasan")
-                    header_written = True
-                continue
-            row = _parse_factory_reason_table_row(line)
-            if row:
-                out.append(f"{row[0]} | {row[1]['id']}")
-        if out and not header_written:
-            out.insert(0, "ID | Alasan")
+            seen.add(key)
+            out.append(f"{material_id} | {entry['id']}")
         return "\n".join(out).strip() or None
+
+    # Single table row / line row. Critical for paragraph-split image OCR.
+    if len(nonempty) == 1:
+        row = _parse_factory_reason_table_row(nonempty[0])
+        if row:
+            return f"{row[0]} | {row[1]['id']}"
+
+    # Two-line split single row: code line + reason line.
+    if len(nonempty) == 2:
+        split_one = _parse_factory_reason_split_rows(nonempty)
+        if len(split_one) == 1:
+            return f"{split_one[0][0]} | {split_one[0][1]['id']}"
 
     # Standalone short reason labels, including multiple labels sent as separate lines.
     chunks = [c.strip() for c in re.split(r"[\n\r,，;；、/]+", text) if c.strip()]
@@ -5887,7 +5970,6 @@ def _factory_reason_semantic_translate_zh_id(text):
         if mapped:
             return "\n".join(mapped)
     return None
-
 
 def _factory_reason_translation_contains(entry, translation_lower):
     for group in entry.get("required_groups", ()): 
@@ -8846,7 +8928,17 @@ def translate(text, src, tgt):
     canonical source，舊錯誤快取不會繼續命中，站名也不再靠模型猜。
     """
     canonical_text = text
+    # v3.15: ERP「原因」欄是強語義表格/短標籤，必須在任何站別 alias、
+    # cache、TM、NMT、LLM、final guard 之前先決定。這是文字與圖片共用的
+    # 邊界層，不是圖片補丁。
     if src == "zh" and tgt == "id":
+        reason_semantic = _factory_reason_semantic_translate_zh_id(canonical_text)
+        if reason_semantic:
+            try:
+                cache_set(canonical_text, src, tgt, reason_semantic, force=True)
+            except Exception:
+                pass
+            return reason_semantic
         canonical_text, _station_alias_matches = resolve_factory_station_aliases(text)
     protected_text, _name_map = protect_names(canonical_text)
     # 存 thread-local 供 _translate_core 路由判斷:有保護名時強制走 LLM,
@@ -8868,6 +8960,12 @@ def translate(text, src, tgt):
     if result and isinstance(result, str):
         result = restore_names(result, _name_map)
         result = _final_delivery_guard(canonical_text, result, src, tgt)
+        # Absolute last boundary: if the source is an ERP reason table/label,
+        # deterministic factory semantics outrank any reviewer/cache/model output.
+        if src == "zh" and tgt == "id":
+            reason_semantic = _factory_reason_semantic_translate_zh_id(canonical_text)
+            if reason_semantic:
+                return reason_semantic
     return result
 
 
@@ -9647,6 +9745,14 @@ def _translate_single_paragraph(text, src, tgt):
     這函數做最小流程:cache → custom example → translate_openai
     不做反譯、self-check 等(那些是整篇譯文層級的檢查)
     """
+    # v3.15: 圖片 OCR 表格被分段時，每一列仍必須先跑 ERP 原因語義層。
+    # 否則單列會繞過 _translate_core 的整表判斷，回到 LLM/快取而重現
+    # Nomor Material / Air Palsu / Gerinda 等舊錯譯。
+    if src == "zh" and tgt == "id":
+        reason_semantic = _factory_reason_semantic_translate_zh_id(text)
+        if reason_semantic:
+            return reason_semantic
+
     # 1. Check exact custom example
     exact = _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
@@ -10260,6 +10366,8 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                         "3a. **表格 / Excel / ERP 截圖**:如果圖片是表格,請用 ` | ` 分隔欄位,每一列獨立一行輸出;欄位標題照原文輸出。\n"
                         "3b. **ID / 料號 / 爐號 / TAG / 批號保護**:英數代碼、尺寸、數量、日期、站號都只做 OCR,不得翻譯、不得自動校正、不得補字。\n"
                         "    讀代碼時逐字辨認 8/3/6/5/S、0/O、1/I/L、B/8、A/4;真的看不清楚的單一字元用 ? 取代,不要猜。\n"
+                        "3c. **ERP 原因欄保護**:若表格標題是 ID / 原因,標題必須輸出 `ID | 原因`,不得改成爐號、料號、Nomor Material、Nomor Tungku。\n"
+                        "    原因欄內容如 削皮/拋光/倒角/退火/改端漆/補毛重/改Tag/取樣/併包/改包裝 只做 OCR 原文輸出,不得翻譯。\n"
                         "4. **忽略手機螢幕介面元素**:狀態列(時間 / 4G / 5G / WiFi / 電量百分比 / 訊號)、\n"
                         "   未讀數(99+)、輸入框文字(輸入訊息)、鍵盤按鍵(注音、空白鍵、換行等)、\n"
                         "   應用程式名稱、底部 navigation bar — 這些都不要輸出\n"

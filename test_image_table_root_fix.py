@@ -75,6 +75,9 @@ def _exec_factory_reason_semantic_subset():
         "_match_factory_reason_action",
         "_is_factory_reason_header_line",
         "_parse_factory_reason_table_row",
+        "_factory_reason_line_id_only",
+        "_parse_factory_reason_split_rows",
+        "_is_factory_reason_header_only_text",
         "_factory_reason_entries_in_text",
         "_looks_like_factory_reason_table_text",
         "_factory_reason_semantic_translate_zh_id",
@@ -116,9 +119,32 @@ def test_factory_reason_table_translates_with_user_provided_semantics():
         "ID | Alasan\n"
         "7H385503A | Ubah warna cat ujung\n"
         "7H347507 | Kembalikan ke stasiun peeling\n"
-        "7H110003 | Timbang ulang berat bruto\n"
+        "7H110003 | Timbang ulang berat kotor\n"
         "7G319512B | Bongkar packing, serahkan ke station 480 untuk sampling"
     )
+
+
+
+def test_factory_reason_semantics_survive_paragraph_split_and_ocr_split_columns():
+    ns = _exec_factory_reason_semantic_subset()
+    assert ns["_factory_reason_semantic_translate_zh_id"]("ID | 原因") == "ID | Alasan"
+    assert ns["_factory_reason_semantic_translate_zh_id"]("7H385503A | 改端漆") == "7H385503A | Ubah warna cat ujung"
+    split_ocr = "ID | 原因\n7H385503A\n改端漆\n7H110003\n補毛重\n7G681208A\n倒角"
+    assert ns["_factory_reason_semantic_translate_zh_id"](split_ocr) == (
+        "ID | Alasan\n"
+        "7H385503A | Ubah warna cat ujung\n"
+        "7H110003 | Timbang ulang berat kotor\n"
+        "7G681208A | Ujung perlu di-chamfer"
+    )
+
+
+def test_translation_boundary_and_paragraph_worker_have_reason_semantic_guard():
+    translate_fn = _function_source("translate")
+    para_fn = _function_source("_translate_single_paragraph")
+    assert "_factory_reason_semantic_translate_zh_id(canonical_text)" in translate_fn
+    assert "cache、TM、NMT、LLM、final guard 之前先決定" in translate_fn
+    assert "_factory_reason_semantic_translate_zh_id(text)" in para_fn
+    assert "Nomor Material / Air Palsu / Gerinda" in para_fn
 
 
 def test_factory_reason_semantic_contract_blocks_old_bad_outputs():
@@ -143,5 +169,5 @@ def test_factory_reason_short_labels_are_flexible_but_do_not_rewrite_normal_stat
     ns = _exec_factory_reason_semantic_subset()
     assert ns["_factory_reason_semantic_translate_zh_id"]("端漆") == "Ubah warna cat ujung"
     assert ns["_factory_reason_semantic_translate_zh_id"]("改TAG") == "Input ulang data dan tempel ulang TAG"
-    assert ns["_factory_reason_semantic_translate_zh_id"]("毛重") == "Timbang ulang berat bruto"
+    assert ns["_factory_reason_semantic_translate_zh_id"]("毛重") == "Timbang ulang berat kotor"
     assert ns["_factory_reason_contract_risk"]("削皮那邊優先放行") is None
