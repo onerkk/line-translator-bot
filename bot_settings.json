@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "1fdabb8d65aef3908c6dc374e739492abbc679e492c761e3d30faccad6f39ae6",
-    "updated_at_iso": "2026-07-09T12:02:21.763889+00:00",
-    "updated_at_unix": 1783598541.7638886
+    "state_hash": "8cf62e4abdad45ae65bccbd6f1fa4ee94dd66fac793a48f2adcabeb9ad07092e",
+    "updated_at_iso": "2026-07-09T12:38:50.479647+00:00",
+    "updated_at_unix": 1783600730.4796467
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -108,7 +108,7 @@
       "gpt-5.4-nano": "gemini-3.1-flash-lite",
       "gpt-5.5": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-08 16:02:48",
+    "last_updated": "2026-07-09 12:38:15",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-4-6",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -355,7 +355,7 @@
   },
   "group_img_ask_settings": {},
   "group_img_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
