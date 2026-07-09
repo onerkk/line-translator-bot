@@ -5844,6 +5844,103 @@ def _parse_factory_reason_split_rows(lines):
     return rows
 
 
+def _parse_factory_reason_column_major_rows(lines):
+    """Parse OCR tables where the model emitted the left ID column first, then 原因 column.
+
+    Vision OCR sometimes reads an Excel screenshot column-by-column instead of row-by-row:
+        ID | 原因
+        7H385503A
+        7H347507
+        ...
+        改端漆
+        補毛重
+        ...
+
+    Pairing is allowed only when counts are exactly equal. If OCR skipped any ID or
+    reason cell, we fail closed instead of shifting reasons onto the wrong IDs.
+    """
+    if not lines:
+        return []
+    cells = []
+    for raw in lines:
+        s = (raw or "").strip()
+        if not s or _is_factory_reason_header_line(s):
+            continue
+        # Same-line rows are handled by the safer row parser. Do not double count them here.
+        if _parse_factory_reason_table_row(s):
+            continue
+        code = _factory_reason_line_id_only(s)
+        if code:
+            cells.append(("id", code))
+            continue
+        entry = _match_factory_reason_action(s, reason_context=True)
+        if entry:
+            cells.append(("reason", entry))
+            continue
+        # Ignore obvious UI/status residue; any other unknown text makes this shape unsafe.
+        if re.fullmatch(r"[-–—_=+*#．.。\s]+", s):
+            continue
+        return []
+    if len(cells) < 4:
+        return []
+    kinds = [k for k, _ in cells]
+    # Require exactly one transition ID...ID -> reason...reason. Interleaved rows are split_rows.
+    try:
+        first_reason = kinds.index("reason")
+    except ValueError:
+        return []
+    if first_reason == 0:
+        return []
+    if any(k != "id" for k in kinds[:first_reason]) or any(k != "reason" for k in kinds[first_reason:]):
+        return []
+    ids = [v for k, v in cells[:first_reason]]
+    entries = [v for k, v in cells[first_reason:]]
+    if len(ids) != len(entries) or len(ids) < 2:
+        return []
+    return list(zip(ids, entries))
+
+
+def _factory_reason_table_alignment_issue(text):
+    """Detect unsafe ERP reason table OCR where ID and reason columns cannot be aligned.
+
+    Returning a reason here is intentionally fail-closed: a shifted table is worse than
+    asking for a clearer crop, because it assigns the wrong operation to a material ID.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines or not any(_is_factory_reason_header_line(ln) for ln in lines[:6]):
+        return ""
+    same = [_parse_factory_reason_table_row(ln) for ln in lines]
+    same = [r for r in same if r]
+    # If we have reliable same-line rows, let the deterministic translator use them.
+    if len(same) >= 2:
+        return ""
+    ids = []
+    reasons = []
+    unknown = []
+    for ln in lines:
+        if _is_factory_reason_header_line(ln):
+            continue
+        if _factory_reason_line_id_only(ln):
+            ids.append(ln)
+        elif _match_factory_reason_action(ln, reason_context=True):
+            reasons.append(ln)
+        elif not re.fullmatch(r"[-–—_=+*#．.。\s]+", ln):
+            unknown.append(ln)
+    if ids and reasons and len(ids) != len(reasons):
+        return "id_reason_count_mismatch"
+    if ids and reasons and unknown:
+        return "unknown_cells_in_split_table"
+    return ""
+
+
+def _factory_reason_alignment_failure_message(tgt="id"):
+    if (tgt or "").lower().startswith("zh"):
+        return "OCR 無法可靠對齊 ID 與原因欄，請重拍較清楚，或只裁切表格後再傳。"
+    return "OCR tabel tidak cukup jelas untuk mencocokkan ID dan Alasan. Mohon kirim foto yang lebih jelas, atau crop hanya bagian tabel lalu kirim ulang."
+
+
 def _is_factory_reason_header_only_text(text):
     if not text or not isinstance(text, str):
         return False
@@ -5902,7 +5999,9 @@ def _looks_like_factory_reason_table_text(text):
     has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:6])
     row_hits = sum(1 for ln in lines if _parse_factory_reason_table_row(ln))
     split_hits = len(_parse_factory_reason_split_rows(lines))
-    return bool((has_header and (row_hits >= 1 or split_hits >= 1)) or row_hits >= 2 or split_hits >= 2)
+    column_hits = len(_parse_factory_reason_column_major_rows(lines))
+    return bool((has_header and (row_hits >= 1 or split_hits >= 1 or column_hits >= 1))
+                or row_hits >= 2 or split_hits >= 2 or column_hits >= 2)
 
 def _factory_reason_semantic_translate_zh_id(text):
     """Deterministic translation for ERP reason labels and reason tables.
@@ -5930,7 +6029,8 @@ def _factory_reason_semantic_translate_zh_id(text):
         if row:
             same_line_rows.append(row)
     split_rows = _parse_factory_reason_split_rows(nonempty)
-    parsed_rows = split_rows if len(split_rows) > len(same_line_rows) else same_line_rows
+    column_rows = _parse_factory_reason_column_major_rows(nonempty)
+    parsed_rows = max((same_line_rows, split_rows, column_rows), key=len)
 
     if (has_header and parsed_rows) or len(parsed_rows) >= 2:
         out = ["ID | Alasan"]
@@ -9078,6 +9178,19 @@ def _translate_core(text, src, tgt):
     # 重新解讀成「Nomor Material / Sedang / Air Palsu」。普通句子不會命中，仍走 LLM。
     if src == "zh" and tgt == "id":
         _reason_semantic = _factory_reason_semantic_translate_zh_id(text)
+        if (not _reason_semantic) and getattr(_tl, 'from_image_ocr', False):
+            _align_issue = _factory_reason_table_alignment_issue(text)
+            if _align_issue:
+                logger.warning("[FactoryReasonOCR] fail-closed: %s text=%r", _align_issue, text[:200])
+                try:
+                    _event_log_write("factory_reason_ocr_alignment_failed", {
+                        "group_id": _gid_for_tm,
+                        "reason": _align_issue,
+                        "ocr_text": text[:500],
+                    })
+                except Exception:
+                    pass
+                return _factory_reason_alignment_failure_message(tgt)
         if _reason_semantic:
             logger.info("Factory reason semantic translation hit: %r -> %r", text[:80], _reason_semantic[:80])
             try:
@@ -10339,6 +10452,110 @@ def _clean_ocr_status_bar(text):
     return '\n'.join(cleaned_lines)
 
 
+def _factory_reason_ocr_row_count(text):
+    if not text or not isinstance(text, str):
+        return 0
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return max(
+        sum(1 for ln in lines if _parse_factory_reason_table_row(ln)),
+        len(_parse_factory_reason_split_rows(lines)),
+        len(_parse_factory_reason_column_major_rows(lines)),
+    )
+
+
+def _should_run_factory_reason_table_ocr(text):
+    if not text or not isinstance(text, str):
+        return False
+    compact = _compact_factory_reason_text(text)
+    has_id = bool(re.search(r"(?<![A-Za-z0-9])ID(?![A-Za-z0-9])", text or "", re.I))
+    has_reason_header = bool(re.search(r"原\s*[因囚困]|原因|理由", text or ""))
+    has_reason_word = any(_compact_factory_reason_text(v) in compact
+                          for e in _FACTORY_REASON_ACTIONS
+                          for v in (list(e.get("variants", ())) + list(e.get("reason_only_variants", ()))))
+    has_code = bool(re.search(r"(?=[A-Z0-9._/-]*\d)(?=[A-Z0-9._/-]*[A-Z])[A-Z0-9][A-Z0-9._/-]{4,30}", text or "", re.I))
+    return bool(has_code and (has_reason_header or (has_id and has_reason_word)))
+
+
+def _strict_factory_reason_ocr_is_better(generic_text, strict_text):
+    if not strict_text or not isinstance(strict_text, str):
+        return False
+    st = strict_text.strip()
+    if not st or "NO_TABLE" in st.upper():
+        return False
+    low = st.lower()
+    # Dedicated OCR must remain source text. Reject if it already translated cells.
+    if any(bad in low for bad in _FACTORY_REASON_WRONG_ID_PATTERNS):
+        return False
+    if not _should_run_factory_reason_table_ocr(st):
+        return False
+    strict_rows = _factory_reason_ocr_row_count(st)
+    generic_rows = _factory_reason_ocr_row_count(generic_text)
+    # Prefer the strict row-grid pass when it produces a real reason table and
+    # does not lose rows compared with the generic pass.
+    return strict_rows >= 2 and strict_rows >= generic_rows
+
+
+def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
+    """Dedicated source-OCR for ERP ID/原因 tables. Does not translate.
+
+    Generic vision OCR can read narrow Excel screenshots by columns, or skip a few
+    visually crowded rows. That shifts reasons onto the wrong material IDs. This
+    second pass is used only when the first OCR result indicates an ERP reason
+    table; it instructs the model to read by horizontal grid row, not by column.
+    """
+    if not oai:
+        return None
+    if mime_type == "image/heic":
+        mime_type = "image/jpeg"
+    try:
+        msgs = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一個工廠 ERP / Excel 表格 OCR 引擎，只負責轉錄原文，不得翻譯。\n"
+                    "目標表格通常有兩欄: ID 和 原因。\n"
+                    "最重要規則:\n"
+                    "1. 必須按照同一條水平格線逐列讀取: 左欄 ID 與右欄 原因 必須來自同一列。\n"
+                    "2. 不可先讀完整 ID 欄再讀原因欄後自行配對；不可讓原因欄上移或下移。\n"
+                    "3. 每一個看得到的資料列都要輸出；看不清楚的單一字元用 ?，看不清楚的原因用 ?。\n"
+                    "4. 英數 ID 逐字 OCR，保留 7H/7G/7I/7B、A/B/C/D 等尾碼，不得自動校正。\n"
+                    "5. 原因欄只輸出中文原文，例如 改端漆、補毛重、退火、倒角、削皮、拋光、併包、改包裝、改Tag、取樣。\n"
+                    "6. 輸出格式只能是 compact table: 第一行 `ID | 原因`，下面每行 `<ID> | <原因>`。\n"
+                    "7. 如果圖片不是 ID/原因 表格，輸出 NO_TABLE。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64," + image_base64,
+                            "detail": "high",
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "請只轉錄 ID/原因 表格。逐列對齊，不翻譯，不要漏列。",
+                    },
+                ],
+            },
+        ]
+        r = _vision_call(
+            msgs,
+            max_tokens=3000,
+            cache_key=_build_cache_key(getattr(_tl, 'group_id', ''), "img", "txt", "ocr_factory_reason"),
+            task_type="ocr",
+        )
+        track_tokens(r)
+        result = (r.choices[0].message.content or "").strip()
+        logger.info("[FactoryReasonOCR] strict raw result (%d chars): %s", len(result), result[:300])
+        return _clean_ocr_status_bar(result).strip() if result else None
+    except Exception as e:
+        logger.warning("[FactoryReasonOCR] strict OCR failed: %s", e)
+        return None
+
+
 def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     """Use OpenAI Vision to extract text from image. v3.8: model upgraded.
     
@@ -10363,7 +10580,7 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                         "1. **嚴格保留段落結構**:原文中的空行(段落分隔)用空行輸出;原文中的換行用換行輸出。\n"
                         "2. 不要加註解、不要翻譯、不要總結、不要編號\n"
                         "3. 中文、英文、數字、印尼文、日文都原樣輸出\n"
-                        "3a. **表格 / Excel / ERP 截圖**:如果圖片是表格,請用 ` | ` 分隔欄位,每一列獨立一行輸出;欄位標題照原文輸出。\n"
+                        "3a. **表格 / Excel / ERP 截圖**:如果圖片是表格,請用 ` | ` 分隔欄位,每一列獨立一行輸出;欄位標題照原文輸出。必須依同一水平格線逐列配對,不可先讀整欄再自行配對。\n"
                         "3b. **ID / 料號 / 爐號 / TAG / 批號保護**:英數代碼、尺寸、數量、日期、站號都只做 OCR,不得翻譯、不得自動校正、不得補字。\n"
                         "    讀代碼時逐字辨認 8/3/6/5/S、0/O、1/I/L、B/8、A/4;真的看不清楚的單一字元用 ? 取代,不要猜。\n"
                         "3c. **ERP 原因欄保護**:若表格標題是 ID / 原因,標題必須輸出 `ID | 原因`,不得改成爐號、料號、Nomor Material、Nomor Tungku。\n"
@@ -10418,6 +10635,24 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
         if not result.strip():
             logger.info("[OCR] all content cleaned as status bar")
             return None
+
+        # v3.16: ERP ID/原因 表格需要行級 OCR。通用 OCR 常會漏讀中間幾列或
+        # 先讀整欄再配對，造成「倒角/削皮/拋光」套到錯誤 ID。偵測到此類
+        # 表格時加跑一次 row-grid OCR；只接受仍為中文原文且列數不倒退的結果。
+        if _should_run_factory_reason_table_ocr(result):
+            strict_result = ocr_factory_reason_table_openai(image_base64, mime_type=mime_type)
+            if _strict_factory_reason_ocr_is_better(result, strict_result):
+                logger.info(
+                    "[FactoryReasonOCR] using strict row-grid OCR generic_rows=%d strict_rows=%d",
+                    _factory_reason_ocr_row_count(result),
+                    _factory_reason_ocr_row_count(strict_result),
+                )
+                return strict_result
+            logger.warning(
+                "[FactoryReasonOCR] strict OCR rejected/unused generic_rows=%d strict_rows=%d",
+                _factory_reason_ocr_row_count(result),
+                _factory_reason_ocr_row_count(strict_result),
+            )
         return result
     except Exception as e:
         logger.exception("[OCR] OpenAI Vision OCR error: %s", e)

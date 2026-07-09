@@ -33,6 +33,8 @@ def test_ocr_prompt_outputs_source_table_not_translation():
     assert "不要翻譯" in ocr_fn
     assert "表格 / Excel / ERP 截圖" in ocr_fn
     assert "` | ` 分隔欄位" in ocr_fn
+    assert "同一水平格線" in ocr_fn
+    assert "不可先讀整欄再自行配對" in ocr_fn
     assert "ID / 料號 / 爐號 / TAG / 批號保護" in ocr_fn
     assert "不得翻譯、不得自動校正、不得補字" in ocr_fn
 
@@ -77,6 +79,9 @@ def _exec_factory_reason_semantic_subset():
         "_parse_factory_reason_table_row",
         "_factory_reason_line_id_only",
         "_parse_factory_reason_split_rows",
+        "_parse_factory_reason_column_major_rows",
+        "_factory_reason_table_alignment_issue",
+        "_factory_reason_alignment_failure_message",
         "_is_factory_reason_header_only_text",
         "_factory_reason_entries_in_text",
         "_looks_like_factory_reason_table_text",
@@ -86,6 +91,9 @@ def _exec_factory_reason_semantic_subset():
         "_build_factory_reason_contract_lines",
         "translation_satisfies_semantic_contract",
         "enforce_translation_semantic_contract",
+        "_factory_reason_ocr_row_count",
+        "_should_run_factory_reason_table_ocr",
+        "_strict_factory_reason_ocr_is_better",
     }
     nodes = []
     for node in tree.body:
@@ -136,6 +144,53 @@ def test_factory_reason_semantics_survive_paragraph_split_and_ocr_split_columns(
         "7H110003 | Timbang ulang berat kotor\n"
         "7G681208A | Ujung perlu di-chamfer"
     )
+
+
+def test_factory_reason_column_major_ocr_pairs_only_when_counts_match():
+    ns = _exec_factory_reason_semantic_subset()
+    column_ocr = (
+        "ID | 原因\n"
+        "7H385503A\n"
+        "7H347507\n"
+        "7H110003\n"
+        "改端漆\n"
+        "改端漆\n"
+        "補毛重"
+    )
+    assert ns["_factory_reason_semantic_translate_zh_id"](column_ocr) == (
+        "ID | Alasan\n"
+        "7H385503A | Ubah warna cat ujung\n"
+        "7H347507 | Ubah warna cat ujung\n"
+        "7H110003 | Timbang ulang berat kotor"
+    )
+
+    unsafe_shift = (
+        "ID | 原因\n"
+        "7H385503A\n"
+        "7H347507\n"
+        "7H110003\n"
+        "改端漆\n"
+        "改端漆"
+    )
+    assert ns["_parse_factory_reason_column_major_rows"](unsafe_shift.splitlines()) == []
+    assert ns["_factory_reason_table_alignment_issue"](unsafe_shift) == "id_reason_count_mismatch"
+
+
+def test_dedicated_factory_reason_ocr_guard_is_source_only_and_row_grid():
+    source = _source()
+    strict_fn = _function_source("ocr_factory_reason_table_openai")
+    assert "同一條水平格線逐列讀取" in strict_fn
+    assert "不可先讀完整 ID 欄再讀原因欄後自行配對" in strict_fn
+    assert "不得翻譯" in strict_fn
+    assert "ocr_factory_reason" in strict_fn
+
+    ns = _exec_factory_reason_semantic_subset()
+    generic_bad = "ID | 原因\n7H385503A | 改端漆\n7H347507 | 補毛重"
+    strict_good = "ID | 原因\n7H385503A | 改端漆\n7H347507 | 補毛重\n7G681208A | 倒角"
+    assert ns["_should_run_factory_reason_table_ocr"](generic_bad) is True
+    assert ns["_strict_factory_reason_ocr_is_better"](generic_bad, strict_good) is True
+    translated_strict = "ID | Alasan\n7H385503A | Ubah warna cat ujung"
+    assert ns["_strict_factory_reason_ocr_is_better"](generic_bad, translated_strict) is False
 
 
 def test_translation_boundary_and_paragraph_worker_have_reason_semantic_guard():
