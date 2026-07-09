@@ -5637,6 +5637,305 @@ TAIWAN_FACTORY_GLOSSARY_HINT = """
 """
 
 
+# ─── v3.14: ERP「原因」欄位語義層(圖片 OCR 與一般文字共用) ─────────────
+# 根因:「削皮 / 拋光 / 倒角 / 退火 / 改端漆 / 補毛重 / 改Tag / 取樣 / 併包 / 改包裝」
+# 在原因欄不是普通名詞或站別,而是工廠 ERP 待辦動作。若只靠通用字典或圖片直譯,
+# 會出現 Nomor Material / Sedang / Air Palsu 等錯譯。這裡建立「語義層」而非圖片補丁:
+#   1) OCR 仍只抽原文;
+#   2) 一般 translate() 先分類這些原因語義;
+#   3) 表格/短標籤可 deterministic 輸出;
+#   4) 一般句子則把同一份 semantic_contract 注入 LLM / 品質閘門。
+_FACTORY_REASON_ACTIONS = [
+    {
+        "key": "削皮",
+        "variants": ("削皮", "回削皮", "退削皮", "退回削皮", "削皮站", "削"),
+        "id": "Kembalikan ke stasiun peeling",
+        "required_groups": (("peeling",), ("kembali", "kembalikan", "dikembalikan")),
+        "note": "要退回削皮站別",
+    },
+    {
+        "key": "拋光",
+        "variants": ("拋光", "抛光", "進拋光", "回拋光", "退拋光", "做拋光"),
+        "id": "Masuk proses polishing",
+        "required_groups": (("polishing", "poles"), ("proses", "masuk")),
+        "note": "要進行拋光製程",
+    },
+    {
+        "key": "倒角",
+        "variants": ("倒角", "端倒角", "端部倒角", "做倒角", "倒角處理"),
+        "id": "Ujung perlu di-chamfer",
+        "required_groups": (("chamfer",), ("ujung",)),
+        "note": "端部需進行倒角",
+    },
+    {
+        "key": "退火",
+        "variants": ("退火", "回退火", "退回退火", "退火製程", "做退火"),
+        "id": "Kembalikan ke proses annealing",
+        "required_groups": (("annealing",), ("kembali", "kembalikan", "dikembalikan")),
+        "note": "要退回退火製程",
+    },
+    {
+        "key": "改端漆",
+        "variants": ("改端漆", "端漆", "改漆", "改噴漆", "端部改漆", "改端部漆", "改端噴漆"),
+        "id": "Ubah warna cat ujung",
+        "required_groups": (("cat", "warna"), ("ujung",)),
+        "note": "端部要改噴漆顏色",
+    },
+    {
+        "key": "補毛重",
+        "variants": ("補毛重", "毛重", "補重", "重稱", "重秤", "重新稱重", "重新秤重"),
+        "id": "Timbang ulang berat bruto",
+        "required_groups": (("timbang",), ("ulang",), ("bruto", "kotor")),
+        "note": "重新稱重",
+    },
+    {
+        "key": "改Tag",
+        "variants": ("改tag", "改tag", "改TAG", "改 Tag", "改標籤", "改标签", "重貼tag", "重貼TAG", "重貼標籤"),
+        "id": "Input ulang data dan tempel ulang TAG",
+        "required_groups": (("tag",), ("input", "data", "tempel"), ("ulang",)),
+        "note": "重新入帳,重新張貼 TAG",
+    },
+    {
+        "key": "取樣",
+        "variants": ("取樣", "取样", "480取樣", "給480取樣", "拆包取樣"),
+        "id": "Bongkar packing, serahkan ke station 480 untuk sampling",
+        "required_groups": (("480",), ("sampling", "sampel"), ("bongkar", "packing")),
+        "note": "拆包給 480 取樣",
+    },
+    {
+        "key": "併包",
+        "variants": ("併包", "并包", "合包", "併", "併包作業", "合併包裝"),
+        "id": "Bongkar packing lalu gabung packing",
+        "required_groups": (("gabung",), ("packing",), ("bongkar",)),
+        "note": "拆包要合併作業",
+    },
+    {
+        "key": "改包裝",
+        "variants": ("改包裝", "改包装", "改包", "重包裝", "重包装", "重新包裝", "重新包装"),
+        "id": "Packing ulang",
+        "required_groups": (("packing",), ("ulang",)),
+        "note": "重新包裝",
+    },
+]
+
+_FACTORY_REASON_WRONG_ID_PATTERNS = (
+    "nomor material", "sedang", "air palsu", "mengubah cetakan", "mengalir",
+    "hentikan furnace", "inspeksi tengah", "menentukan spesifikasi", "ubah harga",
+)
+_FACTORY_REASON_ID_RE = re.compile(
+    r"^\s*(?P<id>(?=[A-Z0-9._/-]*\d)(?=[A-Z0-9._/-]*[A-Z])[A-Z0-9][A-Z0-9._/-]{4,30})"
+    r"\s*(?:\||｜|\t|,|，|:|：|\s+)\s*(?P<reason>.+?)\s*$",
+    re.I,
+)
+
+
+def _compact_factory_reason_text(text):
+    """Normalize OCR/table reason cells without losing Tag case semantics."""
+    if not text or not isinstance(text, str):
+        return ""
+    t = text.strip().lower()
+    t = t.replace("ｔａｇ", "tag")
+    t = re.sub(r"[\s|｜,，。.:：;；/\\\\()（）\[\]【】{}<>《》『』「」'\"`·・_-]+", "", t)
+    return t
+
+
+def _factory_reason_action_map():
+    return {e["key"]: e for e in _FACTORY_REASON_ACTIONS}
+
+
+def _match_factory_reason_action(cell, reason_context=False):
+    """Return a reason-action entry for exact/near-exact factory reason cells.
+
+    reason_context=True is allowed only after deterministic context is present
+    (原因欄、ID 列、短標籤、圖片 OCR 表格). This is what gives flexibility for
+    OCR 少字/大小寫/空白 without turning every occurrence of 製程詞 into a forced
+    ERP reason action.
+    """
+    c = _compact_factory_reason_text(cell)
+    if not c:
+        return None
+    for entry in _FACTORY_REASON_ACTIONS:
+        for v in entry.get("variants", (entry["key"],)):
+            vc = _compact_factory_reason_text(v)
+            if not vc:
+                continue
+            if c == vc:
+                return entry
+            # OCR reason cell sometimes contains one extra marker, e.g.「原因:削皮」 or「削皮?」.
+            if reason_context and vc in c and len(c) <= len(vc) + 4:
+                return entry
+    return None
+
+
+def _is_factory_reason_header_line(line):
+    s = line or ""
+    return bool(re.search(r"(?<![A-Za-z0-9])ID(?![A-Za-z0-9])", s, re.I) and "原因" in s)
+
+
+def _parse_factory_reason_table_row(line):
+    if not line or _is_factory_reason_header_line(line):
+        return None
+    m = _FACTORY_REASON_ID_RE.match(line.strip())
+    if not m:
+        return None
+    material_id = m.group("id").strip()
+    reason_cell = m.group("reason").strip()
+    entry = _match_factory_reason_action(reason_cell, reason_context=True)
+    if not entry:
+        return None
+    return material_id, entry
+
+
+def _factory_reason_entries_in_text(text, reason_context=False):
+    """Collect distinct reason-action entries grounded in source text."""
+    if not text or not isinstance(text, str):
+        return []
+    found = []
+    seen = set()
+    table_like = _looks_like_factory_reason_table_text(text)
+    effective_reason_context = reason_context or table_like or ("原因" in text)
+    # Row-level matching first: high precision for screenshots / copied Excel rows.
+    for line in text.splitlines():
+        row = _parse_factory_reason_table_row(line)
+        if row:
+            key = row[1]["key"]
+            if key not in seen:
+                seen.add(key)
+                found.append(row[1])
+    # Short label / reason column text matching. Keep it narrow outside reason context.
+    chunks = re.split(r"[\n\r,，;；、/]+", text)
+    for chunk in chunks:
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        entry = _match_factory_reason_action(stripped, reason_context=effective_reason_context)
+        if entry and entry["key"] not in seen:
+            seen.add(entry["key"])
+            found.append(entry)
+    if effective_reason_context:
+        compact = _compact_factory_reason_text(text)
+        for entry in _FACTORY_REASON_ACTIONS:
+            if entry["key"] in seen:
+                continue
+            for v in entry.get("variants", (entry["key"],)):
+                vc = _compact_factory_reason_text(v)
+                if vc and vc in compact:
+                    seen.add(entry["key"])
+                    found.append(entry)
+                    break
+    return found
+
+
+def _looks_like_factory_reason_table_text(text):
+    if not text or not isinstance(text, str):
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:5])
+    row_hits = sum(1 for ln in lines if _parse_factory_reason_table_row(ln))
+    return bool((has_header and row_hits >= 1) or row_hits >= 2)
+
+
+def _factory_reason_semantic_translate_zh_id(text):
+    """Deterministic translation for ERP reason labels and reason tables.
+
+    This is intentionally source-grounded and format-preserving:
+    - ID/code cells are copied verbatim;
+    - 原因 header becomes Alasan;
+    - reason cells become the user-provided factory action semantics;
+    - unknown/non-table prose is not rewritten here, it goes through LLM with
+      semantic_contract hints instead.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    has_header = any(_is_factory_reason_header_line(ln) for ln in lines[:5])
+    parsed_rows = []
+    for line in lines:
+        row = _parse_factory_reason_table_row(line)
+        if row:
+            parsed_rows.append((line, row[0], row[1]))
+    if (has_header and parsed_rows) or len(parsed_rows) >= 2:
+        out = []
+        header_written = False
+        for line in lines:
+            if not line.strip():
+                continue
+            if _is_factory_reason_header_line(line):
+                if not header_written:
+                    out.append("ID | Alasan")
+                    header_written = True
+                continue
+            row = _parse_factory_reason_table_row(line)
+            if row:
+                out.append(f"{row[0]} | {row[1]['id']}")
+        if out and not header_written:
+            out.insert(0, "ID | Alasan")
+        return "\n".join(out).strip() or None
+
+    # Standalone short reason labels, including multiple labels sent as separate lines.
+    chunks = [c.strip() for c in re.split(r"[\n\r,，;；、/]+", text) if c.strip()]
+    if chunks and len("".join(chunks)) <= 40:
+        mapped = []
+        for chunk in chunks:
+            entry = _match_factory_reason_action(chunk, reason_context=True)
+            if not entry:
+                mapped = []
+                break
+            mapped.append(entry["id"])
+        if mapped:
+            return "\n".join(mapped)
+    return None
+
+
+def _factory_reason_translation_contains(entry, translation_lower):
+    for group in entry.get("required_groups", ()): 
+        if not any(token.lower() in translation_lower for token in group):
+            return False
+    return True
+
+
+def _factory_reason_contract_risk(text):
+    table_like = _looks_like_factory_reason_table_text(text)
+    reason_context = table_like or ("原因" in (text or ""))
+    entries = _factory_reason_entries_in_text(text, reason_context=reason_context)
+    if not entries:
+        return None
+    # Avoid over-constraining ordinary prose like「削皮那邊」unless it is really a reason/list context.
+    if not reason_context:
+        compact = _compact_factory_reason_text(text)
+        short_exact = any(compact == _compact_factory_reason_text(v)
+                          for e in _FACTORY_REASON_ACTIONS for v in e.get("variants", (e["key"],)))
+        if not short_exact:
+            return None
+    return {
+        "term": "ERP原因欄",
+        "sense": "factory_reason_action_semantics",
+        "entries": [e["key"] for e in entries],
+        "table_like": table_like,
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+    }
+
+
+def _build_factory_reason_contract_lines(risk):
+    keys = set(risk.get("entries") or [])
+    amap = _factory_reason_action_map()
+    lines = ["<risk term='ERP原因欄' sense='factory_reason_action_semantics'>"]
+    lines.append("The source contains ERP/Excel reason labels. These labels are not generic nouns; they are factory action instructions. Preserve ID/code cells verbatim.")
+    lines.append("Translate header 原因 as Alasan. Never translate ID header as Nomor Material.")
+    for key in keys:
+        e = amap.get(key)
+        if not e:
+            continue
+        variants = "/".join(e.get("variants", ())[:4])
+        lines.append(f"{key} (variants: {variants}) => {e['id']} ; meaning: {e['note']}.")
+    lines.append("Forbidden wrong outputs for these labels: Nomor Material, Sedang, Air Palsu, Mengubah Cetakan, Mengalir, Hentikan Furnace.")
+    lines.append("</risk>")
+    return lines
+
+
 def detect_factory_semantic_error_zh_id(src_text, id_text):
     """Detect Chinese->Indonesian factory semantic errors that normal confidence misses."""
     if not id_text:
@@ -6038,6 +6337,16 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["vector_bypass_allowed"] = False
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
+
+        _reason_contract_fn = globals().get("_factory_reason_contract_risk")
+        reason_risk = _reason_contract_fn(text) if callable(_reason_contract_fn) else None
+        if reason_risk:
+            contract["has_risk"] = True
+            contract["risks"].append(reason_risk)
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -6075,6 +6384,8 @@ def build_translation_semantic_contract_prompt(contract):
             lines.append("Translate the station name exactly as: Stasiun packing barang bentuk khusus.")
             lines.append("Keep 異型棒 separate: 異型棒 means batang bentuk khusus.")
             lines.append("</risk>")
+        elif risk.get("sense") == "factory_reason_action_semantics":
+            lines.extend(_build_factory_reason_contract_lines(risk))
     lines.append("</semantic_contract>")
     return " ".join(lines)
 
@@ -6102,6 +6413,15 @@ def translation_satisfies_semantic_contract(contract, translation):
             required = (risk.get("required_id") or "").lower().strip()
             if required and required not in low:
                 return False, "factory_station_canonical_name_missing"
+        elif risk.get("sense") == "factory_reason_action_semantics":
+            for bad in _FACTORY_REASON_WRONG_ID_PATTERNS:
+                if bad in low:
+                    return False, "factory_reason_wrong_output:" + bad
+            amap = _factory_reason_action_map()
+            for key in risk.get("entries", []):
+                entry = amap.get(key)
+                if entry and not _factory_reason_translation_contains(entry, low):
+                    return False, "factory_reason_action_missing:" + key
     return True, ""
 
 def _semantic_rebuild_qing_treat_translation(src_text, contract, current_translation=""):
@@ -6203,6 +6523,11 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
                 translation,
                 risk.get("required_id") or "stasiun packing barang bentuk khusus",
             )
+        if risk.get("sense") == "factory_reason_action_semantics":
+            deterministic = _factory_reason_semantic_translate_zh_id(src_text)
+            if deterministic:
+                return deterministic
+            return translation
     return translation
 
 def filter_semantic_contract_references(contract, refs):
@@ -6246,6 +6571,9 @@ def factory_semantic_translate_zh_id(text):
     """Deterministic Chinese->Indonesian factory translation for high-risk known factory shapes.
     Note: Chinese polysemy like『請』is handled by runtime semantic_contract, not by exact direct bypass here.
     """
+    reason_semantic = _factory_reason_semantic_translate_zh_id(text)
+    if reason_semantic:
+        return reason_semantic
     src = text or ""
     compact = re.sub(r"\s+", "", src)
     if all(k in compact for k in ["清洗前", "料", "品保"]) and ("偷跑" in compact or "吊去" in compact) and "刮傷" in compact:
@@ -8554,7 +8882,7 @@ def translate(text, src, tgt):
 _FACTORY_CTX_PAT = re.compile(
     r'吊[^。，！？\s]{0,4}[料棒材鋼管貨捆包盤胚件]'      # 吊運材料:吊料/吊完料/吊鋼捲/吊棒材
     r'|[上下入出置退來捆堆送]料'                          # 材料動作:上料/下料/入料/出料/置料/退料/來料/捆料/堆料/送料
-    r'|研磨|冷抽|退火|倒角|矯直|拋光|盤元|母材|棒材|線材|解捲|料床|無心|砂帶|砂光|盤條|盤捲'
+    r'|研磨|冷抽|退火|倒角|矯直|拋光|削皮|改端漆|補毛重|改\s*[Tt][Aa][Gg]|取樣|併包|改包裝|盤元|母材|棒材|線材|解捲|料床|無心|砂帶|砂光|盤條|盤捲'
 )
 def _is_factory_context(text):
     """中文工廠材料/吊運/製程語境 → 強制走 LLM(避免 NMT 誤譯與舊快取 bypass)。
@@ -8646,6 +8974,29 @@ def _translate_core(text, src, tgt):
     _quality_critical = tqg_module.is_quality_critical(
         text, src, tgt, message_type=_message_type, factory_domain=_factory_domain_ctx or _factory_ctx
     )
+
+    # v3.14: ERP 原因欄 / 短標籤可完全由 source-grounded semantic layer 翻譯。
+    # 這一步放在 quality-critical clean document 前，避免圖片 OCR 多行表格被文件翻譯路徑
+    # 重新解讀成「Nomor Material / Sedang / Air Palsu」。普通句子不會命中，仍走 LLM。
+    if src == "zh" and tgt == "id":
+        _reason_semantic = _factory_reason_semantic_translate_zh_id(text)
+        if _reason_semantic:
+            logger.info("Factory reason semantic translation hit: %r -> %r", text[:80], _reason_semantic[:80])
+            try:
+                _tl.factory_audit = {
+                    "src": text,
+                    "type": "factory_reason_semantic_direct_zh_id",
+                    "reason": "deterministic_erp_reason_action_semantics",
+                    "raw_translation": "",
+                    "corrected_translation": _reason_semantic,
+                    "domain": ["factory", "erp_reason"],
+                    "auto_corrected": False,
+                }
+                _log_translation(text, _reason_semantic, src, tgt, "factory-reason-semantic", 0, 1.0, False, 1.0, _gid_for_tm)
+                cache_set(text, src, tgt, _reason_semantic)
+            except Exception:
+                pass
+            return _reason_semantic
 
     # Formal announcements and other quality-critical documents use a clean,
     # whole-document path. This deliberately bypasses the legacy shortcut /

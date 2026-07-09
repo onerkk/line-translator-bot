@@ -59,3 +59,89 @@ def test_ask_mode_image_translation_uses_same_standard_pipeline():
     assert "_tl.from_image_ocr = True" in fn
     assert "result = translate(extracted, \"zh\", actual_tgt)" in fn
     assert "result = translate(extracted, lang, actual_tgt)" in fn
+
+
+def _exec_factory_reason_semantic_subset():
+    source = _source()
+    tree = ast.parse(source)
+    wanted_assigns = {
+        "_FACTORY_REASON_ACTIONS",
+        "_FACTORY_REASON_WRONG_ID_PATTERNS",
+        "_FACTORY_REASON_ID_RE",
+    }
+    wanted_defs = {
+        "_compact_factory_reason_text",
+        "_factory_reason_action_map",
+        "_match_factory_reason_action",
+        "_is_factory_reason_header_line",
+        "_parse_factory_reason_table_row",
+        "_factory_reason_entries_in_text",
+        "_looks_like_factory_reason_table_text",
+        "_factory_reason_semantic_translate_zh_id",
+        "_factory_reason_translation_contains",
+        "_factory_reason_contract_risk",
+        "_build_factory_reason_contract_lines",
+        "translation_satisfies_semantic_contract",
+        "enforce_translation_semantic_contract",
+    }
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+            if names & wanted_assigns:
+                nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in wanted_defs:
+            nodes.append(node)
+    module = ast.Module(body=nodes, type_ignores=[])
+    ast.fix_missing_locations(module)
+
+    class DummyLogger:
+        def warning(self, *args, **kwargs):
+            pass
+
+    ns = {
+        "re": __import__("re"),
+        "logger": DummyLogger(),
+        "_event_log_write": lambda *args, **kwargs: None,
+    }
+    exec(compile(module, str(APP), "exec"), ns)
+    return ns
+
+
+def test_factory_reason_table_translates_with_user_provided_semantics():
+    ns = _exec_factory_reason_semantic_subset()
+    text = "ID | 原因\n7H385503A | 改端漆\n7H347507 | 削皮\n7H110003 | 補毛重\n7G319512B | 取樣"
+    out = ns["_factory_reason_semantic_translate_zh_id"](text)
+    assert out == (
+        "ID | Alasan\n"
+        "7H385503A | Ubah warna cat ujung\n"
+        "7H347507 | Kembalikan ke stasiun peeling\n"
+        "7H110003 | Timbang ulang berat bruto\n"
+        "7G319512B | Bongkar packing, serahkan ke station 480 untuk sampling"
+    )
+
+
+def test_factory_reason_semantic_contract_blocks_old_bad_outputs():
+    ns = _exec_factory_reason_semantic_subset()
+    source = "ID | 原因\n7H385503A | 改端漆\n7H347507 | 削皮"
+    risk = ns["_factory_reason_contract_risk"](source)
+    assert risk and risk["sense"] == "factory_reason_action_semantics"
+    contract = {"has_risk": True, "risks": [risk]}
+    bad = "ID | Nomor Material\n7H385503A | Sedang Mengubah Cetakan\n7H347507 | Air Palsu"
+    ok, reason = ns["translation_satisfies_semantic_contract"](contract, bad)
+    assert not ok
+    assert reason.startswith("factory_reason_wrong_output")
+    fixed = ns["enforce_translation_semantic_contract"](contract, source, bad)
+    assert "Nomor Material" not in fixed
+    assert "Air Palsu" not in fixed
+    assert "ID | Alasan" in fixed
+    assert "Ubah warna cat ujung" in fixed
+    assert "Kembalikan ke stasiun peeling" in fixed
+
+
+def test_factory_reason_short_labels_are_flexible_but_do_not_rewrite_normal_station_sentence():
+    ns = _exec_factory_reason_semantic_subset()
+    assert ns["_factory_reason_semantic_translate_zh_id"]("端漆") == "Ubah warna cat ujung"
+    assert ns["_factory_reason_semantic_translate_zh_id"]("改TAG") == "Input ulang data dan tempel ulang TAG"
+    assert ns["_factory_reason_semantic_translate_zh_id"]("毛重") == "Timbang ulang berat bruto"
+    assert ns["_factory_reason_contract_risk"]("削皮那邊優先放行") is None
