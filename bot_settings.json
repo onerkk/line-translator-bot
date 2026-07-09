@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.30-station-alias-root-fix-2026-06-21",
     "schema_version": 2,
-    "state_hash": "c782445f3cbe30765abc91418ce0ab314b7ec2224ef583104e80d69edff02a24",
-    "updated_at_iso": "2026-07-02T07:35:53.471092+00:00",
-    "updated_at_unix": 1782977753.4710922
+    "state_hash": "72e85d1fb02d9abcad0d0f25df3d4a2a28777a87d35a338007180312d55b3b09",
+    "updated_at_iso": "2026-07-09T12:02:19.229105+00:00",
+    "updated_at_unix": 1783598539.2291048
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -108,7 +108,7 @@
       "gpt-5.4-nano": "gemini-3.1-flash-lite",
       "gpt-5.5": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-02 06:11:08",
+    "last_updated": "2026-07-08 16:02:48",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-4-6",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -129,10 +129,10 @@
   },
   "bot_stats": {
     "ant_cache_read": 543126,
-    "ant_cache_write": 1467076,
-    "ant_cost_usd": 2.2818567,
-    "ant_input": 201994,
-    "ant_output": 9037,
+    "ant_cache_write": 1573938,
+    "ant_cost_usd": 2.4264882000000005,
+    "ant_input": 211823,
+    "ant_output": 9282,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -141,9 +141,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 214,
-    "tokens_completion": 14284,
-    "tokens_prompt": 3958859,
+    "text_translations": 221,
+    "tokens_completion": 14529,
+    "tokens_prompt": 4075550,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -281,11 +281,11 @@
       "tokens_prompt": 110202
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cost_usd": 0.4289089,
+      "cost_usd": 0.5735404000000004,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 2043,
-      "tokens_prompt": 344722
+      "tokens_completion": 2288,
+      "tokens_prompt": 461413
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -357,7 +357,7 @@
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+    "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_location_qr_settings": {},
   "group_location_settings": {},
@@ -394,6 +394,8 @@
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
+      "U54c702066e93a5d54e2e12ea5bc258c6": "許凱銘",
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
@@ -613,6 +615,7 @@
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hIWUl7wTBFnh4FQoD-XBoRghFFRJbZE9qXCENGh4THR9EdQMmBHdbHR4VSkpDLFZ9UCQMTEhASEhaZ01FOgobGwlTMC0sfTpVCS8ebTpcTzgRdgt6DxcdHEVmMko4Iyl6FCMxQkxgNDgyQlFNVBgdaT1oKwowcRp6N0J6Ln0nePsXF2EtVXJRG0QSS0_G",
     "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
     "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
+    "U54c702066e93a5d54e2e12ea5bc258c6": "https://sprofile.line-scdn.net/0hSUQKdtM_DHp8MiY7Ok1yBQxiDxBfQ1VoWFFKGUoyBRkWVkp_UQQWSE9mAB9HBUJ_BFRGGkA2Bh1wIXscYmTwTnsCUUtACk4lV1dEnw",
     "U66a8711792ba58d51144dac2f8c4c47c": "https://sprofile.line-scdn.net/0hNuZNVyr1EVp3Nw0yEN5vZAdnEjBURkhIW1kMOktjRzlDAF8MXAVfPxUxT21DAgFZU1hbPxFiHz5VRi4EBxoOXCM1MQgwfiVWHhhaPhs0CDMkew9pAU1eRD9VEQEcXVZnBycGVERcRgghdC8KMgIDTD8rNixWQgRJD2B9DHIFf9kYNWYPWlBWOUswTG3J",
     "U6aac5039042433ab3d48f9b3e9cae0a2": "https://sprofile.line-scdn.net/0hys2eeXGwJlwfHDiOJzxYYm9MJTY8bX9ON3huOX0VcGp1fzVdMng6O38feGUiJTEPYXg9MyofK2U9b2RhTD8NRGtJIRB-eBtIUX81RjZ_Mx9ZZGl9QzkVcUocJTN-eDR4aghqaCgbcRNaLSRuSXMJWDZYAiorVQR9W0tKChouSN9wHlEJMnthPyMbe2uh",
     "U7625d783fa290ef397f79d6667fd222d": "https://sprofile.line-scdn.net/0hSEeT85g4DGpILRwm9HByFTh9DwBrXFV4MB5CDy95VVslGRs4ZU1GBHQlB14gGE08ZBtGDn8oBw9EPnsMVnvwXk8dUVt0FU41Y0hEjw",
