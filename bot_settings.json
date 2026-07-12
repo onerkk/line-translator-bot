@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.33.0-quality-speed-actions-2026-07-12",
     "schema_version": 6,
-    "state_hash": "60b2e5b4909ab768df45695f86e942c4ef854affefaee4fc49d0119f3df0790c",
-    "updated_at_iso": "2026-07-12T18:31:48.548218+00:00",
-    "updated_at_unix": 1783881108.5482175
+    "state_hash": "eaf151e084c7f9e8bd8e2116e69e3903c5e12dc1c44fb165a1704498dd8b622d",
+    "updated_at_iso": "2026-07-12T18:32:39.641350+00:00",
+    "updated_at_unix": 1783881159.6413496
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -166,10 +166,10 @@
   },
   "bot_stats": {
     "ant_cache_read": 558366,
-    "ant_cache_write": 1635570,
-    "ant_cost_usd": 2.557493950000001,
-    "ant_input": 223196,
-    "ant_output": 10135,
+    "ant_cache_write": 1659861,
+    "ant_cost_usd": 2.631351450000001,
+    "ant_input": 226636,
+    "ant_output": 10760,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 224,
-    "tokens_completion": 15382,
-    "tokens_prompt": 4163795,
+    "text_translations": 225,
+    "tokens_completion": 16007,
+    "tokens_prompt": 4191526,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -312,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.18302794999999994,
+      "cost_usd": 0.25688544999999985,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1059,
-      "tokens_prompt": 156688
+      "tokens_completion": 1684,
+      "tokens_prompt": 184419
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -401,7 +401,7 @@
   "group_location_settings": {},
   "group_mark_read_settings": {},
   "group_qr_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true
+    "C6c708f629dd38d6864669ecacf7712f4": false
   },
   "group_retry_key_settings": {},
   "group_settings": {},
