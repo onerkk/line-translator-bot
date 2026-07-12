@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.32.3-three-provider-zero-touch-defaults-2026-07-12",
     "schema_version": 4,
-    "state_hash": "a9a0e1ad94299457458fde3502c0dffecdb7af44e8edd149b0bf2ed5f3a99121",
-    "updated_at_iso": "2026-07-12T03:04:21.782850+00:00",
-    "updated_at_unix": 1783825461.7828498
+    "state_hash": "57e5569b4d8aedd09ed91d0d15878ffefda26b2b49626e6f6e00bb37ccfede81",
+    "updated_at_iso": "2026-07-12T03:47:45.169631+00:00",
+    "updated_at_unix": 1783828065.1696308
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -165,11 +165,11 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 543126,
-    "ant_cache_write": 1573938,
-    "ant_cost_usd": 2.4264882000000005,
-    "ant_input": 211823,
-    "ant_output": 9282,
+    "ant_cache_read": 558366,
+    "ant_cache_write": 1611279,
+    "ant_cost_usd": 2.483886450000001,
+    "ant_input": 219756,
+    "ant_output": 9535,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 221,
-    "tokens_completion": 14529,
-    "tokens_prompt": 4075550,
+    "text_translations": 223,
+    "tokens_completion": 14782,
+    "tokens_prompt": 4136064,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -298,7 +298,8 @@
       "惟壬",
       "祥啊",
       "祥阿",
-      "邱凱達"
+      "邱凱達",
+      "佑晟"
     ]
   },
   "fewshot_mode": "messages",
@@ -311,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.08595195,
+      "cost_usd": 0.10942044999999989,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 371,
-      "tokens_prompt": 110202
+      "tokens_completion": 459,
+      "tokens_prompt": 128957
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -332,11 +333,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.69903005,
+      "cost_usd": 1.7310108000000002,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 5308,
-      "tokens_prompt": 1721823
+      "tokens_completion": 5370,
+      "tokens_prompt": 1762148
     },
     "__dm__": {
       "tokens_completion": 42,
