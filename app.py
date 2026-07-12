@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.32.4-natural-indonesian-glossary-policy-2026-07-12"
+VERSION = "v3.32.8-indonesian-factory-register-2026-07-12"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -255,8 +255,8 @@ import translation_quality_gate as tqg_module  # synchronous provider-neutral in
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 3
-_EXPECTED_QG_BUILD_ID = "2026-07-12.4-natural-indonesian-glossary-policy"
+_EXPECTED_QG_API_VERSION = 7
+_EXPECTED_QG_BUILD_ID = "2026-07-12.8-indonesian-factory-register"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -397,7 +397,7 @@ _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
 # v3.18 省錢預設:背景 QE smart gating。True = 要害句必評、普通句抽樣 10%
 # (背景 LLM 成本 -60~80%);False = 每句都評(回到 v3.13 行為)。
-QE_GATING_ENABLED = True
+QE_GATING_ENABLED = False  # single-API commercial mode: no LLM judge/post-editor
 
 # v3.9.30c B17 修補: LINE 訊息長度限制(5000 字)截斷工具
 # LINE 平台規定 text message 最多 5000 字,超過會被 reject。
@@ -1091,7 +1091,7 @@ TONE_PRESETS = {
         "17. 寧可翻得直白清楚，也不要翻得漂亮卻不符合現場。"
         "18. 若一句中文有歧義，請優先依「工廠製造、站別流轉、工單、包裝、品質異常、鋼材/棒材、分光檢測」脈絡判斷最合理意思後再翻。"
         "19. 若輸入是繁中口語群組訊息，請預設場景為工廠工作群組，不要用日常聊天語境解讀。"
-        "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。長公告必須使用簡短句子與清楚段落，明確交代「誰、要做什麼、原因、後果」；禁止照中文語序硬翻、禁止把術語說明句當成正文、禁止無必要的中英印混寫。"
+        "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。長公告必須使用簡短句子與清楚段落，明確交代「誰、要做什麼、原因、後果」；禁止照中文語序硬翻、禁止把術語說明句當成正文、禁止無必要的中英印混寫。主管公告、紀律要求、品質通知一律使用跨地區員工都看得懂的簡單標準印尼文（例如使用 tidak、sudah），不要使用 gak、ga、nggak、udah 等地區口語或網路縮寫。"
         "21. CRITICAL: 翻譯前先判斷說話者的情感方向(道歉/感謝/請求/警告/抱怨/承諾/通報)，確認後再翻；不要被 emoji(尤其 🙏)誤導，不要看到第一個合理選項就停。"
         "22. THINK-BEFORE-TRANSLATE (Chain-of-thought, internal): Before producing the final translation, internally consider these checks (don't output them, only output final translation): "
         "(a) Who is the speaker? (manager/worker/admin) "
@@ -1101,6 +1101,7 @@ TONE_PRESETS = {
         "(e) Could the translation be misread as the OPPOSITE meaning by an Indonesian worker? If yes, reword. "
         "(f) Is there an emoji that might mislead? (🙏 might suggest 'tolong' but with 'maaf' it means apology, not request) "
         "(g) If any high-risk multi-meaning Chinese word appears, follow the runtime <semantic_contract> exactly. "
+        "(h) Silently back-translate the Indonesian result into Chinese and compare actor, action, object, negation, strength, cause and consequence with the source. If any item changes, rewrite before output. "
         "23. CRITICAL POLYSEMY: Runtime semantic contracts override examples, TM, NMT, glossary, and generic dictionary meanings. "
         "When a semantic contract specifies a sense, preferred translations, and forbidden translations, obey that contract exactly. "
         "After these internal checks, output ONLY the final translation, no explanation."
@@ -1304,15 +1305,14 @@ def _translation_response_text(response):
 
 
 def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=None):
-    """Reject only responses that are objectively unusable, then fail over once.
+    """Reject only responses that contain no usable translation payload.
 
-    This is intentionally conservative: terminology and semantic grading remain in
-    the existing factory glossary/TM/QE pipeline, while this gate catches empty,
-    truncated, refusal-like, or obvious meta-commentary outputs before they reach LINE.
+    Semantic quality is never used to trigger another provider.  Local gates handle
+    purity/completeness after the single successful response.
     """
     source = str(source_text or "")
     source_compact = re.sub(r"\s+", "", source)
-    meta_prefixes = (
+    refusal_prefixes = (
         "here is the translation", "translation:", "translated text:",
         "以下是翻譯", "翻譯如下", "maaf, saya tidak dapat",
         "i cannot translate", "i can't translate",
@@ -1329,36 +1329,10 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         if str(finish or "").lower() in ("length", "max_tokens", "model_context_window_exceeded"):
             return False, f"{provider} translation was truncated ({finish})"
         lowered = text.lower().lstrip()
-        if lowered.startswith(meta_prefixes):
-            return False, f"{provider} returned meta/refusal text instead of translation"
-        output_compact = re.sub(r"\s+", "", text)
-        source_folded = source_compact.casefold()
-        output_folded = output_compact.casefold()
-        # Exact source echo or bilingual source+translation output violates the
-        # pure-translation contract.  Reject here so another provider can answer
-        # without spending a second post-edit request.
-        if len(source_folded) >= 6 and output_folded == source_folded:
+        if lowered.startswith(refusal_prefixes):
+            return False, f"{provider} returned refusal/meta text"
+        if len(source_compact) >= 6 and re.sub(r"\s+", "", text).casefold() == source_compact.casefold():
             return False, f"{provider} echoed the source instead of translating"
-        if (str(src_lang or "").lower() != str(tgt_lang or "").lower()
-                and len(source_folded) >= 12
-                and source_folded in output_folded
-                and len(output_folded) >= int(len(source_folded) * 1.25)):
-            return False, f"{provider} returned bilingual/source-leaking output"
-
-        # Conservative wrong-script check for Chinese -> Indonesian.  Codes,
-        # names and short labels are exempt; this catches only an obvious nearly
-        # untranslated Chinese paragraph.
-        if str(tgt_lang or "").lower().startswith("id"):
-            src_han = len(re.findall(r"[\u3400-\u9fff]", source))
-            out_han = len(re.findall(r"[\u3400-\u9fff]", text))
-            out_latin = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", text))
-            if src_han >= 8 and out_han >= max(6, int(src_han * 0.6)) and out_latin < 8:
-                return False, f"{provider} output appears to remain in the source language"
-
-        # Only catch catastrophic collapse. Short replies, numbers, labels and names
-        # are deliberately exempt to avoid rejecting valid factory chat messages.
-        if len(source_compact) >= 40 and len(output_compact) < max(4, int(len(source_compact) * 0.08)):
-            return False, f"{provider} translation is implausibly incomplete"
         return True, "ok"
 
     return _validate
@@ -1369,7 +1343,7 @@ translation_top_p = 1.0           # Nucleus sampling. Keep 1.0 unless you know w
 translation_seed = 0              # 0 = random; non-zero = (mostly) reproducible outputs for same input.
 # v3.2-0426d Batch B: Round-trip verification (double-check)
 # Mode: "off" / "smart" (long msgs + apology keywords) / "all" / "keywords_only"
-double_check_mode = "smart"
+double_check_mode = "off"
 double_check_threshold = 0.55     # Similarity threshold (0~1). Below = warning. Lower = more permissive.
 double_check_keywords = "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混"
 # v3.2-0426d Batch B: Few-shot examples format mode
@@ -1539,6 +1513,12 @@ def _save_translation_log_to_disk():
 ab_test_enabled = False              # A/B prompt testing (legacy, deprecated)
 ab_test_variant_b_prompt = ""        # Custom variant B prompt (legacy, deprecated)
 
+# Commercial production invariant: one successful translation request per message.
+# Provider failover is allowed only when the attempted provider fails operationally
+# or returns no usable payload.  No judge/reviewer/back-translation/post-edit call
+# may be added to the normal delivery path.
+SINGLE_REQUEST_COMMERCIAL_MODE = True
+
 # ★ v3.4 ID→ZH 翻譯品質強化(對症下藥:印尼文→中文常翻錯)
 # 三項學術論文驗證有效的技巧,可獨立開關
 id_zh_cot_enabled = True             # Chain-of-Thought 二階段翻譯(ID→ZH 專用)
@@ -1556,7 +1536,7 @@ quality_metrics_enabled = True       # 收集品質指標(catastrophic_compressi
 
 # ★ v3.7 段落結構保留(對症下藥:長公告翻譯後不再連成一坨)
 preserve_paragraphs_enabled = True   # 在 prompt 中要求保留段落
-paragraph_split_translate = True     # 分段翻譯模式(雙保險)
+paragraph_split_translate = False    # preserve paragraphs in one model call; never fan out by paragraph
 paragraph_split_threshold = 50       # 訊息長度超過此值且含分段時,走分段翻譯路徑
 
 # v3.2-0426e: New official OpenAI features
@@ -1739,64 +1719,9 @@ def _translation_quality_check(original, translation, back_translation):
 
 
 def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
-    """v3.3 反譯檢查 - 加入多維度品質檢查
-    回傳 (passes_check, similarity, back_translation)
-    
-    Returns:
-      passes_check: bool - 是否通過所有檢查
-      similarity: float - Jaccard 相似度(沒有反譯時為 1.0)
-      back_translation: str - 反譯結果
-    """
-    if not _has_ai_capability("chat") or not translated_text:
-        return True, 1.0, ""
-    try:
-        # v3.9.9: aux helper handles all model families automatically.
-        check_model = _pick_aux_model("backcheck")
-        if tgt_lang == "zh":
-            back_prompt = "Translate this Chinese to Indonesian. Output ONLY the translation, no explanation:"
-        elif tgt_lang == "id":
-            back_prompt = "Translate this Indonesian to Chinese. Output ONLY the translation, no explanation:"
-        else:
-            return True, 1.0, ""
-        r = ai.chat.completions.create(**_build_aux_kwargs(
-            check_model,
-            [{"role": "system", "content": back_prompt},
-             {"role": "user", "content": translated_text}],
-            max_out_tokens=500
-        ))
-        track_tokens(r)
-        # v3.9.30 B7 修補: GPT-5 reasoning model 在 max_completion_tokens 不足時
-        # 會回 content=None + finish_reason='length',直接 .strip() 會 AttributeError
-        _content = r.choices[0].message.content if r.choices else None
-        if _content is None:
-            _finish = r.choices[0].finish_reason if r.choices else "unknown"
-            logger.warning(
-                "[back-trans] empty content from %s, finish_reason=%s — skip back check",
-                check_model, _finish
-            )
-            # 反譯失敗就跳過反譯檢查(不擋住主翻譯流程)
-            return True, 1.0, ""
-        back = _content.strip()
-        
-        # ★ v3.3:多維度檢查
-        ok, reason, details = _translation_quality_check(original_text, translated_text, back)
-        sim = details.get("jaccard", 1.0)
-        
-        if not ok:
-            logger.warning(
-                "Round-trip FAILED: %s | orig=%s | trans=%s | back=%s | details=%s",
-                reason, original_text[:60], translated_text[:60], back[:60], details
-            )
-            # 把失敗原因記到 thread-local,供日誌使用
-            try:
-                _tl.rtc_fail_reason = reason
-            except Exception:
-                pass
-        
-        return ok, sim, back
-    except Exception as e:
-        logger.error("Round-trip check error: %s", e)
-        return True, 1.0, ""
+    """Compatibility shim: round-trip model calls are disabled permanently."""
+    return True, 1.0, ""
+
 
 
 # =====================================================================
@@ -2050,34 +1975,9 @@ def normalize_indonesian_text(text):
 
 
 def normalize_indonesian_text_with_nano(text):
-    """進階模式:額外用 nano 模型做語意級規範化
-    
-    只在 id_preprocessing_nano = True 時使用,會多一次 API 呼叫
-    用途:處理詞表抓不到的特殊用法、混雜爪哇語等
-    """
-    if not id_preprocessing_nano or not oai or not text:
-        return text
-    try:
-        prompt = (
-            "Convert this Indonesian text to standard Bahasa Indonesia, "
-            "expanding all abbreviations and slang. "
-            "Do NOT translate to other languages. Do NOT change machine codes "
-            "(like BF2, CYA, CYB) or proper nouns. "
-            "Output ONLY the normalized Indonesian text, no explanation."
-        )
-        # v3.9.9: aux helper auto-adapts to any model family
-        r = ai.chat.completions.create(**_build_aux_kwargs(
-            _pick_aux_model("normalize"),
-            [{"role": "system", "content": prompt},
-             {"role": "user", "content": text}],
-            max_out_tokens=600
-        ))
-        track_tokens(r)
-        normalized = (r.choices[0].message.content or "").strip()
-        return normalized if normalized else text
-    except Exception as e:
-        logger.warning("ID nano normalization failed: %s", e)
-        return text
+    """Compatibility shim: semantic preprocessing is local-only in commercial mode."""
+    return text
+
 
 
 # =====================================================================
@@ -2088,95 +1988,9 @@ def normalize_indonesian_text_with_nano(text):
 #       兩條獨立路徑(直譯 + 經英語)兩者都通過才算真的 OK
 
 def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
-    """多路徑反譯檢查
-    
-    回傳 (passes, details_dict)
-    
-    details = {
-      'path1_passes': bool,    # 直接反譯
-      'path1_jaccard': float,
-      'path2_passes': bool,    # 經英語反譯
-      'path2_jaccard': float,
-      'final_decision': str,   # 'all_pass' / 'partial' / 'all_fail'
-    }
-    """
-    if not _has_ai_capability("chat"):
-        return True, {"final_decision": "no_ai_provider"}
-    
-    details = {}
-    
-    try:
-        # v3.9.9: aux helper picks model in same family as user's main translator,
-        # so multi-path also works on GPT-5 family without errors.
-        check_model = _pick_aux_model("multipath")
-        
-        # ===== Path 1: 直接反譯 =====
-        if tgt_lang == "zh":
-            back_prompt1 = "Translate this Chinese to Indonesian. Output ONLY translation:"
-        elif tgt_lang == "id":
-            back_prompt1 = "Translate this Indonesian to Chinese. Output ONLY translation:"
-        else:
-            return True, {"final_decision": "unsupported"}
-        
-        r1 = ai.chat.completions.create(**_build_aux_kwargs(
-            check_model,
-            [{"role": "system", "content": back_prompt1},
-             {"role": "user", "content": translation}],
-            max_out_tokens=500
-        ))
-        track_tokens(r1)
-        back1 = (r1.choices[0].message.content or "").strip()
-        sim1 = _text_similarity(original, back1)
-        details["path1_jaccard"] = round(sim1, 3)
-        ok1, _, _ = _translation_quality_check(original, translation, back1)
-        details["path1_passes"] = ok1
-        
-        # ===== Path 2: 經英語反譯 (translation → English → back to source lang) =====
-        # 第一段:translation → English
-        r2a = ai.chat.completions.create(**_build_aux_kwargs(
-            check_model,
-            [{"role": "system", "content": "Translate to English. Output ONLY translation:"},
-             {"role": "user", "content": translation}],
-            max_out_tokens=500
-        ))
-        track_tokens(r2a)
-        english = (r2a.choices[0].message.content or "").strip()
-        
-        # 第二段:English → source language
-        if tgt_lang == "zh":
-            back2_prompt = "Translate this English to Indonesian. Output ONLY translation:"
-        else:
-            back2_prompt = "Translate this English to Chinese. Output ONLY translation:"
-        
-        r2b = ai.chat.completions.create(**_build_aux_kwargs(
-            check_model,
-            [{"role": "system", "content": back2_prompt},
-             {"role": "user", "content": english}],
-            max_out_tokens=500
-        ))
-        track_tokens(r2b)
-        back2 = (r2b.choices[0].message.content or "").strip()
-        sim2 = _text_similarity(original, back2)
-        details["path2_jaccard"] = round(sim2, 3)
-        ok2, _, _ = _translation_quality_check(original, translation, back2)
-        details["path2_passes"] = ok2
-        
-        # ===== 最終判斷 =====
-        if ok1 and ok2:
-            details["final_decision"] = "all_pass"
-            return True, details
-        elif ok1 or ok2:
-            details["final_decision"] = "partial"
-            # 部分通過 - 嚴格模式下視為失敗,但只給警告
-            return False, details
-        else:
-            details["final_decision"] = "all_fail"
-            return False, details
-    
-    except Exception as e:
-        logger.warning("Multi-path back-translation error: %s", e)
-        details["final_decision"] = f"exception:{e}"
-        return True, details  # 不阻擋
+    """Compatibility shim: multi-path back-translation is disabled permanently."""
+    return True, 1.0, ""
+
 
 
 def build_id_zh_cot_instruction(text):
@@ -2196,56 +2010,9 @@ def build_id_zh_cot_instruction(text):
 
 
 def translate_id_zh_with_pivot(text, src, tgt):
-    """v3.4 Pivot via English: ID → EN → ZH 三段式翻譯
-    
-    原理:GPT 對 ID-EN 和 EN-ZH 都很強(EN 是樞紐),
-    比直接 ID→ZH 通常更準確,代價是多一次 API 呼叫
-    
-    來源:ICLR 2025 論文 - 中等資源語言英語樞紐證實有效
-    
-    回傳譯文(失敗時 None,呼叫端 fallback 到原本流程)
-    """
-    if not _has_ai_capability("chat") or src != "id" or tgt != "zh":
-        return None
-    try:
-        # 第 1 段:ID → EN(用 helper,自動配合主模型家族)
-        en_prompt = (
-            "Translate this Indonesian to fluent, complete English. "
-            "Preserve ALL information including names, numbers, machine codes, "
-            "place markers (BF, BF2, CYA, CYB etc). Output ONLY the English "
-            "translation, no notes."
-        )
-        # v3.9.9: aux helper auto-adapts to GPT-5 if user upgrades
-        _pivot_aux = _pick_aux_model("pivot")
-        r1 = ai.chat.completions.create(**_build_aux_kwargs(
-            _pivot_aux,
-            [{"role": "system", "content": en_prompt},
-             {"role": "user", "content": text}],
-            max_out_tokens=800
-        ))
-        track_tokens(r1)
-        english = (r1.choices[0].message.content or "").strip()
-        if not english:
-            return None
-        
-        # 第 2 段:EN → ZH(用主模型,品質更好)— v3.9.9 用 helper
-        zh_prompt = (
-            "Translate this English to Traditional Chinese (繁體中文) "
-            "as used in Taiwan factories. Preserve all factory terminology. "
-            "Machine codes and English acronyms should stay in original. "
-            "Output ONLY the Chinese translation."
-        )
-        r2 = ai.chat.completions.create(**_build_aux_kwargs(
-            pick_model(text),
-            [{"role": "system", "content": zh_prompt},
-             {"role": "user", "content": english}],
-            max_out_tokens=800
-        ))
-        track_tokens(r2)
-        return (r2.choices[0].message.content or "").strip()
-    except Exception as e:
-        logger.warning("Pivot translation failed: %s", e)
-        return None
+    """Compatibility shim: pivot translation is disabled to keep one request."""
+    return None
+
 
 
 def should_use_pivot(text, src, tgt):
@@ -2407,6 +2174,19 @@ def _example_relevance_score(example_text, query_text):
     return (overlap / union) * 10.0 if union else 0.0
 
 
+def _is_zh_id_factory_announcement_source(text):
+    """Return True only for announcement-like Chinese factory messages.
+
+    The style reference is intentionally excluded from ordinary short messages so
+    it does not add prompt cost or force announcement wording into daily chat.
+    """
+    text = text or ""
+    compact = re.sub(r"\s+", "", text)
+    paragraph_count = len([p for p in re.split(r"\n\s*\n", text) if p.strip()])
+    announcement_markers = ("公告", "宣導", "規定", "主管", "高層", "客訴", "作業流程", "工作態度", "@All")
+    return bool(len(compact) >= 120 or paragraph_count >= 3 or sum(m in text for m in announcement_markers) >= 2)
+
+
 def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
@@ -2439,6 +2219,12 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     else:
         direction_key = None
     relevant = [ex for ex in all_examples if ex.get("dir", "zh2id") == direction_key] if direction_key else []
+    if direction_key == "zh2id":
+        is_announcement = _is_zh_id_factory_announcement_source(user_msg)
+        relevant = [
+            ex for ex in relevant
+            if ex.get("scope") != "announcement" or is_announcement
+        ]
 
     # Score each example by relevance to user message and pick top N.
     # Score against the source-language side of the example (what GPT will pattern-match).
@@ -3180,6 +2966,12 @@ BUILTIN_EXAMPLES = [
         "zh": "請大家注意:看到料件後端有損傷要馬上回報組長,不要自己處理。",
         "id": "Mohon perhatian semua: kalau lihat barang ada kerusakan di bagian belakang, harus segera lapor ke kepala, jangan tangani sendiri.",
         "dir": "zh2id"
+    },
+    {
+        "zh": "如果群組內的公告或翻譯有不懂的地方，請直接詢問。急單要有效率並準時完成，生產資料必須符合實際情況。請依照既定作業流程，不要自行省略步驟。",
+        "id": "Pengumuman\n\nKalau ada isi pengumuman atau hasil terjemahan yang belum dipahami, silakan langsung bertanya. Untuk pekerjaan yang bersifat mendesak (urgent order), mohon dikerjakan dengan efisien dan tepat waktu. Jangan membuat atau mengisi data produksi yang tidak sesuai dengan kondisi sebenarnya. Tolong ikuti prosedur kerja yang sudah ditetapkan dan jangan mengubah atau melewati langkah kerja sendiri.",
+        "dir": "zh2id",
+        "scope": "announcement"
     },
 ]
 
@@ -5551,150 +5343,50 @@ def validate_factory_translation(src_text, zh_text, src, tgt):
 
 
 def repair_factory_translation_openai(src_text, bad_result, reason):
-    """v3.3 修復直譯錯誤的 ID->ZH 翻譯
-    
-    v3.3 變更:
-      - 移除 deterministic 強斷言注入(那會讓 GPT 直接複製短答案)
-      - 公告類訊息要求完整翻譯,max_tokens 提升到 600
-      - 依分類調整 user message 口徑
-    """
-    if not _has_ai_capability("chat"):
-        return None
-    try:
-        cls = classify_factory_message(src_text, src="id")
-        hint = build_factory_context_hint(src_text, "id", "zh")
-        
-        sys_prompt = (
-            "你是台灣不鏽鋼棒材工廠的印尼文→繁體中文現場翻譯審核器。"
-            "你的任務是修正直譯錯誤，輸出現場人員會用的繁體中文。"
-            "不要解釋，不要加註解，只輸出修正後譯文。"
-            "規則：barang 在工廠品質語境=料件/材料；batang=棒材；rusak=損傷/異常；"
-            "belakang/depan 描述料件方向=後端/前端，不可翻成從後面/從前面。"
-        )
-        
-        # ★ v3.3:依分類調整 user message
-        if cls["type"] == "announcement":
-            sys_prompt += "重要：這是公告訊息，必須完整翻譯每個資訊點，不可簡化成短語或只翻關鍵詞。"
-            user_msg = (
-                f"原印尼文：{src_text}\n"
-                f"錯誤中文(可能因簡化或漏譯)：{bad_result}\n"
-                f"錯誤原因：{reason}\n"
-                f"術語提示：{hint}\n"
-                f"請輸出完整逐句翻譯後的繁體中文(必須涵蓋原文所有資訊):"
-            )
-            max_tok = 600  # 公告需要長譯文
-        else:
-            user_msg = (
-                f"原印尼文：{src_text}\n"
-                f"錯誤中文：{bad_result}\n"
-                f"錯誤原因：{reason}\n"
-                f"語境提示：{hint}\n"
-                f"請輸出修正後繁體中文："
-            )
-            max_tok = 300
-        
-        # v3.9.8: build kwargs with model_supports() filter so GPT-5 series doesn't 400.
-        repair_kwargs = {
-            "model": pick_model(src_text),
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_msg}
-            ],
-        }
-        _rmodel = repair_kwargs["model"]
-        if model_supports(_rmodel, "temperature"):
-            repair_kwargs["temperature"] = 0.0
-        if model_supports(_rmodel, "top_p"):
-            repair_kwargs["top_p"] = 1.0
-        # v3.9.30b B11 修補: reasoning model 要加 reasoning 預算
-        if model_supports(_rmodel, "max_completion_tokens"):
-            # reasoning model: max_tok(輸出) + 4000(reasoning 緩衝)
-            _is_reasoning = not model_supports(_rmodel, "temperature")
-            _budget = max_tok + (4000 if _is_reasoning else 0)
-            repair_kwargs["max_completion_tokens"] = _budget
-        elif model_supports(_rmodel, "max_tokens"):
-            repair_kwargs["max_tokens"] = max_tok
-        # Translation-optimal reasoning effort for GPT-5 family
-        _opt = optimal_reasoning_for_translation(_rmodel)
-        if model_supports(_rmodel, "reasoning_effort") and _opt:
-            repair_kwargs["reasoning_effort"] = _opt
-        if model_supports(_rmodel, "verbosity"):
-            repair_kwargs["verbosity"] = "low"
-        try:
-            # `prediction` is for low-latency edits — only on classical models.
-            if bad_result and model_supports(_rmodel, "stop"):  # stop is a good proxy for "classical model"
-                repair_kwargs["prediction"] = {
-                    "type": "content",
-                    "content": bad_result,
-                }
-            _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "id", "zh", "repair")
-            if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
-                repair_kwargs["prompt_cache_key"] = _ck_r
-            # v3.9.35: 24h Extended Cache Retention(repair)
-            if openai_24h_cache_enabled and model_supports(_rmodel, "prompt_cache_retention"):
-                repair_kwargs["prompt_cache_retention"] = "24h"
-        except Exception:
-            pass
-        r = ai.chat.completions.create(**repair_kwargs)
-        track_tokens(r)
-        return (r.choices[0].message.content or "").strip()
-    except Exception as e:
-        logger.error("Factory repair error: %s", e)
-        return None
+    """Compatibility shim: no billable second-pass repair request is allowed."""
+    return None
+
 
 
 def finalize_factory_translation(src_text, result, src, tgt):
-    """Post-process, validate, repair; deterministic fallback for covered factory shapes."""
+    """Deterministic factory normalization only; never invokes an AI repair call."""
     if not result:
         return result
     if src == "id" and tgt == "zh":
         result = post_fix_factory_id_to_zh(src_text, result)
         ok, reason = validate_factory_translation(src_text, result, src, tgt)
-        if ok:
-            return result
-        repaired = repair_factory_translation_openai(src_text, result, reason)
-        if repaired:
-            repaired = post_fix_factory_id_to_zh(src_text, repaired)
-            ok2, _ = validate_factory_translation(src_text, repaired, src, tgt)
-            if ok2:
-                return repaired
-        # ★ v3.3:fallback 槽位拼接只用於 incident 類別
-        # 公告/一般訊息寧可回傳 repaired 或原 result(可能不完美),
-        # 也不要被槽位拼接吃掉所有資訊
-        cls = classify_factory_message(src_text, src="id")
-        if cls["type"] == "incident":
-            fallback = factory_semantic_translate_id_zh(src_text)
-            if fallback:
-                return fallback
-        # 公告/一般訊息:回傳 repaired 或原 result
-        if repaired:
-            return repaired
+        if not ok:
+            cls = classify_factory_message(src_text, src="id")
+            if cls["type"] == "incident":
+                fallback = factory_semantic_translate_id_zh(src_text)
+                if fallback:
+                    return fallback
+            logger.warning("[FactoryLocalGate] ID->ZH semantic risk remains: %s", reason)
+        return result
     if src == "zh" and tgt == "id":
         raw = result
-        bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, raw)
         result = post_fix_factory_zh_to_id(src_text, raw)
-        _contract = build_translation_semantic_contract(src_text, src, tgt)
-        result = enforce_translation_semantic_contract(_contract, src_text, result)
-        bad2, reason2, _ = detect_factory_semantic_error_zh_id(src_text, result)
-        if bad or bad2:
-            _tl.factory_audit = {
-                "src": src_text,
-                "type": "factory_semantic_auto_detected_zh_id",
-                "reason": reason2 or reason,
-                "raw_translation": raw,
-                "corrected_translation": result,
-                "domain": domains,
-                "auto_corrected": True,
-            }
-        if bad2:
-            repaired = repair_factory_translation_openai_zh_id(src_text, result, reason2)
-            if repaired:
-                result = post_fix_factory_zh_to_id(src_text, repaired)
-                result = enforce_translation_semantic_contract(_contract, src_text, result)
-        fallback = factory_semantic_translate_zh_id(src_text)
-        bad3, _, _ = detect_factory_semantic_error_zh_id(src_text, result)
-        if bad3 and fallback:
-            result = fallback
+        contract = build_translation_semantic_contract(src_text, src, tgt)
+        result = enforce_translation_semantic_contract(contract, src_text, result)
+        bad, reason, domains = detect_factory_semantic_error_zh_id(src_text, result)
+        if bad:
+            try:
+                _tl.factory_audit = {
+                    "src": src_text,
+                    "type": "factory_semantic_local_warning_zh_id",
+                    "reason": reason,
+                    "raw_translation": raw,
+                    "corrected_translation": result,
+                    "domain": domains,
+                    "auto_corrected": False,
+                }
+            except Exception:
+                pass
+            fallback = factory_semantic_translate_zh_id(src_text)
+            if fallback:
+                return fallback
+            logger.warning("[FactoryLocalGate] ZH->ID semantic risk remains: %s", reason)
+        return result
     return result
 
 
@@ -6516,7 +6208,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v2-factory-domain-terms-root"
+_SEMANTIC_CONTRACT_VERSION = "v3-indonesian-factory-register-root"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -6595,6 +6287,14 @@ _FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
         "note": "材料表面品質檢查。",
     },
     {
+        "key": "grinding_rod",
+        "source_terms": ("研磨棒",),
+        "preferred_id": "grinding rod",
+        "required_groups": (("grinding rod", "batang hasil proses grinding", "batang yang diproses di bagian grinding"),),
+        "forbidden_id_terms": ("batang gerinda",),
+        "note": "研磨製程中的棒材/產品，現場固定稱 grinding rod；不是研磨工具。",
+    },
+    {
         "key": "short_material_handling",
         "source_terms": ("短尺維護", "短尺维护", "短尺料維護", "短尺料维护", "短尺處理", "短尺处理"),
         "preferred_id": "penanganan material pendek",
@@ -6626,7 +6326,7 @@ _FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
 _FACTORY_DOMAIN_TERM_MAP_ZH_ID = {r["key"]: r for r in _FACTORY_DOMAIN_TERM_RULES_ZH_ID}
 
 _FACTORY_DOMAIN_CONTEXT_ZH = (
-    "工單", "噴漆", "來料", "表面品質", "短尺", "重量", "流程", "作業", "各站",
+    "工單", "噴漆", "來料", "表面品質", "研磨棒", "短尺", "重量", "流程", "作業", "各站",
     "站", "來料尺寸", "品質", "尺寸", "材料", "料", "工作站", "公司宣導", "規定",
 )
 
@@ -6969,6 +6669,8 @@ def _repair_factory_domain_term_translation(translation, risk):
     if "incoming_material_size" in active:
         sub(r"\bukuran\s+material\s+yang\s+masuk\b", "ukuran material masuk")
         sub(r"\bukuran\s+bahan\s+yang\s+masuk\b", "ukuran material masuk")
+    if "grinding_rod" in active:
+        sub(r"\bbatang\s+gerinda\b", "grinding rod")
     if "short_material_handling" in active:
         for pattern in (
             r"\bpemeliharaan\s+penggaris\s+pendek\b",
@@ -7393,66 +7095,9 @@ def build_factory_context_hint_zh_id(text):
 
 
 def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
-    if not _has_ai_capability("chat"):
-        return None
-    try:
-        deterministic = factory_semantic_translate_zh_id(src_text)
-        sys_prompt = (
-            "你是台灣不鏽鋼棒材工廠的繁體中文→印尼文現場翻譯審核器。"
-            "你的任務是修正工廠語義直譯錯誤，輸出印尼員工現場看得懂的自然印尼文。"
-            "不要解釋，不要加註解，只輸出修正後譯文。"
-            "規則：偷跑不是偷竊；吊去不是被吊車偷；反應是回報/通報；被吃掉是痕跡消失/被蓋掉。"
-        )
-        user_msg = (
-            f"原中文：{src_text}\n"
-            f"錯誤印尼文：{bad_result}\n"
-            f"錯誤原因：{reason}\n"
-            f"語義提示：{build_factory_context_hint_zh_id(src_text)}\n"
-        )
-        if deterministic:
-            user_msg += f"可採用譯文：{deterministic}\n"
-        user_msg += "請輸出修正後印尼文："
-        # v3.9.8: model_supports() filter
-        repair_kwargs = {
-            "model": pick_model(src_text),
-            "messages": [{"role":"system","content":sys_prompt},{"role":"user","content":user_msg}],
-        }
-        _rmodel = repair_kwargs["model"]
-        if model_supports(_rmodel, "temperature"):
-            repair_kwargs["temperature"] = 0.0
-        if model_supports(_rmodel, "top_p"):
-            repair_kwargs["top_p"] = 1.0
-        # v3.9.30b B11 修補: reasoning model 加 reasoning 預算
-        if model_supports(_rmodel, "max_completion_tokens"):
-            _is_reasoning = not model_supports(_rmodel, "temperature")
-            repair_kwargs["max_completion_tokens"] = 500 + (4000 if _is_reasoning else 0)
-        elif model_supports(_rmodel, "max_tokens"):
-            repair_kwargs["max_tokens"] = 500
-        _opt = optimal_reasoning_for_translation(_rmodel)
-        if model_supports(_rmodel, "reasoning_effort") and _opt:
-            repair_kwargs["reasoning_effort"] = _opt
-        if model_supports(_rmodel, "verbosity"):
-            repair_kwargs["verbosity"] = "low"
-        try:
-            if bad_result and model_supports(_rmodel, "stop"):
-                repair_kwargs["prediction"] = {
-                    "type": "content",
-                    "content": bad_result,
-                }
-            _ck_r = _build_cache_key(getattr(_tl, 'group_id', ''), "zh", "id", "repair")
-            if _ck_r and model_supports(_rmodel, "prompt_cache_key"):
-                repair_kwargs["prompt_cache_key"] = _ck_r
-            # v3.9.35: 24h Extended Cache Retention(zh-id repair)
-            if openai_24h_cache_enabled and model_supports(_rmodel, "prompt_cache_retention"):
-                repair_kwargs["prompt_cache_retention"] = "24h"
-        except Exception:
-            pass
-        r = ai.chat.completions.create(**repair_kwargs)
-        track_tokens(r)
-        return (r.choices[0].message.content or "").strip()
-    except Exception as e:
-        logger.error("Factory zh-id repair error: %s", e)
-        return None
+    """Compatibility shim: no billable second-pass repair request is allowed."""
+    return None
+
 
 # === Hard replacement tables ===
 # These bypass GPT entirely - applied BEFORE sending to GPT (zh->id)
@@ -8133,11 +7778,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         src_name = LANG_NAMES.get(src, src)
         tgt_name = LANG_NAMES.get(tgt, tgt)
 
-        # Apply hard replacements before GPT for zh->other
-        input_text = text
+        # Lock source-grounded canonical terms before the single provider call.
+        # The model copies tokens; the server restores canonical target terms locally.
+        _locked_pairs = ge_module.collect_applicable_pairs(
+            text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
+        )
+        _locked_terms = tqg_module.protect_glossary_terms(text, _locked_pairs)
+        input_text = _locked_terms.protected
         cust_placeholders = {}
         if src == "zh":
-            input_text, cust_placeholders = pre_replace_zh(text)
+            input_text, cust_placeholders = pre_replace_zh(input_text)
 
         # Provider-neutral immutable-data envelope.  The same protected source is
         # sent to OpenAI, Gemini and Claude; values/codes are restored afterward.
@@ -8239,6 +7889,26 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "2.1 Field values, codes, numbers, dimensions and symbols are DATA, not language. Preserve every placeholder exactly. "
             "2.2 If the source contains a parenthetical phrase already written in the target language, treat it as a terminology annotation for the adjacent source phrase and use it consistently; do not reinterpret it as ordinary prose. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
+            + ((
+                "ZH→ID CORE FACTORY REGISTER: Write plain, standard Indonesian that Indonesian factory workers "
+                "can understand immediately. Use standard spelling (paham, silakan, tidak, sudah), short sentences, "
+                "clear paragraphs, and direct subject-action-object order. Use 'kita' for shared workplace impact and "
+                "'kalian' only when a manager directly instructs workers. For a long supervisor notice, you may start "
+                "with 'Pengumuman' on its own line when the source is clearly an announcement; do not invent a heading "
+                "for an ordinary short message. Resolve omitted Chinese subjects from factory context without adding facts. "
+                "Do not translate 高層施壓 literally as 'manajemen atas menekan'. In this workplace context use natural "
+                "phrasing such as 'Manajemen juga semakin memperhatikan pekerjaan kita' or 'pengawasan semakin ketat', "
+                "according to the source strength. Translate 福利 as 'kesejahteraan kita semua' for broad collective "
+                "welfare; use 'tunjangan dan fasilitas karyawan' only when the source specifically names allowances or facilities. "
+                "Do not intensify 敷衍 into membohongi/menipu unless the source explicitly alleges lying. Prefer concrete "
+                "phrasing such as 'data produksi yang tidak sesuai dengan kondisi sebenarnya' or 'sekadar memberi laporan'. "
+                "In this plant, 研磨棒 in production reporting is the product term 'grinding rod', never 'batang gerinda'. "
+                "調機 means 'penyetelan mesin' or 'penyetelan/penyesuaian mesin'. 無法配合規定 in a disciplinary message "
+                "means unwilling/noncompliant (tidak mau mematuhi / melanggar aturan), not physical inability (tidak bisa). "
+                "Keep approved shop-floor terms such as urgent order, work order and grinding when workers normally use them. "
+                "For quality notices prefer 'produk yang cacat' or 'produk yang tidak sesuai standar' over literal Chinese syntax. "
+                "Do not add a repeated closing question unless the source itself repeats or closes with that request. "
+            ) if (src == "zh" and tgt == "id") else "")
             + build_factory_context_hint(text, src, tgt) + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
             + inject_glossary_hint(text, src, tgt)
@@ -8663,6 +8333,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             " Only output the translation. No quotes, no explanation, no prefix."
             " </output_format>"
         )
+        _locked_note = tqg_module.glossary_placeholder_instruction(_locked_terms.mapping)
+        if _locked_note:
+            sys_prompt = _locked_note + "\n" + sys_prompt
 
         if repair_mode and bad_result:
             msg = (
@@ -8911,7 +8584,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         #           猜錯的 tokens 按 output 計費 → 限 score≥85 控成本。
         # Anthropic 無對等功能(誠實註記),Claude 路徑不受影響。
         _prediction_used = False
-        if model_supports(_model, "prediction"):
+        if False and model_supports(_model, "prediction"):
             try:
                 _p_refs = getattr(_tl, 'tm_references', None) or []
                 _p_best = None
@@ -8939,47 +8612,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         except Exception:
             pass
         _llm_t0 = time.time()
-        try:
-            r = ai.chat.completions.create(**_kwargs)
-            _tl.llm_api_ms = (time.time() - _llm_t0) * 1000  # v3.31: API 純耗時
-        except Exception as _te:
-            # 只有明確的 prediction 參數相容錯誤才重送一次。逾時、斷線、限流等
-            # 已由 provider 協調層接力，若在此無條件重送會把三家再跑一輪。
-            _te_msg = str(_te).lower()
-            _te_code = getattr(_te, "status_code", None)
-            _prediction_param_error = (
-                _prediction_used
-                and (_te_code in (400, 422) or "400" in _te_msg or "422" in _te_msg)
-                and "prediction" in _te_msg
-                and any(x in _te_msg for x in ("unsupported", "invalid", "unrecognized", "unknown"))
-            )
-            if _prediction_param_error:
-                logger.warning("[Predicted] call failed (%s), retry without prediction", str(_te)[:120])
-                _kwargs.pop("prediction", None)
-                _prediction_used = False
-                try:
-                    r = ai.chat.completions.create(**_kwargs)
-                    _tl.llm_api_ms = (time.time() - _llm_t0) * 1000
-                except Exception as _te2:
-                    try:
-                        _event_log_write("translate_call_failed", {
-                            "model": _model,
-                            "error": str(_te2)[:300],
-                            "error_type": type(_te2).__name__,
-                        })
-                    except Exception:
-                        pass
-                    raise
-            else:
-                try:
-                    _event_log_write("translate_call_failed", {
-                        "model": _model,
-                        "error": str(_te)[:300],
-                        "error_type": type(_te).__name__,
-                    })
-                except Exception:
-                    pass
-                raise
+        r = ai.chat.completions.create(**_kwargs)
+        _tl.llm_api_ms = (time.time() - _llm_t0) * 1000
         # v3.9.41 Phase Q: 抽 confidence score(雙系統)
         try:
             _conf_provider = ai_provider.get_active_provider()
@@ -9115,6 +8749,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             result = _raw
         result = restore_mentions(result, placeholders)
         result = tqg_module.restore_immutable_spans(result, _immutable.mapping)
+        result = tqg_module.restore_glossary_terms(result, _locked_terms.mapping)
         if src == "id" and tgt == "zh":
             _raw_factory_result = result
             _bad, _reason, _domains = detect_factory_semantic_error(text, _raw_factory_result, src, tgt)
@@ -9145,11 +8780,6 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                         "auto_corrected": True,
                     }
                     _fixed_zhid = post_fix_factory_zh_to_id(text, result)
-                    _bad_after, _reason_after, _ = detect_factory_semantic_error_zh_id(text, _fixed_zhid)
-                    if _bad_after:
-                        _repaired_zhid = repair_factory_translation_openai_zh_id(text, _fixed_zhid, _reason_after)
-                        if _repaired_zhid:
-                            _fixed_zhid = post_fix_factory_zh_to_id(text, _repaired_zhid)
                     result = _fixed_zhid
                     _tl.factory_audit["corrected_translation"] = result
             result = enforce_translation_semantic_contract(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt), text, result)
@@ -9264,16 +8894,9 @@ def cache_set(text, src, tgt, result, force=False):
 
 
 def translate_with_retry(func, text, src, tgt, max_retries=2):
-    """Call a translation function with retry on failure."""
-    for attempt in range(max_retries + 1):
-        result = func(text, src, tgt)
-        if result:
-            return result
-        if attempt < max_retries:
-            wait = 1 * (attempt + 1)
-            logger.warning("Retry %d/%d after %ds for %s", attempt + 1, max_retries, wait, func.__name__)
-            time.sleep(wait)
-    return None
+    """Single-entry compatibility wrapper; provider failover belongs in ai_provider."""
+    return func(text, src, tgt)
+
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -9559,13 +9182,7 @@ def restore_names(text, name_map):
 
 
 def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Last mandatory boundary before any translation can leave the process.
-
-    Every upstream path is treated as untrusted.  The guard validates the final
-    restored text, performs a fresh source-grounded retranslation when needed,
-    and otherwise returns a visible failure notice.  Unsafe mixed-language text
-    is never returned to the LINE handler.
-    """
+    """Final deterministic boundary; never spends another translation request."""
     if not candidate or not isinstance(candidate, str):
         return None
     failure_text = tqg_module.translation_failure_message(tgt)
@@ -9577,77 +9194,31 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
             src, tgt,
         )
-
-        def _validated_fallback(protected_source, fallback_src, fallback_tgt):
-            try:
-                return translate_with_retry(
-                    translate_google, protected_source, fallback_src, fallback_tgt,
-                    max_retries=1,
-                )
-            except Exception as exc:
-                logger.warning("[FinalDeliveryGuard] fallback failed: %s", exc)
-                return None
-
         leaked_label = ge_module.find_reverse_glossary_ui_leak(
-            source_text,
-            candidate,
+            source_text, candidate,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-            src,
-            tgt,
+            src, tgt,
         )
-        candidate_for_gate = "" if leaked_label else candidate
         if leaked_label:
-            logger.warning("[FinalDeliveryGuard] reverse glossary UI-label leak blocked: %s", leaked_label)
-
+            logger.error("[FinalDeliveryGuard] reverse glossary UI-label leak blocked: %s", leaked_label)
+            return failure_text
         checked = tqg_module.ensure_delivery_safe_translation(
-            source_text, candidate_for_gate, src, tgt,
+            source_text, candidate, src, tgt,
             model=_active_upgrade_model(),
             glossary_pairs=pairs,
-            ai_client=ai_provider,
-            fallback_translate=_validated_fallback,
+            ai_client=None,
+            fallback_translate=None,
         )
         if checked.get("ok") and checked.get("text"):
-            safe_text = checked["text"].strip()
-            leaked_after_recovery = ge_module.find_reverse_glossary_ui_leak(
-                source_text,
-                safe_text,
-                GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-                src,
-                tgt,
-            )
-            if leaked_after_recovery:
-                logger.error("[FinalDeliveryGuard] recovered result still leaked UI label: %s", leaked_after_recovery)
-                return failure_text
-            if safe_text != candidate.strip():
-                logger.warning(
-                    "[FinalDeliveryGuard] unsafe candidate replaced path=%s issues=%s",
-                    checked.get("path"), checked.get("issues", [])[:8],
-                )
-            try:
-                cache_set(source_text, src, tgt, safe_text, force=True)
-            except Exception:
-                pass
-            return safe_text
-
+            return checked["text"].strip()
         logger.error(
-            "[FinalDeliveryGuard] blocked unsafe translation path=%s issues=%s",
+            "[FinalDeliveryGuard] local validation blocked output path=%s issues=%s",
             checked.get("path"), checked.get("issues", [])[:12],
         )
-        try:
-            _event_log_write("final_delivery_guard_blocked", {
-                "group_id": getattr(_tl, 'group_id', '') or '',
-                "src": src, "tgt": tgt,
-                "issues": checked.get("issues", [])[:12],
-                "source": (source_text or '')[:300],
-                "candidate": (candidate or '')[:300],
-            })
-        except Exception:
-            pass
         return failure_text
     except Exception as exc:
-        logger.exception("[FinalDeliveryGuard] fail-closed exception: %s", exc)
+        logger.exception("[FinalDeliveryGuard] local validation exception: %s", exc)
         return failure_text
-
 
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
@@ -9868,79 +9439,9 @@ def _translate_core(text, src, tgt):
                 pass
             return _reason_semantic
 
-    # Formal announcements and other quality-critical documents use a clean,
-    # whole-document path. This deliberately bypasses the legacy shortcut /
-    # reverse-glossary / paragraph-fanout / phrase-postfix stack that caused the
-    # observed corruption. A reviewed result is preferred; a first-pass result
-    # may still be sent only after hard integrity checks pass.
-    if _quality_critical:
-        try:
-            _safe_pairs = ge_module.collect_applicable_pairs(
-                text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
-            )
-            def _validated_document_fallback(protected_source, fallback_src, fallback_tgt):
-                # Final availability layer only. The quality module validates the
-                # restored result before it can be returned, and this fallback is
-                # never cached. This prevents provider/reviewer outages from
-                # becoming silent no-reply events.
-                try:
-                    return translate_with_retry(
-                        translate_google,
-                        protected_source,
-                        fallback_src,
-                        fallback_tgt,
-                        max_retries=1,
-                    )
-                except Exception as _fallback_e:
-                    logger.warning("[CleanDocument] fallback translator failed: %s", _fallback_e)
-                    return None
-
-            _clean = tqg_module.translate_quality_critical_document(
-                text, src, tgt,
-                model=_active_upgrade_model(),
-                glossary_pairs=_safe_pairs,
-                ai_client=ai_provider,
-                fallback_translate=_validated_document_fallback,
-            )
-            if not _clean.get("ok") or not _clean.get("text"):
-                logger.error("[CleanDocument] all validated candidates failed: %s", _clean.get("issues"))
-                try:
-                    _event_log_write("clean_document_translation_failed", {
-                        "group_id": _gid_for_tm,
-                        "src": src, "tgt": tgt,
-                        "issues": _clean.get("issues", [])[:12],
-                        "source": text[:300],
-                    })
-                except Exception:
-                    pass
-                # Never fail silently. If every provider and validated fallback
-                # failed, send a clear retry notice instead of appearing as if
-                # translation were disabled.
-                return tqg_module.translation_failure_message(tgt)
-            _clean_text = _clean["text"].strip()
-            if _clean.get("cacheable", True):
-                cache_set(text, src, tgt, _clean_text, force=True)
-            try:
-                _log_translation(
-                    text, _clean_text, src, tgt,
-                    "clean-document-reviewed", 0, 1.0, True, 1.0, _gid_for_tm
-                )
-            except Exception:
-                pass
-            try:
-                if _gid_for_tm:
-                    _conv_buffer_add(_gid_for_tm, text, _clean_text, src, tgt)
-            except Exception:
-                pass
-            logger.info(
-                "[CleanDocument] accepted path=%s reviewed=%s degraded=%s cacheable=%s",
-                _clean.get("path"), _clean.get("reviewed"),
-                _clean.get("degraded"), _clean.get("cacheable", True),
-            )
-            return _clean_text
-        except Exception as _clean_e:
-            logger.exception("[CleanDocument] unexpected pipeline failure: %s", _clean_e)
-            return tqg_module.translation_failure_message(tgt)
+    # v3.32.6: Quality-critical messages stay in the same one-call pipeline.
+    # They bypass stale TM/NMT and are routed to the quality model, but they are
+    # never reviewed, retranslated or split into multiple billable requests.
 
     # v3.18 速度根治②:向量查詢提早並行發出。
     # vector_lookup 內含 1 次 OpenAI embedding API(~0.3-0.8 秒),原本與
@@ -10123,7 +9624,7 @@ def _translate_core(text, src, tgt):
         try:
             nmt_result = nmt_module.nmt_translate(text, src, tgt)
             if nmt_result:
-                # NMT 走完仍要進 QE + 可能 APE
+                # NMT 成功後只做本地品質檢查，不再呼叫 QE/APE 模型
                 logger.info("[Pipeline] NMT route success: %d chars", len(text))
                 result = nmt_result
                 # 跳過 LLM 全翻,直接進後處理
@@ -10197,7 +9698,7 @@ def _translate_core(text, src, tgt):
             if _glossary_for_ge:
                 _ge_result = ge_module.enforce_glossary(
                     text, result, _glossary_for_ge, src, tgt,
-                    ai_client=ai_provider,
+                    ai_client=None,
                 )
                 if _ge_result.get("action_taken") == "fixed":
                     logger.info("[Pipeline] GE auto-fixed %d violations",
@@ -10322,7 +9823,7 @@ def _translate_core(text, src, tgt):
         except Exception:
             pass
 
-    # ─── 背景後處理:QE 評分 → (低分)APE 修正入庫 → TM store → 向量 store ───
+    # ─── 背景後處理:本地品質訊號 → TM store → 向量 store（0 次翻譯 API） ───
     if result and isinstance(result, str) and not result.startswith("⚠"):
         try:
             _BG_POST_EXECUTOR.submit(
@@ -10352,104 +9853,37 @@ def _translate_core(text, src, tgt):
 
 
 def _post_translation_async(text, result, src, tgt, gid, model_used, conf, semantic_contract):
-    """v3.13: 翻譯後處理(背景執行緒)— 譯文已送出,這裡只做品管與資產累積。
+    """Local-only post processing.
 
-    流程(與原 blocking 版相同,只是不再讓使用者等):
-      1. QE 評分(LLM-as-judge,Haiku/4.1-mini)
-      2. 分數低 → APE 修正。修正版不回頭改已送出的訊息(LINE 不能編輯),
-         而是寫進 cache + TM:同句下次直接命中修正版。
-      3. TM store back + 向量 store back(帶 QE 分數),與原行為一致。
+    No QE judge, back-translation or APE model is called.  The background worker
+    only computes deterministic validation signals and stores the already-sent
+    translation in TM/vector assets.
     """
     final = result
-    qe_result = None
-    _qe_skipped = False
-
-    # v3.18 省錢預設:QE smart gating(品質兼顧)
-    # 原本「每句都跑 QE」= 每句多 1 次背景 LLM 費用。改成:
-    #   必評:語意風險句(contract has_risk)、工廠語境、長句(>40字)、低信心句
-    #   其餘:抽樣 10%(維持品質監控統計訊號)
-    # 要害句的品質保護一個不少,背景 LLM 成本約 -60~80%。
-    # 想恢復全評:把 QE_GATING_ENABLED 改 False(本檔常數)。
-    if QE_GATING_ENABLED:
-        import random as _rnd
-        _worth_qe = (
-            bool(semantic_contract and semantic_contract.get("has_risk"))
-            or len(text or "") > 40
-            or (conf is not None and conf < confidence_threshold)
-            or _rnd.random() < 0.10
+    quality_for_tm = int(conf * 100) if conf is not None else None
+    try:
+        pairs = ge_module.collect_applicable_pairs(
+            text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
         )
-        if not _worth_qe:
-            try:
-                _worth_qe = _is_factory_context(text)
-            except Exception:
-                pass
-        if not _worth_qe:
-            _qe_skipped = True
-
-    if not _qe_skipped:
-        try:
-            qe_result = qe_module.estimate_quality(text, final, src, tgt, ai_client=ai_provider)
-        except Exception as _qe_e:
-            logger.warning("[QE-bg] failed: %s", _qe_e)
-
-    # v3.17: round-trip 反譯降級為「QE 不可用時的背景品質監控」。
-    # 原本它是主路徑 blocking 雙API(每句 >30 字翻倍延遲);現在:
-    #   - QE 正常 → 完全不跑反譯(QE 訊號嚴格更強)
-    #   - QE 回 None/例外 且後台 double_check_mode != off → 背景跑一次反譯,
-    #     失敗記 rtc_bg_fail 事件供監控,不影響已送出的訊息
-    #   - v3.18: QE 被 gating 主動略過(省錢)時,反譯也不跑 — 否則省一個換一個
-    if qe_result is None and not _qe_skipped:
-        try:
-            if _should_double_check(text, src):
-                _rt_ok, _rt_sim, _rt_back = _round_trip_check(text, final, src, tgt)
-                if not _rt_ok:
-                    logger.warning("[RTC-bg] round-trip failed (QE unavailable): sim=%.2f orig=%r trans=%r",
-                                   _rt_sim, text[:80], (final or "")[:80])
-                    try:
-                        _event_log_write("rtc_bg_fail", {
-                            "group_id": gid, "similarity": round(_rt_sim, 3),
-                            "src_text": text[:120], "tgt_text": (final or "")[:120],
-                        })
-                    except Exception:
-                        pass
-        except Exception as _rt_e:
-            logger.warning("[RTC-bg] exception: %s", _rt_e)
-
-    if qe_result and qe_result.get("action") in ("warn", "retry"):
-        try:
-            ape_result = ape_module.auto_post_edit(
-                text, final, src, tgt,
-                issues=qe_result.get("issues"),
-                qe_score=qe_result.get("total"),
-                trigger="qe",
-                ai_client=ai_provider,
-            )
-            if ape_result and ape_result != final:
-                ape_result = enforce_translation_semantic_contract(semantic_contract, text, ape_result)
-            if ape_result and ape_result != final:
-                logger.info("[Pipeline-bg] APE 修正入庫 (QE %s);已送出訊息不變,cache/TM 更新為修正版",
-                            qe_result.get("total"))
-                final = ape_result
-                try:
-                    cache_set(text, src, tgt, final)
-                except Exception:
-                    pass
-        except Exception as _ape_e:
-            logger.warning("[APE-bg] failed: %s", _ape_e)
-
-    # TM store back(累積資產,帶 confidence + QE 分數)— 與原 v3.9.41 Phase Q 邏輯一致
-    qe_total = qe_result.get("total") if qe_result else None
-    quality_for_tm = qe_total if qe_total is not None else (
-        int(conf * 100) if conf is not None else None
-    )
+        report = tqg_module.validate_translation(
+            text, final, src, tgt,
+            glossary_pairs=pairs,
+            require_paragraph_fidelity=tqg_module.is_quality_critical(text, src, tgt),
+        )
+        if quality_for_tm is None:
+            quality_for_tm = 100 if report.ok else max(0, 100 - 20 * len(report.hard_issues))
+        if not report.ok:
+            logger.warning("[LocalQE] deterministic issues=%s", report.issues[:10])
+    except Exception as exc:
+        logger.warning("[LocalQE] validation failed: %s", exc)
     try:
         tm_module.tm_store(text, final, src, tgt, gid, model_used, quality_for_tm)
-    except Exception as _tm_e:
-        logger.warning("[TM-bg] store exception: %s", _tm_e)
+    except Exception as exc:
+        logger.warning("[TM-bg] store exception: %s", exc)
     try:
         vec_tm_module.vector_store(text, final, src, tgt, gid, model_used, quality_for_tm)
-    except Exception as _vec_e:
-        logger.warning("[VecTM-bg] store exception: %s", _vec_e)
+    except Exception as exc:
+        logger.warning("[VecTM-bg] store exception: %s", exc)
 
 
 # =====================================================================
@@ -10575,53 +10009,9 @@ def _translate_with_thread_context(translate_fn, para_text, src, tgt, context_sn
 
 
 def _translate_paragraphs_separately(text, src, tgt, translate_fn):
-    """分段並行翻譯，再依原順序與分隔符拼回。
+    """Compatibility shim: paragraphs are preserved in one whole-message request."""
+    return None
 
-    每一段仍走原本完全相同的模型、prompt、術語、cache 與後處理；唯一差異是
-    多段同時送出，總等待時間由「各段耗時相加」降為「最慢一段的耗時」。
-    任一段失敗時仍回傳 None，交回既有整段 fallback，維持可靠性。
-    """
-    parts = _split_into_paragraphs(text)
-    if len(parts) <= 1:
-        return None  # 沒分段,讓主流程處理
-
-    logger.info(
-        "Paragraph-split parallel translation: %d paragraphs, lengths=%s",
-        len(parts), [len(p[0]) for p in parts]
-    )
-
-    context_snapshot = _snapshot_translation_thread_context()
-    jobs = []
-    for idx, (para_text, sep) in enumerate(parts):
-        para_clean = para_text.strip()
-        if not para_clean:
-            jobs.append((idx, sep, None))
-            continue
-        future = _PARAGRAPH_EXECUTOR.submit(
-            _translate_with_thread_context,
-            translate_fn, para_clean, src, tgt, context_snapshot,
-        )
-        jobs.append((idx, sep, future))
-
-    translated_parts = []
-    for idx, sep, future in jobs:
-        if future is None:
-            translated_parts.append(("", sep))
-            continue
-        try:
-            tr = future.result()
-            if not tr:
-                logger.warning(
-                    "Paragraph-split: paragraph %d/%d failed, falling back",
-                    idx + 1, len(parts)
-                )
-                return None
-            translated_parts.append((tr.strip(), sep))
-        except Exception as e:
-            logger.error("Paragraph-split error on paragraph %d: %s", idx + 1, e)
-            return None
-
-    return "".join(tr_text + sep for tr_text, sep in translated_parts).strip()
 
 
 def _translate_inner(text, src, tgt):
@@ -10651,7 +10041,7 @@ def _translate_inner(text, src, tgt):
     # 這個路徑不影響短訊息(沒分段就直接走原本流程)
     # v3.9.27: 來自圖片 OCR 的文字一律走分段路徑(段落保留是首要需求)
     _is_from_image = getattr(_tl, 'from_image_ocr', False)
-    if (not _quality_critical) and paragraph_split_translate and _has_paragraph_structure(text):
+    if False and (not _quality_critical) and paragraph_split_translate and _has_paragraph_structure(text):
         char_len = len(re.sub(r"\s+", "", text))
         # v3.9.27: 圖片 OCR 不看 threshold,直接分段
         if _is_from_image or char_len >= paragraph_split_threshold:
@@ -10727,7 +10117,7 @@ def _translate_inner(text, src, tgt):
 
     # ★ v3.4:長 ID→ZH 訊息嘗試 pivot via English(若啟用)
     pivot_result = None
-    if should_use_pivot(text, src, tgt):
+    if False and should_use_pivot(text, src, tgt):
         try:
             pivot_result = translate_id_zh_with_pivot(text, src, tgt)
         except Exception as _e:
@@ -10743,41 +10133,14 @@ def _translate_inner(text, src, tgt):
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
 
-    # 若品質閘門不通過，只允許一次「嚴格修復」呼叫；不再 strict + repair 連打兩次。
-    if result and not is_translation_acceptable(text, result, src, tgt):
-        logger.warning("Translation quality gate failed; running one strict repair")
-        repaired = translate_openai(
-            text,
-            src,
-            tgt,
-            strict_no_source_script=True,
-            repair_mode=True,
-            bad_result=result,
-        )
-        if repaired:
-            repaired = finalize_factory_translation(text, repaired, src, tgt)
-        if repaired and is_translation_acceptable(text, repaired, src, tgt):
-            result = repaired
+    # v3.32.6: no quality repair request.  The first pass is accepted or blocked locally.
 
     if result and is_translation_acceptable(text, result, src, tgt):
         result = finalize_factory_translation(text, result, src, tgt)
         cache_set(text, src, tgt, result)
         return result
 
-    # Fallback to Google with retry, then factory post-validation.
-    # v3.9.3: DO NOT cache Google fallback results. If the OpenAI call failed
-    # (e.g. wrong API params, rate limit), Google will give a literal direct
-    # translation that ignores all custom examples. Caching that result poisons
-    # subsequent lookups for 1 hour even after the OpenAI bug is fixed.
-    # Instead, return the Google result without caching, so a retry can hit OpenAI.
-    result = translate_with_retry(translate_google, text, src, tgt, max_retries=1)
-    if result:
-        result = finalize_factory_translation(text, result, src, tgt)
-    if result and is_translation_acceptable(text, result, src, tgt):
-        # cache_set(text, src, tgt, result)  # ← intentionally disabled
-        logger.warning("Used Google fallback (NOT cached); check OpenAI errors above")
-        return result
-
+    # No second translation API for quality recovery.
     # Last chance: deterministic semantic fallback before returning None.
     if src == "id" and tgt == "zh":
         semantic = factory_semantic_translate_id_zh(text)
@@ -18020,7 +17383,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <summary style="padding:10px;cursor:pointer;font-size:13px;color:#ef4444;font-weight:600">🛡️ Phase H: Glossary Enforcement(強制術語對照)</summary>
     <div id="dash-ge" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
     <div style="padding:10px;border-top:1px solid #2a2a3e">
-      <button onclick="geSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置(warn / auto_fix / block)</button>
+      <button onclick="geSetConfig()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⚙️ 配置(warn / block)</button>
     </div>
   </details>
   
@@ -18731,7 +18094,7 @@ async function dashLoadStats(){
     const sd = qe.score_distribution || {};
     const qe_models = qe.model_by_provider || {};
     document.getElementById('dash-qe').innerHTML =
-      'enabled: '+(qe.enabled?'✓':'✗')+' | active_provider: '+(qe.active_provider||'?')+'<br>'+
+      'enabled: '+(qe.enabled?'✓':'✗')+'（商用模式固定關閉） | active_provider: '+(qe.active_provider||'?')+'<br>'+
       '<b>current model</b>: '+(qe.model_current||'?')+'<br>'+
       '雙系統 mapping: openai→'+(qe_models.openai||'?')+' | anthropic→'+(qe_models.anthropic||'?')+'<br>'+
       'evaluations: '+(qe.evaluations||0)+' | avg_score: '+(qe.avg_score||0)+'<br>'+
@@ -18742,7 +18105,7 @@ async function dashLoadStats(){
     const ape = ph.E_ape || {};
     const ape_models = ape.model_by_provider || {};
     document.getElementById('dash-ape').innerHTML =
-      'enabled: '+(ape.enabled?'✓':'✗')+' | active_provider: '+(ape.active_provider||'?')+'<br>'+
+      'enabled: '+(ape.enabled?'✓':'✗')+'（商用模式固定關閉） | active_provider: '+(ape.active_provider||'?')+'<br>'+
       '<b>current model</b>: '+(ape.model_current||'?')+'<br>'+
       '雙系統 mapping: openai→'+(ape_models.openai||'?')+' | anthropic→'+(ape_models.anthropic||'?')+'<br>'+
       'total_triggered: '+(ape.total_triggered||0)+'<br>'+
@@ -22424,7 +21787,7 @@ def _load_file_from_github(filename, branch="main"):
 _SETTINGS_FILENAME = "bot_settings.json"
 _SETTINGS_BRANCH = "data"
 _SETTINGS_KV_KEY = os.environ.get("BOT_SETTINGS_KV_KEY", "line_bot:bot_settings:v2").strip() or "line_bot:bot_settings:v2"
-_SETTINGS_SCHEMA_VERSION = 4  # v3.32.3: one-time migration for OpenAI + Claude + Gemini defaults
+_SETTINGS_SCHEMA_VERSION = 6  # v3.32.7: enforce one successful translation request per message
 _SETTINGS_REQUIRE_CLOUD = os.environ.get("REQUIRE_CLOUD_SETTINGS", "1").strip().lower() not in ("0", "false", "no", "off")
 _settings_io_lock = _threading.RLock()
 _last_persisted_state_hash = ""
@@ -23344,6 +22707,23 @@ def load_settings():
             group_conv_settings.update(data["group_conv_settings"])
         if "group_target_langs" in data and isinstance(data["group_target_langs"], dict):
             group_target_langs.update(data["group_target_langs"])
+
+        # v3.32.7 commercial single-request invariant.  Legacy saved settings
+        # cannot silently reactivate billable quality/review paths after deploy.
+        double_check_mode = "off"
+        id_zh_pivot_enabled = False
+        id_zh_double_translation = False
+        id_preprocessing_nano = False
+        multi_path_backtrans_enabled = False
+        paragraph_split_translate = False
+        try:
+            qe_module.QE_ENABLED = False
+            ape_module.APE_ENABLED = False
+            ge_module.GE_ACTION = "warn" if ge_module.GE_ACTION == "auto_fix" else ge_module.GE_ACTION
+            nmt_module.NMT_POST_EDIT = False
+        except Exception as _single_req_cfg_exc:
+            logger.warning("Single-request policy module enforcement failed: %s", _single_req_cfg_exc)
+
         _last_persisted_state_hash = ((data.get("_meta") or {}).get("state_hash")
                                       or _settings_state_hash(data))
         if _migrate_all_ai_defaults:
@@ -24377,29 +23757,30 @@ def api_admin_enable_recommended():
     """一鍵啟用所有 phase 的建議設定(持久化)
     
     自動配置:
-    - GE: action=auto_fix(LLM 自動修術語違規)
-    - QE/APE/CS/ICL/H/N: 啟用
+    - GE: action=warn（本地術語檢查）
+    - QE/APE: 強制停用（避免第二次 API）
+    - CS/ICL/H/N: 啟用
     - 全部 set_config 都會寫到 /var/data/phase_config.json,重啟不會還原
     """
     if not check_manager_access("aiprovider"):
         return jsonify({"error": "forbidden"}), 403
     results = {}
     
-    # Phase H: auto_fix(最重要)
+    # Phase H: local-only terminology validation
     try:
-        results["ge"] = ge_module.ge_set_config(enabled=True, action="auto_fix")
+        results["ge"] = ge_module.ge_set_config(enabled=True, action="warn")
     except Exception as e:
         results["ge"] = {"error": str(e)}
     
-    # Phase D QE 啟用
+    # Phase D LLM QE permanently disabled in commercial single-request mode
     try:
-        results["qe"] = qe_module.qe_set_config(enabled=True)
+        results["qe"] = qe_module.qe_set_config(enabled=False)
     except Exception as e:
         results["qe"] = {"error": str(e)}
     
-    # Phase E APE 啟用
+    # Phase E LLM APE permanently disabled in commercial single-request mode
     try:
-        results["ape"] = ape_module.ape_set_config(enabled=True)
+        results["ape"] = ape_module.ape_set_config(enabled=False)
     except Exception as e:
         results["ape"] = {"error": str(e)}
     
@@ -24417,7 +23798,7 @@ def api_admin_enable_recommended():
     
     return jsonify({
         "ok": True,
-        "message": "已啟用所有 phase 建議設定,並持久化到 /var/data/phase_config.json,重啟不會還原",
+        "message": "已套用商用單次請求設定：QE/APE 關閉、術語本地檢查，並持久化",
         "configs": results,
     })
 
@@ -25410,6 +24791,18 @@ def api_admin_features():
             # v3.9: vision (照片分析) model selectable from admin panel
             if "vision_model" in data:
                 VISION_MODEL = ai_provider.normalize_vision_model(data["vision_model"])
+        # Enforce the commercial single-request invariant even if an old or
+        # custom dashboard submits legacy multi-call toggles.
+        double_check_mode = "off"
+        id_zh_pivot_enabled = False
+        id_zh_double_translation = False
+        id_preprocessing_nano = False
+        multi_path_backtrans_enabled = False
+        paragraph_split_translate = False
+        qe_module.QE_ENABLED = False
+        ape_module.APE_ENABLED = False
+        nmt_module.NMT_POST_EDIT = False
+
         # Sender settings are always global
         if "sender_name" in data:
             sender_name = str(data["sender_name"])[:20]
@@ -27514,7 +26907,7 @@ def admin_apply_best_defaults():
         "logprobs_enabled": True,             # Confidence calculation (gpt-4 only, auto-skip on gpt-5)
         "confidence_threshold": 0.85,         # ⚠️ flag if below 85%
         "structured_output_enabled": False,   # Off — adds latency, marginal gain for translation
-        "double_check_mode": "smart",         # Only re-translate suspect outputs
+        "double_check_mode": "off",           # local deterministic gate; no second translation
         "double_check_threshold": 0.55,       # Permissive (lower = more flagged)
         "prompt_caching_enabled": True,       # 共用固定 prompt，命中 cache 可降低延遲
         "openai_24h_cache_enabled": True,      # 延長 OpenAI 共用 prompt cache 壽命
@@ -27523,7 +26916,7 @@ def admin_apply_best_defaults():
         "reasoning_effort": "low",            # OpenAI 實際翻譯仍按模型自動降到 none/minimal
         
         # === ID→ZH quality ===
-        "id_zh_cot_enabled": True,            # Chain-of-Thought 二階段 (verified +20%)
+        "id_zh_cot_enabled": True,            # single-request reasoning instruction, not a second call
         "id_zh_cod_enabled": True,            # Chain-of-Dictionary (verified +5%)
         "id_zh_pivot_enabled": False,         # Off — doubles cost, marginal gain
         "id_preprocessing_enabled": True,     # Free dictionary normalization
@@ -27531,7 +26924,7 @@ def admin_apply_best_defaults():
         
         # === Format preservation ===
         "preserve_paragraphs_enabled": True,  # Honor original paragraph breaks
-        "paragraph_split_translate": True,    # Per-paragraph translation for long texts
+        "paragraph_split_translate": False,   # one whole-message call; model preserves paragraphs
         "paragraph_split_threshold": 50,      # 50+ char + multi-paragraph = split mode
         
         # === Output cleanliness ===

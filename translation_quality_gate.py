@@ -2,13 +2,11 @@
 
 Design goals
 ------------
-1. Protect data values before normalization or model calls.
-2. Keep protected placeholders through translation *and* semantic review.
-3. Restore literals only once, after a candidate has passed structural checks.
-4. Validate semantic data values independently from quote glyphs/typography.
-5. Never discard a structurally valid first-pass translation only because the
-   optional reviewer is unavailable.
-6. No sentence-specific translation replacements live in this module.
+1. Protect data values and locked terminology before the single model call.
+2. Restore literals and canonical terms deterministically after generation.
+3. Validate completeness, language purity and structure locally without another AI call.
+4. Provider failover is reserved for operational failure, never for quality editing.
+5. No sentence-specific translation replacements live in this module.
 
 The module is intentionally provider-neutral and works with the project's
 ``ai_provider.chat_complete`` interface for OpenAI, Gemini and Claude.
@@ -27,8 +25,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 3
-QUALITY_GATE_BUILD_ID = "2026-07-12.4-natural-indonesian-glossary-policy"
+QUALITY_GATE_API_VERSION = 7
+QUALITY_GATE_BUILD_ID = "2026-07-12.8-indonesian-factory-register"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -193,6 +191,74 @@ def restore_immutable_spans(text: str, mapping: Mapping[str, str]) -> str:
 def protected_placeholders_present(text: str, mapping: Mapping[str, str]) -> Tuple[bool, List[str]]:
     canonical = canonicalize_placeholders(text or "", mapping)
     missing = [ph for ph in mapping if canonical.count(ph) < 1]
+    return not missing, missing
+
+
+_TERM_PLACEHOLDER_RE = re.compile(r"__QG_TERM_(\d{3})_([0-9A-F]{8})__")
+
+
+def _term_placeholder(index: int, source_term: str, target_term: str) -> str:
+    digest = hashlib.sha1((source_term + "\0" + target_term).encode("utf-8")).hexdigest()[:8].upper()
+    return f"__QG_TERM_{index:03d}_{digest}__"
+
+
+def protect_glossary_terms(text: str, glossary_pairs: Sequence[Tuple[str, str]]) -> ProtectedText:
+    """Replace source-grounded hard terms with locked tokens for one-pass translation.
+
+    The model receives each token together with its canonical target value in the
+    prompt.  After generation the token is restored locally, so terminology does
+    not require an LLM post-editor or a second provider call.
+    """
+    original = text or ""
+    if not original or not glossary_pairs:
+        return ProtectedText(original, original, {})
+    protected = original
+    mapping: Dict[str, str] = {}
+    unique: List[Tuple[str, str]] = []
+    seen = set()
+    for source_term, target_term in glossary_pairs:
+        src = (source_term or "").strip()
+        tgt = (target_term or "").strip()
+        key = (src, tgt)
+        if not src or not tgt or key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    for source_term, target_term in sorted(unique, key=lambda pair: -len(pair[0])):
+        if source_term not in protected:
+            continue
+        ph = _term_placeholder(len(mapping), source_term, target_term)
+        mapping[ph] = target_term
+        protected = protected.replace(source_term, ph)
+    return ProtectedText(original, protected, mapping)
+
+
+def glossary_placeholder_instruction(mapping: Mapping[str, str]) -> str:
+    if not mapping:
+        return ""
+    lines = [
+        "<locked_terminology>",
+        "Copy every locked token exactly once wherever it occurs. Do not translate, delete, split, or explain the token.",
+        "The server will replace each token with the canonical target term after this single response:",
+    ]
+    lines.extend(f"{ph} = {target}" for ph, target in mapping.items())
+    lines.append("</locked_terminology>")
+    return "\n".join(lines)
+
+
+def restore_glossary_terms(text: str, mapping: Mapping[str, str]) -> str:
+    if not text or not mapping:
+        return text
+    result = text
+    for ph, target in sorted(mapping.items(), key=lambda item: -len(item[0])):
+        result = result.replace(ph, target)
+    return result
+
+
+def glossary_placeholders_present(text: str, mapping: Mapping[str, str]) -> Tuple[bool, List[str]]:
+    if not mapping:
+        return True, []
+    missing = [ph for ph in mapping if ph not in (text or "") and mapping[ph].casefold() not in (text or "").casefold()]
     return not missing, missing
 
 
@@ -412,7 +478,7 @@ def _dedupe(items: Iterable[str]) -> List[str]:
 
 
 def _partition_issues(issues: Sequence[str]) -> Tuple[List[str], List[str]]:
-    warning_prefixes = ("paragraph_count:",)
+    warning_prefixes = ("paragraph_count:", "style:")
     hard: List[str] = []
     warnings: List[str] = []
     for issue in _dedupe(issues):
@@ -472,6 +538,38 @@ def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -
         if phrase.casefold() in low:
             issues.append(f"deprecated_glossary_phrase:{phrase}")
 
+    # Source-conditioned factory/management semantic lint.  These are concept
+    # rules, not sentence replacements: they prevent common Chinese-literal
+    # constructions that change responsibility, accusation strength or the
+    # physical object being discussed.
+    if "敷衍" in source and not any(x in source for x in ("欺騙", "騙人", "說謊")):
+        if re.search(r"\b(membohongi|menipu)\b", low):
+            issues.append("overintensified_accusation:敷衍")
+    if "研磨棒" in source and "batang gerinda" in low:
+        issues.append("factory_object_error:研磨棒_is_not_grinding_tool")
+    if "研磨棒" in source and not any(x in low for x in (
+        "grinding rod", "batang hasil proses grinding", "batang yang diproses di bagian grinding"
+    )):
+        issues.append("style:factory_term:研磨棒_prefer_grinding_rod")
+    if "調機" in source and "penyesuaian mesin" in low and "penyetelan" not in low:
+        issues.append("style:factory_term:調機_prefer_penyetelan_or_penyetelan_penyesuaian")
+    if "無法配合" in source and re.search(r"tidak bisa (mengikuti|mematuhi)", low):
+        issues.append("agency_error:無法配合_is_noncompliance_not_inability")
+    if "高層" in source and "施壓" in source:
+        if "manajemen atas" in low or re.search(r"manajemen[^.]{0,40}\bmenekan\b", low):
+            issues.append("style:management_register:avoid_literal_pressure")
+    if "福利" in source:
+        # Broad collective welfare is naturally expressed as kesejahteraan kita semua.
+        # Only explicit allowances/facilities require the narrower tunjangan/fasilitas wording.
+        explicit_allowance = any(x in source for x in ("津貼", "補助", "設施", "福利金", "獎金"))
+        if explicit_allowance and "kesejahteraan" in low and not any(x in low for x in ("tunjangan", "fasilitas", "bonus")):
+            issues.append("style:explicit_employee_benefit_needs_specific_term")
+
+    if re.search(r"\bfaham\b", low):
+        issues.append("style:standard_spelling:faham_to_paham")
+    if re.search(r"\bsilahkan\b", low):
+        issues.append("style:standard_spelling:silahkan_to_silakan")
+
     duplicate = re.search(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{2,})\s+\1\b", candidate, re.I)
     if duplicate:
         issues.append(f"repeated_word:{duplicate.group(1).casefold()}")
@@ -497,12 +595,25 @@ def _indonesian_clarity_instruction(tgt_lang: str) -> str:
     if not str(tgt_lang or "").lower().startswith("id"):
         return ""
     return (
-        " Write simple, standard Indonesian that an Indonesian factory worker can understand immediately. "
-        "Do not mirror Chinese word order. For announcements, use short sentences and clear paragraphs; "
-        "state the actor, required action, reason and consequence explicitly when they exist in the source. "
-        "Avoid unnecessary English or Chinese; retain only approved plant terms/codes such as work order, "
-        "shift, model numbers and immutable identifiers. Glossary descriptions and notes are semantic context, "
-        "not phrases to paste into the translation. Only explicit hard terminology pairs are literal constraints."
+        " Write plain, standard Indonesian for Indonesian factory workers, not bureaucratic Indonesian and not "
+        "word-for-word Chinese. Use standard spelling: paham, silakan, tidak, sudah. Prefer short sentences, clear "
+        "paragraphs and direct subject-action-object order. Use 'kita' for shared workplace impact and 'kalian' only "
+        "for direct instructions to workers. For a long supervisor notice that is clearly an announcement, a single "
+        "heading 'Pengumuman' is allowed; do not add headings to ordinary short messages. State who must do what, "
+        "when, why and the consequence whenever the source contains those elements. Resolve omitted Chinese subjects "
+        "and objects from factory context, but do not invent facts or repeat a closing request that appears only once. "
+        "Do not translate management pressure literally as 'manajemen atas menekan'; use natural workplace wording "
+        "such as 'Manajemen juga semakin memperhatikan pekerjaan kita' or 'pengawasan semakin ketat' according to the "
+        "source strength. For broad collective 福利, 'kesejahteraan kita semua' is natural; reserve 'tunjangan dan "
+        "fasilitas karyawan' for explicit allowances or facilities. Preserve the source strength and do not intensify criticism into accusations. "
+        "Do not intensify 敷衍 into membohongi or menipu "
+        "unless the source explicitly alleges lying. Prefer 'data produksi yang tidak sesuai dengan kondisi sebenarnya' "
+        "or another concrete, non-accusatory expression. In this plant 研磨棒 is the product term 'grinding rod', never "
+        "'batang gerinda'. 調機 is 'penyetelan mesin' or 'penyetelan/penyesuaian mesin'. 無法配合規定 describes "
+        "noncompliance, not inability. Keep approved plant terms such as urgent order, work order and grinding when "
+        "they are normal shop-floor usage. For quality notices, keep a product or process defect distinct from a defect in the machine itself, and prefer concrete wording such as 'produk yang cacat' or "
+        "'produk yang tidak sesuai standar'. Glossary descriptions and notes are context only, not phrases to paste "
+        "into the translation. Only explicit hard terminology pairs are literal constraints."
     )
 
 def validate_translation(
@@ -687,9 +798,12 @@ def _build_review_messages(
         if annotations and str(tgt_lang or "").lower().startswith("zh") else ""
     )
     system = (
-        "You are an independent bilingual translation quality editor. Compare the source and current "
-        "translation sentence by sentence and return one corrected final translation. Preserve every "
-        "instruction, condition, negation, actor, object and sequence. Do not add information. Tokens "
+        "You are an independent bilingual translation quality editor for factory communications. Do not merely "
+        "polish the current wording. Reconstruct the meaning from the source, silently back-translate each target "
+        "sentence, compare it with the corresponding source meaning, and then write one fresh corrected final "
+        "translation. Audit actor, action, object, timing, condition, negation, modality, severity, cause and "
+        "consequence. Preserve every instruction, condition, negation, actor, object and sequence. Do not add "
+        "information. Tokens "
         "matching __QG_KEEP_000_XXXXXXXX__ are immutable identifiers and must be copied exactly. Preserve "
         "numbers, symbols, @mentions, emoji and list markers. Preserve the document's logical sections; "
         "minor paragraph reflow is allowed only when meaning is unchanged. Apply only explicitly supplied "
@@ -750,6 +864,38 @@ def _build_translation_messages(
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _independent_provider_preference(ai_client: Any, used_provider: Optional[str]) -> Optional[List[str]]:
+    """Prefer a different configured provider for semantic review/retry.
+
+    This does not add an extra call: critical documents already receive a review.
+    It only prevents the same model family from approving its own semantic mistake
+    when another configured provider is available.
+    """
+    if not used_provider or ai_client is None:
+        return None
+    getter = getattr(ai_client, "get_available_providers", None)
+    if not callable(getter):
+        return None
+    try:
+        available = list(getter("chat", include_open_circuits=False) or [])
+    except TypeError:
+        try:
+            available = list(getter("chat") or [])
+        except Exception:
+            return None
+    except Exception:
+        return None
+    ordered = [p for p in available if p != used_provider]
+    if used_provider in available:
+        ordered.append(used_provider)
+    return ordered or None
+
+
+def _response_provider(resp: Any) -> Optional[str]:
+    provider = getattr(resp, "_jy_provider", None)
+    return str(provider) if provider else None
+
+
 def _call_chat_complete(
     ai_client: Any,
     *,
@@ -757,25 +903,26 @@ def _call_chat_complete(
     messages: Sequence[Mapping[str, str]],
     max_tokens: int,
     timeout: int = 90,
+    provider_preference: Optional[Sequence[str]] = None,
 ) -> Any:
-    attempts = (
-        dict(model=model, messages=list(messages), max_tokens=max_tokens, temperature=0.0,
-             reasoning_effort="none", verbosity="low", timeout=timeout),
-        dict(model=model, messages=list(messages), max_tokens=max_tokens, temperature=0.0,
-             timeout=timeout),
-        dict(model=model, messages=list(messages), max_tokens=max_tokens, timeout=timeout),
-    )
-    last_exc: Optional[Exception] = None
-    for idx, kwargs in enumerate(attempts):
-        try:
-            return ai_client.chat_complete(**kwargs)
-        except Exception as exc:
-            last_exc = exc
-            logger.warning("[QualityGate] provider call attempt %d failed: %s", idx + 1, exc)
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("provider_call_failed")
+    """Issue exactly one coordinated request.
 
+    ai_provider may move to another configured provider only when the selected
+    provider has an operational failure (quota, timeout, transport or 5xx).  This
+    layer never retries with alternate parameters and never asks another model to
+    edit a successful translation.
+    """
+    kwargs = dict(
+        model=model,
+        messages=list(messages),
+        max_tokens=max_tokens,
+        temperature=0.0,
+        timeout=timeout,
+        translation_fast_quality=True,
+    )
+    if provider_preference:
+        kwargs["provider_preference"] = list(provider_preference)
+    return ai_client.chat_complete(**kwargs)
 
 def _extract_response_text(resp: Any) -> str:
     if not getattr(resp, "choices", None):
@@ -799,29 +946,28 @@ def review_translation(
     src_lang: str,
     tgt_lang: str,
     *,
-    model: str,
+    model: str = "",
     issues: Optional[Sequence[str]] = None,
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
+    provider_preference: Optional[Sequence[str]] = None,
 ) -> Optional[str]:
+    """Compatibility shim for the former billable reviewer.
+
+    Commercial single-request mode intentionally performs no model call here.
+    It returns the original candidate only when deterministic validation passes;
+    otherwise it returns ``None`` so the caller can block/log the result.
+    """
     if not source or not candidate:
         return None
-    if ai_client is None:
-        try:
-            import ai_provider as ai_client  # type: ignore
-        except Exception:
-            return None
-    messages = _build_review_messages(
-        source, candidate, src_lang, tgt_lang, list(issues or ()), list(glossary_pairs or ())
+    report = validate_translation(
+        source, candidate, src_lang, tgt_lang,
+        glossary_pairs=_merge_runtime_glossary_pairs(
+            source, src_lang, tgt_lang, list(glossary_pairs or ())
+        ),
+        require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
     )
-    budget = max(1400, min(6000, len(source) * 4 + 800))
-    try:
-        resp = _call_chat_complete(ai_client, model=model, messages=messages, max_tokens=budget)
-        return _extract_response_text(resp) or None
-    except Exception as exc:
-        logger.warning("[QualityGate] semantic review unavailable: %s", exc)
-        return None
-
+    return candidate if report.ok else None
 
 def gate_and_revise(
     source: str,
@@ -835,68 +981,32 @@ def gate_and_revise(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
 ) -> Dict[str, Any]:
-    """Validate an already-restored candidate and optionally review it.
+    """Deterministic delivery gate; never calls an AI reviewer.
 
-    This compatibility entry point is used by the legacy translation path.  The
-    dedicated whole-document path below keeps placeholders protected throughout.
+    A successful provider response is either accepted by local structural checks
+    or blocked.  Translation quality must be solved in the first-pass prompt,
+    locked terminology and data protection, not by billable post-edit requests.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    immutable_literals = list(immutable_literals or ())
-    initial = validate_translation(
+    report = validate_translation(
         source, candidate, src_lang, tgt_lang,
-        immutable_literals=immutable_literals,
+        immutable_literals=list(immutable_literals or ()),
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=critical,
     )
-    if not critical and initial.ok:
-        return {
-            "ok": initial.ok, "text": candidate if initial.ok else None,
-            "issues": initial.issues, "hard_issues": initial.hard_issues,
-            "warnings": initial.warnings, "reviewed": False,
-            "degraded": False, "cacheable": initial.ok, "path": "single_pass",
-        }
-
-    # Critical documents are always independently reviewed.  Non-critical
-    # messages are reviewed only when a deterministic hard check fails.  This
-    # prevents a one-word source-language leak from becoming a silent no-reply
-    # while keeping the fast path cost-free for clean ordinary messages.
-    reviewed = review_translation(
-        source, candidate, src_lang, tgt_lang,
-        model=model, issues=initial.issues, glossary_pairs=glossary_pairs, ai_client=ai_client,
-    )
-    if reviewed:
-        checked = validate_translation(
-            source, reviewed, src_lang, tgt_lang,
-            immutable_literals=immutable_literals,
-            glossary_pairs=glossary_pairs,
-            require_paragraph_fidelity=True,
-        )
-        if checked.ok:
-            return {
-                "ok": True, "text": reviewed, "issues": checked.issues,
-                "hard_issues": [], "warnings": checked.warnings, "reviewed": True,
-                "degraded": False, "cacheable": True, "path": "reviewed",
-            }
-
-    if initial.ok:
-        return {
-            "ok": True, "text": candidate,
-            "issues": _dedupe(initial.issues + ["semantic_review_unavailable_or_rejected"]),
-            "hard_issues": [],
-            "warnings": _dedupe(initial.warnings + ["semantic_review_unavailable_or_rejected"]),
-            "reviewed": False, "degraded": True, "cacheable": True,
-            "path": "validated_first_pass",
-        }
     return {
-        "ok": False, "text": None,
-        "issues": _dedupe(initial.issues + ["no_valid_review_candidate"]),
-        "hard_issues": initial.hard_issues, "warnings": initial.warnings,
-        "reviewed": bool(reviewed), "degraded": True, "cacheable": False,
-        "path": "blocked",
+        "ok": report.ok,
+        "text": candidate if report.ok else None,
+        "issues": report.issues,
+        "hard_issues": report.hard_issues,
+        "warnings": report.warnings,
+        "reviewed": False,
+        "degraded": False,
+        "cacheable": report.ok,
+        "path": "single_api_local_validation" if report.ok else "single_api_blocked",
     }
-
 
 def _translate_candidate(
     protected_source: str,
@@ -907,13 +1017,17 @@ def _translate_candidate(
     glossary_pairs: Sequence[Tuple[str, str]],
     ai_client: Any,
     retry_issues: Optional[Sequence[str]] = None,
-) -> str:
+    provider_preference: Optional[Sequence[str]] = None,
+) -> Tuple[str, Optional[str]]:
     messages = _build_translation_messages(
         protected_source, src_lang, tgt_lang, glossary_pairs, retry_issues=retry_issues
     )
     budget = max(1600, min(8000, len(protected_source) * 4 + 1200))
-    resp = _call_chat_complete(ai_client, model=model, messages=messages, max_tokens=budget)
-    return _extract_response_text(resp)
+    resp = _call_chat_complete(
+        ai_client, model=model, messages=messages, max_tokens=budget,
+        provider_preference=provider_preference,
+    )
+    return _extract_response_text(resp), _response_provider(resp)
 
 
 def _finalize_protected_candidate(
@@ -955,133 +1069,77 @@ def translate_quality_critical_document(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """Translate a complete critical document with protected-data continuity.
+    """One-pass whole-document translation with deterministic validation.
 
-    The same placeholders remain in place through first-pass translation and
-    optional semantic review.  They are restored only once at the end.  This
-    prevents quote-style changes, reviewer edits or provider formatting from
-    turning a valid field value into a false integrity failure.
+    ``fallback_translate`` is accepted only for API compatibility and is not used.
+    Operational provider failover remains inside ``ai_provider.chat_complete``;
+    semantic review, retranslation and LLM post-editing are intentionally absent.
     """
     if ai_client is None:
         try:
             import ai_provider as ai_client  # type: ignore
         except Exception:
             ai_client = None
+    if ai_client is None:
+        return {
+            "ok": False, "text": None, "issues": ["ai_provider_unavailable"],
+            "hard_issues": ["ai_provider_unavailable"], "warnings": [],
+            "reviewed": False, "degraded": True, "cacheable": False,
+            "path": "single_api_unavailable", "provider_path": "none",
+        }
 
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    envelope = protect_immutable_spans(source)
-    protected_source = envelope.protected
-    all_issues: List[str] = []
+    immutable = protect_immutable_spans(source)
+    terms = protect_glossary_terms(immutable.protected, glossary_pairs)
+    protected_source = terms.protected
+    messages = _build_translation_messages(
+        protected_source, src_lang, tgt_lang, glossary_pairs
+    )
+    term_note = glossary_placeholder_instruction(terms.mapping)
+    if term_note:
+        messages[0] = dict(messages[0])
+        messages[0]["content"] = messages[0]["content"] + "\n" + term_note
 
-    if ai_client is not None:
-        # First high-quality whole-document translation.
-        try:
-            raw = _translate_candidate(
-                protected_source, src_lang, tgt_lang,
-                model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
-            )
-            raw = canonicalize_placeholders(raw, envelope.mapping)
-            first_text, first_report = _finalize_protected_candidate(
-                source, protected_source, raw, envelope, src_lang, tgt_lang,
-                glossary_pairs, require_paragraph_fidelity=True,
-            )
-            all_issues.extend(first_report.issues)
-
-            if first_text:
-                # Review stays protected.  A reviewer outage or bad edit cannot
-                # invalidate the already valid first pass.
-                reviewed_raw = review_translation(
-                    protected_source, raw, src_lang, tgt_lang,
-                    model=model, issues=first_report.issues,
-                    glossary_pairs=glossary_pairs, ai_client=ai_client,
-                )
-                if reviewed_raw:
-                    reviewed_raw = canonicalize_placeholders(reviewed_raw, envelope.mapping)
-                    reviewed_text, reviewed_report = _finalize_protected_candidate(
-                        source, protected_source, reviewed_raw, envelope, src_lang, tgt_lang,
-                        glossary_pairs, require_paragraph_fidelity=True,
-                    )
-                    if reviewed_text:
-                        return {
-                            "ok": True, "text": reviewed_text,
-                            "issues": reviewed_report.issues,
-                            "hard_issues": [], "warnings": reviewed_report.warnings,
-                            "reviewed": True, "degraded": False, "cacheable": True,
-                            "path": "protected_reviewed", "provider_path": "primary",
-                        }
-                    all_issues.extend(reviewed_report.issues)
-
-                return {
-                    "ok": True, "text": first_text,
-                    "issues": _dedupe(first_report.issues + ["semantic_review_unavailable_or_rejected"]),
-                    "hard_issues": [],
-                    "warnings": _dedupe(first_report.warnings + ["semantic_review_unavailable_or_rejected"]),
-                    "reviewed": False, "degraded": True, "cacheable": True,
-                    "path": "protected_first_pass", "provider_path": "primary",
-                }
-        except Exception as exc:
-            logger.warning("[QualityGate] critical first pass unavailable: %s", exc)
-            all_issues.append("first_pass_unavailable")
-
-        # One fresh source-grounded retry.  It receives only integrity codes, not
-        # the failed wording, so this is not a string patch.
-        try:
-            raw_retry = _translate_candidate(
-                protected_source, src_lang, tgt_lang,
-                model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
-                retry_issues=all_issues,
-            )
-            raw_retry = canonicalize_placeholders(raw_retry, envelope.mapping)
-            retry_text, retry_report = _finalize_protected_candidate(
-                source, protected_source, raw_retry, envelope, src_lang, tgt_lang,
-                glossary_pairs, require_paragraph_fidelity=True,
-            )
-            if retry_text:
-                return {
-                    "ok": True, "text": retry_text, "issues": retry_report.issues,
-                    "hard_issues": [], "warnings": _dedupe(retry_report.warnings + ["used_fresh_retry"]),
-                    "reviewed": False, "degraded": True, "cacheable": True,
-                    "path": "protected_fresh_retry", "provider_path": "fresh_retry",
-                }
-            all_issues.extend(retry_report.issues)
-        except Exception as exc:
-            logger.warning("[QualityGate] fresh critical retry unavailable: %s", exc)
-            all_issues.append("fresh_retry_unavailable")
-
-    # Optional non-LLM fallback.  It receives the protected document and must
-    # preserve the same placeholder identities before it can be accepted.
-    if fallback_translate is not None:
-        try:
-            fallback_raw = fallback_translate(protected_source, src_lang, tgt_lang) or ""
-            fallback_raw = canonicalize_placeholders(fallback_raw, envelope.mapping)
-            fallback_text, fallback_report = _finalize_protected_candidate(
-                source, protected_source, fallback_raw, envelope, src_lang, tgt_lang,
-                glossary_pairs, require_paragraph_fidelity=True,
-            )
-            if fallback_text:
-                return {
-                    "ok": True, "text": fallback_text, "issues": fallback_report.issues,
-                    "hard_issues": [],
-                    "warnings": _dedupe(fallback_report.warnings + ["used_validated_fallback"]),
-                    "reviewed": False, "degraded": True, "cacheable": False,
-                    "path": "protected_validated_fallback", "provider_path": "fallback",
-                }
-            all_issues.extend(fallback_report.issues)
-        except Exception as exc:
-            logger.warning("[QualityGate] fallback translator unavailable: %s", exc)
-            all_issues.append("fallback_unavailable")
-
-    return {
-        "ok": False, "text": None,
-        "issues": _dedupe(all_issues or ["no_translation_candidate"]),
-        "hard_issues": _dedupe(all_issues or ["no_translation_candidate"]),
-        "warnings": [], "reviewed": False, "degraded": True,
-        "cacheable": False, "path": "all_candidates_failed", "provider_path": "none",
-    }
-
-
+    try:
+        budget = max(1600, min(8000, len(protected_source) * 4 + 1200))
+        response = _call_chat_complete(
+            ai_client,
+            model=model,
+            messages=messages,
+            max_tokens=budget,
+        )
+        raw = _extract_response_text(response)
+        provider = _response_provider(response)
+        raw = restore_glossary_terms(raw, terms.mapping)
+        raw = canonicalize_placeholders(raw, immutable.mapping)
+        text, report = _finalize_protected_candidate(
+            source, immutable.protected, raw, immutable,
+            src_lang, tgt_lang, glossary_pairs,
+            require_paragraph_fidelity=True,
+        )
+        if text:
+            return {
+                "ok": True, "text": text, "issues": report.issues,
+                "hard_issues": [], "warnings": report.warnings,
+                "reviewed": False, "degraded": False, "cacheable": True,
+                "path": "single_api_whole_document", "provider_path": provider or "primary",
+            }
+        return {
+            "ok": False, "text": None, "issues": report.issues,
+            "hard_issues": report.hard_issues, "warnings": report.warnings,
+            "reviewed": False, "degraded": True, "cacheable": False,
+            "path": "single_api_blocked", "provider_path": provider or "primary",
+        }
+    except Exception as exc:
+        logger.warning("[QualityGate] single document call unavailable: %s", exc)
+        return {
+            "ok": False, "text": None, "issues": ["single_api_unavailable"],
+            "hard_issues": ["single_api_unavailable"], "warnings": [],
+            "reviewed": False, "degraded": True, "cacheable": False,
+            "path": "single_api_unavailable", "provider_path": "none",
+        }
 
 def ensure_delivery_safe_translation(
     source: str,
@@ -1094,17 +1152,10 @@ def ensure_delivery_safe_translation(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """Final delivery-boundary validator and source-grounded recovery.
+    """Final local-only validation boundary.
 
-    This function is deliberately called *after* every legacy translation path
-    and immediately before LINE delivery.  It does not trust where the candidate
-    came from (LLM, NMT, lexical TM, vector TM, cache, reviewer, OCR or another
-    wrapper).  A candidate is deliverable only after deterministic validation.
-
-    If validation fails, the bad wording is never edited or string-replaced.
-    Instead, a fresh whole-document translation is generated from the source and
-    independently validated.  If no safe candidate exists, the caller receives a
-    clear failure result and must not deliver the unsafe text.
+    No retranslation, reviewer or fallback API is invoked.  Invalid output is
+    blocked and logged so the first-pass contract can be improved at the source.
     """
     source = source or ""
     candidate = (candidate or "").strip()
@@ -1112,51 +1163,22 @@ def ensure_delivery_safe_translation(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
     envelope = protect_immutable_spans(source)
-
-    initial = validate_translation(
+    report = validate_translation(
         source, candidate, src_lang, tgt_lang,
         immutable_literals=envelope.mapping.values(),
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
     )
-    if initial.ok:
-        return {
-            "ok": True, "text": candidate, "issues": initial.issues,
-            "hard_issues": [], "warnings": initial.warnings,
-            "reviewed": False, "degraded": False, "cacheable": True,
-            "path": "final_boundary_validated",
-        }
-
-    repaired = translate_quality_critical_document(
-        source, src_lang, tgt_lang,
-        model=model, glossary_pairs=glossary_pairs, ai_client=ai_client,
-        fallback_translate=fallback_translate,
-    )
-    repaired_text = (repaired.get("text") or "").strip()
-    if repaired.get("ok") and repaired_text:
-        final = validate_translation(
-            source, repaired_text, src_lang, tgt_lang,
-            immutable_literals=envelope.mapping.values(),
-            glossary_pairs=glossary_pairs,
-            require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
-        )
-        if final.ok:
-            return {
-                "ok": True, "text": repaired_text,
-                "issues": _dedupe(initial.issues + repaired.get("issues", []) + final.issues),
-                "hard_issues": [], "warnings": final.warnings,
-                "reviewed": bool(repaired.get("reviewed")),
-                "degraded": bool(repaired.get("degraded")),
-                "cacheable": bool(repaired.get("cacheable", True)),
-                "path": "final_boundary_retranslated:" + str(repaired.get("path", "unknown")),
-            }
-
     return {
-        "ok": False, "text": None,
-        "issues": _dedupe(initial.issues + list(repaired.get("issues", []))),
-        "hard_issues": _dedupe(initial.hard_issues + list(repaired.get("hard_issues", []))),
-        "warnings": initial.warnings, "reviewed": bool(repaired.get("reviewed")),
-        "degraded": True, "cacheable": False, "path": "final_boundary_blocked",
+        "ok": report.ok,
+        "text": candidate if report.ok else None,
+        "issues": report.issues,
+        "hard_issues": report.hard_issues,
+        "warnings": report.warnings,
+        "reviewed": False,
+        "degraded": False,
+        "cacheable": report.ok,
+        "path": "final_local_validation" if report.ok else "final_local_blocked",
     }
 
 def translation_failure_message(tgt_lang: str) -> str:
