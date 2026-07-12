@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.32.1-risk-aware-quality-latency-2026-07-12",
     "schema_version": 2,
-    "state_hash": "716b1064d73ffc5f114a90f8e0041e7d282d9565eb4d8431822a0ff4e25d884e",
-    "updated_at_iso": "2026-07-12T02:31:44.438603+00:00",
-    "updated_at_unix": 1783823504.4386032
+    "state_hash": "c365e35d550c9f504b5bb3130fc59e4f138ea2334479922b2258be8b4baa3d1d",
+    "updated_at_iso": "2026-07-12T02:32:09.417878+00:00",
+    "updated_at_unix": 1783823529.4178784
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -673,7 +673,7 @@
     "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g"
   },
   "video_ocr_enabled": true,
-  "vision_model": "gpt-5.4-mini",
+  "vision_model": "gpt-5.6-terra",
   "welcome_settings": {
     "enabled": true,
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis.",
