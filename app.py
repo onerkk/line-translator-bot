@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.32.8-indonesian-factory-register-2026-07-12"
+VERSION = "v3.32.9-no-silent-failure-2026-07-12"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -255,8 +255,8 @@ import translation_quality_gate as tqg_module  # synchronous provider-neutral in
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 7
-_EXPECTED_QG_BUILD_ID = "2026-07-12.8-indonesian-factory-register"
+_EXPECTED_QG_API_VERSION = 8
+_EXPECTED_QG_BUILD_ID = "2026-07-12.9-delivery-safe-single-call"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -8425,6 +8425,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # 不論使用者勾選什麼進階設定,後端永遠根據實際模型的能力決定要不要送到 API。
         # 任何「誤勾」都會被靜默忽略,不會造成 400 BadRequest。
         _is_reasoning_model = not model_supports(_model, "temperature")  # 保留給下游 code 用
+        # A message can be operationally "long" even when it is under 800
+        # Unicode characters.  Five-paragraph factory announcements were being
+        # routed to the realtime 8-second/provider budget because the old rule
+        # looked only at raw length.  The quality gate already has the correct
+        # structural classifier (paragraphs, announcement type, factory risk),
+        # so use the same decision for timeout selection.
+        _critical_for_latency = bool(
+            getattr(_tl, 'quality_gate_critical', False)
+            or tqg_module.is_quality_critical(text, src, tgt)
+        )
         _kwargs = {
             "model": _model,
             "messages": _msgs,
@@ -8432,7 +8442,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # 30 秒可能不夠(Anthropic client 自帶 120s,但 OpenAI 路徑走這個值)。
             "timeout": 90,
             # v3.32: 即時短訊息與長文使用不同總期限；協調層仍保證每家最多一次。
-            "latency_profile": "long_text" if len(text or "") >= 800 else "realtime_text",
+            "latency_profile": "long_text" if _critical_for_latency else "realtime_text",
             "response_validator": _build_translation_response_validator(text, src, tgt),
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
@@ -9219,6 +9229,132 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
     except Exception as exc:
         logger.exception("[FinalDeliveryGuard] local validation exception: %s", exc)
         return failure_text
+
+
+def _translation_failure_notice(src_lang="zh", target_langs=None):
+    """Visible, non-billable failure response for LINE delivery.
+
+    A translatable message must never disappear silently.  The notice is
+    bilingual for factory groups so both Taiwanese supervisors and Indonesian
+    workers understand that the original message needs to be resent.
+    """
+    targets = set(target_langs or ())
+    if str(src_lang or "").lower().startswith("id") or "id" in targets:
+        return (
+            "⚠️ 翻譯暫時失敗，請稍後重新傳送。\n"
+            "Terjemahan sementara gagal. Silakan kirim ulang beberapa saat lagi."
+        )
+    return "⚠️ 翻譯暫時失敗，請稍後重新傳送。"
+
+
+def _send_reply_with_push_fallback(
+    *,
+    reply_token,
+    target_id,
+    message_obj,
+    fallback_text,
+    retry_key=None,
+    notification_disabled=False,
+):
+    """Send through LINE reply API, then fall back to push if token expired.
+
+    Long translations can legitimately finish after the reply token is no
+    longer usable.  Delivery fallback is independent from AI failover and does
+    not trigger another translation request.
+    """
+    try:
+        with ApiClient(configuration) as api_client:
+            api_line = MessagingApi(api_client)
+            req = ReplyMessageRequest(reply_token=reply_token, messages=[message_obj])
+            if notification_disabled:
+                req.notification_disabled = True
+            try:
+                if retry_key:
+                    response = api_line.reply_message(req, x_line_retry_key=retry_key)
+                else:
+                    response = api_line.reply_message(req)
+            except TypeError:
+                response = api_line.reply_message(req)
+        return response, "reply"
+    except Exception as reply_exc:
+        logger.warning(
+            "LINE reply failed; falling back to push target=%s error=%s",
+            target_id, str(reply_exc)[:300],
+        )
+        try:
+            _event_log_write("line_reply_fallback_push", {
+                "target": str(target_id or "")[-16:],
+                "error": str(reply_exc)[:300],
+            })
+        except Exception:
+            pass
+        with ApiClient(configuration) as api_client:
+            api_line = MessagingApi(api_client)
+            push_msg = TextMessage(text=_clip_line_text(fallback_text))
+            response = api_line.push_message(PushMessageRequest(
+                to=target_id,
+                messages=[push_msg],
+            ))
+        return response, "push"
+
+
+def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
+    """Best-effort visible failure notice for background text/image jobs.
+
+    The mutable context also de-duplicates notices, so one failed background
+    job cannot flood the group while exceptions unwind through several layers.
+    """
+    ctx = ctx or {}
+    if ctx.get("_failure_notice_sent"):
+        return False
+    target_id = ctx.get("group_id") or ctx.get("user_id")
+    if not target_id:
+        return False
+    ctx["_failure_notice_sent"] = True
+    if kind == "image_no_text":
+        text = (
+            "ℹ️ 圖片中未偵測到可翻譯的文字。\n"
+            "Tidak ada teks yang dapat diterjemahkan pada gambar."
+        )
+    elif kind == "image_language":
+        text = (
+            "⚠️ 無法判斷圖片文字的語言，請傳送較清楚的圖片。\n"
+            "Bahasa pada gambar tidak dapat dikenali. Silakan kirim gambar yang lebih jelas."
+        )
+    elif kind == "image":
+        text = (
+            "⚠️ 圖片辨識或翻譯暫時失敗，請稍後重新傳送圖片。\n"
+            "Pengenalan atau terjemahan gambar sementara gagal. Silakan kirim ulang gambarnya."
+        )
+    else:
+        text = _translation_failure_notice("zh", ["id"])
+    msg = TextMessage(text=_clip_line_text(text))
+    quote_token = (ctx or {}).get("quote_token")
+    if quote_token:
+        try:
+            msg.quote_token = quote_token
+        except Exception:
+            pass
+    try:
+        _send_reply_with_push_fallback(
+            reply_token=(ctx or {}).get("reply_token"),
+            target_id=target_id,
+            message_obj=msg,
+            fallback_text=text,
+            notification_disabled=False,
+        )
+        try:
+            _event_log_write("background_failure_notice_sent", {
+                "kind": kind,
+                "detail": str(detail or "")[:200],
+                "target": str(target_id)[-16:],
+            })
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        logger.error("background failure notice could not be delivered: %s", exc)
+        return False
 
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
@@ -13425,6 +13561,7 @@ def handle_message(event):
         text_to_translate, mention_placeholders = protect_mentions(text, line_mentions)
 
     reply = None
+    _translation_failed = False
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
     # Set translation tone for this group
@@ -13468,13 +13605,14 @@ def handle_message(event):
         if lang not in _group_targets:
             # 偵測到的語言沒在這個群組的配置中 → 跳過,當作雜訊不翻
             return
-        # v3.9.57: 長訊息翻譯防護 — try/except + fallback
-        # 長訊息走升級模型(Sonnet 4.6)可能因 API 錯誤/超時無聲失敗,
-        # 加 fallback:失敗時切回短訊息模型(Haiku 4.5)重試一次。
+        # ai_provider owns the only operational failover chain. Do not rerun the
+        # entire translation pipeline with another model here; that duplicated
+        # API cost and could consume the LINE reply-token window.
         try:
             result = translate(text_to_translate, lang, "zh")
         except Exception as _trans_ex:
-            logger.error("[group %s] translate exception (will retry with fallback): %s %s",
+            result = None
+            logger.error("[group %s] translate exception: %s %s",
                          group_id, type(_trans_ex).__name__, str(_trans_ex)[:200])
             try:
                 _event_log_write("translate_exception", {
@@ -13486,25 +13624,6 @@ def handle_message(event):
                 })
             except Exception:
                 pass
-            # Fallback: 強制用短訊息模型重試(Haiku 4.5 快且穩)
-            result = None
-            try:
-                _prov = ai_provider.get_active_provider()
-                _fallback_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
-                logger.info("[group %s] fallback retry with %s", group_id, _fallback_model)
-                # v3.13: 改 thread-local force_model(pick_model 已支援)。
-                # 原本覆蓋 globals()['pick_model'] 是全行程生效 — translate_multi
-                # 並行化後,別的執行緒正在翻譯時會被一起強制降模型。
-                _tl.force_model = _fallback_model
-                try:
-                    result = translate(text_to_translate, lang, "zh")
-                finally:
-                    try:
-                        delattr(_tl, 'force_model')
-                    except Exception:
-                        pass
-            except Exception as _fb_ex:
-                logger.error("[group %s] fallback also failed: %s", group_id, str(_fb_ex)[:200])
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
         if result:
@@ -13518,7 +13637,9 @@ def handle_message(event):
     track_group_usage(group_id, _bp, _bc, _bcost)
 
     if reply is None:
-        # v3.10+ 修補:群組翻譯失敗加 log 才能追,但不發群組噪音
+        # Root rule: a translatable LINE message must never disappear silently.
+        # Provider failover and local validation may legitimately fail, but the
+        # group still receives one visible, non-billable status message.
         logger.warning("[group %s] translate returned empty for lang=%s text=%r",
                        group_id, lang, (text_to_translate or "")[:80])
         try:
@@ -13529,18 +13650,24 @@ def handle_message(event):
             })
         except Exception:
             pass
-        return
+        _translation_failed = True
+        try:
+            _notice_targets = _targets if lang == "zh" else ["zh"]
+        except (NameError, UnboundLocalError):
+            _notice_targets = [tgt]
+        reply = _translation_failure_notice(lang, _notice_targets)
 
     # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
-    try:
-        _trans_count = len(_trs) if (lang == "zh" and _trs) else 1
-    except (NameError, UnboundLocalError):
-        _trans_count = 1
-    _stats_inc("text_translations", _trans_count)
+    if not _translation_failed:
+        try:
+            _trans_count = len(_trs) if (lang == "zh" and _trs) else 1
+        except (NameError, UnboundLocalError):
+            _trans_count = 1
+        _stats_inc("text_translations", _trans_count)
 
     # v3.10: TTS — 若該群組開了 TTS,額外推一條語音訊息
     try:
-        if _tts_text and _tts_lang and get_tts_enabled(group_id):
+        if (not _translation_failed) and _tts_text and _tts_lang and get_tts_enabled(group_id):
             import threading as _tts_thr
             _tts_thr.Thread(target=push_tts_message,
                             args=(group_id, _tts_text, _tts_lang),
@@ -13570,12 +13697,12 @@ def handle_message(event):
 
     # v3.30: 譯文回填引用快取(未來有人回覆這句時,引用框能顯示對方語言)
     try:
-        if '_trs' in dir() and _trs:
-            for _l, _t in _trs.items():
+        if (not _translation_failed) and '_trs' in dir() and _trs:
+            for _l, _t in _trs:
                 _cache_translation(_l, _t)
-        if translated_text:
+        if (not _translation_failed) and translated_text:
             _cache_translation((tgt if lang == "zh" else "zh"), translated_text)
-        if lang != "zh":
+        if (not _translation_failed) and lang != "zh":
             _cache_translation("zh", translated_text)
     except Exception:
         pass
@@ -13587,7 +13714,7 @@ def handle_message(event):
         _is_multi = (lang == "zh" and _trs and len(_trs) > 1)
     except (NameError, UnboundLocalError):
         pass
-    if get_group_feature(group_id, 'flex'):
+    if (not _translation_failed) and get_group_feature(group_id, 'flex'):
         # v3.10: 改用 build_translation_flex_v2 (含 9 個視覺升級開關)
         try:
             _v2_multilang_on = get_flex_v2(group_id, "multilang")
@@ -13628,60 +13755,61 @@ def handle_message(event):
     _use_retry = get_group_feature(group_id, 'retry_key')
     _retry_key = generate_retry_key() if _use_retry else None
 
-    with ApiClient(configuration) as api_client:
-        api_line = MessagingApi(api_client)
-        # v3.8: capture last logged entry id BEFORE reply, so we can map it
-        # to the bot's outgoing message_id for reaction-event feedback.
-        _entry_id_for_reaction = getattr(_tl, 'last_entry_id', None)
-        _reply_resp = None
-        if flex_msg:
-            if qr:
-                flex_msg.quick_reply = qr
-            if custom_sender:
-                flex_msg.sender = custom_sender
-            if qt:
-                try: flex_msg.quote_token = qt
-                except Exception: pass
-            req = ReplyMessageRequest(reply_token=event.reply_token, messages=[flex_msg])
-            if get_group_feature(group_id, 'silent'):
-                req.notification_disabled = True
+    # v3.8: capture last logged entry id BEFORE send, so reaction events can
+    # still be mapped when the reply API succeeds.  If the reply token expired,
+    # the helper falls back to a plain push message instead of dropping the text.
+    _entry_id_for_reaction = getattr(_tl, 'last_entry_id', None)
+    if flex_msg:
+        if qr:
+            flex_msg.quick_reply = qr
+        if custom_sender:
+            flex_msg.sender = custom_sender
+        if qt:
             try:
-                if _retry_key:
-                    _reply_resp = api_line.reply_message(req, x_line_retry_key=_retry_key)
-                else:
-                    _reply_resp = api_line.reply_message(req)
-            except TypeError:
-                _reply_resp = api_line.reply_message(req)
-        else:
-            msg = TextMessage(text=_clip_line_text(reply))
-            if qr:
-                msg.quick_reply = qr
-            if custom_sender:
-                msg.sender = custom_sender
-            if qt:
-                try: msg.quote_token = qt
-                except Exception: pass
-            req = ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])
-            if get_group_feature(group_id, 'silent'):
-                req.notification_disabled = True
+                flex_msg.quote_token = qt
+            except Exception:
+                pass
+        _message_obj = flex_msg
+    else:
+        _message_obj = TextMessage(text=_clip_line_text(reply))
+        if qr:
+            _message_obj.quick_reply = qr
+        if custom_sender:
+            _message_obj.sender = custom_sender
+        if qt:
             try:
-                if _retry_key:
-                    _reply_resp = api_line.reply_message(req, x_line_retry_key=_retry_key)
-                else:
-                    _reply_resp = api_line.reply_message(req)
-            except TypeError:
-                _reply_resp = api_line.reply_message(req)
-        # v3.8: bind every sent_message.id back to the translation entry so
-        # subsequent reactions can be attributed to the correct entry.
-        try:
-            if _reply_resp and _entry_id_for_reaction:
-                sent_msgs = getattr(_reply_resp, 'sent_messages', None) or []
-                for sm in sent_msgs:
-                    sm_id = getattr(sm, 'id', None)
-                    if sm_id:
-                        register_sent_message(sm_id, _entry_id_for_reaction, group_id)
-        except Exception as _re:
-            logger.debug("register_sent_message skipped: %s", _re)
+                _message_obj.quote_token = qt
+            except Exception:
+                pass
+
+    _reply_resp, _delivery_method = _send_reply_with_push_fallback(
+        reply_token=event.reply_token,
+        target_id=group_id,
+        message_obj=_message_obj,
+        fallback_text=reply,
+        retry_key=_retry_key,
+        notification_disabled=get_group_feature(group_id, 'silent'),
+    )
+    try:
+        _event_log_write("text_translation_delivered", {
+            "group_id": group_id or "",
+            "method": _delivery_method,
+            "failed_notice": bool(_translation_failed),
+        })
+    except Exception:
+        pass
+
+    # Only reply responses expose sent-message IDs reliably. Push fallback still
+    # delivers the translation but reaction mapping is best-effort.
+    try:
+        if _reply_resp and _entry_id_for_reaction:
+            sent_msgs = getattr(_reply_resp, 'sent_messages', None) or []
+            for sm in sent_msgs:
+                sm_id = getattr(sm, 'id', None)
+                if sm_id:
+                    register_sent_message(sm_id, _entry_id_for_reaction, group_id)
+    except Exception as _re:
+        logger.debug("register_sent_message skipped: %s", _re)
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -13823,6 +13951,12 @@ def handle_image(event):
     if not _has_ai_capability("vision"):
         _event_log_write("image_aborted", {"reason": "no_vision_provider"})
         logger.warning("No vision-capable AI provider, cannot do image OCR")
+        _send_background_failure_notice({
+            "reply_token": event.reply_token,
+            "quote_token": getattr(event.message, 'quote_token', None),
+            "group_id": group_id,
+            "user_id": user_id,
+        }, kind="image", detail="no_vision_provider")
         return
 
     # v3.9.25: 把整個 OCR + 翻譯 + reply 移到背景 thread,
@@ -13890,10 +14024,12 @@ def _handle_image_background(ctx):
         except Exception as _de:
             _event_log_write("image_step_error", {"step": "download", "err": str(_de)[:300]})
             logger.exception("Image download exception: %s", _de)
+            _send_background_failure_notice(ctx, kind="image", detail="download_exception")
             return
         if not img_base64:
             _event_log_write("image_aborted", {"reason": "download_returned_none"})
             logger.warning("Failed to download image %s", message_id)
+            _send_background_failure_notice(ctx, kind="image", detail="download_empty")
             return
         img_mime = detect_image_mime(img_raw)
         _event_log_write("image_step", {
@@ -13915,6 +14051,7 @@ def _handle_image_background(ctx):
         except Exception as _oe:
             _event_log_write("image_step_error", {"step": "ocr", "err": str(_oe)[:500]})
             logger.exception("OCR exception: %s", _oe)
+            _send_background_failure_notice(ctx, kind="image", detail="ocr_exception")
             return
         _event_log_write("image_step", {
             "step": "ocr_done",
@@ -13938,6 +14075,7 @@ def _handle_image_background(ctx):
 
         if not extracted or len(extracted.strip()) < 2:
             _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
+            _send_background_failure_notice(ctx, kind="image_no_text", detail="ocr_empty")
             return
 
         if _is_factory_reason_ocr_failure_text(extracted):
@@ -14021,6 +14159,7 @@ def _handle_image_background(ctx):
         _event_log_write("image_step", {"step": "lang_detected", "lang": lang})
         if lang is None:
             _event_log_write("image_aborted", {"reason": "lang_is_none"})
+            _send_background_failure_notice(ctx, kind="image_language", detail="lang_none")
             return
 
         # Determine actual translation target
@@ -14081,10 +14220,12 @@ def _handle_image_background(ctx):
             # 超時,放棄等待(thread 會繼續但我們不管它)
             _event_log_write("image_step_error", {"step": "translate", "err": "thread timeout after 50s"})
             logger.error("Translate thread timeout after 50s")
+            _send_background_failure_notice(ctx, kind="image", detail="translate_timeout")
             return
         if _trans_exc[0]:
             _event_log_write("image_step_error", {"step": "translate", "err": str(_trans_exc[0])[:300]})
             logger.exception("Translate exception: %s", _trans_exc[0])
+            _send_background_failure_notice(ctx, kind="image", detail="translate_exception")
             return
         result = _trans_result[0]
         _event_log_write("image_step", {
@@ -14096,6 +14237,7 @@ def _handle_image_background(ctx):
         if not result:
             _event_log_write("image_aborted", {"reason": "translate_returned_empty"})
             track_group_usage(group_id, _bp, _bc, _bcost)
+            _send_background_failure_notice(ctx, kind="image", detail="translate_empty")
             return
 
         reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
@@ -14161,6 +14303,7 @@ def _handle_image_background(ctx):
     except Exception as _bg_e:
         _event_log_write("image_step_error", {"step": "bg_uncaught", "err": str(_bg_e)[:300]})
         logger.exception("[BG] handle_image_background uncaught: %s", _bg_e)
+        _send_background_failure_notice(ctx, kind="image", detail="background_uncaught")
 
 
 def _process_pending_image_translate(event, message_id):
@@ -27868,8 +28011,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     v3.13 速度根治:多目標改並行。原本逐語言串行,每個語言都要跑完整 pipeline
     (embedding lookup + LLM + GE),2 語言 = 2 倍等待、3 語言 = 3 倍。
     並行後總等待 ≈ 最慢的那一個語言。
-    fallback 改用 _tl.force_model(pick_model 已支援),取代原本
-    monkey-patch globals()['pick_model'] — 那在並行下會互相污染模型選擇。
+    供應商容災只由 ai_provider 管理。這一層不再以 force_model
+    重跑整條翻譯管線，避免重複成本與 LINE 回覆逾時。
     """
     real_targets = [t for t in targets if t != src]
     if not real_targets:
@@ -27891,20 +28034,12 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 res = translate(text_to_translate, src, tgt_lang)
             except Exception as e:
                 logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
-                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5.6-luna)重試
-                try:
-                    _prov = ai_provider.get_active_provider()
-                    _fb_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
-                    _tl.force_model = _fb_model
-                    try:
-                        res = translate(text_to_translate, src, tgt_lang)
-                    finally:
-                        try:
-                            delattr(_tl, 'force_model')
-                        except Exception:
-                            pass
-                except Exception as fb_e:
-                    logger.warning("translate_multi fallback also failed tgt=%s: %s", tgt_lang, fb_e)
+                # ai_provider is the only retry/failover owner. Re-running the
+                # entire translation pipeline here used to double the API calls,
+                # exceed LINE's reply window and still end in a silent return.
+                # Keep the failure observable and let the handler send one clear
+                # bilingual failure notice.
+                res = None
             if res and mention_placeholders:
                 try:
                     res = restore_mentions(res, mention_placeholders)

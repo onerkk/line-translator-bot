@@ -25,8 +25,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 7
-QUALITY_GATE_BUILD_ID = "2026-07-12.8-indonesian-factory-register"
+QUALITY_GATE_API_VERSION = 8
+QUALITY_GATE_BUILD_ID = "2026-07-12.9-delivery-safe-single-call"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -478,12 +478,116 @@ def _dedupe(items: Iterable[str]) -> List[str]:
 
 
 def _partition_issues(issues: Sequence[str]) -> Tuple[List[str], List[str]]:
-    warning_prefixes = ("paragraph_count:", "style:")
+    """Separate objective delivery failures from linguistic quality warnings.
+
+    A local heuristic must never make a valid provider response disappear from
+    LINE.  Only objective integrity failures (empty/truncated-like output,
+    missing protected data, wrong target script, severe omission, source-language
+    leakage, etc.) remain hard failures.  Register/readability diagnostics are
+    warnings after the deterministic normalizer has run.
+    """
+    warning_prefixes = (
+        "paragraph_count:",
+        "style:",
+        "overintensified_accusation:",
+        "factory_object_error:",
+        "agency_error:",
+        "repeated_word:",
+        "indonesian_sentence_too_long:",
+        "indonesian_announcement_too_dense:",
+    )
     hard: List[str] = []
     warnings: List[str] = []
     for issue in _dedupe(issues):
         (warnings if issue.startswith(warning_prefixes) else hard).append(issue)
     return hard, warnings
+
+
+def normalize_indonesian_factory_register(
+    source: str,
+    candidate: str,
+    src_lang: str,
+    tgt_lang: str,
+) -> str:
+    """Deterministically normalize recurrent factory-register errors.
+
+    This is source-conditioned concept normalization, not a second translation
+    request and not a sentence lookup table.  The rules apply to any Chinese
+    factory notice containing the corresponding concept, regardless of wording.
+    They are deliberately conservative and touch only target fragments whose
+    meaning is demonstrably wrong or non-standard in this plant.
+    """
+    result = (candidate or "").strip()
+    if not result:
+        return result
+    if not str(src_lang or "").lower().startswith("zh"):
+        return result
+    if not str(tgt_lang or "").lower().startswith("id"):
+        return result
+
+    source = source or ""
+
+    # Standard Indonesian orthography.  Word boundaries avoid changing names or
+    # technical identifiers that merely contain the same character sequence.
+    result = re.sub(r"\bfaham\b", "paham", result, flags=re.I)
+    result = re.sub(r"\bsilahkan\b", "silakan", result, flags=re.I)
+
+    # Management pressure in Chinese workplace notices is commonly a warning
+    # about tighter oversight, not an allegation that management is physically
+    # or unlawfully pressuring workers.
+    if "高層" in source and "施壓" in source:
+        result = re.sub(
+            r"\bmanajemen\s+atas\s+(?:sudah\s+)?mulai\s+menekan\b",
+            "manajemen juga semakin memperhatikan pekerjaan kita",
+            result,
+            flags=re.I,
+        )
+        result = re.sub(
+            r"\bmanajemen\s+atas\b[^.!?\n]{0,35}\bmenekan\b",
+            "manajemen juga semakin memperhatikan pekerjaan kita",
+            result,
+            flags=re.I,
+        )
+
+    # 敷衍 must not be escalated to lying/deception.  When the source explicitly
+    # concerns false production figures, replace the whole accusation fragment
+    # with a neutral, operationally clear data-accuracy instruction.
+    if "敷衍" in source and not any(x in source for x in ("欺騙", "騙人", "說謊")):
+        if any(x in source for x in ("虛假", "數據", "產量", "資料")):
+            result = re.sub(
+                r"Jangan\s+[^.!?\n]{0,220}\b(?:membohongi|menipu)\b[^.!?\n]*[.!?]?",
+                "Jangan membuat atau mengisi data produksi yang tidak sesuai dengan kondisi sebenarnya.",
+                result,
+                flags=re.I,
+            )
+        result = re.sub(
+            r"\b(?:membohongi|menipu)\s+(?:kami|kita)\b",
+            "sekadar memberi laporan kepada kami",
+            result,
+            flags=re.I,
+        )
+
+    # Plant product terminology and agency semantics.
+    if "研磨棒" in source:
+        result = re.sub(r"\bbatang\s+gerinda\b", "grinding rod", result, flags=re.I)
+    if "無法配合" in source:
+        result = re.sub(
+            r"\btidak\s+bisa\s+(?:mengikuti|mematuhi)\s+(?:peraturan|aturan)(?:\s+kerja)?\b",
+            "tidak mau mematuhi aturan kerja",
+            result,
+            flags=re.I,
+        )
+
+    # Collapse accidental adjacent duplicate words locally.  This is safe for
+    # ordinary Indonesian prose and prevents a harmless typo from blocking the
+    # entire group reply.
+    result = re.sub(
+        r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{2,})\s+\1\b",
+        r"\1",
+        result,
+        flags=re.I,
+    )
+    return result.strip()
 
 
 def _normalize_data_atom(value: str) -> str:
@@ -960,6 +1064,9 @@ def review_translation(
     """
     if not source or not candidate:
         return None
+    candidate = normalize_indonesian_factory_register(
+        source, candidate, src_lang, tgt_lang
+    )
     report = validate_translation(
         source, candidate, src_lang, tgt_lang,
         glossary_pairs=_merge_runtime_glossary_pairs(
@@ -989,6 +1096,9 @@ def gate_and_revise(
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
+    )
+    candidate = normalize_indonesian_factory_register(
+        source, candidate, src_lang, tgt_lang
     )
     report = validate_translation(
         source, candidate, src_lang, tgt_lang,
@@ -1050,6 +1160,9 @@ def _finalize_protected_candidate(
     if not protected_report.ok:
         return None, protected_report
     restored = restore_immutable_spans(canonical, envelope.mapping).strip()
+    restored = normalize_indonesian_factory_register(
+        source, restored, src_lang, tgt_lang
+    )
     final_report = validate_translation(
         source, restored, src_lang, tgt_lang,
         immutable_literals=envelope.mapping.values(),
@@ -1158,7 +1271,9 @@ def ensure_delivery_safe_translation(
     blocked and logged so the first-pass contract can be improved at the source.
     """
     source = source or ""
-    candidate = (candidate or "").strip()
+    candidate = normalize_indonesian_factory_register(
+        source, candidate, src_lang, tgt_lang
+    )
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
