@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.32.1-risk-aware-quality-latency-2026-07-12",
-    "schema_version": 2,
-    "state_hash": "c365e35d550c9f504b5bb3130fc59e4f138ea2334479922b2258be8b4baa3d1d",
-    "updated_at_iso": "2026-07-12T02:32:09.417878+00:00",
-    "updated_at_unix": 1783823529.4178784
+    "app_version": "v3.32.3-three-provider-zero-touch-defaults-2026-07-12",
+    "schema_version": 4,
+    "state_hash": "c6f30f40266c6c8b55bda507b26ec8c202425ef03ce63884005d66fb3a618648",
+    "updated_at_iso": "2026-07-12T02:58:51.661340+00:00",
+    "updated_at_unix": 1783825131.6613405
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -49,7 +49,7 @@
   },
   "ai_active_provider": "anthropic",
   "ai_gemini_features": {
-    "reasoning_effort": "low"
+    "reasoning_effort": "minimal"
   },
   "ai_gemini_models": {
     "default": "gemini-3.1-flash-lite",
@@ -127,7 +127,7 @@
       "upgrade_model": "gemini-3.5-flash"
     },
     "gemini_features": {
-      "reasoning_effort": "low"
+      "reasoning_effort": "minimal"
     },
     "gemini_model_mapping": {
       "gpt-4.1": "gemini-3.5-flash",
@@ -142,19 +142,19 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-12 02:27:42",
+    "last_updated": "2026-07-12 02:58:50",
     "model_mapping": {
-      "gpt-4.1": "claude-sonnet-4-6",
+      "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
-      "gpt-4o": "claude-sonnet-4-6",
+      "gpt-4o": "claude-sonnet-5",
       "gpt-4o-mini": "claude-haiku-4-5-20251001",
       "gpt-5.4": "claude-sonnet-5",
       "gpt-5.4-mini": "claude-haiku-4-5-20251001",
       "gpt-5.4-nano": "claude-haiku-4-5-20251001",
       "gpt-5.5": "claude-sonnet-5",
       "gpt-5.6-luna": "claude-haiku-4-5-20251001",
-      "gpt-5.6-sol": "claude-opus-4-7",
-      "gpt-5.6-terra": "claude-sonnet-4-6"
+      "gpt-5.6-sol": "claude-sonnet-5",
+      "gpt-5.6-terra": "claude-sonnet-5"
     },
     "openai": {
       "base_url": null
@@ -188,9 +188,9 @@
   },
   "camera_qr_enabled": false,
   "camera_roll_qr_enabled": false,
-  "claude_auto_switch_enabled": false,
+  "claude_auto_switch_enabled": true,
   "claude_model_default": "claude-haiku-4-5-20251001",
-  "claude_model_upgrade": "claude-haiku-4-5-20251001",
+  "claude_model_upgrade": "claude-sonnet-5",
   "clipboard_qr_enabled": true,
   "confidence_threshold": 0.85,
   "custom_translation_examples": [
@@ -480,7 +480,7 @@
   "logprobs_enabled": true,
   "mark_read_enabled": true,
   "model_default": "gpt-5.6-luna",
-  "model_threshold": 500,
+  "model_threshold": 150,
   "model_upgrade": "gpt-5.6-terra",
   "multi_path_backtrans_enabled": false,
   "multi_path_min_chars": 60,
