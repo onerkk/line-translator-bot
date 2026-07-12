@@ -32,6 +32,8 @@ import re
 from collections import defaultdict
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
+import glossary_policy as gp_module
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -70,9 +72,7 @@ _stats = {
 # 核心檢查
 # ═══════════════════════════════════════════════════════════════════
 def _extract_target_term(term_value: Any) -> str:
-    if isinstance(term_value, dict):
-        return str(term_value.get("idn", "") or "").strip()
-    return str(term_value or "").strip()
+    return gp_module.canonical_target(term_value)
 
 
 def _normalize_reverse_term(term: str) -> str:
@@ -116,13 +116,16 @@ def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, st
     """
     candidates: Dict[str, List[Tuple[str, str, Any]]] = defaultdict(list)
     for zh_term, value in (glossary or {}).items():
-        target = _extract_target_term(value)
+        row = gp_module.normalize_entry(str(zh_term), value)
+        if not gp_module.is_hard(row):
+            continue
+        target = _extract_target_term(row)
         norm = _normalize_reverse_term(target)
         if not zh_term or not target or len(norm) < GE_MIN_TERM_LEN:
             continue
-        if _reverse_metadata(value, "reverse_safe", None) is False:
+        if _reverse_metadata(row, "reverse_safe", None) is False:
             continue
-        candidates[norm].append((str(zh_term), target, value))
+        candidates[norm].append((str(zh_term), target, row))
 
     safe: Dict[str, Dict[str, str]] = {}
     for norm, rows in candidates.items():
@@ -159,7 +162,8 @@ def build_unsafe_reverse_ui_targets(glossary: Dict[str, Any]) -> set[str]:
     }
     unsafe: set[str] = set()
     for zh_term, value in (glossary or {}).items():
-        target = _extract_target_term(value)
+        row = gp_module.normalize_entry(str(zh_term), value)
+        target = _extract_target_term(row)
         if not zh_term or not target:
             continue
         if _looks_like_ui_label(str(zh_term)) and str(zh_term) not in safe_targets:
@@ -199,10 +203,11 @@ def collect_applicable_pairs(src_text: str, glossary: Dict[str, Any],
     is_id_to_zh = src_lang.lower().startswith("id") and tgt_lang.lower().startswith("zh")
     pairs: List[Tuple[str, str]] = []
     if is_zh_to_id:
-        for zh_term, value in (glossary or {}).items():
-            target = _extract_target_term(value)
-            if zh_term and target and len(zh_term) >= GE_MIN_TERM_LEN and zh_term in src_text:
-                pairs.append((str(zh_term), target))
+        # Only compact canonical terms may become deterministic substring
+        # constraints.  Explanations and context-sensitive action phrases are
+        # deliberately left to the translator so Indonesian grammar can inflect
+        # naturally.
+        pairs.extend(gp_module.hard_pairs(src_text, glossary, limit=100))
     elif is_id_to_zh:
         norm_source = _normalize_reverse_term(src_text)
         for norm, row in build_safe_reverse_index(glossary).items():

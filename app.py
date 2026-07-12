@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.32.3-three-provider-zero-touch-defaults-2026-07-12"
+VERSION = "v3.32.4-natural-indonesian-glossary-policy-2026-07-12"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -248,14 +248,15 @@ import auto_post_edit as ape_module           # Phase E: LLM-based Auto Post-Edi
 import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 # v3.9.40 Phase H-M: 業界更深度整合
 import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
+import glossary_policy as gp_module             # canonical vs explanatory terminology policy
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 2
-_EXPECTED_QG_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
+_EXPECTED_QG_API_VERSION = 3
+_EXPECTED_QG_BUILD_ID = "2026-07-12.4-natural-indonesian-glossary-policy"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -1056,8 +1057,8 @@ TONE_PRESETS = {
         "你是工廠現場中印翻譯助理，專門處理台灣工廠工作群組、現場指令、品質異常、站別流轉、工單、TAG、PMI、包裝、混料、入站、資料輸入等訊息。"
         "你的任務不是逐字翻譯，而是把中文準確翻成「印尼工廠現場員工一看就懂、實際會用」的自然印尼文。請嚴格遵守以下規則："
         "【最高優先規則】"
-        "1. 只要範例表/內建範例已有對應詞、對應句、固定說法，必須優先套用，不可改寫，不可換同義詞，不可自創新翻法。"
-        "2. 若輸入句子中包含範例表已有的片語或句型，優先沿用範例表的翻法，再補齊其他部分。"
+        "1. 只有標記為「硬性術語」的簡短標準詞才可逐字強制套用；詞庫中的說明句、備註、替代說法與舊範例只能用來理解語意，絕對不可直接複製進譯文。"
+        "2. 範例表只提供情境與慣用法。先忠實理解本次原文，再用印尼員工自然會說、能立即理解的句子重寫；不得讓舊範例凌駕本次原意。"
         "3. 若範例表已有專有詞定義，例如 PMI、工單、TAG、混料、站別等專有詞，必須依範例表理解，不可用一般字典義亂翻；像「入完了」「不擋」「無主」「放料」這類工廠動作慣用語，也必須依範例表的工廠脈絡解讀，不可從字面直翻。"
         "【翻譯風格規則】"
         "4. 一律使用印尼工廠現場自然口吻，簡短、直接、清楚，像主管或同事在工作群組講話。"
@@ -1086,11 +1087,11 @@ TONE_PRESETS = {
         "14. 若原文是短句，就翻成短句；若原文是群組公告，就翻成可直接貼群組的公告語氣。"
         "15. 若原文已經是明顯命令句、提醒句、異常句，翻譯後必須保留同等強度，不可弱化。"
         "【品質優先規則】"
-        "16. 翻譯優先順序為：範例表固定翻法 > 工廠現場正確語意 > 印尼員工可懂度 > 文法自然 > 字面對應"
+        "16. 翻譯優先順序為：本次原文完整語意 > 硬性標準術語 > 印尼員工可懂度 > 自然標準印尼文 > 風格與字面對應。"
         "17. 寧可翻得直白清楚，也不要翻得漂亮卻不符合現場。"
         "18. 若一句中文有歧義，請優先依「工廠製造、站別流轉、工單、包裝、品質異常、鋼材/棒材、分光檢測」脈絡判斷最合理意思後再翻。"
         "19. 若輸入是繁中口語群組訊息，請預設場景為工廠工作群組，不要用日常聊天語境解讀。"
-        "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。"
+        "20. 全程維持同一套翻譯標準，不因句長變動口吻，不因句子簡短就隨便翻。長公告必須使用簡短句子與清楚段落，明確交代「誰、要做什麼、原因、後果」；禁止照中文語序硬翻、禁止把術語說明句當成正文、禁止無必要的中英印混寫。"
         "21. CRITICAL: 翻譯前先判斷說話者的情感方向(道歉/感謝/請求/警告/抱怨/承諾/通報)，確認後再翻；不要被 emoji(尤其 🙏)誤導，不要看到第一個合理選項就停。"
         "22. THINK-BEFORE-TRANSLATE (Chain-of-thought, internal): Before producing the final translation, internally consider these checks (don't output them, only output final translation): "
         "(a) Who is the speaker? (manager/worker/admin) "
@@ -5092,9 +5093,18 @@ def inject_glossary_hint(text, src, tgt):
             if k in text:
                 v = GLOSSARY_LOOKUP[k]
                 if _to_id:
-                    idn = v.get("idn", "") if isinstance(v, dict) else str(v)
-                    if idn:
-                        hits.append(f"{k}={idn}")
+                    _row = gp_module.normalize_entry(k, v)
+                    _target = gp_module.canonical_target(_row)
+                    _mode = gp_module.translation_mode(_row)
+                    if _target and _mode == "hard":
+                        hits.append(f"[硬性術語] {k}={_target}")
+                        seen.add(k)
+                    elif _target and _mode == "soft":
+                        _note = (_row.get("note_id") or _row.get("note_zh") or "")[:80]
+                        hits.append(
+                            f"[語意提示，不可逐字複製] {k}≈{_target}"
+                            + (f"（{_note}）" if _note else "")
+                        )
                         seen.add(k)
                 else:
                     _note = (v.get("note_zh", "") if isinstance(v, dict) else "")[:30]
@@ -5144,7 +5154,9 @@ def inject_glossary_hint(text, src, tgt):
                 break
     if not hits:
         return ""
-    return " 【冷抽課專有名詞對照(必須遵守)】" + "; ".join(hits) + ". "
+    return (" 【工廠術語政策】只有標記為[硬性術語]的目標詞必須原樣使用；"
+            "[語意提示]只用來理解，不可把說明句或替代詞直接塞進譯文。"
+            + "; ".join(hits) + ". ")
 
 
 def _find_idn_word_spans(norm_text, idn_key):
@@ -7687,6 +7699,11 @@ if os.path.exists(_glossary_json_path):
 else:
     logger.info("Using embedded glossary: %d terms", len(GLOSSARY_LOOKUP))
 
+# v3.32.4: The glossary is a mixed knowledge base.  Normalize it once so every
+# consumer sees the same canonical/soft/disabled policy; descriptions are never
+# silently promoted to mandatory output text.
+GLOSSARY_LOOKUP = gp_module.normalize_glossary(GLOSSARY_LOOKUP)
+
 # ★ v2.0: 把 glossary 註冊給 ai_provider,啟用 Claude grounding 能力
 try:
     ai_provider.register_glossary(GLOSSARY_LOOKUP)
@@ -7752,8 +7769,11 @@ def seed_glossary_into_tm():
         except Exception:
             purged_unsafe_vec = 0
         for zh_term, v in GLOSSARY_LOOKUP.items():
-            idn_raw = v.get("idn", "") if isinstance(v, dict) else str(v)
-            term = _clean_glossary_idn_term(idn_raw)
+            _row = gp_module.normalize_entry(zh_term, v)
+            if not gp_module.is_hard(_row):
+                skipped += 1
+                continue
+            term = gp_module.canonical_target(_row)
             if not term:
                 skipped += 1
                 continue
@@ -24100,11 +24120,11 @@ def api_admin_tbx_import():
             idn = entry["id"]
             if zh and idn:
                 if zh not in GLOSSARY_LOOKUP:
-                    GLOSSARY_LOOKUP[zh] = {
+                    GLOSSARY_LOOKUP[zh] = gp_module.normalize_entry(zh, {
                         "idn": idn,
                         "note_zh": entry.get("note_zh", ""),
                         "note_id": entry.get("note_id", ""),
-                    }
+                    })
                     added += 1
         # 寫回 ai_provider glossary
         try:
@@ -26156,7 +26176,10 @@ def api_admin_glossary_upload():
                 sheets_processed += 1
         if not new_data:
             return jsonify({"error": "無法解析 Excel,請確認格式:\n欄 B=中文名稱 欄 C=印尼名稱 欄 D=中文說明 欄 E=印尼說明,從第 4 列起"}), 400
-        # Update in-memory
+        # Update in-memory through the same central policy used at startup.
+        # This prevents an uploaded descriptive row from becoming a mandatory
+        # literal phrase in prompts/TM/enforcement.
+        new_data = gp_module.normalize_glossary(new_data)
         GLOSSARY_LOOKUP = new_data
         logger.info("Glossary updated via admin: %d terms from %d sheets", len(new_data), sheets_processed)
         # ★ v2.0: 重新註冊給 ai_provider

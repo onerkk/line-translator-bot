@@ -22,11 +22,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+import glossary_policy as gp_module
+
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 2
-QUALITY_GATE_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
+QUALITY_GATE_API_VERSION = 3
+QUALITY_GATE_BUILD_ID = "2026-07-12.4-natural-indonesian-glossary-policy"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -450,6 +452,59 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
     return (text or "").count(atom)
 
 
+
+def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -> List[str]:
+    """Reject structurally valid but operationally unreadable Indonesian.
+
+    These checks are generic: no source sentence is translated here. They catch
+    stale glossary definitions, duplicated mention markers and dense Chinese-
+    syntax announcements that workers cannot scan reliably.
+    """
+    issues: List[str] = []
+    source = source or ""
+    candidate = candidate or ""
+    low = candidate.casefold()
+
+    if "@@" not in source and re.search(r"(?<!@)@@+", candidate):
+        issues.append("duplicated_mention_marker")
+
+    for phrase in gp_module.deprecated_indonesian_phrases():
+        if phrase.casefold() in low:
+            issues.append(f"deprecated_glossary_phrase:{phrase}")
+
+    duplicate = re.search(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{2,})\s+\1\b", candidate, re.I)
+    if duplicate:
+        issues.append(f"repeated_word:{duplicate.group(1).casefold()}")
+
+    source_han = len(_HAN_RE.findall(source))
+    words = re.findall(r"\b[A-Za-zÀ-ÖØ-öø-ÿ]{2,}\b", candidate)
+    if source_han >= 60 and len(words) >= 45:
+        units = [
+            part.strip()
+            for part in re.split(r"(?:[.!?]+\s*|\n+)", candidate)
+            if part.strip()
+        ]
+        unit_lengths = [len(re.findall(r"\b[A-Za-zÀ-ÖØ-öø-ÿ]{2,}\b", unit)) for unit in units]
+        if unit_lengths and max(unit_lengths) > 55:
+            issues.append(f"indonesian_sentence_too_long:{max(unit_lengths)}")
+        if len(words) >= 65 and len(units) < 3:
+            issues.append(f"indonesian_announcement_too_dense:{len(units)}")
+
+    return _dedupe(issues)
+
+
+def _indonesian_clarity_instruction(tgt_lang: str) -> str:
+    if not str(tgt_lang or "").lower().startswith("id"):
+        return ""
+    return (
+        " Write simple, standard Indonesian that an Indonesian factory worker can understand immediately. "
+        "Do not mirror Chinese word order. For announcements, use short sentences and clear paragraphs; "
+        "state the actor, required action, reason and consequence explicitly when they exist in the source. "
+        "Avoid unnecessary English or Chinese; retain only approved plant terms/codes such as work order, "
+        "shift, model numbers and immutable identifiers. Glossary descriptions and notes are semantic context, "
+        "not phrases to paste into the translation. Only explicit hard terminology pairs are literal constraints."
+    )
+
 def validate_translation(
     source: str,
     candidate: str,
@@ -538,6 +593,8 @@ def validate_translation(
             issues.append("target_script_missing")
         if source_han >= 80 and latin_words < max(20, int(source_han * 0.22)):
             issues.append("catastrophic_omission")
+        if src.startswith("zh"):
+            issues.extend(_indonesian_readability_issues(source, candidate, src))
 
     issues = _dedupe(issues)
     hard, warnings = _partition_issues(issues)
@@ -638,7 +695,7 @@ def _build_review_messages(
         "minor paragraph reflow is allowed only when meaning is unchanged. Apply only explicitly supplied "
         "terminology pairs. No ordinary source-language word may remain untranslated merely because it appears "
         "in the source. Retain Latin text only when it is an immutable identifier, a real proper name, a product/model "
-        "code, or an explicit target-side glossary term." + annotation_rule + " Output "
+        "code, or an explicit target-side glossary term." + annotation_rule + _indonesian_clarity_instruction(tgt_lang) + " Output "
         "only the final translation."
     )
     user = (
@@ -682,7 +739,7 @@ def _build_translation_messages(
         "Do not translate, rename, split or decorate these tokens. Use only explicit unambiguous glossary pairs; "
         "never infer a reversed mapping from a common word. No ordinary source-language word may remain untranslated; "
         "retain Latin text only for immutable identifiers, real proper names, product/model codes, or explicit target-side "
-        "glossary terms." + annotation_rule + " Do not summarize, explain, add headings, mix languages or output "
+        "glossary terms." + annotation_rule + _indonesian_clarity_instruction(tgt_lang) + " Do not summarize, explain, add headings, mix languages or output "
         "alternatives. Output only the complete translation."
     )
     user = (

@@ -106,6 +106,8 @@ import json
 import time
 import threading
 
+import glossary_policy as gp_module
+
 # ═══════════════════════════════════════════════════════════════════
 # 設定檔路徑
 # ═══════════════════════════════════════════════════════════════════
@@ -1090,8 +1092,8 @@ def _pick_thinking_config(features, anthropic_model):
 def register_glossary(glossary_dict):
     global _registered_glossary
     if isinstance(glossary_dict, dict):
-        _registered_glossary = glossary_dict
-        print(f"[ai_provider] ✅ 註冊 glossary,共 {len(glossary_dict)} 條工廠術語", flush=True)
+        _registered_glossary = gp_module.normalize_glossary(glossary_dict)
+        print(f"[ai_provider] ✅ 註冊 glossary,共 {len(_registered_glossary)} 條工廠術語", flush=True)
 
 
 def _find_relevant_glossary_terms(messages, max_items=50):
@@ -1120,15 +1122,23 @@ def _build_glossary_search_results(matched_terms, citations_enabled=True):
         return []
     blocks = []
     for term, info in matched_terms:
-        idn = info.get("idn", "") if isinstance(info, dict) else str(info)
-        note_zh = info.get("note_zh", "") if isinstance(info, dict) else ""
-        note_id = info.get("note_id", "") if isinstance(info, dict) else ""
+        row = gp_module.normalize_entry(term, info)
+        idn = gp_module.canonical_target(row)
+        mode = gp_module.translation_mode(row)
+        note_zh = row.get("note_zh", "")
+        note_id = row.get("note_id", "")
 
-        content = f"中文術語:{term}\n標準印尼譯:{idn}"
+        if mode == "hard":
+            content = f"中文術語:{term}\n類型:硬性標準術語\n必須使用的印尼詞:{idn}"
+        elif mode == "soft":
+            content = (f"中文概念:{term}\n類型:語意提示（不可逐字複製說明）"
+                       f"\n建議概念表達:{idn}")
+        else:
+            continue
         if note_zh:
-            content += f"\n中文說明:{note_zh}"
+            content += f"\n中文說明（只供理解）:{note_zh}"
         if note_id:
-            content += f"\n印尼補充:{note_id}"
+            content += f"\n印尼說明（只供理解）:{note_id}"
 
         blocks.append({
             "type": "search_result",
@@ -1306,16 +1316,18 @@ def _build_glossary_text():
         return ""
     lines = ["# 工廠術語對照表(中文 → 印尼文)\n"]
     for term, info in _registered_glossary.items():
-        if isinstance(info, dict):
-            idn = info.get("idn", "")
-            note_zh = info.get("note_zh", "")
-            note_id = info.get("note_id", "")
-        else:
-            idn = str(info)
-            note_zh = ""
-            note_id = ""
+        row = gp_module.normalize_entry(term, info)
+        idn = gp_module.canonical_target(row)
+        mode = gp_module.translation_mode(row)
+        note_zh = row.get("note_zh", "")
+        note_id = row.get("note_id", "")
+        if not idn or mode == "disabled":
+            continue
         lines.append(f"\n## {term}")
-        lines.append(f"標準印尼譯:{idn}")
+        if mode == "hard":
+            lines.append(f"類型:硬性標準術語\n必須使用的印尼詞:{idn}")
+        else:
+            lines.append(f"類型:語意提示（不可逐字複製說明）\n建議概念表達:{idn}")
         if note_zh:
             lines.append(f"中文說明:{note_zh}")
         if note_id:
@@ -1461,7 +1473,8 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
         appended_parts.append(
             "<glossary_priority>\n"
             "如果訊息中內附 search_result 標籤(工廠術語表),"
-            "務必引用裡面的「標準印尼譯」作為翻譯,不要自己另創譯法。\n"
+            "只有標記為「硬性標準術語」的詞必須原樣使用。標記為「語意提示」的內容只用來理解概念，\n"
+            "不得逐字複製說明句、備註或替代說法；應依本句文法寫成自然、清楚的標準印尼文。\n"
             "</glossary_priority>\n"
         )
         # 條件補:line_plain / ocr_strict / cot_tag / success_criteria(Anthropic 專屬)
@@ -1565,7 +1578,8 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
         "<rules>\n" + raw_system.strip() + "\n</rules>\n",
         "<glossary_priority>\n"
         "如果訊息中內附 search_result 標籤(工廠術語表),"
-        "務必引用裡面的「標準印尼譯」作為翻譯,不要自己另創譯法。\n"
+        "只有標記為「硬性標準術語」的詞必須原樣使用。標記為「語意提示」的內容只用來理解概念，\n"
+            "不得逐字複製說明句、備註或替代說法；應依本句文法寫成自然、清楚的標準印尼文。\n"
         "</glossary_priority>\n",
         output_format_text,
     ]
@@ -1576,7 +1590,7 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
             "<success_criteria>\n"
             "成功的翻譯必須符合以下所有標準:\n"
             "1. 完整性:原文每個意思都被翻出,不漏不增\n"
-            "2. 術語精準:工廠術語用 glossary 標準譯,非自創\n"
+            "2. 術語精準:硬性 glossary 詞照標準譯；軟性說明只供理解，不可直接貼入譯文\n"
             "3. 風格相符:工廠口語場景用口語,工單正式場景用正式\n"
             "4. 人名/料號/敬稱原樣保留(Pak/Bu/Mas/Mbak,徐嘉騰,A2-001)\n"
             "5. 格式對應:原文一行 → 譯文一行;原文編號 → 譯文相同編號\n"
