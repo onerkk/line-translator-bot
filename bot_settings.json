@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.32.1-risk-aware-quality-latency-2026-07-12",
     "schema_version": 2,
-    "state_hash": "8aa7bb258a0f3f7f49e4fef1771755de6abb6d0bcc45dc5d7dcb700819e09c53",
-    "updated_at_iso": "2026-07-12T02:30:40.919348+00:00",
-    "updated_at_unix": 1783823440.919348
+    "state_hash": "716b1064d73ffc5f114a90f8e0041e7d282d9565eb4d8431822a0ff4e25d884e",
+    "updated_at_iso": "2026-07-12T02:31:44.438603+00:00",
+    "updated_at_unix": 1783823504.4386032
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -479,9 +479,9 @@
   "location_translate_enabled": true,
   "logprobs_enabled": true,
   "mark_read_enabled": true,
-  "model_default": "gpt-5.4-mini",
+  "model_default": "gpt-5.6-luna",
   "model_threshold": 500,
-  "model_upgrade": "gpt-5.4-mini",
+  "model_upgrade": "gpt-5.6-terra",
   "multi_path_backtrans_enabled": false,
   "multi_path_min_chars": 60,
   "openai_24h_cache_enabled": false,
