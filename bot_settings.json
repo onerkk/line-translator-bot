@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.32.3-three-provider-zero-touch-defaults-2026-07-12",
     "schema_version": 4,
-    "state_hash": "c6f30f40266c6c8b55bda507b26ec8c202425ef03ce63884005d66fb3a618648",
-    "updated_at_iso": "2026-07-12T02:58:51.661340+00:00",
-    "updated_at_unix": 1783825131.6613405
+    "state_hash": "a9a0e1ad94299457458fde3502c0dffecdb7af44e8edd149b0bf2ed5f3a99121",
+    "updated_at_iso": "2026-07-12T03:04:21.782850+00:00",
+    "updated_at_unix": 1783825461.7828498
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -394,7 +394,7 @@
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cd188e1adc7792e407c90f3fa78850316": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+    "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_location_qr_settings": {},
   "group_location_settings": {},
