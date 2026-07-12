@@ -123,26 +123,28 @@ PROVIDER_CONFIG_PATH = _resolve_provider_config_path()
 # 後台只提供仍在服役、適合文字/圖片翻譯的模型。舊設定不直接丟棄，
 # 而是在呼叫前遷移到官方建議替代型號，避免重新部署後因舊 model id 404。
 ACTIVE_OPENAI_TRANSLATION_MODELS = (
-    "gpt-5.4-mini",   # 一般翻譯首選：速度、品質、成本平衡
-    "gpt-4.1-mini",   # 穩定的非推理翻譯模型
-    "gpt-5.4-nano",   # 大量簡短訊息 / 最低成本
-    "gpt-4.1",        # 高一致性非推理模型
-    "gpt-5.4",        # 長公告、複雜工廠語境
-    "gpt-5.5",        # 最高品質，成本最高
+    "gpt-5.6-luna",   # 即時、高量翻譯：官方定位為 fast / high-volume
+    "gpt-5.6-terra",  # 品質與成本平衡：長公告、複雜工廠語境
+    "gpt-5.6-sol",    # 最高品質選項；成本較高，不作一般預設
+    "gpt-5.4-mini",   # 低成本相容選項
+    "gpt-5.4-nano",   # 最低成本輔助任務
+    "gpt-4.1-mini",   # 穩定非推理相容選項
+    "gpt-4.1",
 )
 ACTIVE_OPENAI_VISION_MODELS = (
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
     "gpt-5.4-mini",
     "gpt-4.1-mini",
     "gpt-5.4-nano",
     "gpt-4.1",
-    "gpt-5.4",
-    "gpt-5.5",
 )
-DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
-DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-5.4"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
+DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-5.6-terra"
 DEFAULT_OPENAI_AUX_MODEL = "gpt-5.4-nano"
-DEFAULT_OPENAI_VISION_MODEL = "gpt-5.4-mini"
-DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_VISION_MODEL = "gpt-5.6-terra"
+DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-5.6-luna"
 # GPT-4o mini TTS family is deprecated. Use the still-active Speech API model
 # tts-1 by default; keep tts-1-hd as an optional quality-first choice.
 DEFAULT_OPENAI_TTS_MODEL = "tts-1"
@@ -154,6 +156,11 @@ ACTIVE_OPENAI_TTS_MODELS = (
 # 官方 deprecations 頁面列出的替代關係，以及本專案過去曾產生的無效名稱。
 # floating alias 的遷移是本專案的主動升級政策；dated snapshot 的替代則依官方公告。
 OPENAI_MODEL_REPLACEMENTS = {
+    # v3.32 model policy: migrate floating GPT-5 aliases to the current
+    # production family while preserving older explicit cost choices.
+    "gpt-5.6": "gpt-5.6-sol",
+    "gpt-5.5": "gpt-5.6-sol",
+    "gpt-5.4": "gpt-5.6-terra",
     # 2026-12-11 shutdown（官方替代）
     "gpt-5-2025-08-07": "gpt-5.5",
     "gpt-5-mini-2025-08-07": "gpt-5.4-mini",
@@ -181,8 +188,8 @@ OPENAI_MODEL_REPLACEMENTS = {
     "gpt-5.1-codex-mini": "gpt-5.4-mini",
     "gpt-5.2-codex": "gpt-5.5",
     # 本專案舊選單 / 過去程式可能留下的名稱
-    "gpt-5": "gpt-5.5",
-    "gpt-5-mini": "gpt-5.4-mini",
+    "gpt-5": "gpt-5.6-sol",
+    "gpt-5-mini": "gpt-5.6-terra",
     "gpt-5-nano": "gpt-5.4-nano",
     "gpt-5.1": "gpt-5.4",
     "gpt-5.2": "gpt-5.4",
@@ -209,7 +216,17 @@ def normalize_openai_model(model, fallback=None, allowed=None):
     low = raw.lower()
     if low.startswith(("claude-", "gemini")):
         return raw
-    normalized = OPENAI_MODEL_REPLACEMENTS.get(low, raw)
+    normalized = raw
+    # Some historical IDs map to an intermediate floating alias. Resolve a
+    # short chain so a retired snapshot never survives just because the first
+    # replacement itself was later superseded.
+    seen = set()
+    for _ in range(4):
+        key = str(normalized).lower()
+        if key in seen or key not in OPENAI_MODEL_REPLACEMENTS:
+            break
+        seen.add(key)
+        normalized = OPENAI_MODEL_REPLACEMENTS[key]
     if allowed is not None and normalized not in tuple(allowed):
         return fallback
     return normalized
@@ -261,6 +278,28 @@ DEFAULT_CONFIG = {
     # 背景執行緒不在使用者等待路徑上 = 零感知省 50%。
     # v3.26: 跨 provider 自動容錯移轉(主力限流/過載/連線失敗時換備援家救句子)
     "provider_failover": True,
+    # 單一協調層負責跨 provider 接力。所有 provider 共用一個總期限，
+    # 避免「外層重試 × 三家切換 × SDK 內建重試」把單句拖到數分鐘。
+    "failover_policy": {
+        "total_timeout_seconds": 60,
+        "per_provider_timeout_seconds": 24,
+        "circuit_breaker_failures": 2,
+        "circuit_breaker_cooldown_seconds": 60,
+        "provider_order": ["openai", "gemini", "anthropic"],
+        # Real-time LINE messages need a much tighter tail-latency budget than
+        # long documents or OCR.  Callers select one profile; the old two
+        # timeout fields remain as backwards-compatible fallbacks.
+        "latency_profiles": {
+            "realtime_text": {"total": 22, "per_provider": 8},
+            "long_text": {"total": 40, "per_provider": 16},
+            "vision": {"total": 50, "per_provider": 20},
+            "background": {"total": 90, "per_provider": 45},
+        },
+        # Active provider is always tried first. Backups are ordered by recent
+        # EWMA latency so the second attempt is the most likely fast recovery.
+        "adaptive_backup_order": True,
+        "latency_ewma_alpha": 0.25,
+    },
     # v3.28: 額度耗盡 → 永久切換主力 + LINE 通知管理員
     "auto_switch_on_exhaust": True,
     "openai_features": {
@@ -273,6 +312,9 @@ DEFAULT_CONFIG = {
     },
     # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
     "gemini_model_mapping": {
+        "gpt-5.6-luna": "gemini-3.1-flash-lite",
+        "gpt-5.6-terra": "gemini-3.5-flash",
+        "gpt-5.6-sol": "gemini-3.5-flash",
         "gpt-5.4-mini": "gemini-3.1-flash-lite",
         "gpt-4.1-mini": "gemini-3.1-flash-lite",
         "gpt-5.4-nano": "gemini-3.1-flash-lite",
@@ -284,15 +326,18 @@ DEFAULT_CONFIG = {
         "gpt-4o":       "gemini-3.5-flash",
     },
     "model_mapping": {
+        "gpt-5.6-luna": "claude-haiku-4-5-20251001",
+        "gpt-5.6-terra": "claude-sonnet-5",
+        "gpt-5.6-sol": "claude-sonnet-5",
         "gpt-5.4-mini": "claude-haiku-4-5-20251001",
         "gpt-4.1-mini": "claude-haiku-4-5-20251001",
         "gpt-5.4-nano": "claude-haiku-4-5-20251001",
-        "gpt-4.1":      "claude-sonnet-4-6",
-        "gpt-5.4":      "claude-sonnet-4-6",
-        "gpt-5.5":      "claude-opus-4-7",
+        "gpt-4.1":      "claude-sonnet-5",
+        "gpt-5.4":      "claude-sonnet-5",
+        "gpt-5.5":      "claude-sonnet-5",
         # 相容仍在服役但不再列入本專案新選單的舊多模態模型
         "gpt-4o-mini":  "claude-haiku-4-5-20251001",
-        "gpt-4o":       "claude-sonnet-4-6",
+        "gpt-4o":       "claude-sonnet-5",
     },
     # === v3.0 Claude 專屬能力(全部預設 ON)===
     "claude_features": {
@@ -324,7 +369,7 @@ DEFAULT_CONFIG = {
         "smart_cache_threshold": True,  # Phase 15 — 用 model-specific token 門檻,而非字元數 1024
         # === D5 v3.2.2 新增 ===
         "image_translation_use_claude": True,  # Phase 19 — 切到 Anthropic 時,圖片翻譯也走 Claude vision
-                                                # OFF 時:即使 active=anthropic,圖片仍走 OpenAI(節省成本/避開未驗證)
+                                                # OFF 時:圖片優先走其他已設定的視覺 provider；統一協調層仍可跨三家接力
         # === D7 v3.2.3 新增 ===
         "line_plain_text_mode": True,   # Phase 20 — 防 Claude 輸出 markdown 廢字元(LINE 不渲染)
                                          # 禁:**粗體** *斜體* `code` # 標題 --- 分隔線 markdown table
@@ -355,6 +400,21 @@ _openai_client = None
 _anthropic_client = None
 _gemini_client = None   # v3.21
 _registered_glossary = None
+
+# Provider 健康狀態只存於目前 worker；用途是暫時避開連續失敗的供應商，
+# 不寫入設定檔，也不會永久停用。多 worker 各自觀察自己的連線狀況較安全。
+_provider_health_lock = threading.RLock()
+_provider_health = {
+    "openai": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+    "anthropic": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+    "gemini": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+}
+
+_PROVIDER_CAPABILITIES = {
+    "openai": {"chat", "vision", "batch"},
+    "anthropic": {"chat", "vision", "batch"},
+    "gemini": {"chat", "vision"},
+}
 
 # === D3 Phase 17: Files API state ===
 # 把整個 glossary 上傳到 Anthropic Files API,後續 messages 內只引用 file_id
@@ -468,7 +528,7 @@ def _get_openai_client():
             return _openai_client
         try:
             from openai import OpenAI
-            _openai_client = OpenAI(api_key=api_key, timeout=90.0)  # v3.2.7: 30→90 配合長訊息翻譯
+            _openai_client = OpenAI(api_key=api_key, timeout=90.0, max_retries=0)  # v3.2.7: 30→90 配合長訊息翻譯
             _openai_client._jy_key = api_key
             return _openai_client
         except Exception as e:
@@ -495,6 +555,7 @@ def _get_anthropic_client():
             _anthropic_client = Anthropic(
                 api_key=api_key,
                 timeout=120.0,
+                max_retries=0,
                 default_headers=extra_headers if extra_headers else None,
             )
             _anthropic_client._jy_key = api_key
@@ -522,6 +583,7 @@ def _get_gemini_client():
                 api_key=api_key,
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 timeout=90.0,
+                max_retries=0,
             )
             _gemini_client._jy_key = api_key
             return _gemini_client
@@ -530,12 +592,140 @@ def _get_gemini_client():
             return None
 
 
+def _client_with_limits(client, timeout):
+    """建立單次呼叫 client，關閉 SDK 隱藏重試並套用本協調層分配的期限。"""
+    try:
+        return client.with_options(timeout=float(timeout), max_retries=0)
+    except (AttributeError, TypeError):
+        # 測試替身或舊 SDK 沒有 with_options 時仍可運作；呼叫參數中的 timeout
+        # 會保留為第二道限制。
+        return client
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 對外 API
 # ═══════════════════════════════════════════════════════════════════
 def get_active_provider():
     _ensure_initialized()
     return _current_config.get("active_provider", "openai")
+
+
+def _provider_has_key(provider):
+    _ensure_initialized()
+    return bool((_current_config or {}).get(provider, {}).get("api_key"))
+
+
+def _provider_supports(provider, capability="chat"):
+    return capability in _PROVIDER_CAPABILITIES.get(provider, set())
+
+
+def _circuit_is_open(provider, now=None):
+    now = time.monotonic() if now is None else now
+    with _provider_health_lock:
+        return float(_provider_health.get(provider, {}).get("open_until", 0.0) or 0.0) > now
+
+
+def _record_provider_success(provider, latency_seconds=None):
+    _ensure_initialized()
+    policy = (_current_config or {}).get("failover_policy", {})
+    alpha = min(1.0, max(0.01, float(policy.get("latency_ewma_alpha", 0.25) or 0.25)))
+    with _provider_health_lock:
+        state = _provider_health.setdefault(provider, {})
+        state.update({"failures": 0, "open_until": 0.0, "last_error": ""})
+        if latency_seconds is not None:
+            latency = max(0.0, float(latency_seconds))
+            prev = state.get("latency_ewma")
+            state["latency_ewma"] = latency if prev is None else (alpha * latency + (1.0 - alpha) * float(prev))
+            state["successes"] = int(state.get("successes", 0) or 0) + 1
+
+
+def _record_provider_failure(provider, err):
+    _ensure_initialized()
+    policy = (_current_config or {}).get("failover_policy", {})
+    threshold = max(1, int(policy.get("circuit_breaker_failures", 2) or 2))
+    cooldown = max(1.0, float(policy.get("circuit_breaker_cooldown_seconds", 60) or 60))
+    with _provider_health_lock:
+        state = _provider_health.setdefault(
+            provider, {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0})
+        state["failures"] = int(state.get("failures", 0) or 0) + 1
+        state["last_error"] = str(err)[:300]
+        if state["failures"] >= threshold:
+            state["open_until"] = time.monotonic() + cooldown
+
+
+def reset_provider_health(provider=None):
+    """測試/管理用途：清除暫時熔斷狀態，不變更 API key 或主力設定。"""
+    targets = (provider,) if provider else tuple(_PROVIDER_CAPABILITIES)
+    with _provider_health_lock:
+        for name in targets:
+            _provider_health[name] = {
+                "failures": 0, "open_until": 0.0, "last_error": "",
+                "latency_ewma": None, "successes": 0,
+            }
+
+
+def get_provider_health_snapshot():
+    """Return a copy suitable for admin diagnostics and tests."""
+    with _provider_health_lock:
+        return {name: dict(state) for name, state in _provider_health.items()}
+
+
+def get_available_providers(capability="chat", preference=None, include_open_circuits=False):
+    """回傳具備指定能力且已設定 key 的 provider，順序即實際接力順序。
+
+    preference 可指定優先順序；未指定時主力優先，再依 failover_policy.provider_order。
+    熔斷中的 provider 在仍有其他可用者時會略過；若全部都熔斷，允許一次探測，
+    避免所有服務在冷卻期間被永久鎖死。
+    """
+    _ensure_initialized()
+    active = get_active_provider()
+    configured_order = list(((_current_config or {}).get("failover_policy", {})
+                             .get("provider_order") or ("openai", "gemini", "anthropic")))
+    requested = list(preference or [])
+    order = []
+    for name in ([active] if not requested else []) + requested + configured_order + ["openai", "gemini", "anthropic"]:
+        if name in _PROVIDER_CAPABILITIES and name not in order:
+            order.append(name)
+    eligible = [p for p in order if _provider_has_key(p) and _provider_supports(p, capability)]
+    if include_open_circuits:
+        return eligible
+    closed = [p for p in eligible if not _circuit_is_open(p)]
+    candidates = closed or eligible
+
+    # Preserve the explicitly selected first provider.  Only rank backups;
+    # this avoids silently changing the user's cost/provider preference while
+    # still improving tail latency after a failure.
+    adaptive = bool(((_current_config or {}).get("failover_policy", {})
+                     .get("adaptive_backup_order", True)))
+    if adaptive and len(candidates) > 2:
+        first, rest = candidates[0], candidates[1:]
+        with _provider_health_lock:
+            def _score(name):
+                state = _provider_health.get(name, {})
+                latency = state.get("latency_ewma")
+                # Unknown providers remain in configured order behind measured
+                # fast providers but ahead of a clearly slow one only after
+                # enough evidence accumulates.
+                return (latency is None, float(latency or 9999.0),
+                        int(state.get("failures", 0) or 0))
+            rest = sorted(rest, key=_score)
+        candidates = [first] + rest
+    return candidates
+
+
+def has_available_provider(capability="chat"):
+    return bool(get_available_providers(capability=capability))
+
+
+def get_native_client(provider):
+    """供同專案的原生 API 模組（Batch/TTS 以外）取得已套用統一設定的 client。"""
+    if provider == "openai":
+        return _get_openai_client()
+    if provider == "anthropic":
+        return _get_anthropic_client()
+    if provider == "gemini":
+        return _get_gemini_client()
+    return None
 
 
 def set_active_provider(provider):
@@ -681,9 +871,9 @@ def _resolve_anthropic_model(openai_model):
 # v3.2 Phase 15: Smart Cache Threshold(按 model-specific token 門檻)
 # ═══════════════════════════════════════════════════════════════════
 # 官方公布的 cache 最小寫入門檻(低於此 → silent fail,cache_creation=0,照付全價):
-#   Opus 4.7:   4,096 tokens
+#   Opus 4.7:   2,048 tokens
 #   Haiku 4.5:  4,096 tokens
-#   Sonnet 4.6: 2,048 tokens
+#   Sonnet 5 / Sonnet 4.6: 1,024 tokens
 #   舊模型(Sonnet 4.5 / Opus 4.1 / Sonnet 3.7): 1,024 tokens
 #
 # 舊版邏輯 `len(system_text) >= 1024` 是字元數,中文約 0.6 token/字
@@ -692,9 +882,10 @@ def _resolve_anthropic_model(openai_model):
 
 # 模型 → cache 最小 token 門檻
 _MODEL_CACHE_MIN_TOKENS = {
-    "claude-opus-4-7":          4096,
+    "claude-opus-4-7":          2048,
     "claude-haiku-4-5":         4096,
-    "claude-sonnet-4-6":        2048,
+    "claude-sonnet-5":          1024,
+    "claude-sonnet-4-6":        1024,
     # 舊模型 fallback
     "claude-sonnet-4-5":        1024,
     "claude-opus-4-5":          1024,
@@ -711,6 +902,7 @@ _MODEL_CACHE_MIN_TOKENS = {
 _MODELS_NO_PREFILL = (
     "claude-opus-4-7",
     "claude-opus-4-6",
+    "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-mythos",
 )
@@ -794,15 +986,20 @@ def _should_apply_cache(system_text, anthropic_model, smart_mode=True):
 #   omitted    — 不回 thinking 文字,只回最終翻譯(Opus 4.7 預設,加快首 token)
 # ═══════════════════════════════════════════════════════════════════
 
+def _model_is_sonnet5(anthropic_model):
+    return "sonnet-5" in (anthropic_model or "").lower()
+
+
 def _model_supports_adaptive(anthropic_model):
-    """Opus 4.6+/4.7 + Sonnet 4.6+ 支援 adaptive thinking"""
+    """Opus 4.6+/4.7 + Sonnet 4.6/5 支援 adaptive thinking。"""
     m = (anthropic_model or "").lower()
-    return any(k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6"])
+    return any(k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6", "sonnet-5"])
 
 
 def _model_requires_adaptive(anthropic_model):
-    """Opus 4.7 強制 adaptive(舊 mode 會 400)"""
-    return "opus-4-7" in (anthropic_model or "").lower()
+    """不接受 legacy budget thinking 的模型。"""
+    m = (anthropic_model or "").lower()
+    return "opus-4-7" in m or "sonnet-5" in m
 
 
 def _model_supports_thinking(anthropic_model):
@@ -818,12 +1015,13 @@ def _normalize_effort(effort, anthropic_model):
     Opus 4.7      支援: low / medium / high / xhigh
     Opus 4.6      支援: low / medium / high
     """
-    valid_lmh = {"low", "medium", "high"}
+    valid = {"low", "medium", "high", "max", "xhigh"}
     eff = (effort or "medium").lower().strip()
-    if eff not in valid_lmh and eff != "xhigh":
+    if eff not in valid:
         eff = "medium"
-    # Opus 4.7 允許 xhigh,其他打回 high
-    if eff == "xhigh" and "opus-4-7" not in (anthropic_model or "").lower():
+    # xhigh is available on Sonnet 5 and selected Opus generations.
+    m = (anthropic_model or "").lower()
+    if eff == "xhigh" and not any(k in m for k in ("sonnet-5", "opus-4-7", "opus-4-8")):
         eff = "high"
     return eff
 
@@ -870,7 +1068,7 @@ def _pick_thinking_config(features, anthropic_model):
     display_pref = features.get("thinking_display", "auto")
     legacy_budget = int(features.get("thinking_budget", 2000))
 
-    # Opus 4.7 強制 adaptive
+    # Opus 4.7 / Sonnet 5 不接受 legacy budget thinking。
     if _model_requires_adaptive(anthropic_model):
         eff = _normalize_effort(effort_pref, anthropic_model)
         disp = _resolve_thinking_display(display_pref, anthropic_model)
@@ -1078,6 +1276,7 @@ def count_tokens(model, messages, system=None):
         # 估算成本(per 1M tokens)
         cost_table = {
             "claude-haiku-4-5":  1.00 / 1_000_000,
+            "claude-sonnet-5":   3.00 / 1_000_000,
             "claude-sonnet-4-6": 3.00 / 1_000_000,
             "claude-opus-4-7":   5.00 / 1_000_000,
         }
@@ -1520,6 +1719,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
     if client is None:
         raise RuntimeError("Gemini client 未初始化(api_key 缺?後台或 GEMINI_API_KEY 設定)")
 
+    request_client = _client_with_limits(client, timeout)
     g_model = _resolve_gemini_model(model)
     features = _current_config.get("gemini_features", {}) if _current_config else {}
 
@@ -1542,7 +1742,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         g_kwargs["reasoning_effort"] = _effort
 
     try:
-        return client.chat.completions.create(**g_kwargs)
+        return request_client.chat.completions.create(**g_kwargs)
     except Exception as e:
         # 相容端點對參數支援可能隨版本變動：minimal 不接受時先退 low，
         # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
@@ -1554,7 +1754,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
             g_kwargs["reasoning_effort"] = "low"
             try:
                 print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
-                return client.chat.completions.create(**g_kwargs)
+                return request_client.chat.completions.create(**g_kwargs)
             except Exception as e2:
                 e = e2
                 _msg = str(e2).lower()
@@ -1566,7 +1766,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
                 retried = True
         if retried:
             print(f"[ai_provider] Gemini 參數退階重試: {str(e)[:120]}", flush=True)
-            return client.chat.completions.create(**g_kwargs)
+            return request_client.chat.completions.create(**g_kwargs)
         raise
 
 
@@ -1661,6 +1861,39 @@ def _is_availability_error(e):
                                 "529", "503", "502"))
 
 
+def _is_provider_failover_error(e):
+    """只判斷「換一家可能成功」的錯誤，避免內容政策/資料格式錯誤白打三家。"""
+    code = getattr(e, "status_code", None)
+    if code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504, 529):
+        return True
+    m = str(e).lower()
+    provider_specific = (
+        "api key", "authentication", "unauthorized", "forbidden",
+        "model not found", "does not exist", "unsupported model",
+        "insufficient_quota", "quota", "credit balance", "billing",
+        "rate limit", "resource_exhausted", "overloaded", "unavailable",
+        "connection", "timed out", "timeout", "temporarily", "server error",
+        "refusal",
+    )
+    if any(token in m for token in provider_specific):
+        return True
+    # 400/422 只在明確為供應商參數相容問題時接力；一般輸入錯誤不重送。
+    if code in (400, 422) or "400" in m or "422" in m:
+        return any(token in m for token in (
+            "unsupported", "unrecognized", "unknown parameter", "invalid model",
+            "reasoning_effort", "service_tier", "max_completion_tokens",
+        ))
+    return False
+
+
+def _is_feature_parameter_error(e, *feature_names):
+    code = getattr(e, "status_code", None)
+    m = str(e).lower()
+    if code not in (400, 422) and not any(x in m for x in ("400", "422", "invalid", "unsupported", "unrecognized")):
+        return False
+    return any(str(name).lower() in m for name in feature_names)
+
+
 def _dispatch_provider(provider, model, messages, max_tokens=None,
                        max_completion_tokens=None, temperature=None, timeout=90,
                        prompt_cache_key=None, reasoning_effort=None, verbosity=None,
@@ -1687,7 +1920,7 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
     if fast_quality and reasoning_effort not in ("none", "minimal"):
         # 只對 reasoning family 覆寫；GPT-4.1 等非 reasoning 模型不送此參數。
         m = (model or "").lower()
-        if m.startswith(("gpt-5.4", "gpt-5.5")):
+        if m.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
             reasoning_effort = "none"
         elif m.startswith(("gpt-5", "o1", "o3", "o4")):
             reasoning_effort = "minimal"
@@ -1706,47 +1939,118 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                   temperature=None, timeout=90, prompt_cache_key=None,
                   reasoning_effort=None, verbosity=None, logprobs=False,
                   top_logprobs=None, logit_bias=None, stop=None, **kwargs):
-    provider = get_active_provider()
+    """跨三家 AI 的唯一協調層。
+
+    每家最多進入一次，所有嘗試共用一個總期限；provider SDK 內建重試另行關閉。
+    required_capability / provider_preference / failover_* 為本層內部參數，不會送給 API。
+    """
+    _ensure_initialized()
+    required_capability = str(kwargs.pop("required_capability", "chat") or "chat")
+    provider_preference = kwargs.pop("provider_preference", None)
+    latency_profile = str(kwargs.pop("latency_profile", "") or "").strip()
+    response_validator = kwargs.pop("response_validator", None)
+    policy = (_current_config or {}).get("failover_policy", {})
+    profile_cfg = (policy.get("latency_profiles", {}) or {}).get(latency_profile, {})
+    requested_total = kwargs.pop("failover_total_timeout", None)
+    requested_per_provider = kwargs.pop("failover_per_provider_timeout", None)
+    total_timeout = max(1.0, float(
+        requested_total or profile_cfg.get("total") or policy.get("total_timeout_seconds", 60) or 60))
+    per_provider_timeout = max(
+        1.0, float(requested_per_provider or profile_cfg.get("per_provider")
+                   or policy.get("per_provider_timeout_seconds", 24) or 24))
+    requested_timeout = max(1.0, float(timeout or per_provider_timeout))
+    failover_enabled = bool((_current_config or {}).get("provider_failover", True))
+
+    providers = get_available_providers(required_capability, preference=provider_preference)
+    if not providers:
+        raise RuntimeError(f"沒有已設定且支援 {required_capability} 的 AI provider")
+    if not failover_enabled:
+        active = get_active_provider()
+        providers = [active] if active in providers else providers[:1]
+
+    deadline = time.monotonic() + total_timeout
+    attempts = []
+    last_error = None
+    last_quality_error = None
     _all_kwargs = dict(
         model=model, messages=messages, max_tokens=max_tokens,
         max_completion_tokens=max_completion_tokens, temperature=temperature,
-        timeout=timeout, prompt_cache_key=prompt_cache_key,
-        reasoning_effort=reasoning_effort, verbosity=verbosity,
-        logprobs=logprobs, top_logprobs=top_logprobs,
+        prompt_cache_key=prompt_cache_key, reasoning_effort=reasoning_effort,
+        verbosity=verbosity, logprobs=logprobs, top_logprobs=top_logprobs,
         logit_bias=logit_bias, stop=stop, **kwargs,
     )
-    try:
-        return _dispatch_provider(provider, **_all_kwargs)
-    except Exception as e:
-        # ═══ v3.26: 跨 provider 自動容錯移轉 ═══
-        # 主力 provider 暫時掛掉(限流/過載/連線)時,自動換有 key 的備援家
-        # 救回這一句,工人端零感知。記帳不會錯:track_tokens 依 response.model
-        # 自動歸到實際出力的那一家。key/參數錯誤不移轉(換家也沒用,該浮出來)。
-        _ensure_initialized()
-        # v3.28: 額度耗盡 → 永久切換主力 + 通知(在單句容錯之前判斷)
-        _is_429 = getattr(e, "status_code", None) == 429 or "429" in str(e)
-        if _is_quota_exhausted_error(e) or (_is_429 and _bump_quota_counter(provider)):
-            _switched = _auto_switch_on_exhaust(provider, e)
-            if _switched:
-                try:
-                    return _dispatch_provider(_switched, **_all_kwargs)
-                except Exception:
-                    pass  # 新主力也失敗 → 繼續走下面的逐家容錯
-        _fo_enabled = (_current_config or {}).get("provider_failover", True)
-        if not _fo_enabled or not _is_availability_error(e):
-            raise
-        for alt in ("openai", "gemini", "anthropic"):
-            if alt == provider:
-                continue
-            if not (_current_config or {}).get(alt, {}).get("api_key"):
-                continue
+
+    for index, provider in enumerate(providers):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        attempt_timeout = max(1.0, min(requested_timeout, per_provider_timeout, remaining))
+        started = time.monotonic()
+        try:
+            if index:
+                print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
+            response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+            elapsed = time.monotonic() - started
+            if callable(response_validator):
+                verdict = response_validator(response, provider)
+                if isinstance(verdict, tuple):
+                    usable = bool(verdict[0])
+                    reason = str(verdict[1]) if len(verdict) > 1 else "quality validator rejected response"
+                else:
+                    usable = bool(verdict)
+                    reason = "quality validator rejected response"
+                if not usable:
+                    last_quality_error = RuntimeError(reason)
+                    attempts.append({
+                        "provider": provider,
+                        "error": reason[:300],
+                        "kind": "quality_reject",
+                        "latency_seconds": round(elapsed, 3),
+                    })
+                    # A valid HTTP response with unusable translation is not a
+                    # provider outage, so do not trip the circuit breaker.
+                    if not failover_enabled:
+                        raise last_quality_error
+                    print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)
+                    continue
+            _record_provider_success(provider, elapsed)
             try:
-                print(f"[ai_provider] ⚠️ {provider} 不可用({str(e)[:80]}),容錯移轉 → {alt}", flush=True)
-                return _dispatch_provider(alt, **_all_kwargs)
-            except Exception as e2:
-                print(f"[ai_provider] 移轉 {alt} 也失敗: {str(e2)[:80]}", flush=True)
-                continue
-        raise
+                response._jy_provider = provider
+                response._jy_failover_attempts = list(attempts)
+                response._jy_latency_seconds = elapsed
+                response._jy_latency_profile = latency_profile or "default"
+            except Exception:
+                pass
+            return response
+        except Exception as err:
+            last_error = err
+            attempts.append({"provider": provider, "error": str(err)[:300]})
+            if _is_provider_failover_error(err):
+                _record_provider_failure(provider, err)
+            print(f"[ai_provider] {provider} 失敗: {type(err).__name__}: {str(err)[:160]}", flush=True)
+
+            # Only explicit credit/quota exhaustion permanently changes the
+            # active provider. Generic 429 means temporary rate limiting and
+            # is handled by this request's failover + circuit cooldown.
+            if _is_quota_exhausted_error(err):
+                _auto_switch_on_exhaust(provider, err)
+
+            if not failover_enabled or not _is_provider_failover_error(err):
+                raise
+
+    if last_error is not None:
+        try:
+            setattr(last_error, "_jy_failover_attempts", attempts)
+        except Exception:
+            pass
+        raise last_error
+    if last_quality_error is not None:
+        try:
+            setattr(last_quality_error, "_jy_failover_attempts", attempts)
+        except Exception:
+            pass
+        raise last_quality_error
+    raise TimeoutError(f"AI 翻譯超過總期限 {total_timeout:.0f} 秒")
 
 
 def _chat_complete_openai(model, messages, **kwargs):
@@ -1800,6 +2104,8 @@ def _chat_complete_openai(model, messages, **kwargs):
             new_messages.insert(0, {"role": "system", "content": tag_instruction.lstrip()})
         messages = new_messages
 
+    timeout = kwargs.get("timeout", 90)
+    request_client = _client_with_limits(client, timeout)
     call_kwargs = {"model": model, "messages": messages}
     for k, v in kwargs.items():
         if v is None:
@@ -1811,7 +2117,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     # GPT-5.4 / GPT-5.5 是 reasoning family：Chat Completions 使用
     # max_completion_tokens；純翻譯預設 reasoning=none，並移除不相容採樣參數。
     _model_lower = (model or "").lower()
-    if _model_lower.startswith(("gpt-5.4", "gpt-5.5")):
+    if _model_lower.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
         if "max_tokens" in call_kwargs and "max_completion_tokens" not in call_kwargs:
             call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
         for _unsupported in (
@@ -1838,11 +2144,11 @@ def _chat_complete_openai(model, messages, **kwargs):
     except Exception:
         pass
     try:
-        resp = client.chat.completions.create(**call_kwargs)
+        resp = request_client.chat.completions.create(**call_kwargs)
     except Exception as _fe:
-        if _flex_used:
+        if _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
             call_kwargs.pop("service_tier", None)
-            resp = client.chat.completions.create(**call_kwargs)
+            resp = request_client.chat.completions.create(**call_kwargs)
         else:
             raise
 
@@ -1880,6 +2186,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     client = _get_anthropic_client()
     if client is None:
         raise RuntimeError("Anthropic client 未初始化(api_key 缺?或 pip install anthropic)")
+    request_client = _client_with_limits(client, timeout)
 
     _ensure_initialized()
     features = dict(_current_config.get("claude_features", {}))
@@ -1905,6 +2212,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     anthropic_model = _resolve_anthropic_model(model)
     is_haiku = "haiku" in anthropic_model.lower()
     is_opus = "opus" in anthropic_model.lower()
+    is_sonnet5 = _model_is_sonnet5(anthropic_model)
 
     # ─── Step 1: 訊息格式轉換 ───
     system_text = ""
@@ -2104,55 +2412,83 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                 int(thinking_cfg.get("budget_tokens", 2000)) + 1024
             )
             call_kwargs["max_tokens"] = needed_max
-        # adaptive 模式 — 直接設,不動 max_tokens(adaptive 的 budget 可超過 max_tokens)
         call_kwargs["thinking"] = thinking_cfg
         thinking_applied = True
+        if is_sonnet5:
+            # Sonnet 5 的 effort 必須放在 output_config，且 sampling params 不接受。
+            call_kwargs["output_config"] = {
+                "effort": _normalize_effort(features.get("thinking_effort", "low"), anthropic_model)
+            }
     else:
-        # 沒啟用 thinking(Haiku 或關 toggle)— 才能用 temperature
-        if temperature is not None and not is_opus:
+        if is_sonnet5:
+            # Sonnet 5 未傳 thinking 時預設 adaptive/high，會增加即時翻譯延遲。
+            # 翻譯路徑明確關閉 thinking，並把整體輸出 effort 固定 low。
+            call_kwargs["thinking"] = {"type": "disabled"}
+            call_kwargs["output_config"] = {"effort": "low"}
+            thinking_mode_used = "disabled_low"
+        elif temperature is not None and not is_opus:
             call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
 
     # ─── Step 4: 呼叫 ───
     try:
-        resp = client.messages.create(**call_kwargs)
+        resp = request_client.messages.create(**call_kwargs)
     except Exception as e:
         err_msg = str(e).lower()
         # v3.2.7 根治: 所有 thinking 相關錯誤都 fallback,不再只抓特定關鍵字。
         # 原因:Sonnet 4.6 + adaptive thinking 失敗時,若錯誤訊息不含
         # "adaptive"/"effort"/"display" 等字,原本直接 raise → 翻譯無聲消失。
         # 新邏輯:只要 thinking_applied=True 且 API 呼叫失敗,一律 fallback。
-        if thinking_applied:
+        if thinking_applied and _is_feature_parameter_error(
+                e, "thinking", "adaptive", "budget_tokens", "effort", "display"):
             print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
             # Fallback A: adaptive → legacy
             if (isinstance(call_kwargs.get("thinking"), dict)
                 and call_kwargs["thinking"].get("type") == "adaptive"):
                 if _model_requires_adaptive(anthropic_model):
-                    # Opus 4.7 不支援 legacy → 完全關掉 thinking
-                    call_kwargs.pop("thinking", None)
+                    # Opus 4.7 / Sonnet 5 不支援 legacy budget thinking。
+                    if is_sonnet5:
+                        call_kwargs["thinking"] = {"type": "disabled"}
+                        call_kwargs["output_config"] = {"effort": "low"}
+                        thinking_mode_used = "disabled_low(fallback)"
+                    else:
+                        call_kwargs.pop("thinking", None)
+                        call_kwargs.pop("output_config", None)
+                        thinking_mode_used = "none(opus47_fallback)"
                     thinking_applied = False
-                    thinking_mode_used = "none(opus47_fallback)"
                 else:
                     legacy_budget = int(features.get("thinking_budget", 2000))
                     call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": legacy_budget}
                     call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
                     thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
                 try:
-                    resp = client.messages.create(**call_kwargs)
+                    resp = request_client.messages.create(**call_kwargs)
                 except Exception as e2:
                     print(f"[ai_provider] legacy fallback 也失敗: {e2}", flush=True)
                     # Fallback B: legacy → 完全關掉 thinking
-                    call_kwargs.pop("thinking", None)
+                    if is_sonnet5:
+                        call_kwargs["thinking"] = {"type": "disabled"}
+                        call_kwargs["output_config"] = {"effort": "low"}
+                        thinking_mode_used = "disabled_low(all_thinking_failed)"
+                    else:
+                        call_kwargs.pop("thinking", None)
+                        call_kwargs.pop("output_config", None)
+                        thinking_mode_used = "none(all_thinking_failed)"
                     call_kwargs["max_tokens"] = int(max_tokens or 1024)
                     thinking_applied = False
-                    thinking_mode_used = "none(all_thinking_failed)"
-                    resp = client.messages.create(**call_kwargs)
+                    resp = request_client.messages.create(**call_kwargs)
             else:
                 # enabled mode 失敗 → 關掉 thinking
-                call_kwargs.pop("thinking", None)
+                if is_sonnet5:
+                    call_kwargs["thinking"] = {"type": "disabled"}
+                    call_kwargs["output_config"] = {"effort": "low"}
+                    thinking_mode_used = "disabled_low(thinking_failed)"
+                else:
+                    call_kwargs.pop("thinking", None)
+                    call_kwargs.pop("output_config", None)
+                    thinking_mode_used = "none(thinking_failed)"
                 call_kwargs["max_tokens"] = int(max_tokens or 1024)
                 thinking_applied = False
-                thinking_mode_used = "none(thinking_failed)"
-                resp = client.messages.create(**call_kwargs)
+                resp = request_client.messages.create(**call_kwargs)
         # 非 thinking 錯誤:grounding/citation/cache/stop 的 fallback
         elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
             print(f"[ai_provider] grounding/citation 失敗,fallback: {e}", flush=True)
@@ -2166,20 +2502,25 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                             merged[i]["content"] = text_only
             call_kwargs["messages"] = merged
             grounding_used = False
-            resp = client.messages.create(**call_kwargs)
+            resp = request_client.messages.create(**call_kwargs)
         elif use_cache_1h and ("extended-cache" in err_msg or "beta" in err_msg or "ttl" in err_msg):
             print(f"[ai_provider] 1h cache fallback to 5min: {e}", flush=True)
             if isinstance(call_kwargs.get("system"), list):
                 for blk in call_kwargs["system"]:
                     if isinstance(blk, dict) and "cache_control" in blk:
                         blk["cache_control"] = {"type": "ephemeral"}
-            resp = client.messages.create(**call_kwargs)
+            resp = request_client.messages.create(**call_kwargs)
         elif use_stop and ("stop_sequence" in err_msg or "too many" in err_msg):
             print(f"[ai_provider] stop_sequences fallback: {e}", flush=True)
             call_kwargs.pop("stop_sequences", None)
-            resp = client.messages.create(**call_kwargs)
+            resp = request_client.messages.create(**call_kwargs)
         else:
             raise
+
+    # Sonnet 5 may return HTTP 200 with stop_reason=refusal. Treat it as an
+    # unusable provider response so the unified coordinator can try another AI.
+    if getattr(resp, "stop_reason", None) == "refusal":
+        raise RuntimeError("Anthropic refusal response")
 
     # ─── Step 5: 抽出文字 + Phase 9 citations ───
     full_text = ""
@@ -2320,7 +2661,7 @@ def _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwa
         raise RuntimeError("OpenAI client 未初始化")
     model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
     call_kwargs = {"model": model, "messages": messages, "stream": True}
-    if model.lower().startswith(("gpt-5.4", "gpt-5.5")):
+    if model.lower().startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
         if max_tokens is not None:
             call_kwargs["max_completion_tokens"] = max_tokens
         if not model.lower().endswith("-pro"):
@@ -2561,7 +2902,7 @@ def should_use_claude_for_images():
     
     用途:給歐那一個獨立開關,避免「切到 Anthropic 後圖片成本爆」
          圖片 token 比文字貴(一張 1MP 圖 ≈ 1600 tokens × $5/M Claude = $0.008)
-         有時候只想讓文字翻譯走 Claude,圖片仍用 OpenAI gpt-5.4-mini
+         有時候只想讓文字翻譯走 Claude,圖片優先改走其他已設定的視覺 provider
     
     呼叫例:
         if ai_provider.get_active_provider() == "anthropic" and ai_provider.should_use_claude_for_images():

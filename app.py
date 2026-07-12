@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.30-station-alias-root-fix-2026-06-21"
+VERSION = "v3.32.1-risk-aware-quality-latency-2026-07-12"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -343,6 +343,15 @@ class _AIProxy:
     audio = _Audio()
 
 ai = _AIProxy()
+
+
+def _has_ai_capability(capability="chat"):
+    """統一判斷三家 AI 是否至少有一家可提供指定能力。"""
+    try:
+        return ai_provider.has_available_provider(capability)
+    except Exception as exc:
+        logger.warning("AI capability check failed (%s): %s", capability, exc)
+        return False
 
 group_settings = {}
 # Target language for Chinese translation per group, default "id"
@@ -683,10 +692,16 @@ bot_stats = {
 
 # Anthropic 官方價格 (USD per 1M tokens) — (base_input, output)
 # cache 倍率業界官方標準:write_5m = base×1.25, read = base×0.10
+_CLAUDE_SONNET5_PRICE = (
+    (2.00, 10.00)
+    if datetime.now(timezone.utc) < datetime(2026, 9, 1, tzinfo=timezone.utc)
+    else (3.00, 15.00)
+)
 ANTHROPIC_PRICE_PER_M = {
     "claude-opus-4-7":   (5.00, 25.00),
     "claude-opus-4-6":   (5.00, 25.00),
     "claude-opus-4-5":   (5.00, 25.00),
+    "claude-sonnet-5":   _CLAUDE_SONNET5_PRICE,
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-sonnet-4-5": (3.00, 15.00),
     "claude-haiku-4-5":  (1.00,  5.00),
@@ -698,10 +713,13 @@ ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
 # cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
 OPENAI_PRICE_PER_M = {
     # 現行翻譯選單
-    "gpt-5.4-nano": (0.20,  1.25),
-    "gpt-5.4-mini": (0.75,  4.50),
-    "gpt-5.4":      (2.50, 15.00),
-    "gpt-5.5":      (5.00, 30.00),
+    "gpt-5.6-luna":  (1.00,  6.00),
+    "gpt-5.6-terra": (2.50, 15.00),
+    "gpt-5.6-sol":   (5.00, 30.00),
+    "gpt-5.4-nano":  (0.20,  1.25),
+    "gpt-5.4-mini":  (0.75,  4.50),
+    "gpt-5.4":       (2.50, 15.00),
+    "gpt-5.5":       (5.00, 30.00),
     "gpt-4.1-mini": (0.40,  1.60),
     "gpt-4.1":      (2.00,  8.00),
     # 只保留成本追蹤相容；不再顯示於後台選單
@@ -709,9 +727,9 @@ OPENAI_PRICE_PER_M = {
     "gpt-4o":       (2.50, 10.00),
     # v3.21 Gemini(概估值,Google 官方定位 flash-lite 為最低價;
     # 實際帳單以 Google AI Studio 為準,此表僅供後台成本儀表板估算)
-    "gemini-3.1-flash-lite": (0.10, 0.40),
-    "gemini-3.5-flash":      (0.30, 2.50),
-    "gemini-3-flash":        (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash":      (0.75, 4.50),
+    "gemini-3-flash":        (0.50, 3.00),
 }
 
 
@@ -753,16 +771,17 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
         return cost
     if p == "gemini":
         # v3.23: Gemini 計價(價格表同放 OPENAI_PRICE_PER_M,gemini-* key 已存在)
-        # 隱式快取折扣概估 ×0.25(Google 端自動,實際以 AI Studio 帳單為準)
+        # Gemini 3.x context-cache read price約為標準 input 的 10%。
+        # 實際帳單仍以 Google AI Studio 為準。
         in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gemini-3.1-flash-lite")
         non_cached = max(0, input_tok - cached_input)
         return (
             non_cached    * in_rate         / 1_000_000
-            + cached_input  * in_rate * 0.25  / 1_000_000
+            + cached_input  * in_rate * 0.10  / 1_000_000
             + output_tok    * out_rate        / 1_000_000
         )
     # OpenAI
-    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5.4-mini")
+    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5.6-luna")
     # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
     cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
     non_cached = max(0, input_tok - cached_input)
@@ -1090,7 +1109,7 @@ translation_tone = "factory"      # global default: factory / casual / natural /
 translation_tone_custom = ""      # global custom tone text (overrides preset if non-empty)
 group_tone_settings = {}          # per-group: {gid: {"tone": str, "custom": str}}
 
-# OpenAI 文字翻譯預設：GPT-5.4 mini 處理日常訊息，GPT-5.4 處理長公告。
+# OpenAI 文字翻譯預設：GPT-5.6 Luna 處理日常訊息，GPT-5.6 Terra 處理長公告。
 # 所有舊設定在載入與 API 儲存時都會經 ai_provider 白名單遷移。
 model_default = ai_provider.DEFAULT_OPENAI_MODEL
 model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
@@ -1101,9 +1120,9 @@ model_threshold = 150             # 短訊息走低延遲模型；長公告才�
 #         字數門檻在 Anthropic 路徑下實質失效。
 # 新邏輯:切到 Anthropic 時,pick_model() 優先看以下兩個變數;
 #       共用 model_threshold(沿用同一個字數門檻,不另設)
-# 預設:短=Haiku 4.5 / 長=Sonnet 4.6,工人日常閒聊省 75% 成本,長工單才升級
+# 預設:短=Haiku 4.5 / 長=Sonnet 5,工人日常閒聊省 75% 成本,長工單才升級
 claude_model_default = "claude-haiku-4-5-20251001"  # 短訊息用 Haiku 4.5
-claude_model_upgrade = "claude-sonnet-4-6"           # 長訊息升級 Sonnet 4.6
+claude_model_upgrade = "claude-sonnet-5"           # 長訊息升級 Sonnet 5
 claude_auto_switch_enabled = True                    # 總開關:OFF 時走「套用模型」單一映射(舊行為)
 
 # v3.21: Gemini 路徑模型(第三 provider — Google 官方定位 flash-lite 為
@@ -1141,7 +1160,7 @@ def _model_family(model_name):
     if m.startswith("gemini"):
         return "gemini"
     # GPT-5.4 / 5.5 官方皆支援 reasoning_effort=none；翻譯用 none 最快最省。
-    if m.startswith(("gpt-5.5", "gpt-5.4")):
+    if m.startswith(("gpt-5.6", "gpt-5.5", "gpt-5.4")):
         return "gpt5_none"
     # 只為讀取舊紀錄保留；正式設定會先遷移到 5.4 / 5.5。
     if m.startswith(("gpt-5.2", "gpt-5.1", "gpt-5")):
@@ -1201,15 +1220,16 @@ MODEL_CAPABILITIES = {
         "verbosity": True,
         "prompt_cache_retention": False,  # gpt-5 / 5-mini / 5-nano 保守設 False
     },
-    # GPT-5.1 / 5.2 — newer reasoning models with none/low/medium/high
-    # 官方確認 5.1+ 支援 24h cache retention
+    # GPT-5.4 / 5.5 / 5.6 — newer reasoning models with none/low/medium/high.
+    # Prompt cache retention must be gated per exact model: GPT-5.6 deprecated
+    # prompt_cache_retention and uses prompt_cache_options.ttl (30m default).
     "gpt5_none": {
         "temperature": False, "top_p": False, "max_tokens": False,
         "max_completion_tokens": True, "logprobs": False, "logit_bias": False,
         "stop": False, "structured_output": True, "metadata": True,
         "prompt_cache_key": True, "reasoning_effort": True, "seed": False,
         "verbosity": True,
-        "prompt_cache_retention": True,  # ✅ 24h cache 支援
+        "prompt_cache_retention": False,  # exact-model whitelist in model_supports()
     },
     "oseries_reasoning": {
         "temperature": False, "top_p": False, "max_tokens": False,
@@ -1245,18 +1265,19 @@ def model_supports(model_name, capability):
     family = _model_family(model_name)
     base_support = MODEL_CAPABILITIES.get(family, MODEL_CAPABILITIES["unknown"]).get(capability, False)
     
-    # v3.9.35: prompt_cache_retention 24h 精準偵測
-    # family 級設 False 是保守預設,這裡為已知支援的 model 開啟
-    # 官方確認支援:gpt-5.1+, gpt-5.2+, gpt-5.4 (含 mini/nano), gpt-5.5 (默認 24h)
-    # 舊 GPT-5 aliases 維持保守 False；正式設定會先遷移
-    if capability == "prompt_cache_retention" and not base_support:
+    # v3.32: exact-model gate for legacy extended prompt-cache retention.
+    # GPT-5.6+ deprecated prompt_cache_retention; it uses the newer 30m-minimum
+    # prompt-cache policy and stable prompt_cache_key instead. Never send the
+    # legacy field to GPT-5.6 because it can be rejected by the API.
+    if capability == "prompt_cache_retention":
         if not model_name:
             return False
         m = model_name.lower()
-        # 已確認支援的精準前綴
-        if m.startswith(("gpt-5.5", "gpt-5.4")):
-            return True
-        # 其他 GPT-5 系列保守 False
+        legacy_extended_cache_prefixes = (
+            "gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1",
+            "gpt-5-codex", "gpt-5", "gpt-4.1",
+        )
+        return m.startswith(legacy_extended_cache_prefixes) and not m.startswith("gpt-5.6")
     return base_support
 
 def optimal_reasoning_for_translation(model_name):
@@ -1267,6 +1288,79 @@ def optimal_reasoning_for_translation(model_name):
     """
     family = _model_family(model_name)
     return TRANSLATION_OPTIMAL_REASONING.get(family)
+
+def _translation_response_text(response):
+    """Extract unified provider text without depending on a specific SDK type."""
+    try:
+        choices = getattr(response, "choices", None)
+        if choices:
+            message = getattr(choices[0], "message", None)
+            content = getattr(message, "content", None) if message is not None else None
+            return str(content or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=None):
+    """Reject only responses that are objectively unusable, then fail over once.
+
+    This is intentionally conservative: terminology and semantic grading remain in
+    the existing factory glossary/TM/QE pipeline, while this gate catches empty,
+    truncated, refusal-like, or obvious meta-commentary outputs before they reach LINE.
+    """
+    source = str(source_text or "")
+    source_compact = re.sub(r"\s+", "", source)
+    meta_prefixes = (
+        "here is the translation", "translation:", "translated text:",
+        "以下是翻譯", "翻譯如下", "maaf, saya tidak dapat",
+        "i cannot translate", "i can't translate",
+    )
+
+    def _validate(response, provider):
+        text = _translation_response_text(response)
+        if not text:
+            return False, f"{provider} returned empty translation"
+        try:
+            finish = getattr(response.choices[0], "finish_reason", None)
+        except Exception:
+            finish = None
+        if str(finish or "").lower() in ("length", "max_tokens", "model_context_window_exceeded"):
+            return False, f"{provider} translation was truncated ({finish})"
+        lowered = text.lower().lstrip()
+        if lowered.startswith(meta_prefixes):
+            return False, f"{provider} returned meta/refusal text instead of translation"
+        output_compact = re.sub(r"\s+", "", text)
+        source_folded = source_compact.casefold()
+        output_folded = output_compact.casefold()
+        # Exact source echo or bilingual source+translation output violates the
+        # pure-translation contract.  Reject here so another provider can answer
+        # without spending a second post-edit request.
+        if len(source_folded) >= 6 and output_folded == source_folded:
+            return False, f"{provider} echoed the source instead of translating"
+        if (str(src_lang or "").lower() != str(tgt_lang or "").lower()
+                and len(source_folded) >= 12
+                and source_folded in output_folded
+                and len(output_folded) >= int(len(source_folded) * 1.25)):
+            return False, f"{provider} returned bilingual/source-leaking output"
+
+        # Conservative wrong-script check for Chinese -> Indonesian.  Codes,
+        # names and short labels are exempt; this catches only an obvious nearly
+        # untranslated Chinese paragraph.
+        if str(tgt_lang or "").lower().startswith("id"):
+            src_han = len(re.findall(r"[\u3400-\u9fff]", source))
+            out_han = len(re.findall(r"[\u3400-\u9fff]", text))
+            out_latin = len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", text))
+            if src_han >= 8 and out_han >= max(6, int(src_han * 0.6)) and out_latin < 8:
+                return False, f"{provider} output appears to remain in the source language"
+
+        # Only catch catastrophic collapse. Short replies, numbers, labels and names
+        # are deliberately exempt to avoid rejecting valid factory chat messages.
+        if len(source_compact) >= 40 and len(output_compact) < max(4, int(len(source_compact) * 0.08)):
+            return False, f"{provider} translation is implausibly incomplete"
+        return True, "ok"
+
+    return _validate
 
 # v3.2-0426d: New translation parameters (admin-controllable)
 translation_temperature = 0.0     # 0.0 = deterministic, 0.3 = slight variety. Translation should be 0~0.3.
@@ -1294,12 +1388,10 @@ prompt_caching_enabled = True       # Use prefix-stable system prompts for 75% d
 # Kept independently toggleable; default ON because it's free upside.
 prompt_cache_key_enabled = True
 
-# v3.9.35: OpenAI 24h Extended Prompt Cache Retention
-# 預設 OFF(保守) — 切到 ON 後,所有支援的 OpenAI model(gpt-5.1+, 5.2+, 5.4+, 5.5+)
-# 都會自動傳 prompt_cache_retention="24h",cache TTL 從 5-10 分鐘延長到 24 小時。
-# 對歐那 LINE bot 工廠 24/7 換班場景:夜班 dead time 後 cache 仍存活,早班直接命中。
-# 不支援的 model(gpt-5/5-mini/5-nano, gpt-4*)會自動 skip(防 400)。
-# 預估省下:夜班→早班 cache hit 從 0% → ~90%,輸入 token 成本省 70-90%。
+# OpenAI legacy 24h extended prompt-cache retention.
+# This switch applies only to older models that still accept
+# prompt_cache_retention="24h". GPT-5.6+ uses the current cache protocol with a
+# 30-minute minimum TTL by default; prompt_cache_key remains enabled separately.
 openai_24h_cache_enabled = True
 
 
@@ -1322,7 +1414,7 @@ def _pick_aux_model(purpose="utility"):
     造成反譯、OCR 輔助或正規化流程 404。現統一使用 gpt-5.4-nano。
     """
     md = ai_provider.normalize_openai_model(model_default)
-    if md.startswith(("gpt-5.4", "gpt-5.5", "gpt-4.1")):
+    if md.startswith(("gpt-5.6", "gpt-5.4", "gpt-5.5", "gpt-4.1")):
         return ai_provider.DEFAULT_OPENAI_AUX_MODEL
     return ai_provider.DEFAULT_OPENAI_MODEL
 
@@ -1359,10 +1451,8 @@ def _build_aux_kwargs(model_name, messages, max_out_tokens=500, temperature=0.0,
         kwargs["verbosity"] = "low"
     if cache_key and model_supports(model_name, "prompt_cache_key"):
         kwargs["prompt_cache_key"] = cache_key
-    # v3.9.35: 24h Extended Cache Retention
-    # 對歐那場景關鍵:LINE bot 工廠 24/7 換班,夜班 dead time 後 cache 仍存活
-    # 預設 in-memory 只 5-10 分鐘,夜班 OFF 後早班 cache miss
-    # 24h 啟用後省 90% input token,只在已知支援的 model 啟用(防 400)
+    # Legacy 24h retention: exact-model gated so GPT-5.6 never receives the
+    # deprecated prompt_cache_retention field.
     if openai_24h_cache_enabled and model_supports(model_name, "prompt_cache_retention"):
         kwargs["prompt_cache_retention"] = "24h"
     return kwargs
@@ -1488,8 +1578,53 @@ def get_group_tone(group_id):
     return translation_tone, translation_tone_custom
 
 
+def _translation_needs_upgrade_model(text):
+    """Return True for short requests whose operational risk justifies the quality model.
+
+    Length alone is a weak routing signal: a six-character factory instruction can
+    be more consequential than a long casual message.  This local classifier does
+    not call an AI and therefore adds effectively no network latency.  It reuses
+    the request-wide semantic contract and the existing quality-critical flag,
+    then applies only conservative factory/safety structure heuristics.
+    """
+    source = str(text or "")
+    if not source.strip():
+        return False
+
+    if bool(getattr(_tl, "quality_gate_critical", False)):
+        return True
+    contract = getattr(_tl, "semantic_contract", None)
+    if isinstance(contract, dict) and (
+        contract.get("has_risk") or contract.get("requires_llm")
+    ):
+        return True
+
+    compact = re.sub(r"\s+", "", source)
+    line_count = len([line for line in source.splitlines() if line.strip()])
+    # Multi-row instructions and code/measurement-heavy messages are more prone
+    # to omissions and deserve the stronger model even when under the char limit.
+    technical_atoms = re.findall(
+        r"(?:[A-Z]{1,6}[-_/.:]?[A-Z0-9]{1,16}|\d+(?:\.\d+)?(?:mm|cm|kg|g|t|%|°C|℃)?)",
+        source,
+        re.I,
+    )
+    if line_count >= 4 or (len(compact) >= 32 and len(technical_atoms) >= 4):
+        return True
+
+    # Safety, quality and irreversible-operation messages should not be routed to
+    # the cheapest model solely because they are short.
+    critical_cues = (
+        "禁止", "不得", "務必", "必須", "危險", "安全", "停機", "停線",
+        "異常", "報廢", "客訴", "混料", "錯料", "工傷", "立即", "緊急",
+        "dilarang", "wajib", "bahaya", "keselamatan", "stop mesin",
+        "abnormal", "scrap", "salah material", "segera", "darurat",
+    )
+    lowered = source.casefold()
+    return len(compact) >= 6 and any(cue.casefold() in lowered for cue in critical_cues)
+
+
 def pick_model(text):
-    """v3.9.33: Pick model based on text length, threshold, AND active provider.
+    """v3.32.1: Pick by provider, length and local translation risk.
     
     Anthropic 路徑(切到 Anthropic 且 claude_auto_switch_enabled=True):
       - 字數 < threshold 或 threshold=0 → claude_model_default(預設 Haiku 4.5)
@@ -1518,7 +1653,7 @@ def pick_model(text):
     
     if provider == "anthropic" and claude_auto_switch_enabled:
         # Anthropic 路徑:直接回傳 Claude model name,_AIProxy 看到 claude-* 會原樣使用,不查 mapping
-        if model_threshold > 0 and text_len >= model_threshold:
+        if model_threshold > 0 and (text_len >= model_threshold or _translation_needs_upgrade_model(text)):
             return claude_model_upgrade
         return claude_model_default
 
@@ -1529,12 +1664,12 @@ def pick_model(text):
             _g_default, _g_upgrade = ai_provider.get_gemini_models()
         except Exception:
             _g_default, _g_upgrade = gemini_model_default, gemini_model_upgrade
-        if model_threshold > 0 and text_len >= model_threshold:
+        if model_threshold > 0 and (text_len >= model_threshold or _translation_needs_upgrade_model(text)):
             return _g_upgrade
         return _g_default
 
     # OpenAI 路徑(或 Anthropic + 關閉自動切換)
-    if model_threshold > 0 and text_len >= model_threshold:
+    if model_threshold > 0 and (text_len >= model_threshold or _translation_needs_upgrade_model(text)):
         return ai_provider.normalize_translation_model(
             model_upgrade, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
     return ai_provider.normalize_translation_model(
@@ -1611,7 +1746,7 @@ def _round_trip_check(original_text, translated_text, src_lang, tgt_lang):
       similarity: float - Jaccard 相似度(沒有反譯時為 1.0)
       back_translation: str - 反譯結果
     """
-    if not oai or not translated_text:
+    if not _has_ai_capability("chat") or not translated_text:
         return True, 1.0, ""
     try:
         # v3.9.9: aux helper handles all model families automatically.
@@ -1964,8 +2099,8 @@ def _multi_path_back_translation(original, translation, src_lang, tgt_lang):
       'final_decision': str,   # 'all_pass' / 'partial' / 'all_fail'
     }
     """
-    if not oai:
-        return True, {"final_decision": "no_oai"}
+    if not _has_ai_capability("chat"):
+        return True, {"final_decision": "no_ai_provider"}
     
     details = {}
     
@@ -2069,7 +2204,7 @@ def translate_id_zh_with_pivot(text, src, tgt):
     
     回傳譯文(失敗時 None,呼叫端 fallback 到原本流程)
     """
-    if not oai or src != "id" or tgt != "zh":
+    if not _has_ai_capability("chat") or src != "id" or tgt != "zh":
         return None
     try:
         # 第 1 段:ID → EN(用 helper,自動配合主模型家族)
@@ -5411,7 +5546,7 @@ def repair_factory_translation_openai(src_text, bad_result, reason):
       - 公告類訊息要求完整翻譯,max_tokens 提升到 600
       - 依分類調整 user message 口徑
     """
-    if not oai:
+    if not _has_ai_capability("chat"):
         return None
     try:
         cls = classify_factory_message(src_text, src="id")
@@ -6483,6 +6618,121 @@ _FACTORY_DOMAIN_CONTEXT_ZH = (
     "站", "來料尺寸", "品質", "尺寸", "材料", "料", "工作站", "公司宣導", "規定",
 )
 
+# Backward-compatible work-order contract kept as a self-contained semantic layer.
+# Older tests/admin tools extract only these symbols from app.py; keeping this layer
+# independent also prevents future domain-registry refactors from silently disabling
+# the most safety-critical factory announcement rules.
+_FACTORY_WORK_ORDER_CONTEXT_ZH = (
+    "公司宣導", "規定", "按照工單", "工單資訊", "各站", "基本工作",
+    "來料尺寸", "表面品質", "短尺維護", "重量確認", "作業流程",
+)
+_FACTORY_WORK_ORDER_BAD_ID_PATTERNS = (
+    r"\btempat\s+buku\s+bahan\b", r"\bbuku\s+bahan\b",
+    r"\bperintah\s+kerja\b", r"\blembar\s+kerja\b",
+    r"\border\s+kerja\b", r"\binformasi\s+pesanan\b",
+    r"\bpemeliharaan\s+ukuran\s+pendek\b",
+    r"\bperawatan\s+ukuran\s+pendek\b",
+    r"\bpenggaris\s+pendek\b", r"\bkonfirmasi\s+bobot\b",
+)
+_FACTORY_WORK_ORDER_REQUIRED_ID = {
+    "work_order": ("work order",),
+    "work_order_info": ("informasi pada work order",),
+    "incoming_material_size": ("ukuran material masuk",),
+    "surface_quality": ("kualitas permukaan",),
+    "short_material_handling": ("penanganan material pendek",),
+    "weight_confirmation": ("konfirmasi berat",),
+    "workflow": ("alur kerja",),
+}
+_FACTORY_WORK_ORDER_TERM_NOTES = {
+    "work_order": "Translate 工單 exactly as 'work order'.",
+    "work_order_info": "Translate 工單資訊 exactly as 'informasi pada work order'.",
+    "incoming_material_size": "Translate 來料尺寸 exactly as 'ukuran material masuk'.",
+    "surface_quality": "Translate 表面品質 exactly as 'kualitas permukaan'.",
+    "short_material_handling": "Translate 短尺維護 exactly as 'penanganan material pendek'.",
+    "weight_confirmation": "Translate 重量確認 exactly as 'konfirmasi berat'.",
+    "workflow": "Translate 作業流程 exactly as 'alur kerja'.",
+}
+
+
+def _compact_zh_for_work_order(text):
+    return re.sub(r"\s+", "", text or "")
+
+
+def _classify_factory_work_order_zh_id(text):
+    compact = _compact_zh_for_work_order(text)
+    if "工單" not in compact:
+        return None
+    # UI labels such as「工單訂單資訊『訂單編號』」are not announcements/process rules.
+    context_hits = [term for term in _FACTORY_WORK_ORDER_CONTEXT_ZH if term in compact]
+    process_shape = any(term in compact for term in (
+        "不要", "不寫", "按照", "執行", "各站", "基本工作", "流程", "宣導", "規定",
+    ))
+    if not process_shape or len(context_hits) < 2:
+        return None
+    entries = ["work_order"]
+    source_map = (
+        ("工單資訊", "work_order_info"),
+        ("來料尺寸", "incoming_material_size"),
+        ("表面品質", "surface_quality"),
+        ("短尺維護", "short_material_handling"),
+        ("重量確認", "weight_confirmation"),
+        ("作業流程", "workflow"),
+    )
+    for source_term, key in source_map:
+        if source_term in compact:
+            entries.append(key)
+    return {
+        "term": "factory_work_order",
+        "sense": "factory_work_order_terms",
+        "entries": entries,
+        "evidence": context_hits[:10],
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+        "requires_validation": True,
+    }
+
+
+def _translation_has_any(translation, candidates):
+    low = (translation or "").lower()
+    return any((candidate or "").lower() in low for candidate in (candidates or ()))
+
+
+def _repair_factory_work_order_terms_zh_id(src_text, translation):
+    """Source-gated deterministic repair for established factory work-order terms."""
+    risk = _classify_factory_work_order_zh_id(src_text)
+    result = (translation or "").strip()
+    if not risk or not result:
+        return result
+
+    def sub(pattern, replacement):
+        nonlocal result
+        result = re.sub(pattern, replacement, result, flags=re.I)
+
+    for pattern in (
+        r"\btempat\s+buku\s+bahan\b", r"\bbuku\s+bahan\b",
+        r"\bsurat\s+perintah\s+kerja\b", r"\bperintah\s+kerja\b",
+        r"\blembar\s+kerja\b", r"\border\s+kerja\b",
+    ):
+        sub(pattern, "work order")
+    if "work_order_info" in risk["entries"]:
+        sub(r"\binformasi\s+(?:pesanan|order|perintah\s+kerja|work order)\b",
+            "informasi pada work order")
+    if "incoming_material_size" in risk["entries"]:
+        sub(r"\bukuran\s+(?:bahan|material)(?:\s+yang)?\s+masuk\b", "ukuran material masuk")
+    if "surface_quality" in risk["entries"]:
+        sub(r"\b(?:mutu|kualitas)\s+permukaan\b", "kualitas permukaan")
+    if "short_material_handling" in risk["entries"]:
+        for pattern in (
+            r"\b(?:pemeliharaan|perawatan)\s+(?:penggaris|ukuran|material)\s+pendek\b",
+            r"\bpenggaris\s+pendek\b",
+        ):
+            sub(pattern, "penanganan material pendek")
+    if "weight_confirmation" in risk["entries"]:
+        sub(r"\bkonfirmasi\s+(?:bobot|berat\s+badan)\b", "konfirmasi berat")
+    if "workflow" in risk["entries"]:
+        sub(r"\b(?:proses\s+operasi|proses\s+kerja|workflow)\b", "alur kerja")
+    return re.sub(r"\s+", " ", result).strip()
+
 
 def _semantic_compact_zh(text):
     return re.sub(r"\s+", "", text or "")
@@ -6768,6 +7018,16 @@ def build_translation_semantic_contract(text, src, tgt):
             pass
 
     if src == "zh" and tgt == "id":
+        _work_order_fn = globals().get("_classify_factory_work_order_zh_id")
+        work_order = _work_order_fn(text) if callable(_work_order_fn) else None
+        if work_order:
+            contract["has_risk"] = True
+            contract["risks"].append(work_order)
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
+
         qing = _classify_qing_sense_zh_id(text)
         if qing and qing.get("sense") in ("treat_sponsor_pay_for", "ambiguous_qing"):
             contract["has_risk"] = True
@@ -6844,6 +7104,14 @@ def build_translation_semantic_contract_prompt(contract):
             lines.append("Translate the station name exactly as: Stasiun packing barang bentuk khusus.")
             lines.append("Keep 異型棒 separate: 異型棒 means batang bentuk khusus.")
             lines.append("</risk>")
+        elif risk.get("sense") == "factory_work_order_terms":
+            lines.append("<risk term='factory_work_order' sense='factory_work_order_terms'>")
+            for key in risk.get("entries", []):
+                note = _FACTORY_WORK_ORDER_TERM_NOTES.get(key)
+                if note:
+                    lines.append(note)
+            lines.append("Do not use material-book, ruler, generic order, or body-weight meanings.")
+            lines.append("</risk>")
         elif risk.get("sense") == "factory_domain_term_semantics":
             lines.extend(_build_factory_domain_term_contract_lines(risk))
         elif risk.get("sense") == "factory_reason_action_semantics":
@@ -6875,6 +7143,14 @@ def translation_satisfies_semantic_contract(contract, translation):
             required = (risk.get("required_id") or "").lower().strip()
             if required and required not in low:
                 return False, "factory_station_canonical_name_missing"
+        elif risk.get("sense") == "factory_work_order_terms":
+            for pattern in _FACTORY_WORK_ORDER_BAD_ID_PATTERNS:
+                if re.search(pattern, low, flags=re.I):
+                    return False, "factory_work_order_forbidden_term"
+            for key in risk.get("entries", []):
+                required = _FACTORY_WORK_ORDER_REQUIRED_ID.get(key, ())
+                if required and not _translation_has_any(low, required):
+                    return False, "factory_work_order_missing:" + key
         elif risk.get("sense") == "factory_domain_term_semantics":
             for key in risk.get("entries", []):
                 entry = _FACTORY_DOMAIN_TERM_MAP_ZH_ID.get(key)
@@ -6995,6 +7271,10 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
                 translation,
                 risk.get("required_id") or "stasiun packing barang bentuk khusus",
             )
+        if risk.get("sense") == "factory_work_order_terms":
+            fixed = _repair_factory_work_order_terms_zh_id(src_text, translation)
+            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
+            return fixed if ok2 else fixed
         if risk.get("sense") == "factory_domain_term_semantics":
             fixed = _repair_factory_domain_term_translation(translation, risk)
             ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
@@ -7101,7 +7381,7 @@ def build_factory_context_hint_zh_id(text):
 
 
 def repair_factory_translation_openai_zh_id(src_text, bad_result, reason):
-    if not oai:
+    if not _has_ai_capability("chat"):
         return None
     try:
         deterministic = factory_semantic_translate_zh_id(src_text)
@@ -8458,6 +8738,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.9.57: timeout 30→90 秒。長訊息走 Sonnet 4.6 + extended thinking,
             # 30 秒可能不夠(Anthropic client 自帶 120s,但 OpenAI 路徑走這個值)。
             "timeout": 90,
+            # v3.32: 即時短訊息與長文使用不同總期限；協調層仍保證每家最多一次。
+            "latency_profile": "long_text" if len(text or "") >= 800 else "realtime_text",
+            "response_validator": _build_translation_response_validator(text, src, tgt),
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
             "translation_fast_quality": True,
@@ -8475,18 +8758,20 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # reasoning tokens + 輸出 tokens,長公告(>500 字)做不完,會被截斷或回空。
         # 新邏輯:輸入越長,輸出空間越大;reasoning model 額外給 reasoning 預算。
         _src_len = len(text or "")
-        # 估計輸出長度(中文/印尼文 ~1.5x 互譯,給 2x 安全係數)
-        _output_budget = max(800, int(_src_len * 2.5))
-        # reasoning model 還要額外給 reasoning 預算
-        if not model_supports(_model, "temperature"):  # 是 reasoning model
-            _output_budget = _output_budget + 4000  # 給 reasoning 4K 緩衝
-        # 上限 16K(防止意外炸掉)
-        _output_budget = min(_output_budget, 16000)
+        # v3.32: Generate fewer tokens. Translation uses the lowest viable reasoning
+        # effort, so reserving a fixed extra 4K tokens for every short LINE message
+        # only increases cost/tail latency. Size from source length with a modest
+        # tokenizer/language-expansion margin; add a small buffer only when the
+        # selected legacy family cannot run with reasoning=none.
+        _output_budget = max(384, int(_src_len * 3.2) + 256)
+        _translation_effort = optimal_reasoning_for_translation(_model)
+        if _translation_effort not in (None, "none"):
+            _output_budget += 768
+        _output_budget = min(_output_budget, 8192)
         if model_supports(_model, "max_completion_tokens"):
             _kwargs["max_completion_tokens"] = _output_budget
         elif model_supports(_model, "max_tokens"):
-            # 非 reasoning model 不需要 reasoning 緩衝
-            _kwargs["max_tokens"] = min(max(800, int(_src_len * 2.5)), 4000)
+            _kwargs["max_tokens"] = min(max(384, int(_src_len * 3.2) + 256), 4096)
         # v3.9.8 (2026-05): Translation-optimal reasoning_effort.
         # OpenAI's official guide: "gpt-4.1: gpt-5.2 with `none` reasoning"
         # Translation is a lightweight, instruction-following task. Higher
@@ -8638,8 +8923,17 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             r = ai.chat.completions.create(**_kwargs)
             _tl.llm_api_ms = (time.time() - _llm_t0) * 1000  # v3.31: API 純耗時
         except Exception as _te:
-            # v3.19: prediction 參數被拒(模型/帳號不支援)→ 拿掉重試一次,不讓整句失敗
-            if _prediction_used:
+            # 只有明確的 prediction 參數相容錯誤才重送一次。逾時、斷線、限流等
+            # 已由 provider 協調層接力，若在此無條件重送會把三家再跑一輪。
+            _te_msg = str(_te).lower()
+            _te_code = getattr(_te, "status_code", None)
+            _prediction_param_error = (
+                _prediction_used
+                and (_te_code in (400, 422) or "400" in _te_msg or "422" in _te_msg)
+                and "prediction" in _te_msg
+                and any(x in _te_msg for x in ("unsupported", "invalid", "unrecognized", "unknown"))
+            )
+            if _prediction_param_error:
                 logger.warning("[Predicted] call failed (%s), retry without prediction", str(_te)[:120])
                 _kwargs.pop("prediction", None)
                 _prediction_used = False
@@ -9727,7 +10021,10 @@ def _translate_core(text, src, tgt):
     _vec_result = None
     try:
         if _vec_future is not None:
-            _vec_result = _vec_future.result(timeout=6)
+            # Vector TM 是加速/參考層，不得阻塞即時翻譯。超過短等待窗就直接
+            # 走 LLM；future 可在背景完成並暖快取，但不再讓使用者多等 6 秒。
+            _vec_wait = max(0.05, min(1.5, float(os.environ.get("VECTOR_TM_WAIT_SECONDS", "0.6"))))
+            _vec_result = _vec_future.result(timeout=_vec_wait)
         else:
             _vec_result = vec_tm_module.vector_lookup(text, src, tgt, _gid_for_tm)
     except Exception as _vec_e:
@@ -10221,8 +10518,8 @@ def _translate_single_paragraph(text, src, tgt):
     if cached:
         return cached
     
-    # 3. Translate via OpenAI(用 retry,確保穩定)
-    result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
+    # 3. 統一 AI 協調層已處理三家接力；此處不可再做外層重試，否則會倍增呼叫。
+    result = translate_openai(text, src, tgt)
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
         cache_set(text, src, tgt, result)
@@ -10416,7 +10713,9 @@ def _translate_inner(text, src, tgt):
         except Exception as _e:
             logger.warning("Pivot attempt failed: %s", _e)
     
-    result = translate_with_retry(translate_openai, text, src, tgt, max_retries=2)
+    # 三家 provider 的接力、總期限與熔斷均由 ai_provider 統一處理。
+    # 這裡只發出一次主翻譯，避免外層 retry 再把整條 provider chain 重跑。
+    result = translate_openai(text, src, tgt)
     
     # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
     if pivot_result and result:
@@ -10424,27 +10723,21 @@ def _translate_inner(text, src, tgt):
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
 
-    # If source-language leakage is detected, retry with strict mode.
+    # 若品質閘門不通過，只允許一次「嚴格修復」呼叫；不再 strict + repair 連打兩次。
     if result and not is_translation_acceptable(text, result, src, tgt):
-        logger.warning("Source-language leakage detected in translation, retrying with stricter prompt")
-        strict_result = translate_openai(text, src, tgt, strict_no_source_script=True)
-        if strict_result:
-            strict_result = finalize_factory_translation(text, strict_result, src, tgt)
-        if strict_result and is_translation_acceptable(text, strict_result, src, tgt):
-            result = strict_result
-        else:
-            repaired = translate_openai(
-                text,
-                src,
-                tgt,
-                strict_no_source_script=True,
-                repair_mode=True,
-                bad_result=(strict_result or result)
-            )
-            if repaired:
-                repaired = finalize_factory_translation(text, repaired, src, tgt)
-            if repaired and is_translation_acceptable(text, repaired, src, tgt):
-                result = repaired
+        logger.warning("Translation quality gate failed; running one strict repair")
+        repaired = translate_openai(
+            text,
+            src,
+            tgt,
+            strict_no_source_script=True,
+            repair_mode=True,
+            bad_result=result,
+        )
+        if repaired:
+            repaired = finalize_factory_translation(text, repaired, src, tgt)
+        if repaired and is_translation_acceptable(text, repaired, src, tgt):
+            result = repaired
 
     if result and is_translation_acceptable(text, result, src, tgt):
         result = finalize_factory_translation(text, result, src, tgt)
@@ -10471,22 +10764,6 @@ def _translate_inner(text, src, tgt):
         if semantic:
             cache_set(text, src, tgt, semantic)
             return semantic
-
-    # Last chance: ask OpenAI to repair the latest output instead of returning a leaked translation.
-    if result:
-        repaired = translate_openai(
-            text,
-            src,
-            tgt,
-            strict_no_source_script=True,
-            repair_mode=True,
-            bad_result=result
-        )
-        if repaired:
-            repaired = finalize_factory_translation(text, repaired, src, tgt)
-        if repaired and is_translation_acceptable(text, repaired, src, tgt):
-            cache_set(text, src, tgt, repaired)
-            return repaired
 
     return None
 
@@ -10569,7 +10846,7 @@ def format_storage_for_work_order(customer_name):
 # 真正的 OCR 函式是 ocr_image_openai() (line 5198 附近)
 
 
-# Vision / OCR：GPT-5.4 mini 為預設，gpt-4.1-mini 為非推理備援。
+# Vision / OCR：GPT-5.6 Terra 為預設，跨三家視覺模型自動接力。
 # 環境變數若仍填舊型號，啟動時會自動遷移到現行白名單。
 VISION_MODEL = ai_provider.normalize_vision_model(
     os.environ.get("VISION_MODEL", ai_provider.DEFAULT_OPENAI_VISION_MODEL))
@@ -10578,146 +10855,105 @@ VISION_FALLBACK_MODEL = ai_provider.DEFAULT_OPENAI_VISION_FALLBACK_MODEL
 
 def _vision_call(messages, max_tokens, cache_key=None,
                  task_type="ocr", reasoning_override=None):
-    """v3.9.28: 完全用 model_supports 過濾參數,符合 GPT-5 系列官方規格。
-    
-    關鍵差異(對比一般翻譯任務):
-    - verbosity = "high"  → OCR 要忠實轉錄,不能壓縮
-      (官方 GPT-5 cookbook: "Raise verbosity when you need
-       faithful transcription rather than compressed summaries")
-    - reasoning_effort = optimal_for_translation (minimal / none)
-      → OCR 純抄字,不需要 reasoning
-    - timeout=30 雙保險
-    
-    Tries VISION_MODEL first, falls back to gpt-4.1-mini on failure.
-    
-    v3.2.2 Phase 19 (2026-05-15):
-      新增「圖片翻譯走 Claude vs OpenAI」獨立開關判斷:
-        - active=anthropic + image_use_claude=True  → 透過 ai (走 ai_provider → Claude vision)
-        - active=anthropic + image_use_claude=False → 強制 oai (繞過 ai_provider 走 OpenAI)
-        - active=openai                              → 一律 oai
-      用途:讓歐那「文字翻譯走 Claude,但圖片仍走 OpenAI」可獨立切換
-            避免 Claude 圖片 token 成本失控
+    """統一圖片/OCR 呼叫：三家 vision 共用期限、熔斷與自動接力。
 
-    v3.9.39 (2026-05-25):
-      新增 task_type 參數讓非 OCR 任務(場景描述)用不同調校:
-        - task_type="ocr"   → verbosity=high, 大 token budget (原行為)
-        - task_type="scene" → verbosity=low,  小 token budget (省成本+輸出短)
-      reasoning_override:強制覆寫 reasoning_effort(scene 用 minimal)
+    不再直接綁定 OpenAI client，也不在此層重跑第二個模型；模型映射與
+    provider 接力全部交給 ai_provider.chat_complete，避免重複重試。
     """
-    last_err = None
-    primary = VISION_MODEL
-    # === v3.2.2 Phase 19: 決定圖片走哪個 client ===
-    _vision_provider = ai_provider.get_active_provider()
-    _vision_use_claude = ai_provider.should_use_claude_for_images()
-    if _vision_provider == "anthropic" and _vision_use_claude:
-        # 圖片走 Claude — 用 ai (_AIProxy) 自動路由
-        _vision_client = ai
-        _vision_route = "claude"
-        # v3.9.33: 若 dual-model 自動切換 ON,圖片用 claude_model_default(預設 Haiku 4.5)
-        # 因為 OCR 是短任務性質,不需要強模型;走 mapping 表會 fallback 到 default_model,
-        # 結果可能跟歐那期待的「短模型」不一致。直接用 claude_model_default 比較可控。
-        if claude_auto_switch_enabled:
-            primary = claude_model_default
-            logger.info("[Vision] dual-model ON, vision uses claude_model_default=%s", primary)
+    active = ai_provider.get_active_provider()
+    use_claude = ai_provider.should_use_claude_for_images()
+    if active == "anthropic" and not use_claude:
+        # 開關 OFF 代表成本偏好，不再代表「Claude-only 時整個圖片功能失效」。
+        preference = ["openai", "gemini", "anthropic"]
+    elif active == "gemini":
+        preference = ["gemini", "openai", "anthropic"]
+    elif active == "anthropic":
+        preference = ["anthropic", "openai", "gemini"]
     else:
-        # 強制 OpenAI — 直接用 oai client,繞過 _AIProxy
-        if oai is None:
-            raise RuntimeError("OpenAI client 未初始化,且 image_translation_use_claude=False 強制 OpenAI")
-        _vision_client = oai
-        _vision_route = "openai_forced" if _vision_provider == "anthropic" else "openai"
-    logger.info("[Vision] route=%s (provider=%s, use_claude=%s, task=%s)",
-                _vision_route, _vision_provider, _vision_use_claude, task_type)
-    # v3.9.33 注意:當 _vision_client = ai (走 Claude),OpenAI fallback 型號會先
-    # 經 ai_provider 映射回 Claude 對應模型；OpenAI 路徑則直接使用 gpt-4.1-mini。
-    # 這意味著 Claude vision 失敗時 fallback 仍是 Claude — 但這已優於完全失敗。
-    # 若要真正 fallback 到 OpenAI,需歐那手動切換 active_provider,或關閉 Phase 19 toggle。
-    for attempt_model in (primary, VISION_FALLBACK_MODEL):
-        if attempt_model == VISION_FALLBACK_MODEL and primary == VISION_FALLBACK_MODEL:
-            break
+        preference = ["openai", "gemini", "anthropic"]
+
+    if not _has_ai_capability("vision"):
+        raise RuntimeError("沒有已設定且支援圖片辨識的 AI provider")
+
+    model = VISION_MODEL
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "timeout": 24,
+        "required_capability": "vision",
+        "provider_preference": preference,
+        "latency_profile": "vision",
+        "translation_fast_quality": True,
+    }
+
+    # OCR 需要完整輸出；場景描述只需短句。OpenAI 參數會在 provider 層按模型
+    # 過濾，Claude/Gemini 路徑只接收它們實際支援的欄位。
+    if model_supports(model, "max_completion_tokens"):
+        if task_type == "scene":
+            budget = max(max_tokens if max_tokens > 0 else 300, 512)
+        else:
+            # OCR needs room for dense tables, but GPT-5.6 translation runs with
+            # reasoning=none; a fixed extra 4K reasoning allowance is unnecessary.
+            budget = min(max(max_tokens, 3200), 12000)
+        kwargs["max_completion_tokens"] = budget
+    else:
+        kwargs["max_tokens"] = max_tokens
+
+    if model_supports(model, "temperature"):
+        kwargs["temperature"] = 0.0
+    if model_supports(model, "reasoning_effort"):
+        effort = reasoning_override or optimal_reasoning_for_translation(model)
+        if effort:
+            kwargs["reasoning_effort"] = effort
+    if model_supports(model, "verbosity"):
+        kwargs["verbosity"] = "low" if task_type == "scene" else "high"
+    if cache_key:
+        kwargs["prompt_cache_key"] = cache_key
+
+    try:
+        _event_log_write("vision_call_start", {
+            "model": model,
+            "provider_preference": preference,
+            "task_type": task_type,
+            "kwargs_keys": list(kwargs.keys()),
+        })
+    except Exception:
+        pass
+
+    try:
+        response = ai.chat.completions.create(**kwargs)
+        provider_used = getattr(response, "_jy_provider", active)
+        content = response.choices[0].message.content if response.choices else None
+        finish = response.choices[0].finish_reason if response.choices else None
         try:
-            kwargs = {
-                "model": attempt_model,
-                "messages": messages,
-                "timeout": 30,
-            }
-            # === 全部用 model_supports 過濾,確保 GPT-5 系列相容 ===
-            # Token limit
-            # v3.9.30b B11 修補: 之前寫死 3000,reasoning model 會被 reasoning tokens 吃光
-            # 改成依 reasoning model 額外加 4K reasoning 緩衝
-            # v3.9.39: task_type=scene 用緊縮 budget(場景描述只要 ~50 字)
-            if model_supports(attempt_model, "max_completion_tokens"):
-                if task_type == "scene":
-                    # 場景描述:短輸出,reasoning model 也只加 1K 緩衝
-                    _vision_budget = max_tokens if max_tokens > 0 else 300
-                    if not model_supports(attempt_model, "temperature"):
-                        _vision_budget = _vision_budget + 1000
-                else:
-                    # OCR 預設輸出 3000;若是 reasoning model 加 4K reasoning 預算
-                    _vision_budget = 3000
-                    if not model_supports(attempt_model, "temperature"):
-                        _vision_budget = 3000 + 4000
-                kwargs["max_completion_tokens"] = _vision_budget
-            elif model_supports(attempt_model, "max_tokens"):
-                kwargs["max_tokens"] = max_tokens
-            # Temperature(GPT-5 系列不支援)
-            if model_supports(attempt_model, "temperature"):
-                kwargs["temperature"] = 0.0
-            # Reasoning effort(GPT-5/o-series 才有)
-            if model_supports(attempt_model, "reasoning_effort"):
-                if reasoning_override:
-                    kwargs["reasoning_effort"] = reasoning_override
-                else:
-                    _opt = optimal_reasoning_for_translation(attempt_model)
-                    if _opt:
-                        kwargs["reasoning_effort"] = _opt
-            # Verbosity — OCR 用 HIGH,場景描述用 LOW
-            if model_supports(attempt_model, "verbosity"):
-                kwargs["verbosity"] = "low" if task_type == "scene" else "high"
-            
-            try:
-                _event_log_write("vision_call_start", {
-                    "model": attempt_model,
-                    "kwargs_keys": list(kwargs.keys()),
-                })
-            except Exception:
-                pass
-            
-            logger.info("[Vision] calling %s with kwargs=%s", attempt_model, list(kwargs.keys()))
-            r = _vision_client.chat.completions.create(**kwargs)
-            
-            if attempt_model != primary:
-                logger.warning("[Vision] fell back from %s to %s", primary, attempt_model)
-            
-            try:
-                _content = r.choices[0].message.content if r.choices else None
-                _finish = r.choices[0].finish_reason if r.choices else None
-                _usage_dict = r.usage.model_dump() if hasattr(r, 'usage') and r.usage else None
-                _event_log_write("vision_call_done", {
-                    "model": attempt_model,
-                    "finish": _finish,
-                    "content_len": len(_content) if _content else 0,
-                    "usage": _usage_dict,
-                })
-                logger.info("[Vision] model=%s ok, finish=%s, content_len=%d",
-                            attempt_model, _finish, len(_content) if _content else 0)
-                if _finish == "length":
-                    logger.warning("[Vision] WARNING: finish_reason=length, output truncated!")
-            except Exception as _le:
-                logger.warning("[Vision] logging error: %s", _le)
-            return r
-        except Exception as e:
-            last_err = e
-            try:
-                _event_log_write("vision_call_failed", {
-                    "model": attempt_model,
-                    "error": str(e)[:300],
-                    "error_type": type(e).__name__,
-                })
-            except Exception:
-                pass
-            logger.warning("[Vision] model %s failed: %r", attempt_model, e)
-            continue
-    raise last_err if last_err else RuntimeError("vision call failed")
+            usage = response.usage.model_dump() if hasattr(response, "usage") and hasattr(response.usage, "model_dump") else None
+            _event_log_write("vision_call_done", {
+                "model": getattr(response, "model", model),
+                "provider": provider_used,
+                "finish": finish,
+                "content_len": len(content) if content else 0,
+                "usage": usage,
+            })
+        except Exception:
+            pass
+        logger.info("[Vision] provider=%s model=%s finish=%s content_len=%d",
+                    provider_used, getattr(response, "model", model), finish,
+                    len(content) if content else 0)
+        if finish == "length":
+            logger.warning("[Vision] output truncated (finish_reason=length)")
+        return response
+    except Exception as exc:
+        try:
+            _event_log_write("vision_call_failed", {
+                "model": model,
+                "provider_preference": preference,
+                "error": str(exc)[:300],
+                "error_type": type(exc).__name__,
+            })
+        except Exception:
+            pass
+        logger.error("[Vision] all providers failed: %r", exc)
+        raise
 
 
 def _clean_ocr_status_bar(text):
@@ -11152,7 +11388,7 @@ def ocr_factory_reason_table_rows_openai(image_base64, mime_type="image/jpeg"):
     source OCR only; translation is handled later by the shared factory reason
     semantic layer.
     """
-    if not oai:
+    if not _has_ai_capability("vision"):
         return None
     expected_rows, sheets = _factory_reason_row_contact_sheets(image_base64, mime_type=mime_type)
     try:
@@ -11243,7 +11479,7 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
     second pass is used only when the first OCR result indicates an ERP reason
     table; it instructs the model to read by horizontal grid row, not by column.
     """
-    if not oai:
+    if not _has_ai_capability("vision"):
         return None
     if mime_type == "image/heic":
         mime_type = "image/jpeg"
@@ -11311,7 +11547,7 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
       - 失敗時詳細記錄 raw response,方便偵錯
     v3.9.17: 加 mime_type 參數 — 不能再寫死 jpeg,LINE 可能傳 PNG/HEIC
     """
-    if not oai:
+    if not _has_ai_capability("vision"):
         return None
     # v3.9.17: HEIC OpenAI 不支援,改用 jpeg(雖然會失敗但至少 OpenAI 會給明確錯誤)
     if mime_type == "image/heic":
@@ -11502,26 +11738,14 @@ def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
     """以視覺方式描述工廠現場場景(主體+異常),供翻譯上下文使用。
 
     v3.9.39 雙系統相容:不直接檢查 oai,而是檢查「整體能否做 vision」
-      - active=openai                    → 走 OpenAI(gpt-5.4-mini)
+      - active=openai                    → 走 OpenAI(gpt-5.6-luna)
       - active=anthropic + use_claude=T  → 走 Claude vision(~$0.001-0.005)
-      - active=anthropic + use_claude=F  → 走 OpenAI(若 oai 存在)
+      - active=anthropic + use_claude=F  → 優先走其他視覺 provider；失敗時仍由統一接力層處理
     走 _vision_call(task_type="scene") 拿到的是低 verbosity + 小 token budget。
     失敗或無法判讀 → 回 ""(不影響翻譯主流程)。
     """
-    # v3.9.39 雙系統 guard:檢查至少一條 vision 路徑可走
-    # 不能用 `if not oai:` — Anthropic-only 設定下 oai 是 None 但 Claude vision OK
-    try:
-        _active = ai_provider.get_active_provider()
-        _use_claude = ai_provider.should_use_claude_for_images()
-        _has_claude_path = (_active == "anthropic" and _use_claude)
-        _has_openai_path = (oai is not None)
-        if not (_has_claude_path or _has_openai_path):
-            return ""
-    except Exception:
-        # ai_provider 沒載入時的 fallback:回到舊邏輯
-        if oai is None:
-            return ""
-        _has_claude_path = False
+    if not _has_ai_capability("vision"):
+        return ""
     try:
         msgs = [
             {
@@ -11642,7 +11866,7 @@ def get_recent_media_scene(group_id, user_id):
 
 def ocr_and_translate_image(image_base64, tgt_lang):
     """OCR + translate image text in one API call, preserving layout."""
-    if not oai:
+    if not _has_ai_capability("vision"):
         return None, None
     tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
     tgt_flag = LANG_FLAGS.get(tgt_lang, "")
@@ -14213,9 +14437,9 @@ def handle_image(event):
         return
 
     # Need OpenAI for image OCR
-    if not oai:
-        _event_log_write("image_aborted", {"reason": "openai_not_initialized"})
-        logger.warning("No OpenAI key, cannot do image OCR")
+    if not _has_ai_capability("vision"):
+        _event_log_write("image_aborted", {"reason": "no_vision_provider"})
+        logger.warning("No vision-capable AI provider, cannot do image OCR")
         return
 
     # v3.9.25: 把整個 OCR + 翻譯 + reply 移到背景 thread,
@@ -14645,7 +14869,7 @@ def _process_pending_image_translate_inner(event, message_id):
         return
 
     group_id = info["group_id"]
-    if not oai:
+    if not _has_ai_capability("vision"):
         _reply_or_push("❌ 系統未設定 OpenAI,無法 OCR 圖片\nSistem belum diatur, tidak bisa OCR gambar")
         return
 
@@ -17364,7 +17588,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">短訊息(便宜)</label>
       <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.4-mini">⭐ 5.4-mini($0.75/$4.50)</option>
+        <option value="gpt-5.6-luna">⭐ 5.6 Luna($1/$6，日常翻譯)</option>
+        <option value="gpt-5.6-terra">🟡 5.6 Terra($2.5/$15，長文)</option>
+        <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
+        <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1-mini">🟢 4.1-mini($0.40/$1.60)</option>
         <option value="gpt-5.4-nano">💰 5.4-nano($0.20/$1.25)</option>
         <option value="gpt-4.1">🟡 4.1($2/$8)</option>
@@ -17457,7 +17684,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
         <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">短訊息(便宜)</div>
         <select id="aip-claude-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
           <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5($1/$5)</option>
-          <option value="claude-sonnet-4-6">🟡 Sonnet 4.6($3/$15)</option>
+          <option value="claude-sonnet-5">⭐ Sonnet 5($3/$15，速度/智慧平衡)</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6($3/$15，相容)</option>
           <option value="claude-opus-4-7">🔴 Opus 4.7($5/$25)</option>
         </select>
       </div>
@@ -17465,7 +17693,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
         <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">長訊息(升級)</div>
         <select id="aip-claude-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
           <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5</option>
-          <option value="claude-sonnet-4-6" selected>🟡 Sonnet 4.6</option>
+          <option value="claude-sonnet-5" selected>⭐ Sonnet 5</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6(相容)</option>
           <option value="claude-opus-4-7">🔴 Opus 4.7</option>
         </select>
       </div>
@@ -17481,7 +17710,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div id="aip-claude-single-model" style="display:none">
     <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
       <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
-      <option value="claude-sonnet-4-6">🟡 Claude Sonnet 4.6(平衡,$3/$15 per M)</option>
+      <option value="claude-sonnet-5">⭐ Claude Sonnet 5(速度/智慧平衡,$3/$15 per M)</option>
+      <option value="claude-sonnet-4-6">Claude Sonnet 4.6(相容,$3/$15 per M)</option>
       <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
     </select>
     <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型(全 LINE bot 翻譯都用同一個)</button>
@@ -17490,7 +17720,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.6">
     ✅ <strong style="color:#10b981">省錢策略</strong>:開啟字數切換,工人閒聊全走 Haiku 省 75%,工單長翻譯才升 Sonnet。<br>
     🟢 Haiku 4.5:推薦,品質夠用,便宜。<br>
-    🟡 Sonnet 4.6:翻譯品質更好,但每筆貴 3 倍。<br>
+    ⭐ Sonnet 5:速度與智慧平衡；即時翻譯會關閉不必要 thinking 並使用 low effort。<br>
     🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。
   </div>
 </div>
@@ -17628,7 +17858,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     🎯 <strong>v3.2 Adaptive Thinking</strong>:Claude 自己判斷簡單句不思考、複雜句深思考,省 token + 提質。<br>
     🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
     🖼️ <strong>v3.2.2 圖片翻譯獨立開關</strong>:Claude vision 一張 ~1MP 圖約 1600 tokens($0.008 input)。<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:文字仍走 Claude,圖片強制走 OpenAI gpt-5.4-mini(省成本但失去 Claude vision 優勢)。<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:圖片優先改走其他已設定且支援視覺的 AI；若主要供應商失敗或額度不足，仍由統一三家接力機制接手。<br>
     📝 <strong>v3.2.3 LINE 純文字模式</strong>:強制 Claude 不輸出 **粗體** # 標題 - bullet 等 markdown 廢字元。<br>
     &nbsp;&nbsp;&nbsp;&nbsp;LINE 不渲染 markdown,工人看到的是字面字元,關掉=容忍 Claude 自由發揮。<br>
     📐 <strong>v3.2.3 OCR 嚴格保版面</strong>:偵測到圖片時自動套用「行/欄/編號完全對應」規則。<br>
@@ -17659,7 +17889,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <tr><td style="padding:6px;color:#ddd">🎤 語音翻譯</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
       <tr><td style="padding:6px;color:#ddd">📊 信心度 (logprobs)</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
       <tr><td style="padding:6px;color:#ddd">⚡ 修補加速 (Predicted)</td><td style="text-align:center">✅</td><td style="text-align:center;color:#e85">❌</td></tr>
-      <tr><td style="padding:6px;color:#ddd">💰 Prompt Cache</td><td style="text-align:center">✅ 5m</td><td style="text-align:center">✅ 5m + 1h</td></tr>
+      <tr><td style="padding:6px;color:#ddd">💰 Prompt Cache</td><td style="text-align:center">✅ 5.6 ≥30m</td><td style="text-align:center">✅ 5m + 1h</td></tr>
       <tr><td style="padding:6px;color:#ddd">🧠 Thinking 思考鏈</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
       <tr><td style="padding:6px;color:#ddd">📚 Search Result 引用</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
       <tr><td style="padding:6px;color:#ddd">🔖 Citations 標注</td><td style="text-align:center;color:#e85">❌</td><td style="text-align:center;color:#10b981">✅ 獨家</td></tr>
@@ -17950,7 +18180,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.4-mini">⭐ gpt-5.4-mini（$0.75 / $4.50，推薦）</option>
+<option value="gpt-5.6-luna">⭐ gpt-5.6-luna（$1 / $6，即時翻譯）</option>
+<option value="gpt-5.6-terra">gpt-5.6-terra（$2.50 / $15，品質平衡）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，最高品質）</option>
+<option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，相容）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60，穩定）</option>
 <option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最省）</option>
 <option value="gpt-4.1">gpt-4.1（$2.00 / $8.00）</option>
@@ -17961,7 +18194,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.4">⭐ gpt-5.4（$2.50 / $15.00，推薦長文）</option>
+<option value="gpt-5.6-terra">⭐ gpt-5.6-terra（$2.50 / $15，推薦長文）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，關鍵公告）</option>
+<option value="gpt-5.6-luna">gpt-5.6-luna（$1 / $6）</option>
+<option value="gpt-5.4">gpt-5.4（$2.50 / $15.00，相容）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
 <option value="gpt-4.1">gpt-4.1（$2.00 / $8.00，穩定）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60）</option>
@@ -17971,36 +18207,38 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 <button class="btn btn-primary btn-sm" onclick="saveModelSettings()">儲存模型設定</button>
 <div id="modelSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
-<!-- v3.9.35: OpenAI 24h Extended Cache Retention -->
+<!-- OpenAI legacy 24h Extended Cache Retention -->
 <div style="margin-top:10px;padding:8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e">
   <div style="display:flex;justify-content:space-between;align-items:center">
     <div>
-      <div style="font-size:13px;color:#e0e0e0">⏰ <strong>24 小時延長 Cache</strong></div>
-      <div style="font-size:11px;color:#888;margin-top:2px">夜班 dead time 後 cache 仍存活,工廠 24/7 場景省 70-90%</div>
+      <div style="font-size:13px;color:#e0e0e0">⏰ <strong>舊版模型 24 小時 Cache</strong></div>
+      <div style="font-size:11px;color:#888;margin-top:2px">只套用仍支援 legacy 24h retention 的 OpenAI 模型</div>
     </div>
     <label class="toggle" style="transform:scale(0.8)"><input type="checkbox" id="openai24hCache" onchange="saveOpenAI24hCache(this.checked)"><span class="slider"></span></label>
   </div>
   <div style="font-size:10px;color:#666;margin-top:6px;line-height:1.4">
-    ⚠️ 僅 GPT-5.4/5.5 系列啟用；GPT-4.1 系會自動略過，不會送出不相容參數。<br>
-    💡 預設 OFF,因為部分 model 在某些區域可能不支援。先測試確認 cache hit 再開。
+    GPT-5.6 使用新版 Prompt Cache（最低 30 分鐘，並使用穩定 cache key），不會傳送已棄用的 24h 欄位。<br>
+    GPT-5.5／5.4／5.2／5.1／GPT-4.1 等相容模型才會套用此開關。
   </div>
 </div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
-<b>📋 OpenAI 翻譯模型指引（2026-06-16）</b><br>
-🔹 <b>gpt-5.4-mini</b>— 日常翻譯首選，兼顧品質、速度與成本。<br>
-🔹 <b>gpt-4.1-mini</b>— 非推理模型，輸出穩定、成本低。<br>
-🔹 <b>gpt-5.4-nano</b>— 適合大量簡短訊息；複雜公告不建議。<br>
-🔹 <b>gpt-5.4</b>— 長公告、被動句與複雜工廠語境。<br>
-🔹 <b>gpt-5.5</b>— 最高品質但成本最高，只建議重要內容。<br>
-<b>GPT-5.4/5.5</b> 翻譯會自動使用 <code>reasoning_effort=none</code>，避免不必要延遲與推理費用。<br>
+<b>📋 OpenAI 翻譯模型指引（2026-07-12）</b><br>
+🔹 <b>gpt-5.6-luna</b>— 即時、高量翻譯預設，速度與成本優先。<br>
+🔹 <b>gpt-5.6-terra</b>— 長公告、被動句、圖片與複雜工廠語境。<br>
+🔹 <b>gpt-5.6-sol</b>— 關鍵內容最高品質選項，成本最高。<br>
+🔹 <b>gpt-4.1-mini / 5.4 系列</b>— 保留作相容與成本選項。<br>
+<b>GPT-5.4/5.5/5.6</b> 翻譯會自動使用 <code>reasoning_effort=none</code>，避免不必要延遲與推理費用。<br>
 價格格式：每百萬 input/output token（USD）。
 </div>
 
 <div style="border-top:1px solid #2a2a3e;padding-top:12px;margin-top:12px">
 <div style="font-weight:600;margin-bottom:6px">📷 照片分析模型（Vision / OCR）</div>
-<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖。失敗自動 fallback 到 gpt-4.1-mini。</div>
+<div class="card-sub" style="margin-bottom:8px">處理工單照片、班表、文字截圖。失敗由 OpenAI、Gemini、Claude 視覺能力自動接力。</div>
 <select id="visionModel" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px;margin-bottom:8px">
-<option value="gpt-5.4-mini">⭐ gpt-5.4-mini（推薦 OCR / 圖片翻譯）</option>
+<option value="gpt-5.6-terra">⭐ gpt-5.6-terra（推薦 OCR / 複雜圖片）</option>
+<option value="gpt-5.6-luna">gpt-5.6-luna（快速圖片翻譯）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（最高品質）</option>
+<option value="gpt-5.4-mini">gpt-5.4-mini（相容）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（穩定、成本較低）</option>
 <option value="gpt-5.4-nano">gpt-5.4-nano（最省，細字辨識較弱）</option>
 <option value="gpt-4.1">gpt-4.1（非推理高品質）</option>
@@ -18010,7 +18248,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <button class="btn btn-primary btn-sm" onclick="saveVisionModel()">儲存照片模型</button>
 <div id="visionSaveResult" style="font-size:12px;color:#8a8a9a;margin-top:4px"></div>
 <div style="font-size:11px;color:#666;margin-top:6px;padding:6px 8px;background:#0d0d1a;border-radius:6px;border:1px solid #2a2a3e;line-height:1.6">
-⭐ <b>gpt-5.4-mini</b> 是目前預設 OCR 模型，支援文字與圖片輸入。<br>
+⭐ <b>gpt-5.6-terra</b> 是目前預設 OCR 模型，支援文字與圖片輸入。<br>
 🟢 <b>gpt-4.1-mini</b> 作為穩定備援，避免 reasoning 模型參數不相容。<br>
 Vision call 會依模型能力自動切換 <code>max_completion_tokens</code> / <code>max_tokens</code>，並過濾不支援參數。
 </div>
@@ -18660,7 +18898,7 @@ async function batchListJobs(){
 
 async function batchSetConfig(){
   const enabled = confirm('啟用 Batch API?(取消 = 停用)');
-  const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-5.4-mini):', 'gpt-5.4-mini');
+  const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-5.6-luna):', 'gpt-5.6-luna');
   if(openai_model === null) return;
   const anthropic_model = prompt('Anthropic batch 用的模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
   if(anthropic_model === null) return;
@@ -18846,7 +19084,7 @@ async function nmtSetConfig(){
 
 async function qeSetConfig(){
   const enabled = confirm('啟用 Quality Estimation?(取消 = 停用)');
-  const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-5.4-mini):', 'gpt-5.4-mini');
+  const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-5.6-luna):', 'gpt-5.6-luna');
   if(openai_model === null) return;
   const anthropic_model = prompt('Anthropic provider 時用的 QE 模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
   if(anthropic_model === null) return;
@@ -18865,9 +19103,9 @@ async function qeSetConfig(){
 
 async function apeSetConfig(){
   const enabled = confirm('啟用 Auto Post-Editing?(取消 = 停用)');
-  const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-5.4):', 'gpt-5.4');
+  const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-5.6-terra):', 'gpt-5.6-terra');
   if(openai_model === null) return;
-  const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-4-6):', 'claude-sonnet-4-6');
+  const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-5):', 'claude-sonnet-5');
   if(anthropic_model === null) return;
   const trigger = prompt('觸發門檻(QE 分數 < 此值才 APE,預設 70):', '70');
   if(trigger === null) return;
@@ -18939,8 +19177,8 @@ async function aipLoadStatus(){
     // v3.25: OpenAI 頁填值 + 首次載入自動開「目前主力」的分頁
     try{
       if(d.openai_models){
-        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-5.4-mini';
-        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-5.4';
+        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-5.6-luna';
+        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-5.6-terra';
       }
       var _fx=document.getElementById('aip-oai-flex');
       if(_fx) _fx.checked = !(cfg.openai_features && cfg.openai_features.flex_background === false);
@@ -18962,7 +19200,7 @@ async function aipLoadStatus(){
     // 載入當前 Anthropic 模型映射(gpt-5.4-mini 的對應)
     try {
       const mapping = cfg.model_mapping || {};
-      const currentModel = mapping['gpt-5.4-mini'] || 'claude-haiku-4-5-20251001';
+      const currentModel = mapping['gpt-5.6-luna'] || mapping['gpt-5.4-mini'] || 'claude-haiku-4-5-20251001';
       const sel = document.getElementById('aip-anthropic-model');
       if (sel) sel.value = currentModel;
     } catch(e) {}
@@ -19031,7 +19269,7 @@ async function aipLoadStatus(){
         if (document.getElementById('aip-claude-default'))
           document.getElementById('aip-claude-default').value = fd.claude_model_default || 'claude-haiku-4-5-20251001';
         if (document.getElementById('aip-claude-upgrade'))
-          document.getElementById('aip-claude-upgrade').value = fd.claude_model_upgrade || 'claude-sonnet-4-6';
+          document.getElementById('aip-claude-upgrade').value = fd.claude_model_upgrade || 'claude-sonnet-5';
         if (document.getElementById('aip-shared-threshold'))
           document.getElementById('aip-shared-threshold').textContent = (fd.model_threshold || 0);
       }
@@ -19386,7 +19624,7 @@ async function aipUpdateAnthropicModel(){
     const mapping = (cur.config && cur.config.model_mapping) || {};
     // 把 LINE bot 內所有 OpenAI 模型(主翻譯 + OCR + 修補 + 輔助等)全部映射到新模型
     const ALL_OPENAI_MODELS = [
-      'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-5.4-nano',
+      'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.4-mini', 'gpt-4.1-mini', 'gpt-5.4-nano',
       'gpt-4.1', 'gpt-5.4', 'gpt-5.5'
     ];
     for (const m of ALL_OPENAI_MODELS) {
@@ -21355,10 +21593,10 @@ async function _loadFeatures(gid){
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   // Model settings (global only, not per-group)
   if(!gid){
-    document.getElementById('modelDefault').value=d.model_default||'gpt-5.4-mini';
-    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-5.4';
+    document.getElementById('modelDefault').value=d.model_default||'gpt-5.6-luna';
+    document.getElementById('modelUpgrade').value=d.model_upgrade||'gpt-5.6-terra';
     // v3.9: vision (照片分析) model
-    if(document.getElementById('visionModel')) document.getElementById('visionModel').value=d.vision_model||'gpt-5.4-mini';
+    if(document.getElementById('visionModel')) document.getElementById('visionModel').value=d.vision_model||'gpt-5.6-terra';
     // v3.2-0426d Batch B: load advanced settings
     if(document.getElementById('ttemp')) document.getElementById('ttemp').value=(d.translation_temperature!==undefined?d.translation_temperature:0);
     if(document.getElementById('ttopp')) document.getElementById('ttopp').value=(d.translation_top_p!==undefined?d.translation_top_p:1.0);
@@ -21403,7 +21641,7 @@ async function _loadFeatures(gid){
     if(document.getElementById('aip-claude-default'))
       document.getElementById('aip-claude-default').value=d.claude_model_default||'claude-haiku-4-5-20251001';
     if(document.getElementById('aip-claude-upgrade'))
-      document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-4-6';
+      document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-5';
     if(document.getElementById('aip-shared-threshold'))
       document.getElementById('aip-shared-threshold').textContent=(d.model_threshold||0);
     // v3.9.35: OpenAI 24h cache toggle
@@ -21441,7 +21679,7 @@ function toggleFeatureSetting(key,val){
 function _modelFamily(name){
   if(!name) return 'unknown';
   var n=name.toLowerCase();
-  if(n.indexOf('gpt-5.5')===0||n.indexOf('gpt-5.4')===0||n.indexOf('gpt-5')===0) return 'gpt5';
+  if(n.indexOf('gpt-5.6')===0||n.indexOf('gpt-5.5')===0||n.indexOf('gpt-5.4')===0||n.indexOf('gpt-5')===0) return 'gpt5';
   if(n.indexOf('o1')===0||n.indexOf('o3')===0||n.indexOf('o4')===0) return 'oseries';
   if(n.indexOf('gpt-4')===0) return 'gpt4';
   return 'unknown';
@@ -21639,7 +21877,7 @@ function saveModelSettings(){
 function saveOpenAI24hCache(enabled){
   api('/features','POST',{openai_24h_cache_enabled: enabled}).then(function(d){
     if(d && d.ok){
-      toast(enabled ? '✅ 24h cache 已啟用' : '24h cache 已關閉');
+      toast(enabled ? '✅ 舊版模型 24h cache 已啟用' : '舊版模型 24h cache 已關閉');
     } else {
       toast('❌ 儲存失敗');
       var el=document.getElementById('openai24hCache');
@@ -27138,11 +27376,11 @@ def admin_apply_best_defaults():
     # The "best defaults" combo (researched May 2026)
     best = {
         # === Models ===
-        "model_default": "gpt-5.4-mini",      # 現行翻譯首選
-        "model_upgrade": "gpt-5.4",           # 長公告與複雜工廠語境
+        "model_default": "gpt-5.6-luna",      # 即時、高量翻譯
+        "model_upgrade": "gpt-5.6-terra",     # 長公告與複雜工廠語境
         "model_threshold": 150,               # 短訊息低延遲；長公告升級強模型
         "claude_model_default": "claude-haiku-4-5-20251001",
-        "claude_model_upgrade": "claude-sonnet-4-6",
+        "claude_model_upgrade": "claude-sonnet-5",
         "claude_auto_switch_enabled": True,
         "gemini_model_default": "gemini-3.1-flash-lite",
         "gemini_model_upgrade": "gemini-3.5-flash",
@@ -27586,12 +27824,12 @@ def debug_vision_test():
     Usage:
       GET /debug/vision-test?key=KEY                      → 用 hardcode 簡單測試圖
       GET /debug/vision-test?key=KEY&msg_id=XXX           → 用指定的 LINE message_id 測
-      GET /debug/vision-test?key=KEY&model=gpt-5.4-mini → 指定模型
+      GET /debug/vision-test?key=KEY&model=gpt-5.6-terra → 指定模型
     """
     if request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
-    if not oai:
-        return jsonify({"error": "OpenAI client not initialized"}), 500
+    if not _has_ai_capability("vision"):
+        return jsonify({"error": "No vision-capable AI provider configured"}), 500
     
     requested_model = request.args.get("model", "")
     line_msg_id = request.args.get("msg_id", "")
@@ -27736,7 +27974,7 @@ def debug_vision_test():
     html += "<p><b>用法:</b><br>"
     html += "&bull; <code>?key=KEY</code> → 用合成的 PNG 測試<br>"
     html += "&bull; <code>?key=KEY&amp;msg_id=LINE_MSG_ID</code> → 用真實 LINE 圖片測試<br>"
-    html += "&bull; <code>?key=KEY&amp;model=gpt-5.4-mini</code> → 換模型測<br>"
+    html += "&bull; <code>?key=KEY&amp;model=gpt-5.6-terra</code> → 換模型測<br>"
     html += "</p><hr>"
     html += "<h3>各階段:</h3>"
     import json as _json
@@ -28141,7 +28379,7 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 res = translate(text_to_translate, src, tgt_lang)
             except Exception as e:
                 logger.warning("translate_multi failed src=%s tgt=%s: %s", src, tgt_lang, e)
-                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5.4-mini)重試
+                # v3.9.57 fallback — 升級模型失敗時,用短訊息模型(Haiku/gpt-5.6-luna)重試
                 try:
                     _prov = ai_provider.get_active_provider()
                     _fb_model = {"anthropic": claude_model_default, "gemini": gemini_model_default}.get(_prov, model_default)
