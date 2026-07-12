@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.30-station-alias-root-fix-2026-06-21",
+    "app_version": "v3.32.1-risk-aware-quality-latency-2026-07-12",
     "schema_version": 2,
-    "state_hash": "8cf62e4abdad45ae65bccbd6f1fa4ee94dd66fac793a48f2adcabeb9ad07092e",
-    "updated_at_iso": "2026-07-09T12:38:50.479647+00:00",
-    "updated_at_unix": 1783600730.4796467
+    "state_hash": "8aa7bb258a0f3f7f49e4fef1771755de6abb6d0bcc45dc5d7dcb700819e09c53",
+    "updated_at_iso": "2026-07-12T02:30:40.919348+00:00",
+    "updated_at_unix": 1783823440.919348
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -91,6 +91,37 @@
       "thinking_effort": "low",
       "xml_system_prompt": true
     },
+    "failover_policy": {
+      "adaptive_backup_order": true,
+      "circuit_breaker_cooldown_seconds": 60,
+      "circuit_breaker_failures": 2,
+      "latency_ewma_alpha": 0.25,
+      "latency_profiles": {
+        "background": {
+          "per_provider": 45,
+          "total": 90
+        },
+        "long_text": {
+          "per_provider": 16,
+          "total": 40
+        },
+        "realtime_text": {
+          "per_provider": 8,
+          "total": 22
+        },
+        "vision": {
+          "per_provider": 20,
+          "total": 50
+        }
+      },
+      "per_provider_timeout_seconds": 24,
+      "provider_order": [
+        "openai",
+        "gemini",
+        "anthropic"
+      ],
+      "total_timeout_seconds": 60
+    },
     "gemini": {
       "default_model": "gemini-3.1-flash-lite",
       "upgrade_model": "gemini-3.5-flash"
@@ -106,18 +137,24 @@
       "gpt-5.4": "gemini-3.5-flash",
       "gpt-5.4-mini": "gemini-3.1-flash-lite",
       "gpt-5.4-nano": "gemini-3.1-flash-lite",
-      "gpt-5.5": "gemini-3.5-flash"
+      "gpt-5.5": "gemini-3.5-flash",
+      "gpt-5.6-luna": "gemini-3.1-flash-lite",
+      "gpt-5.6-sol": "gemini-3.5-flash",
+      "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-09 12:38:15",
+    "last_updated": "2026-07-12 02:27:42",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-4-6",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
       "gpt-4o": "claude-sonnet-4-6",
       "gpt-4o-mini": "claude-haiku-4-5-20251001",
-      "gpt-5.4": "claude-sonnet-4-6",
+      "gpt-5.4": "claude-sonnet-5",
       "gpt-5.4-mini": "claude-haiku-4-5-20251001",
       "gpt-5.4-nano": "claude-haiku-4-5-20251001",
-      "gpt-5.5": "claude-opus-4-7"
+      "gpt-5.5": "claude-sonnet-5",
+      "gpt-5.6-luna": "claude-haiku-4-5-20251001",
+      "gpt-5.6-sol": "claude-opus-4-7",
+      "gpt-5.6-terra": "claude-sonnet-4-6"
     },
     "openai": {
       "base_url": null
