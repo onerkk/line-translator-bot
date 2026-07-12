@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.32.8-indonesian-factory-register-2026-07-12",
+    "app_version": "v3.33.0-quality-speed-actions-2026-07-12",
     "schema_version": 6,
-    "state_hash": "31e22f23bfff423a7edfe163dbf609002d69528babc8713973ff52ecd56498bc",
-    "updated_at_iso": "2026-07-12T05:42:41.703292+00:00",
-    "updated_at_unix": 1783834961.7032917
+    "state_hash": "598bf46956253de3a4357834e1cfd9edd4ab2b4ec855286c86cc0ad9f150d05a",
+    "updated_at_iso": "2026-07-12T18:31:45.261232+00:00",
+    "updated_at_unix": 1783881105.261232
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-12 05:42:41",
+    "last_updated": "2026-07-12 12:08:06",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -166,10 +166,10 @@
   },
   "bot_stats": {
     "ant_cache_read": 558366,
-    "ant_cache_write": 1611279,
-    "ant_cost_usd": 2.483886450000001,
-    "ant_input": 219756,
-    "ant_output": 9535,
+    "ant_cache_write": 1635570,
+    "ant_cost_usd": 2.557493950000001,
+    "ant_input": 223196,
+    "ant_output": 10135,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 223,
-    "tokens_completion": 14782,
-    "tokens_prompt": 4136064,
+    "text_translations": 224,
+    "tokens_completion": 15382,
+    "tokens_prompt": 4163795,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -312,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.10942044999999989,
+      "cost_usd": 0.18302794999999994,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 459,
-      "tokens_prompt": 128957
+      "tokens_completion": 1059,
+      "tokens_prompt": 156688
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -370,7 +370,7 @@
   },
   "group_conv_settings": {},
   "group_flex_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
