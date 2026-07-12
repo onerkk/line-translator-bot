@@ -204,7 +204,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.32.1-risk-aware-quality-latency-2026-07-12"
+VERSION = "v3.32.3-three-provider-zero-touch-defaults-2026-07-12"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -17600,10 +17600,13 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
       <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.4">⭐ 5.4($2.50/$15)</option>
-        <option value="gpt-5.4-mini">🟢 5.4-mini($0.75/$4.50)</option>
-        <option value="gpt-4.1">🟡 4.1($2/$8)</option>
-        <option value="gpt-5.5">🔴 5.5($5/$30)</option>
+        <option value="gpt-5.6-terra">⭐ 5.6 Terra($2.50/$15，推薦長文)</option>
+        <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
+        <option value="gpt-5.6-luna">🟢 5.6 Luna($1/$6，速度優先)</option>
+        <option value="gpt-5.4">5.4($2.50/$15，相容)</option>
+        <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
+        <option value="gpt-4.1">4.1($2/$8，相容)</option>
+        <option value="gpt-5.5">5.5($5/$30，相容)</option>
       </select>
     </div>
   </div>
@@ -17611,11 +17614,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
     <div>
       <span style="color:#fff;font-size:12px;font-weight:600">⚡ Flex 背景半價</span>
-      <span style="color:#888;font-size:10px;display:block">背景品檢(QE/APE)走官方 Flex tier 省 50%;僅 GPT-5.4/5.5 系生效,4.1 系自動略過;主翻譯不受影響</span>
+      <span style="color:#888;font-size:10px;display:block">背景品檢(QE/APE)可走官方 Flex tier 降低成本；GPT-5.6/5.5/5.4 支援，主翻譯不受影響</span>
     </div>
     <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-oai-flex" onchange="aipSetFlexBg(this.checked)"><span class="slider"></span></label>
   </div>
-  <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">已自動啟用:Predicted Outputs(TM 高分句加速 2-5 倍)・prompt cache key・logprobs 信心・最低 reasoning。共用「設定」tab 字數門檻。</div>
+  <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">最佳預設已自動套用：短訊息 5.6 Luna、長訊息 5.6 Terra、150 字升級門檻。更新後不需再手動儲存。</div>
 </div>
 </div>
 
@@ -22401,7 +22404,7 @@ def _load_file_from_github(filename, branch="main"):
 _SETTINGS_FILENAME = "bot_settings.json"
 _SETTINGS_BRANCH = "data"
 _SETTINGS_KV_KEY = os.environ.get("BOT_SETTINGS_KV_KEY", "line_bot:bot_settings:v2").strip() or "line_bot:bot_settings:v2"
-_SETTINGS_SCHEMA_VERSION = 2
+_SETTINGS_SCHEMA_VERSION = 4  # v3.32.3: one-time migration for OpenAI + Claude + Gemini defaults
 _SETTINGS_REQUIRE_CLOUD = os.environ.get("REQUIRE_CLOUD_SETTINGS", "1").strip().lower() not in ("0", "false", "no", "off")
 _settings_io_lock = _threading.RLock()
 _last_persisted_state_hash = ""
@@ -22903,6 +22906,14 @@ def load_settings():
         logger.info("No durable bot settings found, starting fresh")
         return
     try:
+        try:
+            _loaded_settings_schema = int(((data.get("_meta") or {}).get("schema_version") or 0))
+        except (TypeError, ValueError):
+            _loaded_settings_schema = 0
+        # v3.32.3: one-time zero-touch migration for all three providers.
+        # Keep API keys and the user's active-provider choice, but replace stale
+        # model IDs and latency/quality defaults so no dashboard edits are needed.
+        _migrate_all_ai_defaults = _loaded_settings_schema < _SETTINGS_SCHEMA_VERSION
         group_settings.update(data.get("group_settings", {}))
         group_target_lang.update(data.get("group_target_lang", {}))
         group_img_settings.update(data.get("group_img_settings", {}))
@@ -23139,14 +23150,27 @@ def load_settings():
         if "send_metadata_to_openai" in data:
             send_metadata_to_openai = bool(data["send_metadata_to_openai"])
         group_tone_settings.update(data.get("group_tone_settings", {}))
-        if "model_default" in data:
-            model_default = ai_provider.normalize_translation_model(
-                data["model_default"], ai_provider.DEFAULT_OPENAI_MODEL)
-        if "model_upgrade" in data:
-            model_upgrade = ai_provider.normalize_translation_model(
-                data["model_upgrade"], ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
-        if "model_threshold" in data:
-            model_threshold = int(data["model_threshold"])
+        # v3.32.2 zero-touch model migration:
+        # Existing deployments may retain the old 5.4 / 5.5 selection in
+        # bot_settings.json.  On the first start after this update, apply the
+        # recommended production pair automatically so the administrator does
+        # not need to open the dashboard and press Save.
+        if _migrate_all_ai_defaults:
+            model_default = ai_provider.DEFAULT_OPENAI_MODEL
+            model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+            model_threshold = 150
+        else:
+            if "model_default" in data:
+                model_default = ai_provider.normalize_translation_model(
+                    data["model_default"], ai_provider.DEFAULT_OPENAI_MODEL)
+            if "model_upgrade" in data:
+                model_upgrade = ai_provider.normalize_translation_model(
+                    data["model_upgrade"], ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
+            if "model_threshold" in data:
+                try:
+                    model_threshold = max(0, int(data["model_threshold"]))
+                except (TypeError, ValueError):
+                    model_threshold = 150
         # v3.9.33: Anthropic 路徑獨立字數切換
         if "service_price_text" in data:
             service_price_text = str(data["service_price_text"])
@@ -23182,6 +23206,72 @@ def load_settings():
             claude_model_upgrade = str(data["claude_model_upgrade"])
         if "claude_auto_switch_enabled" in data:
             claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
+
+        # v3.32.3 zero-touch best defaults for all three providers. This runs
+        # once for settings schemas older than v4, after legacy/provider config
+        # restoration, so stale Claude/Gemini values cannot override the new
+        # defaults. API keys and active_provider are deliberately preserved.
+        if _migrate_all_ai_defaults:
+            model_default = ai_provider.DEFAULT_OPENAI_MODEL
+            model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+            model_threshold = 150
+            claude_model_default = "claude-haiku-4-5-20251001"
+            claude_model_upgrade = "claude-sonnet-5"
+            claude_auto_switch_enabled = True
+            gemini_model_default = "gemini-3.1-flash-lite"
+            gemini_model_upgrade = "gemini-3.5-flash"
+            try:
+                ai_provider._ensure_initialized()
+                with ai_provider._config_lock:
+                    _cfg = ai_provider._current_config
+                    _cfg["provider_failover"] = True
+                    _cfg["auto_switch_on_exhaust"] = True
+
+                    _anth = _cfg.setdefault("anthropic", {})
+                    _anth["default_model"] = claude_model_default
+                    _gem = _cfg.setdefault("gemini", {})
+                    _gem["default_model"] = gemini_model_default
+                    _gem["upgrade_model"] = gemini_model_upgrade
+
+                    # Merge the current official model mapping without deleting
+                    # any future/custom keys already stored by the administrator.
+                    for _field in ("model_mapping", "gemini_model_mapping"):
+                        _merged_map = dict(_cfg.get(_field, {}) or {})
+                        _merged_map.update(ai_provider.DEFAULT_CONFIG.get(_field, {}))
+                        _cfg[_field] = _merged_map
+
+                    _claude_features = _cfg.setdefault("claude_features", {})
+                    _claude_features.update({
+                        "prompt_caching": True,
+                        "extended_thinking": False,
+                        "thinking_effort": "low",
+                        "native_vision": True,
+                        "image_translation_use_claude": True,
+                        "line_plain_text_mode": True,
+                        "ocr_strict_layout": True,
+                    })
+                    _gemini_features = _cfg.setdefault("gemini_features", {})
+                    _gemini_features["reasoning_effort"] = "minimal"
+
+                    _recommended_policy = ai_provider.DEFAULT_CONFIG.get("failover_policy", {})
+                    _policy = _cfg.setdefault("failover_policy", {})
+                    for _key, _value in _recommended_policy.items():
+                        if isinstance(_value, dict):
+                            _policy[_key] = dict(_value)
+                        elif isinstance(_value, list):
+                            _policy[_key] = list(_value)
+                        else:
+                            _policy[_key] = _value
+                    if not ai_provider._save_config_to_disk(_cfg):
+                        logger.warning("Three-provider default migration could not persist ai_provider config")
+                logger.info(
+                    "Migrated all AI defaults: OpenAI=%s/%s, Claude=%s/%s, Gemini=%s/%s",
+                    model_default, model_upgrade,
+                    claude_model_default, claude_model_upgrade,
+                    gemini_model_default, gemini_model_upgrade)
+            except Exception as _ai_migrate_exc:
+                logger.warning("Three-provider default migration failed: %s", _ai_migrate_exc)
+
         # v3.9.35: OpenAI 24h cache retention
         if "openai_24h_cache_enabled" in data:
             openai_24h_cache_enabled = bool(data["openai_24h_cache_enabled"])
@@ -23236,6 +23326,12 @@ def load_settings():
             group_target_langs.update(data["group_target_langs"])
         _last_persisted_state_hash = ((data.get("_meta") or {}).get("state_hash")
                                       or _settings_state_hash(data))
+        if _migrate_all_ai_defaults:
+            try:
+                if not save_settings(force=True):
+                    logger.warning("Three-provider defaults are active in memory, but schema-v4 persistence failed")
+            except Exception as _persist_migrate_exc:
+                logger.warning("Three-provider defaults are active in memory, but persistence raised: %s", _persist_migrate_exc)
         logger.info("Loaded bot settings from %s: %d groups, %d DM users, %d protected names, %d custom examples, %d forms",
                      _last_settings_load_source, len(group_tracking), len(dm_known_users),
                      len(EXTRA_CUSTOMERS), len(custom_translation_examples), len(forms_data))
