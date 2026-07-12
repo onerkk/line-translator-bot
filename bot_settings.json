@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.33.0-quality-speed-actions-2026-07-12",
     "schema_version": 6,
-    "state_hash": "2829369b784bc097e8c5a60d7bf95f93645210f7602c1d8d52c5e91b2249afcf",
-    "updated_at_iso": "2026-07-12T18:31:47.731374+00:00",
-    "updated_at_unix": 1783881107.7313735
+    "state_hash": "60b2e5b4909ab768df45695f86e942c4ef854affefaee4fc49d0119f3df0790c",
+    "updated_at_iso": "2026-07-12T18:31:48.548218+00:00",
+    "updated_at_unix": 1783881108.5482175
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -370,7 +370,7 @@
   },
   "group_conv_settings": {},
   "group_flex_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true,
+    "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
