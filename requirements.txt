@@ -6,3 +6,4 @@ openpyxl
 anthropic>=0.40.0
 rapidfuzz>=3.5.0
 imageio-ffmpeg
+Pillow>=10,<12

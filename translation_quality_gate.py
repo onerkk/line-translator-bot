@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -25,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 8
-QUALITY_GATE_BUILD_ID = "2026-07-12.9-delivery-safe-single-call"
+QUALITY_GATE_API_VERSION = 9
+QUALITY_GATE_BUILD_ID = "2026-07-12.10-conditional-source-repair"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1056,25 +1057,60 @@ def review_translation(
     ai_client: Any = None,
     provider_preference: Optional[Sequence[str]] = None,
 ) -> Optional[str]:
-    """Compatibility shim for the former billable reviewer.
+    """Perform at most one source-grounded repair call.
 
-    Commercial single-request mode intentionally performs no model call here.
-    It returns the original candidate only when deterministic validation passes;
-    otherwise it returns ``None`` so the caller can block/log the result.
+    The repair is conditional: it runs only after deterministic validation found
+    a hard defect.  The model receives the protected source and the detected
+    issues, so it reconstructs the translation instead of polishing the bad
+    candidate.  A repaired result still has to pass the same local validator.
     """
-    if not source or not candidate:
+    if not source or not candidate or ai_client is None:
         return None
-    candidate = normalize_indonesian_factory_register(
-        source, candidate, src_lang, tgt_lang
+    glossary_pairs = _merge_runtime_glossary_pairs(
+        source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    report = validate_translation(
-        source, candidate, src_lang, tgt_lang,
-        glossary_pairs=_merge_runtime_glossary_pairs(
-            source, src_lang, tgt_lang, list(glossary_pairs or ())
-        ),
-        require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
+    immutable = protect_immutable_spans(source)
+    terms = protect_glossary_terms(immutable.protected, glossary_pairs)
+    protected_source = terms.protected
+    messages = _build_review_messages(
+        protected_source,
+        candidate,
+        src_lang,
+        tgt_lang,
+        list(issues or ()),
+        glossary_pairs,
     )
-    return candidate if report.ok else None
+    term_note = glossary_placeholder_instruction(terms.mapping)
+    if term_note:
+        messages[0] = dict(messages[0])
+        messages[0]["content"] += "\n" + term_note
+    try:
+        budget = max(800, min(4000, len(protected_source) * 3 + 600))
+        response = _call_chat_complete(
+            ai_client,
+            model=model,
+            messages=messages,
+            max_tokens=budget,
+            timeout=45,
+            provider_preference=provider_preference,
+        )
+        raw = _extract_response_text(response)
+        raw = restore_glossary_terms(raw, terms.mapping)
+        text, _report = _finalize_protected_candidate(
+            source,
+            immutable.protected,
+            raw,
+            immutable,
+            src_lang,
+            tgt_lang,
+            glossary_pairs,
+            require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
+        )
+        return text
+    except Exception as exc:
+        logger.warning("[QualityGate] conditional repair unavailable: %s", exc)
+        return None
+
 
 def gate_and_revise(
     source: str,
@@ -1088,11 +1124,12 @@ def gate_and_revise(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
 ) -> Dict[str, Any]:
-    """Deterministic delivery gate; never calls an AI reviewer.
+    """Validate locally and conditionally repair one hard failure.
 
-    A successful provider response is either accepted by local structural checks
-    or blocked.  Translation quality must be solved in the first-pass prompt,
-    locked terminology and data protection, not by billable post-edit requests.
+    Normal translations still use one API call.  Only a candidate that fails a
+    deterministic integrity check receives one source-grounded repair request.
+    This preserves real-time speed while preventing known mixed-language,
+    polarity and placeholder failures from becoming silent empty results.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
@@ -1106,17 +1143,66 @@ def gate_and_revise(
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=critical,
     )
+    if report.ok:
+        return {
+            "ok": True,
+            "text": candidate,
+            "issues": report.issues,
+            "hard_issues": [],
+            "warnings": report.warnings,
+            "reviewed": False,
+            "degraded": False,
+            "cacheable": True,
+            "path": "single_api_local_validation",
+        }
+
+    repair_enabled = os.environ.get("QUALITY_REPAIR_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+    if repair_enabled and ai_client is not None and report.hard_issues:
+        repaired = review_translation(
+            source,
+            candidate,
+            src_lang,
+            tgt_lang,
+            model=model,
+            issues=report.hard_issues,
+            glossary_pairs=glossary_pairs,
+            ai_client=ai_client,
+        )
+        if repaired:
+            repaired_report = validate_translation(
+                source,
+                repaired,
+                src_lang,
+                tgt_lang,
+                immutable_literals=list(immutable_literals or ()),
+                glossary_pairs=glossary_pairs,
+                require_paragraph_fidelity=critical,
+            )
+            if repaired_report.ok:
+                return {
+                    "ok": True,
+                    "text": repaired,
+                    "issues": repaired_report.issues,
+                    "hard_issues": [],
+                    "warnings": repaired_report.warnings,
+                    "reviewed": True,
+                    "degraded": False,
+                    "cacheable": True,
+                    "path": "source_grounded_repair",
+                }
+
     return {
-        "ok": report.ok,
-        "text": candidate if report.ok else None,
+        "ok": False,
+        "text": None,
         "issues": report.issues,
         "hard_issues": report.hard_issues,
         "warnings": report.warnings,
         "reviewed": False,
         "degraded": False,
-        "cacheable": report.ok,
-        "path": "single_api_local_validation" if report.ok else "single_api_blocked",
+        "cacheable": False,
+        "path": "single_api_blocked",
     }
+
 
 def _translate_candidate(
     protected_source: str,
@@ -1182,11 +1268,11 @@ def translate_quality_critical_document(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """One-pass whole-document translation with deterministic validation.
+    """Whole-document translation with one conditional fresh retry.
 
-    ``fallback_translate`` is accepted only for API compatibility and is not used.
-    Operational provider failover remains inside ``ai_provider.chat_complete``;
-    semantic review, retranslation and LLM post-editing are intentionally absent.
+    The first provider call is the normal path. A second call is made only when
+    deterministic validation finds a hard integrity defect; the retry starts
+    from the protected source and detected issues, never from a free-form edit.
     """
     if ai_client is None:
         try:
@@ -1239,6 +1325,39 @@ def translate_quality_critical_document(
                 "reviewed": False, "degraded": False, "cacheable": True,
                 "path": "single_api_whole_document", "provider_path": provider or "primary",
             }
+        # The normal path stays single-call. Retry exactly once only after a
+        # deterministic hard failure, using the protected source plus issue list.
+        repair_enabled = os.environ.get("QUALITY_REPAIR_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+        if repair_enabled and report.hard_issues:
+            retry_raw, retry_provider = _translate_candidate(
+                protected_source,
+                src_lang,
+                tgt_lang,
+                model=model,
+                glossary_pairs=glossary_pairs,
+                ai_client=ai_client,
+                retry_issues=report.hard_issues,
+                provider_preference=_independent_provider_preference(ai_client, provider),
+            )
+            retry_raw = restore_glossary_terms(retry_raw, terms.mapping)
+            retry_text, retry_report = _finalize_protected_candidate(
+                source,
+                immutable.protected,
+                retry_raw,
+                immutable,
+                src_lang,
+                tgt_lang,
+                glossary_pairs,
+                require_paragraph_fidelity=True,
+            )
+            if retry_text:
+                return {
+                    "ok": True, "text": retry_text, "issues": retry_report.issues,
+                    "hard_issues": [], "warnings": retry_report.warnings,
+                    "reviewed": True, "degraded": False, "cacheable": True,
+                    "path": "protected_fresh_retry",
+                    "provider_path": retry_provider or provider or "primary",
+                }
         return {
             "ok": False, "text": None, "issues": report.issues,
             "hard_issues": report.hard_issues, "warnings": report.warnings,
