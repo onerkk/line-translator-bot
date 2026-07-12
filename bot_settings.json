@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.32.3-three-provider-zero-touch-defaults-2026-07-12",
-    "schema_version": 4,
-    "state_hash": "57e5569b4d8aedd09ed91d0d15878ffefda26b2b49626e6f6e00bb37ccfede81",
-    "updated_at_iso": "2026-07-12T03:47:45.169631+00:00",
-    "updated_at_unix": 1783828065.1696308
+    "app_version": "v3.32.8-indonesian-factory-register-2026-07-12",
+    "schema_version": 6,
+    "state_hash": "31e22f23bfff423a7edfe163dbf609002d69528babc8713973ff52ecd56498bc",
+    "updated_at_iso": "2026-07-12T05:42:41.703292+00:00",
+    "updated_at_unix": 1783834961.7032917
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-12 02:58:50",
+    "last_updated": "2026-07-12 05:42:41",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -230,7 +230,7 @@
     "Uaf4dc8fc636bc8f6060521c398514dc1"
   ],
   "double_check_keywords": "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混",
-  "double_check_mode": "smart",
+  "double_check_mode": "off",
   "double_check_threshold": 0.55,
   "external_links_settings": {
     "absen": {
@@ -487,7 +487,7 @@
   "multi_path_min_chars": 60,
   "openai_24h_cache_enabled": false,
   "paragraph_split_threshold": 50,
-  "paragraph_split_translate": true,
+  "paragraph_split_translate": false,
   "preserve_paragraphs_enabled": true,
   "prompt_caching_enabled": true,
   "pw1_text": "UR00179\nCcc0972315373",
