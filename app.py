@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.7-mention-display-name-root-fix-2026-07-13"
+VERSION = "v3.33.8-incident-self-report-semantics-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -262,7 +262,7 @@ import translation_extras as translation_extras_module
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 11
-_EXPECTED_QG_BUILD_ID = "2026-07-13.13-mention-display-name"
+_EXPECTED_QG_BUILD_ID = "2026-07-13.14-incident-self-report-semantics"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -313,6 +313,35 @@ if not _QG_MENTION_NAME_SELFTEST.ok:
         "translation quality gate mention-name self-test failed: "
         f"issues={_QG_MENTION_NAME_SELFTEST.issues}"
     )
+
+# Factory incident-policy invariant: literal religious/legal wording for
+#「自首無罪」must be rejected while the semantically complete wording passes.
+_QG_INCIDENT_SOURCE = "自首無罪，設備有撞壞還是摔壞一定要讓我知道，等其他單位提報了都是比較嚴重了。"
+_QG_INCIDENT_BAD_SELFTEST = tqg_module.validate_translation(
+    _QG_INCIDENT_SOURCE,
+    "Kalau lapor sendiri tidak ada dosa, peralatan rusak atau jatuh harus beri tahu saya, jangan tunggu unit lain lapor karena sudah parah.",
+    "zh", "id", immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if _QG_INCIDENT_BAD_SELFTEST.ok or not any(
+        issue.startswith("semantic:incident_self_report_")
+        for issue in _QG_INCIDENT_BAD_SELFTEST.hard_issues):
+    raise RuntimeError(
+        "translation quality gate incident self-report self-test failed: "
+        f"issues={_QG_INCIDENT_BAD_SELFTEST.issues}"
+    )
+_QG_INCIDENT_GOOD_SELFTEST = tqg_module.validate_translation(
+    _QG_INCIDENT_SOURCE,
+    "Mengaku sendiri tidak akan dipermasalahkan. Jika ada peralatan yang tertabrak atau terjatuh hingga rusak, segera laporkan kepada saya. Jangan sampai departemen lain yang lebih dulu melaporkannya, karena saat itu biasanya masalahnya sudah menjadi lebih serius.",
+    "zh", "id", immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if not _QG_INCIDENT_GOOD_SELFTEST.ok:
+    raise RuntimeError(
+        "translation quality gate incident self-report acceptance self-test failed: "
+        f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
+    )
+
 _FINAL_DELIVERY_GUARD_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
@@ -1126,6 +1155,7 @@ TONE_PRESETS = {
         "(g) If any high-risk multi-meaning Chinese word appears, follow the runtime <semantic_contract> exactly. "
         "(h) Silently back-translate the Indonesian result into Chinese and compare actor, action, object, negation, strength, cause and consequence with the source. If any item changes, rewrite before output. "
         "23. CRITICAL POLYSEMY: Runtime semantic contracts override examples, TM, NMT, glossary, and generic dictionary meanings. "
+        "24. FACTORY INCIDENT REPORTING: In a disciplinary/safety context, 自首無罪 means voluntary self-reporting will not be held against the worker. Never translate it with religious/legal literal wording such as tidak ada dosa or tidak bersalah. Preserve distinct accident mechanisms (e.g. 撞壞 versus 摔壞), who must be notified, who reports first, and the escalation consequence. "
         "When a semantic contract specifies a sense, preferred translations, and forbidden translations, obey that contract exactly. "
         "After these internal checks, output ONLY the final translation, no explanation."
     ),
@@ -6831,7 +6861,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v3-indonesian-factory-register-root"
+_SEMANTIC_CONTRACT_VERSION = "v4-incident-self-report-semantics-root"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -6865,6 +6895,154 @@ _SEM_SPONSOR_ID_MAP = {
 _SEM_BRAND_ID_MAP = {
     "原萃": "Original Tea",
 }
+
+# v3.33.8: Factory incident/self-report semantic contract.
+#
+# Root cause addressed:
+#   Chinese shop-floor phrases such as「自首無罪」are disciplinary shorthand, not
+#   religious/legal language. A literal model translation (e.g. ``tidak ada dosa``)
+#   changes the intended policy. The same sentence often contains distinct damage
+#   mechanisms (撞壞 vs 摔壞) and an escalation condition (another department reports
+#   first). Those semantic roles must survive as roles, not merely as vague words.
+_INCIDENT_SELF_REPORT_TERMS_ZH = (
+    "自首", "主動承認", "自己承認", "主動回報", "自己回報", "主動報告", "自己報告",
+)
+_INCIDENT_NONPUNITIVE_TERMS_ZH = (
+    "無罪", "不追究", "不處罰", "不懲處", "不處分", "不會處罰", "不會懲處",
+    "不會處分", "不會被處罰", "不會被懲處", "不會被追究",
+)
+_INCIDENT_EQUIPMENT_TERMS_ZH = ("設備", "機台", "機器", "工具", "器材", "治具")
+_INCIDENT_COLLISION_DAMAGE_TERMS_ZH = ("撞壞", "撞到壞", "碰壞", "撞擊損壞", "碰撞損壞")
+_INCIDENT_FALL_DAMAGE_TERMS_ZH = ("摔壞", "掉落摔壞", "跌落損壞", "掉下去壞", "掉下損壞")
+_INCIDENT_REPORT_TO_ME_TERMS_ZH = (
+    "讓我知道", "跟我說", "告訴我", "回報我", "向我回報", "向我提報", "報告給我",
+)
+_INCIDENT_OTHER_UNIT_TERMS_ZH = ("其他單位", "其它單位", "別的單位", "其他部門", "其它部門", "別的部門")
+_INCIDENT_REPORT_TERMS_ZH = ("提報", "回報", "報告", "通報")
+
+_INCIDENT_SELF_REPORT_GOOD_ID = (
+    "mengaku sendiri", "melapor sendiri", "melaporkan sendiri", "mengaku secara sukarela",
+)
+_INCIDENT_NONPUNITIVE_GOOD_ID = (
+    "tidak akan dipermasalahkan", "tidak akan dihukum", "tidak akan dikenai sanksi",
+    "tidak akan diberi sanksi", "tidak akan ditindak",
+)
+_INCIDENT_NONPUNITIVE_BAD_ID = (
+    "tidak ada dosa", "tanpa dosa", "bebas dosa", "tidak berdosa", "tidak bersalah",
+)
+_INCIDENT_COLLISION_GOOD_ID = ("tertabrak", "terbentur", "menabrak", "terkena benturan", "benturan")
+_INCIDENT_FALL_GOOD_ID = ("terjatuh", "jatuh", "terlepas lalu jatuh")
+_INCIDENT_OTHER_UNIT_GOOD_ID = ("departemen lain", "unit lain", "bagian lain")
+_INCIDENT_FIRST_REPORT_GOOD_ID = ("lebih dulu", "terlebih dahulu", "lebih dahulu", "duluan")
+_INCIDENT_ESCALATION_GOOD_ID = (
+    "lebih serius", "semakin serius", "menjadi lebih serius", "sudah parah", "menjadi parah",
+)
+
+
+def _classify_factory_incident_self_report_zh_id(text):
+    """Classify non-punitive self-reporting and equipment-incident escalation.
+
+    The trigger is deliberately source-grounded and factory-specific. It requires a
+    self-report/non-punitive signal plus equipment/incident context, so ordinary legal
+    uses of「自首」do not get rewritten by this shop-floor policy.
+    """
+    compact = _semantic_compact_zh(text)
+    self_hits = _semantic_hits(compact, _INCIDENT_SELF_REPORT_TERMS_ZH)
+    nonpunitive_hits = _semantic_hits(compact, _INCIDENT_NONPUNITIVE_TERMS_ZH)
+    equipment_hits = _semantic_hits(compact, _INCIDENT_EQUIPMENT_TERMS_ZH)
+    collision_hits = _semantic_hits(compact, _INCIDENT_COLLISION_DAMAGE_TERMS_ZH)
+    fall_hits = _semantic_hits(compact, _INCIDENT_FALL_DAMAGE_TERMS_ZH)
+    report_me_hits = _semantic_hits(compact, _INCIDENT_REPORT_TO_ME_TERMS_ZH)
+    other_unit_hits = _semantic_hits(compact, _INCIDENT_OTHER_UNIT_TERMS_ZH)
+    report_hits = _semantic_hits(compact, _INCIDENT_REPORT_TERMS_ZH)
+
+    explicit_nonpunitive = bool(self_hits and nonpunitive_hits) or "自首無罪" in compact
+    incident_context = bool(equipment_hits and (collision_hits or fall_hits or report_me_hits or other_unit_hits))
+    if not (explicit_nonpunitive and incident_context):
+        return None
+
+    return {
+        "term": "自首無罪/設備事故提報",
+        "sense": "factory_incident_self_report_nonpunitive",
+        "confidence": 0.995,
+        "evidence": (self_hits + nonpunitive_hits + equipment_hits + collision_hits + fall_hits + report_me_hits + other_unit_hits)[:16],
+        "has_self_report_nonpunitive": True,
+        "has_collision_damage": bool(collision_hits),
+        "has_fall_damage": bool(fall_hits),
+        "has_report_to_me": bool(report_me_hits),
+        "has_other_unit_first_report": bool(other_unit_hits and report_hits),
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+        "requires_validation": True,
+    }
+
+
+def _incident_self_report_translation_ok(risk, translation):
+    low = (translation or "").casefold()
+    if any(bad in low for bad in _INCIDENT_NONPUNITIVE_BAD_ID):
+        return False, "incident_self_report_literal_religious_or_legal"
+    if risk.get("has_self_report_nonpunitive"):
+        if not any(good in low for good in _INCIDENT_SELF_REPORT_GOOD_ID):
+            return False, "incident_self_report_actor_missing"
+        if not any(good in low for good in _INCIDENT_NONPUNITIVE_GOOD_ID):
+            return False, "incident_self_report_nonpunitive_meaning_missing"
+    if risk.get("has_collision_damage"):
+        if not any(good in low for good in _INCIDENT_COLLISION_GOOD_ID):
+            return False, "incident_collision_mechanism_missing"
+        if "rusak" not in low:
+            return False, "incident_collision_damage_result_missing"
+    if risk.get("has_fall_damage"):
+        if not any(good in low for good in _INCIDENT_FALL_GOOD_ID):
+            return False, "incident_fall_mechanism_missing"
+        if "rusak" not in low:
+            return False, "incident_fall_damage_result_missing"
+    if risk.get("has_report_to_me"):
+        has_report = bool(re.search(r"\b(laporkan|melaporkan|beri\s+tahu|beritahu)\b", low))
+        if not (has_report and "saya" in low):
+            return False, "incident_report_to_supervisor_missing"
+    if risk.get("has_other_unit_first_report"):
+        if not any(good in low for good in _INCIDENT_OTHER_UNIT_GOOD_ID):
+            return False, "incident_other_unit_missing"
+        if not any(good in low for good in _INCIDENT_FIRST_REPORT_GOOD_ID):
+            return False, "incident_other_unit_first_report_missing"
+        if not any(good in low for good in _INCIDENT_ESCALATION_GOOD_ID):
+            return False, "incident_escalation_consequence_missing"
+    return True, ""
+
+
+def _semantic_rebuild_factory_incident_self_report(src_text, risk, current_translation=""):
+    """Deterministic slot-based fallback for this safety-critical policy class.
+
+    It reconstructs only roles proven by source-side classification. This avoids both
+    literal「dosa」wording and the opposite failure of inventing ungrounded details.
+    """
+    clauses = []
+    if risk.get("has_self_report_nonpunitive"):
+        clauses.append("Mengaku sendiri tidak akan dipermasalahkan.")
+
+    mechanisms = []
+    if risk.get("has_collision_damage"):
+        mechanisms.append("tertabrak")
+    if risk.get("has_fall_damage"):
+        mechanisms.append("terjatuh")
+    if mechanisms:
+        if len(mechanisms) == 2:
+            damage = "tertabrak atau terjatuh hingga rusak"
+        else:
+            damage = mechanisms[0] + " hingga rusak"
+        report = "segera laporkan kepada saya" if risk.get("has_report_to_me") else "segera laporkan"
+        clauses.append(f"Jika ada peralatan yang {damage}, {report}.")
+    elif risk.get("has_report_to_me"):
+        clauses.append("Jika ada peralatan yang rusak, segera laporkan kepada saya.")
+
+    if risk.get("has_other_unit_first_report"):
+        clauses.append(
+            "Jangan sampai departemen lain yang lebih dulu melaporkannya, "
+            "karena saat itu biasanya masalahnya sudah menjadi lebih serius."
+        )
+
+    rebuilt = " ".join(clauses).strip()
+    return rebuilt or (current_translation or "").strip()
 
 
 # v3.20: Factory domain term contract — root fix for word-boundary / dictionary-sense drift.
@@ -7416,6 +7594,16 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["vector_bypass_allowed"] = False
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
+
+        _incident_contract_fn = globals().get("_classify_factory_incident_self_report_zh_id")
+        incident_risk = _incident_contract_fn(text) if callable(_incident_contract_fn) else None
+        if incident_risk:
+            contract["has_risk"] = True
+            contract["risks"].append(incident_risk)
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -7465,6 +7653,23 @@ def build_translation_semantic_contract_prompt(contract):
             lines.extend(_build_factory_domain_term_contract_lines(risk))
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
+        elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
+            lines.append("<risk term='自首無罪/設備事故提報' sense='factory_incident_self_report_nonpunitive'>")
+            lines.append("This is a factory incident-reporting policy, not religious or criminal-law language.")
+            lines.append("Translate 自首無罪 as voluntary self-reporting will not be held against the worker, e.g. 'Mengaku sendiri tidak akan dipermasalahkan'.")
+            lines.append("Forbidden literal meanings: tidak ada dosa, tanpa dosa, bebas dosa, tidak berdosa, tidak bersalah.")
+            if risk.get("has_collision_damage") and risk.get("has_fall_damage"):
+                lines.append("Preserve both distinct damage mechanisms: collision/impact and falling. Use wording such as 'tertabrak atau terjatuh hingga rusak'; do not collapse them into generic 'rusak atau jatuh'.")
+            elif risk.get("has_collision_damage"):
+                lines.append("Preserve collision/impact as the cause of damage (tertabrak/terbentur hingga rusak).")
+            elif risk.get("has_fall_damage"):
+                lines.append("Preserve falling as the cause of damage (terjatuh hingga rusak).")
+            if risk.get("has_report_to_me"):
+                lines.append("The worker must report it promptly to the speaker/supervisor: 'segera laporkan kepada saya'.")
+            if risk.get("has_other_unit_first_report"):
+                lines.append("Preserve the escalation condition: do not let another department report it first; once that happens, the problem is usually already more serious.")
+            lines.append("Use concise, standard Indonesian suitable for a supervisor's shop-floor notice.")
+            lines.append("</risk>")
     lines.append("</semantic_contract>")
     return " ".join(lines)
 
@@ -7519,6 +7724,10 @@ def translation_satisfies_semantic_contract(contract, translation):
                 entry = amap.get(key)
                 if entry and not _factory_reason_translation_contains(entry, low):
                     return False, "factory_reason_action_missing:" + key
+        elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
+            ok, reason = _incident_self_report_translation_ok(risk, t)
+            if not ok:
+                return False, reason
     return True, ""
 
 def _semantic_rebuild_qing_treat_translation(src_text, contract, current_translation=""):
@@ -7635,6 +7844,10 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
             if deterministic:
                 return deterministic
             return translation
+        if risk.get("sense") == "factory_incident_self_report_nonpunitive":
+            fixed = _semantic_rebuild_factory_incident_self_report(src_text, risk, translation)
+            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
+            return fixed if ok2 else fixed
     return translation
 
 def filter_semantic_contract_references(contract, refs):
