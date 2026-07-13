@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.33.1-runtime-failure-actions-2026-07-13",
     "schema_version": 6,
-    "state_hash": "284cb27906369ba479b13384680d298f12a79fe24ce951d4521449b4f34da813",
-    "updated_at_iso": "2026-07-13T02:12:18.127867+00:00",
-    "updated_at_unix": 1783908738.1278675
+    "state_hash": "602d64d95ed25fe214f56fc291797339aa77211354ce4d24c48345480a77261c",
+    "updated_at_iso": "2026-07-13T02:12:22.585726+00:00",
+    "updated_at_unix": 1783908742.5857265
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -391,9 +391,7 @@
       "span": true
     }
   },
-  "group_img_ask_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true
-  },
+  "group_img_ask_settings": {},
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
