@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 9
-QUALITY_GATE_BUILD_ID = "2026-07-13.11-line-mention-proper-name"
+QUALITY_GATE_API_VERSION = 10
+QUALITY_GATE_BUILD_ID = "2026-07-13.12-visible-immutable-data"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -157,6 +157,73 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
     protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
+
+
+def inspect_immutable_spans(text: str) -> ProtectedText:
+    """Inventory immutable data without hiding it from the translator.
+
+    Opaque ``__QG_KEEP_*`` tokens were originally sent to the model.  Some
+    providers legitimately omitted those machine-looking tokens even while
+    producing a complete translation, which made the local integrity gate
+    report a false service outage.  Provider-facing translation now keeps real
+    identifiers, field values and measurements visible and uses this inventory
+    only for deterministic post-generation validation.
+
+    ``mapping`` intentionally retains the legacy placeholder keys so existing
+    callers can reuse ``mapping.values()`` as the immutable literal inventory,
+    while ``protected`` remains exactly the original visible text.
+    """
+    envelope = protect_immutable_spans(text)
+    visible_mapping = {
+        ph: _normalize_data_atom(literal)
+        for ph, literal in envelope.mapping.items()
+        if _normalize_data_atom(literal)
+    }
+    return ProtectedText(envelope.original, envelope.original, visible_mapping)
+
+
+def visible_immutable_instruction(literals: Iterable[str]) -> str:
+    """Build a provider-facing constraint using real values, never placeholders."""
+    values = []
+    seen = set()
+    for literal in literals or ():
+        value = str(literal or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    if not values:
+        return ""
+    lines = [
+        "<immutable_data>",
+        "The following values are visible source data, not language. Copy each value exactly and do not omit, translate, split, normalize, or rename it:",
+    ]
+    lines.extend(f"- {value}" for value in values[:80])
+    lines.append("</immutable_data>")
+    return "\n".join(lines)
+
+
+def visible_glossary_instruction(pairs: Sequence[Tuple[str, str]]) -> str:
+    """Build terminology constraints without replacing source words by tokens."""
+    rows = []
+    seen = set()
+    for source_term, target_term in pairs or ():
+        src = str(source_term or "").strip()
+        tgt = str(target_term or "").strip()
+        key = (src, tgt)
+        if not src or not tgt or key in seen:
+            continue
+        seen.add(key)
+        rows.append(key)
+    if not rows:
+        return ""
+    lines = [
+        "<required_terminology>",
+        "Translate each visible source term using the exact target term below. Do not copy internal placeholders and do not omit the surrounding meaning:",
+    ]
+    lines.extend(f"- {src} => {tgt}" for src, tgt in rows[:80])
+    lines.append("</required_terminology>")
+    return "\n".join(lines)
 
 
 def _placeholder_pattern(ph: str) -> re.Pattern:
@@ -610,6 +677,12 @@ def _normalize_data_atom(value: str) -> str:
     v = (value or "").strip()
     if v and all(ch in _DASHES for ch in v):
         return "-"
+    # Technical-token matching deliberately permits dots inside identifiers, but
+    # a sentence-final period is punctuation rather than part of the work-order
+    # or machine code.  Keeping it in the immutable atom caused false
+    # ``missing_literal`` failures whenever target punctuation changed to 。.
+    if re.search(r"[A-Za-z0-9]", v):
+        v = re.sub(r"(?<=[A-Za-z0-9])[.,;:!?，。；：！？]+$", "", v)
     return v
 
 
@@ -923,8 +996,7 @@ def _build_review_messages(
         "sentence, compare it with the corresponding source meaning, and then write one fresh corrected final "
         "translation. Audit actor, action, object, timing, condition, negation, modality, severity, cause and "
         "consequence. Preserve every instruction, condition, negation, actor, object and sequence. Do not add "
-        "information. Tokens "
-        "matching __QG_KEEP_000_XXXXXXXX__ are immutable identifiers and must be copied exactly. Preserve "
+        "information. Source identifiers and field values remain visible in the source; copy them exactly. Preserve "
         "numbers, symbols, @mentions, emoji and list markers. Preserve the document's logical sections; "
         "minor paragraph reflow is allowed only when meaning is unchanged. Apply only explicitly supplied "
         "terminology pairs. No ordinary source-language word may remain untranslated merely because it appears "
@@ -968,9 +1040,9 @@ def _build_translation_messages(
         "You are a professional whole-document translator for a factory work group. Translate the complete "
         "source into " + _target_name(tgt_lang) + ". Read the whole document before writing and internally "
         "verify the result before output. Preserve every instruction, condition, negation, actor, object and "
-        "sequence. Preserve list markers, emoji and section order. Tokens matching "
-        "__QG_KEEP_000_XXXXXXXX__ are immutable identifiers: copy each token exactly once wherever it appears. "
-        "Do not translate, rename, split or decorate these tokens. Use only explicit unambiguous glossary pairs; "
+        "sequence. Preserve list markers, emoji and section order. Source identifiers, codes, measurements and "
+        "field values remain visible in the source: copy each one exactly and never omit, translate, rename, split "
+        "or decorate it. Use only explicit unambiguous glossary pairs; "
         "never infer a reversed mapping from a common word. No ordinary source-language word may remain untranslated; "
         "retain Latin text only for immutable identifiers, real proper names, product/model codes, or explicit target-side "
         "glossary terms." + annotation_rule + _indonesian_clarity_instruction(tgt_lang) + " Do not summarize, explain, add headings, mix languages or output "
@@ -1084,23 +1156,22 @@ def review_translation(
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    immutable = protect_immutable_spans(source)
-    terms = protect_glossary_terms(immutable.protected, glossary_pairs)
-    protected_source = terms.protected
+    immutable = inspect_immutable_spans(source)
+    visible_source = immutable.protected
     messages = _build_review_messages(
-        protected_source,
+        visible_source,
         candidate,
         src_lang,
         tgt_lang,
         list(issues or ()),
         glossary_pairs,
     )
-    term_note = glossary_placeholder_instruction(terms.mapping)
-    if term_note:
+    immutable_note = visible_immutable_instruction(immutable.mapping.values())
+    if immutable_note:
         messages[0] = dict(messages[0])
-        messages[0]["content"] += "\n" + term_note
+        messages[0]["content"] += "\n" + immutable_note
     try:
-        budget = max(800, min(4000, len(protected_source) * 3 + 600))
+        budget = max(800, min(4000, len(visible_source) * 3 + 600))
         response = _call_chat_complete(
             ai_client,
             model=model,
@@ -1110,10 +1181,8 @@ def review_translation(
             provider_preference=provider_preference,
         )
         raw = _extract_response_text(response)
-        raw = restore_glossary_terms(raw, terms.mapping)
-        text, _report = _finalize_protected_candidate(
+        text, _report = _finalize_visible_candidate(
             source,
-            immutable.protected,
             raw,
             immutable,
             src_lang,
@@ -1273,6 +1342,32 @@ def _finalize_protected_candidate(
     return (restored if final_report.ok else None), final_report
 
 
+def _finalize_visible_candidate(
+    source: str,
+    candidate: str,
+    envelope: ProtectedText,
+    src_lang: str,
+    tgt_lang: str,
+    glossary_pairs: Sequence[Tuple[str, str]],
+    *,
+    require_paragraph_fidelity: bool,
+) -> Tuple[Optional[str], ValidationResult]:
+    """Validate a translation produced from a source with visible immutable data."""
+    restored = normalize_indonesian_factory_register(
+        source, (candidate or "").strip(), src_lang, tgt_lang
+    )
+    report = validate_translation(
+        source,
+        restored,
+        src_lang,
+        tgt_lang,
+        immutable_literals=envelope.mapping.values(),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    return (restored if report.ok else None), report
+
+
 def translate_quality_critical_document(
     source: str,
     src_lang: str,
@@ -1305,19 +1400,18 @@ def translate_quality_critical_document(
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    immutable = protect_immutable_spans(source)
-    terms = protect_glossary_terms(immutable.protected, glossary_pairs)
-    protected_source = terms.protected
+    immutable = inspect_immutable_spans(source)
+    visible_source = immutable.protected
     messages = _build_translation_messages(
-        protected_source, src_lang, tgt_lang, glossary_pairs
+        visible_source, src_lang, tgt_lang, glossary_pairs
     )
-    term_note = glossary_placeholder_instruction(terms.mapping)
-    if term_note:
+    immutable_note = visible_immutable_instruction(immutable.mapping.values())
+    if immutable_note:
         messages[0] = dict(messages[0])
-        messages[0]["content"] = messages[0]["content"] + "\n" + term_note
+        messages[0]["content"] = messages[0]["content"] + "\n" + immutable_note
 
     try:
-        budget = max(1600, min(8000, len(protected_source) * 4 + 1200))
+        budget = max(1600, min(8000, len(visible_source) * 4 + 1200))
         response = _call_chat_complete(
             ai_client,
             model=model,
@@ -1326,10 +1420,8 @@ def translate_quality_critical_document(
         )
         raw = _extract_response_text(response)
         provider = _response_provider(response)
-        raw = restore_glossary_terms(raw, terms.mapping)
-        raw = canonicalize_placeholders(raw, immutable.mapping)
-        text, report = _finalize_protected_candidate(
-            source, immutable.protected, raw, immutable,
+        text, report = _finalize_visible_candidate(
+            source, raw, immutable,
             src_lang, tgt_lang, glossary_pairs,
             require_paragraph_fidelity=True,
         )
@@ -1345,7 +1437,7 @@ def translate_quality_critical_document(
         repair_enabled = os.environ.get("QUALITY_REPAIR_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
         if repair_enabled and report.hard_issues:
             retry_raw, retry_provider = _translate_candidate(
-                protected_source,
+                visible_source,
                 src_lang,
                 tgt_lang,
                 model=model,
@@ -1354,10 +1446,8 @@ def translate_quality_critical_document(
                 retry_issues=report.hard_issues,
                 provider_preference=_independent_provider_preference(ai_client, provider),
             )
-            retry_raw = restore_glossary_terms(retry_raw, terms.mapping)
-            retry_text, retry_report = _finalize_protected_candidate(
+            retry_text, retry_report = _finalize_visible_candidate(
                 source,
-                immutable.protected,
                 retry_raw,
                 immutable,
                 src_lang,
@@ -1370,7 +1460,7 @@ def translate_quality_critical_document(
                     "ok": True, "text": retry_text, "issues": retry_report.issues,
                     "hard_issues": [], "warnings": retry_report.warnings,
                     "reviewed": True, "degraded": False, "cacheable": True,
-                    "path": "protected_fresh_retry",
+                    "path": "visible_source_fresh_retry",
                     "provider_path": retry_provider or provider or "primary",
                 }
         return {

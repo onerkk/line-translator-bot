@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.4-equipment-code-root-fix-2026-07-13"
+VERSION = "v3.33.6-visible-immutable-data-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -261,8 +261,8 @@ import translation_extras as translation_extras_module
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 9
-_EXPECTED_QG_BUILD_ID = "2026-07-13.11-line-mention-proper-name"
+_EXPECTED_QG_API_VERSION = 10
+_EXPECTED_QG_BUILD_ID = "2026-07-13.12-visible-immutable-data"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -8426,16 +8426,24 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _locked_pairs = ge_module.collect_applicable_pairs(
             text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
         )
-        _locked_terms = tqg_module.protect_glossary_terms(text, _locked_pairs)
-        input_text = _locked_terms.protected
+        # Keep glossary source terms visible as ordinary language.  Opaque
+        # __QG_TERM_* placeholders have the same omission risk as __QG_KEEP_*.
+        # Terminology is enforced through an explicit visible mapping plus the
+        # existing deterministic post-generation glossary validator.
+        _locked_terms = tqg_module.ProtectedText(text, text, {})
+        input_text = text
         cust_placeholders = {}
         if src == "zh":
             input_text, cust_placeholders = pre_replace_zh(input_text)
 
-        # Provider-neutral immutable-data envelope.  The same protected source is
-        # sent to OpenAI, Gemini and Claude; values/codes are restored afterward.
-        _immutable = tqg_module.protect_immutable_spans(input_text)
-        input_text = _immutable.protected
+        # Provider-neutral immutable-data inventory.  Real work-order IDs, model
+        # codes, measurements and field values stay visible in the provider-facing
+        # source.  Opaque __QG_KEEP_* tokens caused Claude/Gemini/OpenAI to omit an
+        # otherwise valid identifier (for example 7H341005), after which the local
+        # integrity gate correctly blocked the incomplete result and LINE showed a
+        # misleading generic failure.  We now inventory those values for strict
+        # post-generation validation without replacing them in the source.
+        _immutable = tqg_module.inspect_immutable_spans(input_text)
         protected, placeholders = protect_mentions(input_text)
 
         extra_rule = ""
@@ -8999,11 +9007,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _prompt_stats.historical_rules,
             _prompt_stats.fallback_used,
         )
-        _locked_note = tqg_module.glossary_placeholder_instruction(_locked_terms.mapping)
+        _locked_note = tqg_module.visible_glossary_instruction(_locked_pairs)
         if _locked_note:
-            # Dynamic locked-term mapping belongs after the stable prefix so
+            # Dynamic terminology mapping belongs after the stable prefix so
             # provider prompt caching can reuse the principles block.
-            sys_prompt = sys_prompt + "\n<locked_terminology>\n" + _locked_note + "\n</locked_terminology>"
+            sys_prompt = sys_prompt + "\n" + _locked_note
+        _immutable_note = tqg_module.visible_immutable_instruction(_immutable.mapping.values())
+        if _immutable_note:
+            # Keep actual identifiers visible in the source and repeat their exact
+            # values as constraints.  Never ask a provider to copy opaque QG tokens.
+            sys_prompt = sys_prompt + "\n" + _immutable_note
 
         if repair_mode and bad_result:
             msg = (
@@ -9430,7 +9443,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # integrity validator can reject an otherwise complete translation.
         result = _repair_pipeline_mention_placeholders(text, result)
         result = restore_mentions(result, placeholders)
-        result = tqg_module.restore_immutable_spans(result, _immutable.mapping)
+        # Immutable values were never hidden from the provider.  The final local
+        # gate validates them directly against _immutable.mapping.values().
         result = tqg_module.restore_glossary_terms(result, _locked_terms.mapping)
         if src == "id" and tgt == "zh":
             _raw_factory_result = result
