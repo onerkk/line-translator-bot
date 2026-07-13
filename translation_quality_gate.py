@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 10
-QUALITY_GATE_BUILD_ID = "2026-07-13.12-visible-immutable-data"
+QUALITY_GATE_API_VERSION = 11
+QUALITY_GATE_BUILD_ID = "2026-07-13.13-mention-display-name"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -408,6 +408,26 @@ def _probable_source_proper_name(token: str, source: str, src_lang: str) -> bool
     # accepts up to two lowercase continuation tokens after the @name.
     for match in _MENTION_RE.finditer(source or ""):
         if _whole_word_in_source(t, match.group(0)):
+            return True
+
+    # The public translation boundary replaces each LINE mention with a stable
+    # token before the provider call.  LINE may mark only the CJK nickname while
+    # leaving an adjacent lowercase Latin display-name continuation outside the
+    # metadata span, producing a protected source such as:
+    #
+    #   __MENTION_0__ sobirin __MENTION_1__ Jika ...
+    #
+    # ``sobirin`` is identity data, not untranslated Indonesian.  Recognize only
+    # the conservative shape between two mention tokens; ordinary words after a
+    # single mention remain subject to the normal source-language leakage gate.
+    for match in re.finditer(
+        r'__MENTION_\d+__\s+'
+        r'(?P<names>[A-Za-z][A-Za-z0-9_.-]{1,31}'
+        r'(?:\s+[A-Za-z][A-Za-z0-9_.-]{1,31})?)\s+'
+        r'__MENTION_\d+__',
+        source or "",
+    ):
+        if _whole_word_in_source(t, match.group("names")):
             return True
     # Ordinary title-case words may be names.  Requiring exact case prevents an
     # all-caps source word from being converted to title case and escaping.

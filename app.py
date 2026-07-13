@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.6-visible-immutable-data-root-fix-2026-07-13"
+VERSION = "v3.33.7-mention-display-name-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -261,8 +261,8 @@ import translation_extras as translation_extras_module
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 10
-_EXPECTED_QG_BUILD_ID = "2026-07-13.12-visible-immutable-data"
+_EXPECTED_QG_API_VERSION = 11
+_EXPECTED_QG_BUILD_ID = "2026-07-13.13-mention-display-name"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -296,6 +296,23 @@ if _QG_BOOT_SELFTEST.ok:
         "source-language leakage was incorrectly accepted"
     )
 _QG_BOOT_SELFTEST_OK = True
+
+# A lowercase Latin display-name continuation between LINE mention tokens is
+# identity metadata, not untranslated Indonesian.  This is the exact production
+# shape produced when LINE marks ``@蘇比`` and ``@(杰弗)`` but leaves ``sobirin``
+# as visible text between them.  Fail startup if the loaded gate regresses.
+_QG_MENTION_NAME_SELFTEST = tqg_module.validate_translation(
+    "__MENTION_0__ sobirin __MENTION_1__ Jika Anda tidak menyemprot cat",
+    "__MENTION_0__ sobirin __MENTION_1__ 如果你沒有噴漆",
+    "id", "zh",
+    immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if not _QG_MENTION_NAME_SELFTEST.ok:
+    raise RuntimeError(
+        "translation quality gate mention-name self-test failed: "
+        f"issues={_QG_MENTION_NAME_SELFTEST.issues}"
+    )
 _FINAL_DELIVERY_GUARD_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
@@ -3322,10 +3339,35 @@ def extract_mentions(text):
         if mention not in mentions:
             mentions.append(mention)
     # Chinese/Japanese @mentions, optionally followed by a parenthesized role.
-    for m in re.findall(r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', text):
-        m = m.rstrip()
-        if m and len(m) > 1 and m not in mentions:
-            mentions.append(m)
+    #
+    # LINE metadata frequently marks only the CJK part as the actual mention,
+    # while workers append the person's Latin display name as plain text, e.g.
+    # ``@蘇比 sobirin``.  Protecting only ``@蘇比`` leaves ``sobirin`` inside the
+    # translatable sentence.  The Chinese-target purity gate then (correctly for
+    # ordinary source words, incorrectly for this name) rejects it as an
+    # untranslated Indonesian word.  Extend the textual mention by up to two
+    # conservative lowercase Latin name tokens, but stop before common
+    # Indonesian sentence words so ``@阿明 jika ...`` never swallows ``jika``.
+    for m in re.finditer(
+        r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?',
+        text,
+    ):
+        end = m.end()
+        tail_end = end
+        for _ in range(2):
+            tail = re.match(r'\s+([a-z][a-z0-9_.-]{1,31})', text[tail_end:])
+            if not tail:
+                break
+            token = tail.group(1)
+            _mention_stopwords = _id_skip | set(
+                getattr(tqg_module, "_COMMON_ID_WORDS", set()) or set()
+            )
+            if token.lower() in _mention_stopwords:
+                break
+            tail_end += tail.end()
+        mention = text[m.start():tail_end].rstrip()
+        if mention and len(mention) > 1 and mention not in mentions:
+            mentions.append(mention)
     # @All
     for m in re.findall(r'@[Aa][Ll][Ll]', text):
         if m not in mentions:
