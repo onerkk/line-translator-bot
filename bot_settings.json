@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.33.0-quality-speed-actions-2026-07-12",
+    "app_version": "v3.33.1-runtime-failure-actions-2026-07-13",
     "schema_version": 6,
-    "state_hash": "eaf151e084c7f9e8bd8e2116e69e3903c5e12dc1c44fb165a1704498dd8b622d",
-    "updated_at_iso": "2026-07-12T18:32:39.641350+00:00",
-    "updated_at_unix": 1783881159.6413496
+    "state_hash": "284cb27906369ba479b13384680d298f12a79fe24ce951d4521449b4f34da813",
+    "updated_at_iso": "2026-07-13T02:12:18.127867+00:00",
+    "updated_at_unix": 1783908738.1278675
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-12 12:08:06",
+    "last_updated": "2026-07-13 01:46:43",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -166,10 +166,10 @@
   },
   "bot_stats": {
     "ant_cache_read": 558366,
-    "ant_cache_write": 1659861,
-    "ant_cost_usd": 2.631351450000001,
-    "ant_input": 226636,
-    "ant_output": 10760,
+    "ant_cache_write": 1672824,
+    "ant_cost_usd": 2.6814029500000007,
+    "ant_input": 231468,
+    "ant_output": 11558,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 225,
-    "tokens_completion": 16007,
-    "tokens_prompt": 4191526,
+    "text_translations": 226,
+    "tokens_completion": 16805,
+    "tokens_prompt": 4209321,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -312,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.25688544999999985,
+      "cost_usd": 0.27885744999999973,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1684,
-      "tokens_prompt": 184419
+      "tokens_completion": 1742,
+      "tokens_prompt": 193077
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -391,9 +391,11 @@
       "span": true
     }
   },
-  "group_img_ask_settings": {},
+  "group_img_ask_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": true
+  },
   "group_img_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true,
+    "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
@@ -626,6 +628,26 @@
       "label": "📍 位置/Lokasi",
       "text": "",
       "type": "location"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "handover",
+      "label": "📋 交班摘要",
+      "text": "/交班摘要",
+      "type": "message"
+    },
+    {
+      "clipboard_text": "",
+      "cmd_check": null,
+      "editable": true,
+      "enabled": true,
+      "id": "interpreter",
+      "label": "🎙️ 即時口譯",
+      "text": "/即時口譯",
+      "type": "message"
     }
   ],
   "reasoning_effort": "medium",
