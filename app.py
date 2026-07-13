@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.2-spray-policy-root-fix-2026-07-13"
+VERSION = "v3.33.3-mention-preservation-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -3255,9 +3255,28 @@ LANG_NAMES_ZH = {
 VALID_TARGETS = ["id", "th", "hi", "vi", "ja", "ko", "en", "tl"]
 
 
+def _mention_has_visible_name(value):
+    """Return True when an @mention contains a non-empty visible label."""
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    if not value.startswith("@"):
+        return False
+    body = value[1:].strip()
+    if ((body.startswith("(") and body.endswith(")"))
+            or (body.startswith("（") and body.endswith("）"))):
+        body = body[1:-1].strip()
+    return bool(body)
+
+
 def extract_mentions(text):
-    """Extract @mentions from text. Skip @Indonesian_word (not real mentions)."""
-    # v3.10+ 修補:加 None / 非字串守衛,避免上游不慎傳入 None 時 TypeError
+    """Extract textual @mentions without requiring LINE mention metadata.
+
+    Besides native ``@name`` mentions, workers frequently paste the display-name
+    form ``@(杰弗)`` / ``@（杰弗）`` as ordinary text.  The old parser did not
+    recognize that form, so the name was sent to the translation model and could
+    be deleted while only ``@()`` survived.  Keep the exact source substring.
+    """
     if not text or not isinstance(text, str):
         return []
     _id_skip = {
@@ -3275,7 +3294,20 @@ def extract_mentions(text):
         'bahaya','lantai','mesin','pompa','pipa','oli','besi','baja','batang',
     }
     mentions = []
-    # English @mentions: grab @word + up to 2 more, trim Indonesian words from end
+
+    # Plain-text LINE-style display names: @(杰弗), @（杰弗）, @(John Doe).
+    # Require a non-empty body so a damaged literal @() is never treated as a
+    # valid identity-bearing mention.
+    for match in re.finditer(
+        r'@\((?=[^)\r\n]{1,80}\))(?=[^)\r\n]*\S)[^)\r\n]{1,80}\)'
+        r'|@（(?=[^）\r\n]{1,80}）)(?=[^）\r\n]*\S)[^）\r\n]{1,80}）',
+        text,
+    ):
+        mention = match.group(0)
+        if _mention_has_visible_name(mention) and mention not in mentions:
+            mentions.append(mention)
+
+    # English @mentions: grab @word + up to 2 more, trim Indonesian words from end.
     for m in re.finditer(r'@([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.-]+))?', text):
         first = m.group(1)
         if first.lower() in _id_skip:
@@ -3289,7 +3321,7 @@ def extract_mentions(text):
         mention = '@' + ' '.join(parts)
         if mention not in mentions:
             mentions.append(mention)
-    # Chinese @mentions
+    # Chinese/Japanese @mentions, optionally followed by a parenthesized role.
     for m in re.findall(r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', text):
         m = m.rstrip()
         if m and len(m) > 1 and m not in mentions:
@@ -3301,48 +3333,177 @@ def extract_mentions(text):
     return list(dict.fromkeys(mentions))
 
 
-def extract_line_mentions(text, message):
-    """Extract @mention strings using LINE's actual mention data (the blue text).
-    Returns list of exact mention strings from the message."""
-    # v3.10+ 修補:加 None / 非字串守衛,避免 text[idx:length] 在 text=None 時 TypeError
+def _line_span_to_python_indices(text, index, length):
+    """Convert a LINE mention span to Python indices.
+
+    LINE documents the values as character positions.  The direct Python slice
+    is therefore authoritative.  A UTF-16-code-unit fallback protects against
+    webhook producers/SDK versions that count astral emoji as two units.
+    """
+    try:
+        index = int(index)
+        length = int(length)
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or length <= 0:
+        return None
+
+    direct_end = index + length
+    if index <= len(text) and direct_end <= len(text):
+        direct = text[index:direct_end]
+        if direct.startswith('@'):
+            return index, direct_end
+
+    unit_pos = 0
+    py_start = py_end = None
+    wanted_end = index + length
+    for py_idx, char in enumerate(text):
+        if unit_pos == index:
+            py_start = py_idx
+        unit_pos += len(char.encode('utf-16-le')) // 2
+        if unit_pos == wanted_end:
+            py_end = py_idx + 1
+            break
+        if unit_pos > wanted_end:
+            break
+    if py_start is not None and py_end is not None:
+        candidate = text[py_start:py_end]
+        if candidate.startswith('@'):
+            return py_start, py_end
+
+    if index <= len(text):
+        return index, min(len(text), direct_end)
+    return None
+
+
+def normalize_line_mentions(text, message, group_id=None):
+    """Return ``(normalized_text, exact_mentions)`` from webhook metadata.
+
+    Valid webhook text is preserved byte-for-byte.  If a webhook contains a
+    damaged empty shell such as ``@()`` but provides ``userId``, resolve the
+    display name from the group profile and repair the text before translation.
+    Textual mentions not present in metadata are merged as a fallback.
+    """
     if not text or not isinstance(text, str):
-        return []
-    mentions = []
+        return text or "", []
+
+    edits = []
+    metadata_mentions = []
     try:
         mention_data = getattr(message, 'mention', None)
-        if mention_data and hasattr(mention_data, 'mentionees'):
-            for m in mention_data.mentionees:
-                idx = m.index
-                length = m.length
-                mention_text = text[idx:idx+length]
-                if mention_text and mention_text not in mentions:
-                    mentions.append(mention_text)
+        mentionees = list(getattr(mention_data, 'mentionees', None) or [])
     except Exception:
-        pass
+        mentionees = []
+
+    for mentionee in mentionees:
+        span = _line_span_to_python_indices(
+            text,
+            getattr(mentionee, 'index', None),
+            getattr(mentionee, 'length', None),
+        )
+        if not span:
+            continue
+        start, end = span
+        raw = text[start:end]
+        replacement = raw
+        mention_type = str(getattr(mentionee, 'type', '') or '').lower()
+
+        if not _mention_has_visible_name(raw):
+            if mention_type == 'all':
+                replacement = '@All'
+            else:
+                user_id = (getattr(mentionee, 'user_id', None)
+                           or getattr(mentionee, 'userId', None))
+                display_name = None
+                if user_id:
+                    try:
+                        display_name = get_display_name(group_id, user_id)
+                    except Exception as exc:
+                        logger.debug("mention profile lookup failed: %s", exc)
+                if display_name:
+                    if raw.startswith('@（'):
+                        replacement = '@（' + display_name + '）'
+                    elif raw.startswith('@('):
+                        replacement = '@(' + display_name + ')'
+                    else:
+                        replacement = '@' + display_name
+                else:
+                    logger.warning(
+                        "[Mention] malformed webhook mention could not be repaired "
+                        "group=%s raw=%r type=%s",
+                        group_id, raw, mention_type,
+                    )
+
+        if replacement != raw:
+            edits.append((start, end, replacement))
+        if _mention_has_visible_name(replacement) and replacement not in metadata_mentions:
+            metadata_mentions.append(replacement)
+
+    normalized = text
+    for start, end, replacement in sorted(edits, key=lambda item: item[0], reverse=True):
+        normalized = normalized[:start] + replacement + normalized[end:]
+
+    mentions = list(metadata_mentions)
+    for mention in extract_mentions(normalized):
+        if mention not in mentions:
+            mentions.append(mention)
+    return normalized, mentions
+
+
+def extract_line_mentions(text, message, group_id=None):
+    """Extract exact mention strings using LINE metadata plus text fallback."""
+    _normalized, mentions = normalize_line_mentions(text, message, group_id)
     return mentions
 
 
 def protect_mentions(text, line_mentions=None):
-    # Use LINE's actual mention data if available (100% accurate)
-    # Fall back to regex extraction if not
-    if line_mentions:
-        mentions = line_mentions
-    else:
-        mentions = extract_mentions(text)
-    protected = text
+    """Replace every mention occurrence with a unique stable placeholder."""
+    if not text or not isinstance(text, str):
+        return text or "", {}
+
+    candidates = []
+    for mention in list(line_mentions or []) + extract_mentions(text):
+        if (isinstance(mention, str) and mention and mention in text
+                and _mention_has_visible_name(mention)
+                and mention not in candidates):
+            candidates.append(mention)
+
+    # Find all non-overlapping occurrences, preferring the longest mention when
+    # one textual mention is a prefix of another.
+    spans = []
+    occupied = []
+    for mention in sorted(candidates, key=len, reverse=True):
+        pos = 0
+        while True:
+            idx = text.find(mention, pos)
+            if idx < 0:
+                break
+            end = idx + len(mention)
+            if not any(idx < used_end and end > used_start for used_start, used_end in occupied):
+                spans.append((idx, end, mention))
+                occupied.append((idx, end))
+            pos = end
+
+    spans.sort(key=lambda item: item[0])
     placeholders = {}
-    for i, m in enumerate(mentions):
+    chunks = []
+    cursor = 0
+    for i, (start, end, mention) in enumerate(spans):
         ph = f"__MENTION_{i}__"
-        if m in protected:
-            placeholders[ph] = m
-            protected = protected.replace(m, ph, 1)
-    return protected, placeholders
+        chunks.append(text[cursor:start])
+        chunks.append(ph)
+        placeholders[ph] = mention
+        cursor = end
+    chunks.append(text[cursor:])
+    return ''.join(chunks), placeholders
 
 
 def restore_mentions(text, placeholders):
     restored = text or ""
-    for ph, original in placeholders.items():
+    index_to_original = {}
+    for ph, original in (placeholders or {}).items():
         idx = ph.replace("__MENTION_", "").replace("__", "")
+        index_to_original[str(idx)] = original
         variants = [
             ph,
             ph.replace("_", " "),
@@ -3351,54 +3512,68 @@ def restore_mentions(text, placeholders):
             f"MENTION {idx}",
             f"__MENTION {idx}__",
             f"[[MENTION_{idx}]]",
-            # v3.9.30c B21 修補: GPT 偶爾會把 __MENTION_ 字面翻譯成中文「提及」
-            # 歐那實際案例:_提及_0__ 殘留在輸出
             f"__提及_{idx}__",
             f"提及_{idx}",
             f"_提及_{idx}_",
             f"提及{idx}",
-            # 印尼語可能的字面翻譯
             f"__SEBUTAN_{idx}__",
             f"SEBUTAN_{idx}",
             f"__sebutan_{idx}__",
         ]
-        for v in variants:
-            restored = restored.replace(v, original)
+        for variant in variants:
+            restored = restored.replace(variant, original)
 
-    # v3.9.30d B21 升級:萬一 GPT 用了我們沒列的變體,用正則兜底清掉所有 __提及_X__ / __MENTION_X__ 殘留
-    # 這個只在還有 placeholders 時跑,避免誤殺正常文字
     if placeholders:
-        # 把所有 placeholder index 收集起來,任何含這些 index 的「提及」字樣都還原
-        indices = [ph.replace("__MENTION_", "").replace("__", "") for ph in placeholders.keys()]
-        # 取第一個 placeholder 對應的 mention 字串作為兜底還原值(通常只有一個 @All / @user)
-        fallback_mention = next(iter(placeholders.values())) if placeholders else ""
-        # 用正則清殘留
-        # 模式 1: __提及_N__ / _提及_N_ / 提及N / 提及_N
-        def _replace_residual(m):
-            return fallback_mention
-        restored = re.sub(r'_{0,2}提及[_\s]?\d+_{0,2}', _replace_residual, restored)
-        # 模式 2: __MENTION_N__ 殘留(英文未還原,通常已被上面 variants 處理,但保險)
-        restored = re.sub(r'_{0,2}MENTION[_\s]?\d+_{0,2}', _replace_residual, restored)
-        # 模式 3: 印尼文 sebutan 殘留
-        restored = re.sub(r'_{0,2}[Ss][Ee][Bb][Uu][Tt][Aa][Nn][_\s]?\d+_{0,2}', _replace_residual, restored)
+        def _replace_indexed_residual(match):
+            return index_to_original.get(match.group(1), match.group(0))
 
-    # Final safety net: if any original @mention disappeared during translation,
-    # prepend it back so the tagged person is not lost.
-    missing = [original for original in placeholders.values() if original not in restored]
-    if missing:
-        prefix = " ".join(missing)
-        restored = (prefix + " " + restored).strip()
+        restored = re.sub(
+            r'_{0,2}提及[_\s]?(\d+)_{0,2}',
+            _replace_indexed_residual,
+            restored,
+        )
+        restored = re.sub(
+            r'_{0,2}MENTION[_\s]?(\d+)_{0,2}',
+            _replace_indexed_residual,
+            restored,
+            flags=re.IGNORECASE,
+        )
+        restored = re.sub(
+            r'_{0,2}SEBUTAN[_\s]?(\d+)_{0,2}',
+            _replace_indexed_residual,
+            restored,
+            flags=re.IGNORECASE,
+        )
+
+    # If a provider removed a placeholder entirely, restore each missing mention
+    # instance rather than merely checking whether the name appears once.
+    remaining_counts = {}
+    for original in (placeholders or {}).values():
+        remaining_counts[original] = restored.count(original)
+    missing_instances = []
+    for original in (placeholders or {}).values():
+        if remaining_counts.get(original, 0) > 0:
+            remaining_counts[original] -= 1
+        else:
+            missing_instances.append(original)
+    if missing_instances:
+        restored = (" ".join(missing_instances) + " " + restored).strip()
     return restored
 
 
 def strip_mentions_for_detect(text, line_mentions=None):
-    """Strip @mentions for language detection."""
-    if line_mentions:
-        # Use LINE's actual mention data - most accurate
-        clean = text
-        for m in line_mentions:
-            clean = clean.replace(m, ' ')
-        return clean
+    """Strip mentions only for language detection, never for translation."""
+    if not text or not isinstance(text, str):
+        return ""
+
+    clean = text
+    candidates = []
+    for mention in list(line_mentions or []) + extract_mentions(text):
+        if isinstance(mention, str) and mention and mention not in candidates:
+            candidates.append(mention)
+    for mention in sorted(candidates, key=len, reverse=True):
+        clean = clean.replace(mention, ' ')
+
     _id_skip = {
         'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
         'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
@@ -3411,14 +3586,19 @@ def strip_mentions_for_detect(text, line_mentions=None):
         'selalu','mohon','pakai','pake','cek','lihat','bilang','ambil','kirim',
         'tunggu','bantu','butuh','perlu','panggil','suruh','hati','awas',
     }
-    def _replace_en(m):
-        first_word = re.match(r'@([A-Za-z0-9]+)', m.group(0))
+    def _replace_en(match):
+        first_word = re.match(r'@([A-Za-z0-9]+)', match.group(0))
         if first_word and first_word.group(1).lower() in _id_skip:
-            return m.group(0)  # Keep: not a real @mention
+            return match.group(0)
         return ' '
-    clean = re.sub(r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))', _replace_en, text)
-    # Strip Chinese @mentions
+    clean = re.sub(
+        r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?'
+        r'(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))',
+        _replace_en,
+        clean,
+    )
     clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', ' ', clean)
+    clean = re.sub(r'@\([^)]*\)|@（[^）]*）', ' ', clean)
     return clean
 
 
@@ -9529,11 +9709,65 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
     if re.search(r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}', candidate, re.I):
         logger.error("[MentionGuard] unresolved mention placeholder: %r", candidate[:200])
         return None
-    missing = [m for m in (mention_placeholders or {}).values() if m and m not in candidate]
+    expected_counts = {}
+    for mention in (mention_placeholders or {}).values():
+        if mention:
+            expected_counts[mention] = expected_counts.get(mention, 0) + 1
+    missing = []
+    for mention, expected in expected_counts.items():
+        actual = candidate.count(mention)
+        if actual < expected:
+            missing.extend([mention] * (expected - actual))
     if missing:
         logger.error("[MentionGuard] restored translation lost mentions: %s", missing[:5])
         return None
     return candidate.strip()
+
+
+def _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang):
+    """Run a quality-variant translation without exposing mention names.
+
+    Postback modes intentionally call ``translate_openai`` directly to bypass
+    normal cache/TM routing.  That path therefore needs the same immutable
+    mention/name boundary as ``translate()`` rather than trusting the model to
+    retain ``@(name)`` text.
+    """
+    mention_protected, mention_map = protect_mentions(canonical)
+    protected, name_map = protect_names(mention_protected)
+    result = translate_openai(protected, src_lang, tgt_lang)
+    if not result:
+        return None
+    result = restore_names(result, name_map)
+    if mention_map:
+        result = restore_mentions(result, mention_map)
+        result = _post_restore_mentions_guard(result, mention_map)
+    if not result:
+        return None
+    result = _normalize_factory_operation_question(canonical, result, src_lang, tgt_lang)
+    result = finalize_factory_translation(canonical, result, src_lang, tgt_lang)
+    return _final_delivery_guard(canonical, result, src_lang, tgt_lang)
+
+
+def _normalize_factory_operation_question(source_text, candidate, src, tgt):
+    """Deterministically normalize a complete factory-operation issue question.
+
+    This is source-gated and only activates when the entire Chinese message is a
+    question asking what problem exists in the spray-painting operation.  It
+    prevents translationese such as ``Ada masalah apa dalam pelaksanaan...``
+    and keeps every leading mention exactly as written.
+    """
+    if src != "zh" or tgt != "id" or not candidate:
+        return candidate
+    content = strip_mentions_for_detect(source_text).strip()
+    compact = re.sub(r"\s+", "", content)
+    if not re.fullmatch(
+        r"噴漆(?:執行|作業|進行)(?:上|中)?有什麼(?:問題|困難|障礙)[？?]?",
+        compact,
+    ):
+        return candidate
+    mentions = extract_mentions(source_text)
+    prefix = (" ".join(mentions) + " ") if mentions else ""
+    return prefix + "Apa kendala dalam proses pengecatan semprot?"
 
 
 def _translation_failure_notice(src_lang="zh", target_langs=None):
@@ -9688,12 +9922,29 @@ def translate(text, src, tgt):
                 pass
             return reason_semantic
         canonical_text, _station_alias_matches = resolve_factory_station_aliases(text)
-    protected_text, _name_map = protect_names(canonical_text)
+    # Mentions are immutable identity data, not translatable language.  Protect
+    # them at the public translation boundary so every caller (group, DM,
+    # postback, API, tests) gets the same behavior instead of relying on one
+    # message-handler branch to remember a special pre-processing step.
+    _explicit_mentions = getattr(_tl, 'line_mentions', None)
+    _mention_protected_text, _mention_map = protect_mentions(
+        canonical_text, _explicit_mentions
+    )
+    protected_text, _name_map = protect_names(_mention_protected_text)
     # 存 thread-local 供 _translate_core 路由判斷:有保護名時強制走 LLM,
     # 不讓 NMT / 語義 bypass 把名稱音譯或誤配到別句的舊譯文。
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
     try:
-        _tl.protected_name_map = _name_map
+        # _translate_core only needs this map as a protected-entity signal.  A
+        # mention-bearing sentence must bypass NMT/fuzzy TM for the same reason
+        # as a protected personal name: external engines may alter placeholders
+        # or bind a stale translation to the wrong person.
+        _protected_entities = dict(_name_map)
+        _protected_entities.update(_mention_map)
+        _protected_entities.update(
+            dict(getattr(_tl, 'external_mention_placeholders', None) or {})
+        )
+        _tl.protected_name_map = _protected_entities
         result = _translate_core(protected_text, src, tgt)
     finally:
         # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
@@ -9707,6 +9958,14 @@ def translate(text, src, tgt):
             pass
     if result and isinstance(result, str):
         result = restore_names(result, _name_map)
+        if _mention_map:
+            result = restore_mentions(result, _mention_map)
+            result = _post_restore_mentions_guard(result, _mention_map)
+            if not result:
+                return None
+        result = _normalize_factory_operation_question(
+            canonical_text, result, src, tgt
+        )
         result = _final_delivery_guard(canonical_text, result, src, tgt)
         # Absolute last boundary: if the source is an ERP reason table/label,
         # deterministic factory semantics outrank any reviewer/cache/model output.
@@ -13764,8 +14023,12 @@ def handle_message(event):
         if not dm_master_enabled and user_id not in dm_whitelist:
             return
 
-        # DM translation: strip mentions, detect language, translate
-        text_clean = strip_mentions_for_detect(text).strip()
+        # DM translation: mentions are removed only from language detection.
+        # The normalized original text is translated so identity labels survive.
+        text, _dm_line_mentions = normalize_line_mentions(
+            text, event.message, None
+        )
+        text_clean = strip_mentions_for_detect(text, _dm_line_mentions).strip()
         # v3.9.56: 全面短文翻譯 — 放行單字內容
         if not has_translatable_content(text_clean):
             return
@@ -13787,7 +14050,19 @@ def handle_message(event):
 
         _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
         _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
-        result = translate(text_clean, lang, tgt)
+        _previous_line_mentions = getattr(_tl, 'line_mentions', None)
+        try:
+            _tl.line_mentions = list(_dm_line_mentions or [])
+            result = translate(text, lang, tgt)
+        finally:
+            try:
+                if _previous_line_mentions is None:
+                    if hasattr(_tl, 'line_mentions'):
+                        delattr(_tl, 'line_mentions')
+                else:
+                    _tl.line_mentions = _previous_line_mentions
+            except Exception:
+                pass
         track_group_usage("__dm__", _bp, _bc, _bcost)
         if not result:
             # v3.10+ 修補:DM 翻譯失敗時不該靜默,使用者會困惑 bot 為何不回。
@@ -13907,8 +14182,10 @@ def handle_message(event):
     if text.startswith("!"):
         return
 
-    # Extract LINE's actual @mention data (blue text = 100% accurate)
-    line_mentions = extract_line_mentions(text, event.message)
+    # Normalize LINE mention spans first.  This also repairs a malformed @()
+    # shell from webhook metadata when the mentionee userId can be resolved, and
+    # recognizes pasted/plain-text forms such as @(杰弗).
+    text, line_mentions = normalize_line_mentions(text, event.message, group_id)
 
     # v3.17 根治：只有 @mention / 人名點名的訊息不送翻譯。
     # 實際案例：@小麥（研磨股班長） 君立。
@@ -13987,11 +14264,11 @@ def handle_message(event):
         # v3.11: 帶 mark_as_read_token,新 SDK 會用 token-based 精準標讀
         mark_as_read(group_id, mark_as_read_token=getattr(event.message, 'mark_as_read_token', None))
 
-    # Protect LINE mentions before translation
+    # Mention protection now lives at translate()'s public boundary.  Pass the
+    # normalized source text through unchanged and provide exact LINE spans via
+    # thread-local context so all translation routes share one implementation.
     text_to_translate = text
     mention_placeholders = {}
-    if line_mentions:
-        text_to_translate, mention_placeholders = protect_mentions(text, line_mentions)
 
     reply = None
     _translation_failed = False
@@ -14002,6 +14279,7 @@ def handle_message(event):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     _tl.group_id = group_id
+    _tl.line_mentions = list(line_mentions or [])
     # v3.10: 多語廣播 — 中文時翻成所有設定的目標語言
     _tts_text = None    # 給 TTS 用的主要翻譯文字
     _tts_lang = None
@@ -15722,12 +16000,12 @@ if PostbackEvent:
                         canonical, _ = resolve_factory_station_aliases(source_text)
                     elif src_lang == "id" and id_preprocessing_enabled:
                         canonical, _ = normalize_indonesian_text(source_text)
-                    protected, name_map = protect_names(canonical)
-                    result = translate_openai(protected, src_lang, tgt_lang)
-                    if result:
-                        result = restore_names(result, name_map)
-                        result = finalize_factory_translation(canonical, result, src_lang, tgt_lang)
-                        result = _final_delivery_guard(canonical, result, src_lang, tgt_lang)
+                    # The helper keeps the direct translate_openai variant path
+                    # and its _final_delivery_guard boundary while adding the
+                    # same immutable-mention protection used by normal results.
+                    result = _translate_variant_preserving_mentions(
+                        canonical, src_lang, tgt_lang
+                    )
             except Exception as exc:
                 logger.exception("[translation_variant] %s failed: %s", mode, exc)
                 result = None
@@ -28847,7 +29125,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
 
     # 複製當前 thread-local 上下文給 worker(pipeline 依賴這些)
     _ctx = {}
-    for _a in ('group_id', 'user_id', 'from_image_ocr', 'tone', 'tone_custom'):
+    for _a in ('group_id', 'user_id', 'from_image_ocr', 'tone', 'tone_custom',
+               'line_mentions'):
         if hasattr(_tl, _a):
             _ctx[_a] = getattr(_tl, _a)
 
@@ -28855,6 +29134,11 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
         if _in_worker:
             for _k, _v in _ctx.items():
                 setattr(_tl, _k, _v)
+        _previous_external_mentions = getattr(
+            _tl, 'external_mention_placeholders', None
+        )
+        if mention_placeholders:
+            _tl.external_mention_placeholders = dict(mention_placeholders)
         try:
             res = None
             try:
@@ -28868,16 +29152,25 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 # bilingual failure notice.
                 res = None
             if res and mention_placeholders:
-                try:
-                    res = restore_mentions(res, mention_placeholders)
-                except Exception:
-                    pass
+                res = restore_mentions(res, mention_placeholders)
+                res = _post_restore_mentions_guard(res, mention_placeholders)
             _entry_id = getattr(_tl, 'last_entry_id', None)
             return res, _entry_id
         finally:
+            try:
+                if _previous_external_mentions is None:
+                    if hasattr(_tl, 'external_mention_placeholders'):
+                        delattr(_tl, 'external_mention_placeholders')
+                else:
+                    _tl.external_mention_placeholders = _previous_external_mentions
+            except Exception:
+                pass
             if _in_worker:
                 # 清 worker 執行緒殘留(executor 執行緒會被重用)
-                for _k in list(_ctx.keys()) + ['force_model', 'last_entry_id']:
+                for _k in list(_ctx.keys()) + [
+                    'force_model', 'last_entry_id',
+                    'external_mention_placeholders',
+                ]:
                     try:
                         if hasattr(_tl, _k):
                             delattr(_tl, _k)

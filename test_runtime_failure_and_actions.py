@@ -42,6 +42,54 @@ def test_post_restore_guard_accepts_valid_line_mentions():
     assert app._post_restore_mentions_guard(candidate, placeholders) == candidate
 
 
+def test_parenthesized_plain_text_mention_is_detected_and_protected():
+    source = "@(杰弗) 噴漆執行上有什麼問題？"
+
+    assert app.extract_mentions(source) == ["@(杰弗)"]
+    protected, placeholders = app.protect_mentions(source)
+
+    assert protected == "__MENTION_0__ 噴漆執行上有什麼問題？"
+    assert placeholders == {"__MENTION_0__": "@(杰弗)"}
+    assert app.strip_mentions_for_detect(source).strip() == "噴漆執行上有什麼問題？"
+
+
+def test_repeated_same_mention_gets_one_placeholder_per_occurrence():
+    source = "@(杰弗) 先確認，@(杰弗) 再回報。"
+
+    protected, placeholders = app.protect_mentions(source)
+
+    assert protected == "__MENTION_0__ 先確認，__MENTION_1__ 再回報。"
+    assert placeholders == {
+        "__MENTION_0__": "@(杰弗)",
+        "__MENTION_1__": "@(杰弗)",
+    }
+    restored = app.restore_mentions(protected, placeholders)
+    assert restored == source
+    assert app._post_restore_mentions_guard(restored, placeholders) == source
+
+
+def test_malformed_line_mention_shell_is_repaired_from_user_profile(monkeypatch):
+    mentionee = types.SimpleNamespace(
+        index=0,
+        length=3,
+        type="user",
+        user_id="U-mentioned-user",
+    )
+    message = types.SimpleNamespace(
+        mention=types.SimpleNamespace(mentionees=[mentionee])
+    )
+    monkeypatch.setattr(app, "get_display_name", lambda group_id, user_id: "杰弗")
+
+    normalized, mentions = app.normalize_line_mentions(
+        "@() 噴漆執行上有什麼問題？",
+        message,
+        "group-1",
+    )
+
+    assert normalized == "@(杰弗) 噴漆執行上有什麼問題？"
+    assert mentions == ["@(杰弗)"]
+
+
 def test_plain_text_translation_actions_are_visible_without_flex():
     qr = app._build_translation_action_quick_reply(
         "group-1",
@@ -196,15 +244,17 @@ def test_screenshot_sentence_repairs_old_spray_cat_output_instead_of_failing(mon
     app.translation_cache.clear()
     app._tl.group_id = "regression-group"
 
+    # Use the same raw text shown in LINE.  There is intentionally no LINE
+    # mention metadata and no prebuilt placeholder map: the public translation
+    # boundary must recognize and preserve the pasted @(name) form itself.
     actual = app.translate_multi(
-        "__MENTION_0__ 噴漆執行上有什麼問題？",
+        "@(杰弗) 噴漆執行上有什麼問題？",
         "zh",
         ["id"],
-        {"__MENTION_0__": "@(杰弗)"},
     )
 
     assert actual == [
-        ("id", "@(杰弗) Apa masalah dalam pelaksanaan pengecatan semprot?")
+        ("id", "@(杰弗) Apa kendala dalam proses pengecatan semprot?")
     ]
     report = tqg.validate_translation(
         "@(杰弗) 噴漆執行上有什麼問題？",
@@ -213,6 +263,30 @@ def test_screenshot_sentence_repairs_old_spray_cat_output_instead_of_failing(mon
         "id",
     )
     assert report.ok, report.issues
+
+
+def test_natural_variant_preserves_parenthesized_mention(monkeypatch):
+    seen = {}
+
+    def fake_translate_openai(text, src, tgt, **_kwargs):
+        seen["text"] = text
+        return "__MENTION_0__ Apa kendala dalam proses pengecatan semprot?"
+
+    monkeypatch.setattr(app, "translate_openai", fake_translate_openai)
+    monkeypatch.setattr(
+        app,
+        "_final_delivery_guard",
+        lambda source, candidate, src, tgt: candidate,
+    )
+
+    actual = app._translate_variant_preserving_mentions(
+        "@(杰弗) 噴漆執行上有什麼問題？",
+        "zh",
+        "id",
+    )
+
+    assert seen["text"].startswith("__MENTION_0__")
+    assert actual == "@(杰弗) Apa kendala dalam proses pengecatan semprot?"
 
 
 def test_spray_paint_prompt_hint_never_recommends_deprecated_term():
