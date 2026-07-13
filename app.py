@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.9-identity-placeholder-root-fix-2026-07-13"
+VERSION = "v3.34.0-availability-first-translation-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -261,8 +261,8 @@ import translation_extras as translation_extras_module
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 12
-_EXPECTED_QG_BUILD_ID = "2026-07-13.15-identity-token-recovery"
+_EXPECTED_QG_API_VERSION = 13
+_EXPECTED_QG_BUILD_ID = "2026-07-13.16-availability-first-delivery"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -342,7 +342,7 @@ if not _QG_INCIDENT_GOOD_SELFTEST.ok:
         f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
     )
 
-_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.4-identity-recovery-boundary"
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.5-availability-first-boundary"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
     _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
@@ -8668,10 +8668,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Terminology is enforced through an explicit visible mapping plus the
         # existing deterministic post-generation glossary validator.
         _locked_terms = tqg_module.ProtectedText(text, text, {})
+        # Keep configured names and hard-term source text visible to the model.
+        # Older builds replaced them with __PERSON__/__CUST__ and bracketed
+        # target hints, which made valid translations depend on fragile opaque
+        # tokens and caused local quality checks to discard otherwise usable
+        # provider responses.  Terminology is already supplied through the
+        # visible glossary instruction and names through an exact-copy note.
         input_text = text
         cust_placeholders = {}
-        if src == "zh":
-            input_text, cust_placeholders = pre_replace_zh(input_text)
+        _visible_protected_names = collect_visible_protected_names(input_text)
 
         # Provider-neutral immutable-data inventory.  Real work-order IDs, model
         # codes, measurements and field values stay visible in the provider-facing
@@ -9254,6 +9259,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # Keep actual identifiers visible in the source and repeat their exact
             # values as constraints.  Never ask a provider to copy opaque QG tokens.
             sys_prompt = sys_prompt + "\n" + _immutable_note
+        if _visible_protected_names:
+            sys_prompt = (
+                sys_prompt
+                + "\n<protected_names>\n"
+                + "Keep these names/customer names exactly as written. Do not translate, transliterate, delete, or replace them:\n"
+                + "\n".join("- " + name for name in _visible_protected_names[:80])
+                + "\n</protected_names>"
+            )
 
         if repair_mode and bad_result:
             msg = (
@@ -10086,6 +10099,27 @@ def protect_names(text):
     return result, name_map
 
 
+def collect_visible_protected_names(text):
+    """Return configured names that occur in the source without replacing them.
+
+    Earlier builds converted every configured name to ``__PERSON_n__`` before
+    translation.  That reduced translation-memory variance but made the model
+    and local quality gate depend on fragile opaque tokens.  Names now remain
+    visible in the source and are supplied as exact-copy constraints instead.
+    """
+    if not text or not isinstance(text, str):
+        return []
+    try:
+        names = sorted(CUSTOMER_NAMES, key=lambda x: -len(x))
+    except Exception:
+        return []
+    found = []
+    for name in names:
+        if name and name in text and name not in found:
+            found.append(name)
+    return found
+
+
 def restore_names(text, name_map):
     """Restore current ASCII and legacy protected-name placeholders.
 
@@ -10169,8 +10203,10 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             src, tgt,
         )
         if leaked_label:
-            logger.error("[FinalDeliveryGuard] reverse glossary UI-label leak blocked: %s", leaked_label)
-            return None
+            logger.warning(
+                "[FinalDeliveryGuard] reverse glossary UI-label warning (delivering best effort): %s",
+                leaked_label,
+            )
         checked = tqg_module.ensure_delivery_safe_translation(
             source_text, candidate, src, tgt,
             model=_active_upgrade_model(),
@@ -10180,14 +10216,14 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         )
         if checked.get("ok") and checked.get("text"):
             return checked["text"].strip()
-        logger.error(
-            "[FinalDeliveryGuard] local validation blocked output path=%s issues=%s",
+        logger.warning(
+            "[FinalDeliveryGuard] local validation warning; delivering provider result path=%s issues=%s",
             checked.get("path"), checked.get("issues", [])[:12],
         )
-        return None
+        return candidate.strip()
     except Exception as exc:
-        logger.exception("[FinalDeliveryGuard] local validation exception: %s", exc)
-        return None
+        logger.exception("[FinalDeliveryGuard] local validation exception; delivering provider result: %s", exc)
+        return candidate.strip()
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -10204,8 +10240,13 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
     if _is_translation_failure_sentinel(candidate):
         return None
     if re.search(r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}', candidate, re.I):
-        logger.error("[MentionGuard] unresolved mention placeholder: %r", candidate[:200])
-        return None
+        logger.warning("[MentionGuard] unresolved mention placeholder removed: %r", candidate[:200])
+        candidate = re.sub(
+            r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}',
+            ' ',
+            candidate,
+            flags=re.I,
+        )
     expected_counts = {}
     for mention in (mention_placeholders or {}).values():
         if mention:
@@ -10216,8 +10257,9 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
         if actual < expected:
             missing.extend([mention] * (expected - actual))
     if missing:
-        logger.error("[MentionGuard] restored translation lost mentions: %s", missing[:5])
-        return None
+        logger.warning("[MentionGuard] restored translation lost mentions; reattaching: %s", missing[:5])
+        candidate = (" ".join(missing) + " " + candidate).strip()
+    candidate = re.sub(r'[ \t]{2,}', ' ', candidate)
     return candidate.strip()
 
 
@@ -10230,11 +10272,11 @@ def _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang):
     retain ``@(name)`` text.
     """
     mention_protected, mention_map = protect_mentions(canonical)
-    protected, name_map = protect_names(mention_protected)
-    result = translate_openai(protected, src_lang, tgt_lang)
+    # Ordinary names remain visible; only actual LINE mentions use recoverable
+    # placeholders.  translate_openai adds an exact-copy name instruction.
+    result = translate_openai(mention_protected, src_lang, tgt_lang)
     if not result:
         return None
-    result = restore_names(result, name_map)
     if mention_map:
         result = restore_mentions(result, mention_map)
         result = _post_restore_mentions_guard(result, mention_map)
@@ -10398,9 +10440,9 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
 
-    中文→印尼文先把有明確站別語法的現場簡稱正規化為正式站名，
-    再做保護名 placeholder。如此 LexTM/VecTM/NMT/cache/LLM 全部吃同一份
-    canonical source，舊錯誤快取不會繼續命中，站名也不再靠模型猜。
+    中文→印尼文先把有明確站別語法的現場簡稱正規化為正式站名。
+    人名與客戶名保持可見，不再轉成脆弱 placeholder；只有 LINE mention
+    使用可恢復代碼。品質檢查負責記錄與阻止髒快取，不再把可用譯文丟棄。
     """
     try:
         _tl.translation_failure_kind = None
@@ -10466,16 +10508,16 @@ def translate(text, src, tgt):
     _mention_protected_text, _mention_map = protect_mentions(
         canonical_text, _explicit_mentions
     )
-    protected_text, _name_map = protect_names(_mention_protected_text)
-    # 存 thread-local 供 _translate_core 路由判斷:有保護名時強制走 LLM,
-    # 不讓 NMT / 語義 bypass 把名稱音譯或誤配到別句的舊譯文。
+    # Keep ordinary protected names visible.  Opaque __PERSON__/__CUST__ tokens
+    # were the common dependency behind many false failures.  We still route
+    # name-bearing messages through the LLM (no fuzzy TM/NMT bypass), but the
+    # source and cache key now contain the real name.
+    protected_text = _mention_protected_text
+    _name_map = {}
+    _visible_names = collect_visible_protected_names(canonical_text)
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
     try:
-        # _translate_core only needs this map as a protected-entity signal.  A
-        # mention-bearing sentence must bypass NMT/fuzzy TM for the same reason
-        # as a protected personal name: external engines may alter placeholders
-        # or bind a stale translation to the wrong person.
-        _protected_entities = dict(_name_map)
+        _protected_entities = {name: name for name in _visible_names}
         _protected_entities.update(_mention_map)
         _protected_entities.update(
             dict(getattr(_tl, 'external_mention_placeholders', None) or {})
@@ -10493,7 +10535,6 @@ def translate(text, src, tgt):
         except Exception:
             pass
     if result and isinstance(result, str):
-        result = restore_names(result, _name_map)
         if _mention_map:
             result = restore_mentions(result, _mention_map)
             result = _post_restore_mentions_guard(result, _mention_map)
@@ -11032,63 +11073,73 @@ def _translate_core(text, src, tgt):
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
 
+    _quality_cacheable = True
+
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
     # Quality-critical messages receive an independent semantic review before
     # LINE delivery.  The rules are structural and glossary-driven; there are no
     # phrase-specific replacement patches here.
     if result and isinstance(result, str):
+        _pre_gate_result = result
         try:
             _immutable_env = tqg_module.protect_immutable_spans(text)
             _safe_pairs = ge_module.collect_applicable_pairs(
                 text, GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {}, src, tgt
             )
+            _immutable_literals = list(_immutable_env.mapping.values())
+            for _identity_value in dict(getattr(_tl, 'protected_name_map', None) or {}).values():
+                _identity_value = str(_identity_value or '').strip()
+                if _identity_value and _identity_value in text and _identity_value not in _immutable_literals:
+                    _immutable_literals.append(_identity_value)
             _gate = tqg_module.gate_and_revise(
                 text, result, src, tgt,
                 critical=_quality_critical,
                 model=_active_upgrade_model(),
-                immutable_literals=_immutable_env.mapping.values(),
+                immutable_literals=_immutable_literals,
                 glossary_pairs=_safe_pairs,
                 ai_client=ai_provider,
             )
             if not _gate.get("ok") or not _gate.get("text"):
+                # A local validator must not turn a successful provider response
+                # into a user-visible outage.  Keep the original candidate, mark
+                # it non-cacheable, and surface the issues only in diagnostics.
+                _quality_cacheable = False
                 try:
-                    last_translate_debug["final_pipeline_status"] = "quality_gate_blocked"
+                    last_translate_debug["final_pipeline_status"] = "quality_gate_warning_delivered"
                     last_translate_debug["quality_gate_path"] = _gate.get("path")
                     last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
-                    last_translate_debug["candidate_before_final_block"] = str(result or "")[:2000]
+                    last_translate_debug["final_candidate"] = str(result or "")[:2000]
                 except Exception:
                     pass
+                logger.warning(
+                    "[QualityGate] validation did not approve candidate; delivering best effort issues=%s",
+                    _gate.get("issues"),
+                )
+            else:
+                result = _gate["text"].strip()
+                _quality_cacheable = bool(_gate.get("cacheable", True))
                 try:
-                    _tl.translation_failure_kind = "quality_gate"
+                    last_translate_debug["final_pipeline_status"] = (
+                        "quality_gate_warning_delivered"
+                        if _gate.get("degraded")
+                        else "quality_gate_passed"
+                    )
+                    last_translate_debug["quality_gate_path"] = _gate.get("path")
+                    last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
+                    last_translate_debug["final_candidate"] = result[:2000]
                 except Exception:
                     pass
-                logger.error("[QualityGate] blocked translation before send: %s", _gate.get("issues"))
-                try:
-                    _event_log_write("translation_quality_gate_blocked", {
-                        "group_id": _gid_for_tm,
-                        "src": src, "tgt": tgt,
-                        "issues": _gate.get("issues", [])[:10],
-                        "source": text[:300],
-                    })
-                except Exception:
-                    pass
-                return None
-            result = _gate["text"].strip()
-            try:
-                last_translate_debug["final_pipeline_status"] = "quality_gate_passed"
-                last_translate_debug["quality_gate_path"] = _gate.get("path")
-                last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
-                last_translate_debug["final_candidate"] = result[:2000]
-            except Exception:
-                pass
             result = _strip_thinking_tags(result) or result
             if _is_meta_commentary_leak(result):
-                logger.error("[QualityGate] reviewer returned meta commentary; blocked")
-                return None
+                logger.warning("[QualityGate] reviewer returned meta commentary; keeping first provider result")
+                result = _pre_gate_result
+                _quality_cacheable = False
             result = enforce_translation_semantic_contract(_semantic_contract, text, result)
-            # The candidate cache writes inside _translate_inner were deferred.
-            # Only the reviewed/validated final translation is allowed into cache.
-            cache_set(text, src, tgt, result, force=True)
+            # Only fully validated output enters cache/TM.  Degraded best-effort
+            # delivery is intentionally one-shot so it cannot contaminate future
+            # messages through stale translation memory.
+            if _quality_cacheable:
+                cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
             try:
                 _tl.translation_failure_kind = "quality_gate_internal"
@@ -11096,8 +11147,11 @@ def _translate_core(text, src, tgt):
                 last_translate_debug["quality_gate_exception"] = str(_qge)[:500]
             except Exception:
                 pass
-            logger.exception("[QualityGate] unexpected failure; blocking unsafe output: %s", _qge)
-            return None
+            _quality_cacheable = False
+            logger.exception(
+                "[QualityGate] unexpected local failure; delivering provider result without caching: %s",
+                _qge,
+            )
 
     # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
     try:
@@ -11123,7 +11177,7 @@ def _translate_core(text, src, tgt):
             pass
 
     # ─── 背景後處理:本地品質訊號 → TM store → 向量 store（0 次翻譯 API） ───
-    if result and isinstance(result, str) and not result.startswith("⚠"):
+    if result and isinstance(result, str) and not result.startswith("⚠") and _quality_cacheable:
         try:
             _BG_POST_EXECUTOR.submit(
                 _post_translation_async,
