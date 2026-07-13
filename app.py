@@ -3561,6 +3561,70 @@ def restore_mentions(text, placeholders):
     return restored
 
 
+def _repair_pipeline_mention_placeholders(source_text, candidate):
+    """Recover immutable LINE mention tokens dropped or mangled by a provider.
+
+    ``translate()`` protects every LINE mention as ``__MENTION_n__`` before any
+    TM/NMT/LLM route.  Some otherwise valid provider responses omit those tokens.
+    The old pipeline validated the candidate *before* the public boundary could
+    restore the names, so ``missing_pipeline_token`` turned a usable translation
+    into the misleading generic failure notice.
+
+    Mention identity is already known locally, so recovering only these tokens
+    is deterministic and does not invent translated content.  Other immutable
+    data (numbers, equipment codes, dates, etc.) remain fail-closed.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return candidate
+    source = str(source_text or "")
+    expected = []
+    for match in re.finditer(r"__MENTION_(\d+)__", source, flags=re.IGNORECASE):
+        token = f"__MENTION_{int(match.group(1))}__"
+        if token not in expected:
+            expected.append(token)
+    if not expected:
+        return candidate
+
+    repaired = candidate
+    protected_entities = dict(getattr(_tl, "protected_name_map", None) or {})
+
+    # A provider may echo the visible display name from conversation context
+    # instead of the token.  Convert one such occurrence back to its canonical
+    # token so final restoration cannot duplicate the addressee.
+    for token in expected:
+        original = protected_entities.get(token)
+        if isinstance(original, str) and original and original in repaired:
+            repaired = repaired.replace(original, token, 1)
+
+    # Canonicalize provider variants without substring replacement.  The old
+    # restore_mentions(identity_map) approach was not idempotent because a
+    # shorter variant such as MENTION_0 also matched inside __MENTION_0__.
+    for token in expected:
+        idx = int(re.search(r"(\d+)", token).group(1))
+        variant_re = re.compile(
+            rf"(?<![A-Za-z0-9])(?:\[\[\s*)?_*(?:MENTION|SEBUTAN|提及)"
+            rf"[_\s-]*0*{idx}_*(?:\s*\]\])?(?![A-Za-z0-9])",
+            flags=re.IGNORECASE,
+        )
+        repaired = variant_re.sub(token, repaired)
+
+    # Only mentions are safe to synthesize locally.  If the provider removed a
+    # token completely, prepend it in original source order.  This mirrors LINE
+    # chat semantics: the addressee remains explicit even when word order moves.
+    missing = [token for token in expected if token not in repaired]
+    if missing:
+        repaired = (" ".join(missing) + " " + repaired).strip()
+
+    if repaired != candidate:
+        logger.warning(
+            "[MentionRecovery] repaired provider mention tokens expected=%s before=%r after=%r",
+            expected,
+            candidate[:180],
+            repaired[:180],
+        )
+    return repaired
+
+
 def strip_mentions_for_detect(text, line_mentions=None):
     """Strip mentions only for language detection, never for translation."""
     if not text or not isinstance(text, str):
@@ -5866,6 +5930,9 @@ def finalize_factory_translation(src_text, result, src, tgt):
     """Deterministic factory normalization only; never invokes an AI repair call."""
     if not result:
         return result
+    # Defense in depth for cache/custom-example/NMT paths that do not pass
+    # through translate_openai's response parser.
+    result = _repair_pipeline_mention_placeholders(src_text, result)
     if src == "id" and tgt == "zh":
         result = post_fix_factory_id_to_zh(src_text, result)
         ok, reason = validate_factory_translation(src_text, result, src, tgt)
@@ -9358,6 +9425,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 result = _raw
         else:
             result = _raw
+        # Outer translate() may already have converted LINE mentions to
+        # __MENTION_n__.  Recover provider-dropped tokens before any local
+        # integrity validator can reject an otherwise complete translation.
+        result = _repair_pipeline_mention_placeholders(text, result)
         result = restore_mentions(result, placeholders)
         result = tqg_module.restore_immutable_spans(result, _immutable.mapping)
         result = tqg_module.restore_glossary_terms(result, _locked_terms.mapping)
@@ -10645,6 +10716,12 @@ def _translate_core(text, src, tgt):
     # 注意:APE 改在背景跑後,修正結果不再回到本次訊息(LINE 訊息本來就不能編輯,
     # 原本 blocking APE 換到的只是「偶爾低分句多等幾秒換修正版」)。
     # 修正版現在會更新 cache + TM,同句下次直接命中好譯文 — 資產品質不變。
+
+    # Mention placeholders are recoverable identity metadata.  Repair them
+    # before meta/quality checks so a provider omission is not misreported as a
+    # translation-service outage.  Non-mention immutable tokens remain strict.
+    if result and isinstance(result, str):
+        result = _repair_pipeline_mention_placeholders(text, result)
 
     # ─── 主路徑收尾 1: <thinking> tag 過濾(v3.11,移到入庫前 — 原本在入庫後,
     #      導致 TM 可能存進含 thinking tag 的髒文字,順手治本) ───

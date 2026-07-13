@@ -361,3 +361,89 @@ def test_equipment_status_semantic_path_does_not_drop_extra_information():
     source = "Mesin I9 masih dalam perbaikan sampai besok"
 
     assert app.factory_semantic_translate_equipment_status_id_zh(source) is None
+
+
+def test_pipeline_recovers_two_provider_dropped_line_mentions_before_quality_gate(monkeypatch):
+    """Regression for the 10:52 LINE screenshot with two addressees.
+
+    The provider returned a usable Chinese translation but omitted both outer
+    ``__MENTION_n__`` tokens.  The old first-pass validator rejected it as
+    ``missing_pipeline_token`` before translate() could restore display names.
+    """
+    source = (
+        "@蘇比 sobirin @(杰弗) Jika Anda menemukan bahwa Anda tidak akan "
+        "menyemprot cat, kinerjanya akan dikurangi 0,5 secara langsung."
+    )
+    provider_text = "如果發現你沒有噴漆，績效將直接扣除0.5。"
+
+    monkeypatch.setattr(app.tm_module, "tm_lookup", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "cache_get", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        app.ai.chat.completions,
+        "create",
+        lambda **_kwargs: _fake_translation_response(provider_text),
+    )
+    app.translation_cache.clear()
+    app._tl.group_id = "mention-recovery-regression"
+    app._tl.line_mentions = ["@蘇比 sobirin", "@(杰弗)"]
+
+    actual = app.translate(source, "id", "zh")
+
+    assert actual == "@蘇比 sobirin @(杰弗) 如果發現你沒有噴漆，績效將直接扣除0.5。"
+    assert "__MENTION_" not in actual
+
+
+def test_pipeline_recovers_only_the_missing_mention_without_duplication(monkeypatch):
+    source = "@蘇比 sobirin @(杰弗) Tolong periksa mesin."
+    provider_text = "__MENTION_1__ 請檢查機台。"
+
+    monkeypatch.setattr(app.tm_module, "tm_lookup", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "cache_get", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        app.ai.chat.completions,
+        "create",
+        lambda **_kwargs: _fake_translation_response(provider_text),
+    )
+    app.translation_cache.clear()
+    app._tl.group_id = "mention-recovery-partial"
+    app._tl.line_mentions = ["@蘇比 sobirin", "@(杰弗)"]
+
+    actual = app.translate(source, "id", "zh")
+
+    assert actual == "@蘇比 sobirin @(杰弗) 請檢查機台"
+    assert actual.count("@蘇比 sobirin") == 1
+    assert actual.count("@(杰弗)") == 1
+
+
+def test_visible_name_echo_is_canonicalized_before_restore_without_duplicate():
+    source = "__MENTION_0__ Tolong periksa mesin."
+    app._tl.protected_name_map = {"__MENTION_0__": "@蘇比 sobirin"}
+
+    repaired = app._repair_pipeline_mention_placeholders(
+        source,
+        "@蘇比 sobirin 請檢查機台。",
+    )
+
+    assert repaired == "__MENTION_0__ 請檢查機台。"
+
+
+def test_mention_recovery_does_not_relax_nonmention_immutable_integrity():
+    raw_source = "Periksa mesin I9 pada 10:30."
+    envelope = tqg.protect_immutable_spans(raw_source)
+    candidate = "請檢查機台。"
+
+    repaired = app._repair_pipeline_mention_placeholders(
+        envelope.protected,
+        candidate,
+    )
+    report = tqg.validate_translation(
+        envelope.protected,
+        repaired,
+        "id",
+        "zh",
+        immutable_literals=envelope.mapping.values(),
+    )
+
+    assert repaired == candidate
+    assert not report.ok
+    assert any(issue.startswith("missing_pipeline_token:") for issue in report.hard_issues)
