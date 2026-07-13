@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Dict, Iterator, Mapping, Tuple
+from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Tuple
 
 POLICY_VERSION = 1
 
@@ -19,33 +19,6 @@ POLICY_VERSION = 1
 # They repair corrupted canonical entries wherever the glossary is consumed:
 # prompt grounding, TM seeding, forward enforcement and reverse lookup.
 _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
-    "標籤": {
-        "canonical_idn": "label produk",
-        "translation_mode": "hard",
-        "reverse_safe": True,
-        "forbidden_idn": ["Faktur Pemesanan", "Surat pesanan pelanggan"],
-    },
-    "研磨機": {
-        "canonical_idn": "mesin grinding",
-        "translation_mode": "hard",
-        "reverse_safe": True,
-        "forbidden_idn": ["Mesin Penghalus cetakkan", "Mesin Penghalus cetakan"],
-    },
-    "工單訂單資訊「長度 MIN」": {
-        "canonical_idn": "Panjang MIN",
-        "translation_mode": "hard",
-        "reverse_safe": True,
-    },
-    "工單訂單資訊「長度 MAX」": {
-        "canonical_idn": "Panjang MAX",
-        "translation_mode": "hard",
-        "reverse_safe": True,
-    },
-    "工單製程紀錄「長度」": {
-        "canonical_idn": "Panjang",
-        "translation_mode": "hard",
-        "reverse_safe": True,
-    },
     "工單": {
         "canonical_idn": "work order",
         "translation_mode": "hard",
