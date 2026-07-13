@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.1-runtime-failure-actions-2026-07-13"
+VERSION = "v3.33.2-spray-policy-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -6443,10 +6443,16 @@ _FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
     {
         "key": "spray_cat",
         "source_terms": ("噴漆", "噴漆標示"),
-        "preferred_id": "spray cat",
-        "required_groups": (("spray cat",),),
-        "forbidden_id_terms": (),
-        "note": "現場標示噴漆作業,保留現場常用 spray cat。",
+        "preferred_id": "pengecatan semprot",
+        # Keep this grammatical rather than forcing one literal substring.  The
+        # central glossary policy marks the old Chinglish phrase ``spray cat``
+        # as deprecated, while natural Indonesian may use a noun or verb form.
+        "required_groups": ((
+            "pengecatan semprot", "proses pengecatan", "mengecat",
+            "menyemprot cat", "penyemprotan cat", "disemprot cat",
+        ),),
+        "forbidden_id_terms": ("spray cat", "di-spray cat", "tidak spray cat"),
+        "note": "噴漆作業使用自然印尼文 pengecatan semprot／mengecat；禁止舊詞 spray cat。",
     },
     {
         "key": "incoming_material_size",
@@ -6841,9 +6847,15 @@ def _repair_factory_domain_term_translation(translation, risk):
         ):
             sub(pattern, "work order")
     if "spray_cat" in active:
-        sub(r"\bmenyemprot\s+cat\b", "melakukan spray cat")
-        sub(r"\bpenyemprotan\s+cat\b", "spray cat")
-        sub(r"\bcat\s+semprot\b", "spray cat")
+        # Repair stale prompt/TM/model output into the central glossary policy
+        # before the delivery gate.  Longer malformed phrases must be handled
+        # first so a generic replacement does not create bad grammar.
+        sub(r"\btidak\s+(?:melakukan\s+)?spray\s+cat\b", "tidak melakukan pengecatan semprot")
+        sub(r"\bdi-?spray\s+cat\b", "disemprot cat")
+        sub(r"\bmelakukan\s+spray\s+cat\b", "melakukan pengecatan semprot")
+        sub(r"\bspray\s+cat\b", "pengecatan semprot")
+        sub(r"\bpenyemprotan\s+cat\b", "pengecatan semprot")
+        sub(r"\bcat\s+semprot\b", "pengecatan semprot")
     if "incoming_material_size" in active:
         sub(r"\bukuran\s+material\s+yang\s+masuk\b", "ukuran material masuk")
         sub(r"\bukuran\s+bahan\s+yang\s+masuk\b", "ukuran material masuk")
@@ -7243,7 +7255,7 @@ def build_factory_context_hint_zh_id(text):
     src = text or ""
     # v3.11(2026-05-26): 加上「放了/放好了/都放了」這類 ERP 放行口語化簡寫的觸發詞,
     # 工廠裡這幾個是「資料已放行到下一站」的縮略,不是「東西放下了」。
-    triggers = ["料", "品保", "清洗", "研磨", "進料", "刮傷", "吊", "偷跑",
+    triggers = ["料", "品保", "清洗", "研磨", "噴漆", "進料", "刮傷", "吊", "偷跑",
                 "工單", "包裝", "站別", "放了", "放好了", "都放了", "已放",
                 "放行", "過帳", "退庫"]
     if not any(k in src for k in triggers):
@@ -7265,7 +7277,7 @@ def build_factory_context_hint_zh_id(text):
         "過帳=input data produksi ke sistem；"
         "退庫=kembalikan ke gudang。"
         "工單=work order(不是 perintah kerja/lembar kerja/buku bahan)；"
-        "工單資訊=informasi pada work order；噴漆=現場 spray cat；"
+        "工單資訊=informasi pada work order；噴漆=pengecatan semprot/mengecat；禁止 spray cat；"
         "來料尺寸=ukuran material masuk；表面品質=kualitas permukaan；"
         "短尺維護=penanganan material pendek(短尺材料處理,不是 penggaris/尺規)；"
         "重量確認=konfirmasi berat；作業流程=alur kerja。"
@@ -7303,7 +7315,8 @@ ZH_TO_ID_HARD = {
     "作業流程": "alur kerja",
     "作业流程": "alur kerja",
     "工單": "work order",
-    "噴漆": "spray cat",
+    # 噴漆是可屈折的動作詞，由 glossary_policy 的 soft hint + semantic
+    # contract 處理；不可再放進硬替換，否則會把舊詞 spray cat 鎖死。
     # v3.9.54: 「放行」從硬替換移除 — 語境依賴(站別放行=release data / 品保放行=QC release),
     # 死替換會讓「品保有放行」變「品保有release data」誤譯。改交 LLM + 下方語境規則判斷。
     # 官方依據:Anthropic prompting best practices — 語境依賴術語用 few-shot 軟引導,非 find-replace。
@@ -7478,6 +7491,55 @@ ID_POST_FIX = {
     "bagian operasional": "bagian sales",
     "operasional perlu": "sales perlu",
 }
+
+
+def _validate_terminology_policy_consistency():
+    """Fail fast when duplicated runtime rules contradict central glossary policy.
+
+    The incident fixed in v3.33.2 was caused by exactly this split-brain state:
+    the prompt/semantic contract required ``spray cat`` while the final quality
+    gate classified the same phrase as deprecated.  A valid provider response
+    was therefore converted into ``None`` and surfaced as a generic LINE
+    translation failure.  This startup invariant prevents that class of outage
+    from being reintroduced by future edits.
+    """
+    deprecated = tuple(p.casefold() for p in gp_module.deprecated_indonesian_phrases())
+    conflicts = []
+
+    def _deprecated_hit(value):
+        low = str(value or "").casefold()
+        return next((phrase for phrase in deprecated if phrase and phrase in low), "")
+
+    for source_term, target in ZH_TO_ID_HARD.items():
+        hit = _deprecated_hit(target)
+        if hit:
+            conflicts.append(f"ZH_TO_ID_HARD[{source_term}] contains deprecated phrase {hit!r}")
+
+    for rule in _FACTORY_DOMAIN_TERM_RULES_ZH_ID:
+        hit = _deprecated_hit(rule.get("preferred_id"))
+        if hit:
+            conflicts.append(f"factory rule {rule.get('key')} preferred_id contains {hit!r}")
+        for group in rule.get("required_groups", ()):
+            for token in group:
+                hit = _deprecated_hit(token)
+                if hit:
+                    conflicts.append(f"factory rule {rule.get('key')} requires deprecated phrase {hit!r}")
+
+    spray_policy = gp_module.normalize_entry("噴漆", {})
+    spray_rule = next((r for r in _FACTORY_DOMAIN_TERM_RULES_ZH_ID if r.get("key") == "spray_cat"), None)
+    canonical = gp_module.canonical_target(spray_policy)
+    if not spray_rule or spray_rule.get("preferred_id") != canonical:
+        conflicts.append(
+            "spray_cat semantic rule does not match glossary_policy canonical target "
+            f"{canonical!r}"
+        )
+
+    if conflicts:
+        raise RuntimeError("Terminology policy conflict: " + "; ".join(conflicts))
+    return True
+
+
+_validate_terminology_policy_consistency()
 
 # Customer names - protect from translation by wrapping
 # Storage area lookup data (from 儲區查詢.xlsx)

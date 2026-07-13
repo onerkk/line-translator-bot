@@ -1,5 +1,6 @@
 import types
 
+import pytest
 import ai_provider
 import app
 import translation_quality_gate as tqg
@@ -140,3 +141,82 @@ def test_single_provider_retry_preserves_usable_response_validator(monkeypatch):
 
     assert actual is response
     assert response._jy_provider == "openai"
+
+
+def _fake_translation_response(content):
+    choice = types.SimpleNamespace(
+        message=types.SimpleNamespace(content=content),
+        finish_reason="stop",
+        logprobs=None,
+    )
+    return types.SimpleNamespace(
+        choices=[choice],
+        usage=None,
+        model="test-model",
+        _jy_provider="openai",
+        _jy_failover_attempts=[],
+    )
+
+
+def test_spray_paint_runtime_policy_matches_central_glossary():
+    rule = next(
+        item for item in app._FACTORY_DOMAIN_TERM_RULES_ZH_ID
+        if item.get("key") == "spray_cat"
+    )
+
+    assert rule["preferred_id"] == "pengecatan semprot"
+    assert "spray cat" in rule["forbidden_id_terms"]
+    assert "噴漆" not in app.ZH_TO_ID_HARD
+    assert app._validate_terminology_policy_consistency() is True
+
+
+def test_terminology_policy_invariant_rejects_future_deprecated_hard_rule(monkeypatch):
+    monkeypatch.setitem(app.ZH_TO_ID_HARD, "測試噴漆衝突", "spray cat")
+
+    with pytest.raises(RuntimeError, match="Terminology policy conflict"):
+        app._validate_terminology_policy_consistency()
+
+
+def test_screenshot_sentence_repairs_old_spray_cat_output_instead_of_failing(monkeypatch):
+    """Regression for the exact LINE screenshot failure.
+
+    Older prompt/semantic rules asked the provider to emit ``spray cat`` while
+    the final delivery gate rejected that same phrase as deprecated.  Even when
+    a provider still returns the stale phrase, the local semantic layer must now
+    migrate it to the canonical Indonesian term and keep the @mention intact.
+    """
+    stale_provider_output = (
+        "__MENTION_0__ Apa masalah dalam pelaksanaan spray cat?"
+    )
+    monkeypatch.setattr(
+        app.ai.chat.completions,
+        "create",
+        lambda **_kwargs: _fake_translation_response(stale_provider_output),
+    )
+    app.translation_cache.clear()
+    app._tl.group_id = "regression-group"
+
+    actual = app.translate_multi(
+        "__MENTION_0__ 噴漆執行上有什麼問題？",
+        "zh",
+        ["id"],
+        {"__MENTION_0__": "@(杰弗)"},
+    )
+
+    assert actual == [
+        ("id", "@(杰弗) Apa masalah dalam pelaksanaan pengecatan semprot?")
+    ]
+    report = tqg.validate_translation(
+        "@(杰弗) 噴漆執行上有什麼問題？",
+        actual[0][1],
+        "zh",
+        "id",
+    )
+    assert report.ok, report.issues
+
+
+def test_spray_paint_prompt_hint_never_recommends_deprecated_term():
+    hint = app.build_factory_context_hint_zh_id("噴漆執行上有什麼問題？")
+
+    assert "噴漆=pengecatan semprot/mengecat" in hint
+    assert "禁止 spray cat" in hint
