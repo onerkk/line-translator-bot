@@ -26,6 +26,10 @@ except ImportError:
     TemplateMessage = None
     BroadcastRequest = None
 try:
+    from linebot.v3.messaging import ImageMessage
+except ImportError:
+    ImageMessage = None
+try:
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 except ImportError:
     ShowLoadingAnimationRequest = None
@@ -204,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.32.9-no-silent-failure-2026-07-12"
+VERSION = "v3.33.1-runtime-failure-actions-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -250,13 +254,15 @@ import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
 import glossary_policy as gp_module             # canonical vs explanatory terminology policy
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
+import prompt_optimizer as prompt_opt_module   # runtime prompt compiler: principles + relevant real-failure rules
+import translation_extras as translation_extras_module
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 8
-_EXPECTED_QG_BUILD_ID = "2026-07-12.9-delivery-safe-single-call"
+_EXPECTED_QG_API_VERSION = 9
+_EXPECTED_QG_BUILD_ID = "2026-07-13.11-line-mention-proper-name"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -2226,26 +2232,36 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
             if ex.get("scope") != "announcement" or is_announcement
         ]
 
-    # Score each example by relevance to user message and pick top N.
-    # Score against the source-language side of the example (what GPT will pattern-match).
-    if len(relevant) > FEWSHOT_INJECT_MAX:
-        scored = []
-        for ex in relevant:
-            src_side = ex.get("zh", "") if direction_key == "zh2id" else ex.get("id", "")
-            score = _example_relevance_score(src_side, user_msg)
-            scored.append((score, ex))
-        # Sort: highest relevance first, then most recent (we approximate recency by list order)
-        # Stable sort preserves original order for ties, so recent examples win on tie.
-        scored.sort(key=lambda x: x[0], reverse=True)
-        # Always include at least 2 highest-relevance + recent fallbacks if relevance is weak
-        top = [ex for score, ex in scored[:FEWSHOT_INJECT_MAX] if score > 0]
-        # If fewer than FEWSHOT_INJECT_MAX matched, fill with most recent
-        if len(top) < FEWSHOT_INJECT_MAX:
-            recent_fill = [ex for ex in relevant[-FEWSHOT_INJECT_MAX*2:] if ex not in top]
-            top.extend(recent_fill[:FEWSHOT_INJECT_MAX - len(top)])
-        chosen = top[:FEWSHOT_INJECT_MAX]
+    # Score examples by relevance and inject only a small, useful set.  The old
+    # implementation always filled eight slots with recent examples even when the
+    # overlap score was zero.  That added latency and could teach an unrelated
+    # sentence pattern.  Real incident examples remain in the knowledge base, but
+    # runtime selection is now risk-aware: ordinary chat 0-2, factory 0-3, long
+    # announcements 0-4.
+    compact_user = re.sub(r"\s+", "", user_msg or "")
+    factory_hint = bool(re.search(
+        r"工單|料號|爐號|品保|停機|開機|調機|維修|異常|研磨|冷抽|退火|酸洗|矯直|"
+        r"倒角|拋光|噴漆|來料|棒材|盤元|母材|線材|QC|(?:I|E|BF)\d+|"
+        r"work\s*order|mesin|material|produksi|operator|kualitas|rusak|cacat",
+        user_msg or "", re.I
+    ))
+    if direction_key == "zh2id" and _is_zh_id_factory_announcement_source(user_msg):
+        runtime_max = min(4, FEWSHOT_INJECT_MAX)
+    elif factory_hint:
+        runtime_max = min(3, FEWSHOT_INJECT_MAX)
+    elif len(compact_user) >= 60:
+        runtime_max = min(2, FEWSHOT_INJECT_MAX)
     else:
-        chosen = relevant[-FEWSHOT_INJECT_MAX:]
+        runtime_max = min(1, FEWSHOT_INJECT_MAX)
+
+    scored = []
+    for index, ex in enumerate(relevant):
+        src_side = ex.get("zh", "") if direction_key == "zh2id" else ex.get("id", "")
+        score = _example_relevance_score(src_side, user_msg)
+        # Prefer newer examples only as a tie-breaker, never as a zero-score filler.
+        scored.append((score, index, ex))
+    scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    chosen = [ex for score, _index, ex in scored if score > 0][:runtime_max]
 
     for ex in chosen:
         zh = ex.get("zh", "").strip()
@@ -2277,10 +2293,13 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     try:
         if group_id and get_conv_context_enabled(group_id):
             history = _conv_buffer_get(group_id)
-            for h in history:
-                if h.get("src") == src and h.get("tgt") == tgt:
-                    msgs.append({"role": "user", "content": h["src_text"]})
-                    msgs.append({"role": "assistant", "content": h["tgt_text"]})
+            matching_history = [
+                h for h in history
+                if h.get("src") == src and h.get("tgt") == tgt
+            ][-3:]
+            for h in matching_history:
+                msgs.append({"role": "user", "content": h["src_text"]})
+                msgs.append({"role": "assistant", "content": h["tgt_text"]})
     except (NameError, Exception):
         # 上下文功能不可用就跳過,不影響翻譯
         pass
@@ -2633,6 +2652,8 @@ QUICK_REPLY_DEFAULTS = [
     {"id": "pw2",         "type": "message",     "label": "🏭 儲運密碼/PW2",   "text": "/pw2",    "clipboard_text": "", "enabled": True,  "cmd_check": "pw2",   "editable": True},
     {"id": "pkg",         "type": "message",     "label": "📦 包裝碼/Kemas",   "text": "/pkg ",   "clipboard_text": "", "enabled": True,  "cmd_check": "pkg",   "editable": True},
     {"id": "scrap",       "type": "message",     "label": "🎨 廢料色/Warna",   "text": "/scrap",  "clipboard_text": "", "enabled": True,  "cmd_check": "scrap", "editable": True},
+    {"id": "handover",    "type": "message",     "label": "📋 交班摘要",        "text": "/交班摘要", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "interpreter", "type": "message",     "label": "🎙️ 即時口譯",        "text": "/即時口譯", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
     {"id": "camera",      "type": "camera",      "label": "📷 拍照/Foto",      "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
     {"id": "clipboard",   "type": "clipboard",   "label": "📋 複製儲區指令",   "text": "",        "clipboard_text": "/qry ", "enabled": False, "cmd_check": None, "editable": True},
     {"id": "camera_roll", "type": "camera_roll", "label": "🖼️ 相簿/Album",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
@@ -3030,6 +3051,163 @@ CACHE_TTL = 3600  # 1 hour
 # Message cache for quoted message context: {message_id: {"text": str, "ts": float}}
 message_cache = {}
 MESSAGE_CACHE_MAX = 200
+
+# Recent successful group translations for bilingual shift-handover summaries.
+# This is a short-lived operational buffer, not a long-term transcript archive.
+_recent_group_messages = {}  # {group_id: [entry, ...]}
+_recent_group_messages_lock = _threading.RLock()
+RECENT_GROUP_MESSAGE_TTL = int(os.environ.get("RECENT_GROUP_MESSAGE_TTL", "64800"))  # 18 h
+RECENT_GROUP_MESSAGE_MAX = int(os.environ.get("RECENT_GROUP_MESSAGE_MAX", "240"))
+
+
+def _record_recent_group_message(group_id, user_id, sender, source_text, source_lang, translations):
+    """Record one successfully translated group message for later handover summary."""
+    if not group_id or not source_text or not isinstance(translations, dict) or not translations:
+        return
+    now = time.time()
+    row = {
+        "timestamp": now,
+        "user_id": user_id or "",
+        "sender": sender or "",
+        "source_language": source_lang or "",
+        "source_text": str(source_text).strip(),
+        "translations": {str(k): str(v) for k, v in translations.items() if v},
+    }
+    with _recent_group_messages_lock:
+        rows = list(_recent_group_messages.get(group_id, []))
+        cutoff = now - max(3600, RECENT_GROUP_MESSAGE_TTL)
+        rows = [r for r in rows if float(r.get("timestamp", 0) or 0) >= cutoff]
+        rows.append(row)
+        _recent_group_messages[group_id] = rows[-max(20, RECENT_GROUP_MESSAGE_MAX):]
+
+
+def _get_recent_group_messages(group_id, hours=12, max_messages=80):
+    if not group_id:
+        return []
+    now = time.time()
+    cutoff = now - max(1, min(48, int(hours or 12))) * 3600
+    with _recent_group_messages_lock:
+        rows = [
+            dict(r) for r in _recent_group_messages.get(group_id, [])
+            if float(r.get("timestamp", 0) or 0) >= cutoff
+        ]
+    return rows[-max(1, min(200, int(max_messages or 80))):]
+
+
+# Image comparison workflow. Original images are kept only briefly and the
+# expensive rendering is executed only when the user taps the LINE button.
+_IMAGE_OVERLAY_TTL = int(os.environ.get("IMAGE_OVERLAY_TTL", "900"))
+_IMAGE_OVERLAY_MAX_BYTES = int(os.environ.get("IMAGE_OVERLAY_MAX_BYTES", str(12 * 1024 * 1024)))
+_image_overlay_lock = _threading.RLock()
+
+
+def _image_overlay_dir():
+    for base in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(base) and os.access(base, os.W_OK):
+            path = os.path.join(base, "line_translation_overlays")
+            os.makedirs(path, exist_ok=True)
+            return path
+    path = os.path.abspath("line_translation_overlays")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _cleanup_image_overlay_store():
+    now = time.time()
+    root = _image_overlay_dir()
+    try:
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                if now - os.path.getmtime(path) > max(300, _IMAGE_OVERLAY_TTL):
+                    os.remove(path)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def _store_image_overlay_context(image_bytes, source_text, translated_text, src_lang, tgt_lang, group_id):
+    if not image_bytes or len(image_bytes) > _IMAGE_OVERLAY_MAX_BYTES or not translated_text:
+        return None
+    token = uuid.uuid4().hex
+    root = _image_overlay_dir()
+    expires_at = time.time() + max(300, _IMAGE_OVERLAY_TTL)
+    meta = {
+        "expires_at": expires_at,
+        "source_text": str(source_text or ""),
+        "translated_text": str(translated_text or ""),
+        "src_lang": str(src_lang or ""),
+        "tgt_lang": str(tgt_lang or ""),
+        "group_id": str(group_id or ""),
+    }
+    with _image_overlay_lock:
+        _cleanup_image_overlay_store()
+        try:
+            with open(os.path.join(root, token + ".img"), "wb") as f:
+                f.write(image_bytes)
+            with open(os.path.join(root, token + ".json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("image overlay context store failed: %s", exc)
+            for ext in (".img", ".json"):
+                try:
+                    os.remove(os.path.join(root, token + ext))
+                except OSError:
+                    pass
+            return None
+    return token
+
+
+def _load_image_overlay_context(token, group_id=""):
+    if not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        return None
+    root = _image_overlay_dir()
+    try:
+        with open(os.path.join(root, token + ".json"), "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        if float(meta.get("expires_at", 0) or 0) <= time.time():
+            return None
+        if group_id and meta.get("group_id") and meta.get("group_id") != group_id:
+            return None
+        with open(os.path.join(root, token + ".img"), "rb") as f:
+            meta["image_bytes"] = f.read()
+        return meta
+    except Exception:
+        return None
+
+
+def _store_generated_overlay_image(image_bytes):
+    if not image_bytes:
+        return None
+    token = uuid.uuid4().hex
+    path = os.path.join(_image_overlay_dir(), token + ".jpg")
+    try:
+        with open(path, "wb") as f:
+            f.write(image_bytes)
+        return token
+    except Exception as exc:
+        logger.warning("generated overlay image store failed: %s", exc)
+        return None
+
+
+def _build_image_overlay_quick_reply(token):
+    action_cls = globals().get("PostbackAction")
+    if not token or not action_cls:
+        return None
+    try:
+        return QuickReply(items=[
+            QuickReplyItem(action=action_cls(
+                label="🖼 原圖＋譯文圖",
+                data="action=image_overlay&token=" + token,
+                displayText="🖼 產生原圖＋譯文對照圖",
+            ))
+        ])
+    except Exception as exc:
+        logger.debug("image overlay quick reply unavailable: %s", exc)
+        return None
 
 LANG_FLAGS = {
     "zh": "\U0001f1f9\U0001f1fc",   # 🇹🇼
@@ -7821,6 +7999,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Get tone from thread-local (set by handler before calling translate)
         _tone = getattr(_tl, 'tone', 'casual')
         _tone_custom = getattr(_tl, 'tone_custom', '')
+        _translation_variant = getattr(_tl, 'translation_variant', 'default') or 'default'
         # v3.2-0426d: tone_custom is ADDITIVE (appends to preset) instead of REPLACING.
         _preset_text = TONE_PRESETS.get(_tone, TONE_PRESETS['casual'])
         if _tone_custom and _tone_custom.strip():
@@ -8333,9 +8512,33 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             " Only output the translation. No quotes, no explanation, no prefix."
             " </output_format>"
         )
+        # v3.33: keep the complete historical prompt in source code as the audit
+        # knowledge base, but compile the runtime request into stable principles +
+        # only terminology/context rules relevant to this message. This preserves
+        # every real incident rule without paying 30k+ prompt characters each time.
+        sys_prompt, _prompt_stats = prompt_opt_module.compile_translation_prompt(
+            sys_prompt,
+            text,
+            src,
+            tgt,
+            tone_instruction=tone_instruction,
+            variant=_translation_variant,
+        )
+        logger.info(
+            "[PromptCompiler] %d→%d chars saved=%.1f%% vocab=%d context=%d incidents=%d fallback=%s",
+            _prompt_stats.original_chars,
+            _prompt_stats.compiled_chars,
+            _prompt_stats.saved_ratio * 100.0,
+            _prompt_stats.vocab_items,
+            _prompt_stats.context_rules,
+            _prompt_stats.historical_rules,
+            _prompt_stats.fallback_used,
+        )
         _locked_note = tqg_module.glossary_placeholder_instruction(_locked_terms.mapping)
         if _locked_note:
-            sys_prompt = _locked_note + "\n" + sys_prompt
+            # Dynamic locked-term mapping belongs after the stable prefix so
+            # provider prompt caching can reuse the principles block.
+            sys_prompt = sys_prompt + "\n<locked_terminology>\n" + _locked_note + "\n</locked_terminology>"
 
         if repair_mode and bad_result:
             msg = (
@@ -9191,13 +9394,30 @@ def restore_names(text, name_map):
     return result
 
 
+def _is_translation_failure_sentinel(text):
+    """Return True only for internal failure strings, never normal translations."""
+    if not text or not isinstance(text, str):
+        return False
+    value = text.strip()
+    return value in {
+        tqg_module.translation_failure_message("zh"),
+        tqg_module.translation_failure_message("id"),
+        tqg_module.translation_failure_message("en"),
+    }
+
+
 def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Final deterministic boundary; never spends another translation request."""
+    """Final deterministic boundary; never spends another translation request.
+
+    Validation failure returns ``None``.  A localized LINE failure notice belongs
+    to the message handler, not the translation value.  Returning the notice here
+    previously made the handler prepend a language flag and present
+    "all services unavailable" as if it were a successful translation.
+    """
     if not candidate or not isinstance(candidate, str):
         return None
-    failure_text = tqg_module.translation_failure_message(tgt)
-    if candidate.strip() == failure_text:
-        return failure_text
+    if _is_translation_failure_sentinel(candidate):
+        return None
     try:
         pairs = ge_module.collect_applicable_pairs(
             source_text,
@@ -9211,7 +9431,7 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         )
         if leaked_label:
             logger.error("[FinalDeliveryGuard] reverse glossary UI-label leak blocked: %s", leaked_label)
-            return failure_text
+            return None
         checked = tqg_module.ensure_delivery_safe_translation(
             source_text, candidate, src, tgt,
             model=_active_upgrade_model(),
@@ -9225,10 +9445,33 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             "[FinalDeliveryGuard] local validation blocked output path=%s issues=%s",
             checked.get("path"), checked.get("issues", [])[:12],
         )
-        return failure_text
+        return None
     except Exception as exc:
         logger.exception("[FinalDeliveryGuard] local validation exception: %s", exc)
-        return failure_text
+        return None
+
+
+def _post_restore_mentions_guard(candidate, mention_placeholders):
+    """Validate only the mutation introduced by mention restoration.
+
+    ``translate()`` has already passed the full quality gate on placeholder-
+    protected text.  Running the complete source-language purity validator again
+    after restoring LINE display names caused lowercase names such as ``sobirin``
+    to be mistaken for untranslated Indonesian.  This boundary checks only what
+    can actually change here: placeholder residue and missing original mentions.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return None
+    if _is_translation_failure_sentinel(candidate):
+        return None
+    if re.search(r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}', candidate, re.I):
+        logger.error("[MentionGuard] unresolved mention placeholder: %r", candidate[:200])
+        return None
+    missing = [m for m in (mention_placeholders or {}).values() if m and m not in candidate]
+    if missing:
+        logger.error("[MentionGuard] restored translation lost mentions: %s", missing[:5])
+        return None
+    return candidate.strip()
 
 
 def _translation_failure_notice(src_lang="zh", target_langs=None):
@@ -9440,6 +9683,29 @@ def _is_factory_context(text):
     return bool(_FACTORY_CTX_PAT.search(text))
 
 
+def _should_query_vector_tm(text, src, tgt, *, factory_ctx=False,
+                            quality_critical=False, has_protected_names=False,
+                            semantic_contract=None):
+    """Vector TM is optional acceleration/reference, never a required stage.
+
+    Skip requests that cannot legally use vector bypass/references anyway. This
+    prevents one embedding call and up to hundreds of milliseconds of waiting on
+    most short factory messages.
+    """
+    if os.environ.get("VECTOR_TM_ENABLED", "1").strip().lower() in ("0", "false", "off", "no"):
+        return False
+    compact = re.sub(r"\s+", "", text or "")
+    if len(compact) < int(os.environ.get("VECTOR_TM_MIN_CHARS", "12")):
+        return False
+    if factory_ctx or quality_critical or has_protected_names:
+        return False
+    if semantic_contract and (semantic_contract.get("has_risk") or not semantic_contract.get("vector_bypass_allowed", True)):
+        return False
+    if _is_pure_equipment_code(text):
+        return False
+    return True
+
+
 def _tm_bypass_integrity_ok(source_text, candidate, src, tgt):
     """Deterministically validate a TM/Vector-TM result before early return.
 
@@ -9579,17 +9845,10 @@ def _translate_core(text, src, tgt):
     # They bypass stale TM/NMT and are routed to the quality model, but they are
     # never reviewed, retranslated or split into multiple billable requests.
 
-    # v3.18 速度根治②:向量查詢提早並行發出。
-    # vector_lookup 內含 1 次 OpenAI embedding API(~0.3-0.8 秒),原本與
-    # 語言偵測/語意契約/LexTM「串行」— 但這些彼此獨立。改成 pipeline 一開始
-    # 就丟 future,本地步驟跑完後 future 多半已完成,省下整段 embedding 等待。
-    # (LexTM bypass 命中時白算一次 embedding ≈ $0.00002,可忽略;延遲省 0.3-0.8s)
+    # v3.33: vector lookup is started only after cheap lexical bypass checks.
+    # Factory/critical/protected-name messages never consume its result, so an
+    # eager embedding call there only added cost and tail latency.
     _vec_future = None
-    try:
-        _vec_future = _VEC_LOOKUP_EXECUTOR.submit(
-            vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm)
-    except Exception:
-        _vec_future = None
     
     # v3.11 (2026-05-26 18:16 截圖): 純設備代碼訊息直接 bypass,不送 LLM
     # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
@@ -9673,17 +9932,30 @@ def _translate_core(text, src, tgt):
             except Exception:
                 pass
     
-    # ─── 3+4: Vector TM lookup(v3.18:收並行 future 的結果) ───
+    # ─── 3+4: Vector TM lookup ───
     _perf["tm"] = time.time()
+    if _should_query_vector_tm(
+        text, src, tgt,
+        factory_ctx=_factory_ctx,
+        quality_critical=_quality_critical,
+        has_protected_names=_has_protected_names,
+        semantic_contract=_semantic_contract,
+    ):
+        try:
+            _vec_future = _VEC_LOOKUP_EXECUTOR.submit(
+                vec_tm_module.vector_lookup, text, src, tgt, _gid_for_tm)
+        except Exception as _vec_submit_e:
+            logger.debug("[VecTM] submit skipped: %s", _vec_submit_e)
+            _vec_future = None
     _vec_result = None
     try:
         if _vec_future is not None:
-            # Vector TM 是加速/參考層，不得阻塞即時翻譯。超過短等待窗就直接
-            # 走 LLM；future 可在背景完成並暖快取，但不再讓使用者多等 6 秒。
-            _vec_wait = max(0.05, min(1.5, float(os.environ.get("VECTOR_TM_WAIT_SECONDS", "0.6"))))
+            # Vector TM must never dominate the real-time path. 50 ms is enough
+            # to collect a warm/local result; otherwise continue immediately.
+            _vec_wait = max(0.0, min(0.25, float(os.environ.get("VECTOR_TM_WAIT_SECONDS", "0.05"))))
             _vec_result = _vec_future.result(timeout=_vec_wait)
-        else:
-            _vec_result = vec_tm_module.vector_lookup(text, src, tgt, _gid_for_tm)
+    except TimeoutError:
+        logger.debug("[VecTM] not ready within realtime wait window; continue without it")
     except Exception as _vec_e:
         logger.warning("[VecTM] lookup exception: %s", _vec_e)
     _perf["vec"] = time.time()
@@ -11596,8 +11868,14 @@ STT_PROMPT_HINT = (
 )
 
 
-def transcribe_audio_openai(audio_bytes):
-    """v3.8: Use gpt-4o-transcribe (or fallback to whisper-1) to transcribe audio.
+def transcribe_audio_openai(audio_bytes, suffix=".m4a"):
+    """Use the configured OpenAI transcription model with format-aware uploads.
+
+    LINE voice messages are normally M4A, while the LIFF browser recorder commonly
+    sends WebM or MP4.  The temporary filename extension must match the real
+    container so the transcription endpoint can decode it reliably.
+
+    v3.8: Use gpt-4o-transcribe (or fallback to whisper-1) to transcribe audio.
 
     Improvements over the old whisper-1 path:
       * gpt-4o-transcribe / gpt-4o-mini-transcribe have noticeably lower WER on
@@ -11608,13 +11886,19 @@ def transcribe_audio_openai(audio_bytes):
     """
     if not oai:
         return None
+    allowed_suffixes = {".m4a", ".mp4", ".mp3", ".mpeg", ".mpga", ".wav", ".webm"}
+    suffix = (suffix or ".m4a").strip().lower()
+    if not suffix.startswith("."):
+        suffix = "." + suffix
+    if suffix not in allowed_suffixes:
+        suffix = ".m4a"
     primary = STT_MODEL
     last_err = None
     for attempt_model in (primary, STT_FALLBACK_MODEL):
         if attempt_model == STT_FALLBACK_MODEL and primary == STT_FALLBACK_MODEL:
             break  # already tried as primary
         try:
-            with tempfile.NamedTemporaryFile(suffix=".m4a", delete=True) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
                 tmp.write(audio_bytes)
                 tmp.flush()
                 tmp.seek(0)
@@ -12718,6 +13002,82 @@ def export_examples_to_jsonl():
         return ""
 
 
+def handle_personal_language_command(text, user_id):
+    """Read or set the caller's preferred language for DM/personal translations."""
+    if not user_id:
+        return "⚠️ 無法取得你的 LINE 身分 / Tidak dapat membaca identitas LINE"
+    parts = (text or "").strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        current = user_languages.get(user_id) or dm_target_lang.get(user_id) or "id"
+        return (
+            "👤 我的語言: {} {}\n"
+            "設定方式: /mylang zh|id|vi|th|tl|en|ja|ko|hi\n"
+            "Contoh: /mylang id"
+        ).format(LANG_FLAGS.get(current, ""), LANG_NAMES_ZH.get(current, current))
+    code = translation_extras_module.normalize_personal_language(arg)
+    if not code:
+        return "⚠️ 不支援的語言。可用: zh, id, vi, th, tl, en, ja, ko, hi"
+    user_languages[user_id] = code
+    dm_target_lang[user_id] = code
+    try:
+        save_settings(force=True)
+    except TypeError:
+        save_settings()
+    except Exception:
+        pass
+    return "✅ 我的語言已設為 {} {}".format(
+        LANG_FLAGS.get(code, ""), LANG_NAMES_ZH.get(code, "中文" if code == "zh" else code))
+
+
+def handle_interpreter_command(group_id, user_id):
+    """Create a short-lived LIFF/web link for turn-by-turn voice interpreting."""
+    scope_id = group_id or (("__dm__:" + user_id) if user_id else "__interpreter__")
+    public_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+    liff_id = (LIFF_ID or "").strip()
+    if not public_url and not liff_id:
+        return "⚠️ 即時口譯需要設定 PUBLIC_URL 或 LIFF_ID"
+    nonce = issue_liff_nonce(scope_id, user_id or "")
+    if liff_id:
+        url = "https://liff.line.me/{}?nonce={}&view=interpreter".format(liff_id, nonce)
+    else:
+        url = "{}/liff/settings?nonce={}&view=interpreter".format(public_url, nonce)
+    return "🎙️ 即時雙向口譯\n{}\n\n連結 10 分鐘內有效".format(url)
+
+
+def build_group_handover_summary(group_id, hours=12):
+    """Summarise recent successful group translations in Chinese and Indonesian."""
+    rows = _get_recent_group_messages(group_id, hours=hours, max_messages=100)
+    compact = translation_extras_module.compact_handover_entries(
+        rows, max_entries=100, max_chars=12000)
+    if not compact:
+        return "⚠️ 最近沒有可整理的翻譯訊息。"
+    messages = translation_extras_module.build_handover_messages(compact)
+    model = _pick_aux_model("handover")
+    kwargs = _build_aux_kwargs(
+        model,
+        messages,
+        max_out_tokens=1600,
+        temperature=0.0,
+        cache_key=_build_cache_key(group_id, "multi", "zh-id", "handover"),
+    )
+    try:
+        response = ai.chat.completions.create(**kwargs)
+        track_tokens(response)
+        raw = response.choices[0].message.content if response and response.choices else ""
+        parsed = translation_extras_module.parse_handover_response(raw)
+    except Exception as exc:
+        logger.exception("handover summary failed: %s", exc)
+        parsed = None
+    if not parsed:
+        return "⚠️ 交班摘要產生失敗，請稍後再試。"
+    return (
+        "📋 交班摘要（最近 {} 小時）\n\n"
+        "🇹🇼 中文\n{}\n\n"
+        "🇮🇩 Bahasa Indonesia\n{}"
+    ).format(max(1, min(48, int(hours or 12))), parsed["zh"], parsed["id"])
+
+
 def handle_command(text, group_id, user_id=None):
     _stats_inc("commands")
     cmd = text.strip().lower()
@@ -12915,6 +13275,14 @@ def handle_command(text, group_id, user_id=None):
             return handle_liff_command(group_id, user_id)
         except NameError:
             return "⚠️ v3.10 模組未載入 / v3.10 module not loaded"
+    elif cmd.startswith("/mylang") or cmd.startswith("/我的語言") or cmd.startswith("/母語"):
+        return handle_personal_language_command(text, user_id)
+    elif cmd in ("/interpreter", "/voiceinterpreter", "/即時口譯", "/即时口译", "/口譯", "/口译"):
+        return handle_interpreter_command(group_id, user_id)
+    elif cmd in ("/handover", "/summary", "/交班摘要", "/今天重點", "/今天重点", "/未完成事項", "/未完成事项"):
+        if not group_id:
+            return "⚠️ 交班摘要只能在群組使用。"
+        return build_group_handover_summary(group_id, hours=12)
     # v3.14: 群組內語言設定面板
     elif cmd in ("/panel", "/lang", "/setting", "/settings"):
         return "__FLEX_PANEL__"
@@ -13341,11 +13709,14 @@ def handle_message(event):
             return
 
         lang = detect_language(text_clean)
-        tgt = dm_target_lang.get(user_id, "id")
+        tgt = user_languages.get(user_id) or dm_target_lang.get(user_id, "id")
         if lang is None:
             return
+        # A personal language is the preferred reading language, not a reason to
+        # suppress a same-language message forever. Preserve the useful ZH↔ID DM
+        # default when the sender writes in their own preferred language.
         if lang == tgt:
-            return
+            tgt = "id" if lang == "zh" else "zh"
 
         # Set translation tone for DM (use global default)
         _tl.tone = translation_tone
@@ -13626,11 +13997,10 @@ def handle_message(event):
                 pass
         if result and mention_placeholders:
             result = restore_mentions(result, mention_placeholders)
-        if result:
-            # Final handler boundary. This second deterministic pass is cheap and
-            # protects against any mutation introduced after translate() returned
-            # (mention restoration, future formatting code, or legacy callers).
-            result = _final_delivery_guard(text, result, lang, "zh")
+            result = _post_restore_mentions_guard(result, mention_placeholders)
+        # translate() already ran the full source-grounded quality boundary.  Do
+        # not run it a second time on restored display names; only the mutation-
+        # specific mention guard above is required.
         if result:
             reply = LANG_FLAGS.get("zh", "") + " " + result
             _tts_lang, _tts_text = "zh", result
@@ -13695,6 +14065,24 @@ def handle_message(event):
         tgt_flag = LANG_FLAGS.get("zh" if lang != "zh" else "id", "")
     translated_text = reply.split(" ", 1)[1] if " " in reply else reply
 
+    # Keep a short-lived, successful-only operational transcript for /交班摘要.
+    if not _translation_failed:
+        try:
+            if lang == "zh" and _trs:
+                _recent_translations = {code: value for code, value in _trs if value}
+            else:
+                _recent_translations = {"zh": translated_text} if translated_text else {}
+            _record_recent_group_message(
+                group_id,
+                sender_id,
+                sender_display,
+                text,
+                lang,
+                _recent_translations,
+            )
+        except Exception as _recent_exc:
+            logger.debug("recent group message record skipped: %s", _recent_exc)
+
     # v3.30: 譯文回填引用快取(未來有人回覆這句時,引用框能顯示對方語言)
     try:
         if (not _translation_failed) and '_trs' in dir() and _trs:
@@ -13747,7 +14135,21 @@ def handle_message(event):
                 # v310 ext 沒載入 → 用舊版
                 flex_msg = build_translation_flex(text, translated_text, src_flag, tgt_flag, sender_display,
                                                   _quoted_for(tgt if lang == "zh" else "zh") or quoted_text)
-    qr = build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None
+    # If Flex/LV4 is disabled by an older persisted setting, expose the new
+    # translation controls as Quick Reply instead of silently hiding them.
+    _action_qr = None
+    if not _translation_failed:
+        try:
+            _msg_id = getattr(event.message, 'id', None)
+            _action_tgt = (tgt if lang == "zh" else "zh")
+            _flex_has_actions = bool(flex_msg and get_flex_v2(group_id, "buttons"))
+            if not _flex_has_actions:
+                _action_qr = _build_translation_action_quick_reply(
+                    group_id, text, translated_text, lang, _action_tgt, _msg_id
+                )
+        except Exception as _aqe:
+            logger.warning("translation action Quick Reply build failed: %s", _aqe)
+    qr = _action_qr or (build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None)
     custom_sender = get_sender_object(name_override=sender_display, icon_url_override=sender_picture)
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
@@ -14241,12 +14643,23 @@ def _handle_image_background(ctx):
             return
 
         reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
+        _overlay_token = _store_image_overlay_context(
+            img_raw, extracted, result, lang, actual_tgt, group_id
+        )
+        _overlay_qr = _build_image_overlay_quick_reply(_overlay_token)
 
         # LINE message limit is 5000 chars
         if len(reply) > 5000:
             reply = reply[:4990] + "\n..."
 
         track_group_usage(group_id, _bp, _bc, _bcost)
+        try:
+            _record_recent_group_message(
+                group_id, user_id, get_display_name(group_id, user_id),
+                extracted, lang, {actual_tgt: result},
+            )
+        except Exception:
+            pass
         _stats_inc("image_translations")
         _event_log_write("image_step", {"step": "before_reply"})
         # v3.8: thread quote_token onto image translation reply.
@@ -14256,6 +14669,8 @@ def _handle_image_background(ctx):
                 with ApiClient(configuration) as api_client:
                     api = MessagingApi(api_client)
                     msg_obj = TextMessage(text=reply)
+                    if _overlay_qr:
+                        msg_obj.quick_reply = _overlay_qr
                     _img_sender = get_sender_object(
                         name_override=get_display_name(group_id, user_id),
                         icon_url_override=get_user_picture_url(group_id, user_id)
@@ -14280,6 +14695,8 @@ def _handle_image_background(ctx):
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
                         msg_obj = TextMessage(text=reply)
+                        if _overlay_qr:
+                            msg_obj.quick_reply = _overlay_qr
                         _img_sender = get_sender_object(
                             name_override=get_display_name(group_id, user_id),
                             icon_url_override=get_user_picture_url(group_id, user_id)
@@ -14357,7 +14774,7 @@ def _process_pending_image_translate_inner(event, message_id):
                 getattr(_src, 'room_id', None) or
                 getattr(_src, 'user_id', None))
     
-    def _reply_or_push(text):
+    def _reply_or_push(text, quick_reply=None):
         target = _push_to
         if not target and info:
             target = info.get("group_id")
@@ -14368,6 +14785,8 @@ def _process_pending_image_translate_inner(event, message_id):
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 _msg = TextMessage(text=text)
+                if quick_reply:
+                    _msg.quick_reply = quick_reply
                 _original_uid = (info or {}).get("user_id", "")
                 _img_sender = get_sender_object(
                     name_override=get_display_name(target, _original_uid),
@@ -14499,8 +14918,19 @@ def _process_pending_image_translate_inner(event, message_id):
         reply_text = reply_text[:4990] + "\n..."
 
     track_group_usage(group_id, _bp, _bc, _bcost)
+    try:
+        _record_recent_group_message(
+            group_id, (info or {}).get("user_id", ""),
+            get_display_name(group_id, (info or {}).get("user_id", "")),
+            extracted, lang, {actual_tgt: result},
+        )
+    except Exception:
+        pass
+    _overlay_token = _store_image_overlay_context(
+        img_raw, extracted, result, lang, actual_tgt, group_id
+    )
     _stats_inc("image_translations")
-    _reply_or_push(reply_text)
+    _reply_or_push(reply_text, quick_reply=_build_image_overlay_quick_reply(_overlay_token))
     logger.info("[ImgAsk] DONE")
 
 
@@ -14583,6 +15013,8 @@ def handle_audio(event):
     tgt = group_target_lang.get(group_id, "id")
 
     reply = None
+    result = None
+    actual_tgt = None
     _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
     _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
     # Set translation tone for this group
@@ -14590,6 +15022,7 @@ def handle_audio(event):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     if lang == "zh":
+        actual_tgt = tgt
         result = translate(transcribed, "zh", tgt)
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get(tgt, "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
@@ -14601,6 +15034,7 @@ def handle_audio(event):
             _gt = [tgt]
         if lang not in _gt:
             return
+        actual_tgt = "zh"
         result = translate(transcribed, lang, "zh")
         if result:
             reply = "\U0001f3a4 " + LANG_FLAGS.get("zh", "") + "\n\U0001f4ac " + transcribed + "\n\U0001f4dd " + result
@@ -14620,6 +15054,14 @@ def handle_audio(event):
             pass
         return
 
+    if not is_dm_aud:
+        try:
+            _record_recent_group_message(
+                group_id, user_id, get_display_name(group_id, user_id),
+                transcribed, lang, {actual_tgt: result},
+            )
+        except Exception:
+            pass
     _stats_inc("voice_translations")
     # v3.8: thread quote_token onto the reply so the translation visually
     # references the original audio bubble. Important in busy group chats.
@@ -14643,6 +15085,14 @@ def handle_audio(event):
             messages=[msg_obj]
         ))
 
+    # Voice input can optionally return target-language speech as a second message.
+    # Keep TTS asynchronous so it never delays the text translation reply.
+    if result and actual_tgt and get_tts_enabled(group_id):
+        _threading.Thread(
+            target=push_tts_message,
+            args=(group_id, result, actual_tgt),
+            daemon=True,
+        ).start()
 
 
 if StickerMessageContent:
@@ -14739,19 +15189,162 @@ if VideoMessageContent:
             logger.warning("Video OCR failed: %s", e)
 
 
+_TEXT_FILE_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".log", ".srt", ".tsv"}
+_TEXT_FILE_MAX_BYTES = int(os.environ.get("TEXT_FILE_MAX_BYTES", str(300 * 1024)))
+_TEXT_FILE_MAX_CHARS = int(os.environ.get("TEXT_FILE_MAX_CHARS", "12000"))
+_TEXT_FILE_CHUNK_CHARS = int(os.environ.get("TEXT_FILE_CHUNK_CHARS", "2800"))
+
+
+def _coerce_blob_bytes(content):
+    if isinstance(content, bytes):
+        return content
+    if isinstance(content, bytearray):
+        return bytes(content)
+    if hasattr(content, "read"):
+        return content.read()
+    return bytes(content)
+
+
+def _decode_uploaded_text(raw):
+    """Decode common Taiwan/Indonesia text-file encodings without silent loss."""
+    for encoding in ("utf-8-sig", "utf-8", "cp950", "big5", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return None
+
+
+def _split_text_for_translation(text, max_chars=None):
+    """Split on paragraphs/lines first, with a hard fallback for oversized rows."""
+    limit = max(400, int(max_chars or _TEXT_FILE_CHUNK_CHARS))
+    chunks, current = [], ""
+    for part in re.split(r"(\n+)", text or ""):
+        if not part:
+            continue
+        if len(part) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(part[i:i + limit] for i in range(0, len(part), limit))
+            continue
+        if len(current) + len(part) > limit and current:
+            chunks.append(current)
+            current = part
+        else:
+            current += part
+    if current:
+        chunks.append(current)
+    return [chunk for chunk in chunks if chunk.strip()]
+
+
 if FileMessageContent:
     @handler.add(MessageEvent, message=FileMessageContent)
     def handle_file(event):
-        """Handle file messages: record user, log file info."""
+        """Translate plain-text files while preserving their line structure.
+
+        Binary Office/PDF documents are deliberately not guessed here.  The
+        supported formats are decoded deterministically and run through the same
+        glossary, prompt compiler and quality gate as normal LINE messages.
+        """
+        if _is_redelivery(event) or _is_duplicate_message(getattr(event.message, 'id', None)):
+            return
         source = event.source
-        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
+        group_id = (getattr(source, 'group_id', None)
+                    or getattr(source, 'room_id', None)
+                    or getattr(source, 'user_id', None))
         user_id = getattr(source, 'user_id', None)
         is_dm = not getattr(source, 'group_id', None) and not getattr(source, 'room_id', None)
         if group_id and user_id and not is_dm:
             record_user_name(group_id, user_id)
-        fname = getattr(event.message, 'file_name', '未知檔案')
-        fsize = getattr(event.message, 'file_size', 0)
+        if not group_settings.get(group_id, True):
+            return
+
+        fname = getattr(event.message, 'file_name', '未知檔案') or '未知檔案'
+        fsize = int(getattr(event.message, 'file_size', 0) or 0)
+        ext = os.path.splitext(fname)[1].lower()
         logger.info("File received: %s (%d bytes) from %s", fname, fsize, group_id)
+        if ext not in _TEXT_FILE_EXTENSIONS:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=(
+                        "📄 目前可直接翻譯 TXT、MD、CSV、TSV、JSON、LOG、SRT 文字檔。\n"
+                        "PDF、DOCX、XLSX 需使用文件版面翻譯流程。"
+                    ))],
+                ))
+            return
+        if fsize > _TEXT_FILE_MAX_BYTES:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="⚠️ 文字檔過大，請縮小至 %d KB 以內。" % (_TEXT_FILE_MAX_BYTES // 1024))],
+                ))
+            return
+
+        show_loading(group_id)
+        try:
+            with ApiClient(configuration) as api_client:
+                raw = _coerce_blob_bytes(MessagingApiBlob(api_client).get_message_content(event.message.id))
+        except Exception as exc:
+            logger.warning("[file_translate] download failed: %s", exc)
+            return
+        text = _decode_uploaded_text(raw)
+        if text is None or not text.strip():
+            reply_text = "⚠️ 無法辨識文字檔編碼，請另存為 UTF-8 後再傳送。"
+        elif len(text) > _TEXT_FILE_MAX_CHARS:
+            reply_text = "⚠️ 文字內容超過 %d 字，請分割檔案後再傳送。" % _TEXT_FILE_MAX_CHARS
+        else:
+            lang = detect_language(text[:4000])
+            if not lang:
+                reply_text = "⚠️ 無法判斷檔案語言。"
+            else:
+                configured = get_group_target_langs(group_id)
+                if lang == "zh":
+                    actual_tgt = group_target_lang.get(group_id, "id")
+                elif lang in configured:
+                    actual_tgt = "zh"
+                else:
+                    actual_tgt = None
+                if not actual_tgt:
+                    reply_text = "⚠️ 此群組未配置「%s」翻譯。" % LANG_NAMES_ZH.get(lang, lang)
+                else:
+                    previous_tl = dict(getattr(_tl, "__dict__", {}))
+                    translated_parts = []
+                    try:
+                        _tl.group_id = group_id or ""
+                        _tl.user_id = user_id or ""
+                        _tl.from_file = True
+                        _tl.quality_gate_critical = True
+                        _tone, _tone_custom = get_group_tone(group_id)
+                        _tl.tone, _tl.tone_custom = _tone, _tone_custom
+                        for part in _split_text_for_translation(text):
+                            translated = translate(part, lang, actual_tgt)
+                            if not translated:
+                                translated_parts = []
+                                break
+                            translated_parts.append(translated)
+                    finally:
+                        _tl.__dict__.clear()
+                        _tl.__dict__.update(previous_tl)
+                    if translated_parts:
+                        translated_file = "".join(translated_parts)
+                        reply_text = "📄 %s → %s\n%s" % (
+                            fname,
+                            LANG_NAMES_ZH.get(actual_tgt, actual_tgt),
+                            translated_file,
+                        )
+                        _stats_inc("file_translations")
+                    else:
+                        reply_text = "⚠️ 檔案翻譯失敗，請稍後重試。"
+
+        reply_chunks = _split_text_for_translation(reply_text, 4700)[:5]
+        messages = [TextMessage(text=_clip_line_text(chunk)) for chunk in reply_chunks]
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=messages or [TextMessage(text="⚠️ 檔案翻譯結果為空。")],
+            ))
 
 
 if LocationMessageContent:
@@ -14995,6 +15588,178 @@ if PostbackEvent:
             params = {}
 
         action = params.get("action", "")
+
+        # v3.33: one-click translation quality modes from the result Flex card.
+        if action == "translation_variant":
+            _gid = (getattr(event.source, 'group_id', None)
+                    or getattr(event.source, 'room_id', None)
+                    or getattr(event.source, 'user_id', None))
+            _uid = getattr(event.source, 'user_id', None) or ""
+            mode = (params.get("mode") or "").strip().lower()
+            context = _get_translation_action_context(params.get("token", ""), _gid)
+            labels = {
+                "natural": "✨ 更自然",
+                "literal": "🔎 直譯",
+                "formal": "📢 正式版",
+                "backcheck": "↩ 回譯檢查",
+                "personal": "👤 我的語言",
+            }
+            if mode not in labels or not context:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text="⚠️ 此翻譯操作已過期，請重新傳送原訊息。")],
+                        ))
+                except Exception:
+                    pass
+                return
+
+            source_text = context.get("original", "")
+            src_lang = context.get("src", "")
+            tgt_lang = context.get("tgt", "")
+            if mode == "backcheck":
+                source_text = context.get("translated", "")
+                src_lang, tgt_lang = tgt_lang, src_lang
+            elif mode == "personal":
+                preferred = user_languages.get(_uid) or dm_target_lang.get(_uid)
+                if not preferred:
+                    try:
+                        with ApiClient(configuration) as api_client:
+                            MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text="⚠️ 請先設定 /mylang zh|id|vi|th|tl|en|ja|ko|hi")],
+                            ))
+                    except Exception:
+                        pass
+                    return
+                tgt_lang = preferred
+            if not source_text or not src_lang or not tgt_lang:
+                return
+
+            show_loading(_gid)
+            previous_tl = dict(getattr(_tl, "__dict__", {}))
+            try:
+                _tl.__dict__.clear()
+                _tl.__dict__.update(previous_tl)
+                _tl.group_id = _gid or ""
+                _tl.user_id = _uid
+                _tl.translation_variant = mode
+                _tl.quality_gate_critical = True
+                _tone, _tone_custom = get_group_tone(_gid)
+                _tl.tone = _tone
+                _tl.tone_custom = _tone_custom
+
+                canonical = source_text
+                if mode == "personal" and tgt_lang == context.get("src"):
+                    result = context.get("original", "")
+                elif mode == "personal" and tgt_lang == context.get("tgt"):
+                    result = context.get("translated", "")
+                else:
+                    if src_lang == "zh" and tgt_lang == "id":
+                        canonical, _ = resolve_factory_station_aliases(source_text)
+                    elif src_lang == "id" and id_preprocessing_enabled:
+                        canonical, _ = normalize_indonesian_text(source_text)
+                    protected, name_map = protect_names(canonical)
+                    result = translate_openai(protected, src_lang, tgt_lang)
+                    if result:
+                        result = restore_names(result, name_map)
+                        result = finalize_factory_translation(canonical, result, src_lang, tgt_lang)
+                        result = _final_delivery_guard(canonical, result, src_lang, tgt_lang)
+            except Exception as exc:
+                logger.exception("[translation_variant] %s failed: %s", mode, exc)
+                result = None
+            finally:
+                _tl.__dict__.clear()
+                _tl.__dict__.update(previous_tl)
+
+            reply_text = (labels[mode] + "\n" + result) if result else "⚠️ 重新翻譯失敗，請再試一次。"
+            if mode == "personal" and result and _uid:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.push_message(PushMessageRequest(
+                            to=_uid,
+                            messages=[TextMessage(text=_clip_line_text(reply_text))],
+                        ))
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text="✅ 已將你的語言版本私訊給你。")],
+                        ))
+                    return
+                except Exception as exc:
+                    logger.info("[translation_variant] personal push unavailable, replying here: %s", exc)
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=_clip_line_text(reply_text))],
+                    ))
+            except Exception as exc:
+                logger.warning("[translation_variant] reply failed: %s", exc)
+            return
+
+        if action == "image_overlay":
+            _gid = (getattr(event.source, 'group_id', None)
+                    or getattr(event.source, 'room_id', None)
+                    or getattr(event.source, 'user_id', None))
+            context = _load_image_overlay_context(params.get("token", ""), _gid)
+            public_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+            if not context or not public_url or not ImageMessage:
+                msg = ("⚠️ 圖片資料已過期，請重新傳送圖片。" if not context else
+                       "⚠️ 產生對照圖需要設定 PUBLIC_URL 並使用支援 ImageMessage 的 LINE SDK。")
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=msg)],
+                        ))
+                except Exception:
+                    pass
+                return
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="🖼 正在產生原圖＋譯文對照圖…")],
+                    ))
+            except Exception:
+                pass
+
+            def _render_and_push_overlay(target=_gid, payload=context, base_url=public_url):
+                try:
+                    rendered = translation_extras_module.render_translation_comparison_image(
+                        payload["image_bytes"],
+                        payload.get("source_text", ""),
+                        payload.get("translated_text", ""),
+                        source_label="原文 " + LANG_FLAGS.get(payload.get("src_lang", ""), ""),
+                        target_label="譯文 " + LANG_FLAGS.get(payload.get("tgt_lang", ""), ""),
+                    )
+                    media_token = _store_generated_overlay_image(rendered)
+                    if not media_token:
+                        raise RuntimeError("failed to store rendered image")
+                    url = base_url + "/media/translation/" + media_token + ".jpg"
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).push_message(PushMessageRequest(
+                            to=target,
+                            messages=[ImageMessage(
+                                originalContentUrl=url,
+                                previewImageUrl=url,
+                            )],
+                        ))
+                except Exception as exc:
+                    logger.exception("image overlay rendering failed: %s", exc)
+                    try:
+                        with ApiClient(configuration) as api_client:
+                            MessagingApi(api_client).push_message(PushMessageRequest(
+                                to=target,
+                                messages=[TextMessage(text="⚠️ 對照圖產生失敗，文字譯文仍可正常使用。")],
+                            ))
+                    except Exception:
+                        pass
+
+            _threading.Thread(target=_render_and_push_overlay, daemon=True).start()
+            return
 
         # v3.10: onboarding 語言選擇按鈕
         if action == "onboard_lang":
@@ -28491,9 +29256,133 @@ def _flex_v2_quote_box(quoted_text):
     }
 
 
-def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_id=None):
+_translation_action_cache = {}
+_translation_action_lock = threading.Lock()
+_TRANSLATION_ACTION_TTL = int(os.environ.get("TRANSLATION_ACTION_TTL", "1800"))
+_TRANSLATION_ACTION_MAX = int(os.environ.get("TRANSLATION_ACTION_MAX", "500"))
+
+
+def _register_translation_action_context(group_id, original_text, translated_text, src_lang, tgt_lang, msg_id=None):
+    """Store source/translation server-side and return a short postback token.
+
+    LINE postback data is limited and must not contain a full factory message.  A
+    short opaque token keeps the Flex payload small while allowing one-click
+    natural/literal/formal/back-check translations for the exact original text.
+    """
+    now = time.time()
+    token = secrets.token_urlsafe(9)
+    record = {
+        "group_id": group_id or "",
+        "original": original_text or "",
+        "translated": translated_text or "",
+        "src": src_lang or "",
+        "tgt": tgt_lang or "",
+        "msg_id": msg_id or "",
+        "expires_at": now + max(60, _TRANSLATION_ACTION_TTL),
+    }
+    with _translation_action_lock:
+        expired = [k for k, v in _translation_action_cache.items()
+                   if float(v.get("expires_at", 0)) <= now]
+        for key in expired:
+            _translation_action_cache.pop(key, None)
+        if len(_translation_action_cache) >= max(20, _TRANSLATION_ACTION_MAX):
+            oldest = sorted(
+                _translation_action_cache.items(),
+                key=lambda item: float(item[1].get("expires_at", 0)),
+            )[: max(1, len(_translation_action_cache) - _TRANSLATION_ACTION_MAX + 1)]
+            for key, _ in oldest:
+                _translation_action_cache.pop(key, None)
+        _translation_action_cache[token] = record
+    return token
+
+
+def _get_translation_action_context(token, group_id=None):
+    if not token:
+        return None
+    now = time.time()
+    with _translation_action_lock:
+        record = _translation_action_cache.get(token)
+        if not record:
+            return None
+        if float(record.get("expires_at", 0)) <= now:
+            _translation_action_cache.pop(token, None)
+            return None
+        if group_id and record.get("group_id") and record.get("group_id") != group_id:
+            return None
+        return dict(record)
+
+
+def _translation_variant_button(label, token, mode):
+    return {
+        "type": "button", "style": "secondary", "height": "sm",
+        "adjustMode": "shrink-to-fit",
+        "action": {
+            "type": "postback",
+            "label": label,
+            "data": "action=translation_variant&mode=" + mode + "&token=" + token,
+            "displayText": label,
+        },
+    }
+
+
+def _build_translation_action_quick_reply(group_id, original_text, translated_text,
+                                          src_lang, tgt_lang, msg_id=None):
+    """Expose quality controls even when a group uses plain text messages.
+
+    The first integration only placed these controls inside Flex LV4.  Existing
+    persistent settings can keep Flex disabled, which made every new function
+    invisible even though the backend code was present.  This compact Quick
+    Reply uses the same server-side action token and therefore works in both
+    legacy plain-text and Flex-disabled groups.
+    """
+    if not (PostbackAction and original_text and translated_text and src_lang and tgt_lang):
+        return None
+    try:
+        token = _register_translation_action_context(
+            group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
+        )
+        items = [
+            QuickReplyItem(action=PostbackAction(
+                label="✨ 更自然", data="action=translation_variant&mode=natural&token=" + token,
+                display_text="✨ 更自然")),
+            QuickReplyItem(action=PostbackAction(
+                label="🔎 直譯", data="action=translation_variant&mode=literal&token=" + token,
+                display_text="🔎 直譯")),
+            QuickReplyItem(action=PostbackAction(
+                label="📢 正式", data="action=translation_variant&mode=formal&token=" + token,
+                display_text="📢 正式")),
+            QuickReplyItem(action=PostbackAction(
+                label="↩ 回譯", data="action=translation_variant&mode=backcheck&token=" + token,
+                display_text="↩ 回譯")),
+            QuickReplyItem(action=PostbackAction(
+                label="👤 我的語言", data="action=translation_variant&mode=personal&token=" + token,
+                display_text="👤 我的語言")),
+            QuickReplyItem(action=MessageAction(label="📋 交班摘要", text="/交班摘要")),
+            QuickReplyItem(action=MessageAction(label="🎙️ 即時口譯", text="/即時口譯")),
+        ]
+        return QuickReply(items=items)
+    except Exception as exc:
+        logger.warning("translation action Quick Reply unavailable: %s", exc)
+        return None
+
+
+def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_id=None, src_lang=None):
     """LV4 互動按鈕 — 根據內容偵測決定要顯示哪幾顆按鈕。"""
     buttons = []
+
+    # One-click quality controls.  The original/translation stay in a short-lived
+    # server-side cache; postback data carries only the opaque token.
+    if original_text and translated_text and src_lang and tgt_lang:
+        _ctx_token = _register_translation_action_context(
+            group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
+        )
+        buttons.extend([
+            _translation_variant_button("✨ 更自然", _ctx_token, "natural"),
+            _translation_variant_button("🔎 直譯", _ctx_token, "literal"),
+            _translation_variant_button("📢 正式", _ctx_token, "formal"),
+            _translation_variant_button("↩ 回譯", _ctx_token, "backcheck"),
+            _translation_variant_button("👤 我的語言", _ctx_token, "personal"),
+        ])
 
     # 偵測工單號 (ABC123, A-12345, 12345 等格式)
     wo_match = re.search(r'[A-Z]{1,5}[-\s]?\d{3,8}|\b\d{5,10}\b', (original_text or "") + " " + (translated_text or ""))
@@ -28533,38 +29422,20 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
     # v3.11 (2026-05-26): 拿掉「👎 翻錯」按鈕(歐那要求)
     # 工人仍可用打字「/wrong」標錯,後端 mark_only 模式照常運作。
 
-    # 最多 4 顆,排成 2x2 或 vertical:
+    # 最多 6 顆,每列兩顆。
     # - 1 顆: 單一橫排
     # - 2-3 顆: 雙列 (避免 3 顆並排手機寬度被截)
     if not buttons:
         return None
 
-    if len(buttons) == 1:
-        rows = [{
+    buttons = buttons[:6]
+    rows = []
+    for index in range(0, len(buttons), 2):
+        rows.append({
             "type": "box", "layout": "horizontal",
             "spacing": "sm", "margin": "sm",
-            "contents": buttons,
-        }]
-    elif len(buttons) == 2:
-        rows = [{
-            "type": "box", "layout": "horizontal",
-            "spacing": "sm", "margin": "sm",
-            "contents": buttons,
-        }]
-    else:
-        # 3+ 顆:第一列 2 顆,第二列剩餘
-        rows = [
-            {
-                "type": "box", "layout": "horizontal",
-                "spacing": "sm", "margin": "sm",
-                "contents": buttons[:2],
-            },
-            {
-                "type": "box", "layout": "horizontal",
-                "spacing": "sm", "margin": "sm",
-                "contents": buttons[2:4],   # 最多再 2 顆
-            },
-        ]
+            "contents": buttons[index:index + 2],
+        })
 
     return {
         "type": "box", "layout": "vertical",
@@ -28699,7 +29570,7 @@ def build_translation_flex_v2(original, translated, src_lang, tgt_lang,
 
         # LV4 互動按鈕
         if v2["buttons"]:
-            btn_box = _flex_v2_button_row(group_id, original, translated, tgt_lang, msg_id)
+            btn_box = _flex_v2_button_row(group_id, original, translated, tgt_lang, msg_id, src_lang)
             if btn_box:
                 body_contents.append(btn_box)
 
@@ -29112,6 +29983,31 @@ def serve_tts(token):
         return resp
     except Exception as e:
         logger.warning("serve_tts disk fallback failed: %s", e)
+        abort(404)
+
+
+@app.route("/media/translation/<token>.jpg")
+def serve_translation_overlay(token):
+    """Serve a short-lived original-image + translation comparison JPEG."""
+    if not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        abort(400)
+    _cleanup_image_overlay_store()
+    path = os.path.join(_image_overlay_dir(), token + ".jpg")
+    try:
+        if not os.path.isfile(path):
+            abort(404)
+        if time.time() - os.path.getmtime(path) > max(300, _IMAGE_OVERLAY_TTL):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            abort(404)
+        with open(path, "rb") as f:
+            data = f.read()
+        resp = app.response_class(data, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "public, max-age=600"
+        return resp
+    except Exception:
         abort(404)
 
 
@@ -30040,10 +30936,104 @@ init();
 </html>"""
 
 
+def _audio_upload_suffix(filename="", mimetype=""):
+    """Return a transcription-safe suffix for a browser audio upload."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    allowed = {".m4a", ".mp4", ".mp3", ".mpeg", ".mpga", ".wav", ".webm"}
+    if ext in allowed:
+        return ext
+    mime = (mimetype or "").split(";", 1)[0].strip().lower()
+    return {
+        "audio/webm": ".webm",
+        "video/webm": ".webm",
+        "audio/mp4": ".mp4",
+        "video/mp4": ".mp4",
+        "audio/m4a": ".m4a",
+        "audio/x-m4a": ".m4a",
+        "audio/mpeg": ".mp3",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+    }.get(mime, ".m4a")
+
+
+@app.route("/api/interpreter/translate", methods=["POST"])
+def api_interpreter_translate():
+    """Turn-by-turn LIFF voice interpreter using the normal STT/translation/TTS stack."""
+    nonce = (request.form.get("nonce") or "").strip()
+    resolved = resolve_liff_nonce(nonce)
+    if not resolved:
+        return jsonify({"ok": False, "error": "invalid_or_expired_nonce"}), 401
+    scope_id, user_id = resolved
+    upload = request.files.get("audio")
+    if not upload:
+        return jsonify({"ok": False, "error": "audio_required"}), 400
+    raw = upload.read(8 * 1024 * 1024 + 1)
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "audio_too_large"}), 413
+
+    requested_src = translation_extras_module.normalize_personal_language(
+        request.form.get("source")) or "zh"
+    tgt = translation_extras_module.normalize_personal_language(
+        request.form.get("target")) or "id"
+    if requested_src == tgt:
+        return jsonify({"ok": False, "error": "source_and_target_must_differ"}), 400
+
+    transcript = transcribe_audio_openai(
+        raw, suffix=_audio_upload_suffix(upload.filename, upload.mimetype)
+    )
+    if not transcript or not transcript.strip():
+        return jsonify({"ok": False, "error": "speech_not_recognized"}), 422
+    detected = detect_language(transcript) or requested_src
+    src = detected if detected in translation_extras_module.SUPPORTED_PERSONAL_LANGS else requested_src
+    if src == tgt:
+        tgt = "id" if src == "zh" else "zh"
+
+    previous_tl = dict(getattr(_tl, "__dict__", {}))
+    try:
+        _tl.__dict__.clear()
+        _tl.group_id = scope_id or "__interpreter__"
+        _tl.user_id = user_id or ""
+        _tl.quality_gate_critical = True
+        _tl.translation_variant = "natural"
+        _tl.tone = "casual"
+        _tl.tone_custom = ""
+        translated = translate(transcript.strip(), src, tgt)
+        if translated:
+            translated = _final_delivery_guard(transcript.strip(), translated, src, tgt)
+    except Exception as exc:
+        logger.exception("interpreter translation failed: %s", exc)
+        translated = None
+    finally:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+    if not translated:
+        return jsonify({"ok": False, "error": "translation_failed"}), 502
+
+    audio_url = ""
+    if request.form.get("speak") in ("1", "true", "yes", "on"):
+        try:
+            audio_url, _duration = generate_tts(translated, tgt)
+            audio_url = audio_url or ""
+        except Exception as exc:
+            logger.info("interpreter TTS skipped: %s", exc)
+    return jsonify({
+        "ok": True,
+        "source": src,
+        "target": tgt,
+        "transcript": transcript.strip(),
+        "translation": translated,
+        "audio_url": audio_url,
+    })
+
+
 @app.route("/liff/settings")
 def liff_settings_page():
-    """Serve the LIFF settings HTML."""
-    resp = app.response_class(LIFF_SETTINGS_HTML, mimetype="text/html")
+    """Serve group settings or the voice interpreter inside the same LIFF endpoint."""
+    if request.args.get("view") == "interpreter":
+        body = translation_extras_module.build_interpreter_html(liff_id=LIFF_ID)
+    else:
+        body = LIFF_SETTINGS_HTML
+    resp = app.response_class(body, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 

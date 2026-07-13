@@ -1994,63 +1994,95 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         logit_bias=logit_bias, stop=stop, **kwargs,
     )
 
+    # When only one provider is configured, a single transient network/5xx/429
+    # error used to become an immediate visible translation failure.  Retry that
+    # same provider exactly once, only for availability errors and only while the
+    # shared request deadline still has room.  Multi-provider deployments still
+    # fail over immediately to preserve latency.
+    single_provider_retry = (
+        len(providers) == 1
+        and bool(policy.get("single_provider_retry", True))
+    )
+
     for index, provider in enumerate(providers):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        attempt_timeout = max(1.0, min(requested_timeout, per_provider_timeout, remaining))
-        started = time.monotonic()
-        try:
-            if index:
-                print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
-            response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
-            elapsed = time.monotonic() - started
-            if callable(response_validator):
-                verdict = response_validator(response, provider)
-                if isinstance(verdict, tuple):
-                    usable = bool(verdict[0])
-                    reason = str(verdict[1]) if len(verdict) > 1 else "quality validator rejected response"
-                else:
-                    usable = bool(verdict)
-                    reason = "quality validator rejected response"
-                if not usable:
-                    last_quality_error = RuntimeError(reason)
-                    attempts.append({
-                        "provider": provider,
-                        "error": reason[:300],
-                        "kind": "quality_reject",
-                        "latency_seconds": round(elapsed, 3),
-                    })
-                    # A valid HTTP response with unusable translation is not a
-                    # provider outage, so do not trip the circuit breaker.
-                    if not failover_enabled:
-                        raise last_quality_error
-                    print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)
-                    continue
-            _record_provider_success(provider, elapsed)
+        provider_attempts = 2 if single_provider_retry else 1
+        for provider_attempt in range(provider_attempts):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            attempt_timeout = max(1.0, min(requested_timeout, per_provider_timeout, remaining))
+            started = time.monotonic()
             try:
-                response._jy_provider = provider
-                response._jy_failover_attempts = list(attempts)
-                response._jy_latency_seconds = elapsed
-                response._jy_latency_profile = latency_profile or "default"
-            except Exception:
-                pass
-            return response
-        except Exception as err:
-            last_error = err
-            attempts.append({"provider": provider, "error": str(err)[:300]})
-            if _is_provider_failover_error(err):
-                _record_provider_failure(provider, err)
-            print(f"[ai_provider] {provider} 失敗: {type(err).__name__}: {str(err)[:160]}", flush=True)
+                if index and provider_attempt == 0:
+                    print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
+                elif provider_attempt:
+                    print(f"[ai_provider] {provider} 暫時性錯誤，單次快速重試", flush=True)
+                response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+                elapsed = time.monotonic() - started
+                if callable(response_validator):
+                    verdict = response_validator(response, provider)
+                    if isinstance(verdict, tuple):
+                        usable = bool(verdict[0])
+                        reason = str(verdict[1]) if len(verdict) > 1 else "quality validator rejected response"
+                    else:
+                        usable = bool(verdict)
+                        reason = "quality validator rejected response"
+                    if not usable:
+                        last_quality_error = RuntimeError(reason)
+                        attempts.append({
+                            "provider": provider,
+                            "error": reason[:300],
+                            "kind": "quality_reject",
+                            "latency_seconds": round(elapsed, 3),
+                        })
+                        # Quality rejection is deterministic for this candidate;
+                        # do not retry the same provider with the same request.
+                        if not failover_enabled:
+                            raise last_quality_error
+                        print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)
+                        break
+                last_error = None
+                _record_provider_success(provider, elapsed)
+                try:
+                    response._jy_provider = provider
+                    response._jy_failover_attempts = list(attempts)
+                    response._jy_latency_seconds = elapsed
+                    response._jy_latency_profile = latency_profile or "default"
+                except Exception:
+                    pass
+                return response
+            except Exception as err:
+                last_error = err
+                transient = _is_availability_error(err) and not _is_quota_exhausted_error(err)
+                can_retry_same = (
+                    single_provider_retry
+                    and provider_attempt == 0
+                    and transient
+                    and (deadline - time.monotonic()) > 1.25
+                )
+                attempts.append({
+                    "provider": provider,
+                    "error": str(err)[:300],
+                    "kind": "transient_retry" if can_retry_same else "provider_error",
+                    "attempt": provider_attempt + 1,
+                })
+                print(f"[ai_provider] {provider} 失敗: {type(err).__name__}: {str(err)[:160]}", flush=True)
 
-            # Only explicit credit/quota exhaustion permanently changes the
-            # active provider. Generic 429 means temporary rate limiting and
-            # is handled by this request's failover + circuit cooldown.
-            if _is_quota_exhausted_error(err):
-                _auto_switch_on_exhaust(provider, err)
+                # Only explicit credit/quota exhaustion permanently changes the
+                # active provider. Generic 429 means temporary rate limiting and
+                # is handled by this request's failover + circuit cooldown.
+                if _is_quota_exhausted_error(err):
+                    _auto_switch_on_exhaust(provider, err)
 
-            if not failover_enabled or not _is_provider_failover_error(err):
-                raise
+                if can_retry_same:
+                    time.sleep(min(0.20, max(0.0, (deadline - time.monotonic()) / 10.0)))
+                    continue
+
+                if _is_provider_failover_error(err):
+                    _record_provider_failure(provider, err)
+                if not failover_enabled or not _is_provider_failover_error(err):
+                    raise
+                break
 
     if last_error is not None:
         try:

@@ -1,44 +1,28 @@
 """
-nmt_provider.py — Hybrid NMT + LLM Translation Provider v1.0 (2026-05-20)
+nmt_provider.py — Conservative Hybrid NMT + LLM Router (2026-07-12)
 
-業界主流 hybrid 翻譯架構:
-- 短句 / 結構簡單 / 無工廠術語 → NMT(Google Translate / DeepL)
-- 長句 / 口語 / 含 glossary 命中 / 含 emoji / 含敬稱 → LLM(Claude / GPT)
-- 可選:NMT 預翻 → LLM post-edit(品質提升 + 成本下降)
+核心原則：
+- NMT 只處理明確、低風險、無工廠語意的日常短句。
+- 中文↔印尼文採白名單：未命中安全日常句，就交給 LLM。
+- 工廠術語、設備代號、命令、否定、數字單位、料號、品質與工安內容一律走 LLM。
+- 不以「句子短」推定「語意簡單」，避免短工廠指令被快速模型誤譯。
 
-【為什麼用 NMT】
-- Google NMT $20 / 1M chars,vs Claude Sonnet $3-15 / 1M tokens
-- Google NMT 延遲 < 100ms,vs LLM 1-3s
-- 短句直譯品質 NMT 已夠用
-- 短句佔工廠群組訊息 60-70%
+支援的 NMT：
+- Google Cloud Translation API v2
+- DeepL API
 
-【支援的 NMT】
-- Google Cloud Translation API v2 (REST,簡單 API key)
-- DeepL API(可選,品質高但價貴,印尼語支援次要)
-
-【決策樹 (route_to_nmt_or_llm)】
-- 訊息長度 < 30 字
-- AND 無 emoji(emoji 表情通常含語境)
-- AND 無 @mention
-- AND 無已知工廠術語(會破壞 NMT 品質)
-- AND 無口語標記(啦/喔/嘛/醬/咧/蛤)
-- AND 無數字 + 量詞混合(短量詞回覆 NMT 易錯)
-→ NMT
-否則 → LLM
-
-【官方文件】
-- Google Cloud Translation: https://cloud.google.com/translate/docs/reference/rest/v2/translate
-- DeepL API: https://developers.deepl.com/docs/api-reference/translate
+路由結果可透過 ``nmt_route_reason`` 取得，供效能統計與測試使用。
 """
 
 import os
 import json
 import logging
 import threading
+import re
 import urllib.request
 import urllib.parse
 import urllib.error
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -82,62 +66,98 @@ NMT_PRICE_PER_M_CHARS = {
 # ═══════════════════════════════════════════════════════════════════
 # 路由邏輯:NMT vs LLM
 # ═══════════════════════════════════════════════════════════════════
-def should_use_nmt(text: str, src_lang: str, tgt_lang: str,
-                   factory_glossary: Optional[set] = None) -> bool:
-    """決定是否走 NMT(否則走 LLM)
-    
-    Args:
-        text: 原文
-        src_lang, tgt_lang: 語言碼
-        factory_glossary: 工廠術語集合(若 text 命中任一,走 LLM 避免 NMT 誤譯)
-    
-    Returns: True = NMT,False = LLM
-    """
+# Only genuinely low-risk chat should use NMT.  Factory commands are often
+# short, but their negation, equipment codes and local terminology make them
+# semantically high-risk.  The router therefore uses an allow-list posture for
+# ZH<->ID while remaining more permissive for other language pairs.
+_FACTORY_RISK_RE = re.compile(
+    r"(?:"
+    r"工單|料號|爐號|站別|站號|品保|QC|停機|開機|調機|維修|異常|刮傷|缺陷|不良|"
+    r"研磨|無心|削皮|冷抽|退火|酸洗|矯直|倒角|拋光|噴漆|洗料|"
+    r"上料|下料|入料|出料|送料|吊料|棒材|盤元|母材|線材|來料|卡料|斷料|混料|"
+    r"放行|過帳|退庫|發料|工安|職災|PPE|LOTO|SOP|interlock|bypass|"
+    r"\b(?:I\d{1,2}|E\d{1,2}|BF\d+|AP|PM\d+|UT|K\d+)\b|"
+    r"\b(?:work\s*order|material|mesin|produksi|operator|kualitas|cacat|rusak|macet|"
+    r"berhenti|nyalakan|matikan|perbaikan|release|gudang|stasiun)\b"
+    r")",
+    re.I,
+)
+_NEGATION_OR_COMMAND_RE = re.compile(
+    r"(?:不要|不得|不能|不可|禁止|務必|必須|先|再|等.+後|確認後|請|麻煩|幫忙|"
+    r"\b(?:jangan|tidak\s+boleh|dilarang|wajib|harus|tolong|mohon|sebelum|sesudah)\b)",
+    re.I,
+)
+_DATA_RISK_RE = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:mm|cm|m|kg|g|t|噸|公斤|支|把|台|件|批|捆|°C|℃|%)|"
+    r"[<>≤≥±×x]|\b[A-Z]{1,5}[-_/]?\d{2,10}\b)",
+    re.I,
+)
+_SAFE_ZH_CHAT_RE = re.compile(
+    r"^(?:早安|午安|晚安|謝謝|感謝|辛苦了|收到|了解|知道了|好|好的|可以|沒問題|"
+    r"等一下|稍等|我到了|我先走了|我先回去了|吃飯了嗎|吃飽了嗎|今天加班嗎|明天見|再見|掰掰|"
+    r"哈哈|呵呵|沒事|不用客氣|不客氣)[。！!？?~～\s]*$"
+)
+_SAFE_ID_CHAT_RE = re.compile(
+    r"^(?:selamat\s+(?:pagi|siang|sore|malam)|terima\s+kasih|makasih|thanks|ok|oke|siap|"
+    r"baik|mengerti|paham|sudah|belum|sebentar|tunggu\s+sebentar|sampai\s+besok|sampai\s+jumpa|"
+    r"tidak\s+apa-?apa|sama-?sama|haha+)[.!?~\s]*$",
+    re.I,
+)
+
+
+def nmt_route_reason(text: str, src_lang: str, tgt_lang: str,
+                     factory_glossary: Optional[set] = None) -> tuple[bool, str]:
+    """Return ``(use_nmt, reason)`` for diagnostics and tests."""
     if NMT_PROVIDER == "none":
-        return False
+        return False, "provider_disabled"
     if not text or not text.strip():
-        return False
+        return False, "empty"
     text = text.strip()
-    
-    # 1. 太長 → LLM
+    src = (src_lang or "").lower()
+    tgt = (tgt_lang or "").lower()
+
     if len(text) >= NMT_SHORT_THRESHOLD:
-        return False
-    
-    # 2. 含 emoji → LLM(NMT 不會適當處理 emoji 語境)
+        return False, "too_long"
     if any(ord(c) > 0x1F000 for c in text):
-        return False
-    
-    # 3. 含 @mention → LLM
-    if "@" in text or "__MENTION_" in text or "__CUST_" in text:
-        return False
-    
-    # 4. 含工廠術語 → LLM
+        return False, "emoji_context"
+    if "@" in text or "__MENTION_" in text or "__CUST_" in text or "__QG_KEEP_" in text:
+        return False, "protected_token"
     if factory_glossary:
         for term in factory_glossary:
-            if term and len(term) >= 2 and term in text:
-                return False
-    
-    # 5. 台灣口語標記 → LLM
-    tw_colloquial = ["啦", "喔", "哦", "嘛", "醬", "降", "咧", "蛤", "厚", "ㄏㄏ", "QQ", "3Q", "感溫", "傻眼", "母湯", "出包"]
+            if term and len(str(term)) >= 2 and str(term) in text:
+                return False, "glossary_term"
+    if _FACTORY_RISK_RE.search(text):
+        return False, "factory_semantics"
+    if _NEGATION_OR_COMMAND_RE.search(text):
+        return False, "command_or_negation"
+    if _DATA_RISK_RE.search(text):
+        return False, "data_or_code"
+
+    tw_colloquial = ("啦", "喔", "哦", "嘛", "醬", "降", "咧", "蛤", "厚", "ㄏㄏ", "QQ", "3Q", "感溫", "傻眼", "母湯", "出包")
     if any(c in text for c in tw_colloquial):
-        return False
-    
-    # 6. 印尼口語縮寫 → LLM
-    id_colloquial = ["bgt", "gak", "udh", "udah", "gimana", "ngapain", "gw", "lu", "dong", "nih", "sih", "lho"]
-    if any(c in text.lower() for c in id_colloquial):
-        return False
-    
-    # 7. 含數字+中文量詞(短回覆易誤譯)
-    import re
-    if re.search(r"\d+[把支台個件批捆噸公斤kg噸支]", text):
-        return False
-    
-    # 8. 含 placeholder
+        return False, "taiwan_colloquial"
+    id_colloquial = ("bgt", "gak", "udh", "udah", "gimana", "ngapain", "gw", "lu", "dong", "nih", "sih", "lho")
+    if any(re.search(r"(?<![a-z])" + re.escape(c) + r"(?![a-z])", text.lower()) for c in id_colloquial):
+        return False, "indonesian_colloquial"
     if "__" in text:
-        return False
-    
-    # 通過全部過濾 → 走 NMT
-    return True
+        return False, "placeholder"
+
+    # ZH<->ID is the critical production direction: only explicit, harmless
+    # conversational phrases are eligible. Unknown short phrases go to LLM.
+    if src.startswith("zh") and tgt.startswith("id"):
+        return (True, "safe_chat_allowlist") if _SAFE_ZH_CHAT_RE.fullmatch(text) else (False, "not_safe_chat_allowlist")
+    if src.startswith("id") and tgt.startswith("zh"):
+        return (True, "safe_chat_allowlist") if _SAFE_ID_CHAT_RE.fullmatch(text) else (False, "not_safe_chat_allowlist")
+
+    return True, "generic_low_risk"
+
+
+def should_use_nmt(text: str, src_lang: str, tgt_lang: str,
+                   factory_glossary: Optional[set] = None) -> bool:
+    """Conservative NMT routing. True only for low-risk chat."""
+    decision, reason = nmt_route_reason(text, src_lang, tgt_lang, factory_glossary)
+    logger.debug("[NMT] route=%s reason=%s text=%r", decision, reason, (text or "")[:80])
+    return decision
 
 
 # ═══════════════════════════════════════════════════════════════════
