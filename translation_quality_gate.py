@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 12
-QUALITY_GATE_BUILD_ID = "2026-07-13.15-identity-token-recovery"
+QUALITY_GATE_API_VERSION = 13
+QUALITY_GATE_BUILD_ID = "2026-07-13.17-factory-context-knowledge"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1415,6 +1415,82 @@ def review_translation(
         return None
 
 
+def _append_missing_data_note(candidate: str, missing_literals: Sequence[str], tgt_lang: str) -> str:
+    """Keep a usable translation deliverable even when a model omitted source data.
+
+    This is a deterministic safety fallback, not a translation rewrite.  The
+    model candidate is preserved and any omitted identifiers/measurements are
+    attached in a clearly labelled source-data note.  That is safer than either
+    silently dropping the data or discarding the whole translation.
+    """
+    text = (candidate or "").strip()
+    values: List[str] = []
+    seen = set()
+    for literal in missing_literals or ():
+        value = str(literal or "").strip()
+        if not value or value in seen or value in text:
+            continue
+        seen.add(value)
+        values.append(value)
+    if not values:
+        return text
+    low = str(tgt_lang or "").lower()
+    if low.startswith("zh"):
+        note = "（原文資料：" + "、".join(values) + "）"
+    elif low.startswith("id"):
+        note = "(Data asli: " + ", ".join(values) + ")"
+    else:
+        note = "(Source data: " + ", ".join(values) + ")"
+    return (text + "\n" + note).strip()
+
+
+def _best_effort_delivery_candidate(
+    source: str,
+    candidate: str,
+    src_lang: str,
+    tgt_lang: str,
+    *,
+    immutable_literals: Sequence[str],
+    glossary_pairs: Sequence[Tuple[str, str]],
+    require_paragraph_fidelity: bool,
+    initial_report: Optional[ValidationResult] = None,
+) -> Tuple[Optional[str], ValidationResult]:
+    """Return the best non-empty provider output instead of creating an outage.
+
+    Validation remains strict and all issues are retained for logs/metrics.  The
+    delivery policy, however, is availability-first: a successful provider
+    response is never converted into a generic translation failure merely by a
+    local heuristic.  Missing immutable data is surfaced explicitly in a note,
+    and the result is marked non-cacheable by callers.
+    """
+    text = repair_identity_tokens(source, (candidate or "").strip())
+    text = normalize_indonesian_factory_register(source, text, src_lang, tgt_lang)
+    if not text:
+        report = initial_report or ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
+        return None, report
+
+    report = initial_report or validate_translation(
+        source, text, src_lang, tgt_lang,
+        immutable_literals=immutable_literals,
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    missing = [
+        issue.split(":", 1)[1]
+        for issue in report.issues
+        if issue.startswith("missing_literal:") and ":" in issue
+    ]
+    if missing:
+        text = _append_missing_data_note(text, missing, tgt_lang)
+        report = validate_translation(
+            source, text, src_lang, tgt_lang,
+            immutable_literals=immutable_literals,
+            glossary_pairs=glossary_pairs,
+            require_paragraph_fidelity=require_paragraph_fidelity,
+        )
+    return text, report
+
+
 def gate_and_revise(
     source: str,
     candidate: str,
@@ -1427,12 +1503,13 @@ def gate_and_revise(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
 ) -> Dict[str, Any]:
-    """Validate locally and conditionally repair one hard failure.
+    """Validate, optionally repair, and always preserve a usable translation.
 
-    Normal translations still use one API call.  Only a candidate that fails a
-    deterministic integrity check receives one source-grounded repair request.
-    This preserves real-time speed while preventing known mixed-language,
-    polarity and placeholder failures from becoming silent empty results.
+    Local checks remain strict for diagnostics and cache admission, but they no
+    longer convert a successful provider response into a generic LINE outage.
+    One source-grounded repair is attempted for hard issues.  If it still does
+    not pass, the best non-empty candidate is delivered as degraded/non-cacheable
+    output, with any omitted immutable data attached explicitly.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
@@ -1495,6 +1572,29 @@ def gate_and_revise(
                     "path": "source_grounded_repair",
                 }
 
+    best_text, best_report = _best_effort_delivery_candidate(
+        source,
+        candidate,
+        src_lang,
+        tgt_lang,
+        immutable_literals=list(immutable_literals or ()),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=critical,
+        initial_report=report,
+    )
+    if best_text:
+        return {
+            "ok": True,
+            "text": best_text,
+            "issues": best_report.issues,
+            "hard_issues": best_report.hard_issues,
+            "warnings": best_report.warnings,
+            "reviewed": bool(repair_enabled and ai_client is not None and report.hard_issues),
+            "degraded": True,
+            "cacheable": False,
+            "path": "best_effort_quality_warning",
+        }
+
     return {
         "ok": False,
         "text": None,
@@ -1502,9 +1602,9 @@ def gate_and_revise(
         "hard_issues": report.hard_issues,
         "warnings": report.warnings,
         "reviewed": False,
-        "degraded": False,
+        "degraded": True,
         "cacheable": False,
-        "path": "single_api_blocked",
+        "path": "empty_translation_blocked",
     }
 
 
@@ -1680,14 +1780,33 @@ def translate_quality_critical_document(
                     "ok": True, "text": retry_text, "issues": retry_report.issues,
                     "hard_issues": [], "warnings": retry_report.warnings,
                     "reviewed": True, "degraded": False, "cacheable": True,
-                    "path": "visible_source_fresh_retry",
+                    "path": "protected_fresh_retry",
                     "provider_path": retry_provider or provider or "primary",
                 }
+        best_text, best_report = _best_effort_delivery_candidate(
+            source,
+            raw,
+            src_lang,
+            tgt_lang,
+            immutable_literals=list(immutable.mapping.values()),
+            glossary_pairs=glossary_pairs,
+            require_paragraph_fidelity=True,
+            initial_report=report,
+        )
+        if best_text:
+            return {
+                "ok": True, "text": best_text, "issues": best_report.issues,
+                "hard_issues": best_report.hard_issues, "warnings": best_report.warnings,
+                "reviewed": bool(repair_enabled and report.hard_issues),
+                "degraded": True, "cacheable": False,
+                "path": "best_effort_whole_document",
+                "provider_path": provider or "primary",
+            }
         return {
             "ok": False, "text": None, "issues": report.issues,
             "hard_issues": report.hard_issues, "warnings": report.warnings,
             "reviewed": False, "degraded": True, "cacheable": False,
-            "path": "single_api_blocked", "provider_path": provider or "primary",
+            "path": "empty_translation_blocked", "provider_path": provider or "primary",
         }
     except Exception as exc:
         logger.warning("[QualityGate] single document call unavailable: %s", exc)
@@ -1709,10 +1828,12 @@ def ensure_delivery_safe_translation(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """Final local-only validation boundary.
+    """Final local-only availability boundary.
 
-    No retranslation, reviewer or fallback API is invoked.  Invalid output is
-    blocked and logged so the first-pass contract can be improved at the source.
+    No network call is made here.  Validation still controls cache admission and
+    produces diagnostics, but a non-empty provider translation is not discarded
+    solely because a heuristic is unhappy.  Missing immutable data is attached
+    explicitly and degraded results are returned as non-cacheable.
     """
     source = source or ""
     candidate = repair_identity_tokens(source, candidate)
@@ -1722,23 +1843,47 @@ def ensure_delivery_safe_translation(
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    envelope = protect_immutable_spans(source)
+    envelope = inspect_immutable_spans(source)
+    require_paragraph_fidelity = is_quality_critical(source, src_lang, tgt_lang)
     report = validate_translation(
         source, candidate, src_lang, tgt_lang,
         immutable_literals=envelope.mapping.values(),
         glossary_pairs=glossary_pairs,
-        require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
+        require_paragraph_fidelity=require_paragraph_fidelity,
+    )
+    if report.ok:
+        return {
+            "ok": True,
+            "text": candidate,
+            "issues": report.issues,
+            "hard_issues": [],
+            "warnings": report.warnings,
+            "reviewed": False,
+            "degraded": False,
+            "cacheable": True,
+            "path": "final_local_validation",
+        }
+
+    best_text, best_report = _best_effort_delivery_candidate(
+        source,
+        candidate,
+        src_lang,
+        tgt_lang,
+        immutable_literals=list(envelope.mapping.values()),
+        glossary_pairs=glossary_pairs,
+        require_paragraph_fidelity=require_paragraph_fidelity,
+        initial_report=report,
     )
     return {
-        "ok": report.ok,
-        "text": candidate if report.ok else None,
-        "issues": report.issues,
-        "hard_issues": report.hard_issues,
-        "warnings": report.warnings,
+        "ok": bool(best_text),
+        "text": best_text,
+        "issues": best_report.issues,
+        "hard_issues": best_report.hard_issues,
+        "warnings": best_report.warnings,
         "reviewed": False,
-        "degraded": False,
-        "cacheable": report.ok,
-        "path": "final_local_validation" if report.ok else "final_local_blocked",
+        "degraded": bool(best_text),
+        "cacheable": False,
+        "path": "final_local_warning" if best_text else "empty_translation_blocked",
     }
 
 def translation_failure_message(tgt_lang: str) -> str:

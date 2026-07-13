@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.34.1-erp-station-timing-semantics-root-fix-2026-07-13"
+VERSION = "v3.35.0-factory-context-knowledge-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -256,13 +256,14 @@ import glossary_policy as gp_module             # canonical vs explanatory termi
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
 import prompt_optimizer as prompt_opt_module   # runtime prompt compiler: principles + relevant real-failure rules
 import translation_extras as translation_extras_module
+import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 13
-_EXPECTED_QG_BUILD_ID = "2026-07-13.16-availability-first-delivery"
+_EXPECTED_QG_BUILD_ID = "2026-07-13.17-factory-context-knowledge"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -279,6 +280,37 @@ logger.info(
     _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
     getattr(tqg_module, "__file__", "<unknown>"),
 )
+
+# v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
+# base.  New workflows/terms are data entries, not Python sentence patches.
+_EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-13.1-context-retrieval"
+_FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
+_FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
+if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
+        or _FACTORY_KNOWLEDGE_HEALTH.get("api_version") != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
+        or _FACTORY_KNOWLEDGE_HEALTH.get("build_id") != _EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID
+        or _FACTORY_KNOWLEDGE_HEALTH.get("entry_count", 0) < 1):
+    raise RuntimeError(
+        "factory knowledge deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_KNOWLEDGE_API_VERSION} build={_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID}, "
+        f"loaded={_FACTORY_KNOWLEDGE_HEALTH!r} module={getattr(factory_knowledge_module, '__file__', '<unknown>')}"
+    )
+_fk_erp = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "入庫時間再平均一點，太早移完開會很難解釋", "zh", "id", limit=3
+)
+_fk_physical = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "貨車到貨後安排入庫時間並卸貨", "zh", "id", limit=3
+)
+if not any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_erp):
+    raise RuntimeError("factory knowledge self-test failed: ERP timing context was not retrieved")
+if any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_physical):
+    raise RuntimeError("factory knowledge self-test failed: physical warehouse message matched ERP timing context")
+_FACTORY_KNOWLEDGE_SELFTEST_OK = True
+logger.info("[FactoryKnowledge] verified build=%s entries=%s sha256=%s",
+            _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
+            _FACTORY_KNOWLEDGE_HEALTH.get("entry_count"),
+            _FACTORY_KNOWLEDGE_HEALTH.get("sha256"))
 
 # Boot-time invariant test: a normal source-language word embedded in a Chinese
 # target must be rejected.  This proves that the loaded module is not merely the
@@ -342,7 +374,7 @@ if not _QG_INCIDENT_GOOD_SELFTEST.ok:
         f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
     )
 
-_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.5-availability-first-boundary"
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.6-strict-integrity-boundary"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
     _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
@@ -1120,8 +1152,7 @@ TONE_PRESETS = {
         "8. 若原文很口語、省略主詞或量詞混亂，必須依工廠作業脈絡補足正確意思後再翻，不可照字面硬翻。"
         "【工廠語境理解規則】"
         "9. 在本系統中，很多中文詞語不是日常字面義，必須依工廠語境理解，例如："
-        "- 「入了 / 入完了 / 入庫時間」不可一律理解成實體入倉。先判斷是否在講站號、ERP、帳務、資料移轉、過帳、入帳、時間分布或會議檢討；若有這些線索，應理解為「把每把棒材的生產資料登錄/移轉到下一站」(pencatatan atau pemindahan data ke stasiun berikutnya)，不是 barang masuk gudang。只有明確提到倉庫、貨車、到貨、卸貨等實物流動時，才翻成 masuk gudang。"
-        "- 本廠包裝流程中，490 是包裝/秤重過帳站，801 是下一個暫存站。像「入庫時間平均一點」「不要太早移完」是要求每把資料從 490 移到 801 的登錄時間依實際作業分布得更平均，避免集中一次過帳或留下長時間無紀錄；「平均」是 merata/tersebar，絕對不是數學平均 rata-rata；「移完」是全部資料移轉完成，不是實體搬完貨。"
+        "- 工廠白話可能同時具有 ERP、站別、實體物流或品質語意。若系統注入 <factory_context_knowledge>，必須以該知識判斷本句語意；沒有命中知識時才依一般工廠脈絡判斷，不可把不確定的廠內縮寫硬套成日常字典義。"
         "- 「把」作為量詞時(數字+把，如「6把」「兩把」) = bundel(棒材捆數)；作為介詞時(把+受詞，如「把工單入完」「把資料登錄」) = 中文文法輔助詞，不要翻成 bundel，而是依完整句子重組成印尼文語序。"
         "- 「PMI」不是泛稱，必須依範例表定義理解(分光檢測棒材鋼種)"
         "- 「混料」固定理解為 material tercampur"
@@ -7492,157 +7523,8 @@ def _repair_factory_domain_term_translation(translation, risk):
 
 
 
-# v3.34.1: ERP station-transfer timing semantic contract.
-# Root cause addressed:
-#   Shop-floor shorthand such as「入庫時間平均一點／太早移完」describes the
-#   timestamp distribution of ERP records moving from packaging station 490 to
-#   temporary station 801.  Generic translation interpreted it as physical
-#   warehouse arrival and translated「平均」as the arithmetic term rata-rata.
-# This classifier is concept-based, not an exact-sentence replacement.
-_ERP_TRANSFER_TIMING_PHYSICAL_MARKERS_ZH = (
-    "貨車", "卡車", "司機", "到貨", "卸貨", "倉庫大門", "月台", "收貨", "送貨",
-)
-_ERP_TRANSFER_TIMING_DISTRIBUTION_MARKERS_ZH = (
-    "平均", "均勻", "分散", "不要集中", "別集中", "分開入", "分批入", "間隔",
-)
-_ERP_TRANSFER_TIMING_ERP_MARKERS_ZH = (
-    "資料", "帳", "帳務", "入帳", "過帳", "登錄", "紀錄", "記錄", "站別", "站號",
-    "移到", "移入", "移完", "入完", "490", "801",
-)
-
-
-def _classify_factory_erp_transfer_timing_zh_id(text):
-    """Classify ERP posting-time distribution language used by the packaging flow.
-
-    It intentionally rejects explicit physical-logistics wording.  In the user's
-    factory, an otherwise unqualified「入庫時間」combined with distribution wording
-    is the established shorthand for posting each packaged bundle from 490 to 801.
-    """
-    compact = _semantic_compact_zh(text)
-    if not compact:
-        return None
-    if any(marker in compact for marker in _ERP_TRANSFER_TIMING_PHYSICAL_MARKERS_ZH):
-        return None
-
-    has_distribution = any(marker in compact for marker in _ERP_TRANSFER_TIMING_DISTRIBUTION_MARKERS_ZH)
-    has_erp_marker = any(marker in compact for marker in _ERP_TRANSFER_TIMING_ERP_MARKERS_ZH)
-    has_inbound_time = any(marker in compact for marker in ("入庫時間", "入帳時間", "過帳時間", "登錄時間", "紀錄時間", "記錄時間"))
-    has_finish_move = any(marker in compact for marker in ("移完", "入完", "全部移", "都移", "全移"))
-    has_review = any(marker in compact for marker in ("開會", "會議", "檢討", "報表", "稽核", "解釋"))
-
-    # Strong implicit factory shorthand:「入庫時間 + 平均」is enough unless the
-    # source explicitly describes trucks/warehouse receiving.  Additional ERP,
-    # move-completion or review markers increase confidence.
-    if not (has_inbound_time and has_distribution):
-        if not (has_distribution and has_erp_marker and (has_finish_move or has_review)):
-            return None
-
-    station_numbers = re.findall(r"(?<!\d)(\d{3})(?:站)?", compact)
-    from_station = None
-    to_station = None
-    if len(station_numbers) >= 2:
-        from_station, to_station = station_numbers[0], station_numbers[1]
-    elif station_numbers:
-        only = station_numbers[0]
-        if only == "801":
-            from_station, to_station = "490", "801"
-        elif only == "490":
-            from_station, to_station = "490", "801"
-        else:
-            to_station = only
-
-    # This exact shorthand belongs to the known packaging ERP flow even when the
-    # workers omit station numbers in chat.
-    if not from_station and not to_station and has_inbound_time:
-        from_station, to_station = "490", "801"
-
-    return {
-        "term": "入庫時間/移完",
-        "sense": "factory_erp_station_transfer_timing",
-        "confidence": 0.99 if (has_finish_move or has_review or station_numbers) else 0.95,
-        "from_station": from_station,
-        "to_station": to_station,
-        "has_distribution": has_distribution,
-        "has_finish_move": has_finish_move,
-        "has_too_early": any(marker in compact for marker in ("太早", "過早", "提早", "太快")),
-        "has_review": has_review,
-        "requires_actual_time_alignment": True,
-        "tm_bypass_allowed": False,
-        "nmt_allowed": False,
-        "requires_validation": True,
-    }
-
-
-def _build_factory_erp_transfer_timing_contract_lines(risk):
-    src_station = risk.get("from_station") or "the current packaging station"
-    tgt_station = risk.get("to_station") or "the next station"
-    return [
-        "<risk term='入庫時間/移完' sense='factory_erp_station_transfer_timing'>",
-        "This is ERP production-recording language, not physical warehouse logistics.",
-        f"The workflow is production data for each packaged bar bundle being posted/transferred from station {src_station} to station {tgt_station}.",
-        "入庫時間/入帳時間 means the timestamp of posting or transferring each bundle's data in the production system. Do not translate it as physical barang masuk gudang.",
-        "平均一點 means distribute the posting timestamps more evenly according to the actual work sequence. Use merata/tersebar/interval yang lebih merata; never use the arithmetic phrase rata-rata sedikit.",
-        "移完 means all ERP records have been transferred to the next station, not that the physical goods have finished moving.",
-        "太早移完/集中一次入帳 can create a long period with no production records and becomes difficult to explain in a production-review meeting.",
-        "The translation must keep records aligned with actual work time; never imply falsifying or inventing timestamps.",
-        "Preferred wording: waktu pencatatan/pemindahan data setiap bundel, sesuai waktu pengerjaan, lebih merata, jangan semua data dipindahkan sekaligus terlalu awal.",
-        "Forbidden wording: waktu masuk gudang, rata-rata sedikit, barang selesai dipindahkan, selesai terlalu cepat without mentioning data/posting time.",
-        "</risk>",
-    ]
-
-
-def _erp_transfer_timing_translation_ok(risk, translation):
-    low = (translation or "").lower()
-    if not low:
-        return False, "erp_transfer_timing_empty"
-    forbidden = (
-        "rata-rata sedikit", "waktu masuk gudang", "barang masuk gudang",
-        "semua barang selesai dipindahkan", "barang selesai dipindahkan",
-    )
-    for phrase in forbidden:
-        if phrase in low:
-            return False, "erp_transfer_timing_forbidden:" + phrase
-    if not any(x in low for x in ("data", "pencatatan", "input", "transaksi", "posting")):
-        return False, "erp_transfer_timing_missing_data_semantics"
-    if not any(x in low for x in ("merata", "tersebar", "tidak menumpuk", "bertahap", "interval")):
-        return False, "erp_transfer_timing_missing_distribution_semantics"
-    if risk.get("from_station") and str(risk["from_station"]) not in low:
-        return False, "erp_transfer_timing_missing_source_station"
-    if risk.get("to_station") and str(risk["to_station"]) not in low:
-        return False, "erp_transfer_timing_missing_target_station"
-    if risk.get("has_too_early") and not any(x in low for x in ("terlalu awal", "terlalu cepat", "lebih awal")):
-        return False, "erp_transfer_timing_missing_early_completion"
-    if risk.get("has_review") and not any(x in low for x in ("rapat", "meeting", "evaluasi", "review")):
-        return False, "erp_transfer_timing_missing_review_consequence"
-    if risk.get("requires_actual_time_alignment") and not any(
-        x in low for x in ("sesuai waktu pengerjaan", "sesuai proses", "sesuai waktu kerja", "sesuai kondisi aktual", "sesuai pekerjaan")
-    ):
-        return False, "erp_transfer_timing_missing_actual_work_alignment"
-    return True, ""
-
-
-def _semantic_rebuild_factory_erp_transfer_timing(src_text, risk, current_translation=""):
-    """Slot-based safe reconstruction for ERP timing instructions.
-
-    The reconstruction is based on the classified operation, stations and intent,
-    so variants such as 入帳/過帳/登錄/移到801 share the same semantics.
-    """
-    src_station = risk.get("from_station") or "490"
-    tgt_station = risk.get("to_station") or "801"
-    first = (
-        f"Tolong atur waktu pemindahan data setiap bundel dari stasiun {src_station} "
-        f"ke stasiun {tgt_station} sesuai waktu pengerjaan agar lebih merata."
-    )
-    clauses = [first]
-    if risk.get("has_finish_move") or risk.get("has_too_early"):
-        second = "Jangan pindahkan semua data sekaligus terlalu awal"
-        if risk.get("has_review"):
-            second += ", karena jeda tanpa pencatatan akan sulit dijelaskan saat rapat"
-        second += "."
-        clauses.append(second)
-    elif risk.get("has_review"):
-        clauses.append("Hindari pencatatan yang menumpuk pada satu waktu, karena jeda tanpa pencatatan akan sulit dijelaskan saat rapat.")
-    return " ".join(clauses)
+# v3.35.0: plant-specific workflow semantics are loaded by factory_knowledge.py
+# from factory_knowledge.json.  Do not add new sentence-specific classifiers here.
 
 
 def build_translation_semantic_contract(text, src, tgt):
@@ -7737,25 +7619,31 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
 
-        _incident_contract_fn = globals().get("_classify_factory_incident_self_report_zh_id")
-        incident_risk = _incident_contract_fn(text) if callable(_incident_contract_fn) else None
-        if incident_risk:
-            contract["has_risk"] = True
-            contract["risks"].append(incident_risk)
-            contract["tm_bypass_allowed"] = False
-            contract["vector_bypass_allowed"] = False
-            contract["nmt_allowed"] = False
-            contract["requires_llm"] = True
-
-        _erp_timing_fn = globals().get("_classify_factory_erp_transfer_timing_zh_id")
-        erp_timing_risk = _erp_timing_fn(text) if callable(_erp_timing_fn) else None
-        if erp_timing_risk:
-            contract["has_risk"] = True
-            contract["risks"].append(erp_timing_risk)
-            contract["tm_bypass_allowed"] = False
-            contract["vector_bypass_allowed"] = False
-            contract["nmt_allowed"] = False
-            contract["requires_llm"] = True
+    # Generic plant-context retrieval.  This is direction-neutral and data-driven:
+    # adding a new workflow means editing factory_knowledge.json, not app.py.
+    try:
+        _fk_module = globals().get("factory_knowledge_module")
+        knowledge_cards = _fk_module.retrieve(text, src, tgt, limit=3) if _fk_module is not None else []
+    except Exception as exc:
+        _logger = globals().get("logger")
+        if _logger is not None and hasattr(_logger, "warning"):
+            _logger.warning("[FactoryKnowledge] retrieval failed open: %s", exc)
+        knowledge_cards = []
+    if knowledge_cards:
+        contract["has_risk"] = True
+        contract["risks"].append({
+            "term": "factory_context_knowledge",
+            "sense": "factory_knowledge_context",
+            "source_text": text,
+            "cards": knowledge_cards,
+            "tm_bypass_allowed": False,
+            "nmt_allowed": False,
+            "requires_validation": True,
+        })
+        contract["tm_bypass_allowed"] = False
+        contract["vector_bypass_allowed"] = False
+        contract["nmt_allowed"] = False
+        contract["requires_llm"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -7768,7 +7656,11 @@ def build_translation_semantic_contract_prompt(contract):
     lines = ["<semantic_contract>"]
     lines.append("This block is generated by deterministic pre-translation semantic analysis. It overrides TM/NMT/examples/general dictionary meanings.")
     for risk in contract.get("risks", []):
-        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+        if risk.get("sense") == "factory_knowledge_context":
+            knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
+            if knowledge_prompt:
+                lines.append(knowledge_prompt)
+        elif risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             sponsor = risk.get("sponsor_id") or "the sponsor/person/company"
             ev = ", ".join(risk.get("evidence", [])[:6])
             lines.append("<risk term='請' sense='treat_sponsor_pay_for'>")
@@ -7805,25 +7697,6 @@ def build_translation_semantic_contract_prompt(contract):
             lines.extend(_build_factory_domain_term_contract_lines(risk))
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
-        elif risk.get("sense") == "factory_erp_station_transfer_timing":
-            lines.extend(_build_factory_erp_transfer_timing_contract_lines(risk))
-        elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
-            lines.append("<risk term='自首無罪/設備事故提報' sense='factory_incident_self_report_nonpunitive'>")
-            lines.append("This is a factory incident-reporting policy, not religious or criminal-law language.")
-            lines.append("Translate 自首無罪 as voluntary self-reporting will not be held against the worker, e.g. 'Mengaku sendiri tidak akan dipermasalahkan'.")
-            lines.append("Forbidden literal meanings: tidak ada dosa, tanpa dosa, bebas dosa, tidak berdosa, tidak bersalah.")
-            if risk.get("has_collision_damage") and risk.get("has_fall_damage"):
-                lines.append("Preserve both distinct damage mechanisms: collision/impact and falling. Use wording such as 'tertabrak atau terjatuh hingga rusak'; do not collapse them into generic 'rusak atau jatuh'.")
-            elif risk.get("has_collision_damage"):
-                lines.append("Preserve collision/impact as the cause of damage (tertabrak/terbentur hingga rusak).")
-            elif risk.get("has_fall_damage"):
-                lines.append("Preserve falling as the cause of damage (terjatuh hingga rusak).")
-            if risk.get("has_report_to_me"):
-                lines.append("The worker must report it promptly to the speaker/supervisor: 'segera laporkan kepada saya'.")
-            if risk.get("has_other_unit_first_report"):
-                lines.append("Preserve the escalation condition: do not let another department report it first; once that happens, the problem is usually already more serious.")
-            lines.append("Use concise, standard Indonesian suitable for a supervisor's shop-floor notice.")
-            lines.append("</risk>")
     lines.append("</semantic_contract>")
     return " ".join(lines)
 
@@ -7833,7 +7706,13 @@ def translation_satisfies_semantic_contract(contract, translation):
     t = (translation or "").strip()
     low = t.lower()
     for risk in contract.get("risks", []):
-        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+        if risk.get("sense") == "factory_knowledge_context":
+            ok, issues = factory_knowledge_module.validate_translation(
+                risk.get("cards", []), risk.get("source_text", ""), t
+            )
+            if not ok:
+                return False, issues[0] if issues else "factory_knowledge_validation_failed"
+        elif risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             has_good = any(g in low for g in _SEM_QING_PREFERRED_ID)
             has_bad = any(b in low for b in _SEM_QING_FORBIDDEN_ID)
             if has_bad:
@@ -7878,14 +7757,6 @@ def translation_satisfies_semantic_contract(contract, translation):
                 entry = amap.get(key)
                 if entry and not _factory_reason_translation_contains(entry, low):
                     return False, "factory_reason_action_missing:" + key
-        elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
-            ok, reason = _incident_self_report_translation_ok(risk, t)
-            if not ok:
-                return False, reason
-        elif risk.get("sense") == "factory_erp_station_transfer_timing":
-            ok, reason = _erp_transfer_timing_translation_ok(risk, t)
-            if not ok:
-                return False, reason
     return True, ""
 
 def _semantic_rebuild_qing_treat_translation(src_text, contract, current_translation=""):
@@ -7971,7 +7842,16 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
     except Exception:
         pass
     for risk in (contract or {}).get("risks", []):
-        if risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
+        if risk.get("sense") == "factory_knowledge_context":
+            # Do not fabricate a fixed sentence locally.  Keep the provider
+            # candidate available and let the one-shot semantic repair path below
+            # ask the model again with the retrieved knowledge.
+            try:
+                _tl.factory_knowledge_issues = [reason]
+            except Exception:
+                pass
+            return translation
+        elif risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             return _semantic_rebuild_qing_treat_translation(src_text, contract, translation)
         if risk.get("sense") == "id_zh_temporal_direction_boundary":
             fixed = _fix_zh_temporal_direction_boundary(src_text, translation)
@@ -8002,15 +7882,63 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
             if deterministic:
                 return deterministic
             return translation
-        if risk.get("sense") == "factory_incident_self_report_nonpunitive":
-            fixed = _semantic_rebuild_factory_incident_self_report(src_text, risk, translation)
-            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
-            return fixed if ok2 else fixed
-        if risk.get("sense") == "factory_erp_station_transfer_timing":
-            fixed = _semantic_rebuild_factory_erp_transfer_timing(src_text, risk, translation)
-            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
-            return fixed if ok2 else fixed
     return translation
+
+def _factory_knowledge_cards_from_contract(contract):
+    cards = []
+    for risk in (contract or {}).get("risks", []):
+        if risk.get("sense") == "factory_knowledge_context":
+            cards.extend(risk.get("cards", []) or [])
+    return cards
+
+
+def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt, contract):
+    """One provider-neutral repair attempt using retrieved plant knowledge.
+
+    This is the key difference from sentence patches: validation rules and
+    context come from JSON cards.  The server never constructs a canned target
+    sentence.  If the second model attempt is still imperfect, availability-first
+    delivery keeps the best non-empty candidate and marks it non-cacheable later.
+    """
+    cards = _factory_knowledge_cards_from_contract(contract)
+    if not cards or not translation or getattr(_tl, "factory_knowledge_repairing", False):
+        return translation
+    ok, issues = factory_knowledge_module.validate_translation(cards, src_text, translation)
+    if ok:
+        return translation
+    try:
+        _tl.factory_knowledge_issues = list(issues)
+        _tl.factory_knowledge_repairing = True
+        revised = translate_openai(
+            src_text, src, tgt, strict_no_source_script=True,
+            repair_mode=True, bad_result=translation,
+        )
+    except Exception as exc:
+        logger.exception("[FactoryKnowledge] repair call failed; keeping first candidate: %s", exc)
+        revised = None
+    finally:
+        try:
+            _tl.factory_knowledge_repairing = False
+        except Exception:
+            pass
+    if not revised or not isinstance(revised, str) or _is_meta_commentary_leak(revised):
+        return translation
+    revised = _repair_pipeline_identity_placeholders(src_text, revised)
+    revised_ok, revised_issues = factory_knowledge_module.validate_translation(cards, src_text, revised)
+    try:
+        _event_log_write("factory_knowledge_repair", {
+            "src_text": (src_text or "")[:200],
+            "card_ids": [card.get("id") for card in cards],
+            "first_issues": list(issues)[:20],
+            "revised_ok": revised_ok,
+            "revised_issues": list(revised_issues)[:20],
+        })
+    except Exception:
+        pass
+    if revised_ok or len(revised_issues) < len(issues):
+        return revised.strip()
+    return translation
+
 
 def filter_semantic_contract_references(contract, refs):
     """Remove TM/Vector references whose target side violates the active semantic contract."""
@@ -9172,7 +9100,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "【站別/Stations - numbers are STATION NUMBERS】"
             "400站=station 400, 401站=station 401, 420站=station 420, "
             "470站=station 470(UT station), UT=mesin UT(di station 470), 480站=station 480, "
-            "490站=station 490(包裝/秤重過帳站, stasiun packing/penimbangan), 801站=station 801(下一個暫存站, stasiun sementara), "
+            "490站=station 490, 801站=station 801; detailed workflow meaning is supplied by <factory_context_knowledge> when relevant, "
             "OL=sedang produksi/online, 回400=kembalikan ke station 400, "
             "無主=tanpa pemilik/unassigned, 入無主=masukkan ke status tanpa pemilik, "
             "掛單/工單=work order, 重掛單=pasang ulang work order, 無工單資訊=tidak ada info work order, "
@@ -9451,9 +9379,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if repair_mode and bad_result:
             msg = (
                 "Original text (source language): " + protected + "\n\n"
-                "Bad translation that leaked source-language words: " + bad_result + "\n\n"
-                "Rewrite the bad translation into pure " + tgt_name +
-                ". Preserve names and __MENTION__ placeholders exactly. Translate every remaining source-language word."
+                "Previous translation that violated one or more semantic/integrity constraints: " + bad_result + "\n\n"
+                "Rewrite it as an accurate, natural " + tgt_name + " translation. "
+                "Follow every <factory_context_knowledge> and <semantic_contract> rule above. "
+                "Preserve names, codes, numbers and __MENTION__ placeholders exactly. Output only the revised translation."
             )
         else:
             # v3.9.50: 撤回 v3.9.47 user msg 強化指令 — Anthropic 官方文檔明確:
@@ -10387,6 +10316,18 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
                 "[FinalDeliveryGuard] reverse glossary UI-label warning (delivering best effort): %s",
                 leaked_label,
             )
+        # Final boundary never has permission to spend another provider call.
+        # Reject obvious mixed-language/integrity violations before the
+        # availability-first helper can downgrade them to a warning.
+        direct_report = tqg_module.validate_translation(
+            source_text, candidate, src, tgt,
+            immutable_literals=tqg_module.inspect_immutable_spans(source_text).mapping.values(),
+            glossary_pairs=pairs,
+            require_paragraph_fidelity=False,
+        )
+        if not direct_report.ok:
+            logger.warning("[FinalDeliveryGuard] direct rejection issues=%s", direct_report.issues[:12])
+            return None
         checked = tqg_module.ensure_delivery_safe_translation(
             source_text, candidate, src, tgt,
             model=_active_upgrade_model(),
@@ -10397,13 +10338,13 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         if checked.get("ok") and checked.get("text"):
             return checked["text"].strip()
         logger.warning(
-            "[FinalDeliveryGuard] local validation warning; delivering provider result path=%s issues=%s",
+            "[FinalDeliveryGuard] local validation rejected candidate path=%s issues=%s",
             checked.get("path"), checked.get("issues", [])[:12],
         )
-        return candidate.strip()
+        return None
     except Exception as exc:
-        logger.exception("[FinalDeliveryGuard] local validation exception; delivering provider result: %s", exc)
-        return candidate.strip()
+        logger.exception("[FinalDeliveryGuard] local validation exception; rejecting candidate: %s", exc)
+        return None
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -11172,8 +11113,9 @@ def _translate_core(text, src, tgt):
             import traceback
             logger.error("[TLOG] wrapper log failed: %s\n%s", e, traceback.format_exc())
     
-    # Runtime semantic contract enforcement after NMT/LLM/TM-inject.
+    # Runtime plant-context repair + semantic contract enforcement after NMT/LLM/TM-inject.
     if result and isinstance(result, str):
+        result = _maybe_repair_factory_knowledge_translation(text, result, src, tgt, _semantic_contract)
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
 
     # ─── 後處理 0.5: Phase H Glossary Enforcement (在 QE 之前) ───
@@ -26212,6 +26154,61 @@ def api_admin_status():
     return jsonify({"ok": True, "role": "manager"})
 
 
+@app.route("/api/admin/factory-knowledge", methods=["GET", "POST"])
+def api_admin_factory_knowledge():
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        if request.method == "GET":
+            return jsonify({
+                "ok": True,
+                "health": _FACTORY_KNOWLEDGE_STORE.health(),
+                "document": _FACTORY_KNOWLEDGE_STORE.document(),
+            })
+        payload = request.get_json(silent=True) or {}
+        entry = payload.get("entry")
+        if not isinstance(entry, dict):
+            return jsonify({"error": "entry object is required"}), 400
+        health = _FACTORY_KNOWLEDGE_STORE.upsert_entry(entry)
+        global _FACTORY_KNOWLEDGE_HEALTH
+        _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
+        return jsonify({"ok": True, "health": health})
+    except factory_knowledge_module.KnowledgeError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("factory knowledge admin update failed: %s", exc)
+        return jsonify({"error": "factory knowledge update failed"}), 500
+
+
+@app.route("/api/admin/factory-knowledge/<entry_id>", methods=["DELETE"])
+def api_admin_factory_knowledge_delete(entry_id):
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        health = _FACTORY_KNOWLEDGE_STORE.delete_entry(entry_id)
+        global _FACTORY_KNOWLEDGE_HEALTH
+        _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
+        return jsonify({"ok": True, "health": health})
+    except factory_knowledge_module.KnowledgeError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("factory knowledge admin delete failed: %s", exc)
+        return jsonify({"error": "factory knowledge delete failed"}), 500
+
+
+@app.route("/api/admin/factory-knowledge/reload", methods=["POST"])
+def api_admin_factory_knowledge_reload():
+    if not check_manager_access():
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        global _FACTORY_KNOWLEDGE_HEALTH
+        _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.reload(force=True)
+        return jsonify({"ok": True, "health": _FACTORY_KNOWLEDGE_HEALTH})
+    except Exception as exc:
+        logger.exception("factory knowledge reload failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/admin/google-config")
 def api_admin_google_config():
     """Public debug endpoint - check if Google Client ID is set."""
@@ -28902,6 +28899,10 @@ def health():
         "version": VERSION,
         "quality_gate_build": _ACTUAL_QG_BUILD_ID,
         "quality_gate_selftest": bool(_QG_BOOT_SELFTEST_OK),
+        "factory_knowledge_selftest": bool(_FACTORY_KNOWLEDGE_SELFTEST_OK),
+        "factory_knowledge_build": _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
+        "factory_knowledge_entries": _FACTORY_KNOWLEDGE_HEALTH.get("entry_count"),
+        "factory_knowledge_sha256": _FACTORY_KNOWLEDGE_HEALTH.get("sha256"),
         "final_delivery_guard": _FINAL_DELIVERY_GUARD_BUILD_ID,
         "uptime": int(time.time() - bot_start_time),
     }
