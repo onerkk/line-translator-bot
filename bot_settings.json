@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.35.0-factory-context-knowledge-root-fix-2026-07-13",
     "schema_version": 6,
-    "state_hash": "aa275092468e72938462960c54cfc4918507f2fdd9c756bcbae56a87ebe76694",
-    "updated_at_iso": "2026-07-13T22:24:12.314902+00:00",
-    "updated_at_unix": 1783981452.314902
+    "state_hash": "2c3c9a953a9699127bcbddd16adcba354e2c740b308256e5f1d03a8c73003dd4",
+    "updated_at_iso": "2026-07-13T22:24:13.375323+00:00",
+    "updated_at_unix": 1783981453.3753226
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -391,11 +391,13 @@
       "span": true
     }
   },
-  "group_img_ask_settings": {},
+  "group_img_ask_settings": {
+    "Cf5e2ea027bb3db193677e7ef3b51adea": true
+  },
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": true
+    "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
   "group_location_qr_settings": {},
   "group_location_settings": {},
