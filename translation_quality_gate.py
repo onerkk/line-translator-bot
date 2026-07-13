@@ -26,14 +26,14 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 11
-QUALITY_GATE_BUILD_ID = "2026-07-13.13-mention-display-name"
+QUALITY_GATE_API_VERSION = 12
+QUALITY_GATE_BUILD_ID = "2026-07-13.15-identity-token-recovery"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
 _PLACEHOLDER_RE = re.compile(r"__QG_KEEP_(\d{3})_([0-9A-F]{8})__")
 _UNKNOWN_PLACEHOLDER_RE = re.compile(r"QG[\s_-]*KEEP[\s_-]*\d{1,4}[\s_-]*[0-9A-F]{6,10}", re.I)
-_PIPELINE_TOKEN_RE = re.compile(r'(?:__QG_KEEP_\d{3}_[0-9A-F]{8}__|⟦PN\d+⟧|__MENTION_\d+__|__CUST_\d+__)')
+_PIPELINE_TOKEN_RE = re.compile(r'(?:__QG_KEEP_\d{3}_[0-9A-F]{8}__|__PERSON_\d+__|⟦PN\d+⟧|__MENTION_\d+__|__CUST_\d+__)')
 
 _QUOTES_OPEN = '"“”„‟＂「」『』‘’\'`'
 _QUOTES_CLOSE = _QUOTES_OPEN
@@ -52,13 +52,13 @@ _MENTION_RE = re.compile(
     r'@[^\s,，。!?！？:：;；]{1,48}(?:\s+[a-z][a-z0-9_.-]{1,31}){0,2}'
 )
 _TECH_TOKEN_RE = re.compile(
-    r'(?<![\w])('
+    r'(?<![A-Za-z0-9_])('
     r'(?:[A-Z]{1,4}\d[A-Z0-9._/+:%×x-]{0,24})|'
     r'(?:\d+[A-Z][A-Z0-9._/+:%×x-]{0,24})|'
     r'(?:[A-Z]{1,4}(?:[/._+-][A-Z0-9]{1,8})+)|'
     r'(?:\d+(?:\.\d+)?\s*(?:mm|cm|kg|g|t|%|°C|℃))|'
     r'(?:[A-Z]{1,4})'
-    r')(?![\w])'
+    r')(?![A-Za-z0-9_])'
 )
 
 _LATIN_RUN_RE = re.compile(r'(?:\b[A-Za-z]{2,}\b(?:[\s,;:/()\-]+|$)){4,}', re.I)
@@ -71,6 +71,148 @@ _LATIN_TOKEN_RE = re.compile(
     r'(?![A-Za-zÀ-ÖØ-öø-ÿ])'
 )
 _DASHES = "-–—−"
+
+
+_IDENTITY_TOKEN_RE = re.compile(
+    r'(?:__MENTION_\d+__|__PERSON_\d+__|⟦PN\d+⟧|__CUST_\d+__)',
+    re.I,
+)
+
+
+def _canonical_identity_token(token: str) -> str:
+    """Return a stable spelling for a recoverable identity placeholder."""
+    raw = str(token or "")
+    m = re.fullmatch(r'__MENTION_(\d+)__', raw, re.I)
+    if m:
+        return f"__MENTION_{int(m.group(1))}__"
+    m = re.fullmatch(r'__PERSON_(\d+)__', raw, re.I)
+    if m:
+        return f"__PERSON_{int(m.group(1))}__"
+    m = re.fullmatch(r'⟦PN(\d+)⟧', raw, re.I)
+    if m:
+        return f"⟦PN{int(m.group(1))}⟧"
+    m = re.fullmatch(r'__CUST_(\d+)__', raw, re.I)
+    if m:
+        return f"__CUST_{int(m.group(1))}__"
+    return raw
+
+
+def _target_clause_starts(text: str) -> List[int]:
+    """Return conservative sentence/paragraph starts for token reinsertion."""
+    value = str(text or "")
+    starts = [0]
+    for match in re.finditer(r'(?:[.!?;,:]+(?:\s+|$)|\n+)', value):
+        if match.end() < len(value):
+            starts.append(match.end())
+    out: List[int] = []
+    for start in starts:
+        while start < len(value) and value[start].isspace():
+            start += 1
+        if start not in out:
+            out.append(start)
+    return out or [0]
+
+
+def _source_clause_index(text: str, position: int) -> int:
+    prefix = str(text or "")[: max(0, int(position or 0))]
+    return len(re.findall(r'(?:[。！？!?；;，,：:]+|\n+)', prefix))
+
+
+def repair_identity_tokens(source: str, candidate: str) -> str:
+    """Recover only locally-known mention/person placeholders.
+
+    Translation providers occasionally simplify ``⟦PN1⟧`` to ``PN`` or drop a
+    mention/name placeholder while still returning a usable translation.  Those
+    tokens represent identity metadata already known by the application, so
+    restoring them is deterministic and does not invent translated content.
+    Codes, dates, quantities and other immutable values remain fail-closed.
+    """
+    source = str(source or "")
+    repaired = str(candidate or "")
+    occurrences = [
+        (_canonical_identity_token(m.group(0)), m.start())
+        for m in _IDENTITY_TOKEN_RE.finditer(source)
+    ]
+    if not occurrences or not repaired:
+        return repaired
+
+    expected_tokens: List[str] = []
+    for token, _pos in occurrences:
+        if token not in expected_tokens:
+            expected_tokens.append(token)
+
+    # Canonicalize common provider variants, but only for tokens that actually
+    # occur in this source.  This avoids touching genuine factory codes.
+    for token in expected_tokens:
+        if token.startswith("__MENTION_"):
+            idx = int(re.search(r"(\d+)", token).group(1))
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9])(?:\[\[\s*)?_*(?:MENTION|SEBUTAN|提及)"
+                rf"[_\s-]*0*{idx}_*(?:\s*\]\])?(?![A-Za-z0-9])",
+                re.I,
+            )
+        elif token.startswith("__PERSON_"):
+            idx = int(re.search(r"(\d+)", token).group(1))
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9])(?:[⟦【〔\[（｟「『]\s*)?_*(?:PERSON|NAME|NAMA|PN)"
+                rf"[_\s-]*0*{idx}_*(?:\s*[⟧】〕\]）｠」』])?(?![A-Za-z0-9])",
+                re.I,
+            )
+        elif token.startswith("⟦PN"):
+            idx = int(re.search(r"(\d+)", token).group(1))
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9])(?:[⟦【〔\[（｟「『]\s*)?_*(?:PERSON|NAME|NAMA|PN)"
+                rf"[_\s-]*0*{idx}_*(?:\s*[⟧】〕\]）｠」』])?(?![A-Za-z0-9])",
+                re.I,
+            )
+        else:  # legacy __CUST_n__
+            idx = int(re.search(r"(\d+)", token).group(1))
+            pattern = re.compile(
+                rf"(?<![A-Za-z0-9])_*(?:CUST|CUSTOMER)[_\s-]*0*{idx}_*(?![A-Za-z0-9])",
+                re.I,
+            )
+        repaired = pattern.sub(token, repaired)
+
+    # Claude has been observed reducing the only protected name token to the
+    # bare label "PN".  This is unambiguous only when exactly one distinct
+    # protected-name token exists and the source itself has no literal PN code.
+    person_tokens = [t for t in expected_tokens if t.startswith("__PERSON_") or t.startswith("⟦PN")]
+    if len(person_tokens) == 1 and not re.search(r'(?<![A-Za-z0-9])PN(?![A-Za-z0-9])', source, re.I):
+        deficit = source.count(person_tokens[0]) - repaired.count(person_tokens[0])
+        if deficit > 0:
+            repaired = re.sub(
+                r'(?<![A-Za-z0-9])P\s*N(?![A-Za-z0-9])',
+                person_tokens[0],
+                repaired,
+                count=deficit,
+                flags=re.I,
+            )
+
+    # Reinsert any still-missing identity occurrences at the corresponding
+    # target sentence/paragraph start.  Insertions are grouped and applied from
+    # right to left so offsets remain stable.
+    expected_by_token: Dict[str, List[int]] = {}
+    for token, pos in occurrences:
+        expected_by_token.setdefault(token, []).append(pos)
+    pending: List[Tuple[int, str]] = []
+    starts = _target_clause_starts(repaired)
+    for token, positions in expected_by_token.items():
+        missing_count = max(0, len(positions) - repaired.count(token))
+        if not missing_count:
+            continue
+        for pos in positions[-missing_count:]:
+            clause_idx = _source_clause_index(source, pos)
+            target_start = starts[min(clause_idx, len(starts) - 1)]
+            pending.append((target_start, token))
+
+    grouped: Dict[int, List[str]] = {}
+    for start, token in pending:
+        grouped.setdefault(start, []).append(token)
+    for start in sorted(grouped, reverse=True):
+        prefix = " ".join(grouped[start]) + " "
+        repaired = repaired[:start] + prefix + repaired[start:]
+
+    return repaired.strip()
 
 # Common function/content words are used only to disambiguate title-cased words
 # at sentence boundaries from real proper names.  Ordinary lowercase source
@@ -732,6 +874,60 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
 
 
 
+def _factory_incident_reporting_issues(source: str, candidate: str) -> List[str]:
+    """Validate factory incident/self-report semantics for ZH→ID output.
+
+    This is a source-conditioned semantic lint, not an exact-sentence matcher. It
+    protects four roles that literal translation often destroys: non-punitive
+    voluntary reporting, physical damage mechanism, report recipient, and the
+    consequence of another department reporting first.
+    """
+    src = re.sub(r"\s+", "", source or "")
+    low = (candidate or "").casefold()
+    issues: List[str] = []
+
+    self_report = any(x in src for x in ("自首", "主動承認", "自己承認", "主動回報", "自己回報", "主動報告", "自己報告"))
+    nonpunitive = any(x in src for x in ("無罪", "不追究", "不處罰", "不懲處", "不處分", "不會處罰", "不會懲處", "不會處分", "不會被處罰", "不會被追究"))
+    equipment = any(x in src for x in ("設備", "機台", "機器", "工具", "器材", "治具"))
+    incident_context = equipment and any(x in src for x in ("撞壞", "碰壞", "摔壞", "掉落", "損壞", "讓我知道", "提報", "回報", "報告"))
+    if not (self_report and nonpunitive and incident_context):
+        return issues
+
+    if re.search(r"\b(?:tidak\s+ada\s+dosa|tanpa\s+dosa|bebas\s+dosa|tidak\s+berdosa|tidak\s+bersalah)\b", low):
+        issues.append("semantic:incident_self_report_literal_religious_or_legal")
+    if not any(x in low for x in ("mengaku sendiri", "melapor sendiri", "melaporkan sendiri", "mengaku secara sukarela")):
+        issues.append("semantic:incident_self_report_actor_missing")
+    if not any(x in low for x in ("tidak akan dipermasalahkan", "tidak akan dihukum", "tidak akan dikenai sanksi", "tidak akan diberi sanksi", "tidak akan ditindak")):
+        issues.append("semantic:incident_self_report_nonpunitive_meaning_missing")
+
+    collision = any(x in src for x in ("撞壞", "撞到壞", "碰壞", "撞擊損壞", "碰撞損壞"))
+    falling = any(x in src for x in ("摔壞", "掉落摔壞", "跌落損壞", "掉下去壞", "掉下損壞"))
+    if collision and not any(x in low for x in ("tertabrak", "terbentur", "menabrak", "terkena benturan", "benturan")):
+        issues.append("semantic:incident_collision_mechanism_missing")
+    if falling and not any(x in low for x in ("terjatuh", "jatuh", "terlepas lalu jatuh")):
+        issues.append("semantic:incident_fall_mechanism_missing")
+    if (collision or falling) and "rusak" not in low:
+        issues.append("semantic:incident_damage_result_missing")
+
+    report_to_me = any(x in src for x in ("讓我知道", "跟我說", "告訴我", "回報我", "向我回報", "向我提報", "報告給我"))
+    if report_to_me:
+        has_report = bool(re.search(r"\b(?:laporkan|melaporkan|beri\s+tahu|beritahu)\b", low))
+        if not (has_report and "saya" in low):
+            issues.append("semantic:incident_report_to_supervisor_missing")
+
+    other_unit = any(x in src for x in ("其他單位", "其它單位", "別的單位", "其他部門", "其它部門", "別的部門"))
+    report = any(x in src for x in ("提報", "回報", "報告", "通報"))
+    if other_unit and report:
+        if not any(x in low for x in ("departemen lain", "unit lain", "bagian lain")):
+            issues.append("semantic:incident_other_unit_missing")
+        if not any(x in low for x in ("lebih dulu", "terlebih dahulu", "lebih dahulu", "duluan")):
+            issues.append("semantic:incident_other_unit_first_report_missing")
+        if not any(x in low for x in ("lebih serius", "semakin serius", "menjadi lebih serius", "sudah parah", "menjadi parah")):
+            issues.append("semantic:incident_escalation_consequence_missing")
+
+    return _dedupe(issues)
+
+
 def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -> List[str]:
     """Reject structurally valid but operationally unreadable Indonesian.
 
@@ -743,6 +939,9 @@ def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -
     source = source or ""
     candidate = candidate or ""
     low = candidate.casefold()
+
+    if str(src_lang or "").lower().startswith("zh"):
+        issues.extend(_factory_incident_reporting_issues(source, candidate))
 
     if "@@" not in source and re.search(r"(?<!@)@@+", candidate):
         issues.append("duplicated_mention_marker")
@@ -820,7 +1019,7 @@ def _indonesian_clarity_instruction(tgt_lang: str) -> str:
         "source strength. For broad collective 福利, 'kesejahteraan kita semua' is natural; reserve 'tunjangan dan "
         "fasilitas karyawan' for explicit allowances or facilities. Preserve the source strength and do not intensify criticism into accusations. "
         "Do not intensify 敷衍 into membohongi or menipu "
-        "unless the source explicitly alleges lying. Prefer 'data produksi yang tidak sesuai dengan kondisi sebenarnya' "
+        "unless the source explicitly alleges lying. For factory incident reporting, 自首無罪 means voluntary self-reporting will not be held against the worker; never use religious/legal literal wording such as 'tidak ada dosa' or 'tidak bersalah'. Preserve distinct damage causes such as collision and falling, the person who must be notified, whether another department reports first, and the resulting escalation. Prefer 'data produksi yang tidak sesuai dengan kondisi sebenarnya' "
         "or another concrete, non-accusatory expression. In this plant 研磨棒 is the product term 'grinding rod', never "
         "'batang gerinda'. 調機 is 'penyetelan mesin' or 'penyetelan/penyesuaian mesin'. 無法配合規定 describes "
         "noncompliance, not inability. Keep approved plant terms such as urgent order, work order and grinding when "
@@ -1238,6 +1437,7 @@ def gate_and_revise(
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
+    candidate = repair_identity_tokens(source, candidate)
     candidate = normalize_indonesian_factory_register(
         source, candidate, src_lang, tgt_lang
     )
@@ -1515,6 +1715,7 @@ def ensure_delivery_safe_translation(
     blocked and logged so the first-pass contract can be improved at the source.
     """
     source = source or ""
+    candidate = repair_identity_tokens(source, candidate)
     candidate = normalize_indonesian_factory_register(
         source, candidate, src_lang, tgt_lang
     )

@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.8-incident-self-report-semantics-root-fix-2026-07-13"
+VERSION = "v3.33.9-identity-placeholder-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -261,8 +261,8 @@ import translation_extras as translation_extras_module
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 11
-_EXPECTED_QG_BUILD_ID = "2026-07-13.14-incident-self-report-semantics"
+_EXPECTED_QG_API_VERSION = 12
+_EXPECTED_QG_BUILD_ID = "2026-07-13.15-identity-token-recovery"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -342,7 +342,7 @@ if not _QG_INCIDENT_GOOD_SELFTEST.ok:
         f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
     )
 
-_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-06-18.3-final-delivery-boundary"
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.4-identity-recovery-boundary"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
     _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
@@ -3633,68 +3633,50 @@ def restore_mentions(text, placeholders):
     return restored
 
 
-def _repair_pipeline_mention_placeholders(source_text, candidate):
-    """Recover immutable LINE mention tokens dropped or mangled by a provider.
+def _repair_pipeline_identity_placeholders(source_text, candidate):
+    """Recover mention and protected-person tokens before quality validation.
 
-    ``translate()`` protects every LINE mention as ``__MENTION_n__`` before any
-    TM/NMT/LLM route.  Some otherwise valid provider responses omit those tokens.
-    The old pipeline validated the candidate *before* the public boundary could
-    restore the names, so ``missing_pipeline_token`` turned a usable translation
-    into the misleading generic failure notice.
-
-    Mention identity is already known locally, so recovering only these tokens
-    is deterministic and does not invent translated content.  Other immutable
-    data (numbers, equipment codes, dates, etc.) remain fail-closed.
+    Identity placeholders are application-owned metadata.  Providers may echo
+    the visible name, simplify ``__PERSON_1__`` to ``PN`` or remove a token.
+    This function canonicalizes those variants and deterministically reinserts
+    missing identities.  It never repairs work-order codes, quantities, dates or
+    other business data; those remain strict quality-gate failures.
     """
     if not candidate or not isinstance(candidate, str):
         return candidate
     source = str(source_text or "")
-    expected = []
-    for match in re.finditer(r"__MENTION_(\d+)__", source, flags=re.IGNORECASE):
-        token = f"__MENTION_{int(match.group(1))}__"
-        if token not in expected:
-            expected.append(token)
-    if not expected:
-        return candidate
-
     repaired = candidate
     protected_entities = dict(getattr(_tl, "protected_name_map", None) or {})
 
-    # A provider may echo the visible display name from conversation context
-    # instead of the token.  Convert one such occurrence back to its canonical
-    # token so final restoration cannot duplicate the addressee.
-    for token in expected:
-        original = protected_entities.get(token)
+    # Convert any visible identity echoed from context back to its exact token.
+    for token, original in protected_entities.items():
+        if token not in source:
+            continue
         if isinstance(original, str) and original and original in repaired:
-            repaired = repaired.replace(original, token, 1)
+            repaired = repaired.replace(original, token, source.count(token))
 
-    # Canonicalize provider variants without substring replacement.  The old
-    # restore_mentions(identity_map) approach was not idempotent because a
-    # shorter variant such as MENTION_0 also matched inside __MENTION_0__.
-    for token in expected:
-        idx = int(re.search(r"(\d+)", token).group(1))
-        variant_re = re.compile(
-            rf"(?<![A-Za-z0-9])(?:\[\[\s*)?_*(?:MENTION|SEBUTAN|提及)"
-            rf"[_\s-]*0*{idx}_*(?:\s*\]\])?(?![A-Za-z0-9])",
-            flags=re.IGNORECASE,
-        )
-        repaired = variant_re.sub(token, repaired)
-
-    # Only mentions are safe to synthesize locally.  If the provider removed a
-    # token completely, prepend it in original source order.  This mirrors LINE
-    # chat semantics: the addressee remains explicit even when word order moves.
-    missing = [token for token in expected if token not in repaired]
-    if missing:
-        repaired = (" ".join(missing) + " " + repaired).strip()
-
+    repaired = tqg_module.repair_identity_tokens(source, repaired)
     if repaired != candidate:
         logger.warning(
-            "[MentionRecovery] repaired provider mention tokens expected=%s before=%r after=%r",
-            expected,
-            candidate[:180],
-            repaired[:180],
+            "[IdentityRecovery] repaired provider identity tokens before=%r after=%r",
+            candidate[:220], repaired[:220],
         )
+        try:
+            last_translate_debug["identity_recovery_applied"] = True
+            last_translate_debug["candidate_after_identity_recovery"] = repaired[:2000]
+        except Exception:
+            pass
+    else:
+        try:
+            last_translate_debug.setdefault("identity_recovery_applied", False)
+        except Exception:
+            pass
     return repaired
+
+
+def _repair_pipeline_mention_placeholders(source_text, candidate):
+    """Backward-compatible alias for the unified identity recovery boundary."""
+    return _repair_pipeline_identity_placeholders(source_text, candidate)
 
 
 def strip_mentions_for_detect(text, line_mentions=None):
@@ -6861,7 +6843,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v4-incident-self-report-semantics-root"
+_SEMANTIC_CONTRACT_VERSION = "v5-identity-placeholder-recovery-root"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -8792,7 +8774,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "1. NEVER translate @mentions and NEVER translate or romanize person names. Keep all Chinese names in ORIGINAL CHINESE CHARACTERS. "
             "For example: 徐嘉騰 stays as 徐嘉騰, NOT Xu Jiateng. 陳弘林 stays as 陳弘林, NOT Chen Honglin. "
             "Chinese nicknames for people must stay unchanged. Do NOT translate them literally. "
-            "2. Any text like __MENTION_0__, __MENTION_1__, ⟦IMM0_XXXXXXXX⟧, or ⟦PN1⟧ ⟦PN2⟧ etc are placeholders - keep them EXACTLY as is, do not translate, transliterate, remove, or alter the brackets. "
+            "2. Any text like __MENTION_0__, __MENTION_1__, __PERSON_1__, __PERSON_2__, or ⟦IMM0_XXXXXXXX⟧ is a placeholder - keep it EXACTLY as is; do not translate, transliterate, remove, or alter underscores/digits. "
             "2.1 Field values, codes, numbers, dimensions and symbols are DATA, not language. Preserve every placeholder exactly. "
             "2.2 If the source contains a parenthetical phrase already written in the target language, treat it as a terminology annotation for the adjacent source phrase and use it consistently; do not reinterpret it as ordinary prose. "
             "3. TRANSLATION TONE/STYLE: " + tone_instruction + " "
@@ -9696,7 +9678,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Outer translate() may already have converted LINE mentions to
         # __MENTION_n__.  Recover provider-dropped tokens before any local
         # integrity validator can reject an otherwise complete translation.
-        result = _repair_pipeline_mention_placeholders(text, result)
+        result = _repair_pipeline_identity_placeholders(text, result)
         result = restore_mentions(result, placeholders)
         # Immutable values were never hidden from the provider.  The final local
         # gate validates them directly against _immutable.mapping.values().
@@ -10076,7 +10058,7 @@ def _is_meta_commentary_leak(text):
 #   → 還原由持有 map 的 wrapper 執行 → 保證一定還原。
 #   → 一次修好三個子問題(bypass 漏翻 / stale 資產 / 脆弱的 __CUST__ 還原)。
 #
-# placeholder 格式:⟦PN{n}⟧(U+27E6/U+27E7 數學白括號 + PN=protected name)
+# placeholder 格式:__PERSON_{n}__(ASCII; provider-stable and shared with mention token style)
 #   - 數學白括號正常文字幾乎不出現 → 不撞使用者內容、不撞機台代碼。
 #   - 帶字母核 PN → 即使 LLM 把括號弄壞,「PN+數字」仍可救回
 #     (沿用舊系統觀察:LLM 會保留 alphanumeric 核心,只弄壞外圍符號)。
@@ -10098,37 +10080,56 @@ def protect_names(text):
     for name in names:
         if name and name in result:
             n += 1
-            ph = "⟦PN%d⟧" % n
+            ph = "__PERSON_%d__" % n
             name_map[ph] = name
             result = result.replace(name, ph)
     return result, name_map
 
 
 def restore_names(text, name_map):
-    """把 placeholder 還原成原始名稱。多層 fallback 保證還原:
-      1. 精確比對 ⟦PN{n}⟧(長 placeholder 先換,避免 ⟦PN1⟧ 被當 ⟦PN11⟧ 一部分)
-      2. regex 掃描「任何括號 + PN + 數字」(LLM 可能把 ⟦⟧ 在地化成 【】〔〕[]（）「」)
-      3. 最後手段:裸「PN+數字」(LLM 把括號完全移除),用 lookaround 避免吃機台代碼
-    僅還原 map 內存在的編號 → 不誤動正常文字。
+    """Restore current ASCII and legacy protected-name placeholders.
+
+    ``protect_names`` now emits ``__PERSON_n__``.  Legacy ``⟦PNn⟧`` and
+    provider variants remain supported so old cache/TM rows can be read safely.
     """
     if not text or not isinstance(text, str) or not name_map:
         return text
     result = text
-    # 1. 精確比對
+
+    def _name_for_index(index):
+        idx = int(index)
+        for key in (f"__PERSON_{idx}__", f"⟦PN{idx}⟧"):
+            if key in name_map:
+                return name_map[key]
+        return None
+
+    # Exact current/legacy keys first.
     for ph, name in sorted(name_map.items(), key=lambda kv: -len(kv[0])):
-        if ph in result:
-            result = result.replace(ph, name)
+        result = result.replace(ph, name)
 
-    def _bracket_repl(mm):
-        return name_map.get("⟦PN%d⟧" % int(mm.group(1)), mm.group(0))
+    def _repl(match):
+        return _name_for_index(match.group(1)) or match.group(0)
 
-    # 2. 括號變體 + 內部空白容錯
+    # Current ASCII token variants.
+    result = re.sub(
+        r"(?<![A-Za-z0-9])_*(?:PERSON|NAME|NAMA)[_\s-]*0*(\d+)_*(?![A-Za-z0-9])",
+        _repl,
+        result,
+        flags=re.I,
+    )
+    # Legacy bracketed/bare PN variants.
     result = re.sub(
         r"[⟦【〔\[（｟「『]\s*P\s*N\s*0*(\d+)\s*[⟧】〕\]）｠」』]",
-        _bracket_repl, result,
+        _repl,
+        result,
+        flags=re.I,
     )
-    # 3. 裸 token(括號被 LLM 移除時的保險),lookaround 確保不吃機台代碼(如 PN2A / XPN2)
-    result = re.sub(r"(?<![A-Za-z0-9])PN0*(\d+)(?![A-Za-z0-9])", _bracket_repl, result)
+    result = re.sub(
+        r"(?<![A-Za-z0-9])PN0*(\d+)(?![A-Za-z0-9])",
+        _repl,
+        result,
+        flags=re.I,
+    )
     return result
 
 
@@ -10267,19 +10268,22 @@ def _normalize_factory_operation_question(source_text, candidate, src, tgt):
 
 
 def _translation_failure_notice(src_lang="zh", target_langs=None):
-    """Visible, non-billable failure response for LINE delivery.
-
-    A translatable message must never disappear silently.  The notice is
-    bilingual for factory groups so both Taiwanese supervisors and Indonesian
-    workers understand that the original message needs to be resent.
-    """
+    """Return an accurate LINE status instead of calling every failure an outage."""
     targets = set(target_langs or ())
+    reason = str(getattr(_tl, "translation_failure_kind", "") or "")
+    if reason.startswith("quality_"):
+        if str(src_lang or "").lower().startswith("id") or "id" in targets:
+            return (
+                "⚠️ AI 已完成翻譯，但結果缺少或改動了關鍵資料，因此未送出。請重新傳送原文。\n"
+                "AI sudah menerjemahkan, tetapi ada nama, kode, angka, atau informasi penting yang hilang/berubah, sehingga hasilnya tidak dikirim. Silakan kirim ulang teks asli."
+            )
+        return "⚠️ AI 已完成翻譯，但結果缺少或改動了關鍵資料，因此未送出。請重新傳送原文。"
     if str(src_lang or "").lower().startswith("id") or "id" in targets:
         return (
-            "⚠️ 翻譯暫時失敗，請稍後重新傳送。\n"
-            "Terjemahan sementara gagal. Silakan kirim ulang beberapa saat lagi."
+            "⚠️ 翻譯服務暫時未取得可用結果，請稍後重新傳送。\n"
+            "Layanan terjemahan sementara belum menghasilkan hasil yang dapat digunakan. Silakan kirim ulang beberapa saat lagi."
         )
-    return "⚠️ 翻譯暫時失敗，請稍後重新傳送。"
+    return "⚠️ 翻譯服務暫時未取得可用結果，請稍後重新傳送。"
 
 
 def _send_reply_with_push_fallback(
@@ -10398,6 +10402,10 @@ def translate(text, src, tgt):
     再做保護名 placeholder。如此 LexTM/VecTM/NMT/cache/LLM 全部吃同一份
     canonical source，舊錯誤快取不會繼續命中，站名也不再靠模型猜。
     """
+    try:
+        _tl.translation_failure_kind = None
+    except Exception:
+        pass
     canonical_text = text
     # v3.33.4: normalize only known factory equipment codes before every cache,
     # TM, NMT, LLM, glossary and quality-gate route.  This prevents inputs such
@@ -10990,7 +10998,7 @@ def _translate_core(text, src, tgt):
     # before meta/quality checks so a provider omission is not misreported as a
     # translation-service outage.  Non-mention immutable tokens remain strict.
     if result and isinstance(result, str):
-        result = _repair_pipeline_mention_placeholders(text, result)
+        result = _repair_pipeline_identity_placeholders(text, result)
 
     # ─── 主路徑收尾 1: <thinking> tag 過濾(v3.11,移到入庫前 — 原本在入庫後,
     #      導致 TM 可能存進含 thinking tag 的髒文字,順手治本) ───
@@ -11016,6 +11024,10 @@ def _translate_core(text, src, tgt):
                 })
             except Exception:
                 pass
+            try:
+                _tl.translation_failure_kind = "quality_meta_leak"
+            except Exception:
+                pass
             return None
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
@@ -11039,6 +11051,17 @@ def _translate_core(text, src, tgt):
                 ai_client=ai_provider,
             )
             if not _gate.get("ok") or not _gate.get("text"):
+                try:
+                    last_translate_debug["final_pipeline_status"] = "quality_gate_blocked"
+                    last_translate_debug["quality_gate_path"] = _gate.get("path")
+                    last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
+                    last_translate_debug["candidate_before_final_block"] = str(result or "")[:2000]
+                except Exception:
+                    pass
+                try:
+                    _tl.translation_failure_kind = "quality_gate"
+                except Exception:
+                    pass
                 logger.error("[QualityGate] blocked translation before send: %s", _gate.get("issues"))
                 try:
                     _event_log_write("translation_quality_gate_blocked", {
@@ -11051,6 +11074,13 @@ def _translate_core(text, src, tgt):
                     pass
                 return None
             result = _gate["text"].strip()
+            try:
+                last_translate_debug["final_pipeline_status"] = "quality_gate_passed"
+                last_translate_debug["quality_gate_path"] = _gate.get("path")
+                last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
+                last_translate_debug["final_candidate"] = result[:2000]
+            except Exception:
+                pass
             result = _strip_thinking_tags(result) or result
             if _is_meta_commentary_leak(result):
                 logger.error("[QualityGate] reviewer returned meta commentary; blocked")
@@ -11060,6 +11090,12 @@ def _translate_core(text, src, tgt):
             # Only the reviewed/validated final translation is allowed into cache.
             cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
+            try:
+                _tl.translation_failure_kind = "quality_gate_internal"
+                last_translate_debug["final_pipeline_status"] = "quality_gate_exception"
+                last_translate_debug["quality_gate_exception"] = str(_qge)[:500]
+            except Exception:
+                pass
             logger.exception("[QualityGate] unexpected failure; blocking unsafe output: %s", _qge)
             return None
 
@@ -29326,6 +29362,14 @@ def debug_last_translate():
             html.append(f'<div><span class="k err">錯誤類型:</span> <span class="err">{d.get("openai_error_type","?")}</span></div>')
         if d.get("openai_raw_response"):
             html.append(f'<div><span class="k">原始回應:</span></div><pre class="v">{d.get("openai_raw_response","")[:1000]}</pre>')
+        html.append(f'<div><span class="k">最終流程:</span> <span class="{"v" if d.get("final_pipeline_status") == "quality_gate_passed" else "warn"}">{d.get("final_pipeline_status","尚未記錄")}</span></div>')
+        html.append(f'<div><span class="k">身分代碼自動修復:</span> <span class="v">{d.get("identity_recovery_applied", False)}</span></div>')
+        if d.get("quality_gate_path"):
+            html.append(f'<div><span class="k">品質閘門路徑:</span> {d.get("quality_gate_path")}</div>')
+        if d.get("quality_gate_issues"):
+            html.append(f'<div><span class="k warn">品質檢查:</span></div><pre class="warn">{d.get("quality_gate_issues")}</pre>')
+        if d.get("candidate_after_identity_recovery"):
+            html.append(f'<div><span class="k">身分修復後:</span></div><pre class="v">{d.get("candidate_after_identity_recovery","")[:1000]}</pre>')
         html.append(f'<div><span class="k">送出的 kwargs keys:</span> <span class="v">{", ".join(d.get("kwargs_keys_sent", []))}</span></div>')
         html.append('</div>')
 
