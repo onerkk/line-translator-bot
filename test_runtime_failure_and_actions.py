@@ -294,3 +294,70 @@ def test_spray_paint_prompt_hint_never_recommends_deprecated_term():
 
     assert "噴漆=pengecatan semprot/mengecat" in hint
     assert "禁止 spray cat" in hint
+
+
+def test_spaced_lowercase_known_equipment_code_is_canonicalized():
+    normalized, replacements = app.normalize_known_equipment_codes(
+        "Mesin i 9 masih dalam perbaikan"
+    )
+
+    assert normalized == "Mesin I9 masih dalam perbaikan"
+    assert replacements == [("i 9", "I9")]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("Mesin i 9 masih dalam perbaikan", "I9 機台還在維修中"),
+        ("Mesin i9 masih dalam perbaikan", "I9 機台還在維修中"),
+        ("Mesin I 9 masih dalam perbaikan", "I9 機台還在維修中"),
+        ("Mesin I9 masih dalam perbaikan", "I9 機台還在維修中"),
+        ("Mesin bf 2 sedang dalam perbaikan", "BF2 機台正在維修中"),
+        ("Mesin C 3 - R belum selesai diperbaiki", "C3-R 機台尚未維修完成"),
+        ("Mesinnya masih diperbaiki", "機台還在維修中"),
+    ],
+)
+def test_equipment_status_translation_is_deterministic(source, expected):
+    assert app.factory_semantic_translate_equipment_status_id_zh(source) == expected
+
+
+def test_equipment_status_bypasses_entire_ai_pipeline(monkeypatch):
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("AI/TM/NMT pipeline must not run for deterministic equipment status")
+
+    monkeypatch.setattr(app, "_translate_core", fail_if_called)
+    app.translation_cache.clear()
+
+    actual = app.translate(
+        "Mesin i 9 masih dalam perbaikan",
+        "id",
+        "zh",
+    )
+
+    assert actual == "I9 機台還在維修中"
+
+
+def test_equipment_code_normalizer_does_not_modify_mention_display_name():
+    source = "@(I 9) Mesin i 9 masih dalam perbaikan"
+
+    normalized, replacements = app.normalize_known_equipment_codes(source)
+    translated = app.factory_semantic_translate_equipment_status_id_zh(source)
+
+    assert normalized == "@(I 9) Mesin I9 masih dalam perbaikan"
+    assert replacements == [("i 9", "I9")]
+    assert translated == "@(I 9) I9 機台還在維修中"
+
+
+def test_unknown_or_longer_codes_are_not_falsely_collapsed():
+    assert app.normalize_known_equipment_codes(
+        "Mesin X 9 masih dalam perbaikan"
+    )[0] == "Mesin X 9 masih dalam perbaikan"
+    assert app.normalize_known_equipment_codes(
+        "Mesin i 90 masih dalam perbaikan"
+    )[0] == "Mesin i 90 masih dalam perbaikan"
+
+
+def test_equipment_status_semantic_path_does_not_drop_extra_information():
+    source = "Mesin I9 masih dalam perbaikan sampai besok"
+
+    assert app.factory_semantic_translate_equipment_status_id_zh(source) is None

@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.33.3-mention-preservation-root-fix-2026-07-13"
+VERSION = "v3.33.4-equipment-code-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -4736,6 +4736,152 @@ STATION_CODES = {
 }
 
 
+# v3.33.4: 已知設備代碼的邊界層正規化。
+#
+# 現場手機輸入常把代碼拆開或改成小寫，例如 ``i 9`` / ``bf 2``。
+# 舊流程會把它當一般文字送進 TM/NMT/LLM，品質閘門又可能因代碼遺失
+# 而擋掉結果，最後 LINE 只顯示「翻譯暫時失敗」。
+#
+# 根治原則：只合併「確實存在於 STATION_CODES」的代碼，且在 cache、TM、
+# NMT、LLM、術語與品質檢查之前完成。這不是任意移除空白，因此不會把
+# 一般印尼文的字母與數字誤黏在一起。
+_EQUIPMENT_CODE_DASHES = r"[-‐‑‒–—−]"
+
+
+def _build_known_equipment_code_pattern(code):
+    """Build a tolerant regex for one canonical ``STATION_CODES`` key.
+
+    Alphanumeric characters may be separated by whitespace; canonical hyphens
+    accept common Unicode dash variants with surrounding whitespace.  Word-like
+    boundaries prevent ``I9`` from matching the beginning of ``I90``.
+    """
+    pieces = []
+    previous_was_alnum = False
+    for ch in str(code):
+        if ch == "-":
+            pieces.append(r"\s*" + _EQUIPMENT_CODE_DASHES + r"\s*")
+            previous_was_alnum = False
+            continue
+        if previous_was_alnum:
+            pieces.append(r"\s*")
+        pieces.append(re.escape(ch))
+        previous_was_alnum = ch.isalnum()
+    return re.compile(
+        r"(?<![A-Za-z0-9])" + "".join(pieces) + r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+_KNOWN_EQUIPMENT_CODE_PATTERNS = tuple(
+    (code, _build_known_equipment_code_pattern(code))
+    for code in sorted(STATION_CODES, key=lambda value: (-len(value), value))
+)
+
+
+def normalize_known_equipment_codes(text, line_mentions=None):
+    """Canonicalize known factory equipment codes before translation routing.
+
+    Returns ``(normalized_text, replacements)`` where replacements is a list of
+    ``(original, canonical)`` pairs.  LINE mentions are protected first so a
+    display name such as ``@(I 9)`` is never rewritten as an equipment code.
+    """
+    if not text or not isinstance(text, str):
+        return text or "", []
+
+    protected, mention_map = protect_mentions(text, line_mentions)
+    result = protected
+    replacements = []
+
+    for canonical, pattern in _KNOWN_EQUIPMENT_CODE_PATTERNS:
+        def _replace(match, _canonical=canonical):
+            original = match.group(0)
+            if original != _canonical:
+                replacements.append((original, _canonical))
+            return _canonical
+
+        result = pattern.sub(_replace, result)
+
+    if mention_map:
+        result = restore_mentions(result, mention_map)
+    return result, replacements
+
+
+def _extract_known_equipment_codes(text):
+    """Return canonical known equipment codes in source order, de-duplicated.
+
+    Mention display names are excluded from scanning; ``@(I 9)`` is a person,
+    not an equipment reference.
+    """
+    normalized, _ = normalize_known_equipment_codes(text)
+    scan_text, _mention_map = protect_mentions(normalized)
+    hits = []
+    for canonical, pattern in _KNOWN_EQUIPMENT_CODE_PATTERNS:
+        for match in pattern.finditer(scan_text):
+            hits.append((match.start(), canonical))
+    hits.sort(key=lambda item: item[0])
+    return list(dict.fromkeys(code for _pos, code in hits))
+
+
+FACTORY_ID_ZH_EQUIPMENT_STATUS = {
+    "masih dalam perbaikan": "還在維修中",
+    "sedang dalam perbaikan": "正在維修中",
+    "dalam perbaikan": "維修中",
+    "masih diperbaiki": "還在維修中",
+    "sedang diperbaiki": "正在維修中",
+    "belum selesai diperbaiki": "尚未維修完成",
+    "belum selesai perbaikan": "尚未維修完成",
+    "sudah selesai diperbaiki": "已維修完成",
+    "sudah selesai perbaikan": "已維修完成",
+    "sudah normal": "已恢復正常",
+    "sudah jalan normal": "已恢復正常運轉",
+    "sudah berjalan normal": "已恢復正常運轉",
+    "belum bisa jalan": "仍無法運轉",
+    "belum bisa berjalan": "仍無法運轉",
+}
+
+
+def factory_semantic_translate_equipment_status_id_zh(text):
+    """Translate a complete, simple equipment-status sentence deterministically.
+
+    The function is deliberately fail-closed: it only fires when, after removing
+    an optional ``mesin/mesinnya`` subject and known equipment code(s), the entire
+    remaining sentence is one supported status phrase.  Extra reasons, deadlines
+    or instructions therefore continue to the normal translator instead of being
+    silently omitted.
+    """
+    normalized, _ = normalize_known_equipment_codes(text)
+    mentions = extract_mentions(normalized)
+    semantic_source = strip_mentions_for_detect(normalized, mentions).strip()
+    cleaned = _clean_factory_id(semantic_source)
+    if not cleaned:
+        return None
+
+    codes = _extract_known_equipment_codes(semantic_source)
+    remainder = cleaned
+    # Remove canonical codes without consuming adjacent ordinary words.
+    for code in codes:
+        remainder = re.sub(
+            r"(?<![a-z0-9])" + re.escape(code.lower()) + r"(?![a-z0-9])",
+            " ",
+            remainder,
+            flags=re.IGNORECASE,
+        )
+    remainder = re.sub(r"^\s*(?:mesin(?:nya)?\s*)?", "", remainder)
+    remainder = re.sub(r"\s+", " ", remainder).strip()
+
+    state_zh = FACTORY_ID_ZH_EQUIPMENT_STATUS.get(remainder)
+    if not state_zh:
+        return None
+
+    prefix = (" ".join(mentions) + " ") if mentions else ""
+    if codes:
+        return prefix + f"{'、'.join(codes)} 機台{state_zh}"
+    # Require an explicit machine subject when no known code is present.
+    if re.match(r"^\s*mesin(?:nya)?(?:\s|$)", cleaned):
+        return prefix + f"機台{state_zh}"
+    return None
+
+
 # 現場口語站別別名 → 正式站名。
 # 這一層只做「有明確站別語法證據」的正規化，避免把產品名「異型棒」誤當站別。
 # 新增其他口語站名時，只需在此表加入規則，不必往 prompt 或輸出後處理堆補丁。
@@ -5143,6 +5289,16 @@ def factory_semantic_translate_id_zh(text):
     t = _clean_factory_id(raw)
     if not t:
         return None
+
+    # v3.33.4: complete simple equipment-status sentences are deterministic.
+    # This route runs before classification/cache/AI so a spaced/lowercase known
+    # code can never turn into a generic visible translation failure.
+    _equipment_status_fn = globals().get(
+        "factory_semantic_translate_equipment_status_id_zh"
+    )
+    equipment_status = _equipment_status_fn(raw) if _equipment_status_fn else None
+    if equipment_status:
+        return equipment_status
 
     # v3.40: safe deterministic path for messages combining
     # pre-operation time + material front/rear direction + issue.
@@ -9903,6 +10059,38 @@ def translate(text, src, tgt):
     canonical source，舊錯誤快取不會繼續命中，站名也不再靠模型猜。
     """
     canonical_text = text
+    # v3.33.4: normalize only known factory equipment codes before every cache,
+    # TM, NMT, LLM, glossary and quality-gate route.  This prevents inputs such
+    # as ``Mesin i 9 ...`` from being treated as ordinary words and later
+    # surfacing as a misleading generic translation failure.
+    if src == "id":
+        canonical_text, _equipment_code_replacements = normalize_known_equipment_codes(
+            canonical_text,
+            getattr(_tl, 'line_mentions', None),
+        )
+        if _equipment_code_replacements:
+            logger.info(
+                "[EquipmentCode] normalized %r -> %r replacements=%s",
+                text[:120], canonical_text[:120], _equipment_code_replacements[:10],
+            )
+            try:
+                _tl.equipment_code_normalization = list(_equipment_code_replacements)
+            except Exception:
+                pass
+        if tgt == "zh":
+            _equipment_status = factory_semantic_translate_equipment_status_id_zh(
+                canonical_text
+            )
+            if _equipment_status:
+                logger.info(
+                    "[EquipmentStatus] deterministic translation hit: %r -> %r",
+                    canonical_text[:120], _equipment_status[:120],
+                )
+                try:
+                    cache_set(canonical_text, src, tgt, _equipment_status, force=True)
+                except Exception:
+                    pass
+                return _equipment_status
     # v3.15: ERP「原因」欄是強語義表格/短標籤，必須在任何站別 alias、
     # cache、TM、NMT、LLM、final guard 之前先決定。這是文字與圖片共用的
     # 邊界層，不是圖片補丁。
