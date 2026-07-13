@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.33.6-visible-immutable-data-root-fix-2026-07-13",
+    "app_version": "v3.35.0-factory-context-knowledge-root-fix-2026-07-13",
     "schema_version": 6,
-    "state_hash": "c93f91d6c940139ade6e2f96be82bf81a0dee310a4089a25d0f494fb3d3206d7",
-    "updated_at_iso": "2026-07-13T03:52:57.180736+00:00",
-    "updated_at_unix": 1783914777.1807363
+    "state_hash": "aa275092468e72938462960c54cfc4918507f2fdd9c756bcbae56a87ebe76694",
+    "updated_at_iso": "2026-07-13T22:24:12.314902+00:00",
+    "updated_at_unix": 1783981452.314902
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-13 03:47:43",
+    "last_updated": "2026-07-13 12:28:35",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -166,10 +166,10 @@
   },
   "bot_stats": {
     "ant_cache_read": 578435,
-    "ant_cache_write": 1689736,
-    "ant_cost_usd": 2.715067450000001,
-    "ant_input": 233985,
-    "ant_output": 11788,
+    "ant_cache_write": 1713068,
+    "ant_cost_usd": 2.778425450000001,
+    "ant_input": 235874,
+    "ant_output": 11913,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 228,
-    "tokens_completion": 17035,
-    "tokens_prompt": 4248819,
+    "text_translations": 229,
+    "tokens_completion": 17160,
+    "tokens_prompt": 4274040,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -312,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.29523620000000006,
+      "cost_usd": 0.3585942000000001,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1908,
-      "tokens_prompt": 218897
+      "tokens_completion": 2033,
+      "tokens_prompt": 244118
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -395,7 +395,7 @@
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": false
+    "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_location_qr_settings": {},
   "group_location_settings": {},
