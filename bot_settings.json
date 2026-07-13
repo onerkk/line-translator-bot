@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.33.4-equipment-code-root-fix-2026-07-13",
+    "app_version": "v3.33.6-visible-immutable-data-root-fix-2026-07-13",
     "schema_version": 6,
-    "state_hash": "d1c6a59820c0d5ef1a655cd3bf013094af9df1b73b78818c80214c730303737a",
-    "updated_at_iso": "2026-07-13T03:05:16.678084+00:00",
-    "updated_at_unix": 1783911916.6780841
+    "state_hash": "36108b9d302d52022b4ea8883a5d9b1c234e4337468fad09d2125294a1d2a16b",
+    "updated_at_iso": "2026-07-13T03:52:55.689186+00:00",
+    "updated_at_unix": 1783914775.6891856
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-3.5-flash",
       "gpt-5.6-terra": "gemini-3.5-flash"
     },
-    "last_updated": "2026-07-13 02:51:35",
+    "last_updated": "2026-07-13 03:47:43",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -165,11 +165,11 @@
     "provider_failover": true
   },
   "bot_stats": {
-    "ant_cache_read": 565499,
-    "ant_cache_write": 1674094,
-    "ant_cost_usd": 2.688258550000001,
-    "ant_input": 232310,
-    "ant_output": 11615,
+    "ant_cache_read": 578435,
+    "ant_cache_write": 1689736,
+    "ant_cost_usd": 2.715067450000001,
+    "ant_input": 233985,
+    "ant_output": 11788,
     "commands": 13,
     "followers": 1,
     "image_translations": 3,
@@ -178,9 +178,9 @@
     "oai_input": 53236,
     "oai_output": 74,
     "oai_reasoning": 0,
-    "text_translations": 226,
-    "tokens_completion": 16862,
-    "tokens_prompt": 4218566,
+    "text_translations": 228,
+    "tokens_completion": 17035,
+    "tokens_prompt": 4248819,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -312,11 +312,11 @@
   "gemini_model_upgrade": "gemini-3.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.2857130499999999,
+      "cost_usd": 0.29523620000000006,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 1799,
-      "tokens_prompt": 202322
+      "tokens_completion": 1908,
+      "tokens_prompt": 218897
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
@@ -333,11 +333,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.7310108000000002,
+      "cost_usd": 1.7482965500000003,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 5370,
-      "tokens_prompt": 1762148
+      "tokens_completion": 5434,
+      "tokens_prompt": 1775826
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -392,7 +392,6 @@
     }
   },
   "group_img_ask_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_img_settings": {
