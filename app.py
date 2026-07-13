@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.34.0-availability-first-translation-root-fix-2026-07-13"
+VERSION = "v3.34.1-erp-station-timing-semantics-root-fix-2026-07-13"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -1120,7 +1120,8 @@ TONE_PRESETS = {
         "8. 若原文很口語、省略主詞或量詞混亂，必須依工廠作業脈絡補足正確意思後再翻，不可照字面硬翻。"
         "【工廠語境理解規則】"
         "9. 在本系統中，很多中文詞語不是日常字面義，必須依工廠語境理解，例如："
-        "- 「入了 / 入完了」要依上下文判斷：預設是「入庫」(masuk gudang)；如果上下文在講站別、製程、登錄，才理解為「入站」(masuk stasiun)或「資料登錄完成」(data sudah dimasukkan)。不要直接用無語境的 sudah masuk。"
+        "- 「入了 / 入完了 / 入庫時間」不可一律理解成實體入倉。先判斷是否在講站號、ERP、帳務、資料移轉、過帳、入帳、時間分布或會議檢討；若有這些線索，應理解為「把每把棒材的生產資料登錄/移轉到下一站」(pencatatan atau pemindahan data ke stasiun berikutnya)，不是 barang masuk gudang。只有明確提到倉庫、貨車、到貨、卸貨等實物流動時，才翻成 masuk gudang。"
+        "- 本廠包裝流程中，490 是包裝/秤重過帳站，801 是下一個暫存站。像「入庫時間平均一點」「不要太早移完」是要求每把資料從 490 移到 801 的登錄時間依實際作業分布得更平均，避免集中一次過帳或留下長時間無紀錄；「平均」是 merata/tersebar，絕對不是數學平均 rata-rata；「移完」是全部資料移轉完成，不是實體搬完貨。"
         "- 「把」作為量詞時(數字+把，如「6把」「兩把」) = bundel(棒材捆數)；作為介詞時(把+受詞，如「把工單入完」「把資料登錄」) = 中文文法輔助詞，不要翻成 bundel，而是依完整句子重組成印尼文語序。"
         "- 「PMI」不是泛稱，必須依範例表定義理解(分光檢測棒材鋼種)"
         "- 「混料」固定理解為 material tercampur"
@@ -4729,6 +4730,11 @@ STATION_NAMES = {
     "研磨站":         {"no": 453, "dept": "研磨股", "id": "Stasiun grinding"},
     "秤重站":         {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
     "秤重":           {"no": 490, "dept": "研磨股", "id": "Stasiun penimbangan"},
+    # 使用者確認的 ERP 現場語境：包裝完成後由 490 將每把資料移轉到 801 暫存站。
+    "包裝站":         {"no": 490, "dept": "包裝", "id": "Stasiun packing"},
+    "包裝過帳站":     {"no": 490, "dept": "包裝", "id": "Stasiun packing / pencatatan"},
+    "801暫存站":      {"no": 801, "dept": "包裝", "id": "Stasiun sementara 801"},
+    "暫存801站":      {"no": 801, "dept": "包裝", "id": "Stasiun sementara 801"},
     "委外":           {"no": 490, "dept": "研磨股", "id": "Outsource"},
     # 包裝站（使用者提供的現場固定稱呼；無 ERP 站號）
     "異型包裝站":     {"no": None, "dept": "包裝", "id": "Stasiun packing barang bentuk khusus"},
@@ -6843,7 +6849,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v5-identity-placeholder-recovery-root"
+_SEMANTIC_CONTRACT_VERSION = "v6-erp-station-timing-semantics-root"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -7485,6 +7491,160 @@ def _repair_factory_domain_term_translation(translation, risk):
     return result
 
 
+
+# v3.34.1: ERP station-transfer timing semantic contract.
+# Root cause addressed:
+#   Shop-floor shorthand such as「入庫時間平均一點／太早移完」describes the
+#   timestamp distribution of ERP records moving from packaging station 490 to
+#   temporary station 801.  Generic translation interpreted it as physical
+#   warehouse arrival and translated「平均」as the arithmetic term rata-rata.
+# This classifier is concept-based, not an exact-sentence replacement.
+_ERP_TRANSFER_TIMING_PHYSICAL_MARKERS_ZH = (
+    "貨車", "卡車", "司機", "到貨", "卸貨", "倉庫大門", "月台", "收貨", "送貨",
+)
+_ERP_TRANSFER_TIMING_DISTRIBUTION_MARKERS_ZH = (
+    "平均", "均勻", "分散", "不要集中", "別集中", "分開入", "分批入", "間隔",
+)
+_ERP_TRANSFER_TIMING_ERP_MARKERS_ZH = (
+    "資料", "帳", "帳務", "入帳", "過帳", "登錄", "紀錄", "記錄", "站別", "站號",
+    "移到", "移入", "移完", "入完", "490", "801",
+)
+
+
+def _classify_factory_erp_transfer_timing_zh_id(text):
+    """Classify ERP posting-time distribution language used by the packaging flow.
+
+    It intentionally rejects explicit physical-logistics wording.  In the user's
+    factory, an otherwise unqualified「入庫時間」combined with distribution wording
+    is the established shorthand for posting each packaged bundle from 490 to 801.
+    """
+    compact = _semantic_compact_zh(text)
+    if not compact:
+        return None
+    if any(marker in compact for marker in _ERP_TRANSFER_TIMING_PHYSICAL_MARKERS_ZH):
+        return None
+
+    has_distribution = any(marker in compact for marker in _ERP_TRANSFER_TIMING_DISTRIBUTION_MARKERS_ZH)
+    has_erp_marker = any(marker in compact for marker in _ERP_TRANSFER_TIMING_ERP_MARKERS_ZH)
+    has_inbound_time = any(marker in compact for marker in ("入庫時間", "入帳時間", "過帳時間", "登錄時間", "紀錄時間", "記錄時間"))
+    has_finish_move = any(marker in compact for marker in ("移完", "入完", "全部移", "都移", "全移"))
+    has_review = any(marker in compact for marker in ("開會", "會議", "檢討", "報表", "稽核", "解釋"))
+
+    # Strong implicit factory shorthand:「入庫時間 + 平均」is enough unless the
+    # source explicitly describes trucks/warehouse receiving.  Additional ERP,
+    # move-completion or review markers increase confidence.
+    if not (has_inbound_time and has_distribution):
+        if not (has_distribution and has_erp_marker and (has_finish_move or has_review)):
+            return None
+
+    station_numbers = re.findall(r"(?<!\d)(\d{3})(?:站)?", compact)
+    from_station = None
+    to_station = None
+    if len(station_numbers) >= 2:
+        from_station, to_station = station_numbers[0], station_numbers[1]
+    elif station_numbers:
+        only = station_numbers[0]
+        if only == "801":
+            from_station, to_station = "490", "801"
+        elif only == "490":
+            from_station, to_station = "490", "801"
+        else:
+            to_station = only
+
+    # This exact shorthand belongs to the known packaging ERP flow even when the
+    # workers omit station numbers in chat.
+    if not from_station and not to_station and has_inbound_time:
+        from_station, to_station = "490", "801"
+
+    return {
+        "term": "入庫時間/移完",
+        "sense": "factory_erp_station_transfer_timing",
+        "confidence": 0.99 if (has_finish_move or has_review or station_numbers) else 0.95,
+        "from_station": from_station,
+        "to_station": to_station,
+        "has_distribution": has_distribution,
+        "has_finish_move": has_finish_move,
+        "has_too_early": any(marker in compact for marker in ("太早", "過早", "提早", "太快")),
+        "has_review": has_review,
+        "requires_actual_time_alignment": True,
+        "tm_bypass_allowed": False,
+        "nmt_allowed": False,
+        "requires_validation": True,
+    }
+
+
+def _build_factory_erp_transfer_timing_contract_lines(risk):
+    src_station = risk.get("from_station") or "the current packaging station"
+    tgt_station = risk.get("to_station") or "the next station"
+    return [
+        "<risk term='入庫時間/移完' sense='factory_erp_station_transfer_timing'>",
+        "This is ERP production-recording language, not physical warehouse logistics.",
+        f"The workflow is production data for each packaged bar bundle being posted/transferred from station {src_station} to station {tgt_station}.",
+        "入庫時間/入帳時間 means the timestamp of posting or transferring each bundle's data in the production system. Do not translate it as physical barang masuk gudang.",
+        "平均一點 means distribute the posting timestamps more evenly according to the actual work sequence. Use merata/tersebar/interval yang lebih merata; never use the arithmetic phrase rata-rata sedikit.",
+        "移完 means all ERP records have been transferred to the next station, not that the physical goods have finished moving.",
+        "太早移完/集中一次入帳 can create a long period with no production records and becomes difficult to explain in a production-review meeting.",
+        "The translation must keep records aligned with actual work time; never imply falsifying or inventing timestamps.",
+        "Preferred wording: waktu pencatatan/pemindahan data setiap bundel, sesuai waktu pengerjaan, lebih merata, jangan semua data dipindahkan sekaligus terlalu awal.",
+        "Forbidden wording: waktu masuk gudang, rata-rata sedikit, barang selesai dipindahkan, selesai terlalu cepat without mentioning data/posting time.",
+        "</risk>",
+    ]
+
+
+def _erp_transfer_timing_translation_ok(risk, translation):
+    low = (translation or "").lower()
+    if not low:
+        return False, "erp_transfer_timing_empty"
+    forbidden = (
+        "rata-rata sedikit", "waktu masuk gudang", "barang masuk gudang",
+        "semua barang selesai dipindahkan", "barang selesai dipindahkan",
+    )
+    for phrase in forbidden:
+        if phrase in low:
+            return False, "erp_transfer_timing_forbidden:" + phrase
+    if not any(x in low for x in ("data", "pencatatan", "input", "transaksi", "posting")):
+        return False, "erp_transfer_timing_missing_data_semantics"
+    if not any(x in low for x in ("merata", "tersebar", "tidak menumpuk", "bertahap", "interval")):
+        return False, "erp_transfer_timing_missing_distribution_semantics"
+    if risk.get("from_station") and str(risk["from_station"]) not in low:
+        return False, "erp_transfer_timing_missing_source_station"
+    if risk.get("to_station") and str(risk["to_station"]) not in low:
+        return False, "erp_transfer_timing_missing_target_station"
+    if risk.get("has_too_early") and not any(x in low for x in ("terlalu awal", "terlalu cepat", "lebih awal")):
+        return False, "erp_transfer_timing_missing_early_completion"
+    if risk.get("has_review") and not any(x in low for x in ("rapat", "meeting", "evaluasi", "review")):
+        return False, "erp_transfer_timing_missing_review_consequence"
+    if risk.get("requires_actual_time_alignment") and not any(
+        x in low for x in ("sesuai waktu pengerjaan", "sesuai proses", "sesuai waktu kerja", "sesuai kondisi aktual", "sesuai pekerjaan")
+    ):
+        return False, "erp_transfer_timing_missing_actual_work_alignment"
+    return True, ""
+
+
+def _semantic_rebuild_factory_erp_transfer_timing(src_text, risk, current_translation=""):
+    """Slot-based safe reconstruction for ERP timing instructions.
+
+    The reconstruction is based on the classified operation, stations and intent,
+    so variants such as 入帳/過帳/登錄/移到801 share the same semantics.
+    """
+    src_station = risk.get("from_station") or "490"
+    tgt_station = risk.get("to_station") or "801"
+    first = (
+        f"Tolong atur waktu pemindahan data setiap bundel dari stasiun {src_station} "
+        f"ke stasiun {tgt_station} sesuai waktu pengerjaan agar lebih merata."
+    )
+    clauses = [first]
+    if risk.get("has_finish_move") or risk.get("has_too_early"):
+        second = "Jangan pindahkan semua data sekaligus terlalu awal"
+        if risk.get("has_review"):
+            second += ", karena jeda tanpa pencatatan akan sulit dijelaskan saat rapat"
+        second += "."
+        clauses.append(second)
+    elif risk.get("has_review"):
+        clauses.append("Hindari pencatatan yang menumpuk pada satu waktu, karena jeda tanpa pencatatan akan sulit dijelaskan saat rapat.")
+    return " ".join(clauses)
+
+
 def build_translation_semantic_contract(text, src, tgt):
     """Build one runtime contract for the current translation request.
     Contract is intentionally plain dict so every legacy module can consume it without new dependencies.
@@ -7586,6 +7746,16 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["vector_bypass_allowed"] = False
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
+
+        _erp_timing_fn = globals().get("_classify_factory_erp_transfer_timing_zh_id")
+        erp_timing_risk = _erp_timing_fn(text) if callable(_erp_timing_fn) else None
+        if erp_timing_risk:
+            contract["has_risk"] = True
+            contract["risks"].append(erp_timing_risk)
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -7635,6 +7805,8 @@ def build_translation_semantic_contract_prompt(contract):
             lines.extend(_build_factory_domain_term_contract_lines(risk))
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
+        elif risk.get("sense") == "factory_erp_station_transfer_timing":
+            lines.extend(_build_factory_erp_transfer_timing_contract_lines(risk))
         elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
             lines.append("<risk term='自首無罪/設備事故提報' sense='factory_incident_self_report_nonpunitive'>")
             lines.append("This is a factory incident-reporting policy, not religious or criminal-law language.")
@@ -7708,6 +7880,10 @@ def translation_satisfies_semantic_contract(contract, translation):
                     return False, "factory_reason_action_missing:" + key
         elif risk.get("sense") == "factory_incident_self_report_nonpunitive":
             ok, reason = _incident_self_report_translation_ok(risk, t)
+            if not ok:
+                return False, reason
+        elif risk.get("sense") == "factory_erp_station_transfer_timing":
+            ok, reason = _erp_transfer_timing_translation_ok(risk, t)
             if not ok:
                 return False, reason
     return True, ""
@@ -7828,6 +8004,10 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
             return translation
         if risk.get("sense") == "factory_incident_self_report_nonpunitive":
             fixed = _semantic_rebuild_factory_incident_self_report(src_text, risk, translation)
+            ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
+            return fixed if ok2 else fixed
+        if risk.get("sense") == "factory_erp_station_transfer_timing":
+            fixed = _semantic_rebuild_factory_erp_transfer_timing(src_text, risk, translation)
             ok2, _ = translation_satisfies_semantic_contract(contract, fixed)
             return fixed if ok2 else fixed
     return translation
@@ -8992,7 +9172,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "【站別/Stations - numbers are STATION NUMBERS】"
             "400站=station 400, 401站=station 401, 420站=station 420, "
             "470站=station 470(UT station), UT=mesin UT(di station 470), 480站=station 480, "
-            "490站=station 490(秤重站/timbang), 801站=station 801, "
+            "490站=station 490(包裝/秤重過帳站, stasiun packing/penimbangan), 801站=station 801(下一個暫存站, stasiun sementara), "
             "OL=sedang produksi/online, 回400=kembalikan ke station 400, "
             "無主=tanpa pemilik/unassigned, 入無主=masukkan ke status tanpa pemilik, "
             "掛單/工單=work order, 重掛單=pasang ulang work order, 無工單資訊=tidak ada info work order, "
