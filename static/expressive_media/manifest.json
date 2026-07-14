@@ -1,0 +1,2458 @@
+{
+  "version": 3,
+  "generated": "2026-07-14",
+  "dimensions": [
+    1200,
+    630
+  ],
+  "assets": [
+    {
+      "id": "cute_apology_01",
+      "file": "cute/apology/apology_01.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_apology_02",
+      "file": "cute/apology/apology_02.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_calm_01",
+      "file": "cute/calm/calm_01.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_calm_02",
+      "file": "cute/calm/calm_02.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_celebration_01",
+      "file": "cute/celebration/celebration_01.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_celebration_02",
+      "file": "cute/celebration/celebration_02.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_concern_01",
+      "file": "cute/concern/concern_01.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_concern_02",
+      "file": "cute/concern/concern_02.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_encouragement_01",
+      "file": "cute/encouragement/encouragement_01.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_encouragement_02",
+      "file": "cute/encouragement/encouragement_02.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_gratitude_01",
+      "file": "cute/gratitude/gratitude_01.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_gratitude_02",
+      "file": "cute/gratitude/gratitude_02.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_greeting_01",
+      "file": "cute/greeting/greeting_01.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_greeting_02",
+      "file": "cute/greeting/greeting_02.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_joy_01",
+      "file": "cute/joy/joy_01.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_joy_02",
+      "file": "cute/joy/joy_02.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_praise_01",
+      "file": "cute/praise/praise_01.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_praise_02",
+      "file": "cute/praise/praise_02.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_question_01",
+      "file": "cute/question/question_01.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_question_02",
+      "file": "cute/question/question_02.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_weather_01",
+      "file": "cute/weather/weather_01.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "cute_weather_02",
+      "file": "cute/weather/weather_02.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "cute"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "factory_equipment_01",
+      "file": "factory/equipment/equipment_01.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_equipment_02",
+      "file": "factory/equipment/equipment_02.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_factory_notice_01",
+      "file": "factory/factory_notice/factory_notice_01.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_factory_notice_02",
+      "file": "factory/factory_notice/factory_notice_02.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_gathering_01",
+      "file": "factory/gathering/gathering_01.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_gathering_02",
+      "file": "factory/gathering/gathering_02.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_notice_01",
+      "file": "factory/notice/notice_01.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_notice_02",
+      "file": "factory/notice/notice_02.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_quality_01",
+      "file": "factory/quality/quality_01.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_quality_02",
+      "file": "factory/quality/quality_02.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_reminder_01",
+      "file": "factory/reminder/reminder_01.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "factory_reminder_02",
+      "file": "factory/reminder/reminder_02.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "factory_safety_01",
+      "file": "factory/safety/safety_01.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_safety_02",
+      "file": "factory/safety/safety_02.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_urgent_01",
+      "file": "factory/urgent/urgent_01.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_urgent_02",
+      "file": "factory/urgent/urgent_02.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_warning_01",
+      "file": "factory/warning/warning_01.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "factory_warning_02",
+      "file": "factory/warning/warning_02.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "factory"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_apology_01",
+      "file": "formal/apology/apology_01.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_apology_02",
+      "file": "formal/apology/apology_02.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_concern_01",
+      "file": "formal/concern/concern_01.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_concern_02",
+      "file": "formal/concern/concern_02.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_equipment_01",
+      "file": "formal/equipment/equipment_01.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_equipment_02",
+      "file": "formal/equipment/equipment_02.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_factory_notice_01",
+      "file": "formal/factory_notice/factory_notice_01.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_factory_notice_02",
+      "file": "formal/factory_notice/factory_notice_02.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_gathering_01",
+      "file": "formal/gathering/gathering_01.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_gathering_02",
+      "file": "formal/gathering/gathering_02.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_gratitude_01",
+      "file": "formal/gratitude/gratitude_01.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_gratitude_02",
+      "file": "formal/gratitude/gratitude_02.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_notice_01",
+      "file": "formal/notice/notice_01.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_notice_02",
+      "file": "formal/notice/notice_02.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_praise_01",
+      "file": "formal/praise/praise_01.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_praise_02",
+      "file": "formal/praise/praise_02.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_quality_01",
+      "file": "formal/quality/quality_01.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_quality_02",
+      "file": "formal/quality/quality_02.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_question_01",
+      "file": "formal/question/question_01.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_question_02",
+      "file": "formal/question/question_02.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "formal_reminder_01",
+      "file": "formal/reminder/reminder_01.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "formal_reminder_02",
+      "file": "formal/reminder/reminder_02.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "formal_safety_01",
+      "file": "formal/safety/safety_01.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_safety_02",
+      "file": "formal/safety/safety_02.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_urgent_01",
+      "file": "formal/urgent/urgent_01.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_urgent_02",
+      "file": "formal/urgent/urgent_02.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_warning_01",
+      "file": "formal/warning/warning_01.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "formal_warning_02",
+      "file": "formal/warning/warning_02.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "formal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_apology_01",
+      "file": "minimal/apology/apology_01.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_apology_02",
+      "file": "minimal/apology/apology_02.jpg",
+      "category": "apology",
+      "intent": [
+        "apology"
+      ],
+      "emotion": [
+        "sadness",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_calm_01",
+      "file": "minimal/calm/calm_01.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_calm_02",
+      "file": "minimal/calm/calm_02.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_celebration_01",
+      "file": "minimal/celebration/celebration_01.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_celebration_02",
+      "file": "minimal/celebration/celebration_02.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_concern_01",
+      "file": "minimal/concern/concern_01.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_concern_02",
+      "file": "minimal/concern/concern_02.jpg",
+      "category": "concern",
+      "intent": [
+        "concern",
+        "comfort"
+      ],
+      "emotion": [
+        "concern",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_encouragement_01",
+      "file": "minimal/encouragement/encouragement_01.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_encouragement_02",
+      "file": "minimal/encouragement/encouragement_02.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_equipment_01",
+      "file": "minimal/equipment/equipment_01.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_equipment_02",
+      "file": "minimal/equipment/equipment_02.jpg",
+      "category": "equipment",
+      "intent": [
+        "instruction",
+        "report"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_factory_notice_01",
+      "file": "minimal/factory_notice/factory_notice_01.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_factory_notice_02",
+      "file": "minimal/factory_notice/factory_notice_02.jpg",
+      "category": "factory_notice",
+      "intent": [
+        "notice",
+        "reminder"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_gathering_01",
+      "file": "minimal/gathering/gathering_01.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_gathering_02",
+      "file": "minimal/gathering/gathering_02.jpg",
+      "category": "gathering",
+      "intent": [
+        "report",
+        "reminder"
+      ],
+      "emotion": [
+        "concern",
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_gratitude_01",
+      "file": "minimal/gratitude/gratitude_01.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_gratitude_02",
+      "file": "minimal/gratitude/gratitude_02.jpg",
+      "category": "gratitude",
+      "intent": [
+        "gratitude"
+      ],
+      "emotion": [
+        "gratitude",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_greeting_01",
+      "file": "minimal/greeting/greeting_01.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_greeting_02",
+      "file": "minimal/greeting/greeting_02.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_joy_01",
+      "file": "minimal/joy/joy_01.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_joy_02",
+      "file": "minimal/joy/joy_02.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_notice_01",
+      "file": "minimal/notice/notice_01.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_notice_02",
+      "file": "minimal/notice/notice_02.jpg",
+      "category": "notice",
+      "intent": [
+        "notice",
+        "announcement"
+      ],
+      "emotion": [
+        "seriousness",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_praise_01",
+      "file": "minimal/praise/praise_01.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_praise_02",
+      "file": "minimal/praise/praise_02.jpg",
+      "category": "praise",
+      "intent": [
+        "praise"
+      ],
+      "emotion": [
+        "joy",
+        "warmth"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_quality_01",
+      "file": "minimal/quality/quality_01.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_quality_02",
+      "file": "minimal/quality/quality_02.jpg",
+      "category": "quality",
+      "intent": [
+        "report",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "neutral"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_question_01",
+      "file": "minimal/question/question_01.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_question_02",
+      "file": "minimal/question/question_02.jpg",
+      "category": "question",
+      "intent": [
+        "question"
+      ],
+      "emotion": [
+        "curiosity",
+        "confusion"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_reminder_01",
+      "file": "minimal/reminder/reminder_01.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "minimal_reminder_02",
+      "file": "minimal/reminder/reminder_02.jpg",
+      "category": "reminder",
+      "intent": [
+        "reminder",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": true
+    },
+    {
+      "id": "minimal_safety_01",
+      "file": "minimal/safety/safety_01.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_safety_02",
+      "file": "minimal/safety/safety_02.jpg",
+      "category": "safety",
+      "intent": [
+        "warning",
+        "instruction"
+      ],
+      "emotion": [
+        "seriousness",
+        "urgency"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_urgent_01",
+      "file": "minimal/urgent/urgent_01.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_urgent_02",
+      "file": "minimal/urgent/urgent_02.jpg",
+      "category": "urgent",
+      "intent": [
+        "urgent",
+        "warning"
+      ],
+      "emotion": [
+        "urgency"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_warning_01",
+      "file": "minimal/warning/warning_01.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_warning_02",
+      "file": "minimal/warning/warning_02.jpg",
+      "category": "warning",
+      "intent": [
+        "warning"
+      ],
+      "emotion": [
+        "urgency",
+        "seriousness"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": true,
+      "short_message": false
+    },
+    {
+      "id": "minimal_weather_01",
+      "file": "minimal/weather/weather_01.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "minimal_weather_02",
+      "file": "minimal/weather/weather_02.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "minimal"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_calm_01",
+      "file": "photo/calm/calm_01.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_calm_02",
+      "file": "photo/calm/calm_02.jpg",
+      "category": "calm",
+      "intent": [
+        "comfort",
+        "neutral"
+      ],
+      "emotion": [
+        "calm",
+        "warmth"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_celebration_01",
+      "file": "photo/celebration/celebration_01.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_celebration_02",
+      "file": "photo/celebration/celebration_02.jpg",
+      "category": "celebration",
+      "intent": [
+        "celebration"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_encouragement_01",
+      "file": "photo/encouragement/encouragement_01.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_encouragement_02",
+      "file": "photo/encouragement/encouragement_02.jpg",
+      "category": "encouragement",
+      "intent": [
+        "encouragement"
+      ],
+      "emotion": [
+        "warmth",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_greeting_01",
+      "file": "photo/greeting/greeting_01.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_greeting_02",
+      "file": "photo/greeting/greeting_02.jpg",
+      "category": "greeting",
+      "intent": [
+        "greeting"
+      ],
+      "emotion": [
+        "warmth",
+        "joy"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_joy_01",
+      "file": "photo/joy/joy_01.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_joy_02",
+      "file": "photo/joy/joy_02.jpg",
+      "category": "joy",
+      "intent": [
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "excitement"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_weather_01",
+      "file": "photo/weather/weather_01.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    },
+    {
+      "id": "photo_weather_02",
+      "file": "photo/weather/weather_02.jpg",
+      "category": "weather",
+      "intent": [
+        "greeting",
+        "joy"
+      ],
+      "emotion": [
+        "joy",
+        "calm"
+      ],
+      "styles": [
+        "photo"
+      ],
+      "min_intensity": 1,
+      "max_intensity": 3,
+      "workplace_safe": true,
+      "factory_safe": false,
+      "short_message": true
+    }
+  ]
+}

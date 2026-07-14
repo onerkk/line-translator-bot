@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.37.2-single-call-no-failure-card-auto-tone-2026-07-14"
+VERSION = "v3.39.0-smart-expressive-120cards-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -256,6 +256,8 @@ import glossary_policy as gp_module             # canonical vs explanatory termi
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
 import prompt_optimizer as prompt_opt_module   # runtime prompt compiler: principles + relevant real-failure rules
 import translation_extras as translation_extras_module
+import expressive_assets as expressive_assets_module
+import expressive_engine as expressive_engine_module
 import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
 
 # Fail fast when only one of the two production files was replaced or when the
@@ -285,12 +287,14 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.2-auto-tone-emoji"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.6-smart-expression-engine"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
+    "build_expression_plan",
     "enrich_translation_with_tone_emoji",
+    "select_expression_visual",
 )
 _missing_translation_extra_functions = [
     name for name in _required_translation_extra_functions
@@ -315,10 +319,34 @@ if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PRO
         f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
         "Replace app.py and prompt_optimizer.py together in the project root."
     )
+_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-07-14.1-smart-expression-engine"
+_EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-07-14.2-120-card-library"
+if getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", None) != _EXPECTED_EXPRESSIVE_ENGINE_VERSION:
+    raise RuntimeError(
+        "expressive_engine deployment mismatch: "
+        f"expected={_EXPECTED_EXPRESSIVE_ENGINE_VERSION}, "
+        f"loaded={getattr(expressive_engine_module, 'EXPRESSIVE_ENGINE_VERSION', None)!r}. "
+        "Replace app.py and expressive_engine.py together in the project root."
+    )
+if getattr(expressive_assets_module, "EXPRESSIVE_ASSETS_VERSION", None) != _EXPECTED_EXPRESSIVE_ASSETS_VERSION:
+    raise RuntimeError(
+        "expressive_assets deployment mismatch: "
+        f"expected={_EXPECTED_EXPRESSIVE_ASSETS_VERSION}, "
+        f"loaded={getattr(expressive_assets_module, 'EXPRESSIVE_ASSETS_VERSION', None)!r}. "
+        "Replace app.py, expressive_assets.py and static/expressive_media together."
+    )
+if expressive_assets_module.asset_count() < 96:
+    raise RuntimeError(
+        "expressive media library is incomplete: "
+        f"found={expressive_assets_module.asset_count()} expected_at_least=96. "
+        "Upload static/expressive_media/manifest.json and every referenced WebP file."
+    )
 logger.info(
-    "[ToneEmoji] deployment verified extras=%s prompt_optimizer=%s",
+    "[Expressive] deployment verified extras=%s engine=%s assets=%s count=%s",
     _EXPECTED_TRANSLATION_EXTRAS_VERSION,
-    _EXPECTED_PROMPT_OPTIMIZER_VERSION,
+    _EXPECTED_EXPRESSIVE_ENGINE_VERSION,
+    _EXPECTED_EXPRESSIVE_ASSETS_VERSION,
+    expressive_assets_module.asset_count(),
 )
 
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
@@ -1142,9 +1170,20 @@ welcome_settings = {
 flex_enabled = True
 # Quick Reply buttons ON/OFF
 quick_reply_enabled = True
-# Automatic pragmatic-tone detection + conservative emoji decoration.
-# This is intentionally independent from the fixed/custom translation tone below.
+# Sentence-aware expressive translation. This remains independent from the
+# fixed/custom translation tone below and never creates an extra AI request.
 auto_tone_emoji_enabled = True
+expressive_translation_mode = "smart"       # off / tone_only / emoji / image / card / smart
+expressive_translation_intensity = "natural"  # subtle / natural / lively
+expressive_visual_style = "auto"             # auto / cute / minimal / formal / factory / photo
+expressive_emoji_enabled = True
+expressive_images_enabled = True
+expressive_short_message_image_enabled = True
+expressive_short_message_max_chars = 80
+expressive_formal_safety_enabled = True
+# Legacy alias retained for old bot_settings.json and older admin clients.
+expressive_visual_enabled = True
+image_ocr_expressive_enabled = True          # OCR/photo text uses a separate switch
 # Image-result actions shown below OCR/photo translations.  The master switch and
 # each action mode are independently configurable from the admin dashboard.
 image_translation_actions_enabled = True
@@ -1178,7 +1217,18 @@ location_qr_enabled = False
 # Per-group feature overrides (group_id -> bool), global values above are defaults
 group_flex_settings = {}      # per-group flex card toggle
 group_qr_settings = {}        # per-group quick reply toggle
-group_auto_tone_emoji_settings = {}  # per-group automatic tone/emoji toggle
+group_auto_tone_emoji_settings = {}  # per-group expressive-translation master toggle
+group_expressive_mode_settings = {}       # per-group off/tone_only/emoji/image/card/smart
+group_expressive_intensity_settings = {}  # per-group subtle/natural/lively
+group_expressive_visual_style_settings = {}
+group_expressive_emoji_settings = {}
+group_expressive_images_settings = {}
+group_expressive_short_image_settings = {}
+group_expressive_short_max_chars_settings = {}
+group_expressive_formal_safety_settings = {}
+# Legacy per-group image toggle retained for migration from the previous build.
+group_expressive_visual_settings = {}
+group_image_ocr_expressive_settings = {}  # per-group OCR expression toggle
 group_image_translation_actions_settings = {}  # per-group image action master toggle
 group_image_translation_action_modes = {}      # per-group image action mode overrides
 group_silent_settings = {}    # per-group silent mode toggle
@@ -3346,10 +3396,103 @@ def get_group_feature(group_id, feature):
 
 
 def get_auto_tone_emoji_enabled(group_id):
-    """Return the automatic tone/emoji switch for one group."""
+    """Return the expressive-translation master switch for one group."""
     if group_id and group_id in group_auto_tone_emoji_settings:
         return bool(group_auto_tone_emoji_settings[group_id])
     return bool(auto_tone_emoji_enabled)
+
+
+def _normalise_expressive_mode(value):
+    return expressive_engine_module.normalise_mode(value)
+
+
+def _normalise_expressive_intensity(value):
+    return expressive_engine_module.normalise_intensity(value)
+
+
+def _normalise_expressive_visual_style(value):
+    return expressive_assets_module.normalise_style(value)
+
+
+def _normalise_expressive_max_chars(value):
+    return expressive_engine_module.normalise_max_chars(value)
+
+
+def get_expressive_translation_mode(group_id):
+    if group_id and group_id in group_expressive_mode_settings:
+        return _normalise_expressive_mode(group_expressive_mode_settings[group_id])
+    return _normalise_expressive_mode(expressive_translation_mode)
+
+
+def get_expressive_translation_intensity(group_id):
+    if group_id and group_id in group_expressive_intensity_settings:
+        return _normalise_expressive_intensity(group_expressive_intensity_settings[group_id])
+    return _normalise_expressive_intensity(expressive_translation_intensity)
+
+
+def get_expressive_visual_style(group_id):
+    if group_id and group_id in group_expressive_visual_style_settings:
+        return _normalise_expressive_visual_style(group_expressive_visual_style_settings[group_id])
+    return _normalise_expressive_visual_style(expressive_visual_style)
+
+
+def get_expressive_emoji_enabled(group_id):
+    if group_id and group_id in group_expressive_emoji_settings:
+        return bool(group_expressive_emoji_settings[group_id])
+    return bool(expressive_emoji_enabled)
+
+
+def get_expressive_images_enabled(group_id):
+    if group_id and group_id in group_expressive_images_settings:
+        return bool(group_expressive_images_settings[group_id])
+    # Migration fallback from the previous single visual toggle.
+    if group_id and group_id in group_expressive_visual_settings:
+        return bool(group_expressive_visual_settings[group_id])
+    return bool(expressive_images_enabled)
+
+
+def get_expressive_visual_enabled(group_id):
+    """Compatibility alias for older code/admin clients."""
+    return get_expressive_images_enabled(group_id)
+
+
+def get_expressive_short_image_enabled(group_id):
+    if group_id and group_id in group_expressive_short_image_settings:
+        return bool(group_expressive_short_image_settings[group_id])
+    return bool(expressive_short_message_image_enabled)
+
+
+def get_expressive_short_max_chars(group_id):
+    if group_id and group_id in group_expressive_short_max_chars_settings:
+        return _normalise_expressive_max_chars(group_expressive_short_max_chars_settings[group_id])
+    return _normalise_expressive_max_chars(expressive_short_message_max_chars)
+
+
+def get_expressive_formal_safety_enabled(group_id):
+    if group_id and group_id in group_expressive_formal_safety_settings:
+        return bool(group_expressive_formal_safety_settings[group_id])
+    return bool(expressive_formal_safety_enabled)
+
+
+def get_image_ocr_expressive_enabled(group_id):
+    if group_id and group_id in group_image_ocr_expressive_settings:
+        return bool(group_image_ocr_expressive_settings[group_id])
+    return bool(image_ocr_expressive_enabled)
+
+
+def get_expressive_runtime_settings(group_id, *, include_images=True):
+    return expressive_engine_module.ExpressiveSettings(
+        enabled=bool(get_auto_tone_emoji_enabled(group_id)),
+        display_mode=get_expressive_translation_mode(group_id),
+        intensity=get_expressive_translation_intensity(group_id),
+        visual_style=get_expressive_visual_style(group_id),
+        emoji_enabled=bool(get_expressive_emoji_enabled(group_id)),
+        images_enabled=bool(get_expressive_images_enabled(group_id) and include_images),
+        short_message_image_enabled=bool(get_expressive_short_image_enabled(group_id)),
+        short_message_max_chars=get_expressive_short_max_chars(group_id),
+        formal_safety_enabled=bool(get_expressive_formal_safety_enabled(group_id)),
+        ocr_enabled=bool(get_image_ocr_expressive_enabled(group_id)),
+    )
 
 
 def get_image_translation_actions_enabled(group_id):
@@ -10760,6 +10903,117 @@ def _normalize_factory_operation_question(source_text, candidate, src, tgt):
     return prefix + "Apa kendala dalam proses pengecatan semprot?"
 
 
+_EXPRESSION_VISUAL_TITLES = {
+    "greeting": ("友善問候", "Salam hangat"),
+    "joy": ("開心分享", "Berbagi kebahagiaan"),
+    "gratitude": ("真心感謝", "Terima kasih"),
+    "apology": ("誠懇致歉", "Permohonan maaf"),
+    "praise": ("值得稱讚", "Apresiasi"),
+    "encouragement": ("加油鼓勵", "Semangat"),
+    "concern": ("關心提醒", "Perhatian"),
+    "question": ("需要確認", "Perlu dikonfirmasi"),
+    "reminder": ("工作提醒", "Pengingat kerja"),
+    "notice": ("重要通知", "Pemberitahuan penting"),
+    "warning": ("注意事項", "Perhatian"),
+    "urgent": ("緊急提醒", "Peringatan mendesak"),
+    "celebration": ("一起慶祝", "Mari merayakan"),
+    "calm": ("溫和傳達", "Pesan hangat"),
+    "factory_notice": ("現場通知", "Pemberitahuan lapangan"),
+    "safety": ("安全優先", "Utamakan keselamatan"),
+    "equipment": ("設備資訊", "Informasi peralatan"),
+    "quality": ("品質重點", "Fokus kualitas"),
+    "gathering": ("人員提醒", "Pengingat personel"),
+    "weather": ("天氣心情", "Suasana cuaca"),
+}
+
+
+def _build_expression_visual_message(source_text, source_lang, group_id, *, from_image_ocr=False):
+    """Build one optional local image or image-card without an AI request.
+
+    Selection is context-aware, manifest-driven and cooldown-limited. Any error
+    returns ``None`` so a valid translation is never blocked by decoration.
+    """
+    if not ImageMessage or not get_auto_tone_emoji_enabled(group_id):
+        return None
+    settings = get_expressive_runtime_settings(group_id, include_images=True)
+    if not settings.images_enabled:
+        return None
+    if from_image_ocr and not settings.ocr_enabled:
+        return None
+    try:
+        expressive = expressive_engine_module.enhance_translation(
+            source_text,
+            source_text,
+            source_language=source_lang,
+            context_id=str(group_id or "global"),
+            settings=expressive_engine_module.ExpressiveSettings(
+                enabled=settings.enabled,
+                display_mode=settings.display_mode,
+                intensity=settings.intensity,
+                visual_style=settings.visual_style,
+                emoji_enabled=False,
+                images_enabled=settings.images_enabled,
+                short_message_image_enabled=settings.short_message_image_enabled,
+                short_message_max_chars=settings.short_message_max_chars,
+                formal_safety_enabled=settings.formal_safety_enabled,
+                ocr_enabled=settings.ocr_enabled,
+            ),
+            from_image_ocr=from_image_ocr,
+        )
+    except Exception as exc:
+        logger.debug("expression visual planning unavailable: %s", exc)
+        return None
+    selection = expressive.visual
+    if not selection:
+        return None
+    public_url = (
+        os.environ.get("PUBLIC_URL")
+        or os.environ.get("RENDER_EXTERNAL_URL")
+        or ""
+    ).rstrip("/")
+    if not public_url and has_request_context():
+        public_url = request.url_root.rstrip("/")
+    if not public_url:
+        return None
+    url = public_url + selection.relative_url
+    try:
+        if selection.presentation == "image":
+            return ImageMessage(originalContentUrl=url, previewImageUrl=url)
+        zh_title, id_title = _EXPRESSION_VISUAL_TITLES.get(
+            selection.title_key, ("智慧情境卡", "Kartu konteks")
+        )
+        title = id_title if source_lang == "zh" else zh_title
+        subtitle = "依訊息情境自動選擇 / Dipilih sesuai konteks"
+        bubble = {
+            "type": "bubble",
+            "size": "mega",
+            "hero": {
+                "type": "image",
+                "url": url,
+                "size": "full",
+                "aspectRatio": "1200:630",
+                "aspectMode": "cover",
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "16px",
+                "backgroundColor": "#111827",
+                "contents": [
+                    {"type": "text", "text": title, "weight": "bold", "size": "md", "color": "#FFFFFF"},
+                    {"type": "text", "text": subtitle, "size": "xxs", "color": "#9CA3AF", "margin": "sm", "wrap": True},
+                ],
+            },
+        }
+        return FlexMessage(
+            alt_text=(title + " / " + id_title)[:400],
+            contents=FlexContainer.from_dict(bubble),
+        )
+    except Exception as exc:
+        logger.debug("expression visual card unavailable: %s", exc)
+        return None
+
+
 def _send_reply_with_push_fallback(
     *,
     reply_token,
@@ -10768,6 +11022,7 @@ def _send_reply_with_push_fallback(
     fallback_text,
     retry_key=None,
     notification_disabled=False,
+    append_messages=None,
 ):
     """Send through LINE reply API, then fall back to push if token expired.
 
@@ -10778,7 +11033,10 @@ def _send_reply_with_push_fallback(
     try:
         with ApiClient(configuration) as api_client:
             api_line = MessagingApi(api_client)
-            req = ReplyMessageRequest(reply_token=reply_token, messages=[message_obj])
+            # Keep the actual translation first. Optional mood visuals follow it,
+            # so users never need to scroll past a decorative image to read text.
+            _messages = [message_obj] + list(append_messages or [])
+            req = ReplyMessageRequest(reply_token=reply_token, messages=_messages)
             if notification_disabled:
                 req.notification_disabled = True
             try:
@@ -10804,9 +11062,10 @@ def _send_reply_with_push_fallback(
         with ApiClient(configuration) as api_client:
             api_line = MessagingApi(api_client)
             push_msg = TextMessage(text=_clip_line_text(fallback_text))
+            _push_messages = [push_msg] + list(append_messages or [])
             response = api_line.push_message(PushMessageRequest(
                 to=target_id,
-                messages=[push_msg],
+                messages=_push_messages,
             ))
         return response, "push"
 
@@ -10966,9 +11225,14 @@ def translate(text, src, tgt):
     _name_map = {}
     _visible_names = collect_visible_protected_names(canonical_text)
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
-    _auto_tone_enabled = bool(
-        get_auto_tone_emoji_enabled(getattr(_tl, 'group_id', None))
-    ) and not bool(getattr(_tl, 'disable_tone_emoji', False))
+    _expression_gid = getattr(_tl, 'group_id', None)
+    _from_image_ocr = bool(getattr(_tl, 'from_image_ocr', False))
+    _auto_tone_enabled = (
+        bool(get_auto_tone_emoji_enabled(_expression_gid))
+        and get_expressive_translation_mode(_expression_gid) != "off"
+        and not bool(getattr(_tl, 'disable_tone_emoji', False))
+        and (not _from_image_ocr or bool(get_image_ocr_expressive_enabled(_expression_gid)))
+    )
     _auto_tone_analysis = (
         translation_extras_module.analyze_message_tone(canonical_text, src)
         if _auto_tone_enabled else None
@@ -11028,22 +11292,44 @@ def translate(text, src, tgt):
                     )
                     return _factory_reason_alignment_failure_message(tgt)
                 return reason_semantic
-        # v3.37: add at most one conservative emoji after all semantic,
-        # glossary, identity and format validation.  OCR/table workflows can opt
-        # out because an added symbol would interfere with line-by-line auditing.
-        _tone_emoji_enabled = bool(
-            get_auto_tone_emoji_enabled(getattr(_tl, 'group_id', None))
-        ) and not bool(
-            getattr(_tl, 'from_image_ocr', False)
-            or getattr(_tl, 'disable_tone_emoji', False)
+        # Sentence-aware expressive decoration runs only after every semantic,
+        # glossary, identity and format guard.  It never creates another AI call.
+        # Visual selection is handled later at the LINE delivery boundary, so this
+        # pass only decorates text and cannot consume the image cooldown.
+        _expressive_enabled = (
+            bool(get_auto_tone_emoji_enabled(_expression_gid))
+            and get_expressive_translation_mode(_expression_gid) != "off"
+            and not bool(getattr(_tl, 'disable_tone_emoji', False))
+            and (not _from_image_ocr or bool(get_image_ocr_expressive_enabled(_expression_gid)))
         )
-        result = translation_extras_module.enrich_translation_with_tone_emoji(
-            canonical_text,
-            result,
-            analysis=_auto_tone_analysis,
-            source_language=src,
-            enabled=_tone_emoji_enabled,
-        )
+        try:
+            _runtime_settings = get_expressive_runtime_settings(
+                _expression_gid, include_images=False
+            )
+            _runtime_settings = expressive_engine_module.ExpressiveSettings(
+                enabled=_expressive_enabled,
+                display_mode=_runtime_settings.display_mode,
+                intensity=_runtime_settings.intensity,
+                visual_style=_runtime_settings.visual_style,
+                emoji_enabled=_runtime_settings.emoji_enabled,
+                images_enabled=False,
+                short_message_image_enabled=_runtime_settings.short_message_image_enabled,
+                short_message_max_chars=_runtime_settings.short_message_max_chars,
+                formal_safety_enabled=_runtime_settings.formal_safety_enabled,
+                ocr_enabled=_runtime_settings.ocr_enabled,
+            )
+            _expressive_result = expressive_engine_module.enhance_translation(
+                canonical_text,
+                result,
+                source_language=src,
+                context_id=str(_expression_gid or "global"),
+                settings=_runtime_settings,
+                from_image_ocr=_from_image_ocr,
+            )
+            result = _expressive_result.text
+        except Exception as _expressive_exc:
+            # Expression is optional. A valid paid translation must still be sent.
+            logger.warning("expressive text enhancement skipped: %s", _expressive_exc)
     if _is_translation_failure_sentinel(result):
         result = None
     _update_last_translate_debug(
@@ -15687,6 +15973,15 @@ def handle_message(event):
             except Exception:
                 pass
 
+    _expression_visual_message = None
+    if not _translation_failed:
+        try:
+            _expression_visual_message = _build_expression_visual_message(
+                text, lang, group_id, from_image_ocr=False
+            )
+        except Exception as _visual_exc:
+            logger.debug("expression visual selection skipped: %s", _visual_exc)
+
     _reply_resp, _delivery_method = _send_reply_with_push_fallback(
         reply_token=event.reply_token,
         target_id=group_id,
@@ -15694,6 +15989,7 @@ def handle_message(event):
         fallback_text=reply,
         retry_key=_retry_key,
         notification_disabled=get_group_feature(group_id, 'silent'),
+        append_messages=([_expression_visual_message] if _expression_visual_message else None),
     )
     try:
         _event_log_write("text_translation_delivered", {
@@ -16158,6 +16454,13 @@ def _handle_image_background(ctx):
             msg_id=message_id,
             overlay_token=_overlay_token,
         )
+        _ocr_expression_visual = None
+        try:
+            _ocr_expression_visual = _build_expression_visual_message(
+                extracted, lang, group_id, from_image_ocr=True
+            )
+        except Exception as _visual_exc:
+            logger.debug("OCR expression visual selection skipped: %s", _visual_exc)
 
         # LINE message limit is 5000 chars
         if len(reply) > 5000:
@@ -16195,7 +16498,7 @@ def _handle_image_background(ctx):
                             pass
                     api.reply_message(ReplyMessageRequest(
                         reply_token=ctx["reply_token"],
-                        messages=[msg_obj]
+                        messages=[msg_obj] + ([_ocr_expression_visual] if _ocr_expression_visual else [])
                     ))
                 _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "reply"})
             except Exception as _re_reply:
@@ -16216,7 +16519,7 @@ def _handle_image_background(ctx):
                             msg_obj.sender = _img_sender
                         api.push_message(PushMessageRequest(
                             to=group_id,
-                            messages=[msg_obj]
+                            messages=[msg_obj] + ([_ocr_expression_visual] if _ocr_expression_visual else [])
                         ))
                     _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "push"})
                 except Exception as _pe:
@@ -16285,7 +16588,7 @@ def _process_pending_image_translate_inner(event, message_id):
                 getattr(_src, 'room_id', None) or
                 getattr(_src, 'user_id', None))
     
-    def _reply_or_push(text, quick_reply=None):
+    def _reply_or_push(text, quick_reply=None, append_messages=None):
         target = _push_to
         if not target and info:
             target = info.get("group_id")
@@ -16307,7 +16610,7 @@ def _process_pending_image_translate_inner(event, message_id):
                     _msg.sender = _img_sender
                 api.push_message(PushMessageRequest(
                     to=target,
-                    messages=[_msg]
+                    messages=[_msg] + list(append_messages or [])
                 ))
             logger.info("[ImgAsk] push sent to %s: %s", target[:8], text[:80])
             return True
@@ -16440,6 +16743,13 @@ def _process_pending_image_translate_inner(event, message_id):
     _overlay_token = _store_image_overlay_context(
         img_raw, extracted, result, lang, actual_tgt, group_id
     )
+    _ocr_expression_visual = None
+    try:
+        _ocr_expression_visual = _build_expression_visual_message(
+            extracted, lang, group_id, from_image_ocr=True
+        )
+    except Exception as _visual_exc:
+        logger.debug("ImgAsk expression visual selection skipped: %s", _visual_exc)
     _stats_inc("image_translations")
     _reply_or_push(
         reply_text,
@@ -16452,6 +16762,7 @@ def _process_pending_image_translate_inner(event, message_id):
             msg_id=message_id,
             overlay_token=_overlay_token,
         ),
+        append_messages=([_ocr_expression_visual] if _ocr_expression_visual else None),
     )
     logger.info("[ImgAsk] DONE")
 
@@ -19981,8 +20292,62 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 </div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">🎭 自動語氣判斷＋表情</span><br><span style="font-size:12px;color:#8a8a9a">判斷道歉、感謝、提醒、警告等語氣，適度加入最多 1 個 emoji；與下方固定／自訂口吻分開</span></div>
-<label class="toggle"><input type="checkbox" id="autoToneEmojiToggle" onchange="toggleFeatureSetting('auto_tone_emoji_enabled',this.checked)"><span class="slider"></span></label>
+<div><span style="font-weight:600">✨ 智慧生動翻譯</span><br><span style="font-size:12px;color:#8a8a9a">逐句判斷語氣與情境，智慧加入表情、插畫或正式圖卡；不增加 AI API 呼叫</span></div>
+<label class="toggle"><input type="checkbox" id="autoToneEmojiToggle" onchange="toggleExpressiveMaster(this.checked)"><span class="slider"></span></label>
+</div>
+<div id="expressiveSettingsWrap" style="padding:10px 0 14px 12px;border-bottom:1px solid #2a2a3e">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+    <label style="font-size:12px;color:#8a8a9a">呈現方式
+      <select id="expressiveModeSelect" onchange="saveExpressiveSetting('expressive_translation_mode',this.value)" style="display:block;width:100%;margin-top:5px;padding:7px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0">
+        <option value="smart">智慧自動：語氣＋表情＋情境圖卡</option>
+        <option value="tone_only">只優化語氣</option>
+        <option value="emoji">語氣＋逐句表情</option>
+        <option value="image">語氣＋獨立圖片</option>
+        <option value="card">語氣＋正式圖文卡</option>
+        <option value="off">完全關閉</option>
+      </select>
+    </label>
+    <label style="font-size:12px;color:#8a8a9a">活潑程度
+      <select id="expressiveIntensitySelect" onchange="saveExpressiveSetting('expressive_translation_intensity',this.value)" style="display:block;width:100%;margin-top:5px;padding:7px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0">
+        <option value="subtle">含蓄</option>
+        <option value="natural">自然</option>
+        <option value="lively">活潑</option>
+      </select>
+    </label>
+    <label style="font-size:12px;color:#8a8a9a">圖片風格
+      <select id="expressiveVisualStyleSelect" onchange="saveExpressiveSetting('expressive_visual_style',this.value)" style="display:block;width:100%;margin-top:5px;padding:7px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0">
+        <option value="auto">自動判斷</option>
+        <option value="cute">可愛療癒</option>
+        <option value="minimal">簡約高質感</option>
+        <option value="formal">正式商務</option>
+        <option value="factory">工廠現場</option>
+        <option value="photo">照片感情境</option>
+      </select>
+    </label>
+    <label style="font-size:12px;color:#8a8a9a">短訊息字數上限
+      <input id="expressiveShortMaxChars" type="number" min="20" max="500" step="10" onchange="saveExpressiveSetting('expressive_short_message_max_chars',parseInt(this.value||80,10))" style="display:block;width:100%;box-sizing:border-box;margin-top:5px;padding:7px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0">
+    </label>
+  </div>
+  <div class="wl-item" style="border-color:#24243a;padding:9px 0">
+    <div><span style="font-size:13px;font-weight:600">😊 使用逐句表情</span><br><span style="font-size:11px;color:#8a8a9a">每句獨立判斷，國旗不算情緒表情；數字、人名、料號附近不插入</span></div>
+    <label class="toggle"><input type="checkbox" id="expressiveEmojiToggle" onchange="saveExpressiveSetting('expressive_emoji_enabled',this.checked)"><span class="slider"></span></label>
+  </div>
+  <div class="wl-item" style="border-color:#24243a;padding:9px 0">
+    <div><span style="font-size:13px;font-weight:600">🖼️ 使用圖片／圖卡</span><br><span style="font-size:11px;color:#8a8a9a">從本地 120 張素材庫選擇，不產生圖片 API 費用；群組有冷卻時間避免洗版</span></div>
+    <label class="toggle"><input type="checkbox" id="expressiveImagesToggle" onchange="saveExpressiveSetting('expressive_images_enabled',this.checked)"><span class="slider"></span></label>
+  </div>
+  <div class="wl-item" style="border-color:#24243a;padding:9px 0">
+    <div><span style="font-size:13px;font-weight:600">💬 短訊息顯示情緒圖片</span><br><span style="font-size:11px;color:#8a8a9a">問候、感謝、鼓勵、稱讚等短句可搭配插畫；可獨立關閉</span></div>
+    <label class="toggle"><input type="checkbox" id="expressiveShortImageToggle" onchange="saveExpressiveSetting('expressive_short_message_image_enabled',this.checked)"><span class="slider"></span></label>
+  </div>
+  <div class="wl-item" style="border-color:#24243a;padding:9px 0">
+    <div><span style="font-size:13px;font-weight:600">🦺 正式／工廠安全限制</span><br><span style="font-size:11px;color:#8a8a9a">工作公告、設備、工單與安全訊息只用正式或工廠風素材，避免過度可愛</span></div>
+    <label class="toggle"><input type="checkbox" id="expressiveFormalSafetyToggle" onchange="saveExpressiveSetting('expressive_formal_safety_enabled',this.checked)"><span class="slider"></span></label>
+  </div>
+  <div class="wl-item" style="border-color:#24243a;padding:9px 0">
+    <div><span style="font-size:13px;font-weight:600">📷 照片 OCR 翻譯也套用</span><br><span style="font-size:11px;color:#8a8a9a">獨立開關；與照片翻譯下方的快捷功能完全分開</span></div>
+    <label class="toggle"><input type="checkbox" id="imageOcrExpressiveToggle" onchange="saveExpressiveSetting('image_ocr_expressive_enabled',this.checked)"><span class="slider"></span></label>
+  </div>
 </div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
@@ -23437,6 +23802,16 @@ async function _loadFeatures(gid){
   document.getElementById('cameraRollQrToggle').checked=d.camera_roll_qr_enabled||false;
   document.getElementById('locationQrToggle').checked=d.location_qr_enabled||false;
   document.getElementById('autoToneEmojiToggle').checked=d.auto_tone_emoji_enabled!==false;
+  document.getElementById('expressiveModeSelect').value=d.expressive_translation_mode||'smart';
+  document.getElementById('expressiveIntensitySelect').value=(d.expressive_translation_intensity==='balanced'?'natural':(d.expressive_translation_intensity||'natural'));
+  document.getElementById('expressiveVisualStyleSelect').value=d.expressive_visual_style||'auto';
+  document.getElementById('expressiveEmojiToggle').checked=d.expressive_emoji_enabled!==false;
+  document.getElementById('expressiveImagesToggle').checked=d.expressive_images_enabled!==false;
+  document.getElementById('expressiveShortImageToggle').checked=d.expressive_short_message_image_enabled!==false;
+  document.getElementById('expressiveShortMaxChars').value=d.expressive_short_message_max_chars||80;
+  document.getElementById('expressiveFormalSafetyToggle').checked=d.expressive_formal_safety_enabled!==false;
+  document.getElementById('imageOcrExpressiveToggle').checked=d.image_ocr_expressive_enabled!==false;
+  updateExpressiveSettingsUI();
   document.getElementById('imageActionsToggle').checked=d.image_translation_actions_enabled!==false;
   var iam=d.image_translation_action_modes||{};
   document.getElementById('imgModeNatural').checked=iam.natural!==false;
@@ -23531,6 +23906,43 @@ function toggleFeatureSetting(key,val){
   var body={};body[key]=val;
   if(_settingsGid)body.group_id=_settingsGid;
   api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'群組設定已更新':'全域設定已更新')});
+}
+function updateExpressiveSettingsUI(){
+  var master=document.getElementById('autoToneEmojiToggle');
+  var wrap=document.getElementById('expressiveSettingsWrap');
+  var mode=document.getElementById('expressiveModeSelect');
+  var intensity=document.getElementById('expressiveIntensitySelect');
+  var style=document.getElementById('expressiveVisualStyleSelect');
+  var emoji=document.getElementById('expressiveEmojiToggle');
+  var images=document.getElementById('expressiveImagesToggle');
+  var shortImage=document.getElementById('expressiveShortImageToggle');
+  var shortMax=document.getElementById('expressiveShortMaxChars');
+  var formal=document.getElementById('expressiveFormalSafetyToggle');
+  var ocr=document.getElementById('imageOcrExpressiveToggle');
+  if(!master||!wrap)return;
+  var enabled=!!master.checked;
+  var mv=mode?mode.value:'smart';
+  var modeOff=(mv==='off');
+  var visualMode=(mv==='smart'||mv==='image'||mv==='card');
+  wrap.style.opacity=(enabled&&!modeOff)?'1':'0.45';
+  if(mode)mode.disabled=!enabled;
+  if(intensity)intensity.disabled=!enabled||modeOff;
+  if(style)style.disabled=!enabled||modeOff||!visualMode;
+  if(emoji)emoji.disabled=!enabled||modeOff||!(mv==='smart'||mv==='emoji');
+  if(images)images.disabled=!enabled||modeOff||!visualMode;
+  var imageEnabled=!!(images&&images.checked);
+  if(shortImage)shortImage.disabled=!enabled||modeOff||!visualMode||!imageEnabled;
+  if(shortMax)shortMax.disabled=!enabled||modeOff||!visualMode||!imageEnabled||!(shortImage&&shortImage.checked);
+  if(formal)formal.disabled=!enabled||modeOff;
+  if(ocr)ocr.disabled=!enabled||modeOff;
+}
+function toggleExpressiveMaster(enabled){
+  updateExpressiveSettingsUI();
+  toggleFeatureSetting('auto_tone_emoji_enabled',!!enabled);
+}
+function saveExpressiveSetting(key,val){
+  if(key==='expressive_translation_mode'||key==='expressive_images_enabled'||key==='expressive_short_message_image_enabled')updateExpressiveSettingsUI();
+  toggleFeatureSetting(key,val);
 }
 function updateImageTranslationActionModesUI(){
   var master=document.getElementById('imageActionsToggle');
@@ -24283,7 +24695,7 @@ def _load_file_from_github(filename, branch="main"):
 _SETTINGS_FILENAME = "bot_settings.json"
 _SETTINGS_BRANCH = "data"
 _SETTINGS_KV_KEY = os.environ.get("BOT_SETTINGS_KV_KEY", "line_bot:bot_settings:v2").strip() or "line_bot:bot_settings:v2"
-_SETTINGS_SCHEMA_VERSION = 7  # v3.36: migrate text translation to CP router + compact prompt
+_SETTINGS_SCHEMA_VERSION = 8  # v3.38: smart expressive translation + 60-card local media library
 _SETTINGS_REQUIRE_CLOUD = os.environ.get("REQUIRE_CLOUD_SETTINGS", "1").strip().lower() not in ("0", "false", "no", "off")
 _settings_io_lock = _threading.RLock()
 _last_persisted_state_hash = ""
@@ -24606,6 +25018,16 @@ def _do_save_impl():
             "flex_enabled": flex_enabled,
             "quick_reply_enabled": quick_reply_enabled,
             "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+            "expressive_translation_mode": expressive_translation_mode,
+            "expressive_translation_intensity": expressive_translation_intensity,
+            "expressive_visual_style": expressive_visual_style,
+            "expressive_emoji_enabled": expressive_emoji_enabled,
+            "expressive_images_enabled": expressive_images_enabled,
+            "expressive_short_message_image_enabled": expressive_short_message_image_enabled,
+            "expressive_short_message_max_chars": expressive_short_message_max_chars,
+            "expressive_formal_safety_enabled": expressive_formal_safety_enabled,
+            "expressive_visual_enabled": expressive_images_enabled,
+            "image_ocr_expressive_enabled": image_ocr_expressive_enabled,
             "image_translation_actions_enabled": image_translation_actions_enabled,
             "image_translation_action_modes": image_translation_action_modes,
             "silent_mode": silent_mode,
@@ -24618,6 +25040,16 @@ def _do_save_impl():
             "group_flex_settings": group_flex_settings,
             "group_qr_settings": group_qr_settings,
             "group_auto_tone_emoji_settings": group_auto_tone_emoji_settings,
+            "group_expressive_mode_settings": group_expressive_mode_settings,
+            "group_expressive_intensity_settings": group_expressive_intensity_settings,
+            "group_expressive_visual_style_settings": group_expressive_visual_style_settings,
+            "group_expressive_emoji_settings": group_expressive_emoji_settings,
+            "group_expressive_images_settings": group_expressive_images_settings,
+            "group_expressive_short_image_settings": group_expressive_short_image_settings,
+            "group_expressive_short_max_chars_settings": group_expressive_short_max_chars_settings,
+            "group_expressive_formal_safety_settings": group_expressive_formal_safety_settings,
+            "group_expressive_visual_settings": group_expressive_visual_settings,
+            "group_image_ocr_expressive_settings": group_image_ocr_expressive_settings,
             "group_image_translation_actions_settings": group_image_translation_actions_settings,
             "group_image_translation_action_modes": group_image_translation_action_modes,
             "group_silent_settings": group_silent_settings,
@@ -24764,9 +25196,17 @@ def load_settings():
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
-    global flex_enabled, quick_reply_enabled, auto_tone_emoji_enabled, image_translation_actions_enabled, image_translation_action_modes
+    global flex_enabled, quick_reply_enabled, auto_tone_emoji_enabled
+    global expressive_translation_mode, expressive_translation_intensity, expressive_visual_style
+    global expressive_emoji_enabled, expressive_images_enabled, expressive_short_message_image_enabled
+    global expressive_short_message_max_chars, expressive_formal_safety_enabled, expressive_visual_enabled
+    global image_ocr_expressive_enabled, image_translation_actions_enabled, image_translation_action_modes
     global silent_mode, welcome_settings, sender_name, sender_icon, sender_name_mode, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
     global group_flex_settings, group_qr_settings, group_auto_tone_emoji_settings
+    global group_expressive_mode_settings, group_expressive_intensity_settings, group_expressive_visual_style_settings
+    global group_expressive_emoji_settings, group_expressive_images_settings, group_expressive_short_image_settings
+    global group_expressive_short_max_chars_settings, group_expressive_formal_safety_settings
+    global group_expressive_visual_settings, group_image_ocr_expressive_settings
     global group_image_translation_actions_settings, group_image_translation_action_modes
     global group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
@@ -24836,6 +25276,30 @@ def load_settings():
             quick_reply_enabled = data["quick_reply_enabled"]
         if "auto_tone_emoji_enabled" in data:
             auto_tone_emoji_enabled = bool(data["auto_tone_emoji_enabled"])
+        if "expressive_translation_mode" in data:
+            expressive_translation_mode = _normalise_expressive_mode(data["expressive_translation_mode"])
+        if "expressive_translation_intensity" in data:
+            expressive_translation_intensity = _normalise_expressive_intensity(data["expressive_translation_intensity"])
+        if "expressive_visual_style" in data:
+            expressive_visual_style = _normalise_expressive_visual_style(data["expressive_visual_style"])
+        if "expressive_emoji_enabled" in data:
+            expressive_emoji_enabled = bool(data["expressive_emoji_enabled"])
+        if "expressive_images_enabled" in data:
+            expressive_images_enabled = bool(data["expressive_images_enabled"])
+        elif _loaded_settings_schema >= 8 and "expressive_visual_enabled" in data:
+            expressive_images_enabled = bool(data["expressive_visual_enabled"])
+        expressive_visual_enabled = expressive_images_enabled
+        if "expressive_short_message_image_enabled" in data:
+            expressive_short_message_image_enabled = bool(data["expressive_short_message_image_enabled"])
+        if "expressive_short_message_max_chars" in data:
+            expressive_short_message_max_chars = _normalise_expressive_max_chars(data["expressive_short_message_max_chars"])
+        if "expressive_formal_safety_enabled" in data:
+            expressive_formal_safety_enabled = bool(data["expressive_formal_safety_enabled"])
+        if "image_ocr_expressive_enabled" in data:
+            # The previous build defaulted this to False.  Schema-7 persisted
+            # defaults must not silently disable the new schema-8 feature.
+            if _loaded_settings_schema >= 8 or bool(data["image_ocr_expressive_enabled"]):
+                image_ocr_expressive_enabled = bool(data["image_ocr_expressive_enabled"])
         if "image_translation_actions_enabled" in data:
             image_translation_actions_enabled = bool(data["image_translation_actions_enabled"])
         if "image_translation_action_modes" in data:
@@ -24861,6 +25325,16 @@ def load_settings():
         group_flex_settings.update(data.get("group_flex_settings", {}))
         group_qr_settings.update(data.get("group_qr_settings", {}))
         group_auto_tone_emoji_settings.update(data.get("group_auto_tone_emoji_settings", {}))
+        group_expressive_mode_settings.update(data.get("group_expressive_mode_settings", {}))
+        group_expressive_intensity_settings.update(data.get("group_expressive_intensity_settings", {}))
+        group_expressive_visual_style_settings.update(data.get("group_expressive_visual_style_settings", {}))
+        group_expressive_emoji_settings.update(data.get("group_expressive_emoji_settings", {}))
+        group_expressive_images_settings.update(data.get("group_expressive_images_settings", {}))
+        group_expressive_short_image_settings.update(data.get("group_expressive_short_image_settings", {}))
+        group_expressive_short_max_chars_settings.update(data.get("group_expressive_short_max_chars_settings", {}))
+        group_expressive_formal_safety_settings.update(data.get("group_expressive_formal_safety_settings", {}))
+        group_expressive_visual_settings.update(data.get("group_expressive_visual_settings", {}))
+        group_image_ocr_expressive_settings.update(data.get("group_image_ocr_expressive_settings", {}))
         group_image_translation_actions_settings.update(data.get("group_image_translation_actions_settings", {}))
         for _gid, _modes in (data.get("group_image_translation_action_modes", {}) or {}).items():
             group_image_translation_action_modes[_gid] = _normalise_image_translation_action_modes(_modes)
@@ -27253,6 +27727,10 @@ def api_translation_stats():
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
     global flex_enabled, quick_reply_enabled, auto_tone_emoji_enabled
+    global expressive_translation_mode, expressive_translation_intensity, expressive_visual_style
+    global expressive_emoji_enabled, expressive_images_enabled, expressive_short_message_image_enabled
+    global expressive_short_message_max_chars, expressive_formal_safety_enabled, expressive_visual_enabled
+    global image_ocr_expressive_enabled
     global image_translation_actions_enabled, image_translation_action_modes
     global silent_mode, welcome_settings
     global sender_name, sender_icon, sender_name_mode, sender_avatar_mode, video_ocr_enabled, location_translate_enabled
@@ -27279,6 +27757,12 @@ def api_admin_features():
                 "flex_enabled": group_flex_settings,
                 "quick_reply_enabled": group_qr_settings,
                 "auto_tone_emoji_enabled": group_auto_tone_emoji_settings,
+                "expressive_emoji_enabled": group_expressive_emoji_settings,
+                "expressive_images_enabled": group_expressive_images_settings,
+                "expressive_visual_enabled": group_expressive_visual_settings,
+                "expressive_short_message_image_enabled": group_expressive_short_image_settings,
+                "expressive_formal_safety_enabled": group_expressive_formal_safety_settings,
+                "image_ocr_expressive_enabled": group_image_ocr_expressive_settings,
                 "image_translation_actions_enabled": group_image_translation_actions_settings,
                 "silent_mode": group_silent_settings,
                 "video_ocr_enabled": group_video_settings,
@@ -27293,6 +27777,16 @@ def api_admin_features():
             for key, d in _feat_map.items():
                 if key in data:
                     d[gid] = bool(data[key])
+            if "expressive_translation_mode" in data:
+                group_expressive_mode_settings[gid] = _normalise_expressive_mode(data.get("expressive_translation_mode"))
+            if "expressive_translation_intensity" in data:
+                group_expressive_intensity_settings[gid] = _normalise_expressive_intensity(data.get("expressive_translation_intensity"))
+            if "expressive_visual_style" in data:
+                group_expressive_visual_style_settings[gid] = _normalise_expressive_visual_style(data.get("expressive_visual_style"))
+            if "expressive_short_message_max_chars" in data:
+                group_expressive_short_max_chars_settings[gid] = _normalise_expressive_max_chars(data.get("expressive_short_message_max_chars"))
+            if "expressive_images_enabled" in data:
+                group_expressive_visual_settings.pop(gid, None)
             if "image_translation_action_modes" in data:
                 group_image_translation_action_modes[gid] = _normalise_image_translation_action_modes(
                     data.get("image_translation_action_modes")
@@ -27330,6 +27824,28 @@ def api_admin_features():
                 quick_reply_enabled = bool(data["quick_reply_enabled"])
             if "auto_tone_emoji_enabled" in data:
                 auto_tone_emoji_enabled = bool(data["auto_tone_emoji_enabled"])
+            if "expressive_translation_mode" in data:
+                expressive_translation_mode = _normalise_expressive_mode(data.get("expressive_translation_mode"))
+            if "expressive_translation_intensity" in data:
+                expressive_translation_intensity = _normalise_expressive_intensity(data.get("expressive_translation_intensity"))
+            if "expressive_visual_style" in data:
+                expressive_visual_style = _normalise_expressive_visual_style(data.get("expressive_visual_style"))
+            if "expressive_emoji_enabled" in data:
+                expressive_emoji_enabled = bool(data["expressive_emoji_enabled"])
+            if "expressive_images_enabled" in data:
+                expressive_images_enabled = bool(data["expressive_images_enabled"])
+                expressive_visual_enabled = expressive_images_enabled
+            elif "expressive_visual_enabled" in data:
+                expressive_images_enabled = bool(data["expressive_visual_enabled"])
+                expressive_visual_enabled = expressive_images_enabled
+            if "expressive_short_message_image_enabled" in data:
+                expressive_short_message_image_enabled = bool(data["expressive_short_message_image_enabled"])
+            if "expressive_short_message_max_chars" in data:
+                expressive_short_message_max_chars = _normalise_expressive_max_chars(data.get("expressive_short_message_max_chars"))
+            if "expressive_formal_safety_enabled" in data:
+                expressive_formal_safety_enabled = bool(data["expressive_formal_safety_enabled"])
+            if "image_ocr_expressive_enabled" in data:
+                image_ocr_expressive_enabled = bool(data["image_ocr_expressive_enabled"])
             if "image_translation_actions_enabled" in data:
                 image_translation_actions_enabled = bool(data["image_translation_actions_enabled"])
             if "image_translation_action_modes" in data:
@@ -27417,6 +27933,16 @@ def api_admin_features():
             "flex_enabled": get_group_feature(gid, 'flex'),
             "quick_reply_enabled": get_group_feature(gid, 'quick_reply'),
             "auto_tone_emoji_enabled": get_auto_tone_emoji_enabled(gid),
+            "expressive_translation_mode": get_expressive_translation_mode(gid),
+            "expressive_translation_intensity": get_expressive_translation_intensity(gid),
+            "expressive_visual_style": get_expressive_visual_style(gid),
+            "expressive_emoji_enabled": get_expressive_emoji_enabled(gid),
+            "expressive_images_enabled": get_expressive_images_enabled(gid),
+            "expressive_visual_enabled": get_expressive_images_enabled(gid),
+            "expressive_short_message_image_enabled": get_expressive_short_image_enabled(gid),
+            "expressive_short_message_max_chars": get_expressive_short_max_chars(gid),
+            "expressive_formal_safety_enabled": get_expressive_formal_safety_enabled(gid),
+            "image_ocr_expressive_enabled": get_image_ocr_expressive_enabled(gid),
             "image_translation_actions_enabled": get_image_translation_actions_enabled(gid),
             "image_translation_action_modes": get_image_translation_action_modes(gid),
             "silent_mode": get_group_feature(gid, 'silent'),
@@ -27441,6 +27967,16 @@ def api_admin_features():
                 "flex_enabled": flex_enabled,
                 "quick_reply_enabled": quick_reply_enabled,
                 "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+                "expressive_translation_mode": expressive_translation_mode,
+                "expressive_translation_intensity": expressive_translation_intensity,
+                "expressive_visual_style": expressive_visual_style,
+                "expressive_emoji_enabled": expressive_emoji_enabled,
+                "expressive_images_enabled": expressive_images_enabled,
+                "expressive_visual_enabled": expressive_images_enabled,
+                "expressive_short_message_image_enabled": expressive_short_message_image_enabled,
+                "expressive_short_message_max_chars": expressive_short_message_max_chars,
+                "expressive_formal_safety_enabled": expressive_formal_safety_enabled,
+                "image_ocr_expressive_enabled": image_ocr_expressive_enabled,
                 "image_translation_actions_enabled": image_translation_actions_enabled,
                 "image_translation_action_modes": image_translation_action_modes,
                 "silent_mode": silent_mode,
@@ -27453,7 +27989,7 @@ def api_admin_features():
                 "camera_roll_qr_enabled": camera_roll_qr_enabled,
                 "location_qr_enabled": location_qr_enabled,
             },
-            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_auto_tone_emoji_settings or gid in group_image_translation_actions_settings or gid in group_image_translation_action_modes or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings or gid in group_camera_roll_qr_settings or gid in group_location_qr_settings,
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_auto_tone_emoji_settings or gid in group_expressive_mode_settings or gid in group_expressive_intensity_settings or gid in group_expressive_visual_style_settings or gid in group_expressive_emoji_settings or gid in group_expressive_images_settings or gid in group_expressive_short_image_settings or gid in group_expressive_short_max_chars_settings or gid in group_expressive_formal_safety_settings or gid in group_expressive_visual_settings or gid in group_image_ocr_expressive_settings or gid in group_image_translation_actions_settings or gid in group_image_translation_action_modes or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings or gid in group_camera_roll_qr_settings or gid in group_location_qr_settings,
         })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
@@ -27462,6 +27998,16 @@ def api_admin_features():
         "flex_enabled": flex_enabled,
         "quick_reply_enabled": quick_reply_enabled,
         "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+        "expressive_translation_mode": expressive_translation_mode,
+        "expressive_translation_intensity": expressive_translation_intensity,
+        "expressive_visual_style": expressive_visual_style,
+        "expressive_emoji_enabled": expressive_emoji_enabled,
+        "expressive_images_enabled": expressive_images_enabled,
+        "expressive_visual_enabled": expressive_images_enabled,
+        "expressive_short_message_image_enabled": expressive_short_message_image_enabled,
+        "expressive_short_message_max_chars": expressive_short_message_max_chars,
+        "expressive_formal_safety_enabled": expressive_formal_safety_enabled,
+        "image_ocr_expressive_enabled": image_ocr_expressive_enabled,
         "image_translation_actions_enabled": image_translation_actions_enabled,
         "image_translation_action_modes": image_translation_action_modes,
         "silent_mode": silent_mode,
@@ -27505,6 +28051,16 @@ def api_admin_features_reset():
     group_flex_settings.pop(gid, None)
     group_qr_settings.pop(gid, None)
     group_auto_tone_emoji_settings.pop(gid, None)
+    group_expressive_mode_settings.pop(gid, None)
+    group_expressive_intensity_settings.pop(gid, None)
+    group_expressive_visual_style_settings.pop(gid, None)
+    group_expressive_emoji_settings.pop(gid, None)
+    group_expressive_images_settings.pop(gid, None)
+    group_expressive_short_image_settings.pop(gid, None)
+    group_expressive_short_max_chars_settings.pop(gid, None)
+    group_expressive_formal_safety_settings.pop(gid, None)
+    group_expressive_visual_settings.pop(gid, None)
+    group_image_ocr_expressive_settings.pop(gid, None)
     group_image_translation_actions_settings.pop(gid, None)
     group_image_translation_action_modes.pop(gid, None)
     group_silent_settings.pop(gid, None)
