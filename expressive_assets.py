@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-EXPRESSIVE_ASSETS_VERSION = "2026-07-14.2-120-card-library"
+EXPRESSIVE_ASSETS_VERSION = "2026-07-14.3-workplace-context"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_MANIFEST = _ROOT / "static" / "expressive_media" / "manifest.json"
@@ -86,7 +86,10 @@ _FACTORY_RE = re.compile(
 )
 _NOTICE_RE = re.compile(
     r"公告|通知|提醒|請大家|務必|規定|主管|處長|巡視|人數|聚集|"
-    r"\b(?:pengumuman|pemberitahuan|harap|wajib|aturan|atasan|kepala\s+divisi|berkumpul)\b",
+    r"會議|班會|股會|班股|交班|集合|上班|下班|加班|班別|早班|夜班|小夜班|會議室|"
+    r"@all|＠all|"
+    r"\b(?:pengumuman|pemberitahuan|harap|wajib|aturan|atasan|kepala\s+divisi|berkumpul|"
+    r"rapat|shift|lembur|ruang\s+rapat|masuk\s+kerja|pulang\s+kerja|kumpul)\b",
     re.I,
 )
 _WARNING_RE = re.compile(

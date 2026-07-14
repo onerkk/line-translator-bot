@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import expressive_assets
 import translation_extras
 
-EXPRESSIVE_ENGINE_VERSION = "2026-07-14.1-smart-expression-engine"
+EXPRESSIVE_ENGINE_VERSION = "2026-07-14.2-text-first-visual-card"
 
 
 @dataclass(frozen=True)
@@ -156,9 +156,11 @@ def enhance_translation(
     visual = None
     allow_visual, is_short = _should_offer_visual(source, cfg, dominant_tone, context)
     if allow_visual:
-        presentation = "card" if mode == "card" else "image"
-        if mode == "smart":
-            presentation = "card" if context in {"factory", "workplace"} else "image"
+        # Smart mode never emits a bare standalone image.  A Flex card with a
+        # translated-text preview makes it explicit that the visual is secondary
+        # decoration.  Bare ImageMessage remains available only when an operator
+        # deliberately chooses the backend `image` mode.
+        presentation = "image" if mode == "image" else "card"
         visual = expressive_assets.select_visual(
             source_text=source,
             tone=dominant_tone,
