@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 
+TRANSLATION_EXTRAS_VERSION = "2026-07-14.2-auto-tone-emoji"
+
+
 SUPPORTED_PERSONAL_LANGS = ("zh", "id", "vi", "th", "tl", "en", "ja", "ko", "hi")
 
 LANGUAGE_LABELS = {
@@ -72,6 +75,319 @@ LANGUAGE_ALIASES = {
     "印地語": "hi",
     "hindi": "hi",
 }
+
+
+# ---------------------------------------------------------------------------
+# Automatic tone detection + conservative emoji decoration
+# ---------------------------------------------------------------------------
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"  # flags
+    "\U0001F300-\U0001FAFF"  # symbols, pictographs and supplemental emoji
+    "\u2600-\u27BF"          # misc symbols/dingbats
+    "]"
+)
+
+_TONE_RULES: tuple[tuple[str, tuple[str, ...], str, str, str], ...] = (
+    (
+        "apology",
+        (
+            r"抱歉|對不起|不好意思|請原諒|是我的錯",
+            r"\b(?:maaf|maafkan|mafkan|maf\s+kan|mafin|mohon\s+maaf|minta\s+maaf|mhn\s+maaf)\b",
+            r"\b(?:sorry|apologi(?:ze|se)?)\b",
+        ),
+        "The speaker is apologising. Preserve responsibility, sincerity and any promise to improve; do not turn it into a request.",
+        "🙏",
+        "suffix",
+    ),
+    (
+        "gratitude",
+        (
+            r"謝謝|感謝|多謝|辛苦了|麻煩你了",
+            r"\b(?:terima\s+kasih|makasih|trimakasih|thanks?|thank\s+you)\b",
+        ),
+        "The speaker is expressing thanks or appreciation. Keep the wording warm but natural for a workplace chat.",
+        "🙏",
+        "suffix",
+    ),
+    (
+        "urgent_warning",
+        (
+            r"危險|警告|禁止|不得|不可|不要靠近|小心|注意安全|立即|立刻|馬上|緊急|停機|停線|務必|必須",
+            r"\b(?:bahaya|peringatan|dilarang|jangan\s+mendekat|hati-hati|segera|darurat|wajib|stop\s+mesin)\b",
+            r"\b(?:danger|warning|prohibited|do\s+not|immediately|urgent|must)\b",
+        ),
+        "This is an explicit warning, urgent instruction or safety message. Preserve its force and make the required action unmistakable without sounding abusive.",
+        "⚠️",
+        "prefix",
+    ),
+    (
+        "announcement",
+        (
+            r"(?:^|[\s：:])公告|通知|提醒大家|請大家注意",
+            r"\b(?:pengumuman|pemberitahuan|informasi\s+untuk\s+semua|harap\s+diperhatikan)\b",
+            r"\b(?:announcement|notice|attention\s+everyone)\b",
+        ),
+        "This is an announcement or group notice. Use clear, organised workplace wording and preserve the original level of formality.",
+        "📢",
+        "prefix",
+    ),
+    (
+        "request",
+        (
+            r"請(?:幫忙|協助|確認|注意|看一下|處理|拿|放|回覆|告知|通知)|麻煩(?:你|大家)?|拜託",
+            r"\b(?:tolong|mohon(?!\s+maaf)|harap|bisa\s+tolong)\b",
+            r"\b(?:please|could\s+you|would\s+you)\b",
+        ),
+        "The speaker is making a polite request. Preserve politeness and the exact requested action without weakening it into a vague suggestion.",
+        "🙏",
+        "suffix",
+    ),
+    (
+        "praise",
+        (
+            r"做得好|很好|很棒|漂亮|讚|厲害|表現很好",
+            r"\b(?:bagus|bagus\s+sekali|mantap|hebat|kerja\s+bagus|good\s+job|well\s+done)\b",
+        ),
+        "The speaker is praising someone. Keep it positive, direct and natural rather than overly formal.",
+        "👍",
+        "suffix",
+    ),
+    (
+        "encouragement",
+        (
+            r"加油|撐住|別灰心|繼續保持|大家辛苦了",
+            r"\b(?:semangat|jangan\s+menyerah|tetap\s+semangat|keep\s+it\s+up)\b",
+        ),
+        "The speaker is encouraging the listener. Keep the message supportive and concise.",
+        "💪",
+        "suffix",
+    ),
+    (
+        "celebration",
+        (
+            r"恭喜|成功了|完成了|達成|太好了",
+            r"\b(?:selamat|berhasil|selesai|akhirnya\s+selesai|congratulations?)\b",
+        ),
+        "The speaker is celebrating success or completion. Preserve the positive energy without adding facts.",
+        "🎉",
+        "suffix",
+    ),
+    (
+        "concern",
+        (
+            r"還好嗎|沒事吧|注意身體|保重|希望你沒事|早日康復",
+            r"\b(?:kamu\s+baik-baik\s+saja|tidak\s+apa-apa|jaga\s+kesehatan|semoga\s+lekas\s+sembuh)\b",
+            r"\b(?:are\s+you\s+okay|take\s+care|get\s+well\s+soon)\b",
+        ),
+        "The speaker is showing concern. Keep the tone caring and sincere, not clinical.",
+        "🙏",
+        "suffix",
+    ),
+    (
+        "greeting",
+        (
+            r"早安|午安|晚安|你好|哈囉|嗨",
+            r"\b(?:selamat\s+pagi|selamat\s+siang|selamat\s+sore|selamat\s+malam|halo|hai)\b",
+            r"\b(?:good\s+morning|good\s+afternoon|good\s+evening|hello|hi)\b",
+        ),
+        "This is a greeting. Keep it friendly and natural for the target-language workplace chat.",
+        "👋",
+        "suffix",
+    ),
+    (
+        "complaint",
+        (
+            r"怎麼又|搞什麼|太誇張|受不了|真的很煩|怎麼會這樣",
+            r"\b(?:aduh|kok\s+bisa|kenapa\s+lagi|menjengkelkan|capek\s+banget)\b",
+            r"\b(?:not\s+again|this\s+is\s+ridiculous|so\s+annoying)\b",
+        ),
+        "The speaker is frustrated or complaining. Preserve the dissatisfaction, but do not intensify it into abuse or hostility.",
+        "😓",
+        "suffix",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class ToneAnalysis:
+    """Deterministic, zero-network tone signal for one source message."""
+
+    primary: str
+    confidence: float
+    instruction: str
+    emoji: str = ""
+    placement: str = "none"
+    matched_text: str = ""
+    is_structured: bool = False
+
+    @property
+    def should_decorate(self) -> bool:
+        return bool(self.emoji and self.placement in {"prefix", "suffix"})
+
+
+def _looks_structured_or_tabular(text: str) -> bool:
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+    data_lines = sum(
+        1
+        for line in lines
+        if re.search(r"\d|\t|[|｜]|(?:^|\s)[A-Z]{1,5}\d{1,8}(?:\s|$)", line)
+    )
+    return data_lines >= max(2, len(lines) // 2)
+
+
+def _looks_factory_technical(text: str) -> bool:
+    """Return True for operational content where decorative emoji adds noise."""
+    return bool(
+        re.search(
+            r"(?:機台|機器|設備|工單|料號|爐號|站別|站號|品保|品質|重量|尺寸|棒材|材料|"
+            r"停機|開機|研磨|冷抽|削皮|退火|酸洗|矯直|拋光|倒角|噴砂|"
+            r"\b(?:mesin|work\s+order|material|barang|stasiun|station|qc|quality|"
+            r"berat|ukuran|grinding|drawing|annealing|pickling|polishing)\b|"
+            r"\d+(?:\.\d+)?\s*(?:kg|g|t|mm|cm|m|%|°c|℃))",
+            text or "",
+            re.I,
+        )
+    )
+
+
+def analyze_message_tone(text: str | None, language: str | None = None) -> ToneAnalysis:
+    """Classify pragmatic tone without an extra AI call.
+
+    The classifier is deliberately conservative.  It recognises high-value chat
+    intents (apology, thanks, warning, request, praise, etc.) and otherwise
+    returns ``neutral`` so technical factory data is not decorated arbitrarily.
+    """
+    source = str(text or "").strip()
+    structured = _looks_structured_or_tabular(source)
+    if not source:
+        return ToneAnalysis(
+            primary="neutral",
+            confidence=1.0,
+            instruction="Match the source's neutral tone.",
+            is_structured=structured,
+        )
+
+    for name, patterns, instruction, emoji, placement in _TONE_RULES:
+        for pattern in patterns:
+            match = re.search(pattern, source, re.I)
+            if not match:
+                continue
+            confidence = 0.96 if name in {"apology", "gratitude", "urgent_warning"} else 0.9
+            if structured and name not in {"urgent_warning", "announcement"}:
+                emoji = ""
+                placement = "none"
+            # Routine operational requests should retain polite wording but not
+            # acquire a decorative prayer emoji.  Explicit thanks/apologies and
+            # safety warnings remain expressive even when factory terms appear.
+            if name == "request" and _looks_factory_technical(source):
+                emoji = ""
+                placement = "none"
+            return ToneAnalysis(
+                primary=name,
+                confidence=confidence,
+                instruction=instruction,
+                emoji=emoji,
+                placement=placement,
+                matched_text=match.group(0),
+                is_structured=structured,
+            )
+
+    # A direct instruction is useful to the translation model even when it does
+    # not warrant an emoji.  Keep this narrow to avoid treating every sentence
+    # containing a factory verb as a command.
+    if re.search(
+        r"(?:請先|先把|記得|不要忘記|務必|幫我|幫忙|先去|等.+再)|"
+        r"\b(?:pastikan|jangan\s+lupa|silakan|harap|tolong)\b",
+        source,
+        re.I,
+    ):
+        return ToneAnalysis(
+            primary="instruction",
+            confidence=0.78,
+            instruction=(
+                "This is a direct workplace instruction. Preserve who must do what, the order of actions, "
+                "urgency and politeness; do not turn it into neutral information."
+            ),
+            is_structured=structured,
+        )
+
+    return ToneAnalysis(
+        primary="neutral",
+        confidence=0.65,
+        instruction=(
+            "No strong interpersonal emotion is explicit. Preserve the source's natural level of formality, "
+            "urgency and directness without inventing warmth, anger or politeness."
+        ),
+        is_structured=structured,
+    )
+
+
+def build_tone_prompt_instruction(analysis: ToneAnalysis | None) -> str:
+    """Render the local analysis as a compact model instruction."""
+    if not analysis:
+        return ""
+    return (
+        "AUTOMATIC TONE ANALYSIS: "
+        f"intent={analysis.primary}; confidence={analysis.confidence:.2f}. "
+        f"{analysis.instruction} "
+        "Use this signal to choose wording only. Do not output a tone label or explanation. "
+        "Emoji decoration is handled by the server after validation; do not invent extra emoji."
+    )
+
+
+def _insert_prefix_on_first_nonempty_line(text: str, emoji: str) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip():
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[index] = indent + emoji + " " + line.lstrip()
+            return "\n".join(lines)
+    return text
+
+
+def _append_suffix_on_last_nonempty_line(text: str, emoji: str) -> str:
+    lines = text.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].strip():
+            lines[index] = lines[index].rstrip() + " " + emoji
+            return "\n".join(lines)
+    return text
+
+
+def enrich_translation_with_tone_emoji(
+    source_text: str | None,
+    translated_text: str | None,
+    *,
+    analysis: ToneAnalysis | None = None,
+    source_language: str | None = None,
+    enabled: bool = True,
+) -> str:
+    """Add at most one context-appropriate emoji after translation validation.
+
+    Existing emoji are never duplicated.  Neutral, tabular and technical content
+    remains untouched.  This is intentionally deterministic so glossary, codes,
+    names, numbers and translated wording cannot be modified by the decoration.
+    """
+    result = str(translated_text or "")
+    source = str(source_text or "")
+    if not enabled or not result.strip():
+        return result
+    if os.environ.get("AUTO_TONE_EMOJI_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+        return result
+    if _EMOJI_RE.search(source) or _EMOJI_RE.search(result):
+        return result
+    analysis = analysis or analyze_message_tone(source, source_language)
+    if not analysis.should_decorate:
+        return result
+    if analysis.placement == "prefix":
+        return _insert_prefix_on_first_nonempty_line(result, analysis.emoji)
+    if analysis.placement == "suffix":
+        return _append_suffix_on_last_nonempty_line(result, analysis.emoji)
+    return result
 
 
 def normalize_personal_language(value: str | None) -> str | None:

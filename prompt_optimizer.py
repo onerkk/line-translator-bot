@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-07-14.2-quality-cost-router"
+PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -382,7 +382,8 @@ def _core_principles(src: str, tgt: str, tone_instruction: str, variant: str) ->
         "Priority: immutable placeholders/names/codes/data > runtime semantic contract > hard glossary > complete source meaning > natural target wording.\n"
         "Translate the intended workplace meaning, not isolated dictionary words. Preserve actor, action, object, time, condition, negation, severity, cause and consequence; never add facts.\n"
         "Preserve @mentions exactly. Preserve Chinese person names, customer names, immutable placeholders, equipment/work-order/lot codes, numbers, decimals, units, ranges and symbols exactly.\n"
-        "Preserve emoji, line breaks, blank lines, paragraph order and lists. Do not merge paragraphs or add headings, markdown, explanations, alternatives or commentary.\n"
+        "Preserve emoji, line breaks, blank lines, paragraph order and lists. Do not merge paragraphs or add headings, markdown, explanations, alternatives or commentary. "
+        "Use the supplied automatic tone analysis to choose wording, but do not invent additional emoji; the server handles any final emoji decoration after validation.\n"
         "Do not leak source-language ordinary words; translate them into the target language.\n"
         + (directional + "\n" if directional else "")
         + f"Tone: {tone}\n"

@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.36.0-quality-cost-routing-root-fix-2026-07-14"
+VERSION = "v3.37.2-single-call-no-failure-card-auto-tone-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -262,8 +262,8 @@ import factory_knowledge as factory_knowledge_module  # editable plant-context r
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 13
-_EXPECTED_QG_BUILD_ID = "2026-07-13.17-factory-context-knowledge"
+_EXPECTED_QG_API_VERSION = 14
+_EXPECTED_QG_BUILD_ID = "2026-07-14.18-single-call-no-failure-card"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -279,6 +279,46 @@ logger.info(
     "[QualityGate] deployment verified api=%s build=%s module=%s",
     _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
     getattr(tqg_module, "__file__", "<unknown>"),
+)
+
+# These four files form one deployable unit.  A stale translation_extras.py was
+# the reason an app-only upload could start successfully and then fail on the
+# first translation with AttributeError.  Fail during deploy instead of charging
+# for a request and discovering the mismatch inside the LINE webhook.
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.2-auto-tone-emoji"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
+_required_translation_extra_functions = (
+    "analyze_message_tone",
+    "build_tone_prompt_instruction",
+    "enrich_translation_with_tone_emoji",
+)
+_missing_translation_extra_functions = [
+    name for name in _required_translation_extra_functions
+    if not callable(getattr(translation_extras_module, name, None))
+]
+if (getattr(translation_extras_module, "TRANSLATION_EXTRAS_VERSION", None)
+        != _EXPECTED_TRANSLATION_EXTRAS_VERSION
+        or _missing_translation_extra_functions):
+    raise RuntimeError(
+        "translation_extras deployment mismatch: "
+        f"expected version={_EXPECTED_TRANSLATION_EXTRAS_VERSION}, "
+        f"loaded={getattr(translation_extras_module, 'TRANSLATION_EXTRAS_VERSION', None)!r}, "
+        f"missing={_missing_translation_extra_functions}, "
+        f"module={getattr(translation_extras_module, '__file__', '<unknown>')}. "
+        "Replace app.py and translation_extras.py together in the project root."
+    )
+if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PROMPT_OPTIMIZER_VERSION:
+    raise RuntimeError(
+        "prompt_optimizer deployment mismatch: "
+        f"expected version={_EXPECTED_PROMPT_OPTIMIZER_VERSION}, "
+        f"loaded={getattr(prompt_opt_module, 'PROMPT_OPTIMIZER_VERSION', None)!r}, "
+        f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
+        "Replace app.py and prompt_optimizer.py together in the project root."
+    )
+logger.info(
+    "[ToneEmoji] deployment verified extras=%s prompt_optimizer=%s",
+    _EXPECTED_TRANSLATION_EXTRAS_VERSION,
+    _EXPECTED_PROMPT_OPTIMIZER_VERSION,
 )
 
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
@@ -1102,6 +1142,21 @@ welcome_settings = {
 flex_enabled = True
 # Quick Reply buttons ON/OFF
 quick_reply_enabled = True
+# Automatic pragmatic-tone detection + conservative emoji decoration.
+# This is intentionally independent from the fixed/custom translation tone below.
+auto_tone_emoji_enabled = True
+# Image-result actions shown below OCR/photo translations.  The master switch and
+# each action mode are independently configurable from the admin dashboard.
+image_translation_actions_enabled = True
+IMAGE_TRANSLATION_ACTION_MODE_DEFAULTS = {
+    "natural": True,
+    "literal": True,
+    "formal": True,
+    "backcheck": True,
+    "personal": True,
+    "overlay": True,
+}
+image_translation_action_modes = dict(IMAGE_TRANSLATION_ACTION_MODE_DEFAULTS)
 # Silent mode: translation messages don't buzz the phone
 silent_mode = False
 # Video OCR translation ON/OFF
@@ -1123,6 +1178,9 @@ location_qr_enabled = False
 # Per-group feature overrides (group_id -> bool), global values above are defaults
 group_flex_settings = {}      # per-group flex card toggle
 group_qr_settings = {}        # per-group quick reply toggle
+group_auto_tone_emoji_settings = {}  # per-group automatic tone/emoji toggle
+group_image_translation_actions_settings = {}  # per-group image action master toggle
+group_image_translation_action_modes = {}      # per-group image action mode overrides
 group_silent_settings = {}    # per-group silent mode toggle
 group_video_settings = {}     # per-group video OCR toggle
 group_location_settings = {}  # per-group location translate toggle
@@ -1551,10 +1609,100 @@ translation_logging_enabled = True   # Record every translation
 translation_log = []                 # In-memory ring buffer + persisted JSON file
 TRANSLATION_LOG_MAX = 500            # Cap at 500 to prevent memory blowup
 
-# v3.9.5: Debug snapshot for the last translation. Used by /admin/debug/last-translate
-# to diagnose why custom examples may not be reaching the model. Stores the
-# actual messages array sent to OpenAI, the path taken, model, and raw response.
+# v3.9.5: Debug snapshot for the last translation. Used by /debug/last-translate.
+# This used to be memory-only, so Render restarts and multi-worker routing often
+# returned "no translation has been made since restart" even after a real call.
+# Keep an atomic disk copy beside the translation log so every worker can read it.
 last_translate_debug = {}
+_last_translate_debug_lock = threading.RLock()
+
+
+def _resolve_last_translate_debug_path():
+    env = os.environ.get("LAST_TRANSLATE_DEBUG_FILE", "").strip()
+    if env:
+        return env
+    try:
+        base_dir = os.path.dirname(os.path.abspath(TRANSLATION_LOG_FILE))
+    except Exception:
+        base_dir = os.getcwd()
+    return os.path.join(base_dir, "last_translate_debug.json")
+
+
+LAST_TRANSLATE_DEBUG_FILE = _resolve_last_translate_debug_path()
+logger.info("[LastTranslateDebug] persistence path = %s", LAST_TRANSLATE_DEBUG_FILE)
+
+
+def _persist_last_translate_debug():
+    """Atomically persist the latest debug snapshot; safe across worker reads."""
+    try:
+        with _last_translate_debug_lock:
+            snapshot = dict(last_translate_debug or {})
+        if not snapshot:
+            return False
+        path = LAST_TRANSLATE_DEBUG_FILE
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        tmp = "%s.%s.%s.tmp" % (path, os.getpid(), threading.get_ident())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False, indent=2, default=str)
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        logger.warning("[LastTranslateDebug] persist failed: %s", exc)
+        return False
+
+
+def _load_last_translate_debug_from_disk():
+    """Load the newest cross-worker snapshot. Returns a dict or an empty dict."""
+    try:
+        path = LAST_TRANSLATE_DEBUG_FILE
+        if not path or not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("[LastTranslateDebug] load failed: %s", exc)
+        return {}
+
+
+def _replace_last_translate_debug(snapshot):
+    global last_translate_debug
+    with _last_translate_debug_lock:
+        last_translate_debug = dict(snapshot or {})
+        last_translate_debug.setdefault("worker_pid", os.getpid())
+        last_translate_debug.setdefault("version", VERSION if 'VERSION' in globals() else "")
+    _persist_last_translate_debug()
+    return last_translate_debug
+
+
+def _update_last_translate_debug(**updates):
+    global last_translate_debug
+    with _last_translate_debug_lock:
+        if not isinstance(last_translate_debug, dict):
+            last_translate_debug = {}
+        last_translate_debug.update(updates)
+        last_translate_debug["worker_pid"] = os.getpid()
+        if 'VERSION' in globals():
+            last_translate_debug["version"] = VERSION
+    _persist_last_translate_debug()
+    return last_translate_debug
+
+
+def _get_last_translate_debug():
+    """Always prefer the persisted snapshot so another worker's call is visible."""
+    disk = _load_last_translate_debug_from_disk()
+    with _last_translate_debug_lock:
+        memory = dict(last_translate_debug or {})
+    if disk and int(disk.get("ts", 0) or 0) >= int(memory.get("ts", 0) or 0):
+        return disk
+    return memory
+
+
+_loaded_last_translate_debug = _load_last_translate_debug_from_disk()
+if _loaded_last_translate_debug:
+    last_translate_debug.update(_loaded_last_translate_debug)
 
 # v3.8: Reaction-event feedback pipeline.
 # Maps: bot's sent message_id → {"entry_id": ..., "ts": ..., "group_id": ...}
@@ -3195,6 +3343,40 @@ def get_group_feature(group_id, feature):
     if group_id and group_id in d:
         return d[group_id]
     return globals().get(global_key, True)
+
+
+def get_auto_tone_emoji_enabled(group_id):
+    """Return the automatic tone/emoji switch for one group."""
+    if group_id and group_id in group_auto_tone_emoji_settings:
+        return bool(group_auto_tone_emoji_settings[group_id])
+    return bool(auto_tone_emoji_enabled)
+
+
+def get_image_translation_actions_enabled(group_id):
+    """Return whether photo/OCR result action buttons are enabled."""
+    if group_id and group_id in group_image_translation_actions_settings:
+        return bool(group_image_translation_actions_settings[group_id])
+    return bool(image_translation_actions_enabled)
+
+
+def _normalise_image_translation_action_modes(value, base=None):
+    """Keep only known image action modes and coerce values to bool."""
+    result = dict(base or IMAGE_TRANSLATION_ACTION_MODE_DEFAULTS)
+    if isinstance(value, dict):
+        for key in IMAGE_TRANSLATION_ACTION_MODE_DEFAULTS:
+            if key in value:
+                result[key] = bool(value[key])
+    return result
+
+
+def get_image_translation_action_modes(group_id):
+    """Return merged global/per-group photo translation action modes."""
+    modes = _normalise_image_translation_action_modes(image_translation_action_modes)
+    if group_id and group_id in group_image_translation_action_modes:
+        modes = _normalise_image_translation_action_modes(
+            group_image_translation_action_modes[group_id], base=modes
+        )
+    return modes
 
 
 def get_group_welcome(group_id):
@@ -8919,6 +9101,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             tone_instruction = _preset_text + " 【額外語氣指令（補充微調，衝突時以下方為準）】 " + _tone_custom.strip()
         else:
             tone_instruction = _preset_text
+        # v3.37: zero-network pragmatic tone analysis.  This does not replace
+        # the configured group preset; it adds a per-message signal so apologies,
+        # requests, warnings, praise and announcements retain their real force.
+        # Emoji are appended only after all quality checks, never by the model.
+        _auto_tone_analysis = getattr(_tl, 'auto_tone_analysis', None)
+        _auto_tone_instruction = translation_extras_module.build_tone_prompt_instruction(
+            _auto_tone_analysis
+        )
+        if _auto_tone_instruction:
+            tone_instruction = tone_instruction + " " + _auto_tone_instruction
 
         # v3.9.51: 雙 AI 系統官方技術 — 用 OpenAI cookbook 官方標準 XML tag 名稱,
         # Anthropic 也識別任何 XML tag(雙方都推薦 use-xml-tags 強化 system prompt)。
@@ -9532,10 +9724,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # v3.9.5: snapshot what we are about to send to OpenAI so /admin/debug/last-translate can show it.
         # This is the single most useful diagnostic when custom examples aren't taking effect.
         try:
-            global last_translate_debug
             _example_count = sum(1 for m in _msgs if m.get("role") in ("user", "assistant")) - 1  # -1 for the actual user msg
             _example_count = max(0, _example_count // 2)  # pairs
-            last_translate_debug = {
+            _replace_last_translate_debug({
                 "ts": int(time.time()),
                 "src_text": text,
                 "src_lang": src,
@@ -9543,6 +9734,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "model_picked": _model,
                 "fewshot_mode": fewshot_mode,
                 "tone": _tone,
+                "auto_tone": getattr(_auto_tone_analysis, 'primary', 'neutral'),
                 "example_pairs_in_prompt": _example_count,
                 "messages_sent": _msgs,  # full messages array
                 "strict_no_source_script": strict_no_source_script,
@@ -9550,7 +9742,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "semantic_contract": getattr(_tl, 'semantic_contract', None),
                 "provider_preference": list(_provider_preference),
                 "prompt_chars": sum(len(str(m.get("content", ""))) for m in _msgs),
-            }
+                "pipeline_status": "provider_request_started",
+            })
         except Exception:
             pass
         # v3.2-0426e: build kwargs with all official OpenAI features
@@ -9785,10 +9978,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # v3.9.5: record raw OpenAI response into debug snapshot
         try:
             _resp_text = r.choices[0].message.content if (r and r.choices) else ""
-            last_translate_debug["openai_raw_response"] = _resp_text
-            last_translate_debug["openai_finish_reason"] = r.choices[0].finish_reason if (r and r.choices) else None
-            last_translate_debug["openai_status"] = "success"
-            last_translate_debug["kwargs_keys_sent"] = sorted(list(_kwargs.keys()))
+            _update_last_translate_debug(
+                openai_raw_response=_resp_text,
+                openai_finish_reason=(r.choices[0].finish_reason if (r and r.choices) else None),
+                openai_status="success",
+                kwargs_keys_sent=sorted(list(_kwargs.keys())),
+                provider_used=getattr(r, "_jy_provider", None),
+                pipeline_status="provider_response_received",
+            )
         except Exception:
             pass
         # Track cache hit for stats (if available in response)
@@ -9819,8 +10016,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             )
             # 寫進 last_translate_debug 方便事後 debug
             try:
-                last_translate_debug["openai_finish_reason"] = _finish_reason
-                last_translate_debug["empty_content"] = True
+                _update_last_translate_debug(
+                    openai_finish_reason=_finish_reason,
+                    empty_content=True,
+                    openai_status="empty",
+                    pipeline_status="provider_returned_empty",
+                )
             except Exception:
                 pass
             return None  # 上游會 fallback 到 google translate
@@ -9981,9 +10182,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         logger.error("OpenAI error: %s", e)
         # v3.9.5: record exception in debug snapshot
         try:
-            last_translate_debug["openai_status"] = "exception"
-            last_translate_debug["openai_error"] = str(e)[:500]
-            last_translate_debug["openai_error_type"] = type(e).__name__
+            _update_last_translate_debug(
+                openai_status="exception",
+                openai_error=str(e)[:500],
+                openai_error_type=type(e).__name__,
+                pipeline_status="provider_exception",
+            )
         except Exception:
             pass
         return None
@@ -10026,6 +10230,10 @@ def cache_get(text, src, tgt):
         if key in translation_cache:
             result, ts = translation_cache[key]
             if time.time() - ts < CACHE_TTL:
+                if _is_translation_failure_sentinel(result):
+                    logger.warning("[LegacyFailurePurge] removed failure payload from cache: %s -> %s", src, tgt)
+                    del translation_cache[key]
+                    return None
                 logger.info("Cache hit: %s -> %s", src, tgt)
                 return result
             else:
@@ -10035,6 +10243,9 @@ def cache_get(text, src, tgt):
 
 def cache_set(text, src, tgt, result, force=False):
     """Store translation in cache only after the synchronous gate has passed."""
+    if not result or _is_translation_failure_sentinel(result):
+        logger.warning("[LegacyFailurePurge] refused to cache empty/failure payload")
+        return
     if getattr(_tl, 'quality_gate_pending', False) and not force:
         logger.debug("[QualityGate] deferred cache write until final review")
         return
@@ -10375,28 +10586,46 @@ def restore_names(text, name_map):
 
 
 def _is_translation_failure_sentinel(text):
-    """Return True only for internal failure strings, never normal translations."""
+    """Detect every legacy user-visible failure payload, including cached copies.
+
+    Older deployments could save these strings in memory/TM or return them as a
+    translated result.  Detection is intentionally independent of
+    translation_quality_gate.translation_failure_message(), which is now a
+    compatibility no-op.
+    """
     if not text or not isinstance(text, str):
         return False
     value = text.strip()
-    return value in {
-        tqg_module.translation_failure_message("zh"),
-        tqg_module.translation_failure_message("id"),
-        tqg_module.translation_failure_message("en"),
-    }
+    # Remove the language flag and warning glyphs used by LINE reply formatting.
+    normalized = re.sub(r"^[\s\u200b-\u200f\ufeff⚠️‼❗🇦-🇿]+", "", value).strip().lower()
+    compact = re.sub(r"\s+", " ", normalized)
+    exact_or_substrings = (
+        "翻譯服務暫時未取得可用結果",
+        "目前所有翻譯服務皆無法取得結果",
+        "ai 已完成翻譯，但結果缺少或改動了關鍵資料",
+        "layanan terjemahan sementara belum menghasilkan hasil yang dapat digunakan",
+        "terjemahan gagal karena semua layanan penerjemahan sedang tidak tersedia",
+        "all translation services are temporarily unavailable",
+        "translation service has not produced a usable result",
+        "silakan kirim ulang beberapa saat lagi",
+    )
+    return any(marker in compact for marker in exact_or_substrings)
 
 
 def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Final deterministic boundary; never spends another translation request.
+    """Run local validation without discarding a paid provider result.
 
-    Validation failure returns ``None``.  A localized LINE failure notice belongs
-    to the message handler, not the translation value.  Returning the notice here
-    previously made the handler prepend a language flag and present
-    "all services unavailable" as if it were a successful translation.
+    This boundary may apply a deterministic safe correction, but it must never
+    replace a non-empty translation with ``None`` merely because a local quality
+    rule is uncertain.  Validation failures are logged and kept out of cache/TM;
+    the best available provider text is still delivered to LINE.
     """
     if not candidate or not isinstance(candidate, str):
         return None
     if _is_translation_failure_sentinel(candidate):
+        return None
+    original = candidate.strip()
+    if not original:
         return None
     try:
         pairs = ge_module.collect_applicable_pairs(
@@ -10405,29 +10634,29 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             src, tgt,
         )
         leaked_label = ge_module.find_reverse_glossary_ui_leak(
-            source_text, candidate,
+            source_text, original,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
             src, tgt,
         )
         if leaked_label:
             logger.warning(
-                "[FinalDeliveryGuard] reverse glossary UI-label warning (delivering best effort): %s",
+                "[FinalDeliveryGuard] reverse glossary UI-label warning; delivering provider result: %s",
                 leaked_label,
             )
-        # Final boundary never has permission to spend another provider call.
-        # Reject obvious mixed-language/integrity violations before the
-        # availability-first helper can downgrade them to a warning.
         direct_report = tqg_module.validate_translation(
-            source_text, candidate, src, tgt,
+            source_text, original, src, tgt,
             immutable_literals=tqg_module.inspect_immutable_spans(source_text).mapping.values(),
             glossary_pairs=pairs,
             require_paragraph_fidelity=False,
         )
         if not direct_report.ok:
-            logger.warning("[FinalDeliveryGuard] direct rejection issues=%s", direct_report.issues[:12])
-            return None
+            logger.warning(
+                "[FinalDeliveryGuard] advisory validation issues=%s; delivering provider result",
+                direct_report.issues[:12],
+            )
+            return original
         checked = tqg_module.ensure_delivery_safe_translation(
-            source_text, candidate, src, tgt,
+            source_text, original, src, tgt,
             model=_active_upgrade_model(),
             glossary_pairs=pairs,
             ai_client=None,
@@ -10436,13 +10665,16 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         if checked.get("ok") and checked.get("text"):
             return checked["text"].strip()
         logger.warning(
-            "[FinalDeliveryGuard] local validation rejected candidate path=%s issues=%s",
+            "[FinalDeliveryGuard] advisory check path=%s issues=%s; delivering provider result",
             checked.get("path"), checked.get("issues", [])[:12],
         )
-        return None
+        return original
     except Exception as exc:
-        logger.exception("[FinalDeliveryGuard] local validation exception; rejecting candidate: %s", exc)
-        return None
+        logger.exception(
+            "[FinalDeliveryGuard] local validation exception; delivering provider result: %s",
+            exc,
+        )
+        return original
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -10528,25 +10760,6 @@ def _normalize_factory_operation_question(source_text, candidate, src, tgt):
     return prefix + "Apa kendala dalam proses pengecatan semprot?"
 
 
-def _translation_failure_notice(src_lang="zh", target_langs=None):
-    """Return an accurate LINE status instead of calling every failure an outage."""
-    targets = set(target_langs or ())
-    reason = str(getattr(_tl, "translation_failure_kind", "") or "")
-    if reason.startswith("quality_"):
-        if str(src_lang or "").lower().startswith("id") or "id" in targets:
-            return (
-                "⚠️ AI 已完成翻譯，但結果缺少或改動了關鍵資料，因此未送出。請重新傳送原文。\n"
-                "AI sudah menerjemahkan, tetapi ada nama, kode, angka, atau informasi penting yang hilang/berubah, sehingga hasilnya tidak dikirim. Silakan kirim ulang teks asli."
-            )
-        return "⚠️ AI 已完成翻譯，但結果缺少或改動了關鍵資料，因此未送出。請重新傳送原文。"
-    if str(src_lang or "").lower().startswith("id") or "id" in targets:
-        return (
-            "⚠️ 翻譯服務暫時未取得可用結果，請稍後重新傳送。\n"
-            "Layanan terjemahan sementara belum menghasilkan hasil yang dapat digunakan. Silakan kirim ulang beberapa saat lagi."
-        )
-    return "⚠️ 翻譯服務暫時未取得可用結果，請稍後重新傳送。"
-
-
 def _send_reply_with_push_fallback(
     *,
     reply_token,
@@ -10627,7 +10840,11 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
             "Pengenalan atau terjemahan gambar sementara gagal. Silakan kirim ulang gambarnya."
         )
     else:
-        text = _translation_failure_notice("zh", ["id"])
+        logger.warning(
+            "background translation returned no deliverable text; visible fallback is disabled detail=%s",
+            str(detail or "")[:200],
+        )
+        return False
     msg = TextMessage(text=_clip_line_text(text))
     quote_token = (ctx or {}).get("quote_token")
     if quote_token:
@@ -10663,10 +10880,14 @@ def translate(text, src, tgt):
     人名與客戶名保持可見，不再轉成脆弱 placeholder；只有 LINE mention
     使用可恢復代碼。品質檢查負責記錄與阻止髒快取，不再把可用譯文丟棄。
     """
-    try:
-        _tl.translation_failure_kind = None
-    except Exception:
-        pass
+    _replace_last_translate_debug({
+        "ts": int(time.time()),
+        "src_text": text,
+        "src_lang": src,
+        "tgt_lang": tgt,
+        "pipeline_status": "translation_pipeline_started",
+        "openai_status": "not_called_yet",
+    })
     canonical_text = text
     # v3.33.4: normalize only known factory equipment codes before every cache,
     # TM, NMT, LLM, glossary and quality-gate route.  This prevents inputs such
@@ -10699,6 +10920,11 @@ def translate(text, src, tgt):
                     cache_set(canonical_text, src, tgt, _equipment_status, force=True)
                 except Exception:
                     pass
+                _update_last_translate_debug(
+                    pipeline_status="deterministic_equipment_status",
+                    final_candidate=_equipment_status[:2000],
+                    openai_status="not_needed",
+                )
                 return _equipment_status
     # v3.15: ERP「原因」欄是強語義表格/短標籤，必須在任何站別 alias、
     # cache、TM、NMT、LLM、final guard 之前先決定。這是文字與圖片共用的
@@ -10717,6 +10943,11 @@ def translate(text, src, tgt):
                 cache_set(canonical_text, src, tgt, reason_semantic, force=True)
             except Exception:
                 pass
+            _update_last_translate_debug(
+                pipeline_status="deterministic_factory_reason",
+                final_candidate=reason_semantic[:2000],
+                openai_status="not_needed",
+            )
             return reason_semantic
         canonical_text, _station_alias_matches = resolve_factory_station_aliases(text)
     # Mentions are immutable identity data, not translatable language.  Protect
@@ -10735,6 +10966,15 @@ def translate(text, src, tgt):
     _name_map = {}
     _visible_names = collect_visible_protected_names(canonical_text)
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
+    _auto_tone_enabled = bool(
+        get_auto_tone_emoji_enabled(getattr(_tl, 'group_id', None))
+    ) and not bool(getattr(_tl, 'disable_tone_emoji', False))
+    _auto_tone_analysis = (
+        translation_extras_module.analyze_message_tone(canonical_text, src)
+        if _auto_tone_enabled else None
+    )
+    _tone_state_missing = object()
+    _prev_auto_tone = getattr(_tl, 'auto_tone_analysis', _tone_state_missing)
     try:
         _protected_entities = {name: name for name in _visible_names}
         _protected_entities.update(_mention_map)
@@ -10742,6 +10982,7 @@ def translate(text, src, tgt):
             dict(getattr(_tl, 'external_mention_placeholders', None) or {})
         )
         _tl.protected_name_map = _protected_entities
+        _tl.auto_tone_analysis = _auto_tone_analysis
         result = _translate_core(protected_text, src, tgt)
     finally:
         # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
@@ -10753,6 +10994,17 @@ def translate(text, src, tgt):
                 _tl.protected_name_map = _prev_pnm
         except Exception:
             pass
+        try:
+            if _prev_auto_tone is _tone_state_missing:
+                if hasattr(_tl, 'auto_tone_analysis'):
+                    delattr(_tl, 'auto_tone_analysis')
+            else:
+                _tl.auto_tone_analysis = _prev_auto_tone
+        except Exception:
+            pass
+    if _is_translation_failure_sentinel(result):
+        logger.warning("[LegacyFailurePurge] blocked failure payload at public translate boundary")
+        result = None
     if result and isinstance(result, str):
         if _mention_map:
             result = restore_mentions(result, _mention_map)
@@ -10776,6 +11028,28 @@ def translate(text, src, tgt):
                     )
                     return _factory_reason_alignment_failure_message(tgt)
                 return reason_semantic
+        # v3.37: add at most one conservative emoji after all semantic,
+        # glossary, identity and format validation.  OCR/table workflows can opt
+        # out because an added symbol would interfere with line-by-line auditing.
+        _tone_emoji_enabled = bool(
+            get_auto_tone_emoji_enabled(getattr(_tl, 'group_id', None))
+        ) and not bool(
+            getattr(_tl, 'from_image_ocr', False)
+            or getattr(_tl, 'disable_tone_emoji', False)
+        )
+        result = translation_extras_module.enrich_translation_with_tone_emoji(
+            canonical_text,
+            result,
+            analysis=_auto_tone_analysis,
+            source_language=src,
+            enabled=_tone_emoji_enabled,
+        )
+    if _is_translation_failure_sentinel(result):
+        result = None
+    _update_last_translate_debug(
+        final_candidate=(str(result)[:2000] if result else ""),
+        pipeline_status=("translation_deliverable" if result else "translation_empty_silent"),
+    )
     return result
 
 
@@ -11011,6 +11285,15 @@ def _translate_core(text, src, tgt):
     _tm_result = None
     try:
         _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
+        if _tm_result:
+            if _is_translation_failure_sentinel(_tm_result.get("tgt_text", "")):
+                logger.warning("[LegacyFailurePurge] ignored failure payload from lexical TM")
+                _tm_result = None
+            elif isinstance(_tm_result.get("references"), list):
+                _tm_result["references"] = [
+                    ref for ref in _tm_result["references"]
+                    if len(ref) < 3 or not _is_translation_failure_sentinel(ref[2])
+                ]
     except Exception as _tm_e:
         logger.warning("[TM] lookup exception: %s", _tm_e)
     
@@ -11079,6 +11362,15 @@ def _translate_core(text, src, tgt):
     
     # v3.9.60: 有保護名時跳過語義 bypass(placeholder 化後語義中性,
     # 「只差人名」的兩句會被當成幾乎相同 → 可能回傳別人名字的舊譯文)。
+    if _vec_result and _is_translation_failure_sentinel(_vec_result.get("tgt_text", "")):
+        logger.warning("[LegacyFailurePurge] ignored failure payload from vector TM")
+        _vec_result = None
+    elif _vec_result and isinstance(_vec_result.get("references"), list):
+        _vec_result["references"] = [
+            ref for ref in _vec_result["references"]
+            if len(ref) < 3 or not _is_translation_failure_sentinel(ref[2])
+        ]
+
     if (not _has_protected_names) and (not _factory_ctx) and (not _quality_critical) and _semantic_contract.get("vector_bypass_allowed", True) and _vec_result and _vec_result.get("match_type") == "vector_bypass":
         _bypass_result = _vec_result["tgt_text"]
         _vec_sem_ok, _vec_sem_reason = translation_satisfies_semantic_contract(_semantic_contract, _bypass_result)
@@ -11274,26 +11566,27 @@ def _translate_core(text, src, tgt):
         logger.warning("[Thinking] strip exception: %s", _ste)
 
     # ─── 主路徑收尾 2: 元注釋洩漏偵測(v3.11) ───
+    # 僅記錄且禁止入庫，不再丟棄已付費取得的非空譯文。
+    _meta_leak_detected = False
     try:
         if _is_meta_commentary_leak(result):
-            logger.warning("[MetaLeak] 偵測到元注釋洩漏,放棄此次翻譯: %r", result[:200])
+            _meta_leak_detected = True
+            logger.warning(
+                "[MetaLeak] 偵測到元注釋洩漏;仍交付 provider 結果但不寫入快取/TM: %r",
+                result[:200],
+            )
             try:
-                _event_log_write("meta_commentary_leak", {
+                _event_log_write("meta_commentary_leak_delivered", {
                     "group_id": _gid_for_tm,
                     "src_text": text[:100],
                     "leaked": result[:200],
                 })
             except Exception:
                 pass
-            try:
-                _tl.translation_failure_kind = "quality_meta_leak"
-            except Exception:
-                pass
-            return None
     except Exception as _mle:
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
 
-    _quality_cacheable = True
+    _quality_cacheable = not _meta_leak_detected
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
     # Quality-critical messages receive an independent semantic review before
@@ -11317,7 +11610,7 @@ def _translate_core(text, src, tgt):
                 model=_active_upgrade_model(),
                 immutable_literals=_immutable_literals,
                 glossary_pairs=_safe_pairs,
-                ai_client=ai_provider,
+                ai_client=None,  # local diagnostics only; never spend a second API call
             )
             if not _gate.get("ok") or not _gate.get("text"):
                 # A local validator must not turn a successful provider response
@@ -11329,6 +11622,7 @@ def _translate_core(text, src, tgt):
                     last_translate_debug["quality_gate_path"] = _gate.get("path")
                     last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
                     last_translate_debug["final_candidate"] = str(result or "")[:2000]
+                    _persist_last_translate_debug()
                 except Exception:
                     pass
                 logger.warning(
@@ -11337,7 +11631,7 @@ def _translate_core(text, src, tgt):
                 )
             else:
                 result = _gate["text"].strip()
-                _quality_cacheable = bool(_gate.get("cacheable", True))
+                _quality_cacheable = (not _meta_leak_detected) and bool(_gate.get("cacheable", True))
                 try:
                     last_translate_debug["final_pipeline_status"] = (
                         "quality_gate_warning_delivered"
@@ -11347,6 +11641,7 @@ def _translate_core(text, src, tgt):
                     last_translate_debug["quality_gate_path"] = _gate.get("path")
                     last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
                     last_translate_debug["final_candidate"] = result[:2000]
+                    _persist_last_translate_debug()
                 except Exception:
                     pass
             result = _strip_thinking_tags(result) or result
@@ -11362,9 +11657,9 @@ def _translate_core(text, src, tgt):
                 cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
             try:
-                _tl.translation_failure_kind = "quality_gate_internal"
                 last_translate_debug["final_pipeline_status"] = "quality_gate_exception"
                 last_translate_debug["quality_gate_exception"] = str(_qge)[:500]
+                _persist_last_translate_debug()
             except Exception:
                 pass
             _quality_cacheable = False
@@ -11699,6 +11994,33 @@ def _translate_inner(text, src, tgt):
     # 三家 provider 的接力、總期限與熔斷均由 ai_provider 統一處理。
     # 這裡只發出一次主翻譯，避免外層 retry 再把整條 provider chain 重跑。
     result = translate_openai(text, src, tgt)
+    if _is_translation_failure_sentinel(result):
+        logger.warning("[LegacyFailurePurge] provider returned a legacy failure payload; treating as empty")
+        result = None
+    if not result:
+        # The paid provider can still charge for an empty/failed response.  Do
+        # not spend another LLM call.  Use the existing no-key Google NMT path as
+        # a best-effort availability fallback, then stay silent if it also fails.
+        try:
+            result = translate_google(text, src, tgt)
+        except Exception as _nmt_fallback_exc:
+            logger.warning("[FreeNMTFallback] exception: %s", _nmt_fallback_exc)
+            result = None
+        if result and not _is_translation_failure_sentinel(result):
+            logger.warning("[FreeNMTFallback] delivered Google fallback after empty paid response")
+            _update_last_translate_debug(
+                fallback_used="google_gtx",
+                fallback_status="success",
+                final_candidate=str(result)[:2000],
+                pipeline_status="free_nmt_fallback_success",
+            )
+        else:
+            result = None
+            _update_last_translate_debug(
+                fallback_used="google_gtx",
+                fallback_status="empty",
+                pipeline_status="all_translation_results_empty",
+            )
     
     # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
     if pivot_result and result:
@@ -14909,19 +15231,8 @@ def handle_message(event):
                 pass
         track_group_usage("__dm__", _bp, _bc, _bcost)
         if not result:
-            # v3.10+ 修補:DM 翻譯失敗時不該靜默,使用者會困惑 bot 為何不回。
-            # 群組情境不發失敗訊息以免噪音,但 DM 私訊只影響使用者本人,給簡訊比較友善。
-            logger.warning("[DM] translate returned empty for lang=%s tgt=%s text=%r",
+            logger.warning("[DM] translate returned empty for lang=%s tgt=%s text=%r; visible fallback disabled",
                            lang, tgt, text_clean[:60])
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="⚠️ 翻譯暫時失敗,請稍後再試 / Gagal menerjemahkan, coba lagi nanti")]
-                    ))
-            except Exception:
-                pass
             return
         reply = LANG_FLAGS.get(tgt, "") + " " + result
 
@@ -15190,26 +15501,34 @@ def handle_message(event):
             _tts_lang, _tts_text = "zh", result
     track_group_usage(group_id, _bp, _bc, _bcost)
 
+    if reply is not None and _is_translation_failure_sentinel(reply):
+        logger.error("[LegacyFailurePurge] blocked legacy failure payload at LINE send boundary")
+        try:
+            _event_log_write("legacy_failure_payload_blocked", {
+                "group_id": group_id or "",
+                "lang": lang,
+                "payload": str(reply)[:240],
+            })
+        except Exception:
+            pass
+        return
+
     if reply is None:
-        # Root rule: a translatable LINE message must never disappear silently.
-        # Provider failover and local validation may legitimately fail, but the
-        # group still receives one visible, non-billable status message.
+        # No visible fallback card.  A non-empty provider result is preserved by
+        # the advisory quality boundary above; only a genuine empty/exceptional
+        # provider outcome reaches here.  Log it and stop without spending or
+        # sending another translation request.
         logger.warning("[group %s] translate returned empty for lang=%s text=%r",
                        group_id, lang, (text_to_translate or "")[:80])
         try:
-            _event_log_write("translate_empty", {
+            _event_log_write("translate_empty_silent", {
                 "group_id": group_id or "",
                 "lang": lang,
                 "text_preview": (text_to_translate or "")[:100],
             })
         except Exception:
             pass
-        _translation_failed = True
-        try:
-            _notice_targets = _targets if lang == "zh" else ["zh"]
-        except (NameError, UnboundLocalError):
-            _notice_targets = [tgt]
-        reply = _translation_failure_notice(lang, _notice_targets)
+        return
 
     # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
     if not _translation_failed:
@@ -15830,7 +16149,15 @@ def _handle_image_background(ctx):
         _overlay_token = _store_image_overlay_context(
             img_raw, extracted, result, lang, actual_tgt, group_id
         )
-        _overlay_qr = _build_image_overlay_quick_reply(_overlay_token)
+        _overlay_qr = _build_image_translation_action_quick_reply(
+            group_id,
+            extracted,
+            result,
+            lang,
+            actual_tgt,
+            msg_id=message_id,
+            overlay_token=_overlay_token,
+        )
 
         # LINE message limit is 5000 chars
         if len(reply) > 5000:
@@ -16114,7 +16441,18 @@ def _process_pending_image_translate_inner(event, message_id):
         img_raw, extracted, result, lang, actual_tgt, group_id
     )
     _stats_inc("image_translations")
-    _reply_or_push(reply_text, quick_reply=_build_image_overlay_quick_reply(_overlay_token))
+    _reply_or_push(
+        reply_text,
+        quick_reply=_build_image_translation_action_quick_reply(
+            group_id,
+            extracted,
+            result,
+            lang,
+            actual_tgt,
+            msg_id=message_id,
+            overlay_token=_overlay_token,
+        ),
+    )
     logger.info("[ImgAsk] DONE")
 
 
@@ -16732,10 +17070,14 @@ if BotLeaveEvent:
             group_settings.pop(group_id, None)
             group_target_lang.pop(group_id, None)
             group_img_settings.pop(group_id, None)
+            group_img_ask_settings.pop(group_id, None)
             group_audio_settings.pop(group_id, None)
             group_wo_settings.pop(group_id, None)
             group_skip_users.pop(group_id, None)
             group_user_names.pop(group_id, None)
+            group_auto_tone_emoji_settings.pop(group_id, None)
+            group_image_translation_actions_settings.pop(group_id, None)
+            group_image_translation_action_modes.pop(group_id, None)
             # v3.10: 清掉新加的設定
             try:
                 group_target_langs.pop(group_id, None)
@@ -16857,8 +17199,14 @@ if PostbackEvent:
                 _tl.__dict__.clear()
                 _tl.__dict__.update(previous_tl)
 
-            reply_text = (labels[mode] + "\n" + result) if result else "⚠️ 重新翻譯失敗，請再試一次。"
-            if mode == "personal" and result and _uid:
+            if not result:
+                logger.warning(
+                    "[translation_variant] mode=%s returned empty; visible fallback disabled",
+                    mode,
+                )
+                return
+            reply_text = labels[mode] + "\n" + result
+            if mode == "personal" and _uid:
                 try:
                     with ApiClient(configuration) as api_client:
                         api = MessagingApi(api_client)
@@ -19630,6 +19978,27 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">📍 位置快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入分享位置按鈕</span></div>
 <label class="toggle"><input type="checkbox" id="locationQrToggle" onchange="toggleFeatureSetting('location_qr_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">🎭 自動語氣判斷＋表情</span><br><span style="font-size:12px;color:#8a8a9a">判斷道歉、感謝、提醒、警告等語氣，適度加入最多 1 個 emoji；與下方固定／自訂口吻分開</span></div>
+<label class="toggle"><input type="checkbox" id="autoToneEmojiToggle" onchange="toggleFeatureSetting('auto_tone_emoji_enabled',this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="wl-item" style="border-color:#2a2a3e">
+<div><span style="font-weight:600">📷 照片翻譯快捷模式</span><br><span style="font-size:12px;color:#8a8a9a">控制照片 OCR 翻譯下方的「更自然／直譯／正式／回譯」等按鈕</span></div>
+<label class="toggle"><input type="checkbox" id="imageActionsToggle" onchange="toggleImageTranslationActions(this.checked)"><span class="slider"></span></label>
+</div>
+<div id="imageActionModesWrap" style="padding:8px 0 14px 12px;border-bottom:1px solid #2a2a3e">
+  <div style="font-size:12px;color:#8a8a9a;margin-bottom:8px">選擇照片翻譯要顯示的模式（可複選）</div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;color:#d0d0d8">
+    <label><input type="checkbox" id="imgModeNatural" onchange="saveImageTranslationActionModes()"> ✨ 更自然</label>
+    <label><input type="checkbox" id="imgModeLiteral" onchange="saveImageTranslationActionModes()"> 🔎 直譯</label>
+    <label><input type="checkbox" id="imgModeFormal" onchange="saveImageTranslationActionModes()"> 📢 正式</label>
+    <label><input type="checkbox" id="imgModeBackcheck" onchange="saveImageTranslationActionModes()"> ↩ 回譯</label>
+    <label><input type="checkbox" id="imgModePersonal" onchange="saveImageTranslationActionModes()"> 👤 我的語言</label>
+    <label><input type="checkbox" id="imgModeOverlay" onchange="saveImageTranslationActionModes()"> 🖼 原圖＋譯文圖</label>
+  </div>
 </div>
 
 <div class="wl-item" style="border-color:#2a2a3e">
@@ -23067,6 +23436,16 @@ async function _loadFeatures(gid){
   document.getElementById('clipboardQrToggle').checked=d.clipboard_qr_enabled||false;
   document.getElementById('cameraRollQrToggle').checked=d.camera_roll_qr_enabled||false;
   document.getElementById('locationQrToggle').checked=d.location_qr_enabled||false;
+  document.getElementById('autoToneEmojiToggle').checked=d.auto_tone_emoji_enabled!==false;
+  document.getElementById('imageActionsToggle').checked=d.image_translation_actions_enabled!==false;
+  var iam=d.image_translation_action_modes||{};
+  document.getElementById('imgModeNatural').checked=iam.natural!==false;
+  document.getElementById('imgModeLiteral').checked=iam.literal!==false;
+  document.getElementById('imgModeFormal').checked=iam.formal!==false;
+  document.getElementById('imgModeBackcheck').checked=iam.backcheck!==false;
+  document.getElementById('imgModePersonal').checked=iam.personal!==false;
+  document.getElementById('imgModeOverlay').checked=iam.overlay!==false;
+  updateImageTranslationActionModesUI();
   document.getElementById('toneSelect').value=d.translation_tone||'casual';
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   // Model settings (global only, not per-group)
@@ -23152,6 +23531,31 @@ function toggleFeatureSetting(key,val){
   var body={};body[key]=val;
   if(_settingsGid)body.group_id=_settingsGid;
   api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'群組設定已更新':'全域設定已更新')});
+}
+function updateImageTranslationActionModesUI(){
+  var master=document.getElementById('imageActionsToggle');
+  var wrap=document.getElementById('imageActionModesWrap');
+  if(!master||!wrap)return;
+  var enabled=!!master.checked;
+  wrap.style.opacity=enabled?'1':'0.45';
+  var inputs=wrap.querySelectorAll('input[type=checkbox]');
+  for(var i=0;i<inputs.length;i++)inputs[i].disabled=!enabled;
+}
+function toggleImageTranslationActions(enabled){
+  updateImageTranslationActionModesUI();
+  toggleFeatureSetting('image_translation_actions_enabled',!!enabled);
+}
+function saveImageTranslationActionModes(){
+  var body={image_translation_action_modes:{
+    natural:document.getElementById('imgModeNatural').checked,
+    literal:document.getElementById('imgModeLiteral').checked,
+    formal:document.getElementById('imgModeFormal').checked,
+    backcheck:document.getElementById('imgModeBackcheck').checked,
+    personal:document.getElementById('imgModePersonal').checked,
+    overlay:document.getElementById('imgModeOverlay').checked
+  }};
+  if(_settingsGid)body.group_id=_settingsGid;
+  api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'照片模式已更新':'照片模式預設已更新')});
 }
 // v3.9.7: 前端模型能力對照表(鏡像後端 MODEL_CAPABILITIES)
 function _modelFamily(name){
@@ -24201,6 +24605,9 @@ def _do_save_impl():
             "group_welcome_settings": group_welcome_settings,
             "flex_enabled": flex_enabled,
             "quick_reply_enabled": quick_reply_enabled,
+            "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+            "image_translation_actions_enabled": image_translation_actions_enabled,
+            "image_translation_action_modes": image_translation_action_modes,
             "silent_mode": silent_mode,
             "sender_name": sender_name,
             "sender_icon": sender_icon,
@@ -24210,6 +24617,9 @@ def _do_save_impl():
             "location_translate_enabled": location_translate_enabled,
             "group_flex_settings": group_flex_settings,
             "group_qr_settings": group_qr_settings,
+            "group_auto_tone_emoji_settings": group_auto_tone_emoji_settings,
+            "group_image_translation_actions_settings": group_image_translation_actions_settings,
+            "group_image_translation_action_modes": group_image_translation_action_modes,
             "group_silent_settings": group_silent_settings,
             "group_video_settings": group_video_settings,
             "group_location_settings": group_location_settings,
@@ -24354,8 +24764,11 @@ def load_settings():
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
     global EXTRA_CUSTOMERS, group_api_usage, extra_names_by_group, user_languages
-    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings, sender_name, sender_icon, sender_name_mode, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
-    global group_flex_settings, group_qr_settings, group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
+    global flex_enabled, quick_reply_enabled, auto_tone_emoji_enabled, image_translation_actions_enabled, image_translation_action_modes
+    global silent_mode, welcome_settings, sender_name, sender_icon, sender_name_mode, sender_avatar_mode, user_pictures, video_ocr_enabled, location_translate_enabled
+    global group_flex_settings, group_qr_settings, group_auto_tone_emoji_settings
+    global group_image_translation_actions_settings, group_image_translation_action_modes
+    global group_silent_settings, group_video_settings, group_location_settings, group_welcome_settings
     global group_mark_read_settings, group_retry_key_settings, group_camera_qr_settings, group_clipboard_qr_settings
     global group_camera_roll_qr_settings, group_location_qr_settings
     global mark_read_enabled, retry_key_enabled, camera_qr_enabled, clipboard_qr_enabled
@@ -24421,6 +24834,14 @@ def load_settings():
             flex_enabled = data["flex_enabled"]
         if "quick_reply_enabled" in data:
             quick_reply_enabled = data["quick_reply_enabled"]
+        if "auto_tone_emoji_enabled" in data:
+            auto_tone_emoji_enabled = bool(data["auto_tone_emoji_enabled"])
+        if "image_translation_actions_enabled" in data:
+            image_translation_actions_enabled = bool(data["image_translation_actions_enabled"])
+        if "image_translation_action_modes" in data:
+            image_translation_action_modes = _normalise_image_translation_action_modes(
+                data.get("image_translation_action_modes")
+            )
         if "silent_mode" in data:
             silent_mode = data["silent_mode"]
         if "sender_name" in data:
@@ -24439,6 +24860,10 @@ def load_settings():
             location_translate_enabled = data["location_translate_enabled"]
         group_flex_settings.update(data.get("group_flex_settings", {}))
         group_qr_settings.update(data.get("group_qr_settings", {}))
+        group_auto_tone_emoji_settings.update(data.get("group_auto_tone_emoji_settings", {}))
+        group_image_translation_actions_settings.update(data.get("group_image_translation_actions_settings", {}))
+        for _gid, _modes in (data.get("group_image_translation_action_modes", {}) or {}).items():
+            group_image_translation_action_modes[_gid] = _normalise_image_translation_action_modes(_modes)
         group_silent_settings.update(data.get("group_silent_settings", {}))
         group_video_settings.update(data.get("group_video_settings", {}))
         group_location_settings.update(data.get("group_location_settings", {}))
@@ -26827,7 +27252,9 @@ def api_translation_stats():
 @app.route("/api/admin/features", methods=["GET", "POST"])
 def api_admin_features():
     """Get/set feature settings. Pass group_id for per-group; omit for global defaults."""
-    global flex_enabled, quick_reply_enabled, silent_mode, welcome_settings
+    global flex_enabled, quick_reply_enabled, auto_tone_emoji_enabled
+    global image_translation_actions_enabled, image_translation_action_modes
+    global silent_mode, welcome_settings
     global sender_name, sender_icon, sender_name_mode, sender_avatar_mode, video_ocr_enabled, location_translate_enabled
     global translation_tone, translation_tone_custom, translation_temperature, translation_top_p, translation_seed, double_check_mode, double_check_threshold, double_check_keywords, fewshot_mode, logprobs_enabled, confidence_threshold, structured_output_enabled, prompt_caching_enabled, translation_logging_enabled, ab_test_enabled, stop_sequences_enabled, forbidden_words_zh, forbidden_words_id, reasoning_effort, send_user_id_to_openai, send_metadata_to_openai
     global id_zh_cot_enabled, id_zh_cod_enabled, id_zh_pivot_enabled, id_zh_pivot_threshold, id_zh_double_translation
@@ -26851,6 +27278,8 @@ def api_admin_features():
             _feat_map = {
                 "flex_enabled": group_flex_settings,
                 "quick_reply_enabled": group_qr_settings,
+                "auto_tone_emoji_enabled": group_auto_tone_emoji_settings,
+                "image_translation_actions_enabled": group_image_translation_actions_settings,
                 "silent_mode": group_silent_settings,
                 "video_ocr_enabled": group_video_settings,
                 "location_translate_enabled": group_location_settings,
@@ -26864,6 +27293,10 @@ def api_admin_features():
             for key, d in _feat_map.items():
                 if key in data:
                     d[gid] = bool(data[key])
+            if "image_translation_action_modes" in data:
+                group_image_translation_action_modes[gid] = _normalise_image_translation_action_modes(
+                    data.get("image_translation_action_modes")
+                )
             # Per-group welcome
             if any(k in data for k in ("welcome_enabled", "welcome_text_zh", "welcome_text_id")):
                 if gid not in group_welcome_settings:
@@ -26895,6 +27328,14 @@ def api_admin_features():
                 flex_enabled = bool(data["flex_enabled"])
             if "quick_reply_enabled" in data:
                 quick_reply_enabled = bool(data["quick_reply_enabled"])
+            if "auto_tone_emoji_enabled" in data:
+                auto_tone_emoji_enabled = bool(data["auto_tone_emoji_enabled"])
+            if "image_translation_actions_enabled" in data:
+                image_translation_actions_enabled = bool(data["image_translation_actions_enabled"])
+            if "image_translation_action_modes" in data:
+                image_translation_action_modes = _normalise_image_translation_action_modes(
+                    data.get("image_translation_action_modes")
+                )
             if "silent_mode" in data:
                 silent_mode = bool(data["silent_mode"])
             if "video_ocr_enabled" in data:
@@ -26975,6 +27416,9 @@ def api_admin_features():
             "welcome_text_id": ws.get("text_id", ""),
             "flex_enabled": get_group_feature(gid, 'flex'),
             "quick_reply_enabled": get_group_feature(gid, 'quick_reply'),
+            "auto_tone_emoji_enabled": get_auto_tone_emoji_enabled(gid),
+            "image_translation_actions_enabled": get_image_translation_actions_enabled(gid),
+            "image_translation_action_modes": get_image_translation_action_modes(gid),
             "silent_mode": get_group_feature(gid, 'silent'),
             "video_ocr_enabled": get_group_feature(gid, 'video_ocr'),
             "location_translate_enabled": get_group_feature(gid, 'location'),
@@ -26996,6 +27440,9 @@ def api_admin_features():
                 "welcome_enabled": welcome_settings.get("enabled", True),
                 "flex_enabled": flex_enabled,
                 "quick_reply_enabled": quick_reply_enabled,
+                "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+                "image_translation_actions_enabled": image_translation_actions_enabled,
+                "image_translation_action_modes": image_translation_action_modes,
                 "silent_mode": silent_mode,
                 "video_ocr_enabled": video_ocr_enabled,
                 "location_translate_enabled": location_translate_enabled,
@@ -27006,7 +27453,7 @@ def api_admin_features():
                 "camera_roll_qr_enabled": camera_roll_qr_enabled,
                 "location_qr_enabled": location_qr_enabled,
             },
-            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings or gid in group_camera_roll_qr_settings or gid in group_location_qr_settings,
+            "is_customized": gid in group_flex_settings or gid in group_qr_settings or gid in group_auto_tone_emoji_settings or gid in group_image_translation_actions_settings or gid in group_image_translation_action_modes or gid in group_silent_settings or gid in group_video_settings or gid in group_location_settings or gid in group_welcome_settings or gid in group_tone_settings or gid in group_mark_read_settings or gid in group_retry_key_settings or gid in group_camera_qr_settings or gid in group_clipboard_qr_settings or gid in group_camera_roll_qr_settings or gid in group_location_qr_settings,
         })
     return jsonify({
         "welcome_enabled": welcome_settings.get("enabled", True),
@@ -27014,6 +27461,9 @@ def api_admin_features():
         "welcome_text_id": welcome_settings.get("text_id", ""),
         "flex_enabled": flex_enabled,
         "quick_reply_enabled": quick_reply_enabled,
+        "auto_tone_emoji_enabled": auto_tone_emoji_enabled,
+        "image_translation_actions_enabled": image_translation_actions_enabled,
+        "image_translation_action_modes": image_translation_action_modes,
         "silent_mode": silent_mode,
         "video_ocr_enabled": video_ocr_enabled,
         "location_translate_enabled": location_translate_enabled,
@@ -27054,6 +27504,9 @@ def api_admin_features_reset():
         return jsonify({"error": "missing group_id"}), 400
     group_flex_settings.pop(gid, None)
     group_qr_settings.pop(gid, None)
+    group_auto_tone_emoji_settings.pop(gid, None)
+    group_image_translation_actions_settings.pop(gid, None)
+    group_image_translation_action_modes.pop(gid, None)
     group_silent_settings.pop(gid, None)
     group_video_settings.pop(gid, None)
     group_location_settings.pop(gid, None)
@@ -29232,13 +29685,14 @@ def admin_health_check():
 
     last_status = "no_recent_translate"
     last_err = ""
+    _health_last_debug = _get_last_translate_debug()
     try:
-        if last_translate_debug:
-            last_status = last_translate_debug.get("openai_status", "unknown")
+        if _health_last_debug:
+            last_status = _health_last_debug.get("openai_status", "unknown")
             if last_status == "exception":
-                last_err = last_translate_debug.get("openai_error", "")[:300]
+                last_err = _health_last_debug.get("openai_error", "")[:300]
                 issues.append(("error", f"最近一次 OpenAI 翻譯失敗: {last_err}"))
-    except NameError:
+    except Exception:
         pass
 
     data = {
@@ -29346,7 +29800,7 @@ def admin_health_check():
         h.append('<div class="dim">尚無翻譯紀錄(剛重啟)</div>')
     elif last_status == "success":
         try:
-            last = last_translate_debug
+            last = _health_last_debug
             h.append('<table>')
             h.append(f'<tr><td>狀態</td><td><span class="ok">✅ success</span></td></tr>')
             h.append(f'<tr><td>原文</td><td>{last.get("src_text", "")[:80]}</td></tr>')
@@ -29661,13 +30115,33 @@ def debug_last_translate():
     """
     if request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden, append ?key=YOUR_ADMIN_KEY"}), 403
-    if not last_translate_debug:
-        return jsonify({"error": "no translation has been made since restart"}), 404
 
     fmt = request.args.get("format", "json")
+    d = _get_last_translate_debug()
+    if not d:
+        payload = {
+            "status": "no_translation_recorded",
+            "message": "No translation debug snapshot is available yet.",
+            "debug_file": LAST_TRANSLATE_DEBUG_FILE,
+            "worker_pid": os.getpid(),
+            "version": VERSION,
+        }
+        if fmt != "html":
+            return jsonify(payload), 200
+        from flask import Response
+        html = (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<style>body{font-family:-apple-system,sans-serif;background:#0d0d1a;color:#e0e0e0;padding:16px}"
+            ".box{background:#1a1a2e;border:1px solid #3a3a4e;border-radius:8px;padding:14px}</style>"
+            "</head><body><div class='box'><h2>📋 Last Translate Debug</h2>"
+            "<p>目前尚無翻譯快照。這不是重啟錯誤；下一次翻譯開始時會自動寫入跨 worker 持久檔。</p>"
+            f"<p>檔案：{LAST_TRANSLATE_DEBUG_FILE}</p><p>Worker：{os.getpid()}</p></div></body></html>"
+        )
+        return Response(html, mimetype="text/html; charset=utf-8"), 200
+
     if fmt == "html":
         # Pretty HTML for mobile reading
-        d = last_translate_debug
         msgs = d.get("messages_sent", [])
         from flask import Response
         html = ['<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">']
@@ -29721,7 +30195,10 @@ def debug_last_translate():
         return Response("\n".join(html), mimetype="text/html; charset=utf-8")
 
     # default: json
-    return jsonify(last_translate_debug)
+    response = dict(d)
+    response["debug_file"] = LAST_TRANSLATE_DEBUG_FILE
+    response["served_by_worker_pid"] = os.getpid()
+    return jsonify(response)
 
 
 # ============================================================================
@@ -30062,6 +30539,9 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 # Keep the failure observable and let the handler send one clear
                 # bilingual failure notice.
                 res = None
+            if _is_translation_failure_sentinel(res):
+                logger.warning("[LegacyFailurePurge] translate_multi dropped legacy failure payload")
+                res = None
             if res and mention_placeholders:
                 res = restore_mentions(res, mention_placeholders)
                 res = _post_restore_mentions_guard(res, mention_placeholders)
@@ -30125,9 +30605,13 @@ def format_multi_reply(translations):
         return None
     lines = []
     for tgt_lang, res in translations:
+        if not res or _is_translation_failure_sentinel(res):
+            continue
         flag = LANG_FLAGS.get(tgt_lang, "")
         lines.append(("%s %s" % (flag, res)).strip())
-    return "\n\n".join(lines) if len(translations) > 1 else lines[0]
+    if not lines:
+        return None
+    return "\n\n".join(lines) if len(lines) > 1 else lines[0]
 
 
 # ----------------------------------------------------------------------------
@@ -30629,6 +31113,59 @@ def _build_translation_action_quick_reply(group_id, original_text, translated_te
         return QuickReply(items=items)
     except Exception as exc:
         logger.warning("translation action Quick Reply unavailable: %s", exc)
+        return None
+
+
+def _build_image_translation_action_quick_reply(
+        group_id, original_text, translated_text, src_lang, tgt_lang,
+        msg_id=None, overlay_token=None):
+    """Build independently configurable actions for photo/OCR translations.
+
+    This is separate from the normal text Quick Reply switch and from the fixed
+    or custom translation-tone prompt.  Administrators can disable the whole
+    photo action row or select exactly which modes are shown.
+    """
+    if not get_image_translation_actions_enabled(group_id):
+        return None
+    if not PostbackAction:
+        return None
+
+    modes = get_image_translation_action_modes(group_id)
+    items = []
+    token = None
+    variant_defs = (
+        ("natural", "✨ 更自然"),
+        ("literal", "🔎 直譯"),
+        ("formal", "📢 正式"),
+        ("backcheck", "↩ 回譯"),
+        ("personal", "👤 我的語言"),
+    )
+    try:
+        if original_text and translated_text and src_lang and tgt_lang:
+            if any(modes.get(mode, False) for mode, _label in variant_defs):
+                token = _register_translation_action_context(
+                    group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
+                )
+            if token:
+                for mode, label in variant_defs:
+                    if not modes.get(mode, False):
+                        continue
+                    items.append(QuickReplyItem(action=PostbackAction(
+                        label=label,
+                        data="action=translation_variant&mode=" + mode + "&token=" + token,
+                        display_text=label,
+                    )))
+
+        if overlay_token and modes.get("overlay", False):
+            items.append(QuickReplyItem(action=PostbackAction(
+                label="🖼 原圖＋譯文圖",
+                data="action=image_overlay&token=" + overlay_token,
+                display_text="🖼 產生原圖＋譯文對照圖",
+            )))
+
+        return QuickReply(items=items[:13]) if items else None
+    except Exception as exc:
+        logger.warning("image translation action Quick Reply unavailable: %s", exc)
         return None
 
 

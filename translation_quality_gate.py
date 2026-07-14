@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 13
-QUALITY_GATE_BUILD_ID = "2026-07-13.17-factory-context-knowledge"
+QUALITY_GATE_API_VERSION = 14
+QUALITY_GATE_BUILD_ID = "2026-07-14.18-single-call-no-failure-card"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1537,40 +1537,10 @@ def gate_and_revise(
             "path": "single_api_local_validation",
         }
 
-    repair_enabled = os.environ.get("QUALITY_REPAIR_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
-    if repair_enabled and ai_client is not None and report.hard_issues:
-        repaired = review_translation(
-            source,
-            candidate,
-            src_lang,
-            tgt_lang,
-            model=model,
-            issues=report.hard_issues,
-            glossary_pairs=glossary_pairs,
-            ai_client=ai_client,
-        )
-        if repaired:
-            repaired_report = validate_translation(
-                source,
-                repaired,
-                src_lang,
-                tgt_lang,
-                immutable_literals=list(immutable_literals or ()),
-                glossary_pairs=glossary_pairs,
-                require_paragraph_fidelity=critical,
-            )
-            if repaired_report.ok:
-                return {
-                    "ok": True,
-                    "text": repaired,
-                    "issues": repaired_report.issues,
-                    "hard_issues": [],
-                    "warnings": repaired_report.warnings,
-                    "reviewed": True,
-                    "degraded": False,
-                    "cacheable": True,
-                    "path": "source_grounded_repair",
-                }
+    # Local diagnostics only.  The former review_translation() branch made a
+    # second billable model request after the first translation had already been
+    # paid for.  It is deliberately removed: validation may affect cacheability,
+    # but it must never trigger another API call or suppress non-empty text.
 
     best_text, best_report = _best_effort_delivery_candidate(
         source,
@@ -1589,7 +1559,7 @@ def gate_and_revise(
             "issues": best_report.issues,
             "hard_issues": best_report.hard_issues,
             "warnings": best_report.warnings,
-            "reviewed": bool(repair_enabled and ai_client is not None and report.hard_issues),
+            "reviewed": False,
             "degraded": True,
             "cacheable": False,
             "path": "best_effort_quality_warning",
@@ -1752,37 +1722,8 @@ def translate_quality_critical_document(
                 "reviewed": False, "degraded": False, "cacheable": True,
                 "path": "single_api_whole_document", "provider_path": provider or "primary",
             }
-        # The normal path stays single-call. Retry exactly once only after a
-        # deterministic hard failure, using the protected source plus issue list.
-        repair_enabled = os.environ.get("QUALITY_REPAIR_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
-        if repair_enabled and report.hard_issues:
-            retry_raw, retry_provider = _translate_candidate(
-                visible_source,
-                src_lang,
-                tgt_lang,
-                model=model,
-                glossary_pairs=glossary_pairs,
-                ai_client=ai_client,
-                retry_issues=report.hard_issues,
-                provider_preference=_independent_provider_preference(ai_client, provider),
-            )
-            retry_text, retry_report = _finalize_visible_candidate(
-                source,
-                retry_raw,
-                immutable,
-                src_lang,
-                tgt_lang,
-                glossary_pairs,
-                require_paragraph_fidelity=True,
-            )
-            if retry_text:
-                return {
-                    "ok": True, "text": retry_text, "issues": retry_report.issues,
-                    "hard_issues": [], "warnings": retry_report.warnings,
-                    "reviewed": True, "degraded": False, "cacheable": True,
-                    "path": "protected_fresh_retry",
-                    "provider_path": retry_provider or provider or "primary",
-                }
+        # No second provider call.  A failed local check only controls cache
+        # admission; the best non-empty first response is still returned.
         best_text, best_report = _best_effort_delivery_candidate(
             source,
             raw,
@@ -1797,7 +1738,7 @@ def translate_quality_critical_document(
             return {
                 "ok": True, "text": best_text, "issues": best_report.issues,
                 "hard_issues": best_report.hard_issues, "warnings": best_report.warnings,
-                "reviewed": bool(repair_enabled and report.hard_issues),
+                "reviewed": False,
                 "degraded": True, "cacheable": False,
                 "path": "best_effort_whole_document",
                 "provider_path": provider or "primary",
@@ -1887,9 +1828,11 @@ def ensure_delivery_safe_translation(
     }
 
 def translation_failure_message(tgt_lang: str) -> str:
-    low = (tgt_lang or "").lower()
-    if low.startswith("id"):
-        return "⚠️ Terjemahan gagal karena semua layanan penerjemahan sedang tidak tersedia. Silakan kirim ulang."
-    if low.startswith("zh"):
-        return "⚠️ 目前所有翻譯服務皆無法取得結果，請稍後重新傳送。"
-    return "⚠️ All translation services are temporarily unavailable. Please resend later."
+    """Deprecated compatibility shim.
+
+    User-visible generic failure translations were removed.  Callers should
+    return ``None``/empty and log diagnostics instead of sending or caching an
+    artificial translated error message.
+    """
+    return ""
+
