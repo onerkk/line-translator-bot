@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.39.0-smart-expressive-120cards-2026-07-14",
     "schema_version": 8,
-    "state_hash": "43669450bc59601ea7218b50971b10e1df61eb62692adfaa73526f5a5517c592",
-    "updated_at_iso": "2026-07-14T04:50:32.129104+00:00",
-    "updated_at_unix": 1784004632.1291044
+    "state_hash": "42fcb2d31f45c349460164393f1d5f87d23de6161acab66e228a9a5c7e57f85c",
+    "updated_at_iso": "2026-07-14T04:51:22.928677+00:00",
+    "updated_at_unix": 1784004682.9286768
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -175,13 +175,13 @@
     "followers": 1,
     "image_translations": 3,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.019964700000000002,
-    "oai_input": 56375,
-    "oai_output": 121,
+    "oai_cost_usd": 0.0233427,
+    "oai_input": 59507,
+    "oai_output": 162,
     "oai_reasoning": 0,
-    "text_translations": 230,
-    "tokens_completion": 17207,
-    "tokens_prompt": 4277179,
+    "text_translations": 231,
+    "tokens_completion": 17248,
+    "tokens_prompt": 4280311,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -239,7 +239,7 @@
   "expressive_short_message_image_enabled": true,
   "expressive_short_message_max_chars": 80,
   "expressive_translation_intensity": "natural",
-  "expressive_translation_mode": "emoji",
+  "expressive_translation_mode": "card",
   "expressive_visual_enabled": true,
   "expressive_visual_style": "auto",
   "external_links_settings": {
@@ -322,11 +322,11 @@
   "gemini_model_upgrade": "gemini-2.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.36714670000000005,
+      "cost_usd": 0.37052470000000015,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 2080,
-      "tokens_prompt": 247257
+      "tokens_completion": 2121,
+      "tokens_prompt": 250389
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.5735404000000004,
