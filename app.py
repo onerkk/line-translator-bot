@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.39.4-bilingual-actions-root-fix-2026-07-14"
+VERSION = "v3.39.5-bilingual-actions-hardlock-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -3020,11 +3020,34 @@ QUICK_REPLY_DEFAULTS = [
     {"id": "clipboard",   "type": "clipboard",   "label": "📋 複製儲區指令",   "text": "",        "clipboard_text": "/qry ", "enabled": False, "cmd_check": None, "editable": True},
     {"id": "camera_roll", "type": "camera_roll", "label": "🖼️ 相簿/Album",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
     {"id": "location",    "type": "location",    "label": "📍 位置/Lokasi",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
-]
+ ]
+
+# Core controls are intentionally bilingual and are migrated on every load.
+# This prevents an older bot_settings.json (Chinese-only or Indonesian-only)
+# from overriding the corrected labels after a Render restart.
+_CORE_BILINGUAL_QR_LABELS = {
+    "help": "📖 說明/Info",
+    "qry": "🔍 儲區/Gudang",
+    "wrong": "❌ 標錯/Salah",
+    "skip": "❌ 不翻我/Lewati",
+    "unskip": "✅ 翻譯我/Terjemah",
+    "pw1": "🔑 班長密碼/PW1",
+    "pw2": "🏭 儲運密碼/PW2",
+    "pkg": "📦 包裝碼/Kemas",
+    "scrap": "🎨 廢料色/Warna",
+    "handover": "📋 交班摘要/Serah",
+    "interpreter": "🎙 口譯/Interpret",
+    "camera": "📷 拍照/Foto",
+    "camera_roll": "🖼 相簿/Album",
+    "location": "📍 位置/Lokasi",
+}
 
 # 執行階段儲存(初始化成預設值的深拷貝,避免後續修改污染常數)
 import copy as _qr_copy
 quick_reply_items_settings = _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
+for _qr_item in quick_reply_items_settings:
+    if _qr_item.get("id") in _CORE_BILINGUAL_QR_LABELS:
+        _qr_item["label"] = _CORE_BILINGUAL_QR_LABELS[_qr_item["id"]][:20]
 
 _QR_VALID_TYPES = {"message", "camera", "camera_roll", "location", "clipboard"}
 
@@ -3043,6 +3066,8 @@ def _qr_sanitize_item(raw, fallback=None):
     if item_type not in _QR_VALID_TYPES:
         item_type = "message"
     label = str(raw.get("label", fb.get("label", ""))).strip()[:20]  # LINE 20 字硬上限
+    if item_id in _CORE_BILINGUAL_QR_LABELS:
+        label = _CORE_BILINGUAL_QR_LABELS[item_id][:20]
     text = str(raw.get("text", fb.get("text", "")))[:300]
     clipboard_text = str(raw.get("clipboard_text", fb.get("clipboard_text", "")))[:1000]
     enabled = bool(raw.get("enabled", fb.get("enabled", True)))
@@ -3085,6 +3110,8 @@ def _qr_merge_loaded(loaded_list):
         fb = defaults_by_id.get(rid)
         item = _qr_sanitize_item(raw, fallback=fb)
         if item:
+            if rid in _CORE_BILINGUAL_QR_LABELS:
+                item["label"] = _CORE_BILINGUAL_QR_LABELS[rid][:20]
             result.append(item)
             seen_ids.add(rid)
     # 補上磁碟沒有的預設按鈕(版本升級時新增的)
@@ -17682,27 +17709,30 @@ if BotLeaveEvent:
 
 
 
+_BILINGUAL_TRANSLATION_ACTION_LABELS = {
+    # Hard-locked bilingual labels.  These controls are shown in mixed
+    # Chinese/Indonesian factory groups, so they must never switch to a
+    # single-language set based on source or target language.
+    "natural": "✨ 自然/Alami",
+    "literal": "🔎 直譯/Harfiah",
+    "formal": "📢 正式/Formal",
+    "backcheck": "↩ 回譯/Cek balik",
+    "personal": "👤 我的語言/Bahasa",
+    "handover": "📋 交班摘要/Serah",
+    "interpreter": "🎙 即時口譯/Interpret",
+    "expired": (
+        "⚠️ 操作已過期，請重傳原訊息。\n"
+        "⚠️ Tombol kedaluwarsa; kirim ulang pesan asli."
+    ),
+}
+
+# Keep the legacy mapping name for compatibility with older helper code, but
+# every locale points to the exact same bilingual labels.
 _TRANSLATION_ACTION_UI = {
-    # Factory groups contain both Chinese- and Indonesian-reading users.  Keep
-    # every control bilingual so nobody must guess what a button does.
-    "zh": {
-        "natural": "✨ 自然/Alami", "literal": "🔎 直譯/Harfiah", "formal": "📢 正式/Formal",
-        "backcheck": "↩ 回譯/Cek", "personal": "👤 語言/Bahasa",
-        "handover": "📋 交班/Serah", "interpreter": "🎙 口譯/Interpret",
-        "expired": "⚠️ 操作已過期，請重傳原訊息。\n⚠️ Tombol kedaluwarsa; kirim ulang pesan asli.",
-    },
-    "id": {
-        "natural": "✨ 自然/Alami", "literal": "🔎 直譯/Harfiah", "formal": "📢 正式/Formal",
-        "backcheck": "↩ 回譯/Cek", "personal": "👤 語言/Bahasa",
-        "handover": "📋 交班/Serah", "interpreter": "🎙 口譯/Interpret",
-        "expired": "⚠️ 操作已過期，請重傳原訊息。\n⚠️ Tombol kedaluwarsa; kirim ulang pesan asli.",
-    },
-    "en": {
-        "natural": "✨ Natural/Alami", "literal": "🔎 Literal/Harfiah", "formal": "📢 Formal",
-        "backcheck": "↩ Back/Cek", "personal": "👤 Language/Bahasa",
-        "handover": "📋 Handover/Serah", "interpreter": "🎙 Interpretasi",
-        "expired": "⚠️ This action expired. / Tombol ini sudah kedaluwarsa.",
-    },
+    "zh": _BILINGUAL_TRANSLATION_ACTION_LABELS,
+    "id": _BILINGUAL_TRANSLATION_ACTION_LABELS,
+    "en": _BILINGUAL_TRANSLATION_ACTION_LABELS,
+    "bi": _BILINGUAL_TRANSLATION_ACTION_LABELS,
 }
 
 _PERSONAL_LANGUAGE_OPTIONS = (
@@ -17719,18 +17749,47 @@ _PERSONAL_LANGUAGE_OPTIONS = (
 
 
 def _translation_action_locale(src_lang=None, tgt_lang=None):
-    """Choose labels for the people reading the translation, not the sender."""
-    target = str(tgt_lang or "").lower()
-    if target in ("zh", "id"):
-        return target
-    source = str(src_lang or "").lower()
-    if source == "id" and target == "zh":
-        return "zh"
-    return "en"
+    """Return the fixed mixed-group UI locale.
+
+    Translation direction must not change control labels.  Chinese and
+    Indonesian readers share the same LINE group, so every action stays
+    bilingual for every source/target pair.
+    """
+    return "bi"
 
 
 def _translation_action_labels(src_lang=None, tgt_lang=None):
-    return _TRANSLATION_ACTION_UI[_translation_action_locale(src_lang, tgt_lang)]
+    # Return a copy so callers cannot accidentally mutate the global canonical
+    # set and silently make later messages single-language again.
+    return dict(_BILINGUAL_TRANSLATION_ACTION_LABELS)
+
+
+def _verify_bilingual_action_labels():
+    required = {
+        "natural": ("自然", "Alami"),
+        "literal": ("直譯", "Harfiah"),
+        "formal": ("正式", "Formal"),
+        "backcheck": ("回譯", "Cek"),
+        "personal": ("我的語言", "Bahasa"),
+        "handover": ("交班摘要", "Serah"),
+        "interpreter": ("即時口譯", "Interpret"),
+    }
+    for key, (zh_word, id_word) in required.items():
+        label = _BILINGUAL_TRANSLATION_ACTION_LABELS.get(key, "")
+        if zh_word not in label or id_word not in label:
+            raise RuntimeError(
+                "translation action label must be Chinese/Indonesian bilingual: "
+                + key + "=" + repr(label)
+            )
+        if len(label) > 20:
+            raise RuntimeError(
+                "translation action label exceeds LINE 20-char limit: "
+                + key + "=" + repr(label)
+            )
+
+
+_verify_bilingual_action_labels()
+logger.info("[ActionUI] bilingual labels hard-locked build=%s", VERSION)
 
 
 def _personal_language_menu_text(locale="id", current=None):
@@ -32296,9 +32355,7 @@ def _build_image_translation_action_quick_reply(
                     )))
 
         if overlay_token and modes.get("overlay", False):
-            overlay_label = ("🖼 圖文對照" if _translation_action_locale(src_lang, tgt_lang) == "zh"
-                             else "🖼 Gambar+teks" if _translation_action_locale(src_lang, tgt_lang) == "id"
-                             else "🖼 Image+text")
+            overlay_label = "🖼 圖文對照/Gambar"
             items.append(QuickReplyItem(action=PostbackAction(
                 label=overlay_label[:20],
                 data="action=image_overlay&token=" + overlay_token,
