@@ -22,22 +22,22 @@ from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-07-14.8-action-ux-handover-fallback"
+TRANSLATION_EXTRAS_VERSION = "2026-07-14.9-bilingual-control-ux"
 
 
 SUPPORTED_PERSONAL_LANGS = ("zh", "id", "vi", "th", "tl", "en", "ja", "ko", "hi")
 
 LANGUAGE_LABELS = {
-    "auto": "自動偵測",
-    "zh": "繁體中文",
-    "id": "印尼文",
-    "vi": "越南文",
-    "th": "泰文",
-    "tl": "菲律賓文",
-    "en": "英文",
-    "ja": "日文",
-    "ko": "韓文",
-    "hi": "印地文",
+    "auto": "自動偵測 / Deteksi otomatis",
+    "zh": "中文 / Mandarin",
+    "id": "印尼文 / Indonesia",
+    "vi": "越南文 / Tiếng Việt",
+    "th": "泰文 / ไทย",
+    "tl": "菲律賓文 / Filipino",
+    "en": "英文 / English",
+    "ja": "日文 / 日本語",
+    "ko": "韓文 / 한국어",
+    "hi": "印地文 / हिन्दी",
 }
 
 LANGUAGE_ALIASES = {
@@ -1352,7 +1352,7 @@ def build_interpreter_html(*, liff_id: str = "") -> str:
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <meta name="liff-id" content="{safe_liff}">
-<title>即時雙向口譯</title>
+<title>即時雙向口譯 / Interpretasi dua arah</title>
 <style>
 :root{{--bg:#0d1321;--card:#172038;--text:#f7fafc;--muted:#9ca9bd;--accent:#18a999;--danger:#ef5b5b}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}}
@@ -1369,12 +1369,12 @@ small{{color:var(--muted)}}
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 </head>
 <body><main>
-<h1>🎙️ 即時雙向口譯</h1><div class="sub">按一下開始說話，再按一下停止。系統會辨識、翻譯並播放譯文。</div>
+<h1>🎙️ 即時雙向口譯 / Interpretasi dua arah</h1><div class="sub">按一下開始說話，再按一下停止。系統會辨識、翻譯並播放譯文。<br>Tekan sekali untuk mulai bicara, lalu tekan lagi untuk berhenti. Sistem akan mengenali, menerjemahkan, dan memutar hasilnya.</div>
 <div class="card"><div class="row"><select id="src">{options}</select><button id="swap">⇄</button><select id="tgt">{options}</select></div>
-<button id="record">開始說話</button><div id="status">準備完成</div></div>
-<div class="card"><div class="label">辨識原文</div><div class="text" id="transcript">—</div></div>
-<div class="card"><div class="label">翻譯結果</div><div class="text" id="translation">—</div><div class="actions"><button id="play">🔊 播放譯文</button><button id="reverse">↩ 交換再說</button></div></div>
-<small>此模式採短回合錄音，避免長時間開啟麥克風；設備代號、數字與單位會交由相同翻譯品質管線處理。</small>
+<button id="record">開始說話 / Mulai bicara</button><div id="status">準備完成 / Siap</div></div>
+<div class="card"><div class="label">辨識原文 / Teks terdeteksi</div><div class="text" id="transcript">—</div></div>
+<div class="card"><div class="label">翻譯結果 / Hasil terjemahan</div><div class="text" id="translation">—</div><div class="actions"><button id="play">🔊 播放 / Putar</button><button id="reverse">↩ 交換 / Tukar</button></div></div>
+<small>此模式採短回合錄音，避免長時間開啟麥克風；設備代號、數字與單位會交由相同翻譯品質管線處理。<br>Mode ini memakai rekaman singkat agar mikrofon tidak terus aktif; kode peralatan, angka, dan satuan tetap diproses melalui jalur kualitas terjemahan yang sama.</small>
 <audio id="audio" preload="none"></audio>
 </main>
 <script>
@@ -1389,16 +1389,16 @@ async function start(){{
  const preferred=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(x=>MediaRecorder.isTypeSupported(x));
  recorder=new MediaRecorder(stream,preferred?{{mimeType:preferred}}:undefined);recorder.ondataavailable=e=>{{if(e.data.size)chunks.push(e.data)}};
  recorder.onstop=async()=>{{stream.getTracks().forEach(t=>t.stop());await send(new Blob(chunks,{{type:recorder.mimeType||'audio/webm'}}))}};
- recorder.start();document.getElementById('record').classList.add('recording');document.getElementById('record').textContent='停止並翻譯';document.getElementById('status').textContent='正在聆聽…';
+ recorder.start();document.getElementById('record').classList.add('recording');document.getElementById('record').textContent='停止並翻譯 / Berhenti';document.getElementById('status').textContent='正在聆聽… / Mendengarkan…';
 }}
-async function stop(){{if(recorder&&recorder.state==='recording')recorder.stop();document.getElementById('record').classList.remove('recording');document.getElementById('record').textContent='開始說話';document.getElementById('status').textContent='辨識與翻譯中…'}}
-document.getElementById('record').onclick=async()=>{{try{{if(recorder&&recorder.state==='recording')await stop();else await start()}}catch(e){{document.getElementById('status').textContent='無法使用麥克風：'+e.message}}}};
+async function stop(){{if(recorder&&recorder.state==='recording')recorder.stop();document.getElementById('record').classList.remove('recording');document.getElementById('record').textContent='開始說話 / Mulai bicara';document.getElementById('status').textContent='辨識與翻譯中… / Mengenali dan menerjemahkan…'}}
+document.getElementById('record').onclick=async()=>{{try{{if(recorder&&recorder.state==='recording')await stop();else await start()}}catch(e){{document.getElementById('status').textContent='無法使用麥克風 / Mikrofon tidak dapat digunakan: '+e.message}}}};
 async function send(blob){{
  const fd=new FormData();fd.append('audio',blob,'speech.webm');fd.append('nonce',NONCE);fd.append('source',src.value);fd.append('target',tgt.value);fd.append('speak','1');
  try{{const r=await fetch('/api/interpreter/translate',{{method:'POST',body:fd}});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||r.status);
  document.getElementById('transcript').textContent=d.transcript||'—';document.getElementById('translation').textContent=d.translation||'—';audioUrl=d.audio_url||'';
- document.getElementById('status').textContent='完成';if(audioUrl){{const a=document.getElementById('audio');a.src=audioUrl;await a.play().catch(()=>{{}})}}
- }}catch(e){{document.getElementById('status').textContent='失敗：'+e.message}}
+ document.getElementById('status').textContent='完成 / Selesai';if(audioUrl){{const a=document.getElementById('audio');a.src=audioUrl;await a.play().catch(()=>{{}})}}
+ }}catch(e){{document.getElementById('status').textContent='失敗 / Gagal: '+e.message}}
 }}
 initLiff();
 </script></body></html>"""

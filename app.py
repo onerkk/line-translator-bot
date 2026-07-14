@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.39.3-multilingual-action-ux-2026-07-14"
+VERSION = "v3.39.4-bilingual-actions-root-fix-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -287,7 +287,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.8-action-ux-handover-fallback"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.9-bilingual-control-ux"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -14831,6 +14831,42 @@ def _command_has_prefix(text, prefixes):
     return any(value == prefix or value.startswith(prefix + " ") for prefix in prefixes)
 
 
+def _normalise_control_shortcut(text):
+    """Normalise visible button text from old/new LINE messages.
+
+    Older buttons used MessageAction while newer buttons use PostbackAction with
+    displayText.  Accept both so a button does not become useless after deploy.
+    """
+    value = str(text or "").strip().lower()
+    for mark in ("👤", "📋", "🎙️", "🎙", "✨", "🔎", "📢", "↩", "↩️"):
+        value = value.replace(mark, "")
+    value = re.sub(r"\s+", " ", value).strip(" \t\r\n-–—:：")
+    return value
+
+
+def _detect_control_shortcut(text):
+    value = _normalise_control_shortcut(text)
+    personal = {
+        "我的語言", "我的语言", "母語", "母语", "語言", "语言",
+        "bahasa saya", "bahasaku", "my language", "語言/bahasa", "语言/bahasa",
+    }
+    handover = {
+        "交班摘要", "交班", "handover", "ringkasan shift",
+        "ringkasan serah terima", "serah terima", "交班/serah",
+    }
+    interpreter = {
+        "即時口譯", "即时口译", "口譯", "口译", "interpreter",
+        "interpretasi", "penerjemah", "口譯/interpret", "口译/interpret",
+    }
+    if value in personal:
+        return "personal_language"
+    if value in handover:
+        return "handover"
+    if value in interpreter:
+        return "interpreter"
+    return ""
+
+
 def _language_name_bilingual(code):
     names_id = {
         "zh": "中文 / Mandarin", "id": "印尼文 / Indonesia",
@@ -14928,7 +14964,7 @@ def _persisted_handover_rows(group_id, hours=12, max_messages=120):
     return recovered[-max(1, int(max_messages or 120)):]
 
 
-def build_group_handover_summary(group_id, hours=12):
+def build_group_handover_summary(group_id, hours=12, extra_rows=None):
     """Summarise recent successful group translations in Chinese and Indonesian.
 
     AI formatting or provider outages never make this button useless: when the
@@ -14937,6 +14973,12 @@ def build_group_handover_summary(group_id, hours=12):
     """
     rows = _get_recent_group_messages(group_id, hours=hours, max_messages=120)
     rows.extend(_persisted_handover_rows(group_id, hours=hours, max_messages=120))
+    try:
+        rows.extend(_translation_action_handover_rows(group_id, max_rows=120))
+    except Exception:
+        pass
+    if extra_rows:
+        rows.extend([dict(row) for row in extra_rows if isinstance(row, dict)])
 
     # Dedupe the in-memory and persisted views of the same translation.
     deduped = []
@@ -14959,20 +15001,26 @@ def build_group_handover_summary(group_id, hours=12):
             "📋 Belum ada pesan terjemahan yang dapat diringkas."
         )
 
+    # A short history does not need another paid AI call.  Use the deterministic
+    # bilingual digest directly; for larger histories the AI may condense it, and
+    # the same local fallback remains available on any provider error.
     parsed = None
-    try:
-        messages = translation_extras_module.build_handover_messages(compact)
-        model = _pick_aux_model("handover")
-        kwargs = _build_aux_kwargs(
-            model, messages, max_out_tokens=1600, temperature=0.0,
-            cache_key=_build_cache_key(group_id, "multi", "zh-id", "handover"),
-        )
-        response = ai.chat.completions.create(**kwargs)
-        track_tokens(response)
-        raw = response.choices[0].message.content if response and response.choices else ""
-        parsed = translation_extras_module.parse_handover_response(raw)
-    except Exception as exc:
-        logger.exception("handover summary AI failed; using local fallback: %s", exc)
+    if len(compact) < 3:
+        parsed = translation_extras_module.build_handover_fallback(compact, max_items=24)
+    else:
+        try:
+            messages = translation_extras_module.build_handover_messages(compact)
+            model = _pick_aux_model("handover")
+            kwargs = _build_aux_kwargs(
+                model, messages, max_out_tokens=1600, temperature=0.0,
+                cache_key=_build_cache_key(group_id, "multi", "zh-id", "handover"),
+            )
+            response = ai.chat.completions.create(**kwargs)
+            track_tokens(response)
+            raw = response.choices[0].message.content if response and response.choices else ""
+            parsed = translation_extras_module.parse_handover_response(raw)
+        except Exception as exc:
+            logger.exception("handover summary AI failed; using local fallback: %s", exc)
 
     if not parsed:
         parsed = translation_extras_module.build_handover_fallback(compact, max_items=24)
@@ -15374,6 +15422,39 @@ def handle_message(event):
         _tl.multi_path_fail = None
     except Exception:
         pass
+
+    # Visible controls must remain usable across old MessageAction buttons,
+    # current Postback display text, and both group languages.  Handle the
+    # human-readable labels before the normal translation pipeline.
+    _control_shortcut = _detect_control_shortcut(text)
+    if _control_shortcut:
+        if _control_shortcut == "personal_language":
+            _current = user_languages.get(user_id) or dm_target_lang.get(user_id)
+            _message = TextMessage(
+                text=_personal_language_menu_text("id", _current),
+                quick_reply=_build_personal_language_quick_reply("", "id"),
+            )
+        elif _control_shortcut == "handover":
+            if is_dm:
+                _shortcut_text = (
+                    "⚠️ 交班摘要只能在群組使用。\n"
+                    "⚠️ Ringkasan serah terima hanya dapat digunakan di grup."
+                )
+            else:
+                _shortcut_text = build_group_handover_summary(group_id, hours=12)
+            _message = TextMessage(text=_clip_line_text(_shortcut_text))
+        else:
+            _shortcut_text = handle_interpreter_command(None if is_dm else group_id, user_id)
+            _message = TextMessage(text=_clip_line_text(_shortcut_text))
+        try:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[_message],
+                ))
+        except Exception as exc:
+            logger.warning("control shortcut reply failed: %s", exc)
+        return
 
     # --- DM (private message) mode ---
     if is_dm and user_id:
@@ -17602,23 +17683,25 @@ if BotLeaveEvent:
 
 
 _TRANSLATION_ACTION_UI = {
+    # Factory groups contain both Chinese- and Indonesian-reading users.  Keep
+    # every control bilingual so nobody must guess what a button does.
     "zh": {
-        "natural": "✨ 更自然", "literal": "🔎 直譯", "formal": "📢 正式",
-        "backcheck": "↩ 回譯", "personal": "👤 我的語言",
-        "handover": "📋 交班摘要", "interpreter": "🎙️ 即時口譯",
-        "expired": "⚠️ 此翻譯操作已過期，請重新傳送原訊息。",
+        "natural": "✨ 自然/Alami", "literal": "🔎 直譯/Harfiah", "formal": "📢 正式/Formal",
+        "backcheck": "↩ 回譯/Cek", "personal": "👤 語言/Bahasa",
+        "handover": "📋 交班/Serah", "interpreter": "🎙 口譯/Interpret",
+        "expired": "⚠️ 操作已過期，請重傳原訊息。\n⚠️ Tombol kedaluwarsa; kirim ulang pesan asli.",
     },
     "id": {
-        "natural": "✨ Lebih alami", "literal": "🔎 Harfiah", "formal": "📢 Formal",
-        "backcheck": "↩ Cek balik", "personal": "👤 Bahasa saya",
-        "handover": "📋 Ringkasan shift", "interpreter": "🎙️ Interpretasi",
-        "expired": "⚠️ Tombol terjemahan sudah kedaluwarsa. Kirim ulang pesan asli.",
+        "natural": "✨ 自然/Alami", "literal": "🔎 直譯/Harfiah", "formal": "📢 正式/Formal",
+        "backcheck": "↩ 回譯/Cek", "personal": "👤 語言/Bahasa",
+        "handover": "📋 交班/Serah", "interpreter": "🎙 口譯/Interpret",
+        "expired": "⚠️ 操作已過期，請重傳原訊息。\n⚠️ Tombol kedaluwarsa; kirim ulang pesan asli.",
     },
     "en": {
-        "natural": "✨ Natural", "literal": "🔎 Literal", "formal": "📢 Formal",
-        "backcheck": "↩ Back-check", "personal": "👤 My language",
-        "handover": "📋 Handover", "interpreter": "🎙️ Interpreter",
-        "expired": "⚠️ This translation action expired. Please resend the original message.",
+        "natural": "✨ Natural/Alami", "literal": "🔎 Literal/Harfiah", "formal": "📢 Formal",
+        "backcheck": "↩ Back/Cek", "personal": "👤 Language/Bahasa",
+        "handover": "📋 Handover/Serah", "interpreter": "🎙 Interpretasi",
+        "expired": "⚠️ This action expired. / Tombol ini sudah kedaluwarsa.",
     },
 }
 
@@ -17654,11 +17737,12 @@ def _personal_language_menu_text(locale="id", current=None):
     current_line = ""
     if current:
         current_line = "\n目前 / Saat ini: " + _language_name_bilingual(current)
-    if locale == "zh":
-        return "👤 請直接點選你想閱讀的語言。" + current_line + "\n不需要輸入指令。"
-    if locale == "id":
-        return "👤 Pilih bahasa yang ingin Anda baca dengan menekan tombol di bawah." + current_line + "\nTidak perlu mengetik perintah."
-    return "👤 Choose the language you want to read." + current_line
+    return (
+        "👤 請直接點下方按鈕選擇閱讀語言。\n"
+        "👤 Tekan tombol di bawah untuk memilih bahasa bacaan."
+        + current_line
+        + "\n不必輸入 /mylang。 / Tidak perlu mengetik /mylang."
+    )
 
 
 def _build_personal_language_quick_reply(token="", locale="id"):
@@ -17749,9 +17833,60 @@ if PostbackEvent:
 
         action = params.get("action", "")
 
-        # Multilingual one-click actions.  Labels follow the translation's target
-        # language, and personal language is selected by buttons instead of a
-        # command that factory users have to memorise.
+        # Multilingual one-click actions.  Controls are bilingual and use
+        # postbacks so users never need to memorise Chinese-only slash commands.
+        if action == "handover_summary":
+            _group = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+            _uid = getattr(event.source, 'user_id', None) or ""
+            if not _group:
+                result_text = (
+                    "⚠️ 交班摘要只能在群組使用。\n"
+                    "⚠️ Ringkasan serah terima hanya dapat digunakan di grup."
+                )
+            else:
+                token = params.get("token", "")
+                context = _get_translation_action_context(token, _group) if token else None
+                extra_rows = []
+                if context:
+                    src = str(context.get("src", "") or "").strip()
+                    tgt = str(context.get("tgt", "") or "").strip()
+                    original = str(context.get("original", "") or "").strip()
+                    translated = str(context.get("translated", "") or "").strip()
+                    if src and tgt and original and translated:
+                        extra_rows.append({
+                            "timestamp": time.time(),
+                            "sender": "",
+                            "source_language": src,
+                            "source_text": original,
+                            "translations": {tgt: translated},
+                        })
+                result_text = build_group_handover_summary(
+                    _group, hours=12, extra_rows=extra_rows
+                )
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=_clip_line_text(result_text))],
+                    ))
+            except Exception as exc:
+                logger.warning("handover postback reply failed: %s", exc)
+            return
+
+        if action == "open_interpreter":
+            _group = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+            _uid = getattr(event.source, 'user_id', None) or ""
+            result_text = handle_interpreter_command(_group, _uid)
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=_clip_line_text(result_text))],
+                    ))
+            except Exception as exc:
+                logger.warning("interpreter postback reply failed: %s", exc)
+            return
+
         if action == "show_language_menu":
             _gid = (getattr(event.source, 'group_id', None)
                     or getattr(event.source, 'room_id', None)
@@ -17883,8 +18018,11 @@ if PostbackEvent:
             mode = (params.get("mode") or "").strip().lower()
             token = params.get("token", "")
             context = _get_translation_action_context(token, _gid)
-            if mode == "personal" and context:
-                locale = _translation_action_locale(context.get("src"), context.get("tgt"))
+            if mode == "personal":
+                locale = _translation_action_locale(
+                    context.get("src") if context else "",
+                    context.get("tgt") if context else "id",
+                )
                 current = user_languages.get(_uid) or dm_target_lang.get(_uid)
                 try:
                     with ApiClient(configuration) as api_client:
@@ -17892,7 +18030,9 @@ if PostbackEvent:
                             reply_token=event.reply_token,
                             messages=[TextMessage(
                                 text=_personal_language_menu_text(locale, current),
-                                quick_reply=_build_personal_language_quick_reply(token, locale),
+                                quick_reply=_build_personal_language_quick_reply(
+                                    token if context else "", locale
+                                ),
                             )],
                         ))
                 except Exception as exc:
@@ -32021,14 +32161,53 @@ def _get_translation_action_context(token, group_id=None):
         return dict(record)
 
 
+def _translation_action_handover_rows(group_id, max_rows=120):
+    """Recover current-group translations from the live action cache.
+
+    This is an independent fallback for handover summaries.  Even if the legacy
+    recent-message buffer missed a row, every translation that displayed action
+    buttons has enough source/target data here to build a bilingual digest.
+    """
+    if not group_id:
+        return []
+    now = time.time()
+    rows = []
+    with _translation_action_lock:
+        for record in _translation_action_cache.values():
+            if str(record.get("group_id", "") or "") != str(group_id):
+                continue
+            if float(record.get("expires_at", 0) or 0) <= now:
+                continue
+            original = str(record.get("original", "") or "").strip()
+            translated = str(record.get("translated", "") or "").strip()
+            src = str(record.get("src", "") or "").strip()
+            tgt = str(record.get("tgt", "") or "").strip()
+            if not original or not translated or not src or not tgt:
+                continue
+            rows.append({
+                "timestamp": max(0.0, float(record.get("expires_at", 0) or 0) - max(60, _TRANSLATION_ACTION_TTL)),
+                "sender": "",
+                "source_language": src,
+                "source_text": original,
+                "translations": {tgt: translated},
+            })
+    rows.sort(key=lambda row: float(row.get("timestamp", 0) or 0))
+    return rows[-max(1, int(max_rows or 120)):]
+
+
 def _translation_variant_button(label, token, mode):
+    data = (
+        "action=show_language_menu&token=" + token
+        if mode == "personal"
+        else "action=translation_variant&mode=" + mode + "&token=" + token
+    )
     return {
         "type": "button", "style": "secondary", "height": "sm",
         "adjustMode": "shrink-to-fit",
         "action": {
             "type": "postback",
             "label": label,
-            "data": "action=translation_variant&mode=" + mode + "&token=" + token,
+            "data": data,
             "displayText": label,
         },
     }
@@ -32045,7 +32224,7 @@ def _build_translation_action_quick_reply(group_id, original_text, translated_te
         )
         labels = _translation_action_labels(src_lang, tgt_lang)
         items = []
-        for mode in ("natural", "literal", "formal", "backcheck", "personal"):
+        for mode in ("natural", "literal", "formal", "backcheck"):
             label = labels[mode][:20]
             items.append(QuickReplyItem(action=PostbackAction(
                 label=label,
@@ -32053,11 +32232,20 @@ def _build_translation_action_quick_reply(group_id, original_text, translated_te
                 display_text=label,
             )))
         items.extend([
-            QuickReplyItem(action=MessageAction(
-                label=labels["handover"][:20], text="/handover"
+            QuickReplyItem(action=PostbackAction(
+                label=labels["personal"][:20],
+                data="action=show_language_menu&token=" + token,
+                display_text=labels["personal"][:20],
             )),
-            QuickReplyItem(action=MessageAction(
-                label=labels["interpreter"][:20], text="/interpreter"
+            QuickReplyItem(action=PostbackAction(
+                label=labels["handover"][:20],
+                data="action=handover_summary&token=" + token,
+                display_text=labels["handover"][:20],
+            )),
+            QuickReplyItem(action=PostbackAction(
+                label=labels["interpreter"][:20],
+                data="action=open_interpreter&token=" + token,
+                display_text=labels["interpreter"][:20],
             )),
         ])
         return QuickReply(items=items)
@@ -32096,9 +32284,14 @@ def _build_image_translation_action_quick_reply(
                 for mode, label in variant_defs:
                     if not modes.get(mode, False):
                         continue
+                    data = (
+                        "action=show_language_menu&token=" + token
+                        if mode == "personal"
+                        else "action=translation_variant&mode=" + mode + "&token=" + token
+                    )
                     items.append(QuickReplyItem(action=PostbackAction(
                         label=label,
-                        data="action=translation_variant&mode=" + mode + "&token=" + token,
+                        data=data,
                         display_text=label,
                     )))
 
@@ -32147,7 +32340,7 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
             "type": "button", "style": "secondary", "height": "sm",
             "adjustMode": "shrink-to-fit",
             "action": {"type": "postback",
-                       "label": "📋 查儲區",
+                       "label": "📋 儲區/Gudang",
                        "data": _qry_data,
                        "displayText": "/qry " + wo_id},
         })
@@ -32167,7 +32360,7 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
                 "type": "button", "style": "secondary", "height": "sm",
                 "adjustMode": "shrink-to-fit",
                 "action": {"type": "postback",
-                           "label": "🔊 重唸",
+                           "label": "🔊 重播/Ulang",
                            "data": "action=tts_replay&lang=" + tgt_lang + "&t=" + _enc,
                            "displayText": "🔊 重唸 / Putar ulang"},
             })
