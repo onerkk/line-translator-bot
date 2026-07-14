@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.36.0-quality-cost-routing-root-fix-2026-07-14",
-    "schema_version": 7,
-    "state_hash": "0a931adb4ba9ff1c55f50f3617f0bab218d4311faabfc4ba2370b438ff5d0c3f",
-    "updated_at_iso": "2026-07-14T00:09:13.439065+00:00",
-    "updated_at_unix": 1783987753.4390647
+    "app_version": "v3.39.0-smart-expressive-120cards-2026-07-14",
+    "schema_version": 8,
+    "state_hash": "f4f30cf3ccfc75c5ac04b498b8e1225cc3640d9823f3137bfef650460ecf7130",
+    "updated_at_iso": "2026-07-14T04:37:29.812800+00:00",
+    "updated_at_unix": 1784003849.8128002
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-07-14 00:09:13",
+    "last_updated": "2026-07-14 04:37:29",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -164,6 +164,7 @@
     },
     "provider_failover": true
   },
+  "auto_tone_emoji_enabled": true,
   "bot_stats": {
     "ant_cache_read": 578435,
     "ant_cache_write": 1713068,
@@ -232,6 +233,15 @@
   "double_check_keywords": "maaf,maafkan,sori,ampun,salah,gak akan,bukan saya,jangan salah,對不起,抱歉,請原諒,誤會,搞錯,放錯,弄錯,搞混",
   "double_check_mode": "off",
   "double_check_threshold": 0.55,
+  "expressive_emoji_enabled": true,
+  "expressive_formal_safety_enabled": true,
+  "expressive_images_enabled": true,
+  "expressive_short_message_image_enabled": true,
+  "expressive_short_message_max_chars": 80,
+  "expressive_translation_intensity": "natural",
+  "expressive_translation_mode": "smart",
+  "expressive_visual_enabled": true,
+  "expressive_visual_style": "auto",
   "external_links_settings": {
     "absen": {
       "enabled": true,
@@ -349,6 +359,7 @@
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
+  "group_auto_tone_emoji_settings": {},
   "group_camera_qr_settings": {},
   "group_camera_roll_qr_settings": {},
   "group_clipboard_qr_settings": {},
@@ -369,6 +380,15 @@
     }
   },
   "group_conv_settings": {},
+  "group_expressive_emoji_settings": {},
+  "group_expressive_formal_safety_settings": {},
+  "group_expressive_images_settings": {},
+  "group_expressive_intensity_settings": {},
+  "group_expressive_mode_settings": {},
+  "group_expressive_short_image_settings": {},
+  "group_expressive_short_max_chars_settings": {},
+  "group_expressive_visual_settings": {},
+  "group_expressive_visual_style_settings": {},
   "group_flex_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
@@ -391,6 +411,9 @@
       "span": true
     }
   },
+  "group_image_ocr_expressive_settings": {},
+  "group_image_translation_action_modes": {},
+  "group_image_translation_actions_settings": {},
   "group_img_ask_settings": {
     "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
@@ -480,6 +503,16 @@
   "id_zh_double_translation": false,
   "id_zh_pivot_enabled": false,
   "id_zh_pivot_threshold": 80,
+  "image_ocr_expressive_enabled": true,
+  "image_translation_action_modes": {
+    "backcheck": true,
+    "formal": true,
+    "literal": true,
+    "natural": true,
+    "overlay": true,
+    "personal": true
+  },
+  "image_translation_actions_enabled": true,
   "location_qr_enabled": false,
   "location_translate_enabled": true,
   "logprobs_enabled": true,
