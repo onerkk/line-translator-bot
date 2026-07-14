@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.39.0-smart-expressive-120cards-2026-07-14",
+    "app_version": "v3.39.4-bilingual-actions-root-fix-2026-07-14",
     "schema_version": 8,
-    "state_hash": "67ac91f724cee8885116819f54a55efc711f12ad961f8bc2f378fa3a8e88be31",
-    "updated_at_iso": "2026-07-14T04:54:01.612367+00:00",
-    "updated_at_unix": 1784004841.612367
+    "state_hash": "39973b8b14b070ea0c6f7f144337ac886ab0d610158098d3eff0b6d682b67ecc",
+    "updated_at_iso": "2026-07-14T07:56:46.102172+00:00",
+    "updated_at_unix": 1784015806.102172
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-07-14 04:37:29",
+    "last_updated": "2026-07-14 07:56:03",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -226,7 +226,9 @@
     "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
   },
   "dm_master_enabled": true,
-  "dm_target_lang": {},
+  "dm_target_lang": {
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "zh"
+  },
   "dm_whitelist": [
     "Uaf4dc8fc636bc8f6060521c398514dc1"
   ],
@@ -703,7 +705,8 @@
   "translation_tone_custom": "",
   "translation_top_p": 1.0,
   "user_languages": {
-    "U78ae67bff0f53d01e513be10be1d7162": "id"
+    "U78ae67bff0f53d01e513be10be1d7162": "id",
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "zh"
   },
   "user_pictures": {
     "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
