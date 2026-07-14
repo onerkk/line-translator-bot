@@ -1,0 +1,74 @@
+name: Apply ZIP update
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Extract update ZIP
+        run: |
+          set -e
+
+          ZIP="line-translator-smart-expressive-changed-files.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ZIP not found: $ZIP"
+            exit 1
+          fi
+
+          rm -rf /tmp/line-update
+          mkdir -p /tmp/line-update
+
+          python3 - <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          zip_path = Path("line-translator-smart-expressive-changed-files.zip")
+          target = Path("/tmp/line-update").resolve()
+
+          with zipfile.ZipFile(zip_path) as z:
+              for item in z.infolist():
+                  destination = (target / item.filename).resolve()
+                  if destination != target and target not in destination.parents:
+                      print("Unsafe ZIP path:", item.filename)
+                      sys.exit(1)
+
+              z.extractall(target)
+
+          print("ZIP extracted successfully")
+          PY
+
+          test -f /tmp/line-update/app.py
+          test -f /tmp/line-update/expressive_engine.py
+          test -f /tmp/line-update/expressive_assets.py
+          test -f /tmp/line-update/static/expressive_media/manifest.json
+
+          rsync -a /tmp/line-update/ ./
+          rm -f "$ZIP"
+
+      - name: Commit updated files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes detected"
+            exit 0
+          fi
+
+          git commit -m "Apply smart expressive translation update"
+          git push origin HEAD:main
