@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.39.0-smart-expressive-120cards-2026-07-14",
     "schema_version": 8,
-    "state_hash": "aca0cd92a99aaacb67137bbe1da9c324343463cf8bafe1c341b0ce9ebaa44ac8",
-    "updated_at_iso": "2026-07-14T04:52:02.949798+00:00",
-    "updated_at_unix": 1784004722.9497979
+    "state_hash": "356a339b55db3888a26cb1bd721d55e6af579489a645803ceefc90094001eda4",
+    "updated_at_iso": "2026-07-14T04:53:56.299956+00:00",
+    "updated_at_unix": 1784004836.2999556
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -239,7 +239,7 @@
   "expressive_short_message_image_enabled": true,
   "expressive_short_message_max_chars": 80,
   "expressive_translation_intensity": "natural",
-  "expressive_translation_mode": "tone_only",
+  "expressive_translation_mode": "emoji",
   "expressive_visual_enabled": true,
   "expressive_visual_style": "auto",
   "external_links_settings": {
