@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-07-12.1"
+PROMPT_OPTIMIZER_VERSION = "2026-07-14.2-quality-cost-router"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -241,7 +241,7 @@ def _context_score(chunk: str, source_tokens: set[str], source_text: str) -> int
     return score
 
 
-def _select_context_rules(section: str, source_text: str, limit: int = 6) -> List[str]:
+def _select_context_rules(section: str, source_text: str, limit: int = 3) -> List[str]:
     tokens = _tokenize_for_overlap(source_text)
     ranked = []
     for chunk in _split_context_rules(section):
@@ -306,7 +306,7 @@ def _entry_score(entry: str, source_text: str, direction: str) -> int:
     return best
 
 
-def _select_vocab(section: str, source_text: str, direction: str, limit: int = 16) -> List[str]:
+def _select_vocab(section: str, source_text: str, direction: str, limit: int = 8) -> List[str]:
     ranked: List[Tuple[int, int, str]] = []
     seen = set()
     for entry in _split_vocab_entries(section):
@@ -322,7 +322,7 @@ def _select_vocab(section: str, source_text: str, direction: str, limit: int = 1
     return [row[2] for row in ranked[: max(1, limit)]]
 
 
-def _matching_historical_rules(source_text: str, direction: str, limit: int = 8) -> List[str]:
+def _matching_historical_rules(source_text: str, direction: str, limit: int = 4) -> List[str]:
     out: List[str] = []
     for rule_id, directions, pattern, instruction in _HISTORICAL_RULES:
         if "*" not in directions and direction not in directions:
@@ -378,20 +378,14 @@ def _core_principles(src: str, tgt: str, tone_instruction: str, variant: str) ->
     directional = _direction_principles(src, tgt)
     return (
         "<translation_principles>\n"
-        f"Direction: {src} -> {tgt}. Output only one final translation in {tgt}.\n"
-        "Priority order: (1) immutable placeholders/names/codes/data, (2) runtime semantic contract, "
-        "(3) hard glossary terms, (4) source meaning and logical roles, (5) relevant historical failure rules, "
-        "(6) natural target-language style, (7) examples/TM. A lower level must never override a higher level.\n"
-        "Translate meaning, not isolated words. Internally identify actor, action, object, timing, condition, negation, "
-        "modality, severity, cause and consequence. Resolve ambiguity from syntax and available context; never add facts.\n"
-        "Preserve @mentions exactly; never translate, romanize or explain Chinese person names or nicknames. Preserve all placeholders, "
-        "field values, customer names, equipment/work-order/lot codes, numbers, decimals, units, ranges, symbols and quoted values exactly.\n"
-        "If the source already contains a target-language phrase in parentheses beside a source term, treat it as terminology evidence for that adjacent term, not as ordinary prose.\n"
-        "Preserve emoji, line breaks, blank lines, list order, speaker labels and paragraph structure. Do not merge, reorder, add headings, add emoji or repeat a closing request that the source does not contain.\n"
-        "Do not leak source-language ordinary words into the target. Output no analysis, alternatives, markdown, labels, explanations, apologies, thinking tags or parenthetical meta-commentary.\n"
-        "Pure equipment-code messages are echoed unchanged by the local pipeline; when codes occur inside prose, preserve each code exactly and translate the prose normally.\n"
+        f"Direction: {src}->{tgt}. Output only one final translation in {tgt}.\n"
+        "Priority: immutable placeholders/names/codes/data > runtime semantic contract > hard glossary > complete source meaning > natural target wording.\n"
+        "Translate the intended workplace meaning, not isolated dictionary words. Preserve actor, action, object, time, condition, negation, severity, cause and consequence; never add facts.\n"
+        "Preserve @mentions exactly. Preserve Chinese person names, customer names, immutable placeholders, equipment/work-order/lot codes, numbers, decimals, units, ranges and symbols exactly.\n"
+        "Preserve emoji, line breaks, blank lines, paragraph order and lists. Do not merge paragraphs or add headings, markdown, explanations, alternatives or commentary.\n"
+        "Do not leak source-language ordinary words; translate them into the target language.\n"
         + (directional + "\n" if directional else "")
-        + f"Configured tone: {tone}\n"
+        + f"Tone: {tone}\n"
         + f"Variant: {_variant_instruction(variant, tgt)}\n"
         + "</translation_principles>"
     )
@@ -410,8 +404,8 @@ def compile_translation_prompt(
     """Compile the large historical prompt for one translation request.
 
     The stable principle block is always first, improving cacheability. Dynamic
-    terminology and incident rules follow it. If compilation fails or exceeds a
-    conservative safety threshold, the original prompt is returned unchanged.
+    terminology and incident rules follow it. Optional blocks are dropped when
+    they exceed the request budget; the historical all-rules prompt is not restored.
     """
     original = full_prompt or ""
     if not original.strip():
@@ -424,45 +418,54 @@ def compile_translation_prompt(
 
     try:
         direction = _direction(src_lang, tgt_lang)
-        prefix = _prefix_before_role(original)
+        # The old prefix duplicated target-language/output rules and added over
+        # one thousand characters to every request.  The compact principle block
+        # below is the single source of truth for runtime delivery.
         semantic_contract = _tag(original, "semantic_contract")
-        format_rules = _tag(original, "format_rules")
-        output_format = _tag(original, "output_format")
         vocab = _select_vocab(_tag(original, "factory_vocabulary"), source_text, direction)
         context = _select_context_rules(_tag(original, "context_disambiguation"), source_text)
         historical = _matching_historical_rules(source_text, direction)
 
-        sections: List[str] = []
-        if prefix:
-            sections.append(prefix)
-        sections.append(
+        role_block = (
             "<role>You are a professional translator for a Taiwan stainless-steel factory LINE work chat. "
             "Produce operationally clear, culturally natural translations for Taiwanese and migrant workers.</role>"
         )
-        sections.append(_core_principles(src_lang, tgt_lang, tone_instruction, variant))
-        if semantic_contract:
-            sections.append("<semantic_contract>" + semantic_contract + "</semantic_contract>")
+        core_block = _core_principles(src_lang, tgt_lang, tone_instruction, variant)
+        semantic_block = ("<semantic_contract>" + semantic_contract + "</semantic_contract>") if semantic_contract else ""
+        output_block = (
+            "<output_format>Output only the translation. Preserve original paragraph and line breaks. "
+            "No prefix, explanation, markdown or added content.</output_format>"
+        )
+        optional_blocks: List[str] = []
         if vocab:
-            sections.append("<relevant_factory_terms>\n" + "\n".join(f"- {item}" for item in vocab) + "\n</relevant_factory_terms>")
+            optional_blocks.append("<relevant_factory_terms>\n" + "\n".join(f"- {item}" for item in vocab) + "\n</relevant_factory_terms>")
         if historical:
-            sections.append("<relevant_failure_rules>\n" + "\n".join(f"- {item}" for item in historical) + "\n</relevant_failure_rules>")
+            optional_blocks.append("<relevant_failure_rules>\n" + "\n".join(f"- {item}" for item in historical) + "\n</relevant_failure_rules>")
         if context:
-            sections.append("<relevant_context_rules>\n" + "\n".join(f"- {item}" for item in context) + "\n</relevant_context_rules>")
-        # Preserve the original compact format/output blocks exactly because they
-        # encode delivery constraints and are already small.
-        if format_rules:
-            sections.append("<format_rules>" + format_rules + "</format_rules>")
-        if output_format:
-            sections.append("<output_format>" + output_format + "</output_format>")
+            optional_blocks.append("<relevant_context_rules>\n" + "\n".join(f"- {item}" for item in context) + "\n</relevant_context_rules>")
 
-        compiled = "\n".join(section for section in sections if section).strip()
-        cap = max_chars or int(os.environ.get("PROMPT_MAX_CHARS", "12000"))
+        cap = max_chars or int(os.environ.get("PROMPT_MAX_CHARS", "6000"))
         # Long/OCR documents may need more relevant terms but should still be far
         # below the original 30k+ prompt.
         if len(source_text or "") >= 800:
-            cap = max(cap, 16000)
-        if not compiled or len(compiled) > cap:
-            stats = PromptCompileStats(len(original), len(original), len(vocab), len(context), len(historical), True)
+            cap = max(cap, 9000)
+
+        # Never fall back to the historical all-rules prompt merely because the
+        # compact prompt exceeds the budget.  That old behavior caused the exact
+        # cost/quality regression this compiler is meant to prevent.  Keep the
+        # invariant layer and request-specific semantic contract, then append only
+        # optional blocks that fit.
+        sections: List[str] = [role_block, core_block]
+        if semantic_block:
+            sections.append(semantic_block)
+        for block in optional_blocks:
+            candidate = "\n".join(sections + [block, output_block]).strip()
+            if len(candidate) <= cap:
+                sections.append(block)
+        sections.append(output_block)
+        compiled = "\n".join(section for section in sections if section).strip()
+        if not compiled:
+            stats = PromptCompileStats(len(original), len(original), 0, 0, 0, True)
             return original, stats
         stats = PromptCompileStats(len(original), len(compiled), len(vocab), len(context), len(historical), False)
         return compiled, stats

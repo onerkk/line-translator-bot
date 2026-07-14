@@ -260,7 +260,11 @@ def normalize_tts_model(model, fallback=None):
 # 預設配置
 # ═══════════════════════════════════════════════════════════════════
 DEFAULT_CONFIG = {
-    "active_provider": "openai",
+    # v3.36: text translation defaults to Gemini because the official Gemini
+    # model guide explicitly positions Flash-Lite for high-volume translation.
+    # app.py still passes an explicit per-request provider order, so image/OCR
+    # and admin-selected non-translation workflows remain independently routed.
+    "active_provider": "gemini",
     "openai": {"api_key": "", "base_url": None},
     "anthropic": {
         "api_key": "",
@@ -273,7 +277,9 @@ DEFAULT_CONFIG = {
     "gemini": {
         "api_key": "",
         "default_model": "gemini-3.1-flash-lite",   # 短訊息(最省)
-        "upgrade_model": "gemini-3.5-flash",        # 長訊息(GA 穩定版)
+        # Gemini 2.5 Flash is Google's stable best-price-performance model and
+        # is substantially cheaper than 3.5 Flash for long factory notices.
+        "upgrade_model": "gemini-2.5-flash",
     },
     # v3.25: OpenAI 官方 Flex tier — 背景品檢呼叫(QE/APE)半價。
     # 官方定位:「較低費用換較慢回應與偶發資源不足,適合非即時任務」,
@@ -287,7 +293,7 @@ DEFAULT_CONFIG = {
         "per_provider_timeout_seconds": 24,
         "circuit_breaker_failures": 2,
         "circuit_breaker_cooldown_seconds": 60,
-        "provider_order": ["openai", "gemini", "anthropic"],
+        "provider_order": ["gemini", "openai", "anthropic"],
         # Real-time LINE messages need a much tighter tail-latency budget than
         # long documents or OCR.  Callers select one profile; the old two
         # timeout fields remain as backwards-compatible fallbacks.
@@ -315,17 +321,17 @@ DEFAULT_CONFIG = {
     # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
     "gemini_model_mapping": {
         "gpt-5.6-luna": "gemini-3.1-flash-lite",
-        "gpt-5.6-terra": "gemini-3.5-flash",
-        "gpt-5.6-sol": "gemini-3.5-flash",
+        "gpt-5.6-terra": "gemini-2.5-flash",
+        "gpt-5.6-sol": "gemini-2.5-flash",
         "gpt-5.4-mini": "gemini-3.1-flash-lite",
         "gpt-4.1-mini": "gemini-3.1-flash-lite",
         "gpt-5.4-nano": "gemini-3.1-flash-lite",
-        "gpt-4.1":      "gemini-3.5-flash",
-        "gpt-5.4":      "gemini-3.5-flash",
-        "gpt-5.5":      "gemini-3.5-flash",
+        "gpt-4.1":      "gemini-2.5-flash",
+        "gpt-5.4":      "gemini-2.5-flash",
+        "gpt-5.5":      "gemini-2.5-flash",
         # 相容仍在服役但不再列入本專案新選單的舊多模態模型
         "gpt-4o-mini":  "gemini-3.1-flash-lite",
-        "gpt-4o":       "gemini-3.5-flash",
+        "gpt-4o":       "gemini-2.5-flash",
     },
     "model_mapping": {
         "gpt-5.6-luna": "claude-haiku-4-5-20251001",
@@ -429,7 +435,13 @@ _uploaded_glossary_hash = None      # 用來判斷 glossary 有沒有改過需�
 # Config 讀寫
 # ═══════════════════════════════════════════════════════════════════
 def _migrate_config_models(cfg):
-    """把磁碟中的舊 mapping key 遷移到現行 OpenAI model id。"""
+    """把磁碟中的舊 mapping key 遷移到現行模型與 CP 路由。
+
+    v3.36 intentionally migrates the former expensive Gemini 3.5 Flash text
+    upgrade route to stable Gemini 2.5 Flash.  This is a one-way migration only
+    for values that still equal the old project default; an administrator who
+    later chooses another model is not overwritten.
+    """
     for field in ("model_mapping", "gemini_model_mapping"):
         defaults = dict(DEFAULT_CONFIG.get(field, {}))
         saved = cfg.get(field, {})
@@ -438,6 +450,23 @@ def _migrate_config_models(cfg):
                 new_key = normalize_openai_model(old_key)
                 defaults[new_key] = target
         cfg[field] = defaults
+
+    gemini_cfg = cfg.setdefault("gemini", {})
+    if gemini_cfg.get("upgrade_model") in (None, "", "gemini-3.5-flash"):
+        gemini_cfg["upgrade_model"] = "gemini-2.5-flash"
+
+    gm = cfg.setdefault("gemini_model_mapping", {})
+    for key in ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-4.1", "gpt-5.4", "gpt-5.5", "gpt-4o"):
+        if gm.get(key) in (None, "", "gemini-3.5-flash"):
+            gm[key] = "gemini-2.5-flash"
+
+    policy = cfg.setdefault("failover_policy", {})
+    old_order = list(policy.get("provider_order") or [])
+    # Preserve all configured providers but make the low-cost translation-first
+    # order deterministic for legacy configs.
+    policy["provider_order"] = list(dict.fromkeys(
+        ["gemini", "openai", "anthropic"] + old_order
+    ))
     return cfg
 
 
@@ -806,7 +835,7 @@ def get_gemini_models():
     _ensure_initialized()
     g = _current_config.get("gemini", {}) if _current_config else {}
     return (g.get("default_model") or "gemini-3.1-flash-lite",
-            g.get("upgrade_model") or "gemini-3.5-flash")
+            g.get("upgrade_model") or "gemini-2.5-flash")
 
 
 def update_model_mapping(mapping):
@@ -1715,7 +1744,7 @@ def _resolve_gemini_model(model):
         return mapping[normalized]
     if any(t in nm for t in ("mini", "nano", "haiku")):
         return gcfg.get("default_model", "gemini-3.1-flash-lite")
-    return gcfg.get("upgrade_model", "gemini-3.5-flash")
+    return gcfg.get("upgrade_model", "gemini-2.5-flash")
 
 
 def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,

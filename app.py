@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.35.0-factory-context-knowledge-root-fix-2026-07-13"
+VERSION = "v3.36.0-quality-cost-routing-root-fix-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -284,7 +284,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-13.1-context-retrieval"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-14.2-quality-cost-routing-context"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -810,10 +810,11 @@ OPENAI_PRICE_PER_M = {
     # 只保留成本追蹤相容；不再顯示於後台選單
     "gpt-4o-mini":  (0.15,  0.60),
     "gpt-4o":       (2.50, 10.00),
-    # v3.21 Gemini(概估值,Google 官方定位 flash-lite 為最低價;
-    # 實際帳單以 Google AI Studio 為準,此表僅供後台成本儀表板估算)
+    # Gemini 官方標準價(2026-07)。這些值只用於本機成本儀表板，
+    # 實際帳單仍以 Google AI Studio 為準。
     "gemini-3.1-flash-lite": (0.25, 1.50),
-    "gemini-3.5-flash":      (0.75, 4.50),
+    "gemini-2.5-flash":      (0.30, 2.50),
+    "gemini-3.5-flash":      (2.70, 16.20),
     "gemini-3-flash":        (0.50, 3.00),
 }
 
@@ -1214,8 +1215,8 @@ claude_auto_switch_enabled = True                    # 總開關:OFF 時走「�
 
 # v3.21: Gemini 路徑模型(第三 provider — Google 官方定位 flash-lite 為
 # 「聊天訊息翻譯的大量/低價場景」首選,三家最低價位)
-gemini_model_default = "gemini-3.1-flash-lite"       # 短訊息(最省)
-gemini_model_upgrade = "gemini-3.5-flash"            # 長訊息(GA 穩定版)
+gemini_model_default = "gemini-3.1-flash-lite"       # 短訊息:官方定位為大量翻譯
+gemini_model_upgrade = "gemini-2.5-flash"            # 複雜訊息:穩定最佳價格效能
 
 # v3.24: 商用販售資訊(Rich Menu 按鈕回覆用;價格可用 /setprice 指令改,持久化)
 service_price_text = (
@@ -1390,10 +1391,12 @@ def _translation_response_text(response):
 
 
 def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=None):
-    """Reject only responses that contain no usable translation payload.
+    """Validate each provider candidate before accepting it.
 
-    Semantic quality is never used to trigger another provider.  Local gates handle
-    purity/completeness after the single successful response.
+    The first attempt uses the low-cost provider.  Only objective integrity or
+    retrieved factory-context failures trigger the next provider, so ordinary
+    messages stay single-call while demonstrably wrong candidates are not
+    accepted merely because the API returned HTTP 200.
     """
     source = str(source_text or "")
     source_compact = re.sub(r"\s+", "", source)
@@ -1418,6 +1421,31 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
             return False, f"{provider} returned refusal/meta text"
         if len(source_compact) >= 6 and re.sub(r"\s+", "", text).casefold() == source_compact.casefold():
             return False, f"{provider} echoed the source instead of translating"
+
+        # Objective local checks are cheap and provider-neutral.  Warning-only
+        # style diagnostics do not trigger another paid call.
+        try:
+            qg = tqg_module.validate_translation(
+                source, text, src_lang or "", tgt_lang or "",
+                require_paragraph_fidelity=False,
+            )
+            if qg.hard_issues:
+                return False, f"{provider} integrity reject: {qg.hard_issues[0]}"
+        except Exception as exc:
+            logger.warning("[CPRouter] local candidate validation skipped: %s", exc)
+
+        # Retrieved plant knowledge is deterministic and request-specific.  A
+        # violation here is strong evidence that the cheap candidate used the
+        # wrong factory sense, so move to the next provider instead of accepting
+        # it and paying for a separate repair call afterwards.
+        try:
+            contract = getattr(_tl, "semantic_contract", None)
+            if contract and contract.get("has_risk"):
+                ok, reason = translation_satisfies_semantic_contract(contract, text)
+                if not ok:
+                    return False, f"{provider} semantic reject: {reason}"
+        except Exception as exc:
+            logger.warning("[CPRouter] semantic candidate validation skipped: %s", exc)
         return True, "ok"
 
     return _validate
@@ -1710,6 +1738,22 @@ def pick_model(text):
     _forced = getattr(_tl, 'force_model', None)
     if _forced:
         return _forced
+
+    # v3.36 translation CP router: keep one canonical OpenAI model name as the
+    # cross-provider quality tier.  ai_provider maps that tier to Gemini/OpenAI/
+    # Claude per attempt.  Returning provider-specific names here made failover
+    # brittle (for example a Gemini model id sent to OpenAI after a failover).
+    if os.environ.get("TRANSLATION_CP_ROUTER_ENABLED", "1").strip().lower() not in {
+        "0", "false", "off", "no"
+    }:
+        if (
+            model_threshold > 0
+            and (len(text) if isinstance(text, str) else 0) >= model_threshold
+        ) or _translation_needs_upgrade_model(text):
+            return ai_provider.normalize_translation_model(
+                model_upgrade, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
+        return ai_provider.normalize_translation_model(
+            model_default, ai_provider.DEFAULT_OPENAI_MODEL)
     try:
         provider = ai_provider.get_active_provider()
     except Exception:
@@ -1740,6 +1784,23 @@ def pick_model(text):
             model_upgrade, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
     return ai_provider.normalize_translation_model(
         model_default, ai_provider.DEFAULT_OPENAI_MODEL)
+
+
+def _translation_provider_preference(text=None, src=None, tgt=None):
+    """Cost/quality order for text translation only.
+
+    Gemini is first because Flash-Lite is explicitly designed for high-volume
+    translation and the upgrade tier maps to stable Gemini 2.5 Flash.  OpenAI is
+    the first quality failover; Claude Sonnet/Haiku remains the final fallback.
+    Unconfigured providers are filtered by ai_provider.chat_complete().
+    """
+    override = os.environ.get("TRANSLATION_PROVIDER_ORDER", "").strip()
+    if override:
+        requested = [p.strip().lower() for p in override.split(",") if p.strip()]
+        valid = [p for p in requested if p in ("gemini", "openai", "anthropic")]
+        if valid:
+            return list(dict.fromkeys(valid + ["gemini", "openai", "anthropic"]))
+    return ["gemini", "openai", "anthropic"]
 
 
 def _active_upgrade_model():
@@ -2272,6 +2333,26 @@ def _is_zh_id_factory_announcement_source(text):
     return bool(len(compact) >= 120 or paragraph_count >= 3 or sum(m in text for m in announcement_markers) >= 2)
 
 
+def _translation_needs_conversation_history(text):
+    """Use chat history only when the current message is genuinely elliptical.
+
+    Previous builds appended up to three unrelated translation pairs to every
+    request.  Besides cost, those pairs could override the current sentence's
+    actor or register.  Full standalone notices do not need history.
+    """
+    source = str(text or "").strip()
+    if not source or len(source) > 90 or "\n\n" in source:
+        return False
+    compact = re.sub(r"\s+", "", source)
+    cues = (
+        "這個", "那個", "這些", "那些", "這把", "那把", "這批", "那批",
+        "剛剛", "上面那個", "下面那個", "一樣", "再來", "還有", "他說",
+        "她說", "它", "這裡", "那裡", "前面", "後面",
+    )
+    bare_quantity = bool(re.fullmatch(r"[一二兩三四五六七八九十\d]+(?:台|把|支|個|件|批)", compact))
+    return bare_quantity or any(cue in compact for cue in cues)
+
+
 def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
@@ -2340,7 +2421,10 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
         # Prefer newer examples only as a tie-breaker, never as a zero-score filler.
         scored.append((score, index, ex))
     scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    chosen = [ex for score, _index, ex in scored if score > 0][:runtime_max]
+    # A tiny overlap score is usually coincidence.  Inject only genuinely
+    # related examples; otherwise zero-shot with retrieved factory knowledge is
+    # both cheaper and more accurate.
+    chosen = [ex for score, _index, ex in scored if score >= 1.0][:runtime_max]
 
     for ex in chosen:
         zh = ex.get("zh", "").strip()
@@ -2370,12 +2454,13 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     #      歷史對(目標語污染,與 v3.9.44 修掉的 few-shot 污染同類 bug)
     # buffer 本來就存了 src/tgt 兩欄,精確配對即可,所有方向通用。
     try:
-        if group_id and get_conv_context_enabled(group_id):
+        if (group_id and get_conv_context_enabled(group_id)
+                and _translation_needs_conversation_history(user_msg)):
             history = _conv_buffer_get(group_id)
             matching_history = [
                 h for h in history
                 if h.get("src") == src and h.get("tgt") == tgt
-            ][-3:]
+            ][-1:]
             for h in matching_history:
                 msgs.append({"role": "user", "content": h["src_text"]})
                 msgs.append({"role": "assistant", "content": h["tgt_text"]})
@@ -2846,7 +2931,10 @@ PACKAGING_LOOKUP = {}
 #   - 5000 entries is well within OpenAI's context window even if all were injected (they aren't).
 CUSTOM_EXAMPLES_MAX = 5000
 # Few-shot only uses N most semantically relevant examples per request:
-FEWSHOT_INJECT_MAX = 8
+# Runtime examples are expensive and can contaminate meaning when only loosely
+# related.  The full example library remains available for retrieval, but each
+# request may inject at most one strongly related pair.
+FEWSHOT_INJECT_MAX = 1
 custom_translation_examples = []
 
 
@@ -6867,7 +6955,8 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     
     # v3.9.58: 飲食/飲料福利場景的「請客 / X請的」不可被翻成 request/diminta
     result = fix_qing_treat_translation_zh_id(src, result)
-    result = re.sub(r"\s+", " ", result).strip()
+    result = result.replace("\r\n", "\n").replace("\r", "\n")
+    result = re.sub(r"[^\S\n]+", " ", result).strip()
     return result
 
 
@@ -6880,7 +6969,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v6-erp-station-timing-semantics-root"
+_SEMANTIC_CONTRACT_VERSION = "v7-quality-cost-routing-context"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -7518,7 +7607,8 @@ def _repair_factory_domain_term_translation(translation, risk):
         sub(r"\bkonfirmasi\s+berat\s+badan\b", "konfirmasi berat")
     if "workflow" in active:
         sub(r"\bproses\s+operasi\b", "alur kerja")
-    result = re.sub(r"\s+", " ", result).strip()
+    result = result.replace("\r\n", "\n").replace("\r", "\n")
+    result = re.sub(r"[^\S\n]+", " ", result).strip()
     return result
 
 
@@ -7792,7 +7882,8 @@ def _semantic_rebuild_qing_treat_translation(src_text, contract, current_transla
     result = (current_translation or "").strip()
     if result:
         result = re.sub(r"\s*[（(]?\s*(?:diminta|minta|meminta|permintaan|dimohon|mohon|dipesan|pesanan|requested|request)[^）)]*[）)]?\s*", " ", result, flags=re.I).strip()
-        result = re.sub(r"\s+", " ", result)
+        result = result.replace("\r\n", "\n").replace("\r", "\n")
+        result = re.sub(r"[^\S\n]+", " ", result).strip()
         if result:
             return f"{result} (ditraktir oleh {sponsor_id})"
     return f"Ini ditraktir oleh {sponsor_id}."
@@ -8748,10 +8839,9 @@ def post_fix_translation(text):
         result = result.replace(wrong, correct)
     # Remove bracketed hints that leaked through from pre_replace
     result = re.sub(r'\[([a-zA-Z /&]+)\]', r'\1', result)
-    # Clean up double spaces (preserve newlines)
-    result = re.sub(r'[^\S\n]+', ' ', result)
-    result = re.sub(r'\n{3,}', '\n\n', result)
-    result = result.strip()
+    # Normalize horizontal spacing only; paragraph structure is immutable.
+    result = result.replace("\r\n", "\n").replace("\r", "\n")
+    result = re.sub(r"[^\S\n]+", " ", result).strip()
     return result
 
 
@@ -9434,6 +9524,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ]
+        # v3.36: translation-only CP routing.  The explicit preference prevents
+        # an expensive admin-selected primary model from being used for every
+        # ordinary LINE sentence while retaining cross-provider failover.
+        _provider_preference = _translation_provider_preference(text, src, tgt)
+
         # v3.9.5: snapshot what we are about to send to OpenAI so /admin/debug/last-translate can show it.
         # This is the single most useful diagnostic when custom examples aren't taking effect.
         try:
@@ -9453,6 +9548,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "strict_no_source_script": strict_no_source_script,
                 "repair_mode": repair_mode,
                 "semantic_contract": getattr(_tl, 'semantic_contract', None),
+                "provider_preference": list(_provider_preference),
+                "prompt_chars": sum(len(str(m.get("content", ""))) for m in _msgs),
             }
         except Exception:
             pass
@@ -9484,6 +9581,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.32: 即時短訊息與長文使用不同總期限；協調層仍保證每家最多一次。
             "latency_profile": "long_text" if _critical_for_latency else "realtime_text",
             "response_validator": _build_translation_response_validator(text, src, tgt),
+            "provider_preference": _provider_preference,
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
             "translation_fast_quality": True,
@@ -19009,9 +19107,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">短訊息(便宜)</div>
       <select id="aip-gemini-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gemini-3.1-flash-lite">🟢 3.1 Flash-Lite(最省 ~$0.10/$0.40)</option>
+        <option value="gemini-3.1-flash-lite">🟢 3.1 Flash-Lite（最省 $0.25/$1.50）</option>
         <option value="gemini-3-flash">🟡 3 Flash</option>
-        <option value="gemini-3.5-flash">🔵 3.5 Flash(GA 最新 ~$0.30/$2.50)</option>
+        <option value="gemini-2.5-flash">🟢 2.5 Flash（穩定 CP）</option>
       </select>
     </div>
     <div style="flex:1">
@@ -19019,7 +19117,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <select id="aip-gemini-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
         <option value="gemini-3.1-flash-lite">🟢 3.1 Flash-Lite</option>
         <option value="gemini-3-flash">🟡 3 Flash</option>
-        <option value="gemini-3.5-flash" selected>🔵 3.5 Flash</option>
+        <option value="gemini-2.5-flash" selected>🟢 2.5 Flash</option>
       </select>
     </div>
   </div>
@@ -23781,7 +23879,7 @@ def _load_file_from_github(filename, branch="main"):
 _SETTINGS_FILENAME = "bot_settings.json"
 _SETTINGS_BRANCH = "data"
 _SETTINGS_KV_KEY = os.environ.get("BOT_SETTINGS_KV_KEY", "line_bot:bot_settings:v2").strip() or "line_bot:bot_settings:v2"
-_SETTINGS_SCHEMA_VERSION = 6  # v3.32.7: enforce one successful translation request per message
+_SETTINGS_SCHEMA_VERSION = 7  # v3.36: migrate text translation to CP router + compact prompt
 _SETTINGS_REQUIRE_CLOUD = os.environ.get("REQUIRE_CLOUD_SETTINGS", "1").strip().lower() not in ("0", "false", "no", "off")
 _settings_io_lock = _threading.RLock()
 _last_persisted_state_hash = ""
@@ -24596,7 +24694,7 @@ def load_settings():
             claude_model_upgrade = "claude-sonnet-5"
             claude_auto_switch_enabled = True
             gemini_model_default = "gemini-3.1-flash-lite"
-            gemini_model_upgrade = "gemini-3.5-flash"
+            gemini_model_upgrade = "gemini-2.5-flash"
             try:
                 ai_provider._ensure_initialized()
                 with ai_provider._config_lock:
@@ -28948,7 +29046,7 @@ def admin_apply_best_defaults():
         "claude_model_upgrade": "claude-sonnet-5",
         "claude_auto_switch_enabled": True,
         "gemini_model_default": "gemini-3.1-flash-lite",
-        "gemini_model_upgrade": "gemini-3.5-flash",
+        "gemini_model_upgrade": "gemini-2.5-flash",
         
         # === Sampling (only affects gpt-4 family; gpt-5 ignores) ===
         "translation_temperature": 0.0,       # Deterministic

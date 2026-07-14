@@ -1,22 +1,72 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-13.1-context-retrieval",
+  "build_id": "2026-07-14.2-quality-cost-routing-context",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
       "id": "erp_station_record_transfer_timing",
       "enabled": true,
       "priority": 100,
-      "directions": ["zh-id"],
+      "directions": [
+        "zh-id"
+      ],
       "title": "包裝站 490 到暫存站 801 的資料過帳時間分布",
       "match": {
-        "strong_phrases": ["入庫時間再平均一點", "入庫時間平均一點", "入帳時間平均一點", "過帳時間平均一點"],
-        "all_groups": [
-          ["入庫時間", "入帳時間", "過帳時間", "登錄時間", "登入時間", "紀錄時間", "記錄時間", "資料時間"],
-          ["平均", "均勻", "分散", "不要集中", "別集中", "分批", "間隔"]
+        "strong_phrases": [
+          "入庫時間再平均一點",
+          "入庫時間平均一點",
+          "入帳時間平均一點",
+          "過帳時間平均一點"
         ],
-        "any_terms": ["移完", "入完", "全部移", "一次移", "一次入", "490", "801", "開會", "會議", "檢討", "報表", "稽核", "沒入帳", "無紀錄"],
-        "none_terms": ["貨車", "卡車", "司機", "到貨", "卸貨", "倉庫大門", "月台", "收貨", "送貨", "進倉"],
+        "all_groups": [
+          [
+            "入庫時間",
+            "入帳時間",
+            "過帳時間",
+            "登錄時間",
+            "登入時間",
+            "紀錄時間",
+            "記錄時間",
+            "資料時間"
+          ],
+          [
+            "平均",
+            "均勻",
+            "分散",
+            "不要集中",
+            "別集中",
+            "分批",
+            "間隔"
+          ]
+        ],
+        "any_terms": [
+          "移完",
+          "入完",
+          "全部移",
+          "一次移",
+          "一次入",
+          "490",
+          "801",
+          "開會",
+          "會議",
+          "檢討",
+          "報表",
+          "稽核",
+          "沒入帳",
+          "無紀錄"
+        ],
+        "none_terms": [
+          "貨車",
+          "卡車",
+          "司機",
+          "到貨",
+          "卸貨",
+          "倉庫大門",
+          "月台",
+          "收貨",
+          "送貨",
+          "進倉"
+        ],
         "require_all_groups": true,
         "min_score": 8
       },
@@ -43,25 +93,65 @@
       ],
       "requirements": [
         {
-          "target_any": ["data", "pencatatan", "input", "posting", "transaksi"],
+          "target_any": [
+            "data",
+            "pencatatan",
+            "input",
+            "posting",
+            "transaksi"
+          ],
           "issue": "missing_system_record_semantics"
         },
         {
-          "target_any": ["merata", "tersebar", "bertahap", "tidak menumpuk", "interval"],
+          "target_any": [
+            "merata",
+            "tersebar",
+            "bertahap",
+            "tidak menumpuk",
+            "interval"
+          ],
           "issue": "missing_distribution_semantics"
         },
         {
-          "source_any": ["太早", "過早", "提早", "太快", "移完", "入完"],
-          "target_any": ["terlalu awal", "terlalu cepat", "lebih awal", "sekaligus"],
+          "source_any": [
+            "太早",
+            "過早",
+            "提早",
+            "太快",
+            "移完",
+            "入完"
+          ],
+          "target_any": [
+            "terlalu awal",
+            "terlalu cepat",
+            "lebih awal",
+            "sekaligus"
+          ],
           "issue": "missing_early_or_batch_completion_semantics"
         },
         {
-          "source_any": ["開會", "會議", "檢討", "報表", "稽核", "解釋"],
-          "target_any": ["rapat", "meeting", "evaluasi", "review", "dijelaskan", "menjelaskan"],
+          "source_any": [
+            "開會",
+            "會議",
+            "檢討",
+            "報表",
+            "稽核",
+            "解釋"
+          ],
+          "target_any": [
+            "rapat",
+            "meeting",
+            "evaluasi",
+            "review",
+            "dijelaskan",
+            "menjelaskan"
+          ],
           "issue": "missing_review_consequence"
         }
       ],
-      "preserve_source_regex": ["(?<!\\d)(490|801)(?!\\d)"],
+      "preserve_source_regex": [
+        "(?<!\\d)(490|801)(?!\\d)"
+      ],
       "examples": [
         {
           "source": "入庫時間再平均一點，太早移完開會很難解釋",
@@ -77,14 +167,35 @@
       "id": "physical_warehouse_receiving",
       "enabled": true,
       "priority": 110,
-      "directions": ["zh-id"],
+      "directions": [
+        "zh-id"
+      ],
       "title": "實體貨物入庫／收貨",
       "match": {
         "all_groups": [
-          ["入庫", "進倉", "收貨", "到貨"],
-          ["貨車", "卡車", "司機", "卸貨", "倉庫", "月台", "送貨", "貨物"]
+          [
+            "入庫",
+            "進倉",
+            "收貨",
+            "到貨"
+          ],
+          [
+            "貨車",
+            "卡車",
+            "司機",
+            "卸貨",
+            "倉庫",
+            "月台",
+            "送貨",
+            "貨物"
+          ]
         ],
-        "any_terms": ["時間", "安排", "平均", "排隊"],
+        "any_terms": [
+          "時間",
+          "安排",
+          "平均",
+          "排隊"
+        ],
         "require_all_groups": true,
         "min_score": 8
       },
@@ -92,11 +203,24 @@
         "這是實體貨物到廠、卸貨、收貨或進倉，不是 ERP 資料過帳。",
         "可使用 barang masuk gudang、penerimaan barang、bongkar muat 等實體物流詞。"
       ],
-      "preferred_target_phrases": ["barang masuk gudang", "penerimaan barang", "bongkar muat"],
-      "forbidden_target_phrases": ["pemindahan data dari stasiun 490 ke stasiun 801"],
+      "preferred_target_phrases": [
+        "barang masuk gudang",
+        "penerimaan barang",
+        "bongkar muat"
+      ],
+      "forbidden_target_phrases": [
+        "pemindahan data dari stasiun 490 ke stasiun 801"
+      ],
       "requirements": [
         {
-          "target_any": ["gudang", "penerimaan barang", "bongkar", "muat", "truk", "sopir"],
+          "target_any": [
+            "gudang",
+            "penerimaan barang",
+            "bongkar",
+            "muat",
+            "truk",
+            "sopir"
+          ],
           "issue": "missing_physical_logistics_semantics"
         }
       ]
@@ -105,15 +229,45 @@
       "id": "incident_voluntary_self_report",
       "enabled": true,
       "priority": 100,
-      "directions": ["zh-id"],
+      "directions": [
+        "zh-id"
+      ],
       "title": "設備事故主動承認與回報",
       "match": {
         "all_groups": [
-          ["自首", "主動承認", "自己承認", "主動回報", "自己回報"],
-          ["設備", "機台", "撞壞", "摔壞", "損壞", "提報", "通報"]
+          [
+            "自首",
+            "主動承認",
+            "自己承認",
+            "主動回報",
+            "自己回報"
+          ],
+          [
+            "設備",
+            "機台",
+            "撞壞",
+            "摔壞",
+            "損壞",
+            "提報",
+            "通報"
+          ]
         ],
-        "any_terms": ["無罪", "不追究", "讓我知道", "其他單位", "比較嚴重", "先提報"],
-        "none_terms": ["警方", "法院", "刑法", "犯罪", "投案", "檢察官"],
+        "any_terms": [
+          "無罪",
+          "不追究",
+          "讓我知道",
+          "其他單位",
+          "比較嚴重",
+          "先提報"
+        ],
+        "none_terms": [
+          "警方",
+          "法院",
+          "刑法",
+          "犯罪",
+          "投案",
+          "檢察官"
+        ],
         "require_all_groups": true,
         "min_score": 8
       },
@@ -128,25 +282,51 @@
         "segera laporkan kepada saya",
         "departemen lain yang lebih dulu melaporkan"
       ],
-      "forbidden_target_phrases": ["tidak ada dosa", "tidak berdosa", "tidak bersalah"],
+      "forbidden_target_phrases": [
+        "tidak ada dosa",
+        "tidak berdosa",
+        "tidak bersalah"
+      ],
       "requirements": [
         {
-          "target_any": ["tidak akan dipermasalahkan", "tidak akan dipersoalkan", "tidak akan ditindak"],
+          "target_any": [
+            "tidak akan dipermasalahkan",
+            "tidak akan dipersoalkan",
+            "tidak akan ditindak"
+          ],
           "issue": "missing_nonpunitive_self_report_semantics"
         },
         {
-          "source_any": ["撞壞"],
-          "target_any": ["tertabrak", "terbentur", "terkena benturan"],
+          "source_any": [
+            "撞壞"
+          ],
+          "target_any": [
+            "tertabrak",
+            "terbentur",
+            "terkena benturan"
+          ],
           "issue": "missing_collision_mechanism"
         },
         {
-          "source_any": ["摔壞"],
-          "target_any": ["terjatuh", "jatuh hingga rusak"],
+          "source_any": [
+            "摔壞"
+          ],
+          "target_any": [
+            "terjatuh",
+            "jatuh hingga rusak"
+          ],
           "issue": "missing_fall_mechanism"
         },
         {
-          "source_any": ["其他單位", "其他部門"],
-          "target_any": ["departemen lain", "bagian lain", "unit lain"],
+          "source_any": [
+            "其他單位",
+            "其他部門"
+          ],
+          "target_any": [
+            "departemen lain",
+            "bagian lain",
+            "unit lain"
+          ],
           "issue": "missing_other_department_reporter"
         }
       ],
@@ -161,21 +341,179 @@
       "id": "spray_painting_operation",
       "enabled": true,
       "priority": 70,
-      "directions": ["zh-id"],
+      "directions": [
+        "zh-id"
+      ],
       "title": "噴漆作業",
       "match": {
-        "strong_phrases": ["噴漆"],
-        "any_terms": ["作業", "施工", "執行", "沒有噴", "未噴", "漆"],
+        "strong_phrases": [
+          "噴漆"
+        ],
+        "any_terms": [
+          "作業",
+          "施工",
+          "執行",
+          "沒有噴",
+          "未噴",
+          "漆"
+        ],
         "require_any": false,
         "min_score": 8
       },
-      "context": ["『噴漆』是塗裝作業，可依句型使用 pengecatan semprot、mengecat dengan semprotan、disemprot cat；不要使用不自然的 spray cat。"],
-      "preferred_target_phrases": ["pengecatan semprot", "disemprot cat", "mengecat dengan semprotan"],
-      "forbidden_target_phrases": ["spray cat"],
+      "context": [
+        "『噴漆』是塗裝作業，可依句型使用 pengecatan semprot、mengecat dengan semprotan、disemprot cat；不要使用不自然的 spray cat。"
+      ],
+      "preferred_target_phrases": [
+        "pengecatan semprot",
+        "disemprot cat",
+        "mengecat dengan semprotan"
+      ],
+      "forbidden_target_phrases": [
+        "spray cat"
+      ],
       "requirements": [
         {
-          "target_any": ["pengecatan semprot", "disemprot cat", "mengecat dengan semprotan", "menyemprot cat"],
+          "target_any": [
+            "pengecatan semprot",
+            "disemprot cat",
+            "mengecat dengan semprotan",
+            "menyemprot cat"
+          ],
           "issue": "missing_spray_painting_semantics"
+        }
+      ]
+    },
+    {
+      "id": "management_shift_smoking_area_notice",
+      "enabled": true,
+      "priority": 90,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "主管巡視、班別與吸菸區人數管理",
+      "match": {
+        "all_groups": [
+          [
+            "主管",
+            "處長",
+            "課長",
+            "經理",
+            "高層",
+            "班長"
+          ],
+          [
+            "上下班",
+            "巡視",
+            "下樓",
+            "小夜班",
+            "夜班",
+            "吸菸區",
+            "抽菸區",
+            "聚集",
+            "分散開來"
+          ]
+        ],
+        "any_terms": [
+          "樓上",
+          "研磨部門",
+          "規定人數",
+          "超過人數",
+          "被看到",
+          "開會",
+          "檢討"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "『樓上主管』是位於樓上辦公或巡視的主管，印尼文應表達 atasan di lantai atas，不是生硬的 atasan yang di atas。",
+        "『主管上下班時間』是主管的上班與下班時段，使用 jam masuk dan pulang kerja；不是一般到達和離開的字面描述。",
+        "『小夜班』是與大夜班不同的早段夜班／晚班。預設可用 shift sore；若原文另有公司正式班名，應保留正式班名，不可簡化成一般 shift malam。",
+        "『處長』在此為部門主管，預設使用 kepala divisi 或 kepala departemen，不可擅自升格成公司董事。",
+        "『研磨部門』使用 bagian grinding 或 departemen grinding；『吸菸區』使用 area merokok。",
+        "『立刻分散開來』是人員立即分開、不要集中，使用 segera berpencar；避免同義詞重複或加入原文沒有的懲處。"
+      ],
+      "preferred_target_phrases": [
+        "atasan di lantai atas",
+        "jam masuk dan pulang kerja",
+        "shift sore",
+        "kepala divisi",
+        "bagian grinding",
+        "area merokok",
+        "segera berpencar"
+      ],
+      "forbidden_target_phrases": [
+        "atasan yang di atas",
+        "jam datang dan pulang",
+        "shift malam awal",
+        "bubar dan menyebar",
+        "berkumpul bersama"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "樓上主管"
+          ],
+          "target_any": [
+            "atasan di lantai atas",
+            "pimpinan di lantai atas"
+          ],
+          "issue": "missing_upstairs_supervisor_semantics"
+        },
+        {
+          "source_any": [
+            "上下班"
+          ],
+          "target_any": [
+            "jam masuk dan pulang kerja",
+            "waktu masuk dan pulang kerja"
+          ],
+          "issue": "missing_work_start_end_time_semantics"
+        },
+        {
+          "source_any": [
+            "處長"
+          ],
+          "target_any": [
+            "kepala divisi",
+            "kepala departemen"
+          ],
+          "issue": "missing_department_head_role"
+        },
+        {
+          "source_any": [
+            "研磨部門"
+          ],
+          "target_any": [
+            "bagian grinding",
+            "departemen grinding",
+            "bagian penggerindaan",
+            "departemen penggerindaan"
+          ],
+          "issue": "missing_grinding_department"
+        },
+        {
+          "source_any": [
+            "吸菸區",
+            "抽菸區"
+          ],
+          "target_any": [
+            "area merokok",
+            "tempat merokok"
+          ],
+          "issue": "missing_smoking_area"
+        },
+        {
+          "source_any": [
+            "分散開來",
+            "分散",
+            "散開"
+          ],
+          "target_any": [
+            "berpencar",
+            "menyebar"
+          ],
+          "issue": "missing_disperse_action"
         }
       ]
     }
