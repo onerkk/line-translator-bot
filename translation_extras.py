@@ -18,11 +18,82 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-07-14.9-bilingual-control-ux"
+TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
+
+
+
+
+DEFAULT_HANDOVER_TIMEZONE = "Asia/Taipei"
+
+
+def _resolve_handover_timezone(timezone_name: str | None = None):
+    """Return a stable display timezone for shift-handover timestamps.
+
+    Render workers run in UTC by default, so ``datetime.fromtimestamp(ts)``
+    silently displayed Taiwan events eight hours early.  Epoch timestamps stay
+    in UTC for storage and rolling-window filtering; conversion happens only at
+    the presentation boundary.
+    """
+    requested = (
+        timezone_name
+        or os.environ.get("HANDOVER_TIMEZONE")
+        or DEFAULT_HANDOVER_TIMEZONE
+    )
+    requested = str(requested or DEFAULT_HANDOVER_TIMEZONE).strip()
+    try:
+        return ZoneInfo(requested), requested
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        # Keep the bot usable even if the host lacks tzdata or an invalid env
+        # value is entered. Taiwan has no daylight-saving time.
+        return timezone(timedelta(hours=8), name="UTC+08:00"), DEFAULT_HANDOVER_TIMEZONE
+
+
+def get_handover_timezone_name(timezone_name: str | None = None) -> str:
+    """Return the validated IANA timezone name used by handover features."""
+    _tz, resolved_name = _resolve_handover_timezone(timezone_name)
+    return resolved_name
+
+
+def _coerce_epoch_seconds(value: Any) -> float:
+    """Normalise persisted seconds/milliseconds into Unix seconds."""
+    ts = float(value or 0)
+    if ts > 100_000_000_000:  # JavaScript / database millisecond epochs
+        ts /= 1000.0
+    return ts
+
+
+def format_handover_timestamp(
+    timestamp_value: Any,
+    *,
+    timezone_name: str | None = None,
+    include_date: bool = False,
+    now_timestamp: float | None = None,
+) -> str:
+    """Format an epoch timestamp in Taiwan/local handover time.
+
+    Same-day entries remain compact (``16:07``). Entries from another local
+    calendar day include ``MM/DD`` so a rolling 12-hour summary crossing
+    midnight is not ambiguous.
+    """
+    try:
+        ts = _coerce_epoch_seconds(timestamp_value)
+        if ts <= 0:
+            return "--:--"
+        tz, _resolved_name = _resolve_handover_timezone(timezone_name)
+        local_dt = datetime.fromtimestamp(ts, timezone.utc).astimezone(tz)
+        if include_date:
+            return local_dt.strftime("%m/%d %H:%M")
+        now_ts = _coerce_epoch_seconds(now_timestamp) if now_timestamp is not None else datetime.now(timezone.utc).timestamp()
+        now_local = datetime.fromtimestamp(now_ts, timezone.utc).astimezone(tz)
+        fmt = "%H:%M" if local_dt.date() == now_local.date() else "%m/%d %H:%M"
+        return local_dt.strftime(fmt)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "--:--"
 
 
 SUPPORTED_PERSONAL_LANGS = ("zh", "id", "vi", "th", "tl", "en", "ja", "ko", "hi")
@@ -1055,7 +1126,7 @@ def compact_handover_entries(
             }
         elif isinstance(item, Mapping):
             row = {
-                "timestamp": float(item.get("timestamp", item.get("ts", 0)) or 0),
+                "timestamp": _coerce_epoch_seconds(item.get("timestamp", item.get("ts", 0))),
                 "sender": str(item.get("sender", "") or ""),
                 "source_language": str(item.get("source_language", item.get("lang", "")) or ""),
                 "source_text": str(item.get("source_text", item.get("text", "")) or "").strip(),
@@ -1082,9 +1153,24 @@ def compact_handover_entries(
     return kept
 
 
-def build_handover_messages(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+def build_handover_messages(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    timezone_name: str | None = None,
+) -> list[dict[str, str]]:
     """Build a concise bilingual shift-handover request for one LLM call."""
-    payload = json.dumps(list(entries), ensure_ascii=False, separators=(",", ":"))
+    resolved_timezone = get_handover_timezone_name(timezone_name)
+    payload_rows: list[dict[str, Any]] = []
+    for entry in entries:
+        row = dict(entry)
+        row["local_time"] = format_handover_timestamp(
+            row.get("timestamp", row.get("ts", 0)),
+            timezone_name=resolved_timezone,
+            include_date=True,
+        )
+        row["timezone"] = resolved_timezone
+        payload_rows.append(row)
+    payload = json.dumps(payload_rows, ensure_ascii=False, separators=(",", ":"))
     system = (
         "You prepare a bilingual shift handover for a stainless-steel factory. "
         "Use only facts present in the supplied messages. Never invent status, causes, owners, deadlines, "
@@ -1093,7 +1179,8 @@ def build_handover_messages(entries: Sequence[Mapping[str, Any]]) -> list[dict[s
         "Return strict JSON only with keys zh and id. Each value must be a compact plain-text handover with "
         "these headings when applicable: 設備/Peralatan, 品質/Kualitas, 未完成/Belum selesai, "
         "下一班注意/Perhatian shift berikutnya, 工安/Keselamatan. Omit empty sections. "
-        "The Indonesian must convey the same facts and strength as the Chinese."
+        "The Indonesian must convey the same facts and strength as the Chinese. "
+        "When mentioning a message time, use local_time exactly; never convert or infer time from the numeric timestamp. "
     )
     user = (
         "Summarise the following chronological group messages. Messages may already contain translations; "
@@ -1155,6 +1242,7 @@ def build_handover_fallback(
     entries: Sequence[Mapping[str, Any]],
     *,
     max_items: int = 24,
+    timezone_name: str | None = None,
 ) -> dict[str, str] | None:
     """Build a deterministic bilingual handover when the LLM is unavailable.
 
@@ -1193,8 +1281,8 @@ def build_handover_fallback(
         seen.add(pair)
 
         try:
-            ts = float(row.get("timestamp", row.get("ts", 0)) or 0)
-            stamp = datetime.fromtimestamp(ts).strftime("%H:%M") if ts > 0 else "--:--"
+            ts = _coerce_epoch_seconds(row.get("timestamp", row.get("ts", 0)))
+            stamp = format_handover_timestamp(ts, timezone_name=timezone_name)
         except Exception:
             stamp = "--:--"
         sender = str(row.get("sender", "") or "").strip()

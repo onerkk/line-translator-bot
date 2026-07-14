@@ -287,7 +287,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.9-bilingual-control-ux"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -295,6 +295,8 @@ _required_translation_extra_functions = (
     "build_expression_plan",
     "enrich_translation_with_tone_emoji",
     "select_expression_visual",
+    "get_handover_timezone_name",
+    "format_handover_timestamp",
 )
 _missing_translation_extra_functions = [
     name for name in _required_translation_extra_functions
@@ -311,6 +313,11 @@ if (getattr(translation_extras_module, "TRANSLATION_EXTRAS_VERSION", None)
         f"module={getattr(translation_extras_module, '__file__', '<unknown>')}. "
         "Replace app.py and translation_extras.py together in the project root."
     )
+_HANDOVER_TIMEZONE_NAME = translation_extras_module.get_handover_timezone_name(
+    os.environ.get("HANDOVER_TIMEZONE")
+)
+logger.info("[HandoverTime] display timezone=%s; storage/filtering=UTC epoch", _HANDOVER_TIMEZONE_NAME)
+
 if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PROMPT_OPTIMIZER_VERSION:
     raise RuntimeError(
         "prompt_optimizer deployment mismatch: "
@@ -15033,10 +15040,12 @@ def build_group_handover_summary(group_id, hours=12, extra_rows=None):
     # the same local fallback remains available on any provider error.
     parsed = None
     if len(compact) < 3:
-        parsed = translation_extras_module.build_handover_fallback(compact, max_items=24)
+        parsed = translation_extras_module.build_handover_fallback(
+            compact, max_items=24, timezone_name=_HANDOVER_TIMEZONE_NAME)
     else:
         try:
-            messages = translation_extras_module.build_handover_messages(compact)
+            messages = translation_extras_module.build_handover_messages(
+                compact, timezone_name=_HANDOVER_TIMEZONE_NAME)
             model = _pick_aux_model("handover")
             kwargs = _build_aux_kwargs(
                 model, messages, max_out_tokens=1600, temperature=0.0,
@@ -15050,14 +15059,15 @@ def build_group_handover_summary(group_id, hours=12, extra_rows=None):
             logger.exception("handover summary AI failed; using local fallback: %s", exc)
 
     if not parsed:
-        parsed = translation_extras_module.build_handover_fallback(compact, max_items=24)
+        parsed = translation_extras_module.build_handover_fallback(
+            compact, max_items=24, timezone_name=_HANDOVER_TIMEZONE_NAME)
     if not parsed:
         return (
             "📋 最近沒有可整理的翻譯訊息。\n"
             "📋 Belum ada pesan terjemahan yang dapat diringkas."
         )
     return (
-        "📋 交班摘要 / Ringkasan serah terima（最近 {} 小時 / {} jam）\n\n"
+        "📋 交班摘要 / Ringkasan serah terima（最近 {} 小時・台灣時間 / {} jam terakhir・waktu Taiwan）\n\n"
         "🇹🇼 中文\n{}\n\n"
         "🇮🇩 Bahasa Indonesia\n{}"
     ).format(max(1, min(48, int(hours or 12))), max(1, min(48, int(hours or 12))), parsed["zh"], parsed["id"])
