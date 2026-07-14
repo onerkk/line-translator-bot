@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.39.4-bilingual-actions-root-fix-2026-07-14",
+    "app_version": "v3.39.5-bilingual-actions-hardlock-2026-07-14",
     "schema_version": 8,
-    "state_hash": "39973b8b14b070ea0c6f7f144337ac886ab0d610158098d3eff0b6d682b67ecc",
-    "updated_at_iso": "2026-07-14T07:56:46.102172+00:00",
-    "updated_at_unix": 1784015806.102172
+    "state_hash": "557bc1ef6769ebdc8157080722519f73db859ddbf7d7f245f504c1d9241880b6",
+    "updated_at_iso": "2026-07-14T08:48:52.307360+00:00",
+    "updated_at_unix": 1784018932.3073604
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -142,7 +142,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-07-14 07:56:03",
+    "last_updated": "2026-07-14 08:29:26",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -520,7 +520,7 @@
   "logprobs_enabled": true,
   "mark_read_enabled": true,
   "model_default": "gpt-5.6-luna",
-  "model_threshold": 150,
+  "model_threshold": 300,
   "model_upgrade": "gpt-5.6-terra",
   "multi_path_backtrans_enabled": false,
   "multi_path_min_chars": 60,
@@ -560,7 +560,7 @@
       "editable": true,
       "enabled": true,
       "id": "wrong",
-      "label": "❌ 標錯/Wrong",
+      "label": "❌ 標錯/Salah",
       "text": "/wrong ",
       "type": "message"
     },
@@ -570,7 +570,7 @@
       "editable": true,
       "enabled": true,
       "id": "skip",
-      "label": "❌ 不翻我/Skip",
+      "label": "❌ 不翻我/Lewati",
       "text": "/skip",
       "type": "message"
     },
@@ -580,7 +580,7 @@
       "editable": true,
       "enabled": true,
       "id": "unskip",
-      "label": "✅ 翻譯我/Unskip",
+      "label": "✅ 翻譯我/Terjemah",
       "text": "/unskip",
       "type": "message"
     },
@@ -650,7 +650,7 @@
       "editable": true,
       "enabled": false,
       "id": "camera_roll",
-      "label": "🖼️ 相簿/Album",
+      "label": "🖼 相簿/Album",
       "text": "",
       "type": "camera_roll"
     },
@@ -670,7 +670,7 @@
       "editable": true,
       "enabled": true,
       "id": "handover",
-      "label": "📋 交班摘要",
+      "label": "📋 交班摘要/Serah",
       "text": "/交班摘要",
       "type": "message"
     },
@@ -680,7 +680,7 @@
       "editable": true,
       "enabled": true,
       "id": "interpreter",
-      "label": "🎙️ 即時口譯",
+      "label": "🎙 口譯/Interpret",
       "text": "/即時口譯",
       "type": "message"
     }
