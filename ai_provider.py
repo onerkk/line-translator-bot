@@ -2015,6 +2015,14 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     attempts = []
     last_error = None
     last_quality_error = None
+    # Availability-first safety net: retain the latest non-empty provider
+    # response even when the local response validator asks for failover.  If all
+    # later providers fail or are also rejected, return this candidate marked as
+    # degraded instead of raising a fake "no usable translation" outage.
+    best_rejected_response = None
+    best_rejected_provider = None
+    best_rejected_reason = None
+    best_rejected_elapsed = None
     _all_kwargs = dict(
         model=model, messages=messages, max_tokens=max_tokens,
         max_completion_tokens=max_completion_tokens, temperature=temperature,
@@ -2058,6 +2066,10 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                         reason = "quality validator rejected response"
                     if not usable:
                         last_quality_error = RuntimeError(reason)
+                        best_rejected_response = response
+                        best_rejected_provider = provider
+                        best_rejected_reason = reason
+                        best_rejected_elapsed = elapsed
                         attempts.append({
                             "provider": provider,
                             "error": reason[:300],
@@ -2112,6 +2124,30 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 if not failover_enabled or not _is_provider_failover_error(err):
                     raise
                 break
+
+    if best_rejected_response is not None:
+        # A provider did return a translation.  Local validation may still mark
+        # it non-cacheable or trigger repair downstream, but it must not be
+        # discarded after every provider has been tried.
+        try:
+            _record_provider_success(best_rejected_provider, best_rejected_elapsed or 0.0)
+        except Exception:
+            pass
+        try:
+            best_rejected_response._jy_provider = best_rejected_provider
+            best_rejected_response._jy_failover_attempts = list(attempts)
+            best_rejected_response._jy_latency_seconds = best_rejected_elapsed or 0.0
+            best_rejected_response._jy_latency_profile = latency_profile or "default"
+            best_rejected_response._jy_quality_degraded = True
+            best_rejected_response._jy_quality_reject_reason = best_rejected_reason or "quality validator rejected response"
+        except Exception:
+            pass
+        print(
+            f"[ai_provider] 所有候選皆被本地品管拒收，改送最後一份非空譯文: "
+            f"{best_rejected_provider} ({str(best_rejected_reason or '')[:120]})",
+            flush=True,
+        )
+        return best_rejected_response
 
     if last_error is not None:
         try:
