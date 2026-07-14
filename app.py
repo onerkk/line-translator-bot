@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.39.2-inline-semantic-expression-2026-07-14"
+VERSION = "v3.39.3-multilingual-action-ux-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -287,7 +287,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.7-inline-semantic-expression"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.8-action-ux-handover-fallback"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -3014,8 +3014,8 @@ QUICK_REPLY_DEFAULTS = [
     {"id": "pw2",         "type": "message",     "label": "🏭 儲運密碼/PW2",   "text": "/pw2",    "clipboard_text": "", "enabled": True,  "cmd_check": "pw2",   "editable": True},
     {"id": "pkg",         "type": "message",     "label": "📦 包裝碼/Kemas",   "text": "/pkg ",   "clipboard_text": "", "enabled": True,  "cmd_check": "pkg",   "editable": True},
     {"id": "scrap",       "type": "message",     "label": "🎨 廢料色/Warna",   "text": "/scrap",  "clipboard_text": "", "enabled": True,  "cmd_check": "scrap", "editable": True},
-    {"id": "handover",    "type": "message",     "label": "📋 交班摘要",        "text": "/交班摘要", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
-    {"id": "interpreter", "type": "message",     "label": "🎙️ 即時口譯",        "text": "/即時口譯", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "handover",    "type": "message",     "label": "📋 交班/Serah",      "text": "/交班摘要", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
+    {"id": "interpreter", "type": "message",     "label": "🎙️ 口譯/Interpret",  "text": "/即時口譯", "clipboard_text": "", "enabled": True,  "cmd_check": None,    "editable": True},
     {"id": "camera",      "type": "camera",      "label": "📷 拍照/Foto",      "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
     {"id": "clipboard",   "type": "clipboard",   "label": "📋 複製儲區指令",   "text": "",        "clipboard_text": "/qry ", "enabled": False, "cmd_check": None, "editable": True},
     {"id": "camera_roll", "type": "camera_roll", "label": "🖼️ 相簿/Album",    "text": "",        "clipboard_text": "", "enabled": False, "cmd_check": None,    "editable": True},
@@ -14811,22 +14811,50 @@ def export_examples_to_jsonl():
         return ""
 
 
+_PERSONAL_LANGUAGE_COMMAND_PREFIXES = (
+    "/mylang", "/mylanguage", "/my-language", "/melange",
+    "/language", "/bahasa", "/bahasaku", "/bahasa-saya",
+    "/我的語言", "/我的语言", "/母語", "/母语",
+)
+_INTERPRETER_COMMANDS = (
+    "/interpreter", "/voiceinterpreter", "/interpret", "/penerjemah",
+    "/即時口譯", "/即时口译", "/口譯", "/口译",
+)
+_HANDOVER_COMMANDS = (
+    "/handover", "/summary", "/serahterima", "/ringkasan",
+    "/交班摘要", "/今天重點", "/今天重点", "/未完成事項", "/未完成事项",
+)
+
+
+def _command_has_prefix(text, prefixes):
+    value = (text or "").strip().lower()
+    return any(value == prefix or value.startswith(prefix + " ") for prefix in prefixes)
+
+
+def _language_name_bilingual(code):
+    names_id = {
+        "zh": "中文 / Mandarin", "id": "印尼文 / Indonesia",
+        "vi": "越南文 / Vietnam", "th": "泰文 / Thailand",
+        "tl": "菲律賓文 / Filipino", "en": "英文 / Inggris",
+        "ja": "日文 / Jepang", "ko": "韓文 / Korea", "hi": "印地文 / Hindi",
+    }
+    return "{} {}".format(LANG_FLAGS.get(code, "🌐"), names_id.get(code, code))
+
+
 def handle_personal_language_command(text, user_id):
-    """Read or set the caller's preferred language for DM/personal translations."""
+    """Read or set the caller's preferred language without requiring cryptic syntax."""
     if not user_id:
-        return "⚠️ 無法取得你的 LINE 身分 / Tidak dapat membaca identitas LINE"
+        return "⚠️ 無法取得你的 LINE 身分。\n⚠️ Identitas LINE tidak dapat dibaca."
     parts = (text or "").strip().split(None, 1)
     arg = parts[1].strip() if len(parts) > 1 else ""
     if not arg:
-        current = user_languages.get(user_id) or dm_target_lang.get(user_id) or "id"
-        return (
-            "👤 我的語言: {} {}\n"
-            "設定方式: /mylang zh|id|vi|th|tl|en|ja|ko|hi\n"
-            "Contoh: /mylang id"
-        ).format(LANG_FLAGS.get(current, ""), LANG_NAMES_ZH.get(current, current))
+        return "__PERSONAL_LANGUAGE_MENU__"
     code = translation_extras_module.normalize_personal_language(arg)
     if not code:
-        return "⚠️ 不支援的語言。可用: zh, id, vi, th, tl, en, ja, ko, hi"
+        return (
+            "⚠️ 不支援這個語言，請按下方語言按鈕。\n"
+            "⚠️ Bahasa ini belum didukung. Silakan pilih melalui tombol bahasa."
+        )
     user_languages[user_id] = code
     dm_target_lang[user_id] = code
     try:
@@ -14835,56 +14863,129 @@ def handle_personal_language_command(text, user_id):
         save_settings()
     except Exception:
         pass
-    return "✅ 我的語言已設為 {} {}".format(
-        LANG_FLAGS.get(code, ""), LANG_NAMES_ZH.get(code, "中文" if code == "zh" else code))
+    display = _language_name_bilingual(code)
+    return "✅ 閱讀語言已設定：{}\n✅ Bahasa bacaan diatur: {}".format(display, display)
 
 
 def handle_interpreter_command(group_id, user_id):
-    """Create a short-lived LIFF/web link for turn-by-turn voice interpreting."""
+    """Create a short-lived bilingual link for turn-by-turn voice interpreting."""
     scope_id = group_id or (("__dm__:" + user_id) if user_id else "__interpreter__")
     public_url = (os.environ.get("PUBLIC_URL") or "").rstrip("/")
+    if not public_url and has_request_context():
+        try:
+            public_url = request.url_root.rstrip("/")
+        except Exception:
+            public_url = ""
     liff_id = (LIFF_ID or "").strip()
     if not public_url and not liff_id:
-        return "⚠️ 即時口譯需要設定 PUBLIC_URL 或 LIFF_ID"
+        return (
+            "⚠️ 即時口譯連結目前無法建立。\n"
+            "⚠️ Tautan interpretasi belum dapat dibuat. Hubungi admin bot."
+        )
     nonce = issue_liff_nonce(scope_id, user_id or "")
     if liff_id:
         url = "https://liff.line.me/{}?nonce={}&view=interpreter".format(liff_id, nonce)
     else:
         url = "{}/liff/settings?nonce={}&view=interpreter".format(public_url, nonce)
-    return "🎙️ 即時雙向口譯\n{}\n\n連結 10 分鐘內有效".format(url)
+    return (
+        "🎙️ 即時雙向口譯 / Interpretasi dua arah\n"
+        "點開連結後輪流說話。 / Buka tautan lalu bicara bergantian.\n"
+        "{}\n\n⏳ 連結 10 分鐘內有效 / Berlaku 10 menit"
+    ).format(url)
+
+
+def _persisted_handover_rows(group_id, hours=12, max_messages=120):
+    """Recover handover source rows from the persisted translation log.
+
+    The original handover buffer was memory-only, so a Render restart or free
+    instance sleep silently erased the data.  The translation log already keeps
+    successful results and is therefore the safest restart-tolerant fallback.
+    """
+    cutoff = time.time() - max(1, min(48, int(hours or 12))) * 3600
+    recovered = []
+    for entry in list(translation_log or []):
+        try:
+            if str(entry.get("group_id", "") or "") != str(group_id or ""):
+                continue
+            ts = float(entry.get("ts", 0) or 0)
+            if ts < cutoff:
+                continue
+            src = str(entry.get("src", "") or "").strip()
+            tgt = str(entry.get("tgt", "") or "").strip()
+            src_lang = str(entry.get("src_lang", "") or "").strip()
+            tgt_lang = str(entry.get("tgt_lang", "") or "").strip()
+            if not src or not tgt:
+                continue
+            recovered.append({
+                "timestamp": ts,
+                "sender": "",
+                "source_language": src_lang,
+                "source_text": src,
+                "translations": {tgt_lang: tgt} if tgt_lang else {},
+            })
+        except Exception:
+            continue
+    return recovered[-max(1, int(max_messages or 120)):]
 
 
 def build_group_handover_summary(group_id, hours=12):
-    """Summarise recent successful group translations in Chinese and Indonesian."""
-    rows = _get_recent_group_messages(group_id, hours=hours, max_messages=100)
+    """Summarise recent successful group translations in Chinese and Indonesian.
+
+    AI formatting or provider outages never make this button useless: when the
+    model call fails, a deterministic bilingual digest is returned from the
+    already-delivered translations without another paid request.
+    """
+    rows = _get_recent_group_messages(group_id, hours=hours, max_messages=120)
+    rows.extend(_persisted_handover_rows(group_id, hours=hours, max_messages=120))
+
+    # Dedupe the in-memory and persisted views of the same translation.
+    deduped = []
+    seen = set()
+    for row in sorted(rows, key=lambda r: float(r.get("timestamp", r.get("ts", 0)) or 0)):
+        key = (
+            str(row.get("source_text", "") or "").strip(),
+            json.dumps(row.get("translations", {}) or {}, ensure_ascii=False, sort_keys=True),
+        )
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+
     compact = translation_extras_module.compact_handover_entries(
-        rows, max_entries=100, max_chars=12000)
+        deduped, max_entries=100, max_chars=12000)
     if not compact:
-        return "⚠️ 最近沒有可整理的翻譯訊息。"
-    messages = translation_extras_module.build_handover_messages(compact)
-    model = _pick_aux_model("handover")
-    kwargs = _build_aux_kwargs(
-        model,
-        messages,
-        max_out_tokens=1600,
-        temperature=0.0,
-        cache_key=_build_cache_key(group_id, "multi", "zh-id", "handover"),
-    )
+        return (
+            "📋 最近沒有可整理的翻譯訊息。\n"
+            "📋 Belum ada pesan terjemahan yang dapat diringkas."
+        )
+
+    parsed = None
     try:
+        messages = translation_extras_module.build_handover_messages(compact)
+        model = _pick_aux_model("handover")
+        kwargs = _build_aux_kwargs(
+            model, messages, max_out_tokens=1600, temperature=0.0,
+            cache_key=_build_cache_key(group_id, "multi", "zh-id", "handover"),
+        )
         response = ai.chat.completions.create(**kwargs)
         track_tokens(response)
         raw = response.choices[0].message.content if response and response.choices else ""
         parsed = translation_extras_module.parse_handover_response(raw)
     except Exception as exc:
-        logger.exception("handover summary failed: %s", exc)
-        parsed = None
+        logger.exception("handover summary AI failed; using local fallback: %s", exc)
+
     if not parsed:
-        return "⚠️ 交班摘要產生失敗，請稍後再試。"
+        parsed = translation_extras_module.build_handover_fallback(compact, max_items=24)
+    if not parsed:
+        return (
+            "📋 最近沒有可整理的翻譯訊息。\n"
+            "📋 Belum ada pesan terjemahan yang dapat diringkas."
+        )
     return (
-        "📋 交班摘要（最近 {} 小時）\n\n"
+        "📋 交班摘要 / Ringkasan serah terima（最近 {} 小時 / {} jam）\n\n"
         "🇹🇼 中文\n{}\n\n"
         "🇮🇩 Bahasa Indonesia\n{}"
-    ).format(max(1, min(48, int(hours or 12))), parsed["zh"], parsed["id"])
+    ).format(max(1, min(48, int(hours or 12))), max(1, min(48, int(hours or 12))), parsed["zh"], parsed["id"])
 
 
 def handle_command(text, group_id, user_id=None):
@@ -15084,13 +15185,13 @@ def handle_command(text, group_id, user_id=None):
             return handle_liff_command(group_id, user_id)
         except NameError:
             return "⚠️ v3.10 模組未載入 / v3.10 module not loaded"
-    elif cmd.startswith("/mylang") or cmd.startswith("/我的語言") or cmd.startswith("/母語"):
+    elif _command_has_prefix(text, _PERSONAL_LANGUAGE_COMMAND_PREFIXES):
         return handle_personal_language_command(text, user_id)
-    elif cmd in ("/interpreter", "/voiceinterpreter", "/即時口譯", "/即时口译", "/口譯", "/口译"):
+    elif cmd in _INTERPRETER_COMMANDS:
         return handle_interpreter_command(group_id, user_id)
-    elif cmd in ("/handover", "/summary", "/交班摘要", "/今天重點", "/今天重点", "/未完成事項", "/未完成事项"):
+    elif cmd in _HANDOVER_COMMANDS:
         if not group_id:
-            return "⚠️ 交班摘要只能在群組使用。"
+            return "⚠️ 交班摘要只能在群組使用。\n⚠️ Ringkasan serah terima hanya dapat digunakan di grup."
         return build_group_handover_summary(group_id, hours=12)
     # v3.14: 群組內語言設定面板
     elif cmd in ("/panel", "/lang", "/setting", "/settings"):
@@ -15503,6 +15604,47 @@ def handle_message(event):
                     messages=[TextMessage(text=whoami_text)]
                 ))
             return
+        # Personal language and interpreter commands must also work in DM.
+        # Previously every unknown slash command was discarded before reaching
+        # handle_command(), so /mylang appeared to do nothing in private chat.
+        if _command_has_prefix(text, _PERSONAL_LANGUAGE_COMMAND_PREFIXES):
+            _lang_result = handle_personal_language_command(text, user_id)
+            with ApiClient(configuration) as api_client:
+                api = MessagingApi(api_client)
+                if _lang_result == "__PERSONAL_LANGUAGE_MENU__":
+                    _current = user_languages.get(user_id) or dm_target_lang.get(user_id)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(
+                            text=_personal_language_menu_text("id", _current),
+                            quick_reply=_build_personal_language_quick_reply("", "id"),
+                        )],
+                    ))
+                else:
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=_clip_line_text(_lang_result))],
+                    ))
+            return
+        if cmd in _INTERPRETER_COMMANDS:
+            _interpreter_result = handle_interpreter_command(None, user_id)
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=_clip_line_text(_interpreter_result))],
+                ))
+            return
+        if cmd in _HANDOVER_COMMANDS:
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=(
+                        "⚠️ 交班摘要只能在群組使用。\n"
+                        "⚠️ Ringkasan serah terima hanya dapat digunakan di grup."
+                    ))],
+                ))
+            return
+
         # DM: skip other / commands
         if text.startswith("/"):
             return
@@ -15596,6 +15738,16 @@ def handle_message(event):
             # 非管理員不顯示 III / ADMIN 區塊
             send_help_flex(event.reply_token, primary_lang="zh",
                            is_admin=is_group_admin(user_id))
+        elif cmd_result == "__PERSONAL_LANGUAGE_MENU__":
+            current = user_languages.get(user_id) or dm_target_lang.get(user_id)
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(
+                        text=_personal_language_menu_text("id", current),
+                        quick_reply=_build_personal_language_quick_reply("", "id"),
+                    )],
+                ))
         elif cmd_result == "__FLEX_PANEL__":
             # v3.14: /panel /lang /setting → 語言設定面板
             try:
@@ -17448,6 +17600,131 @@ if BotLeaveEvent:
             logger.info("Bot removed from group %s", group_id)
 
 
+
+_TRANSLATION_ACTION_UI = {
+    "zh": {
+        "natural": "✨ 更自然", "literal": "🔎 直譯", "formal": "📢 正式",
+        "backcheck": "↩ 回譯", "personal": "👤 我的語言",
+        "handover": "📋 交班摘要", "interpreter": "🎙️ 即時口譯",
+        "expired": "⚠️ 此翻譯操作已過期，請重新傳送原訊息。",
+    },
+    "id": {
+        "natural": "✨ Lebih alami", "literal": "🔎 Harfiah", "formal": "📢 Formal",
+        "backcheck": "↩ Cek balik", "personal": "👤 Bahasa saya",
+        "handover": "📋 Ringkasan shift", "interpreter": "🎙️ Interpretasi",
+        "expired": "⚠️ Tombol terjemahan sudah kedaluwarsa. Kirim ulang pesan asli.",
+    },
+    "en": {
+        "natural": "✨ Natural", "literal": "🔎 Literal", "formal": "📢 Formal",
+        "backcheck": "↩ Back-check", "personal": "👤 My language",
+        "handover": "📋 Handover", "interpreter": "🎙️ Interpreter",
+        "expired": "⚠️ This translation action expired. Please resend the original message.",
+    },
+}
+
+_PERSONAL_LANGUAGE_OPTIONS = (
+    ("zh", "🇹🇼 中文"),
+    ("id", "🇮🇩 Indonesia"),
+    ("vi", "🇻🇳 Tiếng Việt"),
+    ("th", "🇹🇭 ไทย"),
+    ("tl", "🇵🇭 Filipino"),
+    ("en", "🇬🇧 English"),
+    ("ja", "🇯🇵 日本語"),
+    ("ko", "🇰🇷 한국어"),
+    ("hi", "🇮🇳 हिन्दी"),
+)
+
+
+def _translation_action_locale(src_lang=None, tgt_lang=None):
+    """Choose labels for the people reading the translation, not the sender."""
+    target = str(tgt_lang or "").lower()
+    if target in ("zh", "id"):
+        return target
+    source = str(src_lang or "").lower()
+    if source == "id" and target == "zh":
+        return "zh"
+    return "en"
+
+
+def _translation_action_labels(src_lang=None, tgt_lang=None):
+    return _TRANSLATION_ACTION_UI[_translation_action_locale(src_lang, tgt_lang)]
+
+
+def _personal_language_menu_text(locale="id", current=None):
+    current_line = ""
+    if current:
+        current_line = "\n目前 / Saat ini: " + _language_name_bilingual(current)
+    if locale == "zh":
+        return "👤 請直接點選你想閱讀的語言。" + current_line + "\n不需要輸入指令。"
+    if locale == "id":
+        return "👤 Pilih bahasa yang ingin Anda baca dengan menekan tombol di bawah." + current_line + "\nTidak perlu mengetik perintah."
+    return "👤 Choose the language you want to read." + current_line
+
+
+def _build_personal_language_quick_reply(token="", locale="id"):
+    if not PostbackAction:
+        return None
+    items = []
+    safe_token = str(token or "")[:80]
+    for code, label in _PERSONAL_LANGUAGE_OPTIONS:
+        data = "action=set_personal_language&lang=" + code
+        if safe_token:
+            data += "&token=" + urllib.parse.quote(safe_token, safe="")
+        items.append(QuickReplyItem(action=PostbackAction(
+            label=label[:20], data=data, display_text=label[:20]
+        )))
+    return QuickReply(items=items)
+
+
+def _execute_translation_variant(context, mode, group_id, user_id, preferred=None):
+    """Run one translation action with one shared, tested state boundary."""
+    if not context:
+        return None, "", ""
+    source_text = context.get("original", "")
+    src_lang = context.get("src", "")
+    tgt_lang = context.get("tgt", "")
+    if mode == "backcheck":
+        source_text = context.get("translated", "")
+        src_lang, tgt_lang = tgt_lang, src_lang
+    elif mode == "personal":
+        preferred = preferred or user_languages.get(user_id) or dm_target_lang.get(user_id)
+        if not preferred:
+            return None, src_lang, tgt_lang
+        tgt_lang = preferred
+    if not source_text or not src_lang or not tgt_lang:
+        return None, src_lang, tgt_lang
+
+    previous_tl = dict(getattr(_tl, "__dict__", {}))
+    try:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+        _tl.group_id = group_id or ""
+        _tl.user_id = user_id or ""
+        _tl.translation_variant = mode
+        _tl.quality_gate_critical = True
+        _tone, _tone_custom = get_group_tone(group_id)
+        _tl.tone = _tone
+        _tl.tone_custom = _tone_custom
+
+        if mode == "personal" and tgt_lang == context.get("src"):
+            result = context.get("original", "")
+        elif mode == "personal" and tgt_lang == context.get("tgt"):
+            result = context.get("translated", "")
+        else:
+            canonical = source_text
+            if src_lang == "zh" and tgt_lang == "id":
+                canonical, _ = resolve_factory_station_aliases(source_text)
+            elif src_lang == "id" and id_preprocessing_enabled:
+                canonical, _ = normalize_indonesian_text(source_text)
+            result = _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang)
+        return result, src_lang, tgt_lang
+    except Exception as exc:
+        logger.exception("[translation_variant] %s failed: %s", mode, exc)
+        return None, src_lang, tgt_lang
+    finally:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+
 if PostbackEvent:
     @handler.add(PostbackEvent)
     def handle_postback(event):
@@ -17472,112 +17749,192 @@ if PostbackEvent:
 
         action = params.get("action", "")
 
-        # v3.33: one-click translation quality modes from the result Flex card.
+        # Multilingual one-click actions.  Labels follow the translation's target
+        # language, and personal language is selected by buttons instead of a
+        # command that factory users have to memorise.
+        if action == "show_language_menu":
+            _gid = (getattr(event.source, 'group_id', None)
+                    or getattr(event.source, 'room_id', None)
+                    or getattr(event.source, 'user_id', None))
+            _uid = getattr(event.source, 'user_id', None) or ""
+            token = params.get("token", "")
+            context = _get_translation_action_context(token, _gid) if token else None
+            locale = _translation_action_locale(
+                context.get("src") if context else "",
+                context.get("tgt") if context else "id",
+            )
+            current = user_languages.get(_uid) or dm_target_lang.get(_uid)
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(
+                            text=_personal_language_menu_text(locale, current),
+                            quick_reply=_build_personal_language_quick_reply(token, locale),
+                        )],
+                    ))
+            except Exception as exc:
+                logger.warning("language menu reply failed: %s", exc)
+            return
+
+        if action == "set_personal_language":
+            _group = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
+            _uid = getattr(event.source, 'user_id', None) or ""
+            _gid = _group or _uid
+            code = translation_extras_module.normalize_personal_language(params.get("lang", ""))
+            if not _uid or not code:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=(
+                                "⚠️ 無法儲存語言設定。\n"
+                                "⚠️ Pengaturan bahasa tidak dapat disimpan."
+                            ))],
+                        ))
+                except Exception:
+                    pass
+                return
+
+            user_languages[_uid] = code
+            dm_target_lang[_uid] = code
+            try:
+                save_settings(force=True)
+            except TypeError:
+                save_settings()
+            except Exception as exc:
+                logger.warning("save personal language failed: %s", exc)
+
+            display = _language_name_bilingual(code)
+            confirmation = (
+                "✅ 閱讀語言已設定：{}\n"
+                "✅ Bahasa bacaan diatur: {}"
+            ).format(display, display)
+            token = params.get("token", "")
+            context = _get_translation_action_context(token, _gid) if token else None
+            if not context:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=confirmation)],
+                        ))
+                except Exception:
+                    pass
+                return
+
+            show_loading(_gid)
+            result, _src_lang, _tgt_lang = _execute_translation_variant(
+                context, "personal", _gid, _uid, preferred=code
+            )
+            if not result:
+                result_text = confirmation + (
+                    "\n\n⚠️ 這次個人語言版本無法產生。\n"
+                    "⚠️ Versi bahasa pribadi belum dapat dibuat."
+                )
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=_clip_line_text(result_text))],
+                        ))
+                except Exception:
+                    pass
+                return
+
+            personal_text = "👤 {}\n{}".format(display, result)
+            # In a group, keep the personal version private when LINE permits
+            # push messages.  If the user has not friended the bot, reply in the
+            # current chat rather than making the button appear broken.
+            if _group:
+                try:
+                    with ApiClient(configuration) as api_client:
+                        api = MessagingApi(api_client)
+                        api.push_message(PushMessageRequest(
+                            to=_uid,
+                            messages=[TextMessage(text=_clip_line_text(personal_text))],
+                        ))
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=(
+                                confirmation +
+                                "\n📩 已私訊個人語言版本。\n"
+                                "📩 Versi bahasa pribadi dikirim lewat chat pribadi."
+                            ))],
+                        ))
+                    return
+                except Exception as exc:
+                    logger.info("personal language push unavailable; replying in chat: %s", exc)
+            try:
+                with ApiClient(configuration) as api_client:
+                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=_clip_line_text(confirmation + "\n\n" + personal_text))],
+                    ))
+            except Exception as exc:
+                logger.warning("personal language reply failed: %s", exc)
+            return
+
         if action == "translation_variant":
             _gid = (getattr(event.source, 'group_id', None)
                     or getattr(event.source, 'room_id', None)
                     or getattr(event.source, 'user_id', None))
             _uid = getattr(event.source, 'user_id', None) or ""
             mode = (params.get("mode") or "").strip().lower()
-            context = _get_translation_action_context(params.get("token", ""), _gid)
-            labels = {
-                "natural": "✨ 更自然",
-                "literal": "🔎 直譯",
-                "formal": "📢 正式版",
-                "backcheck": "↩ 回譯檢查",
-                "personal": "👤 我的語言",
-            }
-            if mode not in labels or not context:
+            token = params.get("token", "")
+            context = _get_translation_action_context(token, _gid)
+            if mode == "personal" and context:
+                locale = _translation_action_locale(context.get("src"), context.get("tgt"))
+                current = user_languages.get(_uid) or dm_target_lang.get(_uid)
                 try:
                     with ApiClient(configuration) as api_client:
                         MessagingApi(api_client).reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[TextMessage(text="⚠️ 此翻譯操作已過期，請重新傳送原訊息。")],
+                            messages=[TextMessage(
+                                text=_personal_language_menu_text(locale, current),
+                                quick_reply=_build_personal_language_quick_reply(token, locale),
+                            )],
+                        ))
+                except Exception as exc:
+                    logger.warning("personal language menu failed: %s", exc)
+                return
+
+            allowed_modes = {"natural", "literal", "formal", "backcheck"}
+            if mode not in allowed_modes or not context:
+                locale = _translation_action_locale(
+                    context.get("src") if context else "",
+                    context.get("tgt") if context else "id",
+                )
+                try:
+                    with ApiClient(configuration) as api_client:
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[TextMessage(text=_TRANSLATION_ACTION_UI[locale]["expired"])],
                         ))
                 except Exception:
                     pass
                 return
 
-            source_text = context.get("original", "")
-            src_lang = context.get("src", "")
-            tgt_lang = context.get("tgt", "")
-            if mode == "backcheck":
-                source_text = context.get("translated", "")
-                src_lang, tgt_lang = tgt_lang, src_lang
-            elif mode == "personal":
-                preferred = user_languages.get(_uid) or dm_target_lang.get(_uid)
-                if not preferred:
-                    try:
-                        with ApiClient(configuration) as api_client:
-                            MessagingApi(api_client).reply_message(ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[TextMessage(text="⚠️ 請先設定 /mylang zh|id|vi|th|tl|en|ja|ko|hi")],
-                            ))
-                    except Exception:
-                        pass
-                    return
-                tgt_lang = preferred
-            if not source_text or not src_lang or not tgt_lang:
-                return
-
+            labels = _translation_action_labels(context.get("src"), context.get("tgt"))
             show_loading(_gid)
-            previous_tl = dict(getattr(_tl, "__dict__", {}))
-            try:
-                _tl.__dict__.clear()
-                _tl.__dict__.update(previous_tl)
-                _tl.group_id = _gid or ""
-                _tl.user_id = _uid
-                _tl.translation_variant = mode
-                _tl.quality_gate_critical = True
-                _tone, _tone_custom = get_group_tone(_gid)
-                _tl.tone = _tone
-                _tl.tone_custom = _tone_custom
-
-                canonical = source_text
-                if mode == "personal" and tgt_lang == context.get("src"):
-                    result = context.get("original", "")
-                elif mode == "personal" and tgt_lang == context.get("tgt"):
-                    result = context.get("translated", "")
-                else:
-                    if src_lang == "zh" and tgt_lang == "id":
-                        canonical, _ = resolve_factory_station_aliases(source_text)
-                    elif src_lang == "id" and id_preprocessing_enabled:
-                        canonical, _ = normalize_indonesian_text(source_text)
-                    # The helper keeps the direct translate_openai variant path
-                    # and its _final_delivery_guard boundary while adding the
-                    # same immutable-mention protection used by normal results.
-                    result = _translate_variant_preserving_mentions(
-                        canonical, src_lang, tgt_lang
-                    )
-            except Exception as exc:
-                logger.exception("[translation_variant] %s failed: %s", mode, exc)
-                result = None
-            finally:
-                _tl.__dict__.clear()
-                _tl.__dict__.update(previous_tl)
-
+            result, _src_lang, _tgt_lang = _execute_translation_variant(
+                context, mode, _gid, _uid
+            )
             if not result:
-                logger.warning(
-                    "[translation_variant] mode=%s returned empty; visible fallback disabled",
-                    mode,
+                fail_text = (
+                    "⚠️ 無法產生這個版本。\n"
+                    "⚠️ Versi ini belum dapat dibuat."
                 )
-                return
-            reply_text = labels[mode] + "\n" + result
-            if mode == "personal" and _uid:
                 try:
                     with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        api.push_message(PushMessageRequest(
-                            to=_uid,
-                            messages=[TextMessage(text=_clip_line_text(reply_text))],
-                        ))
-                        api.reply_message(ReplyMessageRequest(
+                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[TextMessage(text="✅ 已將你的語言版本私訊給你。")],
+                            messages=[TextMessage(text=fail_text)],
                         ))
-                    return
-                except Exception as exc:
-                    logger.info("[translation_variant] personal push unavailable, replying here: %s", exc)
+                except Exception:
+                    pass
+                return
+            reply_text = labels[mode] + "\n" + result
             try:
                 with ApiClient(configuration) as api_client:
                     MessagingApi(api_client).reply_message(ReplyMessageRequest(
@@ -31679,44 +32036,34 @@ def _translation_variant_button(label, token, mode):
 
 def _build_translation_action_quick_reply(group_id, original_text, translated_text,
                                           src_lang, tgt_lang, msg_id=None):
-    """Expose quality controls even when a group uses plain text messages.
-
-    The first integration only placed these controls inside Flex LV4.  Existing
-    persistent settings can keep Flex disabled, which made every new function
-    invisible even though the backend code was present.  This compact Quick
-    Reply uses the same server-side action token and therefore works in both
-    legacy plain-text and Flex-disabled groups.
-    """
+    """Build usable controls in the language of the translated result."""
     if not (PostbackAction and original_text and translated_text and src_lang and tgt_lang):
         return None
     try:
         token = _register_translation_action_context(
             group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
         )
-        items = [
-            QuickReplyItem(action=PostbackAction(
-                label="✨ 更自然", data="action=translation_variant&mode=natural&token=" + token,
-                display_text="✨ 更自然")),
-            QuickReplyItem(action=PostbackAction(
-                label="🔎 直譯", data="action=translation_variant&mode=literal&token=" + token,
-                display_text="🔎 直譯")),
-            QuickReplyItem(action=PostbackAction(
-                label="📢 正式", data="action=translation_variant&mode=formal&token=" + token,
-                display_text="📢 正式")),
-            QuickReplyItem(action=PostbackAction(
-                label="↩ 回譯", data="action=translation_variant&mode=backcheck&token=" + token,
-                display_text="↩ 回譯")),
-            QuickReplyItem(action=PostbackAction(
-                label="👤 我的語言", data="action=translation_variant&mode=personal&token=" + token,
-                display_text="👤 我的語言")),
-            QuickReplyItem(action=MessageAction(label="📋 交班摘要", text="/交班摘要")),
-            QuickReplyItem(action=MessageAction(label="🎙️ 即時口譯", text="/即時口譯")),
-        ]
+        labels = _translation_action_labels(src_lang, tgt_lang)
+        items = []
+        for mode in ("natural", "literal", "formal", "backcheck", "personal"):
+            label = labels[mode][:20]
+            items.append(QuickReplyItem(action=PostbackAction(
+                label=label,
+                data="action=translation_variant&mode=" + mode + "&token=" + token,
+                display_text=label,
+            )))
+        items.extend([
+            QuickReplyItem(action=MessageAction(
+                label=labels["handover"][:20], text="/handover"
+            )),
+            QuickReplyItem(action=MessageAction(
+                label=labels["interpreter"][:20], text="/interpreter"
+            )),
+        ])
         return QuickReply(items=items)
     except Exception as exc:
         logger.warning("translation action Quick Reply unavailable: %s", exc)
         return None
-
 
 def _build_image_translation_action_quick_reply(
         group_id, original_text, translated_text, src_lang, tgt_lang,
@@ -31735,13 +32082,10 @@ def _build_image_translation_action_quick_reply(
     modes = get_image_translation_action_modes(group_id)
     items = []
     token = None
-    variant_defs = (
-        ("natural", "✨ 更自然"),
-        ("literal", "🔎 直譯"),
-        ("formal", "📢 正式"),
-        ("backcheck", "↩ 回譯"),
-        ("personal", "👤 我的語言"),
-    )
+    labels = _translation_action_labels(src_lang, tgt_lang)
+    variant_defs = tuple((mode, labels[mode]) for mode in (
+        "natural", "literal", "formal", "backcheck", "personal"
+    ))
     try:
         if original_text and translated_text and src_lang and tgt_lang:
             if any(modes.get(mode, False) for mode, _label in variant_defs):
@@ -31759,10 +32103,13 @@ def _build_image_translation_action_quick_reply(
                     )))
 
         if overlay_token and modes.get("overlay", False):
+            overlay_label = ("🖼 圖文對照" if _translation_action_locale(src_lang, tgt_lang) == "zh"
+                             else "🖼 Gambar+teks" if _translation_action_locale(src_lang, tgt_lang) == "id"
+                             else "🖼 Image+text")
             items.append(QuickReplyItem(action=PostbackAction(
-                label="🖼 原圖＋譯文圖",
+                label=overlay_label[:20],
                 data="action=image_overlay&token=" + overlay_token,
-                display_text="🖼 產生原圖＋譯文對照圖",
+                display_text=overlay_label[:20],
             )))
 
         return QuickReply(items=items[:13]) if items else None
@@ -31781,12 +32128,13 @@ def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_
         _ctx_token = _register_translation_action_context(
             group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
         )
+        _labels = _translation_action_labels(src_lang, tgt_lang)
         buttons.extend([
-            _translation_variant_button("✨ 更自然", _ctx_token, "natural"),
-            _translation_variant_button("🔎 直譯", _ctx_token, "literal"),
-            _translation_variant_button("📢 正式", _ctx_token, "formal"),
-            _translation_variant_button("↩ 回譯", _ctx_token, "backcheck"),
-            _translation_variant_button("👤 我的語言", _ctx_token, "personal"),
+            _translation_variant_button(_labels["natural"], _ctx_token, "natural"),
+            _translation_variant_button(_labels["literal"], _ctx_token, "literal"),
+            _translation_variant_button(_labels["formal"], _ctx_token, "formal"),
+            _translation_variant_button(_labels["backcheck"], _ctx_token, "backcheck"),
+            _translation_variant_button(_labels["personal"], _ctx_token, "personal"),
         ])
 
     # 偵測工單號 (ABC123, A-12345, 12345 等格式)

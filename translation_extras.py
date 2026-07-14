@@ -18,10 +18,11 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-07-14.7-inline-semantic-expression"
+TRANSLATION_EXTRAS_VERSION = "2026-07-14.8-action-ux-handover-fallback"
 
 
 SUPPORTED_PERSONAL_LANGS = ("zh", "id", "vi", "th", "tl", "en", "ja", "ko", "hi")
@@ -49,28 +50,41 @@ LANGUAGE_ALIASES = {
     "印尼文": "id",
     "印尼語": "id",
     "indonesian": "id",
+    "indonesia": "id",
     "bahasa": "id",
+    "bahasa indonesia": "id",
+    "中文台灣": "zh",
+    "mandarin": "zh",
+    "cina": "zh",
+    "tionghoa": "zh",
+    "taiwan": "zh",
     "越南": "vi",
     "越南文": "vi",
     "越南語": "vi",
     "vietnamese": "vi",
+    "vietnam": "vi",
     "泰文": "th",
     "泰語": "th",
     "thai": "th",
+    "thailand": "th",
     "菲律賓文": "tl",
     "菲律賓語": "tl",
     "他加祿": "tl",
     "tagalog": "tl",
     "filipino": "tl",
+    "filipina": "tl",
     "英文": "en",
     "英語": "en",
     "english": "en",
+    "inggris": "en",
     "日文": "ja",
     "日語": "ja",
     "japanese": "ja",
+    "jepang": "ja",
     "韓文": "ko",
     "韓語": "ko",
     "korean": "ko",
+    "korea": "ko",
     "印地文": "hi",
     "印地語": "hi",
     "hindi": "hi",
@@ -1090,27 +1104,116 @@ def build_handover_messages(entries: Sequence[Mapping[str, Any]]) -> list[dict[s
 
 
 def parse_handover_response(raw: str | None) -> dict[str, str] | None:
-    """Parse strict or fenced JSON and reject incomplete bilingual results."""
+    """Parse JSON first, then accept a clearly separated bilingual response.
+
+    Some provider/model combinations occasionally wrap the requested JSON in
+    prose or return two markdown sections.  The handover feature must not become
+    unusable merely because formatting differed, so this parser is deliberately
+    tolerant while still requiring both Chinese and Indonesian content.
+    """
     text = (raw or "").strip()
     if not text:
         return None
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
         text = re.sub(r"\s*```$", "", text)
+
+    json_text = text
     start, end = text.find("{"), text.rfind("}")
     if start >= 0 and end > start:
-        text = text[start : end + 1]
+        json_text = text[start : end + 1]
     try:
-        data = json.loads(text)
+        data = json.loads(json_text)
     except Exception:
+        data = None
+    if isinstance(data, dict):
+        zh = str(data.get("zh", data.get("chinese", "")) or "").strip()
+        id_text = str(data.get("id", data.get("indonesian", "")) or "").strip()
+        if zh and id_text:
+            return {"zh": zh, "id": id_text}
+
+    # Markdown/plain-text fallback: split on the Indonesian section marker.
+    marker = re.search(
+        r"(?im)^\s*(?:#{1,4}\s*)?(?:🇮🇩\s*)?(?:bahasa\s+indonesia|indonesia|id)\s*[:：-]?\s*$",
+        text,
+    )
+    if marker:
+        zh_part = text[: marker.start()]
+        id_part = text[marker.end() :]
+        zh_part = re.sub(
+            r"(?im)^\s*(?:#{1,4}\s*)?(?:🇹🇼\s*)?(?:中文|繁體中文|chinese|zh)\s*[:：-]?\s*$",
+            "",
+            zh_part,
+        ).strip()
+        id_part = id_part.strip()
+        if zh_part and id_part:
+            return {"zh": zh_part, "id": id_part}
+    return None
+
+
+def build_handover_fallback(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    max_items: int = 24,
+) -> dict[str, str] | None:
+    """Build a deterministic bilingual handover when the LLM is unavailable.
+
+    This is intentionally a faithful chronological digest rather than an
+    invented summary.  It uses translations that were already delivered, so it
+    does not make another API call and cannot lose order codes, numbers or safety
+    wording through a second transformation.
+    """
+    rows = compact_handover_entries(entries, max_entries=max_items, max_chars=16000)
+    if not rows:
         return None
-    if not isinstance(data, dict):
+
+    zh_lines: list[str] = []
+    id_lines: list[str] = []
+    seen: set[tuple[str, str]] = set()
+
+    for row in rows[-max(1, max_items):]:
+        source = str(row.get("source_text", "") or "").strip()
+        source_lang = str(row.get("source_language", "") or "").strip().lower()
+        translations = dict(row.get("translations", {}) or {})
+        zh_text = source if source_lang == "zh" else str(translations.get("zh", "") or "").strip()
+        id_text = source if source_lang == "id" else str(translations.get("id", "") or "").strip()
+
+        # Older log rows can contain just one target translation.  Keep the
+        # available side instead of dropping the operational record entirely.
+        if not zh_text and source_lang != "id":
+            zh_text = source
+        if not id_text and source_lang != "zh":
+            id_text = source
+        if not zh_text and not id_text:
+            continue
+
+        pair = (zh_text, id_text)
+        if pair in seen:
+            continue
+        seen.add(pair)
+
+        try:
+            ts = float(row.get("timestamp", row.get("ts", 0)) or 0)
+            stamp = datetime.fromtimestamp(ts).strftime("%H:%M") if ts > 0 else "--:--"
+        except Exception:
+            stamp = "--:--"
+        sender = str(row.get("sender", "") or "").strip()
+        prefix = f"[{stamp}]" + (f" {sender}" if sender else "")
+        if zh_text:
+            zh_lines.append(f"• {prefix}：{zh_text}")
+        if id_text:
+            id_lines.append(f"• {prefix}: {id_text}")
+
+    if not zh_lines and not id_lines:
         return None
-    zh = str(data.get("zh", "") or "").strip()
-    id_text = str(data.get("id", "") or "").strip()
-    if not zh or not id_text:
-        return None
-    return {"zh": zh, "id": id_text}
+    if not zh_lines:
+        zh_lines = ["• 無可用中文譯文，請參考下方印尼文紀錄。"]
+    if not id_lines:
+        id_lines = ["• Terjemahan bahasa Indonesia belum tersedia; lihat catatan bahasa Mandarin di atas."]
+    return {
+        "zh": "最近翻譯紀錄（自動備援）\n" + "\n".join(zh_lines),
+        "id": "Catatan terjemahan terbaru (cadangan otomatis)\n" + "\n".join(id_lines),
+    }
 
 
 def _font_candidates(bold: bool = False) -> tuple[str, ...]:
