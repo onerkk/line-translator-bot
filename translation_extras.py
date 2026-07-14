@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-07-14.6-smart-expression-engine"
+TRANSLATION_EXTRAS_VERSION = "2026-07-14.7-inline-semantic-expression"
 
 
 SUPPORTED_PERSONAL_LANGS = ("zh", "id", "vi", "th", "tl", "en", "ja", "ko", "hi")
@@ -469,6 +469,182 @@ def _analysis_for_instruction(source: str, structured: bool) -> ToneAnalysis | N
     return None
 
 
+
+# Functional semantic cues make neutral workplace translations visibly expressive
+# without inventing anger, affection or other emotions that are absent from the
+# source.  These cues are intentionally multilingual because a single Chinese
+# source sentence is often expanded into several Indonesian target sentences.
+_SEMANTIC_EXPRESSION_RULES: tuple[
+    tuple[str, tuple[str, ...], str, tuple[str, ...], str, float, str], ...
+] = (
+    (
+        "limit_rule",
+        (
+            r"上限|下限|不得超過|不可超過|不要超過|超過規定|符合(?:規定|標準|重量)|捆包重|包重|重量範圍",
+            r"\b(?:batas\s+atas|batas\s+bawah|jangan\s+melebihi|tidak\s+boleh\s+melebihi|sesuai\s+(?:ketentuan|standar)|batas\s+berat)\b",
+            r"\b(?:upper\s+limit|lower\s+limit|must\s+not\s+exceed|within\s+the\s+specified\s+limit|weight\s+limit)\b",
+        ),
+        "This sentence states a measurable limit or compliance rule. Preserve every value and condition exactly.",
+        ("⚖️", "📏", "⚠️"),
+        "suffix",
+        0.95,
+        "rule",
+    ),
+    (
+        "confirmation",
+        (
+            r"確認後|經確認|問過才|詢問後才|核准後|同意後|得到許可",
+            r"\b(?:setelah\s+dikonfirmasi|harus\s+dikonfirmasi|konfirmasi|persetujuan|izin\s+terlebih\s+dahulu)\b",
+            r"\b(?:after\s+confirmation|confirm(?:ed|ation)?|approval|required\s+permission)\b",
+        ),
+        "This action requires confirmation or approval before proceeding.",
+        ("✅", "🔎", "💬"),
+        "suffix",
+        0.93,
+        "confirmation",
+    ),
+    (
+        "customer_feedback",
+        (
+            r"客戶(?:反應|反映|抱怨|客訴)|客訴|客戶意見|避免客戶",
+            r"\b(?:keluhan\s+pelanggan|pelanggan.*(?:mengeluh|keluhan|komplain)|komplain\s+pelanggan)\b",
+            r"\b(?:customer\s+(?:complaint|feedback)|customer.*complain)\b",
+        ),
+        "This sentence warns about customer feedback or complaints. Keep it factual and preventive.",
+        ("💬", "⚠️", "👂"),
+        "suffix",
+        0.96,
+        "caution",
+    ),
+    (
+        "meeting_schedule",
+        (
+            r"會議|開會|班股會議|會議室集合|集合開會",
+            r"\b(?:rapat|ruang\s+rapat|pertemuan|berkumpul\s+untuk\s+rapat)\b",
+            r"\b(?:meeting|conference\s+room|team\s+meeting)\b",
+        ),
+        "This sentence announces a meeting or gathering. Preserve the date, time, place and attendees.",
+        ("📅", "⏰", "📍"),
+        "suffix",
+        0.92,
+        "schedule",
+    ),
+    (
+        "work_schedule",
+        (
+            r"上班|下班|早班|夜班|小夜班|加班|交班|班別|幾點|早上|下午|晚上",
+            r"\b(?:masuk\s+kerja|pulang\s+kerja|shift\s+pagi|shift\s+malam|lembur|serah\s+terima|pukul)\b",
+            r"\b(?:start\s+work|finish\s+work|day\s+shift|night\s+shift|overtime|handover|at\s+\d{1,2}[:.]\d{2})\b",
+        ),
+        "This sentence contains a work schedule or time-sensitive instruction.",
+        ("⏰", "🕒", "📅"),
+        "suffix",
+        0.86,
+        "schedule",
+    ),
+    (
+        "packaging",
+        (
+            r"包裝|捆包|捆綁|成捆|打包|包到",
+            r"\b(?:kemasan|pengikatan|ikatan|dibundel|bundel|packing)\b",
+            r"\b(?:packaging|bundling|bundle|packed)\b",
+        ),
+        "This sentence concerns packaging or bundling. Keep quantities, limits and exceptions exact.",
+        ("📦", "🧰"),
+        "suffix",
+        0.87,
+        "factory",
+    ),
+    (
+        "exception_note",
+        (
+            r"特例|例外|除非|只有.*才|特殊情況",
+            r"\b(?:pengecualian|kecuali|hanya\s+jika|kasus\s+khusus)\b",
+            r"\b(?:exception|except\s+when|only\s+if|special\s+case)\b",
+        ),
+        "This sentence explains an exception or special condition. Preserve the exact boundary of the exception.",
+        ("ℹ️", "🔎"),
+        "suffix",
+        0.85,
+        "information",
+    ),
+    (
+        "equipment_notice",
+        (
+            r"機台|機器|設備|故障|異常|維修|保養",
+            r"\b(?:mesin|peralatan|kerusakan|gangguan|perbaikan|pemeliharaan)\b",
+            r"\b(?:machine|equipment|fault|maintenance|repair)\b",
+        ),
+        "This sentence concerns equipment or maintenance. Keep the operational meaning precise.",
+        ("🔧", "⚙️"),
+        "suffix",
+        0.89,
+        "equipment",
+    ),
+    (
+        "quality_notice",
+        (
+            r"品質|品保|檢驗|檢查|不良|規格|標準",
+            r"\b(?:kualitas|qc|pemeriksaan|inspeksi|cacat|spesifikasi|standar)\b",
+            r"\b(?:quality|inspection|defect|specification|standard)\b",
+        ),
+        "This sentence concerns quality or inspection. Preserve the acceptance criteria and result.",
+        ("🔍", "✅", "📋"),
+        "suffix",
+        0.89,
+        "quality",
+    ),
+    (
+        "workplace_reminder",
+        (
+            r"請大家|請注意|多注意|記得|盡量|避免|應該|最好|仍要|還是要|需要",
+            r"\b(?:mohon|harap|usahakan|hindari|sebaiknya|tetap\s+harus|perlu)\b",
+            r"\b(?:please\s+note|remember|try\s+to|avoid|should|still\s+must|need\s+to)\b",
+        ),
+        "This is a practical workplace reminder. Keep it clear and helpful without inventing emotion.",
+        ("📌", "👀", "✅"),
+        "suffix",
+        0.84,
+        "reminder",
+    ),
+)
+
+_FUNCTIONAL_SAFE_TONES = {
+    "urgent_warning", "instruction", "announcement", "management_pressure",
+    "crowd_report", "limit_rule", "confirmation", "customer_feedback",
+    "meeting_schedule", "work_schedule", "packaging", "exception_note",
+    "equipment_notice", "quality_notice", "workplace_reminder",
+}
+
+
+def _analysis_for_semantic_expression(source: str, structured: bool) -> ToneAnalysis | None:
+    """Return a non-emotional functional cue for neutral workplace content."""
+    if not source.strip():
+        return None
+    candidates: list[ToneAnalysis] = []
+    for name, patterns, instruction, emoji_choices, placement, confidence, visual_mood in _SEMANTIC_EXPRESSION_RULES:
+        for pattern in patterns:
+            match = re.search(pattern, source, re.I)
+            if not match:
+                continue
+            choices = () if structured else emoji_choices
+            candidates.append(ToneAnalysis(
+                primary=name,
+                confidence=confidence,
+                instruction=instruction,
+                emoji=(choices[0] if choices else ""),
+                emoji_choices=choices,
+                placement=(placement if choices else "none"),
+                matched_text=match.group(0),
+                is_structured=structured,
+                visual_mood=visual_mood,
+            ))
+            break
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.confidence)
+
+
 def analyze_message_tone(text: str | None, language: str | None = None) -> ToneAnalysis:
     """Classify pragmatic tone without any additional AI/API request.
 
@@ -522,6 +698,9 @@ def analyze_message_tone(text: str | None, language: str | None = None) -> ToneA
     instruction = _analysis_for_instruction(source, structured)
     if instruction:
         candidates.append(instruction)
+    semantic_expression = _analysis_for_semantic_expression(source, structured)
+    if semantic_expression:
+        candidates.append(semantic_expression)
 
     if candidates:
         # Prefer the strongest explicit signal rather than whichever regex happens
@@ -585,7 +764,9 @@ def _append_emoji_to_unit(unit: str, emoji: str, placement: str) -> str:
     # CJK chat normally places emoji directly after punctuation; Latin-script
     # languages usually read more naturally with one separating space.
     has_cjk = bool(re.search(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", core))
-    separator = "" if (not core or core.endswith((" ", "\t")) or has_cjk) else " "
+    latin_count = len(re.findall(r"[A-Za-z]", core))
+    cjk_dominant = has_cjk and latin_count < 3
+    separator = "" if (not core or core.endswith((" ", "\t")) or cjk_dominant) else " "
     return leading + core + separator + emoji + trailing_ws
 
 
@@ -633,6 +814,16 @@ def _expression_priority(analysis: ToneAnalysis) -> float:
         "request": 2.5,
         "greeting": 2.4,
         "positive": 2.3,
+        "limit_rule": 3.95,
+        "confirmation": 3.65,
+        "meeting_schedule": 3.55,
+        "customer_feedback": 3.45,
+        "quality_notice": 3.40,
+        "equipment_notice": 3.40,
+        "workplace_reminder": 3.25,
+        "work_schedule": 3.15,
+        "packaging": 3.05,
+        "exception_note": 2.95,
     }.get(analysis.primary, 1.0)
     return base + float(analysis.confidence)
 
@@ -690,12 +881,31 @@ def build_expression_plan(
     for target_pos, unit_index in enumerate(target_indexes):
         target_unit = target_units[unit_index]
         source_unit = _map_source_unit(source_units, target_pos, len(target_indexes))
-        if not source_unit.strip() or _looks_dense_technical_unit(source_unit):
+        if not source_unit.strip():
             continue
         # Existing emotional emoji only suppresses this sentence; flags do not.
         if _has_emotional_emoji(source_unit) or _has_emotional_emoji(target_unit):
             continue
-        unit_analysis = analyze_message_tone(source_unit, source_language)
+
+        # Prefer the target sentence's own cue because one source sentence can
+        # expand into several translated sentences with different functions
+        # (limit, exception, confirmation, customer warning). Fall back to the
+        # mapped source cue for languages not covered by local target patterns.
+        source_analysis = analyze_message_tone(source_unit, source_language)
+        target_analysis = analyze_message_tone(target_unit, None)
+        # A non-neutral target cue is more precise than the proportionally mapped
+        # source cue. This prevents one long source sentence about packaging and
+        # limits from stamping the same icon onto every expanded target sentence.
+        if target_analysis.primary != "neutral" and target_analysis.should_decorate:
+            unit_analysis = target_analysis
+        else:
+            unit_analysis = source_analysis
+
+        # Dense technical data may still receive a restrained functional marker
+        # such as ⚖️/📋/🔧, but never an invented social emotion.
+        if (_looks_dense_technical_unit(source_unit) or _looks_dense_technical_unit(target_unit)) \
+                and unit_analysis.primary not in _FUNCTIONAL_SAFE_TONES:
+            continue
         tone_scores[unit_analysis.primary] = tone_scores.get(unit_analysis.primary, 0.0) + unit_analysis.confidence
         if unit_analysis.visual_mood:
             visual_scores[unit_analysis.visual_mood] = visual_scores.get(unit_analysis.visual_mood, 0.0) + unit_analysis.confidence
@@ -709,16 +919,20 @@ def build_expression_plan(
     selected = sorted(candidates, key=lambda item: item[0], reverse=True)[:max_count]
     selected.sort(key=lambda item: item[1])
     decorated = 0
+    used_emoji: set[str] = set()
     for _priority, unit_index, source_unit, unit_analysis in selected:
         target_unit = target_units[unit_index]
         choices = unit_analysis.emoji_choices or ((unit_analysis.emoji,) if unit_analysis.emoji else ())
-        if str(intensity or "balanced").strip().lower() == "lively" and choices:
-            emoji = _stable_pick(choices, source_unit + unit_analysis.primary)
+        if str(intensity or "natural").strip().lower() == "lively" and choices:
+            emoji = _stable_pick(choices, source_unit + target_unit + unit_analysis.primary)
         else:
             emoji = unit_analysis.emoji or (choices[0] if choices else "")
+        if emoji in used_emoji:
+            emoji = next((candidate for candidate in choices if candidate not in used_emoji), emoji)
         if not emoji:
             continue
         target_units[unit_index] = _append_emoji_to_unit(target_unit, emoji, unit_analysis.placement)
+        used_emoji.add(emoji)
         decorated += 1
 
     dominant_tone = max(tone_scores, key=tone_scores.get) if tone_scores else dominant.primary

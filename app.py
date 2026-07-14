@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.39.0-smart-expressive-120cards-2026-07-14"
+VERSION = "v3.39.2-inline-semantic-expression-2026-07-14"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -287,7 +287,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.6-smart-expression-engine"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.7-inline-semantic-expression"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -319,8 +319,8 @@ if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PRO
         f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
         "Replace app.py and prompt_optimizer.py together in the project root."
     )
-_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-07-14.1-smart-expression-engine"
-_EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-07-14.2-120-card-library"
+_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-07-14.2-text-first-visual-card"
+_EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-07-14.3-workplace-context"
 if getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", None) != _EXPECTED_EXPRESSIVE_ENGINE_VERSION:
     raise RuntimeError(
         "expressive_engine deployment mismatch: "
@@ -10927,7 +10927,7 @@ _EXPRESSION_VISUAL_TITLES = {
 }
 
 
-def _build_expression_visual_message(source_text, source_lang, group_id, *, from_image_ocr=False):
+def _build_expression_visual_message(source_text, translated_text, source_lang, group_id, *, from_image_ocr=False):
     """Build one optional local image or image-card without an AI request.
 
     Selection is context-aware, manifest-driven and cooldown-limited. Any error
@@ -10943,7 +10943,7 @@ def _build_expression_visual_message(source_text, source_lang, group_id, *, from
     try:
         expressive = expressive_engine_module.enhance_translation(
             source_text,
-            source_text,
+            translated_text,
             source_language=source_lang,
             context_id=str(group_id or "global"),
             settings=expressive_engine_module.ExpressiveSettings(
@@ -10983,7 +10983,29 @@ def _build_expression_visual_message(source_text, source_lang, group_id, *, from
             selection.title_key, ("智慧情境卡", "Kartu konteks")
         )
         title = id_title if source_lang == "zh" else zh_title
-        subtitle = "依訊息情境自動選擇 / Dipilih sesuai konteks"
+        subtitle = "情境圖片為輔助，譯文仍以文字為準 / Visual hanya pelengkap"
+        preview = re.sub(r"\s+", " ", str(translated_text or "")).strip()
+        if len(preview) > 260:
+            preview = preview[:257].rstrip() + "..."
+        body_contents = [
+            {"type": "text", "text": title, "weight": "bold", "size": "md", "color": "#FFFFFF"},
+        ]
+        if preview:
+            body_contents.extend([
+                {"type": "separator", "margin": "md", "color": "#374151"},
+                {
+                    "type": "text",
+                    "text": preview,
+                    "size": "sm",
+                    "color": "#F9FAFB",
+                    "margin": "md",
+                    "wrap": True,
+                    "maxLines": 6,
+                },
+            ])
+        body_contents.append(
+            {"type": "text", "text": subtitle, "size": "xxs", "color": "#9CA3AF", "margin": "md", "wrap": True}
+        )
         bubble = {
             "type": "bubble",
             "size": "mega",
@@ -10999,14 +11021,12 @@ def _build_expression_visual_message(source_text, source_lang, group_id, *, from
                 "layout": "vertical",
                 "paddingAll": "16px",
                 "backgroundColor": "#111827",
-                "contents": [
-                    {"type": "text", "text": title, "weight": "bold", "size": "md", "color": "#FFFFFF"},
-                    {"type": "text", "text": subtitle, "size": "xxs", "color": "#9CA3AF", "margin": "sm", "wrap": True},
-                ],
+                "contents": body_contents,
             },
         }
+        alt_preview = (" — " + preview) if preview else ""
         return FlexMessage(
-            alt_text=(title + " / " + id_title)[:400],
+            alt_text=(title + alt_preview)[:400],
             contents=FlexContainer.from_dict(bubble),
         )
     except Exception as exc:
@@ -11327,6 +11347,22 @@ def translate(text, src, tgt):
                 from_image_ocr=_from_image_ocr,
             )
             result = _expressive_result.text
+            logger.info(
+                "[ExpressiveText] group=%s mode=%s intensity=%s emoji=%s decorated=%s tone=%s",
+                _expression_gid or "global",
+                _runtime_settings.display_mode,
+                _runtime_settings.intensity,
+                _runtime_settings.emoji_enabled,
+                _expressive_result.decorated_count,
+                _expressive_result.tone,
+            )
+            _update_last_translate_debug(
+                expressive_mode=_runtime_settings.display_mode,
+                expressive_intensity=_runtime_settings.intensity,
+                expressive_emoji_enabled=bool(_runtime_settings.emoji_enabled),
+                expressive_decorated_count=int(_expressive_result.decorated_count or 0),
+                expressive_tone=str(_expressive_result.tone or "neutral"),
+            )
         except Exception as _expressive_exc:
             # Expression is optional. A valid paid translation must still be sent.
             logger.warning("expressive text enhancement skipped: %s", _expressive_exc)
@@ -15939,7 +15975,25 @@ def handle_message(event):
         except Exception as _aqe:
             logger.warning("translation action Quick Reply build failed: %s", _aqe)
     qr = _action_qr or (build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None)
-    custom_sender = get_sender_object(name_override=sender_display, icon_url_override=sender_picture)
+
+    # Plan the optional visual before assigning a custom sender.  When a visual
+    # accompanies a translation, both messages must visibly come from the bot;
+    # otherwise LINE makes the translation look like the user's own message and
+    # the separate image appears to be the bot's only response.
+    _expression_visual_message = None
+    if not _translation_failed:
+        try:
+            _expression_visual_message = _build_expression_visual_message(
+                text, translated_text, lang, group_id, from_image_ocr=False
+            )
+        except Exception as _visual_exc:
+            logger.debug("expression visual selection skipped: %s", _visual_exc)
+
+    custom_sender = None
+    if not _expression_visual_message:
+        custom_sender = get_sender_object(
+            name_override=sender_display, icon_url_override=sender_picture
+        )
     # Get quoteToken from original message for reply linking
     qt = getattr(event.message, 'quote_token', None)
 
@@ -15973,15 +16027,6 @@ def handle_message(event):
             except Exception:
                 pass
 
-    _expression_visual_message = None
-    if not _translation_failed:
-        try:
-            _expression_visual_message = _build_expression_visual_message(
-                text, lang, group_id, from_image_ocr=False
-            )
-        except Exception as _visual_exc:
-            logger.debug("expression visual selection skipped: %s", _visual_exc)
-
     _reply_resp, _delivery_method = _send_reply_with_push_fallback(
         reply_token=event.reply_token,
         target_id=group_id,
@@ -15996,6 +16041,7 @@ def handle_message(event):
             "group_id": group_id or "",
             "method": _delivery_method,
             "failed_notice": bool(_translation_failed),
+            "visual_attached": bool(_expression_visual_message),
         })
     except Exception:
         pass
@@ -16746,7 +16792,7 @@ def _process_pending_image_translate_inner(event, message_id):
     _ocr_expression_visual = None
     try:
         _ocr_expression_visual = _build_expression_visual_message(
-            extracted, lang, group_id, from_image_ocr=True
+            extracted, result, lang, group_id, from_image_ocr=True
         )
     except Exception as _visual_exc:
         logger.debug("ImgAsk expression visual selection skipped: %s", _visual_exc)
@@ -20329,11 +20375,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     </label>
   </div>
   <div class="wl-item" style="border-color:#24243a;padding:9px 0">
-    <div><span style="font-size:13px;font-weight:600">😊 使用逐句表情</span><br><span style="font-size:11px;color:#8a8a9a">每句獨立判斷，國旗不算情緒表情；數字、人名、料號附近不插入</span></div>
+    <div><span style="font-size:13px;font-weight:600">😊 使用逐句表情</span><br><span style="font-size:11px;color:#8a8a9a">每句分析情緒與工作語意；規定、上限、確認、會議、包裝等中性內容也會加入功能性表情</span></div>
     <label class="toggle"><input type="checkbox" id="expressiveEmojiToggle" onchange="saveExpressiveSetting('expressive_emoji_enabled',this.checked)"><span class="slider"></span></label>
   </div>
   <div class="wl-item" style="border-color:#24243a;padding:9px 0">
-    <div><span style="font-size:13px;font-weight:600">🖼️ 使用圖片／圖卡</span><br><span style="font-size:11px;color:#8a8a9a">從本地 120 張素材庫選擇，不產生圖片 API 費用；群組有冷卻時間避免洗版</span></div>
+    <div><span style="font-size:13px;font-weight:600">🖼️ 使用圖片／圖卡</span><br><span style="font-size:11px;color:#8a8a9a">僅「智慧自動／圖片／圖卡」模式生效；選「語氣＋逐句表情」時不會另外傳圖片</span></div>
     <label class="toggle"><input type="checkbox" id="expressiveImagesToggle" onchange="saveExpressiveSetting('expressive_images_enabled',this.checked)"><span class="slider"></span></label>
   </div>
   <div class="wl-item" style="border-color:#24243a;padding:9px 0">
