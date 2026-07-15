@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.39.5-bilingual-actions-hardlock-2026-07-14",
     "schema_version": 8,
-    "state_hash": "f54156bdfffd51dae18a37d0c264cf755853df2b03296e60e52b57e102a3c2fa",
-    "updated_at_iso": "2026-07-15T00:59:49.065986+00:00",
-    "updated_at_unix": 1784077189.0659864
+    "state_hash": "c9f4d7190bc8f01a949ec945dfacfa25c7947920516549d93ece853f6a187fe6",
+    "updated_at_iso": "2026-07-15T00:59:50.196216+00:00",
+    "updated_at_unix": 1784077190.196216
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -417,10 +417,11 @@
   "group_image_translation_action_modes": {},
   "group_image_translation_actions_settings": {},
   "group_img_ask_settings": {
+    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_img_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true,
+    "C6c708f629dd38d6864669ecacf7712f4": false,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
