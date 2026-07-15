@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.39.5-bilingual-actions-hardlock-2026-07-14",
     "schema_version": 8,
-    "state_hash": "32ccfb449082d93400cf0f9db214b8657d6530b4935fe507206b0b4e36638597",
-    "updated_at_iso": "2026-07-15T04:31:44.565498+00:00",
-    "updated_at_unix": 1784089904.5654976
+    "state_hash": "60e4d29eca78aeb4d6c18182f362ba8faf74b95646a62295af8a1037d9468192",
+    "updated_at_iso": "2026-07-15T08:43:39.320459+00:00",
+    "updated_at_unix": 1784105019.320459
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -167,10 +167,10 @@
   "auto_tone_emoji_enabled": true,
   "bot_stats": {
     "ant_cache_read": 578435,
-    "ant_cache_write": 1715639,
-    "ant_cost_usd": 2.790074950000001,
-    "ant_input": 238095,
-    "ant_output": 11991,
+    "ant_cache_write": 1720450,
+    "ant_cost_usd": 2.813750450000001,
+    "ant_input": 242459,
+    "ant_output": 12283,
     "commands": 13,
     "followers": 1,
     "image_translations": 4,
@@ -180,8 +180,8 @@
     "oai_output": 416,
     "oai_reasoning": 0,
     "text_translations": 236,
-    "tokens_completion": 17580,
-    "tokens_prompt": 4303097,
+    "tokens_completion": 17872,
+    "tokens_prompt": 4312272,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -417,8 +417,7 @@
   "group_image_translation_action_modes": {},
   "group_image_translation_actions_settings": {},
   "group_img_ask_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true,
-    "Cf5e2ea027bb3db193677e7ef3b51adea": true
+    "C6c708f629dd38d6864669ecacf7712f4": true
   },
   "group_img_settings": {
     "C6c708f629dd38d6864669ecacf7712f4": false,
