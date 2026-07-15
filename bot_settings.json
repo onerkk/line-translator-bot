@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.39.5-bilingual-actions-hardlock-2026-07-14",
     "schema_version": 8,
-    "state_hash": "557bc1ef6769ebdc8157080722519f73db859ddbf7d7f245f504c1d9241880b6",
-    "updated_at_iso": "2026-07-14T08:48:52.307360+00:00",
-    "updated_at_unix": 1784018932.3073604
+    "state_hash": "f54156bdfffd51dae18a37d0c264cf755853df2b03296e60e52b57e102a3c2fa",
+    "updated_at_iso": "2026-07-15T00:59:49.065986+00:00",
+    "updated_at_unix": 1784077189.0659864
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -175,13 +175,13 @@
     "followers": 1,
     "image_translations": 3,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.0233427,
-    "oai_input": 59507,
-    "oai_output": 162,
+    "oai_cost_usd": 0.0375332,
+    "oai_input": 66544,
+    "oai_output": 265,
     "oai_reasoning": 0,
-    "text_translations": 232,
-    "tokens_completion": 17248,
-    "tokens_prompt": 4280311,
+    "text_translations": 234,
+    "tokens_completion": 17351,
+    "tokens_prompt": 4287348,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -345,11 +345,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.7482965500000003,
+      "cost_usd": 1.76248705,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 5434,
-      "tokens_prompt": 1775826
+      "tokens_completion": 5537,
+      "tokens_prompt": 1782863
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -420,7 +420,7 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": true
   },
   "group_img_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
