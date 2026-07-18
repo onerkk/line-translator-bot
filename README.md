@@ -8,7 +8,10 @@
 ## 運作方式
 
 - 自動偵測語言（中文 / 印尼文）
-- 翻譯引擎：優先用 OpenAI GPT-4o-mini（翻譯品質最好），備用 Google Translate
+- 翻譯引擎：使用設定中的 OpenAI 翻譯模型，並依現有備援策略處理失敗
+- 文字與圖片 OCR 共用同一套工廠術語、情境知識、翻譯記憶與品質閘門
+- 工廠詞庫使用字首樹（Trie）最長詞索引，只注入本句實際命中的詞條
+- 支援單位簡稱與別名，例如「一課」=`Seksi 1`、「一股股長」=`kepala regu 1`
 - 太短的訊息（< 2 字）自動忽略，避免洗版
 - 翻譯結果前面會加國旗 emoji 方便辨識
 
@@ -168,11 +171,12 @@ Dewi：Terima kasih, bos
 
 ## 進階自訂
 
-如果你想修改行為，可以調整 `app.py` 裡的：
+- `glossary_data.json`：工廠標準詞、中文／印尼文別名、優先序、OCR 提示與反向安全設定。
+- `factory_knowledge.json`：需要上下文判斷的工廠流程、禁用譯法與必要概念。
+- `factory_terminology.py`：共用字首樹索引、組織單位解析與 OCR 安全正規化。
+- `app.py`：語言偵測、翻譯模型、LINE 訊息流程與管理介面。
 
-- `detect_language()` - 語言偵測邏輯
-- `translate_with_openai()` 裡的 prompt - 翻譯風格
-- `handle_message()` 裡的過濾條件 - 哪些訊息要翻譯
+大量詞庫維護方式與欄位格式請參閱 `ROOT_FIX_2026-07-18_FACTORY_TERMINOLOGY_ENGINE.md`。
 
 ---
 
@@ -180,9 +184,12 @@ Dewi：Terima kasih, bos
 
 ```
 line-translator-bot/
-├── app.py              # 主程式
-├── requirements.txt    # Python 套件
-├── Dockerfile          # Docker 部署用
-├── .env.example        # 環境變數範本
-└── README.md           # 這份說明
+├── app.py                         # 主程式與標準翻譯管線
+├── factory_terminology.py         # 大量工廠術語 Trie、別名與單位解析
+├── glossary_data.json             # 標準詞庫
+├── glossary_enforcement.py        # 雙向術語合規與反向安全索引
+├── factory_knowledge.json         # 工廠上下文知識與禁用譯法
+├── requirements.txt               # Python 套件
+├── Dockerfile                     # Docker 部署用
+└── README.md                      # 這份說明
 ```

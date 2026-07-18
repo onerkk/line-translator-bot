@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.39.5-bilingual-actions-hardlock-2026-07-14"
+VERSION = "v3.40.0-factory-terminology-engine-2026-07-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -259,6 +259,7 @@ import translation_extras as translation_extras_module
 import expressive_assets as expressive_assets_module
 import expressive_engine as expressive_engine_module
 import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
+import factory_terminology as factory_terminology_module  # indexed plant glossary shared by text/OCR
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
@@ -359,7 +360,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-14.2-quality-cost-routing-context"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-18.1-shared-factory-terminology"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -377,10 +378,16 @@ _fk_erp = _FACTORY_KNOWLEDGE_STORE.retrieve(
 _fk_physical = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "貨車到貨後安排入庫時間並卸貨", "zh", "id", limit=3
 )
+_fk_org = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "一課最近被釘很緊，上週處長抓到一堆人在控制室休息吹冷氣；樓上是一股股長，基本紀律注意一下，他蠻公司派的。",
+    "zh", "id", limit=3
+)
 if not any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_erp):
     raise RuntimeError("factory knowledge self-test failed: ERP timing context was not retrieved")
 if any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_physical):
     raise RuntimeError("factory knowledge self-test failed: physical warehouse message matched ERP timing context")
+if not any(card.get("id") == "organization_unit_discipline_notice" for card in _fk_org):
+    raise RuntimeError("factory knowledge self-test failed: organization discipline context was not retrieved")
 _FACTORY_KNOWLEDGE_SELFTEST_OK = True
 logger.info("[FactoryKnowledge] verified build=%s entries=%s sha256=%s",
             _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
@@ -5984,6 +5991,20 @@ def inject_glossary_hint(text, src, tgt):
     if not isinstance(text, str):
         return ""
     hits = []
+    if src == "zh" and tgt == "id":
+        # v3.40: one indexed terminology engine is shared by text messages,
+        # OCR-derived text, prompt grounding, glossary enforcement and the
+        # quality gate.  It retrieves only terms actually present in the source
+        # and resolves numbered organization units such as 一課 / 一股股長.
+        _indexed_prompt = factory_terminology_module.build_translation_prompt(
+            text,
+            GLOSSARY_LOOKUP,
+            src,
+            tgt,
+            safe_reverse_index=globals().get("GLOSSARY_REVERSE_INDEX") or {},
+            max_items=40,
+        )
+        return (" " + _indexed_prompt + " ") if _indexed_prompt else ""
     if src == "zh":
         # 中→印:用中文 key 在 text 中匹配(原邏輯)
         # v3.22 ③:依目標語分流 —
@@ -8018,6 +8039,29 @@ def build_translation_semantic_contract(text, src, tgt):
             pass
 
     if src == "zh" and tgt == "id":
+        # Some isolated unit tests execute this function without importing the
+        # whole application module.  Fail open there; production startup always
+        # verifies and loads the shared terminology engine above.
+        _ft_module = globals().get("factory_terminology_module")
+        _org_matches = (
+            _ft_module.collect_organization_matches(text, src, tgt)
+            if _ft_module is not None else []
+        )
+        if _org_matches:
+            contract["has_risk"] = True
+            contract["risks"].append({
+                "term": "factory_organization_unit",
+                "sense": "factory_organization_terms",
+                "pairs": [(m.matched_text, m.target_term) for m in _org_matches],
+                "tm_bypass_allowed": False,
+                "nmt_allowed": False,
+                "requires_validation": True,
+            })
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
+
         _work_order_fn = globals().get("_classify_factory_work_order_zh_id")
         work_order = _work_order_fn(text) if callable(_work_order_fn) else None
         if work_order:
@@ -8109,6 +8153,12 @@ def build_translation_semantic_contract_prompt(contract):
             knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
             if knowledge_prompt:
                 lines.append(knowledge_prompt)
+        elif risk.get("sense") == "factory_organization_terms":
+            lines.append("<risk term='factory_organization_unit' sense='factory_organization_terms'>")
+            lines.append("These are factory organization levels, not names. Never romanize 一股 as Yigu or generalize 一課 as Departemen 1.")
+            for source_term, target_term in risk.get("pairs", []):
+                lines.append(f"Use exactly: {source_term} => {target_term}.")
+            lines.append("</risk>")
         elif risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             sponsor = risk.get("sponsor_id") or "the sponsor/person/company"
             ev = ", ".join(risk.get("evidence", [])[:6])
@@ -8161,6 +8211,12 @@ def translation_satisfies_semantic_contract(contract, translation):
             )
             if not ok:
                 return False, issues[0] if issues else "factory_knowledge_validation_failed"
+        elif risk.get("sense") == "factory_organization_terms":
+            for source_term, target_term in risk.get("pairs", []):
+                if target_term and target_term.casefold() not in t.casefold():
+                    return False, "factory_organization_term_missing:" + str(source_term)
+            if re.search(r"\byigu\b", low, flags=re.I):
+                return False, "factory_organization_romanization_leak"
         elif risk.get("term") == "請" and risk.get("sense") == "treat_sponsor_pay_for":
             has_good = any(g in low for g in _SEM_QING_PREFERRED_ID)
             has_bad = any(b in low for b in _SEM_QING_FORBIDDEN_ID)
@@ -8786,6 +8842,22 @@ else:
 # consumer sees the same canonical/soft/disabled policy; descriptions are never
 # silently promoted to mandatory output text.
 GLOSSARY_LOOKUP = gp_module.normalize_glossary(GLOSSARY_LOOKUP)
+ge_module.invalidate_glossary_cache()
+_FACTORY_TERMINOLOGY_HEALTH = factory_terminology_module.get_engine(GLOSSARY_LOOKUP).health()
+if (_FACTORY_TERMINOLOGY_HEALTH.get("api_version") != 1
+        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-07-18.2-trie-shared-text-ocr"
+        or _FACTORY_TERMINOLOGY_HEALTH.get("glossary_entries", 0) < 1):
+    raise RuntimeError("factory terminology deployment mismatch: " + repr(_FACTORY_TERMINOLOGY_HEALTH))
+logger.info("[FactoryTerminology] verified %s", _FACTORY_TERMINOLOGY_HEALTH)
+_FACTORY_TERMINOLOGY_SELFTEST_PAIRS = factory_terminology_module.collect_applicable_pairs(
+    "一課最近被釘很緊，樓上是一股股長。", GLOSSARY_LOOKUP, "zh", "id"
+)
+if (("一課", "Seksi 1") not in _FACTORY_TERMINOLOGY_SELFTEST_PAIRS
+        or ("一股股長", "kepala regu 1") not in _FACTORY_TERMINOLOGY_SELFTEST_PAIRS):
+    raise RuntimeError(
+        "factory terminology behavioral self-test failed: "
+        + repr(_FACTORY_TERMINOLOGY_SELFTEST_PAIRS)
+    )
 
 # ★ v2.0: 把 glossary 註冊給 ai_provider,啟用 Claude grounding 能力
 try:
@@ -13188,6 +13260,10 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
         logger.warning("[OCR] HEIC not supported by OpenAI, sending as jpeg (may fail)")
         mime_type = "image/jpeg"
     try:
+        _factory_ocr_hint = factory_terminology_module.build_ocr_hint(
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            max_items=120,
+        )
         msgs = [
                 {
                     "role": "system",
@@ -13206,7 +13282,8 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                         "   未讀數(99+)、輸入框文字(輸入訊息)、鍵盤按鍵(注音、空白鍵、換行等)、\n"
                         "   應用程式名稱、底部 navigation bar — 這些都不要輸出\n"
                         "5. 只輸出訊息內容、貼文、文件、招牌、文章等實質文字\n"
-                        "6. 如果圖片中真的完全沒有任何訊息文字,才輸出 NO_TEXT"
+                        "6. 如果圖片中真的完全沒有任何訊息文字,才輸出 NO_TEXT\n"
+                        + (_factory_ocr_hint if _factory_ocr_hint else "")
                     )
                 },
                 {
@@ -13248,6 +13325,10 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                     return None
         # v3.9.27: 後處理 — 清掉殘留的狀態列文字(雙重保險)
         result = _clean_ocr_status_bar(result)
+        # v3.40: normalize only lossless OCR spacing around factory organization
+        # units (e.g. 一 股 股 長 -> 一股股長) before language detection and the
+        # shared terminology matcher.  No characters or operational facts are guessed.
+        result = factory_terminology_module.normalize_ocr_text(result)
         # 清完後若空,當沒文字
         if not result.strip():
             logger.info("[OCR] all content cleaned as status bar")
@@ -13499,123 +13580,32 @@ def get_recent_media_scene(group_id, user_id):
 
 
 def ocr_and_translate_image(image_base64, tgt_lang):
-    """OCR + translate image text in one API call, preserving layout."""
-    if not _has_ai_capability("vision"):
-        return None, None
-    tgt_name = LANG_NAMES.get(tgt_lang, tgt_lang)
-    tgt_flag = LANG_FLAGS.get(tgt_lang, "")
-    try:
-        msgs = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an OCR + translation assistant for a factory work group chat.\n"
-                        "Task: Extract ALL text from the image, then translate each section.\n\n"
-                        "OUTPUT FORMAT:\n"
-                        "For each distinct section/paragraph in the image, output:\n"
-                        "original text...\n"
-                        + tgt_flag + " translated text...\n"
-                        "(blank line before next section)\n\n"
-                        "EXAMPLE:\n"
-                        "1.研磨來料前需紀錄來料三點式尺寸\n"
-                        + tgt_flag + " 1.Sebelum grinding material masuk, catat dimensi 3 titik\n\n"
-                        "2.拋光棒需清洗\n"
-                        + tgt_flag + " 2.Batang polishing harus dicuci\n\n"
-                        "RULES:\n"
-                        "1. Keep the SAME structure, numbering, and line breaks as the original.\n"
-                        "2. Each section: original text first, then translation with " + tgt_flag + " flag. Do NOT add section titles or brackets.\n"
-                        "3. If there are numbered items (1. 2. 3.), keep the same numbering.\n"
-                        "4. Do NOT repeat the original text. Show it only ONCE then show the translation.\n"
-                        "5. Translate naturally, casual daily language for factory workers.\n"
-                        "6. Target Traditional Chinese = Taiwan style.\n"
-                        "7. NEVER translate or romanize person names. Keep Chinese names in original Chinese characters (e.g. 陳弘林 stays as 陳弘林, NOT Chen Honglin). Do NOT convert to pinyin.\n"
-                        "7b. NEVER translate customer/company names. Keep them EXACTLY as-is: "
-                        "賽利金屬, 寶麗金屬, 田華榕, 佳東, 蘋果, 常州眾山, 大順, 大成, 巨昌, 北澤, 鴻運, 畯圓, 名威, 右勝, "
-                        "貝克休斯, 皇銘, 台芝, 百堅, 津展, 曜麟, 廉錩, 盛昌遠, 永吉, 光輝, "
-                        "DACAPO, CASTLE, LOTUS, METALINOX, KANGRUI, SUNGEUN, STEELINC, GLH, SHINKO, WING KEUNG, "
-                        "BOLLINGHAUS, COGNE, TCI, PLUTUS, SAMWON, DK METAL, KJ. "
-                        "If you see ANY company name in the image, keep it unchanged. Do NOT translate 金屬=metal, 鋼鐵=steel etc. when part of a company name.\n"
-                        "8. If no text found, output exactly: NO_TEXT_FOUND\n"
-                        "9. TABLES/SPREADSHEETS: If the image is a table or spreadsheet, output it as a COMPACT table. "
-                        "Only translate column headers and labels. Keep person names as-is in original characters. "
-                        "Keep numbers as-is. Use a simple format like:\n"
-                        "姓名/Nama | 3/17止/Hingga 3/17\n"
-                        "陳弘林 | -600\n"
-                        "蔡佳佳 | 200\n"
-                        "Do NOT output each cell as a separate translated section. Keep it compact.\n"
-                        "10. Factory vocabulary: "
-                        "交辦事項=hal yang harus dikerjakan, "
-                        "研磨=grinding, 無心研磨=centerless grinding, 拋光=polishing, 來料=material masuk, "
-                        "量測=mengukur, 尺寸=diameter/dimensi, 三點式=3 titik, "
-                        "雷射=laser, 設備=peralatan, 故障=rusak, "
-                        "紀錄=catat, 拋光棒=batang polishing, "
-                        "清洗=cuci, 輕調輕放=handle dengan hati-hati, "
-                        "環狀擦傷=goresan melingkar, "
-                        "重工=rework, 料回削皮=material kembali kupas/peeling, "
-                        "補上=lengkapi, C行套環=C-ring, "
-                        "廠內=di dalam pabrik, 禁止=dilarang, 餵狗=kasih makan anjing, "
-                        "宣導=sosialisasi, "
-                        "包裝站=stasiun packing, 啟動=mulai, "
-                        "PMI全檢=inspeksi penuh PMI, 抽查機制=sistem sampling, "
-                        "每捆=setiap bundel, 鋼種=jenis baja, "
-                        "棒材=batang baja, 混料=tercampur material, "
-                        "出貨=pengiriman, 依情節=sesuai tingkat pelanggaran, "
-                        "增加績效=tambah penilaian kinerja, "
-                        "確實=pastikan, 防止=mencegah, "
-                        "精整=finishing, AP=mesin finishing, 矯直=straightening, 壓光=press polish, "
-                        "退火=annealing, 光輝退火=bright annealing, 酸洗=pickling, 削皮=peeling, 冷抽=cold drawing, "
-                        "熱軋=hot rolling, 煉鋼=steelmaking/peleburan baja, 碳廠=pabrik karbon, "
-                        "職安署=Dinas K3(inspeksi keselamatan kerja), 查核=audit/inspeksi, "
-                        "品保=QC, 儲運=gudang&logistik, 生計=production planning, 業務=sales, 營業=sales, 人事=HRD, "
-                        "處長=kepala divisi, 點名=inspeksi pengawas(NOT roll call), "
-                        "加班=lembur, 排班=jadwal shift, 早班=shift pagi, 夜班=shift malam, "
-                        "砂輪=batu gerinda, 天車=overhead crane, 堆高機=forklift, "
-                        "油桶=drum oli, 太空包=jumbo bag, 噴漆罐=kaleng spray, "
-                        "入庫=masuk gudang, 退庫=kembalikan ke gudang, 出貨差=kekurangan pengiriman, "
-                        "掛單/工單=work order, 重掛單=pasang ulang work order, 取樣=ambil sampel, "
-                        "二道門=pintu kedua(gate 2), 捐血=donor darah, "
-                        "爐號=heat number(NEVER nomor panas), 過帳=input data ke sistem, "
-                        "放行(站別/資料)=release data ke stasiun berikutnya; 放行(品保/QC)=QC release(JANGAN tambah『data』)\n"
-                        "11. Only output the result. No extra explanation."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + image_base64,
-                                "detail": "high"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract and translate all text from this image to " + tgt_name + ". Keep the same layout structure."
-                        }
-                    ]
-                }
-            ]
-        r = _vision_call(msgs, max_tokens=3000,
-                         cache_key=_build_cache_key(getattr(_tl, 'group_id', ''),
-                                                    "img", tgt_lang, "ocrtrans"))
-        track_tokens(r)
-        # v3.9.30 B7 修補: vision model 也可能回 content=None
-        _content = r.choices[0].message.content if r.choices else None
-        if _content is None:
-            _finish = r.choices[0].finish_reason if r.choices else "unknown"
-            logger.warning(
-                "[OCR+translate] empty content, finish_reason=%s", _finish
-            )
-            return None, f"empty_content:{_finish}"
-        result = _content.strip()
-        if result == "NO_TEXT_FOUND" or not result:
-            return None, None
-        return result, None
-    except Exception as e:
-        logger.error("OpenAI Vision OCR+translate error: %s", e)
-        return None, str(e)
+    """Compatibility wrapper: OCR first, then use the standard text pipeline.
 
+    Image translation must never maintain a separate factory vocabulary prompt.
+    OCR extracts source text only; ``translate()`` then applies the same indexed
+    terminology, factory knowledge, TM integrity checks and quality gate used by
+    ordinary text messages.
+    """
+    extracted = ocr_image_openai(image_base64, mime_type="image/jpeg")
+    if not extracted:
+        return None, None
+    src_lang = detect_language(extracted)
+    if not src_lang:
+        return None, "language_detection_failed"
+    actual_target = tgt_lang if src_lang == "zh" else "zh"
+    previous_from_image = getattr(_tl, "from_image_ocr", False)
+    try:
+        _tl.from_image_ocr = True
+        result = translate(extracted, src_lang, actual_target)
+    except Exception as exc:
+        logger.exception("OCR standard-pipeline translation failed: %s", exc)
+        return None, str(exc)
+    finally:
+        _tl.from_image_ocr = previous_from_image
+    if not result:
+        return None, "translation_failed"
+    return result, None
 
 
 # ─── v3.12: 圖片翻譯標準管線根治 ──────────────────────────────
@@ -27112,6 +27102,8 @@ def api_admin_tbx_import():
         # 寫回 ai_provider glossary
         try:
             ai_provider.register_glossary(GLOSSARY_LOOKUP)
+            ge_module.invalidate_glossary_cache()
+            rebuild_glossary_reverse_index()
         except Exception:
             pass
         return jsonify({"ok": True, "imported": len(parsed), "added_new": added,
@@ -29346,6 +29338,7 @@ def api_admin_glossary_upload():
         # ★ v2.0: 重新註冊給 ai_provider
         try:
             ai_provider.register_glossary(GLOSSARY_LOOKUP)
+            ge_module.invalidate_glossary_cache()
         except Exception as _e:
             logger.warning("re-register_glossary 失敗: %s", _e)
         # v3.9.32: 同步重建印→中反向索引

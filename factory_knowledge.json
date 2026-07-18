@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-14.2-quality-cost-routing-context",
+  "build_id": "2026-07-18.1-shared-factory-terminology",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -514,6 +514,143 @@
             "menyebar"
           ],
           "issue": "missing_disperse_action"
+        }
+      ]
+    },
+    {
+      "id": "organization_unit_discipline_notice",
+      "enabled": true,
+      "priority": 125,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "一課／一股主管與紀律提醒",
+      "match": {
+        "strong_phrases": [
+          "一股股長",
+          "一課最近被釘很緊",
+          "什麼都會跟處長講"
+        ],
+        "all_groups": [
+          [
+            "一課",
+            "第一課",
+            "一股",
+            "第一股",
+            "股長"
+          ],
+          [
+            "處長",
+            "控制室",
+            "基本紀律",
+            "公司派",
+            "被釘很緊",
+            "盯很緊",
+            "跟處長講"
+          ]
+        ],
+        "any_terms": [
+          "休息",
+          "吹冷氣",
+          "樓上",
+          "抓到",
+          "注意一下",
+          "什麼都會講",
+          "回報"
+        ],
+        "require_all_groups": false,
+        "min_score": 8
+      },
+      "context": [
+        "「一課」是工廠組織單位 Seksi 1，不是一般的 Departemen 1。",
+        "「一股」是 Regu 1；「一股股長」是 kepala regu 1，不是人名，不得音譯成 Yigu。",
+        "「被釘很緊」是台灣職場口語，表示近期受到嚴格監督，使用 diawasi dengan ketat。",
+        "「公司派」表示立場偏向公司；「蠻公司派」宜用 cukup/cenderung berpihak kepada perusahaan，不可無故加重成 sangat。",
+        "「樓上是一股股長」是提醒樓上有第一股股長在場，不是說樓上屬於一個叫 Yigu 的人。",
+        "「什麼都會跟處長講」表示會把事情告知 kepala divisi；保留警告語氣，但不要新增懲處或法律後果。"
+      ],
+      "preferred_target_phrases": [
+        "Seksi 1",
+        "kepala regu 1",
+        "diawasi dengan ketat",
+        "ruang kontrol",
+        "disiplin dasar",
+        "cukup berpihak kepada perusahaan",
+        "kepala divisi"
+      ],
+      "forbidden_target_phrases": [
+        "Yigu",
+        "Kepala Bagian Yigu",
+        "Departemen 1",
+        "sangat berpihak kepada perusahaan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "一課",
+            "第一課"
+          ],
+          "target_any": [
+            "Seksi 1",
+            "seksi 1"
+          ],
+          "issue": "missing_section_1_unit"
+        },
+        {
+          "source_any": [
+            "一股股長",
+            "第一股股長"
+          ],
+          "target_any": [
+            "kepala regu 1"
+          ],
+          "issue": "missing_regu_1_leader"
+        },
+        {
+          "source_any": [
+            "被釘很緊",
+            "盯很緊"
+          ],
+          "target_any": [
+            "diawasi dengan ketat",
+            "pengawasan sangat ketat",
+            "diawasi sangat ketat"
+          ],
+          "issue": "missing_strict_supervision_semantics"
+        },
+        {
+          "source_any": [
+            "處長"
+          ],
+          "target_any": [
+            "kepala divisi",
+            "kepala departemen"
+          ],
+          "issue": "missing_division_head_role"
+        },
+        {
+          "source_any": [
+            "控制室"
+          ],
+          "target_any": [
+            "ruang kontrol"
+          ],
+          "issue": "missing_control_room_term"
+        },
+        {
+          "source_any": [
+            "基本紀律"
+          ],
+          "target_any": [
+            "disiplin dasar"
+          ],
+          "issue": "missing_basic_discipline_term"
+        }
+      ],
+      "examples": [
+        {
+          "source": "一課最近被釘很緊，上週還被處長抓到一堆人在控制室休息吹冷氣。\n\n樓上是一股股長，基本紀律注意一下，他蠻公司派的，什麼都會跟處長講。",
+          "target": "Akhir-akhir ini Seksi 1 diawasi dengan sangat ketat. Minggu lalu, kepala divisi bahkan memergoki banyak orang sedang beristirahat sambil menikmati AC di ruang kontrol.\n\nDi lantai atas ada kepala regu 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi."
         }
       ]
     }

@@ -33,6 +33,7 @@ from collections import defaultdict
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
 import glossary_policy as gp_module
+import factory_terminology as ft_module
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ except Exception as _e:
 
 import threading
 _lock = threading.RLock()
+_reverse_index_cache: Dict[Tuple[int, int], Dict[str, Dict[str, str]]] = {}
+
 _stats = {
     "checks": 0,
     "compliant": 0,
@@ -114,18 +117,32 @@ def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, st
       * short field/button labels with quoted UI text are rejected unless marked
         ``reverse_safe``.
     """
+    cache_key = (id(glossary), len(glossary or {}))
+    with _lock:
+        cached = _reverse_index_cache.get(cache_key)
+        if cached is not None:
+            return cached
     candidates: Dict[str, List[Tuple[str, str, Any]]] = defaultdict(list)
     for zh_term, value in (glossary or {}).items():
         row = gp_module.normalize_entry(str(zh_term), value)
         if not gp_module.is_hard(row):
             continue
         target = _extract_target_term(row)
-        norm = _normalize_reverse_term(target)
-        if not zh_term or not target or len(norm) < GE_MIN_TERM_LEN:
+        if not zh_term or not target:
             continue
-        if _reverse_metadata(row, "reverse_safe", None) is False:
+        reverse_flag = _reverse_metadata(row, "reverse_safe", None)
+        if reverse_flag is False:
             continue
-        candidates[norm].append((str(zh_term), target, row))
+        # Canonical Indonesian target is always considered. Explicitly safe rows
+        # may also provide worker slang / abbreviation aliases for reverse lookup.
+        reverse_surfaces = [target]
+        if reverse_flag is True:
+            reverse_surfaces.extend(ft_module.target_aliases(row))
+        for surface in reverse_surfaces:
+            norm = _normalize_reverse_term(surface)
+            if len(norm) < GE_MIN_TERM_LEN:
+                continue
+            candidates[norm].append((str(zh_term), str(surface), row))
 
     safe: Dict[str, Dict[str, str]] = {}
     for norm, rows in candidates.items():
@@ -143,7 +160,17 @@ def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, st
             if _looks_like_ui_label(zh_term) and len(tokens) <= 2:
                 continue
         safe[norm] = {"source_term": target, "target_term": zh_term}
+    with _lock:
+        _reverse_index_cache.clear()
+        _reverse_index_cache[cache_key] = safe
     return safe
+
+
+def invalidate_glossary_cache() -> None:
+    """Invalidate derived reverse-index and indexed terminology caches."""
+    with _lock:
+        _reverse_index_cache.clear()
+    ft_module.invalidate_cache()
 
 
 def build_unsafe_reverse_ui_targets(glossary: Dict[str, Any]) -> set[str]:
@@ -201,19 +228,19 @@ def collect_applicable_pairs(src_text: str, glossary: Dict[str, Any],
     src_text = src_text or ""
     is_zh_to_id = src_lang.lower().startswith("zh") and tgt_lang.lower().startswith("id")
     is_id_to_zh = src_lang.lower().startswith("id") and tgt_lang.lower().startswith("zh")
-    pairs: List[Tuple[str, str]] = []
-    if is_zh_to_id:
-        # Only compact canonical terms may become deterministic substring
-        # constraints.  Explanations and context-sensitive action phrases are
-        # deliberately left to the translator so Indonesian grammar can inflect
-        # naturally.
-        pairs.extend(gp_module.hard_pairs(src_text, glossary, limit=100))
-    elif is_id_to_zh:
-        norm_source = _normalize_reverse_term(src_text)
-        for norm, row in build_safe_reverse_index(glossary).items():
-            if re.search(r'(?<![a-z0-9])' + re.escape(norm) + r'(?![a-z0-9])', norm_source):
-                pairs.append((row["source_term"], row["target_term"]))
-    return pairs
+    if not (is_zh_to_id or is_id_to_zh):
+        return []
+    # One shared indexed matcher supplies text messages, OCR-derived text,
+    # prompt grounding, compliance checks and quality-gate constraints.
+    safe_reverse = build_safe_reverse_index(glossary) if is_id_to_zh else None
+    return ft_module.collect_applicable_pairs(
+        src_text,
+        glossary,
+        src_lang,
+        tgt_lang,
+        safe_reverse_index=safe_reverse,
+        limit=100,
+    )
 
 
 def check_glossary_compliance(src_text: str, tgt_text: str,
