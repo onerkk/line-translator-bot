@@ -1254,62 +1254,67 @@
     "canonical_idn": "Seksi 1",
     "translation_mode": "hard",
     "reverse_safe": true,
+    "category": "organization",
+    "priority": 130,
+    "ocr_hint": true,
+    "note_zh": "工廠正式組織單位「第一課」。",
+    "note_id": "Unit organisasi resmi pabrik: Seksi 1.",
     "aliases_zh": [
       "第一課"
     ],
     "aliases_id": [
       "seksi satu"
-    ],
-    "category": "organization",
-    "priority": 130,
-    "ocr_hint": true,
-    "note_zh": "工廠組織單位「第一課」，不是一般的第一部門，也不是人名。",
-    "note_id": "Unit organisasi pabrik: Seksi 1."
+    ]
   },
   "一股": {
-    "idn": "Regu 1",
-    "canonical_idn": "Regu 1",
+    "idn": "Bagian Cold Drawing 1",
+    "canonical_idn": "Bagian Cold Drawing 1",
     "translation_mode": "hard",
     "reverse_safe": true,
+    "category": "organization",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "本廠「一股」是「冷抽一股」的口語簡稱；依 ERP 股別表固定為 Bagian Cold Drawing 1，不是 Regu 1、Subseksi 1 或人名。",
+    "note_id": "Di pabrik ini, 一股 adalah singkatan Bagian Cold Drawing 1; bukan Regu 1, Subseksi 1, atau nama orang.",
     "aliases_zh": [
-      "第一股"
+      "第一股",
+      "冷抽一股"
     ],
     "aliases_id": [
-      "regu satu"
-    ],
-    "category": "organization",
-    "priority": 130,
-    "ocr_hint": true,
-    "note_zh": "工廠組織單位「第一股」，不可音譯成 Yigu。",
-    "note_id": "Unit organisasi pabrik: Regu 1."
+      "bagian cold drawing satu"
+    ]
   },
   "一股股長": {
-    "idn": "kepala regu 1",
-    "canonical_idn": "kepala regu 1",
+    "idn": "kepala bagian Cold Drawing 1",
+    "canonical_idn": "kepala bagian Cold Drawing 1",
     "translation_mode": "hard",
     "reverse_safe": true,
+    "category": "organization",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "本廠冷抽一股主管；「一股」是 Bagian Cold Drawing 1，不是班組 Regu 1。",
+    "note_id": "Kepala Bagian Cold Drawing 1; bukan kepala regu dan bukan nama orang.",
     "aliases_zh": [
-      "第一股股長"
+      "第一股股長",
+      "冷抽一股股長"
     ],
     "aliases_id": [
-      "kepala regu satu"
-    ],
-    "category": "organization",
-    "priority": 140,
-    "ocr_hint": true,
-    "note_zh": "第一股的股長；「一股」是組織單位，不是姓名。",
-    "note_id": "Kepala Regu 1; bukan nama orang."
+      "kepala bagian cold drawing satu"
+    ]
   },
   "股長": {
-    "idn": "kepala regu",
-    "canonical_idn": "kepala regu",
+    "idn": "kepala bagian",
+    "canonical_idn": "kepala bagian",
     "translation_mode": "hard",
-    "reverse_safe": true,
+    "reverse_safe": false,
     "category": "organization",
     "priority": 115,
     "ocr_hint": true,
-    "note_zh": "現場股級主管。",
-    "note_id": "Pimpinan tingkat regu."
+    "note_zh": "股級生產部門主管；實際股名存在時，必須連同股名翻譯，例如一股股長為 kepala bagian Cold Drawing 1。",
+    "note_id": "Pimpinan bagian produksi. Jika nama bagiannya diketahui, nama bagian wajib dipertahankan.",
+    "aliases_id": [
+      "kepala bagian"
+    ]
   },
   "課長": {
     "idn": "kepala seksi",
@@ -1327,14 +1332,14 @@
     "canonical_idn": "kepala divisi",
     "translation_mode": "hard",
     "reverse_safe": true,
-    "aliases_id": [
-      "kepala departemen"
-    ],
     "category": "organization",
     "priority": 120,
     "ocr_hint": true,
     "note_zh": "部門處級主管，不是公司董事。",
-    "note_id": "Kepala divisi/departemen, bukan direktur perusahaan."
+    "note_id": "Kepala divisi/departemen, bukan direktur perusahaan.",
+    "aliases_id": [
+      "kepala departemen"
+    ]
   },
   "控制室": {
     "idn": "ruang kontrol",
@@ -1386,5 +1391,111 @@
     "priority": 65,
     "note_zh": "口語指待在冷氣房休息或享受冷氣，不是吹風。",
     "note_id": "Beristirahat atau menikmati AC di ruangan ber-AC."
+  },
+  "二股": {
+    "idn": "Bagian Cold Drawing 2",
+    "canonical_idn": "Bagian Cold Drawing 2",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "本廠「二股」是「冷抽二股」的口語簡稱；依 ERP 股別表固定為 Bagian Cold Drawing 2。",
+    "note_id": "Di pabrik ini, 二股 adalah singkatan Bagian Cold Drawing 2.",
+    "aliases_zh": [
+      "第二股",
+      "冷抽二股"
+    ],
+    "aliases_id": [
+      "bagian cold drawing dua"
+    ]
+  },
+  "二股股長": {
+    "idn": "kepala bagian Cold Drawing 2",
+    "canonical_idn": "kepala bagian Cold Drawing 2",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "本廠冷抽二股主管。",
+    "note_id": "Kepala Bagian Cold Drawing 2.",
+    "aliases_zh": [
+      "第二股股長",
+      "冷抽二股股長"
+    ],
+    "aliases_id": [
+      "kepala bagian cold drawing dua"
+    ]
+  },
+  "削皮股": {
+    "idn": "Bagian Peeling",
+    "canonical_idn": "Bagian Peeling",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "本廠削皮股，依 ERP 股別表固定為 Bagian Peeling。",
+    "note_id": "Unit pabrik Bagian Peeling.",
+    "aliases_id": [
+      "bagian peeling"
+    ]
+  },
+  "削皮股股長": {
+    "idn": "kepala bagian Peeling",
+    "canonical_idn": "kepala bagian Peeling",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "本廠削皮股主管。",
+    "note_id": "Kepala Bagian Peeling.",
+    "aliases_id": [
+      "kepala bagian peeling"
+    ]
+  },
+  "研磨股": {
+    "idn": "Bagian Grinding",
+    "canonical_idn": "Bagian Grinding",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "本廠研磨股，依 ERP 股別表固定為 Bagian Grinding。",
+    "note_id": "Unit pabrik Bagian Grinding.",
+    "aliases_id": [
+      "bagian grinding"
+    ]
+  },
+  "研磨股股長": {
+    "idn": "kepala bagian Grinding",
+    "canonical_idn": "kepala bagian Grinding",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "本廠研磨股主管。",
+    "note_id": "Kepala Bagian Grinding.",
+    "aliases_id": [
+      "kepala bagian grinding"
+    ]
+  },
+  "班長": {
+    "idn": "kepala regu",
+    "canonical_idn": "kepala regu",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 110,
+    "ocr_hint": true,
+    "note_zh": "現場班組／輪班主管。Regu 僅用於班或工作小組，不用於本廠「股」。",
+    "note_id": "Pimpinan regu/shift. Istilah regu tidak dipakai untuk unit 股 di pabrik ini.",
+    "aliases_id": [
+      "ketua shift"
+    ]
   }
 }

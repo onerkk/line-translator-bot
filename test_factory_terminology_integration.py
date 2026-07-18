@@ -24,7 +24,7 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
             "id",
         )
         self.assertIn(("一課", "Seksi 1"), pairs)
-        self.assertIn(("一股股長", "kepala regu 1"), pairs)
+        self.assertIn(("一股股長", "kepala bagian Cold Drawing 1"), pairs)
         self.assertFalse(any("Yigu" in target for _, target in pairs))
 
     def test_alias_and_longest_match_use_one_index(self):
@@ -35,9 +35,9 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
             "id",
         )
         self.assertIn(("第一課", "Seksi 1"), pairs)
-        self.assertIn(("第一股股長", "kepala regu 1"), pairs)
+        self.assertIn(("第一股股長", "kepala bagian Cold Drawing 1"), pairs)
         # The longer leader term must suppress a conflicting nested 一股 match.
-        self.assertNotIn(("第一股", "Regu 1"), pairs)
+        self.assertNotIn(("第一股", "Bagian Cold Drawing 1"), pairs)
 
     def test_prompt_explains_factory_unit_logic(self):
         prompt = factory_terminology.build_translation_prompt(
@@ -46,9 +46,9 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
             "zh",
             "id",
         )
-        self.assertIn("一股 is Regu 1, not Yigu", prompt)
+        self.assertIn("一股 is Bagian Cold Drawing 1", prompt)
         self.assertIn("一課 => Seksi 1", prompt)
-        self.assertIn("一股股長 => kepala regu 1", prompt)
+        self.assertIn("一股股長 => kepala bagian Cold Drawing 1", prompt)
         self.assertIn("被釘很緊", prompt)
 
     def test_ocr_spacing_normalization_is_lossless(self):
@@ -63,13 +63,64 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
         hint = factory_terminology.build_ocr_hint(self.glossary, max_items=200)
         self.assertIn("一股股長", hint)
         self.assertIn("CYA矯直切斷機", hint)
-        self.assertNotIn("kepala regu 1", hint)
+        self.assertNotIn("kepala bagian Cold Drawing 1", hint)
         self.assertIn("不可翻譯", hint)
 
     def test_reverse_alias_is_only_enabled_on_explicitly_safe_rows(self):
         index = glossary_enforcement.build_safe_reverse_index(self.glossary)
-        self.assertEqual(index["kepala regu satu"]["target_term"], "一股股長")
+        self.assertEqual(index["kepala bagian cold drawing satu"]["target_term"], "一股股長")
         self.assertEqual(index["seksi satu"]["target_term"], "一課")
+
+    def test_plant_section_mapping_uses_erp_semantics_not_generic_hierarchy(self):
+        pairs = factory_terminology.collect_applicable_pairs(
+            "一股在樓上，二股在另一區，研磨股班長正在巡查。",
+            self.glossary,
+            "zh",
+            "id",
+        )
+        self.assertIn(("一股", "Bagian Cold Drawing 1"), pairs)
+        self.assertIn(("二股", "Bagian Cold Drawing 2"), pairs)
+        self.assertIn(("研磨股", "Bagian Grinding"), pairs)
+        self.assertIn(("班長", "kepala regu"), pairs)
+        rendered = " ".join(target for _, target in pairs).casefold()
+        self.assertNotIn("regu 1", rendered)
+        self.assertNotIn("subseksi 1", rendered)
+
+    def test_unknown_numbered_gu_unit_is_not_invented(self):
+        pairs = factory_terminology.collect_applicable_pairs(
+            "三股的人先不要移動。",
+            self.glossary,
+            "zh",
+            "id",
+        )
+        self.assertFalse(any(source == "三股" for source, _ in pairs))
+        self.assertFalse(any(target.casefold() in {"regu 3", "subseksi 3", "bagian 3"} for _, target in pairs))
+
+    def test_gu_head_and_shift_head_are_different_levels(self):
+        pairs = factory_terminology.collect_applicable_pairs(
+            "股長跟班長都在現場。",
+            self.glossary,
+            "zh",
+            "id",
+        )
+        self.assertIn(("股長", "kepala bagian"), pairs)
+        self.assertIn(("班長", "kepala regu"), pairs)
+
+    def test_old_regu_and_subseksi_outputs_are_rejected_for_first_gu_head(self):
+        source = "一課最近被釘很緊，樓上是一股股長，他蠻公司派的。"
+        cards = factory_knowledge.retrieve(source, "zh", "id", limit=3)
+        for wrong_role in ("kepala regu 1", "kepala subseksi 1"):
+            candidate = (
+                "Akhir-akhir ini Seksi 1 diawasi dengan ketat. "
+                f"Di lantai atas ada {wrong_role}. "
+                "Dia cukup berpihak kepada perusahaan."
+            )
+            ok, issues = factory_knowledge.validate_translation(cards, source, candidate)
+            self.assertFalse(ok, (wrong_role, issues))
+            self.assertTrue(
+                any("missing_cold_drawing_1_head_role" in issue or "forbidden:" in issue for issue in issues),
+                (wrong_role, issues),
+            )
 
     def test_large_same_prefix_glossary_uses_trie_index(self):
         synthetic = {
@@ -108,7 +159,7 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
 
         good = (
             "Akhir-akhir ini Seksi 1 diawasi dengan ketat. "
-            "Di lantai atas ada kepala regu 1. Dia cukup berpihak kepada perusahaan."
+            "Di lantai atas ada kepala bagian Cold Drawing 1. Dia cukup berpihak kepada perusahaan."
         )
         ok2, issues2 = factory_knowledge.validate_translation(cards, "一課最近被釘很緊，樓上是一股股長，他蠻公司派的。", good)
         self.assertTrue(ok2, issues2)

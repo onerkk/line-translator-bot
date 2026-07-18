@@ -4,7 +4,7 @@ The glossary may contain hundreds or thousands of plant terms, abbreviations,
 equipment names and organizational-unit labels.  Sending the entire glossary to
 an LLM is slow and reduces translation quality.  This module builds a reusable
 longest-match index, retrieves only source-grounded terms, and adds deterministic
-organization-unit semantics such as ``一課`` and ``一股股長``.
+organization-unit semantics such as ``一課`` and plant-specific 股別 aliases.
 
 The module does not translate complete sentences and does not contain sentence-
 specific patches.  It supplies terminology constraints and OCR recognition hints
@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-07-18.2-trie-shared-text-ocr"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-07-19.1-plant-org-hierarchy"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -112,12 +112,19 @@ def _overlaps(start: int, end: int, spans: Sequence[Tuple[int, int]]) -> bool:
     return any(start < old_end and end > old_start for old_start, old_end in spans)
 
 
-def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> List[FactoryTermMatch]:
-    """Resolve numbered factory organizational units without romanizing them.
+def collect_organization_matches(
+    text: str,
+    src_lang: str,
+    tgt_lang: str,
+    glossary: Mapping[str, Any] | None = None,
+) -> List[FactoryTermMatch]:
+    """Resolve factory organization units without inventing hierarchy labels.
 
-    Chinese labels such as ``一課`` and ``一股股長`` are structural unit names,
-    not personal names.  The number is converted to an Arabic numeral and the
-    organization level is translated consistently.
+    ``課`` is a stable section level and can be parsed numerically as ``Seksi``.
+    ``股`` is plant-specific: in this project it identifies named production
+    sections such as ``Bagian Cold Drawing 1`` and must come from the glossary
+    or ERP-derived aliases.  It must never be inferred as ``Regu`` or
+    ``Subseksi`` solely from a numeral.  ``Regu`` is reserved for 班/工作小組.
     """
     source = _normalize_text(text)
     src = (src_lang or "").lower()
@@ -126,11 +133,21 @@ def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> Lis
     occupied: List[Tuple[int, int]] = []
 
     if src.startswith("zh") and tgt.startswith("id"):
+        # Plant-specific organization names have precedence over generic role
+        # parsing.  This lets ERP/glossary data define 一股=Bagian Cold Drawing 1
+        # and prevents a generic number+股 rule from overriding the real unit.
+        if glossary:
+            for item in get_engine(glossary).match_zh(source, limit=80):
+                if item.category != "organization":
+                    continue
+                if _overlaps(item.start, item.end, occupied):
+                    continue
+                matches.append(item)
+                occupied.append((item.start, item.end))
+
         patterns: Sequence[Tuple[re.Pattern[str], str]] = (
-            (re.compile(r"第?(?P<num>[零〇一二兩三四五六七八九十0-9]{1,4})股股長"), "kepala regu {n}"),
             (re.compile(r"第?(?P<num>[零〇一二兩三四五六七八九十0-9]{1,4})課課長"), "kepala seksi {n}"),
             (re.compile(r"第?(?P<num>[零〇一二兩三四五六七八九十0-9]{1,4})課"), "Seksi {n}"),
-            (re.compile(r"第?(?P<num>[零〇一二兩三四五六七八九十0-9]{1,4})股"), "Regu {n}"),
         )
         for pattern, target_template in patterns:
             for found in pattern.finditer(source):
@@ -155,8 +172,8 @@ def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> Lis
         standalone = (
             ("處長", "kepala divisi", 120),
             ("課長", "kepala seksi", 115),
-            ("股長", "kepala regu", 115),
-            ("班長", "kepala regu", 105),
+            ("股長", "kepala bagian", 115),
+            ("班長", "kepala regu", 110),
         )
         for source_term, target_term, priority in standalone:
             for found in re.finditer(re.escape(source_term), source):
@@ -176,11 +193,11 @@ def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> Lis
 
     elif src.startswith("id") and tgt.startswith("zh"):
         normalized = _normalize_id(source)
+        # Only the stable Seksi hierarchy is parsed generically.  Plant-specific
+        # Bagian names are reversed through explicitly safe glossary aliases.
         reverse_patterns: Sequence[Tuple[re.Pattern[str], str]] = (
-            (re.compile(r"\bkepala\s+regu\s+(?P<num>\d{1,3})\b", re.I), "{n}股股長"),
             (re.compile(r"\bkepala\s+seksi\s+(?P<num>\d{1,3})\b", re.I), "{n}課課長"),
             (re.compile(r"\bseksi\s+(?P<num>\d{1,3})\b", re.I), "{n}課"),
-            (re.compile(r"\bregu\s+(?P<num>\d{1,3})\b", re.I), "{n}股"),
         )
         for pattern, target_template in reverse_patterns:
             for found in pattern.finditer(normalized):
@@ -200,8 +217,6 @@ def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> Lis
                 occupied.append((found.start(), found.end()))
 
     ordered = sorted(matches, key=lambda item: (item.start, -(item.end - item.start), -item.priority))
-    # Repeated mentions need one terminology constraint, not repeated prompt rows.
-    # Preserve the first occurrence for source grounding and compactness.
     deduped: List[FactoryTermMatch] = []
     seen_mapping = set()
     for match in ordered:
@@ -211,7 +226,6 @@ def collect_organization_matches(text: str, src_lang: str, tgt_lang: str) -> Lis
         seen_mapping.add(key)
         deduped.append(match)
     return deduped
-
 
 class FactoryTerminologyEngine:
     """Immutable longest-match index for one normalized glossary snapshot.
@@ -396,7 +410,7 @@ def collect_applicable_pairs(
     pairs: List[Tuple[str, str]] = []
 
     if src.startswith("zh") and tgt.startswith("id"):
-        for match in collect_organization_matches(src_text, src, tgt):
+        for match in collect_organization_matches(src_text, src, tgt, glossary):
             if match.mode == "hard":
                 pairs.append((match.matched_text, match.target_term))
         for match in get_engine(glossary).match_zh(src_text, limit=limit):
@@ -404,7 +418,7 @@ def collect_applicable_pairs(
                 pairs.append((match.matched_text, match.target_term))
 
     elif src.startswith("id") and tgt.startswith("zh"):
-        for match in collect_organization_matches(src_text, src, tgt):
+        for match in collect_organization_matches(src_text, src, tgt, glossary):
             if match.mode == "hard":
                 pairs.append((match.matched_text, match.target_term))
         normalized = _normalize_id(src_text)
@@ -437,12 +451,13 @@ def build_translation_prompt(
     tgt = (tgt_lang or "").lower()
     lines: List[str] = []
 
-    org_matches = collect_organization_matches(src_text, src, tgt)
+    org_matches = collect_organization_matches(src_text, src, tgt, glossary)
     if org_matches:
         lines.append("<factory_organization_terms>")
         lines.append(
             "These are factory organization levels, not person names. Never romanize Chinese unit labels. "
-            "For example, 一股 is Regu 1, not Yigu; 一課 is Seksi 1, not Departemen 1."
+            "股 units are plant-defined production sections: use the exact glossary/ERP mapping and never infer Regu or Subseksi from a numeral. "
+            "In this plant 一股 is Bagian Cold Drawing 1; 一課 is Seksi 1."
         )
         for match in org_matches[:max_items]:
             lines.append(f"[HARD] {match.matched_text} => {match.target_term}")

@@ -360,7 +360,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-18.1-shared-factory-terminology"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-19.1-plant-org-hierarchy"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -1284,7 +1284,7 @@ TONE_PRESETS = {
         "- 「站別」固定理解為 stasiun"
         "- 「料」「料件」「來料」固定指不銹鋼原料/半成品/成品(棒材、盤元、線材、管件)，絕對不是飼料(pakan)、食物、資料或料理。"
         "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在「吊料/上料/下料/入料/出料/置料/退料/送料」中一律是鋼材，相應動作為 angkat / naikkan / turunkan / masukkan / keluarkan material。"
-        "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班(早班/夜班/中班 = shift)，不是班級。"
+        "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。**股別翻譯以 ERP 對照為最高優先**：本廠「一股」= Bagian Cold Drawing 1、「二股」= Bagian Cold Drawing 2；不得自行泛化成 Regu/Subseksi。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班或工作班組(早班/夜班/中班 = shift；班長 = kepala regu/ketua shift)，不是班級。"
         "- 製程工序詞(研磨、削皮、拋光、倒角、酸洗、切斷、噴砂、口付 等)【雙義】:既是站別/部門(位置),也是對料做的工序(動作),**必須依上下文判斷,不可一律當位置直譯**——「送去研磨/研磨那邊/放研磨」=位置(stasiun grinding),「要研磨/研磨好了/研磨中/重研磨」=動作(digerinda / proses grinding)。翻譯前先想清楚:這句是在講『料在哪、送去哪』(位置),還是『對料做什麼』(動作),再決定譯法。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
         "【輸出規則】"
@@ -5995,7 +5995,7 @@ def inject_glossary_hint(text, src, tgt):
         # v3.40: one indexed terminology engine is shared by text messages,
         # OCR-derived text, prompt grounding, glossary enforcement and the
         # quality gate.  It retrieves only terms actually present in the source
-        # and resolves numbered organization units such as 一課 / 一股股長.
+        # and resolves organization units such as 一課 while preserving plant-specific 股別 mappings from the ERP/glossary.
         _indexed_prompt = factory_terminology_module.build_translation_prompt(
             text,
             GLOSSARY_LOOKUP,
@@ -8044,7 +8044,7 @@ def build_translation_semantic_contract(text, src, tgt):
         # verifies and loads the shared terminology engine above.
         _ft_module = globals().get("factory_terminology_module")
         _org_matches = (
-            _ft_module.collect_organization_matches(text, src, tgt)
+            _ft_module.collect_organization_matches(text, src, tgt, globals().get("GLOSSARY_LOOKUP") or {})
             if _ft_module is not None else []
         )
         if _org_matches:
@@ -8155,7 +8155,7 @@ def build_translation_semantic_contract_prompt(contract):
                 lines.append(knowledge_prompt)
         elif risk.get("sense") == "factory_organization_terms":
             lines.append("<risk term='factory_organization_unit' sense='factory_organization_terms'>")
-            lines.append("These are factory organization levels, not names. Never romanize 一股 as Yigu or generalize 一課 as Departemen 1.")
+            lines.append("These are factory organization levels, not names. Use the plant ERP/glossary mapping for 股 units. In this plant 一股 means Bagian Cold Drawing 1; never translate it as Yigu, Regu 1, or Subseksi 1. 一課 means Seksi 1.")
             for source_term, target_term in risk.get("pairs", []):
                 lines.append(f"Use exactly: {source_term} => {target_term}.")
             lines.append("</risk>")
@@ -8845,7 +8845,7 @@ GLOSSARY_LOOKUP = gp_module.normalize_glossary(GLOSSARY_LOOKUP)
 ge_module.invalidate_glossary_cache()
 _FACTORY_TERMINOLOGY_HEALTH = factory_terminology_module.get_engine(GLOSSARY_LOOKUP).health()
 if (_FACTORY_TERMINOLOGY_HEALTH.get("api_version") != 1
-        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-07-18.2-trie-shared-text-ocr"
+        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-07-19.1-plant-org-hierarchy"
         or _FACTORY_TERMINOLOGY_HEALTH.get("glossary_entries", 0) < 1):
     raise RuntimeError("factory terminology deployment mismatch: " + repr(_FACTORY_TERMINOLOGY_HEALTH))
 logger.info("[FactoryTerminology] verified %s", _FACTORY_TERMINOLOGY_HEALTH)
@@ -8853,7 +8853,7 @@ _FACTORY_TERMINOLOGY_SELFTEST_PAIRS = factory_terminology_module.collect_applica
     "一課最近被釘很緊，樓上是一股股長。", GLOSSARY_LOOKUP, "zh", "id"
 )
 if (("一課", "Seksi 1") not in _FACTORY_TERMINOLOGY_SELFTEST_PAIRS
-        or ("一股股長", "kepala regu 1") not in _FACTORY_TERMINOLOGY_SELFTEST_PAIRS):
+        or ("一股股長", "kepala bagian Cold Drawing 1") not in _FACTORY_TERMINOLOGY_SELFTEST_PAIRS):
     raise RuntimeError(
         "factory terminology behavioral self-test failed: "
         + repr(_FACTORY_TERMINOLOGY_SELFTEST_PAIRS)

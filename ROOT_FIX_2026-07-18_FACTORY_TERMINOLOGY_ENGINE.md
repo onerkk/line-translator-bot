@@ -18,7 +18,7 @@
 
 - 文字、圖片直譯、OCR、術語提示、反向詞庫與品質檢查的入口不完全一致。
 - 部分路徑每次翻譯都排序或掃描整本詞庫；詞條變多後會浪費時間與 token。
-- 「一課」「一股股長」這類台灣工廠組織簡稱，可能被一般模型誤判為一般部門或人名，產生 `Departemen 1`、`Yigu` 等錯譯。
+- 「一課」「一股股長」這類台灣工廠組織簡稱，可能被一般模型誤判為一般部門、人名或班組，產生 `Departemen 1`、`Yigu`、`Regu 1`、`Subseksi 1` 等錯譯。
 
 ## 新架構
 
@@ -51,10 +51,11 @@ LINE 圖片 -> Vision OCR 原文 -> 安全正規化 ┘
 | 中文 | 印尼文 | 規則 |
 |---|---|---|
 | 一課／第一課 | `Seksi 1` | 不泛化成 `Departemen 1` |
-| 一股／第一股 | `Regu 1` | 不音譯成 `Yigu` |
-| 一股股長／第一股股長 | `kepala regu 1` | 單位名稱，不是姓名 |
+| 一股／第一股／冷抽一股 | `Bagian Cold Drawing 1` | 依 ERP 股別表；不可譯成 `Regu 1`、`Subseksi 1` 或 `Yigu` |
+| 一股股長／第一股股長／冷抽一股股長 | `kepala bagian Cold Drawing 1` | 冷抽一股主管，不是班長或姓名 |
 | 課長 | `kepala seksi` | 工廠課級主管 |
-| 股長／班長 | `kepala regu` | 現場組級主管 |
+| 股長 | `kepala bagian` | 股級生產部門主管 |
+| 班長 | `kepala regu` | 班／工作小組主管；不可與股長混用 |
 | 處長 | `kepala divisi` | 處級主管 |
 
 數字型單位由語法動態處理，不必為每一個數字逐句加補丁。
@@ -66,16 +67,16 @@ LINE 圖片 -> Vision OCR 原文 -> 安全正規化 ┘
 ```json
 {
   "一股股長": {
-    "canonical_idn": "kepala regu 1",
+    "canonical_idn": "kepala bagian Cold Drawing 1",
     "translation_mode": "hard",
     "reverse_safe": true,
     "aliases_zh": ["第一股股長"],
-    "aliases_id": ["kepala regu satu"],
+    "aliases_id": ["kepala bagian cold drawing satu"],
     "category": "organization",
     "priority": 140,
     "ocr_hint": true,
     "note_zh": "第一股的股長；一股不是姓名。",
-    "note_id": "Kepala Regu 1; bukan nama orang."
+    "note_id": "Kepala Bagian Cold Drawing 1; bukan kepala regu dan bukan nama orang."
   }
 }
 ```
@@ -102,7 +103,7 @@ LINE 圖片 -> Vision OCR 原文 -> 安全正規化 ┘
 
 > Akhir-akhir ini Seksi 1 sedang diawasi dengan ketat. Minggu lalu, kepala divisi memergoki banyak orang sedang beristirahat sambil menikmati AC di ruang kontrol.
 >
-> Di lantai atas ada kepala regu 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi.
+> Di lantai atas ada kepala bagian Cold Drawing 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi.
 
 品質規則會拒絕：
 
