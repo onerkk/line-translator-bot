@@ -1,8 +1,264 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-20.2-output-warehouse-washing-semantics",
+  "build_id": "2026-07-20.3-pmi-grade-verification-semantics",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
+    {
+      "id": "pmi_grade_verification_bundle_packaging",
+      "enabled": true,
+      "priority": 190,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "每把材料的 PMI 鋼種檢驗與包裝責任",
+      "match": {
+        "strong_phrases": [
+          "打鋼種",
+          "驗鋼種",
+          "檢驗鋼種",
+          "打材質",
+          "驗材質",
+          "檢驗材質",
+          "做PMI",
+          "做 PMI",
+          "打PMI",
+          "打 PMI",
+          "PMI檢驗",
+          "PMI檢查",
+          "PMI檢測"
+        ],
+        "any_terms": [
+          "每一把",
+          "每把",
+          "各把",
+          "每一捆",
+          "每捆",
+          "出貨這把",
+          "這把出貨",
+          "包裝",
+          "出貨",
+          "A班",
+          "B班",
+          "C班",
+          "異型站",
+          "異型包裝站",
+          "嫌麻煩",
+          "覺得麻煩",
+          "沒檢驗",
+          "未檢驗",
+          "沒有檢驗"
+        ],
+        "regex_any": [
+          "(?:每一?把|各把|每一?捆).{0,12}(?:打|驗|檢驗|確認)(?:鋼種|材質)",
+          "(?:沒|未|沒有)(?:做|進行|檢驗|檢查|測試)?\\s*PMI.{0,12}(?:包|包裝)"
+        ],
+        "require_any": true,
+        "min_score": 8
+      },
+      "context": [
+        "本廠現場用語『打鋼種／打材質』是用 PMI 分光儀檢驗、確認材料鋼種（material grade），不是在材料上打印、刻印、噴印或貼鋼種標示。",
+        "『每一把／每把／各把』中的『把』是棒材捆數，印尼文使用 setiap bundel；不可把『把』當成中文處置介詞或省略掉逐捆要求。",
+        "『每一把都一定要』是強制品質要求，譯文必須保留 wajib／harus 等同等強度，不可弱化成建議或偶爾抽驗。",
+        "『沒檢驗 PMI 就包了』表示包裝前未執行 PMI 檢驗便直接包裝，必須保留先後關係、缺失行為與包裝責任。",
+        "『嫌麻煩』是未執行檢驗的原因，可用 merasa pemeriksaan tersebut merepotkan／karena merasa repot；不可改成設備故障、沒時間或不知道規定。",
+        "『出貨這把』是已出貨的這一捆材料，使用 bundel yang sudah dikirim；不是一般出貨批次，也不可漏掉這一捆的指涉。",
+        "A班／B班／C班固定用 shift A／shift B／shift C。異型站在明確站別語境中沿用正式站名 Stasiun packing barang bentuk khusus。"
+      ],
+      "preferred_target_phrases": [
+        "grade baja setiap bundel wajib diperiksa dengan PMI",
+        "setiap bundel wajib diperiksa grade bajanya dengan PMI",
+        "pemeriksaan PMI",
+        "bundel yang sudah dikirim",
+        "dikemas tanpa pemeriksaan PMI",
+        "shift A",
+        "Stasiun packing barang bentuk khusus",
+        "karena merasa pemeriksaan tersebut merepotkan"
+      ],
+      "forbidden_target_phrases": [
+        "diberi tanda grade baja",
+        "memberi tanda grade baja",
+        "menandai grade baja",
+        "mencetak grade baja",
+        "mencetak jenis baja",
+        "memberi label grade baja",
+        "diberi label grade baja",
+        "menulis grade baja",
+        "mengukir grade baja",
+        "ditandai grade baja",
+        "diberi tanda jenis baja",
+        "menandai jenis baja",
+        "memberi label jenis baja",
+        "diberi label jenis baja",
+        "ditulis grade baja"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "打鋼種",
+            "驗鋼種",
+            "檢驗鋼種",
+            "打材質",
+            "驗材質",
+            "檢驗材質",
+            "做PMI",
+            "做 PMI",
+            "打PMI",
+            "打 PMI",
+            "PMI檢驗",
+            "PMI檢查",
+            "PMI檢測"
+          ],
+          "target_any": [
+            "PMI"
+          ],
+          "issue": "missing_pmi_grade_verification_method"
+        },
+        {
+          "source_any": [
+            "打鋼種",
+            "驗鋼種",
+            "檢驗鋼種",
+            "打材質",
+            "驗材質",
+            "檢驗材質"
+          ],
+          "target_any": [
+            "grade baja",
+            "grade material",
+            "material grade"
+          ],
+          "issue": "missing_material_grade_semantics"
+        },
+        {
+          "source_any": [
+            "每一把",
+            "每把",
+            "各把",
+            "每一捆",
+            "每捆"
+          ],
+          "target_any": [
+            "setiap bundel",
+            "semua bundel",
+            "tiap bundel"
+          ],
+          "issue": "missing_every_bundle_scope"
+        },
+        {
+          "source_any": [
+            "一定要",
+            "務必",
+            "必須",
+            "不得不驗",
+            "都要"
+          ],
+          "target_any": [
+            "wajib",
+            "harus"
+          ],
+          "issue": "missing_mandatory_strength"
+        },
+        {
+          "source_any": [
+            "沒檢驗PMI就包了",
+            "沒檢驗 PMI 就包了",
+            "未檢驗PMI就包",
+            "未檢驗 PMI 就包",
+            "沒有檢驗PMI就包",
+            "沒有檢驗 PMI 就包",
+            "沒做PMI就包",
+            "沒做 PMI 就包"
+          ],
+          "target_any": [
+            "tanpa pemeriksaan PMI",
+            "tanpa melakukan pemeriksaan PMI",
+            "tidak melakukan pemeriksaan PMI",
+            "tidak diperiksa dengan PMI",
+            "belum diperiksa dengan PMI"
+          ],
+          "issue": "missing_packaged_without_pmi_semantics"
+        },
+        {
+          "source_any": [
+            "嫌麻煩",
+            "覺得麻煩",
+            "認為麻煩"
+          ],
+          "target_any": [
+            "merepotkan",
+            "merasa repot",
+            "dianggap repot"
+          ],
+          "issue": "missing_inconvenience_cause"
+        },
+        {
+          "source_any": [
+            "出貨這把",
+            "這把出貨",
+            "出貨的這把",
+            "這把已出貨"
+          ],
+          "target_any": [
+            "bundel yang sudah dikirim",
+            "bundel yang dikirim",
+            "bundel ini sudah dikirim"
+          ],
+          "issue": "missing_shipped_bundle_reference"
+        },
+        {
+          "source_any": [
+            "A班"
+          ],
+          "target_any": [
+            "shift A"
+          ],
+          "issue": "missing_shift_a_actor"
+        },
+        {
+          "source_any": [
+            "B班"
+          ],
+          "target_any": [
+            "shift B"
+          ],
+          "issue": "missing_shift_b_actor"
+        },
+        {
+          "source_any": [
+            "C班"
+          ],
+          "target_any": [
+            "shift C"
+          ],
+          "issue": "missing_shift_c_actor"
+        },
+        {
+          "source_any": [
+            "異型站",
+            "異型那站",
+            "異型那邊",
+            "異型包裝站"
+          ],
+          "target_any": [
+            "Stasiun packing barang bentuk khusus"
+          ],
+          "issue": "missing_special_shape_packaging_station"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?<![A-Za-z0-9])PMI(?![A-Za-z0-9])"
+      ],
+      "examples": [
+        {
+          "source": "再宣導一下，每一把都一定要打鋼種，出貨這把是A班異型站包裝時嫌麻煩沒檢驗PMI就包了",
+          "target": "Saya ingatkan sekali lagi, grade baja setiap bundel wajib diperiksa dengan PMI. Bundel yang sudah dikirim ini dikemas oleh shift A di Stasiun packing barang bentuk khusus tanpa pemeriksaan PMI karena mereka merasa pemeriksaan tersebut merepotkan."
+        },
+        {
+          "source": "每把包裝前都要驗鋼種，沒有做 PMI 不可以包裝。",
+          "target": "Grade baja setiap bundel harus diperiksa dengan PMI sebelum dikemas. Bundel yang belum diperiksa dengan PMI tidak boleh dikemas."
+        }
+      ]
+    },
     {
       "id": "erp_station_record_transfer_timing",
       "enabled": true,

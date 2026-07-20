@@ -1738,5 +1738,101 @@
       "batang profil S dan H",
       "batang bentuk khusus S dan H"
     ]
+  },
+  "打鋼種": {
+    "idn": "pemeriksaan grade baja dengan PMI",
+    "canonical_idn": "pemeriksaan grade baja dengan PMI",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "quality_inspection_action",
+    "priority": 190,
+    "ocr_hint": true,
+    "note_zh": "本廠現場動詞，指用 PMI 分光儀檢驗／確認材料鋼種，不是打印、標示、刻印或貼標籤。句中應依語法使用 diperiksa/memeriksa grade baja dengan PMI。",
+    "note_id": "Istilah kerja pabrik: memeriksa grade material dengan PMI, bukan memberi tanda, mencetak, mengukir, atau memasang label grade baja.",
+    "aliases_zh": [
+      "驗鋼種",
+      "檢驗鋼種",
+      "打材質",
+      "驗材質",
+      "檢驗材質",
+      "做PMI",
+      "做 PMI",
+      "打PMI",
+      "打 PMI"
+    ],
+    "aliases_id": [
+      "pemeriksaan grade baja dengan PMI",
+      "memeriksa grade baja dengan PMI",
+      "diperiksa grade bajanya dengan PMI"
+    ],
+    "forbidden_idn": [
+      "memberi tanda grade baja",
+      "menandai grade baja",
+      "mencetak grade baja",
+      "memberi label grade baja",
+      "ditandai grade baja",
+      "menandai jenis baja",
+      "diberi tanda jenis baja"
+    ]
+  },
+  "鋼種": {
+    "idn": "grade baja",
+    "canonical_idn": "grade baja",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "quality",
+    "priority": 150,
+    "ocr_hint": true,
+    "note_zh": "材料的鋼種／牌號，工廠品質語境固定用 grade baja。",
+    "note_id": "Grade atau kelas material baja dalam konteks mutu pabrik.",
+    "aliases_zh": [
+      "材料鋼種"
+    ],
+    "aliases_id": [
+      "grade material baja",
+      "material grade"
+    ]
+  },
+  "PMI檢驗": {
+    "idn": "pemeriksaan PMI",
+    "canonical_idn": "pemeriksaan PMI",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "quality_inspection_action",
+    "priority": 175,
+    "ocr_hint": true,
+    "note_zh": "使用 PMI 分光儀確認棒材鋼種／材質的檢驗。",
+    "note_id": "Pemeriksaan PMI untuk memastikan grade atau komposisi material.",
+    "aliases_zh": [
+      "PMI檢查",
+      "PMI檢測",
+      "做PMI檢驗",
+      "做 PMI 檢驗"
+    ],
+    "aliases_id": [
+      "pemeriksaan PMI",
+      "diperiksa dengan PMI"
+    ]
+  },
+  "每一把": {
+    "idn": "setiap bundel",
+    "canonical_idn": "setiap bundel",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "material_quantity",
+    "priority": 165,
+    "ocr_hint": false,
+    "note_zh": "棒材包裝／出貨語境中的逐捆要求；把是棒材捆數。",
+    "note_id": "Setiap bundel material batang; menunjukkan kewajiban berlaku satu per satu pada semua bundel.",
+    "aliases_zh": [
+      "每把",
+      "各把",
+      "每一捆",
+      "每捆"
+    ],
+    "aliases_id": [
+      "tiap bundel",
+      "semua bundel satu per satu"
+    ]
   }
 }
