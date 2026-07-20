@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 15
-QUALITY_GATE_BUILD_ID = "2026-07-20.1-provider-result-never-dropped"
+QUALITY_GATE_API_VERSION = 16
+QUALITY_GATE_BUILD_ID = "2026-07-20.2-implicit-production-units"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -84,6 +84,46 @@ _LATIN_TOKEN_RE = re.compile(
     r'(?![A-Za-zÀ-ÖØ-öø-ÿ])'
 )
 _DASHES = "-–—−"
+
+# Chinese factory notices routinely state a production unit once and omit it
+# from the following target/average/forecast figures.  Indonesian cannot safely
+# rely on the same ellipsis: ``入庫目標3750 ... 147噸 ... 130～135入庫量 ...
+# 入到3600`` must keep ``ton`` on every production quantity.  The rules below
+# are deliberately domain- and cue-based so material grades such as ``422`` are
+# never reinterpreted as 422 tons.
+_ZH_MASS_UNIT_TO_ID = {
+    "公噸": "ton",
+    "噸": "ton",
+    "吨": "ton",
+    "公斤": "kg",
+    "千克": "kg",
+}
+_ZH_EXPLICIT_MASS_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<value>\d+(?:[.,]\d+)?)\s*(?P<unit>公噸|噸|吨|公斤|千克|kg)(?![A-Za-z])",
+    re.I,
+)
+_ZH_QUANTITY_VALUE_PATTERN = (
+    r"\d+(?:[.,]\d+)?(?:\s*(?:[～~\-–—至])\s*\d+(?:[.,]\d+)?)?"
+)
+_ZH_QUANTITY_CUE_BEFORE_RE = re.compile(
+    r"(?P<cue>"
+    r"(?:入庫|進倉|產出|出料|生產|包裝|出貨|庫存|處理|完成)?目標|"
+    r"平均(?:每天|每日|一天|每班|每月)?(?:需|要|達|維持|做到|入到|產到|出到)?|"
+    r"維持(?:每天|每日|一天|每班|每月)?|"
+    r"(?:每天|每日|一天|每班|每月)(?:需|要|達|維持)?|"
+    r"(?:能|可|預估|估計|預計)?(?:入庫|入到|進倉|做到|產到|出到|達到|完成到|累計到)"
+    r")\s*(?P<value>" + _ZH_QUANTITY_VALUE_PATTERN + r")",
+    re.I,
+)
+_ZH_QUANTITY_CUE_AFTER_RE = re.compile(
+    r"(?P<value>" + _ZH_QUANTITY_VALUE_PATTERN + r")\s*"
+    r"(?P<cue>入庫量|進倉量|產出量|出料量|產量|庫存量|處理量|完成量|實績)",
+    re.I,
+)
+_ZH_QUANTITATIVE_PREFIX_RE = re.compile(
+    r"(?:平均|維持|每天|每日|一天|每班|每月|約|大約|至少|至多|低於|高於|超過|不到|達到|目標|預估|估計|預計|能|可)\s*$",
+    re.I,
+)
 
 # A translated Chinese notice may intentionally retain a source-side English
 # process label as a bilingual heading, e.g. ``粗磨（ROUGH GRINDING）``.  This is
@@ -962,6 +1002,167 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
     return (text or "").count(atom)
 
 
+def _canonical_quantity_value(value: str) -> str:
+    value = re.sub(r"\s+", "", str(value or ""))
+    value = re.sub(r"[～~–—至]", "-", value)
+    return value
+
+
+def infer_implicit_quantity_units(
+    source: str,
+    src_lang: str,
+    tgt_lang: str,
+) -> List[Dict[str, str]]:
+    """Infer repeated mass units omitted in Chinese production metrics.
+
+    This is discourse-level unit inheritance, not a sentence replacement.  A
+    candidate number is eligible only when it is attached to a quantitative
+    production cue (target, daily average, warehouse intake, output, inventory,
+    etc.).  A bare material/grade code such as ``422待洗庫存`` has no such cue
+    and is intentionally ignored.
+    """
+    if not str(src_lang or "").lower().startswith("zh"):
+        return []
+    if not str(tgt_lang or "").lower().startswith("id"):
+        return []
+    text = str(source or "")
+    explicit = list(_ZH_EXPLICIT_MASS_RE.finditer(text))
+    if not explicit:
+        return []
+
+    explicit_number_spans = [(m.start("value"), m.end("unit")) for m in explicit]
+    found: List[Tuple[int, int, str, str]] = []
+
+    def add(match: re.Match[str], *, after_cue: bool) -> None:
+        start, end = match.span("value")
+        if any(start < old_end and end > old_start for old_start, old_end in explicit_number_spans):
+            return
+        value = _canonical_quantity_value(match.group("value"))
+        if not value:
+            return
+        cue = str(match.group("cue") or "")
+
+        # A number before a quantity noun is ambiguous unless the nearby left
+        # context contains a real quantitative operator, or the value is a
+        # range.  This excludes steel grades such as ``422待洗庫存量``.
+        if not after_cue:
+            left = text[max(0, start - 18):start]
+            if "-" not in value and not _ZH_QUANTITATIVE_PREFIX_RE.search(left):
+                return
+
+        # Do not infer across unrelated, distant sections.  The nearest stated
+        # unit must be in the same operational passage.
+        nearest = min(explicit, key=lambda item: abs(item.start() - start))
+        if abs(nearest.start() - start) > 360:
+            return
+        source_unit = nearest.group("unit")
+        target_unit = _ZH_MASS_UNIT_TO_ID.get(source_unit, source_unit.lower())
+        found.append((start, end, value, cue + "\0" + target_unit))
+
+    for match in _ZH_QUANTITY_CUE_BEFORE_RE.finditer(text):
+        add(match, after_cue=True)
+    for match in _ZH_QUANTITY_CUE_AFTER_RE.finditer(text):
+        add(match, after_cue=False)
+
+    # Stable source order and deduplication by exact numeric span/value.
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for start, end, value, packed in sorted(found, key=lambda item: (item[0], item[1])):
+        cue, target_unit = packed.split("\0", 1)
+        key = (start, end, value, target_unit)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "value": value,
+            "target_unit": target_unit,
+            "cue": cue,
+            "start": str(start),
+        })
+    return out
+
+
+def implicit_quantity_unit_instruction(source: str, src_lang: str, tgt_lang: str) -> str:
+    requirements = infer_implicit_quantity_units(source, src_lang, tgt_lang)
+    if not requirements:
+        return ""
+    rendered = "; ".join(
+        f"{item['value']} => {item['target_unit']}"
+        for item in requirements
+    )
+    return (
+        "<implicit_quantity_units>Chinese factory writing may state a mass unit once and omit it "
+        "from later quantities in the same production/warehouse passage. The following source "
+        "quantities inherit that unit and MUST show it explicitly in Indonesian: "
+        + rendered
+        + ". Do not treat material grades or station codes as quantities.</implicit_quantity_units>"
+    )
+
+
+def _integer_target_pattern(digits: str) -> str:
+    digits = str(digits or "")
+    if len(digits) <= 3:
+        return re.escape(digits)
+    groups: List[str] = []
+    remainder = digits
+    while remainder:
+        groups.insert(0, remainder[-3:])
+        remainder = remainder[:-3]
+    grouped = r"[.,\s]?".join(re.escape(group) for group in groups)
+    return rf"(?:{re.escape(digits)}|{grouped})"
+
+
+def _quantity_target_pattern(value: str) -> str:
+    value = _canonical_quantity_value(value)
+    parts = value.split("-", 1)
+
+    def one(part: str) -> str:
+        if re.fullmatch(r"\d+", part):
+            return _integer_target_pattern(part)
+        if re.fullmatch(r"\d+[.,]\d+", part):
+            whole, decimal = re.split(r"[.,]", part, maxsplit=1)
+            return _integer_target_pattern(whole) + r"[.,]" + re.escape(decimal)
+        return re.escape(part)
+
+    if len(parts) == 2:
+        return one(parts[0]) + r"\s*(?:[-–—~～]|sampai|hingga)\s*" + one(parts[1])
+    return one(parts[0])
+
+
+def _quantity_has_target_unit(candidate: str, value: str, target_unit: str) -> bool:
+    value_pattern = _quantity_target_pattern(value)
+    unit = str(target_unit or "").lower()
+    if unit == "ton":
+        unit_pattern = r"ton"
+    elif unit == "kg":
+        unit_pattern = r"(?:kg|kilogram)"
+    else:
+        unit_pattern = re.escape(unit)
+    # The unit may precede the number in a table-like phrase, but normal prose
+    # places it after the value.  Bound the gap so a later unrelated quantity
+    # cannot accidentally satisfy this requirement.
+    patterns = (
+        rf"(?<![A-Za-z0-9]){value_pattern}(?![A-Za-z0-9]).{{0,18}}?\b{unit_pattern}\b",
+        rf"\b{unit_pattern}\b.{{0,10}}?(?<![A-Za-z0-9]){value_pattern}(?![A-Za-z0-9])",
+    )
+    return any(re.search(pattern, candidate or "", flags=re.I | re.S) for pattern in patterns)
+
+
+def _implicit_quantity_unit_issues(
+    source: str,
+    candidate: str,
+    src_lang: str,
+    tgt_lang: str,
+) -> List[str]:
+    issues: List[str] = []
+    for item in infer_implicit_quantity_units(source, src_lang, tgt_lang):
+        value = item["value"]
+        target_unit = item["target_unit"]
+        if not _quantity_has_target_unit(candidate, value, target_unit):
+            issues.append(f"missing_inherited_unit:{value}:{target_unit}")
+    return issues
+
+
 
 def _factory_incident_reporting_issues(source: str, candidate: str) -> List[str]:
     """Validate factory incident/self-report semantics for ZH→ID output.
@@ -1206,6 +1407,7 @@ def validate_translation(
         if source_han >= 80 and latin_words < max(20, int(source_han * 0.22)):
             issues.append("catastrophic_omission")
         if src.startswith("zh"):
+            issues.extend(_implicit_quantity_unit_issues(source, candidate, src, tgt))
             issues.extend(_indonesian_readability_issues(source, candidate, src))
 
     issues = _dedupe(issues)
@@ -1298,6 +1500,7 @@ def _build_review_messages(
         "use the canonical Chinese term once; do not output a literal translation plus a redundant duplicate annotation."
         if annotations and str(tgt_lang or "").lower().startswith("zh") else ""
     )
+    inherited_unit_rule = implicit_quantity_unit_instruction(source, src_lang, tgt_lang)
     system = (
         "You are an independent bilingual translation quality editor for factory communications. Do not merely "
         "polish the current wording. Reconstruct the meaning from the source, silently back-translate each target "
@@ -1309,7 +1512,9 @@ def _build_review_messages(
         "minor paragraph reflow is allowed only when meaning is unchanged. Apply only explicitly supplied "
         "terminology pairs. No ordinary source-language word may remain untranslated merely because it appears "
         "in the source. Retain Latin text only when it is an immutable identifier, a real proper name, a product/model "
-        "code, or an explicit target-side glossary term." + annotation_rule + _indonesian_clarity_instruction(tgt_lang) + " Output "
+        "code, or an explicit target-side glossary term." + annotation_rule + _indonesian_clarity_instruction(tgt_lang)
+        + (" " + inherited_unit_rule if inherited_unit_rule else "")
+        + " Output "
         "only the final translation."
     )
     user = (
@@ -1344,6 +1549,7 @@ def _build_translation_messages(
             "\nA previous candidate failed these integrity checks. Produce a fresh translation from the source, "
             "not an edit of the failed candidate:\n" + "\n".join(f"- {x}" for x in retry_issues[:20]) + "\n"
         )
+    inherited_unit_rule = implicit_quantity_unit_instruction(protected_source, src_lang, tgt_lang)
     system = (
         "You are a professional whole-document translator for a factory work group. Translate the complete "
         "source into " + _target_name(tgt_lang) + ". Read the whole document before writing and internally "
@@ -1353,7 +1559,9 @@ def _build_translation_messages(
         "or decorate it. Use only explicit unambiguous glossary pairs; "
         "never infer a reversed mapping from a common word. No ordinary source-language word may remain untranslated; "
         "retain Latin text only for immutable identifiers, real proper names, product/model codes, or explicit target-side "
-        "glossary terms." + annotation_rule + _indonesian_clarity_instruction(tgt_lang) + " Do not summarize, explain, add headings, mix languages or output "
+        "glossary terms." + annotation_rule + _indonesian_clarity_instruction(tgt_lang)
+        + (" " + inherited_unit_rule if inherited_unit_rule else "")
+        + " Do not summarize, explain, add headings, mix languages or output "
         "alternatives. Output only the complete translation."
     )
     user = (

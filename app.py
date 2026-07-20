@@ -265,8 +265,8 @@ import factory_terminology as factory_terminology_module  # indexed plant glossa
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 15
-_EXPECTED_QG_BUILD_ID = "2026-07-20.1-provider-result-never-dropped"
+_EXPECTED_QG_API_VERSION = 16
+_EXPECTED_QG_BUILD_ID = "2026-07-20.2-implicit-production-units"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -360,7 +360,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-19.1-plant-org-hierarchy"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-20.2-output-warehouse-washing-semantics"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -382,12 +382,24 @@ _fk_org = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "一課最近被釘很緊，上週處長抓到一堆人在控制室休息吹冷氣；樓上是一股股長，基本紀律注意一下，他蠻公司派的。",
     "zh", "id", limit=3
 )
+_fk_output = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "目前出料狀況如果平均維持每日130～135噸，月底入庫量應可到3600噸。",
+    "zh", "id", limit=5
+)
+_fk_washing = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
+    "zh", "id", limit=5
+)
 if not any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_erp):
     raise RuntimeError("factory knowledge self-test failed: ERP timing context was not retrieved")
 if any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_physical):
     raise RuntimeError("factory knowledge self-test failed: physical warehouse message matched ERP timing context")
 if not any(card.get("id") == "organization_unit_discipline_notice" for card in _fk_org):
     raise RuntimeError("factory knowledge self-test failed: organization discipline context was not retrieved")
+if not any(card.get("id") == "equipment_output_production_semantics" for card in _fk_output):
+    raise RuntimeError("factory knowledge self-test failed: equipment output semantics were not retrieved")
+if not any(card.get("id") == "material_washing_support_semantics" for card in _fk_washing):
+    raise RuntimeError("factory knowledge self-test failed: material washing support semantics were not retrieved")
 _FACTORY_KNOWLEDGE_SELFTEST_OK = True
 logger.info("[FactoryKnowledge] verified build=%s entries=%s sha256=%s",
             _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
@@ -461,6 +473,52 @@ if not _QG_FACTORY_NOTICE_REPORT.ok:
     raise RuntimeError(
         "translation quality gate bilingual-process self-test failed: "
         f"issues={_QG_FACTORY_NOTICE_REPORT.issues}"
+    )
+
+# Chinese production notices often state ``噸`` once and omit it from later
+# target/forecast figures.  The Indonesian result must repeat the unit for every
+# operational quantity; material grades such as 422 must remain untouched.
+_QG_IMPLICIT_UNIT_SOURCE = (
+    "本月入庫目標3750，到月底平均一天需147噸。"
+    "目前出料狀況若平均維持每日130～135入庫量，最後能入到3600就不錯了。"
+)
+_QG_IMPLICIT_UNIT_REQUIREMENTS = tqg_module.infer_implicit_quantity_units(
+    _QG_IMPLICIT_UNIT_SOURCE, "zh", "id"
+)
+_QG_IMPLICIT_UNIT_VALUES = {
+    item.get("value") for item in _QG_IMPLICIT_UNIT_REQUIREMENTS
+}
+if not {"3750", "130-135", "3600"}.issubset(_QG_IMPLICIT_UNIT_VALUES):
+    raise RuntimeError(
+        "translation quality gate implicit-unit self-test failed: "
+        f"requirements={_QG_IMPLICIT_UNIT_REQUIREMENTS!r}"
+    )
+_QG_IMPLICIT_UNIT_BAD = tqg_module.validate_translation(
+    _QG_IMPLICIT_UNIT_SOURCE,
+    "Target masuk gudang bulan ini 3750. Rata-rata perlu 147 ton per hari. "
+    "Jika hasil produksi tetap 130–135 per hari, totalnya bisa mencapai 3600.",
+    "zh", "id", immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if _QG_IMPLICIT_UNIT_BAD.ok or not any(
+        issue.startswith("missing_inherited_unit:")
+        for issue in _QG_IMPLICIT_UNIT_BAD.hard_issues):
+    raise RuntimeError(
+        "translation quality gate implicit-unit rejection self-test failed: "
+        f"issues={_QG_IMPLICIT_UNIT_BAD.issues}"
+    )
+_QG_IMPLICIT_UNIT_GOOD = tqg_module.validate_translation(
+    _QG_IMPLICIT_UNIT_SOURCE,
+    "Target pemasukan gudang bulan ini adalah 3.750 ton. Rata-rata yang dibutuhkan "
+    "adalah 147 ton per hari. Jika hasil produksi mesin tetap 130–135 ton per hari, "
+    "total pemasukan gudang bisa mencapai 3.600 ton.",
+    "zh", "id", immutable_literals=(), glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if not _QG_IMPLICIT_UNIT_GOOD.ok:
+    raise RuntimeError(
+        "translation quality gate implicit-unit acceptance self-test failed: "
+        f"issues={_QG_IMPLICIT_UNIT_GOOD.issues}"
     )
 
 # Factory incident-policy invariant: literal religious/legal wording for
@@ -1318,7 +1376,9 @@ TONE_PRESETS = {
         "- 「TAG」固定保留 TAG"
         "- 「站別」固定理解為 stasiun"
         "- 「料」「料件」「來料」固定指不銹鋼原料/半成品/成品(棒材、盤元、線材、管件)，絕對不是飼料(pakan)、食物、資料或料理。"
-        "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在「吊料/上料/下料/入料/出料/置料/退料/送料」中一律是鋼材，相應動作為 angkat / naikkan / turunkan / masukkan / keluarkan material。"
+        "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在吊料/上料/下料/入料/置料/退料/送料中是鋼材。**出料必須先判斷語義**：夾輪出料、出料口、把材料退出等機械排料/移料語境才用 keluarkan/pengeluaran material；出料狀況、出料量、每日出料、設備出料等產能語境固定指機台產出，使用 hasil produksi mesin / output produksi，禁止翻成 kondisi material keluar。"
+        "- 中文生產公告常只寫一次重量單位，後續同一指標省略單位；例如入庫目標3750、147噸/日、130～135入庫量、入到3600，印尼文必須把每個數值都明確寫成 ton，不可只保留數字。"
+        "- 材料製程中的「清洗」固定用 cuci/dicuci/proses pencucian；pembersihan 用於打掃、清潔環境或一般清潔，不可拿來代替棒材清洗製程。"
         "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。**股別翻譯以 ERP 對照為最高優先**：本廠「一股」= Bagian Cold Drawing 1、「二股」= Bagian Cold Drawing 2；不得自行泛化成 Regu/Subseksi。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班或工作班組(早班/夜班/中班 = shift；班長 = kepala regu/ketua shift)，不是班級。"
         "- 製程工序詞(研磨、削皮、拋光、倒角、酸洗、切斷、噴砂、口付 等)【雙義】:既是站別/部門(位置),也是對料做的工序(動作),**必須依上下文判斷,不可一律當位置直譯**——「送去研磨/研磨那邊/放研磨」=位置(stasiun grinding),「要研磨/研磨好了/研磨中/重研磨」=動作(digerinda / proses grinding)。翻譯前先想清楚:這句是在講『料在哪、送去哪』(位置),還是『對料做什麼』(動作),再決定譯法。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
@@ -8151,7 +8211,7 @@ def build_translation_semantic_contract(text, src, tgt):
     # adding a new workflow means editing factory_knowledge.json, not app.py.
     try:
         _fk_module = globals().get("factory_knowledge_module")
-        knowledge_cards = _fk_module.retrieve(text, src, tgt, limit=3) if _fk_module is not None else []
+        knowledge_cards = _fk_module.retrieve(text, src, tgt, limit=5) if _fk_module is not None else []
     except Exception as exc:
         _logger = globals().get("logger")
         if _logger is not None and hasattr(_logger, "warning"):
@@ -8544,14 +8604,15 @@ def build_factory_context_hint_zh_id(text):
     src = text or ""
     # v3.11(2026-05-26): 加上「放了/放好了/都放了」這類 ERP 放行口語化簡寫的觸發詞,
     # 工廠裡這幾個是「資料已放行到下一站」的縮略,不是「東西放下了」。
-    triggers = ["料", "品保", "清洗", "研磨", "噴漆", "進料", "刮傷", "吊", "偷跑",
+    triggers = ["料", "品保", "清洗", "研磨", "噴漆", "進料", "出料", "產出", "入庫", "刮傷", "吊", "偷跑",
                 "工單", "包裝", "站別", "放了", "放好了", "都放了", "已放",
                 "放行", "過帳", "退庫"]
     if not any(k in src for k in triggers):
         return ""
     return (
         "【繁中→印尼工廠語義提示】這是台灣不鏽鋼棒材工廠群組訊息，不可逐字翻。"
-        "料/進料=material/bahan masuk；品保=QC；清洗=di-cuci/dibersihkan依現場語氣；"
+        "料/進料=material/bahan masuk；品保=QC；材料清洗=cuci/dicuci/proses pencucian，環境打掃才用 pembersihan；"
+        "出料需依語境判斷：出料口/夾輪出料/材料退出=keluarkan/pengeluaran material；出料狀況/出料量/每日出料/設備出料=hasil produksi mesin/output produksi，禁止 kondisi material keluar；"
         "吊去=被吊走/移走/帶走，譯為 dibawa/diangkat，不可譯成 dicuri；"
         "偷跑=未照正常流程先拿走/先做/先跑，譯為 dibawa/diproses duluan tanpa konfirmasi，不是偷竊；"
         "反應=回報/通報，譯為 lapor/beri tahu，不是 bereaksi；"
@@ -8696,7 +8757,7 @@ ZH_TO_ID_HARD = {
     "短尺": "ukuran pendek",
     "異型棒": "batang bentuk khusus",
     "遞延單": "order ditunda",
-    "急單": "order urgent",
+    "急單": "work order mendesak",
     "不擋非本月": "order bukan bulan ini boleh masuk gudang",
     "不擋": "tidak dibatasi",
     "溢量": "kelebihan produksi",
@@ -9473,10 +9534,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "In this plant, 研磨棒 in production reporting is the product term 'grinding rod', never 'batang gerinda'. "
                 "調機 means 'penyetelan mesin' or 'penyetelan/penyesuaian mesin'. 無法配合規定 in a disciplinary message "
                 "means unwilling/noncompliant (tidak mau mematuhi / melanggar aturan), not physical inability (tidak bisa). "
-                "Keep approved shop-floor terms such as urgent order, work order and grinding when workers normally use them. "
+                "Keep approved shop-floor terms such as work order mendesak, work order and grinding when workers normally use them. "
                 "For quality notices prefer 'produk yang cacat' or 'produk yang tidak sesuai standar' over literal Chinese syntax. "
                 "Do not add a repeated closing question unless the source itself repeats or closes with that request. "
             ) if (src == "zh" and tgt == "id") else "")
+            + (tqg_module.implicit_quantity_unit_instruction(text, src, tgt) + " ")
             + build_factory_context_hint(text, src, tgt) + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
             + inject_glossary_hint(text, src, tgt)
@@ -9691,7 +9753,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "【產線/設備】"
             "產線=lini produksi, 機台=mesin, 開機=nyalakan mesin, 停機=mesin berhenti, 調機=setting mesin, "
             "上料=isi material, 備料=siapkan material, 產量=jumlah produksi, 目標=target, 達標=capai target, 超產=over production, "
-            "訂單=order, 出貨=kirim barang, 交期=deadline, 趕貨=kejar order, 急單=order urgent, 急單備註=catatan order urgent, "
+            "訂單=order, 出貨=kirim barang, 交期=deadline, 趕貨=kejar order, 急單=work order mendesak, 急單備註=catatan work order mendesak, "
             "下製程=proses selanjutnya, 異常=abnormal/ada masalah, 維修中=sedang diperbaiki, "
             "天車=overhead crane, 台車=trolley, 吊秤=timbangan gantung, 馬蹄環=shackle, 鋼索=sling baja, 吊掛物=beban gantung, "
             "稼動率=utilization rate, 線速=line speed(m/min), 限速=batas kecepatan, 降速=turunkan kecepatan, 提速=naikkan kecepatan, 速差=selisih kecepatan, "
@@ -9810,14 +9872,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "當主詞是人問責任(誰放的/誰擺的)→ 必須用 menaruh 或 meletakkan, 不能用裸 taruh. "
             "When ambiguous and context is about work orders or production flow, default to RELEASE(放行). "
             "l) 再=POLYSEMY: "
-            "X再Y(condition+action)=hanya X yang Y / X baru Y(=才). e.g. 急單再幫忙安排入庫=hanya order urgent yang tolong bantu atur masuk gudang. "
+            "X再Y(condition+action)=hanya X yang Y / X baru Y(=才). e.g. 急單再幫忙安排入庫=hanya work order mendesak yang perlu dibantu untuk diatur masuk gudang. "
             "再+verb(without preceding condition)=lagi/sekali lagi(=again). e.g. 再確認一下=confirm sekali lagi. "
             "m) 非本月=bukan order bulan ini(order that is NOT for the current month). 非本月包裝不入庫=yang bukan order bulan ini jangan packing masuk gudang. "
             "n) 不擋=tidak dibatasi/boleh masuk(EXEMPTION, means ALLOWED). 不擋非本月=order bukan bulan ini BOLEH masuk gudang. "
             "CRITICAL: 不擋 means NOT blocked = ALLOWED. Do NOT translate as tidak boleh(=blocked). "
             "e.g. DACAPO不擋非本月=DACAPO order bukan bulan ini boleh masuk gudang. "
-            "o) When H、S appear in a list with 異型棒 or customer names, they are SEPARATE product categories(H=hex bar, S=straight bar). "
-            "Keep them as individual items with commas. e.g. H、S異型棒=H, S, batang bentuk khusus(three separate types). "
+            "o) S/H + 異型棒 is context-sensitive. When S、H (or H、S) directly modifies 異型棒 as one noun phrase, it means special-profile bars shaped S and H; translate as batang profil khusus berbentuk S dan H. "
+            "Only treat H, S and 異型棒 as separate product categories when punctuation or parallel grammar explicitly lists three independent items. Never force the three-item reading solely because S/H appears before 異型棒. "
             "p) ELLIPTICAL QUANTITY REPLIES: Chinese speakers often reply with JUST '數字+量詞' as a short answer, omitting the noun. "
             "e.g. Q:『要幾台?』A:『兩台』(=兩台台車=two troli, NOT 'two units'). "
             "Default mapping: 兩台→dua buah(generic, NEVER 'dua unit'); 三把→tiga bundel; 5支→5 batang; 一個→satu buah; 兩件→dua potong. "

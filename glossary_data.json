@@ -1497,5 +1497,246 @@
     "aliases_id": [
       "ketua shift"
     ]
+  },
+  "出料狀況": {
+    "idn": "kondisi hasil produksi mesin",
+    "canonical_idn": "kondisi hasil produksi mesin",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "production",
+    "priority": 160,
+    "ocr_hint": true,
+    "note_zh": "描述設備或產線目前能產出多少料、產出是否順暢的生產狀況；不是材料從出口移出的動作。",
+    "note_id": "Kondisi hasil produksi mesin/lini, bukan gerakan material keluar dari mesin.",
+    "aliases_zh": [
+      "機台出料狀況",
+      "設備出料狀況",
+      "產出狀況"
+    ],
+    "aliases_id": [
+      "kondisi output produksi mesin",
+      "kondisi hasil produksi"
+    ]
+  },
+  "出料量": {
+    "idn": "jumlah hasil produksi mesin",
+    "canonical_idn": "jumlah hasil produksi mesin",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "production",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "設備或產線的產出量；若以噸計，數值後必須保留 ton。",
+    "note_id": "Jumlah hasil produksi mesin/lini. Jika satuannya ton, ton wajib ditulis.",
+    "aliases_zh": [
+      "設備出料量",
+      "機台出料量",
+      "每日出料量",
+      "產出量"
+    ],
+    "aliases_id": [
+      "jumlah output produksi mesin",
+      "jumlah hasil produksi"
+    ]
+  },
+  "入庫量": {
+    "idn": "jumlah pemasukan gudang",
+    "canonical_idn": "jumlah pemasukan gudang",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "warehouse",
+    "priority": 150,
+    "ocr_hint": true,
+    "note_zh": "產品完成後進入倉庫的數量／噸數；不是 ERP 過帳時間。",
+    "note_id": "Jumlah produk yang masuk gudang; bukan waktu posting data ERP.",
+    "aliases_zh": [
+      "每日入庫量",
+      "平均入庫量",
+      "月入庫量"
+    ],
+    "aliases_id": [
+      "volume pemasukan gudang",
+      "jumlah barang masuk gudang"
+    ]
+  },
+  "待洗庫存量": {
+    "idn": "jumlah stok material yang menunggu proses pencucian",
+    "canonical_idn": "jumlah stok material yang menunggu proses pencucian",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "washing",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "尚未進行材料清洗製程的庫存量。",
+    "note_id": "Jumlah stok material yang masih menunggu proses pencucian.",
+    "aliases_zh": [
+      "待清洗庫存量",
+      "等待清洗庫存量",
+      "待洗庫存"
+    ],
+    "aliases_id": [
+      "stok material yang menunggu dicuci"
+    ]
+  },
+  "清洗作業": {
+    "idn": "proses pencucian",
+    "canonical_idn": "proses pencucian",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "washing",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "棒材或鋼材的清洗製程；不是環境打掃。",
+    "note_id": "Proses pencucian material/batang, bukan pembersihan lingkungan.",
+    "aliases_zh": [
+      "清洗製程",
+      "材料清洗",
+      "棒材清洗"
+    ],
+    "aliases_id": [
+      "proses cuci material"
+    ]
+  },
+  "協助清洗": {
+    "idn": "membantu proses pencucian",
+    "canonical_idn": "membantu proses pencucian",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "washing",
+    "priority": 150,
+    "ocr_hint": true,
+    "note_zh": "協助其他單位進行棒材清洗製程。",
+    "note_id": "Membantu pelaksanaan proses pencucian material.",
+    "aliases_zh": [
+      "支援清洗",
+      "幫忙清洗"
+    ]
+  },
+  "協助一股清洗": {
+    "idn": "membantu proses pencucian di Bagian Cold Drawing 1",
+    "canonical_idn": "membantu proses pencucian di Bagian Cold Drawing 1",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "washing",
+    "priority": 165,
+    "ocr_hint": true,
+    "note_zh": "協助冷抽一股進行材料清洗，不是一般清潔。",
+    "note_id": "Membantu proses pencucian di Bagian Cold Drawing 1, bukan pembersihan umum.",
+    "aliases_zh": [
+      "支援一股清洗",
+      "幫忙一股清洗"
+    ]
+  },
+  "該趕的急單": {
+    "idn": "work order mendesak yang perlu dipercepat",
+    "canonical_idn": "work order mendesak yang perlu dipercepat",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "workflow",
+    "priority": 160,
+    "ocr_hint": true,
+    "note_zh": "需要加速處理的急件工單。",
+    "note_id": "Work order mendesak yang memang perlu dipercepat.",
+    "aliases_zh": [
+      "需要趕的急單",
+      "要趕的急單"
+    ]
+  },
+  "急單優先處理": {
+    "idn": "prioritaskan work order mendesak",
+    "canonical_idn": "prioritaskan work order mendesak",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "workflow",
+    "priority": 160,
+    "ocr_hint": true,
+    "note_zh": "要求各站先處理急件工單。",
+    "note_id": "Instruksi untuk memprioritaskan work order mendesak.",
+    "aliases_zh": [
+      "優先處理急單",
+      "急單要優先處理"
+    ]
+  },
+  "該開的設備": {
+    "idn": "mesin yang seharusnya beroperasi",
+    "canonical_idn": "mesin yang seharusnya beroperasi",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "equipment",
+    "priority": 150,
+    "ocr_hint": true,
+    "note_zh": "依生產安排應保持運轉的設備。",
+    "note_id": "Mesin yang menurut rencana produksi seharusnya tetap beroperasi.",
+    "aliases_zh": [
+      "該開的機台",
+      "應開的設備",
+      "應開的機台"
+    ]
+  },
+  "不要隨便停機": {
+    "idn": "jangan menghentikan mesin sembarangan",
+    "canonical_idn": "jangan menghentikan mesin sembarangan",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "equipment",
+    "priority": 155,
+    "ocr_hint": true,
+    "note_zh": "禁止沒有正當原因任意停掉應運轉的機台。",
+    "note_id": "Jangan menghentikan mesin sembarangan tanpa alasan operasional yang benar.",
+    "aliases_zh": [
+      "不可隨便停機",
+      "不能隨便停機"
+    ]
+  },
+  "庫存暴增": {
+    "idn": "stok meningkat drastis",
+    "canonical_idn": "stok meningkat drastis",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "warehouse",
+    "priority": 145,
+    "ocr_hint": true,
+    "note_zh": "庫存量在短時間內大幅增加。",
+    "note_id": "Stok meningkat drastis dalam waktu singkat.",
+    "aliases_zh": [
+      "庫存爆增",
+      "庫存大增"
+    ]
+  },
+  "上面也沒話可說": {
+    "idn": "pihak atasan juga tidak punya alasan untuk mempermasalahkannya",
+    "canonical_idn": "pihak atasan juga tidak punya alasan untuk mempermasalahkannya",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "management",
+    "priority": 165,
+    "ocr_hint": true,
+    "note_zh": "工廠管理口語：若已依標準執行，上級就沒有理由挑毛病或追究；不是字面上的不說話。",
+    "note_id": "Ungkapan manajemen: atasan tidak punya alasan untuk mempersoalkannya, bukan berarti diam atau tidak banyak bicara.",
+    "aliases_zh": [
+      "上面沒話可說",
+      "主管也沒話可說",
+      "上級也沒話可說"
+    ]
+  },
+  "S、H異型棒": {
+    "idn": "batang profil khusus berbentuk S dan H",
+    "canonical_idn": "batang profil khusus berbentuk S dan H",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "product",
+    "priority": 170,
+    "ocr_hint": true,
+    "note_zh": "S、H直接修飾異型棒時，表示 S 型與 H 型的特殊斷面棒材，不是 S、H、異型棒三個獨立品項。",
+    "note_id": "Batang profil khusus berbentuk S dan H; bukan tiga kategori terpisah.",
+    "aliases_zh": [
+      "H、S異型棒",
+      "S、H 異型棒",
+      "H、S 異型棒"
+    ],
+    "aliases_id": [
+      "batang profil S dan H",
+      "batang bentuk khusus S dan H"
+    ]
   }
 }

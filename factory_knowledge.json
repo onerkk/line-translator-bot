@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-19.1-plant-org-hierarchy",
+  "build_id": "2026-07-20.2-output-warehouse-washing-semantics",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -657,6 +657,379 @@
         {
           "source": "一課最近被釘很緊，上週還被處長抓到一堆人在控制室休息吹冷氣。\n\n樓上是一股股長，基本紀律注意一下，他蠻公司派的，什麼都會跟處長講。",
           "target": "Akhir-akhir ini Seksi 1 diawasi dengan sangat ketat. Minggu lalu, kepala divisi bahkan memergoki banyak orang sedang beristirahat sambil menikmati AC di ruang kontrol.\n\nDi lantai atas ada kepala bagian Cold Drawing 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi."
+        }
+      ]
+    },
+    {
+      "id": "equipment_output_production_semantics",
+      "enabled": true,
+      "priority": 170,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "設備出料／產出狀況不是材料移出動作",
+      "match": {
+        "strong_phrases": [
+          "出料狀況",
+          "出料量",
+          "設備產出",
+          "機台產出",
+          "產線產出"
+        ],
+        "regex_any": [
+          "出料(?:狀況|情況|量|效率|速度)",
+          "(?:設備|機台|產線).{0,8}(?:出料|產出)"
+        ],
+        "none_terms": [
+          "出料口",
+          "夾輪出料",
+          "導軌出料",
+          "出料按鈕"
+        ],
+        "min_score": 6
+      },
+      "context": [
+        "在產量、每日噸數、月底預估或入庫目標語境中，「出料」指設備／產線實際產出的產品量與產出狀況。",
+        "此語義應使用 hasil produksi mesin、output produksi 或 kondisi hasil produksi mesin。",
+        "只有出料口、夾輪出料、材料退出等機械動作才使用 keluarkan/pengeluaran material；本條禁止 material keluar 或 pengeluaran material。"
+      ],
+      "preferred_target_phrases": [
+        "kondisi hasil produksi mesin",
+        "hasil produksi mesin",
+        "output produksi"
+      ],
+      "forbidden_target_phrases": [
+        "kondisi material keluar",
+        "material keluar saat ini",
+        "pengeluaran material saat ini"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "hasil produksi",
+            "output produksi"
+          ],
+          "issue": "missing_machine_production_output_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "目前出料狀況平均維持每日130噸。",
+          "target": "Saat ini, rata-rata hasil produksi mesin tetap sekitar 130 ton per hari."
+        },
+        {
+          "source": "依照設備出料量估計月底入庫。",
+          "target": "Perkirakan pemasukan gudang sampai akhir bulan berdasarkan jumlah hasil produksi mesin."
+        }
+      ]
+    },
+    {
+      "id": "warehouse_intake_target_and_forecast",
+      "enabled": true,
+      "priority": 165,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月入庫目標、每日平均與月底預估",
+      "match": {
+        "all_groups": [
+          [
+            "入庫",
+            "進倉"
+          ],
+          [
+            "目標",
+            "入庫量",
+            "平均",
+            "每日",
+            "一天",
+            "月底",
+            "本月",
+            "入到"
+          ]
+        ],
+        "any_terms": [
+          "噸",
+          "吨",
+          "達到",
+          "維持",
+          "預估",
+          "估計",
+          "不可能",
+          "3600",
+          "3750"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "這裡的入庫是產品實際完成後計入倉庫的數量，不是 490→801 的 ERP 過帳時間。",
+        "中文常只在其中一個數字寫「噸」，後續同一入庫／產量指標省略單位；印尼文必須在每個目標、每日平均、範圍與月底預估數值後明確寫出 ton。",
+        "「入庫量」宜用 jumlah pemasukan gudang；「能入到 X」宜表達 total pemasukan gudang bisa mencapai X ton。"
+      ],
+      "preferred_target_phrases": [
+        "target pemasukan gudang",
+        "jumlah pemasukan gudang",
+        "ton per hari",
+        "total pemasukan gudang bisa mencapai"
+      ],
+      "forbidden_target_phrases": [
+        "waktu masuk gudang",
+        "posting data",
+        "pemindahan data dari stasiun 490 ke stasiun 801"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "pemasukan gudang",
+            "masuk gudang"
+          ],
+          "issue": "missing_warehouse_intake_semantics"
+        },
+        {
+          "source_any": [
+            "噸",
+            "吨"
+          ],
+          "target_any": [
+            "ton"
+          ],
+          "issue": "missing_mass_unit"
+        }
+      ],
+      "examples": [
+        {
+          "source": "本月入庫目標3750，到月底平均一天需147噸。",
+          "target": "Target pemasukan gudang bulan ini adalah 3.750 ton. Sampai akhir bulan, rata-rata yang dibutuhkan adalah 147 ton per hari."
+        }
+      ]
+    },
+    {
+      "id": "operational_priority_runtime_inventory_accountability",
+      "enabled": true,
+      "priority": 168,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "急單優先、設備持續運轉、庫存控制與上級可交代性",
+      "match": {
+        "all_groups": [
+          [
+            "急單",
+            "急件",
+            "趕單"
+          ],
+          [
+            "設備",
+            "機台",
+            "停機",
+            "庫存"
+          ]
+        ],
+        "any_terms": [
+          "優先",
+          "該趕",
+          "該開",
+          "隨便停機",
+          "暴增",
+          "沒話可說",
+          "無話可說"
+        ],
+        "require_all_groups": true,
+        "min_score": 9
+      },
+      "context": [
+        "主管語氣中的「該趕的急單優先處理」是明確作業要求，使用 harus/prioritaskan，並將急單表達為 work order mendesak。",
+        "「該開的設備不要隨便停機」表示依生產安排應運轉的機台不可任意停止，不是說所有設備永遠不得停。",
+        "「庫存不要暴增」是要求控制 WIP／庫存不要短時間大幅上升。",
+        "「這樣上面也沒話可說」不是字面上的上級少說話，而是做到上述要求後，上級沒有理由挑毛病或追究，宜用 pihak atasan tidak punya alasan untuk mempermasalahkannya。"
+      ],
+      "preferred_target_phrases": [
+        "harus memprioritaskan work order mendesak",
+        "mesin yang seharusnya beroperasi",
+        "jangan dihentikan sembarangan",
+        "stok tidak meningkat drastis",
+        "pihak atasan tidak punya alasan untuk mempermasalahkannya"
+      ],
+      "forbidden_target_phrases": [
+        "atasan tidak akan banyak bicara",
+        "atasan tidak banyak bicara",
+        "atasan akan diam",
+        "order urgent yang harus dikejar"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "急單",
+            "急件",
+            "趕單"
+          ],
+          "target_any": [
+            "work order mendesak",
+            "urgent work order"
+          ],
+          "issue": "missing_urgent_work_order_semantics"
+        },
+        {
+          "source_any": [
+            "優先",
+            "該趕"
+          ],
+          "target_any": [
+            "harus",
+            "wajib",
+            "prioritaskan",
+            "perlu"
+          ],
+          "issue": "missing_operational_obligation"
+        },
+        {
+          "source_any": [
+            "停機",
+            "不要隨便停機",
+            "不可隨便停機"
+          ],
+          "target_any": [
+            "jangan dihentikan",
+            "jangan menghentikan",
+            "tidak boleh dihentikan"
+          ],
+          "issue": "missing_no_arbitrary_shutdown"
+        },
+        {
+          "source_any": [
+            "庫存暴增",
+            "庫存爆增",
+            "庫存不要暴增"
+          ],
+          "target_any": [
+            "stok tidak meningkat drastis",
+            "stok tidak melonjak drastis",
+            "agar stok tidak meningkat drastis"
+          ],
+          "issue": "missing_inventory_spike_control"
+        },
+        {
+          "source_any": [
+            "上面也沒話可說",
+            "上面沒話可說",
+            "主管也沒話可說",
+            "上級也沒話可說"
+          ],
+          "target_any": [
+            "tidak punya alasan",
+            "tidak mempunyai alasan",
+            "tidak ada alasan"
+          ],
+          "issue": "missing_no_ground_for_management_complaint"
+        }
+      ],
+      "examples": [
+        {
+          "source": "急單優先處理，該開的設備不要隨便停機，庫存不要暴增，這樣上面也沒話可說。",
+          "target": "Prioritaskan work order mendesak. Mesin yang seharusnya beroperasi jangan dihentikan sembarangan, dan pastikan stok tidak meningkat drastis. Dengan begitu, pihak atasan juga tidak punya alasan untuk mempermasalahkannya."
+        }
+      ]
+    },
+    {
+      "id": "material_washing_support_semantics",
+      "enabled": true,
+      "priority": 172,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "待洗庫存與異型棒支援冷抽一股清洗",
+      "match": {
+        "strong_phrases": [
+          "協助一股清洗",
+          "支援一股清洗",
+          "S、H異型棒",
+          "H、S異型棒"
+        ],
+        "all_groups": [
+          [
+            "待洗",
+            "待清洗",
+            "等待清洗"
+          ],
+          [
+            "清洗",
+            "協助",
+            "支援"
+          ]
+        ],
+        "any_terms": [
+          "庫存",
+          "庫存量",
+          "一股",
+          "異型棒",
+          "40噸",
+          "40吨"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "「待洗庫存量」是尚未進入棒材清洗製程的庫存，使用 stok material yang menunggu proses pencucian。",
+        "材料／棒材的「清洗」是 proses pencucian 或 dicuci；pembersihan 用於一般清潔或環境打掃，不適合本製程。",
+        "「一股」依 ERP 固定為 Bagian Cold Drawing 1。",
+        "S、H 直接修飾「異型棒」時，表示 S 型與 H 型的特殊斷面棒材，使用 batang profil khusus berbentuk S dan H；不是 H、S、異型棒三個獨立品項。",
+        "「協助一股清洗」表示支援該部門的清洗製程，可用 membantu proses pencucian di Bagian Cold Drawing 1。"
+      ],
+      "preferred_target_phrases": [
+        "stok material yang menunggu proses pencucian",
+        "batang profil khusus berbentuk S dan H",
+        "membantu proses pencucian di Bagian Cold Drawing 1"
+      ],
+      "forbidden_target_phrases": [
+        "untuk pembersihan",
+        "H, S, batang bentuk khusus",
+        "S, H, batang bentuk khusus"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "proses pencucian",
+            "menunggu dicuci",
+            "dicuci"
+          ],
+          "issue": "missing_material_washing_process"
+        },
+        {
+          "source_any": [
+            "一股"
+          ],
+          "target_any": [
+            "Bagian Cold Drawing 1"
+          ],
+          "issue": "missing_cold_drawing_1_section"
+        },
+        {
+          "source_any": [
+            "S、H異型棒",
+            "H、S異型棒"
+          ],
+          "target_any": [
+            "S dan H",
+            "H dan S"
+          ],
+          "issue": "missing_s_h_profile_shapes"
+        },
+        {
+          "source_any": [
+            "異型棒"
+          ],
+          "target_any": [
+            "profil khusus",
+            "bentuk khusus"
+          ],
+          "issue": "missing_special_profile_bar_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
+          "target": "Jika jumlah stok material 422 yang menunggu proses pencucian kurang dari 40 ton, batang profil khusus berbentuk S dan H harus membantu proses pencucian di Bagian Cold Drawing 1."
         }
       ]
     }
