@@ -177,4 +177,4 @@ def test_translation_flex_has_personal_language_button():
             label = button.get("action", {}).get("label")
             if label:
                 labels.append(label)
-    assert "👤 我的語言" in labels
+    assert "👤 我的語言/Bahasa" in labels

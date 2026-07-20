@@ -19,7 +19,7 @@ def test_lowercase_line_display_name_is_not_language_leakage():
     assert app._final_delivery_guard(source, candidate, "id", "zh") == candidate
 
 
-def test_final_guard_returns_none_not_localized_failure_as_translation():
+def test_final_guard_keeps_nonempty_provider_result_as_uncached_best_effort():
     result = app._final_delivery_guard(
         "TIDAK BOLEH masuk.",
         "不BOLEH進入。",
@@ -27,9 +27,40 @@ def test_final_guard_returns_none_not_localized_failure_as_translation():
         "zh",
     )
 
-    assert result is None
+    assert result == "不BOLEH進入。"
     assert not app._is_translation_failure_sentinel("正常翻譯")
-    assert app._is_translation_failure_sentinel(tqg.translation_failure_message("zh"))
+    assert app._is_translation_failure_sentinel("翻譯服務暫時未取得可用結果")
+
+
+def test_inner_pipeline_never_turns_nonempty_provider_text_into_none(monkeypatch):
+    provider_text = "粗磨（ROUGH GRINDING）每次至少 0.04 mm。"
+    cached = []
+
+    monkeypatch.setattr(app, "translate_openai", lambda *_args, **_kwargs: provider_text)
+    monkeypatch.setattr(app, "translate_google", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(app, "finalize_factory_translation", lambda _s, value, _sl, _tl: value)
+    monkeypatch.setattr(app, "is_translation_acceptable", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(app, "cache_set", lambda *args, **kwargs: cached.append((args, kwargs)))
+
+    previous = getattr(app._tl, "quality_gate_critical", None)
+    app._tl.quality_gate_critical = True
+    try:
+        actual = app._translate_inner(
+            "ROUGH GRINDING minimal 0,04 mm.",
+            "id",
+            "zh",
+        )
+    finally:
+        if previous is None:
+            try:
+                delattr(app._tl, "quality_gate_critical")
+            except AttributeError:
+                pass
+        else:
+            app._tl.quality_gate_critical = previous
+
+    assert actual == provider_text
+    assert cached == []
 
 
 def test_post_restore_guard_accepts_valid_line_mentions():
@@ -102,9 +133,15 @@ def test_plain_text_translation_actions_are_visible_without_flex():
 
     assert qr is not None
     labels = [item.action.label for item in qr.items]
-    assert labels[:5] == ["✨ 更自然", "🔎 直譯", "📢 正式", "↩ 回譯", "👤 我的語言"]
-    assert "📋 交班摘要" in labels
-    assert "🎙️ 即時口譯" in labels
+    assert labels[:5] == [
+        "✨ 自然/Alami",
+        "🔎 直譯/Harfiah",
+        "📢 正式/Formal",
+        "↩ 回譯/Cek balik",
+        "👤 我的語言/Bahasa",
+    ]
+    assert "📋 交班摘要/Serah" in labels
+    assert "🎙 即時口譯/Interpret" in labels
 
 
 def test_default_quick_reply_menu_exposes_new_commands():
@@ -407,8 +444,15 @@ def test_pipeline_recovers_only_the_missing_mention_without_duplication(monkeypa
     app.translation_cache.clear()
     app._tl.group_id = "mention-recovery-partial"
     app._tl.line_mentions = ["@蘇比 sobirin", "@(杰弗)"]
+    app._tl.disable_tone_emoji = True
 
-    actual = app.translate(source, "id", "zh")
+    try:
+        actual = app.translate(source, "id", "zh")
+    finally:
+        try:
+            delattr(app._tl, "disable_tone_emoji")
+        except AttributeError:
+            pass
 
     assert actual == "@蘇比 sobirin @(杰弗) 請檢查機台"
     assert actual.count("@蘇比 sobirin") == 1

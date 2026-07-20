@@ -217,7 +217,11 @@ def normalize_openai_model(model, fallback=None, allowed=None):
         return fallback
     low = raw.lower()
     if low.startswith(("claude-", "gemini")):
-        return raw
+        # Generic mapping helpers may need to preserve a provider-native name,
+        # but a caller that supplies an OpenAI allow-list is explicitly asking
+        # for an OpenAI request model.  Never let a Claude/Gemini ID cross that
+        # boundary and become a paid 404 request.
+        return fallback if allowed is not None else raw
     normalized = raw
     # Some historical IDs map to an intermediate floating alias. Resolve a
     # short chain so a retired snapshot never survives just because the first
@@ -232,6 +236,37 @@ def normalize_openai_model(model, fallback=None, allowed=None):
     if allowed is not None and normalized not in tuple(allowed):
         return fallback
     return normalized
+
+
+def normalize_openai_request_model(model, fallback=None):
+    """Resolve a model at the final OpenAI API boundary.
+
+    Provider failover deliberately carries one canonical quality-tier model
+    through the coordinator.  Historical code paths can still hand this function
+    a provider-native Claude/Gemini model.  OpenAI must never receive those IDs;
+    they are replaced with the configured OpenAI fallback before the request is
+    created.  Unknown future OpenAI-looking IDs remain forward-compatible.
+    """
+    fallback = fallback or DEFAULT_OPENAI_MODEL
+    raw = str(model or "").strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if low.startswith("claude-"):
+        # Preserve the requested quality tier across provider failover instead
+        # of collapsing every Claude model to the cheapest OpenAI default.
+        return (
+            DEFAULT_OPENAI_UPGRADE_MODEL
+            if any(family in low for family in ("sonnet", "opus"))
+            else fallback
+        )
+    if low.startswith("gemini"):
+        return (
+            fallback
+            if "flash-lite" in low
+            else DEFAULT_OPENAI_UPGRADE_MODEL
+        )
+    return normalize_openai_model(raw, fallback=fallback)
 
 
 def normalize_translation_model(model, fallback=None):
@@ -1959,7 +1994,7 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
             temperature=temperature, timeout=timeout, stop=stop,
             fast_quality=fast_quality,
         )
-    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
+    model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
     if fast_quality and reasoning_effort not in ("none", "minimal"):
         # 只對 reasoning family 覆寫；GPT-4.1 等非 reasoning 模型不送此參數。
         m = (model or "").lower()
@@ -2170,7 +2205,7 @@ def _chat_complete_openai(model, messages, **kwargs):
         raise RuntimeError("OpenAI client 未初始化(api_key 缺?)")
 
     # 最後一道模型生命週期保護：任何內部模組傳入舊 ID 都先遷移。
-    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
+    model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
 
     # v3.2.6: Phase 25 對稱 — OpenAI 路徑也支援 output_translation_tag
     # OpenAI GPT-5 reasoning model 跟 Claude 一樣會吐元評論(Wait/I notice/If English:),

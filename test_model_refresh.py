@@ -52,6 +52,45 @@ def test_unknown_admin_value_falls_back():
     assert ai_provider.normalize_vision_model("not-a-model") == "gpt-5.6-terra"
 
 
+def test_cross_provider_model_never_reaches_openai_boundary():
+    assert (
+        ai_provider.normalize_openai_request_model("claude-sonnet-5")
+        == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+    )
+    assert (
+        ai_provider.normalize_openai_request_model("gemini-2.5-flash")
+        == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+    )
+    assert (
+        ai_provider.normalize_openai_request_model("claude-haiku-4-5-20251001")
+        == ai_provider.DEFAULT_OPENAI_MODEL
+    )
+
+
+def test_openai_dispatch_rewrites_claude_model_before_request():
+    captured = {}
+    sentinel = object()
+    original = ai_provider._chat_complete_openai
+    try:
+        def fake_openai(**kwargs):
+            captured.update(kwargs)
+            return sentinel
+
+        ai_provider._chat_complete_openai = fake_openai
+        actual = ai_provider._dispatch_provider(
+            "openai",
+            "claude-sonnet-5",
+            [{"role": "user", "content": "translate"}],
+            max_tokens=100,
+        )
+    finally:
+        ai_provider._chat_complete_openai = original
+
+    assert actual is sentinel
+    assert captured["model"] == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+    assert not captured["model"].startswith(("claude-", "gemini"))
+
+
 def test_saved_mapping_migration_preserves_custom_target():
     cfg = {
         "model_mapping": {"gpt-5-mini": "claude-sonnet-custom"},
@@ -148,6 +187,8 @@ def run_all():
         test_model_migrations,
         test_tts_migrations,
         test_unknown_admin_value_falls_back,
+        test_cross_provider_model_never_reaches_openai_boundary,
+        test_openai_dispatch_rewrites_claude_model_before_request,
         test_saved_mapping_migration_preserves_custom_target,
         test_no_deprecated_models_in_html_options,
         test_current_defaults_and_deployment_files,

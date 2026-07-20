@@ -26,8 +26,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 14
-QUALITY_GATE_BUILD_ID = "2026-07-14.18-single-call-no-failure-card"
+QUALITY_GATE_API_VERSION = 15
+QUALITY_GATE_BUILD_ID = "2026-07-20.1-provider-result-never-dropped"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -51,13 +51,26 @@ _QUOTED_DATA_RE = re.compile(
 _MENTION_RE = re.compile(
     r'@[^\s,，。!?！？:：;；]{1,48}(?:\s+[a-z][a-z0-9_.-]{1,31}){0,2}'
 )
+
+# Plain uppercase words are not identifiers.  Indonesian factory notices are
+# frequently written in all caps, so the former ``[A-Z]{1,4}`` rule incorrectly
+# protected ordinary words such as DAN and BATU as immutable data.  Only a
+# curated set of globally stable industrial acronyms is treated as an immutable
+# bare-alpha token; every other identifier must have a digit or separator.
+_KNOWN_TECH_ACRONYMS = frozenset({
+    "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR",
+    "PLC", "QA", "QC", "RPM", "SOP", "TIG", "UI", "UPS", "URL", "WIP", "WO",
+})
+_KNOWN_TECH_ACRONYM_PATTERN = "|".join(
+    sorted((re.escape(value) for value in _KNOWN_TECH_ACRONYMS), key=len, reverse=True)
+)
 _TECH_TOKEN_RE = re.compile(
     r'(?<![A-Za-z0-9_])('
     r'(?:[A-Z]{1,4}\d[A-Z0-9._/+:%×x-]{0,24})|'
     r'(?:\d+[A-Z][A-Z0-9._/+:%×x-]{0,24})|'
     r'(?:[A-Z]{1,4}(?:[/._+-][A-Z0-9]{1,8})+)|'
-    r'(?:\d+(?:\.\d+)?\s*(?:mm|cm|kg|g|t|%|°C|℃))|'
-    r'(?:[A-Z]{1,4})'
+    r'(?:\d+(?:[.,]\d+)?\s*(?:mm|cm|kg|g|t|%|°C|℃))|'
+    rf'(?:{_KNOWN_TECH_ACRONYM_PATTERN})'
     r')(?![A-Za-z0-9_])'
 )
 
@@ -71,6 +84,17 @@ _LATIN_TOKEN_RE = re.compile(
     r'(?![A-Za-zÀ-ÖØ-öø-ÿ])'
 )
 _DASHES = "-–—−"
+
+# A translated Chinese notice may intentionally retain a source-side English
+# process label as a bilingual heading, e.g. ``粗磨（ROUGH GRINDING）``.  This is
+# structurally different from an untranslated Indonesian sentence fragment.  We
+# recognize only multi-word, all-uppercase phrases that are copied exactly from
+# the source, are visually attached to Chinese text, and contain no common source
+# language function word.  The rule is document-structural rather than tied to a
+# specific grinding sentence or fixed term list.
+_UPPERCASE_PHRASE_RE = re.compile(
+    r'(?<![A-Za-z])([A-Z][A-Z0-9/+._-]{1,31}(?:\s+[A-Z][A-Z0-9/+._-]{1,31}){1,4})(?![A-Za-z])'
+)
 
 
 _IDENTITY_TOKEN_RE = re.compile(
@@ -509,7 +533,7 @@ def _looks_like_technical_identifier(token: str) -> bool:
         return True
     if any(ch in "._/+:%×x-" for ch in t):
         return True
-    if t.isupper() and 1 <= len(t) <= 4:
+    if t.upper() in _KNOWN_TECH_ACRONYMS:
         return True
     # Mixed-case product/company identifiers such as OpenAI, iPhone, eSIM.
     letters = [ch for ch in t if ch.isalpha()]
@@ -517,6 +541,53 @@ def _looks_like_technical_identifier(token: str) -> bool:
         if not (t[:1].isupper() and t[1:].islower()):
             return True
     return False
+
+
+def _inline_bilingual_allowed_latin(
+    source: str,
+    candidate: str,
+    src_lang: str,
+) -> set[str]:
+    """Return tokens from source-grounded bilingual technical labels.
+
+    The provider may render a heading as ``中文（SOURCE LABEL）`` or ``SOURCE
+    LABEL 中文``.  We permit that label only when all of the following hold:
+
+    * it is a 2–5 word uppercase phrase copied verbatim from the source;
+    * it is attached to Chinese text or enclosed in parentheses in the target;
+    * none of its words is a common source-language function/content word.
+
+    This keeps genuine labels such as ``ROUGH GRINDING`` and ``FREE END`` while
+    still rejecting leaks such as ``TIDAK BOLEH`` or a lone ``BOLEH``.
+    """
+    if not source or not candidate:
+        return set()
+    if not str(src_lang or "").lower().startswith(("id", "en")):
+        return set()
+
+    common = _source_common_words(src_lang)
+    allowed: set[str] = set()
+    for match in _UPPERCASE_PHRASE_RE.finditer(candidate):
+        phrase = match.group(1)
+        words = phrase.split()
+        if any(word.casefold() in common for word in words):
+            continue
+        if not re.search(
+            r'(?<![A-Za-z])' + re.escape(phrase) + r'(?![A-Za-z])',
+            source,
+        ):
+            continue
+
+        left = candidate[max(0, match.start() - 3):match.start()]
+        right = candidate[match.end():min(len(candidate), match.end() + 3)]
+        parenthesized = bool(
+            re.search(r'[（(]\s*$', left) and re.match(r'^\s*[）)]', right)
+        )
+        attached_to_han = bool(_HAN_RE.search(left) or _HAN_RE.search(right))
+        if not (parenthesized or attached_to_han):
+            continue
+        allowed.update(word.upper() for word in words)
+    return allowed
 
 
 def _source_common_words(src_lang: str) -> set[str]:
@@ -610,6 +681,7 @@ def _target_zh_language_purity_issues(
     """
     allowed = _glossary_allowed_latin(glossary_pairs)
     allowed.update(_immutable_allowed_latin(immutable_literals))
+    allowed.update(_inline_bilingual_allowed_latin(source, candidate, src_lang))
     issues: List[str] = []
     common = _source_common_words(src_lang)
 
@@ -845,6 +917,10 @@ def _normalize_data_atom(value: str) -> str:
     # ``missing_literal`` failures whenever target punctuation changed to 。.
     if re.search(r"[A-Za-z0-9]", v):
         v = re.sub(r"(?<=[A-Za-z0-9])[.,;:!?，。；：！？]+$", "", v)
+    # Decimal comma and decimal point represent the same measurement value in
+    # Indonesian/Chinese factory notices.  Canonicalize only digit-surrounded
+    # commas; list punctuation remains untouched.
+    v = re.sub(r"(?<=\d),(?=\d)", ".", v)
     return v
 
 
@@ -868,6 +944,19 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
         return len(re.findall(r'[' + re.escape(_DASHES) + r']', text or ""))
     if atom.startswith("@"):
         return (text or "").count(atom)
+    measurement = re.fullmatch(
+        r'(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>mm|cm|kg|g|t|%|°C|℃)',
+        atom,
+        re.I,
+    )
+    if measurement:
+        number = re.escape(measurement.group("number")).replace(r"\.", r"[.,]")
+        unit = re.escape(measurement.group("unit"))
+        return len(re.findall(
+            rf'(?<![\d.]){number}\s*{unit}(?![A-Za-z0-9])',
+            text or "",
+            re.I,
+        ))
     if re.fullmatch(r'[A-Za-z0-9._/+:%×x-]+', atom):
         return len(re.findall(r'(?<![A-Za-z0-9])' + re.escape(atom) + r'(?![A-Za-z0-9])', text or ""))
     return (text or "").count(atom)

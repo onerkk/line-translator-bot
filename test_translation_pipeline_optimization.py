@@ -151,20 +151,24 @@ def _function_source(name):
 
 
 def test_line_result_buttons_and_postback_modes_are_integrated():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
     row = _function_source("_flex_v2_button_row")
     button = _function_source("_translation_variant_button")
     handler = _function_source("handle_postback")
-    assert "✨ 更自然" in row
-    assert "🔎 直譯" in row
-    assert "📢 正式" in row
-    assert "↩ 回譯" in row
+    executor = _function_source("_execute_translation_variant")
+    variant_translator = _function_source("_translate_variant_preserving_mentions")
+    assert "✨ 自然/Alami" in source
+    assert "🔎 直譯/Harfiah" in source
+    assert "📢 正式/Formal" in source
+    assert "↩ 回譯/Cek balik" in source
     assert "action=translation_variant" in button
     assert "_translation_variant_button" in row
     assert 'action == "translation_variant"' in handler
     for mode in ("natural", "literal", "formal", "backcheck"):
         assert f'"{mode}"' in handler
-    assert "translate_openai" in handler
-    assert "_final_delivery_guard" in handler
+    assert "_translate_variant_preserving_mentions" in executor
+    assert "translate_openai" in variant_translator
+    assert "_final_delivery_guard" in variant_translator
 
 
 def test_audio_tts_is_nonblocking_and_text_file_translation_uses_main_pipeline():

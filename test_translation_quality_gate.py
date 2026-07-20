@@ -91,7 +91,7 @@ class TranslationQualityGateTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("untranslated_source_word:BOLEH", report.hard_issues)
 
-    def test_noncritical_invalid_candidate_gets_source_grounded_review(self):
+    def test_noncritical_invalid_candidate_is_delivered_without_second_api_call(self):
         client = FakeClient(["不得進入。"])
         result = qg.gate_and_revise(
             "TIDAK BOLEH masuk.",
@@ -103,12 +103,12 @@ class TranslationQualityGateTests(unittest.TestCase):
             ai_client=client,
         )
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["text"], "不得進入。")
-        self.assertTrue(result["reviewed"])
-        prompt = client.calls[0]["messages"][0]["content"]
-        self.assertIn("No ordinary source-language word may remain untranslated", prompt)
+        self.assertEqual(result["text"], "不BOLEH進入。")
+        self.assertTrue(result["degraded"])
+        self.assertFalse(result["cacheable"])
+        self.assertEqual(client.calls, [])
 
-    def test_critical_document_retries_from_source_after_language_leak(self):
+    def test_critical_document_does_not_spend_second_api_call_after_local_rejection(self):
         client = FakeClient(["不BOLEH使用工具。", "不得使用工具。"])
         result = qg.translate_quality_critical_document(
             "TIDAK BOLEH menggunakan alat.",
@@ -118,9 +118,59 @@ class TranslationQualityGateTests(unittest.TestCase):
             ai_client=client,
         )
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["text"], "不得使用工具。")
-        self.assertEqual(result["path"], "protected_fresh_retry")
-        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(result["text"], "不BOLEH使用工具。")
+        self.assertEqual(result["path"], "best_effort_whole_document")
+        self.assertFalse(result["cacheable"])
+        self.assertEqual(len(client.calls), 1)
+
+    def test_factory_notice_uppercase_words_are_not_immutable_codes(self):
+        source = (
+            "DAN BATU GERINDA. ROUGH GRINDING minimal 0,04 mm. "
+            "FREE END. Mesin I13 minimal 0,05 mm."
+        )
+        envelope = qg.inspect_immutable_spans(source)
+        literals = set(envelope.mapping.values())
+
+        self.assertNotIn("DAN", literals)
+        self.assertNotIn("BATU", literals)
+        self.assertNotIn("ROUGH", literals)
+        self.assertNotIn("GRINDING", literals)
+        self.assertIn("I13", literals)
+        self.assertIn("0.04 mm", literals)
+        self.assertIn("0.05 mm", literals)
+
+    def test_source_grounded_bilingual_process_labels_are_allowed(self):
+        source = (
+            "1 ROUGH GRINDING minimal 0,04 mm. "
+            "2 FREE END jangan digerinda berulang. Mesin I13 minimal 0,05 mm."
+        )
+        candidate = (
+            "1 粗磨（ROUGH GRINDING）最低 0.04 mm。"
+            "2 FREE END 部位不可重複研磨。I13 機台最低 0.05 mm。"
+        )
+        envelope = qg.inspect_immutable_spans(source)
+        report = qg.validate_translation(
+            source,
+            candidate,
+            "id",
+            "zh",
+            immutable_literals=envelope.mapping.values(),
+        )
+
+        self.assertTrue(report.ok, report.issues)
+        self.assertFalse(any("ROUGH" in issue for issue in report.issues))
+        self.assertFalse(any("GRINDING" in issue for issue in report.issues))
+
+    def test_uppercase_indonesian_phrase_is_still_rejected(self):
+        report = qg.validate_translation(
+            "TIDAK BOLEH masuk.",
+            "不得（TIDAK BOLEH）進入。",
+            "id",
+            "zh",
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("untranslated_source_word:TIDAK", report.hard_issues)
+        self.assertIn("untranslated_source_word:BOLEH", report.hard_issues)
 
 
 if __name__ == "__main__":

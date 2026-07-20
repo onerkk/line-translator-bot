@@ -265,8 +265,8 @@ import factory_terminology as factory_terminology_module  # indexed plant glossa
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 14
-_EXPECTED_QG_BUILD_ID = "2026-07-14.18-single-call-no-failure-card"
+_EXPECTED_QG_API_VERSION = 15
+_EXPECTED_QG_BUILD_ID = "2026-07-20.1-provider-result-never-dropped"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -426,6 +426,41 @@ if not _QG_MENTION_NAME_SELFTEST.ok:
     raise RuntimeError(
         "translation quality gate mention-name self-test failed: "
         f"issues={_QG_MENTION_NAME_SELFTEST.issues}"
+    )
+
+# Regression for long Indonesian factory notices: ordinary uppercase words such
+# as DAN/BATU must not be inventoried as immutable codes, while real machine
+# identifiers and measurements remain protected.  English process labels may be
+# retained bilingually when copied exactly beside Chinese text.
+_QG_FACTORY_NOTICE_SOURCE = (
+    "DAN BATU GERINDA. ROUGH GRINDING minimal 0,04 mm. "
+    "FREE END. Mesin I13 minimal 0,05 mm."
+)
+_QG_FACTORY_NOTICE_ENV = tqg_module.inspect_immutable_spans(_QG_FACTORY_NOTICE_SOURCE)
+_QG_FACTORY_NOTICE_LITERALS = set(_QG_FACTORY_NOTICE_ENV.mapping.values())
+if {"DAN", "BATU"} & _QG_FACTORY_NOTICE_LITERALS:
+    raise RuntimeError(
+        "translation quality gate uppercase-word self-test failed: "
+        f"literals={sorted(_QG_FACTORY_NOTICE_LITERALS)!r}"
+    )
+if not {"I13", "0.04 mm", "0.05 mm"}.issubset(_QG_FACTORY_NOTICE_LITERALS):
+    raise RuntimeError(
+        "translation quality gate immutable-data self-test failed: "
+        f"literals={sorted(_QG_FACTORY_NOTICE_LITERALS)!r}"
+    )
+_QG_FACTORY_NOTICE_REPORT = tqg_module.validate_translation(
+    _QG_FACTORY_NOTICE_SOURCE,
+    "以及砂輪。粗磨（ROUGH GRINDING）最低 0.04 mm。"
+    "FREE END 部位。I13 機台最低 0.05 mm。",
+    "id", "zh",
+    immutable_literals=_QG_FACTORY_NOTICE_LITERALS,
+    glossary_pairs=(),
+    require_paragraph_fidelity=False,
+)
+if not _QG_FACTORY_NOTICE_REPORT.ok:
+    raise RuntimeError(
+        "translation quality gate bilingual-process self-test failed: "
+        f"issues={_QG_FACTORY_NOTICE_REPORT.issues}"
     )
 
 # Factory incident-policy invariant: literal religious/legal wording for
@@ -12453,14 +12488,28 @@ def _translate_inner(text, src, tgt):
     # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
     if pivot_result and result:
         result = select_better_translation(result, pivot_result, text)
-    if result:
-        result = finalize_factory_translation(text, result, src, tgt)
 
     # v3.32.6: no quality repair request.  The first pass is accepted or blocked locally.
 
-    if result and is_translation_acceptable(text, result, src, tgt):
+    if result:
         result = finalize_factory_translation(text, result, src, tgt)
-        cache_set(text, src, tgt, result)
+        if is_translation_acceptable(text, result, src, tgt):
+            cache_set(text, src, tgt, result)
+            return result
+
+        # Availability boundary: a non-empty provider/NMT translation must never
+        # disappear merely because a local heuristic rejects it.  The outer
+        # pipeline performs the same advisory diagnostics again and deliberately
+        # keeps degraded text out of cache/TM.  Returning it here prevents the
+        # historical ``translate returned empty`` outage while preserving strict
+        # cache admission.
+        logger.warning(
+            "[QualityGate] inner validation warning; delivering non-cacheable provider result"
+        )
+        _update_last_translate_debug(
+            pipeline_status="inner_quality_warning_delivered",
+            final_candidate=str(result)[:2000],
+        )
         return result
 
     # No second translation API for quality recovery.
