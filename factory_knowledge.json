@@ -1,8 +1,202 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-20.3-pmi-grade-verification-semantics",
+  "build_id": "2026-07-24.1-loading-unloading-weighing-audit-semantics",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
+    {
+      "id": "loading_unloading_weighing_audit",
+      "enabled": true,
+      "priority": 195,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "上下料秤重落實性抽查與監視器／現場查核",
+      "match": {
+        "strong_phrases": [
+          "上下料秤重",
+          "上料秤重",
+          "下料秤重",
+          "監視器監看",
+          "監視器監控",
+          "現場觀察"
+        ],
+        "any_terms": [
+          "今日起",
+          "從今天起",
+          "抽查",
+          "落實性",
+          "各班要求",
+          "監視器",
+          "現場",
+          "查核",
+          "秤重",
+          "上料",
+          "下料"
+        ],
+        "regex_any": [
+          "(?:今日|今天|即日|本日起).{0,16}(?:抽查|查核)",
+          "(?:上料|下料|上下料).{0,8}(?:秤重|稱重)",
+          "(?:監視器|CCTV).{0,12}(?:監看|監控|查核|檢查)"
+        ],
+        "require_any": true,
+        "min_score": 8,
+        "none_terms": [
+          "貨車",
+          "卡車",
+          "司機",
+          "卸貨",
+          "裝貨",
+          "倉庫",
+          "月台",
+          "碼頭"
+        ]
+      },
+      "context": [
+        "本訊息中的『上下料』是材料進入機台與從機台取出的作業，不是貨車裝卸、一般搬運或只把材料放上／拿下某處。",
+        "『抽查上下料秤重作業落實性』是抽查人員是否確實執行秤重程序，不是檢查磅秤設備本身是否正常。",
+        "『請各班要求』是省略受詞的主管指示，意思是各班必須要求並確保操作員落實此程序；不可弱化成 hanya menegaskan/menekankan hal ini（只強調此事）。",
+        "『監視器監看』以 pemantauan CCTV／pemantauan melalui kamera pengawas 表達；『現場觀察』是 observasi/pengamatan langsung di lapangan。",
+        "『查核作業』是針對作業落實情況的 pemeriksaan/audit，不是產品品質檢驗，也不可自行增加處罰或違規後果。"
+      ],
+      "preferred_target_phrases": [
+        "pemeriksaan acak untuk memastikan pelaksanaan penimbangan",
+        "pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin",
+        "setiap shift memastikan operator menjalankan prosedur ini dengan benar",
+        "pemantauan CCTV",
+        "observasi langsung di lapangan"
+      ],
+      "forbidden_target_phrases": [
+        "menegaskan hal ini",
+        "menekankan hal ini",
+        "saat memasukkan dan mengeluarkan material",
+        "bongkar muat material",
+        "pemeriksaan timbangan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "抽查"
+          ],
+          "target_any": [
+            "pemeriksaan acak",
+            "pemeriksaan secara acak",
+            "pengecekan acak",
+            "audit acak"
+          ],
+          "issue": "missing_random_audit_semantics"
+        },
+        {
+          "source_any": [
+            "上下料",
+            "上料"
+          ],
+          "target_any": [
+            "dimasukkan ke mesin",
+            "masuk ke mesin",
+            "memasukkan material ke mesin",
+            "proses memasukkan material ke mesin"
+          ],
+          "issue": "missing_material_loading_into_machine_semantics"
+        },
+        {
+          "source_any": [
+            "上下料",
+            "下料"
+          ],
+          "target_any": [
+            "dikeluarkan dari mesin",
+            "keluar dari mesin",
+            "mengeluarkan material dari mesin",
+            "proses mengeluarkan material dari mesin"
+          ],
+          "issue": "missing_material_unloading_from_machine_semantics"
+        },
+        {
+          "source_any": [
+            "秤重",
+            "稱重"
+          ],
+          "target_any": [
+            "penimbangan",
+            "ditimbang",
+            "menimbang"
+          ],
+          "issue": "missing_weighing_operation_semantics"
+        },
+        {
+          "source_any": [
+            "落實性",
+            "落實"
+          ],
+          "target_any": [
+            "pelaksanaan",
+            "dilaksanakan",
+            "menjalankan",
+            "mematuhi",
+            "kepatuhan"
+          ],
+          "issue": "missing_implementation_compliance_semantics"
+        },
+        {
+          "source_any": [
+            "各班"
+          ],
+          "target_any": [
+            "setiap shift",
+            "masing-masing shift",
+            "tiap shift"
+          ],
+          "issue": "missing_each_shift_scope"
+        },
+        {
+          "source_any": [
+            "各班要求",
+            "請各班要求"
+          ],
+          "target_any": [
+            "memastikan operator",
+            "menginstruksikan operator",
+            "mewajibkan operator",
+            "memastikan pelaksanaan",
+            "memastikan prosedur",
+            "memastikan ketentuan"
+          ],
+          "issue": "missing_shift_enforcement_semantics"
+        },
+        {
+          "source_any": [
+            "監視器"
+          ],
+          "target_any": [
+            "CCTV",
+            "kamera pengawas"
+          ],
+          "issue": "missing_cctv_monitoring_semantics"
+        },
+        {
+          "source_any": [
+            "現場觀察"
+          ],
+          "target_any": [
+            "observasi langsung di lapangan",
+            "pengamatan langsung di lapangan",
+            "observasi langsung di area kerja",
+            "pengamatan langsung di area kerja"
+          ],
+          "issue": "missing_direct_field_observation_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "今日起會抽查上下料秤重作業落實性，請各班要求。",
+          "target": "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift memastikan operator menjalankan prosedur ini dengan benar."
+        },
+        {
+          "source": "會以監視器監看方式及現場觀察進行查核作業。",
+          "target": "Pemeriksaan akan dilakukan melalui pemantauan CCTV dan observasi langsung di lapangan."
+        }
+      ]
+    },
     {
       "id": "pmi_grade_verification_bundle_packaging",
       "enabled": true,

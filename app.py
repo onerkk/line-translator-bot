@@ -360,7 +360,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-20.3-pmi-grade-verification-semantics"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.1-loading-unloading-weighing-audit-semantics"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -394,6 +394,10 @@ _fk_pmi_grade = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "再宣導一下，每一把都一定要打鋼種，出貨這把是A班異型站包裝時嫌麻煩沒檢驗PMI就包了",
     "zh", "id", limit=5
 )
+_fk_loading_weighing_audit = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "今日起會抽查上下料秤重作業落實性，請各班要求。會以監視器監看方式及現場觀察進行查核作業。",
+    "zh", "id", limit=5
+)
 if not any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_erp):
     raise RuntimeError("factory knowledge self-test failed: ERP timing context was not retrieved")
 if any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_physical):
@@ -406,6 +410,8 @@ if not any(card.get("id") == "material_washing_support_semantics" for card in _f
     raise RuntimeError("factory knowledge self-test failed: material washing support semantics were not retrieved")
 if not any(card.get("id") == "pmi_grade_verification_bundle_packaging" for card in _fk_pmi_grade):
     raise RuntimeError("factory knowledge self-test failed: PMI grade-verification semantics were not retrieved")
+if not any(card.get("id") == "loading_unloading_weighing_audit" for card in _fk_loading_weighing_audit):
+    raise RuntimeError("factory knowledge self-test failed: loading/unloading weighing audit semantics were not retrieved")
 _FACTORY_KNOWLEDGE_SELFTEST_OK = True
 logger.info("[FactoryKnowledge] verified build=%s entries=%s sha256=%s",
             _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
