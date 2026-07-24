@@ -16,6 +16,7 @@ The module is intentionally provider-neutral and works with the project's
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -23,12 +24,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import glossary_policy as gp_module
+import factory_semantic_audit as fsa_module
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 18
-QUALITY_GATE_BUILD_ID = "2026-07-24.4-casebook-semantic-review"
+QUALITY_GATE_API_VERSION = 19
+QUALITY_GATE_BUILD_ID = "2026-07-24.6-structured-source-claim-audit-fallback"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1613,6 +1615,8 @@ def _call_chat_complete(
     max_tokens: int,
     timeout: int = 90,
     provider_preference: Optional[Sequence[str]] = None,
+    structured_schema: Optional[Mapping[str, Any]] = None,
+    structured_name: str = "translation_source_audit",
 ) -> Any:
     """Issue exactly one coordinated request.
 
@@ -1631,6 +1635,9 @@ def _call_chat_complete(
     )
     if provider_preference:
         kwargs["provider_preference"] = list(provider_preference)
+    if structured_schema:
+        kwargs["structured_schema"] = dict(structured_schema)
+        kwargs["structured_name"] = str(structured_name or "translation_source_audit")
     return ai_client.chat_complete(**kwargs)
 
 def _extract_response_text(resp: Any) -> str:
@@ -1662,12 +1669,12 @@ def review_translation(
     provider_preference: Optional[Sequence[str]] = None,
     review_context: str = "",
 ) -> Optional[str]:
-    """Perform at most one source-grounded repair call.
+    """Perform one independent source-grounded adjudication call.
 
-    The repair is conditional: it runs only after deterministic validation found
-    a hard defect.  The model receives the protected source and the detected
-    issues, so it reconstructs the translation instead of polishing the bad
-    candidate.  A repaired result still has to pass the same local validator.
+    High-risk Chinese factory instructions use strict structured output: the
+    reviewer must first enumerate source claims, resolve shorthand, prove claim
+    coverage and disclose unsupported additions before its corrected translation
+    is accepted.  Other directions retain the legacy plain-text review path.
     """
     if not source or not candidate or ai_client is None:
         return None
@@ -1676,36 +1683,59 @@ def review_translation(
     )
     immutable = inspect_immutable_spans(source)
     visible_source = immutable.protected
-    messages = _build_review_messages(
-        visible_source,
-        candidate,
-        src_lang,
-        tgt_lang,
-        list(issues or ()),
-        glossary_pairs,
-    )
-    if review_context:
-        messages[-1] = dict(messages[-1])
-        messages[-1]["content"] += (
-            "\n\nRETRIEVED VERIFIED CONTEXT AND CORRECTION CASES:\n"
-            + str(review_context)[:24000]
-            + "\nUse this only where it matches the current source. The source remains authoritative."
+    frame = fsa_module.build_source_frame(source, src_lang, tgt_lang)
+    use_structured_audit = bool(frame.get("active"))
+    if use_structured_audit:
+        messages = fsa_module.build_structured_review_messages(
+            visible_source,
+            candidate,
+            src_lang,
+            tgt_lang,
+            list(issues or ()),
+            glossary_pairs,
+            review_context,
+            frame,
         )
+    else:
+        messages = _build_review_messages(
+            visible_source,
+            candidate,
+            src_lang,
+            tgt_lang,
+            list(issues or ()),
+            glossary_pairs,
+        )
+        if review_context:
+            messages[-1] = dict(messages[-1])
+            messages[-1]["content"] += (
+                "\n\nRETRIEVED VERIFIED CONTEXT AND CORRECTION CASES:\n"
+                + str(review_context)[:24000]
+                + "\nUse this only where it matches the current source. The source remains authoritative."
+            )
     immutable_note = visible_immutable_instruction(immutable.mapping.values())
     if immutable_note:
         messages[0] = dict(messages[0])
         messages[0]["content"] += "\n" + immutable_note
     try:
-        budget = max(800, min(4000, len(visible_source) * 3 + 600))
+        budget = max(1000, min(5200, len(visible_source) * 4 + 1000))
         response = _call_chat_complete(
             ai_client,
             model=model,
             messages=messages,
             max_tokens=budget,
-            timeout=45,
+            timeout=55,
             provider_preference=provider_preference,
+            structured_schema=(fsa_module.structured_review_schema() if use_structured_audit else None),
+            structured_name="factory_translation_source_audit",
         )
         raw = _extract_response_text(response)
+        if use_structured_audit:
+            payload = fsa_module.parse_structured_payload(raw)
+            payload_ok, payload_issues = fsa_module.validate_structured_payload(payload, frame)
+            if not payload_ok:
+                logger.warning("[QualityGate] structured source audit rejected: %s", payload_issues[:12])
+                return None
+            raw = str(payload.get("corrected_translation") or "").strip()
         text, _report = _finalize_visible_candidate(
             source,
             raw,
@@ -1715,11 +1745,15 @@ def review_translation(
             glossary_pairs,
             require_paragraph_fidelity=is_quality_critical(source, src_lang, tgt_lang),
         )
+        if use_structured_audit and text:
+            semantic_ok, semantic_issues = fsa_module.validate_translation(frame, text)
+            if not semantic_ok:
+                logger.warning("[QualityGate] structured translation failed local frame: %s", semantic_issues[:12])
+                return None
         return text
     except Exception as exc:
-        logger.warning("[QualityGate] conditional repair unavailable: %s", exc)
+        logger.warning("[QualityGate] conditional source audit unavailable: %s", exc)
         return None
-
 
 def _append_missing_data_note(candidate: str, missing_literals: Sequence[str], tgt_lang: str) -> str:
     """Keep a usable translation deliverable even when a model omitted source data.
@@ -1844,6 +1878,26 @@ def gate_and_revise(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
     immutable_values = list(immutable_literals or ())
+    source_frame = fsa_module.build_source_frame(source, src_lang, tgt_lang)
+
+    caller_semantic_validator = semantic_validator
+    def _combined_semantic_validator(text: str) -> Tuple[bool, Sequence[str]]:
+        combined_issues: List[str] = []
+        if caller_semantic_validator is not None:
+            try:
+                caller_ok, caller_issues = caller_semantic_validator(text)
+            except Exception as exc:
+                logger.warning("[QualityGate] caller semantic validator unavailable: %s", exc)
+                caller_ok, caller_issues = True, []
+            if not caller_ok or caller_issues:
+                combined_issues.extend(str(x) for x in (caller_issues or ()) if str(x).strip())
+        frame_ok, frame_issues = fsa_module.validate_translation(source_frame, text)
+        if not frame_ok or frame_issues:
+            combined_issues.extend(str(x) for x in (frame_issues or ()) if str(x).strip())
+        combined_issues = list(dict.fromkeys(combined_issues))
+        return not combined_issues, combined_issues
+
+    semantic_validator = _combined_semantic_validator if (caller_semantic_validator is not None or source_frame.get("active")) else None
     candidate = repair_identity_tokens(source, candidate)
     candidate = normalize_indonesian_factory_register(
         source, candidate, src_lang, tgt_lang
@@ -1859,7 +1913,10 @@ def gate_and_revise(
     # Preserve the low-latency single-call path by default.  A second call is
     # permitted only when the caller explicitly classified the message as
     # high-risk or matched it to a verified correction case.
-    should_review = bool(ai_client is not None and force_review)
+    should_review = bool(
+        ai_client is not None
+        and (force_review or fsa_module.should_force_review(source_frame))
+    )
     if should_review:
         preference = _independent_provider_preference(ai_client, used_provider)
         reviewed = review_translation(
@@ -1911,6 +1968,40 @@ def gate_and_revise(
                     "degraded": True,
                     "cacheable": False,
                     "path": "independent_review_rejected_original_kept",
+                }
+
+    # Provider review is intentionally not a single point of failure.  For the
+    # complete polishing/large-bar scheduling frame, reconstruct a conservative
+    # target from source-proven slots whenever the model candidate still violates
+    # the semantic contract.  This also protects paraphrases when the review API
+    # is unavailable; incomplete/other scenarios never enter this fallback.
+    if not report.ok and source_frame.get("active"):
+        deterministic = fsa_module.deterministic_rebuild(source_frame)
+        if deterministic:
+            deterministic = repair_identity_tokens(source, deterministic)
+            deterministic = normalize_indonesian_factory_register(
+                source, deterministic, src_lang, tgt_lang
+            )
+            deterministic_report = validate_translation(
+                source, deterministic, src_lang, tgt_lang,
+                immutable_literals=immutable_values,
+                glossary_pairs=glossary_pairs,
+                require_paragraph_fidelity=critical,
+            )
+            deterministic_report = _merge_semantic_validation(
+                deterministic_report, deterministic, semantic_validator
+            )
+            if deterministic_report.ok:
+                return {
+                    "ok": True,
+                    "text": deterministic,
+                    "issues": deterministic_report.issues,
+                    "hard_issues": [],
+                    "warnings": deterministic_report.warnings,
+                    "reviewed": bool(should_review),
+                    "degraded": bool(should_review),
+                    "cacheable": True,
+                    "path": "deterministic_source_frame_rebuild",
                 }
 
     if report.ok:

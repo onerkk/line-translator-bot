@@ -103,6 +103,7 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.6 / 2026-05-28)
 
 import os
 import json
+import re
 import time
 import threading
 
@@ -1800,6 +1801,8 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
     request_client = _client_with_limits(client, timeout)
     g_model = _resolve_gemini_model(model)
     features = _current_config.get("gemini_features", {}) if _current_config else {}
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
 
     g_kwargs = {
         "model": g_model,
@@ -1810,8 +1813,17 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         g_kwargs["max_tokens"] = int(max_tokens)
     if temperature is not None:
         g_kwargs["temperature"] = temperature
-    if stop:
+    if stop and not structured_schema:
         g_kwargs["stop"] = stop
+    if structured_schema:
+        g_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": re.sub(r"[^A-Za-z0-9_-]+", "_", structured_name)[:64] or "structured_response",
+                "strict": True,
+                "schema": structured_schema,
+            },
+        }
     _effort = "minimal" if fast_quality else (features.get("reasoning_effort") or "minimal").strip().lower()
     # 舊版後台可能存 none；Gemini 3 相容端點使用 minimal 作為最低延遲檔。
     if _effort == "none":
@@ -1837,7 +1849,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
                 e = e2
                 _msg = str(e2).lower()
         retried = False
-        for _opt in ("reasoning_effort", "stop"):
+        for _opt in ("response_format", "reasoning_effort", "stop"):
             if _opt in g_kwargs and (_opt in _msg or "invalid" in _msg or "unrecognized" in _msg
                                      or "unsupported" in _msg or "400" in _msg):
                 g_kwargs.pop(_opt, None)
@@ -1980,19 +1992,23 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
     """單一 provider 呼叫分派(v3.26 自容錯重構抽出)。"""
     # 內部旗標只控制翻譯延遲，不送到任何第三方 API。
     fast_quality = bool(kwargs.pop("translation_fast_quality", False))
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
     if provider == "anthropic":
         return _chat_complete_anthropic(
             model=model, messages=messages,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout,
             extra_stop=stop, fast_quality=fast_quality,
+            structured_schema=structured_schema, structured_name=structured_name,
         )
     if provider == "gemini":
         return _chat_complete_gemini(
             model=model, messages=messages,
             max_tokens=max_tokens or max_completion_tokens or 1024,
             temperature=temperature, timeout=timeout, stop=stop,
-            fast_quality=fast_quality,
+            fast_quality=fast_quality, structured_schema=structured_schema,
+            structured_name=structured_name,
         )
     model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
     if fast_quality and reasoning_effort not in ("none", "minimal"):
@@ -2009,7 +2025,9 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
         prompt_cache_key=prompt_cache_key,
         reasoning_effort=reasoning_effort, verbosity=verbosity,
         logprobs=logprobs, top_logprobs=top_logprobs,
-        logit_bias=logit_bias, stop=stop, **kwargs,
+        logit_bias=logit_bias, stop=stop,
+        structured_schema=structured_schema, structured_name=structured_name,
+        **kwargs,
     )
 
 
@@ -2207,6 +2225,9 @@ def _chat_complete_openai(model, messages, **kwargs):
     # 最後一道模型生命週期保護：任何內部模組傳入舊 ID 都先遷移。
     model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
 
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
+
     # v3.2.6: Phase 25 對稱 — OpenAI 路徑也支援 output_translation_tag
     # OpenAI GPT-5 reasoning model 跟 Claude 一樣會吐元評論(Wait/I notice/If English:),
     # 後端 regex 抽 <translation> tag 內容是兩家通用的官方治本路徑。
@@ -2214,7 +2235,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     #   https://developers.openai.com/api/docs/guides/prompt-guidance (<output_contract> 範例)
     _ensure_initialized()
     features = _current_config.get("claude_features", {})
-    use_output_tag = features.get("output_translation_tag", False)
+    use_output_tag = features.get("output_translation_tag", False) and not structured_schema
 
     if use_output_tag and messages:
         # 在 system / developer role 訊息末尾注入 <output_format> 指令
@@ -2259,6 +2280,16 @@ def _chat_complete_openai(model, messages, **kwargs):
         if k == "logprobs" and v is False:
             continue
         call_kwargs[k] = v
+    if structured_schema:
+        call_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": re.sub(r"[^A-Za-z0-9_-]+", "_", structured_name)[:64] or "structured_response",
+                "strict": True,
+                "schema": structured_schema,
+            },
+        }
+        call_kwargs.pop("stop", None)
 
     # GPT-5.4 / GPT-5.5 是 reasoning family：Chat Completions 使用
     # max_completion_tokens；純翻譯預設 reasoning=none，並移除不相容採樣參數。
@@ -2292,7 +2323,14 @@ def _chat_complete_openai(model, messages, **kwargs):
     try:
         resp = request_client.chat.completions.create(**call_kwargs)
     except Exception as _fe:
-        if _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
+        if structured_schema and _is_feature_parameter_error(
+                _fe, "response_format", "json_schema", "structured output"):
+            # Older compatibility endpoints may not implement strict JSON schema.
+            # The audit prompt still requires JSON, so retry once without the
+            # transport-level constraint rather than dropping the audit.
+            call_kwargs.pop("response_format", None)
+            resp = request_client.chat.completions.create(**call_kwargs)
+        elif _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
             call_kwargs.pop("service_tier", None)
             resp = request_client.chat.completions.create(**call_kwargs)
         else:
@@ -2327,7 +2365,8 @@ def _chat_complete_openai(model, messages, **kwargs):
 
 
 def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
-                              timeout=120, extra_stop=None, fast_quality=False):
+                              timeout=120, extra_stop=None, fast_quality=False,
+                              structured_schema=None, structured_name="structured_response"):
     """Anthropic 路徑 — v3.0 完整 Claude 能力全部自動啟用"""
     client = _get_anthropic_client()
     if client is None:
@@ -2336,6 +2375,17 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
 
     _ensure_initialized()
     features = dict(_current_config.get("claude_features", {}))
+    structured_name = str(structured_name or "structured_response")
+    # Native structured outputs cannot be combined with citation blocks, XML
+    # output wrappers or stop sequences that may truncate JSON.
+    if structured_schema:
+        features["extended_thinking"] = False
+        features["adaptive_thinking"] = False
+        features["citations"] = False
+        features["stop_sequences"] = False
+        features["output_translation_tag"] = False
+        features["assistant_prefill"] = False
+        features["glossary_grounding"] = False
     # 翻譯快速品質模式只關閉 Extended/Adaptive Thinking；模型、system prompt、
     # glossary grounding、cache、stop sequence 與輸出後處理全部維持不變。
     if fast_quality:
@@ -2575,6 +2625,14 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         elif temperature is not None and not is_opus:
             call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
 
+    if structured_schema:
+        output_config = dict(call_kwargs.get("output_config") or {})
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": structured_schema,
+        }
+        call_kwargs["output_config"] = output_config
+
     # ─── Step 4: 呼叫 ───
     try:
         resp = request_client.messages.create(**call_kwargs)
@@ -2584,7 +2642,17 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         # 原因:Sonnet 4.6 + adaptive thinking 失敗時,若錯誤訊息不含
         # "adaptive"/"effort"/"display" 等字,原本直接 raise → 翻譯無聲消失。
         # 新邏輯:只要 thinking_applied=True 且 API 呼叫失敗,一律 fallback。
-        if thinking_applied and _is_feature_parameter_error(
+        if structured_schema and _is_feature_parameter_error(
+                e, "output_config", "json_schema", "format", "structured output"):
+            print(f"[ai_provider] Anthropic structured output 不相容，退回 JSON prompt: {str(e)[:160]}", flush=True)
+            output_config = dict(call_kwargs.get("output_config") or {})
+            output_config.pop("format", None)
+            if output_config:
+                call_kwargs["output_config"] = output_config
+            else:
+                call_kwargs.pop("output_config", None)
+            resp = request_client.messages.create(**call_kwargs)
+        elif thinking_applied and _is_feature_parameter_error(
                 e, "thinking", "adaptive", "budget_tokens", "effort", "display"):
             print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
             # Fallback A: adaptive → legacy

@@ -1,8 +1,216 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-24.3-guarded-casebook-regression",
+  "build_id": "2026-07-24.5-polishing-source-frame-fallback",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
+    {
+      "id": "polishing_large_bar_month_end_priority",
+      "enabled": true,
+      "priority": 210,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月底大尺寸拋光棒材集中到料與機台優先生產",
+      "match": {
+        "strong_phrases": [
+          "拋光機大尺寸棒材會集中大量到料",
+          "不可以吊小尺寸慢慢跑",
+          "大尺寸優先生產"
+        ],
+        "all_groups": [
+          [
+            "拋光機",
+            "拋光",
+            "抛光机",
+            "抛光"
+          ],
+          [
+            "大尺寸",
+            "大規格",
+            "大规格",
+            "大徑",
+            "大径"
+          ],
+          [
+            "到料",
+            "到貨",
+            "到货",
+            "進料",
+            "进料",
+            "來料",
+            "来料"
+          ],
+          [
+            "優先生產",
+            "优先生产",
+            "先做",
+            "先跑",
+            "優先",
+            "优先"
+          ],
+          [
+            "小尺寸",
+            "小規格",
+            "小规格",
+            "小徑",
+            "小径"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "月底前",
+          "本月份",
+          "本月",
+          "集中",
+          "大量",
+          "I5",
+          "I15",
+          "吊",
+          "慢慢跑",
+          "慢跑"
+        ],
+        "none_terms": [
+          "天車維修",
+          "天车维修",
+          "吊車維修",
+          "吊车维修"
+        ],
+        "min_score": 20
+      },
+      "context": [
+        "「集中大量到料」同時包含兩個資訊：到貨量大，而且到貨時間集中／相近；不能只保留其中一項。",
+        "「本月份的大尺寸」表示本月排程或本月範圍內的大尺寸棒材／訂單，印尼文要讓 bulan ini 修飾材料或排程範圍，不能寫成 produksi ukuran besar dari bulan ini。",
+        "「I5、I15要先…優先生產」是指定機台的生產優先順序，宜用 mendahulukan 或 memprioritaskan produksi。",
+        "「吊小尺寸慢慢跑」在此是生產排程與產出效率語意：不要把小尺寸棒材吊／送上機後慢慢占用設備。原文只寫『吊』時，不可自行補成 crane、derek 或 overhead crane。",
+        "「慢慢跑」沒有提到轉速或 RPM 時，不可翻成低轉速、降低機速等設備設定。"
+      ],
+      "preferred_target_phrases": [
+        "batang berukuran besar",
+        "akan tiba dalam jumlah besar dalam waktu yang berdekatan",
+        "mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini",
+        "jangan mengangkat dan memasukkan batang berukuran kecil ke mesin lalu menjalankan produksinya secara lambat"
+      ],
+      "forbidden_target_phrases": [
+        "produksi ukuran besar dari bulan ini",
+        "produksi berukuran besar dari bulan ini"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "月底前",
+            "月末前"
+          ],
+          "target_any": [
+            "sebelum akhir bulan",
+            "sebelum bulan ini berakhir",
+            "sebelum penghujung bulan"
+          ],
+          "issue": "missing_month_end_deadline"
+        },
+        {
+          "target_any": [
+            "material batang berukuran besar",
+            "batang berukuran besar",
+            "batang ukuran besar"
+          ],
+          "issue": "missing_large_bar_material"
+        },
+        {
+          "target_any": [
+            "dalam jumlah besar",
+            "dalam jumlah banyak",
+            "volume besar"
+          ],
+          "issue": "missing_bulk_arrival"
+        },
+        {
+          "target_any": [
+            "dalam waktu yang berdekatan",
+            "secara bersamaan",
+            "secara terkonsentrasi",
+            "dalam periode yang sama"
+          ],
+          "issue": "missing_concentrated_arrival"
+        },
+        {
+          "target_any": [
+            "mendahulukan",
+            "memprioritaskan",
+            "diprioritaskan",
+            "prioritas"
+          ],
+          "issue": "missing_production_priority"
+        },
+        {
+          "source_any": [
+            "本月份",
+            "本月"
+          ],
+          "target_any": [
+            "bulan ini"
+          ],
+          "issue": "missing_current_month_scope"
+        },
+        {
+          "target_any": [
+            "tidak boleh",
+            "jangan",
+            "dilarang"
+          ],
+          "issue": "missing_prohibition"
+        },
+        {
+          "target_any": [
+            "batang berukuran kecil",
+            "material berukuran kecil",
+            "material ukuran kecil",
+            "batang ukuran kecil"
+          ],
+          "issue": "missing_small_size_material"
+        },
+        {
+          "source_any": [
+            "吊"
+          ],
+          "target_any": [
+            "mengangkat",
+            "memasukkan",
+            "memuat",
+            "menaikkan"
+          ],
+          "issue": "missing_hoist_or_load_action"
+        },
+        {
+          "source_any": [
+            "慢慢跑",
+            "慢跑"
+          ],
+          "target_any": [
+            "secara lambat",
+            "secara perlahan",
+            "berjalan lambat",
+            "produksi lambat"
+          ],
+          "issue": "missing_slow_production_semantics"
+        }
+      ],
+      "preserve_source_regex": [
+        "\\b(?:I5|I15)\\b"
+      ],
+      "examples": [
+        {
+          "source": "月底前拋光機大尺寸棒材會集中大量到料，I5、I15要先從本月份的大尺寸優先生產，不可以吊小尺寸慢慢跑。",
+          "target": "Sebelum akhir bulan, batang berukuran besar untuk mesin polishing akan tiba dalam jumlah besar dalam waktu yang berdekatan. I5 dan I15 harus mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini. Jangan mengangkat dan memasukkan batang berukuran kecil ke mesin lalu menjalankan produksinya secara lambat.",
+          "bad_target": "Sebelum akhir bulan, material batang ukuran besar untuk mesin polishing akan datang dalam jumlah besar secara bersamaan. I5 dan I15 harus terlebih dahulu memprioritaskan produksi ukuran besar dari bulan ini. Jangan mengangkat material ukuran kecil lalu memprosesnya secara perlahan.",
+          "reason": "舊譯文讓『本月份』錯誤修飾抽象的 ukuran besar，且未把最後一句放回機台排程／產出效率語境。"
+        },
+        {
+          "source": "月底前大尺寸拋光棒材會密集大量進料，I5、I15本月先跑大尺寸，禁止先吊小尺寸占機慢跑。",
+          "target": "Sebelum akhir bulan, batang berukuran besar untuk proses polishing akan masuk dalam jumlah besar dalam waktu yang berdekatan. I5 dan I15 harus mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini. Dilarang mengangkat dan memasukkan batang berukuran kecil ke mesin sehingga mesin dipakai untuk produksi yang berjalan lambat.",
+          "reason": "同類排程語意的改寫，用於防止只記住完全相同句子。"
+        }
+      ]
+    },
     {
       "id": "loading_unloading_weighing_audit",
       "enabled": true,

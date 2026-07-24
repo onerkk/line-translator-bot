@@ -259,6 +259,7 @@ import translation_extras as translation_extras_module
 import expressive_assets as expressive_assets_module
 import expressive_engine as expressive_engine_module
 import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
+import factory_semantic_audit as factory_semantic_audit_module  # source-claim frame + structured independent audit
 import translation_casebook as translation_casebook_module  # unified verified examples + human corrections
 import factory_terminology as factory_terminology_module  # indexed plant glossary shared by text/OCR
 
@@ -266,8 +267,8 @@ import factory_terminology as factory_terminology_module  # indexed plant glossa
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 18
-_EXPECTED_QG_BUILD_ID = "2026-07-24.4-casebook-semantic-review"
+_EXPECTED_QG_API_VERSION = 19
+_EXPECTED_QG_BUILD_ID = "2026-07-24.6-structured-source-claim-audit-fallback"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -284,6 +285,21 @@ logger.info(
     _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
     getattr(tqg_module, "__file__", "<unknown>"),
 )
+
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-07-24.2-source-claim-structured-audit-fallback"
+if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
+        != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
+        or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
+        != _EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID):
+    raise RuntimeError(
+        "factory semantic audit deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION} "
+        f"build={_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID}, "
+        f"loaded api={getattr(factory_semantic_audit_module, 'FACTORY_SEMANTIC_AUDIT_API_VERSION', None)!r} "
+        f"build={getattr(factory_semantic_audit_module, 'FACTORY_SEMANTIC_AUDIT_BUILD_ID', None)!r}. "
+        "Replace app.py, translation_quality_gate.py, ai_provider.py and factory_semantic_audit.py together."
+    )
 
 _EXPECTED_CASEBOOK_API_VERSION = 2
 _EXPECTED_CASEBOOK_BUILD_ID = "2026-07-24.5-guarded-correction-casebook"
@@ -373,7 +389,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.3-guarded-casebook-regression"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.5-polishing-source-frame-fallback"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -7579,7 +7595,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v7-quality-cost-routing-context"
+_SEMANTIC_CONTRACT_VERSION = "v8-source-claim-structured-audit"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -8342,6 +8358,38 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["nmt_allowed"] = False
             contract["requires_llm"] = True
 
+    # Source-claim semantic frame.  Unlike a keyword glossary, this records the
+    # operational relationships that must survive translation: time/scope,
+    # machine assignment, material contrast, priority, prohibition and whether
+    # the source actually names crane/RPM details.
+    try:
+        _fsa_module = globals().get("factory_semantic_audit_module")
+        source_frame = (
+            _fsa_module.build_source_frame(text, src, tgt)
+            if _fsa_module is not None else {"active": False}
+        )
+    except Exception as exc:
+        _logger = globals().get("logger")
+        if _logger is not None and hasattr(_logger, "warning"):
+            _logger.warning("[FactorySemanticAudit] source frame failed open: %s", exc)
+        source_frame = {"active": False}
+    if source_frame.get("active"):
+        contract["has_risk"] = True
+        contract["risks"].append({
+            "term": "factory_source_claims",
+            "sense": "factory_source_semantic_frame",
+            "frame": source_frame,
+            "tm_bypass_allowed": False,
+            "nmt_allowed": False,
+            "requires_validation": True,
+        })
+        contract["tm_bypass_allowed"] = False
+        contract["vector_bypass_allowed"] = False
+        contract["nmt_allowed"] = False
+        contract["requires_llm"] = True
+        if _fsa_module is not None and _fsa_module.should_force_review(source_frame):
+            contract["requires_independent_review"] = True
+
     # Generic plant-context retrieval.  This is direction-neutral and data-driven:
     # adding a new workflow means editing factory_knowledge.json, not app.py.
     try:
@@ -8408,7 +8456,13 @@ def build_translation_semantic_contract_prompt(contract):
     lines = ["<semantic_contract>"]
     lines.append("This block is generated by deterministic pre-translation semantic analysis. It overrides TM/NMT/examples/general dictionary meanings.")
     for risk in contract.get("risks", []):
-        if risk.get("sense") == "factory_knowledge_context":
+        if risk.get("sense") == "factory_source_semantic_frame":
+            _fsa_module = globals().get("factory_semantic_audit_module")
+            frame_prompt = (_fsa_module.build_prompt(risk.get("frame") or {})
+                            if _fsa_module is not None else "")
+            if frame_prompt:
+                lines.append(frame_prompt)
+        elif risk.get("sense") == "factory_knowledge_context":
             knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
             if knowledge_prompt:
                 lines.append(knowledge_prompt)
@@ -8470,7 +8524,13 @@ def translation_satisfies_semantic_contract(contract, translation):
     t = (translation or "").strip()
     low = t.lower()
     for risk in contract.get("risks", []):
-        if risk.get("sense") == "factory_knowledge_context":
+        if risk.get("sense") == "factory_source_semantic_frame":
+            _fsa_module = globals().get("factory_semantic_audit_module")
+            if _fsa_module is not None:
+                ok, issues = _fsa_module.validate_translation(risk.get("frame") or {}, t)
+                if not ok:
+                    return False, issues[0] if issues else "factory_source_semantic_frame_failed"
+        elif risk.get("sense") == "factory_knowledge_context":
             ok, issues = factory_knowledge_module.validate_translation(
                 risk.get("cards", []), risk.get("source_text", ""), t
             )
@@ -8672,51 +8732,30 @@ def _verified_cases_from_contract(contract):
 
 
 def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt, contract):
-    """One provider-neutral repair attempt using retrieved plant knowledge.
+    """Record semantic defects and reserve the single repair call for final audit.
 
-    This is the key difference from sentence patches: validation rules and
-    context come from JSON cards.  The server never constructs a canned target
-    sentence.  If the second model attempt is still imperfect, availability-first
-    delivery keeps the best non-empty candidate and marks it non-cacheable later.
+    Older builds performed a generic repair here and therefore consumed the only
+    second provider call before the source-grounded quality gate could run.  The
+    final gate now performs the one structured source-claim adjudication, so this
+    stage is intentionally local-only.
     """
     cards = _factory_knowledge_cards_from_contract(contract)
-    if not cards or not translation or getattr(_tl, "factory_knowledge_repairing", False):
+    if not cards or not translation:
         return translation
     ok, issues = factory_knowledge_module.validate_translation(cards, src_text, translation)
-    if ok:
-        return translation
-    try:
-        _tl.factory_knowledge_issues = list(issues)
-        _tl.factory_knowledge_repairing = True
-        _tl.source_review_already_attempted = True
-        revised = translate_openai(
-            src_text, src, tgt, strict_no_source_script=True,
-            repair_mode=True, bad_result=translation,
-        )
-    except Exception as exc:
-        logger.exception("[FactoryKnowledge] repair call failed; keeping first candidate: %s", exc)
-        revised = None
-    finally:
+    if not ok:
         try:
-            _tl.factory_knowledge_repairing = False
+            _tl.factory_knowledge_issues = list(issues)
         except Exception:
             pass
-    if not revised or not isinstance(revised, str) or _is_meta_commentary_leak(revised):
-        return translation
-    revised = _repair_pipeline_identity_placeholders(src_text, revised)
-    revised_ok, revised_issues = factory_knowledge_module.validate_translation(cards, src_text, revised)
-    try:
-        _event_log_write("factory_knowledge_repair", {
-            "src_text": (src_text or "")[:200],
-            "card_ids": [card.get("id") for card in cards],
-            "first_issues": list(issues)[:20],
-            "revised_ok": revised_ok,
-            "revised_issues": list(revised_issues)[:20],
-        })
-    except Exception:
-        pass
-    if revised_ok or len(revised_issues) < len(issues):
-        return revised.strip()
+        try:
+            _event_log_write("factory_knowledge_deferred_to_source_audit", {
+                "src_text": (src_text or "")[:200],
+                "card_ids": [card.get("id") for card in cards],
+                "issues": list(issues)[:20],
+            })
+        except Exception:
+            pass
     return translation
 
 
@@ -12331,12 +12370,22 @@ def _translate_core(text, src, tgt):
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
             _verified_cases = _verified_cases_from_contract(_semantic_contract)
-            _case_validator = (
-                (lambda candidate: translation_casebook_module.validate_translation_cases(
-                    _verified_cases, candidate
-                ))
-                if _verified_cases else None
-            )
+            def _runtime_semantic_validator(candidate):
+                _issues = []
+                if _verified_cases:
+                    _case_ok, _case_issues = translation_casebook_module.validate_translation_cases(
+                        _verified_cases, candidate
+                    )
+                    if not _case_ok or _case_issues:
+                        _issues.extend(str(x) for x in (_case_issues or []) if str(x).strip())
+                _contract_ok, _contract_reason = translation_satisfies_semantic_contract(
+                    _semantic_contract, candidate
+                )
+                if not _contract_ok and _contract_reason:
+                    _issues.append(str(_contract_reason))
+                _issues = list(dict.fromkeys(_issues))
+                return not _issues, _issues
+
             _gate = tqg_module.gate_and_revise(
                 text, result, src, tgt,
                 critical=_quality_critical,
@@ -12350,7 +12399,7 @@ def _translate_core(text, src, tgt):
                 force_review=_force_source_review,
                 used_provider=getattr(_tl, "last_provider_used", None),
                 review_context=_review_context,
-                semantic_validator=_case_validator,
+                semantic_validator=_runtime_semantic_validator,
             )
             if _gate.get("reviewed"):
                 _tl.source_review_already_attempted = True
