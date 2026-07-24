@@ -69,16 +69,33 @@ class LoadingUnloadingWeighingAuditRootFixTests(unittest.TestCase):
         ok, issues = factory_knowledge.validate_translation(cards, "會以監視器監看方式及現場觀察進行查核作業。", candidate)
         self.assertFalse(ok)
         self.assertIn(
-            "factory_knowledge:loading_unloading_weighing_audit:missing_direct_field_observation_semantics",
+            "factory_knowledge:audit_cctv_field_observation_methods:missing_direct_field_observation_semantics",
             issues,
         )
 
-    def test_knowledge_example_contains_the_corrected_translation(self):
-        entry = next(e for e in self.document["entries"] if e["id"] == "loading_unloading_weighing_audit")
-        targets = [example["target"] for example in entry.get("examples", [])]
-        self.assertTrue(any("dimasukkan ke mesin" in target for target in targets))
-        self.assertTrue(any("setiap shift memastikan operator" in target for target in targets))
-        self.assertTrue(any("pemantauan CCTV" in target for target in targets))
+    def test_knowledge_examples_contain_the_corrected_translations(self):
+        operation = next(e for e in self.document["entries"] if e["id"] == "loading_unloading_weighing_audit")
+        methods = next(e for e in self.document["entries"] if e["id"] == "audit_cctv_field_observation_methods")
+        operation_targets = [example["target"] for example in operation.get("examples", [])]
+        method_targets = [example["target"] for example in methods.get("examples", [])]
+        self.assertTrue(any("dimasukkan ke mesin" in target for target in operation_targets))
+        self.assertTrue(any("setiap shift memastikan operator" in target for target in operation_targets))
+        self.assertTrue(any("pemantauan CCTV" in target for target in method_targets))
+
+    def test_unrelated_notices_do_not_trigger_machine_weighing_card(self):
+        probes = (
+            "今日起會抽查員工出勤，請各班要求準時打卡。",
+            "監視器監看發現設備漏油，請各班要求維修人員立即處理。",
+            "現場觀察後請各班要求操作員清掃機台。",
+            "今日起抽查秤重設備校正，會用監視器監看。",
+        )
+        for probe in probes:
+            with self.subTest(probe=probe):
+                cards = self._cards(probe)
+                self.assertFalse(
+                    any(card.get("id") == "loading_unloading_weighing_audit" for card in cards),
+                    cards,
+                )
 
 
 if __name__ == "__main__":

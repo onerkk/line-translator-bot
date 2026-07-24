@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 2
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-07-24.4-unified-correction-casebook"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-07-24.5-guarded-correction-casebook"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -40,6 +40,8 @@ class RetrievedCase:
     reason: str = ""
     origin: str = "example"
     case_id: str = ""
+    guarded: bool = False
+    distinctive_anchors: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -51,6 +53,8 @@ class RetrievedCase:
             "reason": self.reason,
             "origin": self.origin,
             "case_id": self.case_id,
+            "guarded": bool(self.guarded),
+            "distinctive_anchors": list(self.distinctive_anchors),
         }
 
 
@@ -98,6 +102,7 @@ def _case_from_example(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[
         # ``id`` is the Indonesian target field in the historical example
         # schema, so it must never be mistaken for a case identifier.
         "case_id": str(raw.get("case_id") or f"example:{index}"),
+        "source_match": dict(raw.get("source_match") or {}) if isinstance(raw.get("source_match"), Mapping) else {},
     }
 
 
@@ -119,6 +124,7 @@ def _case_from_correction(raw: Mapping[str, Any], index: int = 0) -> Optional[Di
         "reason": str(raw.get("correction_reason") or "").strip(),
         "origin": "active_learning",
         "case_id": "correction:" + str(raw.get("id") or index),
+        "source_match": {},
     }
 
 
@@ -204,6 +210,107 @@ def collect_cases(
     return selected
 
 
+
+def _guard_contains(text: str, term: Any) -> bool:
+    normalized_term = _normalize(term)
+    return bool(normalized_term) and normalized_term in text
+
+
+def _matches_source_guard(query: str, guard: Mapping[str, Any]) -> Tuple[bool, int, List[str]]:
+    """Evaluate the same conservative match contract used by factory knowledge.
+
+    A case with an explicit guard must not participate in fuzzy retrieval unless
+    the current source satisfies that domain contract. This prevents generic
+    notice wording such as "today / random check / each shift" from activating
+    an unrelated machine-loading correction.
+    """
+    if not guard:
+        return True, 0, []
+    normalized = _normalize(query)
+    evidence: List[str] = []
+    for term in guard.get("none_terms", []) or []:
+        if _guard_contains(normalized, term):
+            return False, 0, ["excluded:" + str(term)]
+
+    score = 0
+    strong_hits = [str(term) for term in guard.get("strong_phrases", []) or []
+                   if _guard_contains(normalized, term)]
+    if strong_hits:
+        score += 8 + min(4, len(strong_hits) - 1)
+        evidence.extend("strong:" + term for term in strong_hits[:4])
+
+    all_groups = guard.get("all_groups", []) or []
+    require_all = bool(guard.get("require_all_groups", True))
+    matched_groups = 0
+    for group in all_groups:
+        hits = [str(term) for term in (group or []) if _guard_contains(normalized, term)]
+        if hits:
+            matched_groups += 1
+            score += 4
+            evidence.append("group:" + hits[0])
+        elif require_all:
+            return False, score, evidence
+    if all_groups and not require_all and matched_groups == 0:
+        return False, score, evidence
+
+    any_hits = [str(term) for term in guard.get("any_terms", []) or []
+                if _guard_contains(normalized, term)]
+    score += min(6, len(any_hits))
+    evidence.extend("term:" + term for term in any_hits[:6])
+
+    regex_hits: List[str] = []
+    for pattern in guard.get("regex_any", []) or []:
+        try:
+            if re.search(str(pattern), normalized, flags=re.I):
+                regex_hits.append(str(pattern))
+        except re.error:
+            continue
+    score += min(6, len(regex_hits) * 3)
+    evidence.extend("regex:" + pattern for pattern in regex_hits[:2])
+
+    if guard.get("require_any") and not (strong_hits or any_hits or regex_hits):
+        return False, score, evidence
+    min_score = int(guard.get("min_score", 1) or 1)
+    return score >= min_score, score, evidence
+
+
+_ZH_GENERIC_NOTICE_PHRASES = tuple(sorted({
+    "今日起", "今天起", "從今天起", "本日起", "即日起", "開始", "將會", "會", "將",
+    "進行", "作業", "落實性", "落實", "抽查", "查核", "檢查", "確認", "請各班要求",
+    "請各班", "各班要求", "各班", "每班", "班別", "請", "要求", "注意", "人員", "操作員",
+    "務必", "必須", "確實", "執行", "程序", "事項", "相關", "此事", "情況", "方式", "以及",
+    "並且", "立即", "處理", "進一步", "針對", "是否", "會以", "以", "及",
+}, key=len, reverse=True))
+
+
+def _zh_content_sequence(text: str) -> str:
+    value = _normalize(text)
+    for phrase in _ZH_GENERIC_NOTICE_PHRASES:
+        value = value.replace(phrase, " ")
+    return "".join(_HAN_RUN_RE.findall(value))
+
+
+def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 6) -> List[str]:
+    if direction != "zh2id":
+        return []
+    q = _zh_content_sequence(query)
+    s = _zh_content_sequence(source)
+    if len(q) < 2 or len(s) < 2:
+        return []
+    shared: List[str] = []
+    max_size = min(6, len(q), len(s))
+    for size in range(max_size, 1, -1):
+        for pos in range(0, len(s) - size + 1):
+            phrase = s[pos:pos + size]
+            if phrase not in q:
+                continue
+            if any(phrase in existing or existing in phrase for existing in shared):
+                continue
+            shared.append(phrase)
+            if len(shared) >= max(1, int(limit)):
+                return shared
+    return shared
+
 def _features(text: str, direction: str) -> Counter[str]:
     normalized = _normalize(text)
     features: Counter[str] = Counter()
@@ -288,9 +395,14 @@ def retrieve(
     ranked: List[RetrievedCase] = []
     for case in direction_cases:
         source = str(case.get("source") or "").strip()
+        source_match = case.get("source_match") if isinstance(case.get("source_match"), Mapping) else {}
+        guarded, guard_score, _guard_evidence = _matches_source_guard(query, source_match)
+        if source_match and not guarded:
+            continue
         source_norm = _normalize(source)
         source_compact = _compact(source)
         c_features = _features(source, direction)
+        distinctive_anchors = _distinctive_shared_anchors(query, source, direction)
         coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf)
         score = 0.55 * harmonic + 0.30 * coverage + 0.15 * precision
         # Long Chinese notices make cosine-like overlap deceptively small even
@@ -312,6 +424,16 @@ def retrieve(
         # unrelated case pass the threshold.
         if case.get("bad_target"):
             score += 0.03
+        if source_match and guarded:
+            # A deterministic domain guard is stronger than raw character
+            # overlap, but it still does not authorize copying the target.
+            score += 0.42 + min(0.12, max(0, guard_score - 8) * 0.01)
+        # Human-correction cases without an explicit source contract must share
+        # at least two non-generic content anchors before they can influence a
+        # different sentence. Exact matches remain authoritative.
+        if (case.get("bad_target") and not source_match and score < 9.0
+                and len(distinctive_anchors) < 2):
+            continue
         if score < float(min_score):
             continue
         ranked.append(RetrievedCase(
@@ -323,6 +445,8 @@ def retrieve(
             reason=str(case.get("reason") or "").strip(),
             origin=str(case.get("origin") or "example"),
             case_id=str(case.get("case_id") or ""),
+            guarded=bool(source_match and guarded),
+            distinctive_anchors=tuple(distinctive_anchors),
         ))
     ranked.sort(key=lambda item: (item.score, bool(item.bad_target), len(item.source)), reverse=True)
     return [item.as_dict() for item in ranked[: max(1, int(max_cases or 1))]]
@@ -417,7 +541,11 @@ def validate_translation_cases(
         score = float(case.get("score") or 0.0)
         bad = str(case.get("bad_target") or "").strip()
         good = str(case.get("target") or "").strip()
-        if score < 0.28 or not bad or not good:
+        guarded = bool(case.get("guarded"))
+        minimum = 0.40 if guarded else 0.62
+        if score < minimum or not bad or not good:
+            continue
+        if not guarded and score < 9.0 and len(case.get("distinctive_anchors") or ()) < 2:
             continue
         bad_similarity = _sequence_similarity(candidate_norm, bad)
         good_similarity = _sequence_similarity(candidate_norm, good)
@@ -425,12 +553,9 @@ def validate_translation_cases(
         if bad_similarity >= 0.72 and bad_similarity > good_similarity + 0.08:
             issues.append(f"known_bad_translation_pattern:{case_id}")
             continue
-        anchors = _contrastive_anchors(case)
-        if anchors and not any(_normalize(anchor) in candidate_norm for anchor in anchors):
-            # Only enforce anchors for very close source matches.  Lower-scored
-            # cases remain prompt evidence, never hard lexical constraints.
-            if score >= 0.52:
-                issues.append(f"missing_correction_semantic_anchor:{case_id}")
+        # Do not require verbatim target-side anchor phrases. Indonesian allows
+        # many equally correct lexical realizations; hard semantic requirements
+        # belong in the factory knowledge contract, not in fuzzy string matching.
     return not issues, issues
 
 
@@ -474,11 +599,23 @@ def build_prompt(cases: Sequence[Mapping[str, Any]]) -> str:
 
 
 def casebook_requires_review(cases: Sequence[Mapping[str, Any]]) -> bool:
-    if not cases:
-        return False
-    top = max(float(case.get("score") or 0.0) for case in cases)
-    strong_correction = any(
-        bool(case.get("bad_target")) and float(case.get("score") or 0.0) >= 0.28
-        for case in cases
-    )
-    return top >= 0.38 or strong_correction
+    """Request an extra review only for a high-confidence correction match.
+
+    Generic examples may guide the first translation prompt, but they must not
+    disable TM/NMT or trigger a second provider call merely because common
+    notice wording overlaps. Explicit source guards allow a lower threshold;
+    unguarded fuzzy human corrections require substantially stronger evidence.
+    """
+    for case in cases or ():
+        score = float(case.get("score") or 0.0)
+        if score >= 9.0 and bool(case.get("target")):
+            return True
+        if not case.get("bad_target"):
+            continue
+        guarded = bool(case.get("guarded"))
+        threshold = 0.50 if guarded else 0.62
+        if not guarded and score < 9.0 and len(case.get("distinctive_anchors") or ()) < 2:
+            continue
+        if score >= threshold:
+            return True
+    return False

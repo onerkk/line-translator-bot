@@ -21,6 +21,7 @@ def factory_examples():
                 "case_id": entry["id"],
                 "bad_target": example.get("bad_target", ""),
                 "reason": example.get("reason", ""),
+                "source_match": dict(entry.get("match") or {}),
             }
             if "zh-id" in entry.get("directions", []):
                 examples.append(dict(common, zh=example["source"], id=example["target"], dir="zh2id"))
@@ -66,12 +67,51 @@ class TranslationCasebookRootFixTests(unittest.TestCase):
         self.assertTrue(any(c["case_id"] == "loading_unloading_weighing_audit" for c in cases), cases)
         self.assertTrue(casebook.casebook_requires_review(cases))
 
-    def test_unrelated_truck_loading_does_not_retrieve_machine_case(self):
+    def test_unrelated_notices_do_not_retrieve_machine_case(self):
+        probes = (
+            "貨車卸貨後請司機到月台秤重。",
+            "今日起會抽查員工出勤，請各班要求準時打卡。",
+            "監視器監看發現設備漏油，請各班要求維修人員立即處理。",
+            "現場觀察後請各班要求操作員清掃機台。",
+            "今日起抽查秤重設備校正，會用監視器監看。",
+        )
+        for probe in probes:
+            with self.subTest(probe=probe):
+                cases = casebook.retrieve(
+                    probe, "zh", "id", examples=self.examples,
+                    max_cases=5, min_score=0.22,
+                )
+                self.assertFalse(
+                    any(c["case_id"] == "loading_unloading_weighing_audit" for c in cases),
+                    cases,
+                )
+
+    def test_semantically_correct_wording_variants_are_not_overconstrained(self):
         cases = casebook.retrieve(
-            "貨車卸貨後請司機到月台秤重。", "zh", "id", examples=self.examples,
+            self.paraphrase, "zh", "id", examples=self.examples, max_cases=5, min_score=0.22
+        )
+        variants = (
+            "Mulai hari ini, penimbangan ketika material masuk ke mesin dan keluar dari mesin akan diperiksa secara acak. Setiap shift wajib memastikan para operator mematuhi prosedur tersebut.",
+            "Mulai hari ini, pemeriksaan acak akan dilakukan untuk memastikan bahan ditimbang saat masuk dan keluar dari mesin. Masing-masing shift harus memastikan prosedur ini dipatuhi oleh operator.",
+        )
+        for candidate in variants:
+            with self.subTest(candidate=candidate):
+                self.assertTrue(casebook.validate_translation_cases(cases, candidate)[0])
+
+    def test_unguarded_generic_example_does_not_force_second_provider_review(self):
+        cases = casebook.retrieve(
+            "今日起會抽查員工出勤，請各班要求準時打卡。",
+            "zh", "id",
+            examples=[{
+                "zh": "今日起會抽查上下料秤重作業落實性，請各班要求。",
+                "id": self.correct,
+                "bad_id": self.old,
+                "dir": "zh2id",
+                "origin": "human_correction",
+            }],
             max_cases=5, min_score=0.22,
         )
-        self.assertFalse(any(c["case_id"] == "loading_unloading_weighing_audit" for c in cases), cases)
+        self.assertFalse(casebook.casebook_requires_review(cases), cases)
 
     def test_known_wrong_output_is_rejected_but_correct_output_passes(self):
         cases = casebook.retrieve(

@@ -286,7 +286,7 @@ logger.info(
 )
 
 _EXPECTED_CASEBOOK_API_VERSION = 2
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-24.4-unified-correction-casebook"
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-24.5-guarded-correction-casebook"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -373,7 +373,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.2-unified-casebook-regression"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.3-guarded-casebook-regression"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -3542,6 +3542,7 @@ def _factory_knowledge_examples_for_casebook():
                     "reason": str(example.get("reason") or ""),
                     "origin": "factory_knowledge",
                     "case_id": str(entry.get("id") or "factory_knowledge"),
+                    "source_match": dict(entry.get("match") or {}),
                 })
             if "id-zh" in directions:
                 examples.append({
@@ -3552,6 +3553,7 @@ def _factory_knowledge_examples_for_casebook():
                     "reason": str(example.get("reason") or ""),
                     "origin": "factory_knowledge",
                     "case_id": str(entry.get("id") or "factory_knowledge"),
+                    "source_match": dict(entry.get("match") or {}),
                 })
     return examples
 
@@ -3605,14 +3607,23 @@ if not translation_casebook_module.validate_translation_cases(
     raise RuntimeError(
         "translation casebook behavioral self-test failed: verified correction was rejected"
     )
-_CASEBOOK_NEGATIVE_SELFTEST = _retrieve_verified_translation_cases(
-    "貨車卸貨後請司機到月台秤重。", "zh", "id", max_cases=5,
+_CASEBOOK_NEGATIVE_PROBES = (
+    "貨車卸貨後請司機到月台秤重。",
+    "今日起會抽查員工出勤，請各班要求準時打卡。",
+    "監視器監看發現設備漏油，請各班要求維修人員立即處理。",
+    "現場觀察後請各班要求操作員清掃機台。",
+    "今日起抽查秤重設備校正，會用監視器監看。",
 )
-if any(case.get("case_id") == "loading_unloading_weighing_audit"
-       for case in _CASEBOOK_NEGATIVE_SELFTEST):
-    raise RuntimeError(
-        "translation casebook behavioral self-test failed: truck unloading was confused with machine loading/unloading"
+for _negative_probe in _CASEBOOK_NEGATIVE_PROBES:
+    _negative_cases = _retrieve_verified_translation_cases(
+        _negative_probe, "zh", "id", max_cases=5,
     )
+    if any(case.get("case_id") == "loading_unloading_weighing_audit"
+           for case in _negative_cases):
+        raise RuntimeError(
+            "translation casebook behavioral self-test failed: unrelated notice was confused with machine loading/unloading: "
+            + _negative_probe
+        )
 _CASEBOOK_BOOT_SELFTEST_OK = True
 logger.info(
     "[TranslationCasebook] verified build=%s cases=%d top=%s",
