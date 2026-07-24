@@ -259,14 +259,15 @@ import translation_extras as translation_extras_module
 import expressive_assets as expressive_assets_module
 import expressive_engine as expressive_engine_module
 import factory_knowledge as factory_knowledge_module  # editable plant-context retrieval, no sentence patches
+import translation_casebook as translation_casebook_module  # unified verified examples + human corrections
 import factory_terminology as factory_terminology_module  # indexed plant glossary shared by text/OCR
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 16
-_EXPECTED_QG_BUILD_ID = "2026-07-20.2-implicit-production-units"
+_EXPECTED_QG_API_VERSION = 18
+_EXPECTED_QG_BUILD_ID = "2026-07-24.4-casebook-semantic-review"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -283,6 +284,18 @@ logger.info(
     _ACTUAL_QG_API_VERSION, _ACTUAL_QG_BUILD_ID,
     getattr(tqg_module, "__file__", "<unknown>"),
 )
+
+_EXPECTED_CASEBOOK_API_VERSION = 2
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-24.4-unified-correction-casebook"
+if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
+        or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
+    raise RuntimeError(
+        "translation casebook deployment mismatch: "
+        f"expected api={_EXPECTED_CASEBOOK_API_VERSION} build={_EXPECTED_CASEBOOK_BUILD_ID}, "
+        f"loaded api={getattr(translation_casebook_module, 'TRANSLATION_CASEBOOK_API_VERSION', None)!r} "
+        f"build={getattr(translation_casebook_module, 'TRANSLATION_CASEBOOK_BUILD_ID', None)!r}. "
+        "Replace app.py and translation_casebook.py together in the project root."
+    )
 
 # These four files form one deployable unit.  A stale translation_extras.py was
 # the reason an app-only upload could start successfully and then fail on the
@@ -360,7 +373,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.1-loading-unloading-weighing-audit-semantics"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.2-unified-casebook-regression"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -2733,27 +2746,26 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     else:
         runtime_max = min(1, FEWSHOT_INJECT_MAX)
 
-    scored = []
-    for index, ex in enumerate(relevant):
-        src_side = ex.get("zh", "") if direction_key == "zh2id" else ex.get("id", "")
-        score = _example_relevance_score(src_side, user_msg)
-        # Prefer newer examples only as a tie-breaker, never as a zero-score filler.
-        scored.append((score, index, ex))
-    scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    # A tiny overlap score is usually coincidence.  Inject only genuinely
-    # related examples; otherwise zero-shot with retrieved factory knowledge is
-    # both cheaper and more accurate.
-    chosen = [ex for score, _index, ex in scored if score >= 1.0][:runtime_max]
+    chosen = _retrieve_verified_translation_cases(
+        user_msg, src, tgt, max_cases=runtime_max
+    )
 
     for ex in chosen:
-        zh = ex.get("zh", "").strip()
-        idn = ex.get("id", "").strip()
-        if not zh or not idn:
+        source_eg = str(ex.get("source") or "").strip()
+        assistant_eg = str(ex.get("target") or "").strip()
+        if not source_eg or not assistant_eg:
             continue
-        if direction_key == "zh2id":
-            user_eg, assistant_eg = zh, idn
+        bad_target = str(ex.get("bad_target") or "").strip()
+        reason = str(ex.get("reason") or "").strip()
+        if bad_target:
+            user_eg = (
+                "SOURCE:\n" + source_eg
+                + "\n\nKNOWN INCORRECT TRANSLATION (do not imitate):\n" + bad_target
+                + ("\n\nCORRECTION RATIONALE:\n" + reason if reason else "")
+                + "\n\nReturn only the verified corrected translation."
+            )
         else:
-            user_eg, assistant_eg = idn, zh
+            user_eg = source_eg
         # v3.9.3 (2026-05): OpenAI 早期文件曾推薦用
         # {"role": "system", "name": "example_user/example_assistant"} 格式做 few-shot,
         # 但這個格式已被棄用,GPT-5 系列(reasoning model)幾乎完全忽略它,
@@ -3280,7 +3292,7 @@ CUSTOM_EXAMPLES_MAX = 5000
 # Runtime examples are expensive and can contaminate meaning when only loosely
 # related.  The full example library remains available for retrieval, but each
 # request may inject at most one strongly related pair.
-FEWSHOT_INJECT_MAX = 1
+FEWSHOT_INJECT_MAX = 4
 custom_translation_examples = []
 
 
@@ -3508,6 +3520,106 @@ BUILTIN_EXAMPLES = [
         "scope": "announcement"
     },
 ]
+
+
+def _factory_knowledge_examples_for_casebook():
+    examples = []
+    try:
+        document = _FACTORY_KNOWLEDGE_STORE.document()
+    except Exception:
+        return examples
+    for entry in document.get("entries", []) or []:
+        directions = set(entry.get("directions", []) or [])
+        for example in entry.get("examples", []) or []:
+            if not isinstance(example, dict) or not example.get("source") or not example.get("target"):
+                continue
+            if "zh-id" in directions:
+                examples.append({
+                    "zh": str(example["source"]),
+                    "id": str(example["target"]),
+                    "dir": "zh2id",
+                    "bad_target": str(example.get("bad_target") or ""),
+                    "reason": str(example.get("reason") or ""),
+                    "origin": "factory_knowledge",
+                    "case_id": str(entry.get("id") or "factory_knowledge"),
+                })
+            if "id-zh" in directions:
+                examples.append({
+                    "id": str(example["source"]),
+                    "zh": str(example["target"]),
+                    "dir": "id2zh",
+                    "bad_target": str(example.get("bad_target") or ""),
+                    "reason": str(example.get("reason") or ""),
+                    "origin": "factory_knowledge",
+                    "case_id": str(entry.get("id") or "factory_knowledge"),
+                })
+    return examples
+
+
+def _active_translation_corrections_for_casebook():
+    return translation_casebook_module.active_corrections_snapshot(al_module, ttl_seconds=60, limit=2000)
+
+
+def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3):
+    # Copy and label each source so the compiler can resolve conflicting targets
+    # deterministically.  Human corrections outrank factory cards; factory cards
+    # outrank generic built-in examples.
+    builtin_examples = [dict(ex, origin=str(ex.get("origin") or "builtin_example"))
+                        for ex in (BUILTIN_EXAMPLES or [])]
+    custom_examples = [dict(ex, origin=str(ex.get("origin") or "custom_correction"))
+                       for ex in (custom_translation_examples or [])]
+    examples = builtin_examples + custom_examples + _factory_knowledge_examples_for_casebook()
+    return translation_casebook_module.retrieve(
+        text, src, tgt,
+        examples=examples,
+        corrections=_active_translation_corrections_for_casebook(),
+        max_cases=max_cases,
+        min_score=0.22,
+    )
+
+
+_CASEBOOK_BOOT_SELFTEST = _retrieve_verified_translation_cases(
+    "從今天開始會不定期查核上、下料時是否確實秤重，請每個班別督導人員落實。",
+    "zh", "id", max_cases=5,
+)
+if not any(case.get("case_id") == "loading_unloading_weighing_audit" for case in _CASEBOOK_BOOT_SELFTEST):
+    raise RuntimeError(
+        "translation casebook behavioral self-test failed: a paraphrased weighing-audit notice did not retrieve the verified correction case"
+    )
+_CASEBOOK_KNOWN_BAD = (
+    "Mulai hari ini akan dilakukan pemeriksaan acak terhadap pelaksanaan penimbangan "
+    "saat memasukkan dan mengeluarkan material. Mohon setiap shift menegaskan hal ini."
+)
+_CASEBOOK_VERIFIED_GOOD = (
+    "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan "
+    "pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift "
+    "memastikan operator menjalankan prosedur ini dengan benar."
+)
+if translation_casebook_module.validate_translation_cases(
+        _CASEBOOK_BOOT_SELFTEST, _CASEBOOK_KNOWN_BAD)[0]:
+    raise RuntimeError(
+        "translation casebook behavioral self-test failed: known incorrect translation was accepted"
+    )
+if not translation_casebook_module.validate_translation_cases(
+        _CASEBOOK_BOOT_SELFTEST, _CASEBOOK_VERIFIED_GOOD)[0]:
+    raise RuntimeError(
+        "translation casebook behavioral self-test failed: verified correction was rejected"
+    )
+_CASEBOOK_NEGATIVE_SELFTEST = _retrieve_verified_translation_cases(
+    "貨車卸貨後請司機到月台秤重。", "zh", "id", max_cases=5,
+)
+if any(case.get("case_id") == "loading_unloading_weighing_audit"
+       for case in _CASEBOOK_NEGATIVE_SELFTEST):
+    raise RuntimeError(
+        "translation casebook behavioral self-test failed: truck unloading was confused with machine loading/unloading"
+    )
+_CASEBOOK_BOOT_SELFTEST_OK = True
+logger.info(
+    "[TranslationCasebook] verified build=%s cases=%d top=%s",
+    _EXPECTED_CASEBOOK_BUILD_ID,
+    len(_CASEBOOK_BOOT_SELFTEST),
+    _CASEBOOK_BOOT_SELFTEST[0].get("case_id") if _CASEBOOK_BOOT_SELFTEST else None,
+)
 
 # ── LIFF Form System ──────────────────────────────────
 # forms_data: {form_id: {id, title_zh, title_id, fields:[{id,type,label_zh,label_id,options,required}], created, status, target_groups:[]}}
@@ -8244,6 +8356,35 @@ def build_translation_semantic_contract(text, src, tgt):
         contract["vector_bypass_allowed"] = False
         contract["nmt_allowed"] = False
         contract["requires_llm"] = True
+
+    # Verified examples and human corrections are one semantic asset.  A strong
+    # casebook match protects paraphrases, not only the exact sentence stored in
+    # TM.  It therefore disables stale bypass routes and requests independent
+    # source review for the final candidate.
+    try:
+        casebook_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=4)
+    except Exception as exc:
+        _logger = globals().get("logger")
+        if _logger is not None and hasattr(_logger, "warning"):
+            _logger.warning("[TranslationCasebook] retrieval failed open: %s", exc)
+        casebook_cases = []
+    _casebook_module = globals().get("translation_casebook_module")
+    if (_casebook_module is not None
+            and _casebook_module.casebook_requires_review(casebook_cases)):
+        contract["has_risk"] = True
+        contract["risks"].append({
+            "term": "verified_translation_cases",
+            "sense": "verified_correction_cases",
+            "cases": casebook_cases,
+            "tm_bypass_allowed": False,
+            "nmt_allowed": False,
+            "requires_validation": True,
+        })
+        contract["tm_bypass_allowed"] = False
+        contract["vector_bypass_allowed"] = False
+        contract["nmt_allowed"] = False
+        contract["requires_llm"] = True
+        contract["requires_independent_review"] = True
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -8260,6 +8401,12 @@ def build_translation_semantic_contract_prompt(contract):
             knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
             if knowledge_prompt:
                 lines.append(knowledge_prompt)
+        elif risk.get("sense") == "verified_correction_cases":
+            _casebook_module = globals().get("translation_casebook_module")
+            case_prompt = (_casebook_module.build_prompt(risk.get("cases", []))
+                           if _casebook_module is not None else "")
+            if case_prompt:
+                lines.append(case_prompt)
         elif risk.get("sense") == "factory_organization_terms":
             lines.append("<risk term='factory_organization_unit' sense='factory_organization_terms'>")
             lines.append("These are factory organization levels, not names. Use the plant ERP/glossary mapping for 股 units. In this plant 一股 means Bagian Cold Drawing 1; never translate it as Yigu, Regu 1, or Subseksi 1. 一課 means Seksi 1.")
@@ -8505,6 +8652,14 @@ def _factory_knowledge_cards_from_contract(contract):
     return cards
 
 
+def _verified_cases_from_contract(contract):
+    cases = []
+    for risk in (contract or {}).get("risks", []):
+        if risk.get("sense") == "verified_correction_cases":
+            cases.extend(risk.get("cases", []) or [])
+    return cases
+
+
 def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt, contract):
     """One provider-neutral repair attempt using retrieved plant knowledge.
 
@@ -8522,6 +8677,7 @@ def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt,
     try:
         _tl.factory_knowledge_issues = list(issues)
         _tl.factory_knowledge_repairing = True
+        _tl.source_review_already_attempted = True
         revised = translate_openai(
             src_text, src, tgt, strict_no_source_script=True,
             repair_mode=True, bad_result=translation,
@@ -10313,6 +10469,19 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _llm_t0 = time.time()
         r = ai.chat.completions.create(**_kwargs)
         _tl.llm_api_ms = (time.time() - _llm_t0) * 1000
+        # Preserve the actual route selected by the provider proxy until the
+        # final quality gate runs.  High-risk source review can then prefer a
+        # genuinely independent configured provider instead of accidentally
+        # asking the same route to approve its own translation.
+        try:
+            _tl.last_provider_used = str(
+                getattr(r, "_jy_provider", None)
+                or ai_provider.get_active_provider()
+                or ""
+            ).strip().lower()
+            _tl.last_model_used = str(getattr(r, "model", None) or _model or "").strip()
+        except Exception:
+            pass
         # v3.9.41 Phase Q: 抽 confidence score(雙系統)
         try:
             _conf_provider = ai_provider.get_active_provider()
@@ -12126,9 +12295,9 @@ def _translate_core(text, src, tgt):
     _quality_cacheable = not _meta_leak_detected
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
-    # Quality-critical messages receive an independent semantic review before
-    # LINE delivery.  The rules are structural and glossary-driven; there are no
-    # phrase-specific replacement patches here.
+    # Quality-critical messages and strong verified-correction matches receive
+    # one independent, source-grounded review before LINE delivery.  The rules
+    # are structural and data-driven; there are no exact-sentence replacements.
     if result and isinstance(result, str):
         _pre_gate_result = result
         try:
@@ -12141,31 +12310,77 @@ def _translate_core(text, src, tgt):
                 _identity_value = str(_identity_value or '').strip()
                 if _identity_value and _identity_value in text and _identity_value not in _immutable_literals:
                     _immutable_literals.append(_identity_value)
+            _review_already_attempted = bool(
+                getattr(_tl, "source_review_already_attempted", False)
+            )
+            _force_source_review = bool(
+                (_quality_critical
+                 or (_semantic_contract or {}).get("requires_independent_review"))
+                and not _review_already_attempted
+            )
+            _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
+            _verified_cases = _verified_cases_from_contract(_semantic_contract)
+            _case_validator = (
+                (lambda candidate: translation_casebook_module.validate_translation_cases(
+                    _verified_cases, candidate
+                ))
+                if _verified_cases else None
+            )
             _gate = tqg_module.gate_and_revise(
                 text, result, src, tgt,
                 critical=_quality_critical,
                 model=_active_upgrade_model(),
                 immutable_literals=_immutable_literals,
                 glossary_pairs=_safe_pairs,
-                ai_client=None,  # local diagnostics only; never spend a second API call
+                # At most one extra source-grounded call.  If the dedicated
+                # factory-knowledge repair already ran, keep this gate local so
+                # a single message can never cascade into three provider calls.
+                ai_client=(None if _review_already_attempted else ai_provider),
+                force_review=_force_source_review,
+                used_provider=getattr(_tl, "last_provider_used", None),
+                review_context=_review_context,
+                semantic_validator=_case_validator,
             )
+            if _gate.get("reviewed"):
+                _tl.source_review_already_attempted = True
             if not _gate.get("ok") or not _gate.get("text"):
-                # A local validator must not turn a successful provider response
-                # into a user-visible outage.  Keep the original candidate, mark
-                # it non-cacheable, and surface the issues only in diagnostics.
-                _quality_cacheable = False
+                # Exact human/factory corrections are safe deterministic fallbacks
+                # only when the current source is exactly identical.  For a
+                # paraphrase, never paste a stored sentence blindly.
+                _exact_verified = translation_casebook_module.exact_verified_target(
+                    text, _verified_cases
+                ) if _verified_cases else None
+                if _exact_verified:
+                    result = _exact_verified
+                    _quality_cacheable = True
+                    _gate = dict(_gate)
+                    _gate.update({
+                        "ok": True,
+                        "text": result,
+                        "cacheable": True,
+                        "degraded": False,
+                        "path": "exact_verified_correction_fallback",
+                    })
+                else:
+                    # A validator failure must not contaminate TM/cache.  Delivery
+                    # remains available, but the known-bad output is never learned.
+                    _quality_cacheable = False
                 try:
-                    last_translate_debug["final_pipeline_status"] = "quality_gate_warning_delivered"
+                    last_translate_debug["final_pipeline_status"] = (
+                        "exact_verified_correction_fallback"
+                        if _exact_verified else "quality_gate_warning_delivered"
+                    )
                     last_translate_debug["quality_gate_path"] = _gate.get("path")
                     last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
                     last_translate_debug["final_candidate"] = str(result or "")[:2000]
                     _persist_last_translate_debug()
                 except Exception:
                     pass
-                logger.warning(
-                    "[QualityGate] validation did not approve candidate; delivering best effort issues=%s",
-                    _gate.get("issues"),
-                )
+                if not _exact_verified:
+                    logger.warning(
+                        "[QualityGate] validation did not approve candidate; delivering best effort issues=%s",
+                        _gate.get("issues"),
+                    )
             else:
                 result = _gate["text"].strip()
                 _quality_cacheable = (not _meta_leak_detected) and bool(_gate.get("cacheable", True))
@@ -12220,7 +12435,9 @@ def _translate_core(text, src, tgt):
     _model_for_bg = getattr(_tl, 'last_model_used', '') or 'unknown'
 
     # 清掉 _tl 暫存避免污染下一次翻譯
-    for _attr in ('tm_references', 'last_confidence', 'detected_lang',
+    for _attr in ('tm_references', 'last_confidence', 'last_provider_used',
+                  'last_model_used', 'source_review_already_attempted',
+                  'factory_knowledge_issues', 'detected_lang',
                   'detected_confidence', 'ge_violations', 'semantic_contract'):
         try:
             if hasattr(_tl, _attr):
@@ -14787,24 +15004,58 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
     target["manual_marked_wrong"] = True
     if correct_translation:
         target["correct_translation"] = correct_translation
-        if add_to_examples:
-            src_lang = target.get("src_lang", "zh")
-            direction = "zh2id" if src_lang == "zh" else "id2zh"
-            new_ex = {
-                "zh": target.get("src", "") if src_lang == "zh" else correct_translation,
-                "id": correct_translation if src_lang == "zh" else target.get("src", ""),
-                "dir": direction
-            }
-            # Avoid exact duplicates
-            is_dup = any(
-                ex.get("zh") == new_ex["zh"] and ex.get("id") == new_ex["id"]
-                for ex in custom_translation_examples
+        src_lang = str(target.get("src_lang") or "zh").lower()
+        tgt_lang = str(target.get("tgt_lang") or ("id" if src_lang == "zh" else "zh")).lower()
+        source_text = str(target.get("src") or "").strip()
+        original_tgt = str(target.get("tgt") or "").strip()
+        correction_reason = "人工標記翻譯錯誤；以修正版為準，並泛化到相近語意句。"
+
+        # One correction path, not four disconnected stores: /wrong now writes
+        # the contrastive record, exact TM and vector TM through Active Learning.
+        # Failure is non-fatal because the local custom case is still persisted.
+        try:
+            _al_result = al_module.submit_correction(
+                src_text=source_text,
+                original_tgt=original_tgt,
+                corrected_tgt=correct_translation,
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
+                correction_reason=correction_reason,
+                corrected_by="line_wrong_command",
+                group_id=target.get("group_id") or group_id,
             )
-            if not is_dup:
+            target["active_learning_correction_id"] = _al_result.get("correction_id") if isinstance(_al_result, dict) else None
+            translation_casebook_module.invalidate_active_cache()
+        except Exception as _al_exc:
+            logger.warning("[/wrong] active-learning persistence failed: %s", _al_exc)
+
+        if add_to_examples and (src_lang, tgt_lang) in (("zh", "id"), ("id", "zh")):
+            direction = "zh2id" if (src_lang, tgt_lang) == ("zh", "id") else "id2zh"
+            new_ex = {
+                "zh": source_text if direction == "zh2id" else correct_translation,
+                "id": correct_translation if direction == "zh2id" else source_text,
+                "dir": direction,
+                "bad_id" if direction == "zh2id" else "bad_zh": original_tgt,
+                "reason": correction_reason,
+                "origin": "human_correction",
+                "case_id": "wrong:" + str(target.get("id") or int(time.time())),
+            }
+            source_field = "zh" if direction == "zh2id" else "id"
+            # Upsert by source+direction.  A newer human correction must replace,
+            # not coexist with, an older contradictory target in the prompt.
+            existing = None
+            for ex in reversed(custom_translation_examples):
+                if ex.get("dir") == direction and str(ex.get(source_field) or "").strip() == source_text:
+                    existing = ex
+                    break
+            if existing is not None:
+                existing.clear()
+                existing.update(new_ex)
+            else:
                 custom_translation_examples.append(new_ex)
-                if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
-                    custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
-                _save_examples_to_disk()  # v3.9.29: 修補隱性 bug
+            if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
+                custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
+            _save_examples_to_disk()
     _save_translation_log_to_disk()
     save_settings()
     return True, target.get("src", "")[:80]
@@ -27422,6 +27673,8 @@ def api_admin_al_submit():
             corrected_by=data.get("by"),
             group_id=data.get("group_id"),
         )
+        if isinstance(result, dict) and result.get("ok"):
+            translation_casebook_module.invalidate_active_cache()
         return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -27451,6 +27704,8 @@ def api_admin_al_delete(correction_id):
         return jsonify({"error": "forbidden"}), 403
     try:
         ok = al_module.delete_correction(correction_id)
+        if ok:
+            translation_casebook_module.invalidate_active_cache()
         return jsonify({"ok": ok})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -30738,6 +30993,9 @@ def health():
         "factory_knowledge_build": _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
         "factory_knowledge_entries": _FACTORY_KNOWLEDGE_HEALTH.get("entry_count"),
         "factory_knowledge_sha256": _FACTORY_KNOWLEDGE_HEALTH.get("sha256"),
+        "translation_casebook_build": _EXPECTED_CASEBOOK_BUILD_ID,
+        "translation_casebook_selftest": bool(_CASEBOOK_BOOT_SELFTEST_OK),
+        "translation_casebook_cases": len(_CASEBOOK_BOOT_SELFTEST),
         "final_delivery_guard": _FINAL_DELIVERY_GUARD_BUILD_ID,
         "uptime": int(time.time() - bot_start_time),
     }

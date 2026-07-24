@@ -4,9 +4,10 @@ Design goals
 ------------
 1. Protect data values and locked terminology before the single model call.
 2. Restore literals and canonical terms deterministically after generation.
-3. Validate completeness, language purity and structure locally without another AI call.
-4. Provider failover is reserved for operational failure, never for quality editing.
-5. No sentence-specific translation replacements live in this module.
+3. Validate completeness, language purity and structure locally.
+4. High-risk factory notices may receive one independent source-grounded review call.
+5. Provider failover remains operational; semantic review prefers a different configured provider when available.
+6. No sentence-specific translation replacements live in this module.
 
 The module is intentionally provider-neutral and works with the project's
 ``ai_provider.chat_complete`` interface for OpenAI, Gemini and Claude.
@@ -26,8 +27,8 @@ import glossary_policy as gp_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 16
-QUALITY_GATE_BUILD_ID = "2026-07-20.2-implicit-production-units"
+QUALITY_GATE_API_VERSION = 18
+QUALITY_GATE_BUILD_ID = "2026-07-24.4-casebook-semantic-review"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1575,9 +1576,9 @@ def _build_translation_messages(
 def _independent_provider_preference(ai_client: Any, used_provider: Optional[str]) -> Optional[List[str]]:
     """Prefer a different configured provider for semantic review/retry.
 
-    This does not add an extra call: critical documents already receive a review.
-    It only prevents the same model family from approving its own semantic mistake
-    when another configured provider is available.
+    The caller permits at most one additional review call.  This ordering
+    prevents the same model family from approving its own semantic mistake when
+    another configured provider is available.
     """
     if not used_provider or ai_client is None:
         return None
@@ -1659,6 +1660,7 @@ def review_translation(
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
     provider_preference: Optional[Sequence[str]] = None,
+    review_context: str = "",
 ) -> Optional[str]:
     """Perform at most one source-grounded repair call.
 
@@ -1682,6 +1684,13 @@ def review_translation(
         list(issues or ()),
         glossary_pairs,
     )
+    if review_context:
+        messages[-1] = dict(messages[-1])
+        messages[-1]["content"] += (
+            "\n\nRETRIEVED VERIFIED CONTEXT AND CORRECTION CASES:\n"
+            + str(review_context)[:24000]
+            + "\nUse this only where it matches the current source. The source remains authoritative."
+        )
     immutable_note = visible_immutable_instruction(immutable.mapping.values())
     if immutable_note:
         messages[0] = dict(messages[0])
@@ -1788,6 +1797,26 @@ def _best_effort_delivery_candidate(
     return text, report
 
 
+def _merge_semantic_validation(
+    report: ValidationResult,
+    candidate: str,
+    semantic_validator: Optional[Callable[[str], Tuple[bool, Sequence[str]]]],
+) -> ValidationResult:
+    if semantic_validator is None:
+        return report
+    try:
+        ok, external_issues = semantic_validator(candidate)
+    except Exception as exc:
+        logger.warning("[QualityGate] semantic validator unavailable: %s", exc)
+        return report
+    issues = [str(issue) for issue in (external_issues or ()) if str(issue).strip()]
+    if ok and not issues:
+        return report
+    merged_issues = list(dict.fromkeys(list(report.issues) + issues))
+    merged_hard = list(dict.fromkeys(list(report.hard_issues) + issues))
+    return ValidationResult(False, merged_issues, merged_hard, list(report.warnings))
+
+
 def gate_and_revise(
     source: str,
     candidate: str,
@@ -1799,28 +1828,91 @@ def gate_and_revise(
     immutable_literals: Optional[Iterable[str]] = None,
     glossary_pairs: Optional[Sequence[Tuple[str, str]]] = None,
     ai_client: Any = None,
+    force_review: bool = False,
+    used_provider: Optional[str] = None,
+    review_context: str = "",
+    semantic_validator: Optional[Callable[[str], Tuple[bool, Sequence[str]]]] = None,
 ) -> Dict[str, Any]:
-    """Validate, optionally repair, and always preserve a usable translation.
+    """Validate and, for high-risk messages, independently reconstruct once.
 
-    Local checks remain strict for diagnostics and cache admission, but they no
-    longer convert a successful provider response into a generic LINE outage.
-    One source-grounded repair is attempted for hard issues.  If it still does
-    not pass, the best non-empty candidate is delivered as degraded/non-cacheable
-    output, with any omitted immutable data attached explicitly.
+    Ordinary messages remain single-call.  Factory notices, announcements and
+    messages matched to verified correction cases can request one additional
+    source-grounded review.  The reviewer receives the original source, not just
+    the first candidate, and a different configured provider is preferred.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
+    immutable_values = list(immutable_literals or ())
     candidate = repair_identity_tokens(source, candidate)
     candidate = normalize_indonesian_factory_register(
         source, candidate, src_lang, tgt_lang
     )
     report = validate_translation(
         source, candidate, src_lang, tgt_lang,
-        immutable_literals=list(immutable_literals or ()),
+        immutable_literals=immutable_values,
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=critical,
     )
+    report = _merge_semantic_validation(report, candidate, semantic_validator)
+
+    # Preserve the low-latency single-call path by default.  A second call is
+    # permitted only when the caller explicitly classified the message as
+    # high-risk or matched it to a verified correction case.
+    should_review = bool(ai_client is not None and force_review)
+    if should_review:
+        preference = _independent_provider_preference(ai_client, used_provider)
+        reviewed = review_translation(
+            source,
+            candidate,
+            src_lang,
+            tgt_lang,
+            model=model,
+            issues=(report.issues if report.issues else ["independent_source_semantic_audit"]),
+            glossary_pairs=glossary_pairs,
+            ai_client=ai_client,
+            provider_preference=preference,
+            review_context=review_context,
+        )
+        if reviewed:
+            reviewed = repair_identity_tokens(source, reviewed)
+            reviewed = normalize_indonesian_factory_register(source, reviewed, src_lang, tgt_lang)
+            reviewed_report = validate_translation(
+                source, reviewed, src_lang, tgt_lang,
+                immutable_literals=immutable_values,
+                glossary_pairs=glossary_pairs,
+                require_paragraph_fidelity=critical,
+            )
+            reviewed_report = _merge_semantic_validation(
+                reviewed_report, reviewed, semantic_validator
+            )
+            if reviewed_report.ok:
+                return {
+                    "ok": True,
+                    "text": reviewed,
+                    "issues": reviewed_report.issues,
+                    "hard_issues": [],
+                    "warnings": reviewed_report.warnings,
+                    "reviewed": True,
+                    "degraded": False,
+                    "cacheable": True,
+                    "path": "independent_source_review_passed",
+                }
+            # A reviewer that fails deterministic integrity checks must never
+            # replace an already valid first translation.
+            if report.ok:
+                return {
+                    "ok": True,
+                    "text": candidate,
+                    "issues": reviewed_report.issues,
+                    "hard_issues": reviewed_report.hard_issues,
+                    "warnings": reviewed_report.warnings,
+                    "reviewed": True,
+                    "degraded": True,
+                    "cacheable": False,
+                    "path": "independent_review_rejected_original_kept",
+                }
+
     if report.ok:
         return {
             "ok": True,
@@ -1828,38 +1920,53 @@ def gate_and_revise(
             "issues": report.issues,
             "hard_issues": [],
             "warnings": report.warnings,
-            "reviewed": False,
-            "degraded": False,
-            "cacheable": True,
-            "path": "single_api_local_validation",
+            "reviewed": bool(should_review),
+            "degraded": bool(should_review),
+            "cacheable": not bool(should_review),
+            "path": "single_api_local_validation" if not should_review else "review_unavailable_original_kept",
         }
-
-    # Local diagnostics only.  The former review_translation() branch made a
-    # second billable model request after the first translation had already been
-    # paid for.  It is deliberately removed: validation may affect cacheability,
-    # but it must never trigger another API call or suppress non-empty text.
 
     best_text, best_report = _best_effort_delivery_candidate(
         source,
         candidate,
         src_lang,
         tgt_lang,
-        immutable_literals=list(immutable_literals or ()),
+        immutable_literals=immutable_values,
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=critical,
         initial_report=report,
     )
     if best_text:
+        semantic_ok = True
+        semantic_issues: List[str] = []
+        if semantic_validator is not None:
+            try:
+                semantic_ok, raw_semantic_issues = semantic_validator(best_text)
+                semantic_issues = [
+                    str(issue) for issue in (raw_semantic_issues or ()) if str(issue).strip()
+                ]
+            except Exception as exc:
+                logger.warning("[QualityGate] semantic validator unavailable on fallback: %s", exc)
+                semantic_ok = True
+        if semantic_issues:
+            best_report = ValidationResult(
+                False,
+                list(dict.fromkeys(list(best_report.issues) + semantic_issues)),
+                list(dict.fromkeys(list(best_report.hard_issues) + semantic_issues)),
+                list(best_report.warnings),
+            )
         return {
-            "ok": True,
+            # Local heuristic failures remain availability-first.  Only a
+            # verified-correction semantic violation can reject best-effort text.
+            "ok": bool(semantic_ok),
             "text": best_text,
             "issues": best_report.issues,
             "hard_issues": best_report.hard_issues,
             "warnings": best_report.warnings,
-            "reviewed": False,
+            "reviewed": bool(should_review),
             "degraded": True,
             "cacheable": False,
-            "path": "best_effort_quality_warning",
+            "path": "best_effort_after_review" if should_review else "best_effort_quality_warning",
         }
 
     return {
@@ -1868,7 +1975,7 @@ def gate_and_revise(
         "issues": report.issues,
         "hard_issues": report.hard_issues,
         "warnings": report.warnings,
-        "reviewed": False,
+        "reviewed": bool(should_review),
         "degraded": True,
         "cacheable": False,
         "path": "empty_translation_blocked",

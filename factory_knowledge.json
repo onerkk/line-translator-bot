@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-24.1-loading-unloading-weighing-audit-semantics",
+  "build_id": "2026-07-24.2-unified-casebook-regression",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -189,7 +189,9 @@
       "examples": [
         {
           "source": "今日起會抽查上下料秤重作業落實性，請各班要求。",
-          "target": "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift memastikan operator menjalankan prosedur ini dengan benar."
+          "target": "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift memastikan operator menjalankan prosedur ini dengan benar.",
+          "bad_target": "Mulai hari ini akan dilakukan pemeriksaan acak terhadap pelaksanaan penimbangan saat memasukkan dan mengeluarkan material. Mohon setiap shift menegaskan hal ini.",
+          "reason": "上下料必須明確為材料進入機台與從機台取出；請各班要求是要求各班確保操作員落實，不可弱化成只強調此事。"
         },
         {
           "source": "會以監視器監看方式及現場觀察進行查核作業。",
@@ -1070,7 +1072,8 @@
           "target_any": [
             "diawasi dengan ketat",
             "pengawasan sangat ketat",
-            "diawasi sangat ketat"
+            "diawasi sangat ketat",
+            "diawasi dengan sangat ketat"
           ],
           "issue": "missing_strict_supervision_semantics"
         },
