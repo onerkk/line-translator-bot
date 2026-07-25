@@ -209,7 +209,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.41.0-unified-factory-translation-2026-07-25"
+VERSION = "v3.41.1-factory-knowledge-deploy-contract-2026-07-25"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -425,20 +425,28 @@ logger.info(
     expressive_assets_module.asset_count(),
 )
 
-# v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
-# base.  New workflows/terms are data entries, not Python sentence patches.
+# v3.41.1: factory knowledge is an independently versioned data asset.  Do not
+# hard-code its build_id in app.py: doing so makes every legitimate JSON update
+# crash at startup even when the schema and semantic contract are valid.  The
+# deployment gate below verifies API/schema compatibility, a real build label,
+# non-empty data, and behavior through retrieval self-tests.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-25.1-unified-factory-translation"
+_EXPECTED_FACTORY_KNOWLEDGE_SCHEMA_VERSION = 1
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
+_FACTORY_KNOWLEDGE_BUILD_ID = str(_FACTORY_KNOWLEDGE_HEALTH.get("build_id") or "").strip()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
         or _FACTORY_KNOWLEDGE_HEALTH.get("api_version") != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
-        or _FACTORY_KNOWLEDGE_HEALTH.get("build_id") != _EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID
+        or _FACTORY_KNOWLEDGE_HEALTH.get("schema_version") != _EXPECTED_FACTORY_KNOWLEDGE_SCHEMA_VERSION
+        or not _FACTORY_KNOWLEDGE_BUILD_ID
+        or _FACTORY_KNOWLEDGE_BUILD_ID.lower() == "unknown"
         or _FACTORY_KNOWLEDGE_HEALTH.get("entry_count", 0) < 1):
     raise RuntimeError(
-        "factory knowledge deployment mismatch: "
-        f"expected api={_EXPECTED_FACTORY_KNOWLEDGE_API_VERSION} build={_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID}, "
-        f"loaded={_FACTORY_KNOWLEDGE_HEALTH!r} module={getattr(factory_knowledge_module, '__file__', '<unknown>')}"
+        "factory knowledge deployment contract failed: "
+        f"expected api={_EXPECTED_FACTORY_KNOWLEDGE_API_VERSION} "
+        f"schema={_EXPECTED_FACTORY_KNOWLEDGE_SCHEMA_VERSION}; "
+        f"loaded={_FACTORY_KNOWLEDGE_HEALTH!r} "
+        f"module={getattr(factory_knowledge_module, '__file__', '<unknown>')}"
     )
 _fk_erp = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "入庫時間再平均一點，太早移完開會很難解釋", "zh", "id", limit=3
@@ -466,6 +474,14 @@ _fk_loading_weighing_audit = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "今日起會抽查上下料秤重作業落實性，請各班要求。會以監視器監看方式及現場觀察進行查核作業。",
     "zh", "id", limit=5
 )
+_fk_storage_overflow = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "週末大成儲格能放就放，放不下再放照片裡這些位置。",
+    "zh", "id", limit=5
+)
+_fk_eh33_storage = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "入儲時EH33峰作金屬集中放這格",
+    "zh", "id", limit=5
+)
 if not any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_erp):
     raise RuntimeError("factory knowledge self-test failed: ERP timing context was not retrieved")
 if any(card.get("id") == "erp_station_record_transfer_timing" for card in _fk_physical):
@@ -480,6 +496,10 @@ if not any(card.get("id") == "pmi_grade_verification_bundle_packaging" for card 
     raise RuntimeError("factory knowledge self-test failed: PMI grade-verification semantics were not retrieved")
 if not any(card.get("id") == "loading_unloading_weighing_audit" for card in _fk_loading_weighing_audit):
     raise RuntimeError("factory knowledge self-test failed: loading/unloading weighing audit semantics were not retrieved")
+if not any(card.get("id") == "customer_storage_slot_photo_overflow_placement" for card in _fk_storage_overflow):
+    raise RuntimeError("factory knowledge self-test failed: customer storage overflow placement semantics were not retrieved")
+if not any(card.get("id") == "customer_eh33_concentrated_storage_slot" for card in _fk_eh33_storage):
+    raise RuntimeError("factory knowledge self-test failed: EH33 concentrated storage semantics were not retrieved")
 _FACTORY_KNOWLEDGE_SELFTEST_OK = True
 logger.info("[FactoryKnowledge] verified build=%s entries=%s sha256=%s",
             _FACTORY_KNOWLEDGE_HEALTH.get("build_id"),
