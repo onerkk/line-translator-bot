@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-25.1-unified-factory-translation",
+  "build_id": "2026-07-25.5-quoted-reply-and-storage-instruction-root-fix",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -2248,6 +2248,296 @@
           "source": "原本靠電子控制自動拉料，效果沒有改善，後來拆掉控制系統改成被動自然牽引。",
           "target": "Awalnya material ditarik otomatis dengan kontrol elektronik. Karena hasilnya tidak membaik, sistem kontrol kemudian dibongkar dan diganti dengan mekanisme tarikan pasif secara alami.",
           "reason": "同一設備改造語意的改寫，避免只記住原句。"
+        }
+      ]
+    },
+    {
+      "id": "customer_storage_slot_photo_overflow_placement",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "客戶儲格容量不足時改放照片標示位置",
+      "match": {
+        "strong_phrases": [
+          "儲格能放就放",
+          "放不下再放照片",
+          "照片裡這些位置",
+          "照片里这些位置"
+        ],
+        "all_groups": [
+          [
+            "儲格",
+            "储格",
+            "儲位",
+            "储位"
+          ],
+          [
+            "放不下",
+            "放不進",
+            "放不进",
+            "不夠放",
+            "不够放",
+            "能放就放",
+            "沒空間",
+            "没有空间",
+            "沒有空間",
+            "還放得下",
+            "还放得下"
+          ],
+          [
+            "照片",
+            "圖片",
+            "图片"
+          ],
+          [
+            "位置",
+            "地方"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "大成",
+          "週末",
+          "周末",
+          "能放就放",
+          "再放",
+          "這些位置",
+          "这些位置",
+          "沒空間",
+          "沒有空間",
+          "还放得下",
+          "還放得下"
+        ],
+        "regex_any": [
+          "(?:儲格|储格|儲位|储位).{0,20}(?:能放就放|放不下|放不進|放不进).{0,30}(?:照片|圖片|图片).{0,10}(?:位置|地方)"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "這是實體材料的儲放指示。『放』是把材料放入儲格或替代位置，不是 ERP 資料放行；禁止翻成 release data。",
+        "『儲格』是工廠內劃分出的材料儲放格／儲位，統一使用 slot penyimpanan；不是資料儲存格。",
+        "『能放就放』是有容量就放入該儲格；『放不下』是容量不足或材料不合適而 tidak muat。",
+        "『再放照片裡這些位置』是改放到照片所標示的多個實體位置，必須保留替代條件與照片指示。",
+        "大成是客戶識別名稱，必須原樣保留為大成，不得翻成 Besar，也不得自行拼成 Da Cheng。",
+        "LINE 引用回覆中的被引用內容只用來補足省略的材料／客戶脈絡；輸出只能翻譯目前這一則回覆，不可把引用原文重複翻出。"
+      ],
+      "preferred_target_phrases": [
+        "slot penyimpanan 大成",
+        "masih dapat menampung material",
+        "jika tidak muat",
+        "lokasi-lokasi yang ditunjukkan pada foto-foto ini"
+      ],
+      "forbidden_target_phrases": [
+        "Besar",
+        "material Besar",
+        "release data",
+        "di-release",
+        "simpan data",
+        "unggah foto",
+        "foto dimasukkan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "儲格",
+            "储格"
+          ],
+          "target_any": [
+            "slot penyimpanan",
+            "petak penyimpanan"
+          ],
+          "issue": "missing_storage_slot_semantics"
+        },
+        {
+          "source_any": [
+            "放不下",
+            "放不進",
+            "放不进",
+            "不夠放",
+            "不够放"
+          ],
+          "target_any": [
+            "tidak muat",
+            "tidak dapat menampung",
+            "tidak cukup ruang"
+          ],
+          "issue": "missing_not_fit_capacity_semantics"
+        },
+        {
+          "source_any": [
+            "照片",
+            "圖片",
+            "图片"
+          ],
+          "target_any": [
+            "foto",
+            "gambar"
+          ],
+          "issue": "missing_photo_reference"
+        },
+        {
+          "source_any": [
+            "位置",
+            "地方"
+          ],
+          "target_any": [
+            "lokasi",
+            "tempat"
+          ],
+          "issue": "missing_alternative_location"
+        },
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_name_not_preserved"
+        }
+      ],
+      "examples": [
+        {
+          "source": "週末大成儲格能放就放，放不下再放照片裡這些位置。",
+          "target": "Pada akhir pekan, jika slot penyimpanan 大成 masih dapat menampung material, letakkan material di sana. Jika tidak muat, letakkan material di lokasi-lokasi yang ditunjukkan pada foto-foto ini.",
+          "bad_target": "Pada akhir pekan, jika data Besar bisa dirilis maka rilis; jika tidak, masukkan fotonya ke lokasi ini.",
+          "reason": "大成是客戶名；儲格與放不下是實體容量語意；照片中的位置是替代儲放地點，不是 ERP 放行或上傳照片。"
+        },
+        {
+          "source": "大成的儲格如果還放得下就先放，沒空間就移到照片標示的位置。",
+          "target": "Jika slot penyimpanan 大成 masih memiliki ruang, letakkan material di sana terlebih dahulu. Jika ruangnya tidak cukup, pindahkan material ke lokasi yang ditunjukkan pada foto.",
+          "reason": "同一儲格容量與替代位置流程的改寫。"
+        }
+      ]
+    },
+    {
+      "id": "customer_eh33_concentrated_storage_slot",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "EH33 峰作金屬入儲時集中放指定儲格",
+      "match": {
+        "strong_phrases": [
+          "入儲時EH33峰作金屬集中放這格",
+          "峰作金屬集中放這格"
+        ],
+        "all_groups": [
+          [
+            "入儲",
+            "入库",
+            "入庫",
+            "進儲",
+            "进储"
+          ],
+          [
+            "EH33"
+          ],
+          [
+            "峰作金屬"
+          ],
+          [
+            "集中放",
+            "統一放",
+            "统一放",
+            "放這格",
+            "放这格"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "這格",
+          "这格",
+          "儲格",
+          "储格",
+          "集中"
+        ],
+        "regex_any": [
+          "(?:入儲|入庫|入库).{0,12}EH33.{0,12}峰作金屬.{0,12}(?:集中放|放這格|放这格)"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "這是材料入儲與儲格配置指示：入儲是材料進入儲存區，不是登入、輸入資料或一般進入倉庫的敘述。",
+        "「集中放這格」表示同一客戶、同一鋼種的材料全部集中放在指定實體儲格，應譯為 ditempatkan bersama di slot ini。",
+        "峰作金屬是客戶識別名稱，必須原樣保留為峰作金屬；不得音譯為 Peng Zuo Metal、Feng Zuo Metal 或翻成一般金屬名詞。",
+        "EH33 是儲位／材料識別代碼，必須原樣保留。"
+      ],
+      "preferred_target_phrases": [
+        "masuk ke area penyimpanan",
+        "semua material EH33 milik 峰作金屬",
+        "ditempatkan bersama di slot ini"
+      ],
+      "forbidden_target_phrases": [
+        "Peng Zuo Metal",
+        "Feng Zuo Metal",
+        "Puncak Logam",
+        "masuk data",
+        "input data",
+        "login",
+        "dikumpulkan taruh",
+        "punya Peng Zuo"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "入儲",
+            "入庫",
+            "入库"
+          ],
+          "target_any": [
+            "masuk ke area penyimpanan",
+            "dimasukkan ke area penyimpanan",
+            "masuk penyimpanan"
+          ],
+          "issue": "missing_storage_entry_semantics"
+        },
+        {
+          "source_any": [
+            "EH33"
+          ],
+          "target_any": [
+            "EH33"
+          ],
+          "issue": "storage_code_not_preserved"
+        },
+        {
+          "source_any": [
+            "峰作金屬"
+          ],
+          "target_any": [
+            "峰作金屬"
+          ],
+          "issue": "customer_name_not_preserved"
+        },
+        {
+          "source_any": [
+            "集中放",
+            "放這格",
+            "放这格"
+          ],
+          "target_any": [
+            "ditempatkan bersama",
+            "letakkan semuanya",
+            "ditempatkan di slot ini"
+          ],
+          "issue": "missing_concentrated_slot_placement"
+        }
+      ],
+      "examples": [
+        {
+          "source": "入儲時EH33峰作金屬集中放這格",
+          "target": "Saat material masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 ditempatkan bersama di slot ini.",
+          "bad_target": "Saat masuk gudang, EH33 punya Peng Zuo Metal dikumpulkan taruh di lokasi ini.",
+          "reason": "峰作金屬必須保留；入儲是進入儲存區；集中放這格要用自然且明確的實體儲格配置語句。"
+        },
+        {
+          "source": "EH33峰作金屬入庫後統一放這格。",
+          "target": "Setelah masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 ditempatkan bersama di slot ini.",
+          "reason": "同義改寫，保留代碼、客戶名稱與集中放置的作業要求。"
         }
       ]
     }

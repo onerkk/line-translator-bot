@@ -1930,5 +1930,48 @@
     ],
     "note_zh": "依設備本身的自然／被動機械牽引，不等於人工手拉；來源未寫手動時不得補成 manual。",
     "note_id": "Tarikan mekanis alami/pasif, bukan ditarik manual oleh operator."
+  },
+  "儲格": {
+    "idn": "slot penyimpanan",
+    "note_zh": "工廠內劃分給材料的實體儲放格／儲位。搭配『放不下』『位置』『照片』時，『放』是物理放置，不是 ERP 放行。",
+    "note_id": "Slot fisik untuk menyimpan material. Jika kalimat menyebut tidak muat, lokasi, atau foto, kata 放 berarti meletakkan material, bukan release data."
+  },
+  "入儲": {
+    "idn": "masuk ke area penyimpanan",
+    "canonical_idn": "masuk ke area penyimpanan",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "masuk data",
+      "input data",
+      "login"
+    ],
+    "note_zh": "材料進入工廠儲存區／儲位的作業，不是輸入資料或登入。",
+    "note_id": "Material masuk ke area penyimpanan atau slot penyimpanan; bukan input data atau login."
+  },
+  "集中放這格": {
+    "idn": "ditempatkan bersama di slot ini",
+    "canonical_idn": "ditempatkan bersama di slot ini",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "dikumpulkan taruh",
+      "dikumpulkan di lokasi ini"
+    ],
+    "note_zh": "同類材料集中放在指定實體儲格。",
+    "note_id": "Semua material sejenis ditempatkan bersama pada slot fisik yang ditentukan."
+  },
+  "峰作金屬": {
+    "idn": "峰作金屬",
+    "canonical_idn": "峰作金屬",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "forbidden_idn": [
+      "Peng Zuo Metal",
+      "Feng Zuo Metal",
+      "Puncak Logam"
+    ],
+    "note_zh": "客戶識別名稱，翻譯時原樣保留，不音譯、不意譯。",
+    "note_id": "Nama pelanggan; pertahankan persis sebagai 峰作金屬, tanpa transliterasi atau terjemahan."
   }
 }
