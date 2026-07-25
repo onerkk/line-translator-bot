@@ -1,0 +1,57 @@
+name: Factory translation release gate
+
+on:
+  push:
+    paths:
+      - "app.py"
+      - "factory_*.py"
+      - "factory_*.json"
+      - "translation_casebook.py"
+      - "translation_quality_gate.py"
+      - "glossary_*.py"
+      - "glossary_*.json"
+      - "test_*root_fix.py"
+      - "test_translation_quality_gate.py"
+      - "validate_factory_translation_assets.py"
+      - ".github/workflows/factory-translation-release-gate.yml"
+  pull_request:
+    paths:
+      - "app.py"
+      - "factory_*.py"
+      - "factory_*.json"
+      - "translation_casebook.py"
+      - "translation_quality_gate.py"
+      - "glossary_*.py"
+      - "glossary_*.json"
+      - "test_*root_fix.py"
+      - "test_translation_quality_gate.py"
+      - "validate_factory_translation_assets.py"
+      - ".github/workflows/factory-translation-release-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  deterministic-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate versioned factory assets
+        run: python validate_factory_translation_assets.py --json
+      - name: Run dependency-free regression tests
+        run: |
+          python -m unittest -v \
+            test_factory_translation_guard_root_fix.py \
+            test_unified_factory_translation_root_fix.py \
+            test_translation_casebook_root_fix.py \
+            test_loading_unloading_weighing_audit_root_fix.py \
+            test_pmi_grade_verification_root_fix.py \
+            test_polishing_production_priority_root_fix.py \
+            test_production_output_warehouse_root_fix.py \
+            test_factory_workflow_terms_root_fix.py \
+            test_work_order_term_root_fix.py \
+            test_reverse_glossary_root_fix.py \
+            test_station_alias_root_fix.py \
+            test_id_zh_temporal_direction_root_fix.py \
+            test_translation_quality_gate.py
