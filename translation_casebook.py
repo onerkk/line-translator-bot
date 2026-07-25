@@ -20,12 +20,13 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-TRANSLATION_CASEBOOK_API_VERSION = 2
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-07-24.5-guarded-correction-casebook"
+TRANSLATION_CASEBOOK_API_VERSION = 3
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-07-25.2-canonical-exact-correction-casebook"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
 _SPACE_RE = re.compile(r"\s+")
+_CANONICAL_SOURCE_STRIP_RE = re.compile(r"[^0-9a-z\u3400-\u9fff%+./_@#-]+", re.I)
 _CACHE_LOCK = threading.RLock()
 _ACTIVE_CACHE: Dict[str, Any] = {"expires": 0.0, "rows": []}
 
@@ -66,6 +67,18 @@ def _normalize(value: Any) -> str:
 
 def _compact(value: Any) -> str:
     return re.sub(r"[^0-9a-z\u3400-\u9fff]+", "", _normalize(value))
+
+
+def canonical_source_key(value: Any) -> str:
+    """Normalize only punctuation/spacing variants for verified exact cases.
+
+    Synonyms and paraphrases remain different keys.  This expands exact human
+    corrections safely to LINE punctuation differences without allowing fuzzy
+    target copying.
+    """
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = text.replace("\u3000", " ")
+    return _CANONICAL_SOURCE_STRIP_RE.sub("", text)
 
 
 def direction_key(src: str, tgt: str) -> Optional[str]:
@@ -200,7 +213,7 @@ def collect_cases(
     seen_source = set()
     seen_pair = set()
     for _priority, _order, case in candidates:
-        source_key = (str(case.get("direction")), _normalize(case.get("source")))
+        source_key = (str(case.get("direction")), canonical_source_key(case.get("source")))
         pair_key = source_key + (_normalize(case.get("target")),)
         if source_key in seen_source or pair_key in seen_pair:
             continue
@@ -414,7 +427,7 @@ def retrieve(
             long_shared = sum(1 for phrase in shared_han if len(phrase) >= 3)
             short_shared = sum(1 for phrase in shared_han if len(phrase) == 2)
             score += min(0.62, 0.13 * long_shared + 0.04 * short_shared)
-        if query_norm == source_norm:
+        if canonical_source_key(query) == canonical_source_key(source):
             score = 10.0
         elif query_compact and source_compact and (query_compact in source_compact or source_compact in query_compact):
             shorter = min(len(query_compact), len(source_compact))
@@ -563,10 +576,10 @@ def exact_verified_target(
     source: str,
     cases: Sequence[Mapping[str, Any]],
 ) -> Optional[str]:
-    """Return a human/factory verified target only for an exact source match."""
-    source_norm = _normalize(source)
+    """Return a verified target for a punctuation/spacing-only source variant."""
+    source_key = canonical_source_key(source)
     for case in cases or ():
-        if _normalize(case.get("source")) == source_norm and str(case.get("target") or "").strip():
+        if canonical_source_key(case.get("source")) == source_key and str(case.get("target") or "").strip():
             return str(case.get("target") or "").strip()
     return None
 

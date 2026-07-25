@@ -208,7 +208,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.40.0-factory-terminology-engine-2026-07-18"
+VERSION = "v3.41.0-unified-factory-translation-2026-07-25"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -262,6 +262,8 @@ import factory_knowledge as factory_knowledge_module  # editable plant-context r
 import factory_semantic_audit as factory_semantic_audit_module  # source-claim frame + structured independent audit
 import translation_casebook as translation_casebook_module  # unified verified examples + human corrections
 import factory_terminology as factory_terminology_module  # indexed plant glossary shared by text/OCR
+import factory_translation_policy as factory_translation_policy_module  # one factory-only route for all zh↔id text/OCR
+import factory_translation_guard as factory_translation_guard_module  # deterministic fail-closed plant acceptance boundary
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
@@ -301,8 +303,8 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
         "Replace app.py, translation_quality_gate.py, ai_provider.py and factory_semantic_audit.py together."
     )
 
-_EXPECTED_CASEBOOK_API_VERSION = 2
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-24.5-guarded-correction-casebook"
+_EXPECTED_CASEBOOK_API_VERSION = 3
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-25.2-canonical-exact-correction-casebook"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -312,6 +314,42 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
         f"build={getattr(translation_casebook_module, 'TRANSLATION_CASEBOOK_BUILD_ID', None)!r}. "
         "Replace app.py and translation_casebook.py together in the project root."
     )
+
+_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 3
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-25.3-fail-closed-source-reviewed-factory-route"
+if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
+        != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
+        or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
+        != _EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID):
+    raise RuntimeError(
+        "factory translation policy deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION} "
+        f"build={_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID}, "
+        f"loaded api={getattr(factory_translation_policy_module, 'FACTORY_TRANSLATION_POLICY_API_VERSION', None)!r} "
+        f"build={getattr(factory_translation_policy_module, 'FACTORY_TRANSLATION_POLICY_BUILD_ID', None)!r}. "
+        "Replace app.py and factory_translation_policy.py together in the project root."
+    )
+logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
+
+_EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION = 1
+_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-07-25.3-historical-corpus-fail-closed-acceptance"
+if (getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_API_VERSION", None)
+        != _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION
+        or getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_BUILD_ID", None)
+        != _EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID):
+    raise RuntimeError(
+        "factory translation guard deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION} "
+        f"build={_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID}, "
+        f"loaded api={getattr(factory_translation_guard_module, 'FACTORY_TRANSLATION_GUARD_API_VERSION', None)!r} "
+        f"build={getattr(factory_translation_guard_module, 'FACTORY_TRANSLATION_GUARD_BUILD_ID', None)!r}. "
+        "Replace app.py, factory_translation_policy.py, factory_translation_guard.py, "
+        "factory_knowledge.json and factory_translation_regression.json together."
+    )
+_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH = factory_translation_guard_module.health()
+if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok")):
+    raise RuntimeError("factory translation guard behavioral self-test failed")
+logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
 # These four files form one deployable unit.  A stale translation_extras.py was
 # the reason an app-only upload could start successfully and then fail on the
@@ -389,7 +427,7 @@ logger.info(
 # v3.35.0: plant-specific shorthand is retrieved from an editable JSON knowledge
 # base.  New workflows/terms are data entries, not Python sentence patches.
 _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION = 1
-_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-24.5-polishing-source-frame-fallback"
+_EXPECTED_FACTORY_KNOWLEDGE_BUILD_ID = "2026-07-25.1-unified-factory-translation"
 _FACTORY_KNOWLEDGE_STORE = factory_knowledge_module.get_store()
 _FACTORY_KNOWLEDGE_HEALTH = _FACTORY_KNOWLEDGE_STORE.health()
 if (getattr(factory_knowledge_module, "FACTORY_KNOWLEDGE_API_VERSION", None) != _EXPECTED_FACTORY_KNOWLEDGE_API_VERSION
@@ -590,7 +628,7 @@ if not _QG_INCIDENT_GOOD_SELFTEST.ok:
         f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
     )
 
-_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-13.6-strict-integrity-boundary"
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-25.3-source-reviewed-fail-closed-factory-acceptance"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
     _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
@@ -5088,12 +5126,20 @@ def is_translation_valid(result, src, tgt):
 
 
 def is_translation_acceptable(src_text, result, src, tgt):
-    """Synchronous generic integrity gate used before cache/send."""
+    """Synchronous immutable, glossary and factory-semantic admission gate."""
     if not is_translation_valid(result, src, tgt):
         return False
+    strict = bool(
+        factory_translation_policy_module.should_force_factory_pipeline(
+            src_text, src, tgt, heuristic_match=_is_factory_context(src_text)
+        )
+        and factory_translation_policy_module.fail_closed(src, tgt)
+    )
     try:
         _env = tqg_module.protect_immutable_spans(src_text)
-        _pairs = ge_module.collect_applicable_pairs(src_text, GLOSSARY_LOOKUP, src, tgt) if 'GLOSSARY_LOOKUP' in globals() else []
+        _pairs = ge_module.collect_applicable_pairs(
+            src_text, GLOSSARY_LOOKUP, src, tgt
+        ) if 'GLOSSARY_LOOKUP' in globals() else []
         _report = tqg_module.validate_translation(
             src_text, result, src, tgt,
             immutable_literals=_env.mapping.values(),
@@ -5102,10 +5148,21 @@ def is_translation_acceptable(src_text, result, src, tgt):
         )
         if not _report.ok:
             logger.warning("[QualityGate] deterministic rejection: %s", _report.issues)
-        return _report.ok
+            return False
     except Exception as _e:
-        logger.warning("[QualityGate] deterministic validation failed open: %s", _e)
-        return True
+        logger.warning("[QualityGate] deterministic validation exception: %s", _e)
+        if strict:
+            return False
+    try:
+        _factory_report = _factory_guard_report(src_text, result, src, tgt)
+        if not _factory_report.ok:
+            logger.warning("[FactoryGuard] deterministic rejection: %s", _factory_report.issues)
+            return False
+    except Exception as _e:
+        logger.warning("[FactoryGuard] deterministic validation exception: %s", _e)
+        if strict:
+            return False
+    return True
 
 
 
@@ -8823,8 +8880,9 @@ def build_factory_context_hint_zh_id(text):
     # v3.11(2026-05-26): 加上「放了/放好了/都放了」這類 ERP 放行口語化簡寫的觸發詞,
     # 工廠裡這幾個是「資料已放行到下一站」的縮略,不是「東西放下了」。
     triggers = ["料", "品保", "清洗", "研磨", "噴漆", "進料", "出料", "產出", "入庫", "刮傷", "吊", "偷跑",
-                "工單", "包裝", "站別", "放了", "放好了", "都放了", "已放",
-                "放行", "過帳", "退庫"]
+                "工單", "包裝", "裝箱", "木箱", "站別", "放了", "放好了", "都放了", "已放",
+                "放行", "過帳", "退庫", "抓帳", "結帳", "關帳", "到料", "陸續到料",
+                "電子系統", "自然拉動"]
     if not any(k in src for k in triggers):
         return ""
     return (
@@ -8849,6 +8907,10 @@ def build_factory_context_hint_zh_id(text):
         "來料尺寸=ukuran material masuk；表面品質=kualitas permukaan；"
         "短尺維護=penanganan material pendek(短尺材料處理,不是 penggaris/尺規)；"
         "重量確認=konfirmasi berat；作業流程=alur kerja。"
+        "抓帳/會計結帳/關帳=tutup buku，嚴禁 cek data/periksa data/rekap data；"
+        "木箱=peti kayu(工業出貨木箱)，嚴禁 kotak kayu；裝箱=把材料放入 peti kayu，否定句也必須保留 peti kayu 範圍；"
+        "陸續到料=material akan tiba secara bertahap，必須保留未來與分批到貨；"
+        "自然拉動=tarikan alami/pasif，不等於 manual；來源未寫手動/人工時，嚴禁自行補 ditarik secara manual。"
     )
 
 
@@ -8967,7 +9029,10 @@ ZH_TO_ID_HARD = {
     "套紙管": "pasang tabung kertas",
     "太空包": "jumbo bag",
     "噴漆罐": "kaleng spray",
-    "木箱": "kotak kayu",
+    "木箱": "peti kayu",
+    "抓帳": "tutup buku",
+    "會計結帳": "tutup buku",
+    "電子系統": "sistem elektronik",
     "櫃子": "kontainer",
     # 訂單
     "允收": "toleransi terima",
@@ -9134,7 +9199,7 @@ if os.path.exists(_packaging_json_path):
 # v3.9.31: 印尼文範例詞庫(冷抽課專有名詞對照表,從 02_專有名詞對照表FN_冷抽課.xlsx)
 # 結構:{中文: {"idn": 印尼文, "note_zh": 中文說明, "note_id": 印尼文說明}}
 # 來源 = 嵌入式 default(232 條)→ glossary_data.json 覆蓋(如存在)
-_GLOSSARY_JSON = '{"M7導板":{"idn":"Tongkat Pemisah","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Untuk misahin barang yang besar(1ton)"},"電子磅秤":{"idn":"Timbangan Gantung","note_zh":"安裝於天車上，用以即時測量並顯示吊運物體重量的電子裝置，具備精確測量、過載警示與數據記錄功能，確保起重作業的安全與準確性","note_id":"Untuk menimbang barang yang digantung"},"天車/固定式起重機":{"idn":"Tian Che / Derek tetap(Fixed crane)","note_zh":"天車是用於廠內吊運不銹鋼原料、半成品及成品的起重設備，具備移動、升降與定位功能的起重機，用以安全、精準地進行不銹鋼材料在各生產工序間的搬運與裝卸作業","note_id":"Alat untuk angkat dan pindah barang berat secara efisien dan aman"},"掛勾":{"idn":"Kait/Hook","note_zh":"懸掛與固定不銹鋼原料、半成品或成品的起重配件，是具有足夠承載強度與防脫設計的金屬吊具，用以安全連接起重索具與吊運物件，確保吊運過程中的穩定與安全。","note_id":"untuk mengait dan mengangkat barang"},"布索":{"idn":"Tali kain yang di pakai di Tian Che","note_zh":"天車上的「布索」是一種強韌的吊繩，用來把不銹鋼材料安全地吊起來並運送到不同地方，確保吊運過程穩定不會斷或滑脫。","note_id":"Untuk mengangkat dan mengikat barang saat proses pengangkatan"},"標籤":{"idn":"Faktur Pemesanan","note_zh":"貼在產品外部，標示出貨資訊，如重量、單號、客戶、儲存位置等","note_id":"Surat pesanan pelanggan yang ditaro pada bahannya (ada yang bulat ada yang persegi)"},"秤重台":{"idn":"Meja Timbangan","note_zh":"包裝站的「秤重台」用來稱出包裝好後的不銹鋼產品重量，確保貨物重量正確，不會裝太多或裝太少。","note_id":"Untuk menimbang barang yang ada di bawah"},"顯示器":{"idn":"Monitor","note_zh":"顯示稱出包裝好後的不銹鋼產品重量","note_id":"Untuk memantau kerjaan yang ada di layar monitor"},"打包機":{"idn":"Plester/Alat pengikat","note_zh":"是一種用手拿的機器，用來把鋼帶拉緊並扣緊固定，讓不銹鋼產品包裝得牢固又不會鬆脫。","note_id":"Alat untuk Membungkus, mengepak, menyegel produk"},"鋼帶":{"idn":"Tali baja","note_zh":"是一種堅硬又強韌的金屬帶子，用來環繞並固定包裝好的不銹鋼產品，讓貨物在運送時不會鬆開或受損。","note_id":"Digunakan untuk mengikat barang/mengamankan barang agar tidak bergerak saat pengiriman atau penyimpanan"},"鋼扣":{"idn":"Klem Baja","note_zh":"包裝站的「鋼扣」是一種用來把包裝鋼帶扣緊的金屬配件，像是一個小鈕扣，讓鋼帶牢牢固定住貨物，不會在運送中鬆開。","note_id":"Digunakan bersama 鋼帶 (steel strapping / tali baja) untuk mengunci atau mengencangkan ikatan di sekitar barang."},"膠膜":{"idn":"Sejenis Bubble Wrap","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan."},"PP布":{"idn":"Untuk melindungi bahan (PP bu bahannya semacam goni)","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk mencegah karatan"},"膠帶":{"idn":"Selotip","note_zh":"用來把紙箱或包裝封起來，讓貨物不會鬆開或掉出來，確保運送時安全又整齊。","note_id":"Untuk merekatkan bahan atau kemasan seperti (Kardus atau kertas yang mau di bungkus)"},"敲齊工具":{"idn":"Alignment/leveling tool","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Digunakan untuk menyelaraskan benda agar sejajar"},"剪刀":{"idn":"Gunting","note_zh":"剪斷膠帶、塑膠膜或紙箱的工具，讓包裝作業更快速、整齊又方便","note_id":"Untuk menggunting Selotip atau pembungkus lainnya."},"CYA矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYA)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"CYB矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYB)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"梅花板手":{"idn":"Kunci Ring","note_zh":"是一種用來轉動並固定六角螺帽的工具，讓螺絲可以緊緊固定或輕鬆拆卸，不會損傷螺絲角。","note_id":"Mengencangkan atau melepaskan mur kepala yang berbentuk heksagonal (6sisi)."},"六角板手":{"idn":"Kunci L","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur yang berbentuk heksagonal dalam"},"開口板手":{"idn":"Kunci Pas Terbuka","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur dengan satu sisi terbuka, cocok untuk ruang yang sempit(yang sulit dijangkau)."},"CYA操作盤":{"idn":"CYA control panel","note_zh":"矯直機的控制面盤","note_id":"Untuk memonitor/mengontrol kerjanya mesin CYA."},"棉繩搬運台車":{"idn":"Troli pengangkat dengan tali katun","note_zh":"是一種用來搬運棉繩的小推車","note_id":"Troli untuk memindahkan tali katun yang di gantung."},"BF235圓棒拋光機":{"idn":"Mesin Pemoles Batang","note_zh":"「圓棒拋光機」是一種用來把不銹鋼圓棒表面磨得光滑亮麗的機器","note_id":"Digunakan untuk memoles/menghaluskan batang logam agar permukaan lebih rata, bersih dan mengkilap."},"束帶":{"idn":"Tali pengikat","note_zh":"是一種用來把材料捆綁在一起的塑料帶","note_id":"Digunakan untuk mengikat atau mengencangkan barang agar tetap stabil selama penyimpanan/pengiriman."},"捲尺":{"idn":"Meteran Gulung","note_zh":"是一種可以伸縮的測量工具，用來量測長度或尺寸","note_id":"Untuk mengukur panjang, tinggi, lebar suatu benda."},"刮刀":{"idn":"Pengikis","note_zh":"是一種用來清除表面雜質或油污的工具","note_id":"Untuk mengikis, membersihkan atau meratakan permukaan"},"檔桿":{"idn":"Pipa Besi Penghadang","note_zh":"於入料過程中，放置於入料區邊緣，避免生產中棒材滾落","note_id":"Untuk menghadang barang tidak berlebihan"},"防鏽油":{"idn":"Oli anti karat","note_zh":"是一種塗在不銹鋼表面的油，可以防止鋼材生鏽，讓產品在存放或運送時保持乾淨又光亮。","note_id":"untuk mencegah karat pada permukaan bahan."},"研磨機":{"idn":"Mesin Penghalus cetakkan","note_zh":"是一種用來把不銹鋼棒材表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Untuk menghaluskan, meratakan atau memperbaiki permukaan cetakkan."},"調機工作台車":{"idn":"Troli Peralatan kerja","note_zh":"1.特別留意：工具箱中梅花板手翻譯錯誤，建議修正\\n\\n2.定義：是一種可以移動的小推車，上面放著調整機器用的手工具，讓工人方便拿取和維修設備。","note_id":"Troli Peralatan kerja"},"I9置料台":{"idn":"Station Pelurusan Material I9","note_zh":"是一個用來暫時放置棒材的工作台","note_id":"Station Pelurusan Material I9"},"I9置料台 旁按鈕「置料台前進」":{"idn":"Mesin Pelurusan Maju","note_zh":"1.特別留意：「置料台前進」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 往前","note_id":"Mesin pelurusan bergerak maju ke depan"},"I9置料台旁按鈕「置料台後退」":{"idn":"Mesin Pelurusan Mundur","note_zh":"1.特別留意：「置料台後退」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 後退","note_id":"Mesin Pelurusan bergerak mundur ke belakang"},"I9置料台旁按鈕「緊急停水」":{"idn":"Tombol darurat berhenti air","note_zh":"1.特別留意：緊急停止按鈕有兩個，黑色的是停水；紅色是機台緊急停止，但兩者的標示都一樣，建議更新\\n2.定義：是一個在發生突發狀況時，可以立刻關閉冷卻水供應的裝置，用來保護設備和確保操作安全。","note_id":"紅(緊急停機)-tombol berhenti darurat\\n黑(緊急停水)-tombol untuk mematikan air"},"I9置料台旁「緊急停止拉索」":{"idn":"Tali tarik darurat untuk menghentikan mesin","note_zh":"1.特別留意：緊急停止拉索，印尼文有誤(寫成緊急停止按鈕)，建議更新\\n2.定義：是一條拉一下就能立刻關掉機器的繩子，用來在發生危險時快速停機，保護工人安全。","note_id":"Tali tarik darurat untuk menghentikan mesin"},"422清洗槽":{"idn":"422 Tangki Pencucian","note_zh":"「清洗槽」是一個裝有清潔液的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"Tempat untuk membersihkan cetakkan."},"清水槽":{"idn":"Tangki Air Bersih","note_zh":"「清洗槽」是一個裝有清水的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"tangki untuk membersihkan/membilas debu sisa minyak ringan"},"藥水槽":{"idn":"Tangki Larutan Kimia","note_zh":"「清洗槽」是一個裝有藥水的容器，用來浸泡或沖洗不銹鋼棒材。","note_id":"untuk menghilangkan karat, minyak atau residu keras."},"天車遙控器":{"idn":"Remote control crane(tian che)","note_zh":"是一個用來遙控吊車移動的控制器，讓工人可以遠距離搬運不銹鋼棒材","note_id":"alat digunakan untuk mengontrol crane(tian che) dari jarak jauh."},"I9入料床收集架電氣箱 下方控制鈕「滾輪 前/停/後」":{"idn":"Roda bergerak Maju/Berhenti/Mundur","note_zh":"1.特別留意：滾輪控制棒材輸送方向\\n2.特別留意中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往後方跑；但標示是”前”\\n(2)旋鈕往右旋，棒材會往前方跑 ；但標示是”後”","note_id":"Roda bergerak Maju/Berhenti/Mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「上料台上升」":{"idn":"Meja Pengumpan naik","note_zh":"是一個讓放置不銹鋼棒材的平台自動升高的裝置，方便工人把棒材送入置料台後，進行生產","note_id":"Membuat material naik secara otomatis"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台後退」":{"idn":"Roll roda mundur ke belakang","note_zh":"此按鈕用於使入料床收集架的滾輪平台向後移動，以清空材料或調整材料位置。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台上升」":{"idn":"Roll roda naik ke atas","note_zh":"此按鈕用於使入料床收集架的滾輪平台升起，將材料送至下一工序。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak naik ketas, mendorong ke proses berikutnya."},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台下降」":{"idn":"Roda turun ke bawah","note_zh":"此按鈕用於使入料床收集架的滾輪平台下降，以便取下或調整材料位置。","note_id":"Tombol ini digunakan untuk menurunkan meja roller pada rak pengumpan I9, agar material bisa diambil atau disesuaikan posisinya"},"I1出料床收集架電氣箱「開、關」":{"idn":"Buka , Tutup","note_zh":"開、關","note_id":"Buka, Tutup"},"I1入料床收集架電氣箱 下方控制鈕「滾輪 後退/停止/前進」":{"idn":"Roda Mundur ke belakang/berhenti/maju kedepan","note_zh":"1.滾輪控制棒材輸送方向\\n2.中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往前方跑；但標示是”後退”\\n(2)旋鈕往右旋，棒材會往後方跑 ；但標示是”前進”","note_id":"Roda Mundur ke belakang/berhenti/maju kedepan"},"無心研磨機 I18":{"idn":"Mesin grinding tanpa pusat I18","note_zh":"是一種用來把不銹鋼表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Mesin yang digunakan untuk mengahaluskan dan mempoles permukaan steel, sehingga produk terlihat lebih rapi dan kualirasnya lebih baik."},"無心研磨機 I18料床電器盤 「手動 自動」":{"idn":"Manual Otomatis","note_zh":"1.特別留意：標示全白，字已消失","note_id":"Manual Otomatis"},"研磨股 無心研磨機自主檢驗紀錄表":{"idn":"Formulir catatan pemeriksaan mandiri mesin grinding tanpa pusat","note_zh":"讓操作研磨機操機手能夠自動依循檢驗生產狀況","note_id":"memungkinkan oprator mesin grinding untuk secara otomatis memeriksa dan mengikuti kondisi produksi."},"研磨股 無心研磨機自主檢驗紀錄表「設備」":{"idn":"Peralatan","note_zh":"紀錄生產設備名稱","note_id":"Peralatan"},"研磨股 無心研磨機自主檢驗紀錄表「時間」":{"idn":"Waktu","note_zh":"紀錄生產時間","note_id":"Waktu"},"研磨股 無心研磨機自主檢驗紀錄表「來料尺寸」":{"idn":"Ukuran material yang masuk (max/min)","note_zh":"紀錄來料尺寸","note_id":"Ukuran material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「來料粗糙度」":{"idn":"Kasar/halus material yang masuk (max/min)","note_zh":"紀錄來料尺寸來料粗糙度(max/min)","note_id":"Kasar/halus material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「成品尺寸前/中／後」":{"idn":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang","note_zh":"紀錄研磨股 無心研磨機自主檢驗紀錄表\\n「成品尺寸(max/min) 前/中／後」","note_id":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang"},"研磨股 無心研磨機自主檢驗紀錄表「長度」":{"idn":"Panjang (mm)","note_zh":"長度(mm)","note_id":"Panjang (mm)"},"研磨股 無心研磨機自主檢驗紀錄表「產出粗糙度」":{"idn":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)","note_zh":"產出粗糙度(max/min)","note_id":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「外觀」":{"idn":"Tampilan Luar","note_zh":"外觀","note_id":"Tampilan Luar"},"研磨股 無心研磨機自主檢驗紀錄表「工號」":{"idn":"Nomor karyawan","note_zh":"工號","note_id":"Nomor kerja"},"研磨股 無心研磨機自主檢驗紀錄表「量具編號」":{"idn":"Nomor alat ukur yang digunakan","note_zh":"量具編號","note_id":"Nomor alat ukur yang digunakan"},"研磨股 無心研磨機自主檢驗紀錄表「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"研磨股 無心研磨機自主檢驗紀錄表「班別」":{"idn":"Shift","note_zh":"班別","note_id":"Shift"},"冷抽上料區":{"idn":"Mesin produksi Coil","note_zh":"在 冷抽上料區，操作員將管件放置在導軌上，準備送入冷抽機進行加工。","note_id":"Operator menaruh pipa di rel, siap proses untuk memotong besi sesuai pesanan konsumen. contoh pemotongan :R,H,S,F."},"AIR管":{"idn":"Pipa udara","note_zh":"用於清理/吹除","note_id":"untuk membersihkan, untuk mengeklem"},"鐵線剪":{"idn":"Gunting kawat","note_zh":"操作員使用 鐵線剪 剪掉多餘的鐵線，確保材料整齊。","note_id":"Untuk menggunting kawat kecil."},"塑膠槌":{"idn":"Palu","note_zh":"操作員使用 塑膠槌 輕輕敲打材料，避免損壞表面。","note_id":"Untuk memukul atau menekan benda tanpa merusak permukaan."},"PE帶剪刀":{"idn":"Gunting besi plat","note_zh":"操作員使用 PE帶剪刀 將金屬帶切割成所需長度。","note_id":"Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan."},"鐵管":{"idn":"Pipa besi","note_zh":"操作員使用 鐵管 輕輕敲齊材料，避免損壞表面。","note_id":"Untuk membengkokkan/meluruskan produk."},"工單":{"idn":"Tempat Buku bahan","note_zh":"操作員將材料資訊記錄在 工單 上，以便後續加工使用。","note_id":"Operator mencatat informasi material di work order supaya bisa digunakan untuk proses produksi berikutnya."},"E6冷抽機─張力輥向下/向上":{"idn":"Pengaturan roller penegang naik/turun","note_zh":"操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力","note_id":"Operator bisa mengatur tension roller naik atau turun supaya pipa tetap lurus dan tegangan merata selama proses penarikan."},"E6冷抽機─張力輥下部大槌向下/向上":{"idn":"Palu besar bagian bawah tension roller naik/turun","note_zh":"操作員可控制 張力輥下部大槌向下或向上，以調整壓力並確保材料穩定通過","note_id":"Untuk mengatur tekanan agar material tetap stabil saat lewat."},"E6冷抽機─張力輥上部大槌向下/向上":{"idn":"Palu besar bagian atas tension roller naik/turun","note_zh":"操作員可控制 張力輥上部大槌向下或向上，以調整上方壓力，確保材料穩定運行。","note_id":"Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan."},"綜合冷抽機E6─放線架拉置單元關":{"idn":"Rak gulungan -  Unit penarik Off","note_zh":"如需停止拉拔動作，可按下 拉置單元關，使設備停止運轉。","note_id":"Jika ingin menarik proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja."},"綜合冷抽機E6─放線架轉盤開關":{"idn":"Saklar putaran cepat dan lambatnya nampan","note_zh":"轉盤快/慢速按鈕","note_id":"Tombol putaran cepat dan lambatnya nampan"},"綜合冷抽機E6─放線架矯直板 傾斜/水平":{"idn":"Pelat pelurus miring/datar","note_zh":"材料剛從放線架出來時，可以將矯直板調整為傾斜，讓材料更容易進入；當運行穩定後，再調整為水平位置。","note_id":"Saat material baru keluar dari rak gulungan, plat dibuat miring supaya mudah masuk; setelah stabil diubah ke posisi datar."},"綜合冷抽機E6─放線架矯直板 升高/垂直":{"idn":"Pelat pelurus naik/posisi vertikal","note_zh":"可將矯直板升高或調整為垂直位置，以配合材料進入並保持穩定。","note_id":"Plat pelurus bisa di naikkan atau dibuat tegak untuk menyesuaikan masuknya material dan menjaga tetap stabil."},"綜合冷抽機E6─放線架矯直板 向後/向前轉":{"idn":"Pelat pelurus berputar ke depan/ atau berputar ke belakang","note_zh":"可將矯直板向前或向後轉動，以調整材料通過方向並保持平直。","note_id":"Pengaturan putaran pelat pelurus kedepan/belakang agar arah material tetap lurus dan stabil."},"綜合冷抽機E6─放線架液壓關":{"idn":"Tombol mengatur mesin hidrolik off","note_zh":"液壓關","note_id":"Tombol mengatur mesin hidrolik off / mati"},"綜合冷抽機E6─放線架液壓開":{"idn":"Tombol mengatur mesin hidrolik on","note_zh":"液壓開","note_id":"Tombol mengatur mesin hidrolis on/hidup"},"綜合冷抽機E6─放線架設定開":{"idn":"Rak gulungan bahan Pengaturan on","note_zh":"設定開","note_id":"Mode pengaturan mesin ON"},"綜合冷抽機E6─放線架設定自動":{"idn":"Rak gulungan bahan Penganturan Auto","note_zh":"設定自動","note_id":"Rak gulungan bahan Pengaturan Auto"},"綜合冷抽機E6─放線架故障重置":{"idn":"Lampu sensor error","note_zh":"當設備出現問題時，故障指示燈會亮起，提示操作員進行檢查和維護。","note_id":"Lampu untuk mendeteksi adanya error pada mesin"},"砂光機":{"idn":"Alat Mengamplas","note_zh":"砂光機用於打磨材料表面，使其平滑並去除毛刺。","note_id":"Mesin amplas digunakan untuk menghaluskan permukaan material agar rata dan menghilangkan burr."},"T桿":{"idn":"Engkol T","note_zh":"T桿用於固定材料或調整設備的位置，使操作更加穩定。","note_id":"untuk menahan material atau mengatur posisi peralatan agar operasi menjadi lebih stabil."},"E822冷抽機":{"idn":"Mesin produksi bar (Vital)","note_zh":"將金屬材料拉細，提升其強度和表面品質。","note_id":"Menipiskan material logam, meningkatkan kekuatan dan kualitas permukaaannya."},"by pass安全裝置":{"idn":"Kunci By Pass","note_zh":"1.特別注意：by pass安全裝置 沒有任何標示，確認是否需要特別標示\\n2.定義：在維護或測試時，可使用 By pass安全裝置，暫時繞過部分安全功能，但需謹慎操作。","note_id":"Perangkat pengaman bypass dapat digunakan untuk sementara melewati sebagian fungsi pengaman, tetapi harus dioperasikan dengan hati-hati."},"綜合冷抽機E6─精矯直設備拉製單元 關":{"idn":"Unit Penarikan Off","note_zh":"拉製單元 關","note_id":"Mematikan unit penarikan agar material berhenti bergerak dari mesin."},"綜合冷抽機E6─精矯直設備拉製單元 開":{"idn":"Unit Penarikan ON","note_zh":"拉製單元 開","note_id":"Menghidupkan unit penarikan agar material mulai bergerak melalui mesin."},"綜合冷抽機E6─精矯直設備TRAPO後端測試關閉依主管建議調整成「後夾輪 夾緊/鬆開」":{"idn":"TRAPO ujung belakang dimatikan","note_zh":"1.TRAPO後端測試關閉\\n依主管建議調整成「後夾輪 夾緊/鬆開」\\n\\n2.定義：後夾輪，就是位於後端固定棒材的夾具","note_id":"Roda penjepit belakang : menjepit/melepas"},"綜合冷抽機E6─精矯直設備TRAPO前端測試關閉依主管建議調整成「前夾輪 夾緊/鬆開」":{"idn":"Mesin Uji TRAPO dibagian depan off","note_zh":"1.TRAPO前端測試關閉\\n依主管建議調整成「前夾輪 夾緊/鬆開」\\n2.定義：前夾輪，是位於前端固定棒材的夾具","note_id":"Roda penjepit depan : menjepit/melepas"},"綜合冷抽機E6─精矯直設備使用/不使用測量輪依主管建議調整成「計長輪 啟動/停用」":{"idn":"Lampu indikator (penggunaan/tidak penggunaan roda pengukur)","note_zh":"1.使用/不使用測量輪\\n依主管建議調整成「計長輪 啟動/停用」\\n2.定義：計長輪，就是測量棒材 長度的工具","note_id":"Roda penghitung panjang adalah alat untuk mengukur panjang batang material."},"綜合冷抽機E6─精矯直設備TRAPO前端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan depan","note_zh":"TRAPO前輸送輪測試升降設定","note_id":"Pengaturan naik/turun untuk roda pengumpan depan TRAPO saat tes agar aliran bahan stabil."},"綜合冷抽機E6─精矯直設備TRAPO後端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan belakang","note_zh":"TRAPO後輸送輪升降設定","note_id":"Pengaturan naik/turun untuk roda belakang TRAPO agar aliran bahan keluar stabil."},"綜合冷抽機E6─精矯直設備設定 開":{"idn":"Pengaturan ON (Lampu indikator manual)","note_zh":"精矯直設備 設定 開（手動指示燈）","note_id":"Mengaktifkan mode pengaturan pada pelurus presisi dengan lampu indikator yang menyala sebagai tanda manual aktif."},"綜合冷抽機E6─精矯直設備設定 自動":{"idn":"Pengaturan Otomatis","note_zh":"精矯直設備 設定 自動（手動/自動）","note_id":"Mode pengaturan pelurus presisi bisa diatur manual/otomatis."},"綜合冷抽機E6─精矯直設備謢蓋確認":{"idn":"Konfirmasi Penutup pelindung","note_zh":"精矯直設備 護蓋確認","note_id":"Pengecekan apakah penutup pelindung mesin sudah aman/tertutup."},"中置料床套筒":{"idn":"Pipa MC","note_zh":"是一個 喇叭口形狀的導引管，讓棒材順利通過置料床，避免卡料","note_id":"Sebagai penahan agar tetap lurus dan stabil saat di proses. (untuk mengantar bahan pipa)"},"導線輪9.0":{"idn":"Roda pemutar","note_zh":"導線輪9.0用於引導材料，使其在機器中平穩運行並保持直線","note_id":"Menuntun material agar berjalan stabil di mesin dan tetap lurus."},"皮膜粉":{"idn":"Bubuk untuk menghaluskan bahan","note_zh":"可以在金屬表面形成保護層，提供潤滑，減少損傷","note_id":"Bubuk untuk menghaluskan bahan, pada saat pipa masih berminyak."},"切斷座":{"idn":"Tempat pemotongan pipa","note_zh":"用來精確切割管件的設備，確保每根材料長度一致。","note_id":"Digunakan untuk memotong pipa secara presisi, memastikan setiap material memiliki panjang yang sama."},"切斷座─右方按鈕「管件向上」":{"idn":"Tombol untuk pipa naik","note_zh":"管件向上","note_id":"Tempat pemotongan - tombol pipa naik."},"切斷座─右方按鈕「管件向下」":{"idn":"Tombol untuk pipa turun","note_zh":"管件向下","note_id":"Tempat pemotongan - tombol pipa turun."},"切斷座─右方按鈕入口側緩慢向下/向上":{"idn":"Bagian masuk pipa bergerak perlahan turun/naik.","note_zh":"可以精確調整管件高度，使其順利進入切割區域。","note_id":"Menyesuaikan tinggi pipa agar masuk lancar ke area pemotongan."},"切斷座─右方按鈕就位":{"idn":"Lampu indikator posisi siap","note_zh":"確認管件已到達正確位置以便切割。","note_id":"Untuk memastikan pipa sudah berada di posisi yang tepat agar bisa dipotong"},"切斷座─右方按鈕手動/自動":{"idn":"Tombol manual/auto","note_zh":"手動/自動","note_id":"Tombol manual/auto di stan pemotongan"},"切斷座─右方按鈕覆歸 昇最高":{"idn":"Tombol reset","note_zh":"切斷座上的按鈕，用於將管件返回至最高位置","note_id":"Tombol yang ada di cutting station untuk mengembalikan pipa ke posisi tertinggi setelah pemotongan."},"切斷座─右方按鈕下降 上昇":{"idn":"Tombol Turun/ naik","note_zh":"切斷座上的按鈕，用於手動調整管件上下","note_id":"Tombol yang ada di cutting station untuk mengatur pipa turun/naik secara manual."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"Memastikan sensor di box conveyor depan-belakang bekerja dengan baik sehingga material dapat melewati dengan aman."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌頂出材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"1.依主管建議調整成「夾輪 出料」\\n2.料床內導管夾輪出料；材料會被導軌推送到下一個加工位置或出料區。","note_id":"Di dalam bed material, roda penjepit pada pipa pemandu untuk proses pengeluaran material; material akan didorong oleh rel pemandu ke posisi proses berikutnya atau ke area keluaran."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌插入材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa memasukkan material","note_zh":"1.依主管建議調整成「夾輪 入料」\\n2.定義：料床內導管夾入材料會被導軌進入到加工位置，準備進行下一步作業。","note_id":"Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌清空」":{"idn":"Rel pipa dikosongkan","note_zh":"導軌上的所有管件會被推送出去，為下一批材料做好準備。","note_id":"Tekan rombol ini, semua pipa di rel akan terdorong keluar, siap untuk batch material berikutnya."},"綜合冷抽機E6-RIPO矯直機":{"idn":"Mesin Ring pelurus","note_zh":"用於將金屬材料拉細並拉直，以便進行下一步加工。","note_id":"Untuk menarik dan meluruskan material agar siap untuk proses berikutnya."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 開」":{"idn":"RIPO on","note_zh":"RIPO 開","note_id":"Mesin RIPO menyala"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 關」":{"idn":"RIPO off","note_zh":"RIPO 關","note_id":"Mesin RIPO Mati"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 關」":{"idn":"Unit penarikan dimatikan","note_zh":"拉製單元 關","note_id":"Tombol untuk mematikan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 開」":{"idn":"Unit penarikan di hidupkan","note_zh":"拉製單元 開","note_id":"Tombol untuk menghidupkan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「材料進入 RIPO」":{"idn":"Bahan masuk ke mesin RIPO","note_zh":"材料進入 RIPO","note_id":"Bahan masuk ke mesin RIPO"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 減速」":{"idn":"Memperlambat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動減速，單元會以較慢速度拉動材料，以確保精度和安全。","note_id":"Unit akan menarik material dengan kecepatan lebih lambat untuk memastikan presisi dan keamanan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 加速」":{"idn":"Mempercepat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動加速，單元會以更高速度拉動材料，加快生產。","note_id":"Unit akan menarik material dengan kecepatan lebih tinggi untuk mempercepat produksi."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 開」":{"idn":"Lampu pengaturan hidup","note_zh":"手動 開","note_id":"Lampu manual hidup"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 自動」":{"idn":"Pengaturan auto","note_zh":"手動 / 自動","note_id":"Tombol pengaturan Auto/Manual."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋請求」":{"idn":"Permintaan Pelindung penutup","note_zh":"操作 E6-RIPO 矯直機前，按下 護蓋請求，系統會確認護蓋位置，確保機器可以安全啟動。","note_id":"Dengan menekan tombol ini sistem akan memeriksa posisi penutup untuk memastikan mesin bisa dijalankan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋重置」":{"idn":"Reset penutup pelindung","note_zh":"當 E6-RIPO 矯直機的護蓋打開後，按下 護蓋重置，護蓋會回到原位，確保操作安全。","note_id":"Setelah penutup pelindung mesin E6-RIPO dibuka, tekan reset penutup pelindung, sehingga penutup kembali ke posisi awalnya dan memastikan operasi aman."},"中置料床":{"idn":"Meja mengantar bahan tengah","note_zh":"材料在進入冷抽機前會放在 中置料床上，便於操作員進行整理和送入下一工序。","note_id":"Material diletakkan di meja bahan tengah sebelum masuk ke mesin cold drawing, sehingga operator lebih mudah menata dan memasukkannnya ke proses berikutnya."},"中置料床 旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"中置料床 旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"中置料床 旁按鈕「管件導軌 頂出材料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"操作中置料床時，按下 管件導軌 頂出材料，材料會被導軌推送到下一工序或取料位置。","note_id":"Setelah menekan tombol 管件導軌 頂出材料 ini, nanti material akan terdorong ke proses berikutnya."},"中置料床 旁按鈕「管件導軌 插入材料」":{"idn":"Rel pipa memasukkan material","note_zh":"操作中置料床時，按下管件導軌插入材料，材料會被導軌進入到加工位置，準備進行下一步作業","note_id":"Setelah menekan tombol  管件導軌 插入材料 ini, nanti material masuk ke posisi pemrosesan, siap untuk langkah kerja berikutnya."},"中置料床 旁按鈕「管件導軌 清空」":{"idn":"Rel pipa dikosongkan","note_zh":"操作中置料床時，按下管件導軌清空，導軌上的所有材料會被推送出去，確保下一批材料能順利進入。","note_id":"Tekan tombol 管件導軌 清空 ini maka semua material akan terdorong keluar memastikan batch material berikutnya bisa masuk dengan lancar"},"綜合冷抽機E6-雙輥矯直設備":{"idn":"Mesin Pelurus dua roller","note_zh":"雙輥矯直，用兩個輥輪的壓力將材料拉直","note_id":"Dua roller lurus untuk meluruskan material dengan tekanan dari dua roller."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「拋光段開連線 關」":{"idn":"Koneksi bagian polishing off","note_zh":"斷開後方製程，倒角機與拋光機的連線；主要目的為特定客戶訂單不需拋光，倒角後就可以進到包裝","note_id":"Tombol untuk mematikan koneksi ke bagian polishing sehingga proses polishing tidak ikut berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「解除控制」":{"idn":"Lepas kontrol","note_zh":"取消設備的自動控制，使設備可以獨立或手動操作","note_id":"Tombol ini digunakan untuk melepas kendali otomatis atau interlock dari mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 開」":{"idn":"Kontrol ON","note_zh":"啟動設備的控制系統，使設備進入受控運轉狀態","note_id":"mengaktifkan kembali sistem kontrol mesin agar berjalan normal."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「設定/自動」":{"idn":"Otomatis/Manual","note_zh":"用來切換設備手動模式與自動運轉模式之間","note_id":"Tombol untuk ganti mode dari otomatis ke manual."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 關」":{"idn":"Kontrol Off","note_zh":"關閉設備的控制系統，使設備停止受控運轉","note_id":"Menonaktifkan sistem kontrol mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 檢索」":{"idn":"Tombol Safety door/ pengecekan","note_zh":"檢查修門的狀態（是否關閉或安全）","note_id":"Tombol untuk mengecek apakah pintu perawatan sudah aman tertutup sebelum mesin berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 確認」":{"idn":"Tombol Safety door/ konfirmasi","note_zh":"確認檢修門已關閉並處於安全狀態，使設備可以運轉","note_id":"Tombol untuk konfirmasi bahwa Safety door sudah aman dan mesin bisa berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「機器燈 開/關」":{"idn":"Lampu mesin On /Off","note_zh":"機器燈 開/關","note_id":"Lampu mesin On /Off"},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「故障重置」":{"idn":"Reset Error","note_zh":"當E6雙輥矯直設備發生故障時，按下故障重置，系統會清除錯誤訊號，使設備恢復正常運行","note_id":"Saat mesin Pelurus dua roller mengalami kesalahan, tekan Reset error, sistem akan menghapus sinyal error dan mengembalikan mesin ke kondisi operasi normal."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「指示燈測試」":{"idn":"Uji lampu indikator","note_zh":"指示燈測試按鈕，確保所有指示燈亮起並正常工作","note_id":"Tombol uji lampu indikator untuk memastikan semua lampu indikator menyala dan berfungsi dengan baik."},"倒角機":{"idn":"Mesin Peraut/Chamfer","note_zh":"冷抽機矯直後，因應客戶需求，於頭尾進行倒角加工","note_id":"Untuk menajamkan ujung kawat/besi agar berbentuk sesuai dengan pesanan pelanggan."},"倒角機旁按鈕「對準器 向後/向前」":{"idn":"Alat geser penjuruator kebelakang / kedepan.","note_zh":"用來調整對準器的位置，使材料正確對準加工位置","note_id":"Tombol untuk mengatur posisi alignment agar material tepat di mesin chamfering"},"倒角機旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"倒角機旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"倒角機旁按鈕「輸送帶彎槽向下」":{"idn":"Menurunkan alur sabuk pengantar.","note_zh":"輸送帶處於高位，物料還不能正確進入機器，按下 輸送帶彎槽向下，彎槽下降，物料可以正確進入倒角機。","note_id":"Pada saat conveyor/sabuk pengantar berada di posisi tinggi (benda belum pas masuk mesin) tekan tombol ini agar benda bisa masuk mesin chamfering dengan posisi tepat."},"倒角機旁按鈕「輸送帶彎槽向上」":{"idn":"Menaikkan alur sabuk pengantar.","note_zh":"輸送帶處於低位，物料需要提升，按下 輸送帶彎槽向上，彎槽升高，物料可以順利進入倒角機。","note_id":"Conveyor berada di posisi rendah, benda kerja perlu diangkat. Tekan tombol ini agar alur naik, sehingga benda kerja bisa masuk mesin chamfering dengan lancar."},"倒角機旁按鈕「輸送帶彎槽已清空」":{"idn":"Alur conveyor sudah kosong","note_zh":"操作前需確認物料已被取出，按下 輸送帶彎槽已清空，系統確認彎槽內無物料，可以安全開始下一步操作","note_id":"Tombol ini akan memastikan alur conveyor kosong sehingga aman untuk memulai langkah berikutnya."},"E824拋光設備區":{"idn":"Mesin Polishing","note_zh":"在 E824 拋光設備區，操作員將工件放入拋光機，設備運行後，工件表面會變得光滑平整。","note_id":"Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."},"E824拋光設備區 旁按鈕「停用煞車」":{"idn":"Rem (brake)","note_zh":"停用煞車","note_id":"Tombol untuk mengerem."},"E824拋光設備區 旁按鈕「門開啟」":{"idn":"Pintu terbuka","note_zh":"門開啟","note_id":"Pintu terbuka"},"E824拋光設備區 旁按鈕「電燈 0 1」":{"idn":"Lampu Indikator 0 1","note_zh":"此按紐用於在電燈關閉及電燈開啟","note_id":"Lampu Indikator 0 (tutup) , 1(buka)"},"E824拋光設備區 旁按鈕「緊急開關」":{"idn":"Saklar Darurat","note_zh":"此按钮用於在緊急情况下直接停止機器。","note_id":"Tombol ini digunakan untuk menghentikan mesin secara langsung dalam keadaan darurat."},"盤元修磨架":{"idn":"Tempat perbaikan/pengasahan coil.","note_zh":"操作員將受損的盤元放在 盤元修磨架 上，使用磨具進行修磨，使盤元表面恢復平整光滑。","note_id":"Operator meletakkan coil yang rusak di rak perbaikan dan pengasahan, lalu menggunakan alat pengasah untuk membuat permukaan coil kembali halus dan rata."},"手持式砂輪機":{"idn":"alat penggrinda barang","note_zh":"手持式砂輪機","note_id":"Alat penggrinda barang."},"盤元修磨架旁按鈕「緊急停止」":{"idn":"Tombol Berhenti darurat","note_zh":"緊急停止","note_id":"Tombol Berhenti darurat"},"盤元修磨架旁按鈕「後退」":{"idn":"Mundur","note_zh":"後退 (西)","note_id":"Mundur"},"盤元修磨架旁按鈕「電氣遙控」":{"idn":"Tombol pengontrol elektrik","note_zh":"操作員按下 盤元修磨架旁按鈕  電氣遙控，可以從操作台遠程控制修磨架的升降或旋轉。","note_id":"Operator menekan tombol kontrol jarak jauh listrik di samping rak perbaikan coil, sehingga dapat mengendalikan naik-turun atau putaran rak dari meja operasi."},"E1冷抽機":{"idn":"Mesin Produksi Bar E1","note_zh":"E1冷抽機","note_id":"Mesin Produksi Bar E1"},"E1冷抽機旁標示「生產特殊鋼種 174 209 431 注意 盤元尾端彈開」":{"idn":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul","note_zh":"1.特別注意：無中印標示\\n生產特殊鋼種 174 209 431 注意 盤元尾端彈開","note_id":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul"},"E1冷抽機旁按鈕「砂帶降速」":{"idn":"Penurunan kecepatan Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶降速」","note_id":"Penurunan kecepatan Tali Amplas"},"E1冷抽機旁按鈕「砂帶重置」":{"idn":"Reset Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶重置」","note_id":"Reset Sabuk Amplas"},"E1冷抽機旁按鈕「砂帶吋動」":{"idn":"Gerakan Sedikit demi sedikit Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶作動」","note_id":"Gerakan Sedikit demi sedikit Sabuk Amplas"},"E1冷抽機 後段按鈕「N6.夾輪夾持」":{"idn":"N6. Roda penjepit dijepit","note_zh":"夾棒材的夾輪作動","note_id":"N6. Roda penjepit dijepit"},"E1冷抽機 後段按鈕「檔板氣壓缸作動」":{"idn":"Papan penghalang sedang bergerak.","note_zh":"檔板會移動到指定位置，固定或導引材料，確保加工安全順利","note_id":"Papan penghalang yang bergerak untuk menahan atau mengatur posisi material."},"工單「訂單資訊」":{"idn":"Informasi pesanan","note_zh":"讓操機手能夠工單資訊，製造棒材","note_id":"Informasi pesanan pelanggan"},"工單訂單資訊「訂單編號」":{"idn":"Nomor Pesanan","note_zh":"訂單編號","note_id":"Nomor Pesanan"},"工單訂單資訊「客戶名稱」":{"idn":"Nama Pelanggan","note_zh":"客戶名稱","note_id":"Nama Pelanggan"},"工單訂單資訊「收貨人」":{"idn":"Nama Penerima","note_zh":"收貨人","note_id":"Nama Penerima"},"工單訂單資訊「生計交期」":{"idn":"Tanggal Pemesanan Produk","note_zh":"生計交期","note_id":"Tanggal Pemesanan Produk"},"工單訂單資訊「性質碼」":{"idn":"Kode Jenis","note_zh":"性質碼","note_id":"Kode Jenis"},"工單訂單資訊「倒角」":{"idn":"Sudut yang diinginkan","note_zh":"倒角","note_id":"Sudut yang diinginkan"},"工單訂單資訊「砂光痕等級」":{"idn":"Tingkat bekas pengamplasan","note_zh":"棒材表面砂光帶造成的砂光痕嚴重程度分級","note_id":"Klasifikasi tingkat keparahan bekas pengamplasan yang muncul di permukaan batang."},"工單訂單資訊「分級」":{"idn":"Grade","note_zh":"依照棒材表面砂光痕嚴重程度分級","note_id":"Dikelompokkan berdasarkan tingkat keparahan bekas pengamplasan pada permukaan batang."},"工單訂單資訊「ET」":{"idn":"Eddy Current Testing","note_zh":"渦電流檢測(ET)是一種基於電磁感應原理的非破壞性檢測技術，專門用於金屬導體表面及近表面的缺陷檢測（如裂紋、腐蝕、孔洞）","note_id":"ET adalah metode pemeriksaan non-destruktif berbasis induksi elektromagnetik, digunakan untuk mendeteksi cacat pada permukaan dan dekat permukaan logam (seperti retak, korosi dan lubang)."},"工單訂單資訊「UT」":{"idn":"Ultrasonic Testing","note_zh":"UT 檢測(超音波檢測，Ultrasonic Testing)是一種無損檢測(NDT)技術，利用高頻聲波深入材料內部，檢測裂紋、夾渣、氣孔或測量厚度","note_id":"UT adalah metode pemeriksaan non-destruktif yang menggunakan gelombang suara frekuensi tinggi untuk masuk ke dalam materal, guna mendeteksi retakan, inklusi pori-pori atau mengkur ketebalan."},"工單訂單資訊「重量/支」":{"idn":"Berat batang / pcs","note_zh":"重量/支","note_id":"Berat batang / pcs"},"工單訂單資訊「冷抽數」":{"idn":"Jumlah proses Cold Drawing","note_zh":"冷抽數","note_id":"Jumlah proses Cold Drawing"},"工單訂單資訊「取樣/重量cm」":{"idn":"Sampel/berat cm","note_zh":"取樣/重量cm","note_id":"Sampel/berat cm"},"工單訂單資訊「成品尺寸 MIN」":{"idn":"Ukuran produk MIN","note_zh":"成品尺寸 MIN","note_id":"Ukuran produk MIN"},"工單訂單資訊「成品尺寸MAX」":{"idn":"Ukuran produk MAX","note_zh":"成品尺寸MAX","note_id":"Ukuran produk MAX"},"工單訂單資訊「短邊 MIN」":{"idn":"Sisi pendek MIN","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最小長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang minimum sisi pendek."},"工單訂單資訊「短邊 MAX」":{"idn":"Sisi pendek MAX","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最大長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang maximum sisi pendek."},"工單訂單資訊「厚度 MIN」":{"idn":"Ketebalan MIN","note_zh":"厚度 MIN","note_id":"Ketebalan MIN"},"工單訂單資訊「厚度 MAX」":{"idn":"Ketebalan MAX","note_zh":"厚度 MAX","note_id":"Ketebalan MAX"},"工單訂單資訊「長度 MIN」":{"idn":"Ketinggian MIN","note_zh":"長度 MIN","note_id":"Ketinggian MIN"},"工單訂單資訊「長度 MAX」":{"idn":"Ketinggian MAX","note_zh":"長度 MAX","note_id":"Ketinggian MAX"},"工單訂單資訊「計畫量」":{"idn":"Jumlah rencana produksi","note_zh":"計畫量","note_id":"Jumlah rencana produksi"},"工單訂單資訊「計畫支數」":{"idn":"Rencana Jumlah batang","note_zh":"計畫支數","note_id":"Rencana Jumlah batang"},"工單訂單資訊「短尺支數」":{"idn":"Jumlah batang pendek","note_zh":"可以接受短尺的支數","note_id":"Jumlah batang pendek yang masih dapat diterima."},"工單訂單資訊「短尺MIN」":{"idn":"Batang pendek","note_zh":"可以接受短尺的長度，最小是幾公分","note_id":"Bisa menerima seberapa pendek Ukurannya, paling kecil berapa cm."},"工單訂單資訊「捆重/MIN/MAX」":{"idn":"Berat per Bundel/MIN/MAX","note_zh":"捆重/MIN/MAX","note_id":"Berat per Bundel/MIN/MAX"},"工單訂單資訊「噴漆位置」":{"idn":"Posisi pengecatan","note_zh":"噴漆位置","note_id":"Posisi pengecatan"},"工單訂單資訊「套環」":{"idn":"Cincin Pelindung","note_zh":"套環","note_id":"Cincin Pelindung"},"工單訂單資訊「顏色」":{"idn":"Warna","note_zh":"顏色","note_id":"Warna"},"工單訂單資訊「包裝代碼」":{"idn":"Kode Kemasan","note_zh":"包裝代碼","note_id":"Kode Kemasan"},"工單備註資訊「品保」":{"idn":"Quality Control","note_zh":"呈現品保檢驗等級","note_id":"Menampilkan tingkat inspeksi QC"},"工單備註資訊「特殊」":{"idn":"Khusus","note_zh":"此單特殊備註事項","note_id":"catatan khusus untuk order ini"},"工單備註資訊「訂單」":{"idn":"Pesanan","note_zh":"呈現訂單特別備註資訊","note_id":"menampilkan catatan khusus dari pesanan"},"工單備註資訊「製造」":{"idn":"Produksi","note_zh":"呈現訂單製造備註資訊","note_id":"menampilkan catatan produksi pada order."},"工單備註資訊「客需」":{"idn":"Kebutuhan pelanggan","note_zh":"呈現訂單中客戶特殊需求資訊","note_id":"menampilakn permintaan khusus dari pelanggan"},"工單「母材」":{"idn":"bahan asal","note_zh":"顯示此工單原始材料來源","note_id":"menampilkan sumber bahan awal dari work order."},"工單母材資訊「尺寸1」":{"idn":"Ukuran 1","note_zh":"尺寸1","note_id":"Ukuran 1"},"工單母材資訊「尺寸2」":{"idn":"Ukuran 2","note_zh":"尺寸2","note_id":"Ukuran 2"},"工單母材資訊「型態」":{"idn":"Tipe/bentuk","note_zh":"型態","note_id":"Tipe/bentuk"},"工單母材資訊「批次」":{"idn":"Batch","note_zh":"批次","note_id":"Batch"},"工單母材資訊「口付 MIN」":{"idn":"Ukuran ujung minimum","note_zh":"口付 MIN","note_id":"Ukuran ujung minimum"},"工單母材資訊「退料重」":{"idn":"Berat material retur","note_zh":"退料重","note_id":"Berat material retur"},"工單母材資訊「現況流程」":{"idn":"Proses saat ini","note_zh":"現況流程","note_id":"Proses saat ini"},"工單母材資訊「解捲支數」":{"idn":"Jumlah batang hasil uncoiling","note_zh":"解捲支數","note_id":"Jumlah batang hasil uncoiling"},"工單母材資訊「400現況儲區」":{"idn":"Area penyimpanan saat ini 400","note_zh":"400站為原料站","note_id":"Stasiun 400 adalah stasiun bahan baku."},"工單製造資訊「退火代碼」":{"idn":"Kode annealing","note_zh":"技術單位提供的建議退火製程參數","note_id":"Parameter proses anealing yang direkomendasikan oleh bagian teknisi."},"工單製造資訊「頻率」":{"idn":"Frekuensi","note_zh":"頻率","note_id":"Frekuensi"},"工單製造資訊「眼膜」":{"idn":"Dies (alat untuk membentuk ukuran & bentuk material saat proses produksi)","note_zh":"眼模可以讓棒材經過加工，變成客戶指定的尺寸與形狀。","note_id":"Memproses batang agar menjadi ukuran dan bentuk sesuai permintaan pelanggan."},"工單製造資訊  眼膜「放置點」":{"idn":"titik penempatan","note_zh":"放置點","note_id":"titik penempatan"},"工單製造資訊  眼膜「進入角」":{"idn":"sudut masuk","note_zh":"進入角","note_id":"sudut masuk"},"工單製造資訊「減面率」":{"idn":"Reduction Ratio","note_zh":"技術單位提供的建議投料尺寸","note_id":"Tingkat Perubahan luas penampang batang (semakin besar, gaya tarik saat drawing semakin besar)"},"工單製造資訊「投料形狀」":{"idn":"Bentuk material masuk","note_zh":"投料形狀","note_id":"Bentuk material masuk"},"工單製造資訊「產出 尺寸」":{"idn":"Ukuran hasil produksi","note_zh":"產出 尺寸","note_id":"Ukuran hasil produksi"},"工單製造資訊「產出 短邊」":{"idn":"Sisi pendek hasil","note_zh":"產出 短邊","note_id":"Sisi pendek hasil"},"工單製造資訊「產出 厚度」":{"idn":"Ketebalan hasil","note_zh":"產出 厚度","note_id":"Ketebalan hasil"},"工單製造資訊「產出 有效長度」":{"idn":"Panjang efektif hasil","note_zh":"產出 有效長度","note_id":"Panjang efektif hasil"},"工單製造資訊「長度模組長度」":{"idn":"Panjang modul","note_zh":"技術單位提供的建議切長長度","note_id":"Panjang potong yang di hasilkan teknisi"},"工單製造資訊「模組投入尺寸」":{"idn":"Ukuran input modul","note_zh":"技術單位提供的建議投料尺寸","note_id":"ukuran material masuk yang direkomendasikan oleh teknisi."},"工單製造資訊「工作站」":{"idn":"Stasiun kerja","note_zh":"工作站","note_id":"Stasiun kerja"},"工單製程紀錄「機台」":{"idn":"Mesin","note_zh":"機台","note_id":"Mesin"},"工單製程紀錄「尺寸一/二/三」":{"idn":"Ukuran 1, 2,3","note_zh":"尺寸一/二/三","note_id":"Ukuran 1, 2,3"},"工單製程紀錄「長度」":{"idn":"Ketinggian","note_zh":"長度","note_id":"Ketinggian"},"工單製程紀錄「重量/支數」":{"idn":"Berat batang/pcs","note_zh":"重量/支數","note_id":"Berat batang/pcs"},"工單製程紀錄「主機手」":{"idn":"Operator utama","note_zh":"主機手","note_id":"Operator utama"},"工單製程紀錄「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"工單製程紀錄「來料確認」":{"idn":"Konfirmasi material masuk","note_zh":"來料確認","note_id":"Konfirmasi material masuk"}}'
+_GLOSSARY_JSON = '{"M7導板":{"idn":"Tongkat Pemisah","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Untuk misahin barang yang besar(1ton)"},"電子磅秤":{"idn":"Timbangan Gantung","note_zh":"安裝於天車上，用以即時測量並顯示吊運物體重量的電子裝置，具備精確測量、過載警示與數據記錄功能，確保起重作業的安全與準確性","note_id":"Untuk menimbang barang yang digantung"},"天車/固定式起重機":{"idn":"Tian Che / Derek tetap(Fixed crane)","note_zh":"天車是用於廠內吊運不銹鋼原料、半成品及成品的起重設備，具備移動、升降與定位功能的起重機，用以安全、精準地進行不銹鋼材料在各生產工序間的搬運與裝卸作業","note_id":"Alat untuk angkat dan pindah barang berat secara efisien dan aman"},"掛勾":{"idn":"Kait/Hook","note_zh":"懸掛與固定不銹鋼原料、半成品或成品的起重配件，是具有足夠承載強度與防脫設計的金屬吊具，用以安全連接起重索具與吊運物件，確保吊運過程中的穩定與安全。","note_id":"untuk mengait dan mengangkat barang"},"布索":{"idn":"Tali kain yang di pakai di Tian Che","note_zh":"天車上的「布索」是一種強韌的吊繩，用來把不銹鋼材料安全地吊起來並運送到不同地方，確保吊運過程穩定不會斷或滑脫。","note_id":"Untuk mengangkat dan mengikat barang saat proses pengangkatan"},"標籤":{"idn":"label produk","note_zh":"貼在產品外部，標示出貨資訊，如重量、單號、客戶、儲存位置等","note_id":"Label yang ditempel pada produk untuk mencantumkan berat, nomor pesanan, pelanggan, dan lokasi penyimpanan.","canonical_idn":"label produk","translation_mode":"hard","reverse_safe":true},"秤重台":{"idn":"Meja Timbangan","note_zh":"包裝站的「秤重台」用來稱出包裝好後的不銹鋼產品重量，確保貨物重量正確，不會裝太多或裝太少。","note_id":"Untuk menimbang barang yang ada di bawah"},"顯示器":{"idn":"Monitor","note_zh":"顯示稱出包裝好後的不銹鋼產品重量","note_id":"Untuk memantau kerjaan yang ada di layar monitor"},"打包機":{"idn":"Plester/Alat pengikat","note_zh":"是一種用手拿的機器，用來把鋼帶拉緊並扣緊固定，讓不銹鋼產品包裝得牢固又不會鬆脫。","note_id":"Alat untuk Membungkus, mengepak, menyegel produk"},"鋼帶":{"idn":"Tali baja","note_zh":"是一種堅硬又強韌的金屬帶子，用來環繞並固定包裝好的不銹鋼產品，讓貨物在運送時不會鬆開或受損。","note_id":"Digunakan untuk mengikat barang/mengamankan barang agar tidak bergerak saat pengiriman atau penyimpanan"},"鋼扣":{"idn":"Klem Baja","note_zh":"包裝站的「鋼扣」是一種用來把包裝鋼帶扣緊的金屬配件，像是一個小鈕扣，讓鋼帶牢牢固定住貨物，不會在運送中鬆開。","note_id":"Digunakan bersama 鋼帶 (steel strapping / tali baja) untuk mengunci atau mengencangkan ikatan di sekitar barang."},"膠膜":{"idn":"Sejenis Bubble Wrap","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan."},"PP布":{"idn":"Untuk melindungi bahan (PP bu bahannya semacam goni)","note_zh":"是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。","note_id":"Untuk mencegah karatan"},"膠帶":{"idn":"Selotip","note_zh":"用來把紙箱或包裝封起來，讓貨物不會鬆開或掉出來，確保運送時安全又整齊。","note_id":"Untuk merekatkan bahan atau kemasan seperti (Kardus atau kertas yang mau di bungkus)"},"敲齊工具":{"idn":"Alignment/leveling tool","note_zh":"是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊","note_id":"Digunakan untuk menyelaraskan benda agar sejajar"},"剪刀":{"idn":"Gunting","note_zh":"剪斷膠帶、塑膠膜或紙箱的工具，讓包裝作業更快速、整齊又方便","note_id":"Untuk menggunting Selotip atau pembungkus lainnya."},"CYA矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYA)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"CYB矯直切斷機":{"idn":"Mesin pemotong dan pelurus (CYB)","note_zh":"是一種能把彎曲的盤元不銹鋼線材拉直，並依照規定長度自動切斷的機器，讓後續加工更容易、品質更一致。","note_id":"Meluruskan dan memotong tali baja/ kawat baja agar siap di kemas."},"梅花板手":{"idn":"Kunci Ring","note_zh":"是一種用來轉動並固定六角螺帽的工具，讓螺絲可以緊緊固定或輕鬆拆卸，不會損傷螺絲角。","note_id":"Mengencangkan atau melepaskan mur kepala yang berbentuk heksagonal (6sisi)."},"六角板手":{"idn":"Kunci L","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur yang berbentuk heksagonal dalam"},"開口板手":{"idn":"Kunci Pas Terbuka","note_zh":"是一種用來旋轉六角螺絲或螺帽的工具，可以把它們旋緊或拆開，讓設備或機器組裝更穩固。","note_id":"Mengencangkan atau melepaskan mur dengan satu sisi terbuka, cocok untuk ruang yang sempit(yang sulit dijangkau)."},"CYA操作盤":{"idn":"CYA control panel","note_zh":"矯直機的控制面盤","note_id":"Untuk memonitor/mengontrol kerjanya mesin CYA."},"棉繩搬運台車":{"idn":"Troli pengangkat dengan tali katun","note_zh":"是一種用來搬運棉繩的小推車","note_id":"Troli untuk memindahkan tali katun yang di gantung."},"BF235圓棒拋光機":{"idn":"Mesin Pemoles Batang","note_zh":"「圓棒拋光機」是一種用來把不銹鋼圓棒表面磨得光滑亮麗的機器","note_id":"Digunakan untuk memoles/menghaluskan batang logam agar permukaan lebih rata, bersih dan mengkilap."},"束帶":{"idn":"Tali pengikat","note_zh":"是一種用來把材料捆綁在一起的塑料帶","note_id":"Digunakan untuk mengikat atau mengencangkan barang agar tetap stabil selama penyimpanan/pengiriman."},"捲尺":{"idn":"Meteran Gulung","note_zh":"是一種可以伸縮的測量工具，用來量測長度或尺寸","note_id":"Untuk mengukur panjang, tinggi, lebar suatu benda."},"刮刀":{"idn":"Pengikis","note_zh":"是一種用來清除表面雜質或油污的工具","note_id":"Untuk mengikis, membersihkan atau meratakan permukaan"},"檔桿":{"idn":"Pipa Besi Penghadang","note_zh":"於入料過程中，放置於入料區邊緣，避免生產中棒材滾落","note_id":"Untuk menghadang barang tidak berlebihan"},"防鏽油":{"idn":"Oli anti karat","note_zh":"是一種塗在不銹鋼表面的油，可以防止鋼材生鏽，讓產品在存放或運送時保持乾淨又光亮。","note_id":"untuk mencegah karat pada permukaan bahan."},"研磨機":{"idn":"mesin grinding","note_zh":"是一種用來把不銹鋼棒材表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Mesin untuk menggerinda dan menghaluskan permukaan batang baja tahan karat.","canonical_idn":"mesin grinding","translation_mode":"hard","reverse_safe":true},"調機工作台車":{"idn":"Troli Peralatan kerja","note_zh":"1.特別留意：工具箱中梅花板手翻譯錯誤，建議修正\\n\\n2.定義：是一種可以移動的小推車，上面放著調整機器用的手工具，讓工人方便拿取和維修設備。","note_id":"Troli Peralatan kerja"},"I9置料台":{"idn":"Station Pelurusan Material I9","note_zh":"是一個用來暫時放置棒材的工作台","note_id":"Station Pelurusan Material I9"},"I9置料台 旁按鈕「置料台前進」":{"idn":"Mesin Pelurusan Maju","note_zh":"1.特別留意：「置料台前進」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 往前","note_id":"Mesin pelurusan bergerak maju ke depan"},"I9置料台旁按鈕「置料台後退」":{"idn":"Mesin Pelurusan Mundur","note_zh":"1.特別留意：「置料台後退」翻譯未置入主詞\\n2.定義：放置不銹鋼材料的工作台 後退","note_id":"Mesin Pelurusan bergerak mundur ke belakang"},"I9置料台旁按鈕「緊急停水」":{"idn":"Tombol darurat berhenti air","note_zh":"1.特別留意：緊急停止按鈕有兩個，黑色的是停水；紅色是機台緊急停止，但兩者的標示都一樣，建議更新\\n2.定義：是一個在發生突發狀況時，可以立刻關閉冷卻水供應的裝置，用來保護設備和確保操作安全。","note_id":"紅(緊急停機)-tombol berhenti darurat\\n黑(緊急停水)-tombol untuk mematikan air"},"I9置料台旁「緊急停止拉索」":{"idn":"Tali tarik darurat untuk menghentikan mesin","note_zh":"1.特別留意：緊急停止拉索，印尼文有誤(寫成緊急停止按鈕)，建議更新\\n2.定義：是一條拉一下就能立刻關掉機器的繩子，用來在發生危險時快速停機，保護工人安全。","note_id":"Tali tarik darurat untuk menghentikan mesin"},"422清洗槽":{"idn":"422 Tangki Pencucian","note_zh":"「清洗槽」是一個裝有清潔液的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"Tempat untuk membersihkan cetakkan."},"清水槽":{"idn":"Tangki Air Bersih","note_zh":"「清洗槽」是一個裝有清水的容器，用來浸泡或沖洗不銹鋼棒材，把表面的油污或雜質清除乾淨。","note_id":"tangki untuk membersihkan/membilas debu sisa minyak ringan"},"藥水槽":{"idn":"Tangki Larutan Kimia","note_zh":"「清洗槽」是一個裝有藥水的容器，用來浸泡或沖洗不銹鋼棒材。","note_id":"untuk menghilangkan karat, minyak atau residu keras."},"天車遙控器":{"idn":"Remote control crane(tian che)","note_zh":"是一個用來遙控吊車移動的控制器，讓工人可以遠距離搬運不銹鋼棒材","note_id":"alat digunakan untuk mengontrol crane(tian che) dari jarak jauh."},"I9入料床收集架電氣箱 下方控制鈕「滾輪 前/停/後」":{"idn":"Roda bergerak Maju/Berhenti/Mundur","note_zh":"1.特別留意：滾輪控制棒材輸送方向\\n2.特別留意中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往後方跑；但標示是”前”\\n(2)旋鈕往右旋，棒材會往前方跑 ；但標示是”後”","note_id":"Roda bergerak Maju/Berhenti/Mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「上料台上升」":{"idn":"Meja Pengumpan naik","note_zh":"是一個讓放置不銹鋼棒材的平台自動升高的裝置，方便工人把棒材送入置料台後，進行生產","note_id":"Membuat material naik secara otomatis"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台後退」":{"idn":"Roll roda mundur ke belakang","note_zh":"此按鈕用於使入料床收集架的滾輪平台向後移動，以清空材料或調整材料位置。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak mundur"},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台上升」":{"idn":"Roll roda naik ke atas","note_zh":"此按鈕用於使入料床收集架的滾輪平台升起，將材料送至下一工序。","note_id":"Tombol ini digunakan untuk membuat meja roller pada rak pengumpan I9 bergerak naik ketas, mendorong ke proses berikutnya."},"I9入料床收集架電氣箱 下方控制鈕 標示掉落「滾輪台下降」":{"idn":"Roda turun ke bawah","note_zh":"此按鈕用於使入料床收集架的滾輪平台下降，以便取下或調整材料位置。","note_id":"Tombol ini digunakan untuk menurunkan meja roller pada rak pengumpan I9, agar material bisa diambil atau disesuaikan posisinya"},"I1出料床收集架電氣箱「開、關」":{"idn":"Buka , Tutup","note_zh":"開、關","note_id":"Buka, Tutup"},"I1入料床收集架電氣箱 下方控制鈕「滾輪 後退/停止/前進」":{"idn":"Roda Mundur ke belakang/berhenti/maju kedepan","note_zh":"1.滾輪控制棒材輸送方向\\n2.中文：「輥輪前/停/後」標示錯誤/不清楚：\\n(1)旋鈕往左旋，棒材會往前方跑；但標示是”後退”\\n(2)旋鈕往右旋，棒材會往後方跑 ；但標示是”前進”","note_id":"Roda Mundur ke belakang/berhenti/maju kedepan"},"無心研磨機 I18":{"idn":"Mesin grinding tanpa pusat I18","note_zh":"是一種用來把不銹鋼表面磨平、磨光滑的機器，讓產品看起來更漂亮、品質更好。","note_id":"Mesin yang digunakan untuk mengahaluskan dan mempoles permukaan steel, sehingga produk terlihat lebih rapi dan kualirasnya lebih baik."},"無心研磨機 I18料床電器盤 「手動 自動」":{"idn":"Manual Otomatis","note_zh":"1.特別留意：標示全白，字已消失","note_id":"Manual Otomatis"},"研磨股 無心研磨機自主檢驗紀錄表":{"idn":"Formulir catatan pemeriksaan mandiri mesin grinding tanpa pusat","note_zh":"讓操作研磨機操機手能夠自動依循檢驗生產狀況","note_id":"memungkinkan oprator mesin grinding untuk secara otomatis memeriksa dan mengikuti kondisi produksi."},"研磨股 無心研磨機自主檢驗紀錄表「設備」":{"idn":"Peralatan","note_zh":"紀錄生產設備名稱","note_id":"Peralatan"},"研磨股 無心研磨機自主檢驗紀錄表「時間」":{"idn":"Waktu","note_zh":"紀錄生產時間","note_id":"Waktu"},"研磨股 無心研磨機自主檢驗紀錄表「來料尺寸」":{"idn":"Ukuran material yang masuk (max/min)","note_zh":"紀錄來料尺寸","note_id":"Ukuran material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「來料粗糙度」":{"idn":"Kasar/halus material yang masuk (max/min)","note_zh":"紀錄來料尺寸來料粗糙度(max/min)","note_id":"Kasar/halus material yang masuk (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「成品尺寸前/中／後」":{"idn":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang","note_zh":"紀錄研磨股 無心研磨機自主檢驗紀錄表\\n「成品尺寸(max/min) 前/中／後」","note_id":"Mencatat ukuran produk setelah digiling (max/min) depan/tengah/belakang"},"研磨股 無心研磨機自主檢驗紀錄表「長度」":{"idn":"Panjang (mm)","note_zh":"長度(mm)","note_id":"Panjang (mm)"},"研磨股 無心研磨機自主檢驗紀錄表「產出粗糙度」":{"idn":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)","note_zh":"產出粗糙度(max/min)","note_id":"Mencatat kasar/halus permukaan bahan setelah digiling (max/min)"},"研磨股 無心研磨機自主檢驗紀錄表「外觀」":{"idn":"Tampilan Luar","note_zh":"外觀","note_id":"Tampilan Luar"},"研磨股 無心研磨機自主檢驗紀錄表「工號」":{"idn":"Nomor karyawan","note_zh":"工號","note_id":"Nomor kerja"},"研磨股 無心研磨機自主檢驗紀錄表「量具編號」":{"idn":"Nomor alat ukur yang digunakan","note_zh":"量具編號","note_id":"Nomor alat ukur yang digunakan"},"研磨股 無心研磨機自主檢驗紀錄表「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"研磨股 無心研磨機自主檢驗紀錄表「班別」":{"idn":"Shift","note_zh":"班別","note_id":"Shift"},"冷抽上料區":{"idn":"Mesin produksi Coil","note_zh":"在 冷抽上料區，操作員將管件放置在導軌上，準備送入冷抽機進行加工。","note_id":"Operator menaruh pipa di rel, siap proses untuk memotong besi sesuai pesanan konsumen. contoh pemotongan :R,H,S,F."},"AIR管":{"idn":"Pipa udara","note_zh":"用於清理/吹除","note_id":"untuk membersihkan, untuk mengeklem"},"鐵線剪":{"idn":"Gunting kawat","note_zh":"操作員使用 鐵線剪 剪掉多餘的鐵線，確保材料整齊。","note_id":"Untuk menggunting kawat kecil."},"塑膠槌":{"idn":"Palu","note_zh":"操作員使用 塑膠槌 輕輕敲打材料，避免損壞表面。","note_id":"Untuk memukul atau menekan benda tanpa merusak permukaan."},"PE帶剪刀":{"idn":"Gunting besi plat","note_zh":"操作員使用 PE帶剪刀 將金屬帶切割成所需長度。","note_id":"Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan."},"鐵管":{"idn":"Pipa besi","note_zh":"操作員使用 鐵管 輕輕敲齊材料，避免損壞表面。","note_id":"Untuk membengkokkan/meluruskan produk."},"工單":{"idn":"work order","note_zh":"工廠現場使用的製造/作業工單，是各站依照執行的工作文件。","note_id":"Dokumen work order untuk acuan proses produksi di setiap stasiun."},"E6冷抽機─張力輥向下/向上":{"idn":"Pengaturan roller penegang naik/turun","note_zh":"操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力","note_id":"Operator bisa mengatur tension roller naik atau turun supaya pipa tetap lurus dan tegangan merata selama proses penarikan."},"E6冷抽機─張力輥下部大槌向下/向上":{"idn":"Palu besar bagian bawah tension roller naik/turun","note_zh":"操作員可控制 張力輥下部大槌向下或向上，以調整壓力並確保材料穩定通過","note_id":"Untuk mengatur tekanan agar material tetap stabil saat lewat."},"E6冷抽機─張力輥上部大槌向下/向上":{"idn":"Palu besar bagian atas tension roller naik/turun","note_zh":"操作員可控制 張力輥上部大槌向下或向上，以調整上方壓力，確保材料穩定運行。","note_id":"Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan."},"綜合冷抽機E6─放線架拉置單元關":{"idn":"Rak gulungan -  Unit penarik Off","note_zh":"如需停止拉拔動作，可按下 拉置單元關，使設備停止運轉。","note_id":"Jika ingin menarik proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja."},"綜合冷抽機E6─放線架轉盤開關":{"idn":"Saklar putaran cepat dan lambatnya nampan","note_zh":"轉盤快/慢速按鈕","note_id":"Tombol putaran cepat dan lambatnya nampan"},"綜合冷抽機E6─放線架矯直板 傾斜/水平":{"idn":"Pelat pelurus miring/datar","note_zh":"材料剛從放線架出來時，可以將矯直板調整為傾斜，讓材料更容易進入；當運行穩定後，再調整為水平位置。","note_id":"Saat material baru keluar dari rak gulungan, plat dibuat miring supaya mudah masuk; setelah stabil diubah ke posisi datar."},"綜合冷抽機E6─放線架矯直板 升高/垂直":{"idn":"Pelat pelurus naik/posisi vertikal","note_zh":"可將矯直板升高或調整為垂直位置，以配合材料進入並保持穩定。","note_id":"Plat pelurus bisa di naikkan atau dibuat tegak untuk menyesuaikan masuknya material dan menjaga tetap stabil."},"綜合冷抽機E6─放線架矯直板 向後/向前轉":{"idn":"Pelat pelurus berputar ke depan/ atau berputar ke belakang","note_zh":"可將矯直板向前或向後轉動，以調整材料通過方向並保持平直。","note_id":"Pengaturan putaran pelat pelurus kedepan/belakang agar arah material tetap lurus dan stabil."},"綜合冷抽機E6─放線架液壓關":{"idn":"Tombol mengatur mesin hidrolik off","note_zh":"液壓關","note_id":"Tombol mengatur mesin hidrolik off / mati"},"綜合冷抽機E6─放線架液壓開":{"idn":"Tombol mengatur mesin hidrolik on","note_zh":"液壓開","note_id":"Tombol mengatur mesin hidrolis on/hidup"},"綜合冷抽機E6─放線架設定開":{"idn":"Rak gulungan bahan Pengaturan on","note_zh":"設定開","note_id":"Mode pengaturan mesin ON"},"綜合冷抽機E6─放線架設定自動":{"idn":"Rak gulungan bahan Penganturan Auto","note_zh":"設定自動","note_id":"Rak gulungan bahan Pengaturan Auto"},"綜合冷抽機E6─放線架故障重置":{"idn":"Lampu sensor error","note_zh":"當設備出現問題時，故障指示燈會亮起，提示操作員進行檢查和維護。","note_id":"Lampu untuk mendeteksi adanya error pada mesin"},"砂光機":{"idn":"Alat Mengamplas","note_zh":"砂光機用於打磨材料表面，使其平滑並去除毛刺。","note_id":"Mesin amplas digunakan untuk menghaluskan permukaan material agar rata dan menghilangkan burr."},"T桿":{"idn":"Engkol T","note_zh":"T桿用於固定材料或調整設備的位置，使操作更加穩定。","note_id":"untuk menahan material atau mengatur posisi peralatan agar operasi menjadi lebih stabil."},"E822冷抽機":{"idn":"Mesin produksi bar (Vital)","note_zh":"將金屬材料拉細，提升其強度和表面品質。","note_id":"Menipiskan material logam, meningkatkan kekuatan dan kualitas permukaaannya."},"by pass安全裝置":{"idn":"Kunci By Pass","note_zh":"1.特別注意：by pass安全裝置 沒有任何標示，確認是否需要特別標示\\n2.定義：在維護或測試時，可使用 By pass安全裝置，暫時繞過部分安全功能，但需謹慎操作。","note_id":"Perangkat pengaman bypass dapat digunakan untuk sementara melewati sebagian fungsi pengaman, tetapi harus dioperasikan dengan hati-hati."},"綜合冷抽機E6─精矯直設備拉製單元 關":{"idn":"Unit Penarikan Off","note_zh":"拉製單元 關","note_id":"Mematikan unit penarikan agar material berhenti bergerak dari mesin."},"綜合冷抽機E6─精矯直設備拉製單元 開":{"idn":"Unit Penarikan ON","note_zh":"拉製單元 開","note_id":"Menghidupkan unit penarikan agar material mulai bergerak melalui mesin."},"綜合冷抽機E6─精矯直設備TRAPO後端測試關閉依主管建議調整成「後夾輪 夾緊/鬆開」":{"idn":"TRAPO ujung belakang dimatikan","note_zh":"1.TRAPO後端測試關閉\\n依主管建議調整成「後夾輪 夾緊/鬆開」\\n\\n2.定義：後夾輪，就是位於後端固定棒材的夾具","note_id":"Roda penjepit belakang : menjepit/melepas"},"綜合冷抽機E6─精矯直設備TRAPO前端測試關閉依主管建議調整成「前夾輪 夾緊/鬆開」":{"idn":"Mesin Uji TRAPO dibagian depan off","note_zh":"1.TRAPO前端測試關閉\\n依主管建議調整成「前夾輪 夾緊/鬆開」\\n2.定義：前夾輪，是位於前端固定棒材的夾具","note_id":"Roda penjepit depan : menjepit/melepas"},"綜合冷抽機E6─精矯直設備使用/不使用測量輪依主管建議調整成「計長輪 啟動/停用」":{"idn":"Lampu indikator (penggunaan/tidak penggunaan roda pengukur)","note_zh":"1.使用/不使用測量輪\\n依主管建議調整成「計長輪 啟動/停用」\\n2.定義：計長輪，就是測量棒材 長度的工具","note_id":"Roda penghitung panjang adalah alat untuk mengukur panjang batang material."},"綜合冷抽機E6─精矯直設備TRAPO前端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan depan","note_zh":"TRAPO前輸送輪測試升降設定","note_id":"Pengaturan naik/turun untuk roda pengumpan depan TRAPO saat tes agar aliran bahan stabil."},"綜合冷抽機E6─精矯直設備TRAPO後端測試調整 +/-":{"idn":"Penyesuaian roda- pengumpan belakang","note_zh":"TRAPO後輸送輪升降設定","note_id":"Pengaturan naik/turun untuk roda belakang TRAPO agar aliran bahan keluar stabil."},"綜合冷抽機E6─精矯直設備設定 開":{"idn":"Pengaturan ON (Lampu indikator manual)","note_zh":"精矯直設備 設定 開（手動指示燈）","note_id":"Mengaktifkan mode pengaturan pada pelurus presisi dengan lampu indikator yang menyala sebagai tanda manual aktif."},"綜合冷抽機E6─精矯直設備設定 自動":{"idn":"Pengaturan Otomatis","note_zh":"精矯直設備 設定 自動（手動/自動）","note_id":"Mode pengaturan pelurus presisi bisa diatur manual/otomatis."},"綜合冷抽機E6─精矯直設備謢蓋確認":{"idn":"Konfirmasi Penutup pelindung","note_zh":"精矯直設備 護蓋確認","note_id":"Pengecekan apakah penutup pelindung mesin sudah aman/tertutup."},"中置料床套筒":{"idn":"Pipa MC","note_zh":"是一個 喇叭口形狀的導引管，讓棒材順利通過置料床，避免卡料","note_id":"Sebagai penahan agar tetap lurus dan stabil saat di proses. (untuk mengantar bahan pipa)"},"導線輪9.0":{"idn":"Roda pemutar","note_zh":"導線輪9.0用於引導材料，使其在機器中平穩運行並保持直線","note_id":"Menuntun material agar berjalan stabil di mesin dan tetap lurus."},"皮膜粉":{"idn":"Bubuk untuk menghaluskan bahan","note_zh":"可以在金屬表面形成保護層，提供潤滑，減少損傷","note_id":"Bubuk untuk menghaluskan bahan, pada saat pipa masih berminyak."},"切斷座":{"idn":"Tempat pemotongan pipa","note_zh":"用來精確切割管件的設備，確保每根材料長度一致。","note_id":"Digunakan untuk memotong pipa secara presisi, memastikan setiap material memiliki panjang yang sama."},"切斷座─右方按鈕「管件向上」":{"idn":"Tombol untuk pipa naik","note_zh":"管件向上","note_id":"Tempat pemotongan - tombol pipa naik."},"切斷座─右方按鈕「管件向下」":{"idn":"Tombol untuk pipa turun","note_zh":"管件向下","note_id":"Tempat pemotongan - tombol pipa turun."},"切斷座─右方按鈕入口側緩慢向下/向上":{"idn":"Bagian masuk pipa bergerak perlahan turun/naik.","note_zh":"可以精確調整管件高度，使其順利進入切割區域。","note_id":"Menyesuaikan tinggi pipa agar masuk lancar ke area pemotongan."},"切斷座─右方按鈕就位":{"idn":"Lampu indikator posisi siap","note_zh":"確認管件已到達正確位置以便切割。","note_id":"Untuk memastikan pipa sudah berada di posisi yang tepat agar bisa dipotong"},"切斷座─右方按鈕手動/自動":{"idn":"Tombol manual/auto","note_zh":"手動/自動","note_id":"Tombol manual/auto di stan pemotongan"},"切斷座─右方按鈕覆歸 昇最高":{"idn":"Tombol reset","note_zh":"切斷座上的按鈕，用於將管件返回至最高位置","note_id":"Tombol yang ada di cutting station untuk mengembalikan pipa ke posisi tertinggi setelah pemotongan."},"切斷座─右方按鈕下降 上昇":{"idn":"Tombol Turun/ naik","note_zh":"切斷座上的按鈕，用於手動調整管件上下","note_id":"Tombol yang ada di cutting station untuk mengatur pipa turun/naik secara manual."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"綜合冷抽機E6-前後輸送管箱設備上按鈕「光幕簾確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"Memastikan sensor di box conveyor depan-belakang bekerja dengan baik sehingga material dapat melewati dengan aman."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌頂出材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"1.依主管建議調整成「夾輪 出料」\\n2.料床內導管夾輪出料；材料會被導軌推送到下一個加工位置或出料區。","note_id":"Di dalam bed material, roda penjepit pada pipa pemandu untuk proses pengeluaran material; material akan didorong oleh rel pemandu ke posisi proses berikutnya atau ke area keluaran."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌插入材料」依主管建議調整成「夾輪 出料」":{"idn":"Rel pipa memasukkan material","note_zh":"1.依主管建議調整成「夾輪 入料」\\n2.定義：料床內導管夾入材料會被導軌進入到加工位置，準備進行下一步作業。","note_id":"Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya."},"綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌清空」":{"idn":"Rel pipa dikosongkan","note_zh":"導軌上的所有管件會被推送出去，為下一批材料做好準備。","note_id":"Tekan rombol ini, semua pipa di rel akan terdorong keluar, siap untuk batch material berikutnya."},"綜合冷抽機E6-RIPO矯直機":{"idn":"Mesin Ring pelurus","note_zh":"用於將金屬材料拉細並拉直，以便進行下一步加工。","note_id":"Untuk menarik dan meluruskan material agar siap untuk proses berikutnya."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 開」":{"idn":"RIPO on","note_zh":"RIPO 開","note_id":"Mesin RIPO menyala"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「RIPO 關」":{"idn":"RIPO off","note_zh":"RIPO 關","note_id":"Mesin RIPO Mati"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 關」":{"idn":"Unit penarikan dimatikan","note_zh":"拉製單元 關","note_id":"Tombol untuk mematikan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元 開」":{"idn":"Unit penarikan di hidupkan","note_zh":"拉製單元 開","note_id":"Tombol untuk menghidupkan bagian penarik material di mesin E6."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「材料進入 RIPO」":{"idn":"Bahan masuk ke mesin RIPO","note_zh":"材料進入 RIPO","note_id":"Bahan masuk ke mesin RIPO"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 減速」":{"idn":"Memperlambat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動減速，單元會以較慢速度拉動材料，以確保精度和安全。","note_id":"Unit akan menarik material dengan kecepatan lebih lambat untuk memastikan presisi dan keamanan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「拉製單元驅動 加速」":{"idn":"Mempercepat unit tarik","note_zh":"在操作 E6-RIPO 矯直機時，按下拉製單元驅動加速，單元會以更高速度拉動材料，加快生產。","note_id":"Unit akan menarik material dengan kecepatan lebih tinggi untuk mempercepat produksi."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 開」":{"idn":"Lampu pengaturan hidup","note_zh":"手動 開","note_id":"Lampu manual hidup"},"綜合冷抽機E6-RIPO矯直機 旁按鈕「設定 自動」":{"idn":"Pengaturan auto","note_zh":"手動 / 自動","note_id":"Tombol pengaturan Auto/Manual."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋請求」":{"idn":"Permintaan Pelindung penutup","note_zh":"操作 E6-RIPO 矯直機前，按下 護蓋請求，系統會確認護蓋位置，確保機器可以安全啟動。","note_id":"Dengan menekan tombol ini sistem akan memeriksa posisi penutup untuk memastikan mesin bisa dijalankan."},"綜合冷抽機E6-RIPO矯直機 旁按鈕「護蓋重置」":{"idn":"Reset penutup pelindung","note_zh":"當 E6-RIPO 矯直機的護蓋打開後，按下 護蓋重置，護蓋會回到原位，確保操作安全。","note_id":"Setelah penutup pelindung mesin E6-RIPO dibuka, tekan reset penutup pelindung, sehingga penutup kembali ke posisi awalnya dan memastikan operasi aman."},"中置料床":{"idn":"Meja mengantar bahan tengah","note_zh":"材料在進入冷抽機前會放在 中置料床上，便於操作員進行整理和送入下一工序。","note_id":"Material diletakkan di meja bahan tengah sebelum masuk ke mesin cold drawing, sehingga operator lebih mudah menata dan memasukkannnya ke proses berikutnya."},"中置料床 旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"中置料床 旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"中置料床 旁按鈕「管件導軌 頂出材料」":{"idn":"Rel pipa mendorong keluar material","note_zh":"操作中置料床時，按下 管件導軌 頂出材料，材料會被導軌推送到下一工序或取料位置。","note_id":"Setelah menekan tombol 管件導軌 頂出材料 ini, nanti material akan terdorong ke proses berikutnya."},"中置料床 旁按鈕「管件導軌 插入材料」":{"idn":"Rel pipa memasukkan material","note_zh":"操作中置料床時，按下管件導軌插入材料，材料會被導軌進入到加工位置，準備進行下一步作業","note_id":"Setelah menekan tombol  管件導軌 插入材料 ini, nanti material masuk ke posisi pemrosesan, siap untuk langkah kerja berikutnya."},"中置料床 旁按鈕「管件導軌 清空」":{"idn":"Rel pipa dikosongkan","note_zh":"操作中置料床時，按下管件導軌清空，導軌上的所有材料會被推送出去，確保下一批材料能順利進入。","note_id":"Tekan tombol 管件導軌 清空 ini maka semua material akan terdorong keluar memastikan batch material berikutnya bisa masuk dengan lancar"},"綜合冷抽機E6-雙輥矯直設備":{"idn":"Mesin Pelurus dua roller","note_zh":"雙輥矯直，用兩個輥輪的壓力將材料拉直","note_id":"Dua roller lurus untuk meluruskan material dengan tekanan dari dua roller."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「拋光段開連線 關」":{"idn":"Koneksi bagian polishing off","note_zh":"斷開後方製程，倒角機與拋光機的連線；主要目的為特定客戶訂單不需拋光，倒角後就可以進到包裝","note_id":"Tombol untuk mematikan koneksi ke bagian polishing sehingga proses polishing tidak ikut berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「解除控制」":{"idn":"Lepas kontrol","note_zh":"取消設備的自動控制，使設備可以獨立或手動操作","note_id":"Tombol ini digunakan untuk melepas kendali otomatis atau interlock dari mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 開」":{"idn":"Kontrol ON","note_zh":"啟動設備的控制系統，使設備進入受控運轉狀態","note_id":"mengaktifkan kembali sistem kontrol mesin agar berjalan normal."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「設定/自動」":{"idn":"Otomatis/Manual","note_zh":"用來切換設備手動模式與自動運轉模式之間","note_id":"Tombol untuk ganti mode dari otomatis ke manual."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 關」":{"idn":"Kontrol Off","note_zh":"關閉設備的控制系統，使設備停止受控運轉","note_id":"Menonaktifkan sistem kontrol mesin."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 檢索」":{"idn":"Tombol Safety door/ pengecekan","note_zh":"檢查修門的狀態（是否關閉或安全）","note_id":"Tombol untuk mengecek apakah pintu perawatan sudah aman tertutup sebelum mesin berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「檢修門 確認」":{"idn":"Tombol Safety door/ konfirmasi","note_zh":"確認檢修門已關閉並處於安全狀態，使設備可以運轉","note_id":"Tombol untuk konfirmasi bahwa Safety door sudah aman dan mesin bisa berjalan."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「機器燈 開/關」":{"idn":"Lampu mesin On /Off","note_zh":"機器燈 開/關","note_id":"Lampu mesin On /Off"},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「故障重置」":{"idn":"Reset Error","note_zh":"當E6雙輥矯直設備發生故障時，按下故障重置，系統會清除錯誤訊號，使設備恢復正常運行","note_id":"Saat mesin Pelurus dua roller mengalami kesalahan, tekan Reset error, sistem akan menghapus sinyal error dan mengembalikan mesin ke kondisi operasi normal."},"綜合冷抽機E6-雙輥矯直設備 面板下按鈕「指示燈測試」":{"idn":"Uji lampu indikator","note_zh":"指示燈測試按鈕，確保所有指示燈亮起並正常工作","note_id":"Tombol uji lampu indikator untuk memastikan semua lampu indikator menyala dan berfungsi dengan baik."},"倒角機":{"idn":"Mesin Peraut/Chamfer","note_zh":"冷抽機矯直後，因應客戶需求，於頭尾進行倒角加工","note_id":"Untuk menajamkan ujung kawat/besi agar berbentuk sesuai dengan pesanan pelanggan."},"倒角機旁按鈕「對準器 向後/向前」":{"idn":"Alat geser penjuruator kebelakang / kedepan.","note_zh":"用來調整對準器的位置，使材料正確對準加工位置","note_id":"Tombol untuk mengatur posisi alignment agar material tepat di mesin chamfering"},"倒角機旁按鈕「光幕簾 請求進入」":{"idn":"Tombol permintaan masuk sensor cahaya","note_zh":"發送請求信號，使材料能通過光閘","note_id":"Mengirim sinyal permintaan supaya material bisa melewati sensor cahaya"},"倒角機旁按鈕「光幕簾 確認」":{"idn":"Tombol konfirmasi sensor cahaya","note_zh":"可以確認前後輸送管箱的光閘是否正常運作，確保材料安全通過。","note_id":"tombol konfirmasi sensor cahaya di samping meja material tengah memastikan sensor berfungsi normal sehingga material dapat melewati dengan aman."},"倒角機旁按鈕「輸送帶彎槽向下」":{"idn":"Menurunkan alur sabuk pengantar.","note_zh":"輸送帶處於高位，物料還不能正確進入機器，按下 輸送帶彎槽向下，彎槽下降，物料可以正確進入倒角機。","note_id":"Pada saat conveyor/sabuk pengantar berada di posisi tinggi (benda belum pas masuk mesin) tekan tombol ini agar benda bisa masuk mesin chamfering dengan posisi tepat."},"倒角機旁按鈕「輸送帶彎槽向上」":{"idn":"Menaikkan alur sabuk pengantar.","note_zh":"輸送帶處於低位，物料需要提升，按下 輸送帶彎槽向上，彎槽升高，物料可以順利進入倒角機。","note_id":"Conveyor berada di posisi rendah, benda kerja perlu diangkat. Tekan tombol ini agar alur naik, sehingga benda kerja bisa masuk mesin chamfering dengan lancar."},"倒角機旁按鈕「輸送帶彎槽已清空」":{"idn":"Alur conveyor sudah kosong","note_zh":"操作前需確認物料已被取出，按下 輸送帶彎槽已清空，系統確認彎槽內無物料，可以安全開始下一步操作","note_id":"Tombol ini akan memastikan alur conveyor kosong sehingga aman untuk memulai langkah berikutnya."},"E824拋光設備區":{"idn":"Mesin Polishing","note_zh":"在 E824 拋光設備區，操作員將工件放入拋光機，設備運行後，工件表面會變得光滑平整。","note_id":"Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."},"E824拋光設備區 旁按鈕「停用煞車」":{"idn":"Rem (brake)","note_zh":"停用煞車","note_id":"Tombol untuk mengerem."},"E824拋光設備區 旁按鈕「門開啟」":{"idn":"Pintu terbuka","note_zh":"門開啟","note_id":"Pintu terbuka"},"E824拋光設備區 旁按鈕「電燈 0 1」":{"idn":"Lampu Indikator 0 1","note_zh":"此按紐用於在電燈關閉及電燈開啟","note_id":"Lampu Indikator 0 (tutup) , 1(buka)"},"E824拋光設備區 旁按鈕「緊急開關」":{"idn":"Saklar Darurat","note_zh":"此按钮用於在緊急情况下直接停止機器。","note_id":"Tombol ini digunakan untuk menghentikan mesin secara langsung dalam keadaan darurat."},"盤元修磨架":{"idn":"Tempat perbaikan/pengasahan coil.","note_zh":"操作員將受損的盤元放在 盤元修磨架 上，使用磨具進行修磨，使盤元表面恢復平整光滑。","note_id":"Operator meletakkan coil yang rusak di rak perbaikan dan pengasahan, lalu menggunakan alat pengasah untuk membuat permukaan coil kembali halus dan rata."},"手持式砂輪機":{"idn":"alat penggrinda barang","note_zh":"手持式砂輪機","note_id":"Alat penggrinda barang."},"盤元修磨架旁按鈕「緊急停止」":{"idn":"Tombol Berhenti darurat","note_zh":"緊急停止","note_id":"Tombol Berhenti darurat"},"盤元修磨架旁按鈕「後退」":{"idn":"Mundur","note_zh":"後退 (西)","note_id":"Mundur"},"盤元修磨架旁按鈕「電氣遙控」":{"idn":"Tombol pengontrol elektrik","note_zh":"操作員按下 盤元修磨架旁按鈕  電氣遙控，可以從操作台遠程控制修磨架的升降或旋轉。","note_id":"Operator menekan tombol kontrol jarak jauh listrik di samping rak perbaikan coil, sehingga dapat mengendalikan naik-turun atau putaran rak dari meja operasi."},"E1冷抽機":{"idn":"Mesin Produksi Bar E1","note_zh":"E1冷抽機","note_id":"Mesin Produksi Bar E1"},"E1冷抽機旁標示「生產特殊鋼種 174 209 431 注意 盤元尾端彈開」":{"idn":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul","note_zh":"1.特別注意：無中印標示\\n生產特殊鋼種 174 209 431 注意 盤元尾端彈開","note_id":"Produksi jenis baja khusus 174 209 431 – hati-hati ujung coil bisa memantul"},"E1冷抽機旁按鈕「砂帶降速」":{"idn":"Penurunan kecepatan Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶降速」","note_id":"Penurunan kecepatan Tali Amplas"},"E1冷抽機旁按鈕「砂帶重置」":{"idn":"Reset Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶重置」","note_id":"Reset Sabuk Amplas"},"E1冷抽機旁按鈕「砂帶吋動」":{"idn":"Gerakan Sedikit demi sedikit Sabuk Amplas","note_zh":"1.特別注意：翻譯錯誤須更新\\n2.定義：設定E1冷抽機「砂帶作動」","note_id":"Gerakan Sedikit demi sedikit Sabuk Amplas"},"E1冷抽機 後段按鈕「N6.夾輪夾持」":{"idn":"N6. Roda penjepit dijepit","note_zh":"夾棒材的夾輪作動","note_id":"N6. Roda penjepit dijepit"},"E1冷抽機 後段按鈕「檔板氣壓缸作動」":{"idn":"Papan penghalang sedang bergerak.","note_zh":"檔板會移動到指定位置，固定或導引材料，確保加工安全順利","note_id":"Papan penghalang yang bergerak untuk menahan atau mengatur posisi material."},"工單「訂單資訊」":{"idn":"Informasi pesanan","note_zh":"讓操機手能夠工單資訊，製造棒材","note_id":"Informasi pesanan pelanggan"},"工單訂單資訊「訂單編號」":{"idn":"Nomor Pesanan","note_zh":"訂單編號","note_id":"Nomor Pesanan"},"工單訂單資訊「客戶名稱」":{"idn":"Nama Pelanggan","note_zh":"客戶名稱","note_id":"Nama Pelanggan"},"工單訂單資訊「收貨人」":{"idn":"Nama Penerima","note_zh":"收貨人","note_id":"Nama Penerima"},"工單訂單資訊「生計交期」":{"idn":"Tanggal Pemesanan Produk","note_zh":"生計交期","note_id":"Tanggal Pemesanan Produk"},"工單訂單資訊「性質碼」":{"idn":"Kode Jenis","note_zh":"性質碼","note_id":"Kode Jenis"},"工單訂單資訊「倒角」":{"idn":"Sudut yang diinginkan","note_zh":"倒角","note_id":"Sudut yang diinginkan"},"工單訂單資訊「砂光痕等級」":{"idn":"Tingkat bekas pengamplasan","note_zh":"棒材表面砂光帶造成的砂光痕嚴重程度分級","note_id":"Klasifikasi tingkat keparahan bekas pengamplasan yang muncul di permukaan batang."},"工單訂單資訊「分級」":{"idn":"Grade","note_zh":"依照棒材表面砂光痕嚴重程度分級","note_id":"Dikelompokkan berdasarkan tingkat keparahan bekas pengamplasan pada permukaan batang."},"工單訂單資訊「ET」":{"idn":"Eddy Current Testing","note_zh":"渦電流檢測(ET)是一種基於電磁感應原理的非破壞性檢測技術，專門用於金屬導體表面及近表面的缺陷檢測（如裂紋、腐蝕、孔洞）","note_id":"ET adalah metode pemeriksaan non-destruktif berbasis induksi elektromagnetik, digunakan untuk mendeteksi cacat pada permukaan dan dekat permukaan logam (seperti retak, korosi dan lubang)."},"工單訂單資訊「UT」":{"idn":"Ultrasonic Testing","note_zh":"UT 檢測(超音波檢測，Ultrasonic Testing)是一種無損檢測(NDT)技術，利用高頻聲波深入材料內部，檢測裂紋、夾渣、氣孔或測量厚度","note_id":"UT adalah metode pemeriksaan non-destruktif yang menggunakan gelombang suara frekuensi tinggi untuk masuk ke dalam materal, guna mendeteksi retakan, inklusi pori-pori atau mengkur ketebalan."},"工單訂單資訊「重量/支」":{"idn":"Berat batang / pcs","note_zh":"重量/支","note_id":"Berat batang / pcs"},"工單訂單資訊「冷抽數」":{"idn":"Jumlah proses Cold Drawing","note_zh":"冷抽數","note_id":"Jumlah proses Cold Drawing"},"工單訂單資訊「取樣/重量cm」":{"idn":"Sampel/berat cm","note_zh":"取樣/重量cm","note_id":"Sampel/berat cm"},"工單訂單資訊「成品尺寸 MIN」":{"idn":"Ukuran produk MIN","note_zh":"成品尺寸 MIN","note_id":"Ukuran produk MIN"},"工單訂單資訊「成品尺寸MAX」":{"idn":"Ukuran produk MAX","note_zh":"成品尺寸MAX","note_id":"Ukuran produk MAX"},"工單訂單資訊「短邊 MIN」":{"idn":"Sisi pendek MIN","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最小長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang minimum sisi pendek."},"工單訂單資訊「短邊 MAX」":{"idn":"Sisi pendek MAX","note_zh":"扁棒的形狀  會有長邊/短邊/厚度的尺寸規格，此為短邊的最大長度","note_id":"Untuk batang pipih terdapat ukuran panjang sisi, sisi pendek, dan ketebalan. ini menunjukkan panjang maximum sisi pendek."},"工單訂單資訊「厚度 MIN」":{"idn":"Ketebalan MIN","note_zh":"厚度 MIN","note_id":"Ketebalan MIN"},"工單訂單資訊「厚度 MAX」":{"idn":"Ketebalan MAX","note_zh":"厚度 MAX","note_id":"Ketebalan MAX"},"工單訂單資訊「長度 MIN」":{"idn":"Panjang MIN","note_zh":"長度 MIN","note_id":"Panjang MIN","canonical_idn":"Panjang MIN","translation_mode":"hard","reverse_safe":true},"工單訂單資訊「長度 MAX」":{"idn":"Panjang MAX","note_zh":"長度 MAX","note_id":"Panjang MAX","canonical_idn":"Panjang MAX","translation_mode":"hard","reverse_safe":true},"工單訂單資訊「計畫量」":{"idn":"Jumlah rencana produksi","note_zh":"計畫量","note_id":"Jumlah rencana produksi"},"工單訂單資訊「計畫支數」":{"idn":"Rencana Jumlah batang","note_zh":"計畫支數","note_id":"Rencana Jumlah batang"},"工單訂單資訊「短尺支數」":{"idn":"Jumlah batang pendek","note_zh":"可以接受短尺的支數","note_id":"Jumlah batang pendek yang masih dapat diterima."},"工單訂單資訊「短尺MIN」":{"idn":"Panjang minimum material pendek","note_zh":"可以接受短尺的長度，最小是幾公分","note_id":"Panjang minimum material pendek yang masih dapat diterima."},"工單訂單資訊「捆重/MIN/MAX」":{"idn":"Berat per Bundel/MIN/MAX","note_zh":"捆重/MIN/MAX","note_id":"Berat per Bundel/MIN/MAX"},"工單訂單資訊「噴漆位置」":{"idn":"Posisi pengecatan","note_zh":"噴漆位置","note_id":"Posisi pengecatan"},"工單訂單資訊「套環」":{"idn":"Cincin Pelindung","note_zh":"套環","note_id":"Cincin Pelindung"},"工單訂單資訊「顏色」":{"idn":"Warna","note_zh":"顏色","note_id":"Warna"},"工單訂單資訊「包裝代碼」":{"idn":"Kode Kemasan","note_zh":"包裝代碼","note_id":"Kode Kemasan"},"工單備註資訊「品保」":{"idn":"Quality Control","note_zh":"呈現品保檢驗等級","note_id":"Menampilkan tingkat inspeksi QC"},"工單備註資訊「特殊」":{"idn":"Khusus","note_zh":"此單特殊備註事項","note_id":"catatan khusus untuk order ini"},"工單備註資訊「訂單」":{"idn":"Pesanan","note_zh":"呈現訂單特別備註資訊","note_id":"menampilkan catatan khusus dari pesanan"},"工單備註資訊「製造」":{"idn":"Produksi","note_zh":"呈現訂單製造備註資訊","note_id":"menampilkan catatan produksi pada order."},"工單備註資訊「客需」":{"idn":"Kebutuhan pelanggan","note_zh":"呈現訂單中客戶特殊需求資訊","note_id":"menampilakn permintaan khusus dari pelanggan"},"工單「母材」":{"idn":"bahan asal","note_zh":"顯示此工單原始材料來源","note_id":"menampilkan sumber bahan awal dari work order."},"工單母材資訊「尺寸1」":{"idn":"Ukuran 1","note_zh":"尺寸1","note_id":"Ukuran 1"},"工單母材資訊「尺寸2」":{"idn":"Ukuran 2","note_zh":"尺寸2","note_id":"Ukuran 2"},"工單母材資訊「型態」":{"idn":"Tipe/bentuk","note_zh":"型態","note_id":"Tipe/bentuk"},"工單母材資訊「批次」":{"idn":"Batch","note_zh":"批次","note_id":"Batch"},"工單母材資訊「口付 MIN」":{"idn":"Ukuran ujung minimum","note_zh":"口付 MIN","note_id":"Ukuran ujung minimum"},"工單母材資訊「退料重」":{"idn":"Berat material retur","note_zh":"退料重","note_id":"Berat material retur"},"工單母材資訊「現況流程」":{"idn":"Proses saat ini","note_zh":"現況流程","note_id":"Proses saat ini"},"工單母材資訊「解捲支數」":{"idn":"Jumlah batang hasil uncoiling","note_zh":"解捲支數","note_id":"Jumlah batang hasil uncoiling"},"工單母材資訊「400現況儲區」":{"idn":"Area penyimpanan saat ini 400","note_zh":"400站為原料站","note_id":"Stasiun 400 adalah stasiun bahan baku."},"工單製造資訊「退火代碼」":{"idn":"Kode annealing","note_zh":"技術單位提供的建議退火製程參數","note_id":"Parameter proses anealing yang direkomendasikan oleh bagian teknisi."},"工單製造資訊「頻率」":{"idn":"Frekuensi","note_zh":"頻率","note_id":"Frekuensi"},"工單製造資訊「眼膜」":{"idn":"Dies (alat untuk membentuk ukuran & bentuk material saat proses produksi)","note_zh":"眼模可以讓棒材經過加工，變成客戶指定的尺寸與形狀。","note_id":"Memproses batang agar menjadi ukuran dan bentuk sesuai permintaan pelanggan."},"工單製造資訊  眼膜「放置點」":{"idn":"titik penempatan","note_zh":"放置點","note_id":"titik penempatan"},"工單製造資訊  眼膜「進入角」":{"idn":"sudut masuk","note_zh":"進入角","note_id":"sudut masuk"},"工單製造資訊「減面率」":{"idn":"Reduction Ratio","note_zh":"技術單位提供的建議投料尺寸","note_id":"Tingkat Perubahan luas penampang batang (semakin besar, gaya tarik saat drawing semakin besar)"},"工單製造資訊「投料形狀」":{"idn":"Bentuk material masuk","note_zh":"投料形狀","note_id":"Bentuk material masuk"},"工單製造資訊「產出 尺寸」":{"idn":"Ukuran hasil produksi","note_zh":"產出 尺寸","note_id":"Ukuran hasil produksi"},"工單製造資訊「產出 短邊」":{"idn":"Sisi pendek hasil","note_zh":"產出 短邊","note_id":"Sisi pendek hasil"},"工單製造資訊「產出 厚度」":{"idn":"Ketebalan hasil","note_zh":"產出 厚度","note_id":"Ketebalan hasil"},"工單製造資訊「產出 有效長度」":{"idn":"Panjang efektif hasil","note_zh":"產出 有效長度","note_id":"Panjang efektif hasil"},"工單製造資訊「長度模組長度」":{"idn":"Panjang modul","note_zh":"技術單位提供的建議切長長度","note_id":"Panjang potong yang di hasilkan teknisi"},"工單製造資訊「模組投入尺寸」":{"idn":"Ukuran input modul","note_zh":"技術單位提供的建議投料尺寸","note_id":"ukuran material masuk yang direkomendasikan oleh teknisi."},"工單製造資訊「工作站」":{"idn":"Stasiun kerja","note_zh":"工作站","note_id":"Stasiun kerja"},"工單製程紀錄「機台」":{"idn":"Mesin","note_zh":"機台","note_id":"Mesin"},"工單製程紀錄「尺寸一/二/三」":{"idn":"Ukuran 1, 2,3","note_zh":"尺寸一/二/三","note_id":"Ukuran 1, 2,3"},"工單製程紀錄「長度」":{"idn":"Panjang","note_zh":"長度","note_id":"Panjang","canonical_idn":"Panjang","translation_mode":"hard","reverse_safe":true},"工單製程紀錄「重量/支數」":{"idn":"Berat batang/pcs","note_zh":"重量/支數","note_id":"Berat batang/pcs"},"工單製程紀錄「主機手」":{"idn":"Operator utama","note_zh":"主機手","note_id":"Operator utama"},"工單製程紀錄「日期」":{"idn":"Tanggal","note_zh":"日期","note_id":"Tanggal"},"工單製程紀錄「來料確認」":{"idn":"Konfirmasi material masuk","note_zh":"來料確認","note_id":"Konfirmasi material masuk"},"異型包裝站":{"idn":"Stasiun packing barang bentuk khusus","note_zh":"現場簡稱「異型」「異型那站」「異型那邊」在站別語境中均指異型包裝站；不可誤作異型棒或一般特殊物料站。","note_id":"Nama resmi stasiun packing untuk barang berbentuk khusus. Bukan kategori produk batang bentuk khusus."},"前站":{"idn":"stasiun sebelumnya","note_zh":"前一道製程／上一站，不是空間上的前方站點。","note_id":"Stasiun atau proses sebelumnya, bukan stasiun yang berada di depan secara fisik."},"料源不足":{"idn":"pasokan material tidak cukup","note_zh":"可供生產或包裝的來料不足。","note_id":"Pasokan material untuk produksi atau packing tidak mencukupi."},"木箱":{"idn":"peti kayu","canonical_idn":"peti kayu","translation_mode":"hard","reverse_safe":true,"forbidden_idn":["kotak kayu"],"note_zh":"工廠出貨與包裝用的大型木製運輸箱／木製板條箱，統一用 peti kayu，不是一般小盒子 kotak kayu。","note_id":"Peti kayu industri untuk pengemasan dan pengiriman material; bukan kotak kayu kecil."},"裝箱":{"idn":"memasukkan material ke dalam peti kayu","canonical_idn":"memasukkan material ke dalam peti kayu","translation_mode":"soft","reverse_safe":false,"forbidden_idn":["masukkan barang ke dalam kotak kayu","memasukkan barang ke dalam kotak kayu"],"note_zh":"把產品／材料裝入出貨木箱。依句型可自然屈折為 dimasukkan、jangan dimasukkan、proses pengemasan ke dalam peti kayu。","note_id":"Memasukkan produk atau material ke dalam peti kayu untuk pengiriman."},"支援裝箱":{"idn":"membantu proses pengemasan ke dalam peti kayu","canonical_idn":"membantu proses pengemasan ke dalam peti kayu","translation_mode":"soft","reverse_safe":false,"forbidden_idn":["bantu proses memasukkan barang ke dalam kotak kayu"],"note_zh":"其他站別／人員支援把材料裝入木製運輸箱的作業。","note_id":"Membantu proses pengemasan material ke dalam peti kayu."},"木箱包":{"idn":"pengemasan dengan peti kayu","canonical_idn":"pengemasan dengan peti kayu","translation_mode":"soft","reverse_safe":false,"forbidden_idn":["packing kotak kayu"],"note_zh":"現場對木箱包裝作業或木箱包裝量的簡稱。","note_id":"Istilah singkat untuk proses atau jumlah pengemasan dengan peti kayu."},"工單資訊":{"idn":"informasi pada work order","note_zh":"工單上列出的製造、流程、尺寸、重量或處理資訊。","note_id":"Informasi yang tercantum pada work order."},"噴漆":{"idn":"spray cat","note_zh":"現場材料標示用的噴漆作業或噴漆標示。","note_id":"Proses spray cat untuk penandaan material di lapangan."},"來料尺寸":{"idn":"ukuran material masuk","note_zh":"材料進到該站時需確認的尺寸。","note_id":"Ukuran material yang masuk ke stasiun dan perlu dikonfirmasi."},"表面品質":{"idn":"kualitas permukaan","note_zh":"材料表面的品質狀態，例如刮傷、痕跡或其他外觀問題。","note_id":"Kondisi kualitas permukaan material."},"短尺維護":{"idn":"penanganan material pendek","note_zh":"短尺材料/短尺料的處理與維護，不是尺規或量尺。","note_id":"Penanganan material pendek; bukan penggaris pendek."},"短尺料":{"idn":"material pendek","note_zh":"長度較短或需依工單管理的短尺材料。","note_id":"Material pendek yang perlu dikelola sesuai work order."},"重量確認":{"idn":"konfirmasi berat","note_zh":"確認材料或產品重量是否正確。","note_id":"Konfirmasi berat material atau produk."},"作業流程":{"idn":"alur kerja","note_zh":"現場標準作業流程。","note_id":"Alur kerja standar di lapangan."},"一課":{"idn":"Seksi 1","canonical_idn":"Seksi 1","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":130,"ocr_hint":true,"note_zh":"工廠正式組織單位「第一課」。","note_id":"Unit organisasi resmi pabrik: Seksi 1.","aliases_zh":["第一課"],"aliases_id":["seksi satu"]},"一股":{"idn":"Bagian Cold Drawing 1","canonical_idn":"Bagian Cold Drawing 1","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":145,"ocr_hint":true,"note_zh":"本廠「一股」是「冷抽一股」的口語簡稱；依 ERP 股別表固定為 Bagian Cold Drawing 1，不是 Regu 1、Subseksi 1 或人名。","note_id":"Di pabrik ini, 一股 adalah singkatan Bagian Cold Drawing 1; bukan Regu 1, Subseksi 1, atau nama orang.","aliases_zh":["第一股","冷抽一股"],"aliases_id":["bagian cold drawing satu"]},"一股股長":{"idn":"kepala bagian Cold Drawing 1","canonical_idn":"kepala bagian Cold Drawing 1","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":155,"ocr_hint":true,"note_zh":"本廠冷抽一股主管；「一股」是 Bagian Cold Drawing 1，不是班組 Regu 1。","note_id":"Kepala Bagian Cold Drawing 1; bukan kepala regu dan bukan nama orang.","aliases_zh":["第一股股長","冷抽一股股長"],"aliases_id":["kepala bagian cold drawing satu"]},"股長":{"idn":"kepala bagian","canonical_idn":"kepala bagian","translation_mode":"hard","reverse_safe":false,"category":"organization","priority":115,"ocr_hint":true,"note_zh":"股級生產部門主管；實際股名存在時，必須連同股名翻譯，例如一股股長為 kepala bagian Cold Drawing 1。","note_id":"Pimpinan bagian produksi. Jika nama bagiannya diketahui, nama bagian wajib dipertahankan.","aliases_id":["kepala bagian"]},"課長":{"idn":"kepala seksi","canonical_idn":"kepala seksi","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":115,"ocr_hint":true,"note_zh":"工廠課級主管。","note_id":"Pimpinan tingkat seksi."},"處長":{"idn":"kepala divisi","canonical_idn":"kepala divisi","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":120,"ocr_hint":true,"note_zh":"部門處級主管，不是公司董事。","note_id":"Kepala divisi/departemen, bukan direktur perusahaan.","aliases_id":["kepala departemen"]},"控制室":{"idn":"ruang kontrol","canonical_idn":"ruang kontrol","translation_mode":"hard","reverse_safe":true,"category":"facility","priority":90,"ocr_hint":true,"note_zh":"機台或產線的控制室。","note_id":"Ruang kontrol mesin atau lini produksi."},"基本紀律":{"idn":"disiplin dasar","canonical_idn":"disiplin dasar","translation_mode":"hard","reverse_safe":true,"category":"management","priority":80,"note_zh":"最基本的工作紀律要求。","note_id":"Disiplin kerja yang paling dasar."},"被釘很緊":{"idn":"diawasi dengan ketat","canonical_idn":"diawasi dengan ketat","translation_mode":"soft","reverse_safe":false,"category":"management","priority":85,"note_zh":"台灣職場口語：近期被主管嚴密注意或監督，不是被釘子固定。","note_id":"Sedang diawasi dengan ketat oleh atasan."},"公司派":{"idn":"cenderung berpihak kepada perusahaan","canonical_idn":"cenderung berpihak kepada perusahaan","translation_mode":"soft","reverse_safe":false,"category":"management","priority":80,"note_zh":"偏向公司立場；程度依「蠻、很、非常」等副詞調整，不可自行加重。","note_id":"Cenderung berpihak kepada perusahaan; jangan melebihkan tingkatnya."},"吹冷氣":{"idn":"menikmati AC","canonical_idn":"menikmati AC","translation_mode":"soft","reverse_safe":false,"category":"workplace","priority":65,"note_zh":"口語指待在冷氣房休息或享受冷氣，不是吹風。","note_id":"Beristirahat atau menikmati AC di ruangan ber-AC."},"二股":{"idn":"Bagian Cold Drawing 2","canonical_idn":"Bagian Cold Drawing 2","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":145,"ocr_hint":true,"note_zh":"本廠「二股」是「冷抽二股」的口語簡稱；依 ERP 股別表固定為 Bagian Cold Drawing 2。","note_id":"Di pabrik ini, 二股 adalah singkatan Bagian Cold Drawing 2.","aliases_zh":["第二股","冷抽二股"],"aliases_id":["bagian cold drawing dua"]},"二股股長":{"idn":"kepala bagian Cold Drawing 2","canonical_idn":"kepala bagian Cold Drawing 2","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":155,"ocr_hint":true,"note_zh":"本廠冷抽二股主管。","note_id":"Kepala Bagian Cold Drawing 2.","aliases_zh":["第二股股長","冷抽二股股長"],"aliases_id":["kepala bagian cold drawing dua"]},"削皮股":{"idn":"Bagian Peeling","canonical_idn":"Bagian Peeling","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":145,"ocr_hint":true,"note_zh":"本廠削皮股，依 ERP 股別表固定為 Bagian Peeling。","note_id":"Unit pabrik Bagian Peeling.","aliases_id":["bagian peeling"]},"削皮股股長":{"idn":"kepala bagian Peeling","canonical_idn":"kepala bagian Peeling","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":155,"ocr_hint":true,"note_zh":"本廠削皮股主管。","note_id":"Kepala Bagian Peeling.","aliases_id":["kepala bagian peeling"]},"研磨股":{"idn":"Bagian Grinding","canonical_idn":"Bagian Grinding","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":145,"ocr_hint":true,"note_zh":"本廠研磨股，依 ERP 股別表固定為 Bagian Grinding。","note_id":"Unit pabrik Bagian Grinding.","aliases_id":["bagian grinding"]},"研磨股股長":{"idn":"kepala bagian Grinding","canonical_idn":"kepala bagian Grinding","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":155,"ocr_hint":true,"note_zh":"本廠研磨股主管。","note_id":"Kepala Bagian Grinding.","aliases_id":["kepala bagian grinding"]},"班長":{"idn":"kepala regu","canonical_idn":"kepala regu","translation_mode":"hard","reverse_safe":true,"category":"organization","priority":110,"ocr_hint":true,"note_zh":"現場班組／輪班主管。Regu 僅用於班或工作小組，不用於本廠「股」。","note_id":"Pimpinan regu/shift. Istilah regu tidak dipakai untuk unit 股 di pabrik ini.","aliases_id":["ketua shift"]},"出料狀況":{"idn":"kondisi hasil produksi mesin","canonical_idn":"kondisi hasil produksi mesin","translation_mode":"hard","reverse_safe":false,"category":"production","priority":160,"ocr_hint":true,"note_zh":"描述設備或產線目前能產出多少料、產出是否順暢的生產狀況；不是材料從出口移出的動作。","note_id":"Kondisi hasil produksi mesin/lini, bukan gerakan material keluar dari mesin.","aliases_zh":["機台出料狀況","設備出料狀況","產出狀況"],"aliases_id":["kondisi output produksi mesin","kondisi hasil produksi"]},"出料量":{"idn":"jumlah hasil produksi mesin","canonical_idn":"jumlah hasil produksi mesin","translation_mode":"hard","reverse_safe":false,"category":"production","priority":155,"ocr_hint":true,"note_zh":"設備或產線的產出量；若以噸計，數值後必須保留 ton。","note_id":"Jumlah hasil produksi mesin/lini. Jika satuannya ton, ton wajib ditulis.","aliases_zh":["設備出料量","機台出料量","每日出料量","產出量"],"aliases_id":["jumlah output produksi mesin","jumlah hasil produksi"]},"入庫量":{"idn":"jumlah pemasukan gudang","canonical_idn":"jumlah pemasukan gudang","translation_mode":"hard","reverse_safe":false,"category":"warehouse","priority":150,"ocr_hint":true,"note_zh":"產品完成後進入倉庫的數量／噸數；不是 ERP 過帳時間。","note_id":"Jumlah produk yang masuk gudang; bukan waktu posting data ERP.","aliases_zh":["每日入庫量","平均入庫量","月入庫量"],"aliases_id":["volume pemasukan gudang","jumlah barang masuk gudang"]},"待洗庫存量":{"idn":"jumlah stok material yang menunggu proses pencucian","canonical_idn":"jumlah stok material yang menunggu proses pencucian","translation_mode":"hard","reverse_safe":false,"category":"washing","priority":155,"ocr_hint":true,"note_zh":"尚未進行材料清洗製程的庫存量。","note_id":"Jumlah stok material yang masih menunggu proses pencucian.","aliases_zh":["待清洗庫存量","等待清洗庫存量","待洗庫存"],"aliases_id":["stok material yang menunggu dicuci"]},"清洗作業":{"idn":"proses pencucian","canonical_idn":"proses pencucian","translation_mode":"hard","reverse_safe":false,"category":"washing","priority":145,"ocr_hint":true,"note_zh":"棒材或鋼材的清洗製程；不是環境打掃。","note_id":"Proses pencucian material/batang, bukan pembersihan lingkungan.","aliases_zh":["清洗製程","材料清洗","棒材清洗"],"aliases_id":["proses cuci material"]},"協助清洗":{"idn":"membantu proses pencucian","canonical_idn":"membantu proses pencucian","translation_mode":"hard","reverse_safe":false,"category":"washing","priority":150,"ocr_hint":true,"note_zh":"協助其他單位進行棒材清洗製程。","note_id":"Membantu pelaksanaan proses pencucian material.","aliases_zh":["支援清洗","幫忙清洗"]},"協助一股清洗":{"idn":"membantu proses pencucian di Bagian Cold Drawing 1","canonical_idn":"membantu proses pencucian di Bagian Cold Drawing 1","translation_mode":"hard","reverse_safe":false,"category":"washing","priority":165,"ocr_hint":true,"note_zh":"協助冷抽一股進行材料清洗，不是一般清潔。","note_id":"Membantu proses pencucian di Bagian Cold Drawing 1, bukan pembersihan umum.","aliases_zh":["支援一股清洗","幫忙一股清洗"]},"該趕的急單":{"idn":"work order mendesak yang perlu dipercepat","canonical_idn":"work order mendesak yang perlu dipercepat","translation_mode":"hard","reverse_safe":false,"category":"workflow","priority":160,"ocr_hint":true,"note_zh":"需要加速處理的急件工單。","note_id":"Work order mendesak yang memang perlu dipercepat.","aliases_zh":["需要趕的急單","要趕的急單"]},"急單優先處理":{"idn":"prioritaskan work order mendesak","canonical_idn":"prioritaskan work order mendesak","translation_mode":"hard","reverse_safe":false,"category":"workflow","priority":160,"ocr_hint":true,"note_zh":"要求各站先處理急件工單。","note_id":"Instruksi untuk memprioritaskan work order mendesak.","aliases_zh":["優先處理急單","急單要優先處理"]},"該開的設備":{"idn":"mesin yang seharusnya beroperasi","canonical_idn":"mesin yang seharusnya beroperasi","translation_mode":"hard","reverse_safe":false,"category":"equipment","priority":150,"ocr_hint":true,"note_zh":"依生產安排應保持運轉的設備。","note_id":"Mesin yang menurut rencana produksi seharusnya tetap beroperasi.","aliases_zh":["該開的機台","應開的設備","應開的機台"]},"不要隨便停機":{"idn":"jangan menghentikan mesin sembarangan","canonical_idn":"jangan menghentikan mesin sembarangan","translation_mode":"hard","reverse_safe":false,"category":"equipment","priority":155,"ocr_hint":true,"note_zh":"禁止沒有正當原因任意停掉應運轉的機台。","note_id":"Jangan menghentikan mesin sembarangan tanpa alasan operasional yang benar.","aliases_zh":["不可隨便停機","不能隨便停機"]},"庫存暴增":{"idn":"stok meningkat drastis","canonical_idn":"stok meningkat drastis","translation_mode":"hard","reverse_safe":false,"category":"warehouse","priority":145,"ocr_hint":true,"note_zh":"庫存量在短時間內大幅增加。","note_id":"Stok meningkat drastis dalam waktu singkat.","aliases_zh":["庫存爆增","庫存大增"]},"上面也沒話可說":{"idn":"pihak atasan juga tidak punya alasan untuk mempermasalahkannya","canonical_idn":"pihak atasan juga tidak punya alasan untuk mempermasalahkannya","translation_mode":"hard","reverse_safe":false,"category":"management","priority":165,"ocr_hint":true,"note_zh":"工廠管理口語：若已依標準執行，上級就沒有理由挑毛病或追究；不是字面上的不說話。","note_id":"Ungkapan manajemen: atasan tidak punya alasan untuk mempersoalkannya, bukan berarti diam atau tidak banyak bicara.","aliases_zh":["上面沒話可說","主管也沒話可說","上級也沒話可說"]},"S、H異型棒":{"idn":"batang profil khusus berbentuk S dan H","canonical_idn":"batang profil khusus berbentuk S dan H","translation_mode":"hard","reverse_safe":false,"category":"product","priority":170,"ocr_hint":true,"note_zh":"S、H直接修飾異型棒時，表示 S 型與 H 型的特殊斷面棒材，不是 S、H、異型棒三個獨立品項。","note_id":"Batang profil khusus berbentuk S dan H; bukan tiga kategori terpisah.","aliases_zh":["H、S異型棒","S、H 異型棒","H、S 異型棒"],"aliases_id":["batang profil S dan H","batang bentuk khusus S dan H"]},"打鋼種":{"idn":"pemeriksaan grade baja dengan PMI","canonical_idn":"pemeriksaan grade baja dengan PMI","translation_mode":"soft","reverse_safe":false,"category":"quality_inspection_action","priority":190,"ocr_hint":true,"note_zh":"本廠現場動詞，指用 PMI 分光儀檢驗／確認材料鋼種，不是打印、標示、刻印或貼標籤。句中應依語法使用 diperiksa/memeriksa grade baja dengan PMI。","note_id":"Istilah kerja pabrik: memeriksa grade material dengan PMI, bukan memberi tanda, mencetak, mengukir, atau memasang label grade baja.","aliases_zh":["驗鋼種","檢驗鋼種","打材質","驗材質","檢驗材質","做PMI","做 PMI","打PMI","打 PMI"],"aliases_id":["pemeriksaan grade baja dengan PMI","memeriksa grade baja dengan PMI","diperiksa grade bajanya dengan PMI"],"forbidden_idn":["memberi tanda grade baja","menandai grade baja","mencetak grade baja","memberi label grade baja","ditandai grade baja","menandai jenis baja","diberi tanda jenis baja"]},"鋼種":{"idn":"grade baja","canonical_idn":"grade baja","translation_mode":"hard","reverse_safe":true,"category":"quality","priority":150,"ocr_hint":true,"note_zh":"材料的鋼種／牌號，工廠品質語境固定用 grade baja。","note_id":"Grade atau kelas material baja dalam konteks mutu pabrik.","aliases_zh":["材料鋼種"],"aliases_id":["grade material baja","material grade"]},"PMI檢驗":{"idn":"pemeriksaan PMI","canonical_idn":"pemeriksaan PMI","translation_mode":"soft","reverse_safe":false,"category":"quality_inspection_action","priority":175,"ocr_hint":true,"note_zh":"使用 PMI 分光儀確認棒材鋼種／材質的檢驗。","note_id":"Pemeriksaan PMI untuk memastikan grade atau komposisi material.","aliases_zh":["PMI檢查","PMI檢測","做PMI檢驗","做 PMI 檢驗"],"aliases_id":["pemeriksaan PMI","diperiksa dengan PMI"]},"每一把":{"idn":"setiap bundel","canonical_idn":"setiap bundel","translation_mode":"hard","reverse_safe":false,"category":"material_quantity","priority":165,"ocr_hint":false,"note_zh":"棒材包裝／出貨語境中的逐捆要求；把是棒材捆數。","note_id":"Setiap bundel material batang; menunjukkan kewajiban berlaku satu per satu pada semua bundel.","aliases_zh":["每把","各把","每一捆","每捆"],"aliases_id":["tiap bundel","semua bundel satu per satu"]},"抓帳":{"idn":"tutup buku","canonical_idn":"tutup buku","translation_mode":"hard","reverse_safe":false,"forbidden_idn":["cek data","periksa data","rekap data"],"note_zh":"工廠出貨／客戶帳務語境中的會計結帳、關帳，不是抓取、檢查或彙整資料。","note_id":"Penutupan pembukuan/akuntansi; bukan pengecekan atau rekap data."},"會計結帳":{"idn":"tutup buku","canonical_idn":"tutup buku","translation_mode":"hard","reverse_safe":false,"forbidden_idn":["cek data","periksa data","rekap data"],"note_zh":"會計期間結帳／關帳。","note_id":"Penutupan pembukuan akuntansi."},"陸續到料":{"idn":"material akan tiba secara bertahap","canonical_idn":"material akan tiba secara bertahap","translation_mode":"soft","reverse_safe":false,"note_zh":"材料不是一次到齊，而是之後分批、接續抵達。","note_id":"Material akan datang/tiba dalam beberapa tahap."},"到料":{"idn":"material tiba","canonical_idn":"material tiba","translation_mode":"soft","reverse_safe":false,"note_zh":"生產材料抵達現場／到貨；不是資料到達。","note_id":"Material produksi tiba di lokasi."},"優先安排包裝":{"idn":"memprioritaskan pengaturan proses pengemasan","canonical_idn":"memprioritaskan pengaturan proses pengemasan","translation_mode":"soft","reverse_safe":false,"note_zh":"把該客戶／該批材料排在包裝作業的前面，不是只口頭提醒。","note_id":"Menempatkan proses pengemasan material tersebut sebagai prioritas."},"電子系統":{"idn":"sistem elektronik","canonical_idn":"sistem elektronik","translation_mode":"hard","reverse_safe":true,"note_zh":"設備上的電子控制／電子系統。","note_id":"Sistem elektronik atau kontrol elektronik pada peralatan."},"自然拉動":{"idn":"tarikan alami/pasif","canonical_idn":"tarikan alami/pasif","translation_mode":"soft","reverse_safe":false,"forbidden_idn":["ditarik secara manual","sistem tarik manual","pengoperasian manual"],"note_zh":"依設備本身的自然／被動機械牽引，不等於人工手拉；來源未寫手動時不得補成 manual。","note_id":"Tarikan mekanis alami/pasif, bukan ditarik manual oleh operator."}}'
 try:
     GLOSSARY_LOOKUP = json.loads(_GLOSSARY_JSON)
 except Exception as _e:
@@ -9757,6 +9822,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "Do not add a repeated closing question unless the source itself repeats or closes with that request. "
             ) if (src == "zh" and tgt == "id") else "")
             + (tqg_module.implicit_quantity_unit_instruction(text, src, tgt) + " ")
+            + factory_translation_policy_module.build_prompt(text, src, tgt) + " "
+            + factory_translation_guard_module.build_prompt(text, src, tgt) + " "
             + build_factory_context_hint(text, src, tgt) + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
             + inject_glossary_hint(text, src, tgt)
@@ -10004,8 +10071,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "套紙管=pasang tabung kertas, 入庫=masuk gudang, 優先包裝入庫=prioritas packing masuk gudang, "
             "需求單=formulir permintaan, 可以全收=bisa diterima semua, "
             "櫃子=kontainer(shipping container), 櫃子在路上=kontainer sedang di jalan, "
-            "木箱=kotak kayu, 裝箱=masukkan ke kotak kayu, 2700大的木箱=kotak kayu ukuran besar 2700mm, "
-            "NOTE: 木箱 context: 3200/2400=box LENGTH mm, 500/1000=weight CAPACITY kg. "
+            "木箱=peti kayu, 裝箱=masukkan material ke dalam peti kayu, 2700大的木箱=peti kayu besar ukuran 2700mm, "
+            "NOTE: 木箱 is an industrial shipping crate (peti kayu), never ordinary kotak kayu. 3200/2400=crate LENGTH mm, 500/1000=weight CAPACITY kg. "
             "把=bundel(bundle), 捆=bundel/ikat, 支/根=batang(piece/rod), 批=lot/batch, "
             "NOTE: X米(三米,六米)=batang X meter(bar LENGTH not distance). 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
             "包(verb)=packing/kemas(NOT wrapping). 秤重=timbang, 貼標=tempel label, 綁鐵=ikat besi, "
@@ -10029,7 +10096,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "卡料需關閉電源後再取料=material macet HARUS matikan listrik dulu baru ambil, "
             "【部門/人員】"
             "業務=sales, 營業=sales(=業務), 生計=production planning, 資訊=IT department, 品保=QC, 儲運=gudang&logistik, 人事=HRD, 工安=safety officer, "
-            "處長=kepala divisi, 抓資料=ambil data, "
+            "處長=kepala divisi, 抓資料=ambil data, 抓帳/會計結帳=tutup buku(NOT cek data/rekap data), "
             "【標籤/系統】"
             "TAG=label, 儲區=area penyimpanan di sistem, 轉檔=konversi data, "
             "MES=MES(sistem produksi), 報表=laporan produksi, 條碼=barcode, "
@@ -10811,6 +10878,16 @@ def cache_get(text, src, tgt):
                     logger.warning("[LegacyFailurePurge] removed failure payload from cache: %s -> %s", src, tgt)
                     del translation_cache[key]
                     return None
+                if _factory_route_is_strict(text, src, tgt):
+                    try:
+                        if not is_translation_acceptable(text, result, src, tgt):
+                            logger.warning("[FactoryGuard] purged unverified cache row: %s -> %s", src, tgt)
+                            del translation_cache[key]
+                            return None
+                    except Exception as exc:
+                        logger.warning("[FactoryGuard] cache read validation failed closed: %s", exc)
+                        del translation_cache[key]
+                        return None
                 logger.info("Cache hit: %s -> %s", src, tgt)
                 return result
             else:
@@ -10826,6 +10903,14 @@ def cache_set(text, src, tgt, result, force=False):
     if getattr(_tl, 'quality_gate_pending', False) and not force:
         logger.debug("[QualityGate] deferred cache write until final review")
         return
+    if _factory_route_is_strict(text, src, tgt):
+        try:
+            if not is_translation_acceptable(text, result, src, tgt):
+                logger.warning("[FactoryGuard] refused unverified factory cache write")
+                return
+        except Exception as exc:
+            logger.warning("[FactoryGuard] cache admission failed closed: %s", exc)
+            return
     key = (text.strip(), src, tgt)
     with _cache_lock:
         if len(translation_cache) >= CACHE_MAX_SIZE:
@@ -11189,13 +11274,64 @@ def _is_translation_failure_sentinel(text):
     return any(marker in compact for marker in exact_or_substrings)
 
 
-def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Run local validation without discarding a paid provider result.
+def _factory_guard_protected_names(source_text):
+    """Collect all visible identities that a factory translation must preserve."""
+    values = []
+    try:
+        values.extend(collect_visible_protected_names(source_text) or [])
+    except Exception:
+        pass
+    try:
+        values.extend(
+            str(value or "").strip()
+            for value in dict(getattr(_tl, "protected_name_map", None) or {}).values()
+        )
+    except Exception:
+        pass
+    return list(dict.fromkeys(value for value in values if value))
 
-    This boundary may apply a deterministic safe correction, but it must never
-    replace a non-empty translation with ``None`` merely because a local quality
-    rule is uncertain.  Validation failures are logged and kept out of cache/TM;
-    the best available provider text is still delivered to LINE.
+
+def _factory_guard_report(source_text, candidate, src, tgt):
+    return factory_translation_guard_module.validate_translation(
+        source_text, candidate, src, tgt,
+        protected_names=_factory_guard_protected_names(source_text),
+    )
+
+
+def _factory_route_is_strict(source_text, src, tgt):
+    return bool(
+        factory_translation_policy_module.should_force_factory_pipeline(
+            source_text, src, tgt, heuristic_match=_is_factory_context(source_text)
+        )
+        and factory_translation_policy_module.fail_closed(src, tgt)
+    )
+
+
+def _factory_exact_fallback(source_text, src, tgt):
+    """Return a locally verified exact correction, never a fuzzy sentence."""
+    exact = factory_translation_guard_module.exact_verified_target(source_text, src, tgt)
+    if not exact:
+        return None
+    candidate = finalize_factory_translation(source_text, exact, src, tgt)
+    report = _factory_guard_report(source_text, candidate, src, tgt)
+    if not report.ok:
+        return None
+    integrity_fn = globals().get("_tm_bypass_integrity_ok")
+    if callable(integrity_fn):
+        integrity_ok, _issues = integrity_fn(source_text, candidate, src, tgt)
+        if not integrity_ok:
+            return None
+    return candidate
+
+
+def _final_delivery_guard(source_text, candidate, src, tgt):
+    """Absolute delivery boundary for every text/OCR factory translation.
+
+    Chinese↔Indonesian factory traffic is fail-closed by default.  A non-empty
+    provider result is not deliverable merely because it cost money: it must
+    pass the generic immutable/glossary gate and the versioned factory guard.
+    Only a punctuation/spacing-equivalent verified correction may replace a
+    rejected candidate.  Non-factory directions retain advisory behavior.
     """
     if not candidate or not isinstance(candidate, str):
         return None
@@ -11204,22 +11340,21 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
     original = candidate.strip()
     if not original:
         return None
+    strict = _factory_route_is_strict(source_text, src, tgt)
     try:
         pairs = ge_module.collect_applicable_pairs(
             source_text,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
             src, tgt,
         )
+        issues = []
         leaked_label = ge_module.find_reverse_glossary_ui_leak(
             source_text, original,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
             src, tgt,
         )
         if leaked_label:
-            logger.warning(
-                "[FinalDeliveryGuard] reverse glossary UI-label warning; delivering provider result: %s",
-                leaked_label,
-            )
+            issues.append("reverse_glossary_ui_label_leak:" + str(leaked_label))
         direct_report = tqg_module.validate_translation(
             source_text, original, src, tgt,
             immutable_literals=tqg_module.inspect_immutable_spans(source_text).mapping.values(),
@@ -11227,9 +11362,33 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             require_paragraph_fidelity=False,
         )
         if not direct_report.ok:
+            issues.extend(str(item) for item in direct_report.hard_issues)
+        factory_report = _factory_guard_report(source_text, original, src, tgt)
+        if not factory_report.ok:
+            issues.extend(factory_report.hard_issues)
+        issues = list(dict.fromkeys(item for item in issues if item))
+        if issues:
+            fallback = _factory_exact_fallback(source_text, src, tgt)
+            if fallback:
+                logger.warning(
+                    "[FinalDeliveryGuard] rejected candidate; using verified exact fallback issues=%s",
+                    issues[:12],
+                )
+                return fallback
+            if strict:
+                logger.error(
+                    "[FinalDeliveryGuard] fail-closed factory rejection issues=%s",
+                    issues[:20],
+                )
+                _update_last_translate_debug(
+                    pipeline_status="factory_guard_rejected_delivery",
+                    factory_guard_issues=issues[:20],
+                    final_candidate="",
+                )
+                return None
             logger.warning(
-                "[FinalDeliveryGuard] advisory validation issues=%s; delivering provider result",
-                direct_report.issues[:12],
+                "[FinalDeliveryGuard] advisory non-factory validation issues=%s",
+                issues[:12],
             )
             return original
         checked = tqg_module.ensure_delivery_safe_translation(
@@ -11240,15 +11399,31 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
             fallback_translate=None,
         )
         if checked.get("ok") and checked.get("text"):
-            return checked["text"].strip()
-        logger.warning(
-            "[FinalDeliveryGuard] advisory check path=%s issues=%s; delivering provider result",
-            checked.get("path"), checked.get("issues", [])[:12],
-        )
+            safe = str(checked["text"]).strip()
+            post_report = _factory_guard_report(source_text, safe, src, tgt)
+            if post_report.ok:
+                return safe
+            if strict:
+                logger.error(
+                    "[FinalDeliveryGuard] safe-check mutation violated factory guard: %s",
+                    post_report.issues[:20],
+                )
+                return _factory_exact_fallback(source_text, src, tgt)
+        if strict:
+            logger.error(
+                "[FinalDeliveryGuard] fail-closed safe check path=%s issues=%s",
+                checked.get("path"), checked.get("issues", [])[:12],
+            )
+            return _factory_exact_fallback(source_text, src, tgt)
         return original
     except Exception as exc:
+        if strict:
+            logger.exception(
+                "[FinalDeliveryGuard] factory validation exception; blocked: %s", exc
+            )
+            return _factory_exact_fallback(source_text, src, tgt)
         logger.exception(
-            "[FinalDeliveryGuard] local validation exception; delivering provider result: %s",
+            "[FinalDeliveryGuard] non-factory validation exception; delivering original: %s",
             exc,
         )
         return original
@@ -11633,9 +11808,12 @@ def translate(text, src, tgt):
                     cache_set(canonical_text, src, tgt, _equipment_status, force=True)
                 except Exception:
                     pass
+                _equipment_status = _final_delivery_guard(
+                    canonical_text, _equipment_status, src, tgt
+                )
                 _update_last_translate_debug(
-                    pipeline_status="deterministic_equipment_status",
-                    final_candidate=_equipment_status[:2000],
+                    pipeline_status=("deterministic_equipment_status" if _equipment_status else "factory_guard_rejected_equipment_status"),
+                    final_candidate=(_equipment_status[:2000] if _equipment_status else ""),
                     openai_status="not_needed",
                 )
                 return _equipment_status
@@ -11656,9 +11834,12 @@ def translate(text, src, tgt):
                 cache_set(canonical_text, src, tgt, reason_semantic, force=True)
             except Exception:
                 pass
+            reason_semantic = _final_delivery_guard(
+                canonical_text, reason_semantic, src, tgt
+            )
             _update_last_translate_debug(
-                pipeline_status="deterministic_factory_reason",
-                final_candidate=reason_semantic[:2000],
+                pipeline_status=("deterministic_factory_reason" if reason_semantic else "factory_guard_rejected_factory_reason"),
+                final_candidate=(reason_semantic[:2000] if reason_semantic else ""),
                 openai_status="not_needed",
             )
             return reason_semantic
@@ -11745,7 +11926,7 @@ def translate(text, src, tgt):
                         _expected_rows, _factory_reason_ocr_row_count(canonical_text)
                     )
                     return _factory_reason_alignment_failure_message(tgt)
-                return reason_semantic
+                return _final_delivery_guard(canonical_text, reason_semantic, src, tgt)
         # Sentence-aware expressive decoration runs only after every semantic,
         # glossary, identity and format guard.  It never creates another AI call.
         # Visual selection is handled later at the LINE delivery boundary, so this
@@ -11800,6 +11981,11 @@ def translate(text, src, tgt):
         except Exception as _expressive_exc:
             # Expression is optional. A valid paid translation must still be sent.
             logger.warning("expressive text enhancement skipped: %s", _expressive_exc)
+        # Expressive decoration is also untrusted output.  Re-run the absolute
+        # boundary after it so no optional formatting step can bypass factory
+        # facts, identities, quantities or terminology.
+        if result:
+            result = _final_delivery_guard(canonical_text, result, src, tgt)
     if _is_translation_failure_sentinel(result):
         result = None
     _update_last_translate_debug(
@@ -11820,7 +12006,7 @@ def translate(text, src, tgt):
 _FACTORY_CTX_PAT = re.compile(
     r'吊[^。，！？\s]{0,4}[料棒材鋼管貨捆包盤胚件]'      # 吊運材料:吊料/吊完料/吊鋼捲/吊棒材
     r'|[上下入出置退來捆堆送]料'                          # 材料動作:上料/下料/入料/出料/置料/退料/來料/捆料/堆料/送料
-    r'|研磨|冷抽|退火|倒角|矯直|拋光|削皮|改端漆|補毛重|改\s*[Tt][Aa][Gg]|取樣|併包|改包裝|盤元|母材|棒材|線材|解捲|料床|無心|砂帶|砂光|盤條|盤捲'
+    r'|研磨|冷抽|退火|倒角|矯直|拋光|削皮|改端漆|補毛重|改\s*[Tt][Aa][Gg]|取樣|併包|改包裝|盤元|母材|棒材|線材|解捲|料床|無心|砂帶|砂光|盤條|盤捲|抓帳|結帳|關帳|木箱|裝箱|電子系統|自然拉動'
 )
 def _is_factory_context(text):
     """中文工廠材料/吊運/製程語境 → 強制走 LLM(避免 NMT 誤譯與舊快取 bypass)。
@@ -11854,40 +12040,39 @@ def _should_query_vector_tm(text, src, tgt, *, factory_ctx=False,
 
 
 def _tm_bypass_integrity_ok(source_text, candidate, src, tgt):
-    """Deterministically validate a TM/Vector-TM result before early return.
+    """Validate a historical translation before any early return.
 
-    TM bypasses intentionally skip the normal LLM/post-processing path.  Without
-    this boundary check, a stale historical translation can evade every new
-    quality rule forever.  The check is provider-free and uses the same target-
-    language purity, immutable-token and glossary validation as fresh output.
+    TM/vector rows are untrusted unless they satisfy the current immutable,
+    glossary and versioned factory acceptance assets.
     """
     try:
+        issues = []
         leaked_label = ge_module.find_reverse_glossary_ui_leak(
-            source_text,
-            candidate,
+            source_text, candidate,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-            src,
-            tgt,
+            src, tgt,
         )
         if leaked_label:
-            return False, ["reverse_glossary_ui_label_leak:" + leaked_label]
+            issues.append("reverse_glossary_ui_label_leak:" + leaked_label)
         envelope = tqg_module.protect_immutable_spans(source_text)
         pairs = ge_module.collect_applicable_pairs(
             source_text,
             GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-            src,
-            tgt,
+            src, tgt,
         )
         report = tqg_module.validate_translation(
-            source_text,
-            candidate,
-            src,
-            tgt,
+            source_text, candidate, src, tgt,
             immutable_literals=envelope.mapping.values(),
             glossary_pairs=pairs,
             require_paragraph_fidelity=False,
         )
-        return report.ok, report.hard_issues
+        if not report.ok:
+            issues.extend(str(item) for item in report.hard_issues)
+        factory_report = _factory_guard_report(source_text, candidate, src, tgt)
+        if not factory_report.ok:
+            issues.extend(factory_report.hard_issues)
+        issues = list(dict.fromkeys(item for item in issues if item))
+        return not issues, issues
     except Exception as exc:
         logger.warning("[TMIntegrity] validation failed closed: %s", exc)
         return False, ["integrity_check_exception"]
@@ -11897,13 +12082,14 @@ def _translate_core(text, src, tgt):
     """v3.9.39 業界全面技術 hybrid pipeline(被 translate() wrapper 包覆)
     
     路由順序(命中越早,成本越低,延遲越低):
-      1. Lexical TM exact match (rapidfuzz=100)        → bypass LLM
-      2. Lexical TM fuzzy bypass (rapidfuzz>=95)       → bypass LLM
-      3. Vector TM semantic bypass (cosine>=0.95)      → bypass LLM
-      4. Vector TM inject (cosine 0.75-0.94)           → 注入 LLM prompt
-      5. Lexical TM inject (rapidfuzz 70-94)           → 注入 LLM prompt
-      6. NMT routable (短句/簡單)                       → Google Translate / DeepL
-      7. LLM 全翻 (預設路徑)
+      0. 已驗證且來源完全相同的工廠修正案例             → 本地驗證後 bypass
+      1. 非統一工廠模式：Lexical TM exact/fuzzy         → 本地驗證後 bypass
+      2. 非統一工廠模式：Vector TM semantic bypass      → 本地驗證後 bypass
+      3. 非統一工廠模式：TM references / NMT            → 依規則注入或翻譯
+      4. 統一工廠模式：工廠 prompt + 詞庫 + 知識 + 案例  → LLM 主翻
+
+    統一工廠模式不允許 legacy custom example、cache、一般 TM、向量 TM
+    或通用 NMT 在現行語義契約前提前回傳。
     
     後處理:
       - QE 評分 → < 70 分 → APE 自動修正
@@ -11923,7 +12109,10 @@ def _translate_core(text, src, tgt):
     # Determine quality-critical messages structurally.  Long announcements,
     # multi-paragraph instructions and checklist-style factory messages bypass
     # stale TM/NMT routes and receive an independent review before send.
-    _factory_ctx = _is_factory_context(text)
+    _factory_heuristic_ctx = _is_factory_context(text)
+    _factory_ctx = factory_translation_policy_module.should_force_factory_pipeline(
+        text, src, tgt, heuristic_match=_factory_heuristic_ctx
+    )
     try:
         _factory_domain_ctx = bool(detect_factory_domain(text, src, tgt).get("is_factory"))
     except Exception:
@@ -11986,7 +12175,10 @@ def _translate_core(text, src, tgt):
                 cache_set(text, src, tgt, _reason_semantic)
             except Exception:
                 pass
-            return _reason_semantic
+            if is_translation_acceptable(text, _reason_semantic, src, tgt):
+                return _reason_semantic
+            logger.error("[FactoryGuard] deterministic ERP reason translation rejected")
+            return None
 
     # v3.32.6: Quality-critical messages stay in the same one-call pipeline.
     # They bypass stale TM/NMT and are routed to the quality model, but they are
@@ -12036,6 +12228,81 @@ def _translate_core(text, src, tgt):
         _tl.semantic_contract = _semantic_contract
     except Exception:
         pass
+
+    # The versioned guard owns the authoritative exact-correction index.  It
+    # accepts punctuation/spacing variants only; semantic paraphrases still go
+    # through the full source-grounded translation route.
+    try:
+        _guard_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
+    except Exception as _guard_exact_exc:
+        logger.error("[FactoryGuard] exact lookup failed closed: %s", _guard_exact_exc)
+        _guard_exact = None
+    if _guard_exact:
+        _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
+        _guard_sem_ok, _guard_sem_reason = translation_satisfies_semantic_contract(
+            _semantic_contract, _guard_candidate
+        )
+        _guard_integrity_ok, _guard_integrity_issues = _tm_bypass_integrity_ok(
+            text, _guard_candidate, src, tgt
+        )
+        if _guard_sem_ok and _guard_integrity_ok:
+            try:
+                _log_translation(text, _guard_candidate, src, tgt,
+                                 "factory_guard_exact", 0, 1.0, False, 1.0, _gid_for_tm)
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _guard_candidate, src, tgt)
+            except Exception:
+                pass
+            _update_last_translate_debug(
+                pipeline_status="factory_guard_exact",
+                final_candidate=str(_guard_candidate)[:2000],
+                openai_status="not_needed",
+                factory_guard_fingerprint=factory_translation_guard_module.asset_fingerprint(),
+            )
+            return _guard_candidate
+        logger.error(
+            "[FactoryGuard] approved exact correction failed current boundary: %s %s",
+            _guard_sem_reason, _guard_integrity_issues[:8],
+        )
+        if _factory_route_is_strict(text, src, tgt):
+            return None
+
+    # Verified exact corrections are the only historical translations allowed to
+    # bypass the unified factory route. They are source-identical, then checked
+    # against the current semantic contract, glossary and immutable data before
+    # delivery. Fuzzy TM/vector/NMT can never override them.
+    try:
+        _exact_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=8)
+        _exact_verified = translation_casebook_module.exact_verified_target(text, _exact_cases)
+    except Exception as _exact_exc:
+        logger.warning("[FactoryPolicy] exact verified lookup failed open: %s", _exact_exc)
+        _exact_verified = None
+    if _exact_verified:
+        _exact_candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
+        _exact_sem_ok, _exact_sem_reason = translation_satisfies_semantic_contract(
+            _semantic_contract, _exact_candidate
+        )
+        _exact_integrity_ok, _exact_integrity_issues = _tm_bypass_integrity_ok(
+            text, _exact_candidate, src, tgt
+        )
+        if _exact_sem_ok and _exact_integrity_ok:
+            try:
+                _log_translation(text, _exact_candidate, src, tgt,
+                                 "verified_exact_factory_case", 0, 1.0, False, 1.0, _gid_for_tm)
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _exact_candidate, src, tgt)
+            except Exception:
+                pass
+            _update_last_translate_debug(
+                pipeline_status="verified_exact_factory_case",
+                final_candidate=str(_exact_candidate)[:2000],
+                openai_status="not_needed",
+            )
+            return _exact_candidate
+        logger.warning(
+            "[FactoryPolicy] exact verified correction blocked by current contract: %s %s",
+            _exact_sem_reason, _exact_integrity_issues[:8],
+        )
 
     # ─── 1+2: Lexical TM lookup ───
     _tm_result = None
@@ -12311,24 +12578,26 @@ def _translate_core(text, src, tgt):
 
     # ─── 主路徑收尾 1: <thinking> tag 過濾(v3.11,移到入庫前 — 原本在入庫後,
     #      導致 TM 可能存進含 thinking tag 的髒文字,順手治本) ───
-    try:
-        _stripped = _strip_thinking_tags(result)
-        if _stripped:
-            result = _stripped
-        else:
-            logger.warning("[Thinking] strip 後 result 為空,保留原 result(可能整段都是 thinking): %r",
-                           (result or "")[:200])
-    except Exception as _ste:
-        logger.warning("[Thinking] strip exception: %s", _ste)
+    if result and isinstance(result, str):
+        try:
+            _stripped = _strip_thinking_tags(result)
+            if _stripped:
+                result = _stripped
+            else:
+                logger.warning("[Thinking] strip 後 result 為空,保留原 result(可能整段都是 thinking): %r",
+                               result[:200])
+        except Exception as _ste:
+            logger.warning("[Thinking] strip exception: %s", _ste)
 
     # ─── 主路徑收尾 2: 元注釋洩漏偵測(v3.11) ───
-    # 僅記錄且禁止入庫，不再丟棄已付費取得的非空譯文。
+    # 先記錄並禁止入庫；後續同步品質閘門與最終工廠邊界會再次檢查，
+    # 統一工廠模式下不可交付含元注釋的譯文。
     _meta_leak_detected = False
     try:
         if _is_meta_commentary_leak(result):
             _meta_leak_detected = True
             logger.warning(
-                "[MetaLeak] 偵測到元注釋洩漏;仍交付 provider 結果但不寫入快取/TM: %r",
+                "[MetaLeak] 偵測到元注釋洩漏;候選禁止入庫並交由最終邊界裁決: %r",
                 result[:200],
             )
             try:
@@ -12345,9 +12614,11 @@ def _translate_core(text, src, tgt):
     _quality_cacheable = not _meta_leak_detected
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
-    # Quality-critical messages and strong verified-correction matches receive
-    # one independent, source-grounded review before LINE delivery.  The rules
-    # are structural and data-driven; there are no exact-sentence replacements.
+    # Newly generated factory translations receive one source-grounded review
+    # before LINE delivery by default. Exact verified corrections have already
+    # returned above. Operators may switch to adaptive/off mode through policy
+    # environment variables, but production defaults fail closed when required
+    # adjudication is unavailable or rejected.
     if result and isinstance(result, str):
         _pre_gate_result = result
         try:
@@ -12363,9 +12634,20 @@ def _translate_core(text, src, tgt):
             _review_already_attempted = bool(
                 getattr(_tl, "source_review_already_attempted", False)
             )
+            _adaptive_review_risk = bool(
+                _quality_critical
+                or (_semantic_contract or {}).get("requires_independent_review")
+            )
+            _factory_review_required = factory_translation_policy_module.require_source_review(
+                text, src, tgt, adaptive_risk=_adaptive_review_risk
+            )
             _force_source_review = bool(
-                (_quality_critical
-                 or (_semantic_contract or {}).get("requires_independent_review"))
+                (_adaptive_review_risk or _factory_review_required)
+                and not _review_already_attempted
+            )
+            _require_review_success = bool(
+                _factory_review_required
+                and factory_translation_policy_module.require_review_success(src, tgt)
                 and not _review_already_attempted
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
@@ -12383,6 +12665,13 @@ def _translate_core(text, src, tgt):
                 )
                 if not _contract_ok and _contract_reason:
                     _issues.append(str(_contract_reason))
+                try:
+                    _factory_report = _factory_guard_report(text, candidate, src, tgt)
+                    if not _factory_report.ok:
+                        _issues.extend(_factory_report.hard_issues)
+                except Exception as _factory_guard_exc:
+                    if _factory_route_is_strict(text, src, tgt):
+                        _issues.append("factory_guard_exception:" + type(_factory_guard_exc).__name__)
                 _issues = list(dict.fromkeys(_issues))
                 return not _issues, _issues
 
@@ -12400,18 +12689,36 @@ def _translate_core(text, src, tgt):
                 used_provider=getattr(_tl, "last_provider_used", None),
                 review_context=_review_context,
                 semantic_validator=_runtime_semantic_validator,
+                require_review_success=_require_review_success,
             )
             if _gate.get("reviewed"):
                 _tl.source_review_already_attempted = True
             if not _gate.get("ok") or not _gate.get("text"):
-                # Exact human/factory corrections are safe deterministic fallbacks
-                # only when the current source is exactly identical.  For a
-                # paraphrase, never paste a stored sentence blindly.
-                _exact_verified = translation_casebook_module.exact_verified_target(
-                    text, _verified_cases
-                ) if _verified_cases else None
+                # Only a source-identical, locally approved correction may
+                # replace a rejected provider result.  Fuzzy cases are prompt
+                # evidence, never sentence-level fallbacks.
+                _exact_verified = factory_translation_guard_module.exact_verified_target(
+                    text, src, tgt
+                )
+                if not _exact_verified and _verified_cases:
+                    _exact_verified = translation_casebook_module.exact_verified_target(
+                        text, _verified_cases
+                    )
+                _exact_candidate = None
                 if _exact_verified:
-                    result = _exact_verified
+                    _candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
+                    _candidate_ok, _candidate_issues = _tm_bypass_integrity_ok(
+                        text, _candidate, src, tgt
+                    )
+                    if _candidate_ok:
+                        _exact_candidate = _candidate
+                    else:
+                        logger.error(
+                            "[FactoryGuard] exact gate fallback rejected: %s",
+                            _candidate_issues[:12],
+                        )
+                if _exact_candidate:
+                    result = _exact_candidate
                     _quality_cacheable = True
                     _gate = dict(_gate)
                     _gate.update({
@@ -12419,16 +12726,22 @@ def _translate_core(text, src, tgt):
                         "text": result,
                         "cacheable": True,
                         "degraded": False,
-                        "path": "exact_verified_correction_fallback",
+                        "path": "factory_guard_exact_fallback",
                     })
+                elif _factory_route_is_strict(text, src, tgt):
+                    logger.error(
+                        "[QualityGate] fail-closed factory candidate issues=%s",
+                        _gate.get("issues"),
+                    )
+                    result = None
+                    _quality_cacheable = False
                 else:
-                    # A validator failure must not contaminate TM/cache.  Delivery
-                    # remains available, but the known-bad output is never learned.
                     _quality_cacheable = False
                 try:
                     last_translate_debug["final_pipeline_status"] = (
-                        "exact_verified_correction_fallback"
-                        if _exact_verified else "quality_gate_warning_delivered"
+                        "factory_guard_exact_fallback"
+                        if _exact_candidate else
+                        ("factory_guard_rejected" if result is None else "quality_gate_warning_delivered")
                     )
                     last_translate_debug["quality_gate_path"] = _gate.get("path")
                     last_translate_debug["quality_gate_issues"] = list(_gate.get("issues", []))[:20]
@@ -12436,11 +12749,6 @@ def _translate_core(text, src, tgt):
                     _persist_last_translate_debug()
                 except Exception:
                     pass
-                if not _exact_verified:
-                    logger.warning(
-                        "[QualityGate] validation did not approve candidate; delivering best effort issues=%s",
-                        _gate.get("issues"),
-                    )
             else:
                 result = _gate["text"].strip()
                 _quality_cacheable = (not _meta_leak_detected) and bool(_gate.get("cacheable", True))
@@ -12456,17 +12764,33 @@ def _translate_core(text, src, tgt):
                     _persist_last_translate_debug()
                 except Exception:
                     pass
-            result = _strip_thinking_tags(result) or result
-            if _is_meta_commentary_leak(result):
-                logger.warning("[QualityGate] reviewer returned meta commentary; keeping first provider result")
-                result = _pre_gate_result
-                _quality_cacheable = False
-            result = enforce_translation_semantic_contract(_semantic_contract, text, result)
-            # Only fully validated output enters cache/TM.  Degraded best-effort
-            # delivery is intentionally one-shot so it cannot contaminate future
-            # messages through stale translation memory.
-            if _quality_cacheable:
-                cache_set(text, src, tgt, result, force=True)
+            if result:
+                result = _strip_thinking_tags(result) or result
+                if _is_meta_commentary_leak(result):
+                    _quality_cacheable = False
+                    if _factory_route_is_strict(text, src, tgt):
+                        logger.error("[QualityGate] meta commentary blocked by factory guard")
+                        result = _factory_exact_fallback(text, src, tgt)
+                    else:
+                        logger.warning("[QualityGate] reviewer returned meta commentary; keeping first provider result")
+                        result = _pre_gate_result
+                if result:
+                    result = enforce_translation_semantic_contract(_semantic_contract, text, result)
+                    _final_guard_report = _factory_guard_report(text, result, src, tgt)
+                    if not _final_guard_report.ok:
+                        _quality_cacheable = False
+                        _exact_candidate = _factory_exact_fallback(text, src, tgt)
+                        if _exact_candidate:
+                            result = _exact_candidate
+                            _quality_cacheable = True
+                        elif _factory_route_is_strict(text, src, tgt):
+                            logger.error(
+                                "[FactoryGuard] post-gate rejection issues=%s",
+                                _final_guard_report.issues[:20],
+                            )
+                            result = None
+                if result and _quality_cacheable:
+                    cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
             try:
                 last_translate_debug["final_pipeline_status"] = "quality_gate_exception"
@@ -12475,10 +12799,35 @@ def _translate_core(text, src, tgt):
             except Exception:
                 pass
             _quality_cacheable = False
-            logger.exception(
-                "[QualityGate] unexpected local failure; delivering provider result without caching: %s",
-                _qge,
-            )
+            if _factory_route_is_strict(text, src, tgt):
+                logger.exception(
+                    "[QualityGate] unexpected factory validation failure; blocked: %s",
+                    _qge,
+                )
+                result = _factory_exact_fallback(text, src, tgt)
+                _quality_cacheable = bool(result)
+            else:
+                logger.exception(
+                    "[QualityGate] unexpected non-factory validation failure; delivering without caching: %s",
+                    _qge,
+                )
+
+    # One final in-core boundary also covers deterministic/NMT/provider paths
+    # that may not have entered the quality-gate branch above.
+    if result and _factory_route_is_strict(text, src, tgt):
+        try:
+            _core_guard_report = _factory_guard_report(text, result, src, tgt)
+            if not _core_guard_report.ok:
+                logger.error(
+                    "[FactoryGuard] in-core fail-closed rejection issues=%s",
+                    _core_guard_report.issues[:20],
+                )
+                result = _factory_exact_fallback(text, src, tgt)
+                _quality_cacheable = bool(result)
+        except Exception as _core_guard_exc:
+            logger.exception("[FactoryGuard] in-core validation exception: %s", _core_guard_exc)
+            result = _factory_exact_fallback(text, src, tgt)
+            _quality_cacheable = bool(result)
 
     # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
     try:
@@ -12535,12 +12884,7 @@ def _translate_core(text, src, tgt):
 
 
 def _post_translation_async(text, result, src, tgt, gid, model_used, conf, semantic_contract):
-    """Local-only post processing.
-
-    No QE judge, back-translation or APE model is called.  The background worker
-    only computes deterministic validation signals and stores the already-sent
-    translation in TM/vector assets.
-    """
+    """Store only translations accepted by the current deterministic assets."""
     final = result
     quality_for_tm = int(conf * 100) if conf is not None else None
     try:
@@ -12552,12 +12896,17 @@ def _post_translation_async(text, result, src, tgt, gid, model_used, conf, seman
             glossary_pairs=pairs,
             require_paragraph_fidelity=tqg_module.is_quality_critical(text, src, tgt),
         )
+        factory_report = _factory_guard_report(text, final, src, tgt)
+        issues = list(report.hard_issues or []) + list(factory_report.hard_issues or [])
+        issues = list(dict.fromkeys(str(item) for item in issues if str(item).strip()))
+        if issues:
+            logger.warning("[TM-bg] rejected unverified translation issues=%s", issues[:20])
+            return
         if quality_for_tm is None:
-            quality_for_tm = 100 if report.ok else max(0, 100 - 20 * len(report.hard_issues))
-        if not report.ok:
-            logger.warning("[LocalQE] deterministic issues=%s", report.issues[:10])
+            quality_for_tm = 100
     except Exception as exc:
-        logger.warning("[LocalQE] validation failed: %s", exc)
+        logger.warning("[TM-bg] validation failed closed: %s", exc)
+        return
     try:
         tm_module.tm_store(text, final, src, tgt, gid, model_used, quality_for_tm)
     except Exception as exc:
@@ -12632,9 +12981,9 @@ def _split_into_paragraphs(text):
 
 def _translate_single_paragraph(text, src, tgt):
     """v3.7 單段翻譯(供分段翻譯使用,跳過分段邏輯避免無窮迴圈)
-    
-    這函數做最小流程:cache → custom example → translate_openai
-    不做反譯、self-check 等(那些是整篇譯文層級的檢查)
+
+    統一工廠模式下不讀一般 custom example / cache；只有 _translate_core
+    前置的「來源完全相同且重新驗證通過」案例可以直接回傳。
     """
     # v3.15: 圖片 OCR 表格被分段時，每一列仍必須先跑 ERP 原因語義層。
     # 否則單列會繞過 _translate_core 的整表判斷，回到 LLM/快取而重現
@@ -12644,13 +12993,28 @@ def _translate_single_paragraph(text, src, tgt):
         if reason_semantic:
             return reason_semantic
 
-    # 1. Check exact custom example
-    exact = _check_custom_example_exact(text.strip(), src, tgt)
+    _force_factory = factory_translation_policy_module.should_force_factory_pipeline(
+        text, src, tgt, heuristic_match=_is_factory_context(text)
+    )
+
+    _guard_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
+    if _guard_exact:
+        _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
+        if is_translation_acceptable(text, _guard_candidate, src, tgt):
+            return _guard_candidate
+        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+            return None
+
+    # 1. Legacy custom examples are not verified against the current factory
+    # contract. They remain available only outside the unified factory route.
+    exact = None if _force_factory else _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
         return exact
-    
-    # 2. Check cache
-    cached = cache_get(text, src, tgt)
+
+    # 2. Legacy cache rows have no policy/glossary build metadata. Never let
+    # them bypass the current factory contract; a fresh accepted output may be
+    # cached for diagnostics but is not trusted as an authoritative factory case.
+    cached = None if _force_factory else cache_get(text, src, tgt)
     if cached:
         return cached
     
@@ -12658,7 +13022,15 @@ def _translate_single_paragraph(text, src, tgt):
     result = translate_openai(text, src, tgt)
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
-        cache_set(text, src, tgt, result)
+        if is_translation_acceptable(text, result, src, tgt):
+            cache_set(text, src, tgt, result)
+            return result
+        fallback = _factory_exact_fallback(text, src, tgt)
+        if fallback:
+            return fallback
+        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+            logger.error("[FactoryGuard] single-paragraph candidate rejected")
+            return None
     return result
 
 
@@ -12698,6 +13070,9 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
 
 def _translate_inner(text, src, tgt):
     _quality_critical = bool(getattr(_tl, 'quality_gate_critical', False))
+    _force_factory = factory_translation_policy_module.should_force_factory_pipeline(
+        text, src, tgt, heuristic_match=_is_factory_context(text)
+    )
     # ★ v3.6 印尼文預處理:在所有後續路徑之前先標準化
     _preprocessing_log = None
     if src == "id" and id_preprocessing_enabled:
@@ -12719,6 +13094,15 @@ def _translate_inner(text, src, tgt):
             if text_nano and text_nano != text:
                 text = text_nano
     
+    _guard_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
+    if _guard_exact:
+        _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
+        if is_translation_acceptable(text, _guard_candidate, src, tgt):
+            return _guard_candidate
+        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+            logger.error("[FactoryGuard] exact inner candidate rejected")
+            return None
+
     # ★ v3.7 段落結構保留:訊息含分段時走分段翻譯路徑
     # 這個路徑不影響短訊息(沒分段就直接走原本流程)
     # v3.9.27: 來自圖片 OCR 的文字一律走分段路徑(段落保留是首要需求)
@@ -12743,8 +13127,10 @@ def _translate_inner(text, src, tgt):
             except Exception as _e:
                 logger.error("Paragraph-split exception: %s", _e)
     
-    # Check custom examples for exact match first (free, no API call)
-    exact = None if _quality_critical else _check_custom_example_exact(text.strip(), src, tgt)
+    # Legacy UI custom examples are not enough to bypass the unified factory
+    # contract. Exact verified factory/human cases were already handled in
+    # _translate_core before any TM/cache route.
+    exact = None if (_quality_critical or _force_factory) else _check_custom_example_exact(text.strip(), src, tgt)
     if exact:
         checked = finalize_factory_translation(text, exact, src, tgt)
         if checked and is_translation_acceptable(text, checked, src, tgt):
@@ -12768,8 +13154,12 @@ def _translate_inner(text, src, tgt):
                 "auto_corrected": False,
             }
             _log_translation(text, semantic, src, tgt, "factory-semantic", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
-            cache_set(text, src, tgt, semantic)
-            return semantic
+            if is_translation_acceptable(text, semantic, src, tgt):
+                cache_set(text, src, tgt, semantic)
+                return semantic
+            if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+                logger.error("[FactoryGuard] deterministic ID->ZH semantic output rejected")
+                return None
 
     if (not _quality_critical) and src == "zh" and tgt == "id":
         semantic = factory_semantic_translate_zh_id(text)
@@ -12785,11 +13175,16 @@ def _translate_inner(text, src, tgt):
                 "auto_corrected": False,
             }
             _log_translation(text, semantic, src, tgt, "factory-semantic-zh-id", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
-            cache_set(text, src, tgt, semantic)
-            return semantic
+            if is_translation_acceptable(text, semantic, src, tgt):
+                cache_set(text, src, tgt, semantic)
+                return semantic
+            if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+                logger.error("[FactoryGuard] deterministic ZH->ID semantic output rejected")
+                return None
 
-    # Check cache first
-    cached = None if _quality_critical else cache_get(text, src, tgt)
+    # Legacy cache entries do not carry policy/glossary build IDs. In unified
+    # factory mode they cannot be trusted as an early-return source.
+    cached = None if (_quality_critical or _force_factory) else cache_get(text, src, tgt)
     if cached:
         cached = finalize_factory_translation(text, cached, src, tgt)
         if cached and is_translation_acceptable(text, cached, src, tgt):
@@ -12812,28 +13207,37 @@ def _translate_inner(text, src, tgt):
         logger.warning("[LegacyFailurePurge] provider returned a legacy failure payload; treating as empty")
         result = None
     if not result:
-        # The paid provider can still charge for an empty/failed response.  Do
-        # not spend another LLM call.  Use the existing no-key Google NMT path as
-        # a best-effort availability fallback, then stay silent if it also fails.
-        try:
-            result = translate_google(text, src, tgt)
-        except Exception as _nmt_fallback_exc:
-            logger.warning("[FreeNMTFallback] exception: %s", _nmt_fallback_exc)
-            result = None
-        if result and not _is_translation_failure_sentinel(result):
-            logger.warning("[FreeNMTFallback] delivered Google fallback after empty paid response")
-            _update_last_translate_debug(
-                fallback_used="google_gtx",
-                fallback_status="success",
-                final_candidate=str(result)[:2000],
-                pipeline_status="free_nmt_fallback_success",
-            )
+        # Generic consumer NMT is intentionally disabled for the unified factory
+        # route: a fluent but wrong accounting/process/equipment instruction is
+        # unsafe. Operators may opt in only with FACTORY_ALLOW_GENERIC_NMT_FALLBACK=1.
+        if factory_translation_policy_module.allow_generic_nmt_fallback(src, tgt):
+            try:
+                result = translate_google(text, src, tgt)
+            except Exception as _nmt_fallback_exc:
+                logger.warning("[FreeNMTFallback] exception: %s", _nmt_fallback_exc)
+                result = None
+            if result and not _is_translation_failure_sentinel(result):
+                logger.warning("[FreeNMTFallback] delivered Google fallback after empty paid response")
+                _update_last_translate_debug(
+                    fallback_used="google_gtx",
+                    fallback_status="success",
+                    final_candidate=str(result)[:2000],
+                    pipeline_status="free_nmt_fallback_success",
+                )
+            else:
+                result = None
+                _update_last_translate_debug(
+                    fallback_used="google_gtx",
+                    fallback_status="empty",
+                    pipeline_status="all_translation_results_empty",
+                )
         else:
+            logger.error("[FactoryPolicy] generic NMT fallback blocked after empty provider response")
             result = None
             _update_last_translate_debug(
-                fallback_used="google_gtx",
-                fallback_status="empty",
-                pipeline_status="all_translation_results_empty",
+                fallback_used="disabled_by_factory_policy",
+                fallback_status="blocked",
+                pipeline_status="factory_translation_provider_empty",
             )
     
     # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
@@ -12848,18 +13252,18 @@ def _translate_inner(text, src, tgt):
             cache_set(text, src, tgt, result)
             return result
 
-        # Availability boundary: a non-empty provider/NMT translation must never
-        # disappear merely because a local heuristic rejects it.  The outer
-        # pipeline performs the same advisory diagnostics again and deliberately
-        # keeps degraded text out of cache/TM.  Returning it here prevents the
-        # historical ``translate returned empty`` outage while preserving strict
-        # cache admission.
+        fallback = _factory_exact_fallback(text, src, tgt)
+        if fallback:
+            return fallback
+        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
+            logger.error("[FactoryGuard] inner provider candidate rejected; fail closed")
+            _update_last_translate_debug(
+                pipeline_status="inner_factory_guard_rejected",
+                final_candidate="",
+            )
+            return None
         logger.warning(
-            "[QualityGate] inner validation warning; delivering non-cacheable provider result"
-        )
-        _update_last_translate_debug(
-            pipeline_status="inner_quality_warning_delivered",
-            final_candidate=str(result)[:2000],
+            "[QualityGate] non-factory inner validation warning; delivering non-cacheable result"
         )
         return result
 
@@ -12867,7 +13271,7 @@ def _translate_inner(text, src, tgt):
     # Last chance: deterministic semantic fallback before returning None.
     if src == "id" and tgt == "zh":
         semantic = factory_semantic_translate_id_zh(text)
-        if semantic:
+        if semantic and is_translation_acceptable(text, semantic, src, tgt):
             cache_set(text, src, tgt, semantic)
             return semantic
 
@@ -31056,6 +31460,9 @@ def health():
         "translation_casebook_build": _EXPECTED_CASEBOOK_BUILD_ID,
         "translation_casebook_selftest": bool(_CASEBOOK_BOOT_SELFTEST_OK),
         "translation_casebook_cases": len(_CASEBOOK_BOOT_SELFTEST),
+        "factory_translation_policy": factory_translation_policy_module.health(),
+        "factory_translation_guard": factory_translation_guard_module.health(),
+        "factory_translation_guard_fingerprint": factory_translation_guard_module.asset_fingerprint(),
         "final_delivery_guard": _FINAL_DELIVERY_GUARD_BUILD_ID,
         "uptime": int(time.time() - bot_start_time),
     }

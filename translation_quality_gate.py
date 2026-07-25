@@ -1866,13 +1866,17 @@ def gate_and_revise(
     used_provider: Optional[str] = None,
     review_context: str = "",
     semantic_validator: Optional[Callable[[str], Tuple[bool, Sequence[str]]]] = None,
+    require_review_success: bool = False,
 ) -> Dict[str, Any]:
     """Validate and, for high-risk messages, independently reconstruct once.
 
     Ordinary messages remain single-call.  Factory notices, announcements and
     messages matched to verified correction cases can request one additional
     source-grounded review.  The reviewer receives the original source, not just
-    the first candidate, and a different configured provider is preferred.
+    the first candidate, and a different configured provider is preferred.  When
+    ``require_review_success`` is true, an unavailable or rejected review cannot
+    fall back to an unchecked generated candidate; only a validated deterministic
+    source-frame rebuild remains eligible.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
@@ -1913,10 +1917,10 @@ def gate_and_revise(
     # Preserve the low-latency single-call path by default.  A second call is
     # permitted only when the caller explicitly classified the message as
     # high-risk or matched it to a verified correction case.
-    should_review = bool(
-        ai_client is not None
-        and (force_review or fsa_module.should_force_review(source_frame))
-    )
+    review_requested = bool(force_review or fsa_module.should_force_review(source_frame))
+    should_review = bool(ai_client is not None and review_requested)
+    review_succeeded = False
+    review_failure_reason = ""
     if should_review:
         preference = _independent_provider_preference(ai_client, used_provider)
         reviewed = review_translation(
@@ -1944,6 +1948,7 @@ def gate_and_revise(
                 reviewed_report, reviewed, semantic_validator
             )
             if reviewed_report.ok:
+                review_succeeded = True
                 return {
                     "ok": True,
                     "text": reviewed,
@@ -1951,13 +1956,15 @@ def gate_and_revise(
                     "hard_issues": [],
                     "warnings": reviewed_report.warnings,
                     "reviewed": True,
+                    "review_requested": review_requested,
+                    "review_succeeded": True,
                     "degraded": False,
                     "cacheable": True,
                     "path": "independent_source_review_passed",
                 }
             # A reviewer that fails deterministic integrity checks must never
             # replace an already valid first translation.
-            if report.ok:
+            if report.ok and not require_review_success:
                 return {
                     "ok": True,
                     "text": candidate,
@@ -1965,10 +1972,17 @@ def gate_and_revise(
                     "hard_issues": reviewed_report.hard_issues,
                     "warnings": reviewed_report.warnings,
                     "reviewed": True,
+                    "review_requested": review_requested,
+                    "review_succeeded": False,
                     "degraded": True,
                     "cacheable": False,
                     "path": "independent_review_rejected_original_kept",
                 }
+            review_failure_reason = "independent_review_rejected"
+        else:
+            review_failure_reason = "independent_review_unavailable"
+    elif review_requested:
+        review_failure_reason = "independent_review_provider_unavailable"
 
     # Provider review is intentionally not a single point of failure.  For the
     # complete polishing/large-bar scheduling frame, reconstruct a conservative
@@ -1999,10 +2013,28 @@ def gate_and_revise(
                     "hard_issues": [],
                     "warnings": deterministic_report.warnings,
                     "reviewed": bool(should_review),
-                    "degraded": bool(should_review),
+                    "review_requested": review_requested,
+                    "review_succeeded": False,
+                    "degraded": bool(review_requested),
                     "cacheable": True,
                     "path": "deterministic_source_frame_rebuild",
                 }
+
+    if report.ok and review_requested and require_review_success and not review_succeeded:
+        reason = review_failure_reason or "required_source_review_not_completed"
+        return {
+            "ok": False,
+            "text": None,
+            "issues": list(dict.fromkeys(list(report.issues) + [reason])),
+            "hard_issues": list(dict.fromkeys(list(report.hard_issues) + [reason])),
+            "warnings": report.warnings,
+            "reviewed": bool(should_review),
+            "review_requested": True,
+            "review_succeeded": False,
+            "degraded": True,
+            "cacheable": False,
+            "path": "required_source_review_failed",
+        }
 
     if report.ok:
         return {
@@ -2012,9 +2044,27 @@ def gate_and_revise(
             "hard_issues": [],
             "warnings": report.warnings,
             "reviewed": bool(should_review),
-            "degraded": bool(should_review),
-            "cacheable": not bool(should_review),
-            "path": "single_api_local_validation" if not should_review else "review_unavailable_original_kept",
+            "review_requested": review_requested,
+            "review_succeeded": False,
+            "degraded": bool(review_requested),
+            "cacheable": not bool(review_requested),
+            "path": "single_api_local_validation" if not review_requested else "review_unavailable_original_kept",
+        }
+
+    if review_requested and require_review_success:
+        reason = review_failure_reason or "required_source_review_not_completed"
+        return {
+            "ok": False,
+            "text": None,
+            "issues": list(dict.fromkeys(list(report.issues) + [reason])),
+            "hard_issues": list(dict.fromkeys(list(report.hard_issues) + [reason])),
+            "warnings": report.warnings,
+            "reviewed": bool(should_review),
+            "review_requested": True,
+            "review_succeeded": False,
+            "degraded": True,
+            "cacheable": False,
+            "path": "required_source_review_failed",
         }
 
     best_text, best_report = _best_effort_delivery_candidate(
@@ -2055,9 +2105,11 @@ def gate_and_revise(
             "hard_issues": best_report.hard_issues,
             "warnings": best_report.warnings,
             "reviewed": bool(should_review),
+            "review_requested": review_requested,
+            "review_succeeded": False,
             "degraded": True,
             "cacheable": False,
-            "path": "best_effort_after_review" if should_review else "best_effort_quality_warning",
+            "path": "best_effort_after_review" if review_requested else "best_effort_quality_warning",
         }
 
     return {
@@ -2067,6 +2119,8 @@ def gate_and_revise(
         "hard_issues": report.hard_issues,
         "warnings": report.warnings,
         "reviewed": bool(should_review),
+        "review_requested": review_requested,
+        "review_succeeded": False,
         "degraded": True,
         "cacheable": False,
         "path": "empty_translation_blocked",

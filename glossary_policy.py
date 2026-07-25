@@ -88,6 +88,68 @@ _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
         "translation_mode": "hard",
         "reverse_safe": True,
     },
+    "木箱": {
+        "canonical_idn": "peti kayu",
+        "translation_mode": "hard",
+        "reverse_safe": True,
+        "forbidden_idn": ["kotak kayu"],
+    },
+    "裝箱": {
+        "canonical_idn": "memasukkan material ke dalam peti kayu",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+        "forbidden_idn": ["masukkan barang ke dalam kotak kayu", "memasukkan barang ke dalam kotak kayu"],
+    },
+    "支援裝箱": {
+        "canonical_idn": "membantu proses pengemasan ke dalam peti kayu",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+        "forbidden_idn": ["bantu proses memasukkan barang ke dalam kotak kayu"],
+    },
+    "木箱包": {
+        "canonical_idn": "pengemasan dengan peti kayu",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+        "forbidden_idn": ["packing kotak kayu"],
+    },
+    "抓帳": {
+        "canonical_idn": "tutup buku",
+        "translation_mode": "hard",
+        "reverse_safe": False,
+        "forbidden_idn": ["cek data", "periksa data", "rekap data"],
+    },
+    "會計結帳": {
+        "canonical_idn": "tutup buku",
+        "translation_mode": "hard",
+        "reverse_safe": False,
+        "forbidden_idn": ["cek data", "periksa data", "rekap data"],
+    },
+    "陸續到料": {
+        "canonical_idn": "material akan tiba secara bertahap",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+    },
+    "到料": {
+        "canonical_idn": "material tiba",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+    },
+    "優先安排包裝": {
+        "canonical_idn": "memprioritaskan pengaturan proses pengemasan",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+    },
+    "電子系統": {
+        "canonical_idn": "sistem elektronik",
+        "translation_mode": "hard",
+        "reverse_safe": True,
+    },
+    "自然拉動": {
+        "canonical_idn": "tarikan alami/pasif",
+        "translation_mode": "soft",
+        "reverse_safe": False,
+        "forbidden_idn": ["ditarik secara manual", "sistem tarik manual", "pengoperasian manual"],
+    },
 }
 
 _DESCRIPTION_MARKERS = (

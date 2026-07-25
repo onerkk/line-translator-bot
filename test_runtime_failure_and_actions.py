@@ -19,7 +19,7 @@ def test_lowercase_line_display_name_is_not_language_leakage():
     assert app._final_delivery_guard(source, candidate, "id", "zh") == candidate
 
 
-def test_final_guard_keeps_nonempty_provider_result_as_uncached_best_effort():
+def test_final_guard_blocks_nonempty_factory_result_that_fails_integrity():
     result = app._final_delivery_guard(
         "TIDAK BOLEH masuk.",
         "不BOLEH進入。",
@@ -27,12 +27,12 @@ def test_final_guard_keeps_nonempty_provider_result_as_uncached_best_effort():
         "zh",
     )
 
-    assert result == "不BOLEH進入。"
+    assert result is None
     assert not app._is_translation_failure_sentinel("正常翻譯")
     assert app._is_translation_failure_sentinel("翻譯服務暫時未取得可用結果")
 
 
-def test_inner_pipeline_never_turns_nonempty_provider_text_into_none(monkeypatch):
+def test_inner_pipeline_fails_closed_for_unverified_factory_provider_text(monkeypatch):
     provider_text = "粗磨（ROUGH GRINDING）每次至少 0.04 mm。"
     cached = []
 
@@ -59,7 +59,7 @@ def test_inner_pipeline_never_turns_nonempty_provider_text_into_none(monkeypatch
         else:
             app._tl.quality_gate_critical = previous
 
-    assert actual == provider_text
+    assert actual is None
     assert cached == []
 
 
@@ -278,6 +278,15 @@ def test_screenshot_sentence_repairs_old_spray_cat_output_instead_of_failing(mon
         "create",
         lambda **_kwargs: _fake_translation_response(stale_provider_output),
     )
+    # Production factory mode requires one source-grounded adjudication
+    # before a newly generated result may be delivered.  This regression is
+    # about deterministic terminology repair, so emulate an independent
+    # reviewer agreeing with the locally normalized candidate.
+    monkeypatch.setattr(
+        tqg,
+        "review_translation",
+        lambda _source, reviewed_candidate, *_args, **_kwargs: reviewed_candidate,
+    )
     app.translation_cache.clear()
     app._tl.group_id = "regression-group"
 
@@ -420,6 +429,11 @@ def test_pipeline_recovers_two_provider_dropped_line_mentions_before_quality_gat
         "create",
         lambda **_kwargs: _fake_translation_response(provider_text),
     )
+    monkeypatch.setattr(
+        tqg,
+        "review_translation",
+        lambda _source, reviewed_candidate, *_args, **_kwargs: reviewed_candidate,
+    )
     app.translation_cache.clear()
     app._tl.group_id = "mention-recovery-regression"
     app._tl.line_mentions = ["@蘇比 sobirin", "@(杰弗)"]
@@ -440,6 +454,11 @@ def test_pipeline_recovers_only_the_missing_mention_without_duplication(monkeypa
         app.ai.chat.completions,
         "create",
         lambda **_kwargs: _fake_translation_response(provider_text),
+    )
+    monkeypatch.setattr(
+        tqg,
+        "review_translation",
+        lambda _source, reviewed_candidate, *_args, **_kwargs: reviewed_candidate,
     )
     app.translation_cache.clear()
     app._tl.group_id = "mention-recovery-partial"

@@ -108,6 +108,42 @@ class TranslationQualityGateTests(unittest.TestCase):
         self.assertFalse(result["cacheable"])
         self.assertEqual(client.calls, [])
 
+    def test_required_source_review_blocks_clean_candidate_when_provider_is_unavailable(self):
+        result = qg.gate_and_revise(
+            "請確認材料已經包裝完成。",
+            "Mohon pastikan material sudah selesai dikemas.",
+            "zh",
+            "id",
+            critical=False,
+            model="fake-model",
+            ai_client=None,
+            force_review=True,
+            require_review_success=True,
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertIsNone(result["text"])
+        self.assertTrue(result["review_requested"])
+        self.assertFalse(result["review_succeeded"])
+        self.assertEqual(result["path"], "required_source_review_failed")
+
+    def test_required_source_review_accepts_valid_reviewed_candidate(self):
+        client = FakeClient(["Mohon pastikan material sudah selesai dikemas."])
+        result = qg.gate_and_revise(
+            "請確認材料已經包裝完成。",
+            "Pastikan material selesai packing.",
+            "zh",
+            "id",
+            critical=False,
+            model="fake-model",
+            ai_client=client,
+            force_review=True,
+            require_review_success=True,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["review_requested"])
+        self.assertTrue(result["review_succeeded"])
+        self.assertEqual(result["path"], "independent_source_review_passed")
+
     def test_critical_document_does_not_spend_second_api_call_after_local_rejection(self):
         client = FakeClient(["不BOLEH使用工具。", "不得使用工具。"])
         result = qg.translate_quality_critical_document(

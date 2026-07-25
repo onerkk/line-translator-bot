@@ -1190,24 +1190,49 @@
     "note_id": "Pasokan material untuk produksi atau packing tidak mencukupi."
   },
   "木箱": {
-    "idn": "kotak kayu",
-    "note_zh": "包裝使用的木箱。",
-    "note_id": "Kotak kayu untuk packing."
+    "idn": "peti kayu",
+    "canonical_idn": "peti kayu",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "forbidden_idn": [
+      "kotak kayu"
+    ],
+    "note_zh": "工廠出貨與包裝用的大型木製運輸箱／木製板條箱，統一用 peti kayu，不是一般小盒子 kotak kayu。",
+    "note_id": "Peti kayu industri untuk pengemasan dan pengiriman material; bukan kotak kayu kecil."
   },
   "裝箱": {
-    "idn": "masukkan barang ke dalam kotak kayu",
-    "note_zh": "把產品裝入木箱，不是一般的包裹或提供物料。",
-    "note_id": "Memasukkan barang ke dalam kotak kayu."
+    "idn": "memasukkan material ke dalam peti kayu",
+    "canonical_idn": "memasukkan material ke dalam peti kayu",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "masukkan barang ke dalam kotak kayu",
+      "memasukkan barang ke dalam kotak kayu"
+    ],
+    "note_zh": "把產品／材料裝入出貨木箱。依句型可自然屈折為 dimasukkan、jangan dimasukkan、proses pengemasan ke dalam peti kayu。",
+    "note_id": "Memasukkan produk atau material ke dalam peti kayu untuk pengiriman."
   },
   "支援裝箱": {
-    "idn": "bantu proses memasukkan barang ke dalam kotak kayu",
-    "note_zh": "其他站別支援木箱裝箱作業。",
-    "note_id": "Membantu proses memasukkan barang ke dalam kotak kayu."
+    "idn": "membantu proses pengemasan ke dalam peti kayu",
+    "canonical_idn": "membantu proses pengemasan ke dalam peti kayu",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "bantu proses memasukkan barang ke dalam kotak kayu"
+    ],
+    "note_zh": "其他站別／人員支援把材料裝入木製運輸箱的作業。",
+    "note_id": "Membantu proses pengemasan material ke dalam peti kayu."
   },
   "木箱包": {
-    "idn": "packing kotak kayu",
-    "note_zh": "現場對木箱包裝作業／木箱包裝量的簡稱。",
-    "note_id": "Istilah singkat untuk proses atau jumlah packing kotak kayu."
+    "idn": "pengemasan dengan peti kayu",
+    "canonical_idn": "pengemasan dengan peti kayu",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "packing kotak kayu"
+    ],
+    "note_zh": "現場對木箱包裝作業或木箱包裝量的簡稱。",
+    "note_id": "Istilah singkat untuk proses atau jumlah pengemasan dengan peti kayu."
   },
   "工單資訊": {
     "idn": "informasi pada work order",
@@ -1834,5 +1859,76 @@
       "tiap bundel",
       "semua bundel satu per satu"
     ]
+  },
+  "抓帳": {
+    "idn": "tutup buku",
+    "canonical_idn": "tutup buku",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "cek data",
+      "periksa data",
+      "rekap data"
+    ],
+    "note_zh": "工廠出貨／客戶帳務語境中的會計結帳、關帳，不是抓取、檢查或彙整資料。",
+    "note_id": "Penutupan pembukuan/akuntansi; bukan pengecekan atau rekap data."
+  },
+  "會計結帳": {
+    "idn": "tutup buku",
+    "canonical_idn": "tutup buku",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "cek data",
+      "periksa data",
+      "rekap data"
+    ],
+    "note_zh": "會計期間結帳／關帳。",
+    "note_id": "Penutupan pembukuan akuntansi."
+  },
+  "陸續到料": {
+    "idn": "material akan tiba secara bertahap",
+    "canonical_idn": "material akan tiba secara bertahap",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "note_zh": "材料不是一次到齊，而是之後分批、接續抵達。",
+    "note_id": "Material akan datang/tiba dalam beberapa tahap."
+  },
+  "到料": {
+    "idn": "material tiba",
+    "canonical_idn": "material tiba",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "note_zh": "生產材料抵達現場／到貨；不是資料到達。",
+    "note_id": "Material produksi tiba di lokasi."
+  },
+  "優先安排包裝": {
+    "idn": "memprioritaskan pengaturan proses pengemasan",
+    "canonical_idn": "memprioritaskan pengaturan proses pengemasan",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "note_zh": "把該客戶／該批材料排在包裝作業的前面，不是只口頭提醒。",
+    "note_id": "Menempatkan proses pengemasan material tersebut sebagai prioritas."
+  },
+  "電子系統": {
+    "idn": "sistem elektronik",
+    "canonical_idn": "sistem elektronik",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "note_zh": "設備上的電子控制／電子系統。",
+    "note_id": "Sistem elektronik atau kontrol elektronik pada peralatan."
+  },
+  "自然拉動": {
+    "idn": "tarikan alami/pasif",
+    "canonical_idn": "tarikan alami/pasif",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "ditarik secara manual",
+      "sistem tarik manual",
+      "pengoperasian manual"
+    ],
+    "note_zh": "依設備本身的自然／被動機械牽引，不等於人工手拉；來源未寫手動時不得補成 manual。",
+    "note_id": "Tarikan mekanis alami/pasif, bukan ditarik manual oleh operator."
   }
 }

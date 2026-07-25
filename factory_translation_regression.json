@@ -1,0 +1,558 @@
+{
+  "schema_version": 1,
+  "build_id": "2026-07-25.3-historical-factory-correction-regression",
+  "description": "Versioned Chinese↔Indonesian factory regression corpus compiled from verified production corrections, root-fix records and semantic tests. Exact targets are authoritative for punctuation/spacing variants; required and forbidden concepts also protect provider output.",
+  "cases": [
+    {
+      "id": "account_close_customer_priority",
+      "direction": "zh-id",
+      "source": "大成週一抓帳，還有160噸會陸續到料，有看到大成麻煩優先安排包裝。",
+      "verified_target": "大成 akan melakukan tutup buku pada hari Senin. Masih ada 160 ton material yang akan tiba secara bertahap. Jika melihat material 大成, mohon prioritaskan pengaturan proses pengemasannya.",
+      "required_target_any_groups": [
+        [
+          "tutup buku",
+          "penutupan pembukuan"
+        ],
+        [
+          "160 ton"
+        ],
+        [
+          "secara bertahap",
+          "dalam beberapa tahap"
+        ],
+        [
+          "prioritaskan",
+          "memprioritaskan",
+          "diprioritaskan"
+        ],
+        [
+          "pengemasan",
+          "dikemas",
+          "mengemas"
+        ],
+        [
+          "大成"
+        ]
+      ],
+      "forbidden_target": [
+        "cek data",
+        "periksa data",
+        "rekap data",
+        "Besar pada hari Senin",
+        "material Besar"
+      ]
+    },
+    {
+      "id": "wooden_crate_month_scope",
+      "direction": "zh-id",
+      "source": "本月份木箱交貨來不及，除了DACAPO、ABE以外，其餘非本月的木箱暫不裝箱。",
+      "verified_target": "Pengiriman peti kayu untuk bulan ini tidak akan sempat diselesaikan tepat waktu. Selain DACAPO dan ABE, material lain yang bukan untuk pengiriman bulan ini sementara jangan dimasukkan ke dalam peti kayu terlebih dahulu.",
+      "required_target_any_groups": [
+        [
+          "peti kayu"
+        ],
+        [
+          "DACAPO"
+        ],
+        [
+          "ABE"
+        ],
+        [
+          "bulan ini"
+        ],
+        [
+          "sementara",
+          "untuk sementara",
+          "terlebih dahulu"
+        ],
+        [
+          "ke dalam peti kayu",
+          "pengemasan dengan peti kayu"
+        ]
+      ],
+      "forbidden_target": [
+        "kotak kayu",
+        "packing kotak kayu"
+      ]
+    },
+    {
+      "id": "natural_passive_pull_not_manual",
+      "direction": "zh-id",
+      "source": "以前這是自動的，但自動運轉沒比較好，所以拔除電子系統，改自然拉動。",
+      "verified_target": "Sebelumnya sistem ini berjalan secara otomatis. Namun, pengoperasian otomatis tidak memberikan hasil yang lebih baik, sehingga sistem elektroniknya dilepas dan mekanismenya diubah menggunakan tarikan alami atau pasif.",
+      "required_target_any_groups": [
+        [
+          "otomatis"
+        ],
+        [
+          "tidak memberikan hasil yang lebih baik",
+          "tidak lebih baik",
+          "tidak ada perbaikan"
+        ],
+        [
+          "sistem elektronik"
+        ],
+        [
+          "dilepas",
+          "dicabut",
+          "dibongkar"
+        ],
+        [
+          "tarikan alami",
+          "tarikan pasif",
+          "mekanisme tarik pasif"
+        ]
+      ],
+      "forbidden_target": [
+        "ditarik secara manual",
+        "sistem tarik manual",
+        "pengoperasian manual",
+        "operator menarik"
+      ]
+    },
+    {
+      "id": "weighing_audit_machine_scope",
+      "direction": "zh-id",
+      "source": "今日起會抽查上下料秤重作業落實性，請各班要求。",
+      "verified_target": "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift memastikan operator menjalankan prosedur ini dengan benar.",
+      "required_target_any_groups": [
+        [
+          "pemeriksaan acak",
+          "audit acak"
+        ],
+        [
+          "dimasukkan ke mesin",
+          "masuk ke mesin"
+        ],
+        [
+          "dikeluarkan dari mesin",
+          "keluar dari mesin"
+        ],
+        [
+          "setiap shift",
+          "masing-masing shift"
+        ],
+        [
+          "memastikan operator",
+          "mewajibkan operator"
+        ]
+      ],
+      "forbidden_target": [
+        "menegaskan hal ini",
+        "bongkar muat material",
+        "pemeriksaan timbangan"
+      ]
+    },
+    {
+      "id": "pmi_grade_verification",
+      "direction": "zh-id",
+      "source": "每把包裝前都要驗鋼種，沒有做 PMI 不可以包裝。",
+      "verified_target": "Grade baja setiap bundel harus diperiksa dengan PMI sebelum dikemas. Bundel yang belum diperiksa dengan PMI tidak boleh dikemas.",
+      "required_target_any_groups": [
+        [
+          "PMI"
+        ],
+        [
+          "grade baja",
+          "grade material"
+        ],
+        [
+          "setiap bundel",
+          "tiap bundel"
+        ],
+        [
+          "harus",
+          "wajib"
+        ],
+        [
+          "tidak boleh dikemas"
+        ]
+      ],
+      "forbidden_target": [
+        "identitas pribadi",
+        "personal identification",
+        "memberi tanda grade baja",
+        "mencetak grade baja"
+      ]
+    },
+    {
+      "id": "polishing_large_bar_priority_scope",
+      "direction": "zh-id",
+      "source": "月底前拋光機大尺寸棒材會集中大量到料，I5、I15要先從本月份的大尺寸優先生產，不可以吊小尺寸慢慢跑。",
+      "verified_target": "Sebelum akhir bulan, batang berukuran besar untuk mesin polishing akan tiba dalam jumlah besar dalam waktu yang berdekatan. I5 dan I15 harus mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini. Jangan mengangkat dan memasukkan batang berukuran kecil ke mesin lalu menjalankan produksinya secara lambat.",
+      "required_target_any_groups": [
+        [
+          "sebelum akhir bulan"
+        ],
+        [
+          "batang berukuran besar"
+        ],
+        [
+          "dalam jumlah besar"
+        ],
+        [
+          "dalam waktu yang berdekatan"
+        ],
+        [
+          "I5"
+        ],
+        [
+          "I15"
+        ],
+        [
+          "bulan ini"
+        ],
+        [
+          "mendahulukan",
+          "memprioritaskan"
+        ],
+        [
+          "batang berukuran kecil"
+        ],
+        [
+          "mengangkat",
+          "memasukkan"
+        ],
+        [
+          "secara lambat",
+          "berjalan lambat"
+        ]
+      ],
+      "forbidden_target": [
+        "produksi ukuran besar dari bulan ini",
+        "overhead crane",
+        "derek",
+        "RPM rendah",
+        "kecepatan mesin rendah"
+      ]
+    },
+    {
+      "id": "work_order_announcement_terms",
+      "direction": "zh-id",
+      "source": "@All 公司宣導過的規定不要自己省略，現在很多噴漆也不噴，工單也不寫，這些狀況越來越多。\n麻煩一切按照工單資訊執行，各站該做的基本工作：來料尺寸、表面品質、短尺維護、重量確認，這些都是作業流程的一部分。",
+      "verified_target": "@All, jangan mengabaikan peraturan yang telah disosialisasikan oleh perusahaan. Sekarang semakin banyak kasus pengecatan semprot tidak dilakukan dan work order tidak diisi. Mohon lakukan semuanya sesuai informasi pada work order. Pekerjaan dasar yang wajib dilakukan di setiap stasiun meliputi pemeriksaan ukuran material masuk, kualitas permukaan, penanganan material pendek, dan konfirmasi berat. Semua ini merupakan bagian dari prosedur kerja.",
+      "required_target_any_groups": [
+        [
+          "work order"
+        ],
+        [
+          "informasi pada work order"
+        ],
+        [
+          "ukuran material masuk"
+        ],
+        [
+          "kualitas permukaan"
+        ],
+        [
+          "penanganan material pendek"
+        ],
+        [
+          "konfirmasi berat"
+        ],
+        [
+          "prosedur kerja",
+          "alur kerja"
+        ]
+      ],
+      "forbidden_target": [
+        "Tempat Buku bahan",
+        "Buku bahan",
+        "lembar kerja",
+        "book order",
+        "order book",
+        "perawatan ukuran pendek",
+        "informasi pesanan"
+      ]
+    },
+    {
+      "id": "id_machine_fire_not_ui_label",
+      "direction": "id-zh",
+      "source": "Mesin ya kebakar,",
+      "verified_target": "機台著火了",
+      "required_target_any_groups": [
+        [
+          "機台",
+          "機器"
+        ],
+        [
+          "著火",
+          "起火",
+          "燒起來"
+        ]
+      ],
+      "forbidden_target": [
+        "工單製程紀錄「機台」",
+        "工單製程紀錄",
+        "機台欄位"
+      ]
+    },
+    {
+      "id": "id_pre_operation_rear_issue_boundary",
+      "direction": "id-zh",
+      "source": "Barang id ini sebelum di jalankan juga ada sedikit masalah dari belakang",
+      "verified_target": "這個料件 ID 在加工前，後端就已經有一點問題了",
+      "required_target_any_groups": [
+        [
+          "料件 ID"
+        ],
+        [
+          "加工前",
+          "運轉前"
+        ],
+        [
+          "後端",
+          "後部"
+        ],
+        [
+          "有一點問題",
+          "有些問題"
+        ]
+      ],
+      "forbidden_target": [
+        "加工前後端",
+        "加工前後部",
+        "處理前後端"
+      ]
+    },
+    {
+      "id": "special_shape_packaging_station_alias",
+      "direction": "zh-id",
+      "source": "異型那站可以支援裝箱",
+      "verified_target": "Stasiun packing barang bentuk khusus bisa membantu proses pengemasan ke dalam peti kayu.",
+      "required_target_any_groups": [
+        [
+          "Stasiun packing barang bentuk khusus"
+        ],
+        [
+          "membantu",
+          "bisa membantu"
+        ],
+        [
+          "pengemasan ke dalam peti kayu",
+          "memasukkan material ke dalam peti kayu"
+        ]
+      ],
+      "forbidden_target": [
+        "Stasiun barang khusus",
+        "stasiun produk khusus",
+        "Yixing",
+        "kotak kayu"
+      ]
+    },
+    {
+      "id": "warehouse_intake_output_forecast_units",
+      "direction": "zh-id",
+      "source": "本月入庫目標3750，到月底平均一天需147噸。\n\n目前出料狀況如果平均維持每日130～135入庫量，最後能入到3600就不錯了。",
+      "verified_target": "Target pemasukan gudang bulan ini adalah 3.750 ton. Sampai akhir bulan, rata-rata yang dibutuhkan adalah 147 ton per hari. Jika hasil produksi mesin tetap 130–135 ton per hari, total pemasukan gudang bisa mencapai 3.600 ton.",
+      "required_target_any_groups": [
+        [
+          "pemasukan gudang"
+        ],
+        [
+          "3.750 ton",
+          "3750 ton"
+        ],
+        [
+          "147 ton per hari"
+        ],
+        [
+          "hasil produksi mesin"
+        ],
+        [
+          "130–135 ton per hari",
+          "130-135 ton per hari"
+        ],
+        [
+          "3.600 ton",
+          "3600 ton"
+        ]
+      ],
+      "forbidden_target": [
+        "material keluar",
+        "barang keluar",
+        "3750.000",
+        "130–135 per hari",
+        "3600.000"
+      ]
+    },
+    {
+      "id": "operational_priority_machine_inventory_accountability",
+      "direction": "zh-id",
+      "source": "研磨各站該趕的急單優先處理，該開的設備不要隨便停機，庫存注意不要暴增，這樣上面也沒話可說了。",
+      "verified_target": "Setiap stasiun grinding harus memprioritaskan work order mendesak yang perlu dipercepat. Mesin yang seharusnya beroperasi jangan dihentikan sembarangan. Pastikan stok tidak meningkat drastis. Dengan begitu, pihak atasan juga tidak punya alasan untuk mempermasalahkannya.",
+      "required_target_any_groups": [
+        [
+          "stasiun grinding"
+        ],
+        [
+          "work order mendesak"
+        ],
+        [
+          "perlu dipercepat",
+          "harus dipercepat"
+        ],
+        [
+          "seharusnya beroperasi"
+        ],
+        [
+          "jangan dihentikan sembarangan"
+        ],
+        [
+          "stok tidak meningkat drastis"
+        ],
+        [
+          "tidak punya alasan untuk mempermasalahkannya"
+        ]
+      ],
+      "forbidden_target": [
+        "order urgent",
+        "mesin jangan dihentikan.",
+        "perhatikan stok.",
+        "atasan tidak akan banyak bicara"
+      ]
+    },
+    {
+      "id": "washing_support_profile_shapes",
+      "direction": "zh-id",
+      "source": "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
+      "verified_target": "Jika jumlah stok material 422 yang menunggu proses pencucian kurang dari 40 ton, batang profil khusus berbentuk S dan H harus membantu proses pencucian di Bagian Cold Drawing 1.",
+      "required_target_any_groups": [
+        [
+          "422"
+        ],
+        [
+          "menunggu proses pencucian"
+        ],
+        [
+          "40 ton"
+        ],
+        [
+          "batang profil khusus berbentuk S dan H"
+        ],
+        [
+          "membantu proses pencucian"
+        ],
+        [
+          "Bagian Cold Drawing 1"
+        ]
+      ],
+      "forbidden_target": [
+        "untuk pembersihan",
+        "H, S, batang bentuk khusus",
+        "S, H, batang bentuk khusus",
+        "Regu 1",
+        "Subseksi 1"
+      ]
+    },
+    {
+      "id": "organization_hierarchy_discipline_notice",
+      "direction": "zh-id",
+      "source": "一課最近被釘很緊，上週還被處長抓到一堆人在控制室休息吹冷氣。\n\n樓上是一股股長，基本紀律注意一下，他蠻公司派的，什麼都會跟處長講。",
+      "verified_target": "Akhir-akhir ini Seksi 1 diawasi dengan sangat ketat. Minggu lalu, kepala divisi bahkan memergoki banyak orang sedang beristirahat sambil menikmati AC di ruang kontrol.\n\nDi lantai atas ada kepala bagian Cold Drawing 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi.",
+      "required_target_any_groups": [
+        [
+          "Seksi 1"
+        ],
+        [
+          "diawasi dengan sangat ketat",
+          "diawasi dengan ketat"
+        ],
+        [
+          "kepala divisi"
+        ],
+        [
+          "ruang kontrol"
+        ],
+        [
+          "kepala bagian Cold Drawing 1"
+        ],
+        [
+          "disiplin dasar"
+        ],
+        [
+          "cukup berpihak kepada perusahaan"
+        ]
+      ],
+      "forbidden_target": [
+        "Departemen 1",
+        "Yigu",
+        "Kepala Bagian Yigu",
+        "Regu 1",
+        "Subseksi 1",
+        "sangat berpihak kepada perusahaan"
+      ]
+    },
+    {
+      "id": "erp_station_record_transfer_distribution",
+      "direction": "zh-id",
+      "source": "490的資料不要一次全移到801，入帳時間分散一點",
+      "verified_target": "Data dari stasiun 490 jangan dipindahkan sekaligus ke stasiun 801. Atur waktu pencatatannya agar lebih merata sesuai proses kerja.",
+      "required_target_any_groups": [
+        [
+          "data"
+        ],
+        [
+          "stasiun 490"
+        ],
+        [
+          "stasiun 801"
+        ],
+        [
+          "jangan dipindahkan sekaligus"
+        ],
+        [
+          "waktu pencatatan",
+          "waktu input"
+        ],
+        [
+          "lebih merata",
+          "tersebar"
+        ]
+      ],
+      "forbidden_target": [
+        "barang dari stasiun 490",
+        "waktu masuk gudang",
+        "rata-rata sedikit"
+      ]
+    },
+    {
+      "id": "incident_self_report_equipment_damage",
+      "direction": "zh-id",
+      "source": "自首無罪，設備有撞壞還是摔壞一定要讓我知道，等其他單位提報了都是比較嚴重了。",
+      "verified_target": "Jika mengaku dan melaporkannya sendiri, hal itu tidak akan dipermasalahkan. Jika ada peralatan yang rusak karena tertabrak atau terjatuh, segera laporkan kepada saya. Jangan sampai departemen lain yang lebih dulu melaporkannya, karena kalau sudah begitu biasanya masalahnya sudah menjadi lebih serius.",
+      "required_target_any_groups": [
+        [
+          "melaporkannya sendiri"
+        ],
+        [
+          "tidak akan dipermasalahkan"
+        ],
+        [
+          "peralatan"
+        ],
+        [
+          "rusak karena tertabrak",
+          "tertabrak"
+        ],
+        [
+          "terjatuh"
+        ],
+        [
+          "laporkan kepada saya"
+        ],
+        [
+          "departemen lain"
+        ],
+        [
+          "lebih serius"
+        ]
+      ],
+      "forbidden_target": [
+        "tidak bersalah secara hukum",
+        "menyerahkan diri kepada polisi",
+        "departemen lain akan menghukum"
+      ]
+    }
+  ]
+}

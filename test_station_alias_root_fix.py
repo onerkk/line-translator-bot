@@ -98,10 +98,10 @@ class StationAliasRootFixTests(unittest.TestCase):
             '異型包裝站': 'Stasiun packing barang bentuk khusus',
             '前站': 'stasiun sebelumnya',
             '料源不足': 'pasokan material tidak cukup',
-            '木箱': 'kotak kayu',
-            '裝箱': 'masukkan barang ke dalam kotak kayu',
-            '支援裝箱': 'bantu proses memasukkan barang ke dalam kotak kayu',
-            '木箱包': 'packing kotak kayu',
+            '木箱': 'peti kayu',
+            '裝箱': 'memasukkan material ke dalam peti kayu',
+            '支援裝箱': 'membantu proses pengemasan ke dalam peti kayu',
+            '木箱包': 'pengemasan dengan peti kayu',
         }
         for source, target in expected.items():
             with self.subTest(source=source):

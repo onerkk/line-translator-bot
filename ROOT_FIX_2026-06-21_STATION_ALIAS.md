@@ -16,4 +16,6 @@
 
 原文：`前站料源不足有木箱就包沒關係，異型那站可以支援裝箱。這個月木箱包預估有700箱，目前應該還差很多`
 
-建議譯文：`Kalau pasokan material dari stasiun sebelumnya tidak cukup, kalau ada kotak kayu langsung packing saja, tidak apa-apa. Stasiun packing barang bentuk khusus bisa bantu proses memasukkan barang ke dalam kotak kayu. Bulan ini estimasi packing kotak kayu sekitar 700 kotak, sekarang sepertinya masih kurang banyak.`
+建議譯文：`Kalau pasokan material dari stasiun sebelumnya tidak cukup, kalau ada peti kayu langsung lakukan pengemasan, tidak apa-apa. Stasiun packing barang bentuk khusus bisa membantu proses pengemasan ke dalam peti kayu. Bulan ini estimasi pengemasan dengan peti kayu sekitar 700 peti, dan saat ini jumlahnya tampaknya masih jauh dari target.`
+
+> 2026-07-25 統一規則：工廠大型木製運輸箱固定用 `peti kayu`；`kotak kayu` 僅指一般小木盒，禁止用於本廠木箱作業。

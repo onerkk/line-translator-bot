@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-24.5-polishing-source-frame-fallback",
+  "build_id": "2026-07-25.1-unified-factory-translation",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -1774,6 +1774,480 @@
         {
           "source": "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
           "target": "Jika jumlah stok material 422 yang menunggu proses pencucian kurang dari 40 ton, batang profil khusus berbentuk S dan H harus membantu proses pencucian di Bagian Cold Drawing 1."
+        }
+      ]
+    },
+    {
+      "id": "customer_account_close_arrival_packaging_priority",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "客戶會計結帳、分批到料與包裝優先順序",
+      "match": {
+        "strong_phrases": [
+          "抓帳",
+          "週一抓帳",
+          "结账前优先包装",
+          "結帳前優先包裝"
+        ],
+        "all_groups": [
+          [
+            "抓帳",
+            "抓账",
+            "會計結帳",
+            "会计结账",
+            "關帳",
+            "关账"
+          ],
+          [
+            "到料",
+            "來料",
+            "来料",
+            "到貨",
+            "到货"
+          ],
+          [
+            "包裝",
+            "包装",
+            "裝箱",
+            "装箱"
+          ],
+          [
+            "優先",
+            "优先",
+            "先安排",
+            "先包",
+            "先排"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "大成",
+          "週一",
+          "周一",
+          "星期一",
+          "陸續",
+          "陆续",
+          "分批",
+          "噸",
+          "吨",
+          "關帳",
+          "关账"
+        ],
+        "regex_any": [
+          "(?:抓帳|抓账|結帳|结账|關帳|关账).{0,40}(?:到料|來料|来料|到貨|到货).{0,50}(?:優先|优先).{0,15}(?:包裝|包装|裝箱|装箱)"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "「抓帳」在此是會計結帳／關帳，印尼文用 tutup buku；不是 cek data、periksa data 或 rekap data。",
+        "客戶名稱是不可翻譯的識別資料。來源寫「大成」就保留「大成」，不得翻成普通形容詞 Besar，也不得自行羅馬拼音。",
+        "「還有160噸會陸續到料」是未來仍有160噸材料分批抵達，必須同時保留剩餘量、未來性與分批到貨。",
+        "「有看到大成」是現場一看到／收到大成材料時的條件；後續動作是把該材料的包裝排程列為優先。",
+        "「優先安排包裝」是實際排定包裝作業優先順序，不可弱化成只注意或只提醒。"
+      ],
+      "preferred_target_phrases": [
+        "akan melakukan tutup buku",
+        "masih ada 160 ton material yang akan tiba secara bertahap",
+        "jika melihat material 大成",
+        "mohon prioritaskan pengaturan proses pengemasannya"
+      ],
+      "forbidden_target_phrases": [
+        "cek data",
+        "periksa data",
+        "rekap data",
+        "Besar pada hari Senin",
+        "material Besar",
+        "data akan tiba"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "抓帳",
+            "抓账",
+            "會計結帳",
+            "会计结账",
+            "關帳",
+            "关账"
+          ],
+          "target_any": [
+            "tutup buku",
+            "penutupan buku",
+            "penutupan pembukuan"
+          ],
+          "issue": "missing_accounting_close_semantics"
+        },
+        {
+          "source_any": [
+            "160噸",
+            "160吨"
+          ],
+          "target_any": [
+            "160 ton"
+          ],
+          "issue": "missing_160_ton_quantity"
+        },
+        {
+          "source_any": [
+            "陸續",
+            "陆续",
+            "分批"
+          ],
+          "target_any": [
+            "secara bertahap",
+            "bertahap",
+            "dalam beberapa tahap",
+            "berangsur-angsur"
+          ],
+          "issue": "missing_staged_arrival_semantics"
+        },
+        {
+          "source_any": [
+            "到料",
+            "來料",
+            "来料",
+            "到貨",
+            "到货"
+          ],
+          "target_any": [
+            "material akan tiba",
+            "material akan datang",
+            "bahan akan tiba",
+            "bahan akan datang",
+            "kedatangan material",
+            "material yang akan tiba",
+            "material yang akan datang",
+            "bahan yang akan tiba",
+            "bahan yang akan datang"
+          ],
+          "issue": "missing_future_material_arrival"
+        },
+        {
+          "source_any": [
+            "優先",
+            "优先"
+          ],
+          "target_any": [
+            "prioritaskan",
+            "memprioritaskan",
+            "diprioritaskan",
+            "prioritas"
+          ],
+          "issue": "missing_packaging_priority"
+        },
+        {
+          "source_any": [
+            "包裝",
+            "包装",
+            "裝箱",
+            "装箱"
+          ],
+          "target_any": [
+            "pengemasan",
+            "dikemas",
+            "mengemas",
+            "packing"
+          ],
+          "issue": "missing_packaging_action"
+        },
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_name_not_preserved"
+        }
+      ],
+      "examples": [
+        {
+          "source": "大成週一抓帳，還有160噸會陸續到料，有看到大成麻煩優先安排包裝。",
+          "target": "大成 akan melakukan tutup buku pada hari Senin. Masih ada 160 ton material yang akan tiba secara bertahap. Jika melihat material 大成, mohon prioritaskan pengaturan proses pengemasannya.",
+          "bad_target": "Besar pada hari Senin akan cek data. Masih ada 160 ton material yang akan tiba bertahap. Jika melihat material 大成, mohon prioritaskan pengaturan pengemasannya.",
+          "reason": "大成是客戶名不可譯成 Besar；抓帳是會計結帳 tutup buku；陸續到料需保留未來分批抵達。"
+        },
+        {
+          "source": "客戶週五要關帳，後面還有80噸分批到貨，看到該客戶的料先排包裝。",
+          "target": "Pelanggan akan melakukan tutup buku pada hari Jumat. Setelah itu masih ada 80 ton material yang akan tiba dalam beberapa tahap. Jika material pelanggan tersebut sudah terlihat atau diterima, prioritaskan jadwal pengemasannya.",
+          "reason": "同一會計結帳＋分批到料＋包裝優先流程的改寫。"
+        }
+      ]
+    },
+    {
+      "id": "industrial_wooden_crate_packaging",
+      "enabled": true,
+      "priority": 225,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "工業木製運輸箱與裝箱作業",
+      "match": {
+        "strong_phrases": [
+          "木箱",
+          "木箱交貨",
+          "暫不裝箱",
+          "木箱包"
+        ],
+        "all_groups": [
+          [
+            "木箱",
+            "木製箱",
+            "木制箱",
+            "木箱包"
+          ],
+          [
+            "裝箱",
+            "装箱",
+            "包裝",
+            "包装",
+            "交貨",
+            "交货",
+            "出貨",
+            "出货"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "本月份",
+          "本月",
+          "非本月",
+          "來不及",
+          "来不及",
+          "暫不",
+          "暂不",
+          "DACAPO",
+          "ABE",
+          "支援"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本工廠「木箱」是裝載不鏽鋼材料的工業木製運輸箱／板條箱，統一用 peti kayu；kotak kayu 容易被理解為一般小木盒，禁止使用。",
+        "「裝箱」是把產品或材料放入 peti kayu，可依語法寫成 memasukkan material ke dalam peti kayu、dimasukkan ke dalam peti kayu 或 pengemasan ke dalam peti kayu。",
+        "若來源寫「暫不裝箱」，必須保留暫時性與禁止／延後裝入木箱的動作；不能只泛泛寫 jangan dikemas 而遺失木箱範圍。",
+        "月份、客戶例外與交貨時程必須保持原來的修飾範圍，不得把「非本月」錯套到木箱本身或其他客戶。"
+      ],
+      "preferred_target_phrases": [
+        "peti kayu",
+        "dimasukkan ke dalam peti kayu",
+        "sementara jangan dimasukkan ke dalam peti kayu"
+      ],
+      "forbidden_target_phrases": [
+        "kotak kayu",
+        "packing kotak kayu",
+        "jangan dikemas saja"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "木箱"
+          ],
+          "target_any": [
+            "peti kayu"
+          ],
+          "issue": "wooden_crate_not_peti_kayu"
+        },
+        {
+          "source_any": [
+            "裝箱",
+            "装箱"
+          ],
+          "target_any": [
+            "ke dalam peti kayu",
+            "pengemasan dengan peti kayu",
+            "pengemasan ke dalam peti kayu"
+          ],
+          "issue": "missing_crating_scope"
+        },
+        {
+          "source_any": [
+            "暫不",
+            "暂不"
+          ],
+          "target_any": [
+            "sementara",
+            "untuk sementara",
+            "terlebih dahulu"
+          ],
+          "issue": "missing_temporary_hold"
+        },
+        {
+          "source_any": [
+            "來不及",
+            "来不及"
+          ],
+          "target_any": [
+            "tidak sempat",
+            "tidak akan sempat",
+            "terlambat",
+            "tidak dapat tepat waktu"
+          ],
+          "issue": "missing_deadline_shortfall"
+        }
+      ],
+      "examples": [
+        {
+          "source": "本月份木箱交貨來不及，除了DACAPO、ABE以外，其餘非本月的木箱暫不裝箱。",
+          "target": "Pengiriman peti kayu untuk bulan ini tidak akan sempat diselesaikan tepat waktu. Selain DACAPO dan ABE, material lain yang bukan untuk pengiriman bulan ini sementara jangan dimasukkan ke dalam peti kayu terlebih dahulu.",
+          "bad_target": "Pengiriman kotak kayu bulan ini tidak sempat. Selain DACAPO dan ABE, kotak kayu yang bukan untuk bulan ini untuk sementara jangan dikemas.",
+          "reason": "木箱是 peti kayu；非本月修飾待出貨材料，不是木箱；暫不裝箱必須明確是不放進木箱。"
+        },
+        {
+          "source": "異型包裝站今天支援裝箱，先處理2700大的木箱。",
+          "target": "Hari ini Stasiun packing barang bentuk khusus membantu proses pengemasan ke dalam peti kayu. Dahulukan peti kayu besar berukuran 2700 mm.",
+          "reason": "站名、支援作業及工業木箱用語同時保留。"
+        }
+      ]
+    },
+    {
+      "id": "automatic_electronic_to_natural_passive_pull",
+      "enabled": true,
+      "priority": 220,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "移除自動電子控制後改為自然／被動牽引",
+      "match": {
+        "strong_phrases": [
+          "拔除電子系統",
+          "改自然拉動",
+          "自動運轉沒比較好",
+          "自然拉動"
+        ],
+        "all_groups": [
+          [
+            "自動",
+            "自动"
+          ],
+          [
+            "電子系統",
+            "电子系统",
+            "電子控制",
+            "电子控制"
+          ],
+          [
+            "拔除",
+            "拆除",
+            "移除",
+            "取消",
+            "拆掉",
+            "移掉"
+          ],
+          [
+            "自然拉動",
+            "自然拉动",
+            "被動拉動",
+            "被动拉动",
+            "自然牽引",
+            "自然牵引"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "以前",
+          "原本",
+          "運轉",
+          "运转",
+          "沒比較好",
+          "没有比较好",
+          "改成"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "來源描述設備原先有自動／電子控制，因效果沒有比較好而移除電子系統，之後改用設備本身的自然或被動機械牽引。",
+        "「自然拉動」不等於「手動拉動」。來源沒有寫手動、人工或由操作員拉時，禁止自行補成 manual、ditarik secara manual 或 operator menarik。",
+        "必須保留因果順序：原本自動 → 效果未改善 → 移除電子系統 → 改成自然／被動牽引。"
+      ],
+      "preferred_target_phrases": [
+        "sebelumnya sistem ini berjalan otomatis",
+        "sistem elektroniknya dilepas",
+        "menggunakan tarikan alami atau pasif"
+      ],
+      "forbidden_target_phrases": [
+        "ditarik secara manual",
+        "sistem tarik manual",
+        "pengoperasian manual",
+        "operator menarik"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "自動",
+            "自动"
+          ],
+          "target_any": [
+            "otomatis"
+          ],
+          "issue": "missing_original_automatic_mode"
+        },
+        {
+          "source_any": [
+            "沒比較好",
+            "没有比较好"
+          ],
+          "target_any": [
+            "tidak lebih baik",
+            "tidak memberikan hasil yang lebih baik",
+            "tidak ada perbaikan"
+          ],
+          "issue": "missing_no_improvement_reason"
+        },
+        {
+          "source_any": [
+            "拔除",
+            "拆除",
+            "移除"
+          ],
+          "target_any": [
+            "dilepas",
+            "dicabut",
+            "dibongkar",
+            "dihilangkan"
+          ],
+          "issue": "missing_electronic_system_removal"
+        },
+        {
+          "source_any": [
+            "電子系統",
+            "电子系统"
+          ],
+          "target_any": [
+            "sistem elektronik",
+            "kontrol elektronik"
+          ],
+          "issue": "missing_electronic_system"
+        },
+        {
+          "source_any": [
+            "自然拉動",
+            "自然拉动",
+            "被動拉動",
+            "被动拉动"
+          ],
+          "target_any": [
+            "tarikan alami",
+            "tarikan pasif",
+            "ditarik secara alami",
+            "mekanisme tarik pasif"
+          ],
+          "issue": "missing_natural_passive_pull"
+        }
+      ],
+      "examples": [
+        {
+          "source": "以前這是自動的，但自動運轉沒比較好，所以拔除電子系統，改自然拉動。",
+          "target": "Sebelumnya sistem ini berjalan secara otomatis. Namun, pengoperasian otomatis tidak memberikan hasil yang lebih baik, sehingga sistem elektroniknya dilepas dan mekanismenya diubah menggunakan tarikan alami atau pasif.",
+          "bad_target": "Dulu ini otomatis, tetapi hasilnya tidak lebih baik. Jadi sistem elektroniknya dilepas dan sekarang ditarik secara manual.",
+          "reason": "「自然拉動」不是手動；舊譯文憑空增加 manual，改變設備運作方式。"
+        },
+        {
+          "source": "原本靠電子控制自動拉料，效果沒有改善，後來拆掉控制系統改成被動自然牽引。",
+          "target": "Awalnya material ditarik otomatis dengan kontrol elektronik. Karena hasilnya tidak membaik, sistem kontrol kemudian dibongkar dan diganti dengan mekanisme tarikan pasif secara alami.",
+          "reason": "同一設備改造語意的改寫，避免只記住原句。"
         }
       ]
     }

@@ -8,7 +8,7 @@
 ## 運作方式
 
 - 自動偵測語言（中文 / 印尼文）
-- 翻譯引擎：使用設定中的 OpenAI 翻譯模型，並依現有備援策略處理失敗
+- 翻譯引擎：使用設定中的 AI 翻譯供應商；中印互譯預設禁止未受工廠規則約束的通用 NMT 靜默降級
 - 文字與圖片 OCR 共用同一套工廠術語、情境知識、翻譯記憶與品質閘門
 - 工廠詞庫使用字首樹（Trie）最長詞索引，只注入本句實際命中的詞條
 - 支援工廠單位簡稱與 ERP 股別，例如「一課」=`Seksi 1`、「一股」=`Bagian Cold Drawing 1`、「一股股長」=`kepala bagian Cold Drawing 1`；`Regu` 僅用於班／工作小組
@@ -154,7 +154,7 @@ Dewi：Terima kasih, bos
 
 ### 翻譯品質不好？
 - 確認 OPENAI_API_KEY 有設定且有餘額
-- 沒有 OpenAI Key 的話會退回用 Google Translate，品質會差一些
+- 至少要設定一個可用的 AI 翻譯供應商。中印工廠翻譯預設不會退回一般 Google Translate；若供應商失敗，系統會拒絕學習或回傳未驗證的通用譯文
 
 ### 有些訊息沒翻譯？
 - 太短的訊息（少於 2 字）會自動跳過
@@ -185,11 +185,48 @@ Dewi：Terima kasih, bos
 ```
 line-translator-bot/
 ├── app.py                         # 主程式與標準翻譯管線
+├── factory_translation_policy.py  # 中印互譯統一工廠路由、複核與失敗封鎖政策
+├── factory_translation_guard.py   # 統一驗收、精確案例、不可變資料與禁用錯譯檢查
 ├── factory_terminology.py         # 大量工廠術語 Trie、別名與單位解析
-├── glossary_data.json             # 標準詞庫
+├── glossary_data.json             # 標準詞庫、標準譯法與禁用譯法
+├── glossary_policy.py             # 詞庫標準化與舊資料遷移規則
 ├── glossary_enforcement.py        # 雙向術語合規與反向安全索引
-├── factory_knowledge.json         # 工廠上下文知識與禁用譯法
+├── factory_knowledge.json         # 工廠上下文知識、流程與已確認修正案例
+├── factory_translation_regression.json # 16 組正式歷史工廠翻譯回歸案例
+├── validate_factory_translation_assets.py # 無需 Flask/LINE/API 的離線發布驗證器
 ├── requirements.txt               # Python 套件
 ├── Dockerfile                     # Docker 部署用
 └── README.md                      # 這份說明
 ```
+
+## 統一工廠翻譯路由（2026-07-25）
+
+本專案的繁體中文 ↔ 印尼文翻譯預設全部進入同一套工廠語義管線，不再先把訊息當成一般生活用語。文字訊息與圖片 OCR 會依序使用：
+
+1. `factory_translation_policy.py`：統一決定工廠路由、是否必須來源複核、複核失敗是否封鎖，以及是否允許通用 NMT 備援。
+2. `glossary_data.json`／`glossary_policy.py`：提供唯一標準詞、禁用譯法與舊資料遷移規則。
+3. `factory_knowledge.json`：保存需要整句語境判斷的流程、角色、設備與已確認修正案例。
+4. `translation_casebook.py`：只允許來源完全相同且通過工廠語義驗證的人工修正直接命中。
+5. `translation_quality_gate.py`：新生成的工廠譯文預設由來源重新建構並獨立複核；複核結果仍須通過本地語義檢查。
+6. `factory_translation_guard.py`：在模型輸出、最終交付、快取、TM、主動學習、表情裝飾與 OCR 路徑上使用同一套驗收邊界。
+7. `factory_translation_regression.json`：保存 16 組正式歷史案例及禁用錯譯探針，防止改版回歸。
+
+生產預設：
+
+```bash
+FACTORY_TRANSLATION_MODE=always
+FACTORY_TRANSLATION_REVIEW_MODE=always
+FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=1
+FACTORY_TRANSLATION_FAIL_CLOSED=1
+FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
+```
+
+`FACTORY_TRANSLATION_MODE=auto` 僅適合臨時測試；`off` 會停用統一工廠路由。`FACTORY_TRANSLATION_REVIEW_MODE=always` 代表每一筆新生成的中印工廠譯文都必須從原文重新複核；精確命中的已驗證案例不重複花費 API。當必要複核失敗、譯文違反工廠驗收規則或只剩通用 NMT 時，正式預設會拒絕交付、寫入快取與學習資料，避免錯譯污染。
+
+發布前執行：
+
+```bash
+python validate_factory_translation_assets.py --json
+```
+
+完整變更與驗證方式請參閱 `ROOT_FIX_2026-07-25_UNIFIED_FACTORY_TRANSLATION.md`。
