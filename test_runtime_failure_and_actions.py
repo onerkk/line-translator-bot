@@ -367,6 +367,23 @@ def test_equipment_status_translation_is_deterministic(source, expected):
     assert app.factory_semantic_translate_equipment_status_id_zh(source) == expected
 
 
+
+def test_structured_measurement_report_bypasses_entire_ai_pipeline(monkeypatch):
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("AI/TM/reviewer pipeline must not run for a source-verifiable report")
+
+    monkeypatch.setattr(app, "_translate_core", fail_if_called)
+    app.translation_cache.clear()
+
+    actual = app.translate(
+        "i9\nDepan 22,17\nTengah 22,15\nBelakang 22,16\nKebulatan ok.",
+        "id",
+        "zh",
+    )
+
+    assert actual == "I9\n前端：22,17\n中間：22,15\n後端：22,16\n圓度：正常"
+
+
 def test_equipment_status_bypasses_entire_ai_pipeline(monkeypatch):
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("AI/TM/NMT pipeline must not run for deterministic equipment status")

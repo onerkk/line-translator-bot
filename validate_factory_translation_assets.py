@@ -34,6 +34,7 @@ REQUIRED_PYTHON = (
     "glossary_enforcement.py",
     "translation_quality_gate.py",
     "factory_semantic_audit.py",
+    "factory_structured_report.py",
 )
 
 

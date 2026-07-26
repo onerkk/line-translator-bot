@@ -209,7 +209,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.41.1-factory-knowledge-deploy-contract-2026-07-25"
+VERSION = "v3.42.0-structured-measurement-report-root-fix-2026-07-26"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -265,6 +265,7 @@ import translation_casebook as translation_casebook_module  # unified verified e
 import factory_terminology as factory_terminology_module  # indexed plant glossary shared by text/OCR
 import factory_translation_policy as factory_translation_policy_module  # one factory-only route for all zh↔id text/OCR
 import factory_translation_guard as factory_translation_guard_module  # deterministic fail-closed plant acceptance boundary
+import factory_structured_report as factory_structured_report_module  # source-verifiable measurement/status reports
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
@@ -11867,6 +11868,40 @@ def translate(text, src, tgt):
             except Exception:
                 pass
         if tgt == "zh":
+            # Compact inspection/measurement reports are source-verifiable: every
+            # output field comes directly from a recognized row label, numeric
+            # value or explicit OK/NG status. Translate these locally before TM,
+            # providers and the mandatory second-review path so a transient AI
+            # outage can never turn an intact quality report into a generic
+            # "safe translation unavailable" notice. Unrecognized/partial rows
+            # fail closed and continue through the normal translation pipeline.
+            _structured_report = factory_structured_report_module.translate_id_zh_measurement_report(
+                canonical_text
+            )
+            if _structured_report:
+                logger.info(
+                    "[StructuredReport] deterministic measurement translation hit: %r -> %r",
+                    canonical_text[:160], _structured_report[:240],
+                )
+                _structured_report = _final_delivery_guard(
+                    canonical_text, _structured_report, src, tgt
+                )
+                if _structured_report:
+                    try:
+                        cache_set(canonical_text, src, tgt, _structured_report, force=True)
+                    except Exception:
+                        pass
+                _update_last_translate_debug(
+                    pipeline_status=(
+                        "deterministic_structured_measurement_report"
+                        if _structured_report else
+                        "factory_guard_rejected_structured_measurement_report"
+                    ),
+                    final_candidate=(_structured_report[:2000] if _structured_report else ""),
+                    openai_status="not_needed",
+                )
+                return _structured_report
+
             _equipment_status = factory_semantic_translate_equipment_status_id_zh(
                 canonical_text
             )
