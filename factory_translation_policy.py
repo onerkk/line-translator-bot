@@ -7,8 +7,8 @@ text and OCR routes:
 * Chinese↔Indonesian requests use the factory semantic route by default.
 * stale lexical/vector TM and generic NMT cannot bypass the current contract.
 * verified exact corrections remain eligible after deterministic validation.
-* newly generated factory translations receive a source-grounded second review
-  by default; an unavailable or rejected required review fails closed.
+* newly generated factory translations receive source-grounded review only when
+  risk warrants it by default; review outages never veto a locally valid result.
 * generic Google/NMT fallback is disabled unless explicitly enabled.
 
 Operational overrides are environment variables so an incident can be handled
@@ -20,8 +20,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-FACTORY_TRANSLATION_POLICY_API_VERSION = 3
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-25.3-fail-closed-source-reviewed-factory-route"
+FACTORY_TRANSLATION_POLICY_API_VERSION = 4
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-27.1-availability-resilient-adaptive-review"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -75,19 +75,20 @@ def fail_closed(src: Any, tgt: Any) -> bool:
 def review_mode() -> str:
     """Return source-review policy: ``always``, ``adaptive`` or ``off``.
 
-    ``always`` is the accuracy-first production default.  Exact verified
-    corrections do not reach the generative gate, so this applies only to newly
-    generated translations.  ``adaptive`` keeps the prior behavior where only
-    structurally high-risk or knowledge-matched messages request a second call.
+    ``adaptive`` is the production default: ordinary short messages use one
+    provider call plus deterministic validation, while structurally high-risk or
+    knowledge-matched messages request an independent source review.  ``always``
+    remains available as an operational override, but a review outage must not
+    discard a first candidate that already passed every local integrity gate.
     """
-    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "always") or "always").strip().lower()
+    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
     aliases = {
         "on": "always", "required": "always", "strict": "always", "all": "always",
         "smart": "adaptive", "auto": "adaptive",
         "none": "off", "disabled": "off", "0": "off",
     }
     value = aliases.get(value, value)
-    return value if value in {"always", "adaptive", "off"} else "always"
+    return value if value in {"always", "adaptive", "off"} else "adaptive"
 
 
 def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool = False) -> bool:
@@ -103,15 +104,15 @@ def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool 
 
 
 def require_review_success(src: Any, tgt: Any) -> bool:
-    """Whether a required review must succeed before a generated result ships.
+    """Whether review success is required for authoritative/cacheable status.
 
-    Enabled by default.  A source-grounded deterministic rebuild is also treated
-    as successful adjudication by the quality gate.  Operators may temporarily
-    set ``FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=0`` during a provider
-    incident, but such results remain non-cacheable.
+    Disabled by default.  A locally valid first translation may still be
+    delivered when the independent reviewer is unavailable or returns an invalid
+    mutation; it is marked degraded and is not cached or learned.  Actual source
+    integrity failures remain fail-closed.
     """
     return supports_direction(src, tgt) and _boolean_env(
-        "FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", True
+        "FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", False
     )
 
 

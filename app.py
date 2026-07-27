@@ -271,8 +271,8 @@ import factory_structured_report as factory_structured_report_module  # source-v
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 19
-_EXPECTED_QG_BUILD_ID = "2026-07-24.6-structured-source-claim-audit-fallback"
+_EXPECTED_QG_API_VERSION = 20
+_EXPECTED_QG_BUILD_ID = "2026-07-27.1-review-outage-cannot-veto-valid-primary"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -317,8 +317,8 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
         "Replace app.py and translation_casebook.py together in the project root."
     )
 
-_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 3
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-25.3-fail-closed-source-reviewed-factory-route"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 4
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-27.1-availability-resilient-adaptive-review"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -12720,11 +12720,11 @@ def _translate_core(text, src, tgt):
     _quality_cacheable = not _meta_leak_detected
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
-    # Newly generated factory translations receive one source-grounded review
-    # before LINE delivery by default. Exact verified corrections have already
-    # returned above. Operators may switch to adaptive/off mode through policy
-    # environment variables, but production defaults fail closed when required
-    # adjudication is unavailable or rejected.
+    # Newly generated high-risk factory translations may receive one
+    # source-grounded review. Exact verified corrections have already returned
+    # above. Review is an additional quality signal, not a single point of
+    # failure: a locally valid first candidate remains deliverable as degraded
+    # and non-cacheable when the reviewer is unavailable or returns bad text.
     if result and isinstance(result, str):
         _pre_gate_result = result
         try:

@@ -29,8 +29,8 @@ import factory_semantic_audit as fsa_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 19
-QUALITY_GATE_BUILD_ID = "2026-07-24.6-structured-source-claim-audit-fallback"
+QUALITY_GATE_API_VERSION = 20
+QUALITY_GATE_BUILD_ID = "2026-07-27.1-review-outage-cannot-veto-valid-primary"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1874,9 +1874,11 @@ def gate_and_revise(
     messages matched to verified correction cases can request one additional
     source-grounded review.  The reviewer receives the original source, not just
     the first candidate, and a different configured provider is preferred.  When
-    ``require_review_success`` is true, an unavailable or rejected review cannot
-    fall back to an unchecked generated candidate; only a validated deterministic
-    source-frame rebuild remains eligible.
+    ``require_review_success`` is true, review success controls authoritative
+    acceptance and cacheability, not basic availability.  A first candidate that
+    already passed all deterministic source, glossary, immutable-data and semantic
+    checks remains deliverable as degraded/non-cacheable when the reviewer is
+    unavailable or returns an invalid mutation.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
@@ -1964,7 +1966,7 @@ def gate_and_revise(
                 }
             # A reviewer that fails deterministic integrity checks must never
             # replace an already valid first translation.
-            if report.ok and not require_review_success:
+            if report.ok:
                 return {
                     "ok": True,
                     "text": candidate,
@@ -2020,37 +2022,43 @@ def gate_and_revise(
                     "path": "deterministic_source_frame_rebuild",
                 }
 
-    if report.ok and review_requested and require_review_success and not review_succeeded:
-        reason = review_failure_reason or "required_source_review_not_completed"
-        return {
-            "ok": False,
-            "text": None,
-            "issues": list(dict.fromkeys(list(report.issues) + [reason])),
-            "hard_issues": list(dict.fromkeys(list(report.hard_issues) + [reason])),
-            "warnings": report.warnings,
-            "reviewed": bool(should_review),
-            "review_requested": True,
-            "review_succeeded": False,
-            "degraded": True,
-            "cacheable": False,
-            "path": "required_source_review_failed",
-        }
-
     if report.ok:
+        # The reviewer is an additional adjudicator, not a single point of
+        # failure.  A network outage, missing second provider, timeout, or bad
+        # reviewer mutation cannot erase a first translation that independently
+        # passed every deterministic source-grounded check.  Keep it visible,
+        # but never cache or learn from the degraded path.
+        review_issue = review_failure_reason if review_requested and not review_succeeded else ""
+        recorded_issues = list(dict.fromkeys(
+            list(report.issues) + ([review_issue] if review_issue else [])
+        ))
+        recorded_warnings = list(dict.fromkeys(
+            list(report.warnings) + ([review_issue] if review_issue else [])
+        ))
+        if not review_requested:
+            path = "single_api_local_validation"
+        elif review_failure_reason == "independent_review_rejected":
+            path = "independent_review_rejected_original_kept"
+        else:
+            path = "review_unavailable_original_kept"
         return {
             "ok": True,
             "text": candidate,
-            "issues": report.issues,
+            "issues": recorded_issues,
             "hard_issues": [],
-            "warnings": report.warnings,
+            "warnings": recorded_warnings,
             "reviewed": bool(should_review),
             "review_requested": review_requested,
             "review_succeeded": False,
             "degraded": bool(review_requested),
             "cacheable": not bool(review_requested),
-            "path": "single_api_local_validation" if not review_requested else "review_unavailable_original_kept",
+            "path": path,
         }
 
+    # Strict review policy still blocks a first candidate that failed local
+    # source-grounded validation.  The availability fix applies only to a clean
+    # primary result; it does not turn malformed or semantically unsafe text into
+    # a deliverable fallback.
     if review_requested and require_review_success:
         reason = review_failure_reason or "required_source_review_not_completed"
         return {
