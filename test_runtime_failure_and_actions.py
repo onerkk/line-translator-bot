@@ -32,7 +32,7 @@ def test_final_guard_blocks_nonempty_factory_result_that_fails_integrity():
     assert app._is_translation_failure_sentinel("翻譯服務暫時未取得可用結果")
 
 
-def test_inner_pipeline_fails_closed_for_unverified_factory_provider_text(monkeypatch):
+def test_inner_pipeline_defers_unverified_factory_provider_text_to_authoritative_gate(monkeypatch):
     provider_text = "粗磨（ROUGH GRINDING）每次至少 0.04 mm。"
     cached = []
 
@@ -59,8 +59,35 @@ def test_inner_pipeline_fails_closed_for_unverified_factory_provider_text(monkey
         else:
             app._tl.quality_gate_critical = previous
 
-    assert actual is None
+    assert actual == provider_text
     assert cached == []
+
+
+def test_pure_equipment_code_is_intentional_skip_not_translation_failure(monkeypatch):
+    provider_calls = []
+    monkeypatch.setattr(
+        app,
+        "translate_openai",
+        lambda *_args, **_kwargs: provider_calls.append(True) or "不應呼叫",
+    )
+
+    actual = app.translate("BF 2", "id", "zh")
+
+    assert actual is None
+    assert provider_calls == []
+    assert app._translation_was_intentionally_skipped() is True
+    assert app._get_translation_outcome() == {
+        "status": "skipped",
+        "reason": "pure_equipment_code",
+    }
+
+
+def test_single_target_multi_translation_preserves_intentional_skip_outcome():
+    actual = app.translate_multi("BF 2", "id", ["zh"])
+
+    assert actual == []
+    assert app._translation_was_intentionally_skipped() is True
+    assert app._get_translation_outcome().get("reason") == "pure_equipment_code"
 
 
 def test_post_restore_guard_accepts_valid_line_mentions():
@@ -527,3 +554,143 @@ def test_mention_recovery_does_not_relax_nonmention_immutable_integrity():
     assert repaired == candidate
     assert not report.ok
     assert any(issue.startswith("missing_pipeline_token:") for issue in report.hard_issues)
+
+
+def test_rejected_deterministic_inner_shortcut_falls_through_to_provider(monkeypatch):
+    """A broken local shortcut must not be misreported as a provider outage."""
+    logged_models = []
+    monkeypatch.setattr(app.factory_translation_guard_module, "exact_verified_target", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "factory_semantic_translate_id_zh", lambda *_a, **_k: "不BOLEH進入。")
+    monkeypatch.setattr(app, "translate_openai", lambda *_a, **_k: "機台目前禁止進入。")
+    monkeypatch.setattr(app, "finalize_factory_translation", lambda _s, value, _sl, _tl: value)
+    monkeypatch.setattr(
+        app,
+        "is_translation_acceptable",
+        lambda _s, value, _sl, _tl: value == "機台目前禁止進入。",
+    )
+    monkeypatch.setattr(app, "cache_set", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        app,
+        "_log_translation",
+        lambda _src, _tgt, _sl, _tl, model, *_args, **_kwargs: logged_models.append(model),
+    )
+
+    previous = getattr(app._tl, "quality_gate_critical", None)
+    app._tl.quality_gate_critical = False
+    try:
+        actual = app._translate_inner("Mesin tidak boleh dimasuki sekarang.", "id", "zh")
+    finally:
+        if previous is None:
+            try:
+                delattr(app._tl, "quality_gate_critical")
+            except AttributeError:
+                pass
+        else:
+            app._tl.quality_gate_critical = previous
+
+    assert actual == "機台目前禁止進入。"
+    assert "factory-semantic" not in logged_models
+
+
+def test_rejected_public_deterministic_shortcut_falls_through_to_core(monkeypatch):
+    """Every deterministic fast path is optional; rejection continues to LLM."""
+    source = "I9\nDepan 22,17\nTengah 22,15\nBelakang 22,16\nKebulatan ok."
+    monkeypatch.setattr(
+        app.factory_structured_report_module,
+        "translate_id_zh_measurement_report",
+        lambda _text: "被最終邊界拒絕的本地結果",
+    )
+    monkeypatch.setattr(app, "factory_semantic_translate_equipment_status_id_zh", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "_translate_core", lambda *_a, **_k: "供應商翻譯結果")
+    monkeypatch.setattr(
+        app,
+        "_final_delivery_guard",
+        lambda _source, candidate, _src, _tgt: (
+            None if candidate == "被最終邊界拒絕的本地結果" else candidate
+        ),
+    )
+    monkeypatch.setattr(app, "cache_set", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "get_auto_tone_emoji_enabled", lambda *_a, **_k: False)
+
+    assert app.translate(source, "id", "zh") == "供應商翻譯結果"
+
+
+def test_tag_installation_notice_is_delivered_instead_of_generic_failure(monkeypatch):
+    """End-to-end regression for the uploaded LINE screenshot."""
+    source = """@budi santoso 山多 @Irwan 布納萬 @伊努滿 Sumertha @迪弟 kampret @Hasim
+
+📢 PEMBERITAHUAN PENTING – STANDAR PEMASANGAN TAG
+
+Mulai saat ini, seluruh operator WAJIB memasang TAG sesuai dengan ketentuan dari pihak manajemen.
+
+Ketentuan pemasangan TAG:
+
+1. Mesin Grinding dan Polishing
+    * TAG harus dipasang pada barang pertama yang keluar dari mesin.
+    * TAG juga harus dipasang pada barang terakhir dari proses produksi.
+    * Ketentuan ini berlaku untuk seluruh mesin Grinding dan Polishing tanpa pengecualian.
+2. Cleaning Station
+    * Work Order dan TAG wajib dijepit pada tali crane menggunakan penjepit (clip) yang telah disediakan.
+    * Dilarang meletakkan Work Order atau TAG di sembarang tempat.
+    * Apabila penjepit hilang atau rusak, segera minta penggantinya kepada Ketua Regu agar standar kerja tetap terjaga.
+
+Mohon seluruh rekan kerja menjalankan ketentuan ini dengan disiplin. Hal-hal yang terlihat sederhana seperti pemasangan TAG sangat berpengaruh terhadap ketertelusuran produk, kelancaran proses produksi, dan hasil audit. Jangan menunggu ditegur atau terjadi masalah terlebih dahulu. Mari bersama-sama menjaga standar kerja yang telah ditetapkan oleh manajemen."""
+    candidate = """@budi santoso 山多 @Irwan 布納萬 @伊努滿 Sumertha @迪弟 kampret @Hasim
+
+📢 重要通知－TAG 安裝標準
+
+從現在起，所有操作員都必須依照管理階層的規定安裝 TAG。
+
+TAG 安裝規定：
+
+1. Grinding 與 Polishing 機台
+    * TAG 必須裝在機台產出的第一件產品上。
+    * TAG 也必須裝在生產流程的最後一件產品上。
+    * 此規定適用於所有 Grinding 與 Polishing 機台，沒有例外。
+2. Cleaning Station
+    * Work Order 與 TAG 必須使用已提供的夾具（clip）夾在天車繩索上。
+    * 禁止將 Work Order 或 TAG 隨意放置。
+    * 夾具遺失或損壞時，請立即向班長申請更換，以維持作業標準。
+
+請所有同仁確實遵守這項規定。安裝 TAG 看似簡單，卻會直接影響產品追溯、製程順暢與稽核結果。不要等到被提醒或發生問題才處理。請大家共同維護管理階層所制定的作業標準。"""
+
+    monkeypatch.setattr(app.tm_module, "tm_lookup", lambda *_a, **_k: None)
+    monkeypatch.setattr(app.vec_tm_module, "vector_lookup", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "cache_get", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "cache_set", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "translate_openai", lambda *_a, **_k: candidate)
+    monkeypatch.setattr(tqg, "review_translation", lambda _s, reviewed, *_a, **_k: reviewed)
+    monkeypatch.setattr(app, "_log_translation", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "_event_log_write", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "_persist_last_translate_debug", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "get_auto_tone_emoji_enabled", lambda *_a, **_k: False)
+
+    previous_group = getattr(app._tl, "group_id", None)
+    previous_disable = getattr(app._tl, "disable_tone_emoji", None)
+    app._tl.group_id = "tag-installation-regression"
+    app._tl.disable_tone_emoji = True
+    try:
+        actual = app.translate(source, "id", "zh")
+    finally:
+        if previous_group is None:
+            try:
+                delattr(app._tl, "group_id")
+            except AttributeError:
+                pass
+        else:
+            app._tl.group_id = previous_group
+        if previous_disable is None:
+            try:
+                delattr(app._tl, "disable_tone_emoji")
+            except AttributeError:
+                pass
+        else:
+            app._tl.disable_tone_emoji = previous_disable
+
+    assert actual
+    assert "TAG 安裝標準" in actual
+    assert "夾具（clip）" in actual
+    for mention in ("@budi santoso", "@Irwan", "@伊努滿", "@迪弟 kampret", "@Hasim"):
+        assert mention in actual
+    assert "暫時無法完成安全翻譯" not in actual
+    assert "belum dapat diterjemahkan dengan aman" not in actual

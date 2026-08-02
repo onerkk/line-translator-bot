@@ -29,8 +29,8 @@ import factory_semantic_audit as fsa_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 20
-QUALITY_GATE_BUILD_ID = "2026-07-27.1-review-outage-cannot-veto-valid-primary"
+QUALITY_GATE_API_VERSION = 21
+QUALITY_GATE_BUILD_ID = "2026-08-02.1-authoritative-gate-document-labels"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -137,6 +137,17 @@ _ZH_QUANTITATIVE_PREFIX_RE = re.compile(
 # specific grinding sentence or fixed term list.
 _UPPERCASE_PHRASE_RE = re.compile(
     r'(?<![A-Za-z])([A-Z][A-Z0-9/+._-]{1,31}(?:\s+[A-Z][A-Z0-9/+._-]{1,31}){1,4})(?![A-Za-z])'
+)
+
+# A mixed-case factory document often defines a short all-uppercase label once
+# and then reuses it throughout the notice (for example a form field, inspection
+# label, or physical tag name).  Repeated labels are source data, not untranslated
+# prose.  The inference is deliberately document-structural: it is disabled for
+# all-uppercase documents and excludes common Indonesian/English words.
+_DOCUMENT_LABEL_TOKEN_RE = re.compile(r'(?<![A-Za-z])([A-Z][A-Z0-9._/+:%×x-]{1,15})(?![A-Za-z])')
+_PARENTHETICAL_LATIN_ALIAS_RE = re.compile(
+    r'[（(]\s*([A-Za-z][A-Za-z0-9._/+:%×x-]{1,31}'
+    r'(?:\s+[A-Za-z][A-Za-z0-9._/+:%×x-]{1,31}){0,2})\s*[）)]'
 )
 
 
@@ -337,6 +348,45 @@ def _replace_matches(text: str, regex: re.Pattern, mapping: Dict[str, str]) -> s
     return regex.sub(repl, text)
 
 
+def _document_defined_uppercase_labels(text: str) -> List[str]:
+    """Infer repeated all-uppercase labels from a mixed-case source document.
+
+    This closes a general false-rejection class without whitelisting one sentence:
+    a label must be repeated, consistently uppercase, non-linguistic, and embedded
+    in a document that otherwise contains lowercase prose.  Ordinary emphatic
+    words such as ``WAJIB`` or ``BOLEH`` therefore remain translatable language.
+    """
+    value = str(text or "")
+    if not value or not re.search(r'[a-z]', value):
+        return []
+    common = _COMMON_ID_WORDS | _COMMON_EN_WORDS
+    candidates: Dict[str, int] = {}
+    for match in _DOCUMENT_LABEL_TOKEN_RE.finditer(value):
+        token = match.group(1)
+        folded = token.casefold()
+        if folded in common or token.upper() in _KNOWN_TECH_ACRONYMS:
+            continue
+        candidates[token] = candidates.get(token, 0) + 1
+    labels: List[str] = []
+    for token, count in candidates.items():
+        if count < 2:
+            continue
+        # Reject a token that also appears in ordinary lower/title case elsewhere.
+        variants = re.findall(r'(?<![A-Za-z])' + re.escape(token) + r'(?![A-Za-z])', value, re.I)
+        if any(item != token for item in variants):
+            continue
+        labels.append(token)
+    return sorted(labels, key=lambda item: (-len(item), item))
+
+
+def _protect_document_defined_labels(text: str, mapping: Dict[str, str]) -> str:
+    protected = str(text or "")
+    for label in _document_defined_uppercase_labels(protected):
+        pattern = re.compile(r'(?<![A-Za-z0-9_])' + re.escape(label) + r'(?![A-Za-z0-9_])')
+        protected = _replace_matches(protected, pattern, mapping)
+    return protected
+
+
 def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
     def repl(match: re.Match) -> str:
         value = match.group("value")
@@ -363,6 +413,7 @@ def protect_immutable_spans(text: str) -> ProtectedText:
         return ProtectedText(text or "", text or "", {})
     mapping: Dict[str, str] = {}
     protected = _replace_matches(text, _MENTION_RE, mapping)
+    protected = _protect_document_defined_labels(protected, mapping)
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
     protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
@@ -633,6 +684,25 @@ def _inline_bilingual_allowed_latin(
     return allowed
 
 
+def _source_parenthetical_alias_latin(source: str, src_lang: str) -> set[str]:
+    """Allow explicit source-defined Latin aliases such as ``penjepit (clip)``.
+
+    Parentheses are a strong, language-independent signal that the author supplied
+    a label/alias.  Only short aliases that contain no common source-language word
+    are admitted, so ordinary parenthesized clauses cannot bypass leakage checks.
+    """
+    common = _source_common_words(src_lang)
+    allowed: set[str] = set()
+    for match in _PARENTHETICAL_LATIN_ALIAS_RE.finditer(source or ""):
+        words = [token for token, _start, _end in _latin_tokens(match.group(1))]
+        if not words or len(words) > 3:
+            continue
+        if any(word.casefold() in common for word in words):
+            continue
+        allowed.update(word.upper() for word in words)
+    return allowed
+
+
 def _source_common_words(src_lang: str) -> set[str]:
     low = (src_lang or "").lower()
     if low.startswith("id"):
@@ -725,6 +795,8 @@ def _target_zh_language_purity_issues(
     allowed = _glossary_allowed_latin(glossary_pairs)
     allowed.update(_immutable_allowed_latin(immutable_literals))
     allowed.update(_inline_bilingual_allowed_latin(source, candidate, src_lang))
+    allowed.update(_source_parenthetical_alias_latin(source, src_lang))
+    allowed.update(label.upper() for label in _document_defined_uppercase_labels(source))
     issues: List[str] = []
     common = _source_common_words(src_lang)
 

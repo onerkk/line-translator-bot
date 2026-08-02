@@ -108,7 +108,7 @@ class TranslationQualityGateTests(unittest.TestCase):
         self.assertFalse(result["cacheable"])
         self.assertEqual(client.calls, [])
 
-    def test_required_source_review_blocks_clean_candidate_when_provider_is_unavailable(self):
+    def test_required_source_review_outage_cannot_veto_clean_candidate(self):
         result = qg.gate_and_revise(
             "請確認材料已經包裝完成。",
             "Mohon pastikan material sudah selesai dikemas.",
@@ -120,11 +120,13 @@ class TranslationQualityGateTests(unittest.TestCase):
             force_review=True,
             require_review_success=True,
         )
-        self.assertFalse(result["ok"], result)
-        self.assertIsNone(result["text"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["text"], "Mohon pastikan material sudah selesai dikemas.")
         self.assertTrue(result["review_requested"])
         self.assertFalse(result["review_succeeded"])
-        self.assertEqual(result["path"], "required_source_review_failed")
+        self.assertTrue(result["degraded"])
+        self.assertFalse(result["cacheable"])
+        self.assertEqual(result["path"], "review_unavailable_original_kept")
 
     def test_required_source_review_accepts_valid_reviewed_candidate(self):
         client = FakeClient(["Mohon pastikan material sudah selesai dikemas."])
@@ -143,6 +145,70 @@ class TranslationQualityGateTests(unittest.TestCase):
         self.assertTrue(result["review_requested"])
         self.assertTrue(result["review_succeeded"])
         self.assertEqual(result["path"], "independent_source_review_passed")
+
+    def test_repeated_document_label_and_parenthetical_alias_are_not_false_leakage(self):
+        source = """@budi santoso 山多 @Irwan 布納萬 @伊努滿 Sumertha @迪弟 kampret @Hasim
+
+📢 PEMBERITAHUAN PENTING – STANDAR PEMASANGAN TAG
+
+Mulai saat ini, seluruh operator WAJIB memasang TAG sesuai dengan ketentuan dari pihak manajemen.
+
+Ketentuan pemasangan TAG:
+
+1. Mesin Grinding dan Polishing
+    * TAG harus dipasang pada barang pertama yang keluar dari mesin.
+    * TAG juga harus dipasang pada barang terakhir dari proses produksi.
+    * Ketentuan ini berlaku untuk seluruh mesin Grinding dan Polishing tanpa pengecualian.
+2. Cleaning Station
+    * Work Order dan TAG wajib dijepit pada tali crane menggunakan penjepit (clip) yang telah disediakan.
+    * Dilarang meletakkan Work Order atau TAG di sembarang tempat.
+    * Apabila penjepit hilang atau rusak, segera minta penggantinya kepada Ketua Regu agar standar kerja tetap terjaga.
+
+Mohon seluruh rekan kerja menjalankan ketentuan ini dengan disiplin. Hal-hal yang terlihat sederhana seperti pemasangan TAG sangat berpengaruh terhadap ketertelusuran produk, kelancaran proses produksi, dan hasil audit. Jangan menunggu ditegur atau terjadi masalah terlebih dahulu. Mari bersama-sama menjaga standar kerja yang telah ditetapkan oleh manajemen."""
+        candidate = """@budi santoso 山多 @Irwan 布納萬 @伊努滿 Sumertha @迪弟 kampret @Hasim
+
+📢 重要通知－TAG 安裝標準
+
+從現在起，所有操作員都必須依照管理階層的規定安裝 TAG。
+
+TAG 安裝規定：
+
+1. Grinding 與 Polishing 機台
+    * TAG 必須裝在機台產出的第一件產品上。
+    * TAG 也必須裝在生產流程的最後一件產品上。
+    * 此規定適用於所有 Grinding 與 Polishing 機台，沒有例外。
+2. Cleaning Station
+    * Work Order 與 TAG 必須使用已提供的夾具（clip）夾在天車繩索上。
+    * 禁止將 Work Order 或 TAG 隨意放置。
+    * 夾具遺失或損壞時，請立即向班長申請更換，以維持作業標準。
+
+請所有同仁確實遵守這項規定。安裝 TAG 看似簡單，卻會直接影響產品追溯、製程順暢與稽核結果。不要等到被提醒或發生問題才處理。請大家共同維護管理階層所制定的作業標準。"""
+        envelope = qg.inspect_immutable_spans(source)
+
+        self.assertIn("TAG", envelope.mapping.values())
+        report = qg.validate_translation(
+            source,
+            candidate,
+            "id",
+            "zh",
+            immutable_literals=envelope.mapping.values(),
+            require_paragraph_fidelity=True,
+        )
+
+        self.assertTrue(report.ok, report.issues)
+        self.assertNotIn("untranslated_source_word:TAG", report.issues)
+        self.assertNotIn("untranslated_source_word:clip", report.issues)
+
+    def test_document_label_inference_does_not_relax_common_source_words(self):
+        report = qg.validate_translation(
+            "TIDAK BOLEH masuk. BOLEH hanya dengan izin.",
+            "不BOLEH進入，只有獲准才BOLEH。",
+            "id",
+            "zh",
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("untranslated_source_word:BOLEH", report.hard_issues)
 
     def test_critical_document_does_not_spend_second_api_call_after_local_rejection(self):
         client = FakeClient(["不BOLEH使用工具。", "不得使用工具。"])

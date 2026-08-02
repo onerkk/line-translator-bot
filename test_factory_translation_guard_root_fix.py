@@ -150,13 +150,18 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FACTORY_TRANSLATION_FAIL_CLOSED": "0"}):
             self.assertFalse(policy.fail_closed("zh", "id"))
 
-    def test_factory_policy_requires_source_review_and_success_by_default(self):
+    def test_factory_policy_uses_adaptive_nonvetoing_review_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FACTORY_TRANSLATION_REVIEW_MODE", None)
             os.environ.pop("FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", None)
-            self.assertEqual(policy.review_mode(), "always")
-            self.assertTrue(policy.require_source_review("普通現場訊息", "zh", "id"))
-            self.assertTrue(policy.require_review_success("zh", "id"))
+            self.assertEqual(policy.review_mode(), "adaptive")
+            self.assertFalse(policy.require_source_review(
+                "普通現場訊息", "zh", "id", adaptive_risk=False
+            ))
+            self.assertTrue(policy.require_source_review(
+                "高風險現場訊息", "zh", "id", adaptive_risk=True
+            ))
+            self.assertFalse(policy.require_review_success("zh", "id"))
         with mock.patch.dict(os.environ, {
             "FACTORY_TRANSLATION_REVIEW_MODE": "adaptive",
             "FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS": "0",
@@ -216,8 +221,8 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
             "[FinalDeliveryGuard] advisory validation issues=%s; delivering provider result",
             app_text,
         )
-        self.assertNotIn(
-            "[QualityGate] inner validation warning; delivering non-cacheable provider result",
+        self.assertIn(
+            "inner_candidate_deferred_to_authoritative_gate",
             app_text,
         )
 

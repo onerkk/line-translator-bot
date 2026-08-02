@@ -209,7 +209,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.42.0-structured-measurement-report-root-fix-2026-07-26"
+VERSION = "v3.43.0-authoritative-quality-gate-root-fix-2026-08-02"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -271,8 +271,8 @@ import factory_structured_report as factory_structured_report_module  # source-v
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 20
-_EXPECTED_QG_BUILD_ID = "2026-07-27.1-review-outage-cannot-veto-valid-primary"
+_EXPECTED_QG_API_VERSION = 21
+_EXPECTED_QG_BUILD_ID = "2026-08-02.1-authoritative-gate-document-labels"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -2071,6 +2071,35 @@ send_metadata_to_openai = True       # Tag each request with group_id for filter
 import threading as _threading
 _tl = _threading.local()          # thread-local for passing tone / audit metadata into translate_openai
 _load_translation_log_from_disk()
+
+
+def _set_translation_outcome(status, reason="", **details):
+    """Record the semantic outcome of the current translation attempt.
+
+    ``None`` historically represented two incompatible states: a genuine
+    translation failure and an intentional no-translation decision (currently
+    used for pure equipment-code messages).  LINE's visible-failure boundary
+    cannot safely infer which state occurred from the return value alone.  Keep
+    the public return contract unchanged while carrying an explicit outcome in
+    request-local state.
+    """
+    payload = {
+        "status": str(status or "unknown"),
+        "reason": str(reason or ""),
+    }
+    if details:
+        payload.update(details)
+    _tl.translation_outcome = payload
+    return payload
+
+
+def _get_translation_outcome():
+    outcome = getattr(_tl, "translation_outcome", None)
+    return dict(outcome) if isinstance(outcome, dict) else {}
+
+
+def _translation_was_intentionally_skipped():
+    return _get_translation_outcome().get("status") == "skipped"
 
 def get_group_tone(group_id):
     """Return (preset, custom_text) for a group."""
@@ -11840,6 +11869,7 @@ def translate(text, src, tgt):
     人名與客戶名保持可見，不再轉成脆弱 placeholder；只有 LINE mention
     使用可恢復代碼。品質檢查負責記錄與阻止髒快取，不再把可用譯文丟棄。
     """
+    _set_translation_outcome("started")
     _replace_last_translate_debug({
         "ts": int(time.time()),
         "src_text": text,
@@ -11895,12 +11925,16 @@ def translate(text, src, tgt):
                     pipeline_status=(
                         "deterministic_structured_measurement_report"
                         if _structured_report else
-                        "factory_guard_rejected_structured_measurement_report"
+                        "deterministic_structured_report_rejected_fallback_to_provider"
                     ),
                     final_candidate=(_structured_report[:2000] if _structured_report else ""),
-                    openai_status="not_needed",
+                    openai_status=("not_needed" if _structured_report else "pending_provider_fallback"),
                 )
-                return _structured_report
+                if _structured_report:
+                    return _structured_report
+                logger.error(
+                    "[DeterministicShortcut] structured report rejected; continuing to provider pipeline"
+                )
 
             _equipment_status = factory_semantic_translate_equipment_status_id_zh(
                 canonical_text
@@ -11910,19 +11944,28 @@ def translate(text, src, tgt):
                     "[EquipmentStatus] deterministic translation hit: %r -> %r",
                     canonical_text[:120], _equipment_status[:120],
                 )
-                try:
-                    cache_set(canonical_text, src, tgt, _equipment_status, force=True)
-                except Exception:
-                    pass
                 _equipment_status = _final_delivery_guard(
                     canonical_text, _equipment_status, src, tgt
                 )
+                if _equipment_status:
+                    try:
+                        cache_set(canonical_text, src, tgt, _equipment_status, force=True)
+                    except Exception:
+                        pass
                 _update_last_translate_debug(
-                    pipeline_status=("deterministic_equipment_status" if _equipment_status else "factory_guard_rejected_equipment_status"),
+                    pipeline_status=(
+                        "deterministic_equipment_status"
+                        if _equipment_status else
+                        "deterministic_equipment_status_rejected_fallback_to_provider"
+                    ),
                     final_candidate=(_equipment_status[:2000] if _equipment_status else ""),
-                    openai_status="not_needed",
+                    openai_status=("not_needed" if _equipment_status else "pending_provider_fallback"),
                 )
-                return _equipment_status
+                if _equipment_status:
+                    return _equipment_status
+                logger.error(
+                    "[DeterministicShortcut] equipment status rejected; continuing to provider pipeline"
+                )
     # v3.15: ERP「原因」欄是強語義表格/短標籤，必須在任何站別 alias、
     # cache、TM、NMT、LLM、final guard 之前先決定。這是文字與圖片共用的
     # 邊界層，不是圖片補丁。
@@ -11936,19 +11979,28 @@ def translate(text, src, tgt):
                     _expected_rows, _factory_reason_ocr_row_count(canonical_text)
                 )
                 return _factory_reason_alignment_failure_message(tgt)
-            try:
-                cache_set(canonical_text, src, tgt, reason_semantic, force=True)
-            except Exception:
-                pass
             reason_semantic = _final_delivery_guard(
                 canonical_text, reason_semantic, src, tgt
             )
+            if reason_semantic:
+                try:
+                    cache_set(canonical_text, src, tgt, reason_semantic, force=True)
+                except Exception:
+                    pass
             _update_last_translate_debug(
-                pipeline_status=("deterministic_factory_reason" if reason_semantic else "factory_guard_rejected_factory_reason"),
+                pipeline_status=(
+                    "deterministic_factory_reason"
+                    if reason_semantic else
+                    "deterministic_factory_reason_rejected_fallback_to_provider"
+                ),
                 final_candidate=(reason_semantic[:2000] if reason_semantic else ""),
-                openai_status="not_needed",
+                openai_status=("not_needed" if reason_semantic else "pending_provider_fallback"),
             )
-            return reason_semantic
+            if reason_semantic:
+                return reason_semantic
+            logger.error(
+                "[DeterministicShortcut] factory reason rejected; continuing to provider pipeline"
+            )
         canonical_text, _station_alias_matches = resolve_factory_station_aliases(text)
     # Mentions are immutable identity data, not translatable language.  Protect
     # them at the public translation boundary so every caller (group, DM,
@@ -12015,6 +12067,7 @@ def translate(text, src, tgt):
             result = restore_mentions(result, _mention_map)
             result = _post_restore_mentions_guard(result, _mention_map)
             if not result:
+                _set_translation_outcome("failed", "mention_restoration_guard")
                 return None
         result = _normalize_factory_operation_question(
             canonical_text, result, src, tgt
@@ -12094,9 +12147,19 @@ def translate(text, src, tgt):
             result = _final_delivery_guard(canonical_text, result, src, tgt)
     if _is_translation_failure_sentinel(result):
         result = None
+    if result:
+        _set_translation_outcome("delivered")
+    elif not _translation_was_intentionally_skipped():
+        _set_translation_outcome("failed", "empty_or_rejected_translation")
     _update_last_translate_debug(
         final_candidate=(str(result)[:2000] if result else ""),
-        pipeline_status=("translation_deliverable" if result else "translation_empty_silent"),
+        pipeline_status=(
+            "translation_deliverable"
+            if result else
+            "translation_intentionally_skipped"
+            if _translation_was_intentionally_skipped() else
+            "translation_empty_or_rejected"
+        ),
     )
     return result
 
@@ -12266,25 +12329,38 @@ def _translate_core(text, src, tgt):
                 except Exception:
                     pass
                 return _factory_reason_alignment_failure_message(tgt)
-            logger.info("Factory reason semantic translation hit: %r -> %r", text[:80], _reason_semantic[:80])
-            try:
-                _tl.factory_audit = {
-                    "src": text,
-                    "type": "factory_reason_semantic_direct_zh_id",
-                    "reason": "deterministic_erp_reason_action_semantics",
-                    "raw_translation": "",
-                    "corrected_translation": _reason_semantic,
-                    "domain": ["factory", "erp_reason"],
-                    "auto_corrected": False,
-                }
-                _log_translation(text, _reason_semantic, src, tgt, "factory-reason-semantic", 0, 1.0, False, 1.0, _gid_for_tm)
-                cache_set(text, src, tgt, _reason_semantic)
-            except Exception:
-                pass
             if is_translation_acceptable(text, _reason_semantic, src, tgt):
+                logger.info(
+                    "Factory reason semantic translation accepted: %r -> %r",
+                    text[:80],
+                    _reason_semantic[:80],
+                )
+                try:
+                    _tl.factory_audit = {
+                        "src": text,
+                        "type": "factory_reason_semantic_direct_zh_id",
+                        "reason": "deterministic_erp_reason_action_semantics",
+                        "raw_translation": "",
+                        "corrected_translation": _reason_semantic,
+                        "domain": ["factory", "erp_reason"],
+                        "auto_corrected": False,
+                    }
+                    _log_translation(
+                        text, _reason_semantic, src, tgt,
+                        "factory-reason-semantic", 0, 1.0, False, 1.0,
+                        _gid_for_tm,
+                    )
+                    cache_set(text, src, tgt, _reason_semantic)
+                except Exception:
+                    pass
                 return _reason_semantic
-            logger.error("[FactoryGuard] deterministic ERP reason translation rejected")
-            return None
+            logger.error(
+                "[DeterministicShortcut] ERP reason translation rejected; continuing to provider pipeline"
+            )
+            _update_last_translate_debug(
+                pipeline_status="deterministic_erp_reason_rejected_fallback_to_provider",
+                final_candidate=str(_reason_semantic)[:2000],
+            )
 
     # v3.32.6: Quality-critical messages stay in the same one-call pipeline.
     # They bypass stale TM/NMT and are routed to the quality model, but they are
@@ -12299,7 +12375,9 @@ def _translate_core(text, src, tgt):
     # 例:'BF 2', 'BF 3 i 16', 'I5/i15', 'E6', 'PM160', 'CYA', 'K8'
     # 工人傳這種訊息通常只是讓同事知道某設備代碼,沒有翻譯需求。
     # 送 LLM 會讓 Claude 自發加元注釋(『這是設備代碼,不翻譯』之類),污染群組。
-    # 直接 return None → 群組路徑會靜默(line 9689),完全不送 LINE。
+    # ``None`` alone is ambiguous at the LINE boundary, so explicitly classify
+    # this as an intentional skip before returning.  Genuine empty/rejected
+    # translations remain visible failures; equipment-code chatter stays silent.
     if _is_pure_equipment_code(text):
         logger.info("[Pipeline] pure equipment code bypass: %r", text[:60])
         try:
@@ -12309,6 +12387,13 @@ def _translate_core(text, src, tgt):
             })
         except Exception:
             pass
+        _set_translation_outcome("skipped", "pure_equipment_code")
+        _update_last_translate_debug(
+            pipeline_status="translation_intentionally_skipped",
+            skip_reason="pure_equipment_code",
+            final_candidate="",
+            openai_status="not_needed",
+        )
         return None
     
     # ─── 0. Phase O: Language Auto-Detection ───
@@ -12371,7 +12456,13 @@ def _translate_core(text, src, tgt):
             _guard_sem_reason, _guard_integrity_issues[:8],
         )
         if _factory_route_is_strict(text, src, tgt):
-            return None
+            logger.error(
+                "[DeterministicShortcut] invalid approved exact correction ignored; continuing to provider pipeline"
+            )
+            _update_last_translate_debug(
+                pipeline_status="invalid_guard_exact_fallback_to_provider",
+                final_candidate=str(_guard_candidate)[:2000],
+            )
 
     # Verified exact corrections are the only historical translations allowed to
     # bypass the unified factory route. They are source-identical, then checked
@@ -13108,8 +13199,9 @@ def _translate_single_paragraph(text, src, tgt):
         _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
         if is_translation_acceptable(text, _guard_candidate, src, tgt):
             return _guard_candidate
-        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-            return None
+        logger.error(
+            "[DeterministicShortcut] invalid single-paragraph exact correction ignored; continuing to provider"
+        )
 
     # 1. Legacy custom examples are not verified against the current factory
     # contract. They remain available only outside the unified factory route.
@@ -13128,16 +13220,29 @@ def _translate_single_paragraph(text, src, tgt):
     result = translate_openai(text, src, tgt)
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
-        if is_translation_acceptable(text, result, src, tgt):
-            cache_set(text, src, tgt, result)
-            return result
-        fallback = _factory_exact_fallback(text, src, tgt)
-        if fallback:
-            return fallback
-        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-            logger.error("[FactoryGuard] single-paragraph candidate rejected")
-            return None
-    return result
+        # This function is a provider stage, not a delivery boundary.  Returning
+        # None here used to convert any local heuristic warning into a fake
+        # provider outage before the whole-document authoritative gate could
+        # review, repair, or classify the candidate.  Defer acceptance and cache
+        # admission to _translate_core/_final_delivery_guard.
+        try:
+            if not is_translation_acceptable(text, result, src, tgt):
+                logger.warning(
+                    "[QualityGate] single-paragraph candidate deferred to authoritative gate"
+                )
+                _update_last_translate_debug(
+                    pipeline_status="single_paragraph_candidate_deferred",
+                    final_candidate=str(result)[:2000],
+                )
+            else:
+                cache_set(text, src, tgt, result)
+        except Exception as exc:
+            logger.warning(
+                "[QualityGate] single-paragraph diagnostic validation failed; deferred: %s",
+                exc,
+            )
+        return result
+    return None
 
 
 def _snapshot_translation_thread_context():
@@ -13205,9 +13310,13 @@ def _translate_inner(text, src, tgt):
         _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
         if is_translation_acceptable(text, _guard_candidate, src, tgt):
             return _guard_candidate
-        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-            logger.error("[FactoryGuard] exact inner candidate rejected")
-            return None
+        logger.error(
+            "[DeterministicShortcut] invalid inner exact correction ignored; continuing to provider"
+        )
+        _update_last_translate_debug(
+            pipeline_status="invalid_inner_exact_fallback_to_provider",
+            final_candidate=str(_guard_candidate)[:2000],
+        )
 
     # ★ v3.7 段落結構保留:訊息含分段時走分段翻譯路徑
     # 這個路徑不影響短訊息(沒分段就直接走原本流程)
@@ -13249,44 +13358,66 @@ def _translate_inner(text, src, tgt):
     if (not _quality_critical) and src == "id" and tgt == "zh":
         semantic = factory_semantic_translate_id_zh(text)
         if semantic:
-            logger.info("Factory semantic translation hit: %r -> %r", text[:80], semantic[:80])
-            _tl.factory_audit = {
-                "src": text,
-                "type": "factory_semantic_direct",
-                "reason": "deterministic_factory_slot_translation",
-                "raw_translation": "",
-                "corrected_translation": semantic,
-                "domain": detect_factory_domain(text, src, tgt).get("domains", []),
-                "auto_corrected": False,
-            }
-            _log_translation(text, semantic, src, tgt, "factory-semantic", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
             if is_translation_acceptable(text, semantic, src, tgt):
+                logger.info(
+                    "Factory semantic translation accepted: %r -> %r",
+                    text[:80],
+                    semantic[:80],
+                )
+                _tl.factory_audit = {
+                    "src": text,
+                    "type": "factory_semantic_direct",
+                    "reason": "deterministic_factory_slot_translation",
+                    "raw_translation": "",
+                    "corrected_translation": semantic,
+                    "domain": detect_factory_domain(text, src, tgt).get("domains", []),
+                    "auto_corrected": False,
+                }
+                _log_translation(
+                    text, semantic, src, tgt, "factory-semantic", 0, 1.0,
+                    False, 1.0, getattr(_tl, 'group_id', '')
+                )
                 cache_set(text, src, tgt, semantic)
                 return semantic
-            if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-                logger.error("[FactoryGuard] deterministic ID->ZH semantic output rejected")
-                return None
+            logger.error(
+                "[DeterministicShortcut] ID->ZH semantic output rejected; continuing to provider"
+            )
+            _update_last_translate_debug(
+                pipeline_status="deterministic_id_zh_rejected_fallback_to_provider",
+                final_candidate=str(semantic)[:2000],
+            )
 
     if (not _quality_critical) and src == "zh" and tgt == "id":
         semantic = factory_semantic_translate_zh_id(text)
         if semantic:
-            logger.info("Factory ZH->ID semantic translation hit: %r -> %r", text[:80], semantic[:80])
-            _tl.factory_audit = {
-                "src": text,
-                "type": "factory_semantic_direct_zh_id",
-                "reason": "deterministic_factory_zh_id_translation",
-                "raw_translation": "",
-                "corrected_translation": semantic,
-                "domain": detect_factory_domain(text, src, tgt).get("domains", []),
-                "auto_corrected": False,
-            }
-            _log_translation(text, semantic, src, tgt, "factory-semantic-zh-id", 0, 1.0, False, 1.0, getattr(_tl, 'group_id', ''))
             if is_translation_acceptable(text, semantic, src, tgt):
+                logger.info(
+                    "Factory ZH->ID semantic translation accepted: %r -> %r",
+                    text[:80],
+                    semantic[:80],
+                )
+                _tl.factory_audit = {
+                    "src": text,
+                    "type": "factory_semantic_direct_zh_id",
+                    "reason": "deterministic_factory_zh_id_translation",
+                    "raw_translation": "",
+                    "corrected_translation": semantic,
+                    "domain": detect_factory_domain(text, src, tgt).get("domains", []),
+                    "auto_corrected": False,
+                }
+                _log_translation(
+                    text, semantic, src, tgt, "factory-semantic-zh-id", 0,
+                    1.0, False, 1.0, getattr(_tl, 'group_id', '')
+                )
                 cache_set(text, src, tgt, semantic)
                 return semantic
-            if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-                logger.error("[FactoryGuard] deterministic ZH->ID semantic output rejected")
-                return None
+            logger.error(
+                "[DeterministicShortcut] ZH->ID semantic output rejected; continuing to provider"
+            )
+            _update_last_translate_debug(
+                pipeline_status="deterministic_zh_id_rejected_fallback_to_provider",
+                final_candidate=str(semantic)[:2000],
+            )
 
     # Legacy cache entries do not carry policy/glossary build IDs. In unified
     # factory mode they cannot be trusted as an early-return source.
@@ -13354,23 +13485,35 @@ def _translate_inner(text, src, tgt):
 
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
-        if is_translation_acceptable(text, result, src, tgt):
-            cache_set(text, src, tgt, result)
-            return result
-
-        fallback = _factory_exact_fallback(text, src, tgt)
-        if fallback:
-            return fallback
-        if _force_factory and factory_translation_policy_module.fail_closed(src, tgt):
-            logger.error("[FactoryGuard] inner provider candidate rejected; fail closed")
-            _update_last_translate_debug(
-                pipeline_status="inner_factory_guard_rejected",
-                final_candidate="",
+        # _translate_inner is only the provider stage.  It must never decide that
+        # a non-empty provider response is a service failure.  The former local
+        # fail-close happened before gate_and_revise(), so recoverable terminology
+        # or language-purity diagnostics (for example repeated technical labels)
+        # bypassed review and surfaced as the generic LINE failure notice.
+        #
+        # Keep diagnostics and cache discipline here, but always pass the candidate
+        # to the one authoritative whole-document gate.  Semantic/factory defects
+        # can still be repaired by review or rejected at the final boundary.
+        try:
+            if is_translation_acceptable(text, result, src, tgt):
+                cache_set(text, src, tgt, result)
+            else:
+                logger.warning(
+                    "[QualityGate] inner provider candidate deferred to authoritative gate"
+                )
+                _update_last_translate_debug(
+                    pipeline_status="inner_candidate_deferred_to_authoritative_gate",
+                    final_candidate=str(result)[:2000],
+                )
+        except Exception as exc:
+            logger.warning(
+                "[QualityGate] inner diagnostic validation failed; candidate deferred: %s",
+                exc,
             )
-            return None
-        logger.warning(
-            "[QualityGate] non-factory inner validation warning; delivering non-cacheable result"
-        )
+            _update_last_translate_debug(
+                pipeline_status="inner_candidate_validation_exception_deferred",
+                final_candidate=str(result)[:2000],
+            )
         return result
 
     # No second translation API for quality recovery.
@@ -17066,6 +17209,25 @@ def handle_message(event):
         return
 
     if reply is None:
+        if _translation_was_intentionally_skipped():
+            _skip_outcome = _get_translation_outcome()
+            logger.info(
+                "[group %s] translation intentionally skipped lang=%s reason=%s text=%r",
+                group_id,
+                lang,
+                _skip_outcome.get("reason") or "unspecified",
+                (text_to_translate or "")[:80],
+            )
+            try:
+                _event_log_write("translation_intentionally_skipped", {
+                    "group_id": group_id or "",
+                    "lang": lang,
+                    "reason": _skip_outcome.get("reason") or "unspecified",
+                    "text_preview": (text_to_translate or "")[:100],
+                })
+            except Exception:
+                pass
+            return
         # Strict factory validation is allowed to block an unsafe translation,
         # but it must never create a silent no-response—especially for LINE
         # quoted replies, where silence looks like the feature is unsupported.
@@ -32652,8 +32814,10 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     供應商容災只由 ai_provider 管理。這一層不再以 force_model
     重跑整條翻譯管線，避免重複成本與 LINE 回覆逾時。
     """
+    _set_translation_outcome("started", "multi_target_translation")
     real_targets = [t for t in targets if t != src]
     if not real_targets:
+        _set_translation_outcome("skipped", "no_distinct_target_language")
         return []
 
     # 複製當前 thread-local 上下文給 worker(pipeline 依賴這些)
@@ -32684,6 +32848,9 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 # Keep the failure observable and let the handler send one clear
                 # bilingual failure notice.
                 res = None
+                _set_translation_outcome(
+                    "failed", "translate_multi_exception", target=tgt_lang
+                )
             if _is_translation_failure_sentinel(res):
                 logger.warning("[LegacyFailurePurge] translate_multi dropped legacy failure payload")
                 res = None
@@ -32691,7 +32858,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 res = restore_mentions(res, mention_placeholders)
                 res = _post_restore_mentions_guard(res, mention_placeholders)
             _entry_id = getattr(_tl, 'last_entry_id', None)
-            return res, _entry_id
+            _outcome = _get_translation_outcome()
+            return res, _entry_id, _outcome
         finally:
             try:
                 if _previous_external_mentions is None:
@@ -32705,7 +32873,7 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 # 清 worker 執行緒殘留(executor 執行緒會被重用)
                 for _k in list(_ctx.keys()) + [
                     'force_model', 'last_entry_id',
-                    'external_mention_placeholders',
+                    'external_mention_placeholders', 'translation_outcome',
                 ]:
                     try:
                         if hasattr(_tl, _k):
@@ -32716,20 +32884,36 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     out = []
     if len(real_targets) == 1:
         # 單目標:同執行緒直接跑,_tl 原生可用,省一次執行緒切換
-        res, _ = _translate_one(real_targets[0], _in_worker=False)
+        res, _, _outcome = _translate_one(real_targets[0], _in_worker=False)
         if res:
             out.append((real_targets[0], res))
+            _set_translation_outcome("delivered", "multi_target_translation")
+        elif _outcome.get("status") == "skipped":
+            _set_translation_outcome(
+                "skipped", _outcome.get("reason") or "intentional_translation_skip"
+            )
+        else:
+            _set_translation_outcome(
+                "failed", _outcome.get("reason") or "empty_or_rejected_translation"
+            )
         return out
 
     # 多目標:並行
     futures = [(t, _MULTI_TGT_EXECUTOR.submit(_translate_one, t, True)) for t in real_targets]
     _last_entry = None
+    _outcomes = []
     for tgt_lang, fut in futures:
         try:
-            res, _eid = fut.result(timeout=120)
+            res, _eid, _outcome = fut.result(timeout=120)
         except Exception as e:
             logger.warning("translate_multi parallel future failed tgt=%s: %s", tgt_lang, e)
+            _outcomes.append({
+                "status": "failed",
+                "reason": "translate_multi_future_exception",
+                "target": tgt_lang,
+            })
             continue
+        _outcomes.append(_outcome)
         if _eid is not None:
             _last_entry = _eid
         if res:
@@ -32740,6 +32924,16 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
             _tl.last_entry_id = _last_entry
         except Exception:
             pass
+    if out:
+        _set_translation_outcome("delivered", "multi_target_translation")
+    elif _outcomes and all(item.get("status") == "skipped" for item in _outcomes):
+        _reasons = sorted({
+            str(item.get("reason") or "intentional_translation_skip")
+            for item in _outcomes
+        })
+        _set_translation_outcome("skipped", ",".join(_reasons))
+    else:
+        _set_translation_outcome("failed", "all_multi_target_translations_empty")
     return out
 
 
