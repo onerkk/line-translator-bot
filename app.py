@@ -209,7 +209,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.43.0-authoritative-quality-gate-root-fix-2026-08-02"
+VERSION = "v3.43.1-authoritative-quality-gate-root-fix-2026-08-02"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -272,7 +272,7 @@ import factory_structured_report as factory_structured_report_module  # source-v
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 21
-_EXPECTED_QG_BUILD_ID = "2026-08-02.1-authoritative-gate-document-labels"
+_EXPECTED_QG_BUILD_ID = "2026-08-02.2-authoritative-gate-document-label-boundaries"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -11931,6 +11931,7 @@ def translate(text, src, tgt):
                     openai_status=("not_needed" if _structured_report else "pending_provider_fallback"),
                 )
                 if _structured_report:
+                    _set_translation_outcome("delivered", "deterministic_structured_measurement_report")
                     return _structured_report
                 logger.error(
                     "[DeterministicShortcut] structured report rejected; continuing to provider pipeline"
@@ -11962,6 +11963,7 @@ def translate(text, src, tgt):
                     openai_status=("not_needed" if _equipment_status else "pending_provider_fallback"),
                 )
                 if _equipment_status:
+                    _set_translation_outcome("delivered", "deterministic_equipment_status")
                     return _equipment_status
                 logger.error(
                     "[DeterministicShortcut] equipment status rejected; continuing to provider pipeline"
@@ -11997,6 +11999,7 @@ def translate(text, src, tgt):
                 openai_status=("not_needed" if reason_semantic else "pending_provider_fallback"),
             )
             if reason_semantic:
+                _set_translation_outcome("delivered", "deterministic_factory_reason")
                 return reason_semantic
             logger.error(
                 "[DeterministicShortcut] factory reason rejected; continuing to provider pipeline"
@@ -12085,7 +12088,12 @@ def translate(text, src, tgt):
                         _expected_rows, _factory_reason_ocr_row_count(canonical_text)
                     )
                     return _factory_reason_alignment_failure_message(tgt)
-                return _final_delivery_guard(canonical_text, reason_semantic, src, tgt)
+                _reason_final = _final_delivery_guard(canonical_text, reason_semantic, src, tgt)
+                if _reason_final:
+                    _set_translation_outcome("delivered", "deterministic_factory_reason_final_boundary")
+                else:
+                    _set_translation_outcome("failed", "deterministic_factory_reason_final_guard")
+                return _reason_final
         # Sentence-aware expressive decoration runs only after every semantic,
         # glossary, identity and format guard.  It never creates another AI call.
         # Visual selection is handled later at the LINE delivery boundary, so this

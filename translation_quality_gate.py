@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 21
-QUALITY_GATE_BUILD_ID = "2026-08-02.1-authoritative-gate-document-labels"
+QUALITY_GATE_BUILD_ID = "2026-08-02.2-authoritative-gate-document-label-boundaries"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -62,7 +62,7 @@ _MENTION_RE = re.compile(
 # bare-alpha token; every other identifier must have a digit or separator.
 _KNOWN_TECH_ACRONYMS = frozenset({
     "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR",
-    "PLC", "QA", "QC", "RPM", "SOP", "TIG", "UI", "UPS", "URL", "WIP", "WO",
+    "PLC", "QA", "QC", "RPM", "SOP", "TAG", "TIG", "UI", "UPS", "URL", "WIP", "WO",
 })
 _KNOWN_TECH_ACRONYM_PATTERN = "|".join(
     sorted((re.escape(value) for value in _KNOWN_TECH_ACRONYMS), key=len, reverse=True)
@@ -144,7 +144,11 @@ _UPPERCASE_PHRASE_RE = re.compile(
 # label, or physical tag name).  Repeated labels are source data, not untranslated
 # prose.  The inference is deliberately document-structural: it is disabled for
 # all-uppercase documents and excludes common Indonesian/English words.
-_DOCUMENT_LABEL_TOKEN_RE = re.compile(r'(?<![A-Za-z])([A-Z][A-Z0-9._/+:%×x-]{1,15})(?![A-Za-z])')
+_DOCUMENT_LABEL_TOKEN_RE = re.compile(
+    r'(?<![A-Za-z0-9_])'
+    r'([A-Z](?:[A-Z0-9._/+:%×x-]{0,14}[A-Z0-9]))'
+    r'(?![A-Za-z0-9_])'
+)
 _PARENTHETICAL_LATIN_ALIAS_RE = re.compile(
     r'[（(]\s*([A-Za-z][A-Za-z0-9._/+:%×x-]{1,31}'
     r'(?:\s+[A-Za-z][A-Za-z0-9._/+:%×x-]{1,31}){0,2})\s*[）)]'
@@ -372,7 +376,11 @@ def _document_defined_uppercase_labels(text: str) -> List[str]:
         if count < 2:
             continue
         # Reject a token that also appears in ordinary lower/title case elsewhere.
-        variants = re.findall(r'(?<![A-Za-z])' + re.escape(token) + r'(?![A-Za-z])', value, re.I)
+        variants = re.findall(
+            r'(?<![A-Za-z0-9_])' + re.escape(token) + r'(?![A-Za-z0-9_])',
+            value,
+            re.I,
+        )
         if any(item != token for item in variants):
             continue
         labels.append(token)

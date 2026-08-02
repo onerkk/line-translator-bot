@@ -210,6 +210,45 @@ TAG 安裝規定：
         self.assertFalse(report.ok)
         self.assertIn("untranslated_source_word:BOLEH", report.hard_issues)
 
+    def test_repeated_document_label_is_tokenized_without_trailing_punctuation(self):
+        source = "Harap pasang LOTX. LOTX: wajib terlihat."
+        candidate = "請安裝 LOTX，並確保 LOTX 清楚可見。"
+        envelope = qg.inspect_immutable_spans(source)
+
+        self.assertEqual(
+            [value for value in envelope.mapping.values() if value == "LOTX"],
+            ["LOTX", "LOTX"],
+        )
+        report = qg.validate_translation(
+            source,
+            candidate,
+            "id",
+            "zh",
+            immutable_literals=envelope.mapping.values(),
+            require_paragraph_fidelity=True,
+        )
+        self.assertTrue(report.ok, report.issues)
+
+    def test_document_label_scanner_never_matches_inside_pipeline_placeholders(self):
+        source = "__QG_KEEP_000_ABCDEF12__ Harap pasang LOTX. LOTX wajib terlihat."
+
+        self.assertEqual(qg._document_defined_uppercase_labels(source), ["LOTX"])
+
+    def test_single_factory_tag_label_is_a_stable_technical_literal(self):
+        source = "Harap pasang TAG pada barang pertama."
+        candidate = "請將 TAG 裝在第一件產品上。"
+        envelope = qg.inspect_immutable_spans(source)
+        report = qg.validate_translation(
+            source,
+            candidate,
+            "id",
+            "zh",
+            immutable_literals=envelope.mapping.values(),
+        )
+
+        self.assertIn("TAG", envelope.mapping.values())
+        self.assertTrue(report.ok, report.issues)
+
     def test_critical_document_does_not_spend_second_api_call_after_local_rejection(self):
         client = FakeClient(["不BOLEH使用工具。", "不得使用工具。"])
         result = qg.translate_quality_critical_document(
