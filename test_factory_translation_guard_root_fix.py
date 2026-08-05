@@ -142,13 +142,22 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
         )
         self.assertIsNone(casebook.exact_verified_target("下個月木箱暫不裝箱", cases))
 
-    def test_factory_policy_is_fail_closed_by_default_and_overridable(self):
+    def test_factory_policy_separates_delivery_availability_from_learning_admission(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FACTORY_TRANSLATION_FAIL_CLOSED", None)
-            self.assertTrue(policy.fail_closed("zh", "id"))
-            self.assertTrue(policy.fail_closed("id", "zh"))
-        with mock.patch.dict(os.environ, {"FACTORY_TRANSLATION_FAIL_CLOSED": "0"}):
+            os.environ.pop("FACTORY_BLOCK_UNVERIFIED_DELIVERY", None)
+            os.environ.pop("FACTORY_REQUIRE_VERIFIED_FOR_CACHE", None)
             self.assertFalse(policy.fail_closed("zh", "id"))
+            self.assertFalse(policy.fail_closed("id", "zh"))
+            self.assertTrue(policy.require_verified_for_cache("zh", "id"))
+            self.assertTrue(policy.require_verified_for_cache("id", "zh"))
+        # The legacy delivery-block switch is intentionally ignored so an old
+        # deployment variable cannot resurrect the generic failure notice.
+        with mock.patch.dict(os.environ, {"FACTORY_TRANSLATION_FAIL_CLOSED": "1"}):
+            os.environ.pop("FACTORY_BLOCK_UNVERIFIED_DELIVERY", None)
+            self.assertFalse(policy.fail_closed("zh", "id"))
+        with mock.patch.dict(os.environ, {"FACTORY_BLOCK_UNVERIFIED_DELIVERY": "1"}):
+            self.assertTrue(policy.fail_closed("zh", "id"))
 
     def test_factory_policy_uses_adaptive_nonvetoing_review_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -208,8 +217,9 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
             "def cache_set(",
             "def _post_translation_async(",
             "factory_translation_guard_module.exact_verified_target(text, src, tgt)",
-            "factory_guard_rejected_delivery",
-            "factory_translation_policy_module.fail_closed(src, tgt)",
+            "degraded_translation_delivered_not_cached",
+            "factory_translation_policy_module.block_unverified_delivery(src, tgt)",
+            "factory_translation_policy_module.require_verified_for_cache(src, tgt)",
             "factory_translation_policy_module.require_source_review(",
             "require_review_success=_require_review_success",
             '"factory_translation_guard": factory_translation_guard_module.health()',

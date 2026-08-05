@@ -148,10 +148,18 @@ def test_actual_app_deterministic_rules_cover_both_reported_messages_without_inv
     assert translate_known("大成儲格能放就放，放不下再放照片裡這些位置") is None
 
 
-def test_app_does_not_silently_drop_rejected_quote_translation_or_attach_quote_to_flex():
+def test_app_auto_retries_empty_quote_translation_without_terminal_failure_or_flex_quote():
     source = Path("app.py").read_text(encoding="utf-8")
-    assert 'translate_empty_visible_notice' in source
-    assert 'kind="translation"' in source
+    assert 'translate_empty_retry_scheduled' in source
+    assert '_schedule_text_translation_retry(' in source
+    assert 'kind="translation_retry"' in source
+    notice_start = source.index("def _send_background_failure_notice")
+    notice_end = source.index("\ndef ", notice_start + 5)
+    notice_fn = source[notice_start:notice_end]
+    assert "這則訊息暫時無法完成安全翻譯" not in notice_fn
+    assert "Pesan ini belum dapat diterjemahkan dengan aman" not in notice_fn
+    assert "無需重傳" in notice_fn
+    assert "tidak perlu mengirim ulang" in notice_fn
     assert "flex_msg.quote_token" not in source
     assert "quoted_context_source" in source
     assert "getattr(event.message, 'quote_token', None)" not in source

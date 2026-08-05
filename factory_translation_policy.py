@@ -1,27 +1,30 @@
-"""Unified routing and acceptance policy for factory Chinese↔Indonesian.
+"""Unified routing, delivery and learning policy for factory Chinese↔Indonesian.
 
-The bot serves one production environment, so generic consumer-MT routing is
-not an acceptable default.  This module is the single policy authority used by
-text and OCR routes:
+The bot serves a production environment, so translation quality and service
+availability must be controlled separately:
 
 * Chinese↔Indonesian requests use the factory semantic route by default.
 * stale lexical/vector TM and generic NMT cannot bypass the current contract.
 * verified exact corrections remain eligible after deterministic validation.
-* newly generated factory translations receive source-grounded review only when
-  risk warrants it by default; review outages never veto a locally valid result.
-* generic Google/NMT fallback is disabled unless explicitly enabled.
+* validator uncertainty makes a candidate non-cacheable/non-learnable but does
+  not turn a complete translation into a generic user-visible failure.
+* objective corruption (missing names/codes/numbers, source-language leakage,
+  unresolved placeholders, severe omission) triggers another provider or an
+  automatic detached retry; it is never displayed as a translation.
+* empty output, legacy failure payloads and pure model meta-commentary are also
+  undeliverable. Provider outages may use an emergency NMT route.
 
-Operational overrides are environment variables so an incident can be handled
-without editing code, but the production defaults deliberately favor semantic
-accuracy over availability and latency.
+This separation is deliberate: a heuristic quality rule must never become a
+single point of availability failure, while unverified text must never pollute
+cache/TM and repeat indefinitely.
 """
 from __future__ import annotations
 
 import os
 from typing import Any, Dict
 
-FACTORY_TRANSLATION_POLICY_API_VERSION = 4
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-27.1-availability-resilient-adaptive-review"
+FACTORY_TRANSLATION_POLICY_API_VERSION = 5
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-05.1-delivery-learning-separation"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -67,20 +70,33 @@ def should_force_factory_pipeline(text: Any, src: Any, tgt: Any, *, heuristic_ma
     return True
 
 
+def block_unverified_delivery(src: Any, tgt: Any) -> bool:
+    """Optional emergency switch for blocking a non-empty degraded candidate.
+
+    Production default is False.  The legacy ``FACTORY_TRANSLATION_FAIL_CLOSED``
+    switch is intentionally not consulted: it previously conflated delivery
+    availability with cache/learning admission and caused ordinary messages to
+    become the generic "cannot translate safely" notice.
+    """
+    return supports_direction(src, tgt) and _boolean_env(
+        "FACTORY_BLOCK_UNVERIFIED_DELIVERY", False
+    )
+
+
 def fail_closed(src: Any, tgt: Any) -> bool:
-    """Reject an unverified factory translation instead of delivering it."""
-    return supports_direction(src, tgt) and _boolean_env("FACTORY_TRANSLATION_FAIL_CLOSED", True)
+    """Backward-compatible alias for the delivery-blocking switch."""
+    return block_unverified_delivery(src, tgt)
+
+
+def require_verified_for_cache(src: Any, tgt: Any) -> bool:
+    """Require local verification before cache/TM/vector learning admission."""
+    return supports_direction(src, tgt) and _boolean_env(
+        "FACTORY_REQUIRE_VERIFIED_FOR_CACHE", True
+    )
 
 
 def review_mode() -> str:
-    """Return source-review policy: ``always``, ``adaptive`` or ``off``.
-
-    ``adaptive`` is the production default: ordinary short messages use one
-    provider call plus deterministic validation, while structurally high-risk or
-    knowledge-matched messages request an independent source review.  ``always``
-    remains available as an operational override, but a review outage must not
-    discard a first candidate that already passed every local integrity gate.
-    """
+    """Return source-review policy: ``always``, ``adaptive`` or ``off``."""
     value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
     aliases = {
         "on": "always", "required": "always", "strict": "always", "all": "always",
@@ -106,10 +122,8 @@ def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool 
 def require_review_success(src: Any, tgt: Any) -> bool:
     """Whether review success is required for authoritative/cacheable status.
 
-    Disabled by default.  A locally valid first translation may still be
-    delivered when the independent reviewer is unavailable or returns an invalid
-    mutation; it is marked degraded and is not cached or learned.  Actual source
-    integrity failures remain fail-closed.
+    Even when enabled, review failure affects authoritative status and learning,
+    not the availability of a non-empty first translation.
     """
     return supports_direction(src, tgt) and _boolean_env(
         "FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", False
@@ -117,10 +131,17 @@ def require_review_success(src: Any, tgt: Any) -> bool:
 
 
 def allow_generic_nmt_fallback(src: Any, tgt: Any) -> bool:
-    """Generic fallback is opt-in in unified factory mode."""
+    """Normal generic fallback remains opt-in in unified factory mode."""
     if not supports_direction(src, tgt):
         return True
     return _boolean_env("FACTORY_ALLOW_GENERIC_NMT_FALLBACK", False)
+
+
+def allow_emergency_nmt_fallback(src: Any, tgt: Any) -> bool:
+    """Allow one last NMT attempt only when the semantic provider returned empty."""
+    if not supports_direction(src, tgt):
+        return True
+    return _boolean_env("FACTORY_ALLOW_EMERGENCY_NMT_FALLBACK", True)
 
 
 def build_prompt(text: Any, src: Any, tgt: Any) -> str:
@@ -142,9 +163,9 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "cause, deadline, measurement or workflow step that is not stated or entailed by approved plant knowledge.\n"
         "Preserve customer names, employee names, codes, work-order IDs, station IDs, numbers and units exactly as written. "
         "Do not translate a Chinese customer name into an ordinary Indonesian adjective or noun.\n"
-        "A newly generated translation is independently reconstructed from the source and then checked locally. "
-        "Any candidate that fails either boundary is blocked instead of delivered, cached or learned. "
-        "Output only one complete target-language translation.\n"
+        "Output only one complete target-language translation. Never output an apology, safety-status message, "
+        "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
+        "objective integrity defects trigger automatic provider fallback or retry and must not be described to the user.\n"
         "</unified_factory_translation_policy>"
     )
 
@@ -157,5 +178,8 @@ def health() -> Dict[str, Any]:
         "review_mode": review_mode(),
         "review_success_required": require_review_success("zh", "id"),
         "generic_nmt_fallback": allow_generic_nmt_fallback("zh", "id"),
+        "emergency_nmt_fallback": allow_emergency_nmt_fallback("zh", "id"),
+        "block_unverified_delivery": block_unverified_delivery("zh", "id"),
+        "verified_cache_required": require_verified_for_cache("zh", "id"),
         "fail_closed": fail_closed("zh", "id"),
     }

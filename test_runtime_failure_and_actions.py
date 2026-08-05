@@ -19,10 +19,10 @@ def test_lowercase_line_display_name_is_not_language_leakage():
     assert app._final_delivery_guard(source, candidate, "id", "zh") == candidate
 
 
-def test_final_guard_blocks_nonempty_factory_result_that_fails_integrity():
+def test_final_guard_withholds_objectively_corrupt_result_for_provider_fallback():
     result = app._final_delivery_guard(
-        "TIDAK BOLEH masuk.",
-        "不BOLEH進入。",
+        "Jangan masuk.",
+        "禁止 masuk。",
         "id",
         "zh",
     )
@@ -560,7 +560,7 @@ def test_rejected_deterministic_inner_shortcut_falls_through_to_provider(monkeyp
     """A broken local shortcut must not be misreported as a provider outage."""
     logged_models = []
     monkeypatch.setattr(app.factory_translation_guard_module, "exact_verified_target", lambda *_a, **_k: None)
-    monkeypatch.setattr(app, "factory_semantic_translate_id_zh", lambda *_a, **_k: "不BOLEH進入。")
+    monkeypatch.setattr(app, "factory_semantic_translate_id_zh", lambda *_a, **_k: "禁止 masuk。")
     monkeypatch.setattr(app, "translate_openai", lambda *_a, **_k: "機台目前禁止進入。")
     monkeypatch.setattr(app, "finalize_factory_translation", lambda _s, value, _sl, _tl: value)
     monkeypatch.setattr(

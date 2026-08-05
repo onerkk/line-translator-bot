@@ -209,7 +209,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.43.1-authoritative-quality-gate-root-fix-2026-08-02"
+VERSION = "v3.44.0-translation-availability-root-fix-2026-08-05"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -318,8 +318,8 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
         "Replace app.py and translation_casebook.py together in the project root."
     )
 
-_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 4
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-07-27.1-availability-resilient-adaptive-review"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 5
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-05.1-delivery-learning-separation"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -773,6 +773,12 @@ _PARAGRAPH_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="para")    # �
 # 高峰期 QE(每次 1-3 秒)佔滿兩個 worker,關鍵路徑的 vec future 排隊到
 # 6 秒 timeout,主路徑反被卡住 — 比不並行更糟。隔離後互不影響。
 _VEC_LOOKUP_EXECUTOR = _TPE_v313(max_workers=3, thread_name_prefix="veclk")
+
+# Text translation availability retries are deliberately isolated from QE/TM
+# workers. A retry may sleep between attempts and must never starve the normal
+# translation or background-learning pools.
+_TRANSLATION_RETRY_LOCK = threading.RLock()
+_TRANSLATION_RETRY_INFLIGHT = set()
 
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
@@ -4217,6 +4223,17 @@ def extract_mentions(text):
     for m in re.finditer(r'@([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.-]+))?', text):
         first = m.group(1)
         if first.lower() in _id_skip:
+            continue
+        # ``@All`` is a reserved LINE broadcast mention, never a person's
+        # multi-word display name.  The generic Latin-name parser used to
+        # greedily swallow the next two Indonesian words (for example,
+        # ``@All Harap perhatikan``), causing those words to bypass translation
+        # and sometimes trip the purity/fidelity guards.  Bound it exactly even
+        # when webhook mention metadata is absent or malformed.
+        if first.lower() == 'all':
+            mention = text[m.start():m.start() + len(first) + 1]
+            if mention not in mentions:
+                mentions.append(mention)
             continue
         parts = [first]
         for g in [m.group(2), m.group(3)]:
@@ -11035,7 +11052,7 @@ def cache_get(text, src, tgt):
                     logger.warning("[LegacyFailurePurge] removed failure payload from cache: %s -> %s", src, tgt)
                     del translation_cache[key]
                     return None
-                if _factory_route_is_strict(text, src, tgt):
+                if _factory_route_requires_validation(text, src, tgt):
                     try:
                         if not is_translation_acceptable(text, result, src, tgt):
                             logger.warning("[FactoryGuard] purged unverified cache row: %s -> %s", src, tgt)
@@ -11060,7 +11077,7 @@ def cache_set(text, src, tgt, result, force=False):
     if getattr(_tl, 'quality_gate_pending', False) and not force:
         logger.debug("[QualityGate] deferred cache write until final review")
         return
-    if _factory_route_is_strict(text, src, tgt):
+    if _factory_route_requires_validation(text, src, tgt):
         try:
             if not is_translation_acceptable(text, result, src, tgt):
                 logger.warning("[FactoryGuard] refused unverified factory cache write")
@@ -11421,9 +11438,13 @@ def _is_translation_failure_sentinel(text):
     exact_or_substrings = (
         "翻譯服務暫時未取得可用結果",
         "目前所有翻譯服務皆無法取得結果",
+        "這則訊息暫時無法完成安全翻譯",
+        "系統已記錄，請稍後重傳",
         "ai 已完成翻譯，但結果缺少或改動了關鍵資料",
         "layanan terjemahan sementara belum menghasilkan hasil yang dapat digunakan",
         "terjemahan gagal karena semua layanan penerjemahan sedang tidak tersedia",
+        "pesan ini belum dapat diterjemahkan dengan aman",
+        "sistem sudah mencatatnya; silakan kirim ulang nanti",
         "all translation services are temporarily unavailable",
         "translation service has not produced a usable result",
         "silakan kirim ulang beberapa saat lagi",
@@ -11455,12 +11476,35 @@ def _factory_guard_report(source_text, candidate, src, tgt):
     )
 
 
-def _factory_route_is_strict(source_text, src, tgt):
+def _factory_route_requires_validation(source_text, src, tgt):
+    """Return whether factory output must be verified before cache/TM learning.
+
+    Delivery availability and learning admission are intentionally separate.
+    Every supported factory route remains fail-closed for cache, TM and vector
+    learning even when a degraded non-empty translation is allowed to reach the
+    user.
+    """
     return bool(
         factory_translation_policy_module.should_force_factory_pipeline(
             source_text, src, tgt, heuristic_match=_is_factory_context(source_text)
         )
-        and factory_translation_policy_module.fail_closed(src, tgt)
+        and factory_translation_policy_module.require_verified_for_cache(src, tgt)
+    )
+
+
+def _factory_route_is_strict(source_text, src, tgt):
+    """Return whether a degraded non-empty candidate may be blocked at delivery.
+
+    The production default is False.  This compatibility switch is reserved for
+    a deliberate emergency override; ordinary quality-rule failures must only
+    disable caching/learning, not replace a translation with a generic failure
+    notice.
+    """
+    return bool(
+        factory_translation_policy_module.should_force_factory_pipeline(
+            source_text, src, tgt, heuristic_match=_is_factory_context(source_text)
+        )
+        and factory_translation_policy_module.block_unverified_delivery(src, tgt)
     )
 
 
@@ -11481,14 +11525,282 @@ def _factory_exact_fallback(source_text, src, tgt):
     return candidate
 
 
-def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Absolute delivery boundary for every text/OCR factory translation.
+def _delivery_validation_issues(source_text, candidate, src, tgt):
+    """Collect current generic + factory hard issues for candidate comparison."""
+    if not candidate or not isinstance(candidate, str):
+        return ["empty_candidate"]
+    found = []
+    try:
+        pairs = ge_module.collect_applicable_pairs(
+            source_text,
+            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+            src, tgt,
+        )
+        report = tqg_module.validate_translation(
+            source_text, candidate, src, tgt,
+            immutable_literals=tqg_module.inspect_immutable_spans(source_text).mapping.values(),
+            glossary_pairs=pairs,
+            require_paragraph_fidelity=False,
+        )
+        if not report.ok:
+            found.extend(str(item) for item in report.hard_issues)
+    except Exception as exc:
+        found.append("generic_validation_exception:" + type(exc).__name__)
+    try:
+        report = _factory_guard_report(source_text, candidate, src, tgt)
+        if not report.ok:
+            found.extend(str(item) for item in report.hard_issues)
+    except Exception as exc:
+        found.append("factory_validation_exception:" + type(exc).__name__)
 
-    Chinese↔Indonesian factory traffic is fail-closed by default.  A non-empty
-    provider result is not deliverable merely because it cost money: it must
-    pass the generic immutable/glossary gate and the versioned factory guard.
-    Only a punctuation/spacing-equivalent verified correction may replace a
-    rejected candidate.  Non-factory directions retain advisory behavior.
+    # Visible LINE mentions are identity tokens, not untranslated language.
+    # Emergency NMT may preserve ``@All`` directly instead of the placeholder;
+    # do not let its Latin token become a false source-language leakage defect.
+    mention_tokens = {
+        token.casefold()
+        for token in re.findall(r"@([A-Za-zÀ-ÖØ-öø-ÿ][\w.-]*)", str(source_text or "") + " " + str(candidate or ""))
+    }
+    filtered = []
+    leakage_prefixes = (
+        "untranslated_source_word:",
+        "source_language_leakage:",
+        "ungrounded_mixed_language:",
+    )
+    for item in found:
+        issue = str(item or "")
+        if issue.startswith(leakage_prefixes):
+            token = issue.split(":", 1)[1].strip().casefold() if ":" in issue else ""
+            if token and token in mention_tokens:
+                continue
+        filtered.append(issue)
+    return list(dict.fromkeys(item for item in filtered if item))
+
+
+def _repair_is_strictly_better(base_issues, repaired_issues):
+    """Accept a local repair only when it reduces defects without new leakage."""
+    base = set(base_issues or [])
+    repaired = set(repaired_issues or [])
+    if not repaired:
+        return True
+    regression_prefixes = (
+        "untranslated_source_word:",
+        "source_language_leakage:",
+        "ungrounded_mixed_language:",
+        "placeholder_leak",
+        "missing_pipeline_token:",
+        "invented_pipeline_token:",
+        "missing_literal:",
+        "missing_marker:",
+        "missing_placeholder:",
+        "unknown_placeholder",
+        "target_script_missing",
+        "catastrophic_omission",
+        "unchanged_source",
+        "factory_guard:protected_name_missing:",
+        "factory_guard:code_missing:",
+        "factory_guard:quantity_",
+    )
+    for issue in repaired - base:
+        if str(issue).startswith(regression_prefixes):
+            return False
+    return len(repaired) < len(base)
+
+
+def _partition_delivery_issues(issues):
+    """Split objective corruption from validator/reviewer uncertainty.
+
+    Objective defects must not be exposed as a translation: they trigger the
+    next provider or the detached retry worker.  Validator outages and lexical
+    ambiguity are advisory; a complete provider translation remains deliverable
+    but is never cached or learned.  This distinction removes the old terminal
+    failure message without weakening immutable data, names, codes, quantities,
+    target-language purity, negation or factory semantic safeguards.
+    """
+    advisory_prefixes = (
+        "ambiguous_reverse_glossary:",
+        "generic_validation_exception:",
+        "factory_validation_exception:",
+        "validation_exception:",
+        "local_safe_check_exception:",
+        "primary_translation_",
+        "emergency_nmt_used:",
+    )
+    objective = []
+    advisory = []
+    for raw in issues or ():
+        issue = str(raw or "").strip()
+        if not issue:
+            continue
+        if issue.startswith(advisory_prefixes):
+            advisory.append(issue)
+        else:
+            objective.append(issue)
+    return list(dict.fromkeys(objective)), list(dict.fromkeys(advisory))
+
+
+def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=None, prior_candidate=None):
+    """Return the safest available non-empty translation without learning it.
+
+    This is the availability boundary for ordinary text.  Local validators are
+    heuristic and may disagree with a perfectly usable provider translation,
+    especially when the source itself is colloquial or grammatically imperfect.
+    Such disagreement must never be converted into a generic "cannot translate"
+    message.  Exact verified corrections still win; otherwise immutable-token
+    repair is attempted and the cleanest provider candidate is delivered as
+    degraded/non-cacheable.
+    """
+    issue_list = [str(item) for item in (issues or []) if str(item).strip()]
+    exact = _factory_exact_fallback(source_text, src, tgt)
+    if exact:
+        return exact
+
+    raw_candidates = [candidate, prior_candidate]
+    candidates = []
+    for value in raw_candidates:
+        if not value or not isinstance(value, str):
+            continue
+        value = value.strip()
+        if not value or _is_translation_failure_sentinel(value):
+            continue
+        try:
+            cleaned = _strip_thinking_tags(value) or value
+        except Exception:
+            cleaned = value
+        cleaned = cleaned.strip()
+        if not cleaned or _is_translation_failure_sentinel(cleaned):
+            continue
+        # Never expose pure model analysis/meta commentary.  If commentary is
+        # mixed with a translation, prefer the other candidate instead.
+        if _is_meta_commentary_leak(cleaned):
+            continue
+        if cleaned not in candidates:
+            candidates.append(cleaned)
+
+    for value in candidates:
+        base_issues = _delivery_validation_issues(source_text, value, src, tgt)
+        try:
+            pairs = ge_module.collect_applicable_pairs(
+                source_text,
+                GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
+                src, tgt,
+            )
+            checked = tqg_module.ensure_delivery_safe_translation(
+                source_text, value, src, tgt,
+                model=_active_upgrade_model(),
+                glossary_pairs=pairs,
+                ai_client=None,
+                fallback_translate=None,
+            )
+            repaired = str(checked.get("text") or "").strip()
+            if (
+                repaired
+                and repaired != value
+                and not _is_translation_failure_sentinel(repaired)
+                and not _is_meta_commentary_leak(repaired)
+            ):
+                repaired_issues = _delivery_validation_issues(
+                    source_text, repaired, src, tgt
+                )
+                if _repair_is_strictly_better(base_issues, repaired_issues):
+                    value = repaired
+                else:
+                    logger.warning(
+                        "[Availability] rejected local repair that did not improve candidate base=%s repaired=%s",
+                        base_issues[:12], repaired_issues[:12],
+                    )
+        except Exception as exc:
+            logger.warning("[Availability] local repair unavailable; keeping provider candidate: %s", exc)
+
+        final_issues = _delivery_validation_issues(source_text, value, src, tgt)
+        objective, advisory = _partition_delivery_issues(final_issues or issue_list)
+        if objective:
+            _update_last_translate_debug(
+                pipeline_status="objective_integrity_retry_required",
+                factory_guard_issues=(objective + advisory)[:20],
+                final_candidate="",
+                cacheable=False,
+            )
+            logger.error(
+                "[Availability] candidate withheld for provider fallback/retry; objective issues=%s",
+                objective[:12],
+            )
+            continue
+
+        degraded_issues = list(dict.fromkeys((issue_list or []) + advisory))
+        try:
+            _tl.delivery_degraded = True
+            _tl.delivery_degraded_issues = degraded_issues[:20]
+        except Exception:
+            pass
+        _update_last_translate_debug(
+            pipeline_status="degraded_translation_delivered_not_cached",
+            factory_guard_issues=degraded_issues[:20],
+            final_candidate=value[:2000],
+            cacheable=False,
+        )
+        logger.warning(
+            "[Availability] delivered non-cacheable candidate after advisory validation disagreement issues=%s",
+            degraded_issues[:12],
+        )
+        return value
+    return None
+
+
+def _emergency_translation_fallback(source_text, src, tgt):
+    """Try independent NMT routes after empty or objectively corrupt output.
+
+    Each provider candidate is validated separately.  An invalid first NMT
+    result no longer prevents the next fallback from running.  Successful output
+    remains non-cacheable; if every route is empty or objectively unsafe, the
+    LINE handler schedules detached retries instead of displaying a terminal
+    "cannot translate" message.
+    """
+    if not source_text or not isinstance(source_text, str):
+        return None
+    if not factory_translation_policy_module.allow_emergency_nmt_fallback(src, tgt):
+        return None
+
+    providers = (
+        ("configured_nmt", lambda: nmt_module.nmt_translate(source_text, src, tgt)),
+        ("public_google", lambda: translate_google(source_text, src, tgt)),
+    )
+    for provider_name, call in providers:
+        try:
+            candidate = call()
+        except Exception as exc:
+            logger.warning("[Availability] emergency %s failed: %s", provider_name, exc)
+            continue
+        if not candidate or _is_translation_failure_sentinel(candidate):
+            continue
+        result = _best_effort_factory_delivery(
+            source_text, candidate, src, tgt,
+            issues=["primary_translation_unavailable_or_invalid", "emergency_nmt_used:" + provider_name],
+        )
+        if not result:
+            logger.warning(
+                "[Availability] emergency %s returned an objectively invalid candidate; trying next route",
+                provider_name,
+            )
+            continue
+        _update_last_translate_debug(
+            pipeline_status="emergency_nmt_delivered_not_cached",
+            emergency_provider=provider_name,
+            final_candidate=result[:2000],
+            cacheable=False,
+        )
+        return result
+    return None
+
+
+def _final_delivery_guard(source_text, candidate, src, tgt):
+    """Final delivery boundary with strict learning and resilient availability.
+
+    A non-empty provider translation is validated before it may enter cache/TM.
+    Validation disagreement first tries an exact verified correction and local
+    immutable repair.  If no authoritative correction exists, the provider text
+    is delivered as degraded and non-cacheable instead of being replaced by a
+    generic failure notice.  Only empty output, legacy failure payloads and pure
+    model meta-commentary are undeliverable.
     """
     if not candidate or not isinstance(candidate, str):
         return None
@@ -11497,7 +11809,10 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
     original = candidate.strip()
     if not original:
         return None
-    strict = _factory_route_is_strict(source_text, src, tgt)
+    if _is_meta_commentary_leak(original):
+        logger.error("[FinalDeliveryGuard] pure meta commentary is not deliverable")
+        return None
+
     try:
         pairs = ge_module.collect_applicable_pairs(
             source_text,
@@ -11524,30 +11839,28 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         if not factory_report.ok:
             issues.extend(factory_report.hard_issues)
         issues = list(dict.fromkeys(item for item in issues if item))
+
         if issues:
-            fallback = _factory_exact_fallback(source_text, src, tgt)
+            fallback = _best_effort_factory_delivery(
+                source_text, original, src, tgt, issues=issues
+            )
             if fallback:
-                logger.warning(
-                    "[FinalDeliveryGuard] rejected candidate; using verified exact fallback issues=%s",
-                    issues[:12],
-                )
                 return fallback
-            if strict:
+            objective, advisory = _partition_delivery_issues(issues)
+            if objective:
                 logger.error(
-                    "[FinalDeliveryGuard] fail-closed factory rejection issues=%s",
-                    issues[:20],
-                )
-                _update_last_translate_debug(
-                    pipeline_status="factory_guard_rejected_delivery",
-                    factory_guard_issues=issues[:20],
-                    final_candidate="",
+                    "[FinalDeliveryGuard] objective integrity rejection; provider fallback/retry required issues=%s",
+                    objective[:20],
                 )
                 return None
-            logger.warning(
-                "[FinalDeliveryGuard] advisory non-factory validation issues=%s",
-                issues[:12],
-            )
+            if _factory_route_is_strict(source_text, src, tgt):
+                logger.error(
+                    "[FinalDeliveryGuard] emergency delivery-block switch rejected advisory candidate issues=%s",
+                    advisory[:20],
+                )
+                return None
             return original
+
         checked = tqg_module.ensure_delivery_safe_translation(
             source_text, original, src, tgt,
             model=_active_upgrade_model(),
@@ -11557,33 +11870,29 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         )
         if checked.get("ok") and checked.get("text"):
             safe = str(checked["text"]).strip()
-            post_report = _factory_guard_report(source_text, safe, src, tgt)
-            if post_report.ok:
-                return safe
-            if strict:
-                logger.error(
-                    "[FinalDeliveryGuard] safe-check mutation violated factory guard: %s",
-                    post_report.issues[:20],
-                )
-                return _factory_exact_fallback(source_text, src, tgt)
-        if strict:
-            logger.error(
-                "[FinalDeliveryGuard] fail-closed safe check path=%s issues=%s",
-                checked.get("path"), checked.get("issues", [])[:12],
-            )
-            return _factory_exact_fallback(source_text, src, tgt)
-        return original
+            if safe and not _is_meta_commentary_leak(safe):
+                post_report = _factory_guard_report(source_text, safe, src, tgt)
+                if post_report.ok:
+                    return safe
+                return _best_effort_factory_delivery(
+                    source_text, safe, src, tgt,
+                    issues=post_report.issues,
+                    prior_candidate=original,
+                ) or original
+
+        return _best_effort_factory_delivery(
+            source_text, original, src, tgt,
+            issues=checked.get("issues", []) or ["local_safe_check_empty"],
+        ) or original
     except Exception as exc:
-        if strict:
-            logger.exception(
-                "[FinalDeliveryGuard] factory validation exception; blocked: %s", exc
-            )
-            return _factory_exact_fallback(source_text, src, tgt)
         logger.exception(
-            "[FinalDeliveryGuard] non-factory validation exception; delivering original: %s",
+            "[FinalDeliveryGuard] validation exception; delivering non-cacheable provider text: %s",
             exc,
         )
-        return original
+        return _best_effort_factory_delivery(
+            source_text, original, src, tgt,
+            issues=["validation_exception:" + type(exc).__name__],
+        ) or original
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -11619,6 +11928,29 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
     if missing:
         logger.warning("[MentionGuard] restored translation lost mentions; reattaching: %s", missing[:5])
         candidate = (" ".join(missing) + " " + candidate).strip()
+
+    # Some emergency NMT engines resolve ``__MENTION_n__`` back to the visible
+    # mention even before our normal restoration step.  Restoring the placeholder
+    # again would then produce ``@All @All ...`` or duplicate a person's mention.
+    # Source mention multiplicity is authoritative: trim only surplus exact
+    # occurrences and preserve the first N occurrences in original order.
+    for mention, expected in expected_counts.items():
+        if expected < 0 or candidate.count(mention) <= expected:
+            continue
+        seen = 0
+        pattern = re.compile(re.escape(mention))
+
+        def _keep_expected(match):
+            nonlocal seen
+            seen += 1
+            return match.group(0) if seen <= expected else " "
+
+        candidate = pattern.sub(_keep_expected, candidate)
+        logger.warning(
+            "[MentionGuard] removed surplus restored mention mention=%r expected=%s",
+            mention, expected,
+        )
+
     candidate = re.sub(r'[ \t]{2,}', ' ', candidate)
     return candidate.strip()
 
@@ -11856,6 +12188,199 @@ def _send_reply_with_push_fallback(
         return response, "push"
 
 
+def _translation_retry_delays():
+    """Return bounded retry delays from env, defaulting to 2s/8s/20s."""
+    raw = str(os.environ.get("TRANSLATION_RETRY_DELAYS", "2,8,20") or "2,8,20")
+    delays = []
+    for part in raw.split(","):
+        try:
+            value = max(1, min(120, int(float(part.strip()))))
+        except Exception:
+            continue
+        if value not in delays:
+            delays.append(value)
+    return tuple(delays[:5] or (2, 8, 20))
+
+
+def _translation_retry_key(ctx, source_text, src_lang, target_langs):
+    message_id = str((ctx or {}).get("message_id") or "").strip()
+    target_id = str((ctx or {}).get("group_id") or (ctx or {}).get("user_id") or "").strip()
+    if message_id:
+        return target_id + ":" + message_id
+    payload = "\x1f".join([
+        target_id,
+        str(src_lang or ""),
+        ",".join(str(x) for x in (target_langs or [])),
+        str(source_text or ""),
+    ])
+    return target_id + ":sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _schedule_text_translation_retry(
+    ctx,
+    *,
+    source_text,
+    src_lang,
+    target_langs,
+    line_mentions=None,
+):
+    """Retry an empty text translation and push the result when available.
+
+    The immediate request has already exhausted the semantic provider chain and
+    emergency NMT.  A detached retry avoids asking users to resend, preserves
+    LINE reply-token latency, and de-duplicates by message ID.  Retried output is
+    still processed by the same translation/quality pipeline; only delivery is
+    converted to push because the original reply token may have expired.
+    """
+    ctx = dict(ctx or {})
+    target_id = ctx.get("group_id") or ctx.get("user_id")
+    source_text = str(source_text or "").strip()
+    targets = [str(value or "").strip() for value in (target_langs or [])]
+    targets = list(dict.fromkeys(value for value in targets if value))
+    if not target_id or not source_text or not src_lang or not targets:
+        return False
+
+    retry_key = _translation_retry_key(ctx, source_text, src_lang, targets)
+    with _TRANSLATION_RETRY_LOCK:
+        if retry_key in _TRANSLATION_RETRY_INFLIGHT:
+            return False
+        _TRANSLATION_RETRY_INFLIGHT.add(retry_key)
+
+    def _worker():
+        previous = {}
+        missing = object()
+        try:
+            for attempt, delay in enumerate(_translation_retry_delays(), start=1):
+                time.sleep(delay)
+                try:
+                    for attr in ("group_id", "line_mentions", "tone", "tone_custom", "disable_tone_emoji"):
+                        previous[attr] = getattr(_tl, attr, missing)
+                    group_id = ctx.get("group_id")
+                    _tl.group_id = group_id or "__dm_retry__"
+                    _tl.line_mentions = list(line_mentions or [])
+                    if group_id:
+                        try:
+                            _tone, _tone_custom = get_group_tone(group_id)
+                        except Exception:
+                            _tone, _tone_custom = translation_tone, translation_tone_custom
+                    else:
+                        _tone, _tone_custom = translation_tone, translation_tone_custom
+                    _tl.tone = _tone
+                    _tl.tone_custom = _tone_custom
+
+                    if src_lang == "zh":
+                        translated_rows = translate_multi(source_text, "zh", targets, {})
+                        reply_text = format_multi_reply(translated_rows) if translated_rows else None
+                        delivered_map = {lang: text for lang, text in (translated_rows or []) if text}
+                    else:
+                        primary_target = targets[0]
+                        translated = translate(source_text, src_lang, primary_target)
+                        reply_text = (
+                            (LANG_FLAGS.get(primary_target, "") + " " + translated).strip()
+                            if translated else None
+                        )
+                        delivered_map = {primary_target: translated} if translated else {}
+
+                    if not reply_text or _is_translation_failure_sentinel(reply_text):
+                        _event_log_write("translation_retry_attempt_empty", {
+                            "target": str(target_id)[-16:],
+                            "attempt": attempt,
+                            "src": src_lang,
+                            "targets": targets,
+                            "message_id": str(ctx.get("message_id") or ""),
+                        })
+                        continue
+
+                    msg = TextMessage(text=_clip_line_text(reply_text))
+                    quote_token = ctx.get("quote_token")
+                    if quote_token:
+                        try:
+                            msg.quote_token = quote_token
+                        except Exception:
+                            pass
+                    try:
+                        with ApiClient(configuration) as api_client:
+                            MessagingApi(api_client).push_message(PushMessageRequest(
+                                to=target_id,
+                                messages=[msg],
+                            ))
+                    except Exception:
+                        # quoteToken may expire before a detached retry finishes.
+                        # Retry the delivery itself once without quoting; do not
+                        # rerun translation or lose a successful result.
+                        plain_msg = TextMessage(text=_clip_line_text(reply_text))
+                        with ApiClient(configuration) as api_client:
+                            MessagingApi(api_client).push_message(PushMessageRequest(
+                                to=target_id,
+                                messages=[plain_msg],
+                            ))
+
+                    message_id = str(ctx.get("message_id") or "")
+                    if message_id and message_id in message_cache:
+                        try:
+                            message_cache[message_id].setdefault("tr", {}).update(delivered_map)
+                        except Exception:
+                            pass
+                    _stats_inc("text_translations", max(1, len(delivered_map)))
+                    _event_log_write("translation_retry_delivered", {
+                        "target": str(target_id)[-16:],
+                        "attempt": attempt,
+                        "src": src_lang,
+                        "targets": targets,
+                        "message_id": message_id,
+                    })
+                    return
+                except Exception as exc:
+                    logger.warning(
+                        "[TranslationRetry] attempt=%s target=%s failed: %s",
+                        attempt, str(target_id)[-16:], str(exc)[:300],
+                    )
+                    try:
+                        _event_log_write("translation_retry_attempt_exception", {
+                            "target": str(target_id)[-16:],
+                            "attempt": attempt,
+                            "error": str(exc)[:300],
+                            "error_type": type(exc).__name__,
+                            "message_id": str(ctx.get("message_id") or ""),
+                        })
+                    except Exception:
+                        pass
+                finally:
+                    for attr, value in previous.items():
+                        try:
+                            if value is missing:
+                                if hasattr(_tl, attr):
+                                    delattr(_tl, attr)
+                            else:
+                                setattr(_tl, attr, value)
+                        except Exception:
+                            pass
+                    previous.clear()
+            logger.error(
+                "[TranslationRetry] exhausted without user-visible failure payload target=%s message_id=%s",
+                str(target_id)[-16:], str(ctx.get("message_id") or ""),
+            )
+            try:
+                _event_log_write("translation_retry_exhausted", {
+                    "target": str(target_id)[-16:],
+                    "src": src_lang,
+                    "targets": targets,
+                    "message_id": str(ctx.get("message_id") or ""),
+                })
+            except Exception:
+                pass
+        finally:
+            with _TRANSLATION_RETRY_LOCK:
+                _TRANSLATION_RETRY_INFLIGHT.discard(retry_key)
+
+    threading.Thread(
+        target=_worker,
+        name="translation-retry-" + hashlib.sha1(retry_key.encode("utf-8")).hexdigest()[:8],
+        daemon=True,
+    ).start()
+    return True
+
+
 def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
     """Best-effort visible failure notice for background text/image jobs.
 
@@ -11885,12 +12410,12 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
             "Pengenalan atau terjemahan gambar sementara gagal. Silakan kirim ulang gambarnya."
         )
     else:
-        # Never fail silently for a translatable text message.  A strict factory
-        # guard may correctly block an unsafe candidate, but users still need a
-        # visible, quotable status instead of assuming reply messages are ignored.
+        # Text failures are self-healing: the bot switches to a detached retry
+        # instead of asking the user to resend or claiming the message cannot be
+        # translated.  The eventual translation is pushed automatically.
         text = (
-            "⚠️ 這則訊息暫時無法完成安全翻譯，系統已記錄，請稍後重傳。\n"
-            "Pesan ini belum dapat diterjemahkan dengan aman. Sistem sudah mencatatnya; silakan kirim ulang nanti."
+            "⏳ 系統已切換備援翻譯並自動重試，無需重傳。\n"
+            "Sistem telah beralih ke penerjemah cadangan dan akan mencoba lagi secara otomatis; tidak perlu mengirim ulang."
         )
     msg = TextMessage(text=_clip_line_text(text))
     quote_token = (ctx or {}).get("quote_token")
@@ -12120,6 +12645,10 @@ def translate(text, src, tgt):
                 _tl.auto_tone_analysis = _prev_auto_tone
         except Exception:
             pass
+    _emergency_attempted = False
+    if not result and not _translation_was_intentionally_skipped():
+        _emergency_attempted = True
+        result = _emergency_translation_fallback(protected_text, src, tgt)
     if _is_translation_failure_sentinel(result):
         logger.warning("[LegacyFailurePurge] blocked failure payload at public translate boundary")
         result = None
@@ -12134,6 +12663,24 @@ def translate(text, src, tgt):
             canonical_text, result, src, tgt
         )
         result = _final_delivery_guard(canonical_text, result, src, tgt)
+        if (
+            not result
+            and not _emergency_attempted
+            and not _translation_was_intentionally_skipped()
+        ):
+            # The primary provider returned text, but objective integrity checks
+            # rejected it.  Try independent NMT routes immediately before
+            # falling back to the detached retry worker.
+            _emergency_attempted = True
+            result = _emergency_translation_fallback(protected_text, src, tgt)
+            if result and _mention_map:
+                result = restore_mentions(result, _mention_map)
+                result = _post_restore_mentions_guard(result, _mention_map)
+            if result:
+                result = _normalize_factory_operation_question(
+                    canonical_text, result, src, tgt
+                )
+                result = _final_delivery_guard(canonical_text, result, src, tgt)
         # Absolute last boundary: if the source is an ERP reason table/label,
         # deterministic factory semantics outrank any reviewer/cache/model output.
         if src == "zh" and tgt == "id":
@@ -16958,8 +17505,29 @@ def handle_message(event):
                 pass
         track_group_usage("__dm__", _bp, _bc, _bcost)
         if not result:
-            logger.warning("[DM] translate returned empty for lang=%s tgt=%s text=%r; visible fallback disabled",
-                           lang, tgt, text_clean[:60])
+            logger.warning(
+                "[DM] immediate translation empty; scheduling retry lang=%s tgt=%s text=%r",
+                lang, tgt, text_clean[:60],
+            )
+            _dm_retry_ctx = {
+                "reply_token": event.reply_token,
+                "quote_token": get_quote_token(event.message),
+                "user_id": user_id,
+                "message_id": str(getattr(event.message, "id", "") or ""),
+            }
+            _dm_retry_scheduled = _schedule_text_translation_retry(
+                _dm_retry_ctx,
+                source_text=text,
+                src_lang=lang,
+                target_langs=[tgt],
+                line_mentions=_dm_line_mentions,
+            )
+            if _dm_retry_scheduled:
+                _send_background_failure_notice(
+                    _dm_retry_ctx,
+                    kind="translation_retry",
+                    detail="dm_immediate_providers_empty_auto_retry",
+                )
             return
         reply = LANG_FLAGS.get(tgt, "") + " " + result
 
@@ -17294,26 +17862,44 @@ def handle_message(event):
             except Exception:
                 pass
             return
-        # Strict factory validation is allowed to block an unsafe translation,
-        # but it must never create a silent no-response—especially for LINE
-        # quoted replies, where silence looks like the feature is unsupported.
-        logger.warning("[group %s] translate returned empty for lang=%s text=%r",
+        # A non-empty candidate is no longer discarded by quality heuristics.
+        # Reaching this branch now means every immediate provider path was empty.
+        # Schedule detached retries and tell the group that no resend is needed;
+        # never emit the old "cannot translate safely" terminal state.
+        logger.warning("[group %s] immediate translation empty; scheduling retry lang=%s text=%r",
                        group_id, lang, (text_to_translate or "")[:80])
+        _retry_targets = list(_targets) if lang == "zh" else ["zh"]
+        _retry_ctx = {
+            "reply_token": event.reply_token,
+            "quote_token": get_quote_token(event.message),
+            "group_id": group_id,
+            "user_id": user_id,
+            "message_id": str(getattr(event.message, "id", "") or ""),
+        }
+        _retry_scheduled = _schedule_text_translation_retry(
+            _retry_ctx,
+            source_text=text_to_translate,
+            src_lang=lang,
+            target_langs=_retry_targets,
+            line_mentions=line_mentions,
+        )
         try:
-            _event_log_write("translate_empty_visible_notice", {
+            _event_log_write("translate_empty_retry_scheduled", {
                 "group_id": group_id or "",
                 "lang": lang,
+                "targets": _retry_targets,
+                "scheduled": bool(_retry_scheduled),
                 "quoted_message_id": str(quoted_id or ""),
                 "text_preview": (text_to_translate or "")[:100],
             })
         except Exception:
             pass
-        _send_background_failure_notice({
-            "reply_token": event.reply_token,
-            "quote_token": get_quote_token(event.message),
-            "group_id": group_id,
-            "user_id": user_id,
-        }, kind="translation", detail="empty_or_rejected_translation")
+        if _retry_scheduled:
+            _send_background_failure_notice(
+                _retry_ctx,
+                kind="translation_retry",
+                detail="immediate_providers_empty_auto_retry",
+            )
         return
 
     # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
