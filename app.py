@@ -291,7 +291,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-07-24.2-source-claim-structured-audit-fallback"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.3-compositional-operational-claim-frame"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -396,7 +396,7 @@ if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PRO
         f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
         "Replace app.py and prompt_optimizer.py together in the project root."
     )
-_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-07-14.2-text-first-visual-card"
+_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-08-05.2-formal-workplace-output-fidelity"
 _EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-07-14.3-workplace-context"
 if getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", None) != _EXPECTED_EXPRESSIVE_ENGINE_VERSION:
     raise RuntimeError(

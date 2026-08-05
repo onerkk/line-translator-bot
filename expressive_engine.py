@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import expressive_assets
 import translation_extras
 
-EXPRESSIVE_ENGINE_VERSION = "2026-07-14.2-text-first-visual-card"
+EXPRESSIVE_ENGINE_VERSION = "2026-08-05.2-formal-workplace-output-fidelity"
 
 
 @dataclass(frozen=True)
@@ -112,6 +112,16 @@ def enhance_translation(
         return base
 
     context = expressive_assets.classify_context(source)
+    operational_workplace = bool(
+        context in {"factory", "workplace"}
+        or re.search(
+            r"削皮|包裝|TAG|重量(?:異常|不正常)|客訴|懲處|工單|料號|機台|設備|"
+            r"研磨|拋光|冷抽|退火|酸洗|矯直|倒角|生產|作業|品保|"
+            r"\b(?:peeling|packing|packaging|weight|complaint|sanction|work\s*order|machine|production|quality)\b",
+            source,
+            re.I,
+        )
+    )
     effective_intensity = intensity
     # Dense factory data should remain precise. Ordinary workplace prose still
     # receives sentence-level semantic emoji under natural/lively modes.
@@ -127,6 +137,12 @@ def enhance_translation(
     visual_mood = analysis.visual_mood
     dominant_tone = analysis.primary
     allow_inline_emoji = cfg.emoji_enabled and mode in {"emoji", "smart"}
+    # Formal factory/workplace output is an operational record. Preserve emoji
+    # already present in the provider translation, but never append new symbols
+    # that were absent from the source. This is a global output-fidelity rule,
+    # not a list of sentence exceptions.
+    if cfg.formal_safety_enabled and operational_workplace:
+        allow_inline_emoji = False
     # A terse factory-process question (for example asking what is wrong with
     # spray painting) is operational data, not casual chat.  Under the formal
     # safety policy, preserve exact copyable output instead of appending 🤔.
