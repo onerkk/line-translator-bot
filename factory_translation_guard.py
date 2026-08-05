@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import factory_knowledge
+import factory_quantity_semantics as fqs_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-07-25.3-historical-corpus-fail-closed-acceptance"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-05.1-compositional-quantity-acceptance"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -401,6 +402,10 @@ class FactoryTranslationGuard:
         issues.extend(self._validate_names(source_text, target_text, protected_names))
         issues.extend(self._validate_codes(source_text, target_text))
         issues.extend(self._validate_quantities(source_text, target_text, _lang(src), _lang(tgt)))
+        quantity_frame = fqs_module.build_frame(source_text, _lang(src), _lang(tgt))
+        quantity_ok, quantity_issues = fqs_module.validate_translation(quantity_frame, target_text)
+        if not quantity_ok or quantity_issues:
+            issues.extend("factory_guard:" + issue for issue in quantity_issues)
         issues = _dedupe(issues)
         return GuardReport(
             ok=not issues,
@@ -435,7 +440,12 @@ class FactoryTranslationGuard:
                     supplemental = []
                     supplemental.extend(self._validate_names(str(example.get("source") or ""), str(example.get("target") or ""), ()))
                     supplemental.extend(self._validate_codes(str(example.get("source") or ""), str(example.get("target") or "")))
-                    supplemental.extend(self._validate_quantities(str(example.get("source") or ""), str(example.get("target") or ""), src, tgt))
+                    source_example = str(example.get("source") or "")
+                    target_example = str(example.get("target") or "")
+                    supplemental.extend(self._validate_quantities(source_example, target_example, src, tgt))
+                    qframe = fqs_module.build_frame(source_example, src, tgt)
+                    _qok, qissues = fqs_module.validate_translation(qframe, target_example)
+                    supplemental.extend("factory_guard:" + issue for issue in qissues)
                     approved_issues = _dedupe(list(owner_issues or []) + supplemental)
                     if not approved_issues:
                         verified += 1
@@ -446,7 +456,15 @@ class FactoryTranslationGuard:
                         _bad_ok, bad_owner_issues = self._knowledge.validate_translation(
                             [owner_card], str(example.get("source") or ""), bad
                         )
-                        bad_issues = _dedupe(list(bad_owner_issues or []) + self._validate_codes(str(example.get("source") or ""), bad) + self._validate_quantities(str(example.get("source") or ""), bad, src, tgt))
+                        bad_source = str(example.get("source") or "")
+                        bad_qframe = fqs_module.build_frame(bad_source, src, tgt)
+                        _bad_qok, bad_qissues = fqs_module.validate_translation(bad_qframe, bad)
+                        bad_issues = _dedupe(
+                            list(bad_owner_issues or [])
+                            + self._validate_codes(bad_source, bad)
+                            + self._validate_quantities(bad_source, bad, src, tgt)
+                            + ["factory_guard:" + issue for issue in bad_qissues]
+                        )
                         if bad_issues:
                             rejected_bad += 1
                         else:

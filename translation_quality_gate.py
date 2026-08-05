@@ -25,12 +25,13 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 import glossary_policy as gp_module
 import factory_semantic_audit as fsa_module
+import factory_quantity_semantics as fqs_module
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 21
-QUALITY_GATE_BUILD_ID = "2026-08-02.2-authoritative-gate-document-label-boundaries"
+QUALITY_GATE_API_VERSION = 22
+QUALITY_GATE_BUILD_ID = "2026-08-05.1-compositional-quantity-semantics"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1491,6 +1492,13 @@ def validate_translation(
             issues.append("catastrophic_omission")
         if src.startswith("zh"):
             issues.extend(_implicit_quantity_unit_issues(source, candidate, src, tgt))
+            # Number/classifier atoms and their relations are validated from a
+            # compositional source frame. This blocks fluent but wrong outputs
+            # such as 包→bundel, dropped half quantities, or 又→plain dan.
+            _quantity_frame = fqs_module.build_frame(source, src, tgt)
+            _quantity_ok, _quantity_issues = fqs_module.validate_translation(_quantity_frame, candidate)
+            if not _quantity_ok or _quantity_issues:
+                issues.extend(_quantity_issues)
             issues.extend(_indonesian_readability_issues(source, candidate, src))
 
     issues = _dedupe(issues)

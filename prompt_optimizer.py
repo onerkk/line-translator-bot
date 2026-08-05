@@ -73,8 +73,14 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
     (
         "bare-quantity",
         ("zh>id",),
-        r"(?:^|[，。！？\s])\d+\s*(?:台|把|支|個|件)(?:$|[，。！？\s])|[一二兩三四五六七八九十]+(?:台|把|支|個|件)",
-        "For a bare number+classifier reply with the noun omitted, stay generic and do not invent the noun: 台/個→buah, 把→bundel, 支→batang, 件→potong. Never use unit unless the source literally says 單位.",
+        r"(?:^|[，。！？\s])\d+\s*(?:台|把|支|個|件|包|袋)(?:半)?(?:$|[，。！？\s])|[一二兩三四五六七八九十]+(?:台|把|支|個|件|包|袋)(?:半)?",
+        "For a bare number+classifier reply with the noun omitted, preserve the classifier: 台/個→buah, 把→bundel, 支→batang, 件→potong, 包/袋→bungkus. Half quantities stay explicit: 一包半→satu setengah bungkus. Never map 包/袋 to bundel, and never use unit unless the source literally says 單位.",
+    ),
+    (
+        "package-pair-relation",
+        ("zh>id",),
+        r"手套|防護具|防护具|(?:包|袋)(?:又|另(?:外)?(?:再)?加|再加|加上|加)[0-9零〇一二兩两三四五六七八九十]*(?:雙|双)|(?:包|袋)(?:有|含|內含|内含|裝有|装有)[0-9零〇一二兩两三四五六七八九十]*(?:雙|双)|不是.{0,8}(?:包|袋).{0,8}(?:而是|是).{0,8}(?:包|袋)",
+        "Treat number+包/袋 as physical packages (bungkus), distinct from rod bundles 把/捆 (bundel). Preserve the relation: 又/加=ditambah (additional pairs), 有/含=berisi (contents), and 不是X包而是Y包 keeps the correction contrast and any half quantity.",
     ),
     (
         "negative-polarity",

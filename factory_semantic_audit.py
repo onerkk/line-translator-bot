@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.3-compositional-operational-claim-frame"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.4-compositional-package-quantity-frame"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -26,7 +26,7 @@ _EXPLICIT_SPEED_ZH = ("轉速", "速度", "低速", "高速", "rpm", "r.p.m")
 _FACTORY_CUES = (
     "料", "棒材", "圓棒", "機台", "設備", "生產", "加工", "到料", "進料", "出料",
     "拋光", "研磨", "清洗", "削皮", "包裝", "工單", "tag", "重量", "異常", "客訴",
-    "懲處", "班", "品保", "qc", "吊", "跑", "產能",
+    "懲處", "班", "品保", "qc", "吊", "跑", "產能", "手套", "防護具", "領取", "领取",
 )
 
 
@@ -76,6 +76,62 @@ def _parse_small_count(raw: str) -> int | None:
     return None
 
 
+def _parse_quantity_value(raw: str) -> float | int | None:
+    """Parse a compact Arabic/Chinese quantity, including a trailing half.
+
+    The parser is intentionally limited to shop-floor allocation quantities.  It
+    does not guess unit conversions; it only resolves forms such as 2, 兩, 1.5,
+    半, 一包半 and 兩袋半 into numeric values for source/target consistency checks.
+    """
+    token = _compact(raw)
+    if not token:
+        return None
+    if token in ("半",):
+        return 0.5
+    if re.fullmatch(r"\d+(?:[.,]\d+)?", token):
+        value = float(token.replace(",", "."))
+        return int(value) if value.is_integer() else value
+    parsed = _parse_small_count(token)
+    return parsed
+
+
+def _parse_package_quantity_phrase(raw: str) -> float | int | None:
+    token = _compact(raw)
+    if not token:
+        return None
+    token = re.sub(r"(?:包|袋)$", "", token)
+    if token == "半":
+        return 0.5
+    if token.endswith(("包半", "袋半")):
+        base = token[:-2]
+        base_value = _parse_quantity_value(base) if base else 1
+        return (base_value + 0.5) if base_value is not None else None
+    # Callers may pass the complete phrase before stripping the unit.
+    match = re.fullmatch(r"(?P<base>.+?)(?:包|袋)半", _compact(raw))
+    if match:
+        base_value = _parse_quantity_value(match.group("base"))
+        return (base_value + 0.5) if base_value is not None else None
+    return _parse_quantity_value(token)
+
+
+_PACKAGE_NUMBER_TOKEN = r"(?:\d+(?:[.,]\d+)?|[零〇一二兩两三四五六七八九十壹貳贰參叁肆伍陸陆柒捌玖拾]{1,3})"
+_PACKAGE_QUANTITY_PHRASE = rf"(?:半(?:包|袋)|{_PACKAGE_NUMBER_TOKEN}(?:包|袋)(?:半)?)"
+_PAIR_NUMBER_TOKEN = _PACKAGE_NUMBER_TOKEN
+
+
+def _extract_package_quantity(raw: str) -> float | int | None:
+    return _parse_package_quantity_phrase(raw)
+
+
+def _extract_pair_count(raw: str) -> int | None:
+    value = _parse_quantity_value(raw)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
 def _extract_count(compact: str, concept_pattern: str) -> int | None:
     count_token = r"(?:\d{1,3}|[零〇一二兩两三四五六七八九十壹貳贰參叁肆伍陸陆柒捌玖拾]{1,3})"
     count_chars = "零〇一二兩两三四五六七八九十壹貳贰參叁肆伍陸陆柒捌玖拾0-9"
@@ -121,13 +177,16 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "flags": {},
         "machine_ids": _machine_ids(src),
         "counts": {},
+        "quantity_tokens": {},
+        "mentions": re.findall(r"@[^\s,，。!?！？:：;；]{1,48}", src),
         "ambiguities": [],
         "prohibited_inferences": [],
         "risk_score": 0,
     }
     if frame["src_lang"] != "zh" or frame["tgt_lang"] != "id" or not src.strip():
         return frame
-    if not any(cue in compact for cue in _FACTORY_CUES):
+    package_quantity_cue = bool(re.search(_PACKAGE_QUANTITY_PHRASE, compact))
+    if not any(cue in compact for cue in _FACTORY_CUES) and not package_quantity_cue:
         return frame
 
     flags = frame["flags"]
@@ -197,6 +256,118 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         r"(?:多|再)(?:看|查|確認|确认|檢查|检查|複核|复核)一次",
         r"(?:再一次)(?:確認|确认|檢查|检查|複核|复核)",
     ))
+    # PPE/package allocation semantics.  包/袋 is a physical package
+    # classifier (bungkus), while 把/捆 is a rod-material bundle (bundel).  The
+    # relationship between a package and pairs must also survive: 又/加 means an
+    # additional quantity; 有/含 means package contents.
+    flags["gloves"] = _contains_any(compact, ("手套", "工作手套", "防護手套", "防护手套"))
+    flags["before_offwork"] = _contains_any(compact, ("下班前", "收工前", "離開前", "离开前"))
+    flags["pickup_action"] = bool(
+        flags["gloves"] and _search_any(compact, (
+            r"(?:記得|记得|要|請|请|別忘|别忘)?(?:領取|领取|領|领|拿|取)(?:一下)?(?:手套|工作手套|防護手套|防护手套)",
+            r"(?:手套|工作手套|防護手套|防护手套).{0,4}(?:記得|记得|要|請|请)?(?:領取|领取|領|领|拿|取)",
+        ))
+    )
+    per_person_match = re.search(
+        rf"(?:一人|每人|每個人|每个人)(?:可|要|領|领|拿|取|分|發|发|給|给|各)?"
+        rf"(?:手套|工作手套|防護手套|防护手套)?(?P<package>{_PACKAGE_QUANTITY_PHRASE})",
+        compact,
+        flags=re.I,
+    )
+    flags["per_person_package"] = bool(per_person_match)
+    if per_person_match:
+        frame["counts"]["package_allocation"] = _extract_package_quantity(per_person_match.group("package"))
+        frame["quantity_tokens"]["package_allocation"] = per_person_match.group("package")
+
+    additive_match = re.search(
+        rf"(?P<package>{_PACKAGE_QUANTITY_PHRASE}).{{0,5}}?"
+        rf"(?:又|另(?:外)?(?:再)?加|再加|加上|加)"
+        rf"(?P<pairs>{_PAIR_NUMBER_TOKEN})(?:雙|双)",
+        compact,
+        flags=re.I,
+    )
+    additive_pair_only = re.search(
+        rf"(?:又|另(?:外)?(?:再)?加|再加|加上|加)(?P<pairs>{_PAIR_NUMBER_TOKEN})(?:雙|双)",
+        compact,
+        flags=re.I,
+    )
+    containment_match = re.search(
+        rf"(?P<package>{_PACKAGE_QUANTITY_PHRASE}).{{0,5}}?"
+        rf"(?:裡面|里面|內|内)?(?:有|含|內含|内含|裝有|装有|裝|装)"
+        rf"(?P<pairs>{_PAIR_NUMBER_TOKEN})(?:雙|双)",
+        compact,
+        flags=re.I,
+    )
+    containment_pair_only = re.search(
+        rf"(?:裡面|里面|包內|包内|袋內|袋内|每包|每袋).{{0,3}}?"
+        rf"(?:有|含|內含|内含|裝有|装有|裝|装)?(?P<pairs>{_PAIR_NUMBER_TOKEN})(?:雙|双)",
+        compact,
+        flags=re.I,
+    )
+    if not containment_match:
+        containment_match = re.search(
+            rf"(?:每包|每袋|一包|一袋).{{0,2}}?(?P<pairs>{_PAIR_NUMBER_TOKEN})(?:雙|双)"
+            rf"(?!.*(?:又|另(?:外)?(?:再)?加|再加|加上))",
+            compact,
+            flags=re.I,
+        )
+
+    package_phrase = None
+    pair_token = None
+    if additive_match:
+        package_phrase = additive_match.group("package")
+        pair_token = additive_match.group("pairs")
+    elif per_person_match and additive_pair_only:
+        package_phrase = per_person_match.group("package")
+        pair_token = additive_pair_only.group("pairs")
+    flags["package_plus_pairs"] = bool(package_phrase and pair_token)
+
+    contains_package_phrase = None
+    contains_pair_token = None
+    if not flags["package_plus_pairs"]:
+        if containment_match:
+            contains_package_phrase = containment_match.groupdict().get("package")
+            contains_pair_token = containment_match.group("pairs")
+        elif per_person_match and containment_pair_only:
+            contains_package_phrase = per_person_match.group("package")
+            contains_pair_token = containment_pair_only.group("pairs")
+    flags["package_contains_pairs"] = bool(contains_package_phrase and contains_pair_token)
+
+    if flags["package_plus_pairs"]:
+        frame["counts"].setdefault("package_allocation", _extract_package_quantity(package_phrase))
+        frame["quantity_tokens"].setdefault("package_allocation", package_phrase)
+        frame["counts"]["pair_allocation"] = _extract_pair_count(pair_token)
+        frame["quantity_tokens"]["pair_allocation"] = pair_token
+    elif flags["package_contains_pairs"]:
+        frame["counts"].setdefault("package_allocation", _extract_package_quantity(contains_package_phrase))
+        frame["quantity_tokens"].setdefault("package_allocation", contains_package_phrase)
+        frame["counts"]["pair_allocation"] = _extract_pair_count(contains_pair_token)
+        frame["quantity_tokens"]["pair_allocation"] = contains_pair_token
+
+    correction_match = re.search(
+        rf"(?:不是|並非|并非|不對|不对)(?P<from>{_PACKAGE_QUANTITY_PHRASE})"
+        rf"(?:[,，。;；:：]?)(?:而是|是|應是|应是|應該是|应该是)"
+        rf"(?P<to>{_PACKAGE_QUANTITY_PHRASE})",
+        compact,
+        flags=re.I,
+    )
+    flags["package_quantity_correction"] = bool(correction_match)
+    if correction_match:
+        frame["counts"]["package_correction_from"] = _extract_package_quantity(correction_match.group("from"))
+        frame["counts"]["package_correction_to"] = _extract_package_quantity(correction_match.group("to"))
+        frame["quantity_tokens"]["package_correction_from"] = correction_match.group("from")
+        frame["quantity_tokens"]["package_correction_to"] = correction_match.group("to")
+    flags["physical_package_unit"] = bool(
+        flags["per_person_package"]
+        or flags["package_plus_pairs"]
+        or flags["package_contains_pairs"]
+        or flags["package_quantity_correction"]
+    )
+    flags["material_bundle_unit"] = bool(
+        flags.get("bundle_by_bundle")
+        or re.search(rf"{_PACKAGE_NUMBER_TOKEN}(?:把|捆)", compact, flags=re.I)
+    )
+
     flags["abnormal_weight"] = _contains_any(compact, (
         "重量異常", "重量异常", "重量不正常", "重量有問題", "重量有问题",
     ))
@@ -302,6 +473,50 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         add("bundle_by_bundle", "一把一把／逐把", "TAG 必須逐把／逐捆處理，避免混貼", "satu bundel demi satu bundel / setiap bundel satu per satu")
     if flags["self_uncertainty"] or flags["double_check"]:
         add("self_result_double_check", "懷疑自己／多看一次", "不立即相信自己剛完成的貼標結果，因此再複核一次", "tidak langsung yakin dengan hasil sendiri lalu cek sekali lagi")
+    if flags["before_offwork"] and flags["pickup_action"]:
+        add("pickup_before_offwork", "下班前領取手套", "離開工作場所前記得領取手套", "sebelum pulang kerja, ingat ambil sarung tangan")
+    elif flags["pickup_action"]:
+        add("pickup_gloves", "領取手套", "提醒人員領取工作手套", "ingat/tolong ambil sarung tangan")
+    if flags["per_person_package"]:
+        package_count = frame["counts"].get("package_allocation")
+        add(
+            "per_person_package_allocation",
+            "一人／每人 + 包或袋",
+            f"每個人分配 {package_count if package_count is not None else '來源所述數量'} 包；包是實體包裝單位，不是棒材捆",
+            "setiap orang ... bungkus; never bundel",
+        )
+    if flags["package_plus_pairs"]:
+        pair_count = frame["counts"].get("pair_allocation")
+        add(
+            "additional_pairs_allocation",
+            "一包又／另加若干雙",
+            f"在每人包裝數之外，另外增加 {pair_count if pair_count is not None else '來源所述數量'} 雙；不是包內含量",
+            "bungkus ditambah ... pasang; not merely dan and not berisi",
+        )
+    if flags["package_contains_pairs"]:
+        pair_count = frame["counts"].get("pair_allocation")
+        add(
+            "package_contents_pairs",
+            "一包有／含若干雙",
+            f"每包內含 {pair_count if pair_count is not None else '來源所述數量'} 雙",
+            "bungkus berisi ... pasang",
+        )
+    if flags["package_quantity_correction"]:
+        from_count = frame["counts"].get("package_correction_from")
+        to_count = frame["counts"].get("package_correction_to")
+        add(
+            "package_quantity_correction",
+            "不是 X 包，是 Y 包（含半包）",
+            f"否定 {from_count} 包並更正為 {to_count} 包；包是 bungkus，不是 bundel",
+            "bukan ... bungkus, melainkan/tetapi ... bungkus",
+        )
+    if flags["physical_package_unit"]:
+        frame["ambiguities"].append({
+            "source_term": "數字+包／袋",
+            "resolved_meaning_zh": "實體包裝數量，印尼文量詞用 bungkus；半包用 setengah bungkus",
+            "rejected_interpretations": ["翻成棒材捆 bundel", "把一包半拆成一包再加半捆", "省略半數量"],
+        })
+
     if flags["abnormal_weight"]:
         count = frame["counts"].get("abnormal_weight")
         count_text = str(count) if count is not None else "來源所述數量"
@@ -365,6 +580,14 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "cannot_help": 2,
         "sanction": 2,
         "severe_consequence": 2,
+        "gloves": 1,
+        "before_offwork": 1,
+        "pickup_action": 1,
+        "per_person_package": 2,
+        "package_plus_pairs": 3,
+        "package_contains_pairs": 3,
+        "package_quantity_correction": 4,
+        "physical_package_unit": 2,
     }
     frame["risk_score"] = sum(weight for key, weight in risk_weights.items() if flags.get(key))
     decisive = (
@@ -372,6 +595,9 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         or flags.get("pending_system_record")
         or flags.get("abnormal_weight")
         or flags.get("wrong_tag_attachment")
+        or flags.get("package_quantity_correction")
+        or flags.get("package_plus_pairs")
+        or flags.get("package_contains_pairs")
         or (flags.get("no_more_search") and flags.get("peeling_location"))
     )
     frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive))
@@ -409,7 +635,7 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
         )
     for item in frame.get("prohibited_inferences", []) or []:
         lines.append("Prohibited inference: " + str(item))
-    lines.append("Silently back-translate the final Indonesian and confirm that time, material scope, machine assignment, priority and prohibition are unchanged.")
+    lines.append("Silently back-translate the final Indonesian and confirm that time, material scope, quantities, classifiers, arithmetic/content relations, machine assignment, priority and prohibition are unchanged.")
     lines.append("</source_semantic_frame>")
     return "\n".join(lines)
 
@@ -480,6 +706,145 @@ def _same_clause_has_counted_concept(
     return _same_clause_has(low, groups)
 
 
+def _indonesian_quantity_terms(value: float | int | None) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int):
+        return _count_terms(value)
+    whole = int(value)
+    fraction = round(float(value) - whole, 6)
+    values: List[str] = [str(value), str(value).replace(".", ",")]
+    if fraction == 0.5:
+        if whole == 0:
+            values.append("setengah")
+        else:
+            whole_word = _indonesian_number_words(whole)
+            if whole_word:
+                values.append(whole_word + " setengah")
+    return tuple(dict.fromkeys(v for v in values if v))
+
+
+def _quantity_unit_in_clause(clause: str, value: float | int | None, units: Sequence[str]) -> bool:
+    quantities = _indonesian_quantity_terms(value)
+    if not quantities:
+        return any(_norm(unit) in clause for unit in units)
+    for quantity in quantities:
+        for unit in units:
+            pattern = r"(?<![a-z0-9])" + re.escape(_norm(quantity)) + r"\s+" + re.escape(_norm(unit)) + r"(?![a-z])"
+            if re.search(pattern, clause, flags=re.I):
+                return True
+    return False
+
+
+def _quantity_unit_spans(
+    clause: str, value: float | int | None, units: Sequence[str]
+) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    quantities = _indonesian_quantity_terms(value)
+    if not quantities:
+        return spans
+    for quantity in quantities:
+        for unit in units:
+            pattern = r"(?<![a-z0-9])" + re.escape(_norm(quantity)) + r"\s+" + re.escape(_norm(unit)) + r"(?![a-z])"
+            spans.extend((match.start(), match.end()) for match in re.finditer(pattern, clause, flags=re.I))
+    return sorted(set(spans))
+
+
+def _same_clause_has_quantity_relation(
+    low: str,
+    left_value: float | int | None,
+    left_units: Sequence[str],
+    relation_terms: Sequence[str],
+    right_value: float | int | None,
+    right_units: Sequence[str],
+) -> bool:
+    clauses = [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+    for clause in clauses:
+        left_spans = _quantity_unit_spans(clause, left_value, left_units)
+        right_spans = _quantity_unit_spans(clause, right_value, right_units)
+        relation_spans: List[Tuple[int, int]] = []
+        for term in relation_terms:
+            relation_spans.extend(
+                (match.start(), match.end())
+                for match in re.finditer(re.escape(_norm(term)), clause, flags=re.I)
+            )
+        if any(
+            left_end <= relation_start and relation_end <= right_start
+            for _left_start, left_end in left_spans
+            for relation_start, relation_end in relation_spans
+            for right_start, _right_end in right_spans
+        ):
+            return True
+    return False
+
+
+def _format_indonesian_quantity(value: float | int | None, raw_token: str = "") -> str:
+    if value is None:
+        return ""
+    token = _compact(raw_token)
+    prefer_digits = bool(re.search(r"\d", token))
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int):
+        if prefer_digits:
+            return str(value)
+        return _indonesian_number_words(value) or str(value)
+    whole = int(value)
+    fraction = round(float(value) - whole, 6)
+    if fraction == 0.5:
+        if prefer_digits and whole == 0:
+            return "0,5"
+        if whole == 0:
+            return "setengah"
+        whole_text = str(whole) if prefer_digits else (_indonesian_number_words(whole) or str(whole))
+        return whole_text + " setengah"
+    return str(value).replace(".", ",")
+
+
+def _package_rebuild(frame: Mapping[str, Any]) -> str:
+    flags = frame.get("flags") or {}
+    counts = frame.get("counts") or {}
+    raw = frame.get("quantity_tokens") or {}
+    mentions = [str(x).strip() for x in frame.get("mentions", []) or [] if str(x).strip()]
+    mention_prefix = ((" ".join(mentions)) + " ") if mentions else ""
+
+    if flags.get("package_quantity_correction"):
+        before = _format_indonesian_quantity(
+            counts.get("package_correction_from"), raw.get("package_correction_from", "")
+        )
+        after = _format_indonesian_quantity(
+            counts.get("package_correction_to"), raw.get("package_correction_to", "")
+        )
+        if before and after:
+            return f"{mention_prefix}bukan {before} bungkus, melainkan {after} bungkus."
+
+    if not (flags.get("per_person_package") and flags.get("gloves")):
+        return ""
+    package_qty = _format_indonesian_quantity(
+        counts.get("package_allocation"), raw.get("package_allocation", "")
+    )
+    if not package_qty:
+        return ""
+    sentences: List[str] = []
+    if flags.get("before_offwork") and flags.get("pickup_action"):
+        sentences.append("Sebelum pulang kerja, ingat ambil sarung tangan.")
+    elif flags.get("pickup_action"):
+        sentences.append("Ingat ambil sarung tangan.")
+
+    pair_qty = _format_indonesian_quantity(
+        counts.get("pair_allocation"), raw.get("pair_allocation", "")
+    )
+    if flags.get("package_plus_pairs") and pair_qty:
+        sentences.append(f"Setiap orang mendapat {package_qty} bungkus ditambah {pair_qty} pasang.")
+    elif flags.get("package_contains_pairs") and pair_qty:
+        sentences.append(f"Setiap orang mendapat {package_qty} bungkus yang berisi {pair_qty} pasang.")
+    else:
+        sentences.append(f"Setiap orang mendapat {package_qty} bungkus.")
+    return mention_prefix + " ".join(sentences)
+
+
 def _complete_polishing_priority_frame(frame: Mapping[str, Any]) -> bool:
     flags = frame.get("flags") or {}
     required = (
@@ -496,12 +861,16 @@ def _complete_polishing_priority_frame(frame: Mapping[str, Any]) -> bool:
 def deterministic_rebuild(frame: Mapping[str, Any]) -> str:
     """Build a safe Indonesian fallback from source-proven semantic slots.
 
-    This is deliberately restricted to the complete polishing/large-bar
-    scheduling frame.  It does not paste an exact stored sentence: machine IDs,
-    time scope, arrival profile and source-explicit equipment/speed details are
-    composed from the current frame.  If the source is incomplete or belongs to
-    another scenario, an empty string is returned instead of guessing.
+    Rebuilds are compositional and restricted to frames whose decisive slots are
+    complete.  No exact source sentence is stored.  Supported frames currently
+    include PPE/package allocation, package-quantity correction, and the complete
+    polishing/large-bar scheduling instruction.
     """
+    package_rebuilt = _package_rebuild(frame)
+    if package_rebuilt:
+        ok, _issues = validate_translation(frame, package_rebuilt)
+        if ok:
+            return package_rebuilt
     if not _complete_polishing_priority_frame(frame):
         return ""
     flags = frame.get("flags") or {}
@@ -619,6 +988,82 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
             issues.append("factory_semantic_audit:self_result_double_check_missing")
 
     counts = frame.get("counts") or {}
+    if flags.get("physical_package_unit"):
+        if not flags.get("material_bundle_unit") and re.search(r"\bbundel\b", low, flags=re.I):
+            issues.append("factory_semantic_audit:physical_package_mistranslated_as_bundle")
+        if not _has_any_target(low, ("bungkus",)):
+            issues.append("factory_semantic_audit:physical_package_unit_missing")
+
+    if flags.get("pickup_action"):
+        if not _has_any_target(low, ("sarung tangan",)):
+            issues.append("factory_semantic_audit:gloves_item_missing")
+        if not _has_any_target(low, ("ambil", "mengambil", "diambil")):
+            issues.append("factory_semantic_audit:gloves_pickup_action_missing")
+    if flags.get("before_offwork") and flags.get("pickup_action") and not _has_any_target(low, (
+        "sebelum pulang kerja", "sebelum selesai kerja", "sebelum meninggalkan tempat kerja",
+    )):
+        issues.append("factory_semantic_audit:before_offwork_deadline_missing")
+
+    if flags.get("per_person_package"):
+        per_person_terms = (
+            "setiap orang", "masing-masing orang", "satu orang satu", "jatah tiap orang", "jatah setiap orang",
+        )
+        allocation_ok = any(
+            _has_any_target(clause, per_person_terms)
+            and _quantity_unit_in_clause(clause, counts.get("package_allocation"), ("bungkus",))
+            for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+        )
+        if not allocation_ok:
+            issues.append("factory_semantic_audit:per_person_package_allocation_missing")
+
+    if flags.get("package_plus_pairs"):
+        additive_ok = _same_clause_has_quantity_relation(
+            low,
+            counts.get("package_allocation"), ("bungkus",),
+            ("ditambah", "tambah", "tambahan", "plus"),
+            counts.get("pair_allocation"), ("pasang",),
+        )
+        if not additive_ok:
+            issues.append("factory_semantic_audit:package_plus_pairs_relation_missing")
+        if _same_clause_has(low, (("bungkus",), ("berisi", "isinya", "memuat"))):
+            issues.append("factory_semantic_audit:additional_pairs_mistranslated_as_contents")
+
+    if flags.get("package_contains_pairs"):
+        contents_ok = _same_clause_has_quantity_relation(
+            low,
+            counts.get("package_allocation"), ("bungkus",),
+            ("berisi", "isinya", "memuat", "isi"),
+            counts.get("pair_allocation"), ("pasang",),
+        )
+        if not contents_ok:
+            issues.append("factory_semantic_audit:package_contents_pairs_relation_missing")
+
+    if flags.get("package_quantity_correction"):
+        clauses = [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+        correction_ok = False
+        for clause in clauses:
+            from_spans = _quantity_unit_spans(clause, counts.get("package_correction_from"), ("bungkus",))
+            to_spans = _quantity_unit_spans(clause, counts.get("package_correction_to"), ("bungkus",))
+            negative_spans = [
+                (m.start(), m.end()) for m in re.finditer(r"\b(?:bukan|tidak)\b", clause, flags=re.I)
+            ]
+            contrast_spans: List[Tuple[int, int]] = []
+            for term in ("melainkan", "tetapi", "namun", "seharusnya", "yang benar"):
+                contrast_spans.extend(
+                    (m.start(), m.end()) for m in re.finditer(re.escape(term), clause, flags=re.I)
+                )
+            if any(
+                neg_end <= from_start and from_end <= contrast_start and contrast_end <= to_start
+                for _neg_start, neg_end in negative_spans
+                for from_start, from_end in from_spans
+                for contrast_start, contrast_end in contrast_spans
+                for to_start, _to_end in to_spans
+            ):
+                correction_ok = True
+                break
+        if not correction_ok:
+            issues.append("factory_semantic_audit:package_quantity_correction_relation_missing")
+
     if flags.get("abnormal_weight") and not _same_clause_has_counted_concept(
         low,
         counts.get("abnormal_weight"),

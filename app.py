@@ -266,13 +266,14 @@ import factory_terminology as factory_terminology_module  # indexed plant glossa
 import factory_translation_policy as factory_translation_policy_module  # one factory-only route for all zh↔id text/OCR
 import factory_translation_guard as factory_translation_guard_module  # deterministic fail-closed plant acceptance boundary
 import factory_structured_report as factory_structured_report_module  # source-verifiable measurement/status reports
+import factory_quantity_semantics as factory_quantity_semantics_module  # compositional number/classifier/relation frame
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 21
-_EXPECTED_QG_BUILD_ID = "2026-08-02.2-authoritative-gate-document-label-boundaries"
+_EXPECTED_QG_API_VERSION = 22
+_EXPECTED_QG_BUILD_ID = "2026-08-05.1-compositional-quantity-semantics"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -291,7 +292,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.3-compositional-operational-claim-frame"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.4-compositional-package-quantity-frame"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -334,7 +335,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
 _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-07-25.3-historical-corpus-fail-closed-acceptance"
+_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-05.1-compositional-quantity-acceptance"
 if (getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION
         or getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_BUILD_ID", None)
@@ -352,6 +353,26 @@ _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH = factory_translation_guard_module.health
 if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok")):
     raise RuntimeError("factory translation guard behavioral self-test failed")
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
+
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-05.1-compositional-classifier-relations"
+if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
+        != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
+        or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
+        != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID):
+    raise RuntimeError(
+        "factory quantity semantics deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION} "
+        f"build={_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID}, "
+        f"loaded api={getattr(factory_quantity_semantics_module, 'FACTORY_QUANTITY_SEMANTICS_API_VERSION', None)!r} "
+        f"build={getattr(factory_quantity_semantics_module, 'FACTORY_QUANTITY_SEMANTICS_BUILD_ID', None)!r}. "
+        "Replace app.py, translation_quality_gate.py, factory_translation_guard.py and factory_quantity_semantics.py together."
+    )
+logger.info(
+    "[FactoryQuantitySemantics] deployment verified api=%s build=%s",
+    _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION,
+    _EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
+)
 
 # These four files form one deployable unit.  A stale translation_extras.py was
 # the reason an app-only upload could start successfully and then fail on the
@@ -8515,6 +8536,32 @@ def build_translation_semantic_contract(text, src, tgt):
         if _fsa_module is not None and _fsa_module.should_force_review(source_frame):
             contract["requires_independent_review"] = True
 
+    # Compositional number/classifier semantics. This is generated from atoms
+    # and relations, not from sentence matches, and therefore protects paraphrases
+    # such as 一包又六雙 / 每人半包 / 不是兩箱而是一箱半.
+    try:
+        quantity_frame = factory_quantity_semantics_module.build_frame(text, src, tgt)
+    except Exception as exc:
+        _logger = globals().get("logger")
+        if _logger is not None and hasattr(_logger, "warning"):
+            _logger.warning("[FactoryQuantitySemantics] source frame failed open: %s", exc)
+        quantity_frame = {"active": False}
+    if quantity_frame.get("active"):
+        contract["has_risk"] = True
+        contract["risks"].append({
+            "term": "factory_quantities",
+            "sense": "factory_quantity_semantics",
+            "frame": quantity_frame,
+            "tm_bypass_allowed": False,
+            "nmt_allowed": False,
+            "requires_validation": True,
+        })
+        contract["tm_bypass_allowed"] = False
+        contract["vector_bypass_allowed"] = False
+        contract["nmt_allowed"] = False
+        contract["requires_llm"] = True
+        contract["requires_independent_review"] = True
+
     # Generic plant-context retrieval.  This is direction-neutral and data-driven:
     # adding a new workflow means editing factory_knowledge.json, not app.py.
     try:
@@ -8587,6 +8634,10 @@ def build_translation_semantic_contract_prompt(contract):
                             if _fsa_module is not None else "")
             if frame_prompt:
                 lines.append(frame_prompt)
+        elif risk.get("sense") == "factory_quantity_semantics":
+            quantity_prompt = factory_quantity_semantics_module.build_prompt(risk.get("frame") or {})
+            if quantity_prompt:
+                lines.append(quantity_prompt)
         elif risk.get("sense") == "factory_knowledge_context":
             knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
             if knowledge_prompt:
@@ -8655,6 +8706,10 @@ def translation_satisfies_semantic_contract(contract, translation):
                 ok, issues = _fsa_module.validate_translation(risk.get("frame") or {}, t)
                 if not ok:
                     return False, issues[0] if issues else "factory_source_semantic_frame_failed"
+        elif risk.get("sense") == "factory_quantity_semantics":
+            ok, issues = factory_quantity_semantics_module.validate_translation(risk.get("frame") or {}, t)
+            if not ok:
+                return False, issues[0] if issues else "factory_quantity_semantics_failed"
         elif risk.get("sense") == "factory_knowledge_context":
             ok, issues = factory_knowledge_module.validate_translation(
                 risk.get("cards", []), risk.get("source_text", ""), t
@@ -10233,8 +10288,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "<context_disambiguation>\n"
             "10. CRITICAL CONTEXT RULES: "
             "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
-            "b) 把/捆=BUNDLE counters. 包2把=packing 2 bundel. "
-            "c) 包(verb)=packing NOT wrapping. 高侑的今天包2把都這樣=Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
+            "b) 把/捆=BUNDLE counters for rod material. 包2把 means the verb 包(packing) + 2把(two bundel). "
+            "c) 包 is polysemous: as a VERB it means packing; as a NUMBER+包/袋 classifier it means a physical package and must use bungkus, NEVER bundel. "
+            "半包/一包半/兩包半=setengah bungkus/satu setengah bungkus/dua setengah bungkus. "
+            "Preserve package-pair relations: 一包又6雙=one package PLUS 6 pairs → satu bungkus ditambah 6 pasang; 一包有6雙=one package CONTAINS 6 pairs → satu bungkus berisi 6 pasang. "
+            "高侑的今天包2把都這樣=Yang di-packing 高侑 hari ini 2 bundel semuanya kayak gini. "
             "d) Names(" + ",".join(EXTRA_CUSTOMERS) + ")=keep as-is. "
             "e) Customer names=keep as-is, do NOT translate. "
             "f) R+number=round bar diameter(R28.57=bulat 28.57mm). Non-R=hex/special(H26=hex 26mm). "
@@ -10266,7 +10324,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Only treat H, S and 異型棒 as separate product categories when punctuation or parallel grammar explicitly lists three independent items. Never force the three-item reading solely because S/H appears before 異型棒. "
             "p) ELLIPTICAL QUANTITY REPLIES: Chinese speakers often reply with JUST '數字+量詞' as a short answer, omitting the noun. "
             "e.g. Q:『要幾台?』A:『兩台』(=兩台台車=two troli, NOT 'two units'). "
-            "Default mapping: 兩台→dua buah(generic, NEVER 'dua unit'); 三把→tiga bundel; 5支→5 batang; 一個→satu buah; 兩件→dua potong. "
+            "Default mapping: 兩台→dua buah(generic, NEVER 'dua unit'); 三把→tiga bundel; 5支→5 batang; 一個→satu buah; 兩件→dua potong; 兩包/兩袋→dua bungkus. 包/袋 must never become bundel. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese contains '單位'. "
             "q) 台車=troli(hard replacement applied). 削皮=peeling(hard replacement applied). "
             "r) 中文『請』多義規則(CRITICAL): 在飲料/便當/咖啡/點心/吃飯/福利發放語境中,『請客 / X請的 / 公司請的 / 總部請的』= treat/sponsor/pay for, "
@@ -10295,8 +10353,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "Translate these short replies with a GENERIC Indonesian quantity phrase that stays neutral: "
             "兩台/兩個/兩支/兩把/兩件 (when noun is omitted) → 'dua' or 'dua buah'(generic), NEVER 'dua unit'(too formal and wrong in casual chat). "
             "The word 'unit' in Indonesian suggests abstract units/modules and is WRONG for physical countable items like troli/batang/bundel. "
-            "Default mapping for bare quantity replies: 台=buah(generic) or keep context-neutral, 把=bundel, 支=batang, 個=buah, 件=potong(for items/pieces). "
-            "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. "
+            "Default mapping for bare quantity replies: 台=buah(generic) or keep context-neutral, 把=bundel, 支=batang, 個=buah, 件=potong(for items/pieces), 包/袋=bungkus. Never map 包/袋 to bundel. "
+            "Examples: 兩台→dua buah. 三把→tiga bundel. 5支→5 batang. 一個→satu buah. 兩件→dua potong. 兩包→dua bungkus. 一包半→satu setengah bungkus. "
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
             "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently.\n"
             "</context_disambiguation>\n"

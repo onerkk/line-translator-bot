@@ -14,6 +14,8 @@ SCREENSHOT_SHIFT = (
     "目前一件重量異常，兩件TAG貼錯都是我們班，大家都很辛苦，作業多留意一下。\n\n"
     "這陣子太多件，現況一旦客訴我也幫不上忙。被懲處會很傷。"
 )
+SCREENSHOT_GLOVES = "下班前 記得領手套 一人一包又6雙"
+SCREENSHOT_PACKAGE_CORRECTION = "@All 不是兩包 是一包半"
 
 
 class FactoryOperationalClaimFrameRootFixTests(unittest.TestCase):
@@ -115,6 +117,72 @@ class FactoryOperationalClaimFrameRootFixTests(unittest.TestCase):
         self.assertIn("speaker_cannot_help_missing", joined)
         self.assertIn("sanction_missing", joined)
         self.assertIn("severe_consequence_missing", joined)
+
+
+    def test_glove_distribution_preserves_addition_not_vague_and(self):
+        frame = audit.build_source_frame(SCREENSHOT_GLOVES, "zh", "id")
+        self.assertTrue(frame["active"])
+        self.assertEqual(frame["counts"]["package_allocation"], 1)
+        self.assertEqual(frame["counts"]["pair_allocation"], 6)
+        self.assertTrue({
+            "pickup_before_offwork",
+            "per_person_package_allocation",
+            "additional_pairs_allocation",
+        }.issubset({item["claim_id"] for item in frame["claims"]}))
+
+        good = (
+            "Sebelum pulang kerja, ingat ambil sarung tangan. "
+            "Setiap orang mendapat satu bungkus ditambah 6 pasang."
+        )
+        self.assertTrue(audit.validate_translation(frame, good)[0])
+
+        screenshot_output = (
+            "Sebelum pulang kerja, ingat ambil sarung tangan. "
+            "Satu orang satu bungkus dan 6 pasang."
+        )
+        ok, issues = audit.validate_translation(frame, screenshot_output)
+        self.assertFalse(ok)
+        self.assertIn("factory_semantic_audit:package_plus_pairs_relation_missing", issues)
+
+        self.assertEqual(audit.deterministic_rebuild(frame), good)
+
+    def test_package_classifier_and_half_quantity_are_not_rod_bundles(self):
+        frame = audit.build_source_frame(SCREENSHOT_PACKAGE_CORRECTION, "zh", "id")
+        self.assertTrue(frame["active"])
+        self.assertEqual(frame["counts"]["package_correction_from"], 2)
+        self.assertEqual(frame["counts"]["package_correction_to"], 1.5)
+
+        good = "@All bukan dua bungkus, melainkan satu setengah bungkus."
+        self.assertTrue(audit.validate_translation(frame, good)[0])
+        self.assertEqual(audit.deterministic_rebuild(frame), good)
+
+        screenshot_output = "@All bukan dua bundel, tetapi satu setengah bundel."
+        ok, issues = audit.validate_translation(frame, screenshot_output)
+        self.assertFalse(ok)
+        self.assertIn("factory_semantic_audit:physical_package_mistranslated_as_bundle", issues)
+        self.assertIn("factory_semantic_audit:physical_package_unit_missing", issues)
+        self.assertIn("factory_semantic_audit:package_quantity_correction_relation_missing", issues)
+
+    def test_package_relation_is_compositional_for_unseen_wording(self):
+        additive_source = "每人領一袋，另外再加4雙手套"
+        additive_frame = audit.build_source_frame(additive_source, "zh", "id")
+        self.assertTrue(additive_frame["flags"]["package_plus_pairs"])
+        self.assertEqual(
+            audit.deterministic_rebuild(additive_frame),
+            "Setiap orang mendapat satu bungkus ditambah 4 pasang.",
+        )
+
+        contents_source = "每人一包，裡面有12雙手套"
+        contents_frame = audit.build_source_frame(contents_source, "zh", "id")
+        self.assertTrue(contents_frame["flags"]["package_contains_pairs"])
+        contents_target = "Setiap orang mendapat satu bungkus yang berisi 12 pasang."
+        self.assertEqual(audit.deterministic_rebuild(contents_frame), contents_target)
+        self.assertTrue(audit.validate_translation(contents_frame, contents_target)[0])
+
+        wrong_relation = "Setiap orang mendapat satu bungkus ditambah 12 pasang."
+        ok, issues = audit.validate_translation(contents_frame, wrong_relation)
+        self.assertFalse(ok)
+        self.assertIn("factory_semantic_audit:package_contents_pairs_relation_missing", issues)
 
     def test_formal_factory_mode_never_appends_new_emoji(self):
         translated = "Saat ini ada satu barang dengan berat tidak normal."
