@@ -157,7 +157,7 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
             os.environ.pop("FACTORY_BLOCK_UNVERIFIED_DELIVERY", None)
             self.assertFalse(policy.fail_closed("zh", "id"))
         with mock.patch.dict(os.environ, {"FACTORY_BLOCK_UNVERIFIED_DELIVERY": "1"}):
-            self.assertTrue(policy.fail_closed("zh", "id"))
+            self.assertFalse(policy.fail_closed("zh", "id"))
 
     def test_factory_policy_uses_adaptive_nonvetoing_review_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):

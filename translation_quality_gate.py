@@ -30,8 +30,8 @@ import factory_quantity_semantics as fqs_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 22
-QUALITY_GATE_BUILD_ID = "2026-08-05.1-compositional-quantity-semantics"
+QUALITY_GATE_API_VERSION = 23
+QUALITY_GATE_BUILD_ID = "2026-08-06.1-quoted-control-fields-and-durable-delivery"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -43,14 +43,32 @@ _QUOTES_OPEN = '"“”„‟＂「」『』‘’\'`'
 _QUOTES_CLOSE = _QUOTES_OPEN
 _QUOTES_ALL = _QUOTES_OPEN
 
-# Quote-wrapped field values.  The *inner value* is protected, while the quote
-# characters remain visible to the model so it can naturally use target-language
-# typography without changing the data value itself.
+# Quote-wrapped source spans are scanned broadly, then filtered by
+# ``_is_immutable_quoted_value``.  The previous one-token-only regex missed
+# operational form labels containing spaces or mixed case (for example a Work
+# Order field value such as ``"NO Kondom"``), causing a correct translation to
+# be rejected as untranslated source language.  Filtering in code keeps normal
+# quoted prose translatable instead of treating every quotation as immutable.
 _QUOTED_DATA_RE = re.compile(
     r'(?P<open>[' + re.escape(_QUOTES_OPEN) + r'])\s*'
-    r'(?P<value>(?:[-–—]|[A-Z0-9][A-Z0-9._/+:%×x-]{0,31}))\s*'
+    r'(?P<value>[^' + re.escape(_QUOTES_ALL) + r'\r\n]{1,64}?)\s*'
     r'(?P<close>[' + re.escape(_QUOTES_CLOSE) + r'])'
 )
+
+# A one-letter uppercase value in parentheses is normally a form/control flag
+# (Y/N, A/B, etc.), not prose.  It must survive translation exactly.  This is
+# intentionally limited to a single ASCII uppercase letter so ordinary
+# parenthetical explanations remain fully translatable.
+_PARENTHESIZED_FLAG_RE = re.compile(
+    r'(?P<open>[（(])\s*(?P<value>[A-Z])\s*(?P<close>[）)])'
+)
+
+_QUOTED_CODELIKE_RE = re.compile(r'(?:[-–—]|[A-Z0-9][A-Z0-9._/+:%×x-]{0,31})\Z')
+_QUOTED_LABEL_TOKEN_RE = re.compile(r'[A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9._/+:%×x-]{0,31}')
+_QUOTED_CONTROL_WORDS = frozenset({
+    "NO", "YES", "Y", "N", "OK", "NG", "PASS", "FAIL", "ON", "OFF",
+    "OPEN", "CLOSE", "HOLD", "RELEASE", "START", "STOP", "AUTO", "MANUAL",
+})
 
 _MENTION_RE = re.compile(
     r'@[^\s,，。!?！？:：;；]{1,48}(?:\s+[a-z][a-z0-9_.-]{1,31}){0,2}'
@@ -396,33 +414,94 @@ def _protect_document_defined_labels(text: str, mapping: Dict[str, str]) -> str:
     return protected
 
 
-def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
+def _is_immutable_quoted_value(value: str) -> bool:
+    """Return whether a short quoted span is operational data, not prose.
+
+    Accepted shapes are deliberately conservative:
+    * the legacy one-token code/measurement/dash shapes;
+    * a short (2–6 token) field/control label with a strong data signal such as
+      an all-uppercase control token, acronym, digit, or technical separator.
+
+    Lowercase natural-language quotations remain translatable.  This avoids the
+    opposite failure mode where quoted instructions could leak untranslated.
+    """
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 64 or "\n" in raw or "\r" in raw:
+        return False
+    if _PLACEHOLDER_RE.fullmatch(raw):
+        return True
+    if _QUOTED_CODELIKE_RE.fullmatch(raw):
+        return True
+    if re.search(r'[.!?;:，。！？；：]', raw):
+        return False
+
+    tokens = raw.split()
+    if not (2 <= len(tokens) <= 6):
+        return False
+    if not all(_QUOTED_LABEL_TOKEN_RE.fullmatch(token) for token in tokens):
+        return False
+
+    has_digit_or_separator = any(
+        any(ch.isdigit() or ch in "._/+:%×x-" for ch in token)
+        for token in tokens
+    )
+    has_control_or_acronym = any(
+        token in _QUOTED_CONTROL_WORDS
+        or token in _KNOWN_TECH_ACRONYMS
+        or (token.isupper() and 1 <= len(token) <= 12)
+        for token in tokens
+    )
+    return has_digit_or_separator or has_control_or_acronym
+
+
+def _protect_parenthesized_flags(text: str, mapping: Dict[str, str]) -> str:
     def repl(match: re.Match) -> str:
         value = match.group("value")
-        # A technical token (e.g. Y) may already have been protected before this
-        # pass.  In that case leave the quote-wrapped placeholder untouched.
         if _PLACEHOLDER_RE.fullmatch(value or ""):
             return match.group(0)
         return f'{match.group("open")}{_new_placeholder(mapping, value)}{match.group("close")}'
+    return _PARENTHESIZED_FLAG_RE.sub(repl, text)
+
+
+def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
+    def repl(match: re.Match) -> str:
+        value = (match.group("value") or "").strip()
+        # A technical token may already have been protected before this pass. In
+        # that case leave the quote-wrapped placeholder untouched.
+        if _PLACEHOLDER_RE.fullmatch(value):
+            return match.group(0)
+        if not _is_immutable_quoted_value(value):
+            return match.group(0)
+        return f'{match.group("open")}{_new_placeholder(mapping, value)}{match.group("close")}'
     return _QUOTED_DATA_RE.sub(repl, text)
+
+
+def _immutable_quoted_value_count(text: str) -> int:
+    return sum(
+        1 for match in _QUOTED_DATA_RE.finditer(text or "")
+        if _is_immutable_quoted_value(match.group("value"))
+    )
 
 
 def protect_immutable_spans(text: str) -> ProtectedText:
     """Protect mentions, field values, codes and measurements.
 
     Ordering is deliberate:
-    - mentions are protected first;
-    - technical tokens next (so quoted ``Y`` becomes a protected atom);
-    - quote-wrapped punctuation values such as ``"-"`` last.
+    - mentions and document-defined labels are protected first;
+    - parenthesized one-letter control flags such as ``(Y)`` next;
+    - technical tokens next;
+    - filtered quote-wrapped field values such as ``"NO Kondom"`` or ``"-"`` last.
 
-    Therefore Indonesian slang normalization can never convert a field value
-    ``Y`` into ``ya``.
+    Therefore normalization cannot convert a control flag ``Y`` into ``ya`` and
+    the quality gate does not reject correct translations merely because a Work
+    Order field label contains spaces or mixed case.
     """
     if not text or not isinstance(text, str):
         return ProtectedText(text or "", text or "", {})
     mapping: Dict[str, str] = {}
     protected = _replace_matches(text, _MENTION_RE, mapping)
     protected = _protect_document_defined_labels(protected, mapping)
+    protected = _protect_parenthesized_flags(protected, mapping)
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
     protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
@@ -1555,7 +1634,7 @@ def is_quality_critical(
     compact_len = len(re.sub(r'\s+', '', text))
     para_count = len(_paragraphs(text))
     marker_count = sum(text.count(m) for m in _MARKERS)
-    quoted_data_count = len(_QUOTED_DATA_RE.findall(text))
+    quoted_data_count = _immutable_quoted_value_count(text)
     return bool(
         message_type == "announcement"
         or compact_len >= 180

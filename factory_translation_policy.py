@@ -23,8 +23,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-FACTORY_TRANSLATION_POLICY_API_VERSION = 5
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-05.1-delivery-learning-separation"
+FACTORY_TRANSLATION_POLICY_API_VERSION = 6
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-06.1-authoritative-final-boundary-and-durable-retry"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -71,16 +71,16 @@ def should_force_factory_pipeline(text: Any, src: Any, tgt: Any, *, heuristic_ma
 
 
 def block_unverified_delivery(src: Any, tgt: Any) -> bool:
-    """Optional emergency switch for blocking a non-empty degraded candidate.
+    """Never let a quality heuristic suppress a non-empty translation.
 
-    Production default is False.  The legacy ``FACTORY_TRANSLATION_FAIL_CLOSED``
-    switch is intentionally not consulted: it previously conflated delivery
-    availability with cache/learning admission and caused ordinary messages to
-    become the generic "cannot translate safely" notice.
+    Delivery blocking was previously configurable, which allowed a stale Render
+    environment variable to revive the old generic failure state after the code
+    had been fixed.  Objective corruption is still rejected by the authoritative
+    final boundary and retried through another provider; advisory disagreement
+    affects only cache/TM admission.  The switch is therefore intentionally
+    retired and always returns False.
     """
-    return supports_direction(src, tgt) and _boolean_env(
-        "FACTORY_BLOCK_UNVERIFIED_DELIVERY", False
-    )
+    return False
 
 
 def fail_closed(src: Any, tgt: Any) -> bool:
@@ -162,6 +162,8 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "Never invent an operator, machine, crane, manual operation, automatic operation, data check, accounting action, "
         "cause, deadline, measurement or workflow step that is not stated or entailed by approved plant knowledge.\n"
         "Preserve customer names, employee names, codes, work-order IDs, station IDs, numbers and units exactly as written. "
+        "For Work Order/ERP/label text, preserve every quoted control label (for example \"NO Kondom\") and every single-letter flag such as (Y)/(N) exactly; translate only the surrounding explanation. "
+        "When two instructions conflict, preserve the conflict, the prohibition against acting immediately, and the required escalation/checking step; never silently choose or harmonize one instruction. "
         "Do not translate a Chinese customer name into an ordinary Indonesian adjective or noun.\n"
         "Output only one complete target-language translation. Never output an apology, safety-status message, "
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "

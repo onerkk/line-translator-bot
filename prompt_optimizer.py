@@ -83,6 +83,12 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
         "Treat number+包/袋 as physical packages (bungkus), distinct from rod bundles 把/捆 (bundel). Preserve the relation: 又/加=ditambah (additional pairs), 有/含=berisi (contents), and 不是X包而是Y包 keeps the correction contrast and any half quantity.",
     ),
     (
+        "work-order-control-label-conflict",
+        ("id>zh", "zh>id"),
+        r"Work\s*Order|工單|製造指示|ERP|\bNO\s+[A-Za-z]|[（(]\s*[YN]\s*[）)]|saling\s+bertentangan|互相矛盾|相互矛盾|資訊.*矛盾|指示.*矛盾",
+        "For Work Order/ERP/control-label messages, preserve quoted field labels and single-letter flags such as (Y)/(N) exactly. Translate the surrounding explanation, but never rewrite the control value. If two instructions conflict, preserve both sides, the instruction not to proceed/decide independently, and the required escalation or verification step; never silently resolve the conflict.",
+    ),
+    (
         "negative-polarity",
         ("zh>id", "id>zh"),
         r"不擋|不得|不能|不可|禁止|不要|未|無法配合|\b(?:tidak|jangan|dilarang|tidak\s+boleh|boleh)\b",

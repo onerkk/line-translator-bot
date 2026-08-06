@@ -6,6 +6,7 @@ import urllib.parse
 import logging
 from datetime import datetime, timezone
 from line_quote_context import get_quote_token, resolve_quote_context
+import translation_retry_queue as translation_retry_queue_module
 from flask import Flask, request, abort, jsonify, g, has_request_context
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
@@ -272,8 +273,8 @@ import factory_quantity_semantics as factory_quantity_semantics_module  # compos
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 22
-_EXPECTED_QG_BUILD_ID = "2026-08-05.1-compositional-quantity-semantics"
+_EXPECTED_QG_API_VERSION = 23
+_EXPECTED_QG_BUILD_ID = "2026-08-06.1-quoted-control-fields-and-durable-delivery"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -779,6 +780,8 @@ _VEC_LOOKUP_EXECUTOR = _TPE_v313(max_workers=3, thread_name_prefix="veclk")
 # translation or background-learning pools.
 _TRANSLATION_RETRY_LOCK = threading.RLock()
 _TRANSLATION_RETRY_INFLIGHT = set()
+_TRANSLATION_RETRY_WORKER = None
+_TRANSLATION_RETRY_WAKE = threading.Event()
 
 _EVENT_LOG_MAX = 200  # 最多保留 200 筆
 
@@ -11440,11 +11443,15 @@ def _is_translation_failure_sentinel(text):
         "目前所有翻譯服務皆無法取得結果",
         "這則訊息暫時無法完成安全翻譯",
         "系統已記錄，請稍後重傳",
+        "系統已切換備援翻譯",
+        "無需重傳",
         "ai 已完成翻譯，但結果缺少或改動了關鍵資料",
         "layanan terjemahan sementara belum menghasilkan hasil yang dapat digunakan",
         "terjemahan gagal karena semua layanan penerjemahan sedang tidak tersedia",
         "pesan ini belum dapat diterjemahkan dengan aman",
         "sistem sudah mencatatnya; silakan kirim ulang nanti",
+        "sistem telah beralih ke penerjemah cadangan",
+        "tidak perlu mengirim ulang",
         "all translation services are temporarily unavailable",
         "translation service has not produced a usable result",
         "silakan kirim ulang beberapa saat lagi",
@@ -12189,17 +12196,31 @@ def _send_reply_with_push_fallback(
 
 
 def _translation_retry_delays():
-    """Return bounded retry delays from env, defaulting to 2s/8s/20s."""
+    """Return the initial retry delays, defaulting to 2s/8s/20s."""
     raw = str(os.environ.get("TRANSLATION_RETRY_DELAYS", "2,8,20") or "2,8,20")
     delays = []
     for part in raw.split(","):
         try:
-            value = max(1, min(120, int(float(part.strip()))))
+            value = max(1, min(300, int(float(part.strip()))))
         except Exception:
             continue
         if value not in delays:
             delays.append(value)
-    return tuple(delays[:5] or (2, 8, 20))
+    return tuple(delays[:8] or (2, 8, 20))
+
+
+def _translation_retry_backoff(completed_attempts):
+    """Delay after a failed attempt; retries continue until delivery succeeds."""
+    initial = _translation_retry_delays()
+    completed = max(1, int(completed_attempts or 1))
+    if completed < len(initial):
+        return initial[completed]
+    try:
+        cap = max(60, min(3600, int(os.environ.get("TRANSLATION_RETRY_MAX_DELAY", "300"))))
+    except Exception:
+        cap = 300
+    exponent = max(0, completed - len(initial))
+    return min(cap, 60 * (2 ** min(exponent, 6)))
 
 
 def _translation_retry_key(ctx, source_text, src_lang, target_langs):
@@ -12216,6 +12237,241 @@ def _translation_retry_key(ctx, source_text, src_lang, target_langs):
     return target_id + ":sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
+def _translation_retry_push(job_key, payload, reply_text):
+    """Push one completed retry with a stable LINE idempotency key."""
+    import uuid
+
+    target_id = payload.get("group_id") or payload.get("user_id")
+    if not target_id:
+        raise ValueError("translation retry has no LINE target")
+    text = _clip_line_text(reply_text)
+    quote_token = payload.get("quote_token")
+    stable_retry_key = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-translation-retry:" + str(job_key)))
+
+    def _push(message):
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            request_obj = PushMessageRequest(to=target_id, messages=[message])
+            try:
+                return api.push_message(request_obj, x_line_retry_key=stable_retry_key)
+            except TypeError:
+                return api.push_message(request_obj)
+
+    message = TextMessage(text=text)
+    if quote_token:
+        try:
+            message.quote_token = quote_token
+        except Exception:
+            pass
+    try:
+        return _push(message)
+    except Exception:
+        # A quote token can expire while a durable retry is waiting.  The
+        # translation itself must still be delivered, so retry the push without
+        # quote metadata and with the same stable retry key.
+        return _push(TextMessage(text=text))
+
+
+def _translation_retry_attempt(job):
+    """Process one durable job. Returns True only after LINE delivery."""
+    payload = dict((job or {}).get("payload") or {})
+    job_key = str((job or {}).get("job_key") or "")
+    source_text = str(payload.get("source_text") or "").strip()
+    src_lang = str(payload.get("src_lang") or "").strip()
+    targets = [str(x or "").strip() for x in payload.get("target_langs") or []]
+    targets = list(dict.fromkeys(x for x in targets if x))
+    target_id = payload.get("group_id") or payload.get("user_id")
+    if not job_key or not source_text or not src_lang or not targets or not target_id:
+        translation_retry_queue_module.remove(job_key)
+        return True
+
+    previous = {}
+    missing = object()
+    attrs = (
+        "group_id", "user_id", "line_mentions", "tone", "tone_custom",
+        "disable_tone_emoji", "quoted_context_source", "quoted_context_message_id",
+        "from_image_ocr",
+    )
+    try:
+        for attr in attrs:
+            previous[attr] = getattr(_tl, attr, missing)
+        group_id = payload.get("group_id")
+        _tl.group_id = group_id or "__dm_retry__"
+        _tl.user_id = str(payload.get("user_id") or "")
+        _tl.line_mentions = list(payload.get("line_mentions") or [])
+        _tl.quoted_context_source = str(payload.get("quoted_context_source") or "")
+        _tl.quoted_context_message_id = str(payload.get("quoted_context_message_id") or "")
+        _tl.from_image_ocr = bool(payload.get("from_image_ocr"))
+        if group_id:
+            try:
+                _tone, _tone_custom = get_group_tone(group_id)
+            except Exception:
+                _tone, _tone_custom = translation_tone, translation_tone_custom
+        else:
+            _tone, _tone_custom = translation_tone, translation_tone_custom
+        _tl.tone = _tone
+        _tl.tone_custom = _tone_custom
+
+        if src_lang == "zh":
+            translated_rows = translate_multi(source_text, "zh", targets, {})
+            reply_text = format_multi_reply(translated_rows) if translated_rows else None
+            delivered_map = {lang: text for lang, text in (translated_rows or []) if text}
+        else:
+            primary_target = targets[0]
+            translated = translate(source_text, src_lang, primary_target)
+            if translated:
+                if payload.get("from_image_ocr"):
+                    reply_text = "🖼️ " + LANG_FLAGS.get(primary_target, "") + "\n" + translated
+                else:
+                    reply_text = (LANG_FLAGS.get(primary_target, "") + " " + translated).strip()
+            else:
+                reply_text = None
+            delivered_map = {primary_target: translated} if translated else {}
+
+        if not reply_text or _is_translation_failure_sentinel(reply_text):
+            return False
+
+        _translation_retry_push(job_key, payload, reply_text)
+        message_id = str(payload.get("message_id") or "")
+        if message_id and message_id in message_cache:
+            try:
+                message_cache[message_id].setdefault("tr", {}).update(delivered_map)
+            except Exception:
+                pass
+        _stats_inc("text_translations", max(1, len(delivered_map)))
+        translation_retry_queue_module.mark_delivered(job_key)
+        with _TRANSLATION_RETRY_LOCK:
+            _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
+        _event_log_write("translation_retry_delivered", {
+            "target": str(target_id)[-16:],
+            "attempt": int((job or {}).get("attempts") or 0) + 1,
+            "src": src_lang,
+            "targets": targets,
+            "message_id": message_id,
+            "durable": True,
+        })
+        return True
+    finally:
+        for attr, value in previous.items():
+            try:
+                if value is missing:
+                    if hasattr(_tl, attr):
+                        delattr(_tl, attr)
+                else:
+                    setattr(_tl, attr, value)
+            except Exception:
+                pass
+
+
+def _translation_retry_worker_loop():
+    """Drain the durable queue; remain alive while any pending job exists."""
+    global _TRANSLATION_RETRY_WORKER
+    try:
+        while True:
+            pending = translation_retry_queue_module.list_pending(limit=500)
+            if not pending:
+                return
+            now = time.time()
+            due = [job for job in pending if float(job.get("next_attempt_at") or 0) <= now]
+            if not due:
+                next_due = min(float(job.get("next_attempt_at") or now + 5) for job in pending)
+                wait_for = max(0.2, min(30.0, next_due - now))
+                _TRANSLATION_RETRY_WAKE.wait(wait_for)
+                _TRANSLATION_RETRY_WAKE.clear()
+                continue
+
+            for job in due[:20]:
+                job_key = str(job.get("job_key") or "")
+                try:
+                    delivered = _translation_retry_attempt(job)
+                    if delivered:
+                        continue
+                    completed = int(job.get("attempts") or 0) + 1
+                    delay = _translation_retry_backoff(completed)
+                    translation_retry_queue_module.reschedule(
+                        job_key,
+                        delay_seconds=delay,
+                        error="empty_or_objectively_rejected_translation",
+                    )
+                    _event_log_write("translation_retry_attempt_empty", {
+                        "target": str((job.get("payload") or {}).get("group_id") or (job.get("payload") or {}).get("user_id") or "")[-16:],
+                        "attempt": completed,
+                        "message_id": str((job.get("payload") or {}).get("message_id") or ""),
+                        "next_delay": delay,
+                        "durable": True,
+                    })
+                except Exception as exc:
+                    completed = int(job.get("attempts") or 0) + 1
+                    delay = _translation_retry_backoff(completed)
+                    translation_retry_queue_module.reschedule(
+                        job_key,
+                        delay_seconds=delay,
+                        error=type(exc).__name__ + ":" + str(exc)[:800],
+                    )
+                    logger.warning(
+                        "[TranslationRetry] durable attempt=%s job=%s failed: %s",
+                        completed, job_key[-24:], str(exc)[:300],
+                    )
+                    try:
+                        _event_log_write("translation_retry_attempt_exception", {
+                            "attempt": completed,
+                            "error": str(exc)[:300],
+                            "error_type": type(exc).__name__,
+                            "message_id": str((job.get("payload") or {}).get("message_id") or ""),
+                            "next_delay": delay,
+                            "durable": True,
+                        })
+                    except Exception:
+                        pass
+    finally:
+        with _TRANSLATION_RETRY_LOCK:
+            _TRANSLATION_RETRY_WORKER = None
+            # Pending keys remain represented by the database.  Clear the
+            # in-memory set only when the durable queue is empty.
+            try:
+                if translation_retry_queue_module.pending_count() == 0:
+                    _TRANSLATION_RETRY_INFLIGHT.clear()
+            except Exception:
+                pass
+
+
+def _ensure_translation_retry_worker():
+    global _TRANSLATION_RETRY_WORKER
+    with _TRANSLATION_RETRY_LOCK:
+        worker = _TRANSLATION_RETRY_WORKER
+        try:
+            alive = bool(worker and worker.is_alive())
+        except Exception:
+            alive = bool(worker)
+        if alive:
+            _TRANSLATION_RETRY_WAKE.set()
+            return False
+        worker = threading.Thread(
+            target=_translation_retry_worker_loop,
+            name="translation-retry-durable",
+            daemon=True,
+        )
+        _TRANSLATION_RETRY_WORKER = worker
+        worker.start()
+        return True
+
+
+def _resume_persisted_translation_retries():
+    """Resume pending jobs after deploy/restart without requiring user resend."""
+    try:
+        pending = translation_retry_queue_module.list_pending(limit=5000)
+    except Exception as exc:
+        logger.warning("[TranslationRetry] durable queue init failed: %s", exc)
+        return False
+    if not pending:
+        return True
+    with _TRANSLATION_RETRY_LOCK:
+        _TRANSLATION_RETRY_INFLIGHT.update(str(job.get("job_key") or "") for job in pending)
+    _ensure_translation_retry_worker()
+    logger.warning("[TranslationRetry] resumed %d persisted jobs", len(pending))
+    return True
+
+
 def _schedule_text_translation_retry(
     ctx,
     *,
@@ -12223,14 +12479,15 @@ def _schedule_text_translation_retry(
     src_lang,
     target_langs,
     line_mentions=None,
+    quoted_context_source=None,
+    quoted_context_message_id=None,
+    from_image_ocr=False,
 ):
-    """Retry an empty text translation and push the result when available.
+    """Persist an empty translation and retry until it is delivered.
 
-    The immediate request has already exhausted the semantic provider chain and
-    emergency NMT.  A detached retry avoids asking users to resend, preserves
-    LINE reply-token latency, and de-duplicates by message ID.  Retried output is
-    still processed by the same translation/quality pipeline; only delivery is
-    converted to push because the original reply token may have expired.
+    Unlike the previous three-attempt in-memory timer, this queue survives
+    restarts and has no terminal exhausted state.  The user is not asked to
+    resend and no status-only message is posted into the conversation.
     """
     ctx = dict(ctx or {})
     target_id = ctx.get("group_id") or ctx.get("user_id")
@@ -12241,145 +12498,42 @@ def _schedule_text_translation_retry(
         return False
 
     retry_key = _translation_retry_key(ctx, source_text, src_lang, targets)
+    payload = {
+        "group_id": ctx.get("group_id"),
+        "user_id": ctx.get("user_id"),
+        "message_id": str(ctx.get("message_id") or ""),
+        "quote_token": ctx.get("quote_token"),
+        "source_text": source_text,
+        "src_lang": str(src_lang),
+        "target_langs": targets,
+        "line_mentions": list(line_mentions or []),
+        "quoted_context_source": str(quoted_context_source or ""),
+        "quoted_context_message_id": str(quoted_context_message_id or ""),
+        "from_image_ocr": bool(from_image_ocr),
+    }
+    first_delay = _translation_retry_delays()[0]
+    try:
+        inserted = translation_retry_queue_module.enqueue(
+            retry_key, payload, delay_seconds=first_delay
+        )
+    except Exception as exc:
+        logger.exception("[TranslationRetry] durable enqueue failed: %s", exc)
+        return False
     with _TRANSLATION_RETRY_LOCK:
-        if retry_key in _TRANSLATION_RETRY_INFLIGHT:
-            return False
         _TRANSLATION_RETRY_INFLIGHT.add(retry_key)
-
-    def _worker():
-        previous = {}
-        missing = object()
-        try:
-            for attempt, delay in enumerate(_translation_retry_delays(), start=1):
-                time.sleep(delay)
-                try:
-                    for attr in ("group_id", "line_mentions", "tone", "tone_custom", "disable_tone_emoji"):
-                        previous[attr] = getattr(_tl, attr, missing)
-                    group_id = ctx.get("group_id")
-                    _tl.group_id = group_id or "__dm_retry__"
-                    _tl.line_mentions = list(line_mentions or [])
-                    if group_id:
-                        try:
-                            _tone, _tone_custom = get_group_tone(group_id)
-                        except Exception:
-                            _tone, _tone_custom = translation_tone, translation_tone_custom
-                    else:
-                        _tone, _tone_custom = translation_tone, translation_tone_custom
-                    _tl.tone = _tone
-                    _tl.tone_custom = _tone_custom
-
-                    if src_lang == "zh":
-                        translated_rows = translate_multi(source_text, "zh", targets, {})
-                        reply_text = format_multi_reply(translated_rows) if translated_rows else None
-                        delivered_map = {lang: text for lang, text in (translated_rows or []) if text}
-                    else:
-                        primary_target = targets[0]
-                        translated = translate(source_text, src_lang, primary_target)
-                        reply_text = (
-                            (LANG_FLAGS.get(primary_target, "") + " " + translated).strip()
-                            if translated else None
-                        )
-                        delivered_map = {primary_target: translated} if translated else {}
-
-                    if not reply_text or _is_translation_failure_sentinel(reply_text):
-                        _event_log_write("translation_retry_attempt_empty", {
-                            "target": str(target_id)[-16:],
-                            "attempt": attempt,
-                            "src": src_lang,
-                            "targets": targets,
-                            "message_id": str(ctx.get("message_id") or ""),
-                        })
-                        continue
-
-                    msg = TextMessage(text=_clip_line_text(reply_text))
-                    quote_token = ctx.get("quote_token")
-                    if quote_token:
-                        try:
-                            msg.quote_token = quote_token
-                        except Exception:
-                            pass
-                    try:
-                        with ApiClient(configuration) as api_client:
-                            MessagingApi(api_client).push_message(PushMessageRequest(
-                                to=target_id,
-                                messages=[msg],
-                            ))
-                    except Exception:
-                        # quoteToken may expire before a detached retry finishes.
-                        # Retry the delivery itself once without quoting; do not
-                        # rerun translation or lose a successful result.
-                        plain_msg = TextMessage(text=_clip_line_text(reply_text))
-                        with ApiClient(configuration) as api_client:
-                            MessagingApi(api_client).push_message(PushMessageRequest(
-                                to=target_id,
-                                messages=[plain_msg],
-                            ))
-
-                    message_id = str(ctx.get("message_id") or "")
-                    if message_id and message_id in message_cache:
-                        try:
-                            message_cache[message_id].setdefault("tr", {}).update(delivered_map)
-                        except Exception:
-                            pass
-                    _stats_inc("text_translations", max(1, len(delivered_map)))
-                    _event_log_write("translation_retry_delivered", {
-                        "target": str(target_id)[-16:],
-                        "attempt": attempt,
-                        "src": src_lang,
-                        "targets": targets,
-                        "message_id": message_id,
-                    })
-                    return
-                except Exception as exc:
-                    logger.warning(
-                        "[TranslationRetry] attempt=%s target=%s failed: %s",
-                        attempt, str(target_id)[-16:], str(exc)[:300],
-                    )
-                    try:
-                        _event_log_write("translation_retry_attempt_exception", {
-                            "target": str(target_id)[-16:],
-                            "attempt": attempt,
-                            "error": str(exc)[:300],
-                            "error_type": type(exc).__name__,
-                            "message_id": str(ctx.get("message_id") or ""),
-                        })
-                    except Exception:
-                        pass
-                finally:
-                    for attr, value in previous.items():
-                        try:
-                            if value is missing:
-                                if hasattr(_tl, attr):
-                                    delattr(_tl, attr)
-                            else:
-                                setattr(_tl, attr, value)
-                        except Exception:
-                            pass
-                    previous.clear()
-            logger.error(
-                "[TranslationRetry] exhausted without user-visible failure payload target=%s message_id=%s",
-                str(target_id)[-16:], str(ctx.get("message_id") or ""),
-            )
-            try:
-                _event_log_write("translation_retry_exhausted", {
-                    "target": str(target_id)[-16:],
-                    "src": src_lang,
-                    "targets": targets,
-                    "message_id": str(ctx.get("message_id") or ""),
-                })
-            except Exception:
-                pass
-        finally:
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(retry_key)
-
-    threading.Thread(
-        target=_worker,
-        name="translation-retry-" + hashlib.sha1(retry_key.encode("utf-8")).hexdigest()[:8],
-        daemon=True,
-    ).start()
+    _ensure_translation_retry_worker()
+    _TRANSLATION_RETRY_WAKE.set()
+    try:
+        _event_log_write("translation_retry_persisted", {
+            "target": str(target_id)[-16:],
+            "src": src_lang,
+            "targets": targets,
+            "message_id": str(ctx.get("message_id") or ""),
+            "inserted": bool(inserted),
+        })
+    except Exception:
+        pass
     return True
-
 
 def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
     """Best-effort visible failure notice for background text/image jobs.
@@ -12410,13 +12564,18 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
             "Pengenalan atau terjemahan gambar sementara gagal. Silakan kirim ulang gambarnya."
         )
     else:
-        # Text failures are self-healing: the bot switches to a detached retry
-        # instead of asking the user to resend or claiming the message cannot be
-        # translated.  The eventual translation is pushed automatically.
-        text = (
-            "⏳ 系統已切換備援翻譯並自動重試，無需重傳。\n"
-            "Sistem telah beralih ke penerjemah cadangan dan akan mencoba lagi secara otomatis; tidak perlu mengirim ulang."
-        )
+        # Text translation retries are silent.  A status-only message is neither
+        # a translation nor useful shop-floor information and was repeatedly
+        # mistaken for the final result.  The durable retry queue will push only
+        # the completed translation.
+        try:
+            _event_log_write("background_text_failure_suppressed", {
+                "detail": str(detail or "")[:200],
+                "target": str(target_id)[-16:],
+            })
+        except Exception:
+            pass
+        return False
     msg = TextMessage(text=_clip_line_text(text))
     quote_token = (ctx or {}).get("quote_token")
     if quote_token:
@@ -13538,14 +13697,16 @@ def _translate_core(text, src, tgt):
                         "degraded": False,
                         "path": "factory_guard_exact_fallback",
                     })
-                elif _factory_route_is_strict(text, src, tgt):
-                    logger.error(
-                        "[QualityGate] fail-closed factory candidate issues=%s",
+                else:
+                    # The first provider candidate remains available to the one
+                    # authoritative public delivery boundary.  Internal review
+                    # may disable cache/TM admission, but it must never erase the
+                    # only translation and manufacture a service outage.
+                    logger.warning(
+                        "[QualityGate] review disagreement; preserving first candidate for final boundary issues=%s",
                         _gate.get("issues"),
                     )
-                    result = None
-                    _quality_cacheable = False
-                else:
+                    result = _pre_gate_result
                     _quality_cacheable = False
                 try:
                     last_translate_debug["final_pipeline_status"] = (
@@ -13593,12 +13754,12 @@ def _translate_core(text, src, tgt):
                         if _exact_candidate:
                             result = _exact_candidate
                             _quality_cacheable = True
-                        elif _factory_route_is_strict(text, src, tgt):
-                            logger.error(
-                                "[FactoryGuard] post-gate rejection issues=%s",
+                        else:
+                            logger.warning(
+                                "[FactoryGuard] post-gate disagreement; preserving provider candidate for final boundary issues=%s",
                                 _final_guard_report.issues[:20],
                             )
-                            result = None
+                            result = _pre_gate_result
                 if result and _quality_cacheable:
                     cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
@@ -13609,35 +13770,32 @@ def _translate_core(text, src, tgt):
             except Exception:
                 pass
             _quality_cacheable = False
-            if _factory_route_is_strict(text, src, tgt):
-                logger.exception(
-                    "[QualityGate] unexpected factory validation failure; blocked: %s",
-                    _qge,
-                )
-                result = _factory_exact_fallback(text, src, tgt)
-                _quality_cacheable = bool(result)
-            else:
-                logger.exception(
-                    "[QualityGate] unexpected non-factory validation failure; delivering without caching: %s",
-                    _qge,
-                )
+            logger.exception(
+                "[QualityGate] validation exception; preserving first provider candidate without caching: %s",
+                _qge,
+            )
+            result = _factory_exact_fallback(text, src, tgt) or _pre_gate_result
+            _quality_cacheable = bool(result and result != _pre_gate_result)
 
     # One final in-core boundary also covers deterministic/NMT/provider paths
     # that may not have entered the quality-gate branch above.
-    if result and _factory_route_is_strict(text, src, tgt):
+    if result:
         try:
             _core_guard_report = _factory_guard_report(text, result, src, tgt)
             if not _core_guard_report.ok:
-                logger.error(
-                    "[FactoryGuard] in-core fail-closed rejection issues=%s",
+                logger.warning(
+                    "[FactoryGuard] in-core disagreement deferred to authoritative final boundary issues=%s",
                     _core_guard_report.issues[:20],
                 )
-                result = _factory_exact_fallback(text, src, tgt)
-                _quality_cacheable = bool(result)
+                _exact = _factory_exact_fallback(text, src, tgt)
+                if _exact:
+                    result = _exact
+                    _quality_cacheable = True
+                else:
+                    _quality_cacheable = False
         except Exception as _core_guard_exc:
-            logger.exception("[FactoryGuard] in-core validation exception: %s", _core_guard_exc)
-            result = _factory_exact_fallback(text, src, tgt)
-            _quality_cacheable = bool(result)
+            logger.exception("[FactoryGuard] in-core validation exception; preserving candidate: %s", _core_guard_exc)
+            _quality_cacheable = False
 
     # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
     try:
@@ -17706,10 +17864,19 @@ def handle_message(event):
             pass
 
     def _quoted_for(tgt_lang):
-        """取引用句在指定語言的最佳顯示版本:譯文優先,退回原文。"""
+        """Return the best cached quote context, including OCR/scene for photos."""
         if not _quoted_entry:
             return None
-        return (_quoted_entry.get("tr") or {}).get(tgt_lang) or _quoted_entry.get("text", "")
+        translated = (_quoted_entry.get("tr") or {}).get(tgt_lang)
+        if translated:
+            return translated
+        if _quoted_entry.get("media_type") == "image":
+            return (
+                _quoted_entry.get("ocr_text")
+                or _quoted_entry.get("scene")
+                or _quoted_entry.get("text", "")
+            )
+        return _quoted_entry.get("text", "")
 
     def _cache_translation(tgt_lang, translated):
         """翻譯完成回填快取,供未來引用使用。"""
@@ -17882,6 +18049,8 @@ def handle_message(event):
             src_lang=lang,
             target_langs=_retry_targets,
             line_mentions=line_mentions,
+            quoted_context_source=getattr(_tl, "quoted_context_source", ""),
+            quoted_context_message_id=getattr(_tl, "quoted_context_message_id", ""),
         )
         try:
             _event_log_write("translate_empty_retry_scheduled", {
@@ -17894,12 +18063,9 @@ def handle_message(event):
             })
         except Exception:
             pass
-        if _retry_scheduled:
-            _send_background_failure_notice(
-                _retry_ctx,
-                kind="translation_retry",
-                detail="immediate_providers_empty_auto_retry",
-            )
+        # Status-only notices are deliberately suppressed.  The durable queue
+        # will push the actual translation when a provider becomes usable; the
+        # conversation never receives a fake translation or a resend request.
         return
 
     # v3.10: 多語廣播每個目標語言都算一次,單語/反向翻譯算一次
@@ -18156,6 +18322,24 @@ def handle_image(event):
     except Exception:
         pass
 
+    # Cache media messages as quoteable context.  LINE reply events only carry
+    # quotedMessageId; without this entry a later text reply to a photo loses all
+    # media context.  OCR/scene text is filled by the background worker when
+    # available, but the current reply text is always translated independently.
+    try:
+        _image_mid = str(getattr(event.message, "id", "") or "")
+        if _image_mid:
+            message_cache[_image_mid] = {
+                "text": "",
+                "ts": time.time(),
+                "tr": {},
+                "media_type": "image",
+                "ocr_text": "",
+                "scene": "",
+            }
+    except Exception:
+        pass
+
     # Record user for whitelist (even if translation is off)
     if group_id and user_id and not is_dm_img:
         record_user_name(group_id, user_id)
@@ -18354,6 +18538,14 @@ def _handle_image_background(ctx):
             "extracted_preview": (extracted[:100] if extracted else None),
         })
         logger.info("Image OCR result: %s chars, text: %s", len(extracted) if extracted else 0, (extracted[:100] + "...") if extracted and len(extracted) > 100 else extracted)
+        try:
+            _entry = message_cache.get(str(message_id))
+            if isinstance(_entry, dict) and extracted:
+                _entry["ocr_text"] = str(extracted)
+                _entry["text"] = str(extracted)
+                _entry["ts"] = time.time()
+        except Exception:
+            pass
 
         # v3.9.39: 場景描述(供下一則文字翻譯的視覺上下文)
         # 這裡不管 OCR 有沒有抓到字都跑 — 場景描述跟 OCR 是不同維度的資訊
@@ -18362,6 +18554,15 @@ def _handle_image_background(ctx):
             scene = describe_scene_for_context(img_base64, mime_type=img_mime)
             if scene:
                 store_media_scene(group_id, user_id, message_id, scene)
+                try:
+                    _entry = message_cache.get(str(message_id))
+                    if isinstance(_entry, dict):
+                        _entry["scene"] = str(scene)
+                        if not str(_entry.get("text") or "").strip():
+                            _entry["text"] = str(scene)
+                        _entry["ts"] = time.time()
+                except Exception:
+                    pass
                 _event_log_write("scene_described", {
                     "msg_id": message_id, "scene": scene[:50]
                 })
@@ -18512,15 +18713,32 @@ def _handle_image_background(ctx):
         _t.join(timeout=50.0)  # 最多等 50 秒
 
         if _t.is_alive():
-            # 超時,放棄等待(thread 會繼續但我們不管它)
+            # The synchronous image deadline expired, but OCR source text is
+            # already available. Persist that text and let the durable queue
+            # deliver the actual translation later; never post a failure/status
+            # message in place of the translation.
             _event_log_write("image_step_error", {"step": "translate", "err": "thread timeout after 50s"})
-            logger.error("Translate thread timeout after 50s")
-            _send_background_failure_notice(ctx, kind="image", detail="translate_timeout")
+            logger.error("Translate thread timeout after 50s; queued durably")
+            _schedule_text_translation_retry(
+                ctx,
+                source_text=extracted,
+                src_lang=lang,
+                target_langs=[actual_tgt],
+                line_mentions=[],
+                from_image_ocr=True,
+            )
             return
         if _trans_exc[0]:
             _event_log_write("image_step_error", {"step": "translate", "err": str(_trans_exc[0])[:300]})
-            logger.exception("Translate exception: %s", _trans_exc[0])
-            _send_background_failure_notice(ctx, kind="image", detail="translate_exception")
+            logger.error("Translate exception queued durably: %s", _trans_exc[0])
+            _schedule_text_translation_retry(
+                ctx,
+                source_text=extracted,
+                src_lang=lang,
+                target_langs=[actual_tgt],
+                line_mentions=[],
+                from_image_ocr=True,
+            )
             return
         result = _trans_result[0]
         _event_log_write("image_step", {
@@ -18530,9 +18748,16 @@ def _handle_image_background(ctx):
         })
 
         if not result:
-            _event_log_write("image_aborted", {"reason": "translate_returned_empty"})
+            _event_log_write("image_aborted", {"reason": "translate_returned_empty_queued"})
             track_group_usage(group_id, _bp, _bc, _bcost)
-            _send_background_failure_notice(ctx, kind="image", detail="translate_empty")
+            _schedule_text_translation_retry(
+                ctx,
+                source_text=extracted,
+                src_lang=lang,
+                target_langs=[actual_tgt],
+                line_mentions=[],
+                from_image_ocr=True,
+            )
             return
 
         reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
@@ -18811,13 +19036,35 @@ def _process_pending_image_translate_inner(event, message_id):
         else:
             result = translate(extracted, lang, actual_tgt)
     except Exception as _te:
-        logger.error("[ImgAsk] translate exception: %s", _te)
-        _reply_or_push("❌ 翻譯失敗 / Terjemahan gagal\n" + str(_te)[:100])
+        logger.error("[ImgAsk] translate exception queued durably: %s", _te)
+        _schedule_text_translation_retry(
+            {
+                "group_id": group_id,
+                "user_id": (info or {}).get("user_id", ""),
+                "message_id": str(message_id or ""),
+            },
+            source_text=extracted,
+            src_lang=lang,
+            target_langs=[actual_tgt],
+            line_mentions=[],
+            from_image_ocr=True,
+        )
         return
 
     if not result:
-        logger.warning("[ImgAsk] translate returned empty")
-        _reply_or_push("⚠️ 翻譯結果為空,請重試\nHasil terjemahan kosong, silakan coba lagi")
+        logger.warning("[ImgAsk] translate returned empty; queued durably")
+        _schedule_text_translation_retry(
+            {
+                "group_id": group_id,
+                "user_id": (info or {}).get("user_id", ""),
+                "message_id": str(message_id or ""),
+            },
+            source_text=extracted,
+            src_lang=lang,
+            target_langs=[actual_tgt],
+            line_mentions=[],
+            from_image_ocr=True,
+        )
         track_group_usage(group_id, _bp, _bc, _bcost)
         return
 
@@ -35971,6 +36218,16 @@ except Exception as _e:
 # END OF v3.10 EXTENSIONS
 # ============================================================================
 
+
+# Resume translations that were pending when the process last stopped.  This
+# runs after all handlers/helpers are defined so the worker can call the normal
+# translation and LINE delivery pipeline.
+try:
+    _resume_persisted_translation_retries()
+except Exception as _retry_boot_exc:
+    logging.getLogger("app").warning(
+        "[TranslationRetry] startup resume failed (continuing): %s", _retry_boot_exc
+    )
 
 # ── 啟動 DB 快照背景同步(模組已就緒;沒設 Upstash env 時此函式自動 no-op) ──
 try:

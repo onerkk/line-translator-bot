@@ -148,19 +148,44 @@ def test_actual_app_deterministic_rules_cover_both_reported_messages_without_inv
     assert translate_known("大成儲格能放就放，放不下再放照片裡這些位置") is None
 
 
-def test_app_auto_retries_empty_quote_translation_without_terminal_failure_or_flex_quote():
+def test_app_persists_empty_quote_translation_without_status_only_reply_or_flex_quote():
     source = Path("app.py").read_text(encoding="utf-8")
     assert 'translate_empty_retry_scheduled' in source
     assert '_schedule_text_translation_retry(' in source
-    assert 'kind="translation_retry"' in source
+    assert 'translation_retry_queue_module.enqueue' in source
+    assert '_resume_persisted_translation_retries()' in source
     notice_start = source.index("def _send_background_failure_notice")
     notice_end = source.index("\ndef ", notice_start + 5)
     notice_fn = source[notice_start:notice_end]
     assert "這則訊息暫時無法完成安全翻譯" not in notice_fn
     assert "Pesan ini belum dapat diterjemahkan dengan aman" not in notice_fn
-    assert "無需重傳" in notice_fn
-    assert "tidak perlu mengirim ulang" in notice_fn
+    assert "系統已切換備援翻譯" not in notice_fn
+    assert "Sistem telah beralih ke penerjemah cadangan" not in notice_fn
+    assert "background_text_failure_suppressed" in notice_fn
     assert "flex_msg.quote_token" not in source
     assert "quoted_context_source" in source
+    assert "quoted_context_message_id" in source
     assert "getattr(event.message, 'quote_token', None)" not in source
     assert "Translate only the " in source and "current user message" in source
+
+
+def test_legacy_backup_retry_status_is_detected_without_importing_runtime_dependencies():
+    tree = ast.parse(Path("app.py").read_text(encoding="utf-8"))
+    fn = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_is_translation_failure_sentinel"
+    )
+    module = ast.Module(body=[fn], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"re": re}
+    exec(compile(module, "<_is_translation_failure_sentinel>", "exec"), namespace)
+    sentinel = namespace["_is_translation_failure_sentinel"]
+
+    old_payload = (
+        "⌛ 系統已切換備援翻譯並自動重試，無需重傳。\n"
+        "Sistem telah beralih ke penerjemah cadangan dan akan mencoba lagi "
+        "secara otomatis; tidak perlu mengirim ulang."
+    )
+    assert sentinel(old_payload) is True
+    assert sentinel("請所有作業員注意，開始前先確認工單內容。") is False

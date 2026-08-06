@@ -16,7 +16,7 @@ SCREENSHOT_CANDIDATE = (
 
 def test_legacy_fail_closed_environment_no_longer_blocks_delivery(monkeypatch):
     monkeypatch.setenv("FACTORY_TRANSLATION_FAIL_CLOSED", "1")
-    monkeypatch.delenv("FACTORY_BLOCK_UNVERIFIED_DELIVERY", raising=False)
+    monkeypatch.setenv("FACTORY_BLOCK_UNVERIFIED_DELIVERY", "1")
 
     assert policy.require_verified_for_cache("id", "zh") is True
     assert policy.fail_closed("id", "zh") is False
@@ -107,7 +107,7 @@ def test_policy_prompt_forbids_model_generated_failure_notices():
     assert "must not be described to the user" in prompt
 
 
-def test_detached_retry_pushes_translation_without_requesting_resend(monkeypatch):
+def test_durable_retry_pushes_translation_without_status_or_resend(monkeypatch, tmp_path):
     pushed = []
 
     class ImmediateThread:
@@ -131,7 +131,7 @@ def test_detached_retry_pushes_translation_without_requesting_resend(monkeypatch
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def push_message(self, request):
+        def push_message(self, request, **_kwargs):
             pushed.append(request)
 
     class DummyTextMessage:
@@ -144,8 +144,12 @@ def test_detached_retry_pushes_translation_without_requesting_resend(monkeypatch
             self.to = to
             self.messages = messages
 
+    app.translation_retry_queue_module.DB_PATH = str(tmp_path / "retry.db")
+    app._TRANSLATION_RETRY_WORKER = None
+    app._TRANSLATION_RETRY_INFLIGHT.clear()
+    app._TRANSLATION_RETRY_WAKE.clear()
     monkeypatch.setattr(app.threading, "Thread", ImmediateThread)
-    monkeypatch.setattr(app.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(app, "_translation_retry_delays", lambda: (0,))
     monkeypatch.setattr(app, "translate", lambda *_a, **_k: "請研磨人員注意。")
     monkeypatch.setattr(app, "ApiClient", DummyApiClient)
     monkeypatch.setattr(app, "MessagingApi", DummyMessagingApi)
@@ -173,6 +177,7 @@ def test_detached_retry_pushes_translation_without_requesting_resend(monkeypatch
     assert "請研磨人員注意" in pushed[0].messages[0].text
     assert "重傳" not in pushed[0].messages[0].text
     assert app._TRANSLATION_RETRY_INFLIGHT == set()
+    assert app.translation_retry_queue_module.pending_count() == 0
 
 
 def test_emergency_fallback_skips_invalid_first_nmt_and_uses_next_provider(monkeypatch):
@@ -217,5 +222,14 @@ def test_exact_screenshot_failure_payload_is_purged_as_legacy_sentinel():
         "⚠️ 這則訊息暫時無法完成安全翻譯，系統已記錄，請稍後重傳。\n"
         "Pesan ini belum dapat diterjemahkan dengan aman. "
         "Sistem sudah mencatatnya; silakan kirim ulang nanti."
+    )
+    assert app._is_translation_failure_sentinel(old_payload) is True
+
+
+def test_backup_retry_status_payload_is_purged_as_legacy_sentinel():
+    old_payload = (
+        "⌛ 系統已切換備援翻譯並自動重試，無需重傳。\n"
+        "Sistem telah beralih ke penerjemah cadangan dan akan mencoba lagi "
+        "secara otomatis; tidak perlu mengirim ulang."
     )
     assert app._is_translation_failure_sentinel(old_payload) is True
