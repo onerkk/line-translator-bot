@@ -316,17 +316,20 @@ def test_factory_reason_image_ocr_fail_payload_is_interceptable():
     assert "mencocokkan ID dan Alasan" in reply
 
 
-def test_ocr_image_openai_has_no_generic_fallback_for_factory_reason_tables():
+def test_ocr_image_openai_keeps_generic_transcript_when_strict_alignment_is_uncertain():
     fn = _function_source("ocr_image_openai")
-    assert "fail-closed; no generic fallback" in fn
-    assert "return _factory_reason_ocr_failure_payload" in fn
     assert "factory_reason_ocr_fail_closed" in fn
+    assert "factory_reason_ocr_degraded" in fn
+    assert "return result" in fn
+    assert "return _factory_reason_ocr_failure_payload" not in fn
 
 
-def test_image_handlers_intercept_factory_reason_ocr_failure_payload():
+def test_image_handlers_never_send_factory_reason_failure_text_as_translation():
     bg_fn = _function_source("_handle_image_background")
     ask_fn = _function_source("_process_pending_image_translate_inner")
     assert "_is_factory_reason_ocr_failure_text(extracted)" in bg_fn
-    assert "_factory_reason_user_failure_reply()" in bg_fn
+    assert "_factory_reason_user_failure_reply()" not in bg_fn
     assert "_is_factory_reason_ocr_failure_text(extracted)" in ask_fn
-    assert "_factory_reason_user_failure_reply()" in ask_fn
+    assert "_factory_reason_user_failure_reply()" not in ask_fn
+    assert "durable" in bg_fn.lower()
+    assert "durable" in ask_fn.lower()

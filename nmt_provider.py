@@ -181,13 +181,17 @@ def _google_translate(text: str, src: str, tgt: str) -> Optional[str]:
     g_tgt = lang_map.get(tgt.lower(), tgt)
     
     url = "https://translation.googleapis.com/language/translate/v2"
-    body = urllib.parse.urlencode({
+    params = {
         "key": api_key,
         "q": text,
-        "source": g_src,
         "target": g_tgt,
         "format": "text",
-    }).encode("utf-8")
+    }
+    # Google auto-detects when source is omitted.  Sending the literal value
+    # "auto" is rejected by the Cloud Translation v2 API.
+    if str(g_src or "").lower() not in ("", "auto"):
+        params["source"] = g_src
+    body = urllib.parse.urlencode(params).encode("utf-8")
     
     try:
         req = urllib.request.Request(url, data=body, method="POST")
@@ -228,11 +232,14 @@ def _deepl_translate(text: str, src: str, tgt: str) -> Optional[str]:
     d_src = lang_map.get(src.lower(), src.upper())
     d_tgt = lang_map.get(tgt.lower(), tgt.upper())
     
-    body = urllib.parse.urlencode({
+    params = {
         "text": text,
-        "source_lang": d_src,
         "target_lang": d_tgt,
-    }).encode("utf-8")
+    }
+    # DeepL detects the source language when source_lang is omitted.
+    if str(src or "").lower() not in ("", "auto"):
+        params["source_lang"] = d_src
+    body = urllib.parse.urlencode(params).encode("utf-8")
     
     try:
         req = urllib.request.Request(url, data=body, method="POST")

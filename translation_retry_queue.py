@@ -1,8 +1,16 @@
-"""Durable queue for translations that could not be delivered immediately.
+"""Durable, lease-based work queue for translation delivery.
 
-The queue intentionally contains only source text and LINE delivery metadata.
-Translation output is never stored until it has been successfully pushed.  Jobs
-are deduplicated by a stable key and remain pending across process restarts.
+The queue is the availability boundary for text and media translation jobs:
+
+* jobs survive process restarts;
+* multiple Gunicorn workers cannot process the same job concurrently;
+* leases expire automatically after a worker crash;
+* retries have no terminal exhausted state;
+* payloads remain source-only until a translation is actually delivered.
+
+The public API keeps the v1 helpers used by older application code while adding
+``claim_due_jobs`` for safe multi-process workers and ``job_kind`` for media
+reprocessing.
 """
 from __future__ import annotations
 
@@ -11,11 +19,12 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 _LOCK = threading.RLock()
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _default_db_path() -> str:
@@ -38,97 +47,148 @@ DB_PATH = _default_db_path()
 def _connect() -> sqlite3.Connection:
     path = Path(DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=15)
+    conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA synchronous=FULL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
+def _columns(conn: sqlite3.Connection) -> set[str]:
+    return {str(row[1]) for row in conn.execute("PRAGMA table_info(translation_retry_jobs)")}
+
+
 def initialize() -> None:
+    """Create or migrate the queue schema without dropping pending v1 jobs."""
     with _LOCK, _connect() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS translation_retry_jobs (
-                job_key TEXT PRIMARY KEY,
-                payload_json TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                next_attempt_at REAL NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                last_error TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'pending',
-                schema_version INTEGER NOT NULL DEFAULT 1
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS translation_retry_jobs (
+                    job_key TEXT PRIMARY KEY,
+                    job_kind TEXT NOT NULL DEFAULT 'text',
+                    payload_json TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    lease_owner TEXT NOT NULL DEFAULT '',
+                    lease_until REAL NOT NULL DEFAULT 0,
+                    schema_version INTEGER NOT NULL DEFAULT 2
+                )
+                """
             )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_translation_retry_due "
-            "ON translation_retry_jobs(status, next_attempt_at)"
-        )
-        conn.commit()
+            cols = _columns(conn)
+            migrations = {
+                "job_kind": "ALTER TABLE translation_retry_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'text'",
+                "lease_owner": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''",
+                "lease_until": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0",
+            }
+            for name, sql in migrations.items():
+                if name not in cols:
+                    conn.execute(sql)
+            conn.execute(
+                "UPDATE translation_retry_jobs SET status='pending', lease_owner='', lease_until=0 "
+                "WHERE status NOT IN ('pending','leased') OR status IS NULL"
+            )
+            conn.execute(
+                "UPDATE translation_retry_jobs SET schema_version=? WHERE schema_version < ?",
+                (_SCHEMA_VERSION, _SCHEMA_VERSION),
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_translation_retry_due "
+                "ON translation_retry_jobs(status, next_attempt_at, lease_until)"
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
-def enqueue(job_key: str, payload: Dict[str, Any], *, delay_seconds: float = 0.0) -> bool:
-    """Insert or refresh one pending job. Returns True when newly inserted."""
+def enqueue(
+    job_key: str,
+    payload: Dict[str, Any],
+    *,
+    delay_seconds: float = 0.0,
+    job_kind: Optional[str] = None,
+) -> bool:
+    """Insert or refresh one job; return ``True`` only for a new row.
+
+    Refresh does not erase attempt history.  A leased job is not stolen; its
+    payload is updated and it becomes eligible again when the lease expires.
+    """
     initialize()
+    key = str(job_key or "").strip()
+    if not key:
+        raise ValueError("job_key is required")
+    body_payload = payload if isinstance(payload, dict) else {}
+    kind = str(job_kind or body_payload.get("job_kind") or "text").strip() or "text"
     now = time.time()
     due = now + max(0.0, float(delay_seconds or 0.0))
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    body = json.dumps(body_payload, ensure_ascii=False, separators=(",", ":"))
     with _LOCK, _connect() as conn:
-        row = conn.execute(
-            "SELECT job_key, status FROM translation_retry_jobs WHERE job_key = ?",
-            (str(job_key),),
-        ).fetchone()
-        inserted = row is None
-        if inserted:
-            conn.execute(
-                """
-                INSERT INTO translation_retry_jobs
-                    (job_key, payload_json, attempts, next_attempt_at, created_at,
-                     updated_at, last_error, status, schema_version)
-                VALUES (?, ?, 0, ?, ?, ?, '', 'pending', ?)
-                """,
-                (str(job_key), body, due, now, now, _SCHEMA_VERSION),
-            )
-        else:
-            # Preserve attempt history, but revive a stale/non-pending row and
-            # refresh payload fields such as a newer quote token.
-            conn.execute(
-                """
-                UPDATE translation_retry_jobs
-                   SET payload_json = ?,
-                       next_attempt_at = CASE
-                           WHEN status = 'pending' THEN MIN(next_attempt_at, ?)
-                           ELSE ?
-                       END,
-                       updated_at = ?,
-                       status = 'pending'
-                 WHERE job_key = ?
-                """,
-                (body, due, due, now, str(job_key)),
-            )
-        conn.commit()
-        return inserted
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT job_key, status, next_attempt_at FROM translation_retry_jobs WHERE job_key=?",
+                (key,),
+            ).fetchone()
+            inserted = row is None
+            if inserted:
+                conn.execute(
+                    """
+                    INSERT INTO translation_retry_jobs
+                        (job_key, job_kind, payload_json, attempts, next_attempt_at,
+                         created_at, updated_at, last_error, status, lease_owner,
+                         lease_until, schema_version)
+                    VALUES (?, ?, ?, 0, ?, ?, ?, '', 'pending', '', 0, ?)
+                    """,
+                    (key, kind, body, due, now, now, _SCHEMA_VERSION),
+                )
+            else:
+                status = str(row["status"] or "pending")
+                current_due = float(row["next_attempt_at"] or due)
+                conn.execute(
+                    """
+                    UPDATE translation_retry_jobs
+                       SET job_kind=?, payload_json=?,
+                           next_attempt_at=?, updated_at=?,
+                           status=CASE WHEN status='leased' THEN 'leased' ELSE 'pending' END,
+                           schema_version=?
+                     WHERE job_key=?
+                    """,
+                    (kind, body, min(current_due, due) if status == "pending" else current_due,
+                     now, _SCHEMA_VERSION, key),
+                )
+            conn.execute("COMMIT")
+            return inserted
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def get(job_key: str) -> Optional[Dict[str, Any]]:
     initialize()
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            "SELECT * FROM translation_retry_jobs WHERE job_key = ? AND status = 'pending'",
+            "SELECT * FROM translation_retry_jobs WHERE job_key=?",
             (str(job_key),),
         ).fetchone()
     return _row_to_job(row) if row else None
 
 
 def list_pending(*, limit: int = 500) -> List[Dict[str, Any]]:
+    """Return all outstanding jobs, including currently leased jobs."""
     initialize()
     with _LOCK, _connect() as conn:
         rows = conn.execute(
             """
             SELECT * FROM translation_retry_jobs
-             WHERE status = 'pending'
+             WHERE status IN ('pending','leased')
              ORDER BY next_attempt_at ASC, created_at ASC
              LIMIT ?
             """,
@@ -138,50 +198,135 @@ def list_pending(*, limit: int = 500) -> List[Dict[str, Any]]:
 
 
 def due_jobs(*, now: Optional[float] = None, limit: int = 20) -> List[Dict[str, Any]]:
+    """Compatibility read-only due query; workers should use ``claim_due_jobs``."""
     initialize()
     ts = time.time() if now is None else float(now)
     with _LOCK, _connect() as conn:
         rows = conn.execute(
             """
             SELECT * FROM translation_retry_jobs
-             WHERE status = 'pending' AND next_attempt_at <= ?
+             WHERE (status='pending' AND next_attempt_at<=?)
+                OR (status='leased' AND lease_until<=?)
              ORDER BY next_attempt_at ASC, created_at ASC
              LIMIT ?
             """,
-            (ts, max(1, min(int(limit or 20), 200))),
+            (ts, ts, max(1, min(int(limit or 20), 200))),
         ).fetchall()
     return [_row_to_job(row) for row in rows]
 
 
-def reschedule(job_key: str, *, delay_seconds: float, error: str = "") -> None:
+def claim_due_jobs(
+    *,
+    owner: Optional[str] = None,
+    now: Optional[float] = None,
+    limit: int = 20,
+    lease_seconds: float = 180.0,
+) -> List[Dict[str, Any]]:
+    """Atomically lease due jobs to one worker.
+
+    Expired leases are reclaimable.  This is the key difference from the old
+    in-memory worker and prevents duplicate provider calls across Gunicorn
+    processes while guaranteeing crash recovery.
+    """
+    initialize()
+    ts = time.time() if now is None else float(now)
+    worker = str(owner or f"pid-{os.getpid()}-{uuid.uuid4().hex[:12]}")
+    lim = max(1, min(int(limit or 20), 200))
+    lease_until = ts + max(15.0, float(lease_seconds or 180.0))
+    with _LOCK, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """
+                SELECT job_key FROM translation_retry_jobs
+                 WHERE (status='pending' AND next_attempt_at<=?)
+                    OR (status='leased' AND lease_until<=?)
+                 ORDER BY next_attempt_at ASC, created_at ASC
+                 LIMIT ?
+                """,
+                (ts, ts, lim),
+            ).fetchall()
+            keys = [str(row["job_key"]) for row in rows]
+            for key in keys:
+                conn.execute(
+                    """
+                    UPDATE translation_retry_jobs
+                       SET status='leased', lease_owner=?, lease_until=?, updated_at=?
+                     WHERE job_key=?
+                       AND ((status='pending' AND next_attempt_at<=?)
+                         OR (status='leased' AND lease_until<=?))
+                    """,
+                    (worker, lease_until, ts, key, ts, ts),
+                )
+            claimed = []
+            if keys:
+                placeholders = ",".join("?" for _ in keys)
+                claimed = conn.execute(
+                    f"SELECT * FROM translation_retry_jobs WHERE lease_owner=? "
+                    f"AND status='leased' AND job_key IN ({placeholders}) "
+                    "ORDER BY next_attempt_at ASC, created_at ASC",
+                    (worker, *keys),
+                ).fetchall()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return [_row_to_job(row) for row in claimed]
+
+
+def renew_lease(job_key: str, *, owner: str, lease_seconds: float = 180.0) -> bool:
     initialize()
     now = time.time()
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE translation_retry_jobs
+               SET lease_until=?, updated_at=?
+             WHERE job_key=? AND status='leased' AND lease_owner=?
+            """,
+            (now + max(15.0, float(lease_seconds or 180.0)), now, str(job_key), str(owner)),
+        )
+    return bool(cur.rowcount)
+
+
+def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Optional[str] = None) -> None:
+    """Release a job back to pending and increment attempt count."""
+    initialize()
+    now = time.time()
+    params: list[Any] = [
+        now + max(1.0, float(delay_seconds or 1.0)),
+        now,
+        str(error or "")[:2000],
+        str(job_key),
+    ]
+    owner_clause = ""
+    if owner:
+        owner_clause = " AND (lease_owner=? OR lease_owner='')"
+        params.append(str(owner))
     with _LOCK, _connect() as conn:
         conn.execute(
             """
             UPDATE translation_retry_jobs
-               SET attempts = attempts + 1,
-                   next_attempt_at = ?,
-                   updated_at = ?,
-                   last_error = ?,
-                   status = 'pending'
-             WHERE job_key = ?
-            """,
-            (
-                now + max(1.0, float(delay_seconds or 1.0)),
-                now,
-                str(error or "")[:1000],
-                str(job_key),
-            ),
+               SET attempts=attempts+1, next_attempt_at=?, updated_at=?,
+                   last_error=?, status='pending', lease_owner='', lease_until=0
+             WHERE job_key=?
+            """ + owner_clause,
+            tuple(params),
         )
-        conn.commit()
 
 
-def mark_delivered(job_key: str) -> None:
+def mark_delivered(job_key: str, *, owner: Optional[str] = None) -> None:
     initialize()
+    params: list[Any] = [str(job_key)]
+    owner_clause = ""
+    if owner:
+        owner_clause = " AND (lease_owner=? OR lease_owner='')"
+        params.append(str(owner))
     with _LOCK, _connect() as conn:
-        conn.execute("DELETE FROM translation_retry_jobs WHERE job_key = ?", (str(job_key),))
-        conn.commit()
+        conn.execute(
+            "DELETE FROM translation_retry_jobs WHERE job_key=?" + owner_clause,
+            tuple(params),
+        )
 
 
 def remove(job_key: str) -> None:
@@ -192,7 +337,8 @@ def pending_count() -> int:
     initialize()
     with _LOCK, _connect() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM translation_retry_jobs WHERE status = 'pending'"
+            "SELECT COUNT(*) AS n FROM translation_retry_jobs "
+            "WHERE status IN ('pending','leased')"
         ).fetchone()
     return int(row["n"] if row else 0)
 
@@ -202,8 +348,10 @@ def _row_to_job(row: sqlite3.Row) -> Dict[str, Any]:
         payload = json.loads(row["payload_json"] or "{}")
     except Exception:
         payload = {}
+    keys = set(row.keys())
     return {
         "job_key": str(row["job_key"]),
+        "job_kind": str(row["job_kind"] if "job_kind" in keys else "text"),
         "payload": payload if isinstance(payload, dict) else {},
         "attempts": int(row["attempts"] or 0),
         "next_attempt_at": float(row["next_attempt_at"] or 0.0),
@@ -211,4 +359,6 @@ def _row_to_job(row: sqlite3.Row) -> Dict[str, Any]:
         "updated_at": float(row["updated_at"] or 0.0),
         "last_error": str(row["last_error"] or ""),
         "status": str(row["status"] or "pending"),
+        "lease_owner": str(row["lease_owner"] if "lease_owner" in keys else ""),
+        "lease_until": float(row["lease_until"] if "lease_until" in keys else 0.0),
     }

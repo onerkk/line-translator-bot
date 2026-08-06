@@ -20,3 +20,11 @@ rapidfuzz>=3.5.0
 # /var/data/translation_memory.db   (Phase A)
 # /var/data/vector_tm.db            (Phase B)
 # /var/data/active_learning.db      (Phase L)
+
+# Translation delivery availability (optional but recommended)
+# LOCAL_TRANSLATE_URL=http://127.0.0.1:5000/translate
+#   LibreTranslate-compatible local endpoint used before public fallbacks.
+# TRANSLATION_RETRY_DB_PATH=/var/data/translation_retry_queue.db
+# TRANSLATION_RETRY_MAX_DELAY=300
+# Optional fully offline route: install argostranslate and preinstall the needed
+# zh/id/en language packages. The application never downloads models at runtime.
