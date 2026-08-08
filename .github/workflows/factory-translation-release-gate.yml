@@ -43,6 +43,7 @@ jobs:
         run: |
           python -m unittest -v \
             test_factory_translation_guard_root_fix.py \
+            test_factory_measurement_semantics_root_fix.py \
             test_factory_structured_report_root_fix.py \
             test_unified_factory_translation_root_fix.py \
             test_translation_casebook_root_fix.py \
