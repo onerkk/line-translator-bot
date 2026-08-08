@@ -271,6 +271,7 @@ import factory_translation_policy as factory_translation_policy_module  # one fa
 import factory_translation_guard as factory_translation_guard_module  # deterministic fail-closed plant acceptance boundary
 import factory_structured_report as factory_structured_report_module  # source-verifiable measurement/status reports
 import factory_quantity_semantics as factory_quantity_semantics_module  # compositional number/classifier/relation frame
+import factory_measurement_semantics as factory_measurement_semantics_module  # compositional ID→ZH micrometer/dimension shorthand frame
 
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
@@ -376,6 +377,29 @@ logger.info(
     "[FactoryQuantitySemantics] deployment verified api=%s build=%s",
     _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION,
     _EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
+)
+
+_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
+_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.1-id-zh-terse-measurement-frame"
+if (getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_API_VERSION", None)
+        != _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION
+        or getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID", None)
+        != _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID):
+    raise RuntimeError(
+        "factory measurement semantics deployment mismatch: "
+        f"expected api={_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION} "
+        f"build={_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID}, "
+        f"loaded api={getattr(factory_measurement_semantics_module, 'FACTORY_MEASUREMENT_SEMANTICS_API_VERSION', None)!r} "
+        f"build={getattr(factory_measurement_semantics_module, 'FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID', None)!r}. "
+        "Replace app.py and factory_measurement_semantics.py together."
+    )
+_FACTORY_MEASUREMENT_SEMANTICS_HEALTH = factory_measurement_semantics_module.health()
+if not ((_FACTORY_MEASUREMENT_SEMANTICS_HEALTH.get("self_test") or {}).get("ok")):
+    raise RuntimeError("factory measurement semantics behavioral self-test failed")
+logger.info(
+    "[FactoryMeasurementSemantics] deployment verified api=%s build=%s",
+    _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION,
+    _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID,
 )
 
 # These four files form one deployable unit.  A stale translation_extras.py was
@@ -2364,7 +2388,7 @@ ID_ZH_HIGH_RISK_TERMS = {
     "patah": "斷裂",
 
     # 量測/品檢(尺寸 vs 公差)— 研磨操機手最高頻訊息,先前完全沒建模(2026-06-04)
-    "mikro": "分厘卡量測/微米級(量測工具或精度,NOT 翻成「微」或「微細級」)",
+    "mikro": "分厘卡/尺寸量測語境；與 kecil/besar 搭配表示尺寸偏小/偏大，絕非微型/小型設備",
     "masuk": "(講尺寸/品檢時)進公差/在公差內/合格(NOT 進入/放入,NOT 來料)",
     "besar": "(描述量測讀數/尺寸時)偏大/超出上限,或比另一量具讀數大(NOT 級別「大級」;一般物體才譯「大」)",
     "kecil": "(描述量測讀數/尺寸時)偏小/低於下限,或比另一量具讀數小(NOT 級別「小級」;一般物體才譯「小」)",
@@ -5424,6 +5448,8 @@ FACTORY_DOMAIN_KEYWORDS_ID = {
         "bengkok", "penyok", "aus", "kasar", "karat", "berkarat", "visual", "qc",
         "masalah", "ada masalah", "sedikit masalah",
         "lulus", "tidak lulus", "reject", "rework", "toleransi", "diameter", "ukuran",
+        "mikro", "mikrometer", "micrometer", "pengukuran", "hasil ukur",
+        "kekecilan", "kebesaran",
     ],
     "material_flow": [
         "barang", "material", "bahan", "batang", "bundel", "lot", "work order", "wo",
@@ -6326,6 +6352,15 @@ def factory_semantic_translate_id_zh(text):
     if equipment_status:
         return equipment_status
 
+    _measurement_frame_fn = globals().get("_build_id_zh_measurement_frame")
+    if callable(_measurement_frame_fn):
+        measurement_frame = _measurement_frame_fn(raw)
+        measurement_result = factory_measurement_semantics_module.deterministic_translation(
+            measurement_frame
+        )
+        if measurement_result:
+            return measurement_result
+
     # v3.40: safe deterministic path for messages combining
     # pre-operation time + material front/rear direction + issue.
     # This runs before the legacy incident length cap because these sentences
@@ -6845,6 +6880,17 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
     domains = domain.get("domains", [])
     if not domain.get("is_factory"):
         return False, "", domains
+
+    # Measurement shorthand has its own source-derived frame.  Validate it here
+    # as well as in the runtime semantic contract so provider output, TM output
+    # and final-delivery checks share the same rejection rule.
+    measurement_frame = _build_id_zh_measurement_frame(src_text)
+    if measurement_frame.get("active"):
+        measurement_ok, measurement_issues = factory_measurement_semantics_module.validate_translation(
+            measurement_frame, zh_text
+        )
+        if not measurement_ok:
+            return True, (measurement_issues[0] if measurement_issues else "measurement_semantic_error"), domains
 
     t = _clean_factory_id(src_text)
     has_obj = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_OBJECTS.keys())
@@ -8414,6 +8460,40 @@ def _repair_factory_domain_term_translation(translation, risk):
 # from factory_knowledge.json.  Do not add new sentence-specific classifiers here.
 
 
+def _current_work_order_media_context():
+    """Return True only when this user's latest fresh media context is a work order.
+
+    The media helper is defined later in this module.  Looking it up dynamically
+    keeps semantic-contract unit tests independent from the LINE/image stack.
+    """
+    try:
+        fn = globals().get("get_recent_work_order_media_context")
+        if not callable(fn):
+            return False
+        return bool(fn(
+            getattr(_tl, "group_id", None),
+            getattr(_tl, "user_id", None),
+        ))
+    except Exception:
+        return False
+
+
+def _build_id_zh_measurement_frame(text):
+    """Build the shared terse measurement frame using the canonical equipment asset."""
+    try:
+        codes = _extract_known_equipment_codes(text)
+        return factory_measurement_semantics_module.build_frame(
+            text,
+            equipment_codes=codes,
+            work_order_context=_current_work_order_media_context(),
+        )
+    except Exception as exc:
+        _logger = globals().get("logger")
+        if _logger is not None and hasattr(_logger, "warning"):
+            _logger.warning("[FactoryMeasurementSemantics] frame failed open: %s", exc)
+        return {"active": False, "complete": False}
+
+
 def build_translation_semantic_contract(text, src, tgt):
     """Build one runtime contract for the current translation request.
     Contract is intentionally plain dict so every legacy module can consume it without new dependencies.
@@ -8428,8 +8508,30 @@ def build_translation_semantic_contract(text, src, tgt):
         "vector_bypass_allowed": True,
         "nmt_allowed": True,
         "requires_llm": False,
+        "context_bound": False,
     }
     if src == "id" and tgt == "zh":
+        measurement_frame = _build_id_zh_measurement_frame(text)
+        if measurement_frame.get("active"):
+            contract["has_risk"] = True
+            contract["risks"].append({
+                "term": "id_zh_measurement_shorthand",
+                "sense": "id_zh_measurement_shorthand",
+                "frame": measurement_frame,
+                "tm_bypass_allowed": False,
+                "nmt_allowed": False,
+                "requires_validation": True,
+            })
+            contract["tm_bypass_allowed"] = False
+            contract["vector_bypass_allowed"] = False
+            contract["nmt_allowed"] = False
+            contract["requires_llm"] = True
+            contract["requires_independent_review"] = True
+            if measurement_frame.get("work_order_context"):
+                # The omitted order object comes from recent media, not source
+                # text.  Source-only cache/TM keys must never learn this result.
+                contract["context_bound"] = True
+
         try:
             t_id = _clean_factory_id(text)
             preop_direction = (
@@ -8663,6 +8765,10 @@ def build_translation_semantic_contract_prompt(contract):
             quantity_prompt = factory_quantity_semantics_module.build_prompt(risk.get("frame") or {})
             if quantity_prompt:
                 lines.append(quantity_prompt)
+        elif risk.get("sense") == "id_zh_measurement_shorthand":
+            measurement_prompt = factory_measurement_semantics_module.build_prompt(risk.get("frame") or {})
+            if measurement_prompt:
+                lines.append(measurement_prompt)
         elif risk.get("sense") == "factory_knowledge_context":
             knowledge_prompt = factory_knowledge_module.build_prompt(risk.get("cards", []))
             if knowledge_prompt:
@@ -8735,6 +8841,10 @@ def translation_satisfies_semantic_contract(contract, translation):
             ok, issues = factory_quantity_semantics_module.validate_translation(risk.get("frame") or {}, t)
             if not ok:
                 return False, issues[0] if issues else "factory_quantity_semantics_failed"
+        elif risk.get("sense") == "id_zh_measurement_shorthand":
+            ok, issues = factory_measurement_semantics_module.validate_translation(risk.get("frame") or {}, t)
+            if not ok:
+                return False, issues[0] if issues else "id_zh_measurement_shorthand_failed"
         elif risk.get("sense") == "factory_knowledge_context":
             ok, issues = factory_knowledge_module.validate_translation(
                 risk.get("cards", []), risk.get("source_text", ""), t
@@ -8878,6 +8988,13 @@ def enforce_translation_semantic_contract(contract, src_text, translation):
     except Exception:
         pass
     for risk in (contract or {}).get("risks", []):
+        if risk.get("sense") == "id_zh_measurement_shorthand":
+            deterministic = factory_measurement_semantics_module.deterministic_translation(
+                risk.get("frame") or {}
+            )
+            if deterministic:
+                return deterministic
+            return translation
         if risk.get("sense") == "factory_knowledge_context":
             # Do not fabricate a fixed sentence locally.  Keep the provider
             # candidate available and let the one-shot semantic repair path below
@@ -11051,6 +11168,9 @@ def translate_google(text, src, tgt):
 
 def cache_get(text, src, tgt):
     """Get translation from cache if exists and not expired."""
+    # Source-only cache keys cannot represent media-resolved ellipsis.
+    if bool((getattr(_tl, "semantic_contract", None) or {}).get("context_bound")):
+        return None
     key = (text.strip(), src, tgt)
     with _cache_lock:
         if key in translation_cache:
@@ -11079,6 +11199,11 @@ def cache_get(text, src, tgt):
 
 def cache_set(text, src, tgt, result, force=False):
     """Store translation in cache only after the synchronous gate has passed."""
+    # Context-bound translations (for example an omitted object resolved from a
+    # recent work-order photo) must never be learned under a source-only key.
+    if bool((getattr(_tl, "semantic_contract", None) or {}).get("context_bound")):
+        logger.debug("[Cache] skipped context-bound translation")
+        return
     if not result or _is_translation_failure_sentinel(result):
         logger.warning("[LegacyFailurePurge] refused to cache empty/failure payload")
         return
@@ -11488,6 +11613,17 @@ def _factory_guard_report(source_text, candidate, src, tgt):
     )
 
 
+def _measurement_semantic_issues(source_text, candidate, src, tgt):
+    """Return hard ID→ZH measurement-frame issues for any delivery path."""
+    if src != "id" or tgt != "zh":
+        return []
+    frame = _build_id_zh_measurement_frame(source_text)
+    if not frame.get("active"):
+        return []
+    ok, issues = factory_measurement_semantics_module.validate_translation(frame, candidate)
+    return [] if ok else list(issues or ["id_zh_measurement_shorthand_failed"])
+
+
 def _factory_route_requires_validation(source_text, src, tgt):
     """Return whether factory output must be verified before cache/TM learning.
 
@@ -11564,6 +11700,10 @@ def _delivery_validation_issues(source_text, candidate, src, tgt):
             found.extend(str(item) for item in report.hard_issues)
     except Exception as exc:
         found.append("factory_validation_exception:" + type(exc).__name__)
+    try:
+        found.extend(_measurement_semantic_issues(source_text, candidate, src, tgt))
+    except Exception as exc:
+        found.append("measurement_validation_exception:" + type(exc).__name__)
 
     # Visible LINE mentions are identity tokens, not untranslated language.
     # Emergency NMT may preserve ``@All`` directly instead of the placeholder;
@@ -11660,6 +11800,22 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     legacy failure payloads and pure model meta-commentary are undeliverable.
     """
     issue_list = [str(item) for item in (issues or []) if str(item).strip()]
+
+    # A complete source-derived measurement frame is stronger than a degraded
+    # provider candidate.  Reconstruct from slots instead of delivering a known
+    # literal "micro/small machine" error.
+    if src == "id" and tgt == "zh":
+        measurement_frame = _build_id_zh_measurement_frame(source_text)
+        measurement_fallback = factory_measurement_semantics_module.deterministic_translation(
+            measurement_frame
+        )
+        if measurement_fallback:
+            measurement_ok, _ = factory_measurement_semantics_module.validate_translation(
+                measurement_frame, measurement_fallback
+            )
+            if measurement_ok:
+                return measurement_fallback
+
     exact = _factory_exact_fallback(source_text, src, tgt)
     if exact:
         return exact
@@ -11838,6 +11994,7 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         factory_report = _factory_guard_report(source_text, original, src, tgt)
         if not factory_report.ok:
             issues.extend(factory_report.hard_issues)
+        issues.extend(_measurement_semantic_issues(source_text, original, src, tgt))
         issues = list(dict.fromkeys(item for item in issues if item))
 
         if issues:
@@ -13040,6 +13197,58 @@ def translate(text, src, tgt):
                     "[DeterministicShortcut] structured report rejected; continuing to provider pipeline"
                 )
 
+            # Terse dimensional shorthand is compositional, not a sentence patch.
+            # The parser consumes the existing canonical equipment-code asset and
+            # only renders locally when every source token belongs to supported
+            # measurement slots.  This prevents ``mikro kecil`` from ever being
+            # interpreted as a miniature/small machine.  A recently confirmed
+            # work-order photo supplies the otherwise omitted order object.
+            _measurement_frame = _build_id_zh_measurement_frame(canonical_text)
+            _measurement_short = factory_measurement_semantics_module.deterministic_translation(
+                _measurement_frame
+            )
+            if _measurement_short:
+                _measurement_ok, _measurement_issues = (
+                    factory_measurement_semantics_module.validate_translation(
+                        _measurement_frame, _measurement_short
+                    )
+                )
+                if not _measurement_ok:
+                    logger.error(
+                        "[FactoryMeasurementSemantics] deterministic candidate failed self-validation: %s",
+                        _measurement_issues,
+                    )
+                    _measurement_short = None
+            if _measurement_short:
+                logger.info(
+                    "[FactoryMeasurementSemantics] deterministic shorthand hit: %r -> %r frame=%s",
+                    canonical_text[:160], _measurement_short[:240], _measurement_frame,
+                )
+                _measurement_short = _final_delivery_guard(
+                    canonical_text, _measurement_short, src, tgt
+                )
+                if _measurement_short and not _measurement_frame.get("work_order_context"):
+                    try:
+                        cache_set(canonical_text, src, tgt, _measurement_short, force=True)
+                    except Exception:
+                        pass
+                _update_last_translate_debug(
+                    pipeline_status=(
+                        "deterministic_id_zh_measurement_shorthand"
+                        if _measurement_short else
+                        "deterministic_measurement_shorthand_rejected_fallback_to_provider"
+                    ),
+                    final_candidate=(_measurement_short[:2000] if _measurement_short else ""),
+                    openai_status=("not_needed" if _measurement_short else "pending_provider_fallback"),
+                    factory_measurement_frame=_measurement_frame,
+                )
+                if _measurement_short:
+                    _set_translation_outcome("delivered", "deterministic_id_zh_measurement_shorthand")
+                    return _measurement_short
+                logger.error(
+                    "[DeterministicShortcut] measurement shorthand rejected; continuing to provider pipeline"
+                )
+
             _equipment_status = factory_semantic_translate_equipment_status_id_zh(
                 canonical_text
             )
@@ -13381,6 +13590,7 @@ def _tm_bypass_integrity_ok(source_text, candidate, src, tgt):
         factory_report = _factory_guard_report(source_text, candidate, src, tgt)
         if not factory_report.ok:
             issues.extend(factory_report.hard_issues)
+        issues.extend(_measurement_semantic_issues(source_text, candidate, src, tgt))
         issues = list(dict.fromkeys(item for item in issues if item))
         return not issues, issues
     except Exception as exc:
@@ -13565,6 +13775,7 @@ def _translate_core(text, src, tgt):
     # ─── 0.5: Runtime semantic contract (根治多義詞，不靠單句補丁) ───
     # 高風險語義先分類，後面 TM / Vector TM / NMT / LLM / QE / APE 全部吃同一份 contract。
     _semantic_contract = build_translation_semantic_contract(text, src, tgt)
+    _context_bound_translation = bool((_semantic_contract or {}).get("context_bound"))
     try:
         _tl.semantic_contract = _semantic_contract
     except Exception:
@@ -14138,6 +14349,8 @@ def _translate_core(text, src, tgt):
                                 _final_guard_report.issues[:20],
                             )
                             result = _pre_gate_result
+                if _context_bound_translation:
+                    _quality_cacheable = False
                 if result and _quality_cacheable:
                     cache_set(text, src, tgt, result, force=True)
         except Exception as _qge:
@@ -14199,6 +14412,11 @@ def _translate_core(text, src, tgt):
                 delattr(_tl, _attr)
         except Exception:
             pass
+
+    # Media-resolved ellipsis is context-bound.  Never teach source-only
+    # cache/TM/vector stores that an omitted work-order noun is always present.
+    if _context_bound_translation:
+        _quality_cacheable = False
 
     # ─── 背景後處理:本地品質訊號 → TM store → 向量 store（0 次翻譯 API） ───
     if result and isinstance(result, str) and not result.startswith("⚠") and _quality_cacheable:
@@ -14675,20 +14893,32 @@ def _translate_inner(text, src, tgt):
 
     return None
 
-def detect_work_order(ocr_text):
-    """Detect if OCR text is from a factory work order (製造指示書).
-    Returns customer name if detected, None otherwise."""
+WORK_ORDER_OCR_KEYWORDS = (
+    "冷精棒製造指示書", "製造指示書", "訂單編號", "客戶名稱", "成品尺寸",
+    "FINAL流程", "FINAL", "MIC_NO", "ID_NO", "HRITABPDIL", "退火代碼",
+    "冷精棒", "收貨人", "短尺", "品保", "特殊", "削皮", "訂單資訊",
+    "成品尺寸MIN", "成品尺寸MAX", "製造指示",
+)
+
+
+def analyze_work_order(ocr_text):
+    """Classify OCR text as a work order independently of customer extraction.
+
+    Older code used the customer string as the work-order boolean.  That meant a
+    real 製造指示書 with unreadable/absent customer name was treated as an
+    ordinary image, so the next terse text message lost its order context.
+    """
     if not ocr_text:
-        return None
-    wo_keywords = ["冷精棒製造指示書", "製造指示書", "訂單編號", "客戶名稱", "成品尺寸",
-                   "FINAL流程", "FINAL", "MIC_NO", "ID_NO", "HRITABPDIL", "退火代碼",
-                   "冷精棒", "收貨人", "短尺", "品保", "特殊", "削皮", "訂單資訊",
-                   "成品尺寸MIN", "成品尺寸MAX", "製造指示"]
-    keyword_count = sum(1 for kw in wo_keywords if kw in ocr_text)
-    logger.info("Work order detection: %d keywords matched in OCR text (%d chars)", keyword_count, len(ocr_text))
+        return {"is_work_order": False, "customer": None, "keyword_count": 0}
+    keyword_count = sum(1 for kw in WORK_ORDER_OCR_KEYWORDS if kw in ocr_text)
+    logger.info(
+        "Work order detection: %d keywords matched in OCR text (%d chars)",
+        keyword_count, len(ocr_text),
+    )
     if keyword_count < 2:
-        return None
-    # Try multiple patterns to extract customer name
+        return {"is_work_order": False, "customer": None, "keyword_count": keyword_count}
+
+    customer = None
     patterns = [
         r'客戶名稱[:\s：]*([^\s\n|,，]+)',
         r'客戶[:\s：]*([^\s\n|,，]+)',
@@ -14697,17 +14927,30 @@ def detect_work_order(ocr_text):
     for pat in patterns:
         m = re.search(pat, ocr_text)
         if m:
-            customer = m.group(1).strip()
-            if customer and len(customer) >= 2:
+            candidate = m.group(1).strip()
+            if candidate and len(candidate) >= 2:
+                customer = candidate
                 logger.info("Work order customer detected: %s", customer)
-                return customer
-    # Fallback: try to match any known customer name in the text
-    for name in CUSTOMER_NAMES:
-        if len(name) >= 2 and name in ocr_text:
-            logger.info("Work order customer matched from list: %s", name)
-            return name
-    logger.info("Work order detected but no customer name found")
-    return None
+                break
+    if not customer:
+        for name in CUSTOMER_NAMES:
+            if len(name) >= 2 and name in ocr_text:
+                customer = name
+                logger.info("Work order customer matched from list: %s", customer)
+                break
+    if not customer:
+        logger.info("Work order detected but no customer name found")
+    return {
+        "is_work_order": True,
+        "customer": customer,
+        "keyword_count": keyword_count,
+    }
+
+
+def detect_work_order(ocr_text):
+    """Backward-compatible customer extractor for a detected work order."""
+    analysis = analyze_work_order(ocr_text)
+    return analysis.get("customer") if analysis.get("is_work_order") else None
 
 
 def format_length_zh(code):
@@ -15787,6 +16030,30 @@ def get_recent_media_scene(group_id, user_id):
         return ""
     # 回最新一筆的 scene_summary
     return fresh[-1][2]
+
+
+WORK_ORDER_MEDIA_SCENE_PREFIX = "【工單照片】"
+
+
+def store_work_order_media_context(group_id, user_id, msg_id):
+    """Promote confirmed OCR work-order classification into shared media context."""
+    store_media_scene(
+        group_id, user_id, msg_id,
+        WORK_ORDER_MEDIA_SCENE_PREFIX + "製造指示書／訂單資訊",
+    )
+
+
+def get_recent_work_order_media_context(group_id, user_id):
+    """True only if the user's latest fresh media item is a confirmed work order.
+
+    Looking only at the newest entry prevents an older work-order photo from
+    leaking into a later unrelated image/text exchange within the TTL window.
+    """
+    scene = get_recent_media_scene(group_id, user_id)
+    return bool(
+        isinstance(scene, str)
+        and scene.startswith(WORK_ORDER_MEDIA_SCENE_PREFIX)
+    )
 
 
 def ocr_and_translate_image(image_base64, tgt_lang):
@@ -18048,6 +18315,7 @@ def handle_message(event):
         _tl.tone = translation_tone
         _tl.tone_custom = translation_tone_custom
         _tl.group_id = "__dm__"
+        _tl.user_id = user_id or ""
 
         _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
         _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
@@ -18372,6 +18640,10 @@ def handle_message(event):
     _tl.tone = _tone
     _tl.tone_custom = _tone_custom
     _tl.group_id = group_id
+    # Media context is keyed by (group, sender).  Earlier text handling set only
+    # group_id, so photo/video context lookup silently saw user_id=None and could
+    # never connect a just-sent work-order photo to the sender's next message.
+    _tl.user_id = user_id or ""
     _tl.line_mentions = list(line_mentions or [])
     # v3.10: 多語廣播 — 中文時翻成所有設定的目標語言
     _tts_text = None    # 給 TTS 用的主要翻譯文字
@@ -18995,27 +19267,42 @@ def _handle_image_background(ctx):
         except Exception:
             pass
 
-        # v3.9.39: 場景描述(供下一則文字翻譯的視覺上下文)
-        # 這裡不管 OCR 有沒有抓到字都跑 — 場景描述跟 OCR 是不同維度的資訊
-        # 例:控制盤照片 OCR 可能空,但場景描述能說「操作盤,綠色按鈕燒焦」
-        try:
-            scene = describe_scene_for_context(img_base64, mime_type=img_mime)
-            if scene:
-                store_media_scene(group_id, user_id, message_id, scene)
-                try:
-                    _entry = message_cache.get(str(message_id))
-                    if isinstance(_entry, dict):
-                        _entry["scene"] = str(scene)
-                        if not str(_entry.get("text") or "").strip():
-                            _entry["text"] = str(scene)
-                        _entry["ts"] = time.time()
-                except Exception:
-                    pass
-                _event_log_write("scene_described", {
-                    "msg_id": message_id, "scene": scene[:50]
-                })
-        except Exception as _sce:
-            logger.warning("scene describe error: %s", _sce)
+        # Classify a work-order document immediately after OCR, before the
+        # separate scene-description API call.  The old order delayed the only
+        # structured context signal, so a text sent right after the photo could
+        # be translated while the work-order fact was still unavailable.
+        _work_order_analysis = analyze_work_order(extracted) if extracted else {
+            "is_work_order": False, "customer": None, "keyword_count": 0
+        }
+        if _work_order_analysis.get("is_work_order"):
+            store_work_order_media_context(group_id, user_id, message_id)
+            _event_log_write("image_step", {
+                "step": "work_order_context_stored_early",
+                "keyword_count": _work_order_analysis.get("keyword_count", 0),
+            })
+
+        # v3.9.39: 場景描述(供下一則文字翻譯的視覺上下文)。
+        # 已確認為工單時不再花第二次 vision call 產生自由文字場景，避免
+        # 它覆寫剛建立的結構化工單 context，也縮短工單處理延遲。
+        if not _work_order_analysis.get("is_work_order"):
+            try:
+                scene = describe_scene_for_context(img_base64, mime_type=img_mime)
+                if scene:
+                    store_media_scene(group_id, user_id, message_id, scene)
+                    try:
+                        _entry = message_cache.get(str(message_id))
+                        if isinstance(_entry, dict):
+                            _entry["scene"] = str(scene)
+                            if not str(_entry.get("text") or "").strip():
+                                _entry["text"] = str(scene)
+                            _entry["ts"] = time.time()
+                    except Exception:
+                        pass
+                    _event_log_write("scene_described", {
+                        "msg_id": message_id, "scene": scene[:50]
+                    })
+            except Exception as _sce:
+                logger.warning("scene describe error: %s", _sce)
 
         if not extracted or len(extracted.strip()) < 2:
             _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
@@ -19030,7 +19317,8 @@ def _handle_image_background(ctx):
 
         # === Check if this is a work order (製造指示書) ===
         try:
-            wo_customer = detect_work_order(extracted)
+            wo_analysis = _work_order_analysis
+            wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
             if wo_customer:
                 _event_log_write("image_step", {"step": "work_order_detected", "customer": str(wo_customer)[:50]})
                 # It's a work order — never translate work order content
@@ -19416,7 +19704,12 @@ def _process_pending_image_translate_inner(event, message_id):
 
     # 工單偵測
     try:
-        wo_customer = detect_work_order(extracted)
+        wo_analysis = analyze_work_order(extracted)
+        if wo_analysis.get("is_work_order"):
+            store_work_order_media_context(
+                group_id, (info or {}).get("user_id", ""), message_id
+            )
+        wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
         if wo_customer:
             wo_on = group_wo_settings.get(group_id, True)
             if wo_on:
@@ -33196,6 +33489,7 @@ def health():
         "factory_translation_policy": factory_translation_policy_module.health(),
         "factory_translation_guard": factory_translation_guard_module.health(),
         "factory_translation_guard_fingerprint": factory_translation_guard_module.asset_fingerprint(),
+        "factory_measurement_semantics": factory_measurement_semantics_module.health(),
         "final_delivery_guard": _FINAL_DELIVERY_GUARD_BUILD_ID,
         "uptime": int(time.time() - bot_start_time),
     }
