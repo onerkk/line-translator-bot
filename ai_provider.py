@@ -296,11 +296,10 @@ def normalize_tts_model(model, fallback=None):
 # 預設配置
 # ═══════════════════════════════════════════════════════════════════
 DEFAULT_CONFIG = {
-    # v3.36: text translation defaults to Gemini because the official Gemini
-    # model guide explicitly positions Flash-Lite for high-volume translation.
-    # app.py still passes an explicit per-request provider order, so image/OCR
-    # and admin-selected non-translation workflows remain independently routed.
-    "active_provider": "gemini",
+    # v3.37: production default/failover hierarchy is strict and predictable:
+    # Claude -> OpenAI(ChatGPT) -> Gemini.  The active provider remains the
+    # first choice; this default only applies to a fresh install.
+    "active_provider": "anthropic",
     "openai": {"api_key": "", "base_url": None},
     "anthropic": {
         "api_key": "",
@@ -329,7 +328,7 @@ DEFAULT_CONFIG = {
         "per_provider_timeout_seconds": 24,
         "circuit_breaker_failures": 2,
         "circuit_breaker_cooldown_seconds": 60,
-        "provider_order": ["gemini", "openai", "anthropic"],
+        "provider_order": ["anthropic", "openai", "gemini"],
         # Real-time LINE messages need a much tighter tail-latency budget than
         # long documents or OCR.  Callers select one profile; the old two
         # timeout fields remain as backwards-compatible fallbacks.
@@ -339,13 +338,18 @@ DEFAULT_CONFIG = {
             "vision": {"total": 50, "per_provider": 20},
             "background": {"total": 90, "per_provider": 45},
         },
-        # Active provider is always tried first. Backups are ordered by recent
-        # EWMA latency so the second attempt is the most likely fast recovery.
-        "adaptive_backup_order": True,
+        # Root-fix: keep failover deterministic.  Cost/latency telemetry must
+        # never reorder ChatGPT behind Gemini when Claude is the configured main.
+        "strict_failover_order": True,
+        "adaptive_backup_order": False,
         "latency_ewma_alpha": 0.25,
     },
-    # v3.28: 額度耗盡 → 永久切換主力 + LINE 通知管理員
+    # v3.28/v3.37: 額度耗盡 → 永久切換主力 + LINE 通知管理員。
+    # Exhausted providers are persisted and skipped until an admin explicitly
+    # switches back or updates that provider's API key.
     "auto_switch_on_exhaust": True,
+    "quota_exhausted_providers": {},
+    "auto_switch_state": {},
     "openai_features": {
         "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
     },
@@ -498,11 +502,17 @@ def _migrate_config_models(cfg):
 
     policy = cfg.setdefault("failover_policy", {})
     old_order = list(policy.get("provider_order") or [])
-    # Preserve all configured providers but make the low-cost translation-first
-    # order deterministic for legacy configs.
+    # v3.37 root-fix: legacy configs are migrated to one strict recovery chain.
+    # If Claude has no credit, ChatGPT must be tried before Gemini.
     policy["provider_order"] = list(dict.fromkeys(
-        ["gemini", "openai", "anthropic"] + old_order
+        ["anthropic", "openai", "gemini"] + old_order
     ))
+    policy["strict_failover_order"] = True
+    policy["adaptive_backup_order"] = False
+    if not isinstance(cfg.get("quota_exhausted_providers"), dict):
+        cfg["quota_exhausted_providers"] = {}
+    if not isinstance(cfg.get("auto_switch_state"), dict):
+        cfg["auto_switch_state"] = {}
     return cfg
 
 
@@ -682,6 +692,26 @@ def _provider_has_key(provider):
     return bool((_current_config or {}).get(provider, {}).get("api_key"))
 
 
+def _provider_quota_blocked(provider):
+    """True when a provider returned an explicit credit/quota exhaustion error.
+
+    This state is persisted in ai_provider_config.json so every Gunicorn worker
+    skips the depleted provider.  It is intentionally not time-based: refill is
+    an external billing event, so only an admin switch/key update clears it.
+    """
+    _ensure_initialized()
+    blocked = (_current_config or {}).get("quota_exhausted_providers", {})
+    return bool(isinstance(blocked, dict) and blocked.get(provider))
+
+
+def get_quota_exhausted_providers():
+    """Return a safe copy for admin diagnostics/tests."""
+    _ensure_initialized()
+    with _config_lock:
+        value = (_current_config or {}).get("quota_exhausted_providers", {})
+        return json.loads(json.dumps(value if isinstance(value, dict) else {}))
+
+
 def _provider_supports(provider, capability="chat"):
     return capability in _PROVIDER_CAPABILITIES.get(provider, set())
 
@@ -741,19 +771,25 @@ def get_available_providers(capability="chat", preference=None, include_open_cir
     """回傳具備指定能力且已設定 key 的 provider，順序即實際接力順序。
 
     preference 可指定優先順序；未指定時主力優先，再依 failover_policy.provider_order。
+    已明確回報額度耗盡的 provider 會跨 worker 持久跳過，直到管理員修復。
     熔斷中的 provider 在仍有其他可用者時會略過；若全部都熔斷，允許一次探測，
     避免所有服務在冷卻期間被永久鎖死。
     """
     _ensure_initialized()
     active = get_active_provider()
     configured_order = list(((_current_config or {}).get("failover_policy", {})
-                             .get("provider_order") or ("openai", "gemini", "anthropic")))
+                             .get("provider_order") or ("anthropic", "openai", "gemini")))
     requested = list(preference or [])
     order = []
     for name in ([active] if not requested else []) + requested + configured_order + ["openai", "gemini", "anthropic"]:
         if name in _PROVIDER_CAPABILITIES and name not in order:
             order.append(name)
-    eligible = [p for p in order if _provider_has_key(p) and _provider_supports(p, capability)]
+    eligible = [
+        p for p in order
+        if _provider_has_key(p)
+        and _provider_supports(p, capability)
+        and not _provider_quota_blocked(p)
+    ]
     if include_open_circuits:
         return eligible
     closed = [p for p in eligible if not _circuit_is_open(p)]
@@ -762,8 +798,9 @@ def get_available_providers(capability="chat", preference=None, include_open_cir
     # Preserve the explicitly selected first provider.  Only rank backups;
     # this avoids silently changing the user's cost/provider preference while
     # still improving tail latency after a failure.
-    adaptive = bool(((_current_config or {}).get("failover_policy", {})
-                     .get("adaptive_backup_order", True)))
+    _failover_policy = ((_current_config or {}).get("failover_policy", {}) or {})
+    strict_order = bool(_failover_policy.get("strict_failover_order", True))
+    adaptive = bool(_failover_policy.get("adaptive_backup_order", False)) and not strict_order
     if adaptive and len(candidates) > 2:
         first, rest = candidates[0], candidates[1:]
         with _provider_health_lock:
@@ -795,13 +832,31 @@ def get_native_client(provider):
     return None
 
 
-def set_active_provider(provider):
+def set_active_provider(provider, *, manual=False, respect_auto_switch=False):
+    """Set the main provider.
+
+    manual=True means an administrator intentionally selected this provider
+    after refill/testing, so its persisted exhausted flag is cleared.
+    respect_auto_switch=True is used while restoring old bot_settings: a stale
+    saved provider must not undo a newer automatic billing failover.
+    """
     if provider not in ("openai", "anthropic", "gemini"):
         return False, f"unknown provider: {provider}"
     _ensure_initialized()
     with _config_lock:
+        state = (_current_config or {}).get("auto_switch_state", {})
+        if (respect_auto_switch and isinstance(state, dict) and state.get("active")
+                and provider != (_current_config or {}).get("active_provider")):
+            return False, "保留額度耗盡後的自動切換主力"
+        blocked = (_current_config or {}).setdefault("quota_exhausted_providers", {})
+        if provider in blocked and not manual:
+            return False, f"{provider} 已標記額度耗盡，需管理員手動切回或更新 API key"
+        if manual:
+            blocked.pop(provider, None)
+            _current_config["auto_switch_state"] = {}
         _current_config["active_provider"] = provider
         if _save_config_to_disk(_current_config):
+            reset_provider_health(provider)
             return True, f"切換到 {provider}"
         return False, "存檔失敗"
 
@@ -812,6 +867,10 @@ def update_provider_key(provider, api_key):
     _ensure_initialized()
     with _config_lock:
         _current_config.setdefault(provider, {})["api_key"] = (api_key or "").strip()
+        # A new/re-entered key is the strongest signal that billing credentials
+        # were repaired.  Allow this provider to participate again, but do not
+        # silently make it primary; the admin can switch it back explicitly.
+        _current_config.setdefault("quota_exhausted_providers", {}).pop(provider, None)
         if _save_config_to_disk(_current_config):
             global _openai_client, _anthropic_client, _gemini_client
             if provider == "openai":
@@ -1863,7 +1922,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
 # ═══ v3.28: 額度耗盡自動切換 + LINE 通知 ═══
 _NOTIFY_CB = None            # app.py 註冊:fn(msg_text) → 推播給管理員
 _quota_fail_log = {}         # {provider: [timestamps]} 連續 429 計數
-_last_auto_switch_ts = 0.0   # 切換冷卻,防迴圈狂切
+_last_auto_switch_by_provider = {}  # per-provider cooldown; allows Claude->OpenAI->Gemini in one request
 
 
 def register_notify_callback(fn):
@@ -1881,16 +1940,28 @@ def _notify_admin(msg):
 
 
 def _is_quota_exhausted_error(e):
-    """判斷是否「額度/儲值耗盡」類錯誤(該永久切換主力,不只救單句):
-      OpenAI:    insufficient_quota / exceeded your current quota
-      Anthropic: credit balance is too low
-      Gemini:    RESOURCE_EXHAUSTED(免費層每日額度用完也算 — 切走,明天歸零可手動切回)
+    """Detect explicit *billing/credit* exhaustion, not ordinary rate limiting.
+
+    Permanent switching is intentionally conservative.  Generic 429,
+    RESOURCE_EXHAUSTED and "quota exceeded" can mean per-minute/token limits;
+    those still fail over for the current request but must not permanently mark
+    a paid provider as empty.
     """
     m = str(e).lower()
     return any(t in m for t in (
-        "insufficient_quota", "exceeded your current quota",
-        "credit balance is too low", "billing", "quota exceeded",
-        "resource_exhausted", "resource exhausted",
+        # OpenAI billing exhaustion
+        "insufficient_quota",
+        "exceeded your current quota",
+        "billing_hard_limit_reached",
+        "billing hard limit",
+        # Anthropic prepaid credit exhaustion
+        "credit balance is too low",
+        "insufficient credits",
+        "no credits remaining",
+        "purchase credits",
+        # Cross-provider explicit payment states
+        "payment required",
+        "billing balance exhausted",
     ))
 
 
@@ -1906,31 +1977,91 @@ def _bump_quota_counter(provider):
 
 
 def _auto_switch_on_exhaust(dead_provider, err):
-    """額度耗盡 → 永久切換主力到下一個有 key 的 provider + 推播通知。
-    切換順序取 CP 值:gemini(免費)→ openai → anthropic。60 秒冷卻防狂切。"""
-    global _last_auto_switch_ts
+    """Persist depletion and advance through Claude -> OpenAI -> Gemini.
+
+    Root-fix properties:
+      * the dead provider is skipped by every worker until manual repair;
+      * Claude exhaustion selects OpenAI before Gemini;
+      * OpenAI may also exhaust in the same request and immediately advance to
+        Gemini (cooldown is per provider, not global);
+      * the switch survives app restarts because auto_switch_state is persisted.
+    """
+    global _last_auto_switch_by_provider
     import time as _t
+    _ensure_initialized()
     if not (_current_config or {}).get("auto_switch_on_exhaust", True):
         return None
-    if _t.time() - _last_auto_switch_ts < 60:
+    if dead_provider not in ("anthropic", "openai", "gemini"):
         return None
-    for alt in ("gemini", "openai", "anthropic"):
-        if alt == dead_provider:
-            continue
-        if not (_current_config or {}).get(alt, {}).get("api_key"):
-            continue
-        ok, _ = set_active_provider(alt)
-        if ok:
-            _last_auto_switch_ts = _t.time()
+
+    now = _t.time()
+    with _config_lock:
+        blocked = _current_config.setdefault("quota_exhausted_providers", {})
+        blocked[dead_provider] = {
+            "at": int(now),
+            "error": str(err)[:240],
+        }
+
+        policy_order = list(((_current_config or {}).get("failover_policy", {})
+                             .get("provider_order") or ("anthropic", "openai", "gemini")))
+        canonical = list(dict.fromkeys(
+            [p for p in policy_order if p in ("anthropic", "openai", "gemini")]
+            + ["anthropic", "openai", "gemini"]
+        ))
+        try:
+            idx = canonical.index(dead_provider)
+            candidates = canonical[idx + 1:] + canonical[:idx]
+        except ValueError:
+            candidates = canonical
+
+        alt = None
+        for candidate in candidates:
+            if candidate == dead_provider:
+                continue
+            if blocked.get(candidate):
+                continue
+            if not (_current_config or {}).get(candidate, {}).get("api_key"):
+                continue
+            if not _provider_supports(candidate, "chat"):
+                continue
+            alt = candidate
+            break
+
+        if alt:
+            # Per-provider cooldown suppresses duplicate alerts from concurrent
+            # workers but never prevents the next provider from advancing too.
+            last = float(_last_auto_switch_by_provider.get(dead_provider, 0.0) or 0.0)
+            _last_auto_switch_by_provider[dead_provider] = now
+            _current_config["active_provider"] = alt
+            _current_config["auto_switch_state"] = {
+                "active": True,
+                "from": dead_provider,
+                "to": alt,
+                "at": int(now),
+                "reason": "quota_exhausted",
+            }
+            _save_config_to_disk(_current_config)
+            reset_provider_health(alt)
             _label = {"openai": "🟢 OpenAI", "anthropic": "🟣 Claude", "gemini": "🔵 Gemini"}
-            _notify_admin(
-                "⛽ AI 額度警報\n─────\n"
-                + _label.get(dead_provider, dead_provider) + " 額度耗盡/限流\n"
-                + "錯誤:" + str(err)[:80] + "\n─────\n"
-                + "✅ 已自動切換主力 → " + _label.get(alt, alt) + "\n"
-                + "翻譯服務不中斷。儲值後可至後台 /admin 切回。")
+            if now - last >= 60:
+                _notify_admin(
+                    "⛽ AI 額度警報\n─────\n"
+                    + _label.get(dead_provider, dead_provider) + " 額度耗盡\n"
+                    + "錯誤:" + str(err)[:80] + "\n─────\n"
+                    + "✅ 已自動切換主力 → " + _label.get(alt, alt) + "\n"
+                    + "翻譯服務不中斷。儲值後請至後台手動切回。")
             print(f"[ai_provider] ⛽ {dead_provider} 額度耗盡 → 主力自動切換 {alt}", flush=True)
             return alt
+
+        _current_config["auto_switch_state"] = {
+            "active": True,
+            "from": dead_provider,
+            "to": None,
+            "at": int(now),
+            "reason": "quota_exhausted_no_backup",
+        }
+        _save_config_to_disk(_current_config)
+
     _notify_admin("🚨 AI 額度警報:" + dead_provider + " 額度耗盡,且無其他可用 provider!"
                   "\n請立即儲值或到後台補 key,翻譯服務目前中斷。")
     return None

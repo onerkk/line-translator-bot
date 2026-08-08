@@ -2282,20 +2282,28 @@ def pick_model(text):
 
 
 def _translation_provider_preference(text=None, src=None, tgt=None):
-    """Cost/quality order for text translation only.
+    """Strict real-time translation failover order.
 
-    Gemini is first because Flash-Lite is explicitly designed for high-volume
-    translation and the upgrade tier maps to stable Gemini 2.5 Flash.  OpenAI is
-    the first quality failover; Claude Sonnet/Haiku remains the final fallback.
-    Unconfigured providers are filtered by ai_provider.chat_complete().
+    The admin-selected active provider is always first.  With the production
+    default (Claude), recovery is Claude -> OpenAI(ChatGPT) -> Gemini.  After an
+    automatic quota switch, ai_provider persistently suppresses the depleted
+    provider, so subsequent requests start directly from the new primary.
     """
     override = os.environ.get("TRANSLATION_PROVIDER_ORDER", "").strip()
+    canonical = ["anthropic", "openai", "gemini"]
     if override:
         requested = [p.strip().lower() for p in override.split(",") if p.strip()]
-        valid = [p for p in requested if p in ("gemini", "openai", "anthropic")]
+        valid = [p for p in requested if p in canonical]
         if valid:
-            return list(dict.fromkeys(valid + ["gemini", "openai", "anthropic"]))
-    return ["gemini", "openai", "anthropic"]
+            return list(dict.fromkeys(valid + canonical))
+    try:
+        active = ai_provider.get_active_provider()
+    except Exception:
+        active = "anthropic"
+    if active not in canonical:
+        active = "anthropic"
+    idx = canonical.index(active)
+    return canonical[idx:] + canonical[:idx]
 
 
 def _active_upgrade_model():
@@ -28586,6 +28594,12 @@ def _restore_ai_provider_config(saved):
         ai_provider._ensure_initialized()
         with ai_provider._config_lock:
             current = copy.deepcopy(ai_provider._current_config or ai_provider.DEFAULT_CONFIG)
+            # Runtime ai_provider_config may contain a newer automatic billing
+            # failover than the last cloud bot_settings snapshot.  Preserve it
+            # so a restart cannot silently jump from OpenAI back to depleted Claude.
+            runtime_switch = copy.deepcopy(current.get("auto_switch_state") or {})
+            runtime_blocked = copy.deepcopy(current.get("quota_exhausted_providers") or {})
+            runtime_active = current.get("active_provider")
             merged = copy.deepcopy(current)
             for key, value in saved.items():
                 if key in ("openai", "anthropic", "gemini") and isinstance(value, dict):
@@ -28599,6 +28613,11 @@ def _restore_ai_provider_config(saved):
                 merged = ai_provider._migrate_config_models(merged)
             except Exception:
                 pass
+            if isinstance(runtime_switch, dict) and runtime_switch.get("active"):
+                merged["auto_switch_state"] = runtime_switch
+                merged["quota_exhausted_providers"] = runtime_blocked
+                if runtime_active in ("openai", "anthropic", "gemini"):
+                    merged["active_provider"] = runtime_active
             ai_provider._current_config = merged
             ai_provider._save_config_to_disk(merged)
             ai_provider._openai_client = None
@@ -29230,7 +29249,8 @@ def load_settings():
             if "gemini_model_upgrade" in data:
                 gemini_model_upgrade = str(data["gemini_model_upgrade"])
             if data.get("ai_active_provider") in ("openai", "anthropic", "gemini"):
-                ai_provider.set_active_provider(data["ai_active_provider"])
+                ai_provider.set_active_provider(
+                    data["ai_active_provider"], respect_auto_switch=True)
             if isinstance(data.get("ai_openai_features"), dict) and data["ai_openai_features"]:
                 ai_provider.update_openai_features(data["ai_openai_features"])
             if isinstance(data.get("ai_gemini_features"), dict) and data["ai_gemini_features"]:
@@ -29545,7 +29565,7 @@ def api_admin_ai_provider_switch():
         return jsonify({"error": "forbidden"}), 403
     data = request.get_json(silent=True) or {}
     target = data.get("provider", "").strip().lower()
-    ok, msg = ai_provider.set_active_provider(target)
+    ok, msg = ai_provider.set_active_provider(target, manual=True)
     if ok:
         save_settings(force=True)
     return jsonify({"ok": ok, "message": msg, "active_provider": ai_provider.get_active_provider()})
@@ -34514,7 +34534,21 @@ def is_group_admin(user_id):
 # ═══ v3.28: AI 額度耗盡通知 — 推播給所有管理員 ═══
 def _push_text_to_admins(msg):
     """ai_provider 額度耗盡自動切換時的通知回呼。
-    推播對象:BOOTSTRAP_ADMIN_USER_IDS 環境變數 + 後台設定的 admin_users。"""
+    推播對象:BOOTSTRAP_ADMIN_USER_IDS 環境變數 + 後台設定的 admin_users。
+
+    The provider layer has already persisted the local failover state before
+    invoking this callback.  Mirror it to durable bot_settings asynchronously so
+    a redeploy cannot resurrect the depleted provider as primary.
+    """
+    try:
+        threading.Thread(
+            target=lambda: save_settings(force=True),
+            name="persist-ai-quota-failover",
+            daemon=True,
+        ).start()
+    except Exception as _persist_e:
+        logger.warning("[ExhaustNotify] 排程持久化自動切換失敗: %s", _persist_e)
+
     targets = set(_BOOTSTRAP_ADMIN_IDS)
     try:
         for _uid, _e in admin_users.items():
