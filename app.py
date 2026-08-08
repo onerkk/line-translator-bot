@@ -380,7 +380,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.2-id-zh-equipment-measurement-frame"
+_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"
 if (getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION
         or getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID", None)
@@ -1539,6 +1539,7 @@ TONE_PRESETS = {
         "- 材料製程中的「清洗」固定用 cuci/dicuci/proses pencucian；pembersihan 用於打掃、清潔環境或一般清潔，不可拿來代替棒材清洗製程。"
         "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。**股別翻譯以 ERP 對照為最高優先**：本廠「一股」= Bagian Cold Drawing 1、「二股」= Bagian Cold Drawing 2；不得自行泛化成 Regu/Subseksi。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班或工作班組(早班/夜班/中班 = shift；班長 = kepala regu/ketua shift)，不是班級。"
         "- 製程工序詞(研磨、削皮、拋光、倒角、酸洗、切斷、噴砂、口付 等)【雙義】:既是站別/部門(位置),也是對料做的工序(動作),**必須依上下文判斷,不可一律當位置直譯**——「送去研磨/研磨那邊/放研磨」=位置(stasiun grinding),「要研磨/研磨好了/研磨中/重研磨」=動作(digerinda / proses grinding)。翻譯前先想清楚:這句是在講『料在哪、送去哪』(位置),還是『對料做什麼』(動作),再決定譯法。"
+        "- 設備代碼 + 尺寸量測短句必須先拆語義角色：I5/I15/BF3 等代碼是生產設備；mikro/mikrometer + kecil/besar/masuk 描述的是材料尺寸量測狀態，不是設備大小。若同一使用者剛貼的是工單/製造指示書照片，後續省略句中的設備代碼表示『該設備現在生產/加工照片中的這個訂單』，尺寸判定屬於『該訂單的來料尺寸』；禁止翻成『設備尺寸偏小』『設備的工單尺寸偏小』。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
         "【輸出規則】"
         "11. 只輸出最終譯文，不要解釋，不要加註解，不要說明原因，不要列出其他可能翻法。"
@@ -2388,7 +2389,7 @@ ID_ZH_HIGH_RISK_TERMS = {
     "patah": "斷裂",
 
     # 量測/品檢(尺寸 vs 公差)— 研磨操機手最高頻訊息,先前完全沒建模(2026-06-04)
-    "mikro": "分厘卡/尺寸量測語境；與 kecil/besar 搭配表示尺寸偏小/偏大，絕非微型/小型設備",
+    "mikro": "分厘卡/尺寸量測語境；與 kecil/besar 搭配表示材料尺寸偏小/偏大，絕非微型/小型設備；若前一張是工單照片，尺寸主體是該訂單的來料，不是機台本體",
     "masuk": "(講尺寸/品檢時)進公差/在公差內/合格(NOT 進入/放入,NOT 來料)",
     "besar": "(描述量測讀數/尺寸時)偏大/超出上限,或比另一量具讀數大(NOT 級別「大級」;一般物體才譯「大」)",
     "kecil": "(描述量測讀數/尺寸時)偏小/低於下限,或比另一量具讀數小(NOT 級別「小級」;一般物體才譯「小」)",
@@ -8481,12 +8482,21 @@ def _repair_factory_domain_term_translation(translation, risk):
 
 
 def _current_work_order_media_context():
-    """Return True only when this user's latest fresh media context is a work order.
+    """Return the work-order relation for the current measurement request.
+
+    Translation-action buttons can be pressed long after the short media-context
+    TTL expires.  When the original translation stored an explicit semantic
+    decision, preserve that decision instead of reinterpreting the same sentence
+    from whatever image happens to be recent at click time.  Ordinary messages
+    still resolve the live per-user media context below.
 
     The media helper is defined later in this module.  Looking it up dynamically
     keeps semantic-contract unit tests independent from the LINE/image stack.
     """
     try:
+        override = getattr(_tl, "measurement_work_order_context_override", None)
+        if isinstance(override, bool):
+            return override
         fn = globals().get("get_recent_work_order_media_context")
         if not callable(fn):
             return False
@@ -8496,6 +8506,75 @@ def _current_work_order_media_context():
         ))
     except Exception:
         return False
+
+
+def _resolve_pending_work_order_context_for_measurement():
+    """Resolve the narrow image/text race for terse measurement shorthand.
+
+    Image OCR runs in a background thread.  A worker can therefore receive
+    ``Mesin I5 mikro kecil`` a fraction of a second after the photo while the
+    work-order classifier is still running.  For this one high-risk, complete
+    semantic frame we briefly poll the shared disk context.  Ordinary text never
+    waits, and a non-work-order scene ends the wait immediately.
+    """
+    gid = getattr(_tl, "group_id", None)
+    uid = getattr(_tl, "user_id", None)
+    if not gid or not uid:
+        return False
+
+    cache = getattr(_tl, "measurement_media_context_resolution", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            _tl.measurement_media_context_resolution = cache
+        except Exception:
+            pass
+    key = (str(gid), str(uid))
+    if key in cache:
+        return bool(cache[key])
+
+    work_order_fn = globals().get("get_recent_work_order_media_context")
+    pending_fn = globals().get("get_recent_pending_image_media_context")
+    state_fn = globals().get("get_recent_media_context_state")
+    if not callable(work_order_fn):
+        cache[key] = False
+        return False
+    try:
+        if work_order_fn(gid, uid):
+            cache[key] = True
+            return True
+        if not callable(pending_fn) or not pending_fn(gid, uid):
+            cache[key] = False
+            return False
+    except Exception:
+        cache[key] = False
+        return False
+
+    try:
+        wait_s = max(0.0, min(5.0, float(os.environ.get(
+            "MEASUREMENT_MEDIA_CONTEXT_WAIT_SECONDS", "3.0"
+        ))))
+    except Exception:
+        wait_s = 3.0
+    if wait_s <= 0:
+        cache[key] = False
+        return False
+
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        time.sleep(0.10)
+        try:
+            if work_order_fn(gid, uid):
+                cache[key] = True
+                return True
+            # Once OCR/scene classification replaced the pending marker with a
+            # non-work-order scene, there is nothing left to wait for.
+            if callable(state_fn) and state_fn(gid, uid) not in ("pending", "work_order"):
+                break
+        except Exception:
+            break
+    cache[key] = False
+    return False
 
 
 def _build_id_zh_measurement_frame(text):
@@ -8510,11 +8589,25 @@ def _build_id_zh_measurement_frame(text):
             text, getattr(_tl, "line_mentions", None)
         )
         codes = _extract_known_equipment_codes(normalized_text)
-        return factory_measurement_semantics_module.build_frame(
+        work_order_context = _current_work_order_media_context()
+        # Parse once without media context so only a complete, high-confidence
+        # measurement shorthand is allowed to wait for an in-flight image OCR.
+        preliminary = factory_measurement_semantics_module.build_frame(
             normalized_text,
             equipment_codes=codes,
-            work_order_context=_current_work_order_media_context(),
+            work_order_context=work_order_context,
         )
+        if (not work_order_context
+                and preliminary.get("active")
+                and preliminary.get("complete")):
+            work_order_context = _resolve_pending_work_order_context_for_measurement()
+        if work_order_context != bool(preliminary.get("work_order_context")):
+            return factory_measurement_semantics_module.build_frame(
+                normalized_text,
+                equipment_codes=codes,
+                work_order_context=work_order_context,
+            )
+        return preliminary
     except Exception as exc:
         _logger = globals().get("logger")
         if _logger is not None and hasattr(_logger, "warning"):
@@ -12158,9 +12251,31 @@ def _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang):
     retain ``@(name)`` text.
     """
     mention_protected, mention_map = protect_mentions(canonical)
+
+    # Natural / literal / formal buttons must change style only, never semantic
+    # interpretation.  They historically called the provider directly and could
+    # bypass the deterministic context resolver used by the normal translation
+    # path.  Run the same source-grounded measurement frame first; when complete
+    # it is both faster (zero provider call) and guarantees all three modes share
+    # the same equipment→current-order→incoming-material meaning.
+    result = None
+    if src_lang == "id" and tgt_lang == "zh":
+        try:
+            frame = _build_id_zh_measurement_frame(canonical)
+            deterministic = factory_measurement_semantics_module.deterministic_translation(frame)
+            if deterministic:
+                ok, _issues = factory_measurement_semantics_module.validate_translation(
+                    frame, deterministic
+                )
+                if ok:
+                    result = deterministic
+        except Exception as exc:
+            logger.warning("[translation_variant] semantic preflight failed open: %s", exc)
+
     # Ordinary names remain visible; only actual LINE mentions use recoverable
     # placeholders.  translate_openai adds an exact-copy name instruction.
-    result = translate_openai(mention_protected, src_lang, tgt_lang)
+    if not result:
+        result = translate_openai(mention_protected, src_lang, tgt_lang)
     if not result:
         return None
     if mention_map:
@@ -13167,6 +13282,16 @@ def translate(text, src, tgt):
     使用可恢復代碼。品質檢查負責記錄與阻止髒快取，不再把可用譯文丟棄。
     """
     _set_translation_outcome("started")
+    try:
+        # Prevent a previous request on the same worker thread from reusing a
+        # media-context decision.  Multiple validators within this request may
+        # share the result, but every new message resolves context afresh.
+        _tl.measurement_media_context_resolution = {}
+        # Explicit overrides are scoped only to one action-button execution.
+        # A normal message must always consult its own current media context.
+        _tl.measurement_work_order_context_override = None
+    except Exception:
+        pass
     _replace_last_translate_debug({
         "ts": int(time.time()),
         "src_text": text,
@@ -16070,6 +16195,20 @@ def get_recent_media_scene(group_id, user_id):
 
 
 WORK_ORDER_MEDIA_SCENE_PREFIX = "【工單照片】"
+PENDING_IMAGE_MEDIA_SCENE_PREFIX = "【圖片待辨識】"
+
+
+def store_pending_image_media_context(group_id, user_id, msg_id):
+    """Persist an image-arrival marker before background OCR starts.
+
+    This is intentionally content-free.  It exists only so a following terse
+    measurement message can distinguish "no photo" from "photo classification
+    is still in flight" across Gunicorn workers.
+    """
+    store_media_scene(
+        group_id, user_id, msg_id,
+        PENDING_IMAGE_MEDIA_SCENE_PREFIX + "等待 OCR/場景分類",
+    )
 
 
 def store_work_order_media_context(group_id, user_id, msg_id):
@@ -16080,17 +16219,29 @@ def store_work_order_media_context(group_id, user_id, msg_id):
     )
 
 
+def get_recent_media_context_state(group_id, user_id):
+    """Return the latest shared media state without exposing guessed content."""
+    scene = get_recent_media_scene(group_id, user_id)
+    if not isinstance(scene, str) or not scene:
+        return "none"
+    if scene.startswith(WORK_ORDER_MEDIA_SCENE_PREFIX):
+        return "work_order"
+    if scene.startswith(PENDING_IMAGE_MEDIA_SCENE_PREFIX):
+        return "pending"
+    return "other"
+
+
+def get_recent_pending_image_media_context(group_id, user_id):
+    return get_recent_media_context_state(group_id, user_id) == "pending"
+
+
 def get_recent_work_order_media_context(group_id, user_id):
     """True only if the user's latest fresh media item is a confirmed work order.
 
     Looking only at the newest entry prevents an older work-order photo from
     leaking into a later unrelated image/text exchange within the TTL window.
     """
-    scene = get_recent_media_scene(group_id, user_id)
-    return bool(
-        isinstance(scene, str)
-        and scene.startswith(WORK_ORDER_MEDIA_SCENE_PREFIX)
-    )
+    return get_recent_media_context_state(group_id, user_id) == "work_order"
 
 
 def ocr_and_translate_image(image_base64, tgt_lang):
@@ -19177,6 +19328,15 @@ def handle_image(event):
                     pass
         return
 
+    # Persist a cross-worker "image classification in flight" marker before
+    # starting OCR.  Terse measurement text sent immediately after this photo
+    # can now wait only for this specific dependency instead of translating with
+    # missing context.  Confirmed work-order or scene context replaces it later.
+    try:
+        store_pending_image_media_context(group_id, user_id, event.message.id)
+    except Exception as _pending_ctx_exc:
+        logger.warning("[media_ctx] pending image marker failed: %s", _pending_ctx_exc)
+
     # If no vision route is currently healthy, persist the media intent and
     # retry after configuration/provider recovery.  Do not post a failure text.
     if not _has_ai_capability("vision"):
@@ -20746,6 +20906,15 @@ def _execute_translation_variant(context, mode, group_id, user_id, preferred=Non
         _tl.user_id = user_id or ""
         _tl.translation_variant = mode
         _tl.quality_gate_critical = True
+        # Preserve the exact semantic relation captured when the original
+        # translation was created.  This makes 自然/直譯/正式 share one meaning
+        # even if the source photo has already expired from media context.
+        stored_measurement_context = context.get("measurement_work_order_context")
+        if (src_lang == "id" and tgt_lang == "zh"
+                and isinstance(stored_measurement_context, bool)):
+            _tl.measurement_work_order_context_override = stored_measurement_context
+        else:
+            _tl.measurement_work_order_context_override = None
         _tone, _tone_custom = get_group_tone(group_id)
         _tl.tone = _tone
         _tl.tone_custom = _tone_custom
@@ -35126,6 +35295,21 @@ def _register_translation_action_context(group_id, original_text, translated_tex
     """
     now = time.time()
     token = secrets.token_urlsafe(9)
+    # Freeze context-bound measurement semantics together with the original
+    # translation.  The action token lives much longer than media context, and
+    # all three style buttons must therefore reuse the same meaning instead of
+    # silently dropping (or acquiring) a work-order relation later.
+    measurement_work_order_context = None
+    try:
+        if src_lang == "id" and tgt_lang == "zh":
+            frame_fn = globals().get("_build_id_zh_measurement_frame")
+            if callable(frame_fn):
+                frame = frame_fn(original_text or "")
+                if frame.get("active") and frame.get("complete"):
+                    measurement_work_order_context = bool(frame.get("work_order_context"))
+    except Exception as exc:
+        logger.warning("[translation_action] measurement semantic snapshot failed open: %s", exc)
+
     record = {
         "group_id": group_id or "",
         "original": original_text or "",
@@ -35135,6 +35319,8 @@ def _register_translation_action_context(group_id, original_text, translated_tex
         "msg_id": msg_id or "",
         "expires_at": now + max(60, _TRANSLATION_ACTION_TTL),
     }
+    if isinstance(measurement_work_order_context, bool):
+        record["measurement_work_order_context"] = measurement_work_order_context
     with _translation_action_lock:
         expired = [k for k, v in _translation_action_cache.items()
                    if float(v.get("expires_at", 0)) <= now]

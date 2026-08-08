@@ -17,7 +17,7 @@ import re
 from typing import Iterable, Mapping, Sequence
 
 FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.2-id-zh-equipment-measurement-frame"
+FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"
 
 # Strong measurement cues.  ``mikro`` is plant shorthand for a dimensional
 # micrometer/measurement reading in this message shape; it is not an adjective
@@ -223,6 +223,14 @@ def build_frame(
     complete = bool(codes and state is not None and not state_ambiguous and not substantive_tokens)
     effective_work_order_context = bool(work_order_context and codes)
 
+    # When a confirmed recent work-order photo is available, the terse factory
+    # shorthand is deictic: the equipment code identifies the machine currently
+    # processing that photographed order, while the dimensional state belongs to
+    # the order's incoming material.  Keep these semantic roles explicit so all
+    # providers and deterministic renderers share the same interpretation.
+    work_order_relation = "current_production" if effective_work_order_context else ""
+    measurement_object = "incoming_material_dimension" if effective_work_order_context else "material_dimension"
+
     return {
         "active": True,
         "complete": complete,
@@ -236,6 +244,8 @@ def build_frame(
         "state_ambiguous": bool(state_ambiguous),
         "state_zh": (_STATE_ZH.get(state) if state else ""),
         "work_order_context": effective_work_order_context,
+        "work_order_relation": work_order_relation,
+        "measurement_object": measurement_object,
         "unparsed_tokens": substantive_tokens,
     }
 
@@ -250,8 +260,19 @@ def deterministic_translation(frame: Mapping) -> str | None:
         return None
     machine = "、".join(codes)
     if frame.get("work_order_context"):
-        return f"{machine} 這台設備的這張工單，{state_zh}"
-    return f"{machine} 這台設備量測{state_zh}"
+        # The photographed work order is the omitted object.  The machine code
+        # tells which equipment is producing it; the size judgement belongs to
+        # the incoming material, never to the machine body itself.
+        material_state = {
+            "尺寸偏小": "來料尺寸偏小",
+            "尺寸偏大": "來料尺寸偏大",
+            "尺寸在公差內": "來料尺寸在公差內",
+        }.get(state_zh, "來料" + state_zh)
+        return f"{machine} 現在生產的這個訂單，{material_state}"
+    # Even without a photographed order, the dimensional state belongs to the
+    # material being processed at that machine.  Never attach the size to the
+    # machine body itself.
+    return f"{machine} 生產中的材料{state_zh}"
 
 
 def build_prompt(frame: Mapping) -> str:
@@ -268,8 +289,11 @@ def build_prompt(frame: Mapping) -> str:
         "與 kecil/kekecilan 搭配表示尺寸偏小，與 besar/kebesaran 搭配表示尺寸偏大，"
         "masuk 表示尺寸在公差內。"
         "mesin + 已知設備代碼是在指定機台，不可把 mikro/kecil 合併成『微型/小型/迷你機台』。"
-        "若最近工單照片上下文=是，來源省略的量測對象可指剛才照片中的該張工單；"
-        "若=否，不可自行補出工單。"
+        "語義角色必須分開：設備代碼是生產設備；尺寸判定的主體是材料，不是設備本體。"
+        "若最近工單照片上下文=是，這是承接剛才照片的省略句：設備代碼表示該機台現在正在生產/加工照片中的這個訂單，"
+        "mikro + 尺寸狀態表示這個訂單的來料尺寸狀態。應理解成『I5 現在生產的這個訂單，來料尺寸偏小/偏大/在公差內』這類關係；"
+        "禁止翻成『I5 這台設備的工單尺寸偏小』、禁止說設備本身尺寸偏小，也不要把量測動作錯掛在設備本體。"
+        "若最近工單照片上下文=否，不可自行補出工單；但尺寸主體仍是該設備生產/加工中的材料，不能翻成設備本體量測尺寸偏小/偏大。"
         "</id_zh_measurement_shorthand>"
     )
 
@@ -311,9 +335,23 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     elif state == "in_tolerance" and not any(x in target for x in ("公差內", "進公差", "尺寸合格", "量測合格")):
         issues.append("measurement_in_tolerance_missing")
 
+    if frame.get("complete"):
+        if not any(x in target for x in ("材料尺寸", "料尺寸", "來料尺寸", "棒材尺寸", "產品尺寸")):
+            issues.append("measurement_material_object_missing")
+        if re.search(r"(?:這台)?設備(?:本身)?(?:量測|測量|測得|量到).{0,6}尺寸偏[大小]", target):
+            issues.append("measurement_state_attached_to_machine_measurement")
+
     if frame.get("work_order_context") and frame.get("complete"):
         if not any(x in target for x in ("工單", "訂單")):
             issues.append("measurement_work_order_context_missing")
+        if "來料尺寸" not in target:
+            issues.append("measurement_incoming_material_object_missing")
+        if not any(x in target for x in ("生產", "加工", "處理")):
+            issues.append("measurement_equipment_order_relation_missing")
+        # Explicitly reject the old wrong attachment where the order is merely
+        # possessed by the machine and the dimensional object is left implicit.
+        if re.search(r"(?:這台)?設備(?:的)?(?:這張|這個)?(?:工單|訂單).{0,8}尺寸偏[大小]", target):
+            issues.append("measurement_size_attached_to_equipment_order")
 
     return not issues, issues
 
@@ -331,17 +369,20 @@ def health() -> dict:
     checks = [
         undersize.get("active") is True,
         undersize.get("complete") is True,
-        deterministic_translation(undersize) == "I5 這台設備量測尺寸偏小",
-        deterministic_translation(order_undersize) == "I5 這台設備的這張工單，尺寸偏小",
-        deterministic_translation(oversize) == "BF3 這台設備量測尺寸偏大",
+        deterministic_translation(undersize) == "I5 生產中的材料尺寸偏小",
+        deterministic_translation(order_undersize) == "I5 現在生產的這個訂單，來料尺寸偏小",
+        deterministic_translation(oversize) == "BF3 生產中的材料尺寸偏大",
         conflict.get("active") is True and conflict.get("complete") is False,
         deterministic_translation(conflict) is None,
         bare_small.get("active") is False,
         generic_micro.get("active") is False,
         validate_translation(undersize, "I5 微型小機台")[0] is False,
         validate_translation(undersize, "I5 這台設備很小")[0] is False,
+        validate_translation(undersize, "I5 這台設備量測尺寸偏小")[0] is False,
+        validate_translation(undersize, "I5 生產中的材料尺寸偏小")[0] is True,
         validate_translation(order_undersize, "I5 這台設備量測尺寸偏小")[0] is False,
-        validate_translation(order_undersize, "I5 這台設備的這張工單，尺寸偏小")[0] is True,
+        validate_translation(order_undersize, "I5 這台設備的這張工單，尺寸偏小")[0] is False,
+        validate_translation(order_undersize, "I5 現在生產的這個訂單，來料尺寸偏小")[0] is True,
     ]
     return {
         "api_version": FACTORY_MEASUREMENT_SEMANTICS_API_VERSION,

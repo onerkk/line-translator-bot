@@ -95,7 +95,7 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         self.assertTrue(frame["work_order_context"])
         self.assertEqual(
             measurement.deterministic_translation(frame),
-            "I5 這台設備的這張工單，尺寸偏小",
+            "I5 現在生產的這個訂單，來料尺寸偏小",
         )
 
     def test_all_canonical_equipment_codes_share_the_same_compositional_rule(self):
@@ -113,7 +113,7 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
                 self.assertEqual(frame["state"], "undersize")
                 self.assertEqual(
                     measurement.deterministic_translation(frame),
-                    f"{code} 這台設備的這張工單，尺寸偏小",
+                    f"{code} 現在生產的這個訂單，來料尺寸偏小",
                 )
 
     def test_i5_case_is_measurement_not_machine_scale(self):
@@ -122,13 +122,17 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         )
         self.assertEqual(
             measurement.deterministic_translation(frame),
-            "I5 這台設備的這張工單，尺寸偏小",
+            "I5 現在生產的這個訂單，來料尺寸偏小",
         )
+        self.assertEqual(frame["work_order_relation"], "current_production")
+        self.assertEqual(frame["measurement_object"], "incoming_material_dimension")
         for bad in (
             "I5 微型小機台",
             "I5 小型設備",
             "I5 這台設備很小",
             "I5 是迷你機台",
+            "I5 這台設備量測尺寸偏小",
+            "I5 這台設備的這張工單，尺寸偏小",
         ):
             with self.subTest(bad=bad):
                 ok, issues = measurement.validate_translation(frame, bad)
@@ -141,9 +145,11 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         )
         self.assertEqual(
             measurement.deterministic_translation(frame),
-            "I5 這台設備量測尺寸偏小",
+            "I5 生產中的材料尺寸偏小",
         )
         self.assertNotIn("工單", measurement.deterministic_translation(frame))
+        self.assertIn("材料尺寸偏小", measurement.deterministic_translation(frame))
+        self.assertNotIn("設備量測尺寸偏小", measurement.deterministic_translation(frame))
 
     def test_mikro_is_not_globally_redefined_without_equipment_anchor(self):
         self.assertFalse(
@@ -158,12 +164,12 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
 
     def test_oversize_in_tolerance_and_conflict_are_modeled(self):
         big = measurement.build_frame("BF3 mikro besar", equipment_codes=["BF3"])
-        self.assertEqual(measurement.deterministic_translation(big), "BF3 這台設備量測尺寸偏大")
+        self.assertEqual(measurement.deterministic_translation(big), "BF3 生產中的材料尺寸偏大")
 
         passed = measurement.build_frame("I15 mikro masuk", equipment_codes=["I15"])
         self.assertEqual(
             measurement.deterministic_translation(passed),
-            "I15 這台設備量測尺寸在公差內",
+            "I15 生產中的材料尺寸在公差內",
         )
 
         conflict = measurement.build_frame(
@@ -198,9 +204,172 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         self.assertIn("if _context_bound_translation:", APP_SOURCE)
         self.assertIn("_quality_cacheable = False", APP_SOURCE)
         self.assertIn(
-            '_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.2-id-zh-equipment-measurement-frame"',
+            '_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"',
             APP_SOURCE,
         )
+
+    def test_work_order_context_changes_relation_and_measurement_object_not_just_wording(self):
+        frame = measurement.build_frame(
+            "Mesin I5 mikro kecil", equipment_codes=["I5"], work_order_context=True
+        )
+        self.assertEqual(frame["work_order_relation"], "current_production")
+        self.assertEqual(frame["measurement_object"], "incoming_material_dimension")
+        prompt = measurement.build_prompt(frame)
+        self.assertIn("現在正在生產/加工照片中的這個訂單", prompt)
+        self.assertIn("來料尺寸", prompt)
+        self.assertIn("不是設備本體", prompt)
+
+    def test_pending_image_race_waits_only_for_measurement_dependency(self):
+        state = {"value": "pending", "clock": 0.0, "sleeps": 0}
+
+        class FakeTime:
+            @staticmethod
+            def monotonic():
+                return state["clock"]
+
+            @staticmethod
+            def sleep(seconds):
+                state["sleeps"] += 1
+                state["clock"] += seconds
+                state["value"] = "work_order"
+
+        ns = _extract_app_namespace(
+            defs=("_resolve_pending_work_order_context_for_measurement",),
+            extra={
+                "_tl": types.SimpleNamespace(group_id="G", user_id="U"),
+                "os": types.SimpleNamespace(environ={"MEASUREMENT_MEDIA_CONTEXT_WAIT_SECONDS": "3"}),
+                "time": FakeTime,
+                "get_recent_work_order_media_context": lambda g, u: state["value"] == "work_order",
+                "get_recent_pending_image_media_context": lambda g, u: state["value"] == "pending",
+                "get_recent_media_context_state": lambda g, u: state["value"],
+            },
+        )
+        self.assertTrue(ns["_resolve_pending_work_order_context_for_measurement"]())
+        self.assertEqual(state["sleeps"], 1)
+
+    def test_image_handler_persists_pending_context_before_background_ocr(self):
+        pending_pos = APP_SOURCE.index(
+            "store_pending_image_media_context(group_id, user_id, event.message.id)"
+        )
+        background_pos = APP_SOURCE.index(
+            "_bg = _threading.Thread(target=_handle_image_background"
+        )
+        self.assertLess(pending_pos, background_pos)
+
+    def test_translation_variants_share_measurement_semantic_preflight(self):
+        ns = _extract_app_namespace(
+            defs=("_translate_variant_preserving_mentions",),
+            extra={
+                "protect_mentions": lambda text: (text, {}),
+                "restore_mentions": lambda text, mapping: text,
+                "_post_restore_mentions_guard": lambda text, mapping: text,
+                "_normalize_factory_operation_question": lambda src, out, a, b: out,
+                "finalize_factory_translation": lambda src, out, a, b: out,
+                "_final_delivery_guard": lambda src, out, a, b: out,
+                "_build_id_zh_measurement_frame": lambda text: measurement.build_frame(
+                    text, equipment_codes=["I5"], work_order_context=True
+                ),
+                "factory_measurement_semantics_module": measurement,
+                "translate_openai": lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("provider must not be called for complete frame")
+                ),
+                "logger": types.SimpleNamespace(warning=lambda *a, **k: None),
+            },
+        )
+        for mode in ("natural", "literal", "formal"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    ns["_translate_variant_preserving_mentions"](
+                        "Mesin I5 mikro kecil", "id", "zh"
+                    ),
+                    "I5 現在生產的這個訂單，來料尺寸偏小",
+                )
+
+    def test_action_cache_snapshots_context_bound_measurement_semantics(self):
+        import secrets
+        import threading
+        import time
+
+        ns = _extract_app_namespace(
+            assigns=(
+                "_translation_action_cache",
+                "_translation_action_lock",
+                "_TRANSLATION_ACTION_TTL",
+                "_TRANSLATION_ACTION_MAX",
+            ),
+            defs=("_register_translation_action_context", "_get_translation_action_context"),
+            extra={
+                "threading": threading,
+                "os": types.SimpleNamespace(environ={}),
+                "secrets": secrets,
+                "time": time,
+                "logger": types.SimpleNamespace(warning=lambda *a, **k: None),
+                "_build_id_zh_measurement_frame": lambda text: measurement.build_frame(
+                    text, equipment_codes=["I5"], work_order_context=True
+                ),
+            },
+        )
+        token = ns["_register_translation_action_context"](
+            "G",
+            "Mesin I5 mikro kecil",
+            "I5 現在生產的這個訂單，來料尺寸偏小",
+            "id",
+            "zh",
+            "M1",
+        )
+        saved = ns["_get_translation_action_context"](token, "G")
+        self.assertIs(saved["measurement_work_order_context"], True)
+
+    def test_action_variant_reuses_saved_semantics_after_media_context_expires(self):
+        tl = types.SimpleNamespace(existing="keep")
+
+        def fake_variant(text, src, tgt):
+            self.assertEqual((src, tgt), ("id", "zh"))
+            self.assertIs(tl.measurement_work_order_context_override, True)
+            return "I5 現在生產的這個訂單，來料尺寸偏小"
+
+        ns = _extract_app_namespace(
+            defs=("_execute_translation_variant",),
+            extra={
+                "_tl": tl,
+                "user_languages": {},
+                "dm_target_lang": {},
+                "get_group_tone": lambda group_id: ("factory", ""),
+                "id_preprocessing_enabled": False,
+                "resolve_factory_station_aliases": lambda text: (text, []),
+                "normalize_indonesian_text": lambda text: (text, []),
+                "_translate_variant_preserving_mentions": fake_variant,
+                "logger": types.SimpleNamespace(exception=lambda *a, **k: None),
+            },
+        )
+        context = {
+            "original": "Mesin I5 mikro kecil",
+            "translated": "I5 現在生產的這個訂單，來料尺寸偏小",
+            "src": "id",
+            "tgt": "zh",
+            "measurement_work_order_context": True,
+        }
+        result, src, tgt = ns["_execute_translation_variant"](
+            context, "natural", "G", "U"
+        )
+        self.assertEqual(result, "I5 現在生產的這個訂單，來料尺寸偏小")
+        self.assertEqual((src, tgt), ("id", "zh"))
+        self.assertEqual(tl.__dict__, {"existing": "keep"})
+
+    def test_live_context_honors_action_override_without_touching_normal_messages(self):
+        tl = types.SimpleNamespace(
+            group_id="G", user_id="U", measurement_work_order_context_override=True
+        )
+        ns = _extract_app_namespace(
+            defs=("_current_work_order_media_context",),
+            extra={
+                "_tl": tl,
+                "get_recent_work_order_media_context": lambda g, u: False,
+            },
+        )
+        self.assertTrue(ns["_current_work_order_media_context"]())
+        tl.measurement_work_order_context_override = None
+        self.assertFalse(ns["_current_work_order_media_context"]())
 
     def test_module_health_self_test_is_green(self):
         health = measurement.health()
