@@ -8,6 +8,7 @@ calling any translation provider or importing Flask/LINE.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import py_compile
 import sys
@@ -16,6 +17,7 @@ from typing import Any, Dict, List
 
 import factory_translation_guard as guard
 import factory_translation_policy as policy
+import factory_measurement_semantics as measurement
 import translation_casebook as casebook
 
 ROOT = Path(__file__).resolve().parent
@@ -25,6 +27,8 @@ REQUIRED_JSON = (
     "glossary_data.json",
 )
 REQUIRED_PYTHON = (
+    "app.py",
+    "factory_measurement_semantics.py",
     "factory_translation_guard.py",
     "factory_translation_policy.py",
     "translation_casebook.py",
@@ -41,6 +45,23 @@ REQUIRED_PYTHON = (
 def _load_json(name: str) -> Any:
     with (ROOT / name).open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _literal_module_assignments(name: str) -> Dict[str, Any]:
+    """Read top-level literal assignments without importing the production app."""
+    tree = ast.parse((ROOT / name).read_text(encoding="utf-8"), filename=name)
+    values: Dict[str, Any] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except Exception:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                values[target.id] = value
+    return values
 
 
 def audit() -> Dict[str, Any]:
@@ -65,6 +86,28 @@ def audit() -> Dict[str, Any]:
     except Exception as exc:
         health = {}
         errors.append(f"guard_reload:{type(exc).__name__}:{exc}")
+
+    measurement_health: Dict[str, Any] = {}
+    try:
+        measurement_health = measurement.health()
+        if not ((measurement_health.get("self_test") or {}).get("ok")):
+            errors.append("measurement_semantics_self_test_failed")
+
+        app_literals = _literal_module_assignments("app.py")
+        expected_api = app_literals.get("_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION")
+        expected_build = app_literals.get("_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID")
+        if expected_api != measurement.FACTORY_MEASUREMENT_SEMANTICS_API_VERSION:
+            errors.append(
+                "measurement_semantics_api_mismatch:"
+                f"app={expected_api!r}:module={measurement.FACTORY_MEASUREMENT_SEMANTICS_API_VERSION!r}"
+            )
+        if expected_build != measurement.FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID:
+            errors.append(
+                "measurement_semantics_build_mismatch:"
+                f"app={expected_build!r}:module={measurement.FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID!r}"
+            )
+    except Exception as exc:
+        errors.append(f"measurement_semantics_exception:{type(exc).__name__}:{exc}")
 
     regression = documents.get("factory_translation_regression.json") or {}
     verified_count = 0
@@ -125,6 +168,7 @@ def audit() -> Dict[str, Any]:
         "warnings": warnings,
         "policy": policy.health(),
         "guard": health,
+        "measurement_semantics": measurement_health,
         "regression": {
             "case_count": len(regression.get("cases", []) or []),
             "verified_targets_accepted": verified_count,

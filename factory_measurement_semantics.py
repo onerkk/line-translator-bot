@@ -17,7 +17,7 @@ import re
 from typing import Iterable, Mapping, Sequence
 
 FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.1-id-zh-terse-measurement-frame"
+FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.2-id-zh-equipment-measurement-frame"
 
 # Strong measurement cues.  ``mikro`` is plant shorthand for a dimensional
 # micrometer/measurement reading in this message shape; it is not an adjective
@@ -72,14 +72,25 @@ _FILLER_WORDS = {
 _BAD_MACHINE_SIZE_ZH = (
     "微型機台",
     "微型小機台",
+    "微小機台",
     "小型機台",
+    "小機台",
     "迷你機台",
     "微型設備",
+    "微小設備",
     "小型設備",
+    "小設備",
     "迷你設備",
     "微型機器",
+    "微小機器",
     "小型機器",
+    "小機器",
     "迷你機器",
+)
+
+_BAD_MACHINE_SCALE_PATTERNS = (
+    re.compile(r"(?:機台|設備|機器)(?:本身)?(?:很|太|較|比較|偏|過於)小(?:型)?"),
+    re.compile(r"(?:機台|設備|機器)(?:本身)?(?:很|太|較|比較|偏|過於)大(?:型)?"),
 )
 
 
@@ -145,15 +156,37 @@ def build_frame(
 
     strong_phrase, measurement_kind = _first_phrase(normalized, _MEASUREMENT_CUES)
     dimension_phrase, dimension_kind = _first_phrase(normalized, _DIMENSION_CUES)
-    state_phrase, state = _first_phrase(normalized, _STATE_CUES)
 
-    # Require a state plus strong measurement evidence for small/large readings.
-    # A phrase such as ``ukuran kecil`` can simply mean a small-size product, so
-    # it must not be upgraded to an out-of-tolerance reading.  ``masuk
-    # toleransi`` is separately safe because the tolerance noun makes the
-    # acceptance sense explicit.
-    if state in {"undersize", "oversize"}:
-        measurement_evidence = bool(strong_phrase)
+    # Resolve the dimensional state compositionally and detect contradictory
+    # shorthand instead of silently taking whichever keyword happens to sort
+    # first.  ``terlalu kecil`` + ``kecil`` is one state; ``kecil`` + ``besar``
+    # is an ambiguity and must never be deterministically collapsed.
+    present_state_phrases = [
+        (phrase, state_name)
+        for phrase, state_name in _STATE_CUES.items()
+        if _has_phrase(normalized, phrase)
+    ]
+    state_names = list(dict.fromkeys(state_name for _phrase, state_name in present_state_phrases))
+    state_ambiguous = len(state_names) > 1
+    state = state_names[0] if len(state_names) == 1 else None
+    state_phrase = None
+    if state is not None:
+        matching = [phrase for phrase, state_name in present_state_phrases if state_name == state]
+        state_phrase = max(matching, key=len) if matching else None
+    elif present_state_phrases:
+        state_phrase = max((phrase for phrase, _state_name in present_state_phrases), key=len)
+
+    # ``mikro`` by itself is lexically ambiguous in ordinary Indonesian.  The
+    # plant-specific measurement reading is activated only when it is anchored
+    # to a canonical equipment code from the existing STATION_CODES asset.
+    # Explicit measurement words such as ``mikrometer`` / ``hasil ukur`` remain
+    # usable without a code.  This generalizes across every known equipment code
+    # without globally redefining the common word ``mikro``.
+    if state in {"undersize", "oversize"} or state_ambiguous:
+        if strong_phrase == "mikro":
+            measurement_evidence = bool(codes)
+        else:
+            measurement_evidence = bool(strong_phrase)
     else:
         measurement_evidence = bool(strong_phrase or dimension_phrase == "toleransi")
     active = bool(state_phrase and measurement_evidence)
@@ -185,8 +218,10 @@ def build_frame(
     substantive_tokens = [tok for tok in tokens if tok not in _FILLER_WORDS]
 
     # Deterministic rendering is deliberately narrower than frame activation.
-    # A known equipment code plus only supported shorthand slots is sufficient.
-    complete = bool(codes and not substantive_tokens)
+    # A known equipment code plus one unambiguous state and only supported
+    # shorthand slots is sufficient.
+    complete = bool(codes and state is not None and not state_ambiguous and not substantive_tokens)
+    effective_work_order_context = bool(work_order_context and codes)
 
     return {
         "active": True,
@@ -198,8 +233,9 @@ def build_frame(
         "dimension_cue": dimension_phrase or "",
         "state_cue": state_phrase or "",
         "state": state,
-        "state_zh": _STATE_ZH[state],
-        "work_order_context": bool(work_order_context),
+        "state_ambiguous": bool(state_ambiguous),
+        "state_zh": (_STATE_ZH.get(state) if state else ""),
+        "work_order_context": effective_work_order_context,
         "unparsed_tokens": substantive_tokens,
     }
 
@@ -214,7 +250,7 @@ def deterministic_translation(frame: Mapping) -> str | None:
         return None
     machine = "、".join(codes)
     if frame.get("work_order_context"):
-        return f"{machine} 這台設備的這張工單{state_zh}"
+        return f"{machine} 這台設備的這張工單，{state_zh}"
     return f"{machine} 這台設備量測{state_zh}"
 
 
@@ -251,6 +287,11 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         if bad in target:
             issues.append("measurement_literal_machine_size:" + bad)
             break
+    for pattern in _BAD_MACHINE_SCALE_PATTERNS:
+        match = pattern.search(target)
+        if match:
+            issues.append("measurement_literal_machine_scale:" + match.group(0))
+            break
 
     # A standalone 「微型」 is also suspicious when the source uses the strong
     # ``mikro`` cue; this catches variants such as 「I5 微型的小機台」.
@@ -278,29 +319,32 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
 
 
 def health() -> dict:
-    cases = [
-        (
-            build_frame("Mesin I5 mikro kecil", equipment_codes=["I5"]),
-            "I5 這台設備量測尺寸偏小",
-            True,
-        ),
-        (
-            build_frame("Mesin I5 mikro kecil", equipment_codes=["I5"], work_order_context=True),
-            "I5 這台設備的這張工單尺寸偏小",
-            True,
-        ),
-        (
-            build_frame("mesin kecil", equipment_codes=[]),
-            "小型機台",
-            True,
-        ),
+    undersize = build_frame("Mesin I5 mikro kecil", equipment_codes=["I5"])
+    order_undersize = build_frame(
+        "Mesin I5 mikro kecil", equipment_codes=["I5"], work_order_context=True
+    )
+    oversize = build_frame("Mesin BF3 mikro besar", equipment_codes=["BF3"])
+    conflict = build_frame("Mesin I15 mikro kecil besar", equipment_codes=["I15"])
+    bare_small = build_frame("mesin kecil", equipment_codes=[])
+    generic_micro = build_frame("produk mikro kecil", equipment_codes=[])
+
+    checks = [
+        undersize.get("active") is True,
+        undersize.get("complete") is True,
+        deterministic_translation(undersize) == "I5 這台設備量測尺寸偏小",
+        deterministic_translation(order_undersize) == "I5 這台設備的這張工單，尺寸偏小",
+        deterministic_translation(oversize) == "BF3 這台設備量測尺寸偏大",
+        conflict.get("active") is True and conflict.get("complete") is False,
+        deterministic_translation(conflict) is None,
+        bare_small.get("active") is False,
+        generic_micro.get("active") is False,
+        validate_translation(undersize, "I5 微型小機台")[0] is False,
+        validate_translation(undersize, "I5 這台設備很小")[0] is False,
+        validate_translation(order_undersize, "I5 這台設備量測尺寸偏小")[0] is False,
+        validate_translation(order_undersize, "I5 這台設備的這張工單，尺寸偏小")[0] is True,
     ]
-    ok = True
-    for frame, target, expected in cases:
-        valid, _ = validate_translation(frame, target)
-        ok = ok and (valid is expected)
     return {
         "api_version": FACTORY_MEASUREMENT_SEMANTICS_API_VERSION,
         "build_id": FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID,
-        "self_test": {"ok": bool(ok)},
+        "self_test": {"ok": all(checks), "checks": len(checks)},
     }

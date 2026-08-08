@@ -380,7 +380,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.1-id-zh-terse-measurement-frame"
+_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.2-id-zh-equipment-measurement-frame"
 if (getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION
         or getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID", None)
@@ -5862,16 +5862,29 @@ def _extract_known_equipment_codes(text):
     """Return canonical known equipment codes in source order, de-duplicated.
 
     Mention display names are excluded from scanning; ``@(I 9)`` is a person,
-    not an equipment reference.
+    not an equipment reference.  Overlapping aliases are resolved by longest
+    span first, so a canonical code such as ``E1-1`` is not double-counted as
+    both ``E1-1`` and its prefix ``E1``.
     """
     normalized, _ = normalize_known_equipment_codes(text)
     scan_text, _mention_map = protect_mentions(normalized)
     hits = []
     for canonical, pattern in _KNOWN_EQUIPMENT_CODE_PATTERNS:
         for match in pattern.finditer(scan_text):
-            hits.append((match.start(), canonical))
-    hits.sort(key=lambda item: item[0])
-    return list(dict.fromkeys(code for _pos, code in hits))
+            hits.append((match.start(), match.end(), canonical))
+
+    # Same-start matches prefer the longest span.  Once a span is accepted, any
+    # nested/prefix match inside it is discarded.  This keeps the existing
+    # STATION_CODES asset single-sourced while preventing compound code leakage.
+    hits.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    selected = []
+    last_end = -1
+    for start, end, canonical in hits:
+        if start < last_end:
+            continue
+        selected.append(canonical)
+        last_end = end
+    return list(dict.fromkeys(selected))
 
 
 FACTORY_ID_ZH_EQUIPMENT_STATUS = {
@@ -6884,13 +6897,20 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
     # Measurement shorthand has its own source-derived frame.  Validate it here
     # as well as in the runtime semantic contract so provider output, TM output
     # and final-delivery checks share the same rejection rule.
-    measurement_frame = _build_id_zh_measurement_frame(src_text)
+    _measurement_frame_fn = globals().get("_build_id_zh_measurement_frame")
+    measurement_frame = (
+        _measurement_frame_fn(src_text)
+        if callable(_measurement_frame_fn)
+        else {"active": False, "complete": False}
+    )
     if measurement_frame.get("active"):
-        measurement_ok, measurement_issues = factory_measurement_semantics_module.validate_translation(
-            measurement_frame, zh_text
-        )
-        if not measurement_ok:
-            return True, (measurement_issues[0] if measurement_issues else "measurement_semantic_error"), domains
+        _measurement_module = globals().get("factory_measurement_semantics_module")
+        if _measurement_module is not None:
+            measurement_ok, measurement_issues = _measurement_module.validate_translation(
+                measurement_frame, zh_text
+            )
+            if not measurement_ok:
+                return True, (measurement_issues[0] if measurement_issues else "measurement_semantic_error"), domains
 
     t = _clean_factory_id(src_text)
     has_obj = any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t) for k in FACTORY_ID_ZH_OBJECTS.keys())
@@ -8479,11 +8499,19 @@ def _current_work_order_media_context():
 
 
 def _build_id_zh_measurement_frame(text):
-    """Build the shared terse measurement frame using the canonical equipment asset."""
+    """Build the shared terse measurement frame using the canonical equipment asset.
+
+    Normalize known code spellings inside the helper as well as at the public
+    translation boundary.  This keeps every caller safe, including validation
+    paths that may receive raw ``i 5`` / ``bf 3`` text directly.
+    """
     try:
-        codes = _extract_known_equipment_codes(text)
+        normalized_text, _ = normalize_known_equipment_codes(
+            text, getattr(_tl, "line_mentions", None)
+        )
+        codes = _extract_known_equipment_codes(normalized_text)
         return factory_measurement_semantics_module.build_frame(
-            text,
+            normalized_text,
             equipment_codes=codes,
             work_order_context=_current_work_order_media_context(),
         )
@@ -8511,7 +8539,16 @@ def build_translation_semantic_contract(text, src, tgt):
         "context_bound": False,
     }
     if src == "id" and tgt == "zh":
-        measurement_frame = _build_id_zh_measurement_frame(text)
+        # Several dependency-free regression tests intentionally execute this
+        # function in an AST-isolated namespace.  Resolve the optional factory
+        # measurement helper dynamically so unrelated semantic contracts remain
+        # testable without importing the full LINE/image stack.
+        _measurement_frame_fn = globals().get("_build_id_zh_measurement_frame")
+        measurement_frame = (
+            _measurement_frame_fn(text)
+            if callable(_measurement_frame_fn)
+            else {"active": False, "complete": False}
+        )
         if measurement_frame.get("active"):
             contract["has_risk"] = True
             contract["risks"].append({
