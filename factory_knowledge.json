@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-11.1-shift-handover-reporting-root-fix",
+  "build_id": "2026-08-11.2-bidirectional-source-relation-root-fix",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -2743,6 +2743,331 @@
           "source": "交班期間若發現任何生產異常，最晚30分鐘內向班長回報，方便班長做後續異常處理。",
           "target": "Jika menemukan masalah produksi apa pun saat pergantian shift, laporkan kepada kepala regu paling lambat 30 menit agar kepala regu lebih mudah menindaklanjuti kondisi abnormal.",
           "reason": "同一語意框架的改寫；期限數值來自當次來源，不固定套用一小時。"
+        }
+      ]
+    },
+    {
+      "id": "monitor_overhead_crane_scale_weight_relation",
+      "enabled": true,
+      "priority": 250,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "螢幕與天車電子磅秤讀值、差值及班長 ID 回報關係",
+      "match": {
+        "strong_phrases": [
+          "layar monitor",
+          "timbangan gantung elektronik",
+          "timbangan katrol",
+          "timbangan gantung",
+          "selisih"
+        ],
+        "all_groups": [
+          [
+            "layar monitor",
+            "monitor"
+          ],
+          [
+            "timbangan katrol",
+            "timbangan gantung elektronik",
+            "timbangan elektronik pada crane",
+            "timbangan elektronik crane",
+            "timbangan gantung",
+            "timbangan crane",
+            "timbangan derek",
+            "timbangan tian che",
+            "timbangan hoist"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "kg",
+          "kilogram",
+          "selisih",
+          "sedangkan",
+          "lapor",
+          "laporan",
+          "ketu kelas",
+          "ketua kelas",
+          "ketua shift",
+          "ketua regu",
+          "kepala shift",
+          "kepala regu"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本廠 timbangan katrol／timbangan gantung／timbangan crane 指安裝於天車的電子磅秤，中文固定用『天車電子磅秤』，不可照字面翻成『滑輪秤』。",
+        "螢幕讀值與天車電子磅秤讀值必須分別連到正確設備；selisih 是兩者差值，不可只保留孤立數字。",
+        "在重量異常回報語境中，Ketu kelas／ketua kelas 是現場人員對班長的錯拼或非正式稱呼；與 ID、lapor 同句時翻成『班長』，不可殘留印尼文。",
+        "來源只有 laporan／lapor 而沒有 sudah／telah 時，不得自行添加已完成時態；有明示完成詞才可翻成『已回報』。"
+      ],
+      "preferred_target_phrases": [
+        "螢幕顯示",
+        "天車電子磅秤",
+        "相差",
+        "用班長的 ID 回報"
+      ],
+      "forbidden_target_phrases": [
+        "滑輪秤",
+        "滑車秤",
+        "Ketu kelas",
+        "Ketua kelas",
+        "ketua shift",
+        "ketua regu",
+        "kepala shift",
+        "kepala regu"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "layar monitor",
+            "monitor"
+          ],
+          "target_any": [
+            "螢幕顯示",
+            "螢幕的讀值",
+            "螢幕讀值"
+          ],
+          "issue": "missing_monitor_display_relation"
+        },
+        {
+          "source_any": [
+            "timbangan katrol",
+            "timbangan gantung elektronik",
+            "timbangan elektronik pada crane",
+            "timbangan elektronik crane",
+            "timbangan gantung",
+            "timbangan crane",
+            "timbangan derek",
+            "timbangan tian che",
+            "timbangan hoist"
+          ],
+          "target_any": [
+            "天車電子磅秤"
+          ],
+          "issue": "missing_overhead_crane_electronic_scale"
+        },
+        {
+          "source_any": [
+            "selisih",
+            "beda",
+            "berbeda"
+          ],
+          "target_any": [
+            "相差",
+            "差距",
+            "差異"
+          ],
+          "issue": "missing_weight_difference_relation"
+        },
+        {
+          "source_any": [
+            "lapor",
+            "laporan",
+            "melapor",
+            "melaporkan"
+          ],
+          "target_any": [
+            "回報",
+            "報告",
+            "通報"
+          ],
+          "issue": "missing_report_action"
+        },
+        {
+          "source_any": [
+            "ketu kelas",
+            "ketua kelas",
+            "ketua shift",
+            "ketua regu",
+            "kepala shift",
+            "kepala regu"
+          ],
+          "target_any": [
+            "班長"
+          ],
+          "issue": "missing_shift_leader_role"
+        }
+      ],
+      "examples": [
+        {
+          "source": "Kg di layar monitor dengan di timbangan katrol selisih 6 kg. Saya laporan dengan id Ketu kelas",
+          "target": "螢幕顯示的重量與天車電子磅秤相差 6 公斤。我用班長的 ID 回報。",
+          "bad_target": "螢幕上的公斤數與滑輪秤相差 6 kg。我已用 Ketu kelas 的 ID 回報。",
+          "reason": "保留重量差值、兩個設備的正確關係與回報角色；不把天車電子磅秤直譯成滑輪秤，也不殘留錯拼職稱。"
+        },
+        {
+          "source": "Di layar monitor 995 kg sedangkan di timbangan katrol 989 kg",
+          "target": "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",
+          "bad_target": "螢幕上是 995 kg，但滑輪秤上是 989 kg。",
+          "reason": "兩個重量讀值各自綁定來源設備，並使用本廠正式設備名稱。"
+        }
+      ]
+    },
+    {
+      "id": "movement_then_on_site_inspection_relation",
+      "enabled": true,
+      "priority": 248,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "移動到現場後查看情況的動作與目的關係",
+      "match": {
+        "strong_phrases": [
+          "我過去了了解看看",
+          "我過去了解看看",
+          "我過去看看",
+          "到現場確認",
+          "去那邊看看"
+        ],
+        "all_groups": [
+          [
+            "過去",
+            "过去",
+            "去那邊",
+            "去那边",
+            "到現場",
+            "到现场",
+            "去現場",
+            "去现场",
+            "去那裡",
+            "去那里",
+            "到那邊",
+            "到那边",
+            "到那裡",
+            "到那里"
+          ],
+          [
+            "了解看看",
+            "了解一下",
+            "看看",
+            "看一下",
+            "確認一下",
+            "确认一下",
+            "檢查一下",
+            "检查一下",
+            "查看"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "我",
+          "先",
+          "情況",
+          "狀況",
+          "機台",
+          "設備",
+          "材料"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "『過去／去那邊／到現場』是明示的空間移動，印尼文必須保留 ke sana／ke lokasi 等移動與目的地，不可只翻『看看情況』。",
+        "『了解看看／確認一下／檢查一下』是移動後的目的，應使用 untuk mengecek／memeriksa 等目的結構。",
+        "若來源明示機台、設備或材料，檢查對象也必須保留；不可一律泛化成 situasi。"
+      ],
+      "preferred_target_phrases": [
+        "Saya ke sana dulu untuk mengecek situasinya",
+        "Saya ke lokasi dulu untuk memeriksa kondisi mesin"
+      ],
+      "forbidden_target_phrases": [],
+      "requirements": [
+        {
+          "source_any": [
+            "過去",
+            "过去",
+            "去那邊",
+            "去那边",
+            "到現場",
+            "到现场",
+            "去現場",
+            "去现场",
+            "去那裡",
+            "去那里",
+            "到那邊",
+            "到那边",
+            "到那裡",
+            "到那里"
+          ],
+          "target_any": [
+            "ke sana",
+            "pergi ke sana",
+            "ke lokasi",
+            "pergi ke lokasi",
+            "menuju lokasi",
+            "ke lapangan"
+          ],
+          "issue": "missing_movement_and_destination"
+        },
+        {
+          "source_any": [
+            "了解看看",
+            "了解一下",
+            "看看",
+            "看一下",
+            "確認一下",
+            "确认一下",
+            "檢查一下",
+            "检查一下",
+            "查看一下",
+            "查看",
+            "確認",
+            "确认",
+            "檢查",
+            "检查",
+            "了解",
+            "瞭解"
+          ],
+          "target_any": [
+            "mengecek",
+            "memeriksa",
+            "meninjau",
+            "melihat",
+            "mencari tahu"
+          ],
+          "issue": "missing_inspection_purpose"
+        },
+        {
+          "source_any": [
+            "機台",
+            "机台",
+            "設備",
+            "设备",
+            "機器",
+            "机器"
+          ],
+          "target_any": [
+            "mesin",
+            "peralatan"
+          ],
+          "issue": "missing_machine_inspection_object"
+        },
+        {
+          "source_any": [
+            "材料",
+            "料件",
+            "棒材"
+          ],
+          "target_any": [
+            "material",
+            "bahan"
+          ],
+          "issue": "missing_material_inspection_object"
+        }
+      ],
+      "examples": [
+        {
+          "source": "我過去了了解看看",
+          "target": "Saya ke sana dulu untuk mengecek situasinya.",
+          "bad_target": "Saya lihat dulu situasinya.",
+          "reason": "來源同時包含移動與查看目的；舊譯只保留查看，漏掉『過去那裡』。"
+        },
+        {
+          "source": "我先到現場確認一下機台狀況",
+          "target": "Saya ke lokasi dulu untuk memeriksa kondisi mesin.",
+          "bad_target": "Saya periksa dulu situasinya.",
+          "reason": "保留到現場的移動、檢查目的及機台對象。"
         }
       ]
     }

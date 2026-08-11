@@ -26,12 +26,13 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 import glossary_policy as gp_module
 import factory_semantic_audit as fsa_module
 import factory_quantity_semantics as fqs_module
+import factory_message_semantics as fmr_module
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 23
-QUALITY_GATE_BUILD_ID = "2026-08-06.1-quoted-control-fields-and-durable-delivery"
+QUALITY_GATE_API_VERSION = 24
+QUALITY_GATE_BUILD_ID = "2026-08-11.1-bidirectional-source-relation-integrity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1580,6 +1581,17 @@ def validate_translation(
                 issues.extend(_quantity_issues)
             issues.extend(_indonesian_readability_issues(source, candidate, src))
 
+    # Bidirectional source-relation completeness. This checks that equipment,
+    # readings, differences, reporting roles, movement, destinations and
+    # inspection actions remain attached to the same source roles. It applies
+    # before any cache/learning decision and is compositional across paraphrases.
+    relation_frame = fmr_module.build_frame(source, src, tgt)
+    relation_ok, relation_issues = fmr_module.validate_translation(
+        relation_frame, candidate
+    )
+    if not relation_ok or relation_issues:
+        issues.extend(relation_issues)
+
     issues = _dedupe(issues)
     hard, warnings = _partition_issues(issues)
     return ValidationResult(not hard, issues, hard, warnings)
@@ -2559,4 +2571,3 @@ def translation_failure_message(tgt_lang: str) -> str:
     artificial translated error message.
     """
     return ""
-

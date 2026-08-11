@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-11.1-shift-handover-reporting-root-fix",
+  "build_id": "2026-08-11.2-bidirectional-source-relation-root-fix",
   "description": "Versioned Chinese↔Indonesian factory regression corpus compiled from verified production corrections, root-fix records and semantic tests. Exact targets are authoritative for punctuation/spacing variants; required and forbidden concepts also protect provider output.",
   "cases": [
     {
@@ -673,6 +673,89 @@
         "bereaksi kepada kepala regu",
         "kepala regu / 班長",
         "ketua shift / kepala regu"
+      ]
+    },
+    {
+      "id": "monitor_overhead_crane_scale_difference_and_report",
+      "direction": "id-zh",
+      "source": "Kg di layar monitor dengan di timbangan katrol selisih 6 kg. Saya laporan dengan id Ketu kelas",
+      "verified_target": "螢幕顯示的重量與天車電子磅秤相差 6 公斤。我用班長的 ID 回報。",
+      "required_target_any_groups": [
+        [
+          "螢幕顯示"
+        ],
+        [
+          "天車電子磅秤"
+        ],
+        [
+          "相差 6 公斤",
+          "相差6公斤"
+        ],
+        [
+          "班長"
+        ],
+        [
+          "ID"
+        ],
+        [
+          "回報",
+          "報告"
+        ]
+      ],
+      "forbidden_target": [
+        "滑輪秤",
+        "Ketu kelas",
+        "Ketua kelas"
+      ]
+    },
+    {
+      "id": "monitor_overhead_crane_scale_two_readings",
+      "direction": "id-zh",
+      "source": "Di layar monitor 995 kg sedangkan di timbangan katrol 989 kg",
+      "verified_target": "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",
+      "required_target_any_groups": [
+        [
+          "螢幕顯示 995 公斤",
+          "螢幕顯示995公斤"
+        ],
+        [
+          "天車電子磅秤顯示 989 公斤",
+          "天車電子磅秤顯示989公斤"
+        ]
+      ],
+      "forbidden_target": [
+        "滑輪秤",
+        "螢幕顯示 989 公斤",
+        "天車電子磅秤顯示 995 公斤"
+      ]
+    },
+    {
+      "id": "movement_then_inspection_purpose",
+      "direction": "zh-id",
+      "source": "我過去了了解看看",
+      "verified_target": "Saya ke sana dulu untuk mengecek situasinya.",
+      "required_target_any_groups": [
+        [
+          "Saya"
+        ],
+        [
+          "ke sana",
+          "pergi ke sana",
+          "ke lokasi"
+        ],
+        [
+          "untuk mengecek",
+          "untuk memeriksa",
+          "untuk melihat"
+        ],
+        [
+          "situasinya",
+          "kondisinya",
+          "keadaan"
+        ]
+      ],
+      "forbidden_target": [
+        "Saya lihat dulu situasinya"
       ]
     }
   ]

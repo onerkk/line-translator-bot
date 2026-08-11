@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 import factory_translation_guard as guard
 import factory_translation_policy as policy
 import factory_measurement_semantics as measurement
+import factory_message_semantics as message_semantics
 import translation_casebook as casebook
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +30,7 @@ REQUIRED_JSON = (
 REQUIRED_PYTHON = (
     "app.py",
     "factory_measurement_semantics.py",
+    "factory_message_semantics.py",
     "factory_translation_guard.py",
     "factory_translation_policy.py",
     "translation_casebook.py",
@@ -109,6 +111,53 @@ def audit() -> Dict[str, Any]:
     except Exception as exc:
         errors.append(f"measurement_semantics_exception:{type(exc).__name__}:{exc}")
 
+    message_semantics_health: Dict[str, Any] = {}
+    try:
+        message_semantics_health = message_semantics.health()
+        if not ((message_semantics_health.get("self_test") or {}).get("ok")):
+            errors.append("message_semantics_self_test_failed")
+
+        app_literals = _literal_module_assignments("app.py")
+        expected_api = app_literals.get("_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION")
+        expected_build = app_literals.get("_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID")
+        if expected_api != message_semantics.FACTORY_MESSAGE_SEMANTICS_API_VERSION:
+            errors.append(
+                "message_semantics_api_mismatch:"
+                f"app={expected_api!r}:module={message_semantics.FACTORY_MESSAGE_SEMANTICS_API_VERSION!r}"
+            )
+        if expected_build != message_semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID:
+            errors.append(
+                "message_semantics_build_mismatch:"
+                f"app={expected_build!r}:module={message_semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID!r}"
+            )
+
+        route_probes = (
+            (
+                "Kg di layar monitor dengan di timbangan katrol selisih 6 kg. "
+                "Saya laporan dengan id Ketu kelas",
+                "id-ID", "zh-TW",
+                "螢幕顯示的重量與天車電子磅秤相差 6 公斤。我用班長的 ID 回報。",
+            ),
+            (
+                "Di layar monitor 995 kg sedangkan di timbangan katrol 989 kg",
+                "id", "zh",
+                "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",
+            ),
+            (
+                "我過去了了解看看", "zh-TW", "id-ID",
+                "Saya ke sana dulu untuk mengecek situasinya.",
+            ),
+        )
+        for source, src, tgt, expected in route_probes:
+            actual = message_semantics.translate_source_directly(source, src, tgt)
+            if actual != expected:
+                errors.append(
+                    "message_semantics_route_mismatch:"
+                    f"source={source!r}:expected={expected!r}:actual={actual!r}"
+                )
+    except Exception as exc:
+        errors.append(f"message_semantics_exception:{type(exc).__name__}:{exc}")
+
     regression = documents.get("factory_translation_regression.json") or {}
     verified_count = 0
     rejected_forbidden_count = 0
@@ -140,10 +189,10 @@ def audit() -> Dict[str, Any]:
             warnings.append(f"policy_mode_override:{policy.mode()}")
         if policy.review_mode() != "always":
             warnings.append(f"review_mode_override:{policy.review_mode()}")
-        if not policy.fail_closed("zh", "id"):
-            warnings.append("factory_fail_closed_disabled")
-        if not policy.require_review_success("zh", "id"):
-            warnings.append("review_success_requirement_disabled")
+        if policy.fail_closed("zh", "id"):
+            errors.append("delivery_blocking_must_remain_disabled")
+        if policy.require_review_success("zh", "id"):
+            errors.append("review_must_not_veto_a_locally_valid_translation")
         if policy.allow_generic_nmt_fallback("zh", "id"):
             warnings.append("generic_nmt_fallback_enabled")
     except Exception as exc:
@@ -169,6 +218,7 @@ def audit() -> Dict[str, Any]:
         "policy": policy.health(),
         "guard": health,
         "measurement_semantics": measurement_health,
+        "message_semantics": message_semantics_health,
         "regression": {
             "case_count": len(regression.get("cases", []) or []),
             "verified_targets_accepted": verified_count,

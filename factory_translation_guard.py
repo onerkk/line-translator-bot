@@ -22,9 +22,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import factory_knowledge
 import factory_quantity_semantics as fqs_module
+import factory_message_semantics as fmr_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.1-handover-reporting-acceptance"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.2-bidirectional-source-relations"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -324,7 +325,7 @@ class FactoryTranslationGuard:
             lines.append("Matched plant knowledge IDs: " + ", ".join(str(card.get("id")) for card in cards))
         lines.append(
             "Do not output a fluent approximation that violates a required concept or uses a known forbidden translation; "
-            "the system will reject it instead of delivering it."
+            "regenerate a source-complete translation before delivery."
         )
         lines.append("</factory_acceptance_boundary>")
         return "\n".join(lines)
@@ -406,6 +407,14 @@ class FactoryTranslationGuard:
         quantity_ok, quantity_issues = fqs_module.validate_translation(quantity_frame, target_text)
         if not quantity_ok or quantity_issues:
             issues.extend("factory_guard:" + issue for issue in quantity_issues)
+        relation_frame = fmr_module.build_frame(
+            source_text, _lang(src), _lang(tgt)
+        )
+        relation_ok, relation_issues = fmr_module.validate_translation(
+            relation_frame, target_text
+        )
+        if not relation_ok or relation_issues:
+            issues.extend("factory_guard:" + issue for issue in relation_issues)
         issues = _dedupe(issues)
         return GuardReport(
             ok=not issues,

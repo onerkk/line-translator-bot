@@ -24,7 +24,7 @@ import os
 from typing import Any, Dict
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 6
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-06.1-authoritative-final-boundary-and-durable-retry"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.2-always-review-nonblocking-relations"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -97,14 +97,14 @@ def require_verified_for_cache(src: Any, tgt: Any) -> bool:
 
 def review_mode() -> str:
     """Return source-review policy: ``always``, ``adaptive`` or ``off``."""
-    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
+    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "always") or "always").strip().lower()
     aliases = {
         "on": "always", "required": "always", "strict": "always", "all": "always",
         "smart": "adaptive", "auto": "adaptive",
         "none": "off", "disabled": "off", "0": "off",
     }
     value = aliases.get(value, value)
-    return value if value in {"always", "adaptive", "off"} else "adaptive"
+    return value if value in {"always", "adaptive", "off"} else "always"
 
 
 def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool = False) -> bool:
@@ -157,8 +157,9 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "quality, maintenance, safety, personnel, or accounting communication unless the source explicitly says otherwise.\n"
         "Use the retrieved plant glossary, factory knowledge and verified correction cases as the authoritative terminology system. "
         "Do not fall back to everyday dictionary meanings when a plant meaning is available.\n"
-        "Before output, silently reconstruct and verify actor, action, object, machine/station, material, movement direction, process state, "
-        "time, quantity, unit, negation, modality, priority, accounting action, cause and consequence against the source.\n"
+        "Before output, silently reconstruct and verify speaker/actor, action, object, recipient, role, ID ownership, "
+        "machine/station, instrument, material, movement, direction, destination, process state, time, quantity, unit, "
+        "which reading belongs to which device, comparison/difference, negation, modality, priority, purpose, cause and consequence against the source.\n"
         "Never invent an operator, machine, crane, manual operation, automatic operation, data check, accounting action, "
         "cause, deadline, measurement or workflow step that is not stated or entailed by approved plant knowledge.\n"
         "Preserve customer names, employee names, codes, work-order IDs, station IDs, numbers and units exactly as written. "

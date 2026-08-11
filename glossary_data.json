@@ -4,10 +4,30 @@
     "note_zh": "是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊",
     "note_id": "Untuk misahin barang yang besar(1ton)"
   },
-  "電子磅秤": {
-    "idn": "Timbangan Gantung",
+  "天車電子磅秤": {
+    "idn": "timbangan gantung elektronik",
     "note_zh": "安裝於天車上，用以即時測量並顯示吊運物體重量的電子裝置，具備精確測量、過載警示與數據記錄功能，確保起重作業的安全與準確性",
-    "note_id": "Untuk menimbang barang yang digantung"
+    "note_id": "Timbangan elektronik yang dipasang pada crane untuk menimbang material yang sedang digantung.",
+    "canonical_idn": "timbangan gantung elektronik",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "equipment",
+    "priority": 150,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "電子磅秤"
+    ],
+    "aliases_id": [
+      "timbangan katrol",
+      "timbangan gantung",
+      "timbangan crane",
+      "timbangan derek",
+      "timbangan tian che",
+      "timbangan hoist"
+    ],
+    "forbidden_idn": [
+      "timbangan kecil"
+    ]
   },
   "天車/固定式起重機": {
     "idn": "Tian Che / Derek tetap(Fixed crane)",

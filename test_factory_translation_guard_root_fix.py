@@ -159,12 +159,12 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FACTORY_BLOCK_UNVERIFIED_DELIVERY": "1"}):
             self.assertFalse(policy.fail_closed("zh", "id"))
 
-    def test_factory_policy_uses_adaptive_nonvetoing_review_by_default(self):
+    def test_factory_policy_reviews_every_message_without_vetoing_delivery_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FACTORY_TRANSLATION_REVIEW_MODE", None)
             os.environ.pop("FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", None)
-            self.assertEqual(policy.review_mode(), "adaptive")
-            self.assertFalse(policy.require_source_review(
+            self.assertEqual(policy.review_mode(), "always")
+            self.assertTrue(policy.require_source_review(
                 "普通現場訊息", "zh", "id", adaptive_risk=False
             ))
             self.assertTrue(policy.require_source_review(
