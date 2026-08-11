@@ -297,7 +297,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.1-shift-handover-reporting-frame"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.2-source-first-handover-translation"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -7841,7 +7841,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v9-shift-handover-reporting-frame"
+_SEMANTIC_CONTRACT_VERSION = "v10-source-first-handover-translation"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -13450,6 +13450,61 @@ def translate(text, src, tgt):
                 logger.error(
                     "[DeterministicShortcut] equipment status rejected; continuing to provider pipeline"
                 )
+    # Source-first handover translation. When the Chinese source supplies the
+    # complete operational relation, render the Indonesian message directly
+    # from those source slots before mention placeholders, TM, providers or
+    # candidate-repair stages. This is the normal translation path for the
+    # intent, not a rejection or post-edit of an already generated translation.
+    if src == "zh" and tgt == "id":
+        try:
+            _source_first_translation = (
+                factory_semantic_audit_module.translate_source_directly(
+                    canonical_text, src, tgt
+                )
+            )
+        except Exception as _source_first_exc:
+            logger.exception(
+                "[SourceFirstTranslation] source-frame translation failed: %s",
+                _source_first_exc,
+            )
+            _source_first_translation = ""
+        if _source_first_translation:
+            _source_first_translation = finalize_factory_translation(
+                canonical_text, _source_first_translation, src, tgt
+            )
+            _source_first_translation = _final_delivery_guard(
+                canonical_text, _source_first_translation, src, tgt
+            )
+            if _source_first_translation:
+                try:
+                    _tl.factory_audit = {
+                        "src": canonical_text,
+                        "type": "factory_source_semantic_direct_zh_id",
+                        "reason": "source_first_handover_translation",
+                        "raw_translation": "",
+                        "corrected_translation": _source_first_translation,
+                        "domain": ["factory", "shift_handover"],
+                        "auto_corrected": False,
+                    }
+                    cache_set(
+                        canonical_text, src, tgt, _source_first_translation,
+                        force=True,
+                    )
+                except Exception:
+                    pass
+                _update_last_translate_debug(
+                    pipeline_status="source_first_handover_translation",
+                    final_candidate=_source_first_translation[:2000],
+                    openai_status="not_needed",
+                )
+                _set_translation_outcome(
+                    "delivered", "source_first_handover_translation"
+                )
+                return _source_first_translation
+            logger.error(
+                "[SourceFirstTranslation] internally generated translation failed the final consistency check; continuing to provider"
+            )
+
     # v3.15: ERP「原因」欄是強語義表格/短標籤，必須在任何站別 alias、
     # cache、TM、NMT、LLM、final guard 之前先決定。這是文字與圖片共用的
     # 邊界層，不是圖片補丁。

@@ -4,7 +4,6 @@ from pathlib import Path
 import factory_knowledge
 import factory_semantic_audit as audit
 import factory_translation_guard as guard
-import translation_quality_gate as quality_gate
 
 
 ROOT = Path(__file__).resolve().parent
@@ -59,6 +58,16 @@ class ShiftHandoverReportingRootFixTests(unittest.TestCase):
             (True, []),
         )
         self.assertEqual(audit.deterministic_rebuild(self.frame), VERIFIED_TRANSLATION)
+        self.assertEqual(
+            audit.translate_source_directly(SOURCE, "zh", "id"),
+            VERIFIED_TRANSLATION,
+        )
+        self.assertEqual(
+            audit.translate_source_directly(
+                SOURCE.replace("@All", "__MENTION_0__"), "zh", "id"
+            ),
+            VERIFIED_TRANSLATION.replace("@All", "__MENTION_0__"),
+        )
 
     def test_paraphrases_use_the_current_deadline_instead_of_copying_the_example(self):
         source = "換班時若發現所有製程問題，必須在45分鐘內報告給班長，讓班長更容易做異常處理。"
@@ -72,6 +81,7 @@ class ShiftHandoverReportingRootFixTests(unittest.TestCase):
         self.assertNotIn("satu jam", rebuilt)
         self.assertNotIn("lebih cepat", rebuilt)
         self.assertEqual(audit.validate_translation(frame, rebuilt), (True, []))
+        self.assertEqual(audit.translate_source_directly(source, "zh", "id"), rebuilt)
 
     def test_unrelated_reaction_or_handover_text_does_not_activate_the_frame(self):
         controls = (
@@ -82,6 +92,7 @@ class ShiftHandoverReportingRootFixTests(unittest.TestCase):
         for source in controls:
             with self.subTest(source=source):
                 self.assertFalse(audit.build_source_frame(source, "zh", "id")["active"])
+                self.assertEqual(audit.translate_source_directly(source, "zh", "id"), "")
 
     def test_knowledge_and_exact_guard_reject_the_production_mistranslation(self):
         store = factory_knowledge.FactoryKnowledgeStore(str(ROOT / "factory_knowledge.json"))
@@ -112,19 +123,19 @@ class ShiftHandoverReportingRootFixTests(unittest.TestCase):
             guard.validate_translation(SOURCE, SCREENSHOT_TRANSLATION, "zh", "id").ok
         )
 
-    def test_quality_gate_rebuilds_from_source_when_review_is_unavailable(self):
-        result = quality_gate.gate_and_revise(
-            SOURCE,
-            SCREENSHOT_TRANSLATION,
-            "zh",
-            "id",
-            critical=False,
-            model="test-model",
-            ai_client=None,
+    def test_public_pipeline_translates_from_source_before_provider_or_mention_protection(self):
+        app_text = (ROOT / "app.py").read_text(encoding="utf-8")
+        translate_start = app_text.index("def translate(text, src, tgt):")
+        source_first = app_text.index(
+            "factory_semantic_audit_module.translate_source_directly(",
+            translate_start,
         )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["text"], VERIFIED_TRANSLATION)
-        self.assertEqual(result["path"], "deterministic_source_frame_rebuild")
+        mention_protection = app_text.index("protect_mentions(", source_first)
+        provider_pipeline = app_text.index(
+            "_translate_core(protected_text", mention_protection
+        )
+        self.assertLess(source_first, mention_protection)
+        self.assertLess(source_first, provider_pipeline)
 
     def test_duplicate_role_rules_use_one_canonical_output(self):
         app_text = (ROOT / "app.py").read_text(encoding="utf-8")

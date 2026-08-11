@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.1-shift-handover-reporting-frame"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.2-source-first-handover-translation"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -207,7 +207,11 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "counts": {},
         "units": {},
         "quantity_tokens": {},
-        "mentions": re.findall(r"@[^\s,，。!?！？:：;；]{1,48}", src),
+        "mentions": re.findall(
+            r"(?:@[^\s,，。!?！？:：;；]{1,48}|__MENTION_\d+__)",
+            src,
+            flags=re.I,
+        ),
         "ambiguities": [],
         "prohibited_inferences": [],
         "risk_score": 0,
@@ -1493,6 +1497,25 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
             issues.append("factory_semantic_audit:slowly_lifting_wrong_attachment")
 
     return not issues, list(dict.fromkeys(issues))
+
+
+def translate_source_directly(source: str, src_lang: str, tgt_lang: str) -> str:
+    """Translate a complete handover-reporting source before any provider call.
+
+    This is a source-to-target translation route, not a candidate-rejection
+    path. It renders only when the source supplies every decisive slot:
+    handover context, universal production-problem scope, reporting recipient,
+    deadline and abnormal-follow-up purpose. Partial or unrelated text remains
+    on the normal translation pipeline.
+    """
+    frame = build_source_frame(source, src_lang, tgt_lang)
+    if not _complete_shift_handover_reporting_frame(frame):
+        return ""
+    translated = _shift_handover_reporting_rebuild(frame)
+    if not translated:
+        return ""
+    ok, _issues = validate_translation(frame, translated)
+    return translated if ok else ""
 
 
 def structured_review_schema() -> Dict[str, Any]:
