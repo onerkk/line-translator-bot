@@ -91,7 +91,7 @@ class TranslationQualityGateTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("untranslated_source_word:BOLEH", report.hard_issues)
 
-    def test_noncritical_invalid_candidate_is_delivered_without_second_api_call(self):
+    def test_noncritical_invalid_candidate_gets_one_targeted_repair_call(self):
         client = FakeClient(["不得進入。"])
         result = qg.gate_and_revise(
             "TIDAK BOLEH masuk.",
@@ -103,10 +103,12 @@ class TranslationQualityGateTests(unittest.TestCase):
             ai_client=client,
         )
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["text"], "不BOLEH進入。")
-        self.assertTrue(result["degraded"])
-        self.assertFalse(result["cacheable"])
-        self.assertEqual(client.calls, [])
+        self.assertEqual(result["text"], "不得進入。")
+        self.assertFalse(result["degraded"])
+        self.assertTrue(result["cacheable"])
+        self.assertTrue(result["reviewed"])
+        self.assertEqual(result["path"], "independent_source_review_passed")
+        self.assertEqual(len(client.calls), 1)
 
     def test_required_source_review_outage_cannot_veto_clean_candidate(self):
         result = qg.gate_and_revise(

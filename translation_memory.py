@@ -1,5 +1,5 @@
 """
-translation_memory.py — Translation Memory (TM) 模組 v1.0 (2026-05-20)
+translation_memory.py — Translation Memory (TM) 模組 v1.1 (2026-08-11)
 
 業界 30 年成熟技術,SQLite + rapidfuzz fuzzy match 實作。
 
@@ -43,6 +43,9 @@ from typing import Optional, List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+TRANSLATION_MEMORY_API_VERSION = 2
+TRANSLATION_MEMORY_BUILD_ID = "2026-08-11.1-policy-versioned-verified-exact"
+
 try:
     from rapidfuzz import fuzz
     HAS_RAPIDFUZZ = True
@@ -81,6 +84,7 @@ _init_done = False
 # 統計(per-process,重啟歸零;持久化統計從 DB COUNT 取)
 _stats = {
     "lookups": 0,
+    "verified_exact_hits": 0,
     "exact_hits": 0,
     "fuzzy_bypass": 0,
     "fuzzy_inject": 0,
@@ -124,6 +128,8 @@ def init():
                     model TEXT,
                     hit_count INTEGER DEFAULT 0,
                     quality_score REAL,
+                    policy_fingerprint TEXT DEFAULT '',
+                    verified INTEGER DEFAULT 0,
                     created_at INTEGER NOT NULL,
                     last_used_at INTEGER NOT NULL,
                     UNIQUE(src_lang, tgt_lang, src_text_hash, group_id)
@@ -134,6 +140,25 @@ def init():
                 CREATE INDEX IF NOT EXISTS idx_tm_last_used ON tm_entries(last_used_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_tm_hit_count ON tm_entries(hit_count DESC);
             """)
+            # Existing deployments predate verified/policy-versioned rows.
+            # Migrate in place; old rows stay unverified and therefore can never
+            # bypass the current factory contract.
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(tm_entries)").fetchall()
+            }
+            if "policy_fingerprint" not in columns:
+                conn.execute(
+                    "ALTER TABLE tm_entries ADD COLUMN policy_fingerprint TEXT DEFAULT ''"
+                )
+            if "verified" not in columns:
+                conn.execute(
+                    "ALTER TABLE tm_entries ADD COLUMN verified INTEGER DEFAULT 0"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_verified_policy "
+                "ON tm_entries(verified, policy_fingerprint, src_lang, tgt_lang, src_text_hash)"
+            )
         _init_done = True
         logger.info("[TM] init OK, db=%s, rapidfuzz=%s", TM_DB_PATH, HAS_RAPIDFUZZ)
     except Exception as e:
@@ -299,13 +324,97 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
         return None
 
 
+def tm_lookup_verified_exact(
+    src_text: str,
+    src_lang: str,
+    tgt_lang: str,
+    group_id: Optional[str] = None,
+    *,
+    policy_fingerprint: str,
+) -> Optional[Dict[str, Any]]:
+    """Return only an exact row verified under the current translation assets.
+
+    This is the persistent counterpart of the in-process verified cache.  It is
+    intentionally exact-only: fuzzy rows and pre-migration entries are useful as
+    prompt evidence but may never bypass a current factory semantic contract.
+    """
+    if not _init_done:
+        init()
+    source = str(src_text or "").strip()
+    fingerprint = str(policy_fingerprint or "").strip()
+    if not source or not fingerprint:
+        return None
+
+    src_hash = _hash_text(source)
+    gid = str(group_id or "")
+    with _lock:
+        _stats["lookups"] += 1
+
+    try:
+        with sqlite3.connect(TM_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            if gid:
+                row = conn.execute(
+                    """
+                    SELECT * FROM tm_entries
+                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
+                      AND verified=1 AND policy_fingerprint=?
+                      AND group_id IN (?, '')
+                    ORDER BY (group_id=?) DESC,
+                             COALESCE(quality_score,-1) DESC,
+                             last_used_at DESC
+                    LIMIT 1
+                    """,
+                    (src_lang, tgt_lang, src_hash, fingerprint, gid, gid),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM tm_entries
+                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
+                      AND verified=1 AND policy_fingerprint=? AND group_id=''
+                    ORDER BY COALESCE(quality_score,-1) DESC, last_used_at DESC
+                    LIMIT 1
+                    """,
+                    (src_lang, tgt_lang, src_hash, fingerprint),
+                ).fetchone()
+
+            if row and str(row["src_text"] or "").strip() == source:
+                conn.execute(
+                    "UPDATE tm_entries SET hit_count=hit_count+1, last_used_at=? WHERE id=?",
+                    (int(time.time()), row["id"]),
+                )
+                with _lock:
+                    _stats["verified_exact_hits"] += 1
+                logger.info(
+                    "[TM] VERIFIED_EXACT hit: %s→%s id=%d",
+                    src_lang,
+                    tgt_lang,
+                    row["id"],
+                )
+                return {
+                    "match_type": "verified_exact",
+                    "score": 100,
+                    "tgt_text": row["tgt_text"],
+                    "policy_fingerprint": row["policy_fingerprint"],
+                }
+    except Exception as exc:
+        logger.warning("[TM] verified exact lookup failed closed: %s", exc)
+
+    with _lock:
+        _stats["misses"] += 1
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 核心 API: tm_store
 # ═══════════════════════════════════════════════════════════════════
 
 def tm_store(src_text: str, tgt_text: str, src_lang: str, tgt_lang: str,
              group_id: Optional[str] = None, model: Optional[str] = None,
-             quality_score: Optional[float] = None) -> bool:
+             quality_score: Optional[float] = None,
+             policy_fingerprint: Optional[str] = None,
+             verified: bool = False) -> bool:
     """翻譯成功後 store TM
     
     UPSERT:同 (src_lang, tgt_lang, src_text_hash, group_id) 已存在則更新 tgt_text 並 hit_count+=1
@@ -335,16 +444,21 @@ def tm_store(src_text: str, tgt_text: str, src_lang: str, tgt_lang: str,
             conn.execute("""
                 INSERT INTO tm_entries
                     (src_lang, tgt_lang, src_text, src_text_hash, tgt_text,
-                     group_id, model, hit_count, quality_score, created_at, last_used_at)
-                VALUES (?,?,?,?,?,?,?,1,?,?,?)
+                     group_id, model, hit_count, quality_score,
+                     policy_fingerprint, verified, created_at, last_used_at)
+                VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?)
                 ON CONFLICT(src_lang, tgt_lang, src_text_hash, group_id) DO UPDATE SET
                     tgt_text=excluded.tgt_text,
                     model=excluded.model,
                     quality_score=excluded.quality_score,
+                    policy_fingerprint=excluded.policy_fingerprint,
+                    verified=excluded.verified,
                     last_used_at=excluded.last_used_at,
                     hit_count=hit_count+1
             """, (src_lang, tgt_lang, src_text, src_hash, tgt_text,
-                  group_id, model, quality_score, now, now))
+                  group_id, model, quality_score,
+                  str(policy_fingerprint or ""), 1 if verified else 0,
+                  now, now))
         with _lock:
             _stats["stores"] += 1
         return True
@@ -387,9 +501,22 @@ def tm_stats() -> Dict[str, Any]:
     
     # Hit rate 計算
     if s["lookups"] > 0:
-        s["hit_rate_bypass"] = round((s["exact_hits"] + s["fuzzy_bypass"]) / s["lookups"], 4)
+        s["hit_rate_bypass"] = round(
+            (s["verified_exact_hits"] + s["exact_hits"] + s["fuzzy_bypass"])
+            / s["lookups"],
+            4,
+        )
         s["hit_rate_inject"] = round(s["fuzzy_inject"] / s["lookups"], 4)
-        s["hit_rate_total"] = round((s["exact_hits"] + s["fuzzy_bypass"] + s["fuzzy_inject"]) / s["lookups"], 4)
+        s["hit_rate_total"] = round(
+            (
+                s["verified_exact_hits"]
+                + s["exact_hits"]
+                + s["fuzzy_bypass"]
+                + s["fuzzy_inject"]
+            )
+            / s["lookups"],
+            4,
+        )
     else:
         s["hit_rate_bypass"] = 0
         s["hit_rate_inject"] = 0

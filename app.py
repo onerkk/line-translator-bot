@@ -274,12 +274,29 @@ import factory_quantity_semantics as factory_quantity_semantics_module  # compos
 import factory_measurement_semantics as factory_measurement_semantics_module  # compositional ID→ZH micrometer/dimension shorthand frame
 import factory_message_semantics as factory_message_semantics_module  # bidirectional equipment/action/movement relation frame
 
+# Versioned verified TM is part of the delivery boundary: a stale module would
+# either miss the cross-worker cache entirely or trust rows without policy IDs.
+_EXPECTED_TRANSLATION_MEMORY_API_VERSION = 2
+_EXPECTED_TRANSLATION_MEMORY_BUILD_ID = "2026-08-11.1-policy-versioned-verified-exact"
+if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
+        != _EXPECTED_TRANSLATION_MEMORY_API_VERSION
+        or getattr(tm_module, "TRANSLATION_MEMORY_BUILD_ID", None)
+        != _EXPECTED_TRANSLATION_MEMORY_BUILD_ID):
+    raise RuntimeError(
+        "translation memory deployment mismatch: "
+        f"expected api={_EXPECTED_TRANSLATION_MEMORY_API_VERSION} "
+        f"build={_EXPECTED_TRANSLATION_MEMORY_BUILD_ID}, "
+        f"loaded api={getattr(tm_module, 'TRANSLATION_MEMORY_API_VERSION', None)!r} "
+        f"build={getattr(tm_module, 'TRANSLATION_MEMORY_BUILD_ID', None)!r}. "
+        "Replace app.py and translation_memory.py together."
+    )
+
 # Fail fast when only one of the two production files was replaced or when the
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 24
-_EXPECTED_QG_BUILD_ID = "2026-08-11.1-bidirectional-source-relation-integrity"
+_EXPECTED_QG_API_VERSION = 25
+_EXPECTED_QG_BUILD_ID = "2026-08-11.2-adaptive-repair-review"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -347,8 +364,8 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
         "Replace app.py and translation_casebook.py together in the project root."
     )
 
-_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 6
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.2-always-review-nonblocking-relations"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 7
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.3-adaptive-cp-reviewed-cache"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -1155,8 +1172,8 @@ ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
 # cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
 OPENAI_PRICE_PER_M = {
     # 現行翻譯選單
-    "gpt-5.6-luna":  (1.00,  6.00),
-    "gpt-5.6-terra": (2.50, 15.00),
+    "gpt-5.6-luna":  (0.20,  1.20),
+    "gpt-5.6-terra": (2.00, 12.00),
     "gpt-5.6-sol":   (5.00, 30.00),
     "gpt-5.4-nano":  (0.20,  1.25),
     "gpt-5.4-mini":  (0.75,  4.50),
@@ -2116,10 +2133,11 @@ def _save_translation_log_to_disk():
 ab_test_enabled = False              # A/B prompt testing (legacy, deprecated)
 ab_test_variant_b_prompt = ""        # Custom variant B prompt (legacy, deprecated)
 
-# Commercial production invariant: one successful translation request per message.
-# Provider failover is allowed only when the attempted provider fails operationally
-# or returns no usable payload.  No judge/reviewer/back-translation/post-edit call
-# may be added to the normal delivery path.
+# Commercial production invariant: every locally clean routine message uses one
+# successful translation request. Provider failover handles operational failure
+# or objective rejection. One source-grounded repair is permitted only after a
+# concrete local defect or for the small high-consequence policy class; there is
+# no unconditional judge/back-translation/post-edit call.
 SINGLE_REQUEST_COMMERCIAL_MODE = True
 
 # ★ v3.4 ID→ZH 翻譯品質強化(對症下藥:印尼文→中文常翻錯)
@@ -2236,6 +2254,37 @@ def _translation_needs_upgrade_model(text):
     return len(compact) >= 6 and any(cue.casefold() in lowered for cue in critical_cues)
 
 
+def _translation_cp_router_enabled():
+    return os.environ.get("TRANSLATION_CP_ROUTER_ENABLED", "1").strip().lower() not in {
+        "0", "false", "off", "no"
+    }
+
+
+def _translation_cp_tier_models():
+    """Return the canonical routine/quality models for predictable spend.
+
+    Stored dashboard choices remain available when the CP router is disabled.
+    With the production router enabled, stale settings cannot silently put Sol
+    on every short message.  Explicit environment overrides are still supported
+    for an intentional deployment-wide model change.
+    """
+    routine = ai_provider.normalize_translation_model(
+        os.environ.get(
+            "TRANSLATION_CP_ROUTINE_MODEL",
+            ai_provider.DEFAULT_OPENAI_MODEL,
+        ),
+        ai_provider.DEFAULT_OPENAI_MODEL,
+    )
+    quality = ai_provider.normalize_translation_model(
+        os.environ.get(
+            "TRANSLATION_CP_QUALITY_MODEL",
+            ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
+        ),
+        ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
+    )
+    return routine, quality
+
+
 def pick_model(text):
     """v3.32.1: Pick by provider, length and local translation risk.
     
@@ -2262,17 +2311,14 @@ def pick_model(text):
     # cross-provider quality tier.  ai_provider maps that tier to Gemini/OpenAI/
     # Claude per attempt.  Returning provider-specific names here made failover
     # brittle (for example a Gemini model id sent to OpenAI after a failover).
-    if os.environ.get("TRANSLATION_CP_ROUTER_ENABLED", "1").strip().lower() not in {
-        "0", "false", "off", "no"
-    }:
+    if _translation_cp_router_enabled():
+        _cp_routine_model, _cp_quality_model = _translation_cp_tier_models()
         if (
             model_threshold > 0
             and (len(text) if isinstance(text, str) else 0) >= model_threshold
         ) or _translation_needs_upgrade_model(text):
-            return ai_provider.normalize_translation_model(
-                model_upgrade, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL)
-        return ai_provider.normalize_translation_model(
-            model_default, ai_provider.DEFAULT_OPENAI_MODEL)
+            return _cp_quality_model
+        return _cp_routine_model
     try:
         provider = ai_provider.get_active_provider()
     except Exception:
@@ -2332,6 +2378,11 @@ def _translation_provider_preference(text=None, src=None, tgt=None):
 
 def _active_upgrade_model():
     """Return the quality model for the active OpenAI/Gemini/Claude provider."""
+    if _translation_cp_router_enabled():
+        # Keep the canonical tier provider-neutral. ai_provider maps Terra to
+        # the configured Claude/Gemini quality model on each attempt, including
+        # cross-provider review/failover.
+        return _translation_cp_tier_models()[1]
     try:
         provider = ai_provider.get_active_provider()
     except Exception:
@@ -4017,11 +4068,25 @@ def get_group_welcome(group_id):
         }
     return welcome_settings
 
-# Translation cache: key = (text, src, tgt), value = (result, timestamp)
+# Translation cache:
+#   key   = (text, src, tgt, tone/variant scope)
+#   value = (result, timestamp, policy/glossary/guard fingerprint)
+#
+# Factory rows are admitted only after the synchronous authoritative gate and
+# are reusable only while the exact asset fingerprint still matches.  Legacy
+# two-field rows remain readable outside the unified factory route but can never
+# bypass the current factory contract.
 translation_cache = {}
 _cache_lock = _threading.Lock()
 CACHE_MAX_SIZE = 500
 CACHE_TTL = 3600  # 1 hour
+try:
+    VERIFIED_FACTORY_CACHE_TTL = max(
+        CACHE_TTL,
+        int(os.environ.get("VERIFIED_FACTORY_CACHE_TTL", "86400")),
+    )
+except (TypeError, ValueError):
+    VERIFIED_FACTORY_CACHE_TTL = 86400
 
 # Message cache for quoted message context: {message_id: {"text": str, "ts": float}}
 message_cache = {}
@@ -11105,6 +11170,30 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 or ""
             ).strip().lower()
             _tl.last_model_used = str(getattr(r, "model", None) or _model or "").strip()
+            _provider_attempts = list(
+                getattr(r, "_jy_failover_attempts", None) or []
+            )
+            _tl.provider_attempt_count = (
+                max(1, len(_provider_attempts))
+                if bool(getattr(r, "_jy_quality_degraded", False))
+                else 1 + len(_provider_attempts)
+            )
+            # A quality-rejected first provider followed by an accepted second
+            # provider already consumed the one useful regeneration.  Do not
+            # pay for a third independent review of the same message.
+            _quality_rejected_providers = {
+                str(item.get("provider") or "").strip().lower()
+                for item in _provider_attempts
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("kind") or "") == "quality_reject"
+                )
+            }
+            if (
+                _quality_rejected_providers
+                and _tl.last_provider_used not in _quality_rejected_providers
+            ):
+                _tl.source_review_already_attempted = True
         except Exception:
             pass
         # v3.9.41 Phase Q: 抽 confidence score(雙系統)
@@ -11375,42 +11464,162 @@ def translate_google(text, src, tgt):
         return None
 
 
+def _translation_cache_context_bound(text):
+    """Return True when source text alone cannot identify the intended meaning."""
+    contract = getattr(_tl, "semantic_contract", None) or {}
+    if bool(contract.get("context_bound")):
+        return True
+    if str(getattr(_tl, "quoted_context_source", "") or "").strip():
+        return True
+    try:
+        return bool(_translation_needs_conversation_history(text))
+    except Exception:
+        return False
+
+
+def _translation_cache_scope():
+    """Bind cached wording to the tone/variant inputs that can change output."""
+    payload = {
+        # Group-local names, terminology, examples and tone settings may alter
+        # wording even when the visible source is identical.  Keep reuse inside
+        # the same group rather than leaking one group's convention to another.
+        "group_id": str(getattr(_tl, "group_id", "") or ""),
+        "tone": str(getattr(_tl, "tone", "") or ""),
+        "tone_custom": str(getattr(_tl, "tone_custom", "") or ""),
+        "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _translation_cache_asset_fingerprint():
+    """Hash every local asset that can change an accepted factory translation."""
+    live_corrections = _active_translation_corrections_for_casebook()
+    payload = {
+        "policy": getattr(
+            factory_translation_policy_module,
+            "FACTORY_TRANSLATION_POLICY_BUILD_ID",
+            "",
+        ),
+        "quality_gate": getattr(tqg_module, "QUALITY_GATE_BUILD_ID", ""),
+        "factory_guard": factory_translation_guard_module.asset_fingerprint(),
+        "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
+        "semantic_audit": getattr(
+            factory_semantic_audit_module,
+            "FACTORY_SEMANTIC_AUDIT_BUILD_ID",
+            "",
+        ),
+        "message_semantics": getattr(
+            factory_message_semantics_module,
+            "FACTORY_MESSAGE_SEMANTICS_BUILD_ID",
+            "",
+        ),
+        "casebook": getattr(
+            translation_casebook_module,
+            "TRANSLATION_CASEBOOK_BUILD_ID",
+            "",
+        ),
+        "custom_examples": globals().get("custom_translation_examples", []),
+        "active_corrections": live_corrections,
+        # Runtime glossary uploads can mutate this mapping without restarting a
+        # worker. Hash its normalized content so those writes invalidate old
+        # rows immediately instead of waiting for a process restart.
+        "glossary": globals().get("GLOSSARY_LOOKUP", {}),
+    }
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _translation_cache_persistent_fingerprint():
+    """Combine semantic assets with the request's tone/variant cache scope."""
+    raw = _translation_cache_asset_fingerprint() + ":" + _translation_cache_scope()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def cache_get(text, src, tgt):
-    """Get translation from cache if exists and not expired."""
-    # Source-only cache keys cannot represent media-resolved ellipsis.
-    if bool((getattr(_tl, "semantic_contract", None) or {}).get("context_bound")):
+    """Return a fresh cache row after current-policy revalidation."""
+    if _translation_cache_context_bound(text):
         return None
-    key = (text.strip(), src, tgt)
+
+    factory_route = _factory_route_requires_validation(text, src, tgt)
+    key = (text.strip(), src, tgt, _translation_cache_scope())
+    legacy_key = (text.strip(), src, tgt)
     with _cache_lock:
-        if key in translation_cache:
-            result, ts = translation_cache[key]
-            if time.time() - ts < CACHE_TTL:
-                if _is_translation_failure_sentinel(result):
-                    logger.warning("[LegacyFailurePurge] removed failure payload from cache: %s -> %s", src, tgt)
-                    del translation_cache[key]
-                    return None
-                if _factory_route_requires_validation(text, src, tgt):
-                    try:
-                        if not is_translation_acceptable(text, result, src, tgt):
-                            logger.warning("[FactoryGuard] purged unverified cache row: %s -> %s", src, tgt)
-                            del translation_cache[key]
-                            return None
-                    except Exception as exc:
-                        logger.warning("[FactoryGuard] cache read validation failed closed: %s", exc)
-                        del translation_cache[key]
-                        return None
-                logger.info("Cache hit: %s -> %s", src, tgt)
-                return result
-            else:
-                del translation_cache[key]
-    return None
+        row = translation_cache.get(key)
+        selected_key = key
+        # Backward compatibility is deliberately limited to non-factory text;
+        # old rows have no asset fingerprint and are never authoritative there.
+        if row is None and not factory_route:
+            row = translation_cache.get(legacy_key)
+            selected_key = legacy_key
+    if row is None:
+        return None
+
+    try:
+        result, ts = row[0], float(row[1])
+        stored_fingerprint = str(row[2] or "") if len(row) >= 3 else ""
+    except Exception:
+        with _cache_lock:
+            translation_cache.pop(selected_key, None)
+        return None
+
+    ttl = VERIFIED_FACTORY_CACHE_TTL if factory_route else CACHE_TTL
+    if time.time() - ts >= ttl:
+        with _cache_lock:
+            translation_cache.pop(selected_key, None)
+        return None
+    if _is_translation_failure_sentinel(result):
+        logger.warning(
+            "[LegacyFailurePurge] removed failure payload from cache: %s -> %s",
+            src,
+            tgt,
+        )
+        with _cache_lock:
+            translation_cache.pop(selected_key, None)
+        return None
+
+    if factory_route:
+        try:
+            current_fingerprint = _translation_cache_asset_fingerprint()
+            if not stored_fingerprint or stored_fingerprint != current_fingerprint:
+                logger.info("[VerifiedCache] invalidated row after asset change")
+                with _cache_lock:
+                    translation_cache.pop(selected_key, None)
+                return None
+            if not is_translation_acceptable(text, result, src, tgt):
+                raise ValueError("current deterministic acceptance failed")
+            contract = getattr(_tl, "semantic_contract", None) or {}
+            semantic_ok, semantic_reason = translation_satisfies_semantic_contract(
+                contract, result
+            )
+            integrity_ok, integrity_issues = _tm_bypass_integrity_ok(
+                text, result, src, tgt
+            )
+            if not semantic_ok or not integrity_ok:
+                raise ValueError(
+                    semantic_reason
+                    or ",".join(integrity_issues[:8])
+                    or "current semantic integrity failed"
+                )
+        except Exception as exc:
+            logger.warning("[VerifiedCache] cache read failed closed: %s", exc)
+            with _cache_lock:
+                translation_cache.pop(selected_key, None)
+            return None
+
+    logger.info("Verified cache hit: %s -> %s", src, tgt)
+    return result
 
 
 def cache_set(text, src, tgt, result, force=False):
-    """Store translation in cache only after the synchronous gate has passed."""
-    # Context-bound translations (for example an omitted object resolved from a
-    # recent work-order photo) must never be learned under a source-only key.
-    if bool((getattr(_tl, "semantic_contract", None) or {}).get("context_bound")):
+    """Store a translation only after synchronous current-policy verification."""
+    if _translation_cache_context_bound(text):
         logger.debug("[Cache] skipped context-bound translation")
         return
     if not result or _is_translation_failure_sentinel(result):
@@ -11419,20 +11628,43 @@ def cache_set(text, src, tgt, result, force=False):
     if getattr(_tl, 'quality_gate_pending', False) and not force:
         logger.debug("[QualityGate] deferred cache write until final review")
         return
-    if _factory_route_requires_validation(text, src, tgt):
+
+    factory_route = _factory_route_requires_validation(text, src, tgt)
+    if factory_route:
         try:
             if not is_translation_acceptable(text, result, src, tgt):
-                logger.warning("[FactoryGuard] refused unverified factory cache write")
-                return
+                raise ValueError("deterministic acceptance failed")
+            contract = getattr(_tl, "semantic_contract", None) or {}
+            semantic_ok, semantic_reason = translation_satisfies_semantic_contract(
+                contract, result
+            )
+            integrity_ok, integrity_issues = _tm_bypass_integrity_ok(
+                text, result, src, tgt
+            )
+            if not semantic_ok or not integrity_ok:
+                raise ValueError(
+                    semantic_reason
+                    or ",".join(integrity_issues[:8])
+                    or "semantic integrity failed"
+                )
         except Exception as exc:
-            logger.warning("[FactoryGuard] cache admission failed closed: %s", exc)
+            logger.warning("[VerifiedCache] refused unverified factory row: %s", exc)
             return
-    key = (text.strip(), src, tgt)
+
+    try:
+        fingerprint = _translation_cache_asset_fingerprint()
+    except Exception as exc:
+        if factory_route:
+            logger.warning("[VerifiedCache] fingerprint unavailable; write skipped: %s", exc)
+            return
+        fingerprint = ""
+
+    key = (text.strip(), src, tgt, _translation_cache_scope())
     with _cache_lock:
         if len(translation_cache) >= CACHE_MAX_SIZE:
             oldest_key = min(translation_cache, key=lambda k: translation_cache[k][1])
             del translation_cache[oldest_key]
-        translation_cache[key] = (result, time.time())
+        translation_cache[key] = (result, time.time(), fingerprint)
 
 
 def translate_with_retry(func, text, src, tgt, max_retries=2):
@@ -13919,13 +14151,14 @@ def _translate_core(text, src, tgt):
     
     路由順序(命中越早,成本越低,延遲越低):
       0. 已驗證且來源完全相同的工廠修正案例             → 本地驗證後 bypass
-      1. 非統一工廠模式：Lexical TM exact/fuzzy         → 本地驗證後 bypass
-      2. 非統一工廠模式：Vector TM semantic bypass      → 本地驗證後 bypass
-      3. 非統一工廠模式：TM references / NMT            → 依規則注入或翻譯
-      4. 統一工廠模式：工廠 prompt + 詞庫 + 知識 + 案例  → LLM 主翻
+      1. 當前政策指紋的記憶體／持久化 exact 譯文        → 重新驗證後 bypass
+      2. 非統一工廠模式：Lexical TM exact/fuzzy         → 本地驗證後 bypass
+      3. 非統一工廠模式：Vector TM semantic bypass      → 本地驗證後 bypass
+      4. 非統一工廠模式：TM references / NMT            → 依規則注入或翻譯
+      5. 統一工廠模式：工廠 prompt + 詞庫 + 知識 + 案例  → LLM 主翻
 
-    統一工廠模式不允許 legacy custom example、cache、一般 TM、向量 TM
-    或通用 NMT 在現行語義契約前提前回傳。
+    統一工廠模式不允許 legacy custom example、未版本化 cache、一般 TM、
+    向量 TM 或通用 NMT 在現行語義契約前提前回傳。
     
     後處理:
       - QE 評分 → < 70 分 → APE 自動修正
@@ -14178,21 +14411,99 @@ def _translate_core(text, src, tgt):
             _exact_sem_reason, _exact_integrity_issues[:8],
         )
 
+    # A generated translation can bypass the provider only after it was admitted
+    # under the exact same guard/glossary/policy build and is revalidated against
+    # this request's semantic contract.  The in-process cache is fastest; the
+    # persistent exact TM preserves the same guarantee across workers/restarts.
+    _verified_cached = cache_get(text, src, tgt)
+    if _verified_cached:
+        try:
+            _log_translation(
+                text, _verified_cached, src, tgt,
+                "verified_policy_cache", 0, 1.0, False, 1.0, _gid_for_tm,
+            )
+            if _gid_for_tm:
+                _conv_buffer_add(_gid_for_tm, text, _verified_cached, src, tgt)
+        except Exception:
+            pass
+        _update_last_translate_debug(
+            pipeline_status="verified_policy_cache",
+            final_candidate=str(_verified_cached)[:2000],
+            openai_status="not_needed",
+        )
+        return _verified_cached
+
+    if _factory_ctx and not _translation_cache_context_bound(text):
+        try:
+            _persistent_fingerprint = _translation_cache_persistent_fingerprint()
+            _verified_tm = tm_module.tm_lookup_verified_exact(
+                text,
+                src,
+                tgt,
+                _gid_for_tm,
+                policy_fingerprint=_persistent_fingerprint,
+            )
+        except Exception as _verified_tm_exc:
+            logger.warning("[VerifiedTM] lookup failed closed: %s", _verified_tm_exc)
+            _verified_tm = None
+        if _verified_tm and _verified_tm.get("tgt_text"):
+            _verified_tm_candidate = finalize_factory_translation(
+                text, _verified_tm["tgt_text"], src, tgt
+            )
+            _verified_tm_sem_ok, _verified_tm_sem_reason = (
+                translation_satisfies_semantic_contract(
+                    _semantic_contract, _verified_tm_candidate
+                )
+            )
+            _verified_tm_integrity_ok, _verified_tm_integrity_issues = (
+                _tm_bypass_integrity_ok(
+                    text, _verified_tm_candidate, src, tgt
+                )
+            )
+            if _verified_tm_sem_ok and _verified_tm_integrity_ok:
+                cache_set(text, src, tgt, _verified_tm_candidate, force=True)
+                try:
+                    _log_translation(
+                        text, _verified_tm_candidate, src, tgt,
+                        "verified_persistent_tm", 0, 1.0, False, 1.0,
+                        _gid_for_tm,
+                    )
+                    if _gid_for_tm:
+                        _conv_buffer_add(
+                            _gid_for_tm, text, _verified_tm_candidate, src, tgt
+                        )
+                except Exception:
+                    pass
+                _update_last_translate_debug(
+                    pipeline_status="verified_persistent_tm",
+                    final_candidate=str(_verified_tm_candidate)[:2000],
+                    openai_status="not_needed",
+                )
+                return _verified_tm_candidate
+            logger.warning(
+                "[VerifiedTM] current contract rejected row: %s %s",
+                _verified_tm_sem_reason,
+                _verified_tm_integrity_issues[:8],
+            )
+
     # ─── 1+2: Lexical TM lookup ───
     _tm_result = None
-    try:
-        _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
-        if _tm_result:
-            if _is_translation_failure_sentinel(_tm_result.get("tgt_text", "")):
-                logger.warning("[LegacyFailurePurge] ignored failure payload from lexical TM")
-                _tm_result = None
-            elif isinstance(_tm_result.get("references"), list):
-                _tm_result["references"] = [
-                    ref for ref in _tm_result["references"]
-                    if len(ref) < 3 or not _is_translation_failure_sentinel(ref[2])
-                ]
-    except Exception as _tm_e:
-        logger.warning("[TM] lookup exception: %s", _tm_e)
+    # Unified factory traffic cannot consume legacy exact/fuzzy rows, so do not
+    # spend a second SQLite query merely to discard its result.
+    if not (_factory_ctx or _quality_critical):
+        try:
+            _tm_result = tm_module.tm_lookup(text, src, tgt, _gid_for_tm)
+            if _tm_result:
+                if _is_translation_failure_sentinel(_tm_result.get("tgt_text", "")):
+                    logger.warning("[LegacyFailurePurge] ignored failure payload from lexical TM")
+                    _tm_result = None
+                elif isinstance(_tm_result.get("references"), list):
+                    _tm_result["references"] = [
+                        ref for ref in _tm_result["references"]
+                        if len(ref) < 3 or not _is_translation_failure_sentinel(ref[2])
+                    ]
+        except Exception as _tm_e:
+            logger.warning("[TM] lookup exception: %s", _tm_e)
     
     # v3.9.60: 有保護名時只允許 exact bypass(key 精確相符,placeholder 化文字本就名稱無關);
     # fuzzy_bypass 會在 placeholder 化文字上模糊配對 → 可能配到「同形不同名」的舊譯文 → 名字錯。
@@ -14508,16 +14819,20 @@ def _translate_core(text, src, tgt):
             _review_already_attempted = bool(
                 getattr(_tl, "source_review_already_attempted", False)
             )
-            _adaptive_review_risk = bool(
-                _quality_critical
-                or (_semantic_contract or {}).get("requires_independent_review")
+            _adaptive_review_risk = (
+                factory_translation_policy_module.adaptive_review_risk(
+                    text,
+                    src,
+                    tgt,
+                    quality_critical=_quality_critical,
+                    semantic_contract=_semantic_contract,
+                )
             )
             _factory_review_required = factory_translation_policy_module.require_source_review(
                 text, src, tgt, adaptive_risk=_adaptive_review_risk
             )
             _force_source_review = bool(
-                (_adaptive_review_risk or _factory_review_required)
-                and not _review_already_attempted
+                _factory_review_required and not _review_already_attempted
             )
             _require_review_success = bool(
                 _factory_review_required
@@ -14558,7 +14873,14 @@ def _translate_core(text, src, tgt):
                 # At most one extra source-grounded call.  If the dedicated
                 # factory-knowledge repair already ran, keep this gate local so
                 # a single message can never cascade into three provider calls.
-                ai_client=(None if _review_already_attempted else ai_provider),
+                ai_client=(
+                    None
+                    if (
+                        _review_already_attempted
+                        or factory_translation_policy_module.review_mode() == "off"
+                    )
+                    else ai_provider
+                ),
                 force_review=_force_source_review,
                 used_provider=getattr(_tl, "last_provider_used", None),
                 review_context=_review_context,
@@ -14717,10 +15039,34 @@ def _translate_core(text, src, tgt):
     # 把背景需要的 thread-local 值先抓成普通變數(背景執行緒看不到本執行緒的 _tl)
     _conf_for_bg = getattr(_tl, 'last_confidence', None)
     _model_for_bg = getattr(_tl, 'last_model_used', '') or 'unknown'
+    _provider_attempts_for_perf = int(
+        getattr(_tl, "provider_attempt_count", 0) or (1 if result else 0)
+    )
+    _review_calls_for_perf = int(
+        bool(isinstance(locals().get("_gate"), dict) and _gate.get("reviewed"))
+    )
+    _billable_calls_for_perf = _provider_attempts_for_perf + _review_calls_for_perf
+    _verified_tm_fingerprint_for_bg = ""
+    if (
+        result
+        and _quality_cacheable
+        and _factory_route_requires_validation(text, src, tgt)
+        and not _translation_cache_context_bound(text)
+    ):
+        try:
+            _verified_tm_fingerprint_for_bg = (
+                _translation_cache_persistent_fingerprint()
+            )
+        except Exception as _tm_fingerprint_exc:
+            logger.warning(
+                "[VerifiedTM] fingerprint unavailable; persistent admission skipped: %s",
+                _tm_fingerprint_exc,
+            )
 
     # 清掉 _tl 暫存避免污染下一次翻譯
     for _attr in ('tm_references', 'last_confidence', 'last_provider_used',
                   'last_model_used', 'source_review_already_attempted',
+                  'provider_attempt_count',
                   'factory_knowledge_issues', 'detected_lang',
                   'detected_confidence', 'ge_violations', 'semantic_contract'):
         try:
@@ -14741,6 +15087,7 @@ def _translate_core(text, src, tgt):
                 _post_translation_async,
                 text, result, src, tgt, _gid_for_tm,
                 _model_for_bg, _conf_for_bg, _semantic_contract,
+                _verified_tm_fingerprint_for_bg,
             )
         except Exception as _bg_e:
             logger.warning("[BG] submit post-processing failed: %s", _bg_e)
@@ -14749,12 +15096,13 @@ def _translate_core(text, src, tgt):
     try:
         _t_end = time.time()
         logger.info(
-            "[Perf] total=%.0fms | prep+lex=%.0fms vec_wait=%.0fms api=%.0fms local_post=%.0fms | src=%s tgt=%s len=%d",
+            "[Perf] total=%.0fms | prep+lex=%.0fms vec_wait=%.0fms api=%.0fms local_post=%.0fms calls=%d | src=%s tgt=%s len=%d",
             (_t_end - _perf["t0"]) * 1000,
             (_perf.get("tm", _perf["t0"]) - _perf["t0"]) * 1000,
             (_perf.get("vec", _perf["t0"]) - _perf.get("tm", _perf["t0"])) * 1000,
             float(getattr(_tl, "llm_api_ms", 0) or 0),
             max(0.0, (_t_end - _perf.get("pre_llm", _t_end)) * 1000 - float(getattr(_tl, "llm_api_ms", 0) or 0)),
+            _billable_calls_for_perf,
             src, tgt, len(text or ""),
         )
     except Exception:
@@ -14763,7 +15111,17 @@ def _translate_core(text, src, tgt):
     return result
 
 
-def _post_translation_async(text, result, src, tgt, gid, model_used, conf, semantic_contract):
+def _post_translation_async(
+    text,
+    result,
+    src,
+    tgt,
+    gid,
+    model_used,
+    conf,
+    semantic_contract,
+    verified_policy_fingerprint="",
+):
     """Store only translations accepted by the current deterministic assets."""
     final = result
     quality_for_tm = int(conf * 100) if conf is not None else None
@@ -14778,6 +15136,12 @@ def _post_translation_async(text, result, src, tgt, gid, model_used, conf, seman
         )
         factory_report = _factory_guard_report(text, final, src, tgt)
         issues = list(report.hard_issues or []) + list(factory_report.hard_issues or [])
+        semantic_ok, semantic_reason = translation_satisfies_semantic_contract(
+            semantic_contract or {}, final
+        )
+        if not semantic_ok:
+            issues.append(semantic_reason or "semantic_contract_failed")
+        issues.extend(_measurement_semantic_issues(text, final, src, tgt))
         issues = list(dict.fromkeys(str(item) for item in issues if str(item).strip()))
         if issues:
             logger.warning("[TM-bg] rejected unverified translation issues=%s", issues[:20])
@@ -14788,7 +15152,17 @@ def _post_translation_async(text, result, src, tgt, gid, model_used, conf, seman
         logger.warning("[TM-bg] validation failed closed: %s", exc)
         return
     try:
-        tm_module.tm_store(text, final, src, tgt, gid, model_used, quality_for_tm)
+        tm_module.tm_store(
+            text,
+            final,
+            src,
+            tgt,
+            gid,
+            model_used,
+            quality_for_tm,
+            policy_fingerprint=verified_policy_fingerprint,
+            verified=bool(verified_policy_fingerprint),
+        )
     except Exception as exc:
         logger.warning("[TM-bg] store exception: %s", exc)
     try:
@@ -14862,8 +15236,8 @@ def _split_into_paragraphs(text):
 def _translate_single_paragraph(text, src, tgt):
     """v3.7 單段翻譯(供分段翻譯使用,跳過分段邏輯避免無窮迴圈)
 
-    統一工廠模式下不讀一般 custom example / cache；只有 _translate_core
-    前置的「來源完全相同且重新驗證通過」案例可以直接回傳。
+    統一工廠模式下不讀一般 custom example；只允許版本／範圍相符且經
+    當前語義契約重新驗證的 exact cache 直接回傳。
     """
     # v3.15: 圖片 OCR 表格被分段時，每一列仍必須先跑 ERP 原因語義層。
     # 否則單列會繞過 _translate_core 的整表判斷，回到 LLM/快取而重現
@@ -14892,10 +15266,10 @@ def _translate_single_paragraph(text, src, tgt):
     if exact:
         return exact
 
-    # 2. Legacy cache rows have no policy/glossary build metadata. Never let
-    # them bypass the current factory contract; a fresh accepted output may be
-    # cached for diagnostics but is not trusted as an authoritative factory case.
-    cached = None if _force_factory else cache_get(text, src, tgt)
+    # 2. Cache rows now carry the current policy/glossary/guard fingerprint and
+    # are revalidated on read.  Factory text may therefore reuse only a verified
+    # exact row; pre-migration rows remain ineligible automatically.
+    cached = cache_get(text, src, tgt)
     if cached:
         return cached
     
@@ -15102,9 +15476,9 @@ def _translate_inner(text, src, tgt):
                 final_candidate=str(semantic)[:2000],
             )
 
-    # Legacy cache entries do not carry policy/glossary build IDs. In unified
-    # factory mode they cannot be trusted as an early-return source.
-    cached = None if (_quality_critical or _force_factory) else cache_get(text, src, tgt)
+    # Versioned verified cache: supported factory directions may reuse an exact
+    # row only after fingerprint matching plus current semantic revalidation.
+    cached = cache_get(text, src, tgt)
     if cached:
         cached = finalize_factory_translation(text, cached, src, tgt)
         if cached and is_translation_acceptable(text, cached, src, tgt):
@@ -23548,8 +23922,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">短訊息(便宜)</label>
       <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.6-luna">⭐ 5.6 Luna($1/$6，日常翻譯)</option>
-        <option value="gpt-5.6-terra">🟡 5.6 Terra($2.5/$15，長文)</option>
+        <option value="gpt-5.6-luna">⭐ 5.6 Luna($0.20/$1.20，日常翻譯)</option>
+        <option value="gpt-5.6-terra">🟡 5.6 Terra($2/$12，長文)</option>
         <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1-mini">🟢 4.1-mini($0.40/$1.60)</option>
@@ -23560,9 +23934,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
       <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.6-terra">⭐ 5.6 Terra($2.50/$15，推薦長文)</option>
+        <option value="gpt-5.6-terra">⭐ 5.6 Terra($2/$12，推薦長文)</option>
         <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
-        <option value="gpt-5.6-luna">🟢 5.6 Luna($1/$6，速度優先)</option>
+        <option value="gpt-5.6-luna">🟢 5.6 Luna($0.20/$1.20，速度優先)</option>
         <option value="gpt-5.4">5.4($2.50/$15，相容)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1">4.1($2/$8，相容)</option>
@@ -24218,8 +24592,8 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.6-luna">⭐ gpt-5.6-luna（$1 / $6，即時翻譯）</option>
-<option value="gpt-5.6-terra">gpt-5.6-terra（$2.50 / $15，品質平衡）</option>
+<option value="gpt-5.6-luna">⭐ gpt-5.6-luna（$0.20 / $1.20，即時翻譯）</option>
+<option value="gpt-5.6-terra">gpt-5.6-terra（$2 / $12，品質平衡）</option>
 <option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，最高品質）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，相容）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60，穩定）</option>
@@ -24232,9 +24606,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.6-terra">⭐ gpt-5.6-terra（$2.50 / $15，推薦長文）</option>
+<option value="gpt-5.6-terra">⭐ gpt-5.6-terra（$2 / $12，推薦長文）</option>
 <option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，關鍵公告）</option>
-<option value="gpt-5.6-luna">gpt-5.6-luna（$1 / $6）</option>
+<option value="gpt-5.6-luna">gpt-5.6-luna（$0.20 / $1.20）</option>
 <option value="gpt-5.4">gpt-5.4（$2.50 / $15.00，相容）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
 <option value="gpt-4.1">gpt-4.1（$2.00 / $8.00，穩定）</option>

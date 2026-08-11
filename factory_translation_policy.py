@@ -21,10 +21,11 @@ cache/TM and repeat indefinitely.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict
 
-FACTORY_TRANSLATION_POLICY_API_VERSION = 6
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.2-always-review-nonblocking-relations"
+FACTORY_TRANSLATION_POLICY_API_VERSION = 7
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.3-adaptive-cp-reviewed-cache"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -97,14 +98,82 @@ def require_verified_for_cache(src: Any, tgt: Any) -> bool:
 
 def review_mode() -> str:
     """Return source-review policy: ``always``, ``adaptive`` or ``off``."""
-    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "always") or "always").strip().lower()
+    # A clean primary translation has already passed immutable-data, glossary,
+    # language-purity and source-relation validation.  Reviewing every such
+    # sentence doubles both latency and model spend without adding a concrete
+    # quality signal, so production defaults to adaptive review.  ``always``
+    # remains available as an explicit quality-first override.
+    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
     aliases = {
         "on": "always", "required": "always", "strict": "always", "all": "always",
         "smart": "adaptive", "auto": "adaptive",
         "none": "off", "disabled": "off", "0": "off",
     }
     value = aliases.get(value, value)
-    return value if value in {"always", "adaptive", "off"} else "always"
+    return value if value in {"always", "adaptive", "off"} else "adaptive"
+
+
+_SERIOUS_REVIEW_RE = re.compile(
+    r"(?:重大職災|人員受傷|工傷|起火|火災|危險|緊急停(?:機|線)|"
+    r"混料|錯料|報廢|客訴|召回|指示.{0,8}(?:矛盾|衝突)|互相矛盾|"
+    r"不得自行|禁止自行|自首|懲處|開除|"
+    r"kecelakaan\s+kerja|cedera|kebakaran|bahaya|darurat|"
+    r"stop\s+(?:mesin|line)|salah\s+(?:material|bahan)|material\s+tercampur|"
+    r"scrap|keluhan\s+pelanggan|penarikan\s+produk|instruksi.{0,24}(?:bertentangan|konflik)|"
+    r"jangan\s+memutuskan\s+sendiri|sanksi|pemecatan)",
+    re.IGNORECASE,
+)
+
+_NOTICE_CONTROL_RE = re.compile(
+    r"(?:禁止|不得|務必|必須|立即|停機|停線|dilarang|tidak\s+boleh|wajib|segera)",
+    re.IGNORECASE,
+)
+
+
+def adaptive_review_risk(
+    text: Any,
+    src: Any,
+    tgt: Any,
+    *,
+    quality_critical: bool = False,
+    semantic_contract: Any = None,
+) -> bool:
+    """Return whether a *locally clean* candidate merits a second source audit.
+
+    Local validation failure is handled independently by the quality gate and
+    always remains eligible for one repair review.  This classifier is only for
+    the smaller set of messages where consequences justify reviewing even a
+    clean first result: safety incidents, irreversible quality/accountability
+    actions, conflicting instructions, or media-resolved missing context.
+    """
+    if not supports_direction(src, tgt):
+        return False
+    if not _boolean_env("FACTORY_REVIEW_CLEAN_HIGH_CONSEQUENCE", True):
+        return False
+
+    contract = semantic_contract if isinstance(semantic_contract, dict) else {}
+    if contract.get("context_bound"):
+        return True
+
+    # An incomplete measurement frame has no deterministic direct translation;
+    # a second source-grounded audit is worthwhile even when surface checks pass.
+    for risk in contract.get("risks", []) or []:
+        if not isinstance(risk, dict):
+            continue
+        if risk.get("sense") == "id_zh_measurement_shorthand":
+            frame = risk.get("frame") if isinstance(risk.get("frame"), dict) else {}
+            if not frame.get("complete"):
+                return True
+
+    source = str(text or "").strip()
+    if not source:
+        return False
+    if _SERIOUS_REVIEW_RE.search(source):
+        return True
+    # A long/structured notice with an explicit prohibition or mandatory action
+    # is consequential enough to review.  A short routine command still gets the
+    # Terra quality tier and deterministic polarity checks, but stays one-call.
+    return bool(quality_critical and _NOTICE_CONTROL_RE.search(source))
 
 
 def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool = False) -> bool:

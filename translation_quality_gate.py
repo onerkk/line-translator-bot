@@ -31,8 +31,8 @@ import factory_message_semantics as fmr_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 24
-QUALITY_GATE_BUILD_ID = "2026-08-11.1-bidirectional-source-relation-integrity"
+QUALITY_GATE_API_VERSION = 25
+QUALITY_GATE_BUILD_ID = "2026-08-11.2-adaptive-repair-review"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -2049,14 +2049,14 @@ def gate_and_revise(
 ) -> Dict[str, Any]:
     """Validate and, for high-risk messages, independently reconstruct once.
 
-    Ordinary messages remain single-call.  Factory notices, announcements and
-    messages matched to verified correction cases can request one additional
-    source-grounded review.  The reviewer receives the original source, not just
-    the first candidate, and a different configured provider is preferred.  When
-    ``require_review_success`` is true, review success controls authoritative
-    acceptance and cacheability, not basic availability.  A first candidate that
-    already passed all deterministic source, glossary, immutable-data and semantic
-    checks remains deliverable as degraded/non-cacheable when the reviewer is
+    Ordinary locally valid messages remain single-call.  A second call is made
+    only when the caller explicitly marks a high-consequence message or when the
+    first candidate fails a deterministic source/glossary/integrity check.  The
+    reviewer receives the original source, not just the first candidate, and a
+    different configured provider is preferred.  When ``require_review_success``
+    is true, review success controls authoritative acceptance and cacheability,
+    not basic availability.  A first candidate that already passed all checks
+    remains deliverable as degraded/non-cacheable when a requested reviewer is
     unavailable or returns an invalid mutation.
     """
     glossary_pairs = _merge_runtime_glossary_pairs(
@@ -2095,10 +2095,13 @@ def gate_and_revise(
     )
     report = _merge_semantic_validation(report, candidate, semantic_validator)
 
-    # Preserve the low-latency single-call path by default.  A second call is
-    # permitted only when the caller explicitly classified the message as
-    # high-risk or matched it to a verified correction case.
-    review_requested = bool(force_review or fsa_module.should_force_review(source_frame))
+    # Preserve the low-latency single-call path for every locally clean routine
+    # message.  A hard local defect is concrete evidence that another call can
+    # improve correctness, so it is automatically eligible for exactly one
+    # source-grounded repair review.  Source-frame risk alone no longer forces a
+    # paid second pass when that frame's validator already confirms full claim
+    # coverage; callers may still force review for high-consequence clean text.
+    review_requested = bool(force_review or not report.ok)
     should_review = bool(ai_client is not None and review_requested)
     review_succeeded = False
     review_failure_reason = ""

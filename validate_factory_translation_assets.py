@@ -20,6 +20,7 @@ import factory_translation_policy as policy
 import factory_measurement_semantics as measurement
 import factory_message_semantics as message_semantics
 import translation_casebook as casebook
+import translation_memory as memory
 
 ROOT = Path(__file__).resolve().parent
 REQUIRED_JSON = (
@@ -39,6 +40,7 @@ REQUIRED_PYTHON = (
     "glossary_policy.py",
     "glossary_enforcement.py",
     "translation_quality_gate.py",
+    "translation_memory.py",
     "factory_semantic_audit.py",
     "factory_structured_report.py",
 )
@@ -187,7 +189,7 @@ def audit() -> Dict[str, Any]:
     try:
         if policy.mode() != "always":
             warnings.append(f"policy_mode_override:{policy.mode()}")
-        if policy.review_mode() != "always":
+        if policy.review_mode() != "adaptive":
             warnings.append(f"review_mode_override:{policy.review_mode()}")
         if policy.fail_closed("zh", "id"):
             errors.append("delivery_blocking_must_remain_disabled")
@@ -197,6 +199,25 @@ def audit() -> Dict[str, Any]:
             warnings.append("generic_nmt_fallback_enabled")
     except Exception as exc:
         errors.append(f"policy_exception:{type(exc).__name__}:{exc}")
+
+    try:
+        app_literals = _literal_module_assignments("app.py")
+        expected_api = app_literals.get("_EXPECTED_TRANSLATION_MEMORY_API_VERSION")
+        expected_build = app_literals.get("_EXPECTED_TRANSLATION_MEMORY_BUILD_ID")
+        if expected_api != memory.TRANSLATION_MEMORY_API_VERSION:
+            errors.append(
+                "translation_memory_api_mismatch:"
+                f"app={expected_api!r}:module={memory.TRANSLATION_MEMORY_API_VERSION!r}"
+            )
+        if expected_build != memory.TRANSLATION_MEMORY_BUILD_ID:
+            errors.append(
+                "translation_memory_build_mismatch:"
+                f"app={expected_build!r}:module={memory.TRANSLATION_MEMORY_BUILD_ID!r}"
+            )
+        if not hasattr(memory, "tm_lookup_verified_exact"):
+            errors.append("translation_memory_verified_exact_route_missing")
+    except Exception as exc:
+        errors.append(f"translation_memory_exception:{type(exc).__name__}:{exc}")
 
     # Exact correction normalization must ignore only presentation differences,
     # never semantic paraphrases.

@@ -87,13 +87,16 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
         self.assertIn("allow_generic_nmt_fallback", inner)
         self.assertIn("generic NMT fallback blocked", inner)
         self.assertIn("_force_factory", inner)
-        self.assertIn("cached = None if (_quality_critical or _force_factory)", inner)
+        self.assertIn("cached = cache_get(text, src, tgt)", inner)
+        self.assertIn("Versioned verified cache", inner)
         self.assertIn("exact = None if (_quality_critical or _force_factory)", inner)
+        self.assertIn("def _translation_cache_asset_fingerprint", source)
+        self.assertIn("tm_module.tm_lookup_verified_exact(", core)
 
         paragraph_start = source.index("def _translate_single_paragraph")
         paragraph_end = source.index("def _snapshot_translation_thread_context")
         paragraph = source[paragraph_start:paragraph_end]
-        self.assertIn("cached = None if _force_factory", paragraph)
+        self.assertIn("cached = cache_get(text, src, tgt)", paragraph)
         self.assertIn("exact = None if _force_factory", paragraph)
 
     def test_regression_cases_pass_the_unified_guard_and_any_matching_knowledge(self):
