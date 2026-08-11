@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-25.5-quoted-reply-and-storage-instruction-root-fix",
+  "build_id": "2026-08-11.1-shift-handover-reporting-root-fix",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -2538,6 +2538,211 @@
           "source": "EH33峰作金屬入庫後統一放這格。",
           "target": "Setelah masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 ditempatkan bersama di slot ini.",
           "reason": "同義改寫，保留代碼、客戶名稱與集中放置的作業要求。"
+        }
+      ]
+    },
+    {
+      "id": "shift_handover_production_problem_reporting",
+      "enabled": true,
+      "priority": 245,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "交接班生產問題回報期限與班長異常後續",
+      "match": {
+        "strong_phrases": [
+          "交接班時遇到任何生產問題",
+          "一個小時內反應給班長",
+          "班長比較好做異常反應",
+          "交接班"
+        ],
+        "all_groups": [
+          [
+            "交接班",
+            "交班",
+            "換班",
+            "换班",
+            "班次交接"
+          ],
+          [
+            "生產問題",
+            "生产问题",
+            "生產異常",
+            "生产异常",
+            "製程問題",
+            "制程问题"
+          ],
+          [
+            "反應",
+            "反应",
+            "反映",
+            "回報",
+            "回报",
+            "報告",
+            "报告",
+            "通報",
+            "通报"
+          ],
+          [
+            "班長"
+          ],
+          [
+            "小時內",
+            "小时内",
+            "分鐘內",
+            "分钟内",
+            "最晚",
+            "不超過",
+            "不超过"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "任何",
+          "所有",
+          "全部",
+          "一個小時",
+          "一个小时",
+          "異常反應",
+          "异常反应",
+          "比較好",
+          "方便",
+          "容易"
+        ],
+        "regex_any": [
+          "(?:交接班|交班|換班|换班).{0,30}(?:任何|所有|全部).{0,12}(?:生產|生产|製程|制程).{0,8}(?:問題|问题|異常|异常).{0,40}(?:反應|反应|反映|回報|回报|報告|报告|通報|通报).{0,12}班長"
+        ],
+        "min_score": 20
+      },
+      "context": [
+        "「反應給班長」在工廠公告中是向班長回報／通報問題，印尼文使用 laporkan atau melaporkan kepada kepala regu；不是 bereaksi。",
+        "「任何生產問題」是完整範圍，必須保留 apa pun、setiap 或 semua，不可縮成泛指的一個問題。",
+        "一小時或其他明示時限必須同時連到回報動作與班長，不可只在譯文其他位置留下孤立數字。",
+        "「班長比較好做異常反應」表示回報後班長能更妥善或更容易進行異常後續；來源沒有寫更快時，不得自行改成 lebih cepat menindaklanjuti。",
+        "班長依本廠正式詞庫固定使用 kepala regu；ketua shift 只作來源別稱辨識，不得輸出斜線替代詞或夾帶中文職稱。"
+      ],
+      "preferred_target_phrases": [
+        "saat pergantian shift",
+        "masalah produksi apa pun",
+        "dilaporkan kepada kepala regu dalam waktu satu jam",
+        "menindaklanjuti kondisi abnormal dengan lebih baik"
+      ],
+      "forbidden_target_phrases": [
+        "lebih cepat menindaklanjuti",
+        "lebih cepat menangani",
+        "supaya kepala regu bisa lebih cepat",
+        "bereaksi kepada kepala regu",
+        "kepala regu / 班長",
+        "ketua shift / kepala regu"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "交接班",
+            "交班",
+            "換班",
+            "换班",
+            "班次交接"
+          ],
+          "target_any": [
+            "saat pergantian shift",
+            "ketika pergantian shift",
+            "saat serah terima shift",
+            "ketika serah terima shift"
+          ],
+          "issue": "missing_shift_handover_context"
+        },
+        {
+          "source_any": [
+            "任何生產問題",
+            "任何生产问题",
+            "任何生產異常",
+            "任何生产异常",
+            "所有生產問題",
+            "所有生产问题"
+          ],
+          "target_any": [
+            "masalah produksi apa pun",
+            "setiap masalah produksi",
+            "semua masalah produksi",
+            "segala masalah produksi"
+          ],
+          "issue": "missing_any_production_problem_scope"
+        },
+        {
+          "source_any": [
+            "反應給班長",
+            "反应给班长",
+            "反映給班長",
+            "回報給班長",
+            "回报给班长",
+            "向班長回報",
+            "向班长回报"
+          ],
+          "target_any": [
+            "laporkan kepada kepala regu",
+            "melaporkan kepada kepala regu",
+            "dilaporkan kepada kepala regu",
+            "disampaikan kepada kepala regu"
+          ],
+          "issue": "missing_report_to_shift_leader_relation"
+        },
+        {
+          "source_any": [
+            "班長"
+          ],
+          "target_any": [
+            "kepala regu"
+          ],
+          "issue": "missing_canonical_shift_leader_role"
+        },
+        {
+          "source_any": [
+            "一個小時內",
+            "一个小时内",
+            "一小時內",
+            "一小时内",
+            "1小時內",
+            "1小时内"
+          ],
+          "target_any": [
+            "dalam waktu satu jam",
+            "dalam waktu 1 jam",
+            "paling lambat satu jam",
+            "paling lambat 1 jam"
+          ],
+          "issue": "missing_one_hour_reporting_deadline"
+        },
+        {
+          "source_any": [
+            "班長比較好做異常反應",
+            "班长比较好做异常反应",
+            "方便班長做異常處理",
+            "方便班长做异常处理",
+            "班長更容易做異常處理",
+            "班长更容易做异常处理"
+          ],
+          "target_any": [
+            "menindaklanjuti kondisi abnormal dengan lebih baik",
+            "menangani kondisi abnormal dengan lebih baik",
+            "lebih mudah menindaklanjuti kondisi abnormal",
+            "lebih mudah menangani kondisi abnormal",
+            "menindaklanjuti kondisi abnormal dengan lebih efektif"
+          ],
+          "issue": "missing_better_abnormal_followup_purpose"
+        }
+      ],
+      "examples": [
+        {
+          "source": "@All 在交接班時遇到任何生產問題 需要在一個小時內反應給班長 班長比較好做異常反應",
+          "target": "@All Jika menemukan masalah produksi apa pun saat pergantian shift, masalah tersebut harus dilaporkan kepada kepala regu dalam waktu satu jam agar kepala regu dapat menindaklanjuti kondisi abnormal dengan lebih baik.",
+          "bad_target": "@All Kalau saat pergantian shift menemukan masalah produksi apa pun, harus dilaporkan ke kepala regu dalam waktu 1 jam, supaya kepala regu bisa lebih cepat menindaklanjuti kondisi yang tidak normal.",
+          "reason": "舊譯大意可懂，但把『比較好做異常反應』擅自加速成『更快處理』；正式譯文保留所有問題範圍、期限、回報對象及較妥善後續的目的。"
+        },
+        {
+          "source": "交班期間若發現任何生產異常，最晚30分鐘內向班長回報，方便班長做後續異常處理。",
+          "target": "Jika menemukan masalah produksi apa pun saat pergantian shift, laporkan kepada kepala regu paling lambat 30 menit agar kepala regu lebih mudah menindaklanjuti kondisi abnormal.",
+          "reason": "同一語意框架的改寫；期限數值來自當次來源，不固定套用一小時。"
         }
       ]
     }

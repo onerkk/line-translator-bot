@@ -297,7 +297,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.4-compositional-package-quantity-frame"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.1-shift-handover-reporting-frame"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -340,7 +340,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
 _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-05.1-compositional-quantity-acceptance"
+_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.1-handover-reporting-acceptance"
 if (getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION
         or getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_BUILD_ID", None)
@@ -1537,7 +1537,7 @@ TONE_PRESETS = {
         "- 「吊」「吊料」「吊完料」「吊運」固定指用天車(crane / tian che)吊運鋼材，絕對不是懸掛、弔唁或餵食；「料」在吊料/上料/下料/入料/置料/退料/送料中是鋼材。**出料必須先判斷語義**：夾輪出料、出料口、把材料退出等機械排料/移料語境才用 keluarkan/pengeluaran material；出料狀況、出料量、每日出料、設備出料等產能語境固定指機台產出，使用 hasil produksi mesin / output produksi，禁止翻成 kondisi material keluar。"
         "- 中文生產公告常只寫一次重量單位，後續同一指標省略單位；例如入庫目標3750、147噸/日、130～135入庫量、入到3600，印尼文必須把每個數值都明確寫成 ton，不可只保留數字。"
         "- 材料製程中的「清洗」固定用 cuci/dicuci/proses pencucian；pembersihan 用於打掃、清潔環境或一般清潔，不可拿來代替棒材清洗製程。"
-        "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。**股別翻譯以 ERP 對照為最高優先**：本廠「一股」= Bagian Cold Drawing 1、「二股」= Bagian Cold Drawing 2；不得自行泛化成 Regu/Subseksi。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班或工作班組(早班/夜班/中班 = shift；班長 = kepala regu/ketua shift)，不是班級。"
+        "- 「股」固定指生產部門/工段(削皮股、冷抽一股、冷抽二股、研磨股 等)，不是股票或大腿。**特別注意**:「一股」「二股」「三股」這類【數字+股】在工廠語境是某個生產部門/工段的簡稱(是單位名稱、常作主詞),**絕對不是**數量詞「股/束/捆」,**絕不可**譯成 dua bundel 或任何捆數;具體部門對應見下方 ERP 站別/股別識別提示。**股別翻譯以 ERP 對照為最高優先**：本廠「一股」= Bagian Cold Drawing 1、「二股」= Bagian Cold Drawing 2；不得自行泛化成 Regu/Subseksi。只有明顯是「一股氣味/一股熱流/一股力量」這類抽象量詞時才當量詞。「班」固定指輪班或工作班組(早班/夜班/中班 = shift；班長固定用 kepala regu，ketua shift 只視為可辨識別稱)，不是班級。"
         "- 製程工序詞(研磨、削皮、拋光、倒角、酸洗、切斷、噴砂、口付 等)【雙義】:既是站別/部門(位置),也是對料做的工序(動作),**必須依上下文判斷,不可一律當位置直譯**——「送去研磨/研磨那邊/放研磨」=位置(stasiun grinding),「要研磨/研磨好了/研磨中/重研磨」=動作(digerinda / proses grinding)。翻譯前先想清楚:這句是在講『料在哪、送去哪』(位置),還是『對料做什麼』(動作),再決定譯法。"
         "- 設備代碼 + 尺寸量測短句必須先拆語義角色：I5/I15/BF3 等代碼是生產設備；mikro/mikrometer + kecil/besar/masuk 描述的是材料尺寸量測狀態，不是設備大小。若同一使用者剛貼的是工單/製造指示書照片，後續省略句中的設備代碼表示『該設備現在生產/加工照片中的這個訂單』，尺寸判定屬於『該訂單的來料尺寸』；禁止翻成『設備尺寸偏小』『設備的工單尺寸偏小』。"
         "10. 遇到工廠專有語、現場省略句、短句、代號、站號、料號、ID、數字、批號時，優先保留原資訊完整，不可漏掉站號、數量、ID、重量、長度、尺寸、編號。"
@@ -7080,8 +7080,8 @@ FACTORY_ZH_ID_POST_FIX = {
     "tertangkap": "ketahuan",
     # 班組/管理階層
     "kepala shift patroli": "kepala regu patroli",
-    "kepala shift": "kepala regu / 班長",
-    "班長": "ketua shift / kepala regu",
+    "kepala shift": "kepala regu",
+    "班長": "kepala regu",
     # v3.9.30d B22:夜點費 ≠ uang lembur malam(夜班加班費)的修補在 post_fix_factory_zh_to_id 內條件式處理
     # 不放這裡是因為合法的「夜班加班費」也會翻成 uang lembur malam,不能無條件改
 }
@@ -7101,7 +7101,7 @@ TAIWAN_FACTORY_GLOSSARY_HINT = """
 - 列管 → Diawasi ketat
 - interlock → Interlock (保留原英文)
 - bypass → Memintas / Di-bypass
-- 班長 → Ketua shift / Kepala regu
+- 班長 → Kepala regu
 - 副總 → Wakil Direktur / Vice President
 - 帽扣 → Tali helm / Strap helm
 - 違規作業 → Pelanggaran prosedur kerja
@@ -7841,7 +7841,7 @@ def post_fix_factory_zh_to_id(src_text, id_text):
 #   這樣舊 TM、NMT 或模型任一路徑都不能覆蓋已判定的語義。
 # ══════════════════════════════════════════════════════════════════════
 
-_SEMANTIC_CONTRACT_VERSION = "v8-source-claim-structured-audit"
+_SEMANTIC_CONTRACT_VERSION = "v9-shift-handover-reporting-frame"
 
 _SEM_QING_TREAT_FOOD_WORDS = (
     "飲料", "罐裝", "罐", "瓶", "原萃", "茶", "咖啡", "水", "奶茶", "豆漿",
@@ -7868,7 +7868,7 @@ _SEM_SPONSOR_ID_MAP = {
     "廠長": "kepala pabrik",
     "副總": "Wakil Direktur",
     "副總指示": "Wakil Direktur",  # 防止錯把「指示」吃進 sponsor 時仍可降回職稱
-    "班長": "ketua shift",
+    "班長": "kepala regu",
     "組長": "kepala regu",
     "主管": "atasan",
 }
@@ -9797,7 +9797,7 @@ INDONESIAN_SLANG_DICT = {
     "mandor": "領班/工頭",
     "kepala": "頭/組長",
     "kepala shift": "班長",
-    "kepala regu": "組長",
+    "kepala regu": "班長",
     "operator": "操作員/操機手",
     "teknisi": "技師/工程師",
     "leader": "組長",
@@ -10344,7 +10344,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "列管 → Diawasi ketat; "
             "interlock → Interlock (keep English); "
             "bypass interlock → Memintas interlock (NOT 'di-bypass'); "
-            "班長 → Ketua shift / Kepala regu; "
+            "班長 → Kepala regu; "
             "副總 → Wakil Direktur; "
             "帽扣 → Tali helm; "
             "違規作業 → Pelanggaran prosedur kerja; "

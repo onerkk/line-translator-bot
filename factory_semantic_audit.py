@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-05.4-compositional-package-quantity-frame"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.1-shift-handover-reporting-frame"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -118,6 +118,20 @@ _PACKAGE_NUMBER_TOKEN = r"(?:\d+(?:[.,]\d+)?|[零〇一二兩两三四五六七�
 _PACKAGE_QUANTITY_PHRASE = rf"(?:半(?:包|袋)|{_PACKAGE_NUMBER_TOKEN}(?:包|袋)(?:半)?)"
 _PAIR_NUMBER_TOKEN = _PACKAGE_NUMBER_TOKEN
 
+_REPORT_DEADLINE_PATTERNS = (
+    re.compile(
+        rf"(?P<value>{_PACKAGE_NUMBER_TOKEN}|半)(?:個|个)?"
+        r"(?P<unit>小時|小时|鐘頭|钟头|分鐘|分钟)(?:以)?內",
+        re.I,
+    ),
+    re.compile(
+        rf"(?:最晚|不得超過|不得超过|不超過|不超过|至多)"
+        rf"(?P<value>{_PACKAGE_NUMBER_TOKEN}|半)(?:個|个)?"
+        r"(?P<unit>小時|小时|鐘頭|钟头|分鐘|分钟)",
+        re.I,
+    ),
+)
+
 
 def _extract_package_quantity(raw: str) -> float | int | None:
     return _parse_package_quantity_phrase(raw)
@@ -130,6 +144,20 @@ def _extract_pair_count(raw: str) -> int | None:
     if isinstance(value, float) and value.is_integer():
         return int(value)
     return None
+
+
+def _extract_report_deadline(compact: str) -> Tuple[float | int | None, str, str]:
+    """Extract a source-stated reporting deadline without guessing its unit."""
+    for pattern in _REPORT_DEADLINE_PATTERNS:
+        match = pattern.search(compact or "")
+        if not match:
+            continue
+        raw_value = match.group("value")
+        value = 0.5 if raw_value == "半" else _parse_quantity_value(raw_value)
+        raw_unit = match.group("unit")
+        unit = "hour" if raw_unit in ("小時", "小时", "鐘頭", "钟头") else "minute"
+        return value, unit, match.group(0)
+    return None, "", ""
 
 
 def _extract_count(compact: str, concept_pattern: str) -> int | None:
@@ -177,6 +205,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "flags": {},
         "machine_ids": _machine_ids(src),
         "counts": {},
+        "units": {},
         "quantity_tokens": {},
         "mentions": re.findall(r"@[^\s,，。!?！？:：;；]{1,48}", src),
         "ambiguities": [],
@@ -216,6 +245,46 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     flags["slow_run"] = _contains_any(compact, ("慢慢跑", "慢跑", "跑很慢", "慢慢生產", "慢慢生产"))
     flags["explicit_crane"] = _contains_any(compact, _EXPLICIT_CRANE_ZH)
     flags["explicit_speed"] = _contains_any(compact, _EXPLICIT_SPEED_ZH)
+
+    # Shift-handover reporting notices combine a time context, universal issue
+    # scope, escalation recipient, deadline and a purpose clause.  Treating
+    # these as independent keywords allowed fluent output to change
+    # 「比較好做異常反應」 into an unsupported promise of faster handling.
+    flags["shift_handover"] = _contains_any(compact, (
+        "交接班", "交班", "換班", "换班", "班次交接", "輪班交接", "轮班交接",
+    ))
+    flags["production_problem"] = _search_any(compact, (
+        r"(?:生產|生产|製程|制程|作業|作业).{0,5}(?:問題|问题|異常|异常)",
+        r"(?:問題|问题|異常|异常).{0,5}(?:生產|生产|製程|制程|作業|作业)",
+    ))
+    flags["any_production_problem"] = bool(
+        flags["production_problem"]
+        and _search_any(compact, (
+            r"(?:任何|任一|所有|全部|不論任何|不论任何).{0,8}(?:生產|生产|製程|制程|作業|作业).{0,5}(?:問題|问题|異常|异常)",
+            r"(?:生產|生产|製程|制程|作業|作业).{0,5}(?:任何|任一|所有|全部).{0,5}(?:問題|问题|異常|异常)",
+        ))
+    )
+    flags["report_to_shift_leader"] = _search_any(compact, (
+        r"(?:反應|反应|反映|回報|回报|報告|报告|通報|通报|告知).{0,8}(?:給|给|向)?(?:當班|当班|值班)?班長",
+        r"(?:給|给|向)(?:當班|当班|值班)?班長.{0,5}(?:反應|反应|反映|回報|回报|報告|报告|通報|通报|告知)",
+    ))
+    report_deadline_value, report_deadline_unit, report_deadline_token = _extract_report_deadline(compact)
+    flags["report_deadline"] = bool(
+        flags["report_to_shift_leader"] and report_deadline_value is not None and report_deadline_unit
+    )
+    if flags["report_deadline"]:
+        frame["counts"]["report_deadline"] = report_deadline_value
+        frame["units"]["report_deadline"] = report_deadline_unit
+        frame["quantity_tokens"]["report_deadline"] = report_deadline_token
+    flags["abnormal_followup_purpose"] = _search_any(compact, (
+        r"(?:班長).{0,15}(?:比較好|更好|較好|方便|容易).{0,15}(?:異常|异常).{0,10}(?:反應|反应|處理|处理|應變|应变|追蹤|追踪|跟進|跟进)",
+        r"(?:比較好|更好|較好|方便|容易).{0,10}(?:讓|让)?(?:班長).{0,15}(?:異常|异常).{0,10}(?:反應|反应|處理|处理|應變|应变|追蹤|追踪|跟進|跟进)",
+        r"(?:班長).{0,15}(?:異常|异常).{0,10}(?:反應|反应|處理|处理|應變|应变|追蹤|追踪|跟進|跟进).{0,10}(?:比較好|更好|較好|方便|容易)",
+    ))
+    flags["explicit_followup_speed"] = _search_any(compact, (
+        r"(?:班長|異常|异常).{0,20}(?:更快|比較快|较快|快速|迅速|盡快|尽快|儘快|立即|即時|即时|馬上|马上)",
+        r"(?:更快|比較快|较快|快速|迅速|盡快|尽快|儘快|立即|即時|即时|馬上|马上).{0,20}(?:班長|異常|异常)",
+    ))
 
     # Compositional operational claims. These are phrase-level plant meanings,
     # not complete-sentence corrections. Each flag can combine with the others
@@ -450,6 +519,59 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             hint = "tidak boleh memasukkan/mengangkat material kecil ke mesin lalu menjalankan produksinya secara lambat"
         add("prohibited_small_size_schedule", "不可以吊小尺寸慢慢跑", meaning, hint)
 
+    if flags["shift_handover"]:
+        add(
+            "shift_handover_context",
+            "交接班／交班／換班",
+            "問題是在班次交接期間被發現",
+            "saat pergantian/serah terima shift",
+        )
+    if flags["any_production_problem"]:
+        add(
+            "any_production_problem_scope",
+            "任何生產問題",
+            "回報要求涵蓋所有生產問題，不可縮成某一種問題",
+            "masalah produksi apa pun / setiap masalah produksi",
+        )
+    if flags["report_to_shift_leader"]:
+        add(
+            "report_to_shift_leader",
+            "反應／回報給班長",
+            "向班長回報問題；反應在此不是化學或生理反應",
+            "laporkan/melaporkan kepada kepala regu",
+        )
+        frame["ambiguities"].append({
+            "source_term": "反應給班長",
+            "resolved_meaning_zh": "向班長回報或通報生產問題",
+            "rejected_interpretations": ["翻成 bereaksi", "只說一般回應而沒有回報對象"],
+        })
+    if flags["report_deadline"]:
+        deadline_value = frame["counts"].get("report_deadline")
+        deadline_unit = frame["units"].get("report_deadline")
+        target_unit = "jam" if deadline_unit == "hour" else "menit"
+        add(
+            "reporting_deadline",
+            report_deadline_token,
+            f"必須在來源所定的 {deadline_value} {deadline_unit} 內向班長回報",
+            f"dalam waktu {deadline_value} {target_unit} / paling lambat {deadline_value} {target_unit}",
+        )
+    if flags["abnormal_followup_purpose"]:
+        add(
+            "abnormal_followup_purpose",
+            "班長比較好做異常反應",
+            "及時回報是為了讓班長更妥善或更容易進行異常後續；未表示處理速度會更快",
+            "agar kepala regu dapat menindaklanjuti kondisi abnormal dengan lebih baik / lebih mudah",
+        )
+        frame["ambiguities"].append({
+            "source_term": "比較好做異常反應",
+            "resolved_meaning_zh": "讓班長更妥善或更容易做異常後續處理",
+            "rejected_interpretations": ["自行改成班長可以更快處理", "把異常反應直譯成反射或化學反應"],
+        })
+        if not flags["explicit_followup_speed"]:
+            frame["prohibited_inferences"].append(
+                "Do not change better/easier abnormal follow-up into faster follow-up; the source does not state increased handling speed."
+            )
+
     if flags["no_more_search"] and flags["peeling_location"]:
         add("stop_searching", "不用／不必再找", "停止尋找目前在找的材料或物件", "tidak usah/perlu dicari lagi")
         add("peeling_station_location", "在削皮／削皮區", "該材料目前位於削皮站或削皮區，不是正在執行削皮動作", "barangnya ada/berada di stasiun atau bagian peeling")
@@ -588,6 +710,11 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "package_contains_pairs": 3,
         "package_quantity_correction": 4,
         "physical_package_unit": 2,
+        "shift_handover": 1,
+        "any_production_problem": 2,
+        "report_to_shift_leader": 2,
+        "report_deadline": 3,
+        "abnormal_followup_purpose": 3,
     }
     frame["risk_score"] = sum(weight for key, weight in risk_weights.items() if flags.get(key))
     decisive = (
@@ -598,6 +725,13 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         or flags.get("package_quantity_correction")
         or flags.get("package_plus_pairs")
         or flags.get("package_contains_pairs")
+        or (
+            flags.get("shift_handover")
+            and flags.get("any_production_problem")
+            and flags.get("report_to_shift_leader")
+            and flags.get("report_deadline")
+            and flags.get("abnormal_followup_purpose")
+        )
         or (flags.get("no_more_search") and flags.get("peeling_location"))
     )
     frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive))
@@ -858,14 +992,58 @@ def _complete_polishing_priority_frame(frame: Mapping[str, Any]) -> bool:
     )
 
 
+def _complete_shift_handover_reporting_frame(frame: Mapping[str, Any]) -> bool:
+    flags = frame.get("flags") or {}
+    return bool(
+        frame.get("active")
+        and all(flags.get(key) for key in (
+            "shift_handover",
+            "any_production_problem",
+            "report_to_shift_leader",
+            "report_deadline",
+            "abnormal_followup_purpose",
+        ))
+        and frame.get("counts", {}).get("report_deadline") is not None
+        and frame.get("units", {}).get("report_deadline") in ("hour", "minute")
+    )
+
+
+def _shift_handover_reporting_rebuild(frame: Mapping[str, Any]) -> str:
+    if not _complete_shift_handover_reporting_frame(frame):
+        return ""
+    counts = frame.get("counts") or {}
+    units = frame.get("units") or {}
+    raw = frame.get("quantity_tokens") or {}
+    quantity = _format_indonesian_quantity(
+        counts.get("report_deadline"), raw.get("report_deadline", "")
+    )
+    target_unit = "jam" if units.get("report_deadline") == "hour" else "menit"
+    if not quantity:
+        return ""
+    mentions = [str(x).strip() for x in frame.get("mentions", []) or [] if str(x).strip()]
+    prefix = ((" ".join(mentions)) + " ") if mentions else ""
+    return (
+        prefix
+        + "Jika menemukan masalah produksi apa pun saat pergantian shift, masalah tersebut harus "
+        + f"dilaporkan kepada kepala regu dalam waktu {quantity} {target_unit} agar kepala regu "
+        + "dapat menindaklanjuti kondisi abnormal dengan lebih baik."
+    )
+
+
 def deterministic_rebuild(frame: Mapping[str, Any]) -> str:
     """Build a safe Indonesian fallback from source-proven semantic slots.
 
     Rebuilds are compositional and restricted to frames whose decisive slots are
     complete.  No exact source sentence is stored.  Supported frames currently
-    include PPE/package allocation, package-quantity correction, and the complete
-    polishing/large-bar scheduling instruction.
+    include shift-handover reporting, PPE/package allocation,
+    package-quantity correction, and the complete polishing/large-bar scheduling
+    instruction.
     """
+    handover_rebuilt = _shift_handover_reporting_rebuild(frame)
+    if handover_rebuilt:
+        ok, _issues = validate_translation(frame, handover_rebuilt)
+        if ok:
+            return handover_rebuilt
     package_rebuilt = _package_rebuild(frame)
     if package_rebuilt:
         ok, _issues = validate_translation(frame, package_rebuilt)
@@ -916,6 +1094,83 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     issues: List[str] = []
     if not low:
         return False, ["factory_semantic_audit:empty_translation"]
+
+    if flags.get("shift_handover") and not _has_any_target(low, (
+        "saat pergantian shift",
+        "ketika pergantian shift",
+        "saat serah terima shift",
+        "ketika serah terima shift",
+        "pada saat pergantian shift",
+    )):
+        issues.append("factory_semantic_audit:shift_handover_context_missing")
+
+    if flags.get("any_production_problem") and not _has_any_target(low, (
+        "masalah produksi apa pun",
+        "setiap masalah produksi",
+        "semua masalah produksi",
+        "segala masalah produksi",
+    )):
+        issues.append("factory_semantic_audit:any_production_problem_scope_missing")
+
+    if flags.get("report_to_shift_leader"):
+        report_relation_ok = _same_clause_has(low, (
+            ("laporkan", "melaporkan", "dilaporkan", "beri tahu", "memberi tahu", "disampaikan"),
+            ("kepala regu", "ketua shift"),
+        ))
+        if not report_relation_ok:
+            issues.append("factory_semantic_audit:report_to_shift_leader_relation_missing")
+        if re.search(r"\bbereaksi\b", low, flags=re.I):
+            issues.append("factory_semantic_audit:report_mistranslated_as_bereaksi")
+
+    if flags.get("report_deadline"):
+        deadline_value = (frame.get("counts") or {}).get("report_deadline")
+        deadline_unit = (frame.get("units") or {}).get("report_deadline")
+        target_units = ("jam",) if deadline_unit == "hour" else ("menit",)
+        deadline_relation_ok = False
+        for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]:
+            if not _has_any_target(clause, (
+                "laporkan", "melaporkan", "dilaporkan", "beri tahu", "memberi tahu", "disampaikan",
+            )):
+                continue
+            if not _has_any_target(clause, ("kepala regu", "ketua shift")):
+                continue
+            if not _quantity_unit_in_clause(clause, deadline_value, target_units):
+                continue
+            if not _has_any_target(clause, (
+                "dalam waktu", "paling lambat", "maksimal", "tidak lebih dari", "selambat-lambatnya",
+            )):
+                continue
+            deadline_relation_ok = True
+            break
+        if not deadline_relation_ok:
+            issues.append("factory_semantic_audit:reporting_deadline_relation_missing")
+
+    if flags.get("abnormal_followup_purpose"):
+        followup_ok = _same_clause_has(low, (
+            ("kepala regu", "ketua shift"),
+            (
+                "menindaklanjuti", "ditindaklanjuti", "tindak lanjut", "menangani", "ditangani",
+                "penanganan", "merespons", "direspons", "memberikan respons",
+            ),
+            (
+                "kondisi abnormal", "kondisi tidak normal", "kondisi yang tidak normal",
+                "keadaan abnormal", "keadaan tidak normal", "ketidaknormalan", "masalah abnormal",
+            ),
+            ("dengan lebih baik", "secara lebih baik", "lebih mudah", "lebih efektif"),
+        ))
+        if not followup_ok:
+            issues.append("factory_semantic_audit:abnormal_followup_purpose_missing")
+        if not flags.get("explicit_followup_speed"):
+            unsupported_speed = _same_clause_has(low, (
+                ("kepala regu", "ketua shift"),
+                (
+                    "menindaklanjuti", "ditindaklanjuti", "tindak lanjut", "menangani", "ditangani",
+                    "penanganan", "merespons", "direspons",
+                ),
+                ("lebih cepat", "lebih segera", "secepatnya", "dengan cepat", "segera"),
+            ))
+            if unsupported_speed:
+                issues.append("factory_semantic_audit:unsupported_followup_speed_inference")
 
     if flags.get("no_more_search") and flags.get("peeling_location"):
         no_search_ok = bool(re.search(

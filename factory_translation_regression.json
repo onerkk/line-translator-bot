@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-07-25.5-quoted-reply-and-storage-instruction-root-fix",
+  "build_id": "2026-08-11.1-shift-handover-reporting-root-fix",
   "description": "Versioned Chinese↔Indonesian factory regression corpus compiled from verified production corrections, root-fix records and semantic tests. Exact targets are authoritative for punctuation/spacing variants; required and forbidden concepts also protect provider output.",
   "cases": [
     {
@@ -633,6 +633,46 @@
         "login",
         "dikumpulkan taruh",
         "punya Peng Zuo"
+      ]
+    },
+    {
+      "id": "shift_handover_production_problem_reporting",
+      "direction": "zh-id",
+      "source": "@All 在交接班時遇到任何生產問題 需要在一個小時內反應給班長 班長比較好做異常反應",
+      "verified_target": "@All Jika menemukan masalah produksi apa pun saat pergantian shift, masalah tersebut harus dilaporkan kepada kepala regu dalam waktu satu jam agar kepala regu dapat menindaklanjuti kondisi abnormal dengan lebih baik.",
+      "required_target_any_groups": [
+        [
+          "saat pergantian shift",
+          "saat serah terima shift"
+        ],
+        [
+          "masalah produksi apa pun",
+          "setiap masalah produksi",
+          "semua masalah produksi"
+        ],
+        [
+          "dilaporkan kepada kepala regu",
+          "laporkan kepada kepala regu",
+          "melaporkan kepada kepala regu"
+        ],
+        [
+          "dalam waktu satu jam",
+          "dalam waktu 1 jam",
+          "paling lambat satu jam",
+          "paling lambat 1 jam"
+        ],
+        [
+          "menindaklanjuti kondisi abnormal dengan lebih baik",
+          "lebih mudah menindaklanjuti kondisi abnormal"
+        ]
+      ],
+      "forbidden_target": [
+        "lebih cepat menindaklanjuti",
+        "lebih cepat menangani",
+        "supaya kepala regu bisa lebih cepat",
+        "bereaksi kepada kepala regu",
+        "kepala regu / 班長",
+        "ketua shift / kepala regu"
       ]
     }
   ]

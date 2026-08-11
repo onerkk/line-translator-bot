@@ -24,7 +24,7 @@ import factory_knowledge
 import factory_quantity_semantics as fqs_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-05.1-compositional-quantity-acceptance"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.1-handover-reporting-acceptance"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
