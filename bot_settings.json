@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.43.1-authoritative-quality-gate-root-fix-2026-08-02",
+    "app_version": "v3.45.0-durable-translation-delivery-root-cure-2026-08-06",
     "schema_version": 8,
-    "state_hash": "b67940a539db4ed3f3f3b1bd9a8d50c99e84db3a1d38e9b5d39b81cf297995c2",
-    "updated_at_iso": "2026-08-05T06:48:18.437322+00:00",
-    "updated_at_unix": 1785912498.4373217
+    "state_hash": "59025eeb5a5ca0d5f1a1837d065716daa7a5dc7faa575f0a2596464a9adeffbf",
+    "updated_at_iso": "2026-08-12T13:35:07.515270+00:00",
+    "updated_at_unix": 1786541707.5152695
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -47,7 +47,7 @@
       "is_admin": true
     }
   },
-  "ai_active_provider": "anthropic",
+  "ai_active_provider": "openai",
   "ai_gemini_features": {
     "reasoning_effort": "minimal"
   },
@@ -59,11 +59,18 @@
     "flex_background": true
   },
   "ai_provider_config": {
-    "active_provider": "anthropic",
+    "active_provider": "openai",
     "anthropic": {
       "default_model": "claude-haiku-4-5-20251001"
     },
     "auto_switch_on_exhaust": true,
+    "auto_switch_state": {
+      "active": true,
+      "at": 1786541706,
+      "from": "anthropic",
+      "reason": "quota_exhausted",
+      "to": "openai"
+    },
     "claude_features": {
       "adaptive_thinking": true,
       "assistant_prefill": false,
@@ -92,7 +99,7 @@
       "xml_system_prompt": true
     },
     "failover_policy": {
-      "adaptive_backup_order": true,
+      "adaptive_backup_order": false,
       "circuit_breaker_cooldown_seconds": 60,
       "circuit_breaker_failures": 2,
       "latency_ewma_alpha": 0.25,
@@ -116,10 +123,11 @@
       },
       "per_provider_timeout_seconds": 24,
       "provider_order": [
-        "gemini",
+        "anthropic",
         "openai",
-        "anthropic"
+        "gemini"
       ],
+      "strict_failover_order": true,
       "total_timeout_seconds": 60
     },
     "gemini": {
@@ -142,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-08-05 05:26:19",
+    "last_updated": "2026-08-12 13:35:06",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -162,7 +170,13 @@
     "openai_features": {
       "flex_background": true
     },
-    "provider_failover": true
+    "provider_failover": true,
+    "quota_exhausted_providers": {
+      "anthropic": {
+        "at": 1786541706,
+        "error": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011Cdx"
+      }
+    }
   },
   "auto_tone_emoji_enabled": true,
   "bot_stats": {
@@ -175,13 +189,13 @@
     "followers": 1,
     "image_translations": 4,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.0884527,
-    "oai_input": 93495,
-    "oai_output": 600,
+    "oai_cost_usd": 0.0972647,
+    "oai_input": 97151,
+    "oai_output": 725,
     "oai_reasoning": 0,
-    "text_translations": 240,
-    "tokens_completion": 18056,
-    "tokens_prompt": 4328266,
+    "text_translations": 241,
+    "tokens_completion": 18181,
+    "tokens_prompt": 4331922,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -331,11 +345,11 @@
       "tokens_prompt": 258366
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cost_usd": 0.5943204000000006,
+      "cost_usd": 0.6031324000000009,
       "model": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tokens_completion": 2378,
-      "tokens_prompt": 469185
+      "tokens_completion": 2503,
+      "tokens_prompt": 472841
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -461,6 +475,7 @@
       "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
       "U54c702066e93a5d54e2e12ea5bc258c6": "許凱銘",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
+      "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
