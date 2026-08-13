@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-11.3-source-token-completeness"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-13.1-contextual-shift-paint-claims"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -61,6 +61,52 @@ _REPORT_ID = (
     "laporkan",
 )
 
+# Shop-floor chat often spells ``shift`` phonetically as sip/sif/shif.  ``sip``
+# is also an ordinary acknowledgement (OK), so it must never be normalized as a
+# shift by itself.  A following shift period plus a real clause is the required
+# disambiguating evidence.  This keeps "Sip, terima kasih" conversational while
+# making "sip pagi tidak ..." a morning-shift production claim.
+_SHIFT_ALIAS_ID_RE = re.compile(
+    r"(?<![a-z])(?P<shift>shift|shif|sif|sip)\s+"
+    r"(?P<period>pagi|siang|sore|malam)(?![a-z])",
+    re.I,
+)
+_SHIFT_CLAUSE_EVIDENCE_ID_RE = re.compile(
+    r"(?<![a-z])(?:tidak|tida|tdk|tdak|gak|ga|nggak|ngga|belum|sudah|akan|"
+    r"masih|jangan|mesin|material|barang|produksi|operator|cat|pengecatan|"
+    r"rusak|selesai|masuk|keluar|kerja|bekerja|melakukan|memberi|mengasih|"
+    r"mengecat|menyemprot)(?![a-z])",
+    re.I,
+)
+_SHIFT_PERIOD_ZH = {
+    "pagi": "早班",
+    "siang": "中班",
+    "sore": "小夜班",
+    "malam": "夜班",
+}
+_NEGATIVE_ID_RE = re.compile(
+    r"(?<![a-z])(?P<negative>tidak|tida|tdk|tdak|gak|ga|nggak|ngga|belum)(?![a-z])",
+    re.I,
+)
+_PAINT_APPLICATION_ID_RE = re.compile(
+    r"(?<![a-z])(?:"
+    r"(?:mengasih|memberi|memberikan|kasih)\s+(?:warna\s+cat|cat\s+warna)"
+    r"|(?:melakukan\s+)?pengecatan(?:\s+semprot)?"
+    r"|(?:melakukan\s+)?penyemprotan\s+cat"
+    r"|mengecat(?:\s+dengan\s+semprotan)?"
+    r"|menyemprot\s+cat"
+    r"|semprot\s+cat"
+    r")(?![a-z])",
+    re.I,
+)
+_NEGATED_PAINT_ZH_RE = re.compile(
+    r"(?:沒有|没有|沒(?:有|做)?|没(?:有|做)?|未做|尚未|還沒|还没|未執行|未执行|未進行|未进行)"
+    r".{0,10}(?:噴漆|喷漆|塗裝|涂装)"
+    r"|(?:噴漆|喷漆|塗裝|涂装)(?:作業|作业)?.{0,10}"
+    r"(?:沒有做|没有做|沒做|没做|未做|尚未執行|尚未执行|未執行|未执行|尚未完成)",
+    re.I,
+)
+
 _ZH_MOTION = (
     "過去", "过去", "去那邊", "去那边", "到那邊", "到那边",
     "去那裡", "去那里", "到那裡", "到那里", "去現場", "去现场",
@@ -83,6 +129,62 @@ def _norm(value: Any) -> str:
     text = re.sub(r"(?<!\d)[。．.,，]|[。．.,，](?!\d)", " ", text)
     text = re.sub(r"[!！?？:：;；()（）\[\]{}]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_indonesian_factory_colloquialisms(source: Any) -> tuple[str, int]:
+    """Normalize context-dependent shop-floor Indonesian without an API call.
+
+    The important distinction is structural, not lexical: ``sip`` means OK in
+    ordinary chat, but ``sip/sif/shif + a shift period + a predicate`` denotes a
+    work shift.  Paint-application slang is canonicalized only when it belongs
+    to that shift claim, so unrelated messages about choosing or supplying a
+    paint colour are not rewritten as production work.
+    """
+    value = str(source or "")
+    if not value:
+        return value, 0
+    replacements = 0
+
+    def _normalize_shift(match: re.Match[str]) -> str:
+        nonlocal replacements
+        raw_shift = match.group("shift")
+        period = match.group("period")
+        # Do not reinterpret a bare acknowledgement such as ``Sip pagi!``.  A
+        # predicate/negation in the same clause is mandatory evidence.
+        tail = value[match.end():]
+        same_clause = re.split(r"[\n.!！?？;；]", tail, maxsplit=1)[0][:160]
+        if raw_shift.casefold() != "shift" and not _SHIFT_CLAUSE_EVIDENCE_ID_RE.search(same_clause):
+            return match.group(0)
+        canonical = f"shift {period.casefold()}"
+        if match.group(0).casefold() != canonical:
+            replacements += 1
+        return canonical
+
+    value = _SHIFT_ALIAS_ID_RE.sub(_normalize_shift, value)
+    value, typo_count = re.subn(
+        r"(?<![a-z])tida(?![a-z])", "tidak", value, flags=re.I
+    )
+    replacements += typo_count
+
+    shift_match = _SHIFT_ALIAS_ID_RE.search(value)
+    negative_match = _NEGATIVE_ID_RE.search(value)
+    paint_match = _PAINT_APPLICATION_ID_RE.search(value)
+    if (
+        shift_match
+        and negative_match
+        and paint_match
+        and shift_match.end() <= negative_match.start() <= paint_match.start()
+        and paint_match.start() - shift_match.end() <= 160
+    ):
+        canonical_paint = "melakukan pengecatan semprot"
+        if paint_match.group(0).casefold() != canonical_paint:
+            value = (
+                value[:paint_match.start()]
+                + canonical_paint
+                + value[paint_match.end():]
+            )
+            replacements += 1
+    return value, replacements
 
 
 def _compact(value: Any) -> str:
@@ -217,6 +319,61 @@ def _base_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
 
 def _build_id_zh_frame(source: str, frame: dict) -> dict:
     text = _norm(source)
+    shift_match = _SHIFT_ALIAS_ID_RE.search(text)
+    shift_period = shift_match.group("period").casefold() if shift_match else ""
+    negative_match = _NEGATIVE_ID_RE.search(text)
+    paint_match = _PAINT_APPLICATION_ID_RE.search(text)
+    shift_paint_claim = bool(
+        shift_match
+        and negative_match
+        and paint_match
+        and shift_match.end() <= negative_match.start() <= paint_match.start()
+        and paint_match.start() - shift_match.end() <= 160
+    )
+    if shift_paint_claim:
+        frame["kind"] = "id_zh_shift_process_status"
+        frame["slots"].update({
+            "shift_alias": shift_match.group("shift").casefold(),
+            "shift_period": shift_period,
+            "shift_target": _SHIFT_PERIOD_ZH[shift_period],
+            "negative_term": negative_match.group("negative").casefold(),
+            "completion": "not_yet" if negative_match.group("negative").casefold() == "belum" else "not_done",
+            "process": "spray_painting",
+            "process_source": paint_match.group(0),
+        })
+        _claim(
+            frame,
+            "shift_actor",
+            shift_match.group(0),
+            f"{_SHIFT_PERIOD_ZH[shift_period]}是執行者／責任班別，不是問候語",
+            _SHIFT_PERIOD_ZH[shift_period],
+        )
+        _claim(
+            frame,
+            "process_negation",
+            negative_match.group(0),
+            "製程沒有執行；否定不能遺失或翻成缺少供應",
+            "沒有",
+        )
+        _claim(
+            frame,
+            "spray_painting_process",
+            paint_match.group(0),
+            "現場噴漆／塗裝作業，不是提供油漆顏色",
+            "噴漆",
+        )
+        supported_spans = sorted(
+            (shift_match.span(), negative_match.span(), paint_match.span()),
+            reverse=True,
+        )
+        unparsed = text
+        for start, end in supported_spans:
+            unparsed = unparsed[:start] + " " + unparsed[end:]
+        frame["unparsed"] = re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", " ", unparsed).strip()
+        frame["active"] = True
+        frame["complete"] = not frame["unparsed"]
+        return frame
+
     monitor_term = _first_phrase(text, _MONITOR_ID)
     scale_term = _first_phrase(text, _HOIST_SCALE_ID)
     monitor_weight = _extract_weight_after(text, _MONITOR_ID)
@@ -386,6 +543,13 @@ def deterministic_translation(frame: Mapping) -> str:
     if not frame or not frame.get("active") or not frame.get("complete"):
         return ""
     slots = frame.get("slots") or {}
+    if frame.get("kind") == "id_zh_shift_process_status":
+        shift = str(slots.get("shift_target") or "")
+        if not shift or slots.get("process") != "spray_painting":
+            return ""
+        status = "還沒有噴漆" if slots.get("completion") == "not_yet" else "沒有噴漆"
+        return _with_mentions(frame, f"{shift}{status}")
+
     if frame.get("kind") == "id_zh_weight_display_relation":
         parts: list[str] = []
         monitor_weight = str(slots.get("monitor_weight") or "")
@@ -454,7 +618,22 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     slots = frame.get("slots") or {}
     issues: list[str] = []
 
-    if frame.get("kind") == "id_zh_weight_display_relation":
+    if frame.get("kind") == "id_zh_shift_process_status":
+        shift_target = str(slots.get("shift_target") or "")
+        if shift_target and shift_target not in target:
+            issues.append("factory_message_semantics:shift_actor_missing")
+        if any(term in target for term in ("早上好", "早安", "上午好")):
+            issues.append("factory_message_semantics:shift_mistranslated_as_greeting")
+        if not any(term in target for term in ("噴漆", "塗裝", "喷漆", "涂装")):
+            issues.append("factory_message_semantics:spray_painting_process_missing")
+        if not _NEGATED_PAINT_ZH_RE.search(target):
+            issues.append("factory_message_semantics:process_negation_missing")
+        if any(term in target for term in (
+            "提供油漆", "提供漆", "供應油漆", "供应油漆", "油漆顏色", "油漆颜色",
+        )):
+            issues.append("factory_message_semantics:paint_action_mistranslated_as_supply")
+
+    elif frame.get("kind") == "id_zh_weight_display_relation":
         if slots.get("monitor_term") and not (
             "螢幕" in target and any(term in target for term in ("顯示", "讀值", "數值"))
         ):
@@ -558,6 +737,14 @@ def build_prompt(frame: Mapping) -> str:
             "scale: translate it as 天車電子磅秤, never 滑輪秤. Ketu/ketua kelas beside report+ID "
             "means the shift leader: 班長; do not leave Indonesian role words in Chinese."
         )
+    elif frame.get("kind") == "id_zh_shift_process_status":
+        lines.append(
+            "In this shop-floor clause, sip/sif/shif before pagi/siang/sore/malam is a phonetic "
+            "spelling of shift, not the acknowledgement sip and not a greeting. Pagi is therefore "
+            "早班, not 早上好. Mengasih/memberi warna cat under a negated shift status describes "
+            "performing spray-painting work; translate the linked claim as 班別沒有噴漆, never as "
+            "not supplying/providing a paint colour."
+        )
     elif frame.get("kind") == "zh_id_motion_inspection_relation":
         lines.append(
             "Chinese 過去/到現場 is an explicit movement to another location. Indonesian must contain "
@@ -569,6 +756,9 @@ def build_prompt(frame: Mapping) -> str:
 
 
 def health() -> dict:
+    shift_paint = build_frame(
+        "Sip pagi tida mengasih warna cat", "id", "zh"
+    )
     discrepancy = build_frame(
         "Kg di layar monitor dengan di timbangan katrol selisih 6 kg. "
         "Saya laporan dengan id Ketu kelas",
@@ -587,12 +777,20 @@ def health() -> dict:
         "994 kg. Saya sudah lapor pakai ID ketua regu."
     )
     controls = (
+        build_frame("Sip, terima kasih.", "id", "zh"),
+        build_frame("Selamat pagi, Pak.", "id", "zh"),
+        build_frame("Tolong memberi warna cat biru.", "id", "zh"),
         build_frame("Saya ketua kelas di sekolah.", "id", "zh"),
         build_frame("Katrol rusak.", "id", "zh"),
         build_frame("我先看看情況。", "zh", "id"),
         build_frame("我過去拿工具。", "zh", "id"),
     )
     checks = [
+        shift_paint.get("active") is True and shift_paint.get("complete") is True,
+        translate_source_directly(shift_paint["source"], "id", "zh")
+        == "早班沒有噴漆",
+        normalize_indonesian_factory_colloquialisms(shift_paint["source"])[0]
+        == "shift pagi tidak melakukan pengecatan semprot",
         discrepancy.get("active") is True and discrepancy.get("complete") is True,
         translate_source_directly(
             discrepancy["source"], "id", "zh"

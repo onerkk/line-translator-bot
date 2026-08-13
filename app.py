@@ -330,7 +330,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-11.3-source-token-completeness"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-13.1-contextual-shift-paint-claims"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -2663,6 +2663,17 @@ def normalize_indonesian_text(text):
     # the chat-abbreviation rule y -> ya.
     _immutable = tqg_module.protect_immutable_spans(text)
     text = _immutable.protected
+
+    # Contextual shop-floor normalization must run before the generic slang
+    # table.  In ordinary chat sip means OK, but in ``sip pagi + predicate`` it
+    # is a phonetic spelling of shift.  Resolving the phrase as a unit prevents
+    # the later sip->baik rule from destroying the shift actor.  This local pass
+    # also fixes common negation/paint-action variants without adding latency.
+    text, contextual_replacements = (
+        factory_message_semantics_module.normalize_indonesian_factory_colloquialisms(
+            text
+        )
+    )
     
     # 1. 找出需要保護的大寫專有名詞,用 placeholder 暫存
     protected = {}
@@ -2678,7 +2689,7 @@ def normalize_indonesian_text(text):
     text_protected = ID_PRESERVE_TOKENS.sub(_protect, text)
     
     # 2. 詞表替換 - 用 word boundary,大小寫不敏感
-    replacements = 0
+    replacements = contextual_replacements
     
     # 按長度由長到短排序,避免短詞先匹配吃掉長詞
     sorted_map = sorted(ID_NORMALIZATION_MAP.items(), key=lambda x: -len(x[0]))
