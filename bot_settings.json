@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.45.0-durable-translation-delivery-root-cure-2026-08-06",
     "schema_version": 8,
-    "state_hash": "59025eeb5a5ca0d5f1a1837d065716daa7a5dc7faa575f0a2596464a9adeffbf",
-    "updated_at_iso": "2026-08-12T13:35:07.515270+00:00",
-    "updated_at_unix": 1786541707.5152695
+    "state_hash": "535cbc97c15b871d051635c3d20e0f1a1bf87569f3fff3f85b17886213bac9b1",
+    "updated_at_iso": "2026-08-14T12:07:12.371712+00:00",
+    "updated_at_unix": 1786709232.3717124
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -150,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-08-12 13:35:06",
+    "last_updated": "2026-08-14 03:46:29",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -189,13 +189,13 @@
     "followers": 1,
     "image_translations": 4,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.0972647,
-    "oai_input": 97151,
-    "oai_output": 725,
+    "oai_cost_usd": 0.0980741,
+    "oai_input": 100790,
+    "oai_output": 793,
     "oai_reasoning": 0,
-    "text_translations": 241,
-    "tokens_completion": 18181,
-    "tokens_prompt": 4331922,
+    "text_translations": 242,
+    "tokens_completion": 18249,
+    "tokens_prompt": 4335561,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -325,7 +325,8 @@
       "祥啊",
       "祥阿",
       "邱凱達",
-      "佑晟"
+      "佑晟",
+      "奇沃"
     ]
   },
   "fewshot_mode": "messages",
@@ -359,11 +360,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.78907555,
-      "model": "claude-haiku-4-5-20251001",
-      "provider": "anthropic",
-      "tokens_completion": 5721,
-      "tokens_prompt": 1798857
+      "cost_usd": 1.7898849499999996,
+      "model": "gpt-5.6-luna",
+      "provider": "openai",
+      "tokens_completion": 5789,
+      "tokens_prompt": 1802496
     },
     "__dm__": {
       "tokens_completion": 42,
