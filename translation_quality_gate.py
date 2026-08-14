@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 25
-QUALITY_GATE_BUILD_ID = "2026-08-11.2-adaptive-repair-review"
+QUALITY_GATE_BUILD_ID = "2026-08-14.1-all-exit-source-claims"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1591,6 +1591,19 @@ def validate_translation(
     )
     if not relation_ok or relation_issues:
         issues.extend(relation_issues)
+
+    # Plant-specific operational claims are an acceptance invariant, not only
+    # a conditional reviewer hint.  Run the source frame at this lowest shared
+    # boundary so direct validation, restored provider output, cache admission,
+    # TM admission and degraded/fallback paths cannot bypass it.  The review
+    # pipeline may call the same validator again; stable issue de-duplication
+    # below keeps that harmless.
+    operational_frame = fsa_module.build_source_frame(source, src, tgt)
+    operational_ok, operational_issues = fsa_module.validate_translation(
+        operational_frame, candidate
+    )
+    if not operational_ok or operational_issues:
+        issues.extend(operational_issues)
 
     issues = _dedupe(issues)
     hard, warnings = _partition_issues(issues)

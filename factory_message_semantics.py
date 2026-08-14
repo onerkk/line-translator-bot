@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-13.1-contextual-shift-paint-claims"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-14.1-equipment-code-failure"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -104,6 +104,15 @@ _NEGATED_PAINT_ZH_RE = re.compile(
     r".{0,10}(?:噴漆|喷漆|塗裝|涂装)"
     r"|(?:噴漆|喷漆|塗裝|涂装)(?:作業|作业)?.{0,10}"
     r"(?:沒有做|没有做|沒做|没做|未做|尚未執行|尚未执行|未執行|未执行|尚未完成)",
+    re.I,
+)
+
+_EQUIPMENT_CODE_ID_RE = re.compile(
+    r"(?<![a-z0-9])(?:i\d{1,2}|e\d{1,2}|bf\d+|ap|pm\d+|ut|k\d+)(?![a-z0-9])",
+    re.I,
+)
+_EQUIPMENT_FAILURE_ID_RE = re.compile(
+    r"(?<![a-z])(?:rusak|tidak\s+berfungsi|tidak\s+bisa\s+dipakai)(?![a-z])",
     re.I,
 )
 
@@ -319,6 +328,47 @@ def _base_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
 
 def _build_id_zh_frame(source: str, frame: dict) -> dict:
     text = _norm(source)
+    equipment_codes = list(dict.fromkeys(
+        match.group(0).upper() for match in _EQUIPMENT_CODE_ID_RE.finditer(text)
+    ))
+    equipment_failure = _EQUIPMENT_FAILURE_ID_RE.search(text)
+    if equipment_codes and equipment_failure:
+        unparsed = _MENTION_RE.sub(" ", text)
+        unparsed = _EQUIPMENT_CODE_ID_RE.sub(" ", unparsed)
+        unparsed = _EQUIPMENT_FAILURE_ID_RE.sub(" ", unparsed)
+        unparsed = re.sub(
+            r"(?<![a-z])(?:mesin|machine|unit|dan|serta)(?![a-z])|[&/+\-]",
+            " ",
+            unparsed,
+            flags=re.I,
+        )
+        unparsed = re.sub(
+            r"[\s,，。.!！?？:：;；()（）\[\]{}]+", " ", unparsed
+        ).strip()
+        frame["kind"] = "id_zh_equipment_code_failure"
+        frame["slots"].update({
+            "equipment_codes": equipment_codes,
+            "failure_term": equipment_failure.group(0).casefold(),
+        })
+        frame["unparsed"] = unparsed
+        _claim(
+            frame,
+            "equipment_identity",
+            ", ".join(equipment_codes),
+            "I/E/BF/PM/K 等代碼在本廠是機台或站別識別碼",
+            "、".join(equipment_codes) + " 機台",
+        )
+        _claim(
+            frame,
+            "equipment_failure",
+            equipment_failure.group(0),
+            "機台功能故障，不是材料或表面損傷",
+            "故障",
+        )
+        frame["active"] = True
+        frame["complete"] = not unparsed
+        return frame
+
     shift_match = _SHIFT_ALIAS_ID_RE.search(text)
     shift_period = shift_match.group("period").casefold() if shift_match else ""
     negative_match = _NEGATIVE_ID_RE.search(text)
@@ -543,6 +593,12 @@ def deterministic_translation(frame: Mapping) -> str:
     if not frame or not frame.get("active") or not frame.get("complete"):
         return ""
     slots = frame.get("slots") or {}
+    if frame.get("kind") == "id_zh_equipment_code_failure":
+        codes = [str(item) for item in slots.get("equipment_codes") or () if str(item)]
+        if not codes:
+            return ""
+        return _with_mentions(frame, f"{'、'.join(codes)} 機台故障")
+
     if frame.get("kind") == "id_zh_shift_process_status":
         shift = str(slots.get("shift_target") or "")
         if not shift or slots.get("process") != "spray_painting":
@@ -618,7 +674,24 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     slots = frame.get("slots") or {}
     issues: list[str] = []
 
-    if frame.get("kind") == "id_zh_shift_process_status":
+    if frame.get("kind") == "id_zh_equipment_code_failure":
+        for code in slots.get("equipment_codes") or ():
+            if not re.search(
+                r"(?<![A-Za-z0-9])" + re.escape(str(code)) + r"(?![A-Za-z0-9])",
+                target,
+                re.I,
+            ):
+                issues.append("factory_message_semantics:equipment_code_missing")
+        if not any(term in target for term in ("機台", "機器", "設備")):
+            issues.append("factory_message_semantics:equipment_role_missing")
+        if "故障" not in target:
+            issues.append("factory_message_semantics:functional_failure_missing")
+        if any(term in target for term in ("損傷", "损伤")):
+            issues.append("factory_message_semantics:equipment_mistranslated_as_surface_damage")
+        if any(term in target for term in ("損壞", "损坏")) and "故障" not in target:
+            issues.append("factory_message_semantics:equipment_failure_wording_ambiguous")
+
+    elif frame.get("kind") == "id_zh_shift_process_status":
         shift_target = str(slots.get("shift_target") or "")
         if shift_target and shift_target not in target:
             issues.append("factory_message_semantics:shift_actor_missing")
@@ -731,7 +804,13 @@ def build_prompt(frame: Mapping) -> str:
                 **claim
             )
         )
-    if frame.get("kind") == "id_zh_weight_display_relation":
+    if frame.get("kind") == "id_zh_equipment_code_failure":
+        lines.append(
+            "A source code such as I15 is an equipment/station identifier. Rusak predicates a "
+            "functional machine failure: translate the linked claim as I15 機台故障, not as "
+            "material/surface damage (損傷) and not as the underspecified I15 損壞."
+        )
+    elif frame.get("kind") == "id_zh_weight_display_relation":
         lines.append(
             "In this factory context timbangan katrol/gantung/crane is the overhead-crane electronic "
             "scale: translate it as 天車電子磅秤, never 滑輪秤. Ketu/ketua kelas beside report+ID "
@@ -756,6 +835,7 @@ def build_prompt(frame: Mapping) -> str:
 
 
 def health() -> dict:
+    equipment_failure = build_frame("i15 rusak", "id", "zh")
     shift_paint = build_frame(
         "Sip pagi tida mengasih warna cat", "id", "zh"
     )
@@ -786,6 +866,10 @@ def health() -> dict:
         build_frame("我過去拿工具。", "zh", "id"),
     )
     checks = [
+        equipment_failure.get("active") is True
+        and equipment_failure.get("complete") is True,
+        translate_source_directly("i15 rusak", "id", "zh") == "I15 機台故障",
+        validate_translation(equipment_failure, "i15 損壞")[0] is False,
         shift_paint.get("active") is True and shift_paint.get("complete") is True,
         translate_source_directly(shift_paint["source"], "id", "zh")
         == "早班沒有噴漆",

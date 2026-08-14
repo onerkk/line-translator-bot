@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-11.2-bidirectional-source-relation-root-fix",
+  "build_id": "2026-08-14.1-operational-status-root-fix",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -3068,6 +3068,512 @@
           "target": "Saya ke lokasi dulu untuk memeriksa kondisi mesin.",
           "bad_target": "Saya periksa dulu situasinya.",
           "reason": "保留到現場的移動、檢查目的及機台對象。"
+        }
+      ]
+    },
+    {
+      "id": "erp_release_data_to_ol_status",
+      "enabled": true,
+      "priority": 300,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "發料是 ERP 生產資料轉為 OL 狀態",
+      "match": {
+        "strong_phrases": [
+          "發料",
+          "发料"
+        ],
+        "any_terms": [
+          "成功",
+          "已經",
+          "已经",
+          "完成",
+          "請",
+          "请",
+          "資料",
+          "数据",
+          "OL"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本廠『發料』是不可拆開理解的 ERP／資料系統動作：把該筆生產資料的狀態設為或呈現為 OL，表示該筆資料正在生產。",
+        "它不是發放、領取、出庫或移動實體材料；來源中的人物、成功／完成狀態或請求語氣必須保留。"
+      ],
+      "preferred_target_phrases": [
+        "mengubah status data menjadi OL",
+        "status data diubah menjadi OL"
+      ],
+      "forbidden_target_phrases": [
+        "mengeluarkan material",
+        "mengambil material",
+        "membagikan material",
+        "memindahkan material",
+        "material keluar"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "data",
+            "record"
+          ],
+          "issue": "missing_erp_data_object"
+        },
+        {
+          "target_any": [
+            "OL"
+          ],
+          "issue": "missing_ol_status"
+        },
+        {
+          "target_any": [
+            "mengubah status",
+            "diubah menjadi",
+            "menjadi OL",
+            "berstatus OL",
+            "meng-OL-kan"
+          ],
+          "issue": "missing_data_to_ol_relation"
+        },
+        {
+          "source_any": [
+            "成功",
+            "順利",
+            "顺利"
+          ],
+          "target_any": [
+            "berhasil",
+            "sukses"
+          ],
+          "issue": "missing_success_result"
+        }
+      ],
+      "examples": [
+        {
+          "source": "@budi santoso 山多 成功發料",
+          "target": "@budi santoso 山多 sudah berhasil mengubah status data menjadi OL.",
+          "bad_target": "@budi santoso 山多 berhasil mengeluarkan material.",
+          "reason": "發料是資料狀態轉為 OL，不是實體材料出庫。"
+        },
+        {
+          "source": "這筆工單已經發料完成",
+          "target": "Status data work order ini sudah diubah menjadi OL.",
+          "reason": "同一語意可搭配不同主詞與完成語氣，不能只記住單一句子。"
+        }
+      ]
+    },
+    {
+      "id": "night_attendance_replaced_by_k3_spot_checks",
+      "enabled": true,
+      "priority": 285,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "夜間點名取消並改為 K3 無固定時程入廠抽查",
+      "match": {
+        "all_groups": [
+          [
+            "夜間點名",
+            "夜间点名",
+            "夜班點名",
+            "夜班点名"
+          ],
+          [
+            "取消",
+            "停止",
+            "不再"
+          ],
+          [
+            "安衛",
+            "安卫",
+            "工安",
+            "K3"
+          ],
+          [
+            "抽查",
+            "稽查",
+            "查核"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "下週",
+          "下周",
+          "不定時",
+          "不定时",
+          "入廠",
+          "入厂",
+          "改成",
+          "改為",
+          "改为"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "『點名』在此是人員到勤／出席確認，不是集合或典禮，因此不可翻成 apel malam。",
+        "後半句是替代措施：K3／安衛人員在沒有固定時程的情況下到廠執行隨機抽查。"
+      ],
+      "preferred_target_phrases": [
+        "pengecekan kehadiran malam ditiadakan",
+        "bagian K3 melakukan pemeriksaan acak di pabrik tanpa jadwal tetap"
+      ],
+      "forbidden_target_phrases": [
+        "apel malam"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "pengecekan kehadiran malam",
+            "pemeriksaan kehadiran malam",
+            "absensi malam"
+          ],
+          "issue": "missing_night_attendance_check"
+        },
+        {
+          "target_any": [
+            "ditiadakan",
+            "dihapus",
+            "dihentikan",
+            "tidak dilakukan lagi"
+          ],
+          "issue": "missing_abolition"
+        },
+        {
+          "target_any": [
+            "bagian K3",
+            "departemen K3",
+            "tim K3",
+            "petugas K3"
+          ],
+          "issue": "missing_k3_actor"
+        },
+        {
+          "target_any": [
+            "pemeriksaan acak",
+            "inspeksi acak",
+            "pemeriksaan mendadak",
+            "inspeksi mendadak"
+          ],
+          "issue": "missing_random_inspection"
+        },
+        {
+          "source_any": [
+            "不定時",
+            "不定时",
+            "不定期"
+          ],
+          "target_any": [
+            "tanpa jadwal tetap",
+            "secara tidak terjadwal",
+            "tanpa waktu tetap"
+          ],
+          "issue": "missing_unscheduled_timing"
+        }
+      ],
+      "examples": [
+        {
+          "source": "下週開始取消夜間點名，改成安衛不定時入廠抽查。",
+          "target": "Mulai minggu depan, pengecekan kehadiran malam ditiadakan. Sebagai gantinya, bagian K3 akan melakukan pemeriksaan acak di pabrik tanpa jadwal tetap.",
+          "bad_target": "Mulai minggu depan, apel malam ditiadakan dan diganti dengan pemeriksaan acak oleh bagian K3.",
+          "reason": "點名是出勤確認；替代措施還包含到廠及無固定時程。"
+        }
+      ]
+    },
+    {
+      "id": "month_end_staffing_target_without_invented_unit",
+      "enabled": true,
+      "priority": 280,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月底請假、人力與追量通知中的數值單位邊界",
+      "match": {
+        "all_groups": [
+          [
+            "請假",
+            "请假"
+          ],
+          [
+            "生產人力",
+            "生产人力"
+          ],
+          [
+            "本月目標",
+            "本月目标"
+          ],
+          [
+            "追量",
+            "趕量",
+            "赶量"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "月底前",
+          "進度",
+          "进度",
+          "上個月",
+          "上个月",
+          "一天"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "本月目標後的數值與單位是分離欄位；原文只寫數值時，不得依工廠習慣自行增加 ton、kg、件或其他單位。",
+        "同一通知中的提前告知請假、月底人力統計、落後上月、開多站追量與每天請假上限都是獨立且必須保留的關係。"
+      ],
+      "preferred_target_phrases": [
+        "Target bulan ini adalah 3800",
+        "mengoperasikan tiga stasiun untuk mengejar target",
+        "tidak lebih dari 2 orang per hari"
+      ],
+      "forbidden_target_phrases": [
+        "3800 ton",
+        "3800 kg"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "請假",
+            "请假"
+          ],
+          "target_any": [
+            "cuti",
+            "izin"
+          ],
+          "issue": "missing_leave_notice"
+        },
+        {
+          "source_any": [
+            "生產人力",
+            "生产人力"
+          ],
+          "target_any": [
+            "tenaga kerja produksi",
+            "tenaga produksi",
+            "jumlah tenaga kerja"
+          ],
+          "issue": "missing_production_staffing"
+        },
+        {
+          "source_any": [
+            "本月目標",
+            "本月目标"
+          ],
+          "target_any": [
+            "target bulan ini"
+          ],
+          "issue": "missing_monthly_target"
+        },
+        {
+          "source_any": [
+            "上個月",
+            "上个月"
+          ],
+          "target_any": [
+            "bulan lalu",
+            "bulan sebelumnya"
+          ],
+          "issue": "missing_previous_month_comparison"
+        },
+        {
+          "source_any": [
+            "追量",
+            "趕量",
+            "赶量"
+          ],
+          "target_any": [
+            "mengejar target",
+            "mengejar produksi",
+            "mengejar output"
+          ],
+          "issue": "missing_output_catchup_purpose"
+        },
+        {
+          "source_any": [
+            "一天",
+            "每日",
+            "每天"
+          ],
+          "target_any": [
+            "per hari",
+            "setiap hari",
+            "dalam satu hari"
+          ],
+          "issue": "missing_daily_scope"
+        }
+      ],
+      "preserve_source_regex": [
+        "\\b\\d+(?:[.,]\\d+)?\\b"
+      ],
+      "examples": [
+        {
+          "source": "月底前有確認請假的再提前告知，上面要統計月底生產人力。\n本月目標3800，目前進度比上個月還落後，月底前應該都是開三站追量，麻煩盡量一天請假不超過2員。",
+          "target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
+          "bad_target": "Target bulan ini 3800 ton. Saat ini progres masih lebih lambat dibandingkan bulan lalu.",
+          "reason": "來源沒有 ton，且不能漏掉開站追量與每日請假人數上限。"
+        }
+      ]
+    },
+    {
+      "id": "qiwo_workwear_pickup_and_checkbox",
+      "enabled": true,
+      "priority": 270,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "QIWO 工作服與帽子按名單尺寸領取並勾選",
+      "match": {
+        "all_groups": [
+          [
+            "奇沃衣服",
+            "QIWO衣服",
+            "奇沃工作服",
+            "QIWO工作服"
+          ],
+          [
+            "帽子",
+            "工作帽"
+          ],
+          [
+            "領取",
+            "领取",
+            "來領",
+            "来领"
+          ],
+          [
+            "打勾",
+            "勾選",
+            "勾选",
+            "打鉤",
+            "打钩"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "下班前",
+          "尺寸",
+          "單子",
+          "单子",
+          "名單",
+          "名单"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "奇沃／QIWO 是工作服名稱，應保留為 QIWO；衣服、帽子及各自數量不得混在一起。",
+        "領取期限、依名單尺寸領取，以及領完後在同一名單打勾，是三個獨立作業要求。"
+      ],
+      "preferred_target_phrases": [
+        "pakaian QIWO",
+        "topi",
+        "sesuai ukuran yang tercantum pada daftar",
+        "wajib beri tanda centang pada daftar"
+      ],
+      "forbidden_target_phrases": [],
+      "requirements": [
+        {
+          "target_any": [
+            "pakaian QIWO",
+            "baju QIWO",
+            "seragam QIWO"
+          ],
+          "issue": "missing_qiwo_workwear"
+        },
+        {
+          "target_any": [
+            "topi"
+          ],
+          "issue": "missing_hat"
+        },
+        {
+          "source_any": [
+            "下班前"
+          ],
+          "target_any": [
+            "sebelum pulang kerja",
+            "sebelum selesai kerja"
+          ],
+          "issue": "missing_pickup_deadline"
+        },
+        {
+          "target_any": [
+            "sesuai ukuran",
+            "berdasarkan ukuran"
+          ],
+          "issue": "missing_listed_size"
+        },
+        {
+          "target_any": [
+            "tanda centang",
+            "beri centang",
+            "mencentang"
+          ],
+          "issue": "missing_checkbox"
+        }
+      ],
+      "examples": [
+        {
+          "source": "下班前來領奇沃衣服（兩件）跟帽子（一頂），按照單子上的尺寸領取，領完一定要打勾。",
+          "target": "Sebelum pulang kerja, silakan ambil pakaian QIWO (2 potong) dan topi (1 buah). Mohon ambil sesuai ukuran yang tercantum pada daftar. Setelah selesai mengambil, wajib beri tanda centang pada daftar.",
+          "reason": "保留兩種品項、數量、名單尺寸及領後勾選的順序。"
+        }
+      ]
+    },
+    {
+      "id": "equipment_code_rusak_is_machine_failure",
+      "enabled": true,
+      "priority": 290,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "設備代碼加 rusak 表示該機台故障",
+      "match": {
+        "regex_any": [
+          "(?i)(?<![a-z0-9])(?:i\\d{1,2}|e\\d{1,2}|bf\\d+|pm\\d+|k\\d+)(?![a-z0-9]).{0,20}(?:rusak|tidak\\s+berfungsi|tidak\\s+bisa\\s+dipakai)"
+        ],
+        "require_any": true,
+        "min_score": 3
+      },
+      "context": [
+        "I15 等代碼是機台／站別識別碼；當 rusak 直接描述它時，應明確翻成『機台故障』。",
+        "『損傷』用於材料或表面缺陷；只寫『I15 損壞』會丟失機台角色及功能故障關係。"
+      ],
+      "preferred_target_phrases": [
+        "I15 機台故障"
+      ],
+      "forbidden_target_phrases": [
+        "I15 損壞",
+        "I15 损坏",
+        "I15 損傷",
+        "I15 损伤"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "機台",
+            "機器",
+            "設備"
+          ],
+          "issue": "missing_equipment_role"
+        },
+        {
+          "target_any": [
+            "故障"
+          ],
+          "issue": "missing_functional_failure"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?i)\\b(?:i\\d{1,2}|e\\d{1,2}|bf\\d+|pm\\d+|k\\d+)\\b"
+      ],
+      "examples": [
+        {
+          "source": "i15 rusak",
+          "target": "I15 機台故障",
+          "bad_target": "i15 損壞",
+          "reason": "設備代碼是主詞，rusak 表示機台功能故障。"
         }
       ]
     }

@@ -16,13 +16,13 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-07-14.3-auto-tone-signal"
+PROMPT_OPTIMIZER_VERSION = "2026-08-14.1-operational-status-context"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ0-9._/+:%×x-]*")
 _EQUIPMENT_RE = re.compile(r"(?<![A-Za-z0-9])(?:I\d{1,2}|E\d{1,2}|BF\d+|AP|PM\d+|UT|K\d+)(?![A-Za-z0-9])", re.I)
-_MEASUREMENT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:mm|cm|m|kg|g|t|噸|公斤|支|把|台|件|批|捆|°C|℃|%)", re.I)
+_MEASUREMENT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:mm|cm|m|kg|g|t|噸|公斤|支|把|台|件|頂|顶|批|捆|°C|℃|%)", re.I)
 
 _COMMON_ID_VOCAB_TOKENS = {
     "mesin", "material", "barang", "data", "proses", "produksi", "kerja",
@@ -73,8 +73,8 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
     (
         "bare-quantity",
         ("zh>id",),
-        r"(?:^|[，。！？\s])\d+\s*(?:台|把|支|個|件|包|袋)(?:半)?(?:$|[，。！？\s])|[一二兩三四五六七八九十]+(?:台|把|支|個|件|包|袋)(?:半)?",
-        "For a bare number+classifier reply with the noun omitted, preserve the classifier: 台/個→buah, 把→bundel, 支→batang, 件→potong, 包/袋→bungkus. Half quantities stay explicit: 一包半→satu setengah bungkus. Never map 包/袋 to bundel, and never use unit unless the source literally says 單位.",
+        r"(?:^|[，。！？\s])\d+\s*(?:台|把|支|個|件|頂|顶|包|袋)(?:半)?(?:$|[，。！？\s])|[一二兩三四五六七八九十]+(?:台|把|支|個|件|頂|顶|包|袋)(?:半)?",
+        "For a bare number+classifier reply with the noun omitted, preserve the classifier: 台/個/頂→buah, 把→bundel, 支→batang, 件→potong, 包/袋→bungkus. Half quantities stay explicit: 一包半→satu setengah bungkus. Never map 包/袋 to bundel, and never use unit unless the source literally says 單位.",
     ),
     (
         "package-pair-relation",
@@ -101,9 +101,15 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
         "Preserve Chinese passive roles: the source subject receives the action. Do not reverse actor and object; keep who supervises, fines, bypasses or controls whom.",
     ),
     (
+        "erp-data-status-ol",
+        ("zh>id",),
+        r"發料|发料|(?:資料|数据).{0,12}(?:OL|ol)|(?:OL|ol).{0,12}(?:資料|数据)",
+        "In this plant, 發料 is one indivisible ERP production-status action: set/present the record as OL so people know it is in production. Translate it compositionally as mengubah status data menjadi OL (with source aspect/actor); never as issuing, taking, moving or distributing physical material.",
+    ),
+    (
         "factory-material",
         ("zh>id",),
-        r"料|來料|棒材|盤元|母材|線材|吊料|上料|下料|入料|出料|送料|卡料|斷料|混料",
+        r"(?<![發发資资])料|來料|棒材|盤元|母材|線材|吊料|上料|下料|入料|出料|送料|卡料|斷料|混料",
         "In this factory, 料 means production material/steel, never feed. Material handling verbs must preserve movement, direction and production state; 吊去 means lift/move away, never steal.",
     ),
     (

@@ -370,6 +370,36 @@
     "note_zh": "工廠現場使用的製造/作業工單，是各站依照執行的工作文件。",
     "note_id": "Dokumen work order untuk acuan proses produksi di setiap stasiun."
   },
+  "發料": {
+    "idn": "mengubah status data menjadi OL",
+    "canonical_idn": "mengubah status data menjadi OL",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "erp_production_status",
+    "priority": 220,
+    "ocr_hint": true,
+    "note_zh": "本廠 ERP／資料系統用語：把該筆生產資料的狀態設為或呈現為 OL，讓現場清楚知道該筆資料正在生產。這是一個完整的資料狀態動作，不是領取、發放、搬運或出庫實體材料。",
+    "note_id": "Istilah sistem ERP di pabrik ini: mengubah atau menampilkan status record produksi menjadi OL agar status sedang diproduksi terlihat jelas; bukan mengeluarkan, mengambil, membagikan, atau memindahkan material fisik.",
+    "aliases_zh": [
+      "发料",
+      "資料OL",
+      "资料OL",
+      "把資料改成OL",
+      "把数据改成OL"
+    ],
+    "aliases_id": [
+      "mengubah status data menjadi OL",
+      "membuat data berstatus OL",
+      "meng-OL-kan data"
+    ],
+    "forbidden_idn": [
+      "mengeluarkan material",
+      "mengambil material",
+      "membagikan material",
+      "memindahkan material",
+      "material keluar"
+    ]
+  },
   "E6冷抽機─張力輥向下/向上": {
     "idn": "Pengaturan roller penegang naik/turun",
     "note_zh": "操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力",

@@ -103,7 +103,7 @@ class FactoryQuantitySemanticsRootFixTests(unittest.TestCase):
         self.assertIn('"sense": "factory_quantity_semantics"', source)
         self.assertIn("factory_quantity_semantics_module.build_prompt", source)
         self.assertIn("factory_quantity_semantics_module.validate_translation", source)
-        self.assertIn("2026-08-05.1-compositional-classifier-relations", source)
+        self.assertIn("2026-08-14.1-headwear-classifier", source)
 
 
 if __name__ == "__main__":

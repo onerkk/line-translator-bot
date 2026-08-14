@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-05.1-compositional-classifier-relations"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-14.1-headwear-classifier"
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ _CLASSIFIERS: Dict[str, ClassifierSpec] = {
     "個": ClassifierSpec("個", "buah", ("buah",), ("sebuah",), "generic_count"),
     "个": ClassifierSpec("个", "buah", ("buah",), ("sebuah",), "generic_count"),
     "件": ClassifierSpec("件", "buah", ("buah", "barang", "potong"), ("sebuah",), "item_count"),
+    "頂": ClassifierSpec("頂", "buah", ("buah",), ("sebuah",), "headwear_count"),
+    "顶": ClassifierSpec("顶", "buah", ("buah",), ("sebuah",), "headwear_count"),
     "批": ClassifierSpec("批", "lot", ("lot", "batch"), (), "lot_count"),
     "箱": ClassifierSpec("箱", "kotak", ("kotak", "kardus"), ("sekotak",), "box"),
     "盒": ClassifierSpec("盒", "kotak", ("kotak",), ("sekotak",), "box"),

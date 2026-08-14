@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-13.1-contextual-shift-process-root-fix",
+  "build_id": "2026-08-14.1-operational-status-root-fix",
   "description": "Versioned Chinese↔Indonesian factory regression corpus compiled from verified production corrections, root-fix records and semantic tests. Exact targets are authoritative for punctuation/spacing variants; required and forbidden concepts also protect provider output.",
   "cases": [
     {
@@ -784,6 +784,177 @@
       "forbidden_target": [
         "Saya lihat dulu situasinya"
       ]
+    },
+    {
+      "id": "erp_release_data_to_ol_success",
+      "direction": "zh-id",
+      "source": "@budi santoso 山多 成功發料",
+      "verified_target": "@budi santoso 山多 sudah berhasil mengubah status data menjadi OL.",
+      "required_target_any_groups": [
+        [
+          "data"
+        ],
+        [
+          "OL"
+        ],
+        [
+          "mengubah status data menjadi OL",
+          "status data diubah menjadi OL",
+          "data berstatus OL"
+        ],
+        [
+          "berhasil",
+          "sukses"
+        ]
+      ],
+      "forbidden_target": [
+        "mengeluarkan material",
+        "mengambil material",
+        "membagikan material",
+        "material keluar"
+      ]
+    },
+    {
+      "id": "night_attendance_replaced_by_unscheduled_k3_checks",
+      "direction": "zh-id",
+      "source": "下週開始取消夜間點名，改成安衛不定時入廠抽查。",
+      "verified_target": "Mulai minggu depan, pengecekan kehadiran malam ditiadakan. Sebagai gantinya, bagian K3 akan melakukan pemeriksaan acak di pabrik tanpa jadwal tetap.",
+      "required_target_any_groups": [
+        [
+          "mulai minggu depan"
+        ],
+        [
+          "pengecekan kehadiran malam",
+          "pemeriksaan kehadiran malam",
+          "absensi malam"
+        ],
+        [
+          "ditiadakan",
+          "dihapus",
+          "dihentikan"
+        ],
+        [
+          "bagian K3",
+          "departemen K3",
+          "tim K3"
+        ],
+        [
+          "pemeriksaan acak",
+          "inspeksi acak",
+          "pemeriksaan mendadak"
+        ],
+        [
+          "di pabrik",
+          "ke pabrik"
+        ],
+        [
+          "tanpa jadwal tetap",
+          "secara tidak terjadwal",
+          "tanpa waktu tetap"
+        ]
+      ],
+      "forbidden_target": [
+        "apel malam"
+      ]
+    },
+    {
+      "id": "month_end_staffing_target_bare_value",
+      "direction": "zh-id",
+      "source": "月底前有確認請假的再提前告知，上面要統計月底生產人力。\n本月目標3800，目前進度比上個月還落後，月底前應該都是開三站追量，麻煩盡量一天請假不超過2員。",
+      "verified_target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
+      "required_target_any_groups": [
+        [
+          "cuti sebelum akhir bulan"
+        ],
+        [
+          "beri tahu lebih awal",
+          "informasikan lebih awal"
+        ],
+        [
+          "tenaga kerja produksi"
+        ],
+        [
+          "target bulan ini adalah 3800",
+          "target bulan ini 3800"
+        ],
+        [
+          "lebih tertinggal dibandingkan bulan lalu",
+          "tertinggal dari bulan lalu"
+        ],
+        [
+          "tiga stasiun",
+          "3 stasiun"
+        ],
+        [
+          "mengejar target",
+          "mengejar produksi"
+        ],
+        [
+          "tidak lebih dari 2 orang per hari",
+          "maksimal 2 orang per hari"
+        ]
+      ],
+      "forbidden_target": [
+        "3800 ton",
+        "3800 kg"
+      ]
+    },
+    {
+      "id": "equipment_code_i15_functional_failure",
+      "direction": "id-zh",
+      "source": "i15 rusak",
+      "verified_target": "I15 機台故障",
+      "required_target_any_groups": [
+        [
+          "I15"
+        ],
+        [
+          "機台",
+          "機器",
+          "設備"
+        ],
+        [
+          "故障"
+        ]
+      ],
+      "forbidden_target": [
+        "I15 損壞",
+        "I15 损坏",
+        "I15 損傷",
+        "I15 损伤"
+      ]
+    },
+    {
+      "id": "qiwo_workwear_pickup_counts_size_checkbox",
+      "direction": "zh-id",
+      "source": "@All 下班前來領奇沃衣服（兩件）跟帽子（一頂），麻煩按照單子上的尺寸領取。\n#領完單子上一定要打勾。",
+      "verified_target": "@All Sebelum pulang kerja, silakan ambil pakaian QIWO (2 potong) dan topi (1 buah). Mohon ambil sesuai ukuran yang tercantum pada daftar. Setelah selesai mengambil, wajib beri tanda centang pada daftar.",
+      "required_target_any_groups": [
+        [
+          "sebelum pulang kerja"
+        ],
+        [
+          "pakaian QIWO (2 potong)",
+          "2 potong pakaian QIWO"
+        ],
+        [
+          "topi (1 buah)",
+          "1 buah topi"
+        ],
+        [
+          "sesuai ukuran yang tercantum pada daftar",
+          "berdasarkan ukuran yang tercantum pada daftar"
+        ],
+        [
+          "setelah selesai mengambil",
+          "setelah mengambil"
+        ],
+        [
+          "wajib beri tanda centang",
+          "harus mencentang"
+        ]
+      ],
+      "forbidden_target": []
     }
   ]
 }

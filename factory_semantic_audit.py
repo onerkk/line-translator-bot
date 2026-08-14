@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-11.2-source-first-handover-translation"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-14.1-operational-status-claims"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -27,6 +27,8 @@ _FACTORY_CUES = (
     "料", "棒材", "圓棒", "機台", "設備", "生產", "加工", "到料", "進料", "出料",
     "拋光", "研磨", "清洗", "削皮", "包裝", "工單", "tag", "重量", "異常", "客訴",
     "懲處", "班", "品保", "qc", "吊", "跑", "產能", "手套", "防護具", "領取", "领取",
+    "發料", "发料", "點名", "点名", "安衛", "安卫", "工安", "抽查", "請假", "请假",
+    "人力", "目標", "目标", "奇沃", "qiwo", "衣服", "工作服", "制服", "帽子", "打勾",
 )
 
 
@@ -193,6 +195,66 @@ def _machine_ids(source: str) -> List[str]:
     return values
 
 
+def _source_clauses(source: str) -> List[str]:
+    """Return non-empty source clauses for deterministic coverage checks.
+
+    Direct source-first rendering is allowed only when every clause belongs to
+    the same supported operational profile.  This prevents a recognized first
+    sentence from causing an unrelated trailing instruction to be dropped.
+    """
+    return [
+        item.strip()
+        for item in re.split(r"[\r\n。！？!?；;，,]+", str(source or ""))
+        if item.strip()
+    ]
+
+
+def _unparsed_profile_clauses(source: str, patterns: Sequence[str]) -> List[str]:
+    compiled = [re.compile(pattern, re.I | re.S) for pattern in patterns]
+    return [
+        clause
+        for clause in _source_clauses(source)
+        if not any(pattern.search(_compact(clause)) for pattern in compiled)
+    ]
+
+
+def _extract_erp_actor(source: str) -> str:
+    """Extract a visible actor/mention before the ERP 發料 action.
+
+    The value is copied, never translated.  Result/aspect/request words are
+    removed while names and LINE mention placeholders remain intact.
+    """
+    match = re.search(r"發料|发料", str(source or ""), flags=re.I)
+    if not match:
+        return ""
+    prefix = str(source or "")[:match.start()]
+    record_match = re.search(
+        r"(?:這|这|該|该)?筆?(?:工單|工单|資料|资料|數據|数据)",
+        prefix,
+        flags=re.I,
+    )
+    if record_match:
+        prefix = prefix[:record_match.start()]
+    prefix = re.sub(
+        r"(?:已經|已经|已|成功|順利|顺利|完成|幫忙|帮忙|協助|协助|請|请|麻煩|麻烦)+",
+        " ",
+        prefix,
+        flags=re.I,
+    )
+    prefix = re.sub(r"(?:把|將|将)$", "", prefix).strip()
+    prefix = re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", " ", prefix).strip()
+    return prefix if len(prefix) <= 80 else ""
+
+
+def _extract_erp_record_kind(source: str) -> str:
+    compact = _compact(source)
+    if re.search(r"(?:這|这|該|该)?筆?(?:工單|工单)", compact, flags=re.I):
+        return "work_order"
+    if re.search(r"(?:這|这|該|该)?筆?(?:資料|资料|數據|数据)", compact, flags=re.I):
+        return "data"
+    return ""
+
+
 def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, Any]:
     """Build a deterministic claim frame for Chinese -> Indonesian factory text."""
     src = str(source or "")
@@ -207,6 +269,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "counts": {},
         "units": {},
         "quantity_tokens": {},
+        "operational": {},
         "mentions": re.findall(
             r"(?:@[^\s,，。!?！？:：;；]{1,48}|__MENTION_\d+__)",
             src,
@@ -249,6 +312,178 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     flags["slow_run"] = _contains_any(compact, ("慢慢跑", "慢跑", "跑很慢", "慢慢生產", "慢慢生产"))
     flags["explicit_crane"] = _contains_any(compact, _EXPLICIT_CRANE_ZH)
     flags["explicit_speed"] = _contains_any(compact, _EXPLICIT_SPEED_ZH)
+
+    # ERP production-status action.  In this plant 發料 is an indivisible
+    # workflow term: it changes a production record so the system displays OL,
+    # showing that the record is in production.  It is not 發 + physical 料 and
+    # must never become mengeluarkan material.
+    flags["erp_release_to_ol"] = _contains_any(compact, ("發料", "发料"))
+    flags["erp_ol_success"] = bool(
+        flags["erp_release_to_ol"]
+        and _contains_any(compact, ("成功發料", "成功发料", "發料成功", "发料成功", "順利發料", "顺利发料"))
+    )
+    flags["erp_ol_completed"] = bool(
+        flags["erp_release_to_ol"]
+        and _search_any(compact, (
+            r"(?:已經|已经|已|完成|好了).{0,6}(?:發料|发料)",
+            r"(?:發料|发料)(?:完成|好了|完畢|完毕)",
+        ))
+    )
+    flags["erp_ol_request"] = bool(
+        flags["erp_release_to_ol"]
+        and _search_any(compact, (
+            r"(?:請|请|麻煩|麻烦|幫忙|帮忙|協助|协助).{0,12}(?:發料|发料)",
+        ))
+    )
+    if flags["erp_release_to_ol"]:
+        frame["operational"]["erp_actor"] = _extract_erp_actor(src)
+        frame["operational"]["erp_record_kind"] = _extract_erp_record_kind(src)
+        frame["operational"]["erp_unparsed_clauses"] = _unparsed_profile_clauses(
+            src,
+            (r"發料|发料", r"(?:資料|资料|數據|数据).{0,8}(?:OL|ol)"),
+        )
+
+    # Attendance procedure replaced by unannounced K3 spot checks.  The source
+    # says 點名 (attendance check), not an assembly/apel.
+    flags["next_week_start"] = _contains_any(compact, (
+        "下週開始", "下周开始", "從下週起", "从下周起", "下星期開始", "下星期开始",
+    ))
+    flags["night_attendance_check"] = _search_any(compact, (
+        r"(?:夜間|夜间|晚間|晚间|夜班)(?:集合)?(?:點名|点名)",
+    ))
+    flags["attendance_check_abolished"] = bool(
+        flags["night_attendance_check"]
+        and _contains_any(compact, ("取消", "停辦", "停办", "不再", "停止"))
+    )
+    flags["k3_department"] = _contains_any(compact, ("安衛", "安卫", "工安", "K3", "k3"))
+    flags["unscheduled_check"] = _contains_any(compact, (
+        "不定時", "不定时", "不定期", "無固定時間", "无固定时间", "隨機", "随机",
+    ))
+    flags["factory_spot_check"] = bool(
+        _contains_any(compact, ("抽查", "稽查", "查核"))
+        and _contains_any(compact, ("入廠", "入厂", "到廠", "到厂", "進廠", "进厂", "廠內", "厂内"))
+    )
+    flags["procedure_replacement"] = _contains_any(compact, (
+        "改成", "改為", "改为", "改由", "取代", "替代", "換成", "换成",
+    ))
+    if flags["night_attendance_check"] or flags["k3_department"]:
+        frame["operational"]["attendance_unparsed_clauses"] = _unparsed_profile_clauses(
+            src,
+            (
+                r"(?:夜間|夜间|晚間|晚间|夜班).{0,8}(?:點名|点名)",
+                r"(?:安衛|安卫|工安|K3|k3).{0,24}(?:抽查|稽查|查核)",
+                r"(?:抽查|稽查|查核).{0,24}(?:安衛|安卫|工安|K3|k3)",
+            ),
+        )
+
+    # Month-end leave/staffing and production-target notice.  Values and units
+    # are separate slots so the validator can reject a fluent but unsupported
+    # addition such as "3800 ton" when the source states only 3800.
+    flags["advance_leave_notice"] = _search_any(compact, (
+        r"(?:月底前|月末前).{0,18}(?:確認|确认)?.{0,8}(?:請假|请假).{0,8}(?:提前告知|提前說|提前说|先告知|先說|先说)",
+        r"(?:確認|确认).{0,8}(?:請假|请假).{0,8}(?:提前告知|提前說|提前说|先告知|先說|先说)",
+    ))
+    flags["management_staffing_count"] = _search_any(compact, (
+        r"(?:上面|主管|管理層|管理层).{0,12}(?:統計|统计|盤點|盘点).{0,12}(?:月底)?(?:生產|生产)?人力",
+        r"(?:統計|统计|盤點|盘点).{0,12}(?:月底)?(?:生產|生产)?人力",
+    ))
+    monthly_target_match = re.search(
+        r"(?:本月|這個月|这个月)(?:生產|生产)?(?:目標|目标)"
+        r"(?P<value>\d+(?:[.,]\d+)?)(?P<unit>公噸|噸|吨|公斤|kg)?",
+        compact,
+        flags=re.I,
+    )
+    flags["monthly_production_target"] = bool(monthly_target_match)
+    if monthly_target_match:
+        target_value = _parse_quantity_value(monthly_target_match.group("value"))
+        frame["counts"]["monthly_production_target"] = target_value
+        frame["units"]["monthly_production_target"] = monthly_target_match.group("unit") or ""
+        frame["quantity_tokens"]["monthly_production_target"] = monthly_target_match.group(0)
+    flags["progress_behind_last_month"] = _search_any(compact, (
+        r"(?:目前|現在|现在)?(?:進度|进度).{0,10}(?:比|較|较).{0,5}(?:上個月|上个月).{0,6}(?:落後|落后|慢)",
+        r"(?:目前|現在|现在)?(?:進度|进度).{0,10}(?:落後|落后).{0,8}(?:上個月|上个月)",
+    ))
+    station_count_match = re.search(
+        rf"(?:開|开|運轉|运转|啟用|启用)(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:個|个)?站",
+        compact,
+        flags=re.I,
+    )
+    flags["multi_station_catchup"] = bool(
+        station_count_match and _contains_any(compact, ("追量", "趕量", "赶量", "追產量", "追产量", "趕進度", "赶进度"))
+    )
+    if station_count_match:
+        frame["counts"]["operating_station_count"] = _parse_small_count(station_count_match.group("count"))
+        frame["quantity_tokens"]["operating_station_count"] = station_count_match.group(0)
+    leave_limit_match = re.search(
+        rf"(?:一天|每日|每天).{{0,12}}(?:請假|请假).{{0,10}}"
+        rf"(?:不超過|不超过|不得超過|不得超过|最多|至多)(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:員|员|人)",
+        compact,
+        flags=re.I,
+    )
+    flags["daily_leave_cap"] = bool(leave_limit_match)
+    if leave_limit_match:
+        frame["counts"]["daily_leave_cap"] = _parse_small_count(leave_limit_match.group("count"))
+        frame["quantity_tokens"]["daily_leave_cap"] = leave_limit_match.group(0)
+    if any(flags.get(key) for key in (
+        "advance_leave_notice", "management_staffing_count", "monthly_production_target",
+        "progress_behind_last_month", "multi_station_catchup", "daily_leave_cap",
+    )):
+        frame["operational"]["staffing_unparsed_clauses"] = _unparsed_profile_clauses(
+            src,
+            (
+                r"(?:月底前|月末前).{0,20}(?:請假|请假).{0,12}(?:告知|說|说)",
+                r"(?:上面|主管|管理層|管理层|統計|统计).{0,20}(?:人力)",
+                r"(?:本月|這個月|这个月).{0,8}(?:目標|目标)",
+                r"(?:進度|进度).{0,16}(?:上個月|上个月).{0,8}(?:落後|落后|慢)",
+                r"(?:開|开|運轉|运转|啟用|启用).{0,8}站.{0,8}(?:追量|趕量|赶量|追產量|追产量|趕進度|赶进度)",
+                r"(?:一天|每日|每天).{0,20}(?:請假|请假).{0,12}(?:不超過|不超过|不得超過|不得超过|最多|至多)",
+            ),
+        )
+
+    # QIWO workwear distribution.  Counts remain in the shared quantity frame;
+    # this layer binds the items, deadline, size list and post-pickup checkbox.
+    flags["qiwo_workwear"] = _contains_any(compact, (
+        "奇沃衣服", "QIWO衣服", "qiwo衣服", "奇沃工作服", "QIWO工作服", "奇沃制服", "QIWO制服",
+    ))
+    flags["hat_item"] = _contains_any(compact, ("帽子", "工作帽"))
+    flags["workwear_pickup"] = bool(
+        flags["qiwo_workwear"]
+        and _contains_any(compact, ("領取", "领取", "來領", "来领", "領", "领", "拿取"))
+    )
+    flags["pickup_by_listed_size"] = _search_any(compact, (
+        r"(?:按照|依照|按).{0,8}(?:單子|单子|名單|名单|清單|清单|表單|表单).{0,8}(?:尺寸|尺碼|尺码).{0,6}(?:領取|领取|領|领|拿)",
+        r"(?:按照|依照|按).{0,8}(?:尺寸|尺碼|尺码).{0,8}(?:領取|领取|領|领|拿)",
+    ))
+    flags["checkbox_after_pickup"] = _search_any(compact, (
+        r"(?:領完|领完|領取後|领取后|拿完|取完).{0,12}(?:單子|单子|名單|名单|清單|清单|表單|表单).{0,8}(?:打勾|勾選|勾选|打鉤|打钩)",
+        r"(?:單子|单子|名單|名单|清單|清单|表單|表单).{0,8}(?:一定|務必|务必|要|必須|必须).{0,6}(?:打勾|勾選|勾选|打鉤|打钩)",
+    ))
+    workwear_count_match = re.search(
+        rf"(?:奇沃|QIWO|qiwo)?(?:衣服|工作服|制服)[（(]?(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:件|套)[）)]?",
+        compact,
+        flags=re.I,
+    )
+    hat_count_match = re.search(
+        rf"(?:帽子|工作帽)[（(]?(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:頂|顶|個|个)[）)]?",
+        compact,
+        flags=re.I,
+    )
+    if workwear_count_match:
+        frame["counts"]["workwear_count"] = _parse_small_count(workwear_count_match.group("count"))
+        frame["quantity_tokens"]["workwear_count"] = workwear_count_match.group(0)
+    if hat_count_match:
+        frame["counts"]["hat_count"] = _parse_small_count(hat_count_match.group("count"))
+        frame["quantity_tokens"]["hat_count"] = hat_count_match.group(0)
+    if flags["qiwo_workwear"] or flags["hat_item"]:
+        frame["operational"]["workwear_unparsed_clauses"] = _unparsed_profile_clauses(
+            src,
+            (
+                r"(?:下班前|收工前|離開前|离开前).{0,30}(?:奇沃|QIWO|qiwo|衣服|工作服|制服|帽子)",
+                r"(?:奇沃|QIWO|qiwo|衣服|工作服|制服).{0,20}(?:帽子|工作帽|領取|领取|領|领)",
+                r"(?:按照|依照|按).{0,20}(?:尺寸|尺碼|尺码).{0,10}(?:領取|领取|領|领|拿)",
+                r"(?:領完|领完|領取後|领取后|拿完|取完|單子|单子|名單|名单|清單|清单).{0,20}(?:打勾|勾選|勾选|打鉤|打钩)",
+            ),
+        )
 
     # Shift-handover reporting notices combine a time context, universal issue
     # scope, escalation recipient, deadline and a purpose clause.  Treating
@@ -523,6 +758,177 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             hint = "tidak boleh memasukkan/mengangkat material kecil ke mesin lalu menjalankan produksinya secara lambat"
         add("prohibited_small_size_schedule", "不可以吊小尺寸慢慢跑", meaning, hint)
 
+    if flags["erp_release_to_ol"]:
+        add(
+            "erp_data_status_to_ol",
+            "發料／发料",
+            "在 ERP／生產系統中把這筆資料的狀態改成 OL，表示該筆資料正在生產；不是取出、排出、發放或搬運實體材料",
+            "mengubah status data menjadi OL / membuat data berstatus OL",
+        )
+        frame["ambiguities"].append({
+            "source_term": "發料／发料",
+            "resolved_meaning_zh": "把生產資料設為 OL 狀態，使系統清楚顯示該筆資料正在生產",
+            "rejected_interpretations": [
+                "mengeluarkan material",
+                "mengambil material",
+                "membagikan material",
+                "material keluar dari mesin",
+            ],
+        })
+        frame["prohibited_inferences"].append(
+            "Treat 發料 as one ERP status action. Never split it into 發 + physical material and never use mengeluarkan/mengambil/membagikan material."
+        )
+        if frame["operational"].get("erp_record_kind") == "work_order":
+            add(
+                "erp_work_order_record",
+                "這／該筆工單",
+                "被改為 OL 的是來源明示的這筆 work order 生產資料",
+                "status data work order ini",
+            )
+        elif frame["operational"].get("erp_record_kind") == "data":
+            add(
+                "erp_data_record_reference",
+                "這／該筆資料",
+                "被改為 OL 的是來源明示的這筆資料",
+                "status data ini",
+            )
+    if flags["erp_ol_success"]:
+        add(
+            "erp_ol_success_result",
+            "成功發料／發料成功",
+            "ERP 資料改為 OL 的動作已成功完成",
+            "sudah berhasil mengubah status data menjadi OL",
+        )
+    elif flags["erp_ol_completed"]:
+        add(
+            "erp_ol_completed_result",
+            "已發料／發料完成",
+            "ERP 資料已經改為 OL 狀態",
+            "status data sudah diubah menjadi OL",
+        )
+    elif flags["erp_ol_request"]:
+        add(
+            "erp_ol_request",
+            "請／幫忙發料",
+            "請對方把 ERP 資料狀態改為 OL",
+            "tolong ubah status data menjadi OL",
+        )
+
+    if flags["next_week_start"]:
+        add("next_week_effective_time", "下週開始／下週起", "新規則從下週開始生效", "mulai minggu depan")
+    if flags["night_attendance_check"] and flags["attendance_check_abolished"]:
+        add(
+            "abolish_night_attendance_check",
+            "取消夜間點名",
+            "取消夜間的人員到勤點名／出勤確認；不是取消晚間集合活動",
+            "pengecekan kehadiran malam ditiadakan",
+        )
+    if flags["procedure_replacement"]:
+        add("procedure_replacement", "改成／改由", "後述 K3 抽查取代原夜間點名制度", "diganti / sebagai gantinya")
+    if flags["k3_department"] and flags["factory_spot_check"]:
+        add(
+            "k3_factory_spot_check",
+            "安衛入廠抽查",
+            "由安衛／K3 部門在工廠內進行抽查",
+            "bagian K3 melakukan pemeriksaan acak di pabrik",
+        )
+    if flags["unscheduled_check"]:
+        add(
+            "unscheduled_inspection_timing",
+            "不定時／不定期",
+            "抽查沒有固定時程",
+            "tanpa jadwal tetap / pada waktu yang tidak ditentukan",
+        )
+    if flags["night_attendance_check"]:
+        frame["ambiguities"].append({
+            "source_term": "夜間點名",
+            "resolved_meaning_zh": "夜間出勤／到勤確認",
+            "rejected_interpretations": ["把點名擴寫成晚間集合或 apel malam"],
+        })
+
+    if flags["advance_leave_notice"]:
+        add(
+            "advance_leave_notification",
+            "月底前確認請假的提前告知",
+            "已確定月底前要請假的人員須提前告知",
+            "yang sudah memastikan akan mengambil cuti sebelum akhir bulan harus memberi tahu lebih awal",
+        )
+    if flags["management_staffing_count"]:
+        add(
+            "management_month_end_staffing_count",
+            "上面統計月底生產人力",
+            "管理端要統計月底可用的生產人力",
+            "pihak manajemen menghitung tenaga kerja produksi untuk akhir bulan",
+        )
+    if flags["monthly_production_target"]:
+        target_value = frame["counts"].get("monthly_production_target")
+        target_unit = frame["units"].get("monthly_production_target")
+        unit_note = f"，來源明示單位 {target_unit}" if target_unit else "，來源沒有寫單位，目標文不得自行增加 ton/kg 等單位"
+        add(
+            "monthly_production_target",
+            frame["quantity_tokens"].get("monthly_production_target", "本月目標"),
+            f"本月目標值為 {target_value}{unit_note}",
+            f"target bulan ini {target_value}" + (" (preserve the explicit source unit)" if target_unit else " (do not invent a unit)"),
+        )
+        if not target_unit:
+            frame["prohibited_inferences"].append(
+                "The monthly target is a bare source value. Do not append ton, kg, pieces or any other unit unless the source states it."
+            )
+    if flags["progress_behind_last_month"]:
+        add(
+            "progress_behind_last_month",
+            "目前進度比上個月還落後",
+            "目前進度落後於上個月的進度／表現",
+            "progres saat ini lebih tertinggal dibandingkan bulan lalu",
+        )
+    if flags["multi_station_catchup"]:
+        station_count = frame["counts"].get("operating_station_count")
+        add(
+            "multi_station_output_catchup",
+            frame["quantity_tokens"].get("operating_station_count", "開多站追量"),
+            f"月底前預計持續開 {station_count} 個生產站以追趕產量／目標",
+            f"mengoperasikan {station_count} stasiun hingga akhir bulan untuk mengejar target",
+        )
+    if flags["daily_leave_cap"]:
+        leave_cap = frame["counts"].get("daily_leave_cap")
+        add(
+            "daily_leave_cap",
+            frame["quantity_tokens"].get("daily_leave_cap", "一天請假不超過人數上限"),
+            f"每天請假人數盡量不得超過 {leave_cap} 人",
+            f"jumlah karyawan yang mengambil cuti tidak lebih dari {leave_cap} orang per hari",
+        )
+
+    if flags["qiwo_workwear"]:
+        add(
+            "qiwo_workwear_item",
+            "奇沃衣服／QIWO 工作服",
+            "領取 QIWO 工作服；奇沃是識別名稱，不可翻成普通形容詞",
+            "pakaian QIWO",
+        )
+    if flags["hat_item"]:
+        add("work_hat_item", "帽子", "同時領取工作帽", "topi")
+    if flags.get("before_offwork") and flags["workwear_pickup"]:
+        add(
+            "workwear_pickup_before_offwork",
+            "下班前來領",
+            "必須在下班前領取工作服與帽子",
+            "sebelum pulang kerja, ambil pakaian dan topi",
+        )
+    if flags["pickup_by_listed_size"]:
+        add(
+            "pickup_by_listed_size",
+            "按照單子上的尺寸領取",
+            "領取尺寸必須依名單／表單登載的尺寸",
+            "ambil sesuai ukuran yang tercantum pada daftar",
+        )
+    if flags["checkbox_after_pickup"]:
+        add(
+            "checkbox_after_pickup",
+            "領完單子上一定要打勾",
+            "完成領取後，必須在同一份名單上勾選確認",
+            "setelah mengambil, wajib beri tanda centang pada daftar",
+        )
+
     if flags["shift_handover"]:
         add(
             "shift_handover_context",
@@ -719,6 +1125,28 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "report_to_shift_leader": 2,
         "report_deadline": 3,
         "abnormal_followup_purpose": 3,
+        "erp_release_to_ol": 5,
+        "erp_ol_success": 2,
+        "erp_ol_completed": 2,
+        "erp_ol_request": 2,
+        "next_week_start": 1,
+        "night_attendance_check": 3,
+        "attendance_check_abolished": 2,
+        "k3_department": 1,
+        "unscheduled_check": 2,
+        "factory_spot_check": 3,
+        "procedure_replacement": 2,
+        "advance_leave_notice": 2,
+        "management_staffing_count": 2,
+        "monthly_production_target": 3,
+        "progress_behind_last_month": 2,
+        "multi_station_catchup": 3,
+        "daily_leave_cap": 3,
+        "qiwo_workwear": 2,
+        "hat_item": 1,
+        "workwear_pickup": 2,
+        "pickup_by_listed_size": 2,
+        "checkbox_after_pickup": 3,
     }
     frame["risk_score"] = sum(weight for key, weight in risk_weights.items() if flags.get(key))
     decisive = (
@@ -737,6 +1165,15 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             and flags.get("abnormal_followup_purpose")
         )
         or (flags.get("no_more_search") and flags.get("peeling_location"))
+        or flags.get("erp_release_to_ol")
+        or (
+            flags.get("night_attendance_check")
+            and flags.get("attendance_check_abolished")
+            and flags.get("k3_department")
+            and flags.get("factory_spot_check")
+        )
+        or flags.get("monthly_production_target")
+        or flags.get("checkbox_after_pickup")
     )
     frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive))
     return frame
@@ -1034,6 +1471,161 @@ def _shift_handover_reporting_rebuild(frame: Mapping[str, Any]) -> str:
     )
 
 
+def _complete_erp_ol_frame(frame: Mapping[str, Any]) -> bool:
+    flags = frame.get("flags") or {}
+    operational = frame.get("operational") or {}
+    return bool(
+        frame.get("active")
+        and flags.get("erp_release_to_ol")
+        and (
+            flags.get("erp_ol_success")
+            or flags.get("erp_ol_completed")
+            or flags.get("erp_ol_request")
+        )
+        and not operational.get("erp_unparsed_clauses")
+    )
+
+
+def _erp_ol_rebuild(frame: Mapping[str, Any]) -> str:
+    if not _complete_erp_ol_frame(frame):
+        return ""
+    flags = frame.get("flags") or {}
+    operational = frame.get("operational") or {}
+    actor = str(operational.get("erp_actor") or "").strip()
+    record_kind = str(operational.get("erp_record_kind") or "")
+    record = {
+        "work_order": "status data work order ini",
+        "data": "status data ini",
+    }.get(record_kind, "status data")
+    prefix = (actor + " ") if actor else ""
+    if flags.get("erp_ol_success"):
+        if actor:
+            return prefix + f"sudah berhasil mengubah {record} menjadi OL."
+        return record[:1].upper() + record[1:] + " sudah berhasil diubah menjadi OL."
+    if flags.get("erp_ol_completed"):
+        if actor:
+            return prefix + f"sudah mengubah {record} menjadi OL."
+        return record[:1].upper() + record[1:] + " sudah diubah menjadi OL."
+    if flags.get("erp_ol_request"):
+        return prefix + f"tolong ubah {record} menjadi OL."
+    return ""
+
+
+def _complete_attendance_replacement_frame(frame: Mapping[str, Any]) -> bool:
+    flags = frame.get("flags") or {}
+    operational = frame.get("operational") or {}
+    return bool(
+        frame.get("active")
+        and all(flags.get(key) for key in (
+            "next_week_start",
+            "night_attendance_check",
+            "attendance_check_abolished",
+            "procedure_replacement",
+            "k3_department",
+            "unscheduled_check",
+            "factory_spot_check",
+        ))
+        and not operational.get("attendance_unparsed_clauses")
+    )
+
+
+def _attendance_replacement_rebuild(frame: Mapping[str, Any]) -> str:
+    if not _complete_attendance_replacement_frame(frame):
+        return ""
+    return (
+        "Mulai minggu depan, pengecekan kehadiran malam ditiadakan. "
+        "Sebagai gantinya, bagian K3 akan melakukan pemeriksaan acak di pabrik "
+        "tanpa jadwal tetap."
+    )
+
+
+def _complete_staffing_target_frame(frame: Mapping[str, Any]) -> bool:
+    flags = frame.get("flags") or {}
+    counts = frame.get("counts") or {}
+    operational = frame.get("operational") or {}
+    return bool(
+        frame.get("active")
+        and all(flags.get(key) for key in (
+            "advance_leave_notice",
+            "management_staffing_count",
+            "monthly_production_target",
+            "progress_behind_last_month",
+            "multi_station_catchup",
+            "daily_leave_cap",
+        ))
+        and counts.get("monthly_production_target") is not None
+        and counts.get("operating_station_count") is not None
+        and counts.get("daily_leave_cap") is not None
+        and not operational.get("staffing_unparsed_clauses")
+    )
+
+
+def _staffing_target_rebuild(frame: Mapping[str, Any]) -> str:
+    if not _complete_staffing_target_frame(frame):
+        return ""
+    counts = frame.get("counts") or {}
+    units = frame.get("units") or {}
+    raw = frame.get("quantity_tokens") or {}
+    target = _format_indonesian_quantity(
+        counts.get("monthly_production_target"), raw.get("monthly_production_target", "")
+    )
+    stations = _format_indonesian_quantity(
+        counts.get("operating_station_count"), raw.get("operating_station_count", "")
+    )
+    leave_cap = _format_indonesian_quantity(
+        counts.get("daily_leave_cap"), raw.get("daily_leave_cap", "")
+    )
+    if not (target and stations and leave_cap):
+        return ""
+    unit_map = {
+        "噸": " ton", "吨": " ton", "公噸": " ton",
+        "公斤": " kg", "kg": " kg",
+    }
+    target += unit_map.get(str(units.get("monthly_production_target") or ""), "")
+    return (
+        "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. "
+        "Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. "
+        f"Target bulan ini adalah {target}. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. "
+        f"Hingga akhir bulan, kemungkinan {stations} stasiun akan terus dioperasikan untuk mengejar target. "
+        f"Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari {leave_cap} orang per hari."
+    )
+
+
+def _complete_qiwo_workwear_frame(frame: Mapping[str, Any]) -> bool:
+    flags = frame.get("flags") or {}
+    counts = frame.get("counts") or {}
+    operational = frame.get("operational") or {}
+    return bool(
+        frame.get("active")
+        and all(flags.get(key) for key in (
+            "qiwo_workwear",
+            "hat_item",
+            "workwear_pickup",
+            "before_offwork",
+            "pickup_by_listed_size",
+            "checkbox_after_pickup",
+        ))
+        and counts.get("workwear_count") is not None
+        and counts.get("hat_count") is not None
+        and not operational.get("workwear_unparsed_clauses")
+    )
+
+
+def _qiwo_workwear_rebuild(frame: Mapping[str, Any]) -> str:
+    if not _complete_qiwo_workwear_frame(frame):
+        return ""
+    counts = frame.get("counts") or {}
+    mentions = [str(x).strip() for x in frame.get("mentions", []) or [] if str(x).strip()]
+    prefix = ((" ".join(mentions)) + " ") if mentions else ""
+    return (
+        prefix
+        + f"Sebelum pulang kerja, silakan ambil pakaian QIWO ({counts['workwear_count']} potong) "
+        + f"dan topi ({counts['hat_count']} buah). "
+        + "Mohon ambil sesuai ukuran yang tercantum pada daftar. "
+        + "Setelah selesai mengambil, wajib beri tanda centang pada daftar."
+    )
+
+
 def deterministic_rebuild(frame: Mapping[str, Any]) -> str:
     """Build a safe Indonesian fallback from source-proven semantic slots.
 
@@ -1043,11 +1635,18 @@ def deterministic_rebuild(frame: Mapping[str, Any]) -> str:
     package-quantity correction, and the complete polishing/large-bar scheduling
     instruction.
     """
-    handover_rebuilt = _shift_handover_reporting_rebuild(frame)
-    if handover_rebuilt:
-        ok, _issues = validate_translation(frame, handover_rebuilt)
-        if ok:
-            return handover_rebuilt
+    for rebuild in (
+        _erp_ol_rebuild,
+        _attendance_replacement_rebuild,
+        _staffing_target_rebuild,
+        _qiwo_workwear_rebuild,
+        _shift_handover_reporting_rebuild,
+    ):
+        rebuilt = rebuild(frame)
+        if rebuilt:
+            ok, _issues = validate_translation(frame, rebuilt)
+            if ok:
+                return rebuilt
     package_rebuilt = _package_rebuild(frame)
     if package_rebuilt:
         ok, _issues = validate_translation(frame, package_rebuilt)
@@ -1095,9 +1694,232 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         return True, []
     low = _norm(translation)
     flags = frame.get("flags") or {}
+    operational = frame.get("operational") or {}
     issues: List[str] = []
     if not low:
         return False, ["factory_semantic_audit:empty_translation"]
+
+    if flags.get("erp_release_to_ol"):
+        ol_relation_ok = bool(
+            re.search(
+                r"(?:mengubah|mengganti|menjadikan|membuat|diubah|diganti|dijadikan|dibuat)"
+                r".{0,45}(?:status\s+)?data.{0,35}(?<![a-z0-9])ol(?![a-z0-9])",
+                low,
+                flags=re.I | re.S,
+            )
+            or re.search(
+                r"(?:status\s+)?data.{0,45}"
+                r"(?:mengubah|mengganti|menjadi|berstatus|diubah|diganti|dijadikan|dibuat)"
+                r".{0,35}(?<![a-z0-9])ol(?![a-z0-9])",
+                low,
+                flags=re.I | re.S,
+            )
+            or re.search(r"\bmeng-?ol-kan\s+(?:status\s+)?data\b", low, flags=re.I)
+            or re.search(r"\b(?:status\s+)?data\s+(?:sudah\s+)?di-?ol-kan\b", low, flags=re.I)
+        )
+        if not ol_relation_ok:
+            issues.append("factory_semantic_audit:erp_data_to_ol_relation_missing")
+        if operational.get("erp_record_kind") == "work_order":
+            work_order_relation_ok = _same_clause_has(low, (
+                ("data",),
+                ("work order", "perintah kerja"),
+                ("ol",),
+            )) or any(
+                "data" in clause
+                and re.search(r"(?<![a-z0-9])wo(?![a-z0-9])", clause, flags=re.I)
+                and re.search(r"(?<![a-z0-9])ol(?![a-z0-9])", clause, flags=re.I)
+                for clause in re.split(r"[.!?;\n]+", low)
+            )
+            if not work_order_relation_ok:
+                issues.append("factory_semantic_audit:erp_work_order_record_missing")
+        if re.search(
+            r"\b(?:mengeluarkan|mengambil|membagikan|mengirim|memindahkan|"
+            r"mengeluarkan\s+dari|keluarkan)\s+(?:material|bahan|barang)\b|"
+            r"\b(?:material|bahan|barang)\s+keluar\b",
+            low,
+            flags=re.I,
+        ):
+            issues.append("factory_semantic_audit:erp_release_mistranslated_as_physical_material")
+        if flags.get("erp_ol_success") and not _has_any_target(low, (
+            "berhasil", "sukses",
+        )):
+            issues.append("factory_semantic_audit:erp_ol_success_result_missing")
+        if flags.get("erp_ol_completed") and not _has_any_target(low, (
+            "sudah", "telah",
+        )):
+            issues.append("factory_semantic_audit:erp_ol_completed_aspect_missing")
+        if flags.get("erp_ol_request") and not _has_any_target(low, (
+            "tolong", "mohon", "harap",
+        )):
+            issues.append("factory_semantic_audit:erp_ol_request_modality_missing")
+
+    if flags.get("next_week_start") and not _has_any_target(low, (
+        "mulai minggu depan", "terhitung mulai minggu depan",
+    )):
+        issues.append("factory_semantic_audit:next_week_effective_time_missing")
+    if flags.get("night_attendance_check"):
+        attendance_ok = _has_any_target(low, (
+            "pengecekan kehadiran malam",
+            "pemeriksaan kehadiran malam",
+            "absensi malam",
+            "pengecekan absensi malam",
+        ))
+        if not attendance_ok:
+            issues.append("factory_semantic_audit:night_attendance_check_missing")
+        if re.search(r"\bapel\s+malam\b", low, flags=re.I):
+            issues.append("factory_semantic_audit:night_roll_call_mistranslated_as_assembly")
+    if flags.get("attendance_check_abolished") and not _same_clause_has(low, (
+        (
+            "pengecekan kehadiran malam", "pemeriksaan kehadiran malam",
+            "absensi malam", "pengecekan absensi malam",
+        ),
+        ("ditiadakan", "dihapus", "dihentikan", "tidak dilakukan lagi"),
+    )):
+        issues.append("factory_semantic_audit:attendance_abolition_relation_missing")
+    if flags.get("procedure_replacement") and not _has_any_target(low, (
+        "sebagai gantinya", "diganti dengan", "akan digantikan oleh", "dialihkan menjadi",
+    )):
+        issues.append("factory_semantic_audit:replacement_relation_missing")
+    if flags.get("k3_department") and not _has_any_target(low, (
+        "bagian k3", "departemen k3", "tim k3", "petugas k3",
+    )):
+        issues.append("factory_semantic_audit:k3_actor_missing")
+    if flags.get("factory_spot_check") and not _same_clause_has(low, (
+        ("pemeriksaan acak", "inspeksi acak", "pemeriksaan mendadak", "inspeksi mendadak"),
+        ("di pabrik", "ke pabrik", "dalam pabrik"),
+    )):
+        issues.append("factory_semantic_audit:k3_factory_spot_check_relation_missing")
+    if flags.get("unscheduled_check") and not _has_any_target(low, (
+        "tanpa jadwal tetap", "pada waktu yang tidak ditentukan", "secara tidak terjadwal",
+        "tanpa waktu tetap", "secara berkala tanpa jadwal tetap",
+    )):
+        issues.append("factory_semantic_audit:unscheduled_inspection_timing_missing")
+
+    counts = frame.get("counts") or {}
+    units = frame.get("units") or {}
+    if flags.get("advance_leave_notice"):
+        advance_leave_ok = _same_clause_has(low, (
+            ("cuti", "izin"),
+            ("beri tahu lebih awal", "memberi tahu lebih awal", "informasikan lebih awal", "memberitahukan lebih awal", "laporkan lebih awal"),
+            ("sebelum akhir bulan", "hingga akhir bulan", "menjelang akhir bulan"),
+        ))
+        if not advance_leave_ok:
+            issues.append("factory_semantic_audit:advance_leave_notification_missing")
+    if flags.get("management_staffing_count") and not _same_clause_has(low, (
+        ("manajemen", "atasan", "pimpinan"),
+        ("menghitung", "mendata", "merekap"),
+        ("tenaga kerja produksi", "jumlah tenaga kerja", "tenaga produksi"),
+        ("akhir bulan", "menjelang akhir bulan"),
+    )):
+        issues.append("factory_semantic_audit:management_staffing_count_missing")
+    if flags.get("monthly_production_target"):
+        target_value = counts.get("monthly_production_target")
+        value_terms = _indonesian_quantity_terms(target_value)
+        target_clauses = [
+            clause for clause in re.split(r"[.!?;\n]+", low)
+            if _has_any_target(clause, ("target bulan ini", "target produksi bulan ini"))
+        ]
+        value_present = any(
+            any(re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", clause, re.I) for term in value_terms)
+            for clause in target_clauses
+        )
+        if not value_present:
+            issues.append("factory_semantic_audit:monthly_production_target_value_missing")
+        source_unit = str(units.get("monthly_production_target") or "")
+        unit_map = {
+            "噸": ("ton",), "吨": ("ton",), "公噸": ("ton",),
+            "公斤": ("kg", "kilogram"), "kg": ("kg", "kilogram"),
+        }
+        if source_unit:
+            if not any(
+                _quantity_unit_in_clause(clause, target_value, unit_map.get(source_unit, (source_unit,)))
+                for clause in target_clauses
+            ):
+                issues.append("factory_semantic_audit:explicit_monthly_target_unit_missing")
+        else:
+            for clause in target_clauses:
+                if any(
+                    re.search(
+                        r"(?<![a-z0-9])" + re.escape(term)
+                        + r"\s*(?:ton|kg|kilogram|buah|potong|unit)(?![a-z])",
+                        clause,
+                        flags=re.I,
+                    )
+                    for term in value_terms
+                ):
+                    issues.append("factory_semantic_audit:unsupported_monthly_target_unit_inference")
+                    break
+    if flags.get("progress_behind_last_month") and not _same_clause_has(low, (
+        ("progres", "kemajuan"),
+        ("lebih tertinggal", "lebih lambat", "masih tertinggal", "tertinggal"),
+        ("bulan lalu", "bulan sebelumnya"),
+    )):
+        issues.append("factory_semantic_audit:progress_behind_last_month_missing")
+    if flags.get("multi_station_catchup"):
+        station_count = counts.get("operating_station_count")
+        station_relation_ok = any(
+            _quantity_unit_in_clause(clause, station_count, ("stasiun",))
+            and _has_any_target(clause, ("dioperasikan", "mengoperasikan", "beroperasi", "menjalankan"))
+            and _has_any_target(clause, ("mengejar target", "mengejar produksi", "mengejar output", "mengejar volume"))
+            and _has_any_target(clause, ("hingga akhir bulan", "sampai akhir bulan", "sebelum akhir bulan"))
+            for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+        )
+        if not station_relation_ok:
+            issues.append("factory_semantic_audit:multi_station_catchup_relation_missing")
+    if flags.get("daily_leave_cap"):
+        leave_cap = counts.get("daily_leave_cap")
+        leave_cap_ok = any(
+            _quantity_unit_in_clause(clause, leave_cap, ("orang",))
+            and _has_any_target(clause, ("cuti", "izin"))
+            and _has_any_target(clause, ("tidak lebih dari", "maksimal", "paling banyak", "jangan lebih dari"))
+            and _has_any_target(clause, ("per hari", "dalam satu hari", "setiap hari"))
+            for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+        )
+        if not leave_cap_ok:
+            issues.append("factory_semantic_audit:daily_leave_cap_relation_missing")
+
+    if flags.get("qiwo_workwear") and not _same_clause_has(low, (
+        ("qiwo",),
+        ("pakaian", "baju", "seragam"),
+    )):
+        issues.append("factory_semantic_audit:qiwo_workwear_item_missing")
+    if flags.get("hat_item") and not _has_any_target(low, ("topi",)):
+        issues.append("factory_semantic_audit:work_hat_item_missing")
+    if flags.get("workwear_pickup") and not _has_any_target(low, (
+        "ambil", "mengambil", "diambil",
+    )):
+        issues.append("factory_semantic_audit:workwear_pickup_action_missing")
+    if flags.get("before_offwork") and flags.get("workwear_pickup") and not _has_any_target(low, (
+        "sebelum pulang kerja", "sebelum selesai kerja", "sebelum meninggalkan tempat kerja",
+    )):
+        issues.append("factory_semantic_audit:workwear_pickup_deadline_missing")
+    if counts.get("workwear_count") is not None and not any(
+        _quantity_unit_in_clause(clause, counts.get("workwear_count"), ("potong", "buah", "setel"))
+        and _has_any_target(clause, ("pakaian", "baju", "seragam"))
+        for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+    ):
+        issues.append("factory_semantic_audit:workwear_count_relation_missing")
+    if counts.get("hat_count") is not None and not any(
+        _quantity_unit_in_clause(clause, counts.get("hat_count"), ("buah",))
+        and _has_any_target(clause, ("topi",))
+        for clause in [part.strip() for part in re.split(r"[.!?;\n]+", low) if part.strip()]
+    ):
+        issues.append("factory_semantic_audit:hat_count_relation_missing")
+    if flags.get("pickup_by_listed_size") and not _same_clause_has(low, (
+        ("sesuai ukuran", "berdasarkan ukuran"),
+        ("tercantum", "tertulis", "tertera"),
+        ("daftar", "formulir"),
+    )):
+        issues.append("factory_semantic_audit:listed_size_pickup_relation_missing")
+    if flags.get("checkbox_after_pickup"):
+        checkbox_ok = _same_clause_has(low, (
+            ("setelah mengambil", "setelah selesai mengambil", "sesudah mengambil"),
+            ("wajib", "harus", "pastikan"),
+            ("tanda centang", "beri centang", "mencentang", "centang"),
+            ("daftar", "formulir"),
+        ))
+        if not checkbox_ok:
+            issues.append("factory_semantic_audit:checkbox_after_pickup_relation_missing")
 
     if flags.get("shift_handover") and not _has_any_target(low, (
         "saat pergantian shift",
@@ -1500,22 +2322,30 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
 
 
 def translate_source_directly(source: str, src_lang: str, tgt_lang: str) -> str:
-    """Translate a complete handover-reporting source before any provider call.
+    """Translate only source-complete operational profiles before providers.
 
-    This is a source-to-target translation route, not a candidate-rejection
-    path. It renders only when the source supplies every decisive slot:
-    handover context, universal production-problem scope, reporting recipient,
-    deadline and abnormal-follow-up purpose. Partial or unrelated text remains
-    on the normal translation pipeline.
+    Every supported profile has an explicit completeness predicate and a
+    clause-coverage check.  A recognized clause therefore cannot cause an
+    unrelated trailing sentence to disappear.  Partial profiles still provide
+    claims to the ordinary provider and validators but never use this shortcut.
     """
     frame = build_source_frame(source, src_lang, tgt_lang)
-    if not _complete_shift_handover_reporting_frame(frame):
-        return ""
-    translated = _shift_handover_reporting_rebuild(frame)
-    if not translated:
-        return ""
-    ok, _issues = validate_translation(frame, translated)
-    return translated if ok else ""
+    profiles = (
+        (_complete_erp_ol_frame, _erp_ol_rebuild),
+        (_complete_attendance_replacement_frame, _attendance_replacement_rebuild),
+        (_complete_staffing_target_frame, _staffing_target_rebuild),
+        (_complete_qiwo_workwear_frame, _qiwo_workwear_rebuild),
+        (_complete_shift_handover_reporting_frame, _shift_handover_reporting_rebuild),
+    )
+    for complete, rebuild in profiles:
+        if not complete(frame):
+            continue
+        translated = rebuild(frame)
+        if not translated:
+            return ""
+        ok, _issues = validate_translation(frame, translated)
+        return translated if ok else ""
+    return ""
 
 
 def structured_review_schema() -> Dict[str, Any]:
