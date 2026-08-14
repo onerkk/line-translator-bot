@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.45.0-durable-translation-delivery-root-cure-2026-08-06",
     "schema_version": 8,
-    "state_hash": "535cbc97c15b871d051635c3d20e0f1a1bf87569f3fff3f85b17886213bac9b1",
-    "updated_at_iso": "2026-08-14T12:07:12.371712+00:00",
-    "updated_at_unix": 1786709232.3717124
+    "state_hash": "e7b4abcc3c7f84a446a93b112bfe480e0054825c764c7fd1c60a212b529f7f14",
+    "updated_at_iso": "2026-08-14T12:07:39.764343+00:00",
+    "updated_at_unix": 1786709259.7643433
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -326,7 +326,8 @@
       "祥阿",
       "邱凱達",
       "佑晟",
-      "奇沃"
+      "奇沃",
+      "華新麗華"
     ]
   },
   "fewshot_mode": "messages",
