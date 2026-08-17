@@ -448,7 +448,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-08-14.1-operational-status-context"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-08-17.1-erp-data-release-context"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
