@@ -330,7 +330,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-14.1-equipment-code-failure"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-17.1-erp-data-release-relations"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)

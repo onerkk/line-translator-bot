@@ -21,7 +21,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-14.1-equipment-code-failure"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-17.1-erp-data-release-relations"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -127,6 +127,58 @@ _ZH_INSPECTION = (
     "查看一下", "看看", "看一下", "查看", "檢查", "检查", "確認", "确认",
     "了解", "瞭解",
 )
+
+# 「放」is highly polysemous in the factory group.  A bare request such as
+# 「這把麻煩他們放一下」does not describe moving the physical bundle: 把 is the
+# bundle reference whose ERP record must be released to the next station.  This
+# relation must be decided from syntax before a provider sees the sentence; a
+# prompt-only rule cannot prevent stale TM/provider output from reverting to the
+# everyday meaning "put/place".
+_ZH_RELEASE_OBJECT_RE = re.compile(
+    r"(?P<deictic>這|这|那|該|该)?"
+    r"(?P<count>\d{1,3}|[零〇一二兩两三四五六七八九十]{1,3})?"
+    r"(?P<object>把|捆|批|(?:張|张|筆|笔|個|个)?(?:工單|工单|單|单|資料|资料|數據|数据))"
+    r"(?=$|[\s,，。.!！?？:：;；()（）\[\]{}]|"
+    r"(?:麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|叫|讓|让|"
+    r"都|全都|先|再|要|需|已經|已经|已|放))",
+    re.I,
+)
+_ZH_RELEASE_REQUEST_RE = re.compile(
+    r"(?:麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|叫|讓|让)",
+    re.I,
+)
+_ZH_RELEASE_COMPLETED_RE = re.compile(
+    r"(?:已經|已经|已|都|全都)?(?:放行|放)(?:完成|好了?|完(?:了)?|了)",
+    re.I,
+)
+_ZH_RELEASE_PHYSICAL_RE = re.compile(
+    r"(?:放不下|放不進|放不进|放得下|放得進|放得进|能放就放|不夠放|不够放|"
+    r"放在|放到|放進|放进|放入|放下|放回|擺在|摆在|擺到|摆到|"
+    r"儲格|储格|儲位|储位|置料|位置|地方|地上|旁邊|旁边|上面|下面|"
+    r"架上|桌上|這裡|这里|那裡|那里|照片|圖片|图片|空間|空间)",
+    re.I,
+)
+_ZH_RELEASE_PHYSICAL_OBJECT_RE = re.compile(
+    r"(?:工具|刀|剪刀|箱子|紙箱|纸箱|衣服|鞋子|物品|東西|东西|零件)"
+    r".{0,10}(?:放|擺|摆)|(?:放|擺|摆).{0,10}"
+    r"(?:工具|刀|剪刀|箱子|紙箱|纸箱|衣服|鞋子|物品|東西|东西|零件)",
+    re.I,
+)
+_ZH_RELEASE_QC_RE = re.compile(
+    r"(?:品保|品管|品質|质量|QC|檢驗|检验).{0,12}(?:放行|放了|已放)|"
+    r"(?:放行|放了|已放).{0,12}(?:品保|品管|品質|质量|QC|檢驗|检验)",
+    re.I,
+)
+
+_ZH_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "两": 2,
+    "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_ID_SMALL_NUMBERS = {
+    0: "nol", 1: "satu", 2: "dua", 3: "tiga", 4: "empat", 5: "lima",
+    6: "enam", 7: "tujuh", 8: "delapan", 9: "sembilan", 10: "sepuluh",
+    11: "sebelas",
+}
 
 
 def _norm(value: Any) -> str:
@@ -518,7 +570,208 @@ def _strip_zh_supported_tokens(source: str) -> str:
     return value
 
 
+def _parse_zh_release_count(raw: str) -> int | None:
+    token = str(raw or "").strip()
+    if not token:
+        return None
+    if token.isdigit():
+        value = int(token)
+        return value if 0 <= value <= 999 else None
+    if token in _ZH_DIGITS:
+        return _ZH_DIGITS[token]
+    if "十" in token:
+        left, right = token.split("十", 1)
+        tens = 1 if not left else _ZH_DIGITS.get(left)
+        ones = 0 if not right else _ZH_DIGITS.get(right)
+        if tens is not None and ones is not None:
+            return tens * 10 + ones
+    return None
+
+
+def _format_id_release_count(value: int | None, raw: str) -> str:
+    if value is None:
+        return str(raw or "").strip()
+    if value in _ID_SMALL_NUMBERS:
+        return _ID_SMALL_NUMBERS[value]
+    if 12 <= value <= 19:
+        return _ID_SMALL_NUMBERS[value - 10] + " belas"
+    if 20 <= value <= 99:
+        tens, ones = divmod(value, 10)
+        result = _ID_SMALL_NUMBERS[tens] + " puluh"
+        return result if not ones else result + " " + _ID_SMALL_NUMBERS[ones]
+    return str(value)
+
+
+def _release_object_kind(raw: str) -> str:
+    token = str(raw or "")
+    if token in ("把", "捆"):
+        return "bundle"
+    if token == "批":
+        return "batch"
+    if any(term in token for term in ("資料", "资料", "數據", "数据")):
+        return "data"
+    if any(term in token for term in ("工單", "工单", "單", "单")):
+        return "work_order"
+    return ""
+
+
+def _release_delegate(compact: str) -> str:
+    for terms, delegate in (
+        (("他們", "他们", "她們", "她们"), "third_plural"),
+        (("你們", "你们"), "second_plural"),
+        (("他", "她"), "third_singular"),
+        (("你",), "second_singular"),
+    ):
+        if any(term in compact for term in terms):
+            return delegate
+    return ""
+
+
+def _strip_zh_release_supported_tokens(source: str, object_evidence: str) -> str:
+    value = _MENTION_RE.sub("", str(source or ""))
+    value = _compact(value)
+    if object_evidence:
+        value = value.replace(_compact(object_evidence), "", 1)
+    tokens = {
+        "麻煩", "麻烦", "拜託", "拜托", "請", "请", "幫忙", "帮忙", "幫", "帮",
+        "協助", "协助", "叫", "讓", "让", "他們", "他们", "她們", "她们", "他", "她",
+        "你們", "你们", "你", "一下", "先", "再", "優先", "优先", "趕快", "赶快",
+        "都", "全都", "已經", "已经", "已", "完成", "好了", "好", "完了", "完", "了",
+        "要", "需要", "需", "放行", "放",
+    }
+    for token in sorted(tokens, key=len, reverse=True):
+        value = value.replace(token, "")
+    return re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", "", value)
+
+
+def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
+    """Classify ERP data release from syntax and reject physical/QC senses.
+
+    Classification order is deliberate: an explicit spatial destination or QC
+    actor wins over the generic factory shorthand.  Only then may a bundle,
+    batch, work-order or data reference license bare 放 as the colloquial form
+    of 放行.  This keeps 「這把麻煩他們放一下」and its paraphrases together while
+    leaving 「這把刀放在架上」and「品保放行」to their correct senses.
+    """
+    visible = _MENTION_RE.sub("", str(source or ""))
+    compact = _compact(visible)
+    if not compact:
+        return frame
+    if "放假" in compact or "放料" in compact:
+        return frame
+    if _ZH_RELEASE_QC_RE.search(compact):
+        return frame
+    if _ZH_RELEASE_PHYSICAL_RE.search(compact):
+        return frame
+    if "放行" not in compact and _ZH_RELEASE_PHYSICAL_OBJECT_RE.search(compact):
+        return frame
+
+    object_match = _ZH_RELEASE_OBJECT_RE.search(compact)
+    explicit_release = "放行" in compact
+    completed = bool(_ZH_RELEASE_COMPLETED_RE.search(compact))
+    request = bool(_ZH_RELEASE_REQUEST_RE.search(compact) or "放一下" in compact)
+    shorthand_action = bool(
+        object_match
+        and (
+            "放一下" in compact
+            or completed
+            or re.search(r"(?:先|再|優先|优先|趕快|赶快)放", compact)
+            or re.search(r"放.{0,8}" + re.escape(object_match.group(0)), compact)
+            or re.search(re.escape(object_match.group(0)) + r".{0,16}放", compact)
+        )
+    )
+    # Explicit 放行 is already an ERP workflow verb unless QC won above.  Bare
+    # 放 needs a production-record object plus request/completion/imperative
+    # syntax; a lone everyday 放 therefore never activates this frame.
+    if not explicit_release and not shorthand_action:
+        return frame
+
+    object_raw = object_match.group("object") if object_match else ""
+    object_kind = _release_object_kind(object_raw)
+    object_count_raw = object_match.group("count") if object_match else ""
+    object_count = _parse_zh_release_count(object_count_raw)
+    deictic = bool(object_match and object_match.group("deictic"))
+    delegate = _release_delegate(compact)
+    priority = any(term in compact for term in ("先放", "優先放", "优先放"))
+    repeat = "再放" in compact
+    evidence = object_match.group(0) if object_match else ""
+    unparsed = _strip_zh_release_supported_tokens(source, evidence)
+
+    frame["kind"] = "zh_id_erp_data_release"
+    frame["slots"].update({
+        "explicit_release": explicit_release,
+        "completed": completed,
+        "request": request or not completed,
+        "delegate": delegate,
+        "priority": priority,
+        "repeat": repeat,
+        "object_evidence": evidence,
+        "object_kind": object_kind,
+        "object_count_raw": object_count_raw,
+        "object_count": object_count,
+        "object_deictic": deictic,
+    })
+    _claim(
+        frame,
+        "erp_data_release_action",
+        "放行" if explicit_release else "放／放一下",
+        "把對應生產資料放行到下一站；不是把實體物品擺下或放置",
+        "release data ke stasiun berikutnya",
+    )
+    if object_kind:
+        object_meaning = {
+            "bundle": "來源中的把／捆是棒材捆的資料參照",
+            "batch": "來源中的批是該批生產資料的參照",
+            "work_order": "來源指定這張工單／這單的資料",
+            "data": "來源直接指定這筆資料",
+        }[object_kind]
+        _claim(
+            frame,
+            "erp_release_record_object",
+            evidence,
+            object_meaning,
+            "data untuk " + ({
+                "bundle": "bundel",
+                "batch": "batch",
+                "work_order": "work order",
+                "data": "data",
+            }[object_kind]),
+        )
+    if request or not completed:
+        _claim(
+            frame,
+            "erp_release_request",
+            "麻煩／請／幫／放一下",
+            "請求對方執行資料放行",
+            "tolong",
+        )
+    if delegate:
+        _claim(
+            frame,
+            "erp_release_delegate",
+            delegate,
+            "保留被要求執行放行的人稱",
+            {
+                "third_plural": "mereka",
+                "third_singular": "dia",
+                "second_plural": "kalian",
+                "second_singular": "Anda/kamu",
+            }[delegate],
+        )
+    if completed:
+        _claim(frame, "erp_release_completed", "已／都／放了", "資料放行已完成", "sudah di-release")
+    frame["unparsed"] = unparsed
+    frame["active"] = True
+    # A source-first rendering is allowed only when the referenced record is
+    # explicit and every non-mention token belongs to this relation.
+    frame["complete"] = bool(object_kind and not unparsed)
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    release_frame = _build_zh_id_data_release_frame(source, frame)
+    if release_frame.get("active"):
+        return release_frame
     compact = _compact(source)
     motion_term = next((term for term in sorted(_ZH_MOTION, key=len, reverse=True) if term in compact), "")
     inspect_term = next((term for term in sorted(_ZH_INSPECTION, key=len, reverse=True) if term in compact), "")
@@ -606,6 +859,48 @@ def deterministic_translation(frame: Mapping) -> str:
         status = "還沒有噴漆" if slots.get("completion") == "not_yet" else "沒有噴漆"
         return _with_mentions(frame, f"{shift}{status}")
 
+    if frame.get("kind") == "zh_id_erp_data_release":
+        object_kind = str(slots.get("object_kind") or "")
+        count_raw = str(slots.get("object_count_raw") or "")
+        count_text = _format_id_release_count(
+            slots.get("object_count"), count_raw
+        )
+        deictic = bool(slots.get("object_deictic"))
+        if object_kind == "bundle":
+            reference = ((count_text + " ") if count_text else "") + "bundel"
+        elif object_kind == "batch":
+            reference = ((count_text + " ") if count_text else "") + "batch"
+        elif object_kind == "work_order":
+            reference = "work order"
+        elif object_kind == "data":
+            reference = "data"
+        else:
+            return ""
+        if deictic:
+            reference += " ini"
+        data_object = reference if object_kind == "data" else "data untuk " + reference
+        destination = "ke stasiun berikutnya"
+        if slots.get("completed"):
+            text = data_object[:1].upper() + data_object[1:] + " sudah di-release " + destination
+        else:
+            action = "release " + data_object + " " + destination
+            delegate = slots.get("delegate")
+            if delegate == "third_plural":
+                text = "Tolong minta mereka " + action
+            elif delegate == "third_singular":
+                text = "Tolong minta dia " + action
+            elif delegate == "second_plural":
+                text = "Tolong kalian " + action
+            elif delegate == "second_singular":
+                text = "Tolong Anda " + action
+            else:
+                text = "Tolong " + action
+        if slots.get("priority"):
+            text += " terlebih dahulu"
+        if slots.get("repeat"):
+            text += " sekali lagi"
+        return _with_mentions(frame, text + ".")
+
     if frame.get("kind") == "id_zh_weight_display_relation":
         parts: list[str] = []
         monitor_weight = str(slots.get("monitor_weight") or "")
@@ -690,6 +985,67 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:equipment_mistranslated_as_surface_damage")
         if any(term in target for term in ("損壞", "损坏")) and "故障" not in target:
             issues.append("factory_message_semantics:equipment_failure_wording_ambiguous")
+
+    elif frame.get("kind") == "zh_id_erp_data_release":
+        low = _norm(target)
+        release_relation = bool(
+            re.search(
+                r"\b(?:release|rilis|merilis|me-?release|di-?release|dirilis)\b",
+                low,
+                re.I,
+            )
+            and _has_phrase(low, ("data",))
+            and _has_phrase(low, (
+                "stasiun berikutnya", "proses berikutnya", "tahap berikutnya",
+                "untuk dilanjutkan",
+            ))
+        )
+        if not release_relation:
+            issues.append("factory_message_semantics:erp_data_release_relation_missing")
+        if re.search(
+            r"\b(?:meletakkan|menaruh|taruh|letakkan|menempatkan|"
+            r"menyimpan|simpan|melepaskan)\b",
+            low,
+            re.I,
+        ):
+            issues.append("factory_message_semantics:erp_release_mistranslated_as_physical_placement")
+
+        object_kind = slots.get("object_kind")
+        if object_kind == "bundle" and not _has_phrase(low, ("bundel",)):
+            issues.append("factory_message_semantics:erp_release_bundle_reference_missing")
+        elif object_kind == "batch" and not _has_phrase(low, ("batch", "lot")):
+            issues.append("factory_message_semantics:erp_release_batch_reference_missing")
+        elif object_kind == "work_order" and not _has_phrase(low, ("work order",)):
+            issues.append("factory_message_semantics:erp_release_work_order_reference_missing")
+        elif object_kind == "data" and not _has_phrase(low, ("data",)):
+            issues.append("factory_message_semantics:erp_release_data_reference_missing")
+
+        count = slots.get("object_count")
+        count_raw = str(slots.get("object_count_raw") or "")
+        if count is not None:
+            expected_count = _format_id_release_count(count, count_raw)
+            if not _has_phrase(low, (expected_count, str(count))):
+                issues.append("factory_message_semantics:erp_release_object_count_missing")
+        if slots.get("object_deictic") and not _has_phrase(low, ("ini",)):
+            issues.append("factory_message_semantics:erp_release_deictic_reference_missing")
+        if slots.get("request") and not _has_phrase(low, ("tolong", "mohon", "harap")):
+            issues.append("factory_message_semantics:erp_release_request_modality_missing")
+        delegate_terms = {
+            "third_plural": ("mereka",),
+            "third_singular": ("dia",),
+            "second_plural": ("kalian",),
+            "second_singular": ("anda", "kamu"),
+        }.get(slots.get("delegate"), ())
+        if delegate_terms and not _has_phrase(low, delegate_terms):
+            issues.append("factory_message_semantics:erp_release_delegate_missing")
+        if slots.get("completed") and not _has_phrase(low, ("sudah", "telah")):
+            issues.append("factory_message_semantics:erp_release_completed_aspect_missing")
+        if slots.get("priority") and not _has_phrase(low, (
+            "terlebih dahulu", "dulu", "prioritas", "diprioritaskan",
+        )):
+            issues.append("factory_message_semantics:erp_release_priority_missing")
+        if slots.get("repeat") and not _has_phrase(low, ("lagi", "sekali lagi")):
+            issues.append("factory_message_semantics:erp_release_repeat_missing")
 
     elif frame.get("kind") == "id_zh_shift_process_status":
         shift_target = str(slots.get("shift_target") or "")
@@ -810,6 +1166,16 @@ def build_prompt(frame: Mapping) -> str:
             "functional machine failure: translate the linked claim as I15 機台故障, not as "
             "material/surface damage (損傷) and not as the underspecified I15 損壞."
         )
+    elif frame.get("kind") == "zh_id_erp_data_release":
+        lines.append(
+            "This is an ERP production-data release relation. In bare factory shorthand, a "
+            "bundle/batch/work-order reference plus 放/放一下 means release the linked data to "
+            "the next station. Indonesian must explicitly say release data ke stasiun berikutnya "
+            "and preserve the referenced bundel/batch/work order, request modality, delegate and "
+            "completion/priority aspect. Never use meletakkan, menaruh, taruh, menempatkan, "
+            "menyimpan or melepaskan for this sense. Spatial/capacity wording and QC actors are "
+            "classified separately and do not use this data-release frame."
+        )
     elif frame.get("kind") == "id_zh_weight_display_relation":
         lines.append(
             "In this factory context timbangan katrol/gantung/crane is the overhead-crane electronic "
@@ -849,6 +1215,9 @@ def health() -> dict:
         "id", "zh",
     )
     movement = build_frame("我過去了了解看看", "zh", "id")
+    data_release = build_frame(
+        "@小麥（研磨股班長） 這把麻煩他們放一下", "zh", "id"
+    )
     reversed_readings = (
         "995 kg di layar monitor, 989 kg di timbangan gantung elektronik"
     )
@@ -864,6 +1233,10 @@ def health() -> dict:
         build_frame("Katrol rusak.", "id", "zh"),
         build_frame("我先看看情況。", "zh", "id"),
         build_frame("我過去拿工具。", "zh", "id"),
+        build_frame("這把刀麻煩他們放在架上。", "zh", "id"),
+        build_frame("這把材料放不下，先放照片裡的位置。", "zh", "id"),
+        build_frame("品保檢驗後有放行。", "zh", "id"),
+        build_frame("請他們放下工具。", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -886,6 +1259,16 @@ def health() -> dict:
         movement.get("active") is True and movement.get("complete") is True,
         translate_source_directly("我過去了了解看看", "zh", "id")
         == "Saya ke sana dulu untuk mengecek situasinya.",
+        data_release.get("active") is True and data_release.get("complete") is True,
+        translate_source_directly(data_release["source"], "zh", "id")
+        == (
+            "@小麥（研磨股班長） Tolong minta mereka release data untuk bundel ini "
+            "ke stasiun berikutnya."
+        ),
+        validate_translation(
+            data_release,
+            "@小麥 Tolong minta mereka meletakkan bundel ini.",
+        )[0] is False,
         translate_source_directly(reversed_readings, "id-ID", "zh-TW")
         == "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",
         translate_source_directly(current_values, "ind", "zh-Hant")

@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-08-14.1-operational-status-context"
+PROMPT_OPTIMIZER_VERSION = "2026-08-17.1-erp-data-release-context"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -55,8 +55,12 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
     (
         "release-vs-put",
         ("zh>id",),
-        r"放行|放了|已放|放完|幫放|先放|誰放|放在|放到|放地|放料|退庫|過帳",
-        "Resolve 放 by syntax: ERP/work-order flow=release data; QC放行=QC release without adding data; location/object placement=taruh/menaruh/meletakkan; 放料=feed material. Never default all 放 to physical placement.",
+        r"放行|放(?:了|好了?|完(?:了)?|一下)|(?:幫|帮)(?:忙)?放|先放|誰放|谁放|"
+        r"(?:麻煩|麻烦|請|请|叫|讓|让).{0,16}放|"
+        r"(?:這|这|那|該|该)?(?:[零〇一二兩两三四五六七八九十\d]+)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据).{0,16}放|"
+        r"放.{0,10}(?:這|这|那|該|该)?(?:[零〇一二兩两三四五六七八九十\d]+)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据)|"
+        r"放在|放到|放地|放料|退庫|過帳",
+        "Resolve 放 by linked syntax, in this order: QC/品保 actor=QC release without adding data; an explicit spatial destination/capacity/object=physical placement with taruh/menaruh/meletakkan; a bundle/batch/work-order/data reference plus 放/放一下/已放=ERP data release to the next station. Preserve request, delegate, object and completion. Never default the last pattern to physical placement.",
     ),
     (
         "qing-polysemy",

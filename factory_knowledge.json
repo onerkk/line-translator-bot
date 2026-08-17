@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-14.1-operational-status-root-fix",
+  "build_id": "2026-08-17.1-erp-data-release-root-fix",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -2248,6 +2248,213 @@
           "source": "原本靠電子控制自動拉料，效果沒有改善，後來拆掉控制系統改成被動自然牽引。",
           "target": "Awalnya material ditarik otomatis dengan kontrol elektronik. Karena hasilnya tidak membaik, sistem kontrol kemudian dibongkar dan diganti dengan mekanisme tarikan pasif secara alami.",
           "reason": "同一設備改造語意的改寫，避免只記住原句。"
+        }
+      ]
+    },
+    {
+      "id": "erp_colloquial_data_release_to_next_station",
+      "enabled": true,
+      "priority": 305,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "把／批／工單資料的口語放行",
+      "match": {
+        "strong_phrases": [
+          "資料放行",
+          "放這把",
+          "放這批",
+          "放這單",
+          "這把麻煩他們放一下",
+          "這批幫忙放一下",
+          "兩把都放了"
+        ],
+        "all_groups": [
+          [
+            "這把",
+            "这把",
+            "一把",
+            "兩把",
+            "两把",
+            "三把",
+            "2把",
+            "3把",
+            "這捆",
+            "这捆",
+            "一捆",
+            "兩捆",
+            "两捆",
+            "這批",
+            "这批",
+            "這一批",
+            "这一批",
+            "這單",
+            "这单",
+            "工單",
+            "工单",
+            "資料",
+            "资料",
+            "數據",
+            "数据"
+          ],
+          [
+            "放一下",
+            "幫放",
+            "帮放",
+            "幫忙放",
+            "帮忙放",
+            "放行",
+            "先放",
+            "放了",
+            "已放",
+            "放完",
+            "放好"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "麻煩",
+          "麻烦",
+          "請",
+          "请",
+          "他們",
+          "他们",
+          "優先",
+          "优先",
+          "下一站"
+        ],
+        "none_terms": [
+          "放不下",
+          "放不進",
+          "放在",
+          "放到",
+          "儲格",
+          "储格",
+          "儲位",
+          "储位",
+          "位置",
+          "地方",
+          "地上",
+          "架上",
+          "照片",
+          "圖片",
+          "图片",
+          "品保放行",
+          "品保有放行",
+          "QC放行",
+          "檢驗放行",
+          "检验放行",
+          "放料",
+          "放假"
+        ],
+        "regex_any": [
+          "(?:這|这|那|該|该)?(?:[零〇一二兩两三四五六七八九十\\d]+)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据).{0,16}(?:麻煩|麻烦|請|请|幫|帮|叫|讓|让)?.{0,12}放(?:行|一下|了|好|完)?",
+          "(?:麻煩|麻烦|請|请|幫|帮).{0,16}放(?:行|一下)?.{0,10}(?:這|这|那|該|该)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据)"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本廠生產流程語境中，把／捆／批／工單／資料參照搭配『放、放一下、放了、先放』時，是『放行』的口語省略：把對應 ERP 生產資料放行到下一站，不是搬動或擺放實體物品。",
+        "判斷順序固定：品保／QC 是檢驗放行，不加 data；來源有放在／放到／儲格／位置／容量／照片等空間證據時才是實體放置；其餘符合生產資料參照句型者是資料放行。",
+        "譯文必須保留請求者、被請求者、這把／這批／這單的指涉，以及已完成、優先或再次執行等狀態。"
+      ],
+      "preferred_target_phrases": [
+        "release data ke stasiun berikutnya",
+        "release data untuk bundel ini ke stasiun berikutnya",
+        "data untuk bundel ini sudah di-release ke stasiun berikutnya"
+      ],
+      "forbidden_target_phrases": [
+        "meletakkan bundel",
+        "menaruh bundel",
+        "taruh bundel",
+        "menempatkan bundel",
+        "menyimpan bundel",
+        "melepaskan bundel"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "release data",
+            "data di-release",
+            "data sudah di-release",
+            "sudah di-release",
+            "merilis data",
+            "data dirilis"
+          ],
+          "issue": "missing_erp_data_release_action"
+        },
+        {
+          "target_any": [
+            "stasiun berikutnya",
+            "proses berikutnya",
+            "tahap berikutnya",
+            "untuk dilanjutkan"
+          ],
+          "issue": "missing_next_station_relation"
+        },
+        {
+          "source_any": [
+            "這把",
+            "这把",
+            "那把",
+            "一把",
+            "兩把",
+            "两把",
+            "三把",
+            "這捆",
+            "这捆",
+            "一捆",
+            "兩捆",
+            "两捆"
+          ],
+          "target_any": [
+            "bundel"
+          ],
+          "issue": "missing_bundle_record_reference"
+        },
+        {
+          "source_any": [
+            "麻煩",
+            "麻烦",
+            "請",
+            "请",
+            "幫",
+            "帮"
+          ],
+          "target_any": [
+            "tolong",
+            "mohon",
+            "harap"
+          ],
+          "issue": "missing_release_request_modality"
+        },
+        {
+          "source_any": [
+            "他們",
+            "他们"
+          ],
+          "target_any": [
+            "mereka"
+          ],
+          "issue": "missing_release_delegate"
+        }
+      ],
+      "examples": [
+        {
+          "source": "這把麻煩他們放一下。",
+          "target": "Tolong minta mereka release data untuk bundel ini ke stasiun berikutnya.",
+          "bad_target": "Tolong minta mereka meletakkan bundel ini.",
+          "reason": "沒有實體位置或容量語意；這把是對應生產資料的參照，放一下是資料放行。"
+        },
+        {
+          "source": "這兩把都放了。",
+          "target": "Data untuk dua bundel ini sudah di-release ke stasiun berikutnya.",
+          "reason": "同一語義的完成式與複數改寫，不依賴單一原句。"
+        },
+        {
+          "source": "麻煩先放這張工單。",
+          "target": "Tolong release data untuk work order ini ke stasiun berikutnya terlebih dahulu.",
+          "reason": "工單是資料放行對象，先的優先時序必須保留。"
         }
       ]
     },
