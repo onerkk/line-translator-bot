@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-14.1-headwear-classifier"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-18.1-person-prefix-boundary"
 
 
 @dataclass(frozen=True)
@@ -196,6 +196,14 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
 
     for start, end, mode, match in raw_matches:
         if any(start < old_end and end > old_start for old_start, old_end in occupied):
+            continue
+        # ``每個人`` is the distributive person marker "everyone", not an
+        # implicit quantity atom ``每個`` (= each item).  Treating the prefix as
+        # one generic object made list numbering such as ``每個人：1. ...`` look
+        # like a missing "satu buah" and triggered a needless AI repair.
+        if (mode == "each"
+                and match.group("each_cls") in {"個", "个"}
+                and text[end:end + 1] == "人"):
             continue
         if mode == "cardinal" and _looks_like_packaging_verb(text, match):
             continue

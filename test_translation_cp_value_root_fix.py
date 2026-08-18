@@ -98,6 +98,28 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
         self.assertFalse(result["review_requested"])
         self.assertEqual(client.calls, [])
 
+    def test_stale_always_review_setting_cannot_double_every_request(self):
+        with mock.patch.dict(os.environ, {
+            "FACTORY_TRANSLATION_REVIEW_MODE": "always",
+            "FACTORY_ALLOW_ALWAYS_REVIEW": "0",
+        }):
+            self.assertEqual(policy.review_mode(), "adaptive")
+            self.assertFalse(policy.require_source_review(
+                "請確認材料已包裝完成。", "zh", "id", adaptive_risk=False
+            ))
+            self.assertTrue(policy.require_source_review(
+                "發生混料，請立即停線。", "zh", "id", adaptive_risk=True
+            ))
+
+        with mock.patch.dict(os.environ, {
+            "FACTORY_TRANSLATION_REVIEW_MODE": "always",
+            "FACTORY_ALLOW_ALWAYS_REVIEW": "1",
+        }):
+            self.assertEqual(policy.review_mode(), "always")
+            self.assertTrue(policy.require_source_review(
+                "請確認材料已包裝完成。", "zh", "id", adaptive_risk=False
+            ))
+
     def test_persistent_tm_requires_exact_current_policy_fingerprint(self):
         old_path = tm.TM_DB_PATH
         old_init = tm._init_done

@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-07-19.1-plant-org-hierarchy"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-08-18.1-reversible-management-titles"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -37,6 +37,39 @@ _OCR_PRIORITY_SUFFIXES = (
     "機", "站", "課", "股", "處", "部", "組", "班", "線", "盤", "爐", "表",
     "單", "材", "棒", "包", "箱", "油", "門", "秤", "車", "架", "刀", "輪",
 )
+
+# Management titles must be reversible and must not collapse into a nearby
+# organizational level.  The groups below are deliberately small: a local
+# correction is made only when the source identifies exactly one role in that
+# group and the target contains one different, recognized role.  Ambiguous
+# multi-role sentences remain with the normal semantic quality gate.
+_ORGANIZATION_ROLE_SPECS: Tuple[Tuple[str, str, str, Tuple[str, ...]], ...] = (
+    ("deputy_factory_head", "executive", "副廠長", ("Wakil Kepala Pabrik",)),
+    ("deputy_director", "executive", "副總", ("Wakil Direktur",)),
+    ("division_head", "plant_hierarchy", "處長", ("kepala divisi", "kepala departemen")),
+    ("section_head", "plant_hierarchy", "課長", ("kepala seksi",)),
+    ("subsection_head", "plant_hierarchy", "股長", ("kepala bagian",)),
+    ("shift_head", "plant_hierarchy", "班長", ("kepala regu", "ketua shift")),
+)
+
+
+def _id_phrase_pattern(phrase: str) -> re.Pattern[str]:
+    normalized = unicodedata.normalize("NFKC", str(phrase or "")).replace("\u3000", " ")
+    tokens = [re.escape(token) for token in normalized.split() if token]
+    return re.compile(
+        r"(?<![A-Za-z0-9])" + r"\s+".join(tokens) + r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+_ORGANIZATION_ID_PATTERNS: Dict[str, Tuple[re.Pattern[str], ...]] = {
+    key: tuple(_id_phrase_pattern(surface) for surface in surfaces)
+    for key, _group, _zh, surfaces in _ORGANIZATION_ROLE_SPECS
+}
+_ORGANIZATION_ROLE_BY_KEY = {
+    key: {"group": group, "zh": zh, "id": surfaces[0], "surfaces": surfaces}
+    for key, group, zh, surfaces in _ORGANIZATION_ROLE_SPECS
+}
 
 
 @dataclass(frozen=True)
@@ -108,6 +141,93 @@ def _normalize_id(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _zh_role_keys(text: str, group: str) -> set[str]:
+    source = _normalize_text(text)
+    return {
+        key
+        for key, spec in _ORGANIZATION_ROLE_BY_KEY.items()
+        if spec["group"] == group and str(spec["zh"]) in source
+    }
+
+
+def _id_role_keys(text: str, group: str) -> set[str]:
+    source = _normalize_text(text)
+    return {
+        key
+        for key, spec in _ORGANIZATION_ROLE_BY_KEY.items()
+        if spec["group"] == group
+        and any(pattern.search(source) for pattern in _ORGANIZATION_ID_PATTERNS[key])
+    }
+
+
+def _replace_id_role(text: str, role_key: str, replacement: str) -> str:
+    result = text
+    for pattern in _ORGANIZATION_ID_PATTERNS[role_key]:
+        result = pattern.sub(replacement, result)
+    return result
+
+
+def canonicalize_organization_translation(
+    source_text: str,
+    target_text: str,
+    src_lang: str,
+    tgt_lang: str,
+) -> str:
+    """Repair an unambiguous management-title drift without another AI call.
+
+    This is source-conditioned rather than a global word replacement.  For
+    example, ``股長`` may locally correct ``kepala seksi`` to ``kepala bagian``;
+    an Indonesian source that really says ``kepala seksi`` still correctly maps
+    to ``課長``.  If a source mentions multiple roles in the same hierarchy,
+    local alignment is not assumed and the normal quality gate remains in
+    charge.
+    """
+    if not target_text:
+        return target_text
+    src = (src_lang or "").lower()
+    tgt = (tgt_lang or "").lower()
+    if not ((src.startswith("zh") and tgt.startswith("id"))
+            or (src.startswith("id") and tgt.startswith("zh"))):
+        return target_text
+
+    # Preserve all non-title text byte-for-byte; normalization is used only by
+    # the detectors, never as a blanket rewrite of customer names or codes.
+    result = str(target_text)
+    groups = {str(spec["group"]) for spec in _ORGANIZATION_ROLE_BY_KEY.values()}
+    for group in groups:
+        if src.startswith("zh"):
+            source_roles = _zh_role_keys(source_text, group)
+            if len(source_roles) != 1:
+                continue
+            expected = next(iter(source_roles))
+            expected_id = str(_ORGANIZATION_ROLE_BY_KEY[expected]["id"])
+
+            # Normalize accepted aliases of the correct role first.  This makes
+            # the glossary literal deterministic without changing sentence
+            # structure or making a second provider request.
+            result = _replace_id_role(result, expected, expected_id)
+            target_roles = _id_role_keys(result, group)
+            if expected in target_roles:
+                continue
+            wrong_roles = target_roles - {expected}
+            if len(wrong_roles) == 1:
+                result = _replace_id_role(result, next(iter(wrong_roles)), expected_id)
+        else:
+            source_roles = _id_role_keys(source_text, group)
+            if len(source_roles) != 1:
+                continue
+            expected = next(iter(source_roles))
+            expected_zh = str(_ORGANIZATION_ROLE_BY_KEY[expected]["zh"])
+            target_roles = _zh_role_keys(result, group)
+            if expected in target_roles:
+                continue
+            wrong_roles = target_roles - {expected}
+            if len(wrong_roles) == 1:
+                wrong_zh = str(_ORGANIZATION_ROLE_BY_KEY[next(iter(wrong_roles))]["zh"])
+                result = result.replace(wrong_zh, expected_zh)
+    return result
+
+
 def _overlaps(start: int, end: int, spans: Sequence[Tuple[int, int]]) -> bool:
     return any(start < old_end and end > old_start for old_start, old_end in spans)
 
@@ -170,6 +290,8 @@ def collect_organization_matches(
                 occupied.append((found.start(), found.end()))
 
         standalone = (
+            ("副廠長", "Wakil Kepala Pabrik", 125),
+            ("副總", "Wakil Direktur", 125),
             ("處長", "kepala divisi", 120),
             ("課長", "kepala seksi", 115),
             ("股長", "kepala bagian", 115),

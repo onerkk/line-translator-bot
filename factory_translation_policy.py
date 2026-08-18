@@ -25,7 +25,7 @@ import re
 from typing import Any, Dict
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 7
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-11.3-adaptive-cp-reviewed-cache"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-18.1-adaptive-review-explicit-always"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -101,8 +101,11 @@ def review_mode() -> str:
     # A clean primary translation has already passed immutable-data, glossary,
     # language-purity and source-relation validation.  Reviewing every such
     # sentence doubles both latency and model spend without adding a concrete
-    # quality signal, so production defaults to adaptive review.  ``always``
-    # remains available as an explicit quality-first override.
+    # quality signal, so production defaults to adaptive review.  Some older
+    # deployments still carry ``FACTORY_TRANSLATION_REVIEW_MODE=always`` from a
+    # retired README.  Requiring a second explicit opt-in prevents that stale
+    # variable from silently doubling every request while preserving a genuine
+    # quality-first override when deliberately requested.
     value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
     aliases = {
         "on": "always", "required": "always", "strict": "always", "all": "always",
@@ -110,6 +113,8 @@ def review_mode() -> str:
         "none": "off", "disabled": "off", "0": "off",
     }
     value = aliases.get(value, value)
+    if value == "always" and not _boolean_env("FACTORY_ALLOW_ALWAYS_REVIEW", False):
+        return "adaptive"
     return value if value in {"always", "adaptive", "off"} else "adaptive"
 
 
@@ -248,6 +253,7 @@ def health() -> Dict[str, Any]:
         "build_id": FACTORY_TRANSLATION_POLICY_BUILD_ID,
         "mode": mode(),
         "review_mode": review_mode(),
+        "always_review_opt_in": _boolean_env("FACTORY_ALLOW_ALWAYS_REVIEW", False),
         "review_success_required": require_review_success("zh", "id"),
         "generic_nmt_fallback": allow_generic_nmt_fallback("zh", "id"),
         "emergency_nmt_fallback": allow_emergency_nmt_fallback("zh", "id"),

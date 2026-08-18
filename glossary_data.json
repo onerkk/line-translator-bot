@@ -1381,7 +1381,7 @@
     "idn": "kepala bagian",
     "canonical_idn": "kepala bagian",
     "translation_mode": "hard",
-    "reverse_safe": false,
+    "reverse_safe": true,
     "category": "organization",
     "priority": 115,
     "ocr_hint": true,
@@ -1415,6 +1415,28 @@
     "aliases_id": [
       "kepala departemen"
     ]
+  },
+  "副總": {
+    "idn": "Wakil Direktur",
+    "canonical_idn": "Wakil Direktur",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 125,
+    "ocr_hint": true,
+    "note_zh": "公司副總級主管；不是副廠長。",
+    "note_id": "Pimpinan tingkat Wakil Direktur perusahaan; bukan Wakil Kepala Pabrik."
+  },
+  "副廠長": {
+    "idn": "Wakil Kepala Pabrik",
+    "canonical_idn": "Wakil Kepala Pabrik",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 125,
+    "ocr_hint": true,
+    "note_zh": "工廠副廠長；不是公司副總。",
+    "note_id": "Wakil pimpinan pabrik; bukan Wakil Direktur perusahaan."
   },
   "控制室": {
     "idn": "ruang kontrol",

@@ -21,11 +21,12 @@
 
 ```bash
 FACTORY_TRANSLATION_MODE=always
-FACTORY_TRANSLATION_REVIEW_MODE=always
-FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=1
-FACTORY_TRANSLATION_FAIL_CLOSED=1
+FACTORY_TRANSLATION_REVIEW_MODE=adaptive
+FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=0
 FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 ```
+
+自 2026-08-18 起，舊環境若只留下 `FACTORY_TRANSLATION_REVIEW_MODE=always`，會安全降為 `adaptive`，避免每筆訊息固定多一次模型費用。只有同時設定 `FACTORY_ALLOW_ALWAYS_REVIEW=1` 才會啟用逐筆複核。
 
 文字、圖片 OCR 與翻譯變體共用相同政策。系統不再依單一關鍵字決定是否採用工廠規則，因此客戶名、製程簡稱、設備、會計或現場指令不會因句型改寫而掉回一般生活翻譯。
 
@@ -35,7 +36,7 @@ FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 
 精確命中的人工確認案例仍須通過目前版本的工廠驗收，才可直接回傳。這條路徑不需要再次呼叫模型；任何衝突的已驗證目標會使啟動自檢失敗。
 
-### 3. 新生成譯文必須從原文獨立複核
+### 3. 高風險或本地驗證失敗的譯文才從原文獨立複核
 
 `translation_quality_gate.py` 不只潤飾第一版譯文。複核者收到原文、第一版譯文、術語限制與已知風險，必須從原文重新建構意思，檢查：
 
@@ -45,14 +46,14 @@ FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 - 工廠術語、作業範圍、責任角色與流程順序
 - 是否加入原文沒有的人工、設備、會計或流程推論
 
-正式預設要求複核成功。若複核不可用、複核結果被本地規則拒絕，且沒有可由原文欄位確定重建的安全結果，系統不交付第一版譯文。
+正式預設讓本地驗證通過的一般訊息維持一次模型呼叫；重大安全、品質、矛盾指示、上下文缺口或本地驗證失敗時，才增加一次來源複核。複核與驗收失敗的譯文不會寫入快取或學習資料。
 
 ### 4. 單一確定性驗收邊界
 
 `factory_translation_guard.py` 編譯並統一使用：
 
 - `factory_knowledge.json` 的 21 組核准範例與已知壞譯文
-- `factory_translation_regression.json` 的 16 組正式歷史案例
+- `factory_translation_regression.json` 的 30 組正式歷史案例
 - 精確案例索引與資產指紋
 - 客戶名、設備代碼、數字、單位、否定及禁用片語規則
 - 每一案例的必要語義群組
@@ -88,7 +89,7 @@ FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 
 ## 正式回歸範圍
 
-`factory_translation_regression.json` 現有 16 組案例，涵蓋：
+`factory_translation_regression.json` 現有 30 組案例，涵蓋：
 
 - 大成結帳、160 噸分批到料、優先包裝
 - 本月木箱交期與非本月材料暫不裝箱
@@ -111,7 +112,7 @@ FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 python validate_factory_translation_assets.py --json
 ```
 
-驗證器會檢查 JSON、Python 編譯、政策正式預設、資產衝突、精確案例可尋址性、16 組核准目標與禁用錯譯探針。GitHub Actions 已加入同一發布閘門及依賴無關的回歸測試。
+驗證器會檢查 JSON、Python 編譯、政策正式預設、資產衝突、精確案例可尋址性、30 組核准目標與禁用錯譯探針。GitHub Actions 已加入同一發布閘門及依賴無關的回歸測試。
 
 本次封裝前驗證結果：
 

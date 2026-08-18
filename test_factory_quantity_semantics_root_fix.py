@@ -73,6 +73,26 @@ class FactoryQuantitySemanticsRootFixTests(unittest.TestCase):
         self.assertTrue(fqs.validate_translation(frame, "TAG setiap bundel harus diperiksa.")[0])
         self.assertFalse(fqs.validate_translation(frame, "TAG satu bundel harus diperiksa.")[0])
 
+    def test_everyone_prefix_and_list_number_are_not_object_quantities(self):
+        source = "每個人：\n1. 股長巡場取消，副總將帶隊抽查夜間工作紀律。"
+        frame = fqs.build_frame(source, "zh", "id")
+        self.assertFalse(frame["active"])
+        self.assertEqual(frame["atoms"], [])
+        self.assertTrue(frame["distributive"])
+        self.assertTrue(
+            fqs.validate_translation(
+                frame,
+                "Untuk semuanya: kepala bagian tidak melakukan patroli.",
+            )[0]
+        )
+
+        actual_quantity = fqs.build_frame("每個人一罐飲料", "zh", "id")
+        self.assertTrue(actual_quantity["active"])
+        self.assertEqual(
+            [(atom["value"], atom["classifier"]) for atom in actual_quantity["atoms"]],
+            [("1", "罐")],
+        )
+
     def test_quality_gate_rejects_classifier_and_relation_loss(self):
         source = "下班前記得領手套，一人一包又6雙"
         bad = "Sebelum pulang kerja, ingat ambil sarung tangan. Satu orang satu bundel dan 6 pasang."
@@ -103,7 +123,7 @@ class FactoryQuantitySemanticsRootFixTests(unittest.TestCase):
         self.assertIn('"sense": "factory_quantity_semantics"', source)
         self.assertIn("factory_quantity_semantics_module.build_prompt", source)
         self.assertIn("factory_quantity_semantics_module.validate_translation", source)
-        self.assertIn("2026-08-14.1-headwear-classifier", source)
+        self.assertIn("2026-08-18.1-person-prefix-boundary", source)
 
 
 if __name__ == "__main__":

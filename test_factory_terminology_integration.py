@@ -70,6 +70,66 @@ class FactoryTerminologyIntegrationTests(unittest.TestCase):
         index = glossary_enforcement.build_safe_reverse_index(self.glossary)
         self.assertEqual(index["kepala bagian cold drawing satu"]["target_term"], "一股股長")
         self.assertEqual(index["seksi satu"]["target_term"], "一課")
+        self.assertEqual(index["kepala bagian"]["target_term"], "股長")
+        self.assertEqual(index["kepala seksi"]["target_term"], "課長")
+        self.assertEqual(index["wakil direktur"]["target_term"], "副總")
+        self.assertEqual(index["wakil kepala pabrik"]["target_term"], "副廠長")
+
+    def test_management_titles_are_distinct_in_both_directions(self):
+        forward = factory_terminology.collect_applicable_pairs(
+            "股長、課長、副總與副廠長都要收到通知。",
+            self.glossary,
+            "zh",
+            "id",
+        )
+        self.assertIn(("股長", "kepala bagian"), forward)
+        self.assertIn(("課長", "kepala seksi"), forward)
+        self.assertIn(("副總", "Wakil Direktur"), forward)
+        self.assertIn(("副廠長", "Wakil Kepala Pabrik"), forward)
+
+        reverse = factory_terminology.collect_applicable_pairs(
+            "kepala bagian, kepala seksi, Wakil Direktur, dan Wakil Kepala Pabrik",
+            self.glossary,
+            "id",
+            "zh",
+            safe_reverse_index=glossary_enforcement.build_safe_reverse_index(self.glossary),
+        )
+        self.assertIn(("kepala bagian", "股長"), reverse)
+        self.assertIn(("kepala seksi", "課長"), reverse)
+        self.assertIn(("Wakil Direktur", "副總"), reverse)
+        self.assertIn(("Wakil Kepala Pabrik", "副廠長"), reverse)
+
+    def test_unambiguous_wrong_management_titles_are_repaired_locally(self):
+        source = "每個人：股長巡場取消，副總將帶隊抽查夜間工作紀律。"
+        wrong = (
+            "Untuk semuanya: Patroli area kerja oleh kepala seksi ditiadakan. "
+            "Wakil Kepala Pabrik akan memimpin tim untuk melakukan inspeksi mendadak."
+        )
+        fixed = factory_terminology.canonicalize_organization_translation(
+            source, wrong, "zh", "id"
+        )
+        self.assertIn("kepala bagian", fixed)
+        self.assertIn("Wakil Direktur", fixed)
+        self.assertNotIn("kepala seksi", fixed)
+        self.assertNotIn("Wakil Kepala Pabrik", fixed)
+
+        reverse_fixed = factory_terminology.canonicalize_organization_translation(
+            "kepala bagian dan Wakil Direktur akan memeriksa shift malam.",
+            "課長與副廠長將檢查夜班。",
+            "id",
+            "zh",
+        )
+        self.assertEqual(reverse_fixed, "股長與副總將檢查夜班。")
+
+    def test_multi_role_source_is_not_guessed_by_local_repair(self):
+        source = "股長與課長一起巡場。"
+        target = "kepala seksi dan kepala bagian melakukan patroli bersama."
+        self.assertEqual(
+            factory_terminology.canonicalize_organization_translation(
+                source, target, "zh", "id"
+            ),
+            target,
+        )
 
     def test_plant_section_mapping_uses_erp_semantics_not_generic_hierarchy(self):
         pairs = factory_terminology.collect_applicable_pairs(

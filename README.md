@@ -193,7 +193,7 @@ line-translator-bot/
 ├── glossary_policy.py             # 詞庫標準化與舊資料遷移規則
 ├── glossary_enforcement.py        # 雙向術語合規與反向安全索引
 ├── factory_knowledge.json         # 工廠上下文知識、流程與已確認修正案例
-├── factory_translation_regression.json # 16 組正式歷史工廠翻譯回歸案例
+├── factory_translation_regression.json # 30 組正式歷史工廠翻譯回歸案例
 ├── validate_factory_translation_assets.py # 無需 Flask/LINE/API 的離線發布驗證器
 ├── requirements.txt               # Python 套件
 ├── Dockerfile                     # Docker 部署用
@@ -208,21 +208,20 @@ line-translator-bot/
 2. `glossary_data.json`／`glossary_policy.py`：提供唯一標準詞、禁用譯法與舊資料遷移規則。
 3. `factory_knowledge.json`：保存需要整句語境判斷的流程、角色、設備與已確認修正案例。
 4. `translation_casebook.py`：只允許來源完全相同且通過工廠語義驗證的人工修正直接命中。
-5. `translation_quality_gate.py`：新生成的工廠譯文預設由來源重新建構並獨立複核；複核結果仍須通過本地語義檢查。
+5. `translation_quality_gate.py`：一般且本地驗證通過的訊息維持一次模型呼叫；高風險、語義不完整或本地驗證失敗時才做一次來源複核。
 6. `factory_translation_guard.py`：在模型輸出、最終交付、快取、TM、主動學習、表情裝飾與 OCR 路徑上使用同一套驗收邊界。
-7. `factory_translation_regression.json`：保存 16 組正式歷史案例及禁用錯譯探針，防止改版回歸。
+7. `factory_translation_regression.json`：保存 30 組正式歷史案例及禁用錯譯探針，防止改版回歸。
 
 生產預設：
 
 ```bash
 FACTORY_TRANSLATION_MODE=always
-FACTORY_TRANSLATION_REVIEW_MODE=always
-FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=1
-FACTORY_TRANSLATION_FAIL_CLOSED=1
+FACTORY_TRANSLATION_REVIEW_MODE=adaptive
+FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS=0
 FACTORY_ALLOW_GENERIC_NMT_FALLBACK=0
 ```
 
-`FACTORY_TRANSLATION_MODE=auto` 僅適合臨時測試；`off` 會停用統一工廠路由。`FACTORY_TRANSLATION_REVIEW_MODE=always` 代表每一筆新生成的中印工廠譯文都必須從原文重新複核；精確命中的已驗證案例不重複花費 API。當必要複核失敗、譯文違反工廠驗收規則或只剩通用 NMT 時，正式預設會拒絕交付、寫入快取與學習資料，避免錯譯污染。
+`FACTORY_TRANSLATION_MODE=auto` 僅適合臨時測試；`off` 會停用統一工廠路由。`adaptive` 會讓一般乾淨訊息只呼叫一次模型，重大安全、品質、衝突指示或本地驗證失敗才複核；確定性的職稱校正與術語檢查仍在每次翻譯執行。若確實需要逐筆複核，必須同時設定 `FACTORY_TRANSLATION_REVIEW_MODE=always` 與 `FACTORY_ALLOW_ALWAYS_REVIEW=1`，避免舊環境變數無意間把時間與費用加倍。未通過驗證的結果不會寫入快取或學習資料。
 
 發布前執行：
 
