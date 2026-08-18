@@ -31,8 +31,8 @@ import factory_message_semantics as fmr_module
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 25
-QUALITY_GATE_BUILD_ID = "2026-08-14.1-all-exit-source-claims"
+QUALITY_GATE_API_VERSION = 26
+QUALITY_GATE_BUILD_ID = "2026-08-18.1-source-bound-privacy-placeholders"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1509,13 +1509,29 @@ def validate_translation(
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
-    if _PLACEHOLDER_RE.search(candidate) or _UNKNOWN_PLACEHOLDER_RE.search(candidate):
+    # A provider-bound privacy placeholder is valid only when the same token is
+    # present in the masked source. Canonicalize harmless spacing/bracket drift
+    # first, then flag only invented/unknown tokens. The previous unconditional
+    # check forced every privacy-safe response through paid provider failover.
+    source_placeholders = {
+        match.group(0) for match in _PLACEHOLDER_RE.finditer(source)
+    }
+    candidate_for_tokens = canonicalize_placeholders(
+        candidate, {placeholder: placeholder for placeholder in source_placeholders}
+    )
+    candidate_placeholders = {
+        match.group(0) for match in _PLACEHOLDER_RE.finditer(candidate_for_tokens)
+    }
+    if any(placeholder not in source_placeholders for placeholder in candidate_placeholders):
+        issues.append("placeholder_leak")
+    placeholder_residue = _PLACEHOLDER_RE.sub("", candidate_for_tokens)
+    if _UNKNOWN_PLACEHOLDER_RE.search(placeholder_residue):
         issues.append("placeholder_leak")
 
     for token in _PIPELINE_TOKEN_RE.findall(source):
-        if candidate.count(token) < source.count(token):
+        if candidate_for_tokens.count(token) < source.count(token):
             issues.append(f"missing_pipeline_token:{token}")
-    for token in _PIPELINE_TOKEN_RE.findall(candidate):
+    for token in _PIPELINE_TOKEN_RE.findall(candidate_for_tokens):
         if token not in source:
             issues.append(f"invented_pipeline_token:{token}")
 
@@ -1809,6 +1825,7 @@ def _call_chat_complete(
     provider_preference: Optional[Sequence[str]] = None,
     structured_schema: Optional[Mapping[str, Any]] = None,
     structured_name: str = "translation_source_audit",
+    privacy_literals: Optional[Iterable[str]] = None,
 ) -> Any:
     """Issue exactly one coordinated request.
 
@@ -1830,6 +1847,8 @@ def _call_chat_complete(
     if structured_schema:
         kwargs["structured_schema"] = dict(structured_schema)
         kwargs["structured_name"] = str(structured_name or "translation_source_audit")
+    if privacy_literals:
+        kwargs["privacy_literals"] = list(privacy_literals)
     return ai_client.chat_complete(**kwargs)
 
 def _extract_response_text(resp: Any) -> str:
@@ -1860,6 +1879,7 @@ def review_translation(
     ai_client: Any = None,
     provider_preference: Optional[Sequence[str]] = None,
     review_context: str = "",
+    privacy_literals: Optional[Iterable[str]] = None,
 ) -> Optional[str]:
     """Perform one independent source-grounded adjudication call.
 
@@ -1919,6 +1939,7 @@ def review_translation(
             provider_preference=provider_preference,
             structured_schema=(fsa_module.structured_review_schema() if use_structured_audit else None),
             structured_name="factory_translation_source_audit",
+            privacy_literals=privacy_literals,
         )
         raw = _extract_response_text(response)
         if use_structured_audit:
@@ -2059,6 +2080,7 @@ def gate_and_revise(
     review_context: str = "",
     semantic_validator: Optional[Callable[[str], Tuple[bool, Sequence[str]]]] = None,
     require_review_success: bool = False,
+    privacy_literals: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """Validate and, for high-risk messages, independently reconstruct once.
 
@@ -2131,6 +2153,7 @@ def gate_and_revise(
             ai_client=ai_client,
             provider_preference=preference,
             review_context=review_context,
+            privacy_literals=privacy_literals,
         )
         if reviewed:
             reviewed = repair_identity_tokens(source, reviewed)

@@ -29,7 +29,7 @@ language_detection.py — Language Auto-Detection v1.0 (2026-05-20)
 
 import logging
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable, List
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,16 @@ VI_KEYWORDS = {
     "khi", "đã", "sẽ", "này", "đó", "tôi", "bạn", "anh", "chị", "em",
     "phải", "nên", "vì", "nếu", "mà", "rồi", "đang", "rất", "cũng",
 }
+
+_TECH_ACRONYMS = {
+    "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "NG", "OCR",
+    "OK", "PLC", "PPE", "QA", "QC", "RPM", "SOP", "TAG", "TIG", "UI",
+    "UPS", "URL", "UT", "WIP", "WO",
+}
+_IDENTITY_PLACEHOLDER_RE = re.compile(
+    r"(?:__QG_KEEP_\d{3}_[0-9A-F]{8}__|__MENTION_\d+__|__PERSON_\d+__|__CUST_\d+__)",
+    re.I,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -179,6 +189,98 @@ def detect_language(text: str) -> Dict[str, Any]:
         "is_mixed": is_mixed,
         "block_ratios": block_ratios,
     }
+
+
+def analyze_code_switching(
+    text: str,
+    src_lang: str = "",
+    tgt_lang: str = "",
+    protected_literals: Iterable[str] = (),
+) -> Dict[str, Any]:
+    """Detect genuine natural-language code switching without another API call.
+
+    ``detect_language`` intentionally chooses one dominant language because the
+    LINE router needs a single source code.  This companion profile records the
+    secondary natural-language spans so the translator is explicitly told to
+    translate them too.  Equipment codes and protected names do not trigger it.
+    """
+    value = str(text or "")
+    for literal in sorted(
+        {str(item or "").strip() for item in protected_literals if str(item or "").strip()},
+        key=len,
+        reverse=True,
+    ):
+        value = value.replace(literal, " ")
+    value = _IDENTITY_PLACEHOLDER_RE.sub(" ", value)
+
+    latin_tokens = re.findall(r"(?<![A-Za-z])([A-Za-zÀ-ÖØ-öø-ÿ]{2,})(?![A-Za-z])", value)
+    prose_tokens: List[str] = [
+        token for token in latin_tokens
+        if token.upper() not in _TECH_ACRONYMS
+    ]
+    latin_lower = [token.lower() for token in prose_tokens]
+    latin_hits = {
+        "id": sum(token in ID_KEYWORDS for token in latin_lower),
+        "en": sum(token in EN_KEYWORDS for token in latin_lower),
+        "vi": sum(token in VI_KEYWORDS for token in latin_lower),
+    }
+    latin_is_prose = bool(
+        len(prose_tokens) >= 2
+        and (max(latin_hits.values(), default=0) >= 1 or len(prose_tokens) >= 4)
+    )
+    latin_language = "unknown"
+    if latin_is_prose:
+        probe = " ".join(prose_tokens)
+        latin_language, _confidence = _classify_latin(probe)
+
+    script_counts = {
+        "zh": len(re.findall(r"[\u3400-\u9fff]", value)),
+        "ja": len(re.findall(r"[\u3040-\u30ff]", value)),
+        "ko": len(re.findall(r"[\uac00-\ud7af]", value)),
+        "th": len(re.findall(r"[\u0e00-\u0e7f]", value)),
+        "hi": len(re.findall(r"[\u0900-\u097f]", value)),
+    }
+    languages: List[str] = []
+    if script_counts["ja"]:
+        languages.append("ja")
+    elif script_counts["zh"] >= 2:
+        languages.append("zh")
+    for lang in ("ko", "th", "hi"):
+        if script_counts[lang] >= 2:
+            languages.append(lang)
+    if latin_is_prose:
+        languages.append(latin_language)
+    languages = list(dict.fromkeys(lang for lang in languages if lang != "unknown"))
+
+    is_mixed = len(languages) >= 2
+    # Two Latin languages cannot be reliably segmented by a local keyword probe;
+    # report only script-grounded mixtures and avoid over-directing the model.
+    return {
+        "is_mixed": is_mixed,
+        "languages": languages,
+        "source_language": str(src_lang or "").lower(),
+        "target_language": str(tgt_lang or "").lower(),
+        "latin_language": latin_language,
+        "latin_tokens": len(prose_tokens),
+        "script_counts": script_counts,
+    }
+
+
+def code_switching_instruction(profile: Dict[str, Any]) -> str:
+    """Build a compact provider instruction; returns empty for normal text."""
+    if not isinstance(profile, dict) or not profile.get("is_mixed"):
+        return ""
+    languages = ", ".join(str(item) for item in profile.get("languages", []) if item)
+    return (
+        "<code_switching>\n"
+        "The source intentionally mixes natural-language spans"
+        + (" (detected: " + languages + ")" if languages else "")
+        + ". Translate every natural-language span into the requested target language, "
+        "including a secondary-language span. Preserve only names, technical codes, "
+        "approved factory terms and placeholders; do not leave ordinary secondary-language "
+        "instructions untranslated. Use one coherent target-language message.\n"
+        "</code_switching>"
+    )
 
 
 def _classify_latin(text: str) -> tuple:

@@ -99,6 +99,7 @@ def init():
                     embedding BLOB NOT NULL,
                     embedding_model TEXT NOT NULL,
                     group_id TEXT DEFAULT '',
+                    model TEXT DEFAULT '',
                     hit_count INTEGER DEFAULT 0,
                     quality_score REAL,
                     created_at INTEGER NOT NULL,
@@ -110,6 +111,17 @@ def init():
                 CREATE INDEX IF NOT EXISTS idx_vec_hit ON vector_entries(hit_count DESC);
                 CREATE INDEX IF NOT EXISTS idx_vec_used ON vector_entries(last_used_at DESC);
             """)
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(vector_entries)").fetchall()
+            }
+            if "model" not in columns:
+                conn.execute(
+                    "ALTER TABLE vector_entries ADD COLUMN model TEXT DEFAULT ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vec_model ON vector_entries(model)"
+            )
         _init_done = True
         logger.info("[VecTM] init OK, db=%s", VECTOR_DB_PATH)
     except Exception as e:
@@ -358,17 +370,18 @@ def vector_store(src_text: str, tgt_text: str, src_lang: str, tgt_lang: str,
             conn.execute("""
                 INSERT INTO vector_entries
                     (src_lang, tgt_lang, src_text, src_text_hash, tgt_text, embedding,
-                     embedding_model, group_id, hit_count, quality_score, created_at, last_used_at)
-                VALUES (?,?,?,?,?,?,?,?,1,?,?,?)
+                     embedding_model, group_id, model, hit_count, quality_score, created_at, last_used_at)
+                VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)
                 ON CONFLICT(src_lang, tgt_lang, src_text_hash, group_id) DO UPDATE SET
                     tgt_text=excluded.tgt_text,
                     embedding=excluded.embedding,
                     embedding_model=excluded.embedding_model,
+                    model=excluded.model,
                     quality_score=excluded.quality_score,
                     last_used_at=excluded.last_used_at,
                     hit_count=hit_count+1
             """, (src_lang, tgt_lang, src_text, src_hash, tgt_text, blob,
-                  EMBEDDING_MODEL, group_id, quality_score, now, now))
+                  EMBEDDING_MODEL, group_id, model or "", quality_score, now, now))
         with _lock:
             _stats["stores"] += 1
         return True
@@ -456,6 +469,42 @@ def vector_delete_target_texts(target_texts: List[str], src_lang: Optional[str] 
         return count
     except Exception as e:
         logger.error("[VecTM] delete_target_texts failed: %s", e)
+        return 0
+
+
+def vector_delete_exact(src_text: str, src_lang: str, tgt_lang: str,
+                        group_id: Optional[str] = None,
+                        model: Optional[str] = None,
+                        target_text: Optional[str] = None) -> int:
+    """Compare-and-delete one exact vector asset for correction rollback."""
+    if not _init_done:
+        init()
+    source = str(src_text or "").strip()
+    if not source:
+        return 0
+    where = [
+        "src_lang=?", "tgt_lang=?", "src_text_hash=?", "src_text=?", "group_id=?",
+    ]
+    params: List[Any] = [
+        src_lang, tgt_lang, _hash_text(source), source, group_id or "",
+    ]
+    if model is not None:
+        where.append("COALESCE(model,'')=?")
+        params.append(str(model))
+    if target_text is not None:
+        where.append("tgt_text=?")
+        params.append(str(target_text).strip())
+    try:
+        with sqlite3.connect(VECTOR_DB_PATH) as conn:
+            cursor = conn.execute(
+                "DELETE FROM vector_entries WHERE " + " AND ".join(where), params
+            )
+            count = int(cursor.rowcount)
+        if count:
+            logger.info("[VecTM] exact correction rollback removed=%d", count)
+        return count
+    except Exception as exc:
+        logger.error("[VecTM] exact delete failed: %s", exc)
         return 0
 
 

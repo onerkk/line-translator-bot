@@ -120,6 +120,10 @@ def _case_from_example(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[
 
 
 def _case_from_correction(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[str, Any]]:
+    # Rows created before moderation have no status and are historical approved
+    # corrections. New pending/rejected feedback is evidence only, never truth.
+    if raw.get("status") is not None and str(raw.get("status")).lower() != "approved":
+        return None
     src_lang = str(raw.get("src_lang") or "").lower()
     tgt_lang = str(raw.get("tgt_lang") or "").lower()
     direction = direction_key(src_lang, tgt_lang)
@@ -149,7 +153,15 @@ def active_corrections_snapshot(active_learning_module: Any, *, ttl_seconds: int
             return [dict(row) for row in _ACTIVE_CACHE.get("rows", [])]
     rows: List[Dict[str, Any]] = []
     try:
-        raw_rows = active_learning_module.list_corrections(limit=max(1, int(limit)), offset=0)
+        try:
+            raw_rows = active_learning_module.list_corrections(
+                limit=max(1, int(limit)), offset=0, status="approved"
+            )
+        except TypeError:
+            # Compatibility with a test double or pre-moderation module.
+            raw_rows = active_learning_module.list_corrections(
+                limit=max(1, int(limit)), offset=0
+            )
         for index, raw in enumerate(raw_rows or []):
             if isinstance(raw, Mapping):
                 case = _case_from_correction(raw, index)

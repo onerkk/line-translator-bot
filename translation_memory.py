@@ -698,6 +698,47 @@ def tm_delete(entry_id: int) -> bool:
         return False
 
 
+def tm_delete_exact(src_text: str, src_lang: str, tgt_lang: str,
+                    group_id: Optional[str] = None,
+                    model: Optional[str] = None,
+                    target_text: Optional[str] = None) -> int:
+    """Delete only the exact source asset that still matches its provenance.
+
+    Moderated-correction rollback must never erase a newer correction that
+    happens to share the same source hash.  Optional model/target predicates
+    make that operation compare-and-delete instead of a broad purge.
+    """
+    if not _init_done:
+        init()
+    source = str(src_text or "").strip()
+    if not source:
+        return 0
+    where = [
+        "src_lang=?", "tgt_lang=?", "src_text_hash=?", "src_text=?", "group_id=?",
+    ]
+    params: List[Any] = [
+        src_lang, tgt_lang, _hash_text(source), source, group_id or "",
+    ]
+    if model is not None:
+        where.append("COALESCE(model,'')=?")
+        params.append(str(model))
+    if target_text is not None:
+        where.append("tgt_text=?")
+        params.append(str(target_text).strip())
+    try:
+        with sqlite3.connect(TM_DB_PATH) as conn:
+            cursor = conn.execute(
+                "DELETE FROM tm_entries WHERE " + " AND ".join(where), params
+            )
+            count = int(cursor.rowcount)
+        if count:
+            logger.info("[TM] exact correction rollback removed=%d", count)
+        return count
+    except Exception as exc:
+        logger.error("[TM] exact delete failed: %s", exc)
+        return 0
+
+
 def tm_delete_by_model(model: str, src_lang: Optional[str] = None,
                        tgt_lang: Optional[str] = None,
                        group_id: Optional[str] = None) -> int:

@@ -24,6 +24,9 @@ import urllib.parse
 import urllib.error
 from typing import Optional, Dict, Any
 
+import language_detection as _language_detection
+import translation_privacy as _translation_privacy
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -53,6 +56,7 @@ _stats = {
     "nmt_failed": 0,
     "nmt_chars_translated": 0,
     "estimated_cost_usd": 0.0,
+    "privacy_values_masked": 0,
 }
 
 
@@ -116,6 +120,13 @@ def nmt_route_reason(text: str, src_lang: str, tgt_lang: str,
     src = (src_lang or "").lower()
     tgt = (tgt_lang or "").lower()
 
+    try:
+        if _language_detection.analyze_code_switching(text, src, tgt).get("is_mixed"):
+            # Mixed natural-language spans need one context-aware call.  Splitting
+            # them would increase requests and can destroy cross-span meaning.
+            return False, "mixed_language"
+    except Exception:
+        pass
     if len(text) >= NMT_SHORT_THRESHOLD:
         return False, "too_long"
     if any(ord(c) > 0x1F000 for c in text):
@@ -268,13 +279,29 @@ def nmt_translate(text: str, src: str, tgt: str) -> Optional[str]:
     
     with _lock:
         _stats["route_to_nmt"] += 1
+
+    privacy_envelope = _translation_privacy.mask_sensitive_text(text)
+    provider_text = privacy_envelope.masked
+    if privacy_envelope.mapping:
+        with _lock:
+            _stats["privacy_values_masked"] += len(privacy_envelope.mapping)
     
     if NMT_PROVIDER == "google":
-        result = _google_translate(text, src, tgt)
+        result = _google_translate(provider_text, src, tgt)
     elif NMT_PROVIDER == "deepl":
-        result = _deepl_translate(text, src, tgt)
+        result = _deepl_translate(provider_text, src, tgt)
     else:
         return None
+
+    if result and privacy_envelope.mapping:
+        placeholders_ok, missing = _translation_privacy.placeholders_preserved(
+            result, privacy_envelope
+        )
+        if not placeholders_ok:
+            logger.warning("[NMT] privacy placeholder omitted; rejecting result: %s", missing[:3])
+            result = None
+        else:
+            result = _translation_privacy.restore_sensitive_text(result, privacy_envelope)
     
     if result:
         with _lock:

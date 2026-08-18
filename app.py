@@ -213,7 +213,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.45.0-durable-translation-delivery-root-cure-2026-08-06"
+VERSION = "v3.46.0-moderated-private-code-switch-2026-08-18"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -259,6 +259,7 @@ import tbx_support as tbx_module              # Phase F: TBX 1.0 ISO terminology
 import glossary_enforcement as ge_module      # Phase H: Glossary post-validation enforcement
 import glossary_policy as gp_module             # canonical vs explanatory terminology policy
 import translation_quality_gate as tqg_module  # synchronous provider-neutral integrity gate
+import translation_privacy as translation_privacy_module  # provider-boundary PII/name masking
 import prompt_optimizer as prompt_opt_module   # runtime prompt compiler: principles + relevant real-failure rules
 import translation_extras as translation_extras_module
 import expressive_assets as expressive_assets_module
@@ -295,8 +296,8 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 25
-_EXPECTED_QG_BUILD_ID = "2026-08-14.1-all-exit-source-claims"
+_EXPECTED_QG_API_VERSION = 26
+_EXPECTED_QG_BUILD_ID = "2026-08-18.1-source-bound-privacy-placeholders"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -10286,6 +10287,25 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         input_text = text
         cust_placeholders = {}
         _visible_protected_names = collect_visible_protected_names(input_text)
+        # Native LINE mentions are already converted to __MENTION_n__ before
+        # leaving the process, so their visible labels do not need a second PII
+        # token. Plain names, e-mail, phone and labelled identity/account values
+        # are masked locally at the provider boundary.
+        _name_probe = input_text
+        try:
+            for _mention_value in extract_mentions(input_text):
+                _name_probe = _name_probe.replace(_mention_value, " ")
+        except Exception:
+            pass
+        _visible_protected_names = [
+            _name for _name in _visible_protected_names if _name in _name_probe
+        ]
+        _privacy_envelope = translation_privacy_module.mask_sensitive_text(
+            input_text, extra_literals=_visible_protected_names
+        )
+        _mixed_profile = ld_module.analyze_code_switching(
+            input_text, src, tgt, protected_literals=_visible_protected_names
+        )
 
         # Provider-neutral immutable-data inventory.  Real work-order IDs, model
         # codes, measurements and field values stay visible in the provider-facing
@@ -10295,7 +10315,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # misleading generic failure.  We now inventory those values for strict
         # post-generation validation without replacing them in the source.
         _immutable = tqg_module.inspect_immutable_spans(input_text)
-        protected, placeholders = protect_mentions(input_text)
+        protected, placeholders = protect_mentions(_privacy_envelope.masked)
+        _provider_source_text = protected
 
         extra_rule = ""
         if strict_no_source_script and src != tgt:
@@ -10896,6 +10917,12 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 + "\n".join("- " + name for name in _visible_protected_names[:80])
                 + "\n</protected_names>"
             )
+        _mixed_note = ld_module.code_switching_instruction(_mixed_profile)
+        if _mixed_note:
+            sys_prompt = sys_prompt + "\n" + _mixed_note
+        _privacy_note = translation_privacy_module.provider_instruction(_privacy_envelope)
+        if _privacy_note:
+            sys_prompt = sys_prompt + "\n" + _privacy_note
 
         if repair_mode and bad_result:
             msg = (
@@ -10955,6 +10982,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": msg}
             ]
+        # Last outbound boundary: also scan TM/few-shot messages so historical
+        # examples cannot leak an unrelated e-mail/phone/account value.
+        _msgs = translation_privacy_module.mask_messages(_msgs, _privacy_envelope)
         # v3.36: translation-only CP routing.  The explicit preference prevents
         # an expensive admin-selected primary model from being used for every
         # ordinary LINE sentence while retaining cross-provider failover.
@@ -10967,7 +10997,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _example_count = max(0, _example_count // 2)  # pairs
             _replace_last_translate_debug({
                 "ts": int(time.time()),
-                "src_text": text,
+                "src_text": _provider_source_text,
                 "src_lang": src,
                 "tgt_lang": tgt,
                 "model_picked": _model,
@@ -10980,6 +11010,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 "repair_mode": repair_mode,
                 "semantic_contract": getattr(_tl, 'semantic_contract', None),
                 "provider_preference": list(_provider_preference),
+                "privacy": translation_privacy_module.privacy_summary(_privacy_envelope),
+                "mixed_language": _mixed_profile,
                 "prompt_chars": sum(len(str(m.get("content", ""))) for m in _msgs),
                 "pipeline_status": "provider_request_started",
             })
@@ -11012,7 +11044,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "timeout": 90,
             # v3.32: 即時短訊息與長文使用不同總期限；協調層仍保證每家最多一次。
             "latency_profile": "long_text" if _critical_for_latency else "realtime_text",
-            "response_validator": _build_translation_response_validator(text, src, tgt),
+            "response_validator": _build_translation_response_validator(
+                _provider_source_text, src, tgt
+            ),
             "provider_preference": _provider_preference,
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
@@ -11372,6 +11406,19 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 result = _raw
         else:
             result = _raw
+        if _privacy_envelope.mapping:
+            _privacy_ok, _privacy_missing = translation_privacy_module.placeholders_preserved(
+                result, _privacy_envelope
+            )
+            if not _privacy_ok:
+                logger.error(
+                    "[Privacy] provider omitted protected values; rejecting candidate: %s",
+                    _privacy_missing[:3],
+                )
+                return None
+            result = translation_privacy_module.restore_sensitive_text(
+                result, _privacy_envelope
+            )
         # Outer translate() may already have converted LINE mentions to
         # __MENTION_n__.  Recover provider-dropped tokens before any local
         # integrity validator can reject an otherwise complete translation.
@@ -11471,7 +11518,18 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
 
 def translate_google(text, src, tgt):
     try:
-        protected, placeholders = protect_mentions(text)
+        privacy_names = collect_visible_protected_names(text)
+        try:
+            name_probe = text
+            for mention_value in extract_mentions(text):
+                name_probe = name_probe.replace(mention_value, " ")
+            privacy_names = [name for name in privacy_names if name in name_probe]
+        except Exception:
+            pass
+        privacy_envelope = translation_privacy_module.mask_sensitive_text(
+            text, extra_literals=privacy_names
+        )
+        protected, placeholders = protect_mentions(privacy_envelope.masked)
         lang_map = {
             "zh": "zh-TW", "id": "id", "en": "en",
             "vi": "vi", "th": "th", "ja": "ja",
@@ -11490,6 +11548,18 @@ def translate_google(text, src, tgt):
                 if item[0]:
                     parts.append(item[0])
             result = "".join(parts)
+            privacy_ok, privacy_missing = translation_privacy_module.placeholders_preserved(
+                result, privacy_envelope
+            )
+            if not privacy_ok:
+                logger.warning(
+                    "Google translate omitted privacy placeholders: %s",
+                    privacy_missing[:3],
+                )
+                return None
+            result = translation_privacy_module.restore_sensitive_text(
+                result, privacy_envelope
+            )
             result = restore_mentions(result, placeholders)
             # Fix known translation mistakes
             result = post_fix_translation(result)
@@ -12267,13 +12337,12 @@ def _partition_delivery_issues(issues):
 
 
 def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=None, prior_candidate=None):
-    """Return the best non-empty provider translation and forbid learning it.
+    """Return the best complete provider translation and forbid learning it.
 
-    Availability is now fail-open at the *delivery* boundary and fail-closed at
-    the *learning* boundary.  Validators may reject cache/TM admission, request
-    another provider, or record an integrity alert, but they may not replace a
-    real translation with a user-visible failure state.  Only empty output,
-    legacy failure payloads and pure model meta-commentary are undeliverable.
+    Advisory validator uncertainty is fail-open at delivery and fail-closed for
+    learning. Objective corruption (untranslated source prose, missing identity,
+    code, quantity or target script) is not a translation and must return None so
+    the next provider/detached retry can run.
     """
     issue_list = [str(item) for item in (issues or []) if str(item).strip()]
 
@@ -12373,6 +12442,18 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     ranked.sort(key=lambda item: item[0])
     _score, best, objective, advisory = ranked[0]
     degraded_issues = list(dict.fromkeys(issue_list + objective + advisory))
+    if objective:
+        logger.error(
+            "[Availability] objective corruption withheld for provider fallback: %s",
+            objective[:20],
+        )
+        _update_last_translate_debug(
+            pipeline_status="objective_translation_corruption_withheld",
+            factory_guard_issues=degraded_issues[:30],
+            final_candidate="",
+            cacheable=False,
+        )
+        return None
     try:
         _tl.delivery_degraded = bool(degraded_issues)
         _tl.delivery_degraded_issues = degraded_issues[:30]
@@ -14366,6 +14447,26 @@ def _translate_core(text, src, tgt):
                            src, _detected_lang, _ld_result["confidence"], text[:60])
     except Exception as _ld_e:
         logger.debug("[LD] detect exception: %s", _ld_e)
+
+    # Dominant-language routing still uses one source code, but the provider is
+    # told when the source contains genuine secondary-language prose. This is a
+    # local scan and keeps the request count at exactly one.
+    try:
+        _mixed_profile = ld_module.analyze_code_switching(
+            text,
+            src,
+            tgt,
+            protected_literals=dict(
+                getattr(_tl, "protected_name_map", None) or {}
+            ).values(),
+        )
+        _tl.mixed_language_profile = _mixed_profile
+    except Exception as _mixed_exc:
+        logger.debug("[LD] code-switch analysis exception: %s", _mixed_exc)
+        try:
+            _tl.mixed_language_profile = {"is_mixed": False, "languages": []}
+        except Exception:
+            pass
     
     # ─── 0.5: Runtime semantic contract (根治多義詞，不靠單句補丁) ───
     # 高風險語義先分類，後面 TM / Vector TM / NMT / LLM / QE / APE 全部吃同一份 contract。
@@ -14938,6 +15039,9 @@ def _translate_core(text, src, tgt):
                 review_context=_review_context,
                 semantic_validator=_runtime_semantic_validator,
                 require_review_success=_require_review_success,
+                privacy_literals=list(dict(
+                    getattr(_tl, "protected_name_map", None) or {}
+                ).values()),
             )
             if _gate.get("reviewed"):
                 _tl.source_review_already_attempted = True
@@ -17868,7 +17972,8 @@ def find_user_by_name(group_id, name_query):
 
 
 def mark_translation_wrong(group_id, correct_translation="", add_to_examples=True,
-                           offset=1, entry_id=None):
+                           offset=1, entry_id=None, corrected_by=None,
+                           auto_approve=None):
     """v3.4: Mark a translation as wrong with multiple selection modes.
 
     Selection priority:
@@ -17877,8 +17982,9 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
 
     Args:
       group_id: LINE group id (limits search to this group's translations)
-      correct_translation: optional human-corrected version, added as training example
-      add_to_examples: whether to append to custom_translation_examples
+      correct_translation: optional corrected version, queued for review
+      add_to_examples: backward-compatible argument; approved casebook is now the
+        only correction-learning path
       offset: 1-based index from the most recent (1=latest, 2=2nd latest, ...)
       entry_id: exact translation_log entry id
 
@@ -17915,9 +18021,15 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
         original_tgt = str(target.get("tgt") or "").strip()
         correction_reason = "人工標記翻譯錯誤；以修正版為準，並泛化到相近語意句。"
 
-        # One correction path, not four disconnected stores: /wrong now writes
-        # the contrastive record, exact TM and vector TM through Active Learning.
-        # Failure is non-fatal because the local custom case is still persisted.
+        if auto_approve is None:
+            try:
+                auto_approve = bool(corrected_by and is_group_admin(corrected_by))
+            except Exception:
+                auto_approve = False
+
+        # One moderated path: worker feedback is pending; an authenticated
+        # admin correction may be approved immediately. No duplicate custom
+        # example is written, so rejection can fully roll back its influence.
         try:
             _al_result = al_module.submit_correction(
                 src_text=source_text,
@@ -17926,41 +18038,24 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
                 src_lang=src_lang,
                 tgt_lang=tgt_lang,
                 correction_reason=correction_reason,
-                corrected_by="line_wrong_command",
+                corrected_by=corrected_by or "line_wrong_command",
                 group_id=target.get("group_id") or group_id,
+                auto_approve=bool(auto_approve),
+                approved_by=(corrected_by if auto_approve else None),
             )
-            target["active_learning_correction_id"] = _al_result.get("correction_id") if isinstance(_al_result, dict) else None
-            translation_casebook_module.invalidate_active_cache()
+            if not isinstance(_al_result, dict) or not _al_result.get("ok"):
+                raise RuntimeError(
+                    str((_al_result or {}).get("error") if isinstance(_al_result, dict) else "correction_queue_failed")
+                )
+            target["active_learning_correction_id"] = _al_result.get("correction_id")
+            target["correction_status"] = _al_result.get("status", "pending")
+            if target["correction_status"] == "approved":
+                translation_casebook_module.invalidate_active_cache()
         except Exception as _al_exc:
             logger.warning("[/wrong] active-learning persistence failed: %s", _al_exc)
-
-        if add_to_examples and (src_lang, tgt_lang) in (("zh", "id"), ("id", "zh")):
-            direction = "zh2id" if (src_lang, tgt_lang) == ("zh", "id") else "id2zh"
-            new_ex = {
-                "zh": source_text if direction == "zh2id" else correct_translation,
-                "id": correct_translation if direction == "zh2id" else source_text,
-                "dir": direction,
-                "bad_id" if direction == "zh2id" else "bad_zh": original_tgt,
-                "reason": correction_reason,
-                "origin": "human_correction",
-                "case_id": "wrong:" + str(target.get("id") or int(time.time())),
-            }
-            source_field = "zh" if direction == "zh2id" else "id"
-            # Upsert by source+direction.  A newer human correction must replace,
-            # not coexist with, an older contradictory target in the prompt.
-            existing = None
-            for ex in reversed(custom_translation_examples):
-                if ex.get("dir") == direction and str(ex.get(source_field) or "").strip() == source_text:
-                    existing = ex
-                    break
-            if existing is not None:
-                existing.clear()
-                existing.update(new_ex)
-            else:
-                custom_translation_examples.append(new_ex)
-            if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
-                custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
-            _save_examples_to_disk()
+            _save_translation_log_to_disk()
+            save_settings()
+            return False, "修正回饋無法寫入審核佇列，請稍後再試。"
     _save_translation_log_to_disk()
     save_settings()
     return True, target.get("src", "")[:80]
@@ -18404,6 +18499,7 @@ def handle_command(text, group_id, user_id=None):
                 add_to_examples=False,
                 offset=parsed.get("offset", 1),
                 entry_id=parsed.get("entry_id"),
+                corrected_by=user_id,
             )
             if not ok:
                 return "⚠️ " + info
@@ -18415,12 +18511,18 @@ def handle_command(text, group_id, user_id=None):
 
         # mode == "correct"
         correct = parsed.get("correct", "").strip()
+        try:
+            correction_admin = bool(user_id and is_group_admin(user_id))
+        except Exception:
+            correction_admin = False
         ok, info = mark_translation_wrong(
             group_id,
             correct_translation=correct,
             add_to_examples=True,
             offset=parsed.get("offset", 1),
             entry_id=parsed.get("entry_id"),
+            corrected_by=user_id,
+            auto_approve=correction_admin,
         )
         if not ok:
             return "⚠️ " + info
@@ -18428,10 +18530,24 @@ def handle_command(text, group_id, user_id=None):
         position_label = "最近一筆" if offset == 1 else f"倒數第 {offset} 筆"
         if parsed.get("entry_id"):
             position_label = f"指定 ID 訊息"
-        total = len(custom_translation_examples)
-        return (f"✅ 已標記{position_label}錯誤,並加入修正範例 / Ditandai salah & ditambahkan ke contoh koreksi:\n"
+        try:
+            correction_stats = al_module.al_stats()
+        except Exception:
+            correction_stats = {}
+        if correction_admin:
+            approved_total = int(correction_stats.get("approved_corrections", 0) or 0)
+            return (
+                f"✅ 已核准{position_label}修正 / Koreksi disetujui:\n"
                 f"{correct}\n"
-                f"📚 累積範例 / Total contoh: {total} / {CUSTOM_EXAMPLES_MAX}")
+                f"📚 已核准修正 / Koreksi disetujui: {approved_total}"
+            )
+        pending_total = int(correction_stats.get("pending_corrections", 0) or 0)
+        return (
+            f"🕵️ 已送出{position_label}修正，等待管理員審核。\n"
+            f"Koreksi sudah dikirim dan menunggu persetujuan admin.\n"
+            f"{correct}\n"
+            f"⏳ 待審 / Menunggu: {pending_total}"
+        )
 
     elif cmd.startswith("/export"):
         # v3.4: export training data
@@ -22079,9 +22195,22 @@ def _apply_reaction_feedback(message_id, reaction_type, user_id, group_id):
             if prev == "negative":
                 feedback["negative"] = max(0, feedback["negative"] - 1)
             voters[user_id or ""] = "positive"
-        # If 2+ positive votes and not yet a training example, promote it.
         try:
-            if feedback["positive"] >= 2 and not target.get("promoted_to_examples"):
+            if user_id and is_group_admin(user_id):
+                feedback["admin_positive"] = True
+        except Exception:
+            pass
+        require_admin_vote = os.environ.get(
+            "REACTION_PROMOTION_REQUIRES_ADMIN", "1"
+        ).strip().lower() not in ("0", "false", "off", "no")
+        promotion_reviewed = (
+            not require_admin_vote or bool(feedback.get("admin_positive"))
+        )
+        # Two votes can show usefulness, but only an admin-reviewed consensus is
+        # allowed into prompt examples by default.
+        try:
+            if (feedback["positive"] >= 2 and promotion_reviewed
+                    and not target.get("promoted_to_examples")):
                 src_text = target.get("src", "")
                 tgt_text = target.get("tgt", "")
                 src_lang = target.get("src_lang", "zh")
@@ -24417,7 +24546,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div id="dash-al" style="padding:10px;font-size:11px;color:#aaa;font-family:monospace">—</div>
     <div style="padding:10px;border-top:1px solid #2a2a3e">
       <button onclick="alSubmitCorrection()" style="padding:6px 12px;background:#f97316;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">✏️ 提交人工修正</button>
-      <button onclick="alListCorrections()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">📋 查看修正紀錄</button>
+      <button onclick="alListCorrections()" style="padding:6px 12px;background:#444;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">📋 查看修正紀錄</button>
+      <button onclick="alReviewPending('approve')" style="padding:6px 12px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;margin-right:6px">✅ 核准待審</button>
+      <button onclick="alReviewPending('reject')" style="padding:6px 12px;background:#b91c1c;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">⛔ 駁回待審</button>
     </div>
   </details>
   
@@ -25223,7 +25354,9 @@ async function dashLoadStats(){
     const dashAl = document.getElementById('dash-al');
     if(dashAl) dashAl.innerHTML =
       'corrections_submitted: '+(al.corrections_submitted||0)+'<br>'+
+      'pending: '+(al.pending_corrections||0)+' | approved: '+(al.approved_corrections||0)+' | rejected: '+(al.rejected_corrections||0)+'<br>'+
       'tm_updated: '+(al.tm_updated||0)+' | vec_tm_updated: '+(al.vec_tm_updated||0)+'<br>'+
+      'vector sync: '+(al.vector_sync_enabled?'on':'off（省成本）')+'<br>'+
       'total_corrections in DB: '+(al.total_corrections||0)+'<br>'+
       'top correctors: '+topCorr;
     
@@ -25401,7 +25534,7 @@ async function alSubmitCorrection(){
     });
     const data = await r.json();
     alert(data.ok 
-      ? '✓ 修正提交 (id='+data.correction_id+'),TM:'+(data.tm_updated?'✓':'✗')+' Vector:'+(data.vec_updated?'✓':'✗')+'。下次同樣訊息會直接用修正版,bypass LLM。'
+      ? '✓ 修正已核准 (id='+data.correction_id+'),TM:'+(data.tm_updated?'✓':'—')+' Vector:'+(data.vec_skipped?'關閉（省成本）':(data.vec_updated?'✓':'✗'))+'。下次同樣訊息會直接使用核准版。'
       : '✗ '+(data.error||''));
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
@@ -25416,9 +25549,37 @@ async function alListCorrections(){
     let msg = '最近 '+data.count+' 筆修正:\\n\\n';
     for(const r of data.results.slice(0,10)){
       const ts = new Date(r.created_at*1000).toLocaleString();
-      msg += '#'+r.id+' '+ts+' by '+(r.corrected_by||'?')+'\\n  原:'+r.original_translation+'\\n  正:'+r.corrected_translation+'\\n  ('+(r.correction_reason||'無原因')+')\\n\\n';
+      msg += '#'+r.id+' ['+(r.status||'approved')+'] '+ts+' by '+(r.corrected_by||'?')+'\\n  原:'+r.original_translation+'\\n  正:'+r.corrected_translation+'\\n  ('+(r.correction_reason||'無原因')+')\\n\\n';
     }
     alert(msg);
+  } catch(err) { alert('✗ '+err.message); }
+}
+
+async function alReviewPending(action){
+  try {
+    const r = await fetch('/api/admin/al/list?status=pending&limit=20', {headers:{'X-Admin-Key':KEY}});
+    const data = await r.json();
+    if(!data.ok){ alert('✗ '+(data.error||'')); return; }
+    if(!data.results.length){ alert('目前沒有待審修正'); return; }
+    const summary = data.results.slice(0,12).map(x =>
+      '#'+x.id+' '+x.src_lang+'→'+x.tgt_lang+'\\n原文：'+x.src_text+'\\n修正：'+x.corrected_translation
+    ).join('\\n\\n');
+    const idRaw = prompt((action==='approve'?'核准':'駁回')+'哪一筆？請輸入 ID：\\n\\n'+summary, '');
+    if(!idRaw) return;
+    const id = parseInt(idRaw, 10);
+    if(!Number.isInteger(id) || !data.results.some(x=>x.id===id)){ alert('ID 不在待審清單'); return; }
+    let reason = null;
+    if(action==='reject'){
+      reason = prompt('駁回原因（可空）：', '內容不正確或不足以作為標準譯文');
+      if(reason===null) return;
+    }
+    const rr = await fetch('/api/admin/al/entry/'+id+'/'+action, {
+      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      body: JSON.stringify({by:'admin dashboard', reason:reason})
+    });
+    const result = await rr.json();
+    alert(result.ok ? '✓ #'+id+' 已'+(action==='approve'?'核准':'駁回') : '✗ '+(result.error||''));
+    dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
 
@@ -30946,7 +31107,7 @@ def api_admin_batch_config():
 
 @app.route("/api/admin/al/submit", methods=["POST"])
 def api_admin_al_submit():
-    """提交人工修正,同步寫回 TM + Vector TM(quality_score=100)"""
+    """Admin-submitted correction is reviewed and approved immediately."""
     if not check_manager_access("aiprovider"):
         return jsonify({"error": "forbidden"}), 403
     try:
@@ -30960,6 +31121,8 @@ def api_admin_al_submit():
             correction_reason=data.get("reason"),
             corrected_by=data.get("by"),
             group_id=data.get("group_id"),
+            auto_approve=True,
+            approved_by=data.get("by") or "admin",
         )
         if isinstance(result, dict) and result.get("ok"):
             translation_casebook_module.invalidate_active_cache()
@@ -30980,8 +31143,43 @@ def api_admin_al_list():
             src_lang=request.args.get("src_lang") or None,
             tgt_lang=request.args.get("tgt_lang") or None,
             keyword=request.args.get("keyword") or None,
+            status=request.args.get("status") or None,
         )
         return jsonify({"ok": True, "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/entry/<int:correction_id>/approve", methods=["POST"])
+def api_admin_al_approve(correction_id):
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        result = al_module.approve_correction(
+            correction_id, approved_by=data.get("by") or "admin"
+        )
+        if result.get("ok"):
+            translation_casebook_module.invalidate_active_cache()
+        return jsonify(result), (200 if result.get("ok") else 404)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/entry/<int:correction_id>/reject", methods=["POST"])
+def api_admin_al_reject(correction_id):
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        result = al_module.reject_correction(
+            correction_id,
+            rejected_by=data.get("by") or "admin",
+            reason=data.get("reason"),
+        )
+        if result.get("ok"):
+            translation_casebook_module.invalidate_active_cache()
+        return jsonify(result), (200 if result.get("ok") else 404)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -34266,6 +34464,8 @@ def api_admin_translation_log_mark_wrong():
         correct_translation=correct,
         add_to_examples=bool(correct) and add,
         entry_id=eid,
+        corrected_by="admin_api",
+        auto_approve=True,
     )
     return jsonify({"ok": ok, "info": info, "examples_total": len(custom_translation_examples)})
 
@@ -34284,6 +34484,9 @@ def health():
         "translation_casebook_build": _EXPECTED_CASEBOOK_BUILD_ID,
         "translation_casebook_selftest": bool(_CASEBOOK_BOOT_SELFTEST_OK),
         "translation_casebook_cases": len(_CASEBOOK_BOOT_SELFTEST),
+        "translation_privacy_build": translation_privacy_module.PRIVACY_BUILD_ID,
+        "translation_privacy_enabled": translation_privacy_module.privacy_enabled(),
+        "active_learning_build": al_module.ACTIVE_LEARNING_BUILD_ID,
         "factory_translation_policy": factory_translation_policy_module.health(),
         "factory_translation_guard": factory_translation_guard_module.health(),
         "factory_translation_guard_fingerprint": factory_translation_guard_module.asset_fingerprint(),
@@ -35158,7 +35361,8 @@ _ADMIN_ONLY_EQ = {
     "/clearcache",
 }
 _ADMIN_ONLY_STARTSWITH = (
-    "/wrong", "/markwrong", "/錯", "/標錯",
+    # /wrong is intentionally open to workers; their correction stays pending
+    # until an admin approves it and therefore cannot poison translation memory.
     "/export",
     "/skipterm",
     "/skipadd",

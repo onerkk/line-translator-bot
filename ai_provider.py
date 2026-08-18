@@ -108,6 +108,7 @@ import time
 import threading
 
 import glossary_policy as gp_module
+import translation_privacy as privacy_module
 
 # ═══════════════════════════════════════════════════════════════════
 # 設定檔路徑
@@ -2162,6 +2163,32 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
     )
 
 
+def _prepare_provider_privacy(messages, extra_literals=()):
+    """Mask string message content once at the final external-provider edge."""
+    combined = "\n".join(
+        str(message.get("content") or "")
+        for message in (messages or [])
+        if isinstance(message, dict) and isinstance(message.get("content"), str)
+    )
+    envelope = privacy_module.mask_sensitive_text(
+        combined, extra_literals=extra_literals
+    )
+    return privacy_module.mask_messages(messages or [], envelope), envelope
+
+
+def _restore_provider_privacy(response, envelope):
+    if not envelope.mapping or not getattr(response, "choices", None):
+        return response
+    try:
+        message = response.choices[0].message
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            message.content = privacy_module.restore_sensitive_text(content, envelope)
+    except Exception as exc:
+        print(f"[ai_provider] privacy restore failed: {type(exc).__name__}", flush=True)
+    return response
+
+
 def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                   temperature=None, timeout=90, prompt_cache_key=None,
                   reasoning_effort=None, verbosity=None, logprobs=False,
@@ -2176,6 +2203,10 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     provider_preference = kwargs.pop("provider_preference", None)
     latency_profile = str(kwargs.pop("latency_profile", "") or "").strip()
     response_validator = kwargs.pop("response_validator", None)
+    privacy_literals = kwargs.pop("privacy_literals", ()) or ()
+    messages, privacy_envelope = _prepare_provider_privacy(
+        messages, extra_literals=privacy_literals
+    )
     policy = (_current_config or {}).get("failover_policy", {})
     profile_cfg = (policy.get("latency_profiles", {}) or {}).get(latency_profile, {})
     requested_total = kwargs.pop("failover_total_timeout", None)
@@ -2239,6 +2270,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 elif provider_attempt:
                     print(f"[ai_provider] {provider} 暫時性錯誤，單次快速重試", flush=True)
                 response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+                response = _restore_provider_privacy(response, privacy_envelope)
                 elapsed = time.monotonic() - started
                 if callable(response_validator):
                     verdict = response_validator(response, provider)
