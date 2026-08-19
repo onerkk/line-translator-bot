@@ -149,6 +149,15 @@ def audit() -> Dict[str, Any]:
                 "我過去了了解看看", "zh-TW", "id-ID",
                 "Saya ke sana dulu untuk mengecek situasinya.",
             ),
+            (
+                "@All 拋光小棒這兩個月來不及出貨的遞延料很多，"
+                "系統上藍底備註跟交期6、7月的料優先生產",
+                "zh", "id",
+                "@All Dalam dua bulan terakhir, banyak material batang berukuran kecil "
+                "untuk proses polishing yang tertunda karena tidak sempat dikirim tepat waktu. "
+                "Prioritaskan produksi material yang catatannya berlatar biru di sistem serta "
+                "material dengan jadwal pengiriman bulan Juni dan Juli.",
+            ),
         )
         for source, src, tgt, expected in route_probes:
             actual = message_semantics.translate_source_directly(source, src, tgt)

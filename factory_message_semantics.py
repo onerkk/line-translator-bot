@@ -7,10 +7,11 @@ on the shop floor: equipment-to-reading comparisons, reporting with a leader's
 ID, and movement-to-a-location followed by inspection.
 
 The rules are not sentence replacements.  Values, units, aspect, destination,
-objects and mentions are read from the current source.  A direct translation is
-produced only when every meaningful source token belongs to a supported slot;
-otherwise the same frame becomes a provider prompt and a deterministic
-completeness check for the ordinary translation path.
+objects, production-selection criteria and mentions are read from the current
+source.  A direct translation is produced only when every meaningful source
+token belongs to a supported slot; otherwise the same frame becomes a provider
+prompt and a deterministic completeness check for the ordinary translation
+path.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ import unicodedata
 from typing import Any, Iterable, Mapping
 
 
-FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-17.1-erp-data-release-relations"
+FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-19.1-production-priority-relations"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -169,6 +170,64 @@ _ZH_RELEASE_QC_RE = re.compile(
     r"(?:放行|放了|已放).{0,12}(?:品保|品管|品質|质量|QC|檢驗|检验)",
     re.I,
 )
+
+# Production-planning notices often combine two linked claims: a backlog caused
+# by missed shipping in a recent period, followed by two *alternative* priority
+# selectors from the production system.  A literal model can turn the first
+# noun phrase into ``material tunda batang kecil polishing`` and collapse the
+# two selectors into one material that must satisfy both conditions.  Parse the
+# relations before any provider call so recognized notices are both natural and
+# immediate, while paraphrases/extra clauses still go through the ordinary
+# source-grounded provider path instead of being silently dropped.
+_ZH_PROCESS_TO_ID = {
+    "拋光": "polishing",
+    "抛光": "polishing",
+    "研磨": "grinding",
+    "削皮": "peeling",
+    "冷抽": "cold drawing",
+    "矯直": "straightening",
+    "矫直": "straightening",
+    "酸洗": "pickling",
+}
+_ZH_SMALL_BAR_TERMS = (
+    "小尺寸棒材", "小尺寸棒料", "小徑棒材", "小径棒材", "小尺寸材料", "小棒",
+)
+_ZH_BACKLOG_PERIOD_RE = re.compile(
+    r"(?P<evidence>(?:這|这|近|過去|过去|最近)"
+    r"(?P<count>\d{1,2}|[零〇一二兩两三四五六七八九十]{1,3})(?:個|个)?月)",
+    re.I,
+)
+_ZH_SHIPPING_DELAY_TERMS = (
+    "來不及出貨", "来不及出货", "未能如期出貨", "未能如期出货",
+    "無法如期出貨", "无法如期出货", "沒能如期出貨", "没能如期出货",
+    "無法按期出貨", "无法按期出货", "未能按期出貨", "未能按期出货",
+)
+_ZH_DEFERRED_MATERIAL_TERMS = (
+    "遞延材料", "递延材料", "遞延料", "递延料", "延遲材料", "延迟材料",
+    "延遲料", "延迟料", "積欠材料", "积欠材料", "積欠料", "积欠料",
+)
+_ZH_BACKLOG_VOLUME_TERMS = ("非常多", "相當多", "相当多", "很多", "不少", "大量")
+_ZH_SYSTEM_TERMS = ("系統上", "系统上", "系統中", "系统中", "系統內", "系统内", "系統", "系统")
+_ZH_BLUE_MARK_TERMS = (
+    "藍色底", "蓝色底", "藍底", "蓝底", "藍色標示", "蓝色标示",
+    "藍色標記", "蓝色标记", "藍色底色", "蓝色底色",
+)
+_ZH_NOTE_TERMS = ("備註", "备注", "註記", "注记", "標示", "标示", "標記", "标记")
+_ZH_PRIORITY_ACTION_TERMS = (
+    "優先生產", "优先生产", "優先排產", "优先排产", "先排產", "先排产", "先生產", "先生产",
+)
+_ZH_MONTH_TOKEN = r"(?:1[0-2]|0?[1-9]|十二|十一|十|[一二三四五六七八九])"
+_ZH_DELIVERY_MONTH_RE = re.compile(
+    r"(?P<evidence>(?:交期|出貨月份|出货月份|交貨月份|交货月份)"
+    r"(?:為|为|是)?(?P<months>" + _ZH_MONTH_TOKEN + r"(?:月)?"
+    r"(?:(?:、|,|，|/|及|和|跟|與|与)" + _ZH_MONTH_TOKEN + r"(?:月)?)*))",
+    re.I,
+)
+_ID_MONTH_NAMES = {
+    1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+    5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+    9: "September", 10: "Oktober", 11: "November", 12: "Desember",
+}
 
 _ZH_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "两": 2,
@@ -602,6 +661,51 @@ def _format_id_release_count(value: int | None, raw: str) -> str:
     return str(value)
 
 
+def _parse_zh_delivery_months(value: str) -> list[int]:
+    months: list[int] = []
+    for match in re.finditer(_ZH_MONTH_TOKEN, str(value or ""), flags=re.I):
+        parsed = _parse_zh_release_count(match.group(0))
+        if parsed is not None and 1 <= parsed <= 12 and parsed not in months:
+            months.append(parsed)
+    return months
+
+
+def _format_id_month_list(months: Iterable[int]) -> str:
+    names = [_ID_MONTH_NAMES.get(int(month), "") for month in months]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return names[0] + " dan " + names[1]
+    return ", ".join(names[:-1]) + ", dan " + names[-1]
+
+
+def _strip_zh_production_priority_supported_tokens(
+    source: str, evidence: Iterable[str]
+) -> str:
+    value = _MENTION_RE.sub("", str(source or ""))
+    for token in sorted(
+        {str(item or "") for item in evidence if str(item or "")},
+        key=len,
+        reverse=True,
+    ):
+        value = value.replace(token, "", 1)
+    # These are grammatical connectors inside the supported relation, not
+    # independent claims.  Remove them only after all source-bearing phrases
+    # have been removed; an unrelated appended clause therefore remains in
+    # ``unparsed`` and blocks the local direct route.
+    support_words = {
+        "請", "请", "要", "需要", "需", "務必", "务必", "把", "將", "将",
+        "其中", "有", "的", "與", "与", "和", "及", "跟", "以及", "還有", "还有",
+        "料", "材料", "棒材", "上", "中", "內", "内", "以",
+    }
+    for token in sorted(support_words, key=len, reverse=True):
+        value = value.replace(token, "")
+    return re.sub(r"[\s,，、。.!！?？:：;；()（）\[\]{}]+", "", value)
+
+
 def _release_object_kind(raw: str) -> str:
     token = str(raw or "")
     if token in ("把", "捆"):
@@ -768,7 +872,183 @@ def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+def _build_zh_id_production_priority_frame(source: str, frame: dict) -> dict:
+    """Extract backlog cause and two independent production-priority groups.
+
+    This is intentionally compositional: process, material size, recent-period
+    count and delivery months are read from the current source.  The local
+    renderer is available only when every meaningful token is accounted for.
+    A related sentence with an extra instruction still activates the frame for
+    provider prompting/validation, but never loses that extra clause through a
+    partial deterministic translation.
+    """
+    visible = _MENTION_RE.sub("", str(source or ""))
+    compact = _compact(visible)
+    if not compact:
+        return frame
+
+    process_source = next(
+        (
+            term for term in sorted(_ZH_PROCESS_TO_ID, key=len, reverse=True)
+            if term in compact
+        ),
+        "",
+    )
+    small_bar_source = next(
+        (term for term in _ZH_SMALL_BAR_TERMS if term in compact), ""
+    )
+    period_match = _ZH_BACKLOG_PERIOD_RE.search(compact)
+    period_evidence = period_match.group("evidence") if period_match else ""
+    period_count_raw = period_match.group("count") if period_match else ""
+    period_count = _parse_zh_release_count(period_count_raw)
+    shipping_delay_source = next(
+        (term for term in _ZH_SHIPPING_DELAY_TERMS if term in compact), ""
+    )
+    deferred_source = next(
+        (term for term in _ZH_DEFERRED_MATERIAL_TERMS if term in compact), ""
+    )
+    volume_source = next(
+        (term for term in _ZH_BACKLOG_VOLUME_TERMS if term in compact), ""
+    )
+    system_source = next(
+        (term for term in _ZH_SYSTEM_TERMS if term in compact), ""
+    )
+    blue_source = next(
+        (term for term in _ZH_BLUE_MARK_TERMS if term in compact), ""
+    )
+    note_source = next(
+        (term for term in _ZH_NOTE_TERMS if term in compact), ""
+    )
+    priority_source = next(
+        (term for term in _ZH_PRIORITY_ACTION_TERMS if term in compact), ""
+    )
+    delivery_match = _ZH_DELIVERY_MONTH_RE.search(compact)
+    delivery_evidence = delivery_match.group("evidence") if delivery_match else ""
+    delivery_months = _parse_zh_delivery_months(
+        delivery_match.group("months") if delivery_match else ""
+    )
+
+    # Require the distinctive relation shape before claiming the sentence.  A
+    # generic note about a blue system row or a standalone delivery-month order
+    # must remain outside this specialized frame.
+    core_signal = bool(
+        process_source
+        and small_bar_source
+        and priority_source
+        and (shipping_delay_source or deferred_source)
+        and (blue_source or delivery_months)
+    )
+    if not core_signal:
+        return frame
+
+    evidence = (
+        process_source,
+        small_bar_source,
+        period_evidence,
+        shipping_delay_source,
+        deferred_source,
+        volume_source,
+        system_source,
+        blue_source,
+        note_source,
+        delivery_evidence,
+        priority_source,
+    )
+    unparsed = _strip_zh_production_priority_supported_tokens(source, evidence)
+    process_id = _ZH_PROCESS_TO_ID.get(process_source, "")
+
+    frame["kind"] = "zh_id_production_backlog_priority"
+    frame["slots"].update({
+        "process_source": process_source,
+        "process_id": process_id,
+        "small_bar_source": small_bar_source,
+        "backlog_period_evidence": period_evidence,
+        "backlog_period_count_raw": period_count_raw,
+        "backlog_period_count": period_count,
+        "shipping_delay_source": shipping_delay_source,
+        "deferred_material_source": deferred_source,
+        "backlog_volume_source": volume_source,
+        "system_source": system_source,
+        "blue_marker_source": blue_source,
+        "note_source": note_source,
+        "delivery_month_evidence": delivery_evidence,
+        "delivery_months": delivery_months,
+        "priority_action_source": priority_source,
+    })
+    if process_source and small_bar_source:
+        _claim(
+            frame,
+            "small_bar_process_scope",
+            process_source + small_bar_source,
+            "小尺寸棒材屬於指定製程範圍；不可硬拼成不自然的名詞串",
+            f"material batang berukuran kecil untuk proses {process_id}",
+        )
+    if period_count and shipping_delay_source and deferred_source:
+        _claim(
+            frame,
+            "recent_shipping_backlog",
+            period_evidence + shipping_delay_source + deferred_source,
+            "最近指定月數內未能及時出貨，因而形成遞延材料",
+            f"dalam {_format_id_release_count(period_count, period_count_raw)} bulan terakhir; "
+            "material tertunda karena tidak sempat dikirim tepat waktu",
+        )
+    if volume_source:
+        _claim(
+            frame,
+            "backlog_volume",
+            volume_source,
+            "遞延材料數量很多",
+            "banyak material",
+        )
+    if system_source and blue_source and note_source:
+        _claim(
+            frame,
+            "blue_note_priority_group",
+            system_source + blue_source + note_source,
+            "第一個優先生產群組：系統中備註欄為藍底的材料",
+            "material yang catatannya berlatar biru di sistem",
+        )
+    if delivery_months:
+        _claim(
+            frame,
+            "delivery_month_priority_group",
+            delivery_evidence,
+            "第二個、獨立的優先生產群組：交期為指定月份的材料",
+            "material dengan jadwal pengiriman bulan "
+            + _format_id_month_list(delivery_months),
+        )
+    if priority_source:
+        _claim(
+            frame,
+            "production_priority_action",
+            priority_source,
+            "上述兩組材料都要優先生產；兩條件是並列選擇，不可合併成同時滿足",
+            "prioritaskan produksi ... serta material ...",
+        )
+
+    frame["unparsed"] = unparsed
+    frame["active"] = True
+    frame["complete"] = bool(
+        process_id
+        and small_bar_source
+        and period_count
+        and shipping_delay_source
+        and deferred_source
+        and volume_source
+        and system_source
+        and blue_source
+        and note_source
+        and delivery_months
+        and priority_source
+        and not unparsed
+    )
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    priority_frame = _build_zh_id_production_priority_frame(source, frame)
+    if priority_frame.get("active"):
+        return priority_frame
     release_frame = _build_zh_id_data_release_frame(source, frame)
     if release_frame.get("active"):
         return release_frame
@@ -858,6 +1138,22 @@ def deterministic_translation(frame: Mapping) -> str:
             return ""
         status = "還沒有噴漆" if slots.get("completion") == "not_yet" else "沒有噴漆"
         return _with_mentions(frame, f"{shift}{status}")
+
+    if frame.get("kind") == "zh_id_production_backlog_priority":
+        process_id = str(slots.get("process_id") or "")
+        period_count = slots.get("backlog_period_count")
+        period_raw = str(slots.get("backlog_period_count_raw") or "")
+        month_list = _format_id_month_list(slots.get("delivery_months") or ())
+        if not process_id or not period_count or not month_list:
+            return ""
+        count_text = _format_id_release_count(period_count, period_raw)
+        text = (
+            f"Dalam {count_text} bulan terakhir, banyak material batang berukuran kecil "
+            f"untuk proses {process_id} yang tertunda karena tidak sempat dikirim tepat waktu. "
+            "Prioritaskan produksi material yang catatannya berlatar biru di sistem serta "
+            f"material dengan jadwal pengiriman bulan {month_list}."
+        )
+        return _with_mentions(frame, text)
 
     if frame.get("kind") == "zh_id_erp_data_release":
         object_kind = str(slots.get("object_kind") or "")
@@ -959,6 +1255,19 @@ def _number_unit_present_zh(text: str, value: str) -> bool:
     return bool(re.search(re.escape(value) + r"\s*(?:公斤|kg)", text, flags=re.I))
 
 
+def _id_delivery_month_present(text: str, month: int) -> bool:
+    name = _ID_MONTH_NAMES.get(int(month), "")
+    if name and _has_phrase(text, (name,)):
+        return True
+    return bool(
+        re.search(
+            r"(?<!\d)" + re.escape(str(int(month))) + r"(?!\d)",
+            str(text or ""),
+            flags=re.I,
+        )
+    )
+
+
 def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[str]]:
     """Validate source roles and relations, not merely isolated keywords."""
     if not frame or not frame.get("active"):
@@ -985,6 +1294,69 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:equipment_mistranslated_as_surface_damage")
         if any(term in target for term in ("損壞", "损坏")) and "故障" not in target:
             issues.append("factory_message_semantics:equipment_failure_wording_ambiguous")
+
+    elif frame.get("kind") == "zh_id_production_backlog_priority":
+        low = _norm(target)
+        process_id = str(slots.get("process_id") or "")
+        if process_id and not _has_phrase(low, (process_id,)):
+            issues.append("factory_message_semantics:production_process_scope_missing")
+        if not _has_phrase(low, (
+            "batang berukuran kecil", "batang ukuran kecil", "batang berdiameter kecil",
+        )):
+            issues.append("factory_message_semantics:small_bar_scope_missing")
+
+        period_count = slots.get("backlog_period_count")
+        if period_count:
+            period_text = _format_id_release_count(
+                period_count, str(slots.get("backlog_period_count_raw") or "")
+            )
+            if not _has_phrase(low, (
+                f"{period_text} bulan terakhir", f"{period_count} bulan terakhir",
+            )):
+                issues.append("factory_message_semantics:backlog_period_missing")
+        if not (
+            _has_phrase(low, ("tertunda", "keterlambatan"))
+            and _has_phrase(low, ("dikirim", "pengiriman"))
+        ):
+            issues.append("factory_message_semantics:delayed_shipping_relation_missing")
+        if not _has_phrase(low, ("banyak", "dalam jumlah besar")):
+            issues.append("factory_message_semantics:backlog_volume_missing")
+
+        blue_note_relation = bool(
+            _has_phrase(low, ("sistem",))
+            and _has_phrase(low, ("biru",))
+            and _has_phrase(low, (
+                "catatan", "catatannya", "ditandai", "tanda", "berlatar",
+            ))
+        )
+        if not blue_note_relation:
+            issues.append("factory_message_semantics:blue_system_note_relation_missing")
+        for month in slots.get("delivery_months") or ():
+            if not _id_delivery_month_present(low, int(month)):
+                issues.append(
+                    "factory_message_semantics:delivery_month_missing:" + str(month)
+                )
+        if not (
+            _has_phrase(low, ("produksi",))
+            and _has_phrase(low, (
+                "prioritaskan", "memprioritaskan", "diprioritaskan", "prioritas",
+            ))
+        ):
+            issues.append("factory_message_semantics:production_priority_missing")
+
+        # The source joins two eligible sets: blue-note material, plus material
+        # due in the named months.  Repeating ``material`` after the connector is
+        # the clearest deterministic proof that a model did not collapse this
+        # into one item that must satisfy both filters.
+        if not re.search(
+            r"\b(?:serta|dan\s+juga|maupun|dan)\s+material\b", low, re.I
+        ):
+            issues.append("factory_message_semantics:priority_groups_collapsed")
+        if any(phrase in low for phrase in (
+            "material tunda", "batang kecil polishing", "catatan latar biru",
+            "tanggal pengiriman bulan",
+        )):
+            issues.append("factory_message_semantics:unnatural_indonesian_compound")
 
     elif frame.get("kind") == "zh_id_erp_data_release":
         low = _norm(target)
@@ -1166,6 +1538,18 @@ def build_prompt(frame: Mapping) -> str:
             "functional machine failure: translate the linked claim as I15 機台故障, not as "
             "material/surface damage (損傷) and not as the underspecified I15 損壞."
         )
+    elif frame.get("kind") == "zh_id_production_backlog_priority":
+        lines.append(
+            "This is a production-planning relation. Render the process and small-bar material "
+            "as a natural Indonesian phrase such as 'material batang berukuran kecil untuk proses "
+            "polishing', never the word stack 'material tunda batang kecil polishing'. The first "
+            "claim says shipping was not completed on time during the stated recent period, which "
+            "created a large backlog. The priority clause names two independent eligible groups: "
+            "(1) material whose note has a blue background in the system, and (2) material whose "
+            "delivery schedule is in each extracted month. Use 'serta material' (or an equally "
+            "explicit repeated noun) so the two selectors are not collapsed into one intersection. "
+            "Use Indonesian month names for numeric source months."
+        )
     elif frame.get("kind") == "zh_id_erp_data_release":
         lines.append(
             "This is an ERP production-data release relation. In bare factory shorthand, a "
@@ -1218,6 +1602,19 @@ def health() -> dict:
     data_release = build_frame(
         "@小麥（研磨股班長） 這把麻煩他們放一下", "zh", "id"
     )
+    production_priority_source = (
+        "@All 拋光小棒這兩個月來不及出貨的遞延料很多，"
+        "系統上藍底備註跟交期6、7月的料優先生產"
+    )
+    production_priority = build_frame(
+        production_priority_source, "zh", "id"
+    )
+    production_priority_target = (
+        "@All Dalam dua bulan terakhir, banyak material batang berukuran kecil "
+        "untuk proses polishing yang tertunda karena tidak sempat dikirim tepat waktu. "
+        "Prioritaskan produksi material yang catatannya berlatar biru di sistem serta "
+        "material dengan jadwal pengiriman bulan Juni dan Juli."
+    )
     reversed_readings = (
         "995 kg di layar monitor, 989 kg di timbangan gantung elektronik"
     )
@@ -1268,6 +1665,17 @@ def health() -> dict:
         validate_translation(
             data_release,
             "@小麥 Tolong minta mereka meletakkan bundel ini.",
+        )[0] is False,
+        production_priority.get("active") is True
+        and production_priority.get("complete") is True,
+        translate_source_directly(
+            production_priority_source, "zh", "id"
+        ) == production_priority_target,
+        validate_translation(
+            production_priority,
+            "@All Material tunda batang kecil polishing yang belum sempat dikirim "
+            "dalam dua bulan ini banyak. Prioritaskan produksi material dengan catatan "
+            "latar biru di sistem dan tanggal pengiriman bulan 6 dan 7.",
         )[0] is False,
         translate_source_directly(reversed_readings, "id-ID", "zh-TW")
         == "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",

@@ -144,11 +144,10 @@ def test_deployment_contract_pins_the_new_semantic_build_and_keeps_source_first_
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-08-17.1-erp-data-release-relations"'
+        '"2026-08-19.1-production-priority-relations"'
     ) in source
     assert "factory_message_semantics_module.translate_source_directly(" in source
     knowledge = json.loads(
         (ROOT / "factory_knowledge.json").read_text(encoding="utf-8")
     )
     assert knowledge["build_id"] == "2026-08-17.1-erp-data-release-root-fix"
-

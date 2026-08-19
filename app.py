@@ -330,8 +330,8 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
         "Replace app.py, translation_quality_gate.py, ai_provider.py and factory_semantic_audit.py together."
     )
 
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-17.1-erp-data-release-relations"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-19.1-production-priority-relations"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -342,7 +342,7 @@ if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VER
         f"build={_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID}, "
         f"loaded api={getattr(factory_message_semantics_module, 'FACTORY_MESSAGE_SEMANTICS_API_VERSION', None)!r} "
         f"build={getattr(factory_message_semantics_module, 'FACTORY_MESSAGE_SEMANTICS_BUILD_ID', None)!r}. "
-        "Replace app.py, translation_quality_gate.py and factory_message_semantics.py together."
+        "Replace app.py and factory_message_semantics.py together."
     )
 _FACTORY_MESSAGE_SEMANTICS_HEALTH = factory_message_semantics_module.health()
 if not ((_FACTORY_MESSAGE_SEMANTICS_HEALTH.get("self_test") or {}).get("ok")):
