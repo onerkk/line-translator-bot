@@ -1982,6 +1982,93 @@
     "note_zh": "把該客戶／該批材料排在包裝作業的前面，不是只口頭提醒。",
     "note_id": "Menempatkan proses pengemasan material tersebut sebagai prioritas."
   },
+  "關帳": {
+    "idn": "tutup buku",
+    "canonical_idn": "tutup buku",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "accounting_workflow",
+    "priority": 165,
+    "forbidden_idn": [
+      "cek data",
+      "periksa data",
+      "rekap data"
+    ],
+    "note_zh": "客戶／會計期間的關帳、結帳作業，不是檢查或彙整資料。",
+    "note_id": "Penutupan pembukuan pelanggan atau periode akuntansi."
+  },
+  "到站": {
+    "idn": "tiba di stasiun proses",
+    "canonical_idn": "tiba di stasiun proses",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "material_flow",
+    "priority": 160,
+    "note_zh": "材料抵達目前或指定的製程站別；時態與條件詞依原句保留。",
+    "note_id": "Material tiba di stasiun proses; pertahankan aspek waktu dan syarat dari kalimat sumber."
+  },
+  "出貨量不足": {
+    "idn": "jumlah material untuk pengiriman tidak mencukupi",
+    "canonical_idn": "jumlah material untuk pengiriman tidak mencukupi",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "shipping_workflow",
+    "priority": 175,
+    "note_zh": "目前可供出貨的材料數量不足，不是單純的供應來源不足。",
+    "note_id": "Jumlah material yang tersedia untuk pengiriman tidak mencukupi."
+  },
+  "待併包": {
+    "idn": "menunggu untuk digabung dalam satu kemasan",
+    "canonical_idn": "menunggu untuk digabung dalam satu kemasan",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "packaging_workflow",
+    "priority": 185,
+    "forbidden_idn": [
+      "menunggu paket",
+      "paket tertunda"
+    ],
+    "note_zh": "材料等待與後續材料合併成同一包／同一包裝單位的狀態，不是等待包裹送達。",
+    "note_id": "Status material yang menunggu digabung dengan material berikutnya dalam satu unit kemasan."
+  },
+  "待併的料": {
+    "idn": "material yang menunggu untuk digabung",
+    "canonical_idn": "material yang menunggu untuk digabung",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "packaging_workflow",
+    "priority": 180,
+    "note_zh": "等待合併包裝的材料。",
+    "note_id": "Material yang masih menunggu proses penggabungan kemasan."
+  },
+  "後面無料": {
+    "idn": "tidak ada material berikutnya",
+    "canonical_idn": "tidak ada material berikutnya",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "packaging_workflow",
+    "priority": 185,
+    "forbidden_idn": [
+      "material gratis",
+      "bahan gratis"
+    ],
+    "note_zh": "在併包順序中，後續沒有可供合併的材料；無料不是免費材料。",
+    "note_id": "Tidak ada material berikutnya yang dapat digabung; bukan material gratis."
+  },
+  "獨立包": {
+    "idn": "kemas secara terpisah",
+    "canonical_idn": "kemas secara terpisah",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "packaging_workflow",
+    "priority": 185,
+    "forbidden_idn": [
+      "kemas sendiri",
+      "bungkus sendiri"
+    ],
+    "note_zh": "不再等待與其他材料併包，改成另一個獨立包裝單位；不是叫某人自己包。",
+    "note_id": "Dikemas sebagai unit terpisah, bukan dikerjakan sendiri oleh operator."
+  },
   "電子系統": {
     "idn": "sistem elektronik",
     "canonical_idn": "sistem elektronik",

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-17.1-erp-data-release-root-fix",
+  "build_id": "2026-08-25.1-packaging-consolidation-workflow",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -1973,6 +1973,186 @@
           "source": "客戶週五要關帳，後面還有80噸分批到貨，看到該客戶的料先排包裝。",
           "target": "Pelanggan akan melakukan tutup buku pada hari Jumat. Setelah itu masih ada 80 ton material yang akan tiba dalam beberapa tahap. Jika material pelanggan tersebut sudah terlihat atau diterima, prioritaskan jadwal pengemasannya.",
           "reason": "同一會計結帳＋分批到料＋包裝優先流程的改寫。"
+        }
+      ]
+    },
+    {
+      "id": "packaging_consolidation_threshold_decision",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "待併包、後續料況與重量門檻的獨立包裝判斷",
+      "match": {
+        "strong_phrases": [
+          "待併包",
+          "待併的料",
+          "獨立包起來",
+          "獨立包裝",
+          "後面無料"
+        ],
+        "all_groups": [
+          [
+            "待併包",
+            "待併",
+            "待并包",
+            "待并"
+          ],
+          [
+            "獨立包",
+            "独立包",
+            "分開包",
+            "分开包",
+            "單獨包",
+            "单独包"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "出貨量不足",
+          "出货量不足",
+          "無料",
+          "後面無料",
+          "后面无料",
+          "公斤",
+          "大於",
+          "大于",
+          "很遠",
+          "很远"
+        ],
+        "regex_any": [
+          "(?:大於|大于|超過|超过).{0,8}(?:公斤|kg).{0,80}(?:無料|无料|待併|待并).{0,40}(?:獨立包|独立包|分開包|分开包|單獨包|单独包)"
+        ],
+        "min_score": 12
+      },
+      "context": [
+        "「待併包」是材料正在等待與後續材料合併成同一包／同一包裝單位的作業狀態，不是已經完成包裝，也不是一般的等待包裹。",
+        "「後面無料」在此表示後續沒有可供合併包裝的材料，不是免費材料；印尼文應表達 tidak ada material berikutnya。",
+        "「待併的料還很遠」描述後續材料到達或可併包的時點還要很久，不是材料之間的物理距離很遠。",
+        "重量門檻修飾目前客戶／批次的來料數量；例如「來料大於250公斤」不是『材料將到貨』的未來事件。",
+        "「獨立包起來」是不要再等併包，改成另外單獨包裝；使用 kemas secara terpisah／packing terpisah，不可翻成操作員自己包裝。",
+        "「出貨量不足」是可供出貨的材料數量不足，需與待併包內的材料一起檢視。"
+      ],
+      "preferred_target_phrases": [
+        "menunggu untuk digabung dalam satu kemasan",
+        "tidak ada material berikutnya",
+        "material berikutnya masih lama tibanya",
+        "melebihi 250 kg",
+        "kemas secara terpisah"
+      ],
+      "forbidden_target_phrases": [
+        "material gratis",
+        "bahan gratis",
+        "jaraknya masih jauh",
+        "kemas sendiri",
+        "bungkus sendiri"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "待併包",
+            "待併",
+            "待并包",
+            "待并"
+          ],
+          "target_any": [
+            "menunggu untuk digabung",
+            "menunggu digabung",
+            "menunggu penggabungan",
+            "daftar tunggu penggabungan",
+            "akan digabung dalam satu kemasan"
+          ],
+          "issue": "missing_pending_packaging_consolidation"
+        },
+        {
+          "source_any": [
+            "出貨量不足",
+            "出货量不足"
+          ],
+          "target_any": [
+            "jumlah material untuk pengiriman",
+            "jumlah material yang siap dikirim",
+            "jumlah pengiriman",
+            "kuantitas pengiriman"
+          ],
+          "issue": "missing_shipping_quantity_scope"
+        },
+        {
+          "source_any": [
+            "出貨量不足",
+            "出货量不足"
+          ],
+          "target_any": [
+            "tidak mencukupi",
+            "tidak cukup",
+            "kurang"
+          ],
+          "issue": "missing_insufficient_shipping_quantity"
+        },
+        {
+          "source_any": [
+            "無料",
+            "无料"
+          ],
+          "target_any": [
+            "tidak ada material berikutnya",
+            "tidak ada bahan berikutnya",
+            "material berikutnya tidak ada",
+            "bahan berikutnya tidak ada"
+          ],
+          "issue": "missing_no_following_material"
+        },
+        {
+          "source_any": [
+            "很遠",
+            "很远"
+          ],
+          "target_any": [
+            "masih lama",
+            "masih jauh waktunya",
+            "jadwalnya masih jauh",
+            "kedatangannya masih lama"
+          ],
+          "issue": "missing_late_following_material_timing"
+        },
+        {
+          "source_any": [
+            "大於250公斤",
+            "大于250公斤",
+            "超過250公斤",
+            "超过250公斤"
+          ],
+          "target_any": [
+            "lebih dari 250 kg",
+            "melebihi 250 kg",
+            "di atas 250 kg"
+          ],
+          "issue": "missing_250kg_threshold_relation"
+        },
+        {
+          "source_any": [
+            "獨立包",
+            "独立包",
+            "分開包",
+            "分开包",
+            "單獨包",
+            "单独包"
+          ],
+          "target_any": [
+            "kemas secara terpisah",
+            "dikemas secara terpisah",
+            "packing terpisah",
+            "pengemasan terpisah"
+          ],
+          "issue": "missing_separate_packaging_action"
+        }
+      ],
+      "examples": [
+        {
+          "source": "待併包的材料若超過300公斤，而後續材料還要很久才到，就改成獨立包裝。",
+          "target": "Jika material yang menunggu untuk digabung melebihi 300 kg, sedangkan material berikutnya masih lama tibanya, kemas secara terpisah.",
+          "reason": "保留重量門檻、後續料況的時間條件，以及不再等待併包而改為獨立包裝的因果關係。"
         }
       ]
     },

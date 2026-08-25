@@ -150,4 +150,4 @@ def test_deployment_contract_pins_the_new_semantic_build_and_keeps_source_first_
     knowledge = json.loads(
         (ROOT / "factory_knowledge.json").read_text(encoding="utf-8")
     )
-    assert knowledge["build_id"] == "2026-08-17.1-erp-data-release-root-fix"
+    assert knowledge["build_id"] == "2026-08-25.1-packaging-consolidation-workflow"

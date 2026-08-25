@@ -18,13 +18,13 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-14.1-operational-status-claims"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-25.1-contextual-material-arrival"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
 _EXPLICIT_SPEED_ZH = ("轉速", "速度", "低速", "高速", "rpm", "r.p.m")
 _FACTORY_CUES = (
-    "料", "棒材", "圓棒", "機台", "設備", "生產", "加工", "到料", "進料", "出料",
+    "料", "棒材", "圓棒", "機台", "設備", "生產", "加工", "到料", "到站", "進料", "出料",
     "拋光", "研磨", "清洗", "削皮", "包裝", "工單", "tag", "重量", "異常", "客訴",
     "懲處", "班", "品保", "qc", "吊", "跑", "產能", "手套", "防護具", "領取", "领取",
     "發料", "发料", "點名", "点名", "安衛", "安卫", "工安", "抽查", "請假", "请假",
@@ -48,6 +48,97 @@ def _contains_any(text: str, terms: Iterable[str]) -> bool:
 
 def _search_any(text: str, patterns: Iterable[str]) -> bool:
     return any(re.search(str(pattern), text, flags=re.I | re.S) for pattern in patterns)
+
+
+_MATERIAL_ARRIVAL_RE = re.compile(
+    r"到站|到廠|到厂|到貨|到货|到料|來料|来料|進料|进料",
+    re.I,
+)
+_NOMINAL_INCOMING_MATERIAL_SUFFIX_RE = re.compile(
+    r"^(?:尺寸|大小|規格|规格|重量|數量|数量|品質|质量|材質|材质|外觀|外观|"
+    r"批號|批号|標籤|标签|異常|异常|檢驗|检验|狀況|状况|來源|来源|"
+    r"大於|大于|小於|小于|高於|高于|低於|低于|超過|超过|不足|過多|过多|"
+    r"為|为|是|需|需要|要求|標準|标准|公差|直徑|直径)",
+    re.I,
+)
+_ARRIVAL_FUTURE_CUE_RE = re.compile(
+    r"(?:將會|将会|將|将|會|会|預計|预计|即將|即将|快要|預估|预估|"
+    r"後續|后续|之後|之后|稍後|稍后|陸續|陆续)(?:[^，,。；;！？!?]){0,14}$",
+    re.I,
+)
+_ARRIVAL_COMPLETED_CUE_RE = re.compile(
+    r"(?:已經|已经|已|都已|均已|全部已)(?:[^，,。；;！？!?]){0,8}$",
+    re.I,
+)
+_ARRIVAL_CONDITIONAL_CUE_RE = re.compile(
+    r"(?:如果|假如|若是|若|如有|只要|一旦|有)(?:[^，,。；;！？!?]){0,6}$",
+    re.I,
+)
+
+
+def _material_arrival_profile(value: Any) -> Dict[str, Any]:
+    """Classify material-arrival *events*, not every occurrence of 來料.
+
+    In shop-floor Chinese, ``來料`` is frequently an attributive noun in
+    phrases such as ``來料尺寸`` or ``來料大於 250 公斤``.  Treating those noun
+    phrases as a future arrival event makes the target validator demand
+    ``akan tiba`` and can discard an otherwise correct translation.  This
+    classifier binds aspect to each local arrival mention and exposes enough
+    detail for tense-appropriate validation.
+    """
+    text = _compact(value)
+    profile: Dict[str, Any] = {
+        "event": False,
+        "future": False,
+        "completed": False,
+        "conditional": False,
+        "at_station": False,
+        "evidence": [],
+        "nominal_mentions": [],
+    }
+    for match in _MATERIAL_ARRIVAL_RE.finditer(text):
+        term = match.group(0)
+        left = text[max(0, match.start() - 24):match.start()]
+        right = text[match.end():match.end() + 24]
+        # Keep aspect cues clause-local; punctuation must stop a cue from a
+        # previous instruction leaking into this mention.
+        left_clause = re.split(r"[，,。；;！？!?]", left)[-1]
+        right_clause = re.split(r"[，,。；;！？!?]", right)[0]
+
+        nominal = bool(_NOMINAL_INCOMING_MATERIAL_SUFFIX_RE.match(right_clause))
+        future = bool(_ARRIVAL_FUTURE_CUE_RE.search(left_clause))
+        completed = bool(
+            _ARRIVAL_COMPLETED_CUE_RE.search(left_clause)
+            or re.match(r"^(?:已經到|已经到|已到|了|完成|完畢|完毕)", right_clause, flags=re.I)
+        )
+        conditional = bool(
+            _ARRIVAL_CONDITIONAL_CUE_RE.search(left_clause)
+            or re.match(r"^(?:後|后|時|时)", right_clause, flags=re.I)
+        )
+        ongoing = bool(re.match(r"^(?:中|途中)", right_clause, flags=re.I))
+
+        # 來料/進料 are ambiguous nouns unless an aspect cue makes the event
+        # reading explicit. 到站/到廠/到貨/到料 are eventive by themselves,
+        # except when immediately used as a nominal modifier.
+        ambiguous_noun = term in ("來料", "来料", "進料", "进料")
+        is_event = not nominal and (
+            not ambiguous_noun or future or completed or conditional or ongoing
+        )
+        if not is_event:
+            if term not in profile["nominal_mentions"]:
+                profile["nominal_mentions"].append(term)
+            continue
+
+        profile["event"] = True
+        profile["future"] = bool(profile["future"] or future)
+        profile["completed"] = bool(profile["completed"] or completed)
+        profile["conditional"] = bool(profile["conditional"] or conditional)
+        profile["at_station"] = bool(
+            profile["at_station"] or term in ("到站", "到廠", "到厂")
+        )
+        if term not in profile["evidence"]:
+            profile["evidence"].append(term)
+    return profile
 
 
 def _parse_small_count(raw: str) -> int | None:
@@ -292,14 +383,25 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     flags["small_size"] = _contains_any(compact, ("小尺寸", "小規格", "小规格", "小徑", "小径"))
     flags["bar_material"] = _contains_any(compact, ("棒材", "圓棒", "圆棒", "棒料"))
     flags["polishing"] = _contains_any(compact, ("拋光", "抛光", "polishing"))
-    flags["arrival"] = _contains_any(compact, ("到料", "到貨", "到货", "來料", "来料", "進料", "进料"))
+    arrival_profile = _material_arrival_profile(compact)
+    frame["operational"]["arrival_profile"] = arrival_profile
+    flags["arrival"] = bool(arrival_profile["event"])
+    flags["arrival_future"] = bool(arrival_profile["future"])
+    flags["arrival_completed"] = bool(arrival_profile["completed"])
+    flags["arrival_conditional"] = bool(arrival_profile["conditional"])
+    flags["arrival_at_station"] = bool(arrival_profile["at_station"])
     # Arrival-profile modifiers must be attached to an arrival context. Generic
     # "很多" in a defect notice means many cases, not bulk material arrival.
-    flags["bulk"] = (
+    flags["bulk"] = bool(
+        flags["arrival"] and (
         _contains_any(compact, ("大量", "大批", "批量"))
         or (flags["arrival"] and _contains_any(compact, ("很多", "不少")))
+        )
     )
-    flags["concentrated"] = _contains_any(compact, ("集中", "密集", "同時", "同时", "一起到"))
+    flags["concentrated"] = bool(
+        flags["arrival"]
+        and _contains_any(compact, ("集中", "密集", "同時", "同时", "一起到"))
+    )
     # "先做" is only a production-priority cue when it is not the ordinary
     # sequence marker in phrases such as "先做清楚記號".
     flags["priority"] = bool(
@@ -723,8 +825,21 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     if flags["deadline_month_end"]:
         add("deadline_month_end", "月底前/月末前", "到料或作業時點在月底以前", "sebelum akhir bulan")
     if flags["arrival"]:
-        detail = "材料將到廠／到貨"
-        hint = "material akan tiba / masuk"
+        arrival_evidence = "/".join(arrival_profile.get("evidence") or ["到料", "到貨", "進料"])
+        detail = "材料抵達／進入現場"
+        hint = "material tiba / masuk"
+        if flags["arrival_at_station"]:
+            detail = "材料抵達指定站別"
+            hint = "material tiba di stasiun"
+        if flags["arrival_completed"]:
+            detail = "材料已經抵達／進入現場"
+            hint = "material sudah tiba / sudah masuk"
+        if flags["arrival_conditional"]:
+            detail = "若材料抵達現場／站別，才執行後續動作"
+            hint = "jika material tiba / sampai di stasiun"
+        if flags["arrival_future"]:
+            detail = "材料將到廠／到貨"
+            hint = "material akan tiba / masuk"
         if flags["bulk"] and flags["concentrated"]:
             detail = "材料會在相近時間集中且大量到貨"
             hint = "akan tiba dalam jumlah besar dalam waktu yang berdekatan"
@@ -734,7 +849,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         elif flags["concentrated"]:
             detail = "材料會集中到貨"
             hint = "akan tiba dalam waktu yang berdekatan / secara terkonsentrasi"
-        add("material_arrival", "到料/到貨/進料", detail, hint)
+        add("material_arrival", arrival_evidence, detail, hint)
     if flags["large_size"] and flags["bar_material"]:
         add("large_bar_material", "大尺寸棒材", "大尺寸的棒材，不是抽象的『大型生產』", "material batang berukuran besar")
     elif flags["large_size"]:
@@ -2237,8 +2352,34 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         "mesin polishing", "proses polishing", "mesin pemoles", "proses pemolesan", "pemolesan",
     )):
         issues.append("factory_semantic_audit:missing_polishing_context")
-    if flags.get("arrival") and not _has_any_target(low, ("akan tiba", "akan datang", "akan masuk", "kedatangan", "diterima")):
+    arrival_terms = (
+        "tiba", "datang", "masuk", "sampai", "kedatangan", "diterima",
+    )
+    if flags.get("arrival") and not _has_any_target(low, arrival_terms):
         issues.append("factory_semantic_audit:missing_material_arrival")
+    if flags.get("arrival_future") and not _has_any_target(low, (
+        "akan tiba", "akan datang", "akan masuk", "akan sampai",
+        "diperkirakan tiba", "diperkirakan datang", "segera tiba",
+    )):
+        issues.append("factory_semantic_audit:missing_future_material_arrival")
+    if flags.get("arrival_completed") and not _same_clause_has(low, (
+        ("sudah", "telah"), arrival_terms,
+    )):
+        issues.append("factory_semantic_audit:missing_completed_material_arrival")
+    if flags.get("arrival_conditional"):
+        conditional_groups: Tuple[Sequence[str], ...] = (
+            ("jika", "apabila", "kalau", "bila"),
+            arrival_terms,
+        )
+        if flags.get("arrival_at_station"):
+            conditional_groups += (("stasiun", "pos proses", "titik proses"),)
+        if not _same_clause_has(low, conditional_groups):
+            issues.append("factory_semantic_audit:missing_conditional_material_arrival")
+    if flags.get("arrival_at_station") and not _same_clause_has(low, (
+        arrival_terms,
+        ("stasiun", "pos proses", "titik proses"),
+    )):
+        issues.append("factory_semantic_audit:missing_arrival_station")
     if flags.get("bulk") and not _has_any_target(low, (
         "dalam jumlah besar", "dalam jumlah banyak", "volume besar", "secara besar-besaran",
     )):
@@ -2248,7 +2389,6 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     )):
         issues.append("factory_semantic_audit:missing_concentrated_arrival")
 
-    arrival_terms = ("akan tiba", "akan datang", "akan masuk", "kedatangan", "diterima")
     if flags.get("arrival") and flags.get("bulk") and not _same_clause_has(low, (
         arrival_terms,
         ("dalam jumlah besar", "dalam jumlah banyak", "volume besar", "secara besar-besaran"),
