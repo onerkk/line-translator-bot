@@ -4,7 +4,8 @@ Glossary enforcement can prove that isolated words and numbers are present, but
 it cannot prove that the target keeps their source roles.  This module extracts
 small, compositional source frames for relations that are especially dangerous
 on the shop floor: equipment-to-reading comparisons, reporting with a leader's
-ID, and movement-to-a-location followed by inspection.
+ID, movement-to-a-location followed by inspection, and machine-guard safety
+instructions whose omitted Chinese subjects must remain attached to the guard.
 
 The rules are not sentence replacements.  Values, units, aspect, destination,
 objects, production-selection criteria and mentions are read from the current
@@ -22,11 +23,19 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-19.1-production-priority-relations"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-26.1-machine-guard-safety-relations"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
-    r"(?:@[^\s,，。!?！？:：;；]{1,48}|__MENTION_\d+__)", re.I
+    r"(?:"
+    r"@[Aa][Ll][Ll](?![A-Za-z0-9_.-])"
+    r"|@[\u4e00-\u9fff\u3040-\u30ff]+"
+    r"(?:\s*[（(][^）)\r\n]{1,48}[）)])?"
+    r"(?:\s+(?-i:[A-Z])[A-Za-z0-9_.-]{1,31}){0,2}"
+    r"|@[^\s,，。!?！？:：;；]{1,48}"
+    r"|__MENTION_\d+__"
+    r")",
+    re.I,
 )
 
 _MONITOR_ID = (
@@ -127,6 +136,53 @@ _ZH_INSPECTION = (
     "確認一下", "确认一下", "檢查看看", "检查看看", "檢查一下", "检查一下",
     "查看一下", "看看", "看一下", "查看", "檢查", "检查", "確認", "确认",
     "了解", "瞭解",
+)
+
+# Machine guards are engineering controls, not the machine itself.  Chinese
+# shop-floor messages often mention the guard once and then omit it in a later
+# clause (e.g. 設備護網要蓋上，剛被提醒多台設備沒蓋好).  The later 設備 is a
+# location/owner relation: guards on several machines were not restored.  A
+# fluent literal translation such as ``beberapa mesin tidak ditutup`` changes
+# the safety subject and is therefore rejected by this frame.
+_ZH_MACHINE_GUARD_TERMS = (
+    "設備護網", "设备护网", "機台護網", "机台护网", "機器護網", "机器护网",
+    "安全護網", "安全护网", "設備護罩", "设备护罩", "機台護罩", "机台护罩",
+    "機器護罩", "机器护罩", "防護罩", "防护罩", "護網", "护网", "護罩", "护罩",
+    "護蓋", "护盖",
+)
+_ZH_GUARD_CLOSE_RE = re.compile(
+    r"(?:蓋上|盖上|蓋好|盖好|蓋回|盖回|關上|关上|關好|关好|關回|关回|"
+    r"裝上|装上|裝好|装好|裝回|装回|復位|复位|回復原位|回复原位|恢復原位|恢复原位)",
+    re.I,
+)
+_ZH_GUARD_NOT_CLOSED_RE = re.compile(
+    r"(?:沒|没|沒有|没有|未|尚未)(?:有)?(?:蓋|盖|關|关|裝|装|復位|复位)"
+    r"(?:上|好|回|回去|到位)?",
+    re.I,
+)
+_ZH_GUARD_REMINDER_RE = re.compile(
+    r"(?:幫忙|帮忙|請|请|麻煩|麻烦|協助|协助|再)?(?:大家|同仁|人員|人员)?"
+    r"(?:幫忙|帮忙)?提醒|提醒(?:一下|大家|同仁|人員|人员)",
+    re.I,
+)
+_ZH_GUARD_RECENT_REMINDER_RE = re.compile(
+    r"(?:剛(?:剛|才)?|刚(?:刚|才)?).{0,8}(?:被提醒|有人提醒|收到提醒)",
+    re.I,
+)
+_ZH_GUARD_EQUIPMENT_SCOPE_RE = re.compile(
+    r"(?P<count>多|數|数|好幾|好几|幾|几|\d+|[一二兩两三四五六七八九十]+)"
+    r"台(?:設備|设备|機台|机台|機器|机器)",
+    re.I,
+)
+_ZH_DISCIPLINE_LAX_RE = re.compile(
+    r"(?:注意|維持|维持|保持|遵守)?(?:工作)?紀律.{0,8}"
+    r"(?:不要|不可|不能|別|别)?(?:太)?(?:鬆懈|松懈|散漫|懈怠)",
+    re.I,
+)
+_ZH_ATTENDANCE_EARLY_LEAVE_RE = re.compile(
+    r"(?:點名|点名)(?P<modality>不會|不会|不要|不可|不能|別|别)"
+    r"(?:太)?早(?:離開|离开|走|下班)",
+    re.I,
 )
 
 # 「放」is highly polysemous in the factory group.  A bare request such as
@@ -1045,7 +1101,226 @@ def _build_zh_id_production_priority_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+def _guard_scope_to_id(raw: str) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return ""
+    if token in {"多", "數", "数", "好幾", "好几", "幾", "几"}:
+        return "beberapa mesin"
+    parsed = _parse_zh_release_count(token)
+    if parsed is None:
+        return "beberapa mesin"
+    return _format_id_release_count(parsed, token) + " mesin"
+
+
+def _visible_zh_clauses(source: str) -> list[str]:
+    visible = _MENTION_RE.sub(" ", str(source or ""))
+    return [
+        re.sub(r"\s+", " ", clause).strip()
+        for clause in re.split(r"[\n,，、。.!！?？:：;；]+", visible)
+        if re.sub(r"\s+", " ", clause).strip()
+    ]
+
+
+def _build_zh_id_machine_guard_frame(source: str, frame: dict) -> dict:
+    """Bind machine-guard actions and states to the guard, not the machine.
+
+    The parser works clause by clause and renders locally only when every
+    non-mention clause belongs to a supported safety relation.  Extra text does
+    not disappear: it leaves the frame active for provider prompting and
+    validation but makes the deterministic route incomplete.
+    """
+    visible = _MENTION_RE.sub(" ", str(source or ""))
+    guard_source = next(
+        (
+            term for term in sorted(_ZH_MACHINE_GUARD_TERMS, key=len, reverse=True)
+            if term in visible
+        ),
+        "",
+    )
+    if not guard_source:
+        return frame
+
+    segments: list[dict[str, Any]] = []
+    unparsed: list[str] = []
+    for clause in _visible_zh_clauses(source):
+        attendance = _ZH_ATTENDANCE_EARLY_LEAVE_RE.search(clause)
+        if attendance:
+            raw_modality = attendance.group("modality")
+            segments.append({
+                "type": "attendance_early_leave",
+                "source": clause,
+                "modality": (
+                    "declarative_future"
+                    if raw_modality in {"不會", "不会"}
+                    else "prohibition"
+                ),
+            })
+            continue
+
+        if _ZH_DISCIPLINE_LAX_RE.search(clause):
+            segments.append({"type": "discipline_not_lax", "source": clause})
+            continue
+
+        local_guard = next(
+            (term for term in _ZH_MACHINE_GUARD_TERMS if term in clause), ""
+        )
+        close_action = bool(_ZH_GUARD_CLOSE_RE.search(clause))
+        not_closed = bool(_ZH_GUARD_NOT_CLOSED_RE.search(clause))
+        reminder_request = bool(_ZH_GUARD_REMINDER_RE.search(clause))
+        recent_reminder = bool(_ZH_GUARD_RECENT_REMINDER_RE.search(clause))
+        scope_match = _ZH_GUARD_EQUIPMENT_SCOPE_RE.search(clause)
+
+        # A later clause such as 多台設備沒蓋好 inherits the explicit guard
+        # subject from an earlier clause.  Without an explicit guard anywhere
+        # in the source this function never activates, so ordinary equipment
+        # status messages are not reinterpreted as safety-guard statements.
+        if not_closed and (local_guard or scope_match):
+            raw_scope = scope_match.group("count") if scope_match else ""
+            segments.append({
+                "type": "guard_not_closed",
+                "source": clause,
+                "recent_reminder": recent_reminder,
+                "scope_raw": raw_scope,
+                "scope_id": _guard_scope_to_id(raw_scope),
+            })
+            continue
+
+        if reminder_request and local_guard:
+            segments.append({
+                "type": "guard_reminder_close" if close_action else "guard_reminder",
+                "source": clause,
+                "all_people": any(
+                    term in clause for term in ("大家", "同仁", "人員", "人员")
+                ),
+            })
+            continue
+
+        if close_action and local_guard:
+            segments.append({
+                "type": "guard_close",
+                "source": clause,
+                "immediate": any(
+                    term in clause
+                    for term in (
+                        "隨手", "随手", "立刻", "立即", "馬上", "马上",
+                        "用完", "使用後", "使用后", "開啟後", "开启后", "打開後", "打开后",
+                    )
+                ),
+            })
+            continue
+
+        unparsed.append(clause)
+
+    guard_segments = [
+        segment for segment in segments
+        if str(segment.get("type") or "").startswith("guard_")
+    ]
+    if not guard_segments:
+        return frame
+
+    frame["kind"] = "zh_id_machine_guard_safety"
+    frame["slots"].update({
+        "guard_source": guard_source,
+        "segments": segments,
+        "has_guard_close": any(
+            segment["type"] in {"guard_close", "guard_reminder_close"}
+            for segment in segments
+        ),
+        "has_guard_reminder": any(
+            segment["type"] in {"guard_reminder", "guard_reminder_close"}
+            for segment in segments
+        ),
+        "has_guard_not_closed": any(
+            segment["type"] == "guard_not_closed" for segment in segments
+        ),
+        "has_discipline": any(
+            segment["type"] == "discipline_not_lax" for segment in segments
+        ),
+        "attendance_modality": next(
+            (
+                segment.get("modality", "")
+                for segment in segments
+                if segment["type"] == "attendance_early_leave"
+            ),
+            "",
+        ),
+    })
+    frame["unparsed"] = " | ".join(unparsed)
+    _claim(
+        frame,
+        "machine_guard_identity",
+        guard_source,
+        "護網／護罩是機械安全防護裝置，不是整台設備，也不是一般網路設備",
+        "pelindung mesin / peralatan pengaman mesin",
+    )
+
+    seen_claims: set[str] = set()
+    for segment in segments:
+        segment_type = str(segment.get("type") or "")
+        if segment_type in seen_claims:
+            continue
+        seen_claims.add(segment_type)
+        evidence = str(segment.get("source") or "")
+        if segment_type == "attendance_early_leave":
+            if segment.get("modality") == "declarative_future":
+                _claim(
+                    frame,
+                    "attendance_future_modality",
+                    evidence,
+                    "不會是將來否定陳述，不可改成不要的命令",
+                    "saat pengecekan kehadiran, kita tidak akan meninggalkan tempat terlalu awal",
+                )
+            else:
+                _claim(
+                    frame,
+                    "attendance_prohibition",
+                    evidence,
+                    "要求人員點名時不要太早離開",
+                    "saat pengecekan kehadiran, jangan meninggalkan tempat terlalu awal",
+                )
+        elif segment_type == "discipline_not_lax":
+            _claim(
+                frame,
+                "work_discipline_not_lax",
+                evidence,
+                "工作紀律不可鬆懈或大意；不是物理上的鬆／寬",
+                "tetap jaga kedisiplinan dan jangan lengah",
+            )
+        elif segment_type == "guard_close":
+            _claim(
+                frame,
+                "machine_guard_restore_action",
+                evidence,
+                "使用後立即把機械護網／護罩裝回或關妥",
+                "segera pasang kembali pelindung mesin dengan benar",
+            )
+        elif segment_type in {"guard_reminder", "guard_reminder_close"}:
+            _claim(
+                frame,
+                "machine_guard_reminder_duty",
+                evidence,
+                "請對方協助提醒人員把機械防護裝置裝回並確認到位",
+                "mohon bantu ingatkan agar pelindung mesin dipasang kembali dengan benar",
+            )
+        elif segment_type == "guard_not_closed":
+            _claim(
+                frame,
+                "machine_guard_not_closed_state",
+                evidence,
+                "沒蓋好的是多台設備上的護網／護罩，不是整台機器被關閉",
+                "pelindung pada beberapa mesin belum dipasang kembali dengan benar",
+            )
+
+    frame["active"] = True
+    frame["complete"] = bool(segments and not unparsed)
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    machine_guard_frame = _build_zh_id_machine_guard_frame(source, frame)
+    if machine_guard_frame.get("active"):
+        return machine_guard_frame
     priority_frame = _build_zh_id_production_priority_frame(source, frame)
     if priority_frame.get("active"):
         return priority_frame
@@ -1138,6 +1413,51 @@ def deterministic_translation(frame: Mapping) -> str:
             return ""
         status = "還沒有噴漆" if slots.get("completion") == "not_yet" else "沒有噴漆"
         return _with_mentions(frame, f"{shift}{status}")
+
+    if frame.get("kind") == "zh_id_machine_guard_safety":
+        rendered: list[str] = []
+        for segment in slots.get("segments") or ():
+            segment_type = str(segment.get("type") or "")
+            if segment_type == "attendance_early_leave":
+                if segment.get("modality") == "declarative_future":
+                    rendered.append(
+                        "Saat pengecekan kehadiran, kita tidak akan meninggalkan "
+                        "tempat terlalu awal."
+                    )
+                else:
+                    rendered.append(
+                        "Saat pengecekan kehadiran, jangan meninggalkan tempat terlalu awal."
+                    )
+            elif segment_type == "discipline_not_lax":
+                rendered.append("Tetap jaga kedisiplinan dan jangan lengah.")
+            elif segment_type == "guard_close":
+                if segment.get("immediate"):
+                    rendered.append(
+                        "Setelah menggunakan mesin, segera pasang kembali pelindung mesin."
+                    )
+                else:
+                    rendered.append(
+                        "Pelindung mesin harus dipasang kembali dengan benar."
+                    )
+            elif segment_type in {"guard_reminder", "guard_reminder_close"}:
+                recipient = "semua orang " if segment.get("all_people") else ""
+                rendered.append(
+                    "Mohon bantu ingatkan " + recipient
+                    + "agar pelindung mesin dipasang kembali dengan benar."
+                )
+            elif segment_type == "guard_not_closed":
+                scope = str(segment.get("scope_id") or "")
+                subject = (
+                    f"pelindung pada {scope}"
+                    if scope
+                    else "pelindung mesin"
+                )
+                prefix = "Saya baru saja diingatkan bahwa " if segment.get("recent_reminder") else ""
+                sentence = prefix + subject + " belum dipasang kembali dengan benar."
+                rendered.append(sentence[:1].upper() + sentence[1:])
+        if not rendered:
+            return ""
+        return _with_mentions(frame, " ".join(rendered))
 
     if frame.get("kind") == "zh_id_production_backlog_priority":
         process_id = str(slots.get("process_id") or "")
@@ -1294,6 +1614,136 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:equipment_mistranslated_as_surface_damage")
         if any(term in target for term in ("損壞", "损坏")) and "故障" not in target:
             issues.append("factory_message_semantics:equipment_failure_wording_ambiguous")
+
+    elif frame.get("kind") == "zh_id_machine_guard_safety":
+        low = _norm(target)
+        target_clauses = [
+            _norm(clause)
+            for clause in re.split(r"[\n.!！?？;；]+", target)
+            if _norm(clause)
+        ]
+
+        def _guard_target_present(value: str) -> bool:
+            return bool(re.search(
+                r"\b(?:"
+                r"pelindung(?:\s+keselamatan)?\s+mesin(?:nya)?"
+                r"|pelindung\s+pada\s+(?:beberapa|sejumlah|\w+)\s+mesin"
+                r"|(?:peralatan\s+)?pengaman\s+mesin"
+                r"|pagar\s+pengaman\s+mesin"
+                r")\b",
+                value,
+                re.I,
+            ))
+
+        def _guard_position_action_present(value: str) -> bool:
+            return bool(re.search(
+                r"\b(?:pasang|memasang|dipasang|terpasang|tutup|menutup|"
+                r"ditutup|tertutup|kembali\s+ke\s+posisi)\b",
+                value,
+                re.I,
+            ))
+
+        if not _guard_target_present(low):
+            issues.append("factory_message_semantics:machine_guard_term_missing")
+        if any(phrase in low for phrase in (
+            "pelindung jaring peralatan",
+            "jaring pelindung peralatan",
+            "jaring peralatan",
+        )):
+            issues.append("factory_message_semantics:machine_guard_unnatural_literal_term")
+
+        segments = list(slots.get("segments") or ())
+        attendance_modality = str(slots.get("attendance_modality") or "")
+        if attendance_modality:
+            attendance_clauses = [
+                clause for clause in target_clauses
+                if _has_phrase(clause, (
+                    "absen", "absensi", "pengecekan kehadiran", "pemeriksaan kehadiran",
+                ))
+            ]
+            if not attendance_clauses:
+                issues.append("factory_message_semantics:attendance_check_missing")
+            elif attendance_modality == "declarative_future":
+                if not any("tidak akan" in clause for clause in attendance_clauses):
+                    issues.append("factory_message_semantics:attendance_future_negation_missing")
+                if any(_has_phrase(clause, ("jangan",)) for clause in attendance_clauses):
+                    issues.append("factory_message_semantics:attendance_statement_changed_to_command")
+            elif not any(
+                _has_phrase(clause, ("jangan",)) for clause in attendance_clauses
+            ):
+                issues.append("factory_message_semantics:attendance_prohibition_missing")
+
+        if slots.get("has_discipline"):
+            if not _has_phrase(low, ("disiplin", "kedisiplinan")):
+                issues.append("factory_message_semantics:work_discipline_missing")
+            if not _has_phrase(low, (
+                "lengah", "lalai", "mengendur", "mengendurkan", "kendur",
+            )):
+                issues.append("factory_message_semantics:discipline_laxness_missing")
+            if _has_phrase(low, ("longgar",)):
+                issues.append("factory_message_semantics:discipline_mistranslated_as_physical_looseness")
+
+        if slots.get("has_guard_close"):
+            if not any(
+                _guard_target_present(clause)
+                and _guard_position_action_present(clause)
+                for clause in target_clauses
+            ):
+                issues.append("factory_message_semantics:machine_guard_restore_action_missing")
+
+        if slots.get("has_guard_reminder"):
+            reminder_clauses = [
+                clause for clause in target_clauses
+                if re.search(r"\b(?:ingat|ingatkan|mengingatkan|diingatkan)\b", clause, re.I)
+            ]
+            if not reminder_clauses:
+                issues.append("factory_message_semantics:machine_guard_reminder_missing")
+            elif not any(
+                _guard_target_present(clause)
+                and _guard_position_action_present(clause)
+                for clause in reminder_clauses
+            ):
+                issues.append("factory_message_semantics:machine_guard_reminder_object_incomplete")
+
+        if slots.get("has_guard_not_closed"):
+            negative_guard_clauses = [
+                clause for clause in target_clauses
+                if _guard_target_present(clause)
+                and re.search(r"\b(?:belum|tidak)\b", clause, re.I)
+                and _guard_position_action_present(clause)
+            ]
+            if not negative_guard_clauses:
+                issues.append("factory_message_semantics:machine_guard_not_closed_state_missing")
+
+            # Explicitly catch the fluent but dangerous role swap shown in the
+            # incident: ``beberapa mesin tidak ditutup`` makes the machine the
+            # closed object even if a different sentence mentions a guard.
+            wrong_machine_subject = any(
+                re.search(
+                    r"\b(?:beberapa|sejumlah|\w+)\s+mesin\s+(?:belum|tidak)\s+"
+                    r"(?:di)?tutup",
+                    clause,
+                    re.I,
+                )
+                and not _guard_target_present(clause)
+                for clause in target_clauses
+            )
+            if wrong_machine_subject:
+                issues.append("factory_message_semantics:machine_replaced_guard_as_closed_subject")
+
+            for segment in segments:
+                if segment.get("type") != "guard_not_closed":
+                    continue
+                scope_id = str(segment.get("scope_id") or "")
+                if scope_id and not any(
+                    _has_phrase(clause, (scope_id,))
+                    for clause in negative_guard_clauses
+                ):
+                    issues.append("factory_message_semantics:affected_machine_scope_missing")
+                if segment.get("recent_reminder") and not _has_phrase(
+                    low, ("baru saja", "barusan")
+                ):
+                    issues.append("factory_message_semantics:recent_reminder_aspect_missing")
 
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         low = _norm(target)
@@ -1538,6 +1988,19 @@ def build_prompt(frame: Mapping) -> str:
             "functional machine failure: translate the linked claim as I15 機台故障, not as "
             "material/surface damage (損傷) and not as the underspecified I15 損壞."
         )
+    elif frame.get("kind") == "zh_id_machine_guard_safety":
+        lines.append(
+            "This is a machine-guard safety relation. 設備護網/護網/護罩 denotes the "
+            "engineering guard on a machine; use natural Indonesian 'pelindung mesin' or "
+            "'peralatan pengaman mesin', never 'pelindung jaring peralatan'. When a later "
+            "clause says 多台設備沒蓋好, the omitted subject is still the guards attached "
+            "to those machines: say that pelindung pada beberapa mesin belum dipasang or "
+            "ditutup kembali dengan benar. Never say that several machines themselves were "
+            "not closed. In a reminder request, make the omitted duty explicit: remind staff "
+            "to reinstall/close the machine guard properly. In a discipline clause, 鬆懈 is "
+            "lengah/lalai, not physical longgar. Preserve the source modality exactly: 不會 "
+            "is a future-negative statement (tidak akan), while 不要 is a prohibition (jangan)."
+        )
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         lines.append(
             "This is a production-planning relation. Render the process and small-bar material "
@@ -1622,6 +2085,22 @@ def health() -> dict:
         "Monitor menunjukkan 1000 kg, sedangkan timbangan gantung elektronik "
         "994 kg. Saya sudah lapor pakai ID ketua regu."
     )
+    machine_guard_source = (
+        "@All 點名不會太早離開，注意紀律不要太鬆懈，設備護網要隨手蓋上，"
+        "剛剛被提醒多台設備沒蓋好"
+    )
+    machine_guard_target = (
+        "@All Saat pengecekan kehadiran, kita tidak akan meninggalkan tempat terlalu awal. "
+        "Tetap jaga kedisiplinan dan jangan lengah. Setelah menggunakan mesin, segera "
+        "pasang kembali pelindung mesin. Saya baru saja diingatkan bahwa pelindung "
+        "pada beberapa mesin belum dipasang kembali dengan benar."
+    )
+    machine_guard = build_frame(machine_guard_source, "zh", "id")
+    guard_reminder_source = "@法比恩 Fabian 設備護網幫忙提醒一下"
+    guard_reminder_target = (
+        "@法比恩 Fabian Mohon bantu ingatkan agar pelindung mesin dipasang kembali "
+        "dengan benar."
+    )
     controls = (
         build_frame("Sip, terima kasih.", "id", "zh"),
         build_frame("Selamat pagi, Pak.", "id", "zh"),
@@ -1634,6 +2113,7 @@ def health() -> dict:
         build_frame("這把材料放不下，先放照片裡的位置。", "zh", "id"),
         build_frame("品保檢驗後有放行。", "zh", "id"),
         build_frame("請他們放下工具。", "zh", "id"),
+        build_frame("網路設備幫忙提醒一下。", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -1702,6 +2182,28 @@ def health() -> dict:
             "螢幕上的公斤數與滑輪秤相差 6 kg。我已用 Ketu kelas 的 ID 回報。",
         )[0] is False,
         validate_translation(movement, "Saya lihat dulu situasinya.")[0] is False,
+        machine_guard.get("active") is True
+        and machine_guard.get("complete") is True,
+        translate_source_directly(machine_guard_source, "zh", "id")
+        == machine_guard_target,
+        validate_translation(machine_guard, machine_guard_target)[0] is True,
+        validate_translation(
+            machine_guard,
+            "@All Saat absen, jangan pulang terlalu cepat. Perhatikan disiplin dan "
+            "jangan terlalu longgar. Tutup kembali pelindung mesin setelah digunakan. "
+            "Baru saja diingatkan bahwa beberapa mesin tidak ditutup dengan benar.",
+        )[0] is False,
+        translate_source_directly(guard_reminder_source, "zh", "id")
+        == guard_reminder_target,
+        validate_translation(
+            build_frame(guard_reminder_source, "zh", "id"),
+            "@法比恩 Fabian Mohon bantu mengingatkan tentang pelindung jaring peralatan.",
+        )[0] is False,
+        translate_source_directly(
+            "@All 點名不要太早離開，設備護網要蓋好", "zh", "id"
+        ).startswith(
+            "@All Saat pengecekan kehadiran, jangan meninggalkan tempat terlalu awal."
+        ),
         all(not frame.get("active") for frame in controls),
     ]
     return {

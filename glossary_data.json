@@ -2120,6 +2120,46 @@
     "note_zh": "同類材料集中放在指定實體儲格。",
     "note_id": "Semua material sejenis ditempatkan bersama pada slot fisik yang ditentukan."
   },
+  "設備護網": {
+    "idn": "pelindung mesin",
+    "canonical_idn": "pelindung mesin",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "safety_equipment",
+    "priority": 210,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "设备护网",
+      "機台護網",
+      "机台护网",
+      "機器護網",
+      "机器护网",
+      "安全護網",
+      "安全护网",
+      "護網",
+      "护网",
+      "設備護罩",
+      "设备护罩",
+      "機台護罩",
+      "机台护罩",
+      "防護罩",
+      "防护罩",
+      "護罩",
+      "护罩"
+    ],
+    "aliases_id": [
+      "peralatan pengaman mesin",
+      "pengaman mesin",
+      "pagar pengaman mesin"
+    ],
+    "forbidden_idn": [
+      "pelindung jaring peralatan",
+      "jaring pelindung peralatan",
+      "jaring peralatan"
+    ],
+    "note_zh": "設備上的機械安全防護裝置。『蓋上／裝回／沒蓋好』的主體是護網或護罩，不是整台設備。",
+    "note_id": "Pelindung keselamatan pada mesin. Jika sumber menyebut dipasang kembali atau belum tertutup dengan benar, subjeknya adalah pelindung pada mesin, bukan mesinnya."
+  },
   "峰作金屬": {
     "idn": "峰作金屬",
     "canonical_idn": "峰作金屬",
