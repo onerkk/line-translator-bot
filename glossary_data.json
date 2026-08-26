@@ -2120,6 +2120,34 @@
     "note_zh": "同類材料集中放在指定實體儲格。",
     "note_id": "Semua material sejenis ditempatkan bersama pada slot fisik yang ditentukan."
   },
+  "點名": {
+    "idn": "pengecekan kehadiran",
+    "canonical_idn": "pengecekan kehadiran",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "category": "attendance_procedure",
+    "priority": 205,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "点名",
+      "人員點名",
+      "人员点名",
+      "班前點名",
+      "班前点名"
+    ],
+    "aliases_id": [
+      "pemeriksaan kehadiran",
+      "pengabsenan",
+      "presensi"
+    ],
+    "forbidden_idn": [
+      "absensi",
+      "apel",
+      "inspeksi"
+    ],
+    "note_zh": "本廠語境指依名冊確認人員是否到場；不是缺席、集合典禮或設備檢查。",
+    "note_id": "Pengecekan nama untuk memastikan kehadiran personel; bukan ketidakhadiran, apel, atau inspeksi peralatan."
+  },
   "設備護網": {
     "idn": "pelindung mesin",
     "canonical_idn": "pelindung mesin",

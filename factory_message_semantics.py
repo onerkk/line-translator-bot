@@ -4,8 +4,10 @@ Glossary enforcement can prove that isolated words and numbers are present, but
 it cannot prove that the target keeps their source roles.  This module extracts
 small, compositional source frames for relations that are especially dangerous
 on the shop floor: equipment-to-reading comparisons, reporting with a leader's
-ID, movement-to-a-location followed by inspection, and machine-guard safety
-instructions whose omitted Chinese subjects must remain attached to the guard.
+ID, movement-to-a-location followed by inspection, short attendance/departure
+events whose omitted human actor must not be replaced by a vehicle, and
+machine-guard safety instructions whose omitted Chinese subjects must remain
+attached to the guard.
 
 The rules are not sentence replacements.  Values, units, aspect, destination,
 objects, production-selection criteria and mentions are read from the current
@@ -23,7 +25,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-26.1-machine-guard-safety-relations"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-26.2-short-event-role-integrity"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -183,6 +185,62 @@ _ZH_ATTENDANCE_EARLY_LEAVE_RE = re.compile(
     r"(?:點名|点名)(?P<modality>不會|不会|不要|不可|不能|別|别)"
     r"(?:太)?早(?:離開|离开|走|下班)",
     re.I,
+)
+
+# A Chinese serial-verb message such as ``點名開車走了`` has an omitted human
+# actor: somebody attends the roll call and then leaves by driving.  ``開車``
+# is a manner/action predicate; 車 is its object, not the actor of ``走``.  A
+# general model can produce the fluent but role-reversed ``kendaraan berangkat``
+# and can also hallucinate ``lebih dulu``.  This frame records the event roles,
+# temporal relation, modality, explicitly grounded priority and source emoji.
+# It deliberately does not match ``車輛開走了`` because that source really does
+# make the vehicle the departing subject.
+_ZH_ATTENDANCE_EVENT_RE = re.compile(
+    r"(?:點完名|点完名|點名(?:完成|結束|结束|完)?|点名(?:完成|結束|结束|完)?)",
+    re.I,
+)
+_ZH_PERSON_VEHICLE_DEPARTURE_RE = re.compile(
+    r"(?P<actor>我們|我们|你們|你们|他們|他们|她們|她们|我|你|他|她)?"
+    r"(?P<connector>就|再|直接)?"
+    r"(?P<modality>不要|別|别|不能|不可|準備|准备|將要|将要|會|会|要)?"
+    r"(?P<priority>先)?"
+    r"(?P<drive>開車|开车|駕車|驾车)"
+    r"(?P<connector_after>就|再|直接)?"
+    r"(?P<priority_after>先)?"
+    r"(?P<departure>離開|离开|回去|回家|出發|出发|離場|离场|走)"
+    r"(?P<aspect>了|啦|囉|啰|喽|喔|哦)?",
+    re.I,
+)
+_ZH_EVENT_ACTOR_ID = {
+    "我": "saya",
+    "我們": "kami",
+    "我们": "kami",
+    "你": "Anda",
+    "你們": "kalian",
+    "你们": "kalian",
+    "他": "dia",
+    "她": "dia",
+    "他們": "mereka",
+    "他们": "mereka",
+    "她們": "mereka",
+    "她们": "mereka",
+}
+_ZH_EVENT_AFTER_RE = re.compile(
+    r"^(?:之後|之后|以後|以后|後|后)?(?:就|再|然後|然后|接著|接着)?$",
+    re.I,
+)
+_ZH_EVENT_BEFORE_RE = re.compile(r"^(?:之前|以前|前)(?:就|再)?$", re.I)
+_ZH_EVENT_DURING_RE = re.compile(r"^(?:時|时|期間|期间)(?:就|再)?$", re.I)
+_EMOJI_BASE = (
+    r"[\u2600-\u27BF\U0001F000-\U0001FAFF]"
+)
+_EMOJI_CLUSTER_RE = re.compile(
+    r"(?:[\U0001F1E6-\U0001F1FF]{2}|[#*0-9]\ufe0f?\u20e3|"
+    + _EMOJI_BASE
+    + r")"
+    r"(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF]|\u200d"
+    + _EMOJI_BASE
+    + r"[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF]*)*"
 )
 
 # 「放」is highly polysemous in the factory group.  A bare request such as
@@ -1317,6 +1375,169 @@ def _build_zh_id_machine_guard_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+def _extract_emoji_tokens(source: str) -> list[str]:
+    """Return source emoji clusters in order so a direct route cannot drop them."""
+    return [match.group(0) for match in _EMOJI_CLUSTER_RE.finditer(str(source or ""))]
+
+
+def _event_prefix_actor(prefix: str) -> tuple[str, str]:
+    """Consume only a standalone actor and optional 在 before 點名."""
+    value = str(prefix or "")
+    if value == "在":
+        return "", ""
+    for actor in sorted(_ZH_EVENT_ACTOR_ID, key=len, reverse=True):
+        if value in {actor, actor + "在", "在" + actor}:
+            return actor, ""
+    return "", value
+
+
+def _build_zh_id_attendance_vehicle_departure_frame(
+    source: str, frame: dict
+) -> dict:
+    """Bind attendance, a human driving action and departure as one event.
+
+    The parser consumes roles rather than matching an entire sentence.  It is
+    therefore reusable across traditional/simplified Chinese, explicit or
+    omitted actors, after/before/during relations, modal variants, departure
+    destinations and source emoji.  Unconsumed text keeps the frame active for
+    provider validation but prevents the local renderer from dropping content.
+    """
+    emoji_tokens = _extract_emoji_tokens(source)
+    visible = _MENTION_RE.sub("", str(source or ""))
+    visible = _EMOJI_CLUSTER_RE.sub("", visible)
+    compact = re.sub(
+        r"[\s,，、。.!！?？:：;；()（）\[\]{}]+", "", _norm(visible)
+    )
+    attendance = _ZH_ATTENDANCE_EVENT_RE.search(compact)
+    if not attendance:
+        return frame
+    departure = _ZH_PERSON_VEHICLE_DEPARTURE_RE.search(
+        compact, attendance.end()
+    )
+    if not departure:
+        return frame
+
+    prefix = compact[:attendance.start()]
+    between = compact[attendance.end():departure.start()]
+    suffix = compact[departure.end():]
+    prefix_actor, prefix_unparsed = _event_prefix_actor(prefix)
+    matched_actor = str(departure.group("actor") or "")
+    actor_source = matched_actor or prefix_actor
+
+    unparsed: list[str] = []
+    if prefix_unparsed:
+        unparsed.append(prefix_unparsed)
+    if prefix_actor and matched_actor and prefix_actor != matched_actor:
+        unparsed.append(prefix_actor + "/" + matched_actor)
+
+    if _ZH_EVENT_BEFORE_RE.fullmatch(between):
+        temporal_relation = "before"
+    elif _ZH_EVENT_DURING_RE.fullmatch(between):
+        temporal_relation = "during"
+    elif _ZH_EVENT_AFTER_RE.fullmatch(between):
+        temporal_relation = "after"
+    else:
+        temporal_relation = "unknown"
+        if between:
+            unparsed.append(between)
+
+    # A final conversational particle is part of the departure speech act.
+    # Any other suffix is a separate claim and must block the direct renderer.
+    suffix_unparsed = re.sub(r"^[啊呀吧呢嘛]+$", "", suffix)
+    if suffix_unparsed:
+        unparsed.append(suffix_unparsed)
+
+    raw_modality = str(departure.group("modality") or "")
+    if raw_modality in {"不要", "別", "别"}:
+        modality = "prohibition"
+    elif raw_modality in {"不能", "不可"}:
+        modality = "not_allowed"
+    elif raw_modality in {"準備", "准备"}:
+        modality = "imminent"
+    elif raw_modality in {"將要", "将要", "會", "会"}:
+        modality = "future"
+    elif raw_modality == "要":
+        modality = "intention"
+    else:
+        modality = "completed" if departure.group("aspect") else "unmarked"
+
+    connector_values = {
+        str(departure.group("connector") or ""),
+        str(departure.group("connector_after") or ""),
+    }
+    priority = bool(
+        departure.group("priority") or departure.group("priority_after")
+    )
+    farewell = bool(
+        any("👋" in token for token in emoji_tokens)
+        or str(departure.group("aspect") or "") in {"啦", "囉", "啰", "喽", "喔", "哦"}
+    )
+
+    frame["kind"] = "zh_id_attendance_vehicle_departure"
+    frame["slots"].update({
+        "attendance_source": attendance.group(0),
+        "temporal_relation": temporal_relation,
+        "actor_source": actor_source,
+        "actor_id": _ZH_EVENT_ACTOR_ID.get(actor_source, ""),
+        "drive_source": departure.group("drive"),
+        "departure_source": departure.group("departure"),
+        "modality": modality,
+        "priority": priority,
+        "direct": "直接" in connector_values,
+        "sequence_then": "再" in connector_values,
+        "farewell": farewell,
+        "emoji_tokens": emoji_tokens,
+    })
+    frame["unparsed"] = " | ".join(unparsed)
+    _claim(
+        frame,
+        "attendance_temporal_relation",
+        attendance.group(0) + between,
+        "點名與離開事件的先後／同時關係必須保留",
+        {
+            "after": "setelah pengecekan kehadiran selesai",
+            "before": "sebelum pengecekan kehadiran",
+            "during": "saat pengecekan kehadiran",
+        }.get(temporal_relation, "hubungan waktu dengan absensi"),
+    )
+    if actor_source:
+        _claim(
+            frame,
+            "departure_actor",
+            actor_source,
+            "明示的人員是開車並離開的行為者",
+            _ZH_EVENT_ACTOR_ID.get(actor_source, ""),
+        )
+    _claim(
+        frame,
+        "human_drives_and_departs",
+        departure.group(0),
+        "人員以開車／搭車方式離開；車是交通方式，不可升格為離開的主詞",
+        "orang berangkat/pergi dengan mobil",
+    )
+    if priority:
+        _claim(
+            frame,
+            "grounded_departure_priority",
+            "先",
+            "來源明寫先離開，目標才可使用 lebih dahulu/dulu",
+            "lebih dahulu",
+        )
+    if emoji_tokens:
+        _claim(
+            frame,
+            "source_emoji_fidelity",
+            "".join(emoji_tokens),
+            "來源表情符號必須原樣保留且不可漏掉",
+            "".join(emoji_tokens),
+        )
+    frame["active"] = True
+    frame["complete"] = bool(
+        temporal_relation != "unknown" and not unparsed
+    )
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
     machine_guard_frame = _build_zh_id_machine_guard_frame(source, frame)
     if machine_guard_frame.get("active"):
@@ -1327,6 +1548,11 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
     release_frame = _build_zh_id_data_release_frame(source, frame)
     if release_frame.get("active"):
         return release_frame
+    departure_frame = _build_zh_id_attendance_vehicle_departure_frame(
+        source, frame
+    )
+    if departure_frame.get("active"):
+        return departure_frame
     compact = _compact(source)
     motion_term = next((term for term in sorted(_ZH_MOTION, key=len, reverse=True) if term in compact), "")
     inspect_term = next((term for term in sorted(_ZH_INSPECTION, key=len, reverse=True) if term in compact), "")
@@ -1458,6 +1684,59 @@ def deterministic_translation(frame: Mapping) -> str:
         if not rendered:
             return ""
         return _with_mentions(frame, " ".join(rendered))
+
+    if frame.get("kind") == "zh_id_attendance_vehicle_departure":
+        temporal_relation = str(slots.get("temporal_relation") or "")
+        introduction = {
+            "after": "Setelah pengecekan kehadiran selesai, ",
+            "before": "Sebelum pengecekan kehadiran, ",
+            "during": "Saat pengecekan kehadiran, ",
+        }.get(temporal_relation, "")
+        if not introduction:
+            return ""
+
+        departure_source = str(slots.get("departure_source") or "")
+        if departure_source in {"回家"}:
+            verb, tail = "pulang", "dengan mobil"
+        elif departure_source in {"回去"}:
+            verb, tail = "kembali", "dengan mobil"
+        elif departure_source in {"離開", "离开", "離場", "离场"}:
+            verb, tail = "meninggalkan lokasi", "dengan mobil"
+        else:
+            verb, tail = "berangkat", "dengan mobil"
+
+        modality = str(slots.get("modality") or "")
+        if modality == "prohibition":
+            modal_prefix = "jangan "
+        elif modality == "not_allowed":
+            modal_prefix = "tidak boleh "
+        elif modality in {"future", "intention"}:
+            modal_prefix = "akan "
+        elif modality == "imminent":
+            modal_prefix = "bersiap untuk "
+        elif modality == "completed" and not slots.get("farewell"):
+            modal_prefix = "sudah "
+        else:
+            modal_prefix = ""
+
+        actor = str(slots.get("actor_id") or "")
+        predicate_parts = [modal_prefix]
+        if slots.get("sequence_then"):
+            predicate_parts.append("kemudian ")
+        if slots.get("direct"):
+            predicate_parts.append("langsung ")
+        predicate_parts.append(verb)
+        if slots.get("priority"):
+            predicate_parts.append(" lebih dahulu")
+        predicate_parts.append(" " + tail)
+        predicate = "".join(predicate_parts)
+        sentence = introduction + ((actor + " ") if actor else "") + predicate + "."
+        emoji_tokens = [
+            str(token) for token in slots.get("emoji_tokens") or () if str(token)
+        ]
+        if emoji_tokens:
+            sentence += " " + "".join(emoji_tokens)
+        return _with_mentions(frame, sentence)
 
     if frame.get("kind") == "zh_id_production_backlog_priority":
         process_id = str(slots.get("process_id") or "")
@@ -1745,6 +2024,98 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
                 ):
                     issues.append("factory_message_semantics:recent_reminder_aspect_missing")
 
+    elif frame.get("kind") == "zh_id_attendance_vehicle_departure":
+        low = _norm(target)
+        temporal_relation = str(slots.get("temporal_relation") or "")
+        attendance_terms = (
+            r"(?:absen|absensi|pengecekan\s+kehadiran|pemeriksaan\s+kehadiran)"
+        )
+        temporal_patterns = {
+            "after": r"\b(?:setelah|sesudah|selesai|habis)\s+" + attendance_terms + r"\b",
+            "before": r"\bsebelum\s+" + attendance_terms + r"\b",
+            "during": r"\b(?:saat|ketika|selama)\s+" + attendance_terms + r"\b",
+        }
+        temporal_pattern = temporal_patterns.get(temporal_relation, "")
+        if not temporal_pattern or not re.search(temporal_pattern, low, re.I):
+            issues.append(
+                "factory_message_semantics:attendance_departure_relation_missing"
+            )
+
+        human_vehicle_motion = re.search(
+            r"\b(?:"
+            r"(?:mengemudi|mengendarai)\s+(?:mobil|kendaraan)"
+            r"|(?:berangkat|pergi|pulang|kembali|meninggalkan\s+lokasi)"
+            r"(?:\s+(?:lebih\s+(?:dulu|dahulu)|terlebih\s+dahulu|dulu))?\s+"
+            r"(?:(?:dengan|naik)\s+(?:mobil|kendaraan)|mengendarai\s+(?:mobil|kendaraan))"
+            r")\b",
+            low,
+            re.I,
+        )
+        if not human_vehicle_motion:
+            issues.append(
+                "factory_message_semantics:human_vehicle_departure_missing"
+            )
+
+        # 車輛開走了 can legitimately use a vehicle subject. 開車走了 cannot:
+        # its omitted subject is a person and 車 remains the transport object.
+        if re.search(
+            r"\b(?:kendaraan|mobil)(?:nya)?\s+"
+            r"(?:(?:sudah|telah|akan)\s+)?(?:langsung\s+)?"
+            r"(?:berangkat|pergi|pulang|meninggalkan)\b",
+            low,
+            re.I,
+        ):
+            issues.append(
+                "factory_message_semantics:vehicle_promoted_to_departure_actor"
+            )
+
+        priority_present = bool(re.search(
+            r"\b(?:lebih\s+dulu|lebih\s+dahulu|terlebih\s+dahulu|lebih\s+awal)\b",
+            low,
+            re.I,
+        ))
+        if slots.get("priority"):
+            if not re.search(
+                r"\b(?:dulu|dahulu|lebih\s+dulu|lebih\s+dahulu|terlebih\s+dahulu)\b",
+                low,
+                re.I,
+            ):
+                issues.append(
+                    "factory_message_semantics:grounded_departure_priority_missing"
+                )
+        elif priority_present:
+            issues.append(
+                "factory_message_semantics:ungrounded_departure_priority"
+            )
+
+        actor_id = str(slots.get("actor_id") or "")
+        if actor_id and not _has_phrase(low, (actor_id,)):
+            issues.append("factory_message_semantics:departure_actor_missing")
+
+        modality = str(slots.get("modality") or "")
+        if modality in {"future", "intention"} and not _has_phrase(low, ("akan",)):
+            issues.append("factory_message_semantics:departure_future_modality_missing")
+        elif modality == "imminent" and not _has_phrase(
+            low, ("bersiap", "akan segera")
+        ):
+            issues.append("factory_message_semantics:departure_imminence_missing")
+        elif modality == "prohibition" and not _has_phrase(low, ("jangan",)):
+            issues.append("factory_message_semantics:departure_prohibition_missing")
+        elif modality == "not_allowed" and not _has_phrase(
+            low, ("tidak boleh", "dilarang")
+        ):
+            issues.append("factory_message_semantics:departure_not_allowed_missing")
+
+        if slots.get("direct") and not _has_phrase(low, ("langsung",)):
+            issues.append("factory_message_semantics:direct_departure_missing")
+
+        for emoji in slots.get("emoji_tokens") or ():
+            emoji_text = str(emoji or "")
+            if emoji_text and target.count(emoji_text) < str(frame.get("source") or "").count(emoji_text):
+                issues.append(
+                    "factory_message_semantics:source_emoji_missing:" + emoji_text
+                )
+
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         low = _norm(target)
         process_id = str(slots.get("process_id") or "")
@@ -2001,6 +2372,18 @@ def build_prompt(frame: Mapping) -> str:
             "lengah/lalai, not physical longgar. Preserve the source modality exactly: 不會 "
             "is a future-negative statement (tidak akan), while 不要 is a prohibition (jangan)."
         )
+    elif frame.get("kind") == "zh_id_attendance_vehicle_departure":
+        lines.append(
+            "This is a short attendance/vehicle-departure event. In 開車走了, the omitted "
+            "actor is a person who leaves by car; 車 is the object/means of driving. Never "
+            "promote mobil/kendaraan to the departing actor as in 'kendaraan berangkat'. "
+            "Keep the attendance timing (setelah/sebelum/saat pengecekan kehadiran), any "
+            "explicit person, "
+            "modality and source emoji. Use lebih dulu/lebih dahulu only when the Chinese "
+            "source explicitly contains 先; do not infer priority from 走了. For a source "
+            "with no explicit person, a subject-neutral Indonesian chat clause is safer "
+            "than inventing dia/mereka."
+        )
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         lines.append(
             "This is a production-planning relation. Render the process and small-bar material "
@@ -2101,6 +2484,16 @@ def health() -> dict:
         "@法比恩 Fabian Mohon bantu ingatkan agar pelindung mesin dipasang kembali "
         "dengan benar."
     )
+    vehicle_departure_source = "點名開車走了👋"
+    vehicle_departure_target = (
+        "Setelah pengecekan kehadiran selesai, berangkat dengan mobil. 👋"
+    )
+    vehicle_departure_bad = (
+        "Setelah absensi, kendaraan berangkat lebih dulu."
+    )
+    vehicle_departure = build_frame(
+        vehicle_departure_source, "zh", "id"
+    )
     controls = (
         build_frame("Sip, terima kasih.", "id", "zh"),
         build_frame("Selamat pagi, Pak.", "id", "zh"),
@@ -2114,6 +2507,8 @@ def health() -> dict:
         build_frame("品保檢驗後有放行。", "zh", "id"),
         build_frame("請他們放下工具。", "zh", "id"),
         build_frame("網路設備幫忙提醒一下。", "zh", "id"),
+        build_frame("點名後車輛開走了", "zh", "id"),
+        build_frame("點名開車的人到了", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -2203,6 +2598,28 @@ def health() -> dict:
             "@All 點名不要太早離開，設備護網要蓋好", "zh", "id"
         ).startswith(
             "@All Saat pengecekan kehadiran, jangan meninggalkan tempat terlalu awal."
+        ),
+        vehicle_departure.get("active") is True
+        and vehicle_departure.get("complete") is True,
+        translate_source_directly(vehicle_departure_source, "zh", "id")
+        == vehicle_departure_target,
+        validate_translation(
+            vehicle_departure, vehicle_departure_target
+        )[0] is True,
+        validate_translation(
+            vehicle_departure, vehicle_departure_bad
+        )[0] is False,
+        translate_source_directly(
+            "我點名後開車離開了", "zh", "id"
+        ) == (
+            "Setelah pengecekan kehadiran selesai, saya sudah meninggalkan "
+            "lokasi dengan mobil."
+        ),
+        translate_source_directly(
+            "點完名他先開車回家了", "zh", "id"
+        ) == (
+            "Setelah pengecekan kehadiran selesai, dia sudah pulang lebih "
+            "dahulu dengan mobil."
         ),
         all(not frame.get("active") for frame in controls),
     ]
