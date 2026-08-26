@@ -4536,45 +4536,54 @@ def normalize_line_mentions(text, message, group_id=None):
         start, end = span
         mention_type = str(getattr(mentionee, 'type', '') or '').lower()
 
-        # ``all`` is a fixed LINE token.  Never trust an oversized webhook
-        # length for it: some quoted/reply payload variants have reported a
-        # span that reaches into the current sentence.  Treating that entire
-        # span as a mention makes the mention-only guard discard a real work
-        # instruction without ever entering the translation outbox.
+        # ``@All`` is a fixed LINE broadcast token.  Never trust an oversized
+        # webhook/SDK span for it: if ``length`` accidentally reaches into the
+        # user's sentence, the mention-only guard would otherwise remove the
+        # entire current message and silently skip translation.  This is most
+        # visible when the text message replies to (quotes) a photo, but the
+        # current ``message.text`` must remain authoritative regardless of the
+        # quoted message type or whether image translation is enabled.
         if mention_type == 'all':
-            token_match = re.match(r'@[Aa][Ll][Ll](?![A-Za-z0-9_])', text[start:])
-            if not token_match:
-                # Ignore malformed metadata and let the exact textual @All
-                # fallback below recover it.  A bad span must never consume
-                # user-authored text.
+            all_token = re.match(
+                r'@[Aa][Ll][Ll](?![A-Za-z0-9_.-])',
+                text[start:],
+            )
+            if not all_token:
+                logger.warning(
+                    "[Mention] invalid @All span ignored group=%s start=%s raw=%r",
+                    group_id, start, text[start:end][:80],
+                )
                 continue
-            end = start + token_match.end()
+            end = start + all_token.end()
 
         raw = text[start:end]
-        replacement = '@All' if mention_type == 'all' else raw
+        replacement = raw
 
-        if mention_type != 'all' and not _mention_has_visible_name(raw):
-            user_id = (getattr(mentionee, 'user_id', None)
-                       or getattr(mentionee, 'userId', None))
-            display_name = None
-            if user_id:
-                try:
-                    display_name = get_display_name(group_id, user_id)
-                except Exception as exc:
-                    logger.debug("mention profile lookup failed: %s", exc)
-            if display_name:
-                if raw.startswith('@（'):
-                    replacement = '@（' + display_name + '）'
-                elif raw.startswith('@('):
-                    replacement = '@(' + display_name + ')'
-                else:
-                    replacement = '@' + display_name
+        if not _mention_has_visible_name(raw):
+            if mention_type == 'all':
+                replacement = '@All'
             else:
-                logger.warning(
-                    "[Mention] malformed webhook mention could not be repaired "
-                    "group=%s raw=%r type=%s",
-                    group_id, raw, mention_type,
-                )
+                user_id = (getattr(mentionee, 'user_id', None)
+                           or getattr(mentionee, 'userId', None))
+                display_name = None
+                if user_id:
+                    try:
+                        display_name = get_display_name(group_id, user_id)
+                    except Exception as exc:
+                        logger.debug("mention profile lookup failed: %s", exc)
+                if display_name:
+                    if raw.startswith('@（'):
+                        replacement = '@（' + display_name + '）'
+                    elif raw.startswith('@('):
+                        replacement = '@(' + display_name + ')'
+                    else:
+                        replacement = '@' + display_name
+                else:
+                    logger.warning(
+                        "[Mention] malformed webhook mention could not be repaired "
+                        "group=%s raw=%r type=%s",
+                        group_id, raw, mention_type,
+                    )
 
         if replacement != raw:
             edits.append((start, end, replacement))
@@ -13261,52 +13270,6 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             return False
 
         extracted = str(extracted).strip()
-        work_order_enabled = bool(payload.get(
-            "wo_setting",
-            group_wo_settings.get(group_id, True),
-        ))
-        work_order_reply = None
-        if work_order_enabled:
-            try:
-                work_order_analysis = analyze_work_order(extracted)
-                if work_order_analysis.get("is_work_order"):
-                    try:
-                        store_work_order_media_context(group_id, user_id, message_id)
-                    except Exception as context_exc:
-                        logger.warning(
-                            "[ImageRetry] work-order context store failed: %s",
-                            context_exc,
-                        )
-                work_order_reply = _prepare_work_order_image_reply(
-                    group_id,
-                    work_order_analysis,
-                    enabled=work_order_enabled,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[ImageRetry] work-order route failed; using OCR translation: %s",
-                    exc,
-                )
-        if work_order_reply:
-            # Delivery errors must escape to the lease worker so the same
-            # specialized result is retried.  Falling back to generic OCR text
-            # after a transient LINE error would change the configured route.
-            _translation_retry_push(job_key, payload, work_order_reply)
-            _stats_inc("work_order_detections")
-            translation_retry_queue_module.mark_delivered(
-                job_key, owner=lease_owner
-            )
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            _event_log_write("image_retry_delivered", {
-                "target": str(target_id)[-16:],
-                "attempt": int((job or {}).get("attempts") or 0) + 1,
-                "path": "work_order",
-                "message_id": message_id,
-                "durable": True,
-            })
-            return True
-
         lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")
         preferred = str(payload.get("tgt") or group_target_lang.get(group_id, "id") or "id")
         actual_tgt = preferred if lang == "zh" else "zh"
@@ -13759,13 +13722,6 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
         "message_id": message_id,
         "quote_token": ctx.get("quote_token"),
         "tgt": str(ctx.get("tgt") or group_target_lang.get(ctx.get("group_id"), "id") or "id"),
-        # Preserve the setting that governed the original webhook.  In
-        # particular, ``False`` means normal OCR translation and must not be
-        # reinterpreted as an enabled work-order route during a later retry.
-        "wo_setting": bool(ctx.get(
-            "wo_setting",
-            group_wo_settings.get(ctx.get("group_id"), True),
-        )),
     }
     try:
         inserted = translation_retry_queue_module.enqueue(
@@ -15941,27 +15897,6 @@ def format_storage_for_work_order(customer_name):
         lines.append(zh + " \u2192 " + area)
     lines.append("=" * 18)
     return "\n".join(lines)
-
-
-def _prepare_work_order_image_reply(group_id, analysis, *, enabled=None):
-    """Return a specialized work-order reply only when it can replace translation.
-
-    Disabling work-order detection means the image must continue through the
-    normal OCR translation path.  Likewise, a detection without a usable
-    storage reply is not a delivered result and therefore cannot consume the
-    image event.  Keeping this decision in one helper prevents the automatic,
-    ask-mode and durable-retry paths from drifting apart again.
-    """
-    if enabled is None:
-        enabled = group_wo_settings.get(group_id, True)
-    if not bool(enabled) or not isinstance(analysis, dict):
-        return None
-    if not analysis.get("is_work_order"):
-        return None
-    customer = analysis.get("customer")
-    if not customer:
-        return None
-    return format_storage_for_work_order(str(customer)) or None
 
 
 # v3.9.29: 已移除此處的孤兒 OCR 死碼(原 line 5078-5135)
@@ -20174,7 +20109,6 @@ def handle_image(event):
             "group_id": group_id,
             "user_id": user_id,
             "tgt": group_target_lang.get(group_id, "id"),
-            "wo_setting": group_wo_settings.get(group_id, True),
         }, delay_seconds=5)
         return
 
@@ -20296,15 +20230,9 @@ def _handle_image_background(ctx):
         # separate scene-description API call.  The old order delayed the only
         # structured context signal, so a text sent right after the photo could
         # be translated while the work-order fact was still unavailable.
-        _work_order_enabled = bool(ctx.get(
-            "wo_setting",
-            group_wo_settings.get(group_id, True),
-        ))
-        _work_order_analysis = (
-            analyze_work_order(extracted)
-            if extracted and _work_order_enabled
-            else {"is_work_order": False, "customer": None, "keyword_count": 0}
-        )
+        _work_order_analysis = analyze_work_order(extracted) if extracted else {
+            "is_work_order": False, "customer": None, "keyword_count": 0
+        }
         if _work_order_analysis.get("is_work_order"):
             store_work_order_media_context(group_id, user_id, message_id)
             _event_log_write("image_step", {
@@ -20349,65 +20277,53 @@ def _handle_image_background(ctx):
         # === Check if this is a work order (製造指示書) ===
         try:
             wo_analysis = _work_order_analysis
-            work_order_reply = _prepare_work_order_image_reply(
-                group_id,
-                wo_analysis,
-                enabled=_work_order_enabled,
-            )
-            if work_order_reply:
-                wo_customer = wo_analysis.get("customer")
-                _event_log_write("image_step", {
-                    "step": "work_order_detected",
-                    "customer": str(wo_customer)[:50],
-                })
-                qt_wo = ctx["quote_token"]
-                work_order_delivered = False
-                # v3.10+ 修補:加 push fallback。原本只用 reply_message,
-                # work_order 偵測 + storage lookup 若加 OCR 超過 30 秒,
-                # reply_token 就過期,訊息靜默消失,使用者完全不知工單已處理。
-                try:
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        msg_obj = TextMessage(text=work_order_reply)
-                        if qt_wo:
+            wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
+            if wo_customer:
+                _event_log_write("image_step", {"step": "work_order_detected", "customer": str(wo_customer)[:50]})
+                # It's a work order — never translate work order content
+                wo_on = group_wo_settings.get(group_id, True)
+                if wo_on:
+                    reply = format_storage_for_work_order(wo_customer)
+                    if reply:
+                        _stats_inc("work_order_detections")
+                        qt_wo = ctx["quote_token"]
+                        # v3.10+ 修補:加 push fallback。原本只用 reply_message,
+                        # work_order 偵測 + storage lookup 若加 OCR 超過 30 秒,
+                        # reply_token 就過期,訊息靜默消失,使用者完全不知工單已處理。
+                        try:
+                            with ApiClient(configuration) as api_client:
+                                api = MessagingApi(api_client)
+                                msg_obj = TextMessage(text=reply)
+                                if qt_wo:
+                                    try:
+                                        msg_obj.quote_token = qt_wo
+                                    except Exception:
+                                        pass
+                                api.reply_message(ReplyMessageRequest(
+                                    reply_token=ctx["reply_token"],
+                                    messages=[msg_obj]
+                                ))
+                            _event_log_write("image_done", {"path": "work_order", "method": "reply"})
+                        except Exception as _wo_re:
+                            _event_log_write("image_step_error", {
+                                "step": "wo_reply", "err": str(_wo_re)[:300], "fallback": "push"
+                            })
+                            logger.warning("Work order reply failed, trying push: %s", _wo_re)
                             try:
-                                msg_obj.quote_token = qt_wo
-                            except Exception:
-                                pass
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=ctx["reply_token"],
-                            messages=[msg_obj]
-                        ))
-                    _event_log_write("image_done", {"path": "work_order", "method": "reply"})
-                    work_order_delivered = True
-                except Exception as _wo_re:
-                    _event_log_write("image_step_error", {
-                        "step": "wo_reply", "err": str(_wo_re)[:300], "fallback": "push"
-                    })
-                    logger.warning("Work order reply failed, trying push: %s", _wo_re)
-                    try:
-                        with ApiClient(configuration) as api_client:
-                            api = MessagingApi(api_client)
-                            api.push_message(PushMessageRequest(
-                                to=group_id,
-                                messages=[TextMessage(text=work_order_reply)]
-                            ))
-                        _event_log_write("image_done", {"path": "work_order", "method": "push"})
-                        work_order_delivered = True
-                    except Exception as _wo_pe:
-                        _event_log_write("image_step_error", {"step": "wo_push", "err": str(_wo_pe)[:300]})
-                        logger.exception("Work order push also failed: %s", _wo_pe)
+                                with ApiClient(configuration) as api_client:
+                                    api = MessagingApi(api_client)
+                                    api.push_message(PushMessageRequest(
+                                        to=group_id,
+                                        messages=[TextMessage(text=reply)]
+                                    ))
+                                _event_log_write("image_done", {"path": "work_order", "method": "push"})
+                            except Exception as _wo_pe:
+                                _event_log_write("image_step_error", {"step": "wo_push", "err": str(_wo_pe)[:300]})
+                                logger.exception("Work order push also failed: %s", _wo_pe)
+                # Whether storage found or not, skip translation for work orders
                 track_group_usage(group_id, _bp, _bc, _bcost)
-                if work_order_delivered:
-                    _stats_inc("work_order_detections")
-                    _complete_durable_image_job(ctx)
-                # A usable specialized result owns this image.  If delivery
-                # failed, leave the durable image job pending so its retry path
-                # sends the same result instead of silently completing it.
+                _complete_durable_image_job(ctx)
                 return
-            # Disabled work-order handling, an unreadable customer, or a
-            # missing storage lookup must fall through to normal OCR
-            # translation.  Detection alone is not a delivered response.
         except Exception as e:
             _event_log_write("image_step_error", {"step": "work_order_detect", "err": str(e)[:200]})
             logger.error("Work order detection error: %s", e)
@@ -20530,7 +20446,7 @@ def _handle_image_background(ctx):
         _ocr_expression_visual = None
         try:
             _ocr_expression_visual = _build_expression_visual_message(
-                extracted, result, lang, group_id, from_image_ocr=True
+                extracted, lang, group_id, from_image_ocr=True
             )
         except Exception as _visual_exc:
             logger.debug("OCR expression visual selection skipped: %s", _visual_exc)
@@ -20635,7 +20551,6 @@ def _process_pending_image_translate(event, message_id):
             "group_id": group_id,
             "user_id": user_id,
             "tgt": group_target_lang.get(group_id, "id"),
-            "wo_setting": group_wo_settings.get(group_id, True),
         }, delay_seconds=2)
         return None
 
@@ -20704,7 +20619,6 @@ def _process_pending_image_translate_inner(event, message_id):
         "user_id": (info or {}).get("user_id", ""),
         "quote_token": None,
         "tgt": group_target_lang.get(group_id, "id"),
-        "wo_setting": group_wo_settings.get(group_id, True),
     }
     _ask_retry_ctx["durable_job_key"] = _schedule_image_translation_retry(
         _ask_retry_ctx, delay_seconds=75
@@ -20749,28 +20663,21 @@ def _process_pending_image_translate_inner(event, message_id):
 
     # 工單偵測
     try:
-        wo_enabled = bool(group_wo_settings.get(group_id, True))
-        wo_analysis = (
-            analyze_work_order(extracted)
-            if wo_enabled
-            else {"is_work_order": False, "customer": None, "keyword_count": 0}
-        )
+        wo_analysis = analyze_work_order(extracted)
         if wo_analysis.get("is_work_order"):
             store_work_order_media_context(
                 group_id, (info or {}).get("user_id", ""), message_id
             )
-        wo_reply = _prepare_work_order_image_reply(
-            group_id,
-            wo_analysis,
-            enabled=wo_enabled,
-        )
-        if wo_reply:
-            wo_delivered = _reply_or_push(wo_reply)
+        wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
+        if wo_customer:
+            wo_on = group_wo_settings.get(group_id, True)
+            if wo_on:
+                wo_reply = format_storage_for_work_order(wo_customer)
+                if wo_reply:
+                    _stats_inc("work_order_detections")
+                    _reply_or_push(wo_reply)
             track_group_usage(group_id, _bp, _bc, _bcost)
-            if wo_delivered:
-                _stats_inc("work_order_detections")
-                _complete_durable_image_job(_ask_retry_ctx)
-            # Leave the durable job pending when LINE delivery failed.
+            _complete_durable_image_job(_ask_retry_ctx)
             return
     except Exception as e:
         logger.error("[ImgAsk] Work order detection error: %s", e)
