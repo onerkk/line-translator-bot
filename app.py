@@ -10251,14 +10251,95 @@ _DEFAULT_NAMES = [
 extra_names_by_group = {"__all__": list(_DEFAULT_NAMES)}
 EXTRA_CUSTOMERS = []
 
+def _clean_protected_name_list(values):
+    """Return unique, non-empty protected names without changing their order.
+
+    The durable settings document predates duplicate prevention, so an older
+    document can still contain the same name more than once.  Clean the stored
+    lists at the data boundary instead of relying on ``set`` only while building
+    the translation lookup; otherwise the admin page continues to display the
+    duplicates and saves them again.
+    """
+    if values is None:
+        values = []
+    elif isinstance(values, str):
+        values = [values]
+    elif not isinstance(values, (list, tuple, set)):
+        values = []
+
+    cleaned = []
+    seen = set()
+    removed = 0
+    for value in values:
+        name = str(value or "").strip()
+        if not name or name in seen:
+            removed += 1
+            continue
+        seen.add(name)
+        cleaned.append(name)
+    return cleaned, removed
+
+
+def _storage_protected_names(storage_lookup=None):
+    """Return the current storage customer names as an ordered unique list."""
+    lookup = STORAGE_LOOKUP if storage_lookup is None else storage_lookup
+    keys = lookup.keys() if isinstance(lookup, dict) else []
+    names, _removed = _clean_protected_name_list(list(keys))
+    return names
+
+
+def protected_name_inventory():
+    """Build the admin-facing union of manual and storage-managed names.
+
+    Storage customers remain owned by ``storage_data.json`` and are not copied
+    into ``extra_names_by_group``.  This single-source design makes every
+    storage update immediately update the no-translation list while preventing
+    the same customer from being persistently added a second time.
+    """
+    with _state_lock:
+        manual_names, _removed = _clean_protected_name_list(
+            extra_names_by_group.get("__all__", [])
+        )
+        storage_names = _storage_protected_names()
+        storage_set = set(storage_names)
+
+        names = []
+        seen = set()
+        for name in manual_names + storage_names:
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+
+    return {
+        "names": names,
+        "storage_names": storage_names,
+        "count": len(names),
+        "storage_count": len(storage_names),
+        "manual_count": sum(1 for name in names if name not in storage_set),
+    }
+
+
 def rebuild_customer_names():
-    """Rebuild EXTRA_CUSTOMERS and CUSTOMER_NAMES from all groups."""
+    """Deduplicate stored lists and rebuild all translation name lookups."""
     global EXTRA_CUSTOMERS, CUSTOMER_NAMES
+    removed_duplicates = 0
     merged = set()
-    for names in extra_names_by_group.values():
-        merged.update(names)
-    EXTRA_CUSTOMERS = sorted(list(merged), key=lambda x: -len(x))
-    CUSTOMER_NAMES = sorted(list(set(list(STORAGE_LOOKUP.keys()) + EXTRA_CUSTOMERS)), key=lambda x: -len(x))
+    with _state_lock:
+        for scope, names in list(extra_names_by_group.items()):
+            cleaned, removed = _clean_protected_name_list(names)
+            extra_names_by_group[scope] = cleaned
+            removed_duplicates += removed
+            merged.update(cleaned)
+        EXTRA_CUSTOMERS = sorted(merged, key=lambda x: -len(x))
+        CUSTOMER_NAMES = sorted(
+            set(_storage_protected_names() + EXTRA_CUSTOMERS),
+            key=lambda x: -len(x),
+        )
+    return {
+        "duplicates_removed": removed_duplicates,
+        "protected_count": len(CUSTOMER_NAMES),
+    }
 
 CUSTOMER_NAMES = []
 rebuild_customer_names()
@@ -23790,7 +23871,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="panel" id="panel-names">
 <div class="card">
 <div style="font-weight:700;font-size:15px;margin-bottom:4px">🛡️ 翻譯保護名單</div>
-<div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻（人名、公司名皆可）</div>
+<div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻；儲區客戶會自動同步並去除重複名稱</div>
 <div style="display:flex;gap:8px;margin-bottom:12px">
 <input id="newNameInput" type="text" placeholder="輸入名字..." onkeydown="if(event.key==='Enter')addName()" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:14px;outline:none">
 <button class="btn btn-primary btn-sm" onclick="addName()">新增</button>
@@ -23804,7 +23885,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="panel" id="panel-storage">
 <div class="card">
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:15px">📦 儲區資料更新</div>
-<div class="card-sub" style="margin-bottom:14px">上傳 Excel 檔案自動更新儲區查詢資料</div>
+<div class="card-sub" style="margin-bottom:14px">上傳 Excel 自動更新儲區，並同步客戶名稱至翻譯保護名單（自動去重）</div>
 <input type="file" id="storageFile" accept=".xlsx,.xls" style="display:none" onchange="previewStorage()">
 <button class="btn btn-primary btn-sm" onclick="document.getElementById('storageFile').click()">選擇 Excel 檔案</button>
 <div id="storageFileName" style="margin-top:8px;font-size:13px;color:#8a8a9a"></div>
@@ -26963,17 +27044,23 @@ function renderUsersList(){
 }
 
 var _protectedNames=[];
+var _storageProtectedNames={};
 async function loadNames(){
   var d=await api('/names');
   if(!d)return;
   _protectedNames=d.names||[];
+  _storageProtectedNames={};
+  var storageNames=d.storage_names||[];
+  for(var s=0;s<storageNames.length;s++)_storageProtectedNames[storageNames[s]]=true;
   var el=document.getElementById('namesList');
-  document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個保護名稱';
+  document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個保護名稱（儲區自動 '+(d.storage_count||0)+'、手動 '+(d.manual_count||0)+'）';
   if(!_protectedNames.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
   var html='<div style="display:flex;flex-wrap:wrap;gap:8px">';
   for(var i=0;i<_protectedNames.length;i++){
+    var isStorage=!!_storageProtectedNames[_protectedNames[i]];
+    var action=isStorage?'<span style="color:#7c6fef;font-size:10px;font-weight:700">📦儲區</span>':'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span>';
     html+='<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
-    escapeHtml(_protectedNames[i])+'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span></span>';
+    escapeHtml(_protectedNames[i])+action+'</span>';
   }
   html+='</div>';
   el.innerHTML=html;
@@ -26983,13 +27070,14 @@ async function addName(){
   var name=inp.value.trim();
   if(!name){toast('請輸入名字');return}
   var d=await api('/names','POST',{action:'add',name:name});
-  if(d){toast('已新增: '+name);inp.value='';loadNames()}
+  if(d){toast(d.message||(d.added===false?'名稱已存在':'已新增: '+name));inp.value='';loadNames()}
 }
 function removeName(idx){
   var name=_protectedNames[idx];
   if(!name)return;
+  if(_storageProtectedNames[name]){toast('此名稱由儲區自動同步，請更新儲區資料');return}
   if(!confirm('確定移除「'+name+'」？'))return;
-  api('/names','POST',{action:'remove',name:name}).then(function(d){if(d){toast('已移除: '+name);loadNames()}});
+  api('/names','POST',{action:'remove',name:name}).then(function(d){if(d){toast(d.message||'已移除: '+name);loadNames()}});
 }
 
 async function loadStorageStats(){
@@ -27019,9 +27107,11 @@ async function uploadStorage(){
     if(d.error){toast(d.error);return}
     toast(d.message||'更新成功');
     var ghStatus=d.github?'✅ 已推送 GitHub，Render 將自動部署':'⚠️ GitHub 推送失敗，僅暫時生效';
+    var protectStatus='🛡️ 保護名單新增 '+(d.protected_added||0)+' 個，已自動去重 '+(d.duplicates_removed||0)+' 個';
     document.getElementById('storageActions').style.display='none';
-    document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#43b581;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div><div class="card-sub" style="margin-top:4px">'+ghStatus+'</div></div>';
+    document.getElementById('storagePreview').innerHTML='<div class="card"><div style="color:#43b581;font-weight:600">✅ 已更新 '+d.count+' 筆客戶資料</div><div class="card-sub" style="margin-top:4px">'+protectStatus+'</div><div class="card-sub" style="margin-top:4px">'+ghStatus+'</div></div>';
     loadStorageStats();
+    loadNames();
   }catch(e){toast('上傳失敗: '+e)}
 }
 
@@ -33070,6 +33160,9 @@ def api_admin_glossary_reverse():
 def api_admin_names():
     if not check_manager_access("names"):
         return jsonify({"error": "forbidden"}), 403
+    cleanup = rebuild_customer_names()
+    if cleanup.get("duplicates_removed"):
+        save_settings()
     names_list = extra_names_by_group.setdefault("__all__", [])
     if request.method == "POST":
         data = request.get_json() or {}
@@ -33077,19 +33170,67 @@ def api_admin_names():
         name = data.get("name", "").strip()
         if not name:
             return jsonify({"error": "missing name"}), 400
+        storage_names = set(_storage_protected_names())
         if action == "add":
-            if name not in names_list:
-                names_list.append(name)
-                rebuild_customer_names()
-                save_settings()
-            return jsonify({"ok": True})
+            if name in storage_names:
+                inventory = protected_name_inventory()
+                return jsonify({
+                    "ok": True,
+                    "added": False,
+                    "source": "storage",
+                    "message": "名稱已由儲區自動保護，未重複新增",
+                    **inventory,
+                })
+            if name in names_list:
+                inventory = protected_name_inventory()
+                return jsonify({
+                    "ok": True,
+                    "added": False,
+                    "source": "manual",
+                    "message": "名稱已在保護名單內，未重複新增",
+                    **inventory,
+                })
+            names_list.append(name)
+            rebuild_customer_names()
+            save_settings()
+            inventory = protected_name_inventory()
+            return jsonify({
+                "ok": True,
+                "added": True,
+                "source": "manual",
+                "message": "已新增: " + name,
+                **inventory,
+            })
         elif action == "remove":
+            if name in storage_names:
+                inventory = protected_name_inventory()
+                return jsonify({
+                    "ok": False,
+                    "removed": False,
+                    "locked": True,
+                    "message": "此名稱由儲區自動同步，請更新儲區資料",
+                    **inventory,
+                })
             if name in names_list:
                 names_list.remove(name)
                 rebuild_customer_names()
                 save_settings()
-            return jsonify({"ok": True})
-    return jsonify({"names": names_list, "count": len(names_list)})
+                inventory = protected_name_inventory()
+                return jsonify({
+                    "ok": True,
+                    "removed": True,
+                    "message": "已移除: " + name,
+                    **inventory,
+                })
+            inventory = protected_name_inventory()
+            return jsonify({
+                "ok": True,
+                "removed": False,
+                "message": "名稱不在手動保護名單內",
+                **inventory,
+            })
+        return jsonify({"error": "invalid action"}), 400
+    return jsonify(protected_name_inventory())
 
 
 @app.route("/api/admin/storage/stats")
@@ -33160,19 +33301,41 @@ def api_admin_storage_upload():
                     new_data[cust].append([length_key, zone])
         if not new_data:
             return jsonify({"error": "無法解析 Excel，請確認格式：\n欄A=客戶 欄B=<=3200 欄C=>3200<=4200 欄D=>4200"}), 400
-        # Update in-memory
-        STORAGE_LOOKUP = new_data
-        rebuild_customer_names()
+        # Update in-memory.  The admin protected-name view is a live union of
+        # manual names and storage customer keys, so changing STORAGE_LOOKUP is
+        # also the authoritative automatic no-translation-list update.
+        with _state_lock:
+            old_inventory = set(protected_name_inventory()["names"])
+            STORAGE_LOOKUP = new_data
+            sync_stats = rebuild_customer_names()
+            inventory = protected_name_inventory()
+        protected_added = sum(
+            1 for name in inventory["storage_names"] if name not in old_inventory
+        )
+        if sync_stats.get("duplicates_removed"):
+            save_settings()
         logger.info("Storage updated via admin: %d customers", len(new_data))
         # Auto-commit to GitHub for permanent update
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_storage_to_github(json_str)
-        msg = "已更新 " + str(len(new_data)) + " 筆客戶"
+        msg = (
+            "已更新 " + str(len(new_data)) + " 筆客戶，保護名單新增 "
+            + str(protected_added) + " 個"
+        )
         if gh_ok:
             msg += "（已自動推送 GitHub，將永久生效）"
         else:
             msg += "（GitHub 推送失敗，僅暫時生效）"
-        return jsonify({"ok": True, "count": len(new_data), "github": gh_ok, "message": msg})
+        return jsonify({
+            "ok": True,
+            "count": len(new_data),
+            "github": gh_ok,
+            "message": msg,
+            "protected_added": protected_added,
+            "protected_count": inventory["count"],
+            "storage_protected_count": inventory["storage_count"],
+            "duplicates_removed": sync_stats.get("duplicates_removed", 0),
+        })
     except Exception as e:
         logger.error("Storage upload error: %s", e)
         return jsonify({"error": "解析失敗: " + str(e)}), 400
