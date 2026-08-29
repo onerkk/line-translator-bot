@@ -297,7 +297,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-08-18.1-source-bound-privacy-placeholders"
+_EXPECTED_QG_BUILD_ID = "2026-08-29.1-compact-factory-unit-codes"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -331,7 +331,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-26.2-short-event-role-integrity"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-29.1-unit-trolley-ownership"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -3765,11 +3765,11 @@ BUILTIN_EXAMPLES = [
     {"zh": "一定要確實執行", "id": "harus benar-benar dijalankan", "dir": "zh2id"},
     {"zh": "一定要標示清楚", "id": "harus diberi penandaan yang jelas", "dir": "zh2id"},
     {"zh": "PMI作業", "id": "pemeriksaan grade baja batang dengan spektrometer", "dir": "zh2id"},
-    {"zh": "台車", "id": "troli angkut batang", "dir": "zh2id"},
-    {"zh": "台車滿了", "id": "troli angkut batang sudah penuh", "dir": "zh2id"},
+    {"zh": "台車", "id": "troli", "dir": "zh2id"},
+    {"zh": "台車滿了", "id": "troli sudah penuh", "dir": "zh2id"},
     {"zh": "麻煩一下", "id": "tolong bantu", "dir": "zh2id"},
-    {"zh": "台車再幫忙一下", "id": "Troli angkut batang sudah penuh, tolong bantu turunkan batangnya lagi.", "dir": "zh2id"},
-    {"zh": "削皮那邊還需要一台", "id": "Bagian peeling masih butuh satu troli lagi.", "dir": "zh2id"},
+    {"zh": "台車再幫忙一下", "id": "Tolong bantu urus troli sekali lagi.", "dir": "zh2id"},
+    {"zh": "削皮那邊還需要一台", "id": "Bagian Peeling masih membutuhkan satu troli lagi.", "dir": "zh2id"},
     {"zh": "太凸", "id": "terlalu panjang", "dir": "zh2id"},
     # v3.9.59: 中文多義詞不再靠單句 built-in example；改由 runtime semantic_contract 統一判斷與驗證。
     

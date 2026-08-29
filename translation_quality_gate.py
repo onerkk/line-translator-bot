@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-08-18.1-source-bound-privacy-placeholders"
+QUALITY_GATE_BUILD_ID = "2026-08-29.1-compact-factory-unit-codes"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -95,6 +95,24 @@ _TECH_TOKEN_RE = re.compile(
     r'(?:\d+(?:[.,]\d+)?\s*(?:mm|cm|kg|g|t|%|°C|℃))|'
     rf'(?:{_KNOWN_TECH_ACRONYM_PATTERN})'
     r')(?![A-Za-z0-9_])'
+)
+
+# Adjacent G-number unit abbreviations are separate organizational identifiers,
+# not one opaque model code.  For example, G8G9 means units G8 and G9.  This
+# specialized run parser executes before the general technical-token regex so
+# both identifiers are inventoried and can be preserved independently.
+_EXPLICIT_FACTORY_UNIT_RUN_RE = re.compile(
+    r'(?<![A-Za-z0-9_])'
+    r'(?:G\s*\d{1,2})'
+    r'(?:(?:\s*G\s*\d{1,2})|'
+    r'(?:\s*(?:、|/|／|,|，|和|與|与|跟|及|&|\+)\s*G\s*\d{1,2}))*'
+    r'(?![A-Za-z0-9_])',
+    re.I,
+)
+_FACTORY_UNIT_TROLLEY_RUN_RE = re.compile(
+    _EXPLICIT_FACTORY_UNIT_RUN_RE.pattern
+    + r'(?=\s*(?:的)?\s*台[車车])',
+    re.I,
 )
 
 _LATIN_RUN_RE = re.compile(r'(?:\b[A-Za-z]{2,}\b(?:[\s,;:/()\-]+|$)){4,}', re.I)
@@ -477,6 +495,34 @@ def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
     return _QUOTED_DATA_RE.sub(repl, text)
 
 
+def _protect_factory_unit_runs(text: str, mapping: Dict[str, str]) -> str:
+    """Protect every G-number unit that directly modifies 台車 separately.
+
+    Separators and adjacency are retained in the protected text, so restoring a
+    legacy envelope reproduces the original spelling (G8G9, G8/G9, G8、G9,
+    etc.) while the immutable inventory contains G8 and G9 as distinct atoms.
+    A lone code and an identical-looking token outside this unit/trolley syntax
+    are left to the ordinary technical-token rule, where exact code identity is
+    safer than assuming an organizational abbreviation.
+    """
+    def repl(run_match: re.Match) -> str:
+        raw = run_match.group(0)
+        code_matches = list(re.finditer(r"G\s*\d{1,2}", raw, re.I))
+        if len(code_matches) < 2:
+            return raw
+        pieces: List[str] = []
+        cursor = 0
+        for code_match in code_matches:
+            pieces.append(raw[cursor:code_match.start()])
+            canonical = re.sub(r"\s+", "", code_match.group(0)).upper()
+            pieces.append(_new_placeholder(mapping, canonical))
+            cursor = code_match.end()
+        pieces.append(raw[cursor:])
+        return "".join(pieces)
+
+    return _FACTORY_UNIT_TROLLEY_RUN_RE.sub(repl, str(text or ""))
+
+
 def _immutable_quoted_value_count(text: str) -> int:
     return sum(
         1 for match in _QUOTED_DATA_RE.finditer(text or "")
@@ -503,6 +549,7 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     protected = _replace_matches(text, _MENTION_RE, mapping)
     protected = _protect_document_defined_labels(protected, mapping)
     protected = _protect_parenthesized_flags(protected, mapping)
+    protected = _protect_factory_unit_runs(protected, mapping)
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
     protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
@@ -1161,6 +1208,14 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
             text or "",
             re.I,
         ))
+    if re.fullmatch(r'G\d{1,2}', atom, re.I):
+        expected = atom.upper()
+        return sum(
+            1
+            for run in _EXPLICIT_FACTORY_UNIT_RUN_RE.finditer(text or "")
+            for digits in re.findall(r'G\s*(\d{1,2})', run.group(0), re.I)
+            if ("G" + digits).upper() == expected
+        )
     if re.fullmatch(r'[A-Za-z0-9._/+:%×x-]+', atom):
         return len(re.findall(r'(?<![A-Za-z0-9])' + re.escape(atom) + r'(?![A-Za-z0-9])', text or ""))
     return (text or "").count(atom)

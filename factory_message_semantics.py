@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-26.2-short-event-role-integrity"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-29.1-unit-trolley-ownership"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -138,6 +138,36 @@ _ZH_INSPECTION = (
     "確認一下", "确认一下", "檢查看看", "检查看看", "檢查一下", "检查一下",
     "查看一下", "看看", "看一下", "查看", "檢查", "检查", "確認", "确认",
     "了解", "瞭解",
+)
+
+# In terse shop-floor Chinese, ``削皮需要G8G9台車`` is an organization and
+# ownership relation.  ``削皮`` is the receiving production section, while G8
+# and G9 are two factory-unit abbreviations whose trolleys are being requested.
+# A lexical translator tends to read 削皮 as the physical action "peel skin"
+# and glue G8G9 onto 台車 as a model/load label.  Parse those roles from the
+# source before translation so the compact spelling never loses the unit split
+# or reverses the relation.
+_ZH_PEELING_RECEIVER_RE = re.compile(
+    r"削皮(?:那一站|這一站|这一站|那站|這站|这站|那邊|那边|這邊|这边|"
+    r"股|站|部門|部门|區|区)?(?!棒|機|机|作業|作业|製程|制程|加工)",
+    re.I,
+)
+_ZH_FACTORY_UNIT_TROLLEY_RE = re.compile(
+    r"(?P<unit_expr>(?<![A-Za-z0-9])G\s*\d{1,2}"
+    r"(?:(?:\s*G\s*\d{1,2})|"
+    r"(?:\s*(?:、|/|／|,|，|和|與|与|跟|及|&|\+)\s*(?:G\s*)?\d{1,2}))*"
+    r")\s*(?:的)?\s*(?P<trolley>台[車车])",
+    re.I,
+)
+_ZH_TROLLEY_NEED_RE = re.compile(
+    r"需要|需用|缺少|想借|要借|借用|需|要|缺",
+    re.I,
+)
+_ZH_TROLLEY_REQUEST_RE = re.compile(
+    r"(?:麻煩|麻烦|拜託|拜托)(?:幫忙|帮忙|協助|协助|支援)?(?:一下|了|啦|喔|哦)?"
+    r"|(?:請|请)(?:幫忙|帮忙|協助|协助|支援)?(?:一下)?"
+    r"|(?:幫忙|帮忙|協助|协助|支援)(?:一下)?",
+    re.I,
 )
 
 # Machine guards are engineering controls, not the machine itself.  Chinese
@@ -741,6 +771,131 @@ def _strip_zh_supported_tokens(source: str) -> str:
     value = _MENTION_RE.sub("", value)
     value = re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", "", value)
     return value
+
+
+def _factory_unit_codes(unit_expression: str) -> list[str]:
+    """Split compact unit spellings such as G8G9, G8/G9 and G8、9."""
+    codes: list[str] = []
+    for digits in re.findall(r"\d{1,2}", str(unit_expression or "")):
+        code = "G" + digits
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _format_id_factory_unit_list(codes: Iterable[str]) -> str:
+    values = [str(code).upper() for code in codes if str(code)]
+    if not values:
+        return ""
+    if len(values) == 1:
+        return "unit " + values[0]
+    if len(values) == 2:
+        return "unit " + values[0] + " dan " + values[1]
+    return "unit " + ", ".join(values[:-1]) + ", dan " + values[-1]
+
+
+def _strip_zh_unit_trolley_supported_tokens(
+    source: str,
+    spans: Iterable[tuple[int, int]],
+) -> str:
+    value = _MENTION_RE.sub("", str(source or ""))
+    # The spans were found after mentions had been removed, so delete them from
+    # that same visible string, right-to-left to keep offsets stable.
+    for start, end in sorted(spans, reverse=True):
+        value = value[:start] + value[end:]
+    value = _ZH_TROLLEY_REQUEST_RE.sub("", value)
+    for token in ("目前", "現在", "现在", "還", "还"):
+        value = value.replace(token, "")
+    return re.sub(r"[\s,，、。.!！?？:：;；()（）\[\]{}]+", "", value)
+
+
+def _build_zh_id_factory_unit_trolley_frame(source: str, frame: dict) -> dict:
+    """Bind a receiving section to trolleys sourced from G-number units.
+
+    The compact source omits 的 and separators, but those omissions do not turn
+    the codes into a trolley model.  A direct rendering is allowed only when all
+    non-mention text belongs to the receiver/need/ownership/request relation.
+    """
+    visible = _MENTION_RE.sub("", str(source or ""))
+    receiver_match = _ZH_PEELING_RECEIVER_RE.search(visible)
+    if not receiver_match:
+        return frame
+    trolley_match = _ZH_FACTORY_UNIT_TROLLEY_RE.search(
+        visible, receiver_match.end()
+    )
+    if not trolley_match:
+        return frame
+    bridge = visible[receiver_match.end():trolley_match.start()]
+    if len(_compact(bridge)) > 40:
+        return frame
+    need_match = _ZH_TROLLEY_NEED_RE.search(bridge)
+    if not need_match:
+        return frame
+
+    codes = _factory_unit_codes(trolley_match.group("unit_expr"))
+    if not codes:
+        return frame
+    need_span = (
+        receiver_match.end() + need_match.start(),
+        receiver_match.end() + need_match.end(),
+    )
+    request = bool(_ZH_TROLLEY_REQUEST_RE.search(visible))
+    currently = any(term in bridge for term in ("目前", "現在", "现在"))
+    still = any(term in bridge for term in ("還", "还"))
+    unparsed = _strip_zh_unit_trolley_supported_tokens(
+        source,
+        (
+            receiver_match.span(),
+            need_span,
+            trolley_match.span(),
+        ),
+    )
+
+    frame["kind"] = "zh_id_factory_unit_trolley_request"
+    frame["slots"].update({
+        "receiver_source": receiver_match.group(0),
+        "receiver_id": "Bagian Peeling",
+        "need_source": need_match.group(0),
+        "owner_unit_expression": trolley_match.group("unit_expr"),
+        "owner_unit_codes": codes,
+        "trolley_source": trolley_match.group("trolley"),
+        "request": request,
+        "currently": currently,
+        "still": still,
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame,
+        "trolley_receiving_section",
+        receiver_match.group(0),
+        "削皮在需要台車的主詞位置，是削皮單位／部門，不是剝除表皮的動作",
+        "Bagian Peeling",
+    )
+    _claim(
+        frame,
+        "factory_unit_trolley_ownership",
+        trolley_match.group(0),
+        "G8、G9 是兩個工廠單位簡稱；台車來自這些單位，不是名為 G8G9 的台車",
+        "troli dari " + _format_id_factory_unit_list(codes),
+    )
+    _claim(
+        frame,
+        "trolley_need_relation",
+        need_match.group(0),
+        "削皮單位需要台車",
+        "Bagian Peeling membutuhkan troli",
+    )
+    if request:
+        _claim(
+            frame,
+            "trolley_request_modality",
+            "麻煩／請／幫忙",
+            "請對方協助處理台車需求",
+            "Mohon bantuannya",
+        )
+    frame["active"] = True
+    frame["complete"] = bool(not unparsed)
+    return frame
 
 
 def _parse_zh_release_count(raw: str) -> int | None:
@@ -1539,6 +1694,9 @@ def _build_zh_id_attendance_vehicle_departure_frame(
 
 
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    unit_trolley_frame = _build_zh_id_factory_unit_trolley_frame(source, frame)
+    if unit_trolley_frame.get("active"):
+        return unit_trolley_frame
     machine_guard_frame = _build_zh_id_machine_guard_frame(source, frame)
     if machine_guard_frame.get("active"):
         return machine_guard_frame
@@ -1639,6 +1797,22 @@ def deterministic_translation(frame: Mapping) -> str:
             return ""
         status = "還沒有噴漆" if slots.get("completion") == "not_yet" else "沒有噴漆"
         return _with_mentions(frame, f"{shift}{status}")
+
+    if frame.get("kind") == "zh_id_factory_unit_trolley_request":
+        receiver = str(slots.get("receiver_id") or "")
+        unit_list = _format_id_factory_unit_list(
+            slots.get("owner_unit_codes") or ()
+        )
+        if not receiver or not unit_list:
+            return ""
+        subject = receiver
+        if slots.get("currently"):
+            subject = "Saat ini, " + subject
+        predicate = "masih membutuhkan" if slots.get("still") else "membutuhkan"
+        text = f"{subject} {predicate} troli dari {unit_list}."
+        if slots.get("request"):
+            text += " Mohon bantuannya."
+        return _with_mentions(frame, text)
 
     if frame.get("kind") == "zh_id_machine_guard_safety":
         rendered: list[str] = []
@@ -1893,6 +2067,65 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:equipment_mistranslated_as_surface_damage")
         if any(term in target for term in ("損壞", "损坏")) and "故障" not in target:
             issues.append("factory_message_semantics:equipment_failure_wording_ambiguous")
+
+    elif frame.get("kind") == "zh_id_factory_unit_trolley_request":
+        low = _norm(target)
+        if not _has_phrase(low, ("bagian peeling",)):
+            issues.append(
+                "factory_message_semantics:trolley_receiving_section_missing"
+            )
+        if not _has_phrase(low, (
+            "membutuhkan", "memerlukan", "butuh", "perlu",
+        )):
+            issues.append("factory_message_semantics:trolley_need_relation_missing")
+        if not _has_phrase(low, ("troli", "trolley")):
+            issues.append("factory_message_semantics:trolley_object_missing")
+
+        for code in slots.get("owner_unit_codes") or ():
+            if not re.search(
+                r"(?<![A-Za-z0-9])" + re.escape(str(code))
+                + r"(?![A-Za-z0-9])",
+                target,
+                re.I,
+            ):
+                issues.append(
+                    "factory_message_semantics:factory_unit_code_missing:"
+                    + str(code)
+                )
+        owner_relation = bool(
+            re.search(
+                r"\b(?:dari|milik)\s+(?:unit|bagian|seksi|departemen)\b",
+                low,
+                re.I,
+            )
+        )
+        if not owner_relation:
+            issues.append(
+                "factory_message_semantics:unit_trolley_ownership_relation_missing"
+            )
+        if slots.get("request") and not _has_phrase(
+            low, ("mohon", "tolong", "harap")
+        ):
+            issues.append("factory_message_semantics:trolley_request_modality_missing")
+        if slots.get("currently") and not _has_phrase(
+            low, ("saat ini", "sekarang")
+        ):
+            issues.append("factory_message_semantics:trolley_current_time_missing")
+        if slots.get("still") and not _has_phrase(low, ("masih",)):
+            issues.append("factory_message_semantics:trolley_still_aspect_missing")
+
+        if re.search(
+            r"\b(?:untuk\s+)?proses\s+(?:peeling|pengupasan|kupas\s+kulit)\b",
+            low,
+            re.I,
+        ) or _has_phrase(low, ("kupas kulit",)):
+            issues.append(
+                "factory_message_semantics:peeling_section_mistranslated_as_process"
+            )
+        if _has_phrase(low, ("troli angkut batang",)):
+            issues.append(
+                "factory_message_semantics:ungrounded_trolley_function_added"
+            )
 
     elif frame.get("kind") == "zh_id_machine_guard_safety":
         low = _norm(target)
@@ -2359,6 +2592,16 @@ def build_prompt(frame: Mapping) -> str:
             "functional machine failure: translate the linked claim as I15 機台故障, not as "
             "material/surface damage (損傷) and not as the underspecified I15 損壞."
         )
+    elif frame.get("kind") == "zh_id_factory_unit_trolley_request":
+        lines.append(
+            "This is a factory-unit trolley request. In the subject position before 需要, "
+            "削皮 means the receiving organization Bagian Peeling, not the action proses "
+            "pengupasan/kupas kulit. Compact G-number spellings such as G8G9, G8/G9 and "
+            "G8、G9 denote separate factory-unit abbreviations. Preserve every code and "
+            "express the omitted ownership/source relation explicitly as 'troli dari unit "
+            "G8 dan G9' (or equivalent with milik). Never glue the codes into a trolley "
+            "model, and do not add the unsupported function 'angkut batang'."
+        )
     elif frame.get("kind") == "zh_id_machine_guard_safety":
         lines.append(
             "This is a machine-guard safety relation. 設備護網/護網/護罩 denotes the "
@@ -2445,6 +2688,12 @@ def health() -> dict:
         "id", "zh",
     )
     movement = build_frame("我過去了了解看看", "zh", "id")
+    unit_trolley_source = "@法比恩 Fabian 削皮需要G8G9台車 麻煩一下"
+    unit_trolley_target = (
+        "@法比恩 Fabian Bagian Peeling membutuhkan troli dari unit G8 dan G9. "
+        "Mohon bantuannya."
+    )
+    unit_trolley = build_frame(unit_trolley_source, "zh", "id")
     data_release = build_frame(
         "@小麥（研磨股班長） 這把麻煩他們放一下", "zh", "id"
     )
@@ -2502,6 +2751,9 @@ def health() -> dict:
         build_frame("Katrol rusak.", "id", "zh"),
         build_frame("我先看看情況。", "zh", "id"),
         build_frame("我過去拿工具。", "zh", "id"),
+        build_frame("G8G9台車已經滿了。", "zh", "id"),
+        build_frame("這批削皮棒需要台車。", "zh", "id"),
+        build_frame("這批料削皮需要台車。", "zh", "id"),
         build_frame("這把刀麻煩他們放在架上。", "zh", "id"),
         build_frame("這把材料放不下，先放照片裡的位置。", "zh", "id"),
         build_frame("品保檢驗後有放行。", "zh", "id"),
@@ -2531,6 +2783,17 @@ def health() -> dict:
         movement.get("active") is True and movement.get("complete") is True,
         translate_source_directly("我過去了了解看看", "zh", "id")
         == "Saya ke sana dulu untuk mengecek situasinya.",
+        unit_trolley.get("active") is True
+        and unit_trolley.get("complete") is True,
+        unit_trolley.get("slots", {}).get("owner_unit_codes") == ["G8", "G9"],
+        translate_source_directly(unit_trolley_source, "zh", "id")
+        == unit_trolley_target,
+        validate_translation(unit_trolley, unit_trolley_target)[0] is True,
+        validate_translation(
+            unit_trolley,
+            "Untuk proses kupas kulit, diperlukan troli angkut batang G8G9. "
+            "Mohon bantuannya.",
+        )[0] is False,
         data_release.get("active") is True and data_release.get("complete") is True,
         translate_source_directly(data_release["source"], "zh", "id")
         == (
