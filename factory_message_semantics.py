@@ -5,9 +5,10 @@ it cannot prove that the target keeps their source roles.  This module extracts
 small, compositional source frames for relations that are especially dangerous
 on the shop floor: equipment-to-reading comparisons, reporting with a leader's
 ID, movement-to-a-location followed by inspection, short attendance/departure
-events whose omitted human actor must not be replaced by a vehicle, and
-machine-guard safety instructions whose omitted Chinese subjects must remain
-attached to the guard.
+events whose omitted human actor must not be replaced by a vehicle, supervisory
+alerts whose organization/location nouns stand for people, and machine-guard
+safety instructions whose omitted Chinese subjects must remain attached to the
+guard.
 
 The rules are not sentence replacements.  Values, units, aspect, destination,
 objects, production-selection criteria and mentions are read from the current
@@ -25,7 +26,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-29.1-unit-trolley-ownership"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-30.1-shopfloor-agent-roles"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -271,6 +272,126 @@ _EMOJI_CLUSTER_RE = re.compile(
     r"(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF]|\u200d"
     + _EMOJI_BASE
     + r"[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF]*)*"
+)
+
+# Chinese shop-floor chat routinely omits 人/人員 when the surrounding syntax
+# already makes a human actor obvious.  Two high-impact examples are
+# ``抓到二股滑手機`` (someone from the section was caught using a phone; the
+# section itself did not use it) and ``點名進來了`` (the attendance checker
+# entered; the abstract attendance procedure did not start).  A glossary cannot
+# solve either relation: forcing 二股 and 點名 to their canonical nouns actually
+# makes a fluent role swap more likely.  These maps and clause parsers resolve
+# the actor before translation and are deliberately compositional across roles,
+# units, conduct, movement, timing, modality and alert recipients.
+_ZH_SUPERVISOR_ROLE_ID = {
+    "冷抽一股股長": "kepala bagian Cold Drawing 1",
+    "冷抽二股股長": "kepala bagian Cold Drawing 2",
+    "一股股長": "kepala bagian Cold Drawing 1",
+    "二股股長": "kepala bagian Cold Drawing 2",
+    "削皮股股長": "kepala bagian Peeling",
+    "研磨股股長": "kepala bagian Grinding",
+    "處長": "kepala divisi",
+    "处长": "kepala divisi",
+    "課長": "kepala seksi",
+    "课长": "kepala seksi",
+    "股長": "kepala bagian",
+    "股长": "kepala bagian",
+    "班長": "kepala regu",
+    "班长": "kepala regu",
+    "主管": "atasan",
+}
+_ZH_FACTORY_UNIT_ID = {
+    "冷抽一股": "Bagian Cold Drawing 1",
+    "第一股": "Bagian Cold Drawing 1",
+    "一股": "Bagian Cold Drawing 1",
+    "冷抽二股": "Bagian Cold Drawing 2",
+    "第二股": "Bagian Cold Drawing 2",
+    "二股": "Bagian Cold Drawing 2",
+    "削皮股": "Bagian Peeling",
+    "研磨股": "Bagian Grinding",
+    "一課": "Seksi 1",
+    "一课": "Seksi 1",
+}
+_ZH_HUMAN_CONDUCT_ID = {
+    "使用手機": "menggunakan ponsel",
+    "使用手机": "menggunakan ponsel",
+    "滑手機": "menggunakan ponsel",
+    "滑手机": "menggunakan ponsel",
+    "玩手機": "menggunakan ponsel",
+    "玩手机": "menggunakan ponsel",
+    "看手機": "menggunakan ponsel",
+    "看手机": "menggunakan ponsel",
+    "睡覺": "tidur",
+    "睡觉": "tidur",
+    "抽菸": "merokok",
+    "抽烟": "merokok",
+    "吸菸": "merokok",
+    "吸烟": "merokok",
+    "聊天": "mengobrol",
+    "休息": "beristirahat",
+}
+_ZH_ROLE_PATTERN = "(?:" + "|".join(
+    re.escape(term)
+    for term in sorted(_ZH_SUPERVISOR_ROLE_ID, key=len, reverse=True)
+) + ")"
+_ZH_UNIT_PATTERN = "(?:" + "|".join(
+    re.escape(term)
+    for term in sorted(_ZH_FACTORY_UNIT_ID, key=len, reverse=True)
+) + ")"
+_ZH_CONDUCT_PATTERN = "(?:" + "|".join(
+    re.escape(term)
+    for term in sorted(_ZH_HUMAN_CONDUCT_ID, key=len, reverse=True)
+) + ")"
+_ZH_OBSERVED_CONDUCT_RE = re.compile(
+    r"^(?P<recent_before>剛剛|刚刚|剛才|刚才|剛|刚)?"
+    r"(?P<observer>" + _ZH_ROLE_PATTERN + r")"
+    r"(?P<recent_after>剛剛|刚刚|剛才|刚才|剛|刚)?"
+    r"(?P<speech>說|说|表示|提到|告知)?"
+    r"(?P<observation>抓到|捉到|逮到|看到|看見|看见|發現|发现|注意到)?"
+    r"(?P<unit>" + _ZH_UNIT_PATTERN + r")"
+    r"(?:那邊|那边|裡|里|內|内)?(?:的)?"
+    r"(?P<person>有人|有人員|有人员|有員工|有员工|有同仁|"
+    r"人員|人员|員工|员工|同仁|作業員|作业员|操作員|操作员|的人)?"
+    r"(?:在|正在)?(?P<conduct>" + _ZH_CONDUCT_PATTERN + r")"
+    r"(?:了|啦|喔|哦)?$",
+    re.I,
+)
+_ZH_SUPERVISOR_MOVEMENT_RE = re.compile(
+    r"^(?P<timing_before>晚點|晚点|稍後|稍后|等等|等一下|待會|待会|"
+    r"過一會|过一会)?"
+    r"(?P<actor>" + _ZH_ROLE_PATTERN + r")?"
+    r"(?P<timing_after>晚點|晚点|稍後|稍后|等等|等一下|待會|待会|"
+    r"過一會|过一会)?"
+    r"(?P<uncertainty>應該|应该|可能|也許|也许|大概|或許|或许)?"
+    r"(?P<repeat_before>還|还|再)?(?P<future>會|会)?(?P<repeat_after>再)?"
+    r"(?P<motion>到現場|到现场|下來|下来|進來|进来|過來|过来|來|来)"
+    r"(?P<inspection>巡視|巡视|巡查|檢查|检查|看看|看一下|看)?"
+    r"(?P<aspect>了|啦|喔|哦)?$",
+    re.I,
+)
+_ZH_ATTENDANCE_CHECKER_MOVEMENT_RE = re.compile(
+    r"^(?P<timing_before>晚點|晚点|稍後|稍后|等等|等一下|待會|待会)?"
+    r"(?:點名|点名)(?:的)?(?:人|人員|人员|同仁|主管|人員)?"
+    r"(?P<timing_after>晚點|晚点|稍後|稍后|等等|等一下|待會|待会)?"
+    r"(?P<uncertainty>應該|应该|可能|也許|也许|大概)?"
+    r"(?P<future>會|会)?(?P<motion>下來|下来|進來|进来|過來|过来|來|来|到了|到)"
+    r"(?P<aspect>了|啦|喔|哦)?$",
+    re.I,
+)
+_ZH_SHOPFLOOR_ALERT_RE = re.compile(
+    r"^(?P<repeat>再)?(?:麻煩|麻烦|請|请)?"
+    r"(?:(?P<notify>通知|告知|提醒)(?P<notify_recipient>現場|现场|大家|同仁|人員|人员))?"
+    r"(?P<recipient>現場|现场|大家|同仁|人員|人员)?(?:再|多)?"
+    r"(?P<attention>注意|留意|小心|警覺|警觉)(?:一下|一點|一点|些)?$",
+    re.I,
+)
+_ZH_VEHICLE_BACKLOG_RE = re.compile(
+    r"^(?P<today>今天|今日)(?:的)?"
+    r"(?P<vehicle>車輛|车辆|貨車|货车|卡車|卡车|車|车)"
+    r"(?P<volume>很多|太多|不少|非常多)"
+    r"(?:(?P<late>來不及|来不及)(?:處理|处理|完成)?"
+    r"(?P<defer>延到|延後到|延后到|改到)(?P<tomorrow>明天|明日))?$",
+    re.I,
 )
 
 # 「放」is highly polysemous in the factory group.  A bare request such as
@@ -1693,6 +1814,263 @@ def _build_zh_id_attendance_vehicle_departure_frame(
     return frame
 
 
+def _shopfloor_timing_id(raw: str) -> str:
+    value = str(raw or "")
+    if value in {"等等", "等一下", "待會", "待会", "過一會", "过一会"}:
+        return "sebentar lagi"
+    if value:
+        return "nanti"
+    return ""
+
+
+def _shopfloor_motion_id(raw: str) -> str:
+    value = str(raw or "")
+    if value in {"下來", "下来"}:
+        return "turun"
+    if value in {"進來", "进来"}:
+        return "masuk"
+    if value in {"到現場", "到现场"}:
+        return "datang ke lapangan"
+    if value in {"過來", "过来", "來", "来", "到了", "到"}:
+        return "datang"
+    return ""
+
+
+def _shopfloor_inspection_id(raw: str) -> str:
+    value = str(raw or "")
+    if value in {"檢查", "检查"}:
+        return "memeriksa keadaan"
+    if value in {"巡視", "巡视", "巡查"}:
+        return "meninjau keadaan"
+    if value:
+        return "melihat keadaan"
+    return ""
+
+
+def _build_zh_id_shopfloor_agent_frame(source: str, frame: dict) -> dict:
+    """Resolve omitted people behind organization, location and procedure nouns.
+
+    This is a clause compositor, not an exact-sentence table.  Each recognized
+    clause contributes typed slots.  A provider receives the frame even when an
+    extra clause prevents deterministic rendering, while the local fast path is
+    allowed only when every visible clause was consumed.
+    """
+    segments: list[dict[str, Any]] = []
+    unparsed: list[str] = []
+    last_supervisor = ""
+
+    for clause in _visible_zh_clauses(source):
+        compact = _compact(clause)
+        if not compact:
+            continue
+
+        attendance = _ZH_ATTENDANCE_CHECKER_MOVEMENT_RE.fullmatch(compact)
+        if attendance:
+            timing_source = str(
+                attendance.group("timing_before")
+                or attendance.group("timing_after")
+                or ""
+            )
+            movement_source = str(attendance.group("motion") or "")
+            segments.append({
+                "type": "attendance_checker_movement",
+                "source": clause,
+                "timing_source": timing_source,
+                "timing_id": _shopfloor_timing_id(timing_source),
+                "uncertain": bool(attendance.group("uncertainty")),
+                "future": bool(attendance.group("future")),
+                "completed": bool(
+                    attendance.group("aspect")
+                    or movement_source in {"到了"}
+                ),
+                "movement_source": movement_source,
+                "movement_id": _shopfloor_motion_id(movement_source),
+            })
+            continue
+
+        observed = _ZH_OBSERVED_CONDUCT_RE.fullmatch(compact)
+        if observed and (observed.group("speech") or observed.group("observation")):
+            observer_source = str(observed.group("observer") or "")
+            unit_source = str(observed.group("unit") or "")
+            conduct_source = str(observed.group("conduct") or "")
+            last_supervisor = observer_source
+            segments.append({
+                "type": "supervisor_observed_person_conduct",
+                "source": clause,
+                "observer_source": observer_source,
+                "observer_id": _ZH_SUPERVISOR_ROLE_ID.get(observer_source, ""),
+                "recent": bool(
+                    observed.group("recent_before")
+                    or observed.group("recent_after")
+                ),
+                "reported_speech": bool(observed.group("speech")),
+                "observation_source": str(observed.group("observation") or ""),
+                "unit_source": unit_source,
+                "unit_id": _ZH_FACTORY_UNIT_ID.get(unit_source, ""),
+                "person_explicit": bool(observed.group("person")),
+                "conduct_source": conduct_source,
+                "conduct_id": _ZH_HUMAN_CONDUCT_ID.get(conduct_source, ""),
+            })
+            continue
+
+        vehicle = _ZH_VEHICLE_BACKLOG_RE.fullmatch(compact)
+        if vehicle:
+            segments.append({
+                "type": "vehicle_backlog_defer",
+                "source": clause,
+                "vehicle_source": str(vehicle.group("vehicle") or ""),
+                "volume_source": str(vehicle.group("volume") or ""),
+                "not_in_time": bool(vehicle.group("late")),
+                "defer_to_tomorrow": bool(vehicle.group("defer")),
+            })
+            continue
+
+        movement = _ZH_SUPERVISOR_MOVEMENT_RE.fullmatch(compact)
+        if movement:
+            explicit_actor = str(movement.group("actor") or "")
+            actor_source = explicit_actor or last_supervisor
+            # A bare ``晚點可能會下來`` does not identify who will move.  It is
+            # only safe when a preceding parsed clause supplied the supervisor.
+            if actor_source:
+                if explicit_actor:
+                    last_supervisor = explicit_actor
+                timing_source = str(
+                    movement.group("timing_before")
+                    or movement.group("timing_after")
+                    or ""
+                )
+                movement_source = str(movement.group("motion") or "")
+                inspection_source = str(movement.group("inspection") or "")
+                segments.append({
+                    "type": "supervisor_movement_inspection",
+                    "source": clause,
+                    "actor_source": actor_source,
+                    "actor_id": _ZH_SUPERVISOR_ROLE_ID.get(actor_source, ""),
+                    "actor_inherited": not bool(explicit_actor),
+                    "timing_source": timing_source,
+                    "timing_id": _shopfloor_timing_id(timing_source),
+                    "uncertain": bool(movement.group("uncertainty")),
+                    "future": bool(movement.group("future")),
+                    "repeat": bool(
+                        movement.group("repeat_before")
+                        or movement.group("repeat_after")
+                    ),
+                    "completed": bool(movement.group("aspect")),
+                    "movement_source": movement_source,
+                    "movement_id": _shopfloor_motion_id(movement_source),
+                    "inspection_source": inspection_source,
+                    "inspection_id": _shopfloor_inspection_id(inspection_source),
+                })
+                continue
+
+        alert = _ZH_SHOPFLOOR_ALERT_RE.fullmatch(compact)
+        if alert:
+            recipient_source = str(
+                alert.group("notify_recipient")
+                or alert.group("recipient")
+                or ""
+            )
+            # A standalone generic 注意一下 has no recoverable recipient or
+            # factory role.  It remains on the ordinary translation path.  It
+            # becomes part of this frame only when the same message already
+            # established the alert context or the clause names a notification
+            # action/recipient itself.
+            if not (segments or alert.group("notify") or recipient_source):
+                unparsed.append(clause)
+                continue
+            segments.append({
+                "type": "shopfloor_alert",
+                "source": clause,
+                "notify": bool(alert.group("notify")),
+                "recipient_source": recipient_source,
+                "shopfloor_recipient": recipient_source in {"現場", "现场"},
+                "repeat": bool(alert.group("repeat")),
+                "attention_source": str(alert.group("attention") or ""),
+            })
+            continue
+
+        unparsed.append(clause)
+
+    if not segments:
+        return frame
+
+    frame["kind"] = "zh_id_shopfloor_agent_roles"
+    frame["slots"].update({
+        "segments": segments,
+        "has_attendance_checker": any(
+            item["type"] == "attendance_checker_movement" for item in segments
+        ),
+        "has_humanized_unit": any(
+            item["type"] == "supervisor_observed_person_conduct"
+            for item in segments
+        ),
+        "has_shopfloor_recipient": any(
+            item["type"] == "shopfloor_alert"
+            and item.get("shopfloor_recipient")
+            for item in segments
+        ),
+    })
+    frame["unparsed"] = " | ".join(unparsed)
+
+    for index, segment in enumerate(segments, start=1):
+        segment_type = str(segment.get("type") or "")
+        evidence = str(segment.get("source") or "")
+        if segment_type == "attendance_checker_movement":
+            _claim(
+                frame,
+                f"attendance_checker_actor_{index}",
+                evidence,
+                "點名搭配進來／下來等人物移動時，是執行點名的人員移動；不是抽象點名程序開始",
+                "petugas pengecekan kehadiran + gerakan masuk/turun/datang",
+            )
+        elif segment_type == "supervisor_observed_person_conduct":
+            _claim(
+                frame,
+                f"organization_member_actor_{index}",
+                evidence,
+                "股／課是人員所屬單位；滑手機等人類行為的主詞是該單位的人，不是單位本身",
+                "seseorang dari " + str(segment.get("unit_id") or ""),
+            )
+            _claim(
+                frame,
+                f"supervisor_observation_{index}",
+                evidence,
+                "保留主管的說話／目擊角色、時間與被發現的人員行為",
+                str(segment.get("observer_id") or "")
+                + " memergoki seseorang sedang "
+                + str(segment.get("conduct_id") or ""),
+            )
+        elif segment_type == "supervisor_movement_inspection":
+            _claim(
+                frame,
+                f"supervisor_movement_{index}",
+                evidence,
+                "移動動作的主詞是明示或前句承接的主管；保留時間、可能性、再次與查看目的",
+                str(segment.get("actor_id") or "")
+                + " " + str(segment.get("movement_id") or ""),
+            )
+        elif segment_type == "vehicle_backlog_defer":
+            _claim(
+                frame,
+                f"vehicle_workload_{index}",
+                evidence,
+                "今天車輛數量多；來不及處理的車輛延到明天，不可把很多直接修飾成未處理",
+                "kendaraan hari ini banyak; yang tidak sempat ditangani ditunda sampai besok",
+            )
+        elif segment_type == "shopfloor_alert":
+            _claim(
+                frame,
+                f"shopfloor_people_alert_{index}",
+                evidence,
+                "現場在通知／注意語境中指現場人員，不是名為『現場部門』的抽象單位",
+                "beri tahu personel di lapangan agar waspada",
+            )
+
+    frame["active"] = True
+    frame["complete"] = not unparsed
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
     unit_trolley_frame = _build_zh_id_factory_unit_trolley_frame(source, frame)
     if unit_trolley_frame.get("active"):
@@ -1711,6 +2089,9 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
     )
     if departure_frame.get("active"):
         return departure_frame
+    shopfloor_agent_frame = _build_zh_id_shopfloor_agent_frame(source, frame)
+    if shopfloor_agent_frame.get("active"):
+        return shopfloor_agent_frame
     compact = _compact(source)
     motion_term = next((term for term in sorted(_ZH_MOTION, key=len, reverse=True) if term in compact), "")
     inspect_term = next((term for term in sorted(_ZH_INSPECTION, key=len, reverse=True) if term in compact), "")
@@ -1911,6 +2292,113 @@ def deterministic_translation(frame: Mapping) -> str:
         if emoji_tokens:
             sentence += " " + "".join(emoji_tokens)
         return _with_mentions(frame, sentence)
+
+    if frame.get("kind") == "zh_id_shopfloor_agent_roles":
+        rendered: list[str] = []
+        observation_verbs = {
+            "抓到": "memergoki", "捉到": "memergoki", "逮到": "memergoki",
+            "看到": "melihat", "看見": "melihat", "看见": "melihat",
+            "發現": "mendapati", "发现": "mendapati", "注意到": "melihat",
+        }
+
+        def _sentence(value: str) -> str:
+            clean = re.sub(r"\s+", " ", str(value or "")).strip()
+            if not clean:
+                return ""
+            return clean[:1].upper() + clean[1:].rstrip(". ") + "."
+
+        for segment in slots.get("segments") or ():
+            segment_type = str(segment.get("type") or "")
+            if segment_type == "attendance_checker_movement":
+                parts: list[str] = []
+                timing_id = str(segment.get("timing_id") or "")
+                if timing_id:
+                    parts.append(timing_id + ",")
+                parts.append("petugas pengecekan kehadiran")
+                if segment.get("completed"):
+                    parts.append("sudah")
+                if segment.get("uncertain"):
+                    parts.append("mungkin")
+                if segment.get("future"):
+                    parts.append("akan")
+                parts.append(str(segment.get("movement_id") or "datang"))
+                rendered.append(_sentence(" ".join(parts)))
+            elif segment_type == "supervisor_observed_person_conduct":
+                observer = str(segment.get("observer_id") or "")
+                unit = str(segment.get("unit_id") or "")
+                conduct = str(segment.get("conduct_id") or "")
+                recent = " baru saja" if segment.get("recent") else ""
+                observation = observation_verbs.get(
+                    str(segment.get("observation_source") or ""), ""
+                )
+                person_conduct = (
+                    f"seseorang dari {unit} sedang {conduct}"
+                )
+                if segment.get("reported_speech"):
+                    if observation:
+                        text = (
+                            f"{observer}{recent} mengatakan bahwa dia {observation} "
+                            + person_conduct
+                        )
+                    else:
+                        text = (
+                            f"{observer}{recent} mengatakan bahwa "
+                            + person_conduct
+                        )
+                else:
+                    text = (
+                        f"{observer}{recent} {observation or 'melihat'} "
+                        + person_conduct
+                    )
+                rendered.append(_sentence(text))
+            elif segment_type == "vehicle_backlog_defer":
+                rendered.append(_sentence("hari ini ada banyak kendaraan"))
+                if segment.get("not_in_time") and segment.get("defer_to_tomorrow"):
+                    rendered.append(_sentence(
+                        "yang tidak sempat ditangani akan ditunda sampai besok"
+                    ))
+            elif segment_type == "supervisor_movement_inspection":
+                timing_id = str(segment.get("timing_id") or "")
+                subject = (
+                    "dia"
+                    if segment.get("actor_inherited")
+                    else str(segment.get("actor_id") or "")
+                )
+                parts = []
+                if timing_id:
+                    parts.append(timing_id + ",")
+                parts.append(subject)
+                if segment.get("completed"):
+                    parts.append("sudah")
+                if segment.get("uncertain"):
+                    parts.append("mungkin")
+                if segment.get("future"):
+                    parts.append("akan")
+                parts.append(str(segment.get("movement_id") or "datang"))
+                if segment.get("repeat"):
+                    parts.append("lagi")
+                inspection = str(segment.get("inspection_id") or "")
+                if inspection:
+                    parts.extend(("untuk", inspection))
+                rendered.append(_sentence(" ".join(parts)))
+            elif segment_type == "shopfloor_alert":
+                if segment.get("notify") and segment.get("shopfloor_recipient"):
+                    rendered.append(_sentence(
+                        "tolong beri tahu personel di lapangan agar lebih waspada"
+                    ))
+                elif segment.get("notify"):
+                    rendered.append(_sentence(
+                        "tolong beri tahu mereka agar lebih waspada"
+                    ))
+                elif segment.get("shopfloor_recipient"):
+                    rendered.append(_sentence(
+                        "personel di lapangan harap lebih waspada"
+                    ))
+                else:
+                    rendered.append(_sentence("mohon lebih waspada"))
+        if not rendered or any(not item for item in rendered):
+            return ""
+        return _with_mentions(frame, " ".join(rendered))
 
     if frame.get("kind") == "zh_id_production_backlog_priority":
         process_id = str(slots.get("process_id") or "")
@@ -2349,6 +2837,276 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
                     "factory_message_semantics:source_emoji_missing:" + emoji_text
                 )
 
+    elif frame.get("kind") == "zh_id_shopfloor_agent_roles":
+        low = _norm(target)
+        target_clauses = [
+            _norm(clause)
+            for clause in re.split(r"[\n.!！?？;；]+", target)
+            if _norm(clause)
+        ]
+
+        def _movement_present(value: str, haystack: str = "") -> bool:
+            text = haystack or low
+            if value == "turun":
+                return _has_phrase(text, ("turun",))
+            if value == "masuk":
+                return _has_phrase(text, ("masuk", "memasuki"))
+            if value == "datang ke lapangan":
+                return bool(
+                    _has_phrase(text, ("datang", "masuk"))
+                    and _has_phrase(text, ("lapangan", "area kerja", "lokasi"))
+                )
+            return _has_phrase(text, ("datang", "tiba"))
+
+        for segment in slots.get("segments") or ():
+            segment_type = str(segment.get("type") or "")
+            if segment_type == "attendance_checker_movement":
+                attendance_agent_clauses = [
+                    clause for clause in target_clauses
+                    if re.search(
+                        r"\b(?:petugas|orang|personel|karyawan|pegawai)\b.{0,45}"
+                        r"\b(?:pengecekan|pemeriksaan)\s+kehadiran\b",
+                        clause,
+                        re.I,
+                    )
+                ]
+                if not attendance_agent_clauses:
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_human_actor_missing"
+                    )
+                if re.search(
+                    r"\b(?:absen|absensi|pengecekan\s+kehadiran|"
+                    r"pemeriksaan\s+kehadiran)\b.{0,18}"
+                    r"\b(?:dimulai|mulai|berlangsung)\b",
+                    low,
+                    re.I,
+                ):
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_movement_changed_to_procedure_start"
+                    )
+                attendance_relation_clauses = [
+                    clause for clause in attendance_agent_clauses
+                    if _movement_present(
+                        str(segment.get("movement_id") or ""), clause
+                    )
+                ]
+                if not attendance_relation_clauses:
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_movement_missing"
+                    )
+                attendance_scope = " ".join(
+                    attendance_relation_clauses or attendance_agent_clauses
+                )
+                if segment.get("completed") and not _has_phrase(
+                    attendance_scope, ("sudah", "telah")
+                ):
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_completed_aspect_missing"
+                    )
+                if segment.get("future") and not _has_phrase(
+                    attendance_scope, ("akan",)
+                ):
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_future_missing"
+                    )
+                if segment.get("uncertain") and not _has_phrase(
+                    attendance_scope, ("mungkin", "kemungkinan", "diperkirakan")
+                ):
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_uncertainty_missing"
+                    )
+                if segment.get("timing_id") and not _has_phrase(
+                    attendance_scope, (str(segment.get("timing_id")),)
+                ):
+                    issues.append(
+                        "factory_message_semantics:attendance_checker_timing_missing"
+                    )
+
+            elif segment_type == "supervisor_observed_person_conduct":
+                observer = _norm(segment.get("observer_id"))
+                unit = _norm(segment.get("unit_id"))
+                conduct = _norm(segment.get("conduct_id"))
+                if observer and not _has_phrase(low, (observer,)):
+                    issues.append(
+                        "factory_message_semantics:supervisor_observer_missing"
+                    )
+                if unit and not _has_phrase(low, (unit,)):
+                    issues.append(
+                        "factory_message_semantics:organization_unit_missing"
+                    )
+                human_affiliation = bool(unit and (
+                    re.search(
+                        r"\b(?:seseorang|orang|karyawan|personel|operator|"
+                        r"pekerja|anggota|pegawai)\b.{0,60}\b(?:dari|di)\s+"
+                        + re.escape(unit)
+                        + r"\b",
+                        low,
+                        re.I,
+                    )
+                    or re.search(
+                        r"\b(?:di|dari)\s+" + re.escape(unit)
+                        + r"\b.{0,60}\b(?:seseorang|orang|karyawan|personel|"
+                        r"operator|pekerja|anggota|pegawai)\b",
+                        low,
+                        re.I,
+                    )
+                ))
+                if not human_affiliation:
+                    issues.append(
+                        "factory_message_semantics:organization_member_human_actor_missing"
+                    )
+                conduct_ok = False
+                if conduct == "menggunakan ponsel":
+                    conduct_ok = bool(re.search(
+                        r"\b(?:menggunakan|memakai|melihat|bermain(?:\s+dengan)?)\s+"
+                        r"(?:ponsel|hp|handphone)\b",
+                        low,
+                        re.I,
+                    ))
+                elif conduct:
+                    conduct_ok = _has_phrase(low, (conduct,))
+                if not conduct_ok:
+                    issues.append(
+                        "factory_message_semantics:observed_human_conduct_missing"
+                    )
+                if segment.get("observation_source") and not _has_phrase(low, (
+                    "memergoki", "mendapati", "melihat", "menemukan",
+                )):
+                    issues.append(
+                        "factory_message_semantics:supervisor_observation_action_missing"
+                    )
+                if segment.get("reported_speech") and not _has_phrase(low, (
+                    "mengatakan", "menyampaikan", "memberi tahu", "melaporkan",
+                )):
+                    issues.append(
+                        "factory_message_semantics:supervisor_reported_speech_missing"
+                    )
+                if segment.get("recent") and not _has_phrase(
+                    low, ("baru saja", "barusan")
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_observation_recency_missing"
+                    )
+                if unit and conduct_ok and not human_affiliation:
+                    issues.append(
+                        "factory_message_semantics:organization_promoted_to_human_conduct_actor"
+                    )
+
+            elif segment_type == "vehicle_backlog_defer":
+                if not _has_phrase(low, ("hari ini",)):
+                    issues.append(
+                        "factory_message_semantics:vehicle_workload_today_missing"
+                    )
+                if not _has_phrase(low, ("kendaraan", "truk", "mobil")):
+                    issues.append(
+                        "factory_message_semantics:vehicle_workload_object_missing"
+                    )
+                if not _has_phrase(low, ("banyak", "jumlah besar")):
+                    issues.append(
+                        "factory_message_semantics:vehicle_workload_volume_missing"
+                    )
+                if segment.get("not_in_time") and not _has_phrase(
+                    low, ("tidak sempat", "tidak keburu")
+                ):
+                    issues.append(
+                        "factory_message_semantics:vehicle_not_in_time_relation_missing"
+                    )
+                if segment.get("defer_to_tomorrow") and not (
+                    _has_phrase(low, ("ditunda", "diundur", "dialihkan"))
+                    and _has_phrase(low, ("besok",))
+                ):
+                    issues.append(
+                        "factory_message_semantics:vehicle_defer_to_tomorrow_missing"
+                    )
+
+            elif segment_type == "supervisor_movement_inspection":
+                actor = _norm(segment.get("actor_id"))
+                actor_terms = [actor] if actor else []
+                if segment.get("actor_inherited"):
+                    actor_terms.extend(("dia", "ia", "beliau"))
+                movement_clauses = [
+                    clause for clause in target_clauses
+                    if _movement_present(
+                        str(segment.get("movement_id") or ""), clause
+                    )
+                ]
+                if actor_terms and not any(
+                    _has_phrase(clause, actor_terms) for clause in movement_clauses
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_actor_missing"
+                    )
+                if not movement_clauses:
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_action_missing"
+                    )
+                movement_scope = " ".join(movement_clauses)
+                if segment.get("timing_id") and not _has_phrase(
+                    movement_scope, (str(segment.get("timing_id")),)
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_timing_missing"
+                    )
+                if segment.get("uncertain") and not _has_phrase(
+                    movement_scope, ("mungkin", "kemungkinan", "diperkirakan")
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_uncertainty_missing"
+                    )
+                if segment.get("future") and not _has_phrase(
+                    movement_scope, ("akan",)
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_future_missing"
+                    )
+                if segment.get("repeat") and not _has_phrase(
+                    movement_scope, ("lagi", "kembali")
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_repeat_movement_missing"
+                    )
+                if segment.get("completed") and not _has_phrase(
+                    movement_scope, ("sudah", "telah")
+                ):
+                    issues.append(
+                        "factory_message_semantics:supervisor_movement_completed_aspect_missing"
+                    )
+                if segment.get("inspection_source") and not _has_phrase(movement_scope, (
+                    "melihat", "meninjau", "memeriksa", "mengecek",
+                )):
+                    issues.append(
+                        "factory_message_semantics:supervisor_inspection_purpose_missing"
+                    )
+
+            elif segment_type == "shopfloor_alert":
+                if not _has_phrase(low, (
+                    "waspada", "berhati-hati", "hati-hati", "perhatikan",
+                )):
+                    issues.append(
+                        "factory_message_semantics:shopfloor_alert_attention_missing"
+                    )
+                if segment.get("notify") and not _has_phrase(low, (
+                    "beri tahu", "memberi tahu", "informasikan", "ingatkan",
+                )):
+                    issues.append(
+                        "factory_message_semantics:shopfloor_notification_action_missing"
+                    )
+                if segment.get("shopfloor_recipient"):
+                    people_at_shopfloor = bool(re.search(
+                        r"\b(?:personel|karyawan|operator|pekerja|orang|pegawai)\b"
+                        r".{0,25}\b(?:lapangan|area\s+kerja|lokasi)\b",
+                        low,
+                        re.I,
+                    ))
+                    if not people_at_shopfloor:
+                        issues.append(
+                            "factory_message_semantics:shopfloor_people_recipient_missing"
+                        )
+                    if _has_phrase(low, ("bagian lapangan",)):
+                        issues.append(
+                            "factory_message_semantics:shopfloor_location_mistranslated_as_department"
+                        )
+
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         low = _norm(target)
         process_id = str(slots.get("process_id") or "")
@@ -2627,6 +3385,19 @@ def build_prompt(frame: Mapping) -> str:
             "with no explicit person, a subject-neutral Indonesian chat clause is safer "
             "than inventing dia/mereka."
         )
+    elif frame.get("kind") == "zh_id_shopfloor_agent_roles":
+        lines.append(
+            "Resolve human actors before choosing words. A factory section such as 一股/二股 "
+            "cannot literally use a phone, sleep, smoke, chat or rest: when one of those human-only "
+            "predicates follows the section, Indonesian must say seseorang/personel dari the "
+            "canonical section. Likewise, 點名 followed by 進來/下來/來 is metonymy for the human "
+            "attendance checker; it is not an abstract attendance procedure starting. 現場 as the "
+            "recipient of 通知/注意 means personel di lapangan, never a department named bagian "
+            "lapangan. Preserve the supervisor as the actor across adjacent omitted-subject clauses, "
+            "including timing, uncertainty, future, repeat movement and inspection purpose. For a "
+            "compressed vehicle-workload clause, keep 'vehicles are many' separate from 'the ones "
+            "not completed in time are deferred until tomorrow'."
+        )
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         lines.append(
             "This is a production-planning relation. Render the process and small-bar material "
@@ -2743,6 +3514,30 @@ def health() -> dict:
     vehicle_departure = build_frame(
         vehicle_departure_source, "zh", "id"
     )
+    supervisor_alert_source = (
+        "處長剛剛說抓到二股滑手機，晚點可能還會下來，再注意一下"
+    )
+    supervisor_alert_target = (
+        "Kepala divisi baru saja mengatakan bahwa dia memergoki seseorang dari "
+        "Bagian Cold Drawing 2 sedang menggunakan ponsel. Nanti, dia mungkin "
+        "akan turun lagi. Mohon lebih waspada."
+    )
+    supervisor_alert_bad = (
+        "Kepala divisi baru saja mengatakan menemukan Bagian Cold Drawing 2 "
+        "bermain ponsel. Nanti mungkin akan turun lagi, harap lebih hati-hati."
+    )
+    workload_alert_source = (
+        "今天的車很多來不及延到明天，處長等等應該會進來看，"
+        "通知現場注意一下。"
+    )
+    workload_alert_target = (
+        "Hari ini ada banyak kendaraan. Yang tidak sempat ditangani akan ditunda "
+        "sampai besok. Sebentar lagi, kepala divisi mungkin akan masuk untuk "
+        "melihat keadaan. Tolong beri tahu personel di lapangan agar lebih waspada."
+    )
+    attendance_checker_source = "點名進來了"
+    attendance_checker_target = "Petugas pengecekan kehadiran sudah masuk."
+    attendance_checker_bad = "Absen sudah dimulai."
     controls = (
         build_frame("Sip, terima kasih.", "id", "zh"),
         build_frame("Selamat pagi, Pak.", "id", "zh"),
@@ -2761,6 +3556,11 @@ def health() -> dict:
         build_frame("網路設備幫忙提醒一下。", "zh", "id"),
         build_frame("點名後車輛開走了", "zh", "id"),
         build_frame("點名開車的人到了", "zh", "id"),
+        build_frame("點名開始了", "zh", "id"),
+        build_frame("二股今天要開會", "zh", "id"),
+        build_frame("處長說二股產量增加", "zh", "id"),
+        build_frame("滑手機很傷眼", "zh", "id"),
+        build_frame("再注意一下", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -2884,6 +3684,30 @@ def health() -> dict:
             "Setelah pengecekan kehadiran selesai, dia sudah pulang lebih "
             "dahulu dengan mobil."
         ),
+        build_frame(supervisor_alert_source, "zh", "id").get("complete") is True,
+        translate_source_directly(supervisor_alert_source, "zh", "id")
+        == supervisor_alert_target,
+        validate_translation(
+            build_frame(supervisor_alert_source, "zh", "id"),
+            supervisor_alert_target,
+        )[0] is True,
+        validate_translation(
+            build_frame(supervisor_alert_source, "zh", "id"),
+            supervisor_alert_bad,
+        )[0] is False,
+        build_frame(workload_alert_source, "zh", "id").get("complete") is True,
+        translate_source_directly(workload_alert_source, "zh", "id")
+        == workload_alert_target,
+        validate_translation(
+            build_frame(workload_alert_source, "zh", "id"),
+            workload_alert_target,
+        )[0] is True,
+        translate_source_directly(attendance_checker_source, "zh", "id")
+        == attendance_checker_target,
+        validate_translation(
+            build_frame(attendance_checker_source, "zh", "id"),
+            attendance_checker_bad,
+        )[0] is False,
         all(not frame.get("active") for frame in controls),
     ]
     return {

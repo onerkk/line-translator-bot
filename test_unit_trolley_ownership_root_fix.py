@@ -172,7 +172,7 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
 
     def test_deployment_revision_and_builtin_examples_are_consistent(self):
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-        expected = "2026-08-29.1-unit-trolley-ownership"
+        expected = "2026-08-30.1-shopfloor-agent-roles"
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)
         self.assertIn(
             f'_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "{expected}"',

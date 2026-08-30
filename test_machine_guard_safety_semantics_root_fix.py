@@ -137,7 +137,7 @@ def test_glossary_and_app_require_the_same_versioned_safety_engine():
     app_source = (root / "app.py").read_text(encoding="utf-8")
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-08-29.1-unit-trolley-ownership"'
+        '"2026-08-30.1-shopfloor-agent-roles"'
     ) in app_source
     assert semantics.health()["self_test"]["ok"] is True
 
