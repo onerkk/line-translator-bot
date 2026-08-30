@@ -38,6 +38,9 @@ from typing import Optional, List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+VECTOR_TM_API_VERSION = 2
+VECTOR_TM_BUILD_ID = "2026-08-30.1-provenance-safe-reviewed-memory"
+
 # ═══════════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════════
@@ -100,6 +103,9 @@ def init():
                     embedding_model TEXT NOT NULL,
                     group_id TEXT DEFAULT '',
                     model TEXT DEFAULT '',
+                    verified INTEGER DEFAULT 0,
+                    allow_bypass INTEGER DEFAULT 1,
+                    policy_fingerprint TEXT DEFAULT '',
                     hit_count INTEGER DEFAULT 0,
                     quality_score REAL,
                     created_at INTEGER NOT NULL,
@@ -119,8 +125,27 @@ def init():
                 conn.execute(
                     "ALTER TABLE vector_entries ADD COLUMN model TEXT DEFAULT ''"
                 )
+            if "verified" not in columns:
+                conn.execute(
+                    "ALTER TABLE vector_entries ADD COLUMN verified INTEGER DEFAULT 0"
+                )
+            if "allow_bypass" not in columns:
+                # Preserve historical non-factory behaviour. New reviewed
+                # corrections explicitly set this to zero and are references
+                # only, never whole-sentence fuzzy shortcuts.
+                conn.execute(
+                    "ALTER TABLE vector_entries ADD COLUMN allow_bypass INTEGER DEFAULT 1"
+                )
+            if "policy_fingerprint" not in columns:
+                conn.execute(
+                    "ALTER TABLE vector_entries ADD COLUMN policy_fingerprint TEXT DEFAULT ''"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_vec_model ON vector_entries(model)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vec_provenance "
+                "ON vector_entries(verified, allow_bypass, model)"
             )
         _init_done = True
         logger.info("[VecTM] init OK, db=%s", VECTOR_DB_PATH)
@@ -264,7 +289,8 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
         with sqlite3.connect(VECTOR_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             candidates = conn.execute("""
-                SELECT id, src_text, tgt_text, embedding, group_id, hit_count
+                SELECT id, src_text, tgt_text, embedding, group_id, hit_count,
+                       model, verified, allow_bypass, policy_fingerprint
                 FROM vector_entries
                 WHERE src_lang=? AND tgt_lang=?
                 ORDER BY (group_id=?) DESC, hit_count DESC, last_used_at DESC
@@ -294,7 +320,7 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
         top_sim, top_c = scored[0]
         
         # Tier 1: vector bypass
-        if top_sim >= VECTOR_SIMILARITY_BYPASS:
+        if top_sim >= VECTOR_SIMILARITY_BYPASS and bool(top_c["allow_bypass"]):
             with _lock:
                 _stats["bypass_hits"] += 1
             try:
@@ -311,6 +337,7 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
                 "similarity": top_sim,
                 "tgt_text": top_c["tgt_text"],
                 "matched_src": top_c["src_text"],
+                "provenance": str(top_c["model"] or ""),
             }
         
         # Tier 2: vector inject
@@ -327,6 +354,11 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
                 "match_type": "vector_inject",
                 "similarity": top_sim,
                 "references": refs,
+                "reviewed_reference": any(
+                    bool(c["verified"]) and not bool(c["allow_bypass"])
+                    for _score, c in scored[:VECTOR_TOPK]
+                    if _score >= VECTOR_SIMILARITY_INJECT
+                ),
             }
         
         with _lock:
@@ -344,7 +376,10 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
 # ═══════════════════════════════════════════════════════════════════
 def vector_store(src_text: str, tgt_text: str, src_lang: str, tgt_lang: str,
                  group_id: Optional[str] = None, model: Optional[str] = None,
-                 quality_score: Optional[float] = None) -> bool:
+                 quality_score: Optional[float] = None,
+                 *, verified: bool = False,
+                 allow_bypass: bool = True,
+                 policy_fingerprint: Optional[str] = None) -> bool:
     if not _init_done:
         init()
     if not src_text or not tgt_text:
@@ -370,18 +405,24 @@ def vector_store(src_text: str, tgt_text: str, src_lang: str, tgt_lang: str,
             conn.execute("""
                 INSERT INTO vector_entries
                     (src_lang, tgt_lang, src_text, src_text_hash, tgt_text, embedding,
-                     embedding_model, group_id, model, hit_count, quality_score, created_at, last_used_at)
-                VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)
+                     embedding_model, group_id, model, verified, allow_bypass,
+                     policy_fingerprint, hit_count, quality_score, created_at, last_used_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
                 ON CONFLICT(src_lang, tgt_lang, src_text_hash, group_id) DO UPDATE SET
                     tgt_text=excluded.tgt_text,
                     embedding=excluded.embedding,
                     embedding_model=excluded.embedding_model,
                     model=excluded.model,
+                    verified=excluded.verified,
+                    allow_bypass=excluded.allow_bypass,
+                    policy_fingerprint=excluded.policy_fingerprint,
                     quality_score=excluded.quality_score,
                     last_used_at=excluded.last_used_at,
                     hit_count=hit_count+1
             """, (src_lang, tgt_lang, src_text, src_hash, tgt_text, blob,
-                  EMBEDDING_MODEL, group_id, model or "", quality_score, now, now))
+                  EMBEDDING_MODEL, group_id, model or "",
+                  1 if verified else 0, 1 if allow_bypass else 0,
+                  str(policy_fingerprint or ""), quality_score, now, now))
         with _lock:
             _stats["stores"] += 1
         return True
@@ -433,6 +474,8 @@ def vector_stats() -> Dict[str, Any]:
         pass
     s["embedding_cache_size"] = len(_QUERY_EMBED_CACHE)
     s["embedding_model"] = EMBEDDING_MODEL
+    s["api_version"] = VECTOR_TM_API_VERSION
+    s["build_id"] = VECTOR_TM_BUILD_ID
     s["embedding_provider"] = "openai"  # 固定用 OpenAI(Anthropic 沒 embedding API)
     s["note"] = "Vector TM 即使 active provider=anthropic,embedding 也走 OpenAI(需 OPENAI_API_KEY)"
     s["openai_key_available"] = bool(os.environ.get("OPENAI_API_KEY", ""))

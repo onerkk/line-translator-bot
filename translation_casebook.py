@@ -20,15 +20,15 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-TRANSLATION_CASEBOOK_API_VERSION = 3
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-07-25.2-canonical-exact-correction-casebook"
+TRANSLATION_CASEBOOK_API_VERSION = 4
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-08-30.1-scoped-versioned-correction-casebook"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
 _SPACE_RE = re.compile(r"\s+")
 _CANONICAL_SOURCE_STRIP_RE = re.compile(r"[^0-9a-z\u3400-\u9fff%+./_@#-]+", re.I)
 _CACHE_LOCK = threading.RLock()
-_ACTIVE_CACHE: Dict[str, Any] = {"expires": 0.0, "rows": []}
+_ACTIVE_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,8 @@ class RetrievedCase:
     case_id: str = ""
     guarded: bool = False
     distinctive_anchors: Tuple[str, ...] = ()
+    verified_correction: bool = False
+    revision: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -56,6 +58,8 @@ class RetrievedCase:
             "case_id": self.case_id,
             "guarded": bool(self.guarded),
             "distinctive_anchors": list(self.distinctive_anchors),
+            "verified_correction": bool(self.verified_correction),
+            "revision": int(self.revision),
         }
 
 
@@ -105,17 +109,22 @@ def _case_from_example(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[
         or raw.get("original_translation")
         or ""
     ).strip()
+    origin = str(raw.get("origin") or ("human_correction" if bad_target else "example"))
     return {
         "source": source,
         "target": target,
         "direction": direction,
         "bad_target": bad_target,
         "reason": str(raw.get("reason") or raw.get("correction_reason") or "").strip(),
-        "origin": str(raw.get("origin") or ("human_correction" if bad_target else "example")),
+        "origin": origin,
         # ``id`` is the Indonesian target field in the historical example
         # schema, so it must never be mistaken for a case identifier.
         "case_id": str(raw.get("case_id") or f"example:{index}"),
         "source_match": dict(raw.get("source_match") or {}) if isinstance(raw.get("source_match"), Mapping) else {},
+        "verified_correction": bool(
+            raw.get("verified_correction")
+            or origin.lower() in {"human_correction", "custom_correction", "manual_correction"}
+        ),
     }
 
 
@@ -123,6 +132,12 @@ def _case_from_correction(raw: Mapping[str, Any], index: int = 0) -> Optional[Di
     # Rows created before moderation have no status and are historical approved
     # corrections. New pending/rejected feedback is evidence only, never truth.
     if raw.get("status") is not None and str(raw.get("status")).lower() != "approved":
+        return None
+    # New corrections must pass the current local acceptance boundary before
+    # becoming prompt evidence. Historical rows remain eligible and are still
+    # revalidated at delivery; failed/quarantined rows never enter this layer.
+    validation_state = str(raw.get("validation_state") or "legacy").lower()
+    if validation_state not in {"passed", "override", "legacy"}:
         return None
     src_lang = str(raw.get("src_lang") or "").lower()
     tgt_lang = str(raw.get("tgt_lang") or "").lower()
@@ -142,20 +157,39 @@ def _case_from_correction(raw: Mapping[str, Any], index: int = 0) -> Optional[Di
         "origin": "active_learning",
         "case_id": "correction:" + str(raw.get("id") or index),
         "source_match": {},
+        "verified_correction": True,
+        "revision": int(raw.get("revision") or 1),
+        "group_id": str(raw.get("group_id") or ""),
+        "validation_state": validation_state,
     }
 
 
-def active_corrections_snapshot(active_learning_module: Any, *, ttl_seconds: int = 60, limit: int = 2000) -> List[Dict[str, Any]]:
-    """Read corrections with a short TTL so SQLite is not queried per message."""
+def active_corrections_snapshot(
+    active_learning_module: Any,
+    *,
+    ttl_seconds: int = 60,
+    limit: int = 2000,
+    group_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Read approved corrections with a group-scoped short-lived cache.
+
+    Runtime calls pass the current LINE group and receive that group's approved
+    corrections plus explicitly global rows.  Omitting ``group_id`` preserves
+    the historical all-groups administrative/test view.
+    """
     now = time.monotonic()
+    cache_key = "*" if group_id is None else "group:" + str(group_id or "")
     with _CACHE_LOCK:
-        if float(_ACTIVE_CACHE.get("expires", 0.0)) > now:
-            return [dict(row) for row in _ACTIVE_CACHE.get("rows", [])]
+        cached = _ACTIVE_CACHE.get(cache_key) or {}
+        if float(cached.get("expires", 0.0)) > now:
+            return [dict(row) for row in cached.get("rows", [])]
     rows: List[Dict[str, Any]] = []
     try:
         try:
             raw_rows = active_learning_module.list_corrections(
-                limit=max(1, int(limit)), offset=0, status="approved"
+                limit=max(1, int(limit)), offset=0, status="approved",
+                group_id=group_id,
+                include_global=(group_id is not None),
             )
         except TypeError:
             # Compatibility with a test double or pre-moderation module.
@@ -170,15 +204,20 @@ def active_corrections_snapshot(active_learning_module: Any, *, ttl_seconds: int
     except Exception:
         rows = []
     with _CACHE_LOCK:
-        _ACTIVE_CACHE["rows"] = [dict(row) for row in rows]
-        _ACTIVE_CACHE["expires"] = now + max(5, int(ttl_seconds))
+        _ACTIVE_CACHE[cache_key] = {
+            "rows": [dict(row) for row in rows],
+            "expires": now + max(5, int(ttl_seconds)),
+        }
     return rows
 
 
-def invalidate_active_cache() -> None:
+def invalidate_active_cache(group_id: Optional[str] = None) -> None:
     with _CACHE_LOCK:
-        _ACTIVE_CACHE["expires"] = 0.0
-        _ACTIVE_CACHE["rows"] = []
+        if group_id is None:
+            _ACTIVE_CACHE.clear()
+        else:
+            _ACTIVE_CACHE.pop("group:" + str(group_id or ""), None)
+            _ACTIVE_CACHE.pop("*", None)
 
 
 def collect_cases(
@@ -447,7 +486,7 @@ def retrieve(
             score += 0.55 + 0.35 * (shorter / max(1, longer))
         # Human corrections deserve a modest tie-breaker, never enough to make an
         # unrelated case pass the threshold.
-        if case.get("bad_target"):
+        if case.get("bad_target") or case.get("verified_correction"):
             score += 0.03
         if source_match and guarded:
             # A deterministic domain guard is stronger than raw character
@@ -456,7 +495,8 @@ def retrieve(
         # Human-correction cases without an explicit source contract must share
         # at least two non-generic content anchors before they can influence a
         # different sentence. Exact matches remain authoritative.
-        if (case.get("bad_target") and not source_match and score < 9.0
+        if ((case.get("bad_target") or case.get("verified_correction"))
+                and not source_match and score < 9.0
                 and len(distinctive_anchors) < 2):
             continue
         if score < float(min_score):
@@ -472,6 +512,8 @@ def retrieve(
             case_id=str(case.get("case_id") or ""),
             guarded=bool(source_match and guarded),
             distinctive_anchors=tuple(distinctive_anchors),
+            verified_correction=bool(case.get("verified_correction")),
+            revision=int(case.get("revision") or 0),
         ))
     ranked.sort(key=lambda item: (item.score, bool(item.bad_target), len(item.source)), reverse=True)
     return [item.as_dict() for item in ranked[: max(1, int(max_cases or 1))]]
@@ -635,10 +677,10 @@ def casebook_requires_review(cases: Sequence[Mapping[str, Any]]) -> bool:
         score = float(case.get("score") or 0.0)
         if score >= 9.0 and bool(case.get("target")):
             return True
-        if not case.get("bad_target"):
+        if not case.get("bad_target") and not case.get("verified_correction"):
             continue
         guarded = bool(case.get("guarded"))
-        threshold = 0.50 if guarded else 0.62
+        threshold = 0.50 if guarded else (0.66 if case.get("verified_correction") else 0.62)
         if not guarded and score < 9.0 and len(case.get("distinctive_anchors") or ()) < 2:
             continue
         if score >= threshold:

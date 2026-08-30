@@ -213,7 +213,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.46.0-moderated-private-code-switch-2026-08-18"
+VERSION = "v3.47.0-safe-continuous-learning-2026-08-30"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -277,8 +277,8 @@ import factory_message_semantics as factory_message_semantics_module  # bidirect
 
 # Versioned verified TM is part of the delivery boundary: a stale module would
 # either miss the cross-worker cache entirely or trust rows without policy IDs.
-_EXPECTED_TRANSLATION_MEMORY_API_VERSION = 2
-_EXPECTED_TRANSLATION_MEMORY_BUILD_ID = "2026-08-11.1-policy-versioned-verified-exact"
+_EXPECTED_TRANSLATION_MEMORY_API_VERSION = 3
+_EXPECTED_TRANSLATION_MEMORY_BUILD_ID = "2026-08-30.1-reviewed-correction-exact"
 if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
         != _EXPECTED_TRANSLATION_MEMORY_API_VERSION
         or getattr(tm_module, "TRANSLATION_MEMORY_BUILD_ID", None)
@@ -353,8 +353,8 @@ logger.info(
     _EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID,
 )
 
-_EXPECTED_CASEBOOK_API_VERSION = 3
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-07-25.2-canonical-exact-correction-casebook"
+_EXPECTED_CASEBOOK_API_VERSION = 4
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-08-30.1-scoped-versioned-correction-casebook"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -365,8 +365,8 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
         "Replace app.py and translation_casebook.py together in the project root."
     )
 
-_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 7
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-18.1-adaptive-review-explicit-always"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-30.1-learned-risk-adaptive-review"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -748,6 +748,20 @@ logger.info(
 )
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
+_EXPECTED_ACTIVE_LEARNING_API_VERSION = 2
+_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-08-30.1-safe-continuous-learning"
+if (getattr(al_module, "ACTIVE_LEARNING_API_VERSION", None)
+        != _EXPECTED_ACTIVE_LEARNING_API_VERSION
+        or getattr(al_module, "ACTIVE_LEARNING_BUILD_ID", None)
+        != _EXPECTED_ACTIVE_LEARNING_BUILD_ID):
+    raise RuntimeError(
+        "active learning deployment mismatch: "
+        f"expected api={_EXPECTED_ACTIVE_LEARNING_API_VERSION} "
+        f"build={_EXPECTED_ACTIVE_LEARNING_BUILD_ID}, "
+        f"loaded api={getattr(al_module, 'ACTIVE_LEARNING_API_VERSION', None)!r} "
+        f"build={getattr(al_module, 'ACTIVE_LEARNING_BUILD_ID', None)!r}. "
+        "Replace app.py and active_learning.py together."
+    )
 import tm_maintenance as tm_maint_module      # Phase M: TM 資料治理
 # v3.9.41 Phase N/O/Q: 業界進階技術完成
 import in_context_learning as icl_module      # Phase N: Dynamic few-shot from TM
@@ -3016,7 +3030,7 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
                 + "\n</line_reply_context>"
             ),
         })
-    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    all_examples = list(BUILTIN_EXAMPLES) + _verified_custom_translation_examples()
     # Pick examples matching translation direction (only show direction-relevant pairs)
     # If translating zh->id, show zh2id examples; reverse for id->zh
     # v3.9.44 (BUG FIX): direction_key 必須精確匹配 zh↔id 兩個方向。
@@ -3299,7 +3313,7 @@ def _should_double_check(text, src_lang):
 
 def _build_custom_examples_prompt():
     """Build custom examples string. Includes BUILTIN_EXAMPLES + custom."""
-    all_examples = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    all_examples = list(BUILTIN_EXAMPLES) + _verified_custom_translation_examples()
     if not all_examples:
         return " "
     zh2id = []
@@ -3324,7 +3338,7 @@ def _build_custom_examples_prompt():
 
 def _check_custom_example_exact(text, src, tgt):
     """Check if text exactly matches a custom or builtin example."""
-    all_examples_local = list(BUILTIN_EXAMPLES) + list(custom_translation_examples or [])
+    all_examples_local = list(BUILTIN_EXAMPLES) + _verified_custom_translation_examples()
     if not all_examples_local:
         return None
     t = text.strip()
@@ -3873,23 +3887,111 @@ def _factory_knowledge_examples_for_casebook():
     return examples
 
 
-def _active_translation_corrections_for_casebook():
-    return translation_casebook_module.active_corrections_snapshot(al_module, ttl_seconds=60, limit=2000)
+_VERIFIED_CUSTOM_EXAMPLES_CACHE = {
+    "fingerprint": "",
+    "rows": [],
+    "invalid": [],
+}
+_verified_custom_examples_lock = threading.RLock()
 
 
-def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3):
+def _verified_custom_translation_examples():
+    """Return only custom examples accepted by the current local boundary.
+
+    Historical custom-example files predate moderation. Revalidating their
+    content once per content fingerprint prevents a stale or reaction-promoted
+    model output from silently becoming exact truth or few-shot evidence.
+    """
+    raw = json.dumps(
+        custom_translation_examples or [],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    with _verified_custom_examples_lock:
+        if _VERIFIED_CUSTOM_EXAMPLES_CACHE.get("fingerprint") == fingerprint:
+            return [dict(row) for row in _VERIFIED_CUSTOM_EXAMPLES_CACHE.get("rows", [])]
+
+    verified = []
+    invalid = []
+    for index, example in enumerate(custom_translation_examples or []):
+        if not isinstance(example, dict):
+            invalid.append({"index": index, "issues": ["example_not_object"]})
+            continue
+        direction = str(example.get("dir") or "zh2id").strip().lower()
+        if direction == "zh2id":
+            src_lang, tgt_lang = "zh", "id"
+            source, target = example.get("zh"), example.get("id")
+        elif direction == "id2zh":
+            src_lang, tgt_lang = "id", "zh"
+            source, target = example.get("id"), example.get("zh")
+        else:
+            invalid.append({"index": index, "issues": ["example_direction_invalid"]})
+            continue
+        report = al_module.validate_correction(
+            str(source or ""),
+            str(target or ""),
+            src_lang,
+            tgt_lang,
+        )
+        if not report.get("ok"):
+            invalid.append({
+                "index": index,
+                "issues": list(report.get("issues") or ()),
+            })
+            continue
+        row = dict(example)
+        row.update({
+            "dir": direction,
+            "origin": str(example.get("origin") or "custom_correction"),
+            "verified_correction": True,
+            "validation_state": "passed",
+            "validation_fingerprint": report.get("policy_fingerprint"),
+        })
+        verified.append(row)
+
+    with _verified_custom_examples_lock:
+        _VERIFIED_CUSTOM_EXAMPLES_CACHE.update({
+            "fingerprint": fingerprint,
+            "rows": [dict(row) for row in verified],
+            "invalid": [dict(row) for row in invalid],
+        })
+    if invalid:
+        logger.warning(
+            "[ContinuousLearning] excluded %d/%d unverified custom examples",
+            len(invalid), len(custom_translation_examples or []),
+        )
+    return verified
+
+
+def _active_translation_corrections_for_casebook(group_id=None):
+    if group_id is None:
+        try:
+            group_id = str(getattr(_tl, "group_id", "") or "")
+        except Exception:
+            group_id = ""
+    return translation_casebook_module.active_corrections_snapshot(
+        al_module,
+        ttl_seconds=60,
+        limit=2000,
+        group_id=group_id,
+    )
+
+
+def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3, group_id=None):
     # Copy and label each source so the compiler can resolve conflicting targets
     # deterministically.  Human corrections outrank factory cards; factory cards
     # outrank generic built-in examples.
     builtin_examples = [dict(ex, origin=str(ex.get("origin") or "builtin_example"))
                         for ex in (BUILTIN_EXAMPLES or [])]
-    custom_examples = [dict(ex, origin=str(ex.get("origin") or "custom_correction"))
-                       for ex in (custom_translation_examples or [])]
+    custom_examples = _verified_custom_translation_examples()
     examples = builtin_examples + custom_examples + _factory_knowledge_examples_for_casebook()
     return translation_casebook_module.retrieve(
         text, src, tgt,
         examples=examples,
-        corrections=_active_translation_corrections_for_casebook(),
+        corrections=_active_translation_corrections_for_casebook(group_id),
         max_cases=max_cases,
         min_score=0.22,
     )
@@ -15114,6 +15216,24 @@ def _translate_core(text, src, tgt):
             _review_already_attempted = bool(
                 getattr(_tl, "source_review_already_attempted", False)
             )
+            try:
+                _continuous_learning_risk = al_module.assess_review_risk(
+                    text,
+                    src,
+                    tgt,
+                    group_id=_gid_for_tm,
+                )
+            except Exception as _learning_risk_exc:
+                logger.warning(
+                    "[ContinuousLearning] risk assessment failed open: %s",
+                    _learning_risk_exc,
+                )
+                _continuous_learning_risk = {
+                    "requires_review": False,
+                    "score": 0.0,
+                    "matches": [],
+                    "reasons": [],
+                }
             _adaptive_review_risk = (
                 factory_translation_policy_module.adaptive_review_risk(
                     text,
@@ -15121,6 +15241,9 @@ def _translate_core(text, src, tgt):
                     tgt,
                     quality_critical=_quality_critical,
                     semantic_contract=_semantic_contract,
+                    learned_risk=bool(
+                        _continuous_learning_risk.get("requires_review")
+                    ),
                 )
             )
             _factory_review_required = factory_translation_policy_module.require_source_review(
@@ -15135,6 +15258,14 @@ def _translate_core(text, src, tgt):
                 and not _review_already_attempted
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
+            _learning_review_context = al_module.build_review_context(
+                _continuous_learning_risk
+            )
+            if _learning_review_context:
+                _review_context = "\n".join(
+                    part for part in (_review_context, _learning_review_context)
+                    if part
+                )
             _verified_cases = _verified_cases_from_contract(_semantic_contract)
             def _runtime_semantic_validator(candidate):
                 _issues = []
@@ -15158,6 +15289,20 @@ def _translate_core(text, src, tgt):
                         _issues.append("factory_guard_exception:" + type(_factory_guard_exc).__name__)
                 _issues = list(dict.fromkeys(_issues))
                 return not _issues, _issues
+
+            # Preserve the first candidate's objective issue categories for the
+            # learning audit. gate_and_revise returns the repaired candidate's
+            # clean report on success, which alone cannot tell whether the extra
+            # review fixed a defect or merely rephrased a clean high-risk notice.
+            _learning_initial_issues = _delivery_validation_issues(
+                text, result, src, tgt
+            )
+            _runtime_ok, _runtime_issues = _runtime_semantic_validator(result)
+            if not _runtime_ok or _runtime_issues:
+                _learning_initial_issues.extend(
+                    str(item) for item in (_runtime_issues or ()) if str(item).strip()
+                )
+            _learning_initial_issues = list(dict.fromkeys(_learning_initial_issues))
 
             _gate = tqg_module.gate_and_revise(
                 text, result, src, tgt,
@@ -15323,6 +15468,34 @@ def _translate_core(text, src, tgt):
         except Exception as _core_guard_exc:
             logger.exception("[FactoryGuard] in-core validation exception; preserving candidate: %s", _core_guard_exc)
             _quality_cacheable = False
+
+    # Persist only meaningful interventions. These records never become target
+    # translations by themselves; they teach the adaptive policy that a similar
+    # future source deserves an independent review. Clean single-pass messages
+    # are intentionally not written, keeping the database compact.
+    try:
+        _learning_gate = locals().get("_gate")
+        if isinstance(_learning_gate, dict):
+            al_module.record_translation_outcome(
+                source_text=text,
+                candidate_text=str(locals().get("_pre_gate_result") or ""),
+                final_text=str(result or ""),
+                src_lang=src,
+                tgt_lang=tgt,
+                group_id=_gid_for_tm,
+                issues=list(dict.fromkeys(
+                    list(locals().get("_learning_initial_issues") or ())
+                    + list(_learning_gate.get("issues") or ())
+                )),
+                path=str(_learning_gate.get("path") or ""),
+                reviewed=bool(_learning_gate.get("reviewed")),
+                cacheable=bool(result and _quality_cacheable),
+            )
+    except Exception as _learning_event_exc:
+        logger.warning(
+            "[ContinuousLearning] outcome persistence failed without affecting delivery: %s",
+            _learning_event_exc,
+        )
 
     # ─── 主路徑收尾 3: 對話 buffer(純記憶體 deque,零成本,留在主路徑) ───
     try:
@@ -18185,12 +18358,27 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
                 auto_approve=bool(auto_approve),
                 approved_by=(corrected_by if auto_approve else None),
             )
-            if not isinstance(_al_result, dict) or not _al_result.get("ok"):
+            _validation_blocked_but_queued = bool(
+                isinstance(_al_result, dict)
+                and _al_result.get("correction_id")
+                and _al_result.get("error") == "correction_validation_failed"
+            )
+            if (not isinstance(_al_result, dict)
+                    or (not _al_result.get("ok") and not _validation_blocked_but_queued)):
                 raise RuntimeError(
                     str((_al_result or {}).get("error") if isinstance(_al_result, dict) else "correction_queue_failed")
                 )
             target["active_learning_correction_id"] = _al_result.get("correction_id")
-            target["correction_status"] = _al_result.get("status", "pending")
+            target["correction_status"] = (
+                "pending" if _validation_blocked_but_queued
+                else _al_result.get("status", "pending")
+            )
+            target["correction_validation_state"] = _al_result.get(
+                "validation_state", "pending"
+            )
+            target["correction_validation_issues"] = list(
+                _al_result.get("validation_issues") or ()
+            )
             if target["correction_status"] == "approved":
                 translation_casebook_module.invalidate_active_cache()
         except Exception as _al_exc:
@@ -18291,7 +18479,7 @@ _export_tokens = {}
 
 
 def export_examples_to_jsonl():
-    """Export custom_translation_examples to OpenAI fine-tune JSONL format.
+    """Export currently verified examples to OpenAI fine-tune JSONL format.
     Returns a public URL good for ~1 hour, or "" on failure.
 
     OpenAI chat fine-tune format expects:
@@ -18302,7 +18490,8 @@ def export_examples_to_jsonl():
       ]}
     one JSON per line.
     """
-    if not custom_translation_examples:
+    verified_examples = _verified_custom_translation_examples()
+    if not verified_examples:
         return ""
     try:
         token = uuid.uuid4().hex[:12]
@@ -18311,7 +18500,7 @@ def export_examples_to_jsonl():
         sys_prompt = ("You are a Taiwan-factory ZH↔ID translator. "
                       "Output only the translation, no commentary.")
         with open(path, "w", encoding="utf-8") as f:
-            for ex in custom_translation_examples:
+            for ex in verified_examples:
                 zh = (ex.get("zh") or "").strip()
                 idn = (ex.get("id") or "").strip()
                 direction = ex.get("dir", "zh2id")
@@ -18677,6 +18866,30 @@ def handle_command(text, group_id, user_id=None):
         except Exception:
             correction_stats = {}
         if correction_admin:
+            if parsed.get("entry_id"):
+                selected_entry = next(
+                    (row for row in translation_log
+                     if row.get("id") == parsed.get("entry_id")),
+                    None,
+                )
+            else:
+                recent = list_recent_translations(
+                    group_id, limit=max(1, int(parsed.get("offset", 1) or 1))
+                )
+                selected_entry = (
+                    recent[int(parsed.get("offset", 1) or 1) - 1]
+                    if len(recent) >= int(parsed.get("offset", 1) or 1)
+                    else None
+                )
+            if selected_entry and selected_entry.get("correction_status") != "approved":
+                issue_text = ", ".join(
+                    selected_entry.get("correction_validation_issues") or ()
+                ) or "validation_pending"
+                return (
+                    f"⚠️ {position_label}修正已保留，但未通過自動驗證，不會進入翻譯記憶。\n"
+                    f"Koreksi disimpan tetapi gagal validasi dan tidak dipelajari.\n"
+                    f"{issue_text}"
+                )
             approved_total = int(correction_stats.get("approved_corrections", 0) or 0)
             return (
                 f"✅ 已核准{position_label}修正 / Koreksi disetujui:\n"
@@ -18696,9 +18909,10 @@ def handle_command(text, group_id, user_id=None):
         parts = text.strip().split()
         if len(parts) == 1:
             # /export → status
-            total = len(custom_translation_examples)
-            zh2id = sum(1 for e in custom_translation_examples if e.get("dir") == "zh2id")
-            id2zh = sum(1 for e in custom_translation_examples if e.get("dir") == "id2zh")
+            verified_examples = _verified_custom_translation_examples()
+            total = len(verified_examples)
+            zh2id = sum(1 for e in verified_examples if e.get("dir") == "zh2id")
+            id2zh = sum(1 for e in verified_examples if e.get("dir") == "id2zh")
             target = 300
             ready = "✅ 達到 fine-tune 建議門檻" if total >= target else f"再 {target-total} 筆達建議門檻"
             return (f"📊 訓練資料統計 / Statistik data\n"
@@ -18717,7 +18931,7 @@ def handle_command(text, group_id, user_id=None):
             return "用法 / Usage: /export 或 /export jsonl"
 
     elif cmd in ("/stats wrong", "/wrongstats", "/標記統計"):
-        total = len(custom_translation_examples)
+        total = len(_verified_custom_translation_examples())
         wrong_count = sum(1 for e in translation_log if e.get("marked_wrong"))
         recent_30d = 0
         cutoff = int(time.time()) - 30*86400
@@ -22313,10 +22527,11 @@ def _apply_reaction_feedback(message_id, reaction_type, user_id, group_id):
     """Look up which translation entry the reacted message corresponds to,
     then apply positive/negative feedback to translation_log.
 
-    Positive (love/like/happy): if entry has a known correct translation,
-        promote it to examples; else just record the positive vote.
-    Negative (sad/surprise): mark the entry as wrong (operator can later add
-        a correction via admin panel or LINE command).
+    Positive (love/like/happy): two votes plus an administrator vote may submit
+        the rendered translation to the same deterministic validation and
+        versioned approval path used by explicit corrections.
+    Negative (sad/surprise): mark the entry as wrong and learn only a scoped
+        future-review risk signal; the generated target is never learned.
     """
     rec = sent_message_to_entry.get(message_id)
     if not rec:
@@ -22346,47 +22561,59 @@ def _apply_reaction_feedback(message_id, reaction_type, user_id, group_id):
                 feedback["admin_positive"] = True
         except Exception:
             pass
-        require_admin_vote = os.environ.get(
-            "REACTION_PROMOTION_REQUIRES_ADMIN", "1"
-        ).strip().lower() not in ("0", "false", "off", "no")
-        promotion_reviewed = (
-            not require_admin_vote or bool(feedback.get("admin_positive"))
-        )
-        # Two votes can show usefulness, but only an admin-reviewed consensus is
-        # allowed into prompt examples by default.
+        # Reactions are weak labels.  This admin vote is intentionally mandatory
+        # (and cannot be disabled by an environment variable) so a popularity
+        # signal alone can never turn model output into translation truth.
+        promotion_reviewed = bool(feedback.get("admin_positive"))
         try:
             if (feedback["positive"] >= 2 and promotion_reviewed
                     and not target.get("promoted_to_examples")):
                 src_text = target.get("src", "")
                 tgt_text = target.get("tgt", "")
-                src_lang = target.get("src_lang", "zh")
+                src_lang = str(target.get("src_lang") or "zh").lower()
+                tgt_lang = str(
+                    target.get("tgt_lang") or ("id" if src_lang == "zh" else "zh")
+                ).lower()
                 if src_text and tgt_text and not tgt_text.startswith("⚠️"):
-                    direction = "zh2id" if src_lang == "zh" else "id2zh"
-                    new_ex = {
-                        "zh": src_text if src_lang == "zh" else tgt_text,
-                        "id": tgt_text if src_lang == "zh" else src_text,
-                        "dir": direction,
-                        "source": "reaction_positive",
-                    }
-                    if new_ex not in custom_translation_examples:
-                        custom_translation_examples.append(new_ex)
-                        # Cap at configured max to prevent unbounded growth.
-                        try:
-                            cap = int(CUSTOM_EXAMPLES_MAX)
-                        except Exception:
-                            cap = 1000
-                        if len(custom_translation_examples) > cap:
-                            custom_translation_examples[:] = custom_translation_examples[-cap:]
+                    learned = al_module.submit_correction(
+                        src_text=str(src_text),
+                        # This is a reviewed positive example, not a claim that
+                        # an existing target was changed; a no-op comparison to
+                        # itself would incorrectly reject it.
+                        original_tgt="",
+                        corrected_tgt=str(tgt_text),
+                        src_lang=src_lang,
+                        tgt_lang=tgt_lang,
+                        correction_reason=(
+                            "管理員核可的正面表情共識；經本機語義與完整性驗證後升格。"
+                        ),
+                        corrected_by=str(user_id or "reaction_admin"),
+                        group_id=(target.get("group_id") or rec.get("group_id")
+                                  or group_id or ""),
+                        auto_approve=True,
+                        approved_by=str(user_id or "reaction_admin"),
+                    )
+                    target["reaction_learning_correction_id"] = learned.get("correction_id")
+                    target["reaction_learning_status"] = learned.get("status", "pending")
+                    target["reaction_learning_validation_state"] = learned.get(
+                        "validation_state", "failed" if not learned.get("ok") else "passed"
+                    )
+                    target["reaction_learning_validation_issues"] = list(
+                        learned.get("validation_issues") or ()
+                    )
+                    if learned.get("ok") and learned.get("status") == "approved":
                         target["promoted_to_examples"] = True
-                        try:
-                            _save_examples_to_disk()
-                        except Exception:
-                            pass
-                        try:
-                            _save_translation_log_to_disk()
-                        except Exception:
-                            pass
-                        logger.info("Reaction promoted entry %s to examples", entry_id)
+                        logger.info(
+                            "Reaction promoted entry %s through validated correction %s",
+                            entry_id, learned.get("correction_id"),
+                        )
+                    else:
+                        target["reaction_learning_blocked"] = True
+                        logger.warning(
+                            "Reaction learning blocked for entry %s: %s",
+                            entry_id, learned.get("validation_issues") or learned.get("error"),
+                        )
+                    _save_translation_log_to_disk()
         except Exception as ee:
             logger.warning("Reaction promote failed: %s", ee)
         return True, "positive"
@@ -22401,10 +22628,35 @@ def _apply_reaction_feedback(message_id, reaction_type, user_id, group_id):
         if not target.get("marked_wrong"):
             target["marked_wrong"] = True
             target["marked_wrong_source"] = "reaction"
+        # A complaint teaches only *where to review next time*.  It deliberately
+        # cannot promote either the model output or an unverified replacement.
+        if prev != "negative":
             try:
-                _save_translation_log_to_disk()
-            except Exception:
-                pass
+                src_lang = str(target.get("src_lang") or "zh").lower()
+                tgt_lang = str(
+                    target.get("tgt_lang") or ("id" if src_lang == "zh" else "zh")
+                ).lower()
+                risk_event = al_module.record_translation_outcome(
+                    source_text=str(target.get("src") or ""),
+                    candidate_text=str(target.get("tgt") or ""),
+                    final_text=str(target.get("tgt") or ""),
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    group_id=(target.get("group_id") or rec.get("group_id")
+                              or group_id or ""),
+                    issues=("user_negative_translation_feedback",),
+                    path="reaction_negative_feedback",
+                    reviewed=False,
+                    cacheable=False,
+                    event_type="negative_reaction_feedback",
+                )
+                target["reaction_risk_event_id"] = risk_event.get("event_id")
+            except Exception as ee:
+                logger.warning("Reaction risk learning failed: %s", ee)
+        try:
+            _save_translation_log_to_disk()
+        except Exception:
+            pass
         return True, "negative"
 
     return False, "ignored_reaction_type"
@@ -22414,8 +22666,8 @@ if MessageReactionEvent:
     @handler.add(MessageReactionEvent)
     def handle_reaction(event):
         """v3.8: Free quality signal from group members.
-        ❤️/👍 → promote the translation to training examples (after 2 positive votes).
-        😢/😮 → flag the translation as wrong, surface to admin panel.
+        ❤️/👍 → after 2 votes + admin vote, validate before learning.
+        😢/😮 → flag as wrong and raise scoped future-review risk only.
         """
         try:
             source = event.source
@@ -25680,8 +25932,8 @@ async function alSubmitCorrection(){
     });
     const data = await r.json();
     alert(data.ok 
-      ? '✓ 修正已核准 (id='+data.correction_id+'),TM:'+(data.tm_updated?'✓':'—')+' Vector:'+(data.vec_skipped?'關閉（省成本）':(data.vec_updated?'✓':'✗'))+'。下次同樣訊息會直接使用核准版。'
-      : '✗ '+(data.error||''));
+      ? '✓ 修正已驗證並核准 (id='+data.correction_id+', revision='+(data.revision||1)+')；精確記憶:'+(data.tm_updated?'✓':'—')+'、相似句案例:✓、向量加速:'+(data.vec_skipped?'未啟用':(data.vec_updated?'✓':'✗'))+'。'
+      : '✗ '+(data.error||'')+(data.validation_issues?'\n'+data.validation_issues.join('\n'):''));
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -31278,10 +31530,15 @@ def api_admin_al_submit():
             group_id=data.get("group_id"),
             auto_approve=True,
             approved_by=data.get("by") or "admin",
+            force=bool(data.get("force")),
+            validation_override_reason=data.get("validation_override_reason"),
         )
         if isinstance(result, dict) and result.get("ok"):
             translation_casebook_module.invalidate_active_cache()
-        return jsonify(result)
+        status_code = 200 if result.get("ok") else (
+            422 if result.get("error") == "correction_validation_failed" else 400
+        )
+        return jsonify(result), status_code
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -31312,11 +31569,17 @@ def api_admin_al_approve(correction_id):
     try:
         data = request.get_json(force=True, silent=True) or {}
         result = al_module.approve_correction(
-            correction_id, approved_by=data.get("by") or "admin"
+            correction_id,
+            approved_by=data.get("by") or "admin",
+            force=bool(data.get("force")),
+            validation_override_reason=data.get("validation_override_reason"),
         )
         if result.get("ok"):
             translation_casebook_module.invalidate_active_cache()
-        return jsonify(result), (200 if result.get("ok") else 404)
+        status_code = 200 if result.get("ok") else (
+            422 if result.get("error") == "correction_validation_failed" else 404
+        )
+        return jsonify(result), status_code
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -31358,6 +31621,24 @@ def api_admin_al_stats():
         return jsonify({"error": "forbidden"}), 403
     try:
         return jsonify({"ok": True, "stats": al_module.al_stats()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/al/audit", methods=["POST"])
+def api_admin_al_audit():
+    """Revalidate approved corrections after semantic-policy upgrades."""
+    if not check_manager_access("aiprovider"):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        result = al_module.audit_approved_corrections(
+            quarantine=bool(data.get("quarantine", False)),
+            limit=_safe_int(data.get("limit", 2000), default=2000, min_val=1, max_val=10000),
+        )
+        if result.get("quarantined"):
+            translation_casebook_module.invalidate_active_cache()
+        return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -32111,28 +32392,40 @@ def api_translation_log():
             }
         })
     if request.method == "POST":
-        # Mark a log entry as wrong, optionally add to BUILTIN-style override list
+        # Mark a log entry as wrong.  Any supplied correction goes through the
+        # same moderated, validated, versioned path as LINE /wrong feedback.
         data = request.get_json() or {}
         ts = data.get("ts")
         if ts is None:
             return jsonify({"error": "missing ts"}), 400
-        for entry in translation_log:
+        for index, entry in enumerate(translation_log):
             if entry.get("ts") == ts:
+                correction = str(data.get("correct_translation") or "").strip()
+                if correction:
+                    # Legacy rows can lack an id; assign one so the correction
+                    # helper selects this exact row instead of a recent neighbour.
+                    entry_id = str(entry.get("id") or f"legacy-{ts}-{index}")
+                    entry["id"] = entry_id
+                    auto_approve = bool(data.get("add_to_examples"))
+                    ok, info = mark_translation_wrong(
+                        entry.get("group_id") or "",
+                        correct_translation=correction,
+                        add_to_examples=auto_approve,
+                        entry_id=entry_id,
+                        corrected_by="admin_translation_log",
+                        auto_approve=auto_approve,
+                    )
+                    if not ok:
+                        return jsonify({"error": info}), 503
+                    return jsonify({
+                        "ok": True,
+                        "correction_id": entry.get("active_learning_correction_id"),
+                        "correction_status": entry.get("correction_status", "pending"),
+                        "validation_state": entry.get("correction_validation_state"),
+                        "validation_issues": entry.get("correction_validation_issues", []),
+                    })
                 entry["marked_wrong"] = True
-                entry["correct_translation"] = data.get("correct_translation", "")
-                # Optionally add to custom_translation_examples
-                if data.get("add_to_examples") and data.get("correct_translation"):
-                    src_lang = entry.get("src_lang", "zh")
-                    direction = "zh2id" if src_lang == "zh" else "id2zh"
-                    new_ex = {
-                        "zh": entry.get("src", "") if src_lang == "zh" else data.get("correct_translation", ""),
-                        "id": data.get("correct_translation", "") if src_lang == "zh" else entry.get("src", ""),
-                        "dir": direction
-                    }
-                    custom_translation_examples.append(new_ex)
-                    if len(custom_translation_examples) > CUSTOM_EXAMPLES_MAX:
-                        custom_translation_examples[:] = custom_translation_examples[-CUSTOM_EXAMPLES_MAX:]
-                    _save_examples_to_disk()  # v3.9.29: 修補隱性 bug
+                entry["manual_marked_wrong"] = True
                 _save_translation_log_to_disk()
                 return jsonify({"ok": True})
         return jsonify({"error": "not found"}), 404
@@ -33752,9 +34045,12 @@ def api_admin_examples_get():
     """Get all custom translation examples."""
     if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
+    verified = _verified_custom_translation_examples()
     return jsonify({
         "examples": custom_translation_examples,
         "count": len(custom_translation_examples),
+        "verified_count": len(verified),
+        "excluded_count": max(0, len(custom_translation_examples) - len(verified)),
         "max": CUSTOM_EXAMPLES_MAX,
     })
 
@@ -33768,16 +34064,36 @@ def api_admin_examples_add():
     data = request.get_json() or {}
     zh = data.get("zh", "").strip()
     idn = data.get("id", "").strip()
-    direction = data.get("dir", "zh2id")
+    direction = str(data.get("dir", "zh2id")).strip().lower()
     if not zh or not idn:
         return jsonify({"error": "missing zh or id"}), 400
+    if direction not in ("zh2id", "id2zh"):
+        return jsonify({"error": "invalid direction"}), 400
+    source, target = (zh, idn) if direction == "zh2id" else (idn, zh)
+    src_lang, tgt_lang = ("zh", "id") if direction == "zh2id" else ("id", "zh")
+    validation = al_module.validate_correction(source, target, src_lang, tgt_lang)
+    if not validation.get("ok"):
+        return jsonify({
+            "error": "example_validation_failed",
+            "validation_state": validation.get("state", "failed"),
+            "validation_issues": validation.get("issues", []),
+        }), 422
     if len(custom_translation_examples) >= CUSTOM_EXAMPLES_MAX:
         return jsonify({"error": "max_reached", "max": CUSTOM_EXAMPLES_MAX}), 400
     # Check for duplicates
     for ex in custom_translation_examples:
         if ex.get("zh") == zh and ex.get("id") == idn:
             return jsonify({"error": "duplicate"}), 400
-    custom_translation_examples.append({"zh": zh, "id": idn, "dir": direction})
+    custom_translation_examples.append({
+        "zh": zh,
+        "id": idn,
+        "dir": direction,
+        "origin": "custom_correction",
+        "verified_correction": True,
+        "validation_state": "passed",
+        "validation_fingerprint": validation.get("policy_fingerprint"),
+    })
+    _save_examples_to_disk()
     save_settings()
     return jsonify({"ok": True, "count": len(custom_translation_examples)})
 
@@ -33793,6 +34109,7 @@ def api_admin_examples_delete():
     if idx is None or idx < 0 or idx >= len(custom_translation_examples):
         return jsonify({"error": "invalid index"}), 400
     custom_translation_examples.pop(idx)
+    _save_examples_to_disk()
     save_settings()
     return jsonify({"ok": True, "count": len(custom_translation_examples)})
 
@@ -33809,10 +34126,32 @@ def api_admin_examples_edit():
         return jsonify({"error": "invalid index"}), 400
     zh = data.get("zh", "").strip()
     idn = data.get("id", "").strip()
-    direction = data.get("dir", custom_translation_examples[idx].get("dir", "zh2id"))
+    direction = str(
+        data.get("dir", custom_translation_examples[idx].get("dir", "zh2id"))
+    ).strip().lower()
     if not zh or not idn:
         return jsonify({"error": "missing zh or id"}), 400
-    custom_translation_examples[idx] = {"zh": zh, "id": idn, "dir": direction}
+    if direction not in ("zh2id", "id2zh"):
+        return jsonify({"error": "invalid direction"}), 400
+    source, target = (zh, idn) if direction == "zh2id" else (idn, zh)
+    src_lang, tgt_lang = ("zh", "id") if direction == "zh2id" else ("id", "zh")
+    validation = al_module.validate_correction(source, target, src_lang, tgt_lang)
+    if not validation.get("ok"):
+        return jsonify({
+            "error": "example_validation_failed",
+            "validation_state": validation.get("state", "failed"),
+            "validation_issues": validation.get("issues", []),
+        }), 422
+    custom_translation_examples[idx] = {
+        "zh": zh,
+        "id": idn,
+        "dir": direction,
+        "origin": "custom_correction",
+        "verified_correction": True,
+        "validation_state": "passed",
+        "validation_fingerprint": validation.get("policy_fingerprint"),
+    }
+    _save_examples_to_disk()
     save_settings()
     return jsonify({"ok": True})
 
@@ -34577,14 +34916,15 @@ def api_admin_examples_export_jsonl():
     """Admin: download fine-tune JSONL directly from admin panel."""
     if not check_manager_access("examples") and request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "forbidden"}), 403
-    if not custom_translation_examples:
+    verified_examples = _verified_custom_translation_examples()
+    if not verified_examples:
         return jsonify({"error": "no_examples"}), 400
     try:
         from flask import Response
         sys_prompt = ("You are a Taiwan-factory ZH↔ID translator. "
                       "Output only the translation, no commentary.")
         lines = []
-        for ex in custom_translation_examples:
+        for ex in verified_examples:
             zh = (ex.get("zh") or "").strip()
             idn = (ex.get("id") or "").strip()
             direction = ex.get("dir", "zh2id")
@@ -34615,9 +34955,10 @@ def api_admin_examples_stats():
     """Admin: training-data status summary for the dashboard."""
     if not check_manager_access("examples"):
         return jsonify({"error": "forbidden"}), 403
-    total = len(custom_translation_examples)
-    zh2id = sum(1 for e in custom_translation_examples if e.get("dir") == "zh2id")
-    id2zh = sum(1 for e in custom_translation_examples if e.get("dir") == "id2zh")
+    verified_examples = _verified_custom_translation_examples()
+    total = len(verified_examples)
+    zh2id = sum(1 for e in verified_examples if e.get("dir") == "zh2id")
+    id2zh = sum(1 for e in verified_examples if e.get("dir") == "id2zh")
     wrong_count = sum(1 for e in translation_log if e.get("marked_wrong"))
     cutoff_30d = int(time.time()) - 30*86400
     wrong_30d = sum(1 for e in translation_log
@@ -34693,9 +35034,19 @@ def api_admin_translation_log_mark_wrong():
         add_to_examples=bool(correct) and add,
         entry_id=eid,
         corrected_by="admin_api",
-        auto_approve=True,
+        auto_approve=bool(correct) and bool(add),
     )
-    return jsonify({"ok": ok, "info": info, "examples_total": len(custom_translation_examples)})
+    selected_entry = next((row for row in translation_log if row.get("id") == eid), {})
+    verified_total = len(_verified_custom_translation_examples())
+    return jsonify({
+        "ok": ok,
+        "info": info,
+        "examples_total": verified_total,
+        "correction_id": selected_entry.get("active_learning_correction_id"),
+        "correction_status": selected_entry.get("correction_status"),
+        "validation_state": selected_entry.get("correction_validation_state"),
+        "validation_issues": selected_entry.get("correction_validation_issues", []),
+    })
 
 
 @app.route("/health", methods=["GET"])

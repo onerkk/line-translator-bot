@@ -43,8 +43,8 @@ from typing import Optional, List, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-TRANSLATION_MEMORY_API_VERSION = 2
-TRANSLATION_MEMORY_BUILD_ID = "2026-08-11.1-policy-versioned-verified-exact"
+TRANSLATION_MEMORY_API_VERSION = 3
+TRANSLATION_MEMORY_BUILD_ID = "2026-08-30.1-reviewed-correction-exact"
 
 try:
     from rapidfuzz import fuzz
@@ -331,12 +331,19 @@ def tm_lookup_verified_exact(
     group_id: Optional[str] = None,
     *,
     policy_fingerprint: str,
+    allow_reviewed_corrections: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Return only an exact row verified under the current translation assets.
 
     This is the persistent counterpart of the in-process verified cache.  It is
     intentionally exact-only: fuzzy rows and pre-migration entries are useful as
     prompt evidence but may never bypass a current factory semantic contract.
+
+    A moderator-approved ``human_corrected`` row is also eligible across policy
+    revisions.  The caller still revalidates it against the current semantic
+    contract and delivery guard before returning it, so policy upgrades do not
+    erase human knowledge and stale corrections cannot silently bypass new
+    safety rules.
     """
     if not _init_done:
         init()
@@ -353,30 +360,36 @@ def tm_lookup_verified_exact(
     try:
         with sqlite3.connect(TM_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
+            reviewed_clause = " OR (model='human_corrected' AND verified=1)" if allow_reviewed_corrections else ""
             if gid:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM tm_entries
-                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
-                      AND verified=1 AND policy_fingerprint=?
+                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=? AND src_text=?
+                      AND verified=1 AND (policy_fingerprint=?{reviewed_clause})
                       AND group_id IN (?, '')
                     ORDER BY (group_id=?) DESC,
+                             (policy_fingerprint=?) DESC,
+                             (model='human_corrected') DESC,
                              COALESCE(quality_score,-1) DESC,
                              last_used_at DESC
                     LIMIT 1
                     """,
-                    (src_lang, tgt_lang, src_hash, fingerprint, gid, gid),
+                    (src_lang, tgt_lang, src_hash, source, fingerprint, gid, gid, fingerprint),
                 ).fetchone()
             else:
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM tm_entries
-                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
-                      AND verified=1 AND policy_fingerprint=? AND group_id=''
-                    ORDER BY COALESCE(quality_score,-1) DESC, last_used_at DESC
+                    WHERE src_lang=? AND tgt_lang=? AND src_text_hash=? AND src_text=?
+                      AND verified=1 AND (policy_fingerprint=?{reviewed_clause}) AND group_id=''
+                    ORDER BY (policy_fingerprint=?) DESC,
+                             (model='human_corrected') DESC,
+                             COALESCE(quality_score,-1) DESC,
+                             last_used_at DESC
                     LIMIT 1
                     """,
-                    (src_lang, tgt_lang, src_hash, fingerprint),
+                    (src_lang, tgt_lang, src_hash, source, fingerprint, fingerprint),
                 ).fetchone()
 
             if row and str(row["src_text"] or "").strip() == source:
@@ -397,6 +410,11 @@ def tm_lookup_verified_exact(
                     "score": 100,
                     "tgt_text": row["tgt_text"],
                     "policy_fingerprint": row["policy_fingerprint"],
+                    "verification_kind": (
+                        "reviewed_correction"
+                        if str(row["model"] or "") == "human_corrected"
+                        else "current_policy"
+                    ),
                 }
     except Exception as exc:
         logger.warning("[TM] verified exact lookup failed closed: %s", exc)

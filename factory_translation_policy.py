@@ -24,8 +24,8 @@ import os
 import re
 from typing import Any, Dict
 
-FACTORY_TRANSLATION_POLICY_API_VERSION = 7
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-18.1-adaptive-review-explicit-always"
+FACTORY_TRANSLATION_POLICY_API_VERSION = 8
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-30.1-learned-risk-adaptive-review"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -142,6 +142,7 @@ def adaptive_review_risk(
     *,
     quality_critical: bool = False,
     semantic_contract: Any = None,
+    learned_risk: bool = False,
 ) -> bool:
     """Return whether a *locally clean* candidate merits a second source audit.
 
@@ -153,11 +154,29 @@ def adaptive_review_risk(
     """
     if not supports_direction(src, tgt):
         return False
+
+    # Continuous learning never supplies a target sentence by itself. It may
+    # only escalate a structurally similar prior failure to an independent
+    # source-grounded review, which is safe even when the previous candidate was
+    # wrong or later removed.
+    if learned_risk:
+        return True
+
     if not _boolean_env("FACTORY_REVIEW_CLEAN_HIGH_CONSEQUENCE", True):
         return False
 
     contract = semantic_contract if isinstance(semantic_contract, dict) else {}
     if contract.get("context_bound"):
+        return True
+    # Strong verified-correction matches explicitly request review. Do not use
+    # the broad contract-level flag here: quantity/source frames also set it and
+    # already have deterministic validators, so honoring it globally would
+    # silently double most routine factory traffic.
+    if any(
+        isinstance(risk, dict)
+        and risk.get("sense") == "verified_correction_cases"
+        for risk in (contract.get("risks") or ())
+    ):
         return True
 
     # An incomplete measurement frame has no deterministic direct translation;
