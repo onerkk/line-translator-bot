@@ -213,7 +213,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.47.0-safe-continuous-learning-2026-08-30"
+VERSION = "v3.48.0-operational-discourse-root-fix-2026-08-31"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -330,8 +330,8 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
         "Replace app.py, translation_quality_gate.py, ai_provider.py and factory_semantic_audit.py together."
     )
 
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-30.1-shopfloor-agent-roles"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-31.1-operational-discourse-and-flow"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)

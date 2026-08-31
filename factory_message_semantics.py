@@ -25,8 +25,8 @@ import unicodedata
 from typing import Any, Iterable, Mapping
 
 
-FACTORY_MESSAGE_SEMANTICS_API_VERSION = 2
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-30.1-shopfloor-agent-roles"
+FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-31.1-operational-discourse-and-flow"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -126,6 +126,28 @@ _EQUIPMENT_CODE_ID_RE = re.compile(
 )
 _EQUIPMENT_FAILURE_ID_RE = re.compile(
     r"(?<![a-z])(?:rusak|tidak\s+berfungsi|tidak\s+bisa\s+dipakai)(?![a-z])",
+    re.I,
+)
+
+# Short Indonesian shop-floor reports frequently omit prepositions and use
+# colloquial spellings.  Keep the machine identity, leak relation and shift
+# actor attached to the right event instead of accepting a merely word-level
+# rendering.
+_MACHINE_OIL_ID_RE = re.compile(
+    r"(?<![a-z])(?:(?:minyak|oli)\s+mesin|oli)(?![a-z])",
+    re.I,
+)
+_OIL_LEAK_ID_RE = re.compile(
+    r"(?<![a-z])(?:menetes|netes|tetes|bocor|merembes|rembes)(?![a-z])",
+    re.I,
+)
+_NIGHT_SHIFT_PERSON_ID_RE = re.compile(
+    r"(?<![a-z])(?:orang|karyawan|operator|personel|pekerja)\s+"
+    r"(?:shift\s+)?(?:malam|malem)(?![a-z])",
+    re.I,
+)
+_TRASH_DISPOSAL_ID_RE = re.compile(
+    r"(?<![a-z])(?:membuang|buang)\s+(?:sampah|limbah)(?![a-z])",
     re.I,
 )
 
@@ -488,6 +510,90 @@ _ZH_DELIVERY_MONTH_RE = re.compile(
     r"(?:(?:、|,|，|/|及|和|跟|與|与)" + _ZH_MONTH_TOKEN + r"(?:月)?)*))",
     re.I,
 )
+
+# Operational discourse and material-flow relations.  These expressions parse
+# variable names, counts, processes and times from the source.  They are not
+# sentence replacements: a deterministic rendering is available only when all
+# meaningful source text belongs to one of the extracted slots.
+_ZH_CUSTOMER_TOKEN = r"[\u3400-\u9fffA-Za-z0-9_.&+\-]{1,32}"
+_ZH_CUSTOMER_ITEM = (
+    r"(?:" + _ZH_CUSTOMER_TOKEN
+    + r"(?:[ \t]+" + _ZH_CUSTOMER_TOKEN + r"){0,5})"
+)
+_ZH_REMAINING_CUSTOMERS_RE = re.compile(
+    r"(?P<evidence>(?:今天|今日)\s*(?:還|还)?\s*(?:只)?\s*"
+    r"剩(?:下|餘|余)?\s*(?P<items>" + _ZH_CUSTOMER_ITEM
+    + r"(?:\s*(?:、|，|,|/|／|和|與|与|及)\s*" + _ZH_CUSTOMER_ITEM + r")+))",
+    re.I,
+)
+_ZH_NUMBER_TOKEN = r"(?:\d{1,3}|[零〇一二兩两三四五六七八九十]{1,3})"
+_ZH_BUNDLE_AT_PROCESS_RE = re.compile(
+    r"(?P<evidence>(?P<count>" + _ZH_NUMBER_TOKEN + r")\s*(?:把|捆)\s*"
+    r"(?:正|目前|現在|现在)?\s*在\s*"
+    r"(?P<process>包裝|包装|拋光|抛光|研磨|削皮|冷抽|矯直|矫直|酸洗))",
+    re.I,
+)
+_ZH_BUNDLE_TO_PROCESS_RE = re.compile(
+    r"(?P<evidence>(?P<count>" + _ZH_NUMBER_TOKEN + r")\s*(?:把|捆)\s*"
+    r"(?:會|会|將|将)?\s*(?:陸續|陆续|分批|逐步)\s*"
+    r"(?P<process>包裝|包装|拋光|抛光|研磨|削皮|冷抽|矯直|矫直|酸洗)\s*"
+    r"(?:過去|过去|送過去|送过去|移過去|移过去))",
+    re.I,
+)
+_ZH_PROCESS_LOCATION_ID = {
+    "包裝": "bagian packaging", "包装": "bagian packaging",
+    "拋光": "bagian polishing", "抛光": "bagian polishing",
+    "研磨": "bagian grinding", "削皮": "Bagian Peeling",
+    "冷抽": "bagian cold drawing",
+    "矯直": "bagian straightening", "矫直": "bagian straightening",
+    "酸洗": "bagian pickling",
+}
+_ZH_EXPLICIT_PROHIBITION_RE = re.compile(
+    r"(?:請|请)?(?:不要|別|别|不可|不能|禁止|勿|請勿|请勿).{0,8}"
+    r"(?:亂|乱|隨便|随便)",
+    re.I,
+)
+_ZH_CARELESS_DISPOSAL_RE = re.compile(
+    r"(?P<evidence>(?:亂|乱|隨便|随便)(?:丟|丢|扔|倒)(?:垃圾)?)",
+    re.I,
+)
+_ZH_CARELESS_MAINTENANCE_RE = re.compile(
+    r"(?P<evidence>(?:亂|乱|隨便|随便)(?:維護|维护|處理|处理))",
+    re.I,
+)
+_ZH_AFTER_DRINKING_RE = re.compile(
+    r"(?P<evidence>(?:喝完|飲用完|饮用完|喝了以後|喝了以后|喝完以後|喝完以后))",
+    re.I,
+)
+_ZH_NO_SHORT_MATERIAL_RE = re.compile(
+    r"(?P<evidence>(?:沒|没|沒有|没有|無|无)(?:有)?(?:短尺料|短尺材料|短尺))",
+    re.I,
+)
+_ZH_CLOCK_TOKEN = r"(?:\d{1,2}|[零〇一二兩两三四五六七八九十]{1,3})點(?:半|\d{1,2}分)?"
+_ZH_MONTH_ORDER_PRIORITY_RE = re.compile(
+    r"(?P<evidence>各站(?:要|需|務必|务必)?優先生產(?:本月份|本月|這個月|这个月)(?:份)?訂單)",
+    re.I,
+)
+_ZH_MES_STOP_RE = re.compile(
+    r"(?P<evidence>(?:今天|今日)(?P<time>" + _ZH_CLOCK_TOKEN
+    + r")後MES系統(?:中止|停止|暫停|暂停)(?:服務|服务|運作|运作))",
+    re.I,
+)
+_ZH_CHANGE_DATA_DEADLINE_RE = re.compile(
+    r"(?P<evidence>所有(?:的)?(?:異動|异动|變更|变更)資料(?:都)?在"
+    r"(?P<time>" + _ZH_CLOCK_TOKEN + r")(?:左右|前)?完成)",
+    re.I,
+)
+_ZH_PACKAGING_SHIPPING_URGENT_RE = re.compile(
+    r"(?P<evidence>(?:包裝|包装)(?:出貨|出货)急單(?:再)?(?:麻煩|麻烦|請|请)?"
+    r"(?:幫忙|帮忙)?優先處理)",
+    re.I,
+)
+_ZH_SPECIAL_STATION_ROUTE_RE = re.compile(
+    r"(?P<evidence>(?:異型站|异型站|異型包裝站|异型包装站)(?:的)?(?:料|材料)"
+    r"(?:再)?(?:麻煩|麻烦|請|请)?(?:幫忙|帮忙)?(?:分流|調撥|调拨|轉|转|移)過來)",
+    re.I,
+)
 _ID_MONTH_NAMES = {
     1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
     5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
@@ -550,6 +656,10 @@ def normalize_indonesian_factory_colloquialisms(source: Any) -> tuple[str, int]:
         r"(?<![a-z])tida(?![a-z])", "tidak", value, flags=re.I
     )
     replacements += typo_count
+    value, typo_count = re.subn(
+        r"(?<![a-z])malem(?![a-z])", "malam", value, flags=re.I
+    )
+    replacements += typo_count
 
     shift_match = _SHIFT_ALIAS_ID_RE.search(value)
     negative_match = _NEGATIVE_ID_RE.search(value)
@@ -574,6 +684,40 @@ def normalize_indonesian_factory_colloquialisms(source: Any) -> tuple[str, int]:
 
 def _compact(value: Any) -> str:
     return re.sub(r"\s+", "", _norm(value))
+
+
+def _strip_zh_operational_tokens(
+    source: Any,
+    evidence: Iterable[str],
+    support_words: Iterable[str] = (),
+) -> str:
+    """Return source content not represented by an operational frame.
+
+    Exact extracted spans are removed before small grammatical connectors.  An
+    unrelated clause therefore remains visible and prevents a partial direct
+    translation from silently discarding it.
+    """
+    # Builders extract their evidence from NFKC-normalized text.  Normalize the
+    # source the same way before removing that evidence; otherwise full-width
+    # punctuation (for example Chinese comma -> ASCII comma) can make an exact
+    # extracted span impossible to remove and falsely mark a complete frame as
+    # incomplete.
+    value = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    for token in sorted(
+        [str(item or "") for item in evidence if str(item or "")],
+        key=len,
+        reverse=True,
+    ):
+        value = value.replace(token, "", 1)
+    for token in sorted(
+        {str(item or "") for item in support_words if str(item or "")},
+        key=len,
+        reverse=True,
+    ):
+        value = value.replace(token, "")
+    return re.sub(
+        r"[\s,，、。.!！?？:：;；()（）\[\]{}]+", "", value
+    )
 
 
 def _lang_family(value: Any) -> str:
@@ -702,7 +846,96 @@ def _base_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
     }
 
 
+def _build_id_zh_machine_oil_leak_frame(source: str, frame: dict) -> dict:
+    text = _norm(source)
+    codes = list(dict.fromkeys(
+        match.group(0).upper() for match in _EQUIPMENT_CODE_ID_RE.finditer(text)
+    ))
+    oil = _MACHINE_OIL_ID_RE.search(text)
+    leak = _OIL_LEAK_ID_RE.search(text)
+    if not (codes and oil and leak):
+        return frame
+
+    unparsed = _MENTION_RE.sub(" ", text)
+    unparsed = _EQUIPMENT_CODE_ID_RE.sub(" ", unparsed)
+    unparsed = _MACHINE_OIL_ID_RE.sub(" ", unparsed)
+    unparsed = _OIL_LEAK_ID_RE.sub(" ", unparsed)
+    unparsed = re.sub(
+        r"(?<![a-z])(?:mesin|machine|unit|dari|di|pada|ada|dan)(?![a-z])",
+        " ", unparsed, flags=re.I,
+    )
+    unparsed = re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", " ", unparsed).strip()
+    frame["kind"] = "id_zh_machine_oil_leak"
+    frame["slots"].update({
+        "equipment_codes": codes,
+        "oil_source": oil.group(0).casefold(),
+        "leak_source": leak.group(0).casefold(),
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "oil_leak_equipment", ", ".join(codes),
+        "I/E/BF 等代碼是漏油的機台識別碼", "、".join(codes) + " 機台",
+    )
+    _claim(
+        frame, "machine_oil_leak", oil.group(0) + " " + leak.group(0),
+        "機台正在滴油／漏油，不是只描述一滴機油", "漏油",
+    )
+    frame["active"] = True
+    frame["complete"] = not unparsed
+    return frame
+
+
+def _build_id_zh_night_shift_trash_frame(source: str, frame: dict) -> dict:
+    text = _norm(source)
+    person = _NIGHT_SHIFT_PERSON_ID_RE.search(text)
+    negative = _NEGATIVE_ID_RE.search(text)
+    disposal = _TRASH_DISPOSAL_ID_RE.search(text)
+    if not (
+        person and negative and disposal
+        and person.end() <= negative.start() <= disposal.start()
+    ):
+        return frame
+
+    unparsed = _MENTION_RE.sub(" ", text)
+    for match in sorted(
+        (person, negative, disposal), key=lambda item: item.start(), reverse=True
+    ):
+        unparsed = unparsed[:match.start()] + " " + unparsed[match.end():]
+    unparsed = re.sub(
+        r"(?<![a-z])(?:shift|yang|para|di|bagian)(?![a-z])",
+        " ", unparsed, flags=re.I,
+    )
+    unparsed = re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", " ", unparsed).strip()
+    negative_term = negative.group("negative").casefold()
+    frame["kind"] = "id_zh_night_shift_trash_omission"
+    frame["slots"].update({
+        "shift_actor": "night_shift_staff",
+        "negative_source": negative_term,
+        "completion": "not_yet" if negative_term == "belum" else "not_done",
+        "trash_source": disposal.group(0).casefold(),
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "night_shift_human_actor", person.group(0),
+        "晚班人員是沒有執行倒垃圾的人", "晚班人員",
+    )
+    _claim(
+        frame, "trash_disposal_negation",
+        negative.group(0) + " " + disposal.group(0),
+        "倒垃圾這項工作未執行；否定不可遺失", "沒有倒垃圾",
+    )
+    frame["active"] = True
+    frame["complete"] = not unparsed
+    return frame
+
+
 def _build_id_zh_frame(source: str, frame: dict) -> dict:
+    oil_leak_frame = _build_id_zh_machine_oil_leak_frame(source, frame)
+    if oil_leak_frame.get("active"):
+        return oil_leak_frame
+    trash_frame = _build_id_zh_night_shift_trash_frame(source, frame)
+    if trash_frame.get("active"):
+        return trash_frame
     text = _norm(source)
     equipment_codes = list(dict.fromkeys(
         match.group(0).upper() for match in _EQUIPMENT_CODE_ID_RE.finditer(text)
@@ -1070,6 +1303,17 @@ def _format_id_month_list(months: Iterable[int]) -> str:
     if len(names) == 2:
         return names[0] + " dan " + names[1]
     return ", ".join(names[:-1]) + ", dan " + names[-1]
+
+
+def _format_id_preserved_name_list(names: Iterable[str]) -> str:
+    values = [str(name).strip() for name in names if str(name).strip()]
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return values[0] + " dan " + values[1]
+    return ", ".join(values[:-1]) + ", dan " + values[-1]
 
 
 def _strip_zh_production_priority_supported_tokens(
@@ -2071,7 +2315,365 @@ def _build_zh_id_shopfloor_agent_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+def _build_zh_id_customer_order_frame(source: str, frame: dict) -> dict:
+    """Resolve a remaining-customer list as the customers' orders/material.
+
+    In production chat, ``今天剩 A、B、C`` does not say that the companies
+    themselves remain.  The customer names are metonymic references to their
+    remaining orders.  Names stay byte-for-byte unchanged while the omitted
+    order relation is made explicit in Indonesian.
+    """
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    customer_match = _ZH_REMAINING_CUSTOMERS_RE.search(visible)
+    if not customer_match:
+        return frame
+    names = [
+        item.strip()
+        for item in re.split(r"\s*(?:、|，|,|/|／|和|與|与|及)\s*", customer_match.group("items"))
+        if item.strip()
+    ]
+    if len(names) < 2:
+        return frame
+
+    tail = visible[customer_match.end():]
+    system_match = re.search(r"(?:包裝|包装)系統", tail, re.I)
+    note_match = re.search(r"(?:備註|备注|註記|注记|標記|标记)", tail, re.I)
+    deferred_match = re.search(
+        r"(?:遞延料|递延料|遞延材料|递延材料|延遲料|延迟料)", tail, re.I
+    )
+    action_match = re.search(
+        r"(?P<evidence>(?:再)?(?:麻煩|麻烦|請|请)?(?:幫忙|帮忙|協助|协助)?"
+        r"(?:把)?(?:這些|这些|該|该)?(?:料|材料)?(?:再)?(?:包裝|包装)"
+        r"(?:後|后|再|並|并|然後|然后)?(?:辦理|办理)?(?:入庫|入库))",
+        tail,
+        re.I,
+    )
+    # A list after 今天剩 is not automatically a customer/order list.  Require
+    # production evidence before enabling the metonymy rule so ordinary lists
+    # such as 今天剩蘋果、香蕉 cannot be rewritten as customer orders.
+    production_context = bool(
+        system_match
+        or deferred_match
+        or action_match
+        or re.search(
+            r"(?:訂單|订单|工單|工单|出貨|出货|入庫|入库|包裝|包装|客戶|客户)",
+            tail,
+            re.I,
+        )
+    )
+    if not production_context:
+        return frame
+    has_packaging_instruction = bool(
+        system_match and note_match and deferred_match and action_match
+    )
+    evidence = [customer_match.group("evidence")]
+    for match in (system_match, note_match, deferred_match, action_match):
+        if match:
+            evidence.append(match.group("evidence") if "evidence" in match.groupdict() else match.group(0))
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence,
+        ("再", "的", "請", "请", "麻煩", "麻烦", "幫忙", "帮忙"),
+    )
+    frame["kind"] = "zh_id_remaining_customer_orders"
+    frame["slots"].update({
+        "customer_names": names,
+        "today": True,
+        "has_packaging_instruction": has_packaging_instruction,
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "remaining_customer_order_metonymy", customer_match.group("evidence"),
+        "客戶名稱在剩餘生產清單中代指這些客戶尚未完成的訂單，不是公司本身留下",
+        "pesanan untuk " + ", ".join(names),
+    )
+    if has_packaging_instruction:
+        _claim(
+            frame, "deferred_packaging_system_note",
+            system_match.group(0) + note_match.group(0) + deferred_match.group(0),
+            "包裝系統內被標記為遞延的材料", "material yang ditandai tertunda di sistem packaging",
+        )
+        _claim(
+            frame, "package_then_warehouse",
+            action_match.group("evidence"),
+            "先協助包裝，再辦理材料入庫；兩個動作與順序都要保留",
+            "tolong kemas lalu masukkan ke gudang",
+        )
+    frame["active"] = True
+    frame["complete"] = bool(has_packaging_instruction and not unparsed)
+    return frame
+
+
+def _build_zh_id_deferred_material_flow_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    urgent = re.search(
+        r"(?P<evidence>(?:下午)?急單(?:差不多|快(?:完成|好了)?|即將完成|即将完成)"
+        r"(?:完成|好了)?(?:後|后))",
+        visible, re.I,
+    )
+    deferred = re.search(
+        r"(?P<evidence>(?:這份|这份)?(?:上面(?:的)?|上述(?:的)?)?"
+        r"(?:遞延料|递延料|遞延材料|递延材料|延遲料|延迟料))",
+        visible, re.I,
+    )
+    request = re.search(
+        r"(?P<evidence>(?:再)?(?:麻煩|麻烦|請|请)?(?:幫忙|帮忙|協助|协助)"
+        r"(?:安排)?(?:處理|处理)(?:一下)?)",
+        visible, re.I,
+    )
+    current = _ZH_BUNDLE_AT_PROCESS_RE.search(visible)
+    destination = _ZH_BUNDLE_TO_PROCESS_RE.search(visible)
+    if not (deferred and current and destination):
+        return frame
+
+    current_count_raw = current.group("count")
+    destination_count_raw = destination.group("count")
+    current_count = _parse_zh_release_count(current_count_raw)
+    destination_count = _parse_zh_release_count(destination_count_raw)
+    current_process = current.group("process")
+    destination_process = destination.group("process")
+    evidence = [
+        match.group("evidence")
+        for match in (urgent, deferred, request, current, destination)
+        if match
+    ]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence,
+        ("這份", "这份", "上面", "上述", "的", "再", "會", "会", "一下"),
+    )
+    frame["kind"] = "zh_id_deferred_material_process_flow"
+    frame["slots"].update({
+        "urgent_nearly_done": bool(urgent),
+        "deferred_reference": True,
+        "request": bool(request),
+        "current_count_raw": current_count_raw,
+        "current_count": current_count,
+        "current_process_source": current_process,
+        "current_process_id": _ZH_PROCESS_LOCATION_ID.get(current_process, ""),
+        "destination_count_raw": destination_count_raw,
+        "destination_count": destination_count,
+        "destination_process_source": destination_process,
+        "destination_process_id": _ZH_PROCESS_LOCATION_ID.get(destination_process, ""),
+        "gradual_movement": True,
+    })
+    frame["unparsed"] = unparsed
+    if urgent:
+        _claim(
+            frame, "after_urgent_order_nearly_done", urgent.group("evidence"),
+            "下午急單接近完成之後才處理後述遞延料",
+            "setelah work order mendesak sore ini hampir selesai",
+        )
+    _claim(
+        frame, "deferred_material_reference", deferred.group("evidence"),
+        "指向上方所列的遞延材料", "material tertunda yang tercantum di atas",
+    )
+    if request:
+        _claim(
+            frame, "deferred_material_handling_request", request.group("evidence"),
+            "請對方安排處理遞延材料", "mohon atur penanganannya",
+        )
+    _claim(
+        frame, "bundles_at_current_process", current.group("evidence"),
+        "指定捆數目前位於該製程", (
+            _format_id_release_count(current_count, current_count_raw)
+            + " bundel berada di " + _ZH_PROCESS_LOCATION_ID.get(current_process, "")
+        ),
+    )
+    _claim(
+        frame, "bundles_move_to_process", destination.group("evidence"),
+        "指定捆數將分批送往該製程；製程名稱是目的地，不是已完成的被動加工",
+        (
+            _format_id_release_count(destination_count, destination_count_raw)
+            + " bundel akan dikirim secara bertahap ke "
+            + _ZH_PROCESS_LOCATION_ID.get(destination_process, "")
+        ),
+    )
+    frame["active"] = True
+    frame["complete"] = bool(
+        urgent and request and current_count is not None
+        and destination_count is not None
+        and _ZH_PROCESS_LOCATION_ID.get(current_process)
+        and _ZH_PROCESS_LOCATION_ID.get(destination_process)
+        and not unparsed
+    )
+    return frame
+
+
+def _build_zh_id_careless_action_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    disposal = _ZH_CARELESS_DISPOSAL_RE.search(visible)
+    maintenance = _ZH_CARELESS_MAINTENANCE_RE.search(visible)
+    if not (disposal or maintenance):
+        return frame
+    after_drinking = _ZH_AFTER_DRINKING_RE.search(visible)
+    no_short = _ZH_NO_SHORT_MATERIAL_RE.search(visible)
+    explicit_prohibition = bool(_ZH_EXPLICIT_PROHIBITION_RE.search(visible))
+    action = "trash_disposal" if disposal else "short_material_handling" if no_short else "maintenance_unspecified"
+    evidence = [
+        match.group("evidence")
+        for match in (after_drinking, no_short, disposal, maintenance)
+        if match
+    ]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence,
+        (
+            "請不要", "请不要", "請勿", "请勿", "不要", "別", "别", "不可",
+            "不能", "禁止", "勿", "你", "你們", "你们", "他", "他們", "他们",
+            "又", "卻", "却", "反而", "竟然", "還", "还", "就", "了", "啦",
+        ),
+    )
+    frame["kind"] = "zh_id_careless_action_speech_act"
+    frame["slots"].update({
+        "modality": "prohibition" if explicit_prohibition else "observed_complaint",
+        "action": action,
+        "after_drinking": bool(after_drinking),
+        "no_short_material": bool(no_short),
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "careless_action_modality",
+        (disposal or maintenance).group("evidence"),
+        (
+            "來源有明確禁止詞，因此是命令"
+            if explicit_prohibition
+            else "來源是在陳述／抱怨已發生的隨意行為，沒有禁止詞；不可擅自改成 jangan 命令"
+        ),
+        "jangan" if explicit_prohibition else "declarative complaint; no jangan",
+    )
+    if action == "trash_disposal":
+        _claim(
+            frame, "careless_disposal_action", disposal.group("evidence"),
+            "飲用後物品被隨意丟棄", "dibuang sembarangan",
+        )
+    elif action == "short_material_handling":
+        _claim(
+            frame, "short_material_handling_action", maintenance.group("evidence"),
+            "明明沒有短尺材料，卻隨意執行短尺材料處理；不是設備 maintenance",
+            "penanganan material pendek dilakukan sembarangan",
+        )
+    frame["active"] = True
+    frame["complete"] = bool(
+        not unparsed
+        and (
+            (action == "trash_disposal" and after_drinking)
+            or (action == "short_material_handling" and no_short)
+        )
+    )
+    return frame
+
+
+def _parse_zh_clock(value: str) -> str:
+    raw = str(value or "").strip()
+    match = re.fullmatch(
+        r"(?P<hour>\d{1,2}|[零〇一二兩两三四五六七八九十]{1,3})點"
+        r"(?:(?P<half>半)|(?P<minute>\d{1,2})分)?",
+        raw,
+    )
+    if not match:
+        return ""
+    hour = _parse_zh_release_count(match.group("hour"))
+    if hour is None or not 0 <= hour <= 23:
+        return ""
+    minute = 30 if match.group("half") else int(match.group("minute") or 0)
+    if not 0 <= minute <= 59:
+        return ""
+    return f"{hour}.{minute:02d}"
+
+
+def _build_zh_id_mes_operational_notice_frame(source: str, frame: dict) -> dict:
+    visible = _compact(_MENTION_RE.sub("", str(source or "")))
+    priority = _ZH_MONTH_ORDER_PRIORITY_RE.search(visible)
+    blue_attention = re.search(
+        r"(?P<evidence>(?P<marker>藍色底|蓝色底|藍底|蓝底|藍色底色|蓝色底色)"
+        r"(?:的)?(?:訂單|订单)?(?:要|需)?(?:特別|特别)?注意)",
+        visible,
+        re.I,
+    )
+    blue = blue_attention.group("marker") if blue_attention else ""
+    mes_stop = _ZH_MES_STOP_RE.search(visible)
+    deadline = _ZH_CHANGE_DATA_DEADLINE_RE.search(visible)
+    urgent = _ZH_PACKAGING_SHIPPING_URGENT_RE.search(visible)
+    route = _ZH_SPECIAL_STATION_ROUTE_RE.search(visible)
+    matched_segments = sum(bool(item) for item in (priority, mes_stop, deadline, urgent, route))
+    if matched_segments < 2:
+        return frame
+    evidence = [
+        match.group("evidence")
+        for match in (priority, mes_stop, deadline, urgent, route)
+        if match
+    ]
+    if blue_attention:
+        evidence.append(blue_attention.group("evidence"))
+    unparsed = visible
+    for token in sorted(evidence, key=len, reverse=True):
+        unparsed = unparsed.replace(_compact(token), "", 1)
+    unparsed = re.sub(r"[、,，。.!！?？:：;；]", "", unparsed)
+    stop_time = _parse_zh_clock(mes_stop.group("time") if mes_stop else "")
+    deadline_time = _parse_zh_clock(deadline.group("time") if deadline else "")
+    frame["kind"] = "zh_id_mes_operational_notice"
+    frame["slots"].update({
+        "monthly_order_priority": bool(priority),
+        "blue_background_attention": bool(blue),
+        "mes_stop": bool(mes_stop),
+        "mes_stop_time": stop_time,
+        "change_data_deadline": bool(deadline),
+        "change_data_deadline_time": deadline_time,
+        "packaging_shipping_urgent": bool(urgent),
+        "special_station_route": bool(route),
+    })
+    frame["unparsed"] = unparsed
+    if priority:
+        _claim(
+            frame, "monthly_order_production_priority", priority.group("evidence"),
+            "各站必須優先生產本月訂單", "semua stasiun memprioritaskan produksi pesanan bulan ini",
+        )
+    if blue:
+        _claim(
+            frame, "blue_background_attention", blue,
+            "藍色背景的訂單需要特別注意", "pesanan berlatar biru perlu diperhatikan khusus",
+        )
+    if mes_stop:
+        _claim(
+            frame, "mes_service_stop", mes_stop.group("evidence"),
+            "MES 系統在指定時間後停止服務", f"sistem MES berhenti beroperasi setelah pukul {stop_time}",
+        )
+    if deadline:
+        _claim(
+            frame, "change_data_completion_deadline", deadline.group("evidence"),
+            "所有異動資料須在指定時間左右完成", f"semua perubahan data diselesaikan sekitar pukul {deadline_time}",
+        )
+    if urgent:
+        _claim(
+            frame, "packaging_shipping_urgent_priority", urgent.group("evidence"),
+            "包裝與出貨急單要優先處理", "prioritaskan work order mendesak untuk packaging dan pengiriman",
+        )
+    if route:
+        _claim(
+            frame, "special_station_material_route", route.group("evidence"),
+            "把異型站的材料分流到說話者所在位置", (
+                "alihkan material dari Stasiun packing barang bentuk khusus ke sini"
+            ),
+        )
+    frame["active"] = True
+    frame["complete"] = bool(
+        priority and blue and mes_stop and stop_time and deadline and deadline_time
+        and urgent and route and not unparsed
+    )
+    return frame
+
+
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    customer_frame = _build_zh_id_customer_order_frame(source, frame)
+    if customer_frame.get("active"):
+        return customer_frame
+    flow_frame = _build_zh_id_deferred_material_flow_frame(source, frame)
+    if flow_frame.get("active"):
+        return flow_frame
+    careless_frame = _build_zh_id_careless_action_frame(source, frame)
+    if careless_frame.get("active"):
+        return careless_frame
+    mes_frame = _build_zh_id_mes_operational_notice_frame(source, frame)
+    if mes_frame.get("active"):
+        return mes_frame
     unit_trolley_frame = _build_zh_id_factory_unit_trolley_frame(source, frame)
     if unit_trolley_frame.get("active"):
         return unit_trolley_frame
@@ -2166,6 +2768,16 @@ def deterministic_translation(frame: Mapping) -> str:
     if not frame or not frame.get("active") or not frame.get("complete"):
         return ""
     slots = frame.get("slots") or {}
+    if frame.get("kind") == "id_zh_machine_oil_leak":
+        codes = [str(item) for item in slots.get("equipment_codes") or () if str(item)]
+        if not codes:
+            return ""
+        return _with_mentions(frame, f"{'、'.join(codes)} 機台漏油")
+
+    if frame.get("kind") == "id_zh_night_shift_trash_omission":
+        status = "還沒倒垃圾" if slots.get("completion") == "not_yet" else "沒有倒垃圾"
+        return _with_mentions(frame, "晚班人員" + status)
+
     if frame.get("kind") == "id_zh_equipment_code_failure":
         codes = [str(item) for item in slots.get("equipment_codes") or () if str(item)]
         if not codes:
@@ -2400,6 +3012,73 @@ def deterministic_translation(frame: Mapping) -> str:
             return ""
         return _with_mentions(frame, " ".join(rendered))
 
+    if frame.get("kind") == "zh_id_remaining_customer_orders":
+        names = _format_id_preserved_name_list(slots.get("customer_names") or ())
+        if not names or not slots.get("has_packaging_instruction"):
+            return ""
+        text = (
+            f"Hari ini hanya tersisa pesanan untuk {names}. "
+            "Untuk material yang ditandai tertunda di sistem packaging, "
+            "mohon bantu kemas lalu masukkan ke gudang."
+        )
+        return _with_mentions(frame, text)
+
+    if frame.get("kind") == "zh_id_deferred_material_process_flow":
+        current_count = _format_id_release_count(
+            slots.get("current_count"), str(slots.get("current_count_raw") or "")
+        )
+        destination_count = _format_id_release_count(
+            slots.get("destination_count"), str(slots.get("destination_count_raw") or "")
+        )
+        current_process = str(slots.get("current_process_id") or "")
+        destination_process = str(slots.get("destination_process_id") or "")
+        if not all((current_count, destination_count, current_process, destination_process)):
+            return ""
+        text = (
+            "Setelah work order mendesak sore ini hampir selesai, mohon atur "
+            "penanganan material tertunda yang tercantum di atas. "
+            f"{current_count.capitalize()} bundel berada di {current_process}. "
+            f"{destination_count.capitalize()} bundel akan dikirim secara bertahap "
+            f"ke {destination_process}."
+        )
+        return _with_mentions(frame, text)
+
+    if frame.get("kind") == "zh_id_careless_action_speech_act":
+        action = str(slots.get("action") or "")
+        modality = str(slots.get("modality") or "")
+        if action == "trash_disposal" and slots.get("after_drinking"):
+            if modality == "prohibition":
+                return _with_mentions(frame, "Setelah minum, jangan dibuang sembarangan.")
+            return _with_mentions(frame, "Setelah diminum, malah dibuang sembarangan.")
+        if action == "short_material_handling" and slots.get("no_short_material"):
+            if modality == "prohibition":
+                return _with_mentions(
+                    frame,
+                    "Jika tidak ada material pendek, jangan lakukan penanganan "
+                    "material pendek secara sembarangan."
+                )
+            return _with_mentions(
+                frame,
+                "Tidak ada material pendek, tetapi penanganan material pendek "
+                "malah dilakukan sembarangan."
+            )
+        return ""
+
+    if frame.get("kind") == "zh_id_mes_operational_notice":
+        stop_time = str(slots.get("mes_stop_time") or "")
+        deadline_time = str(slots.get("change_data_deadline_time") or "")
+        if not stop_time or not deadline_time:
+            return ""
+        text = (
+            "Semua stasiun harus memprioritaskan produksi pesanan bulan ini; "
+            "pesanan berlatar biru perlu mendapat perhatian khusus. "
+            f"Hari ini, setelah pukul {stop_time}, sistem MES akan berhenti beroperasi. "
+            f"Semua perubahan data harus diselesaikan sekitar pukul {deadline_time}. "
+            "Mohon prioritaskan work order mendesak untuk packaging dan pengiriman. "
+            "Mohon alihkan material dari Stasiun packing barang bentuk khusus ke sini."
+        )
+        return _with_mentions(frame, text)
+
     if frame.get("kind") == "zh_id_production_backlog_priority":
         process_id = str(slots.get("process_id") or "")
         period_count = slots.get("backlog_period_count")
@@ -2529,6 +3208,62 @@ def _id_delivery_month_present(text: str, month: int) -> bool:
     )
 
 
+def _id_clock_present(text: str, expected: str) -> bool:
+    raw = str(expected or "")
+    if not raw:
+        return True
+    try:
+        hour_text, minute_text = raw.split(".", 1)
+        hour, minute = int(hour_text), int(minute_text)
+    except (TypeError, ValueError):
+        return False
+    hour_words = {
+        0: "nol", 1: "satu", 2: "dua", 3: "tiga", 4: "empat",
+        5: "lima", 6: "enam", 7: "tujuh", 8: "delapan", 9: "sembilan",
+        10: "sepuluh", 11: "sebelas", 12: "dua belas",
+    }
+    numeric_suffix = (
+        r"(?:[.,:]" + f"{minute:02d}" + r")\b"
+        if minute
+        else r"(?:[.,:]00)?\b"
+    )
+    numeric = bool(re.search(
+        r"\bpukul\s+(?:0?" + re.escape(str(hour)) + r")" + numeric_suffix,
+        text,
+        re.I,
+    ))
+    if numeric:
+        return True
+    word = hour_words.get(hour, "")
+    if not word:
+        return False
+    if minute == 0:
+        return bool(re.search(r"\bpukul\s+" + re.escape(word) + r"\b", text, re.I))
+    if minute == 30:
+        next_word = hour_words.get((hour + 1) % 12, "")
+        return bool(
+            re.search(r"\bpukul\s+" + re.escape(word) + r"\s+(?:lewat\s+)?tiga\s+puluh\b", text, re.I)
+            or (next_word and re.search(r"\bpukul\s+setengah\s+" + re.escape(next_word) + r"\b", text, re.I))
+            or re.search(r"\bpukul\s+" + re.escape(word) + r"\s+setengah\b", text, re.I)
+        )
+    return False
+
+
+def _normalized_target_clauses(value: Any) -> list[str]:
+    """Keep relation checks inside their source-corresponding target clause."""
+    return [
+        clause
+        for clause in (
+            _norm(item)
+            for item in re.split(
+                r"(?:[\n\r!！?？;；]+|(?<!\d)\.(?!\d))",
+                str(value or ""),
+            )
+        )
+        if clause
+    ]
+
+
 def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[str]]:
     """Validate source roles and relations, not merely isolated keywords."""
     if not frame or not frame.get("active"):
@@ -2539,7 +3274,35 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     slots = frame.get("slots") or {}
     issues: list[str] = []
 
-    if frame.get("kind") == "id_zh_equipment_code_failure":
+    if frame.get("kind") == "id_zh_machine_oil_leak":
+        for code in slots.get("equipment_codes") or ():
+            if not re.search(
+                r"(?<![A-Za-z0-9])" + re.escape(str(code)) + r"(?![A-Za-z0-9])",
+                target,
+                re.I,
+            ):
+                issues.append("factory_message_semantics:oil_leak_equipment_code_missing")
+        if not any(term in target for term in ("機台", "机台", "機器", "机器", "設備", "设备")):
+            issues.append("factory_message_semantics:oil_leak_machine_actor_missing")
+        if not any(term in target for term in ("漏油", "滴油", "滲油", "渗油", "油滲漏", "油渗漏")):
+            issues.append("factory_message_semantics:machine_oil_leak_action_missing")
+        if any(term in target for term in ("汽油", "柴油")):
+            issues.append("factory_message_semantics:machine_oil_type_changed")
+
+    elif frame.get("kind") == "id_zh_night_shift_trash_omission":
+        if not any(term in target for term in ("晚班", "夜班")):
+            issues.append("factory_message_semantics:night_shift_actor_missing")
+        if not any(term in target for term in ("人員", "人员", "員工", "员工", "操作員", "操作员")):
+            issues.append("factory_message_semantics:night_shift_human_role_missing")
+        if not any(term in target for term in ("沒有", "没有", "沒", "没", "未", "還沒", "还没")):
+            issues.append("factory_message_semantics:trash_disposal_negation_missing")
+        if not (
+            any(term in target for term in ("垃圾", "廢棄物", "废弃物"))
+            and any(term in target for term in ("倒", "丟", "丢", "扔", "清運", "清运"))
+        ):
+            issues.append("factory_message_semantics:trash_disposal_action_missing")
+
+    elif frame.get("kind") == "id_zh_equipment_code_failure":
         for code in slots.get("equipment_codes") or ():
             if not re.search(
                 r"(?<![A-Za-z0-9])" + re.escape(str(code)) + r"(?![A-Za-z0-9])",
@@ -2614,6 +3377,238 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append(
                 "factory_message_semantics:ungrounded_trolley_function_added"
             )
+
+    elif frame.get("kind") == "zh_id_remaining_customer_orders":
+        low = _norm(target)
+        for name in slots.get("customer_names") or ():
+            if str(name) not in target:
+                issues.append(
+                    "factory_message_semantics:remaining_customer_name_missing:" + str(name)
+                )
+        if not _has_phrase(low, ("pesanan", "order", "work order")):
+            issues.append("factory_message_semantics:customer_order_metonymy_missing")
+        if not _has_phrase(low, ("tersisa", "tinggal", "belum selesai")):
+            issues.append("factory_message_semantics:remaining_order_state_missing")
+        if slots.get("has_packaging_instruction"):
+            if not (
+                _has_phrase(low, ("sistem",))
+                and _has_phrase(low, ("tertunda", "ditunda"))
+                and _has_phrase(low, ("catatan", "ditandai", "tercatat"))
+            ):
+                issues.append("factory_message_semantics:deferred_packaging_note_missing")
+            # Bare ``packaging`` in ``sistem packaging`` is a location/noun, not
+            # proof that the packaging action was preserved.
+            package_match = re.search(
+                r"\b(?:kemas|mengemas|dikemas|bungkus|membungkus|dibungkus)\b",
+                low,
+                re.I,
+            )
+            warehouse_match = re.search(
+                r"\b(?:masuk(?:kan)?|dimasukkan)\s+(?:ke\s+)?gudang\b|\bmasuk\s+gudang\b",
+                low,
+                re.I,
+            )
+            if not package_match:
+                issues.append("factory_message_semantics:deferred_packaging_action_missing")
+            if not warehouse_match:
+                issues.append("factory_message_semantics:deferred_warehouse_action_missing")
+            if package_match and warehouse_match and package_match.start() > warehouse_match.start():
+                issues.append("factory_message_semantics:package_warehouse_sequence_reversed")
+            if not _has_phrase(low, ("mohon", "tolong", "harap")):
+                issues.append("factory_message_semantics:packaging_help_request_missing")
+
+    elif frame.get("kind") == "zh_id_deferred_material_process_flow":
+        low = _norm(target)
+        clauses = _normalized_target_clauses(target)
+        if slots.get("urgent_nearly_done") and not (
+            _has_phrase(low, ("work order mendesak", "order mendesak"))
+            and _has_phrase(low, ("hampir selesai", "nyaris selesai"))
+            and _has_phrase(low, ("setelah", "sesudah"))
+        ):
+            issues.append("factory_message_semantics:urgent_order_timing_missing")
+        if not _has_phrase(low, ("material tertunda", "material yang tertunda")):
+            issues.append("factory_message_semantics:deferred_material_reference_missing")
+        if slots.get("request") and not _has_phrase(low, ("mohon", "tolong", "harap")):
+            issues.append("factory_message_semantics:deferred_handling_request_missing")
+        current_count = _format_id_release_count(
+            slots.get("current_count"), str(slots.get("current_count_raw") or "")
+        )
+        destination_count = _format_id_release_count(
+            slots.get("destination_count"), str(slots.get("destination_count_raw") or "")
+        )
+        if current_count and not _has_phrase(low, (current_count, str(slots.get("current_count")))):
+            issues.append("factory_message_semantics:current_bundle_count_missing")
+        if destination_count and not _has_phrase(low, (destination_count, str(slots.get("destination_count")))):
+            issues.append("factory_message_semantics:destination_bundle_count_missing")
+        current_process = str(slots.get("current_process_id") or "")
+        if current_process and not _has_phrase(low, (current_process, current_process.replace("bagian ", ""))):
+            issues.append("factory_message_semantics:current_bundle_process_missing")
+        destination_process = str(slots.get("destination_process_id") or "")
+        destination_name = destination_process.replace("bagian ", "")
+        current_count_pattern = "|".join(
+            re.escape(item)
+            for item in dict.fromkeys(
+                item for item in (current_count, str(slots.get("current_count") or "")) if item
+            )
+        )
+        destination_count_pattern = "|".join(
+            re.escape(item)
+            for item in dict.fromkeys(
+                item for item in (
+                    destination_count,
+                    str(slots.get("destination_count") or ""),
+                )
+                if item
+            )
+        )
+        current_name = current_process.replace("bagian ", "")
+        current_binding = bool(
+            current_count_pattern
+            and current_name
+            and any(
+                re.search(
+                    r"(?<![a-z0-9])(?:" + current_count_pattern + r")(?![a-z0-9])"
+                    r".{0,32}\b(?:bundel|ikat)\b.{0,48}"
+                    r"\b(?:berada|ada|sedang)\b.{0,40}"
+                    r"(?:bagian\s+|stasiun\s+)?" + re.escape(current_name) + r"\b",
+                    clause,
+                    re.I,
+                )
+                for clause in clauses
+            )
+        )
+        if not current_binding:
+            issues.append("factory_message_semantics:current_count_process_relation_missing")
+        movement_to_process = any(
+            re.search(
+                r"\b(?:dikirim|dialihkan|dipindahkan|dibawa|bergerak)\b",
+                clause,
+                re.I,
+            )
+            and re.search(
+                r"\b(?:ke|menuju)\s+(?:bagian\s+|stasiun\s+)?"
+                + re.escape(destination_name) + r"\b",
+                clause,
+                re.I,
+            )
+            for clause in clauses
+        )
+        if not movement_to_process:
+            issues.append("factory_message_semantics:process_destination_relation_missing")
+        destination_binding = bool(
+            destination_count_pattern
+            and destination_name
+            and any(
+                re.search(
+                    r"(?<![a-z0-9])(?:" + destination_count_pattern + r")(?![a-z0-9])"
+                    r".{0,32}\b(?:bundel|ikat)\b.{0,64}"
+                    r"\b(?:dikirim|dialihkan|dipindahkan|dibawa|bergerak)\b.{0,80}"
+                    r"\b(?:ke|menuju)\s+(?:bagian\s+|stasiun\s+)?"
+                    + re.escape(destination_name) + r"\b",
+                    clause,
+                    re.I,
+                )
+                for clause in clauses
+            )
+        )
+        if not destination_binding:
+            issues.append("factory_message_semantics:destination_count_process_relation_missing")
+        if not _has_phrase(low, ("secara bertahap", "bertahap", "berangsur-angsur")):
+            issues.append("factory_message_semantics:gradual_process_movement_missing")
+        if re.search(r"\b(?:dipoles|dipolish|dipoleskan)\b", low, re.I) and not movement_to_process:
+            issues.append("factory_message_semantics:process_destination_changed_to_passive_action")
+
+    elif frame.get("kind") == "zh_id_careless_action_speech_act":
+        low = _norm(target)
+        command_present = bool(re.search(
+            r"\b(?:jangan|dilarang|tidak\s+boleh)\b", low, re.I
+        ))
+        modality = str(slots.get("modality") or "")
+        if modality == "observed_complaint" and command_present:
+            issues.append("factory_message_semantics:statement_changed_to_prohibition")
+        elif modality == "prohibition" and not command_present:
+            issues.append("factory_message_semantics:prohibition_modality_missing")
+        action = str(slots.get("action") or "")
+        if action == "trash_disposal":
+            if not re.search(r"\b(?:buang|membuang|dibuang)\b", low, re.I):
+                issues.append("factory_message_semantics:careless_disposal_action_missing")
+            if not _has_phrase(low, ("sembarangan", "asal")):
+                issues.append("factory_message_semantics:careless_disposal_manner_missing")
+            if slots.get("after_drinking") and not re.search(
+                r"\bsetelah\s+(?:di)?minum\b|\bhabis\s+(?:di)?minum\b",
+                low,
+                re.I,
+            ):
+                issues.append("factory_message_semantics:after_drinking_relation_missing")
+        elif action == "short_material_handling":
+            if not (
+                _has_phrase(low, ("tidak ada", "tanpa"))
+                and _has_phrase(low, ("material pendek", "batang pendek"))
+            ):
+                issues.append("factory_message_semantics:no_short_material_state_missing")
+            if not (
+                _has_phrase(low, ("penanganan", "menangani"))
+                and _has_phrase(low, ("material pendek", "batang pendek"))
+            ):
+                issues.append("factory_message_semantics:short_material_handling_missing")
+            if not _has_phrase(low, ("sembarangan", "asal")):
+                issues.append("factory_message_semantics:careless_handling_manner_missing")
+            if _has_phrase(low, ("maintenance", "pemeliharaan mesin", "perawatan mesin")):
+                issues.append("factory_message_semantics:short_handling_changed_to_machine_maintenance")
+
+    elif frame.get("kind") == "zh_id_mes_operational_notice":
+        low = _norm(target)
+        clauses = _normalized_target_clauses(target)
+        if slots.get("monthly_order_priority") and not any(
+            _has_phrase(clause, ("semua stasiun", "setiap stasiun"))
+            and _has_phrase(clause, ("pesanan bulan ini", "order bulan ini"))
+            and _has_phrase(clause, ("prioritas", "prioritaskan", "memprioritaskan"))
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:monthly_order_station_priority_missing")
+        if slots.get("blue_background_attention") and not any(
+            _has_phrase(clause, ("biru",))
+            and _has_phrase(
+                clause,
+                ("perhatian khusus", "diperhatikan khusus", "perhatikan khusus"),
+            )
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:blue_order_attention_missing")
+        if slots.get("mes_stop") and not any(
+            _has_phrase(clause, ("sistem mes",))
+            and _has_phrase(clause, ("berhenti", "dihentikan", "tidak beroperasi"))
+            and _id_clock_present(clause, str(slots.get("mes_stop_time") or ""))
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:mes_stop_time_relation_missing")
+        if slots.get("change_data_deadline") and not any(
+            _has_phrase(clause, ("perubahan data", "data perubahan", "data yang diubah"))
+            and _has_phrase(clause, ("selesai", "diselesaikan", "dituntaskan"))
+            and _id_clock_present(
+                clause, str(slots.get("change_data_deadline_time") or "")
+            )
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:change_data_deadline_missing")
+        if slots.get("packaging_shipping_urgent") and not any(
+            _has_phrase(clause, ("work order mendesak", "order mendesak"))
+            and _has_phrase(clause, ("packing", "packaging", "pengemasan"))
+            and _has_phrase(clause, ("pengiriman", "dikirim"))
+            and _has_phrase(clause, ("prioritas", "prioritaskan", "diprioritaskan"))
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:packaging_shipping_urgent_priority_missing")
+        if slots.get("special_station_route") and not any(
+            _has_phrase(clause, ("stasiun packing barang bentuk khusus",))
+            and _has_phrase(clause, ("material", "bahan"))
+            and _has_phrase(
+                clause, ("dialihkan", "dipindahkan", "alihkan", "pindahkan")
+            )
+            and _has_phrase(clause, ("ke sini", "kemari"))
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:special_station_material_route_missing")
 
     elif frame.get("kind") == "zh_id_machine_guard_safety":
         low = _norm(target)
@@ -3344,7 +4339,20 @@ def build_prompt(frame: Mapping) -> str:
                 **claim
             )
         )
-    if frame.get("kind") == "id_zh_equipment_code_failure":
+    if frame.get("kind") == "id_zh_machine_oil_leak":
+        lines.append(
+            "This is a machine oil-leak report. Attach the I/E/BF code to the machine, "
+            "and render minyak/oli mesin + menetes/bocor as 機台漏油 or 機台滴油. "
+            "Do not reduce the event to a detached noun phrase such as 機油滴漏 that "
+            "loses the machine actor."
+        )
+    elif frame.get("kind") == "id_zh_night_shift_trash_omission":
+        lines.append(
+            "Orang/karyawan malam means night-shift personnel. Keep them as the human "
+            "actor and preserve the negation on the trash-disposal duty. Colloquial "
+            "malem/tida are malam/tidak; do not interpret them as names or omit them."
+        )
+    elif frame.get("kind") == "id_zh_equipment_code_failure":
         lines.append(
             "A source code such as I15 is an equipment/station identifier. Rusak predicates a "
             "functional machine failure: translate the linked claim as I15 機台故障, not as "
@@ -3397,6 +4405,39 @@ def build_prompt(frame: Mapping) -> str:
             "including timing, uncertainty, future, repeat movement and inspection purpose. For a "
             "compressed vehicle-workload clause, keep 'vehicles are many' separate from 'the ones "
             "not completed in time are deferred until tomorrow'."
+        )
+    elif frame.get("kind") == "zh_id_remaining_customer_orders":
+        lines.append(
+            "In a production list, 今天剩 + customer names is metonymy for the remaining "
+            "orders/material for those customers. Preserve every customer identifier exactly, "
+            "but make the omitted noun explicit as pesanan untuk; never say that the companies "
+            "themselves remain. For the packaging-system instruction, keep the marked-deferred "
+            "state and the ordered actions: package first, then put the material into the warehouse."
+        )
+    elif frame.get("kind") == "zh_id_deferred_material_process_flow":
+        lines.append(
+            "Counts with 把 are material bundles. In a clause shaped '三把會陸續拋光過去', "
+            "拋光 is the destination section and 過去 is movement: say that three bundles will "
+            "be sent gradually to bagian polishing. Do not turn the destination into the passive "
+            "action dipoles, do not add a shipment to a customer, and keep the current-location "
+            "bundles separate from the bundles that will move."
+        )
+    elif frame.get("kind") == "zh_id_careless_action_speech_act":
+        lines.append(
+            "Preserve the source speech act. Chinese 亂/隨便 + action without an explicit "
+            "不要/別/禁止 is an observation or complaint about careless conduct, not a new "
+            "prohibition; Indonesian must not add jangan/tidak boleh/dilarang. Only an explicit "
+            "source prohibition licenses jangan. In the short-material construction, 維護 means "
+            "penanganan material pendek, never generic machine maintenance."
+        )
+    elif frame.get("kind") == "zh_id_mes_operational_notice":
+        lines.append(
+            "Keep each operational instruction as a separate relation: all stations prioritize "
+            "this month's orders; blue-background orders receive special attention; MES stops "
+            "after the stated time; all data changes are completed by the stated time; packaging/"
+            "shipping urgent orders are prioritized; and material from the canonical Stasiun "
+            "packing barang bentuk khusus is diverted to the speaker's location. Never attach "
+            "packing to the wrong station or drop either time."
         )
     elif frame.get("kind") == "zh_id_production_backlog_priority":
         lines.append(
@@ -3538,6 +4579,56 @@ def health() -> dict:
     attendance_checker_source = "點名進來了"
     attendance_checker_target = "Petugas pengecekan kehadiran sudah masuk."
     attendance_checker_bad = "Absen sudah dimulai."
+    oil_leak_source = "i19 minyak mesin menetes"
+    oil_leak_target = "I19 機台漏油"
+    oil_leak = build_frame(oil_leak_source, "id", "zh")
+    night_trash_source = "Orang malem tida membuang sampah"
+    night_trash_target = "晚班人員沒有倒垃圾"
+    night_trash = build_frame(night_trash_source, "id", "zh")
+    customer_order_source = (
+        "今天剩柏緯、上銀、津展。"
+        "包裝系統備註遞延料再幫忙包裝入庫。"
+    )
+    customer_order_target = (
+        "Hari ini hanya tersisa pesanan untuk 柏緯, 上銀, dan 津展. "
+        "Untuk material yang ditandai tertunda di sistem packaging, "
+        "mohon bantu kemas lalu masukkan ke gudang."
+    )
+    customer_order = build_frame(customer_order_source, "zh", "id")
+    material_flow_source = (
+        "下午急單差不多後，這份上面的遞延料幫忙安排處理一下，"
+        "四把在包裝，三把會陸續拋光過去"
+    )
+    material_flow_target = (
+        "Setelah work order mendesak sore ini hampir selesai, mohon atur "
+        "penanganan material tertunda yang tercantum di atas. Empat bundel "
+        "berada di bagian packaging. Tiga bundel akan dikirim secara bertahap "
+        "ke bagian polishing."
+    )
+    material_flow = build_frame(material_flow_source, "zh", "id")
+    short_material_source = "沒短尺亂維護"
+    short_material_target = (
+        "Tidak ada material pendek, tetapi penanganan material pendek malah "
+        "dilakukan sembarangan."
+    )
+    short_material = build_frame(short_material_source, "zh", "id")
+    drink_source = "喝完亂丟"
+    drink_target = "Setelah diminum, malah dibuang sembarangan."
+    drink = build_frame(drink_source, "zh", "id")
+    mes_notice_source = (
+        "@All 各站優先生產本月份訂單，藍底特別注意。"
+        "今天五點後MES系統中止服務，所有的異動資料都在四點半左右完成。"
+        "包裝出貨急單再麻煩優先處理。異型站的料幫忙分流過來"
+    )
+    mes_notice_target = (
+        "@All Semua stasiun harus memprioritaskan produksi pesanan bulan ini; "
+        "pesanan berlatar biru perlu mendapat perhatian khusus. Hari ini, "
+        "setelah pukul 5.00, sistem MES akan berhenti beroperasi. Semua perubahan "
+        "data harus diselesaikan sekitar pukul 4.30. Mohon prioritaskan work order "
+        "mendesak untuk packaging dan pengiriman. Mohon alihkan material dari "
+        "Stasiun packing barang bentuk khusus ke sini."
+    )
+    mes_notice = build_frame(mes_notice_source, "zh", "id")
     controls = (
         build_frame("Sip, terima kasih.", "id", "zh"),
         build_frame("Selamat pagi, Pak.", "id", "zh"),
@@ -3561,6 +4652,11 @@ def health() -> dict:
         build_frame("處長說二股產量增加", "zh", "id"),
         build_frame("滑手機很傷眼", "zh", "id"),
         build_frame("再注意一下", "zh", "id"),
+        build_frame("今天剩蘋果、香蕉，晚餐吃掉", "zh", "id"),
+        build_frame("I19 minyak mesin baru diganti", "id", "zh"),
+        build_frame("Orang malam membuang sampah", "id", "zh"),
+        build_frame("沒短尺所以不用維護", "zh", "id"),
+        build_frame("四把在包裝，三把已經拋光完成", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -3708,6 +4804,79 @@ def health() -> dict:
             build_frame(attendance_checker_source, "zh", "id"),
             attendance_checker_bad,
         )[0] is False,
+        oil_leak.get("active") is True and oil_leak.get("complete") is True,
+        translate_source_directly(oil_leak_source, "id", "zh")
+        == oil_leak_target,
+        validate_translation(oil_leak, oil_leak_target)[0] is True,
+        validate_translation(oil_leak, "I19 機油滴漏")[0] is False,
+        night_trash.get("active") is True
+        and night_trash.get("complete") is True,
+        translate_source_directly(night_trash_source, "id", "zh")
+        == night_trash_target,
+        validate_translation(night_trash, night_trash_target)[0] is True,
+        customer_order.get("active") is True
+        and customer_order.get("complete") is True,
+        translate_source_directly(customer_order_source, "zh", "id")
+        == customer_order_target,
+        validate_translation(customer_order, customer_order_target)[0] is True,
+        validate_translation(
+            customer_order,
+            "Hari ini masih tersisa 柏緯、上銀、津展. Mohon bantu kemas lalu "
+            "masukkan ke gudang.",
+        )[0] is False,
+        material_flow.get("active") is True
+        and material_flow.get("complete") is True,
+        translate_source_directly(material_flow_source, "zh", "id")
+        == material_flow_target,
+        validate_translation(material_flow, material_flow_target)[0] is True,
+        validate_translation(
+            material_flow,
+            "Setelah work order mendesak hampir selesai, empat bundel berada di "
+            "packaging dan tiga bundel akan dipoles bertahap.",
+        )[0] is False,
+        short_material.get("active") is True
+        and short_material.get("complete") is True,
+        translate_source_directly(short_material_source, "zh", "id")
+        == short_material_target,
+        validate_translation(short_material, short_material_target)[0] is True,
+        validate_translation(
+            short_material,
+            "Tidak ada batang pendek, jangan melakukan maintenance sembarangan.",
+        )[0] is False,
+        drink.get("active") is True and drink.get("complete") is True,
+        translate_source_directly(drink_source, "zh", "id") == drink_target,
+        validate_translation(drink, drink_target)[0] is True,
+        validate_translation(
+            drink, "Setelah minum, jangan buang sembarangan."
+        )[0] is False,
+        mes_notice.get("active") is True and mes_notice.get("complete") is True,
+        translate_source_directly(mes_notice_source, "zh", "id")
+        == mes_notice_target,
+        validate_translation(mes_notice, mes_notice_target)[0] is True,
+        validate_translation(
+            mes_notice,
+            "@All Semua stasiun prioritaskan pesanan bulan ini. Sistem MES "
+            "berhenti pukul 4.30. Mohon prioritaskan bagian packing.",
+        )[0] is False,
+        validate_translation(
+            material_flow,
+            "Setelah work order mendesak sore ini hampir selesai, mohon atur "
+            "penanganan material tertunda yang tercantum di atas. Tiga bundel "
+            "berada di bagian packaging. Empat bundel akan dikirim secara "
+            "bertahap ke bagian polishing.",
+        )[0] is False,
+        validate_translation(
+            mes_notice,
+            "@All Semua stasiun harus memprioritaskan produksi pesanan bulan ini; "
+            "pesanan berlatar biru perlu mendapat perhatian khusus. Hari ini, "
+            "setelah pukul 4.30, sistem MES akan berhenti beroperasi. Semua "
+            "perubahan data harus diselesaikan sekitar pukul 5.00. Mohon "
+            "prioritaskan work order mendesak untuk packaging dan pengiriman. "
+            "Mohon alihkan material dari Stasiun packing barang bentuk khusus ke sini.",
+        )[0] is False,
+        translate_source_directly(
+            material_flow_source + "，明天停機保養", "zh", "id"
+        ) == "",
         all(not frame.get("active") for frame in controls),
     ]
     return {

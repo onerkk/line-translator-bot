@@ -153,10 +153,10 @@ def test_deployment_contract_requires_the_new_role_integrity_engine():
 
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-08-30.1-shopfloor-agent-roles"'
+        '"2026-08-31.1-operational-discourse-and-flow"'
     ) in app_source
     health = semantics.health()
-    assert health["build_id"] == "2026-08-30.1-shopfloor-agent-roles"
+    assert health["build_id"] == "2026-08-31.1-operational-discourse-and-flow"
     assert health["self_test"]["ok"] is True
     assert health["self_test"]["checks"] >= 42
     assert glossary["點名"]["canonical_idn"] == "pengecekan kehadiran"
