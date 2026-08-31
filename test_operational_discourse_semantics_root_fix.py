@@ -339,7 +339,7 @@ def test_deployment_contract_and_boot_self_test_are_release_locked():
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
     glossary = json.loads((ROOT / "glossary_data.json").read_text(encoding="utf-8"))
 
-    assert 'VERSION = "v3.48.0-operational-discourse-root-fix-2026-08-31"' in app_source
+    assert 'VERSION = "v3.48.1-admin-js-embedding-root-fix-2026-08-31"' in app_source
     assert "_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3" in app_source
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '

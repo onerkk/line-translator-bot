@@ -213,7 +213,7 @@ app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.48.0-operational-discourse-root-fix-2026-08-31"
+VERSION = "v3.48.1-admin-js-embedding-root-fix-2026-08-31"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -23790,7 +23790,22 @@ def build_quick_reply(group_id=None):
 
 # ─── Admin Panel ────────────────────────────────────────
 
-ADMIN_HTML = '''<!DOCTYPE html>
+
+def _json_for_inline_script(value):
+    """Serialize data for a script block without permitting HTML termination."""
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+# Keep the embedded HTML raw: JavaScript escapes such as \n must reach the
+# browser unchanged instead of being interpreted once by Python first.
+ADMIN_HTML = r'''<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
@@ -23920,7 +23935,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </div>
 <script>
 var _loginMode='super';
-var GCID='__GOOGLE_CLIENT_ID__';
+var GCID=__GOOGLE_CLIENT_ID_JSON__;
 function switchLoginMode(mode){
   _loginMode=mode;
   document.getElementById('superLoginFields').style.display=mode==='super'?'block':'none';
@@ -24159,7 +24174,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:15px">📚 印尼文範例詞庫更新</div>
 <div class="card-sub" style="margin-bottom:14px">上傳專有名詞對照表 Excel 自動更新印尼文範例詞庫（中文／印尼文／中文說明／印尼文說明）</div>
 <input type="file" id="glossaryFile" accept=".xlsx,.xls" style="display:none" onchange="previewGlossary()">
-<button class="btn btn-primary btn-sm" onclick="document.getElementById(\'glossaryFile\').click()">選擇 Excel 檔案</button>
+<button class="btn btn-primary btn-sm" onclick="document.getElementById('glossaryFile').click()">選擇 Excel 檔案</button>
 <div id="glossaryFileName" style="margin-top:8px;font-size:13px;color:#8a8a9a"></div>
 </div>
 <div id="glossaryPreview"></div>
@@ -25587,9 +25602,14 @@ Vision call 會依模型能力自動切換 <code>max_completion_tokens</code> / 
 
 <script>
 window.onerror=function(msg,url,line,col,err){
-  document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\\n'+msg+'\\nLine: '+line+'\\nCol: '+col+'</div>';
+  document.body.innerHTML='<div style="color:red;font:16px monospace;padding:20px;white-space:pre-wrap">JS ERROR:\n'+msg+'\nLine: '+line+'\nCol: '+col+'</div>';
   return false;
 };
+// Keep worker refresh independent from the large application script. If that
+// script ever fails to parse, this small bootstrap can still retire stale HTML.
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=62').catch(function(){})}
+</script>
+<script>
 var KEY=window._ADMIN_KEY||'';
 var API=window.location.origin+'/api/admin';
 
@@ -25635,14 +25655,14 @@ var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','p
 // v3.9.39 Phase G: 業界全面技術儀表板 JS
 // ═════════════════════════════════════════════════════════════════
 async function enableAllRecommended(){
-  if(!confirm('一鍵啟用所有 phase 建議設定?\\n\\n會配置:\\n- Phase H 改 auto_fix(LLM 自動修術語)\\n- Phase D/E/N/Q 全部啟用\\n- 配置會持久化,重啟不還原')) return;
+  if(!confirm('一鍵啟用所有 phase 建議設定?\n\n會配置:\n- Phase H 改 auto_fix(LLM 自動修術語)\n- Phase D/E/N/Q 全部啟用\n- 配置會持久化,重啟不還原')) return;
   try {
     const r = await fetch('/api/admin/all-phases/enable-recommended', {
       method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}
     });
     const data = await r.json();
     if(data.ok){
-      alert('✓ '+data.message+'\\n\\n建議再到 Render Dashboard 加 rapidfuzz 跟 GOOGLE_TRANSLATE_API_KEY,效益更大');
+      alert('✓ '+data.message+'\n\n建議再到 Render Dashboard 加 rapidfuzz 跟 GOOGLE_TRANSLATE_API_KEY,效益更大');
       dashLoadStats();
     } else {
       alert('✗ '+(data.error||'失敗'));
@@ -25827,7 +25847,7 @@ async function ldTestDetect(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const r2 = data.result;
-    alert('偵測結果:\\n語言: '+r2.primary+'\\n信心: '+r2.confidence+'\\n混合: '+r2.is_mixed+'\\nblocks: '+JSON.stringify(r2.block_ratios));
+    alert('偵測結果:\n語言: '+r2.primary+'\n信心: '+r2.confidence+'\n混合: '+r2.is_mixed+'\nblocks: '+JSON.stringify(r2.block_ratios));
   } catch(err) { alert('✗ '+err.message); }
 }
 
@@ -25846,7 +25866,7 @@ async function csSetConfig(){
 
 async function geSetConfig(){
   const enabled = confirm('啟用 Glossary Enforcement?(取消 = 停用)');
-  const action = prompt('Action 模式:warn(只警告)/ auto_fix(LLM 修正)/ block(嚴重時加 ⚠️ 前綴)\\n預設 warn:', 'warn');
+  const action = prompt('Action 模式:warn(只警告)/ auto_fix(LLM 修正)/ block(嚴重時加 ⚠️ 前綴)\n預設 warn:', 'warn');
   if(action === null) return;
   try {
     const r = await fetch('/api/admin/ge/config', {
@@ -25868,9 +25888,9 @@ async function concordanceSearch(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'失敗')); return; }
     if(!data.results.length){ alert('沒找到匹配「'+phrase+'」的 TM 條目'); return; }
-    let msg = '找到 '+data.count+' 筆:\\n\\n';
+    let msg = '找到 '+data.count+' 筆:\n\n';
     for(const r of data.results.slice(0,10)){
-      msg += '['+r.matched_side+'] '+r.src_context+' → '+r.tgt_context+' (hits='+r.hit_count+')\\n\\n';
+      msg += '['+r.matched_side+'] '+r.src_context+' → '+r.tgt_context+' (hits='+r.hit_count+')\n\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -25882,10 +25902,10 @@ async function batchListJobs(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.jobs.length){ alert('沒有 batch jobs'); return; }
-    let msg = '最近 '+data.count+' 個 batch jobs:\\n\\n';
+    let msg = '最近 '+data.count+' 個 batch jobs:\n\n';
     for(const j of data.jobs){
       const ts = new Date(j.submitted_at*1000).toLocaleString();
-      msg += j.job_id+' | '+j.provider+' | tasks='+j.task_count+' | status='+(j.status||'?')+'\\n  submitted '+ts+'\\n\\n';
+      msg += j.job_id+' | '+j.provider+' | tasks='+j.task_count+' | status='+(j.status||'?')+'\n  submitted '+ts+'\n\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -25944,10 +25964,10 @@ async function alListCorrections(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.results.length){ alert('沒有人工修正紀錄'); return; }
-    let msg = '最近 '+data.count+' 筆修正:\\n\\n';
+    let msg = '最近 '+data.count+' 筆修正:\n\n';
     for(const r of data.results.slice(0,10)){
       const ts = new Date(r.created_at*1000).toLocaleString();
-      msg += '#'+r.id+' ['+(r.status||'approved')+'] '+ts+' by '+(r.corrected_by||'?')+'\\n  原:'+r.original_translation+'\\n  正:'+r.corrected_translation+'\\n  ('+(r.correction_reason||'無原因')+')\\n\\n';
+      msg += '#'+r.id+' ['+(r.status||'approved')+'] '+ts+' by '+(r.corrected_by||'?')+'\n  原:'+r.original_translation+'\n  正:'+r.corrected_translation+'\n  ('+(r.correction_reason||'無原因')+')\n\n';
     }
     alert(msg);
   } catch(err) { alert('✗ '+err.message); }
@@ -25960,9 +25980,9 @@ async function alReviewPending(action){
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.results.length){ alert('目前沒有待審修正'); return; }
     const summary = data.results.slice(0,12).map(x =>
-      '#'+x.id+' '+x.src_lang+'→'+x.tgt_lang+'\\n原文：'+x.src_text+'\\n修正：'+x.corrected_translation
-    ).join('\\n\\n');
-    const idRaw = prompt((action==='approve'?'核准':'駁回')+'哪一筆？請輸入 ID：\\n\\n'+summary, '');
+      '#'+x.id+' '+x.src_lang+'→'+x.tgt_lang+'\n原文：'+x.src_text+'\n修正：'+x.corrected_translation
+    ).join('\n\n');
+    const idRaw = prompt((action==='approve'?'核准':'駁回')+'哪一筆？請輸入 ID：\n\n'+summary, '');
     if(!idRaw) return;
     const id = parseInt(idRaw, 10);
     if(!Number.isInteger(id) || !data.results.some(x=>x.id===id)){ alert('ID 不在待審清單'); return; }
@@ -25991,8 +26011,8 @@ async function maintDedup(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('去重 ('+(res.dry_run?'dry_run':'實際執行')+'):\\n找到 '+res.found_dupes+' 條重複\\n已刪除 '+res.removed+' 條\\n'+
-          (res.details && res.details.length ? '\\n前 3 個例子:\\n' + res.details.slice(0,3).map(d=>'  '+d.src_text+' → 留下「'+d.kept_tgt+'」,刪 '+d.loser_count+' 條').join('\\n') : ''));
+    alert('去重 ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found_dupes+' 條重複\n已刪除 '+res.removed+' 條\n'+
+          (res.details && res.details.length ? '\n前 3 個例子:\n' + res.details.slice(0,3).map(d=>'  '+d.src_text+' → 留下「'+d.kept_tgt+'」,刪 '+d.loser_count+' 條').join('\n') : ''));
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -26002,7 +26022,7 @@ async function maintPrune(){
   if(days === null) return;
   const min_hits = prompt('Prune:hit_count <= 多少才刪?(預設 1)', '1');
   if(min_hits === null) return;
-  const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\\n注意:human_corrected 永遠保留');
+  const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\n注意:human_corrected 永遠保留');
   try {
     const r = await fetch('/api/admin/tm-maint/prune', {
       method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
@@ -26014,7 +26034,7 @@ async function maintPrune(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('Prune ('+(res.dry_run?'dry_run':'實際執行')+'):\\n找到 '+res.found+' 條符合條件\\n已刪除 '+res.removed+' 條');
+    alert('Prune ('+(res.dry_run?'dry_run':'實際執行')+'):\n找到 '+res.found+' 條符合條件\n已刪除 '+res.removed+' 條');
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -26024,7 +26044,7 @@ async function maintDecay(){
   if(days === null) return;
   const factor = prompt('衰減 factor(0-1,預設 0.9 = quality_score × 0.9):', '0.9');
   if(factor === null) return;
-  const real = confirm('Quality decay:確定執行?(取消 = dry_run)\\n注意:human_corrected 不衰減');
+  const real = confirm('Quality decay:確定執行?(取消 = dry_run)\n注意:human_corrected 不衰減');
   try {
     const r = await fetch('/api/admin/tm-maint/decay', {
       method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
@@ -26035,7 +26055,7 @@ async function maintDecay(){
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     const res = data.result;
-    alert('Decay ('+(res.dry_run?'dry_run':'實際執行')+'):\\n影響 '+res.affected+' 條 entries\\nfactor: '+res.factor);
+    alert('Decay ('+(res.dry_run?'dry_run':'實際執行')+'):\n影響 '+res.affected+' 條 entries\nfactor: '+res.factor);
     dashLoadStats();
   } catch(err) { alert('✗ '+err.message); }
 }
@@ -26368,11 +26388,11 @@ async function aipCountTokens(){
       const tw = cost * 31; // USD → TWD
       box.style.color = '#10b981';
       box.textContent =
-        '💰 成本估算(基準 prompt + glossary)\\n\\n' +
-        '模型:' + data.result.model + '\\n' +
-        'Input tokens:' + data.result.input_tokens + '\\n' +
-        '單次 input 成本:US$' + cost.toFixed(6) + ' (~NT$' + tw.toFixed(4) + ')\\n\\n' +
-        '💡 一千次 LINE 翻譯 input 成本約 NT$' + (tw * 1000).toFixed(2) + '\\n' +
+        '💰 成本估算(基準 prompt + glossary)\n\n' +
+        '模型:' + data.result.model + '\n' +
+        'Input tokens:' + data.result.input_tokens + '\n' +
+        '單次 input 成本:US$' + cost.toFixed(6) + ' (~NT$' + tw.toFixed(4) + ')\n\n' +
+        '💡 一千次 LINE 翻譯 input 成本約 NT$' + (tw * 1000).toFixed(2) + '\n' +
         '(不含 output、不含 cache 折扣;有 cache 命中時實際更低)';
     }else{
       box.style.color = '#ef4444';
@@ -26386,7 +26406,7 @@ async function aipCountTokens(){
 
 // D3 Phase 17: 上傳 Glossary 到 Anthropic Files API
 async function aipUploadGlossary(){
-  if(!confirm('把 232 條工廠 glossary 上傳到 Anthropic Files API?\\n\\n上傳後 messages 內可只引用 file_id,不用每次重傳。\\n上傳後請開「Files API Glossary」toggle 才會啟用。'))return;
+  if(!confirm('把 232 條工廠 glossary 上傳到 Anthropic Files API?\n\n上傳後 messages 內可只引用 file_id,不用每次重傳。\n上傳後請開「Files API Glossary」toggle 才會啟用。'))return;
   const box = document.getElementById('aip-tools-result');
   box.style.display = 'block';
   box.style.color = '#aaa';
@@ -26400,7 +26420,7 @@ async function aipUploadGlossary(){
     const data = await r.json();
     if(data.ok){
       box.style.color = '#10b981';
-      box.textContent = '✅ ' + (data.message || '上傳成功') + '\\n\\nfile_id: ' + (data.file_id || '?');
+      box.textContent = '✅ ' + (data.message || '上傳成功') + '\n\nfile_id: ' + (data.file_id || '?');
       // 同步更新狀態顯示
       const stEl = document.getElementById('aip-files-status');
       if(stEl) stEl.textContent = '已上傳:' + (data.file_id || '');
@@ -26415,7 +26435,7 @@ async function aipUploadGlossary(){
   }
 }
 async function aipSwitchProvider(p){
-  if(!confirm('確定切換到 ' + p.toUpperCase() + '?\\n下次翻譯請求立即用新 provider。')) return;
+  if(!confirm('確定切換到 ' + p.toUpperCase() + '?\n下次翻譯請求立即用新 provider。')) return;
   try{
     const r = await fetch('/api/admin/ai-provider/switch', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p})});
     const data = await r.json();
@@ -26474,7 +26494,7 @@ async function setupRichMenu(){
   try{
     const r = await fetch('/api/admin/richmenu/setup', {method:'POST', headers:{'X-Admin-Key':KEY}});
     const d = await r.json();
-    el.textContent = d.ok ? ('✅ 完成!\\n' + (d.steps||[]).join('\\n')) : ('❌ 失敗: ' + (d.error||'') + '\\n' + (d.steps||[]).join('\\n'));
+    el.textContent = d.ok ? ('✅ 完成!\n' + (d.steps||[]).join('\n')) : ('❌ 失敗: ' + (d.error||'') + '\n' + (d.steps||[]).join('\n'));
   }catch(e){ el.textContent='❌ ' + e; }
 }
 async function aipTestProvider(){
@@ -26487,33 +26507,33 @@ async function aipTestProvider(){
     const data = await r.json();
     if(data.ok){
       box.style.color = '#10b981';
-      let txt = '✅ 測試成功\\n\\n';
-      txt += 'Provider:' + data.provider + '\\n';
-      txt += '模型:' + (data.model_used || '?') + '\\n\\n';
-      txt += '翻譯結果:\\n' + (data.result || '(空)') + '\\n\\n';
+      let txt = '✅ 測試成功\n\n';
+      txt += 'Provider:' + data.provider + '\n';
+      txt += '模型:' + (data.model_used || '?') + '\n\n';
+      txt += '翻譯結果:\n' + (data.result || '(空)') + '\n\n';
       const u = data.usage || {};
       txt += '用量:input=' + (u.input||0) + ' / output=' + (u.output||0) + ' tokens';
       if (u.cache_read || u.cache_creation) {
-        txt += '\\n  cache讀=' + (u.cache_read||0) + ' / cache寫=' + (u.cache_creation||0);
+        txt += '\n  cache讀=' + (u.cache_read||0) + ' / cache寫=' + (u.cache_creation||0);
       }
       // v3.0: 顯示實際啟用的 Claude 能力
       if (data.claude_features_used) {
         const f = data.claude_features_used;
-        txt += '\\n\\n🎯 這次用了的 Claude 能力:';
-        if (f.caching) txt += '\\n  ✅ Prompt Caching' + (f.caching_1h ? ' (1h TTL)' : '');
+        txt += '\n\n🎯 這次用了的 Claude 能力:';
+        if (f.caching) txt += '\n  ✅ Prompt Caching' + (f.caching_1h ? ' (1h TTL)' : '');
         if (f.thinking) {
           // v3.2 D4: 顯示 adaptive/legacy 模式
           const modeStr = f.thinking_mode || 'unknown';
-          txt += '\\n  ✅ Extended Thinking [' + modeStr + ']';
+          txt += '\n  ✅ Extended Thinking [' + modeStr + ']';
         }
-        if (f.grounding) txt += '\\n  ✅ Glossary Grounding (' + (f.grounding_terms_count||0) + ' 條術語)';
-        if (f.stop_sequences) txt += '\\n  ✅ Stop Sequences';
-        if (f.xml_system) txt += '\\n  ✅ XML System Prompt';
-        if (f.citations) txt += '\\n  ✅ Citations (' + (f.citation_count||0) + ' 條引用)';
+        if (f.grounding) txt += '\n  ✅ Glossary Grounding (' + (f.grounding_terms_count||0) + ' 條術語)';
+        if (f.stop_sequences) txt += '\n  ✅ Stop Sequences';
+        if (f.xml_system) txt += '\n  ✅ XML System Prompt';
+        if (f.citations) txt += '\n  ✅ Citations (' + (f.citation_count||0) + ' 條引用)';
         // v3.2.3 D7 Phase 20+21: LINE 純文字模式 / OCR 保版面
-        if (f.line_plain_text_mode) txt += '\\n  ✅ LINE 純文字模式(防 markdown 廢字元)';
+        if (f.line_plain_text_mode) txt += '\n  ✅ LINE 純文字模式(防 markdown 廢字元)';
         if (f.has_visual_input) {
-          txt += '\\n  📷 偵測到圖片/PDF';
+          txt += '\n  📷 偵測到圖片/PDF';
           if (f.ocr_strict_layout_applied) txt += ' → ✅ OCR 嚴格保版面已套用';
         }
         // v3.2 D4 Phase 15: cache 門檻診斷(看有沒有 silent fail)
@@ -26521,17 +26541,17 @@ async function aipTestProvider(){
           const passed = f.cache_above_threshold;
           const sym = passed ? '✅' : '⚠️';
           const note = passed ? '達門檻' : '⚠️ 未達門檻,cache 不會寫入(silent fail)';
-          txt += '\\n\\n📐 Cache 門檻診斷:';
-          txt += '\\n  ' + sym + ' system 估 ' + f.cache_est_tokens + ' tokens / 門檻 ' + f.cache_threshold_tokens + ' tokens — ' + note;
+          txt += '\n\n📐 Cache 門檻診斷:';
+          txt += '\n  ' + sym + ' system 估 ' + f.cache_est_tokens + ' tokens / 門檻 ' + f.cache_threshold_tokens + ' tokens — ' + note;
         }
       }
       if (data.citations && data.citations.length) {
-        txt += '\\n\\n📖 引用了的工廠術語:\\n  • ' + data.citations.join('\\n  • ');
+        txt += '\n\n📖 引用了的工廠術語:\n  • ' + data.citations.join('\n  • ');
       }
       box.textContent = txt;
     }else{
       box.style.color = '#ef4444';
-      box.textContent = '❌ 測試失敗\\n\\n' + (data.error || '未知錯誤');
+      box.textContent = '❌ 測試失敗\n\n' + (data.error || '未知錯誤');
     }
   }catch(e){
     box.style.color = '#ef4444';
@@ -26570,7 +26590,7 @@ async function aipSaveClaudeDualModels(){
   if (!dd || !du) return;
   const md = dd.value, mu = du.value;
   if (md === mu) {
-    if (!confirm('短訊息和長訊息選了同一個 model:' + md + '\\n\\n字數切換等同失效,確定?')) return;
+    if (!confirm('短訊息和長訊息選了同一個 model:' + md + '\n\n字數切換等同失效,確定?')) return;
   }
   try {
     const data = await api('/features', 'POST', {
@@ -26578,8 +26598,8 @@ async function aipSaveClaudeDualModels(){
       claude_model_upgrade: mu,
     });
     if (data && data.ok) {
-      alert('✅ Claude 雙模型已儲存\\n短訊息→' + md.replace('claude-','').replace('-20251001','') + 
-            '\\n長訊息→' + mu.replace('claude-','').replace('-20251001',''));
+      alert('✅ Claude 雙模型已儲存\n短訊息→' + md.replace('claude-','').replace('-20251001','') + 
+            '\n長訊息→' + mu.replace('claude-','').replace('-20251001',''));
     } else {
       alert('❌ 儲存失敗');
     }
@@ -26595,7 +26615,7 @@ async function aipSaveGeminiConfig(){
   const ge = document.getElementById('aip-gemini-effort');
   if(!gd || !gu || !ge) return;
   if(gd.value === gu.value){
-    if(!confirm('短訊息和長訊息選了同一個 model:' + gd.value + '\\n\\n字數切換等同失效,確定?')) return;
+    if(!confirm('短訊息和長訊息選了同一個 model:' + gd.value + '\n\n字數切換等同失效,確定?')) return;
   }
   try{
     const r = await fetch('/api/admin/ai-provider/gemini-config', {
@@ -26604,8 +26624,8 @@ async function aipSaveGeminiConfig(){
     });
     const data = await r.json();
     if(data.ok){
-      alert('✅ Gemini 設定已儲存\\n短訊息→' + gd.value.replace('gemini-','') +
-            '\\n長訊息→' + gu.value.replace('gemini-','') + '\\nReasoning→' + ge.value);
+      alert('✅ Gemini 設定已儲存\n短訊息→' + gd.value.replace('gemini-','') +
+            '\n長訊息→' + gu.value.replace('gemini-','') + '\nReasoning→' + ge.value);
       aipLoadStatus();
     }else alert('❌ ' + (data.message || '儲存失敗'));
   }catch(e){ alert('網路錯誤:' + e); }
@@ -26639,7 +26659,7 @@ async function aipUpdateAnthropicModel(){
   const sel = document.getElementById('aip-anthropic-model');
   if (!sel) return;
   const newModel = sel.value;
-  if (!confirm('套用 Anthropic 模型:' + newModel + '\\n\\n所有 LINE bot 翻譯都會走這個模型(不管 OpenAI tab 內怎麼設)。\\n確定?')) return;
+  if (!confirm('套用 Anthropic 模型:' + newModel + '\n\n所有 LINE bot 翻譯都會走這個模型(不管 OpenAI tab 內怎麼設)。\n確定?')) return;
   try {
     // 先取目前完整 mapping
     const cur = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}}).then(r=>r.json());
@@ -26661,7 +26681,7 @@ async function aipUpdateAnthropicModel(){
     });
     const data = await r.json();
     if (data.ok) {
-      alert('✅ 模型已套用:' + newModel + '\\n\\n所有 LINE bot 翻譯(主翻譯/OCR/修補/輔助)都會用這個 Claude 模型。');
+      alert('✅ 模型已套用:' + newModel + '\n\n所有 LINE bot 翻譯(主翻譯/OCR/修補/輔助)都會用這個 Claude 模型。');
       aipLoadStatus();
     } else {
       alert('❌ ' + (data.message || '套用失敗'));
@@ -28138,7 +28158,7 @@ async function doImport(){
   var text=document.getElementById('importText').value;
   var resEl=document.getElementById('importResult');
   if(!text.trim()){resEl.innerHTML='<span style="color:#f04747">請輸入資料</span>';return}
-  var lines=text.replace(/\\r/g,'').split('\\n');
+  var lines=text.replace(/\r/g,'').split('\n');
   var added=0, skipped=0, errors=0;
   for(var i=0;i<lines.length;i++){
     var line=lines[i].trim();
@@ -28179,9 +28199,9 @@ function downloadCsv(){
       var s=String(c).replace(/"/g,'""');
       return '"'+s+'"';
     }).join(',');
-  }).join('\\n');
+  }).join('\n');
   // Add UTF-8 BOM so Excel opens it correctly
-  var blob=new Blob(['\\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  var blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url;
@@ -29331,17 +29351,17 @@ window.addEventListener('load',function(){
   var k=localStorage.getItem('bot_admin_key');
   if(k){document.getElementById('pwInput').value=k;doLogin()}
 });
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js?v=61').catch(function(){})}
 </script>
 </body>
 </html>'''
 
 
-SW_JS = '''const CACHE='bot-admin-v58';
-const URLS=['/admin'];
-self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(URLS)))});
-self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
-self.addEventListener('fetch',e=>{const u=e.request.url;if(u.includes('/api/')||u.includes('/health')){e.respondWith(fetch(e.request));return}e.respondWith(fetch(e.request).then(r=>{if(r.ok){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c))}return r}).catch(()=>caches.match(e.request)))});'''
+# The admin console is operational software, not an offline document. A stale
+# cached HTML shell can keep a repaired JavaScript bundle broken indefinitely,
+# so the worker only removes legacy caches and never intercepts requests.
+SW_JS = r'''const CACHE_PREFIX='bot-admin-';
+self.addEventListener('install',e=>{self.skipWaiting()});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith(CACHE_PREFIX)).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});'''
 
 MANIFEST_JSON = json.dumps({
     "name": "翻譯Bot 管理後台",
@@ -31925,7 +31945,10 @@ def api_admin_dashboard_stats():
 
 @app.route("/admin")
 def admin_page():
-    html = ADMIN_HTML.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID)
+    html = ADMIN_HTML.replace(
+        "__GOOGLE_CLIENT_ID_JSON__",
+        _json_for_inline_script(GOOGLE_CLIENT_ID),
+    )
     resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -31935,7 +31958,7 @@ def admin_page():
 @app.route("/debug")
 def debug_page():
     """Minimal debug page - no SW, no cache."""
-    html = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    html = r'''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Debug</title>
 <style>body{background:#000;color:#0f0;font:13px monospace;padding:12px}input,button{font:14px sans-serif;padding:8px 12px;margin:4px;border-radius:6px;border:1px solid #555}input{background:#111;color:#fff;width:200px}button{background:#7c6fef;color:#fff;border:none;cursor:pointer}#log{white-space:pre-wrap;margin-top:12px}</style>
 </head><body>
@@ -31946,11 +31969,12 @@ def debug_page():
 <button onclick="testHealth()">Health</button>
 <button onclick="clearSW()">清除SW快取</button>
 </div>
-<div id="log">等待操作...\n</div>
+<div id="log">等待操作...
+</div>
 <script>
 const L=document.getElementById('log');
 const API=window.location.origin+'/api/admin';
-function log(s){L.textContent+=new Date().toLocaleTimeString()+' '+s+'\\n';L.scrollTop=L.scrollHeight}
+function log(s){L.textContent+=new Date().toLocaleTimeString()+' '+s+'\n';L.scrollTop=L.scrollHeight}
 
 async function testHealth(){
   log('>>> GET /health');
@@ -32125,7 +32149,7 @@ def api_admin_google_config():
 @app.route("/google-test")
 def google_test_page():
     """Visual test page for Google Sign In."""
-    html = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    html = r"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Google Test</title><script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>body{font-family:sans-serif;padding:20px;background:#111;color:#eee}
 pre{background:#000;padding:10px;border-radius:6px;word-break:break-all;white-space:pre-wrap;font-size:12px}
@@ -32138,11 +32162,11 @@ pre{background:#000;padding:10px;border-radius:6px;word-break:break-all;white-sp
 <h3>Result:</h3>
 <pre id="result">waiting...</pre>
 <script>
-var CID='""" + GOOGLE_CLIENT_ID + """';
+var CID=__GOOGLE_CLIENT_ID_JSON__;
 document.getElementById('cid').textContent=CID;
 document.getElementById('cidlen').textContent=CID.length;
 function handle(response){
-  document.getElementById('result').textContent='SUCCESS!\\ncredential length: '+response.credential.length;
+  document.getElementById('result').textContent='SUCCESS!\ncredential length: '+response.credential.length;
 }
 function init(){
   if(typeof google==='undefined'||!google.accounts){setTimeout(init,500);return}
@@ -32154,6 +32178,10 @@ function init(){
 }
 document.addEventListener('DOMContentLoaded',init);
 </script></body></html>"""
+    html = html.replace(
+        "__GOOGLE_CLIENT_ID_JSON__",
+        _json_for_inline_script(GOOGLE_CLIENT_ID),
+    )
     return app.response_class(html, mimetype="text/html")
 
 
@@ -34461,7 +34489,7 @@ def api_admin_richmenu_alias_detail(alias_id):
 # ─── LIFF Form System ─────────────────────────────────────
 # ═══════════════════════════════════════════════════════════
 
-LIFF_FORM_HTML = """<!DOCTYPE html>
+LIFF_FORM_HTML = r"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
@@ -34507,7 +34535,7 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 <div class="loading" id="loadingBox">載入中 Loading...</div>
 </div>
 <script>
-var LIFF_ID='""" + LIFF_ID + """';
+var LIFF_ID=__LIFF_ID_JSON__;
 var API_BASE=location.origin;
 var currentUser=null;
 var formId=null;
@@ -34621,7 +34649,7 @@ async function submitForm(){
       if(f.type==='checkbox'){val=el.checked?'yes':'no'}
       else{val=el.value.trim()}
       if(f.required && !val && f.type!=='checkbox'){
-        alert('請填寫: '+f.label_zh+'\\nHarap isi: '+f.label_id);
+        alert('請填寫: '+f.label_zh+'\nHarap isi: '+f.label_id);
         btn.disabled=false;btn.textContent='提交 Kirim';return;
       }
       answers[f.id]=val;
@@ -34650,7 +34678,11 @@ document.addEventListener('DOMContentLoaded',initLiff);
 
 @app.route("/liff/form")
 def liff_form_page():
-    resp = app.response_class(LIFF_FORM_HTML, mimetype="text/html")
+    html = LIFF_FORM_HTML.replace(
+        "__LIFF_ID_JSON__",
+        _json_for_inline_script(LIFF_ID),
+    )
+    resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
 
