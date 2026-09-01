@@ -178,7 +178,7 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
             f'_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "{expected}"',
             app_source,
         )
-        quality_build = "2026-08-29.1-compact-factory-unit-codes"
+        quality_build = "2026-09-01.1-contextual-factory-identifiers"
         self.assertEqual(quality_gate.QUALITY_GATE_BUILD_ID, quality_build)
         self.assertIn(
             f'_EXPECTED_QG_BUILD_ID = "{quality_build}"', app_source

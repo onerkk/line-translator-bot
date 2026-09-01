@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-08-29.1-compact-factory-unit-codes"
+QUALITY_GATE_BUILD_ID = "2026-09-01.1-contextual-factory-identifiers"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -95,6 +95,55 @@ _TECH_TOKEN_RE = re.compile(
     r'(?:\d+(?:[.,]\d+)?\s*(?:mm|cm|kg|g|t|%|°C|℃))|'
     rf'(?:{_KNOWN_TECH_ACRONYM_PATTERN})'
     r')(?![A-Za-z0-9_])'
+)
+
+# A bare alphabetic token is ambiguous in isolation: ``FA`` may be a material
+# code, while ``DAN``/``BOLEH`` are ordinary Indonesian words that still need
+# translation.  Treat it as immutable only when the author explicitly labels
+# it as a code.  The same source-grounded rule covers Indonesian, English and
+# Chinese and extends across a compact code list such as
+# ``kode A3, A4, A8, dan FA`` / ``代碼 A3、A4、A8 及 FA``.
+_EXPLICIT_CODE_ATOM = r'[A-Z](?:[A-Z0-9._/+:%×x-]{0,22}[A-Z0-9])?'
+_EXPLICIT_CODE_LIST_RE = re.compile(
+    r'(?P<prefix>'
+    r'(?:(?<![A-Za-z])(?i:nomor\s+kode|kode|codes?|code)(?![A-Za-z])|'
+    r'代碼|代码|編號|编号)'
+    r'\s*(?:(?i:adalah|yaitu|ialah|is)\s+|[為为是]\s*)?(?:[:：=#]\s*)?'
+    r')'
+    rf'(?P<values>{_EXPLICIT_CODE_ATOM}'
+    rf'(?:\s*(?:(?:[,，、;/／&+])\s*(?:(?i:dan|and|atau|or)\s+)?|'
+    rf'(?:(?i:dan|and|atau|or)\s+)|[及和與与]){_EXPLICIT_CODE_ATOM})*)'
+)
+_EXPLICIT_CODE_VALUE_RE = re.compile(
+    r'(?<![A-Za-z0-9_])' + _EXPLICIT_CODE_ATOM + r'(?![A-Za-z0-9_])'
+)
+
+# Pure numbers are normally quantities and must remain available for ordinary
+# translation.  In a labelled factory identifier position, however, they are
+# data: ``jenis 310`` and ``tempat pembuangan 316`` are type/location IDs, not
+# the number of items.  Recognize the label on either side so the reverse
+# Chinese→Indonesian route receives the same protection (for example
+# ``316廢棄區``).
+_CONTEXTUAL_NUMERIC_ATOM = r'\d(?:[\d._/-]{0,22}\d)?'
+_CONTEXTUAL_NUMERIC_PREFIX_RE = re.compile(
+    r'(?P<prefix>'
+    r'(?:(?<![A-Za-z])(?i:'
+    r'jenis(?:\s+barang)?|tipe|type|'
+    r'tempat\s+pembuangan|lokasi\s+pembuangan|area\s+pembuangan|'
+    r'disposal\s+(?:area|bin|location)|stasiun|station'
+    r')(?![A-Za-z])|'
+    r'種類|种类|類型|类型|型別|型别|'
+    r'廢棄區|废弃区|丟棄區|丢弃区|處置區|处置区|站別|站别|站)'
+    r'\s*(?:(?i:nomor|number|no\.?)\s*)?(?:[:：=#]\s*)?'
+    r')'
+    r'(?P<value>' + _CONTEXTUAL_NUMERIC_ATOM + r')(?!\d)'
+)
+_CONTEXTUAL_NUMERIC_SUFFIX_RE = re.compile(
+    r'(?<![A-Za-z0-9_])'
+    r'(?P<value>' + _CONTEXTUAL_NUMERIC_ATOM + r')'
+    r'(?P<suffix>\s*(?:號|号)?(?:'
+    r'廢棄區|废弃区|丟棄區|丢弃区|處置區|处置区|站別|站别|站'
+    r'))'
 )
 
 # Adjacent G-number unit abbreviations are separate organizational identifiers,
@@ -523,6 +572,62 @@ def _protect_factory_unit_runs(text: str, mapping: Dict[str, str]) -> str:
     return _FACTORY_UNIT_TROLLEY_RUN_RE.sub(repl, str(text or ""))
 
 
+def _protect_explicit_code_lists(text: str, mapping: Dict[str, str]) -> str:
+    """Protect every value in an explicitly labelled code field/list.
+
+    The label supplies the evidence that a bare alphabetic atom is data.  This
+    deliberately does not add the atom to the global acronym allow-list, so an
+    unrelated all-caps Indonesian word remains translatable and rejectable if
+    it leaks into a Chinese result.
+    """
+    def repl(run_match: re.Match) -> str:
+        values = run_match.group("values") or ""
+        pieces: List[str] = [run_match.group("prefix") or ""]
+        cursor = 0
+        for value_match in _EXPLICIT_CODE_VALUE_RE.finditer(values):
+            pieces.append(values[cursor:value_match.start()])
+            pieces.append(_new_placeholder(mapping, value_match.group(0)))
+            cursor = value_match.end()
+        pieces.append(values[cursor:])
+        return "".join(pieces)
+
+    return _EXPLICIT_CODE_LIST_RE.sub(repl, str(text or ""))
+
+
+def _protect_named_value(
+    text: str,
+    regex: re.Pattern,
+    mapping: Dict[str, str],
+    *,
+    group: str = "value",
+) -> str:
+    """Replace one named capture while preserving its surrounding label."""
+    def repl(match: re.Match) -> str:
+        literal = match.group(group)
+        if not literal or _PLACEHOLDER_RE.fullmatch(literal):
+            return match.group(0)
+        relative_start = match.start(group) - match.start()
+        relative_end = match.end(group) - match.start()
+        whole = match.group(0)
+        return (
+            whole[:relative_start]
+            + _new_placeholder(mapping, literal)
+            + whole[relative_end:]
+        )
+
+    return regex.sub(repl, str(text or ""))
+
+
+def _protect_contextual_numeric_identifiers(text: str, mapping: Dict[str, str]) -> str:
+    """Protect labelled numeric type, station and disposal-location IDs."""
+    protected = _protect_named_value(
+        text, _CONTEXTUAL_NUMERIC_PREFIX_RE, mapping
+    )
+    return _protect_named_value(
+        protected, _CONTEXTUAL_NUMERIC_SUFFIX_RE, mapping
+    )
+
+
 def _immutable_quoted_value_count(text: str) -> int:
     return sum(
         1 for match in _QUOTED_DATA_RE.finditer(text or "")
@@ -534,7 +639,8 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     """Protect mentions, field values, codes and measurements.
 
     Ordering is deliberate:
-    - mentions and document-defined labels are protected first;
+    - mentions and context-labelled identifiers are protected first;
+    - repeated document-defined labels follow;
     - parenthesized one-letter control flags such as ``(Y)`` next;
     - technical tokens next;
     - filtered quote-wrapped field values such as ``"NO Kondom"`` or ``"-"`` last.
@@ -547,6 +653,8 @@ def protect_immutable_spans(text: str) -> ProtectedText:
         return ProtectedText(text or "", text or "", {})
     mapping: Dict[str, str] = {}
     protected = _replace_matches(text, _MENTION_RE, mapping)
+    protected = _protect_explicit_code_lists(protected, mapping)
+    protected = _protect_contextual_numeric_identifiers(protected, mapping)
     protected = _protect_document_defined_labels(protected, mapping)
     protected = _protect_parenthesized_flags(protected, mapping)
     protected = _protect_factory_unit_runs(protected, mapping)
@@ -1559,7 +1667,17 @@ def validate_translation(
     glossary_pairs = _merge_runtime_glossary_pairs(
         source, src_lang, tgt_lang, list(glossary_pairs or ())
     )
-    immutable_literals = list(immutable_literals or ())
+    # ``None`` means the caller supplied only source/candidate text.  Inventory
+    # source-grounded immutable values here so every boundary (provider response
+    # validation, final delivery, cache/TM admission and standalone callers)
+    # applies the same identifier contract.  An explicit empty iterable still
+    # means "already validated elsewhere" for the protected-placeholder path.
+    if immutable_literals is None:
+        immutable_literals = list(
+            inspect_immutable_spans(source).mapping.values()
+        )
+    else:
+        immutable_literals = list(immutable_literals)
 
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
