@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-01.1-contextual-factory-identifiers"
+QUALITY_GATE_BUILD_ID = "2026-09-02.1-localized-measurement-equivalence"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1310,7 +1310,26 @@ def _count_semantic_atom(text: str, atom: str, *, quoted_preferred: bool = False
     )
     if measurement:
         number = re.escape(measurement.group("number")).replace(r"\.", r"[.,]")
-        unit = re.escape(measurement.group("unit"))
+        unit_key = measurement.group("unit").casefold()
+        # A measurement is immutable as a value, not as a source-language
+        # spelling.  Rejecting 6 kg -> 6 公斤 made a correct ID->ZH factory
+        # translation fail the shared cache/learning boundary.  Count standard
+        # cross-language unit equivalents while keeping the numeric value and
+        # occurrence count fail-closed.
+        unit_aliases = {
+            "mm": ("mm", "毫米"),
+            "cm": ("cm", "公分", "厘米"),
+            "kg": ("kg", "kilogram", "公斤", "千克"),
+            "g": ("g", "gram", "公克", "克"),
+            "t": ("t", "ton", "噸", "吨", "公噸", "公吨"),
+            "%": ("%", "persen", "百分比"),
+            "°c": ("°C", "℃", "攝氏度", "摄氏度"),
+            "℃": ("°C", "℃", "攝氏度", "摄氏度"),
+        }
+        aliases = unit_aliases.get(unit_key, (measurement.group("unit"),))
+        unit = "(?:" + "|".join(
+            re.escape(value) for value in sorted(aliases, key=len, reverse=True)
+        ) + ")"
         return len(re.findall(
             rf'(?<![\d.]){number}\s*{unit}(?![A-Za-z0-9])',
             text or "",

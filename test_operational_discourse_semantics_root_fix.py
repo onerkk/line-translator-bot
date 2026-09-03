@@ -339,15 +339,15 @@ def test_deployment_contract_and_boot_self_test_are_release_locked():
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
     glossary = json.loads((ROOT / "glossary_data.json").read_text(encoding="utf-8"))
 
-    assert 'VERSION = "v3.48.1-admin-js-embedding-root-fix-2026-08-31"' in app_source
+    assert 'VERSION = "v3.49.0-operational-data-continuity-root-fix-2026-09-02"' in app_source
     assert "_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3" in app_source
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-08-31.1-operational-discourse-and-flow"'
+        '"2026-09-02.1-operational-data-continuity"'
     ) in app_source
     health = semantics.health()
     assert health["api_version"] == 3
-    assert health["build_id"] == "2026-08-31.1-operational-discourse-and-flow"
+    assert health["build_id"] == "2026-09-02.1-operational-data-continuity"
     assert health["self_test"]["ok"] is True
     assert glossary["短尺維護"]["idn"] == "penanganan material pendek"
     assert glossary["短尺料"]["idn"] == "material pendek"

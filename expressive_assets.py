@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-EXPRESSIVE_ASSETS_VERSION = "2026-07-14.3-workplace-context"
+EXPRESSIVE_ASSETS_VERSION = "2026-09-02.1-operational-record-context"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_MANIFEST = _ROOT / "static" / "expressive_media" / "manifest.json"
@@ -79,9 +79,12 @@ _TITLE_KEYS = {
 
 _FACTORY_RE = re.compile(
     r"機台|設備|工單|料號|爐號|站別|品質|品保|研磨|冷抽|退火|酸洗|矯直|拋光|倒角|噴砂|噴漆|"
-    r"包裝|捆包|棒材|線材|盤元|吊料|上料|下料|停機|停線|安全帽|護具|"
+    r"包裝|捆包|棒材|線材|盤元|吊料|上料|下料|停機|停線|安全帽|護具|台車|生產|生产|"
+    r"資料異動|異動資料|手寫報表|紙本報表|手写报表|纸本报表|維護重量|维护重量|"
+    r"重量資料|重量资料|支數|支数|新系統|新系统|電腦資料|电脑资料|"
     r"\b(?:mesin|work\s*order|material|station|quality|grinding|painting|annealing|pickling|"
-    r"polishing|packing|bundle|shutdown|safety)\b",
+    r"polishing|packing|bundle|shutdown|safety|troli|perubahan\s+data|laporan\s+manual|"
+    r"data\s+berat|sistem\s+baru)\b",
     re.I,
 )
 _NOTICE_RE = re.compile(

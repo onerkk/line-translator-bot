@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-08-31.1-operational-discourse-and-flow"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-02.1-operational-data-continuity"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -592,6 +592,147 @@ _ZH_PACKAGING_SHIPPING_URGENT_RE = re.compile(
 _ZH_SPECIAL_STATION_ROUTE_RE = re.compile(
     r"(?P<evidence>(?:異型站|异型站|異型包裝站|异型包装站)(?:的)?(?:料|材料)"
     r"(?:再)?(?:麻煩|麻烦|請|请)?(?:幫忙|帮忙)?(?:分流|調撥|调拨|轉|转|移)過來)",
+    re.I,
+)
+
+# Operational-data continuity is one workflow, not a bag of word replacements.
+# During a computer/MES outage the source may distribute the instructions over
+# several terse clauses: continue production where possible, document the
+# computer-data problem, maintain weight data on paper, submit the report in the
+# morning, and later enter the changes in the new system.  Models commonly make
+# each sentence fluent while silently changing one relation (for example
+# 維護重量 -> mencatat berat) or leaving a Taiwanese M/D date ambiguous.  The
+# following expressions extract those roles and transitions from variable
+# wording before any cache, TM, NMT or LLM route is allowed to run.
+_ZH_HM_TOKEN = r"(?:[01]?\d|2[0-3]):[0-5]\d"
+_ZH_TROLLEY_OBJECT_RE = re.compile(r"(?P<evidence>台[車车])", re.I)
+_ZH_TROLLEY_ASSIST_RE = re.compile(
+    r"(?P<evidence>(?:(?:請|请|麻煩|麻烦|拜託|拜托)?(?:再)?"
+    r"(?:幫忙|帮忙|協助|协助|支援)(?:處理|处理|照看)?(?:一下)?))",
+    re.I,
+)
+_ZH_TRANSLATE_REQUEST_RE = re.compile(
+    r"(?P<evidence>(?:麻煩|麻烦|請|请)?(?:幫忙|帮忙|協助|协助)"
+    r"(?:做)?(?:翻譯|翻译)(?:一下)?)",
+    re.I,
+)
+_ZH_EQUIPMENT_STAFF_UNDERSTAND_RE = re.compile(
+    r"(?P<evidence>(?:確保|确保|讓|让)(?:所有|全部)?(?:的)?"
+    r"(?:設備|设备)(?:人員|人员)(?:都|全部)?(?:能|可以)?"
+    r"(?:明白|理解|了解|看懂))",
+    re.I,
+)
+_ZH_AFTER_HM_RE = re.compile(
+    r"(?P<evidence>(?P<time>" + _ZH_HM_TOKEN + r")(?:後|后|以後|以后|之後|之后))",
+    re.I,
+)
+_ZH_COMPUTER_LOCATION_RE = re.compile(
+    r"(?P<evidence>(?:在)?(?:電腦|电脑)(?:上|中|內|内|裡|里)?)",
+    re.I,
+)
+_ZH_PROHIBITION_RE = re.compile(
+    r"(?P<evidence>(?:請勿|请勿|不要|不得|禁止|別|别|不可|不能)(?:再)?)",
+    re.I,
+)
+_ZH_ANY_DATA_CHANGE_RE = re.compile(
+    r"(?P<evidence>(?:(?:做|進行|进行)?(?:任何)?(?:資料|资料|數據|数据)"
+    r"(?:異動|异动|變更|变更|更動|更动|改動|改动)|"
+    r"(?:做|進行|进行)?(?:異動|异动|變更|变更|更動|更动|改動|改动)"
+    r"(?:任何)?(?:資料|资料|數據|数据)))",
+    re.I,
+)
+_ZH_HM_RANGE_RE = re.compile(
+    r"(?P<evidence>(?P<start>" + _ZH_HM_TOKEN + r")\s*(?:~|至|到|-)\s*"
+    r"(?P<end>" + _ZH_HM_TOKEN + r"))",
+    re.I,
+)
+_ZH_IDS_REQUIRING_CHANGE_RE = re.compile(
+    r"(?P<evidence>(?:需要|需|要)(?:做|進行|进行)?"
+    r"(?:異動|异动|變更|变更)(?:的)?\s*ID)",
+    re.I,
+)
+_ZH_MANUAL_REPORT_BACK_RE = re.compile(
+    r"(?P<evidence>(?:在)?(?:手寫|手写|紙本|纸本)(?:的)?報表(?:的)?背面|"
+    r"(?:在)?(?:手寫報表|手写报表|紙本報表|纸本报表)(?:的)?背面)",
+    re.I,
+)
+_ZH_MANUAL_REPORT_FIELDS_RE = re.compile(
+    r"(?P<evidence>(?:寫上|写上|記錄|记录|紀錄|纪录|填寫|填写)"
+    r"(?P<fields>[^。.!！?？;；]{0,100}?)(?:的)?(?:記錄|记录|紀錄|纪录)?"
+    r"(?=[,，。.!！?？;；]|拍照|$))",
+    re.I,
+)
+_ZH_PHOTO_TO_GROUP_RE = re.compile(
+    r"(?P<evidence>拍照(?:後|后)?(?:再|並|并|然後|然后)?"
+    r"(?:傳|传|發送|发送|上傳|上传)(?:到|至)?(?:群組|群组|群裡|群里))",
+    re.I,
+)
+_ZH_MD_NEW_SYSTEM_RE = re.compile(
+    r"(?P<evidence>(?P<month>0?[1-9]|1[0-2])/(?P<day>0?[1-9]|[12]\d|3[01])"
+    r"(?:(?:起)?(?:新系統|新系统)(?:開始|开始)?(?:使用|啟用|启用)|"
+    r"(?:起)?(?:開始|开始)(?:使用|啟用|启用)(?:新系統|新系统)))",
+    re.I,
+)
+_ZH_NEW_SYSTEM_DATA_CHANGE_RE = re.compile(
+    r"(?P<evidence>(?:再|之後|之后|以後|以后|接著|接着)?"
+    r"(?:用|使用|透過|通过)(?:新系統|新系统)(?:進行|进行|做)?"
+    r"(?:異動|异动|變更|变更)(?:資料|资料|數據|数据))",
+    re.I,
+)
+_ZH_MACHINE_PRODUCING_RE = re.compile(
+    r"(?P<evidence>(?:機器|机器|機台|机台)(?:有|仍在|還在|还在|繼續|继续|照常|保持)?(?:生產|生产))",
+    re.I,
+)
+_ZH_PRODUCE_IF_POSSIBLE_RE = re.compile(
+    r"(?P<evidence>(?:(?:可以|能夠|能够|能)(?:生產|生产)(?:的)?(?:就|則|则)?"
+    r"(?:照常|繼續|继续|仍然|仍)?(?:生產|生产)))",
+    re.I,
+)
+_ZH_COMPUTER_WEIGHT_UPDATE_RE = re.compile(
+    r"(?P<evidence>(?:(?:沒有辦法|没有办法|沒辦法|没办法|無法|无法|不能)"
+    r"(?:使用|用)?(?:電腦|电脑|系統|系统)(?:來|来|去|進行|进行)?"
+    r"(?:維護|维护|更新|異動|异动)(?:重量資料|重量资料|重量數據|重量数据|重量)|"
+    r"(?:重量資料|重量资料|重量數據|重量数据|重量)"
+    r"(?:沒有辦法|没有办法|沒辦法|没办法|無法|无法|不能)?"
+    r"(?:在|透過|通过|用)(?:電腦|电脑|系統|系统)"
+    r"(?:維護|维护|更新|異動|异动))"
+    r"(?:的)?(?:也)?(?:沒關係|没关系|不要緊|不要紧|沒問題|没问题)?)",
+    re.I,
+)
+_ZH_COMPUTER_DATA_ISSUE_RE = re.compile(
+    r"(?P<evidence>(?:(?:電腦|电脑)(?:中|裡|里|上)?(?:的)?"
+    r"(?:資料|资料|數據|数据)(?:有)?(?:任何)?(?:問題|问题|異常|异常)|"
+    r"(?:資料|资料|數據|数据)(?:在|於|于)(?:電腦|电脑)(?:中|裡|里|上)?"
+    r"(?:有)?(?:任何)?(?:問題|问题|異常|异常)))",
+    re.I,
+)
+_ZH_PHOTO_REASON_RE = re.compile(
+    r"(?P<evidence>直接(?:拍照|截圖|截图)(?:下來|下来)?"
+    r"(?:並|并|再|後|后)?(?:填寫|填写|寫上|写上|註明|注明)(?:問題)?"
+    r"(?:原因|理由))",
+    re.I,
+)
+_ZH_SYSTEM_DATA_UNAVAILABLE_RE = re.compile(
+    r"(?P<evidence>(?:另外)?(?:因為|因为|因|由於|由于)"
+    r"(?:系統|系统)(?:問題|问题|故障|異常|异常)[、,]?"
+    r"(?:很多|多筆|多笔|多項|多项)?(?:資料|资料|數據|数据)(?:都)?"
+    r"(?:沒辦法|没办法|無法|无法|不能)(?:正常)?使用(?:的)?)",
+    re.I,
+)
+_ZH_DIRECT_PAPER_REPORT_RE = re.compile(
+    r"(?P<evidence>(?:都)?直接(?:(?:寫|写|記錄|记录|紀錄|纪录)在?"
+    r"(?:紙本|纸本|手寫|手写)?(?:報表|报表)(?:上面|上)?|"
+    r"(?:填寫|填写)(?:紙本|纸本|手寫|手写)?(?:報表|报表)(?:上面|上)?))",
+    re.I,
+)
+_ZH_MORNING_REPORT_SUBMIT_RE = re.compile(
+    r"(?P<evidence>(?:早上|上午)(?P<collective>一併|一并|一起|集中)?"
+    r"(?P<action>交回|繳回|缴回|交上來|交上来|提交|繳交|缴交))",
+    re.I,
+)
+_ZH_REPORT_DATE_RE = re.compile(
+    r"(?P<evidence>(?:記得|记得|務必|务必|請|请)?(?:要)?"
+    r"(?:寫|写|填寫|填写|註明|注明|標明|标明)(?:上)?日期)",
     re.I,
 )
 _ID_MONTH_NAMES = {
@@ -2561,6 +2702,290 @@ def _build_zh_id_careless_action_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+def _normalize_hm(value: Any) -> str:
+    raw = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or "")))
+    match = re.fullmatch(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})", raw)
+    if not match:
+        return ""
+    hour, minute = int(match.group("hour")), int(match.group("minute"))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return ""
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _valid_month_day(month: int, day: int) -> bool:
+    days = (0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    return 1 <= month <= 12 and 1 <= day <= days[month]
+
+
+def _build_zh_id_trolley_assistance_frame(source: str, frame: dict) -> dict:
+    """Resolve a bare trolley-assistance request without inventing an action.
+
+    ``台車幫忙一下`` omits the handling verb.  Indonesian ``bantu troli``
+    makes the trolley sound like the beneficiary/person being helped, while a
+    guessed verb such as push or move adds an unsupported instruction.  The
+    neutral relation is therefore ``bantu menangani troli``.
+    """
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    trolley = _ZH_TROLLEY_OBJECT_RE.search(visible)
+    request = _ZH_TROLLEY_ASSIST_RE.search(visible)
+    if not (trolley and request):
+        return frame
+    # The richer G-unit ownership construction is handled by its own frame.
+    if _ZH_FACTORY_UNIT_TROLLEY_RE.search(visible) or _ZH_PEELING_RECEIVER_RE.search(visible):
+        return frame
+    evidence = [trolley.group("evidence"), request.group("evidence")]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence, ("一下", "的", "請", "请", "麻煩", "麻烦")
+    )
+    frame["kind"] = "zh_id_trolley_assistance"
+    frame["slots"].update({
+        "repeat": "再" in request.group("evidence"),
+        "neutral_handling": True,
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "trolley_assistance_object", trolley.group("evidence"),
+        "請對方協助處理台車；台車是被處理的物件，不是接受幫助的人",
+        "bantu menangani troli",
+    )
+    if frame["slots"]["repeat"]:
+        _claim(frame, "trolley_assistance_repeat", "再", "再次協助", "sekali lagi")
+    frame["active"] = True
+    frame["complete"] = not unparsed
+    return frame
+
+
+def _build_zh_id_equipment_staff_translation_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    request = _ZH_TRANSLATE_REQUEST_RE.search(visible)
+    purpose = _ZH_EQUIPMENT_STAFF_UNDERSTAND_RE.search(visible)
+    if not (request and purpose):
+        return frame
+    evidence = [request.group("evidence"), purpose.group("evidence")]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence, ("一下", "這個", "这个", "內容", "内容")
+    )
+    frame["kind"] = "zh_id_equipment_staff_translation_request"
+    frame["slots"].update({
+        "translation_request": True,
+        "all_equipment_staff": True,
+        "understanding_purpose": True,
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "translation_assistance", request.group("evidence"),
+        "請被提及的人協助翻譯目前內容", "mohon bantu menerjemahkan ini",
+    )
+    _claim(
+        frame, "equipment_staff_understanding", purpose.group("evidence"),
+        "目的在讓所有負責設備的人員理解內容；設備修飾人員，不是獨立職稱直譯",
+        "agar semua personel yang menangani peralatan memahaminya",
+    )
+    frame["active"] = True
+    frame["complete"] = not unparsed
+    return frame
+
+
+def _build_zh_id_computer_data_freeze_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    after = _ZH_AFTER_HM_RE.search(visible)
+    computer = _ZH_COMPUTER_LOCATION_RE.search(visible)
+    prohibition = _ZH_PROHIBITION_RE.search(visible)
+    change = _ZH_ANY_DATA_CHANGE_RE.search(visible)
+    if not all((after, computer, prohibition, change)):
+        return frame
+    time_value = _normalize_hm(after.group("time"))
+    evidence = [
+        after.group("evidence"), computer.group("evidence"),
+        prohibition.group("evidence"), change.group("evidence"),
+    ]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence, ("再", "做", "任何", "的")
+    )
+    frame["kind"] = "zh_id_computer_data_change_freeze"
+    frame["slots"].update({
+        "effective_after": time_value,
+        "computer_scope": True,
+        "all_data_changes_prohibited": True,
+    })
+    frame["unparsed"] = unparsed
+    _claim(
+        frame, "data_change_freeze_time", after.group("evidence"),
+        "指定時間之後開始禁止異動", f"setelah pukul {time_value}",
+    )
+    _claim(
+        frame, "computer_data_change_prohibition", change.group("evidence"),
+        "禁止在電腦上做任何資料異動", "jangan lakukan perubahan data apa pun lagi di komputer",
+    )
+    frame["active"] = True
+    frame["complete"] = bool(time_value and not unparsed)
+    return frame
+
+
+def _build_zh_id_manual_data_handover_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    time_range = _ZH_HM_RANGE_RE.search(visible)
+    ids = _ZH_IDS_REQUIRING_CHANGE_RE.search(visible)
+    report_back = _ZH_MANUAL_REPORT_BACK_RE.search(visible)
+    fields = _ZH_MANUAL_REPORT_FIELDS_RE.search(visible)
+    photo_group = _ZH_PHOTO_TO_GROUP_RE.search(visible)
+    system_date = _ZH_MD_NEW_SYSTEM_RE.search(visible)
+    system_change = _ZH_NEW_SYSTEM_DATA_CHANGE_RE.search(visible)
+    matched = sum(bool(item) for item in (
+        time_range, ids, report_back, fields, photo_group, system_date, system_change
+    ))
+    if matched < 3:
+        return frame
+
+    field_text = fields.group("fields") if fields else ""
+    has_fields = bool(
+        re.search(r"(?<![A-Za-z])ID(?![A-Za-z])", field_text, re.I)
+        and "重量" in field_text
+        and any(term in field_text for term in ("支數", "支数"))
+    )
+    start = _normalize_hm(time_range.group("start") if time_range else "")
+    end = _normalize_hm(time_range.group("end") if time_range else "")
+    month = int(system_date.group("month")) if system_date else 0
+    day = int(system_date.group("day")) if system_date else 0
+    valid_date = _valid_month_day(month, day)
+    evidence = [
+        item.group("evidence") for item in (
+            time_range, ids, report_back, fields, photo_group, system_date, system_change
+        ) if item
+    ]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence, ("在", "的", "紀錄", "纪录", "記錄", "记录", "再", "之後", "之后")
+    )
+    frame["kind"] = "zh_id_manual_data_change_handover"
+    frame["slots"].update({
+        "range_start": start,
+        "range_end": end,
+        "id_changes": bool(ids),
+        "manual_report_back": bool(report_back),
+        "fields": ("ID", "weight", "bar_count") if has_fields else (),
+        "photo_to_group": bool(photo_group),
+        "new_system_month": month,
+        "new_system_day": day,
+        "new_system_data_change": bool(system_change),
+    })
+    frame["unparsed"] = unparsed
+    if time_range and ids:
+        _claim(
+            frame, "data_change_time_range", time_range.group("evidence") + ids.group("evidence"),
+            "只針對指定時段內需要異動的 ID", f"ID yang perlu diubah antara pukul {start} dan {end}",
+        )
+    if report_back and fields:
+        _claim(
+            frame, "manual_report_back_fields", report_back.group("evidence") + fields.group("evidence"),
+            "在手寫／紙本報表背面記錄 ID、重量、支數", "catat ID, berat, dan jumlah batang pada sisi belakang formulir laporan manual",
+        )
+    if photo_group:
+        _claim(frame, "photo_record_to_group", photo_group.group("evidence"), "拍下記錄並傳到群組", "foto catatan lalu kirimkan ke grup")
+    if system_date and valid_date:
+        _claim(
+            frame, "new_system_unambiguous_date", system_date.group("evidence"),
+            "台灣月/日日期必須在印尼文改成無歧義的日＋月份名稱",
+            f"mulai {day} {_ID_MONTH_NAMES[month]}",
+        )
+    if system_change:
+        _claim(frame, "new_system_change_route", system_change.group("evidence"), "此後透過新系統異動資料", "gunakan sistem baru untuk melakukan perubahan data")
+    frame["active"] = True
+    frame["complete"] = bool(
+        start and end and ids and report_back and has_fields and photo_group
+        and system_date and valid_date and system_change and not unparsed
+    )
+    return frame
+
+
+def _build_zh_id_system_outage_reporting_frame(source: str, frame: dict) -> dict:
+    visible = unicodedata.normalize("NFKC", _MENTION_RE.sub("", str(source or "")))
+    machine_producing = _ZH_MACHINE_PRODUCING_RE.search(visible)
+    produce_if_possible = _ZH_PRODUCE_IF_POSSIBLE_RE.search(visible)
+    weight_update = _ZH_COMPUTER_WEIGHT_UPDATE_RE.search(visible)
+    computer_issue = _ZH_COMPUTER_DATA_ISSUE_RE.search(visible)
+    photo_reason = _ZH_PHOTO_REASON_RE.search(visible)
+    system_unavailable = _ZH_SYSTEM_DATA_UNAVAILABLE_RE.search(visible)
+    paper_report = _ZH_DIRECT_PAPER_REPORT_RE.search(visible)
+    morning_submit = _ZH_MORNING_REPORT_SUBMIT_RE.search(visible)
+    report_date = _ZH_REPORT_DATE_RE.search(visible)
+
+    # Require a linked workflow, never a lone keyword.  This prevents ordinary
+    # computer, date, production and report messages from being intercepted.
+    anchored = bool(
+        (weight_update and paper_report)
+        or (system_unavailable and produce_if_possible and paper_report)
+        or (computer_issue and photo_reason and paper_report)
+    )
+    if not anchored:
+        return frame
+    evidence = [
+        item.group("evidence") for item in (
+            machine_producing, produce_if_possible, weight_update, computer_issue,
+            photo_reason, system_unavailable, paper_report, morning_submit, report_date,
+        ) if item
+    ]
+    unparsed = _strip_zh_operational_tokens(
+        source, evidence,
+        ("生產上", "生产上", "另外", "因為", "因为", "因", "都", "也", "的"),
+    )
+    no_problem = bool(weight_update and re.search(
+        r"沒關係|没关系|不要緊|不要紧|沒問題|没问题",
+        weight_update.group("evidence"), re.I,
+    ))
+    collective = bool(morning_submit and morning_submit.group("collective"))
+    submit_action = morning_submit.group("action") if morning_submit else ""
+    frame["kind"] = "zh_id_system_outage_manual_reporting"
+    frame["slots"].update({
+        "machine_producing": bool(machine_producing),
+        "produce_if_possible": bool(produce_if_possible),
+        "computer_weight_data_update_unavailable": bool(weight_update),
+        "weight_update_no_problem": no_problem,
+        "computer_data_issue": bool(computer_issue),
+        "photo_and_reason": bool(photo_reason),
+        "system_data_unavailable": bool(system_unavailable),
+        "direct_paper_report": bool(paper_report),
+        "morning_submit": bool(morning_submit),
+        "morning_collective": collective,
+        "morning_submit_action": submit_action,
+        "report_date_required": bool(report_date),
+    })
+    frame["unparsed"] = unparsed
+    if machine_producing:
+        _claim(frame, "production_continues", machine_producing.group("evidence"), "機器仍有生產", "mesin tetap berproduksi")
+    if produce_if_possible:
+        _claim(frame, "production_if_possible", produce_if_possible.group("evidence"), "系統異常時，能生產者才繼續生產", "tetap lakukan produksi jika memungkinkan")
+    if weight_update:
+        _claim(
+            frame, "computer_weight_data_update", weight_update.group("evidence"),
+            "無法在電腦／系統維護或更新重量資料；不是一般抄寫重量",
+            "data berat tidak dapat diperbarui melalui komputer",
+        )
+    if computer_issue and photo_reason:
+        _claim(
+            frame, "computer_issue_document_reason",
+            computer_issue.group("evidence") + photo_reason.group("evidence"),
+            "電腦資料有問題時要拍照留存並填寫原因",
+            "jika data di komputer bermasalah, ambil foto untuk dokumentasi dan tuliskan penyebabnya",
+        )
+    if system_unavailable:
+        _claim(frame, "system_causes_unusable_data", system_unavailable.group("evidence"), "系統故障造成多筆資料無法使用", "banyak data tidak dapat digunakan karena gangguan sistem")
+    if paper_report:
+        _claim(frame, "direct_manual_report", paper_report.group("evidence"), "把資料直接記在紙本報表", "isi/catat langsung pada formulir laporan")
+    if morning_submit:
+        _claim(frame, "morning_report_submission", morning_submit.group("evidence"), "早上繳交／交回報表", "serahkan/kembalikan formulir laporan pada pagi hari")
+    if report_date:
+        _claim(frame, "report_date_required", report_date.group("evidence"), "報表必須註明日期", "pastikan tanggalnya dicantumkan")
+    frame["active"] = True
+    frame["complete"] = bool(
+        paper_report and not unparsed
+        and (weight_update or system_unavailable or computer_issue)
+        and (not computer_issue or photo_reason)
+        and (not system_unavailable or produce_if_possible)
+    )
+    return frame
+
+
 def _parse_zh_clock(value: str) -> str:
     raw = str(value or "").strip()
     match = re.fullmatch(
@@ -2662,6 +3087,20 @@ def _build_zh_id_mes_operational_notice_frame(source: str, frame: dict) -> dict:
 
 
 def _build_zh_id_frame(source: str, frame: dict) -> dict:
+    manual_handover_frame = _build_zh_id_manual_data_handover_frame(source, frame)
+    if manual_handover_frame.get("active"):
+        return manual_handover_frame
+    outage_frame = _build_zh_id_system_outage_reporting_frame(source, frame)
+    if outage_frame.get("active"):
+        return outage_frame
+    freeze_frame = _build_zh_id_computer_data_freeze_frame(source, frame)
+    if freeze_frame.get("active"):
+        return freeze_frame
+    equipment_translation_frame = _build_zh_id_equipment_staff_translation_frame(
+        source, frame
+    )
+    if equipment_translation_frame.get("active"):
+        return equipment_translation_frame
     customer_frame = _build_zh_id_customer_order_frame(source, frame)
     if customer_frame.get("active"):
         return customer_frame
@@ -2677,6 +3116,9 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
     unit_trolley_frame = _build_zh_id_factory_unit_trolley_frame(source, frame)
     if unit_trolley_frame.get("active"):
         return unit_trolley_frame
+    trolley_assistance_frame = _build_zh_id_trolley_assistance_frame(source, frame)
+    if trolley_assistance_frame.get("active"):
+        return trolley_assistance_frame
     machine_guard_frame = _build_zh_id_machine_guard_frame(source, frame)
     if machine_guard_frame.get("active"):
         return machine_guard_frame
@@ -2806,6 +3248,105 @@ def deterministic_translation(frame: Mapping) -> str:
         if slots.get("request"):
             text += " Mohon bantuannya."
         return _with_mentions(frame, text)
+
+    if frame.get("kind") == "zh_id_trolley_assistance":
+        suffix = " sekali lagi" if slots.get("repeat") else " sebentar"
+        return _with_mentions(
+            frame, "Mohon bantu menangani troli" + suffix + "."
+        )
+
+    if frame.get("kind") == "zh_id_equipment_staff_translation_request":
+        return _with_mentions(
+            frame,
+            "Mohon bantu menerjemahkan ini agar semua personel yang menangani "
+            "peralatan memahaminya.",
+        )
+
+    if frame.get("kind") == "zh_id_computer_data_change_freeze":
+        effective_after = str(slots.get("effective_after") or "")
+        if not effective_after:
+            return ""
+        return _with_mentions(
+            frame,
+            f"Setelah pukul {effective_after}, jangan lakukan perubahan data apa "
+            "pun lagi di komputer.",
+        )
+
+    if frame.get("kind") == "zh_id_manual_data_change_handover":
+        start = str(slots.get("range_start") or "")
+        end = str(slots.get("range_end") or "")
+        month = int(slots.get("new_system_month") or 0)
+        day = int(slots.get("new_system_day") or 0)
+        month_name = _ID_MONTH_NAMES.get(month, "")
+        if not all((start, end, month_name, day)):
+            return ""
+        text = (
+            f"Untuk ID yang perlu diubah antara pukul {start} dan {end}, catat ID, "
+            "berat, dan jumlah batang pada sisi belakang formulir laporan manual. "
+            "Foto catatan tersebut lalu kirimkan ke grup. "
+            f"Mulai {day} {month_name}, gunakan sistem baru untuk melakukan perubahan data."
+        )
+        return _with_mentions(frame, text)
+
+    if frame.get("kind") == "zh_id_system_outage_manual_reporting":
+        rendered: list[str] = []
+        if slots.get("computer_data_issue"):
+            rendered.append(
+                "Jika ada masalah pada data di komputer, segera ambil foto untuk "
+                "dokumentasi dan tuliskan penyebabnya."
+            )
+        if slots.get("system_data_unavailable"):
+            production = (
+                " tetap lakukan produksi jika memungkinkan."
+                if slots.get("produce_if_possible") else "."
+            )
+            rendered.append(
+                "Jika banyak data tidak dapat digunakan karena gangguan sistem,"
+                + production
+            )
+        elif slots.get("machine_producing"):
+            rendered.append("Mesin tetap berproduksi.")
+
+        if slots.get("computer_weight_data_update_unavailable"):
+            if slots.get("weight_update_no_problem"):
+                rendered.append(
+                    "Tidak masalah jika data berat tidak dapat diperbarui melalui komputer."
+                )
+            else:
+                rendered.append(
+                    "Data berat tidak dapat diperbarui melalui komputer."
+                )
+            rendered.append(
+                "Catat semua data tersebut langsung pada formulir laporan."
+            )
+            if slots.get("morning_submit"):
+                if slots.get("morning_submit_action") == "交回":
+                    verb = "Kembalikan seluruh formulir laporan tersebut"
+                else:
+                    verb = "Serahkan formulir laporan tersebut"
+                if slots.get("morning_collective"):
+                    verb += " sekaligus"
+                rendered.append(verb + " pada pagi hari.")
+            if slots.get("report_date_required"):
+                rendered.append("Pastikan tanggalnya dicantumkan.")
+        elif slots.get("direct_paper_report"):
+            actions = ["Isi formulir laporan secara langsung"]
+            if slots.get("morning_submit"):
+                submit = "serahkan"
+                if slots.get("morning_collective"):
+                    submit += " sekaligus"
+                actions.append(submit + " pada pagi hari")
+            if slots.get("report_date_required"):
+                actions.append("pastikan tanggalnya dicantumkan")
+            if len(actions) == 1:
+                rendered.append(actions[0] + ".")
+            elif len(actions) == 2:
+                rendered.append(actions[0] + " dan " + actions[1] + ".")
+            else:
+                rendered.append(", ".join(actions[:-1]) + ", dan " + actions[-1] + ".")
+        if not rendered:
+            return ""
+        return _with_mentions(frame, " ".join(rendered))
 
     if frame.get("kind") == "zh_id_machine_guard_safety":
         rendered: list[str] = []
@@ -3249,6 +3790,35 @@ def _id_clock_present(text: str, expected: str) -> bool:
     return False
 
 
+def _id_hm_present(text: str, expected: str) -> bool:
+    raw = str(expected or "")
+    if not raw:
+        return True
+    try:
+        hour_text, minute_text = raw.split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+    except (TypeError, ValueError):
+        return False
+    return bool(re.search(
+        r"(?<!\d)0?" + re.escape(str(hour)) + r"\s*[:.]\s*"
+        + f"{minute:02d}" + r"(?!\d)",
+        str(text or ""),
+        re.I,
+    ))
+
+
+def _id_month_day_present(text: str, month: int, day: int) -> bool:
+    month_name = _ID_MONTH_NAMES.get(int(month or 0), "")
+    if not month_name or not day:
+        return False
+    return bool(re.search(
+        r"(?<!\d)0?" + re.escape(str(int(day))) + r"\s+"
+        + re.escape(month_name) + r"\b",
+        str(text or ""),
+        re.I,
+    ))
+
+
 def _normalized_target_clauses(value: Any) -> list[str]:
     """Keep relation checks inside their source-corresponding target clause."""
     return [
@@ -3377,6 +3947,189 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append(
                 "factory_message_semantics:ungrounded_trolley_function_added"
             )
+
+    elif frame.get("kind") == "zh_id_trolley_assistance":
+        low = _norm(target)
+        if not _has_phrase(low, ("mohon", "tolong", "harap")):
+            issues.append("factory_message_semantics:trolley_assistance_request_missing")
+        if not _has_phrase(low, ("troli", "trolley")):
+            issues.append("factory_message_semantics:trolley_assistance_object_missing")
+        handling_relation = bool(re.search(
+            r"\b(?:menangani|tangani|mengurus|urus|mengelola)\s+"
+            r"(?:sebuah\s+|si\s+)?(?:troli|trolley)\b"
+            r"|\bbantu(?:an)?\s+(?:untuk|dalam)\s+"
+            r"(?:menangani|tangani|mengurus|urus)\s+(?:troli|trolley)\b",
+            low,
+            re.I,
+        ))
+        if not handling_relation:
+            issues.append("factory_message_semantics:trolley_handling_relation_missing")
+        if slots.get("repeat") and not _has_phrase(low, ("sekali lagi", "kembali")):
+            issues.append("factory_message_semantics:trolley_repeat_missing")
+        if not slots.get("repeat") and _has_phrase(low, ("sekali lagi",)):
+            issues.append("factory_message_semantics:ungrounded_trolley_repeat_added")
+        if _has_phrase(low, ("mendorong", "memindahkan", "mengangkut", "menurunkan")):
+            issues.append("factory_message_semantics:ungrounded_trolley_action_added")
+
+    elif frame.get("kind") == "zh_id_equipment_staff_translation_request":
+        low = _norm(target)
+        if not _has_phrase(low, (
+            "menerjemahkan", "terjemahkan", "menterjemahkan", "alih bahasakan",
+        )):
+            issues.append("factory_message_semantics:translation_assistance_missing")
+        if not _has_phrase(low, ("agar", "supaya")):
+            issues.append("factory_message_semantics:understanding_purpose_relation_missing")
+        if not _has_phrase(low, ("semua", "seluruh")):
+            issues.append("factory_message_semantics:all_equipment_staff_scope_missing")
+        if not _has_phrase(low, ("memahami", "memahaminya", "mengerti", "paham")):
+            issues.append("factory_message_semantics:equipment_staff_understanding_missing")
+        equipment_staff_relation = bool(re.search(
+            r"\b(?:personel|petugas|staf|pegawai|karyawan)\s+yang\s+"
+            r"(?:(?:bertanggung\s+jawab\s+atas)|menangani|mengurus|mengoperasikan)\s+"
+            r"(?:peralatan|mesin)\b",
+            low,
+            re.I,
+        ))
+        if not equipment_staff_relation:
+            issues.append("factory_message_semantics:equipment_staff_relation_ambiguous")
+
+    elif frame.get("kind") == "zh_id_computer_data_change_freeze":
+        low = _norm(target)
+        if not (
+            _has_phrase(low, ("setelah", "sesudah"))
+            and _id_hm_present(target, str(slots.get("effective_after") or ""))
+        ):
+            issues.append("factory_message_semantics:data_change_freeze_time_missing")
+        if not _has_phrase(low, ("komputer",)):
+            issues.append("factory_message_semantics:data_change_computer_scope_missing")
+        if not _has_phrase(low, (
+            "perubahan data", "mengubah data", "ubah data", "modifikasi data",
+        )):
+            issues.append("factory_message_semantics:data_change_action_missing")
+        if not _has_phrase(low, ("jangan", "tidak boleh", "dilarang")):
+            issues.append("factory_message_semantics:data_change_prohibition_missing")
+        if not _has_phrase(low, ("apa pun", "apa saja", "semua", "seluruh")):
+            issues.append("factory_message_semantics:any_data_change_scope_missing")
+
+    elif frame.get("kind") == "zh_id_manual_data_change_handover":
+        low = _norm(target)
+        if not (
+            _id_hm_present(target, str(slots.get("range_start") or ""))
+            and _id_hm_present(target, str(slots.get("range_end") or ""))
+            and _has_phrase(low, ("antara", "dari"))
+        ):
+            issues.append("factory_message_semantics:data_change_time_range_missing")
+        if not (
+            re.search(r"(?<![A-Za-z])ID(?![A-Za-z])", target, re.I)
+            and _has_phrase(low, ("diubah", "mengubah", "perubahan"))
+        ):
+            issues.append("factory_message_semantics:id_change_scope_missing")
+        if not (
+            _has_phrase(low, ("berat",))
+            and _has_phrase(low, ("jumlah batang", "jumlah potong", "jumlah pcs"))
+        ):
+            issues.append("factory_message_semantics:manual_report_fields_missing")
+        if not (
+            _has_phrase(low, ("sisi belakang", "bagian belakang"))
+            and _has_phrase(low, (
+                "formulir laporan manual", "laporan tulis tangan", "laporan manual",
+            ))
+        ):
+            issues.append("factory_message_semantics:manual_report_back_relation_missing")
+        if not (
+            _has_phrase(low, ("foto", "potret"))
+            and _has_phrase(low, ("kirimkan", "kirim", "unggah"))
+            and _has_phrase(low, ("grup", "group"))
+        ):
+            issues.append("factory_message_semantics:photo_record_to_group_missing")
+        month = int(slots.get("new_system_month") or 0)
+        day = int(slots.get("new_system_day") or 0)
+        if not _id_month_day_present(target, month, day):
+            issues.append("factory_message_semantics:new_system_localized_date_missing")
+        if month and day and re.search(
+            r"(?<!\d)0?" + re.escape(str(month)) + r"\s*[/.-]\s*0?"
+            + re.escape(str(day)) + r"(?!\d)",
+            target,
+        ):
+            issues.append("factory_message_semantics:month_day_date_ambiguous")
+        if not (
+            _has_phrase(low, ("sistem baru",))
+            and _has_phrase(low, (
+                "perubahan data", "mengubah data", "melakukan perubahan data",
+            ))
+        ):
+            issues.append("factory_message_semantics:new_system_data_change_route_missing")
+
+    elif frame.get("kind") == "zh_id_system_outage_manual_reporting":
+        low = _norm(target)
+        clauses = _normalized_target_clauses(target)
+        if slots.get("machine_producing") and not any(
+            _has_phrase(clause, ("mesin",))
+            and _has_phrase(clause, ("berproduksi", "produksi"))
+            for clause in clauses
+        ):
+            issues.append("factory_message_semantics:machine_production_state_missing")
+        if slots.get("computer_data_issue") and not (
+            _has_phrase(low, ("data di komputer", "data komputer"))
+            and _has_phrase(low, ("masalah", "bermasalah", "gangguan"))
+            and _has_phrase(low, ("foto", "potret"))
+            and _has_phrase(low, ("penyebab", "penyebabnya", "alasan", "alasannya"))
+        ):
+            issues.append("factory_message_semantics:computer_issue_photo_reason_missing")
+        if slots.get("system_data_unavailable") and not (
+            _has_phrase(low, ("sistem",))
+            and _has_phrase(low, ("data",))
+            and _has_phrase(low, ("tidak dapat digunakan", "tidak bisa digunakan"))
+        ):
+            issues.append("factory_message_semantics:system_unusable_data_relation_missing")
+        if slots.get("produce_if_possible") and not (
+            _has_phrase(low, ("produksi", "berproduksi"))
+            and _has_phrase(low, ("jika memungkinkan", "bila memungkinkan", "yang masih dapat"))
+        ):
+            issues.append("factory_message_semantics:conditional_production_missing")
+        if slots.get("computer_weight_data_update_unavailable"):
+            has_weight_data = _has_phrase(low, ("data berat", "informasi berat"))
+            has_update = _has_phrase(low, (
+                "diperbarui", "memperbarui", "pembaruan", "diubah", "mengubah",
+                "menginput", "diinput", "input", "memasukkan", "dimasukkan",
+                "entri", "mencatat data berat",
+            ))
+            if not (
+                has_weight_data and has_update
+                and _has_phrase(low, ("komputer", "sistem"))
+                and _has_phrase(low, ("tidak dapat", "tidak bisa", "tidak memungkinkan"))
+            ):
+                issues.append("factory_message_semantics:computer_weight_data_update_missing")
+            if _has_phrase(low, ("mencatat berat", "catat berat")) and not has_update:
+                issues.append("factory_message_semantics:weight_data_update_changed_to_recording")
+            if slots.get("weight_update_no_problem") and not _has_phrase(
+                low, ("tidak masalah", "tidak apa-apa")
+            ):
+                issues.append("factory_message_semantics:weight_update_no_problem_missing")
+        if slots.get("direct_paper_report") and not (
+            _has_phrase(low, ("laporan", "formulir laporan"))
+            and _has_phrase(low, ("catat", "tulis", "isi", "isikan"))
+        ):
+            issues.append("factory_message_semantics:direct_manual_report_missing")
+        if slots.get("morning_submit") and not (
+            _has_phrase(low, ("pagi",))
+            and _has_phrase(low, (
+                "serahkan", "diserahkan", "kembalikan", "dikembalikan", "kumpulkan",
+            ))
+        ):
+            issues.append("factory_message_semantics:morning_report_submission_missing")
+        if slots.get("morning_collective") and not _has_phrase(
+            low, ("sekaligus", "bersamaan", "secara kolektif")
+        ):
+            issues.append("factory_message_semantics:collective_report_submission_missing")
+        if slots.get("report_date_required") and not (
+            _has_phrase(low, ("tanggal", "tanggalnya"))
+            and _has_phrase(low, (
+                "dicantumkan", "mencantumkan", "ditulis", "menulis",
+                "menuliskan", "tuliskan", "cantumkan",
+            ))
+        ):
+            issues.append("factory_message_semantics:report_date_requirement_missing")
 
     elif frame.get("kind") == "zh_id_remaining_customer_orders":
         low = _norm(target)
@@ -4311,6 +5064,12 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         ):
             issues.append("factory_message_semantics:situation_object_missing")
 
+    source_emojis = _extract_emoji_tokens(str(frame.get("source") or ""))
+    target_emojis = _extract_emoji_tokens(target)
+    for emoji in dict.fromkeys(target_emojis):
+        if target_emojis.count(emoji) > source_emojis.count(emoji):
+            issues.append("factory_message_semantics:ungrounded_emoji_added:" + emoji)
+
     return not issues, list(dict.fromkeys(issues))
 
 
@@ -4367,6 +5126,43 @@ def build_prompt(frame: Mapping) -> str:
             "express the omitted ownership/source relation explicitly as 'troli dari unit "
             "G8 dan G9' (or equivalent with milik). Never glue the codes into a trolley "
             "model, and do not add the unsupported function 'angkut batang'."
+        )
+    elif frame.get("kind") == "zh_id_trolley_assistance":
+        lines.append(
+            "This is a bare request to help handle a trolley. The trolley is the object "
+            "being handled, not a person receiving help: use bantu menangani/mengurus "
+            "troli, never the personifying phrase bantu troli. Do not invent pushing, "
+            "moving, carrying or unloading unless that action is explicit in the source."
+        )
+    elif frame.get("kind") == "zh_id_equipment_staff_translation_request":
+        lines.append(
+            "設備人員 denotes the people responsible for or handling equipment. Express "
+            "that modifier as personel yang menangani/bertanggung jawab atas peralatan, "
+            "not the unnatural detached title petugas peralatan. Keep the translation "
+            "request and its purpose: all of those personnel must understand it."
+        )
+    elif frame.get("kind") == "zh_id_computer_data_change_freeze":
+        lines.append(
+            "Preserve the full freeze relation in one instruction: after the extracted "
+            "clock time, no data change of any kind may be made on the computer. Do not "
+            "turn it into a computer-use ban, omit apa pun, or move the time boundary."
+        )
+    elif frame.get("kind") == "zh_id_manual_data_change_handover":
+        lines.append(
+            "Keep this entire manual-to-system handover chain: IDs requiring changes in "
+            "the extracted time range; ID, weight and bar count written on the back of the "
+            "manual report form; a photo sent to the group; then data changes through the "
+            "new system from the extracted date. Taiwanese numeric dates are month/day; "
+            "render them unambiguously as day + Indonesian month name, never raw M/D."
+        )
+    elif frame.get("kind") == "zh_id_system_outage_manual_reporting":
+        lines.append(
+            "Treat this as one operational-continuity workflow. A system/computer problem "
+            "causes data to be unavailable; production continues only where possible; "
+            "computer weight-data maintenance means memperbarui data berat, not merely "
+            "mencatat berat; the fallback is a paper report that is submitted/returned in "
+            "the morning with the date when requested. Preserve photo-and-reason "
+            "documentation, conditionality, sequence and collective submission exactly."
         )
     elif frame.get("kind") == "zh_id_machine_guard_safety":
         lines.append(
@@ -4629,6 +5425,62 @@ def health() -> dict:
         "Stasiun packing barang bentuk khusus ke sini."
     )
     mes_notice = build_frame(mes_notice_source, "zh", "id")
+    trolley_assistance_source = "@辰 @Dato潘 台車幫忙一下"
+    trolley_assistance_target = (
+        "@辰 @Dato潘 Mohon bantu menangani troli sebentar."
+    )
+    trolley_assistance = build_frame(trolley_assistance_source, "zh", "id")
+    equipment_translation_source = (
+        "@法比恩 Fabian 幫忙翻譯，確保設備人員都明白"
+    )
+    equipment_translation_target = (
+        "@法比恩 Fabian Mohon bantu menerjemahkan ini agar semua personel yang "
+        "menangani peralatan memahaminya."
+    )
+    equipment_translation = build_frame(
+        equipment_translation_source, "zh", "id"
+    )
+    data_freeze_source = "@All 16：40後電腦上不要再做任何資料異動"
+    data_freeze_target = (
+        "@All Setelah pukul 16:40, jangan lakukan perubahan data apa pun lagi "
+        "di komputer."
+    )
+    data_freeze = build_frame(data_freeze_source, "zh", "id")
+    manual_handover_source = (
+        "16：40～20：00需要異動的ID，在手寫報表背面寫上ID、重量、支數的紀錄，"
+        "拍照傳到群組，9/2新系統開始使用，再用新系統異動資料"
+    )
+    manual_handover_target = (
+        "Untuk ID yang perlu diubah antara pukul 16:40 dan 20:00, catat ID, "
+        "berat, dan jumlah batang pada sisi belakang formulir laporan manual. "
+        "Foto catatan tersebut lalu kirimkan ke grup. Mulai 2 September, gunakan "
+        "sistem baru untuk melakukan perubahan data."
+    )
+    manual_handover = build_frame(manual_handover_source, "zh", "id")
+    weight_fallback_source = (
+        "機器有生產。沒有辦法使用電腦維護重量的也沒關係。"
+        "都直接寫在報表上面。早上一併交回！"
+    )
+    weight_fallback_target = (
+        "Mesin tetap berproduksi. Tidak masalah jika data berat tidak dapat "
+        "diperbarui melalui komputer. Catat semua data tersebut langsung pada "
+        "formulir laporan. Kembalikan seluruh formulir laporan tersebut sekaligus "
+        "pada pagi hari."
+    )
+    weight_fallback = build_frame(weight_fallback_source, "zh", "id")
+    outage_source = (
+        "@All 生產上。電腦資料有任何問題直接拍照下來填寫原因！"
+        "另外因為系統問題、很多資料沒辦法使用的、可以生產就生產、"
+        "直接填寫報表、早上交上來、記得要寫日期"
+    )
+    outage_target = (
+        "@All Jika ada masalah pada data di komputer, segera ambil foto untuk "
+        "dokumentasi dan tuliskan penyebabnya. Jika banyak data tidak dapat "
+        "digunakan karena gangguan sistem, tetap lakukan produksi jika memungkinkan. "
+        "Isi formulir laporan secara langsung, serahkan pada pagi hari, dan pastikan "
+        "tanggalnya dicantumkan."
+    )
+    outage = build_frame(outage_source, "zh", "id")
     controls = (
         build_frame("Sip, terima kasih.", "id", "zh"),
         build_frame("Selamat pagi, Pak.", "id", "zh"),
@@ -4657,6 +5509,10 @@ def health() -> dict:
         build_frame("Orang malam membuang sampah", "id", "zh"),
         build_frame("沒短尺所以不用維護", "zh", "id"),
         build_frame("四把在包裝，三把已經拋光完成", "zh", "id"),
+        build_frame("台車已經滿了", "zh", "id"),
+        build_frame("我在家裡用電腦整理照片", "zh", "id"),
+        build_frame("9/2是我的生日", "zh", "id"),
+        build_frame("系統問題明天再討論", "zh", "id"),
     )
     checks = [
         equipment_failure.get("active") is True
@@ -4877,6 +5733,44 @@ def health() -> dict:
         translate_source_directly(
             material_flow_source + "，明天停機保養", "zh", "id"
         ) == "",
+        trolley_assistance.get("active") is True
+        and trolley_assistance.get("complete") is True,
+        translate_source_directly(trolley_assistance_source, "zh", "id")
+        == trolley_assistance_target,
+        validate_translation(
+            trolley_assistance, "Tolong bantu troli sebentar. 🙂"
+        )[0] is False,
+        equipment_translation.get("active") is True
+        and equipment_translation.get("complete") is True,
+        translate_source_directly(equipment_translation_source, "zh", "id")
+        == equipment_translation_target,
+        validate_translation(
+            equipment_translation,
+            "Tolong bantu terjemahkan agar semua petugas peralatan memahaminya.",
+        )[0] is False,
+        data_freeze.get("active") is True and data_freeze.get("complete") is True,
+        translate_source_directly(data_freeze_source, "zh", "id")
+        == data_freeze_target,
+        manual_handover.get("active") is True
+        and manual_handover.get("complete") is True,
+        translate_source_directly(manual_handover_source, "zh", "id")
+        == manual_handover_target,
+        validate_translation(
+            manual_handover,
+            manual_handover_target.replace("2 September", "9/2") + " 📌",
+        )[0] is False,
+        weight_fallback.get("active") is True
+        and weight_fallback.get("complete") is True,
+        translate_source_directly(weight_fallback_source, "zh", "id")
+        == weight_fallback_target,
+        validate_translation(
+            weight_fallback,
+            weight_fallback_target.replace(
+                "data berat tidak dapat diperbarui", "tidak bisa mencatat berat"
+            ),
+        )[0] is False,
+        outage.get("active") is True and outage.get("complete") is True,
+        translate_source_directly(outage_source, "zh", "id") == outage_target,
         all(not frame.get("active") for frame in controls),
     ]
     return {
