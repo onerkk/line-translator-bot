@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.46.0-moderated-private-code-switch-2026-08-18",
+    "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "e9dd38aa6b4e73a730979bff50188ad4ed309d559f21a72f445d2c0cc16e53c6",
-    "updated_at_iso": "2026-08-29T01:17:43.250829+00:00",
-    "updated_at_unix": 1787966263.2508285
+    "state_hash": "e3a51554cb5bc3007055699176f0464633a2065cd295c601ef23539f185a1be7",
+    "updated_at_iso": "2026-09-04T12:10:16.618996+00:00",
+    "updated_at_unix": 1788523816.618996
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -150,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-08-26 21:02:33",
+    "last_updated": "2026-09-03 00:13:27",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -189,13 +189,13 @@
     "followers": 1,
     "image_translations": 4,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.1269373,
-    "oai_input": 136839,
-    "oai_output": 1262,
+    "oai_cost_usd": 0.1284789,
+    "oai_input": 144097,
+    "oai_output": 1337,
     "oai_reasoning": 0,
-    "text_translations": 253,
-    "tokens_completion": 18718,
-    "tokens_prompt": 4371610,
+    "text_translations": 255,
+    "tokens_completion": 18793,
+    "tokens_prompt": 4378868,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -348,11 +348,11 @@
       "tokens_prompt": 258366
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cost_usd": 0.6192164000000007,
+      "cost_usd": 0.6199644000000009,
       "model": "gpt-5.6-luna",
       "provider": "openai",
-      "tokens_completion": 2635,
-      "tokens_prompt": 480091
+      "tokens_completion": 2664,
+      "tokens_prompt": 483657
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -362,11 +362,11 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.8026641499999998,
+      "cost_usd": 1.80345775,
       "model": "gpt-5.6-luna",
       "provider": "openai",
-      "tokens_completion": 6126,
-      "tokens_prompt": 1831295
+      "tokens_completion": 6172,
+      "tokens_prompt": 1834987
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -546,7 +546,7 @@
   "paragraph_split_translate": false,
   "preserve_paragraphs_enabled": true,
   "prompt_caching_enabled": true,
-  "pw1_text": "UR00179\nCcc0972315373",
+  "pw1_text": "UR02447\nAa0989520079aA",
   "pw2_text": "UR00644\nHh0973550210",
   "quality_metrics_enabled": true,
   "quick_reply_enabled": false,
