@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-25.1-contextual-material-arrival"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-04.1-universal-vs-sequential-bundles"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -658,6 +658,9 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     flags["bundle_by_bundle"] = _search_any(compact, (
         r"(?:一把一把|逐把|每把(?:分開|分开)?|一捆一捆|逐捆)",
     ))
+    flags["bundle_sequential"] = _search_any(compact, (
+        r"(?:一把一把|逐把|每把(?:分開|分开)|一捆一捆|逐捆)",
+    ))
     flags["self_uncertainty"] = _search_any(compact, (
         r"(?:懷疑|怀疑|不(?:太)?放心|不太相信)(?:我)?自己",
         r"(?:不(?:太)?放心|不確定|不确定).{0,6}(?:貼|贴)(?:tag)?(?:結果|结果)?",
@@ -1117,7 +1120,9 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     if flags["clear_marking"]:
         add("clear_marking", "標記清楚", "對資料尚未到位的材料做清楚標記", "ditandai / diberi tanda dengan jelas")
     if flags["bundle_by_bundle"]:
-        add("bundle_by_bundle", "一把一把／逐把", "TAG 必須逐把／逐捆處理，避免混貼", "satu bundel demi satu bundel / setiap bundel satu per satu")
+        add("bundle_by_bundle", "一把一把／逐把" if flags.get("bundle_sequential") else "每把",
+            "依原文對每一捆執行指定作業；只有明示逐把／分開才要求依序處理，不得自行增加 TAG 等動作",
+            "satu bundel demi satu bundel" if flags.get("bundle_sequential") else "setiap bundel")
     if flags["self_uncertainty"] or flags["double_check"]:
         add("self_result_double_check", "懷疑自己／多看一次", "不立即相信自己剛完成的貼標結果，因此再複核一次", "tidak langsung yakin dengan hasil sendiri lalu cek sekali lagi")
     if flags["before_offwork"] and flags["pickup_action"]:
@@ -2158,13 +2163,17 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     )):
         issues.append("factory_semantic_audit:clear_marking_missing")
 
-    if flags.get("bundle_by_bundle") and not _has_any_target(low, (
+    sequential_bundle_terms = (
         "satu bundel demi satu bundel",
         "setiap bundel satu per satu",
         "bundel satu per satu",
         "satu ikat demi satu ikat",
         "setiap ikat satu per satu",
-    )):
+    )
+    bundle_terms = sequential_bundle_terms if flags.get("bundle_sequential") else sequential_bundle_terms + (
+        "setiap bundel", "tiap bundel", "masing-masing bundel", "setiap ikat", "tiap ikat",
+    )
+    if flags.get("bundle_by_bundle") and not _has_any_target(low, bundle_terms):
         issues.append("factory_semantic_audit:bundle_by_bundle_missing")
 
     if flags.get("self_uncertainty") or flags.get("double_check"):

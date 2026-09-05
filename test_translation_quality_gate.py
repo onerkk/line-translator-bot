@@ -260,9 +260,11 @@ TAG 安裝規定：
             model="fake-model",
             ai_client=client,
         )
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["text"], "不BOLEH使用工具。")
-        self.assertEqual(result["path"], "best_effort_whole_document")
+        # A one-call document path may defer delivery, but must never report a
+        # known mixed-language error as successful merely to avoid a retry.
+        self.assertFalse(result["ok"], result)
+        self.assertIsNone(result["text"])
+        self.assertIn("untranslated_source_word:BOLEH", result["hard_issues"])
         self.assertFalse(result["cacheable"])
         self.assertEqual(len(client.calls), 1)
 

@@ -171,6 +171,35 @@ def enqueue(
             raise
 
 
+def checkpoint(job_key: str, updates: Dict[str, Any], *, owner: Optional[str] = None) -> bool:
+    """Persist completed work without resetting attempts, due time or a lease.
+
+    A retrying worker may write only while it owns the live lease. The immediate
+    handler may checkpoint only before any worker has claimed the pending job.
+    """
+    initialize()
+    with _LOCK, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT payload_json,status,lease_owner,lease_until FROM translation_retry_jobs WHERE job_key=?",
+            (str(job_key),),
+        ).fetchone()
+        if row is None:
+            return False
+        if owner:
+            if row["status"] != "leased" or row["lease_owner"] != owner or row["lease_until"] <= time.time():
+                return False
+        elif row["status"] != "pending":
+            return False
+        payload = json.loads(row["payload_json"])
+        payload.update(updates)
+        conn.execute(
+            "UPDATE translation_retry_jobs SET payload_json=?,updated_at=? WHERE job_key=?",
+            (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), time.time(), str(job_key)),
+        )
+    return True
+
+
 def get(job_key: str) -> Optional[Dict[str, Any]]:
     initialize()
     with _LOCK, _connect() as conn:

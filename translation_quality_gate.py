@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-02.1-localized-measurement-equivalence"
+QUALITY_GATE_BUILD_ID = "2026-09-04.1-validated-delivery-only"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1531,7 +1531,7 @@ def _factory_incident_reporting_issues(source: str, candidate: str) -> List[str]
 
     if re.search(r"\b(?:tidak\s+ada\s+dosa|tanpa\s+dosa|bebas\s+dosa|tidak\s+berdosa|tidak\s+bersalah)\b", low):
         issues.append("semantic:incident_self_report_literal_religious_or_legal")
-    if not any(x in low for x in ("mengaku sendiri", "melapor sendiri", "melaporkan sendiri", "mengaku secara sukarela")):
+    if not any(x in low for x in ("mengaku sendiri", "melapor sendiri", "melaporkan sendiri", "melaporkannya sendiri", "mengaku secara sukarela")):
         issues.append("semantic:incident_self_report_actor_missing")
     if not any(x in low for x in ("tidak akan dipermasalahkan", "tidak akan dihukum", "tidak akan dikenai sanksi", "tidak akan diberi sanksi", "tidak akan ditindak")):
         issues.append("semantic:incident_self_report_nonpunitive_meaning_missing")
@@ -1664,6 +1664,34 @@ def _indonesian_clarity_instruction(tgt_lang: str) -> str:
         "into the translation. Only explicit hard terminology pairs are literal constraints."
     )
 
+def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
+    """Keep explicit numeric threshold direction, including strict/inclusive.
+
+    Plain language realizations are allowed, but > cannot become >=, < or =.
+    Decimal comma/point differences are presentation only inside this check.
+    """
+    expressions = re.findall(r"(>=|<=|!=|[<>≥≤≠])\s*([+-]?\d+(?:[.,]\d+)?)", source)
+    aliases = {">=": "≥", "<=": "≤", "!=": "≠"}
+    words = {
+        ">": r"(?:大於|高於|超過|lebih\s+(?:besar|tinggi)\s+dari|lebih\s+dari)",
+        "<": r"(?:小於|低於|少於|kurang\s+dari|lebih\s+(?:kecil|rendah)\s+dari)",
+        "≥": r"(?:大於等於|大於或等於|至少|不低於|setidaknya|minimal|sekurang-kurangnya)",
+        "≤": r"(?:小於等於|小於或等於|至多|不超過|最多|maksimal|paling\s+banyak|tidak\s+lebih\s+dari)",
+        "≠": r"(?:不等於|tidak\s+sama\s+dengan)",
+    }
+    symbols = {">": r">", "<": r"<", "≥": r"(?:>=|≥)", "≤": r"(?:<=|≤)", "≠": r"(?:!=|≠)"}
+    issues = []
+    target = re.sub(r"\s+", " ", candidate.replace("\uff1e", ">").replace("\uff1c", "<"))
+    for raw_operator, value in expressions:
+        operator = aliases.get(raw_operator, raw_operator)
+        number = re.escape(value.replace(",", ".")).replace(r"\.", "[.,]")
+        pattern = (r"(?<![<>=!≥≤≠不未])(?<!tidak )(?:" + symbols[operator] + "|" + words[operator]
+                   + r")\s*" + number + r"(?![\d.,])")
+        if not re.search(pattern, target, re.I):
+            issues.append("numeric_comparison_changed:" + raw_operator + value)
+    return _dedupe(issues)
+
+
 def validate_translation(
     source: str,
     candidate: str,
@@ -1741,6 +1769,7 @@ def validate_translation(
     for marker in _MARKERS:
         if source.count(marker) > candidate.count(marker):
             issues.append(f"missing_marker:{marker}")
+    issues.extend(_comparison_integrity_issues(source, candidate))
 
     if require_paragraph_fidelity:
         src_p = len(_paragraphs(source))
@@ -2200,13 +2229,10 @@ def _best_effort_delivery_candidate(
     require_paragraph_fidelity: bool,
     initial_report: Optional[ValidationResult] = None,
 ) -> Tuple[Optional[str], ValidationResult]:
-    """Return the best non-empty provider output instead of creating an outage.
+    """Return a locally repaired candidate only when its meaning is intact.
 
-    Validation remains strict and all issues are retained for logs/metrics.  The
-    delivery policy, however, is availability-first: a successful provider
-    response is never converted into a generic translation failure merely by a
-    local heuristic.  Missing immutable data is surfaced explicitly in a note,
-    and the result is marked non-cacheable by callers.
+    Appending missing numbers/codes to a note does not restore their relation to
+    equipment or actions. Such output must be reviewed or retried from source.
     """
     text = repair_identity_tokens(source, (candidate or "").strip())
     text = normalize_indonesian_factory_register(source, text, src_lang, tgt_lang)
@@ -2214,26 +2240,13 @@ def _best_effort_delivery_candidate(
         report = initial_report or ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
         return None, report
 
-    report = initial_report or validate_translation(
+    report = validate_translation(
         source, text, src_lang, tgt_lang,
         immutable_literals=immutable_literals,
         glossary_pairs=glossary_pairs,
         require_paragraph_fidelity=require_paragraph_fidelity,
     )
-    missing = [
-        issue.split(":", 1)[1]
-        for issue in report.issues
-        if issue.startswith("missing_literal:") and ":" in issue
-    ]
-    if missing:
-        text = _append_missing_data_note(text, missing, tgt_lang)
-        report = validate_translation(
-            source, text, src_lang, tgt_lang,
-            immutable_literals=immutable_literals,
-            glossary_pairs=glossary_pairs,
-            require_paragraph_fidelity=require_paragraph_fidelity,
-        )
-    return text, report
+    return (text if report.ok else None), report
 
 
 def _merge_semantic_validation(
@@ -2247,10 +2260,12 @@ def _merge_semantic_validation(
         ok, external_issues = semantic_validator(candidate)
     except Exception as exc:
         logger.warning("[QualityGate] semantic validator unavailable: %s", exc)
-        return report
+        ok, external_issues = False, ["semantic_validation_exception:" + type(exc).__name__]
     issues = [str(issue) for issue in (external_issues or ()) if str(issue).strip()]
     if ok and not issues:
         return report
+    if not ok and not issues:
+        issues = ["semantic_validation_failed"]
     merged_issues = list(dict.fromkeys(list(report.issues) + issues))
     merged_hard = list(dict.fromkeys(list(report.hard_issues) + issues))
     return ValidationResult(False, merged_issues, merged_hard, list(report.warnings))
@@ -2300,9 +2315,9 @@ def gate_and_revise(
                 caller_ok, caller_issues = caller_semantic_validator(text)
             except Exception as exc:
                 logger.warning("[QualityGate] caller semantic validator unavailable: %s", exc)
-                caller_ok, caller_issues = True, []
+                caller_ok, caller_issues = False, ["semantic_validation_exception:" + type(exc).__name__]
             if not caller_ok or caller_issues:
-                combined_issues.extend(str(x) for x in (caller_issues or ()) if str(x).strip())
+                combined_issues.extend(str(x) for x in (caller_issues or ["semantic_validation_failed"]) if str(x).strip())
         frame_ok, frame_issues = fsa_module.validate_translation(source_frame, text)
         if not frame_ok or frame_issues:
             combined_issues.extend(str(x) for x in (frame_issues or ()) if str(x).strip())
@@ -2506,7 +2521,8 @@ def gate_and_revise(
                 ]
             except Exception as exc:
                 logger.warning("[QualityGate] semantic validator unavailable on fallback: %s", exc)
-                semantic_ok = True
+                semantic_ok = False
+                semantic_issues = ["semantic_validation_exception:" + type(exc).__name__]
         if semantic_issues:
             best_report = ValidationResult(
                 False,
@@ -2515,10 +2531,8 @@ def gate_and_revise(
                 list(best_report.warnings),
             )
         return {
-            # Local heuristic failures remain availability-first.  Only a
-            # verified-correction semantic violation can reject best-effort text.
-            "ok": bool(semantic_ok),
-            "text": best_text,
+            "ok": bool(semantic_ok and best_report.ok),
+            "text": best_text if semantic_ok and best_report.ok else None,
             "issues": best_report.issues,
             "hard_issues": best_report.hard_issues,
             "warnings": best_report.warnings,
@@ -2736,12 +2750,10 @@ def ensure_delivery_safe_translation(
     ai_client: Any = None,
     fallback_translate: Optional[Callable[[str, str, str], Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """Final local-only availability boundary.
+    """Final local-only boundary; hard failures require source-grounded repair.
 
-    No network call is made here.  Validation still controls cache admission and
-    produces diagnostics, but a non-empty provider translation is not discarded
-    solely because a heuristic is unhappy.  Missing immutable data is attached
-    explicitly and degraded results are returned as non-cacheable.
+    No network calls and no appended data notes. A candidate with missing facts
+    cannot be labelled successful or admitted to translation memory.
     """
     source = source or ""
     candidate = repair_identity_tokens(source, candidate)

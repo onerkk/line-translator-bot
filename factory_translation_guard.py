@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import unicodedata
+from translation_source_identity import canonical_source_key
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -25,14 +26,13 @@ import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.2-bidirectional-source-relations"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-04.1-lossless-source-identity"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
 _DEFAULT_REGRESSION = _ROOT / "factory_translation_regression.json"
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _SPACE_RE = re.compile(r"\s+")
-_SOURCE_KEY_STRIP_RE = re.compile(r"[^0-9a-z\u3400-\u9fff%+./_@#-]+", re.I)
 _TARGET_PUNCT_RE = re.compile(r"[\s\u3000]+")
 _NUMBER_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<number>\d+(?:[.,]\d+)?)\s*(?P<unit>噸|吨|公噸|公吨|公斤|千克|kilogram|kg|KG|公克|克|gram|g|G|毫米|milimeter|mm|MM|公分|厘米|sentimeter|cm|CM|公尺|米|meter|m|M|ton|persen|%)(?![A-Za-z])"
@@ -103,18 +103,6 @@ def direction_key(src: Any, tgt: Any) -> str:
     return f"{_lang(src)}-{_lang(tgt)}"
 
 
-def canonical_source_key(value: Any) -> str:
-    """Build a punctuation/spacing-insensitive key without paraphrase matching.
-
-    This intentionally normalizes only presentation differences.  It does not
-    equate synonyms such as 週一/星期一 or semantic paraphrases, so a verified
-    sentence can never be pasted onto a different instruction.
-    """
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = text.replace("\u3000", " ")
-    return _SOURCE_KEY_STRIP_RE.sub("", text)
-
-
 def _normalize_target(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     return _TARGET_PUNCT_RE.sub(" ", text).strip()
@@ -178,6 +166,8 @@ class FactoryTranslationGuard:
     @staticmethod
     def _knowledge_exact_cases(document: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:
         for entry in document.get("entries", []) or []:
+            if entry.get("enabled") is False:
+                continue
             entry_id = str(entry.get("id") or "factory_knowledge")
             directions = set(str(item).lower() for item in (entry.get("directions") or []))
             for index, example in enumerate(entry.get("examples", []) or []):
@@ -431,6 +421,8 @@ class FactoryTranslationGuard:
         knowledge_doc = self._knowledge.document()
         # Every approved knowledge example must retrieve its own card and pass.
         for entry in knowledge_doc.get("entries", []) or []:
+            if entry.get("enabled") is False:
+                continue
             directions = set(entry.get("directions", []) or [])
             for example in entry.get("examples", []) or []:
                 if not isinstance(example, Mapping):

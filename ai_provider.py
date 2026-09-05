@@ -2203,6 +2203,10 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     provider_preference = kwargs.pop("provider_preference", None)
     latency_profile = str(kwargs.pop("latency_profile", "") or "").strip()
     response_validator = kwargs.pop("response_validator", None)
+    # Translation callers cap completed candidate generations independently of
+    # transport failover. Other chat/vision features retain their existing policy.
+    generation_limit = max(0, int(kwargs.pop("translation_max_generations", 0) or 0))
+    completed_generations = 0
     privacy_literals = kwargs.pop("privacy_literals", ()) or ()
     messages, privacy_envelope = _prepare_provider_privacy(
         messages, extra_literals=privacy_literals
@@ -2257,6 +2261,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     )
 
     for index, provider in enumerate(providers):
+        if generation_limit and completed_generations >= generation_limit:
+            break
         provider_attempts = 2 if single_provider_retry else 1
         for provider_attempt in range(provider_attempts):
             remaining = deadline - time.monotonic()
@@ -2270,6 +2276,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 elif provider_attempt:
                     print(f"[ai_provider] {provider} 暫時性錯誤，單次快速重試", flush=True)
                 response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+                completed_generations += 1
                 response = _restore_provider_privacy(response, privacy_envelope)
                 elapsed = time.monotonic() - started
                 if callable(response_validator):
@@ -2294,6 +2301,18 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                         })
                         # Quality rejection is deterministic for this candidate;
                         # do not retry the same provider with the same request.
+                        if generation_limit:
+                            # Give the remaining attempt the actual defect list,
+                            # without resending the rejected translation itself.
+                            _all_kwargs["messages"] = list(messages)
+                            _all_kwargs["messages"].insert(1, {
+                                "role": "system",
+                                "content": (
+                                    "Local validation of a prior candidate found: " + reason[:1200]
+                                    + ". Reconstruct from the original source and fix these defects. "
+                                    "Output only the complete translation; do not mention the validation."
+                                ),
+                            })
                         if not failover_enabled:
                             raise last_quality_error
                         print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)

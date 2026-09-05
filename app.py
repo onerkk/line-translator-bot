@@ -143,6 +143,7 @@ import zipfile
 from io import BytesIO
 import threading
 import contextlib
+from translation_request_guard import serialize_request
 import hashlib
 import copy
 try:
@@ -297,7 +298,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-02.1-localized-measurement-equivalence"
+_EXPECTED_QG_BUILD_ID = "2026-09-04.1-validated-delivery-only"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -316,7 +317,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-08-25.1-contextual-material-arrival"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-04.1-universal-vs-sequential-bundles"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -354,7 +355,7 @@ logger.info(
 )
 
 _EXPECTED_CASEBOOK_API_VERSION = 4
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-08-30.1-scoped-versioned-correction-casebook"
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-04.1-lossless-source-identity"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -382,7 +383,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
 _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-08-11.2-bidirectional-source-relations"
+_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-04.1-lossless-source-identity"
 if (getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION
         or getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_BUILD_ID", None)
@@ -449,7 +450,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-08-17.1-erp-data-release-context"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-04.1-runtime-contract-preservation"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -741,7 +742,7 @@ if not _QG_INCIDENT_GOOD_SELFTEST.ok:
         f"issues={_QG_INCIDENT_GOOD_SELFTEST.issues}"
     )
 
-_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-07-25.3-source-reviewed-fail-closed-factory-acceptance"
+_FINAL_DELIVERY_GUARD_BUILD_ID = "2026-09-04.1-validated-delivery-only"
 logger.info(
     "[QualityGate] behavioral self-test passed issues=%s final_guard=%s",
     _QG_BOOT_SELFTEST.issues, _FINAL_DELIVERY_GUARD_BUILD_ID,
@@ -749,7 +750,7 @@ logger.info(
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
 _EXPECTED_ACTIVE_LEARNING_API_VERSION = 2
-_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-08-30.1-safe-continuous-learning"
+_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-09-04.1-lossless-correction-migration"
 if (getattr(al_module, "ACTIVE_LEARNING_API_VERSION", None)
         != _EXPECTED_ACTIVE_LEARNING_API_VERSION
         or getattr(al_module, "ACTIVE_LEARNING_BUILD_ID", None)
@@ -2997,7 +2998,7 @@ def _translation_needs_conversation_history(text):
     return bare_quantity or any(cue in compact for cue in cues)
 
 
-def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
+def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, source_text=None):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
     {role: "system", name: "example_user"/"example_assistant"} pairs.
@@ -3012,6 +3013,7 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     這讓 AI 能看懂「接話」「省略主詞」等需上下文的語境。
     順序維持 [system, few-shot..., conv-history..., 本句] — caching 友善。
     """
+    retrieval_source = user_msg if source_text is None else source_text
     msgs = [{"role": "system", "content": sys_prompt}]
     quoted_context = str(getattr(_tl, 'quoted_context_source', '') or '').strip()
     if quoted_context:
@@ -3030,28 +3032,7 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
                 + "\n</line_reply_context>"
             ),
         })
-    all_examples = list(BUILTIN_EXAMPLES) + _verified_custom_translation_examples()
-    # Pick examples matching translation direction (only show direction-relevant pairs)
-    # If translating zh->id, show zh2id examples; reverse for id->zh
-    # v3.9.44 (BUG FIX): direction_key 必須精確匹配 zh↔id 兩個方向。
-    # 舊邏輯把 "src=zh and tgt!=zh" 全部當成 zh2id,導致 zh→en/th/hi/vi 翻譯
-    # 都被注入「中文→印尼」的 few-shot 對話對,LLM 跟著 pattern 回印尼文,
-    # 無視 system prompt 要求的目標語言(多語廣播時英文 box 顯示印尼文 root cause)。
-    # BUILTIN_EXAMPLES 跟 custom_translation_examples 的 dir 欄位只支援 zh2id/id2zh,
-    # 其他方向直接 None → 不注入(避免污染 LLM)。
-    if src == "zh" and tgt == "id":
-        direction_key = "zh2id"
-    elif src == "id" and tgt == "zh":
-        direction_key = "id2zh"
-    else:
-        direction_key = None
-    relevant = [ex for ex in all_examples if ex.get("dir", "zh2id") == direction_key] if direction_key else []
-    if direction_key == "zh2id":
-        is_announcement = _is_zh_id_factory_announcement_source(user_msg)
-        relevant = [
-            ex for ex in relevant
-            if ex.get("scope") != "announcement" or is_announcement
-        ]
+    direction_key = translation_casebook_module.direction_key(src, tgt)
 
     # Score examples by relevance and inject only a small, useful set.  The old
     # implementation always filled eight slots with recent examples even when the
@@ -3059,14 +3040,14 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     # sentence pattern.  Real incident examples remain in the knowledge base, but
     # runtime selection is now risk-aware: ordinary chat 0-2, factory 0-3, long
     # announcements 0-4.
-    compact_user = re.sub(r"\s+", "", user_msg or "")
+    compact_user = re.sub(r"\s+", "", retrieval_source or "")
     factory_hint = bool(re.search(
         r"工單|料號|爐號|品保|停機|開機|調機|維修|異常|研磨|冷抽|退火|酸洗|矯直|"
         r"倒角|拋光|噴漆|來料|棒材|盤元|母材|線材|QC|(?:I|E|BF)\d+|"
         r"work\s*order|mesin|material|produksi|operator|kualitas|rusak|cacat",
-        user_msg or "", re.I
+        retrieval_source or "", re.I
     ))
-    if direction_key == "zh2id" and _is_zh_id_factory_announcement_source(user_msg):
+    if direction_key == "zh2id" and _is_zh_id_factory_announcement_source(retrieval_source):
         runtime_max = min(4, FEWSHOT_INJECT_MAX)
     elif factory_hint:
         runtime_max = min(3, FEWSHOT_INJECT_MAX)
@@ -3075,8 +3056,11 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     else:
         runtime_max = min(1, FEWSHOT_INJECT_MAX)
 
-    chosen = _retrieve_verified_translation_cases(
-        user_msg, src, tgt, max_cases=runtime_max
+    # The semantic contract already contains the selected contrastive cases.
+    # Sending the same targets again as few-shot pairs doubles their token cost
+    # and gives historical wording undue weight over the current source.
+    chosen = [] if "<verified_translation_cases>" in sys_prompt else _retrieve_verified_translation_cases(
+        retrieval_source, src, tgt, max_cases=runtime_max, group_id=group_id
     )
 
     for ex in chosen:
@@ -3115,7 +3099,7 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None):
     # buffer 本來就存了 src/tgt 兩欄,精確配對即可,所有方向通用。
     try:
         if (group_id and get_conv_context_enabled(group_id)
-                and _translation_needs_conversation_history(user_msg)):
+                and _translation_needs_conversation_history(retrieval_source)):
             history = _conv_buffer_get(group_id)
             matching_history = [
                 h for h in history
@@ -3858,6 +3842,8 @@ def _factory_knowledge_examples_for_casebook():
     except Exception:
         return examples
     for entry in document.get("entries", []) or []:
+        if entry.get("enabled") is False:
+            continue
         directions = set(entry.get("directions", []) or [])
         for example in entry.get("examples", []) or []:
             if not isinstance(example, dict) or not example.get("source") or not example.get("target"):
@@ -3903,7 +3889,10 @@ def _verified_custom_translation_examples():
     model output from silently becoming exact truth or few-shot evidence.
     """
     raw = json.dumps(
-        custom_translation_examples or [],
+        {
+            "examples": custom_translation_examples or [],
+            "validator": al_module._validator_fingerprint(),
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -8173,6 +8162,7 @@ _INCIDENT_REPORT_TERMS_ZH = ("提報", "回報", "報告", "通報")
 
 _INCIDENT_SELF_REPORT_GOOD_ID = (
     "mengaku sendiri", "melapor sendiri", "melaporkan sendiri", "mengaku secara sukarela",
+    "melaporkannya sendiri",
 )
 _INCIDENT_NONPUNITIVE_GOOD_ID = (
     "tidak akan dipermasalahkan", "tidak akan dihukum", "tidak akan dikenai sanksi",
@@ -10648,6 +10638,14 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         else:
             target_override = ""
 
+        _scene = get_recent_media_scene(
+            getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)
+        ) or ""
+        _media_context_note = (
+            "<source_bound_context>Recent image context (use only to resolve omitted references; "
+            "do not override explicit source facts or infer new actions): " + str(_scene)[:1200]
+            + "</source_bound_context>"
+        ) if _scene else ""
         sys_prompt = (
             target_override +
             # v3.9.37: 分區 XML 結構,符合 Anthropic 官方 use-xml-tags 規範
@@ -10690,7 +10688,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             + (tqg_module.implicit_quantity_unit_instruction(text, src, tgt) + " ")
             + factory_translation_policy_module.build_prompt(text, src, tgt) + " "
             + factory_translation_guard_module.build_prompt(text, src, tgt) + " "
-            + build_factory_context_hint(text, src, tgt) + " "
+            + _media_context_note + " "
             + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
             + inject_glossary_hint(text, src, tgt)
             
@@ -10944,7 +10942,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "木箱=peti kayu, 裝箱=masukkan material ke dalam peti kayu, 2700大的木箱=peti kayu besar ukuran 2700mm, "
             "NOTE: 木箱 is an industrial shipping crate (peti kayu), never ordinary kotak kayu. 3200/2400=crate LENGTH mm, 500/1000=weight CAPACITY kg. "
             "把=bundel(bundle), 捆=bundel/ikat, 支/根=batang(piece/rod), 批=lot/batch, "
-            "NOTE: X米(三米,六米)=batang X meter(bar LENGTH not distance). 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
+            "NOTE: X米(三米,六米)=batang X meter(bar LENGTH not distance). 三米上面放六米=batang 6m ditaruh di atas batang 3m. "
             "包(verb)=packing/kemas(NOT wrapping). 秤重=timbang, 貼標=tempel label, 綁鐵=ikat besi, "
             "【訂單管理】"
             "允收=jumlah yang boleh diterima pelanggan, 允收0支=zero tolerance, 不收短尺=tidak terima ukuran pendek, "
@@ -11003,7 +11001,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "</factory_vocabulary>\n"
             "<context_disambiguation>\n"
             "10. CRITICAL CONTEXT RULES: "
-            "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 3m ditaruh di atas batang 6m. "
+            "a) X米(三米,六米)=bar LENGTH. 三米上面放六米=batang 6m ditaruh di atas batang 3m. "
             "b) 把/捆=BUNDLE counters for rod material. 包2把 means the verb 包(packing) + 2把(two bundel). "
             "c) 包 is polysemous: as a VERB it means packing; as a NUMBER+包/袋 classifier it means a physical package and must use bungkus, NEVER bundel. "
             "半包/一包半/兩包半=setengah bungkus/satu setengah bungkus/dua setengah bungkus. "
@@ -11018,7 +11016,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "j) 爐號=heat number(NEVER 'nomor panas'). 有包到X=kalau ada packing untuk X(NOT 'paket datang ke X'). "
             "k) 放=POLYSEMY(multiple meanings, judge by context): "
             "放+把/單/批/工單號/這把/這單/這批=RELEASE data(放行). e.g. 先放這把=release bundel ini dulu, 放了=sudah di-release, 幫放一下=tolong bantu release. "
-            "放+地點/方位(地上/旁邊/上面/那邊/架上)=PUT/PLACE. e.g. 放地上=taruh di lantai, 三米上面放六米=batang 3m ditaruh di atas 6m. "
+            "放+地點/方位(地上/旁邊/上面/那邊/架上)=PUT/PLACE. e.g. 放地上=taruh di lantai, 三米上面放六米=batang 6m ditaruh di atas 3m. "
             "放+這些/這批/這個+物體(棒材/料/箱/東西) WITHOUT 地點 + 詢問責任/歸屬(誰放的/誰放的啊/哪個人放的)=PUT/PLACE asking WHO placed it. "
             "CRITICAL: 在這種「誰放的」句型必須用 menaruh 或 meletakkan(formal/written), 不可用 taruh(太口語). "
             "e.g. 這些棒材誰放的=Ada yang tahu siapa yang menaruh batang-batang ini? "
@@ -11074,7 +11072,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "CRITICAL: NEVER use 'unit' to translate 台/個/件 unless the original Chinese literally contains '單位' (unit as in department/organizational unit). "
             "q) 台車=troli(hard replacement already applied). 削皮=peeling(hard replacement already applied). These should appear in output as 'troli' and 'peeling' consistently.\n"
             "</context_disambiguation>\n"
-            + _build_custom_examples_prompt()
+
             # v3.9.37: 刪除原 line 4920~5337「11. TRANSLATION EXAMPLES」死 examples block
             # 原 100+ 條中印對照 examples 已透過 _build_messages_with_fewshot() 動態注入
             # 為 user/assistant pair (line 1681),符合 Anthropic multishot-prompting 官方規範
@@ -11220,7 +11218,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _msgs = [{"role": "system", "content": sys_prompt}] + _icl_messages
         elif fewshot_mode == "messages":
             _gid_for_ctx = getattr(_tl, 'group_id', None)
-            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt, group_id=_gid_for_ctx)
+            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt, group_id=_gid_for_ctx, source_text=text)
         else:
             _msgs = [
                 {"role": "system", "content": sys_prompt},
@@ -11295,6 +11293,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
             "translation_fast_quality": True,
+            "translation_max_generations": 2,
         }
         # Sampling parameters
         if model_supports(_model, "temperature"):
@@ -11504,7 +11503,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             }
             if (
                 _quality_rejected_providers
-                and _tl.last_provider_used not in _quality_rejected_providers
+                and (len(_quality_rejected_providers) >= 2
+                     or _tl.last_provider_used not in _quality_rejected_providers)
             ):
                 _tl.source_review_already_attempted = True
         except Exception:
@@ -11820,6 +11820,8 @@ def _translation_cache_context_bound(text):
         return True
     if str(getattr(_tl, "quoted_context_source", "") or "").strip():
         return True
+    if get_recent_media_scene(getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)):
+        return True
     try:
         return bool(_translation_needs_conversation_history(text))
     except Exception:
@@ -11851,6 +11853,7 @@ def _translation_cache_asset_fingerprint():
             "",
         ),
         "quality_gate": getattr(tqg_module, "QUALITY_GATE_BUILD_ID", ""),
+        "prompt_compiler": getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),
         "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
         "semantic_audit": getattr(
@@ -12560,10 +12563,6 @@ def _partition_delivery_issues(issues):
     """
     advisory_prefixes = (
         "ambiguous_reverse_glossary:",
-        "generic_validation_exception:",
-        "factory_validation_exception:",
-        "validation_exception:",
-        "local_safe_check_exception:",
         "primary_translation_",
         "emergency_nmt_used:",
     )
@@ -12590,11 +12589,18 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     """
     issue_list = [str(item) for item in (issues or []) if str(item).strip()]
 
+    def _verified_local(value):
+        if not value:
+            return None
+        defects = _delivery_validation_issues(source_text, value, src, tgt)
+        return value if not defects else None
+
     # Complete bidirectional source relations are authoritative and can be
     # rendered without trusting or repairing a degraded provider sentence.
     relation_fallback = factory_message_semantics_module.translate_source_directly(
         source_text, src, tgt
     )
+    relation_fallback = _verified_local(relation_fallback)
     if relation_fallback:
         return relation_fallback
 
@@ -12606,6 +12612,7 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     operational_fallback = factory_semantic_audit_module.translate_source_directly(
         source_text, src, tgt
     )
+    operational_fallback = _verified_local(operational_fallback)
     if operational_fallback:
         return operational_fallback
 
@@ -12621,7 +12628,7 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
             measurement_ok, _ = factory_measurement_semantics_module.validate_translation(
                 measurement_frame, measurement_fallback
             )
-            if measurement_ok:
+            if measurement_ok and _verified_local(measurement_fallback):
                 return measurement_fallback
 
     exact = _factory_exact_fallback(source_text, src, tgt)
@@ -12720,7 +12727,7 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
         )
     return best
 
-def _emergency_translation_fallback(source_text, src, tgt):
+def _emergency_translation_fallback(source_text, src, tgt, mention_placeholders=None):
     """Try independent NMT routes after empty or objectively corrupt output.
 
     Each provider candidate is validated separately.  An invalid first NMT
@@ -12748,6 +12755,15 @@ def _emergency_translation_fallback(source_text, src, tgt):
             continue
         if not candidate or _is_translation_failure_sentinel(candidate):
             continue
+        # Some NMT engines return the actual visible mention. Normalize that
+        # already-present identity back to its known token before validation;
+        # never invent or append a missing identity as a repair.
+        for token, visible in dict(mention_placeholders or {}).items():
+            expected = str(source_text).count(token)
+            missing = max(0, expected - str(candidate).count(token))
+            if visible and missing:
+                candidate = re.sub(re.escape(visible) + r"(?!\w)", lambda _m: token,
+                                   str(candidate), count=missing)
         result = _best_effort_factory_delivery(
             source_text, candidate, src, tgt,
             issues=["primary_translation_unavailable_or_invalid", "emergency_nmt_used:" + provider_name],
@@ -12855,12 +12871,12 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
                     source_text, safe, src, tgt,
                     issues=post_report.issues,
                     prior_candidate=original,
-                ) or original
+                )
 
         return _best_effort_factory_delivery(
             source_text, original, src, tgt,
             issues=checked.get("issues", []) or ["local_safe_check_empty"],
-        ) or original
+        )
     except Exception as exc:
         logger.exception(
             "[FinalDeliveryGuard] validation exception; delivering non-cacheable provider text: %s",
@@ -12869,7 +12885,7 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         return _best_effort_factory_delivery(
             source_text, original, src, tgt,
             issues=["validation_exception:" + type(exc).__name__],
-        ) or original
+        )
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -13434,25 +13450,38 @@ def _translation_retry_image_attempt(job, lease_owner=None):
         except Exception:
             _tl.tone, _tl.tone_custom = translation_tone, translation_tone_custom
 
-        img_base64, img_raw = download_line_image(message_id)
-        if not img_base64 or not img_raw:
-            return False
-        mime = detect_image_mime(img_raw)
-        extracted = ocr_image_openai(img_base64, mime_type=mime)
+        extracted = str(payload.get("ocr_text") or "").strip()
+        _tl.factory_reason_image_expected_rows = int(payload.get("factory_reason_image_expected_rows") or 0)
+        if not extracted:
+            img_base64, img_raw = download_line_image(message_id)
+            if not img_base64 or not img_raw:
+                return False
+            mime = detect_image_mime(img_raw)
+            extracted = ocr_image_openai(img_base64, mime_type=mime)
         if _is_factory_reason_ocr_failure_text(extracted):
-            extracted = None
-        if not extracted or len(str(extracted).strip()) < 2:
-            # A successful vision call can legitimately find no text.  Avoid an
-            # immortal queue row after several independent attempts; this path
-            # remains silent because there is nothing to translate.
-            if int((job or {}).get("attempts") or 0) >= 2 and _has_ai_capability("vision"):
-                translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-                with _TRANSLATION_RETRY_LOCK:
-                    _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-                return True
             return False
-
+        if not extracted or len(str(extracted).strip()) < 2:
+            # Empty output can also be a provider timeout. It is not evidence
+            # of a blank image and must never silently complete a pending job.
+            return False
         extracted = str(extracted).strip()
+        translation_retry_queue_module.checkpoint(job_key, {
+            "ocr_text": extracted,
+            "factory_reason_image_expected_rows": int(getattr(_tl, "factory_reason_image_expected_rows", 0) or 0),
+        }, owner=lease_owner)
+        work_order = analyze_work_order(extracted)
+        if work_order.get("is_work_order"):
+            store_work_order_media_context(group_id, user_id, message_id)
+        wo_on = bool(payload.get("wo_setting", group_wo_settings.get(group_id, True)))
+        wo_customer = work_order.get("customer") if work_order.get("is_work_order") else None
+        wo_reply = format_storage_for_work_order(wo_customer) if wo_on and wo_customer else None
+        if wo_reply:
+            _translation_retry_push(job_key, payload, wo_reply)
+            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
+            with _TRANSLATION_RETRY_LOCK:
+                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
+            return True
+
         lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")
         preferred = str(payload.get("tgt") or group_target_lang.get(group_id, "id") or "id")
         actual_tgt = preferred if lang == "zh" else "zh"
@@ -13900,6 +13929,7 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
     job_key = f"{target_id}:{message_id}:image"
     payload = {
         "job_kind": "image",
+        "wo_setting": bool(ctx.get("wo_setting", group_wo_settings.get(ctx.get("group_id"), True))),
         "group_id": ctx.get("group_id"),
         "user_id": ctx.get("user_id"),
         "message_id": message_id,
@@ -13972,6 +14002,15 @@ def translate(text, src, tgt):
     使用可恢復代碼。品質檢查負責記錄與阻止髒快取，不再把可用譯文丟棄。
     """
     _set_translation_outcome("started")
+    # Worker threads are reused. Early exact/cache returns previously left
+    # review, context and admission decisions behind for the next message.
+    for _request_attr in (
+        "semantic_contract", "source_review_already_attempted", "provider_attempt_count",
+        "quality_gate_pending", "delivery_degraded", "delivery_degraded_issues",
+        "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
+    ):
+        if hasattr(_tl, _request_attr):
+            delattr(_tl, _request_attr)
     try:
         # Prevent a previous request on the same worker thread from reusing a
         # media-context decision.  Multiple validators within this request may
@@ -13991,6 +14030,28 @@ def translate(text, src, tgt):
         "openai_status": "not_called_yet",
     })
     canonical_text = text
+    # Resolve source-identical approvals before aliases and LINE placeholders
+    # change the source key. These presentation transforms used to hide existing
+    # work-order, station and @All corrections, triggering unnecessary API calls.
+    _original_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
+    _has_live_corrections = bool(custom_translation_examples or _active_translation_corrections_for_casebook())
+    if _original_exact or _has_live_corrections:
+        _original_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=8)
+        _original_exact = translation_casebook_module.exact_verified_target(text, _original_cases) or _original_exact
+        if _original_exact:
+            _approved = finalize_factory_translation(text, _original_exact, src, tgt)
+            _approved_ok, _approved_issues = _tm_bypass_integrity_ok(text, _approved, src, tgt)
+            if _approved_ok:
+                _approved = _final_delivery_guard(text, _approved, src, tgt)
+                if _approved:
+                    _gid = getattr(_tl, "group_id", "") or ""
+                    _log_translation(text, _approved, src, tgt, "verified_original_exact", 0, 1.0, False, 1.0, _gid)
+                    if _gid:
+                        _conv_buffer_add(_gid, text, _approved, src, tgt)
+                    _set_translation_outcome("delivered", "verified_original_exact")
+                    _update_last_translate_debug(pipeline_status="verified_original_exact",
+                                                final_candidate=_approved[:2000], openai_status="not_needed")
+                    return _approved
     # v3.33.4: normalize only known factory equipment codes before every cache,
     # TM, NMT, LLM, glossary and quality-gate route.  This prevents inputs such
     # as ``Mesin i 9 ...`` from being treated as ordinary words and later
@@ -14279,7 +14340,11 @@ def translate(text, src, tgt):
         )
         _tl.protected_name_map = _protected_entities
         _tl.auto_tone_analysis = _auto_tone_analysis
-        result = _translate_core(protected_text, src, tgt)
+        _request_key = None
+        if not _translation_cache_context_bound(protected_text):
+            _request_key = (protected_text, src, tgt, _translation_cache_scope())
+        with serialize_request(_request_key):
+            result = _translate_core(protected_text, src, tgt)
     finally:
         # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
         try:
@@ -14301,7 +14366,7 @@ def translate(text, src, tgt):
     _emergency_attempted = False
     if not result and not _translation_was_intentionally_skipped():
         _emergency_attempted = True
-        result = _emergency_translation_fallback(protected_text, src, tgt)
+        result = _emergency_translation_fallback(protected_text, src, tgt, mention_placeholders=_mention_map)
     if _is_translation_failure_sentinel(result):
         logger.warning("[LegacyFailurePurge] blocked failure payload at public translate boundary")
         result = None
@@ -14325,7 +14390,7 @@ def translate(text, src, tgt):
             # rejected it.  Try independent NMT routes immediately before
             # falling back to the detached retry worker.
             _emergency_attempted = True
-            result = _emergency_translation_fallback(protected_text, src, tgt)
+            result = _emergency_translation_fallback(protected_text, src, tgt, mention_placeholders=_mention_map)
             if result and _mention_map:
                 result = restore_mentions(result, _mention_map)
                 result = _post_restore_mentions_guard(result, _mention_map)
@@ -14721,6 +14786,43 @@ def _translate_core(text, src, tgt):
     except Exception:
         pass
 
+    # Verified exact corrections are the only historical translations allowed to
+    # bypass the unified factory route. They are source-identical, then checked
+    # against the current semantic contract, glossary and immutable data before
+    # delivery. Fuzzy TM/vector/NMT can never override them.
+    try:
+        _exact_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=8)
+        _exact_verified = translation_casebook_module.exact_verified_target(text, _exact_cases)
+    except Exception as _exact_exc:
+        logger.warning("[FactoryPolicy] exact verified lookup failed open: %s", _exact_exc)
+        _exact_verified = None
+    if _exact_verified:
+        _exact_candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
+        _exact_sem_ok, _exact_sem_reason = translation_satisfies_semantic_contract(
+            _semantic_contract, _exact_candidate
+        )
+        _exact_integrity_ok, _exact_integrity_issues = _tm_bypass_integrity_ok(
+            text, _exact_candidate, src, tgt
+        )
+        if _exact_sem_ok and _exact_integrity_ok:
+            try:
+                _log_translation(text, _exact_candidate, src, tgt,
+                                 "verified_exact_factory_case", 0, 1.0, False, 1.0, _gid_for_tm)
+                if _gid_for_tm:
+                    _conv_buffer_add(_gid_for_tm, text, _exact_candidate, src, tgt)
+            except Exception:
+                pass
+            _update_last_translate_debug(
+                pipeline_status="verified_exact_factory_case",
+                final_candidate=str(_exact_candidate)[:2000],
+                openai_status="not_needed",
+            )
+            return _exact_candidate
+        logger.warning(
+            "[FactoryPolicy] exact verified correction blocked by current contract: %s %s",
+            _exact_sem_reason, _exact_integrity_issues[:8],
+        )
+
     # The versioned guard owns the authoritative exact-correction index.  It
     # accepts punctuation/spacing variants only; semantic paraphrases still go
     # through the full source-grounded translation route.
@@ -14764,43 +14866,6 @@ def _translate_core(text, src, tgt):
                 pipeline_status="invalid_guard_exact_fallback_to_provider",
                 final_candidate=str(_guard_candidate)[:2000],
             )
-
-    # Verified exact corrections are the only historical translations allowed to
-    # bypass the unified factory route. They are source-identical, then checked
-    # against the current semantic contract, glossary and immutable data before
-    # delivery. Fuzzy TM/vector/NMT can never override them.
-    try:
-        _exact_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=8)
-        _exact_verified = translation_casebook_module.exact_verified_target(text, _exact_cases)
-    except Exception as _exact_exc:
-        logger.warning("[FactoryPolicy] exact verified lookup failed open: %s", _exact_exc)
-        _exact_verified = None
-    if _exact_verified:
-        _exact_candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
-        _exact_sem_ok, _exact_sem_reason = translation_satisfies_semantic_contract(
-            _semantic_contract, _exact_candidate
-        )
-        _exact_integrity_ok, _exact_integrity_issues = _tm_bypass_integrity_ok(
-            text, _exact_candidate, src, tgt
-        )
-        if _exact_sem_ok and _exact_integrity_ok:
-            try:
-                _log_translation(text, _exact_candidate, src, tgt,
-                                 "verified_exact_factory_case", 0, 1.0, False, 1.0, _gid_for_tm)
-                if _gid_for_tm:
-                    _conv_buffer_add(_gid_for_tm, text, _exact_candidate, src, tgt)
-            except Exception:
-                pass
-            _update_last_translate_debug(
-                pipeline_status="verified_exact_factory_case",
-                final_candidate=str(_exact_candidate)[:2000],
-                openai_status="not_needed",
-            )
-            return _exact_candidate
-        logger.warning(
-            "[FactoryPolicy] exact verified correction blocked by current contract: %s %s",
-            _exact_sem_reason, _exact_integrity_issues[:8],
-        )
 
     # A generated translation can bypass the provider only after it was admitted
     # under the exact same guard/glossary/policy build and is revalidated against
@@ -15285,8 +15350,7 @@ def _translate_core(text, src, tgt):
                     if not _factory_report.ok:
                         _issues.extend(_factory_report.hard_issues)
                 except Exception as _factory_guard_exc:
-                    if _factory_route_is_strict(text, src, tgt):
-                        _issues.append("factory_guard_exception:" + type(_factory_guard_exc).__name__)
+                    _issues.append("factory_guard_exception:" + type(_factory_guard_exc).__name__)
                 _issues = list(dict.fromkeys(_issues))
                 return not _issues, _issues
 
@@ -15636,10 +15700,13 @@ def _post_translation_async(
         )
     except Exception as exc:
         logger.warning("[TM-bg] store exception: %s", exc)
-    try:
-        vec_tm_module.vector_store(text, final, src, tgt, gid, model_used, quality_for_tm)
-    except Exception as exc:
-        logger.warning("[VecTM-bg] store exception: %s", exc)
+    if (not factory_translation_policy_module.should_force_factory_pipeline(
+            text, src, tgt, heuristic_match=_is_factory_context(text))
+            and os.environ.get("VECTOR_TM_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}):
+        try:
+            vec_tm_module.vector_store(text, final, src, tgt, gid, model_used, quality_for_tm)
+        except Exception as exc:
+            logger.warning("[VecTM-bg] store exception: %s", exc)
 
 
 # =====================================================================
@@ -20521,6 +20588,13 @@ def _handle_image_background(ctx):
         except Exception:
             pass
 
+        if extracted and not _is_factory_reason_ocr_failure_text(extracted):
+            _image_key = ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image"
+            translation_retry_queue_module.checkpoint(_image_key, {
+                "ocr_text": str(extracted),
+                "factory_reason_image_expected_rows": int(getattr(_tl, "factory_reason_image_expected_rows", 0) or 0),
+            })
+
         # Classify a work-order document immediately after OCR, before the
         # separate scene-description API call.  The old order delayed the only
         # structured context signal, so a text sent right after the photo could
@@ -20569,60 +20643,37 @@ def _handle_image_background(ctx):
             # place an OCR/translation warning into the translated conversation.
             return
 
-        # === Check if this is a work order (製造指示書) ===
-        try:
-            wo_analysis = _work_order_analysis
-            wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
-            if wo_customer:
-                _event_log_write("image_step", {"step": "work_order_detected", "customer": str(wo_customer)[:50]})
-                # It's a work order — never translate work order content
-                wo_on = group_wo_settings.get(group_id, True)
-                if wo_on:
-                    reply = format_storage_for_work_order(wo_customer)
-                    if reply:
-                        _stats_inc("work_order_detections")
-                        qt_wo = ctx["quote_token"]
-                        # v3.10+ 修補:加 push fallback。原本只用 reply_message,
-                        # work_order 偵測 + storage lookup 若加 OCR 超過 30 秒,
-                        # reply_token 就過期,訊息靜默消失,使用者完全不知工單已處理。
-                        try:
-                            with ApiClient(configuration) as api_client:
-                                api = MessagingApi(api_client)
-                                msg_obj = TextMessage(text=reply)
-                                if qt_wo:
-                                    try:
-                                        msg_obj.quote_token = qt_wo
-                                    except Exception:
-                                        pass
-                                api.reply_message(ReplyMessageRequest(
-                                    reply_token=ctx["reply_token"],
-                                    messages=[msg_obj]
-                                ))
-                            _event_log_write("image_done", {"path": "work_order", "method": "reply"})
-                        except Exception as _wo_re:
-                            _event_log_write("image_step_error", {
-                                "step": "wo_reply", "err": str(_wo_re)[:300], "fallback": "push"
-                            })
-                            logger.warning("Work order reply failed, trying push: %s", _wo_re)
-                            try:
-                                with ApiClient(configuration) as api_client:
-                                    api = MessagingApi(api_client)
-                                    api.push_message(PushMessageRequest(
-                                        to=group_id,
-                                        messages=[TextMessage(text=reply)]
-                                    ))
-                                _event_log_write("image_done", {"path": "work_order", "method": "push"})
-                            except Exception as _wo_pe:
-                                _event_log_write("image_step_error", {"step": "wo_push", "err": str(_wo_pe)[:300]})
-                                logger.exception("Work order push also failed: %s", _wo_pe)
-                # Whether storage found or not, skip translation for work orders
-                track_group_usage(group_id, _bp, _bc, _bcost)
-                _complete_durable_image_job(ctx)
-                return
-        except Exception as e:
-            _event_log_write("image_step_error", {"step": "work_order_detect", "err": str(e)[:200]})
-            logger.error("Work order detection error: %s", e)
-        # === End work order check ===
+        # Work-order lookup is optional. OCR text still goes through normal
+        # translation when disabled or when no storage result exists.
+        wo_customer = (_work_order_analysis.get("customer")
+                       if _work_order_analysis.get("is_work_order") else None)
+        wo_on = bool(ctx.get("wo_setting", group_wo_settings.get(group_id, True)))
+        wo_reply = format_storage_for_work_order(wo_customer) if wo_customer and wo_on else None
+        if wo_reply:
+            try:
+                with ApiClient(configuration) as api_client:
+                    api = MessagingApi(api_client)
+                    msg_obj = TextMessage(text=wo_reply)
+                    if ctx.get("quote_token"):
+                        msg_obj.quote_token = ctx["quote_token"]
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=ctx["reply_token"], messages=[msg_obj]
+                    ))
+                _event_log_write("image_done", {"path": "work_order", "method": "reply"})
+            except Exception:
+                try:
+                    _translation_retry_push(
+                        ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image",
+                        ctx, wo_reply,
+                    )
+                    _event_log_write("image_done", {"path": "work_order", "method": "push"})
+                except Exception as exc:
+                    logger.warning("Work order delivery pending: %s", exc)
+                    return
+            _stats_inc("work_order_detections")
+            track_group_usage(group_id, _bp, _bc, _bcost)
+            _complete_durable_image_job(ctx)
+            return
 
         _event_log_write("image_step", {"step": "before_lang_detect"})
         lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")

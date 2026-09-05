@@ -16,17 +16,17 @@ import re
 import threading
 import time
 import unicodedata
+from translation_source_identity import canonical_source_key
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-08-30.1-scoped-versioned-correction-casebook"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-04.1-lossless-source-identity"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
 _SPACE_RE = re.compile(r"\s+")
-_CANONICAL_SOURCE_STRIP_RE = re.compile(r"[^0-9a-z\u3400-\u9fff%+./_@#-]+", re.I)
 _CACHE_LOCK = threading.RLock()
 _ACTIVE_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -71,18 +71,6 @@ def _normalize(value: Any) -> str:
 
 def _compact(value: Any) -> str:
     return re.sub(r"[^0-9a-z\u3400-\u9fff]+", "", _normalize(value))
-
-
-def canonical_source_key(value: Any) -> str:
-    """Normalize only punctuation/spacing variants for verified exact cases.
-
-    Synonyms and paraphrases remain different keys.  This expands exact human
-    corrections safely to LINE punctuation differences without allowing fuzzy
-    target copying.
-    """
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = text.replace("\u3000", " ")
-    return _CANONICAL_SOURCE_STRIP_RE.sub("", text)
 
 
 def direction_key(src: str, tgt: str) -> Optional[str]:

@@ -27,18 +27,18 @@ import sqlite3
 import threading
 import time
 import unicodedata
+from translation_source_identity import canonical_source_key
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_LEARNING_API_VERSION = 2
-ACTIVE_LEARNING_BUILD_ID = "2026-08-30.1-safe-continuous-learning"
+ACTIVE_LEARNING_BUILD_ID = "2026-09-04.1-lossless-correction-migration"
 VALID_STATUSES = frozenset({
     "pending", "approved", "rejected", "superseded", "quarantined",
 })
 _SUPPORTED_DIRECTIONS = {("zh", "id"), ("id", "zh")}
-_CANONICAL_STRIP_RE = re.compile(r"[^0-9a-z\u3400-\u9fff%+./_@#-]+", re.I)
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
 _HAN_RE = re.compile(r"[\u3400-\u9fff]")
 
@@ -89,12 +89,6 @@ def _lang(value: Any) -> str:
     if low.startswith("id"):
         return "id"
     return low.split("-", 1)[0]
-
-
-def canonical_source_key(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    text = text.replace("\u3000", " ")
-    return _CANONICAL_STRIP_RE.sub("", text)
 
 
 def _hash_text(text: str) -> str:
@@ -250,10 +244,10 @@ def init() -> None:
                 )
                 revisions[revision_key] = revisions.get(revision_key, 0) + 1
                 revision = int(row["revision"] or 0)
-                if not str(row["canonical_src_key"] or "") or revision <= 0:
+                if str(row["canonical_src_key"] or "") != key_text or revision <= 0:
                     conn.execute(
                         "UPDATE corrections SET canonical_src_key=?,revision=? WHERE id=?",
-                        (key_text, revisions[revision_key], int(row["id"])),
+                        (key_text, revision if revision > 0 else revisions[revision_key], int(row["id"])),
                     )
 
             conn.executescript(
