@@ -22,11 +22,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import factory_knowledge
+import factory_source_understanding as source_understanding
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-04.1-lossless-source-identity"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-05.1-operation-status-boundary"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -392,6 +393,9 @@ class FactoryTranslationGuard:
             issues.extend(self._validate_regression_case(exact, target_text))
         issues.extend(self._validate_names(source_text, target_text, protected_names))
         issues.extend(self._validate_codes(source_text, target_text))
+        analysis = source_understanding.analyze(source_text, _lang(src), protected_names=protected_names)
+        _state_ok, state_issues = source_understanding.validate_operational_states(analysis, target_text, _lang(src), _lang(tgt))
+        issues.extend("factory_guard:" + issue for issue in state_issues)
         issues.extend(self._validate_quantities(source_text, target_text, _lang(src), _lang(tgt)))
         quantity_frame = fqs_module.build_frame(source_text, _lang(src), _lang(tgt))
         quantity_ok, quantity_issues = fqs_module.validate_translation(quantity_frame, target_text)

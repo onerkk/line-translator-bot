@@ -34,6 +34,7 @@ translation_memory.py — Translation Memory (TM) 模組 v1.1 (2026-08-11)
 """
 
 import sqlite3
+from translation_source_identity import canonical_source_key
 import os
 import time
 import hashlib
@@ -231,10 +232,10 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
             # 同 group_id 優先(語境一致),然後降到全局
             row = conn.execute("""
                 SELECT * FROM tm_entries
-                WHERE src_lang=? AND tgt_lang=? AND src_text_hash=?
+                WHERE src_lang=? AND tgt_lang=? AND src_text_hash=? AND group_id IN (?, '')
                 ORDER BY (group_id=?) DESC, COALESCE(quality_score,-1) DESC, hit_count DESC, last_used_at DESC
                 LIMIT 1
-            """, (src_lang, tgt_lang, src_hash, group_id)).fetchone()
+            """, (src_lang, tgt_lang, src_hash, group_id, group_id)).fetchone()
             
             if row and row["src_text"].strip() == src_text:
                 # 防 hash 碰撞:再比 raw 字串
@@ -256,10 +257,10 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
             candidates = conn.execute("""
                 SELECT id, src_text, tgt_text, group_id, hit_count
                 FROM tm_entries
-                WHERE src_lang=? AND tgt_lang=?
+                WHERE src_lang=? AND tgt_lang=? AND group_id IN (?, '')
                 ORDER BY (group_id=?) DESC, COALESCE(quality_score,-1) DESC, hit_count DESC, last_used_at DESC
                 LIMIT ?
-            """, (src_lang, tgt_lang, group_id, TM_MAX_CANDIDATES)).fetchall()
+            """, (src_lang, tgt_lang, group_id, group_id, TM_MAX_CANDIDATES)).fetchall()
         
         if not candidates:
             with _lock:
@@ -276,7 +277,10 @@ def tm_lookup(src_text: str, src_lang: str, tgt_lang: str,
         top_score, top_c = scored[0]
         
         # Tier 2: fuzzy bypass(直接用譯文)
-        if top_score >= TM_FUZZY_THRESHOLD_BYPASS:
+        # A 99% match can change "not", a machine code or one quantity. Fuzzy
+        # rows are evidence only unless the difference is presentation-only.
+        if (top_score >= TM_FUZZY_THRESHOLD_BYPASS
+                and canonical_source_key(src_text) == canonical_source_key(top_c["src_text"])):
             with _lock:
                 _stats["fuzzy_bypass"] += 1
             try:

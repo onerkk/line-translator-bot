@@ -12,6 +12,10 @@ no embedding API is required on the user-facing path.
 from __future__ import annotations
 
 import math
+import json
+from functools import lru_cache
+from html import escape
+import factory_source_understanding as source_understanding
 import re
 import threading
 import time
@@ -22,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-04.1-lossless-source-identity"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-05.1-bidirectional-adaptive-retrieval"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -45,6 +49,7 @@ class RetrievedCase:
     distinctive_anchors: Tuple[str, ...] = ()
     verified_correction: bool = False
     revision: int = 0
+    source_edits: Tuple = ()
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +65,7 @@ class RetrievedCase:
             "distinctive_anchors": list(self.distinctive_anchors),
             "verified_correction": bool(self.verified_correction),
             "revision": int(self.revision),
+            "source_edits": list(self.source_edits),
         }
 
 
@@ -186,6 +192,8 @@ def active_corrections_snapshot(
             )
         for index, raw in enumerate(raw_rows or []):
             if isinstance(raw, Mapping):
+                if group_id is not None and str(raw.get("group_id") or "") not in {"", str(group_id or "")}:
+                    continue
                 case = _case_from_correction(raw, index)
                 if case:
                     rows.append(case)
@@ -343,6 +351,21 @@ def _zh_content_sequence(text: str) -> str:
 
 
 def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 6) -> List[str]:
+    if direction == "id2zh":
+        # Reverse corrections were all dropped: the old implementation returned
+        # no Indonesian anchors, while callers required at least two anchors.
+        def content_words(text):
+            normalized = source_understanding.normalized_view(str(text), "id").casefold()
+            return {w for w in _LATIN_WORD_RE.findall(normalized)
+                    if len(w) >= 4 and w not in _ID_STOPWORDS
+                    and w not in {"mohon", "tolong", "harap", "harus", "bisa", "dapat"}}
+        anchors = sorted(content_words(query) & content_words(source), key=lambda w: (-len(w), w))
+        shared_concepts = source_understanding.concepts(query) & source_understanding.concepts(source)
+        # Synonyms/inflections can share no content word at all (cek bahan /
+        # periksa material). Independent domain concepts also count as anchors.
+        anchors.extend("concept:" + name for name in sorted(shared_concepts - {"machine", "shift"})
+                       if name not in source_understanding.concepts(" ".join(anchors)))
+        return anchors[:limit]
     if direction != "zh2id":
         return []
     q = _zh_content_sequence(query)
@@ -363,8 +386,9 @@ def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: 
                 return shared
     return shared
 
+@lru_cache(maxsize=8192)
 def _features(text: str, direction: str) -> Counter[str]:
-    normalized = _normalize(text)
+    normalized = _normalize(source_understanding.normalized_view(str(text), "zh" if direction == "zh2id" else "id"))
     features: Counter[str] = Counter()
     if direction == "zh2id":
         # Chinese factory messages freely insert punctuation/spaces inside one
@@ -389,20 +413,23 @@ def _features(text: str, direction: str) -> Counter[str]:
             features["w:" + word] += 1.0 if len(word) < 4 else 1.5
         for left, right in zip(words, words[1:]):
             features[f"b:{left} {right}"] += 2.2
+    for feature in source_understanding.match_features(normalized, "zh" if direction == "zh2id" else "id"):
+        features[feature] += 1.8 if feature.startswith("concept:") else 0.12
     return features
 
 
-def _idf(cases: Sequence[Mapping[str, Any]], direction: str) -> Dict[str, float]:
-    docs = []
-    for case in cases:
-        if str(case.get("direction")) != direction:
-            continue
-        docs.append(set(_features(str(case.get("source") or ""), direction)))
-    total = max(1, len(docs))
+@lru_cache(maxsize=16)
+def _cached_idf(sources: Tuple[str, ...], direction: str):
     counts: Counter[str] = Counter()
-    for doc in docs:
-        counts.update(doc)
+    for source in sources:
+        counts.update(set(_features(source, direction)))
+    total = max(1, len(sources))
     return {feature: math.log((total + 1.0) / (count + 1.0)) + 1.0 for feature, count in counts.items()}
+
+
+def _idf(cases: Sequence[Mapping[str, Any]], direction: str) -> Dict[str, float]:
+    return _cached_idf(tuple(str(case.get("source") or "") for case in cases
+                             if str(case.get("direction")) == direction), direction)
 
 
 def _weighted_overlap(query: Counter[str], candidate: Counter[str], idf: Mapping[str, float]) -> Tuple[float, float, float]:
@@ -440,6 +467,8 @@ def retrieve(
     direction_cases = [case for case in cases if str(case.get("direction")) == direction]
     if not direction_cases:
         return []
+    query_original = query
+    query = source_understanding.normalized_view(str(query), src)
     query_norm = _normalize(query)
     query_compact = _compact(query)
     q_features = _features(query, direction)
@@ -451,10 +480,11 @@ def retrieve(
         guarded, guard_score, _guard_evidence = _matches_source_guard(query, source_match)
         if source_match and not guarded:
             continue
-        source_norm = _normalize(source)
-        source_compact = _compact(source)
+        source_view = source_understanding.normalized_view(source, src)
+        source_norm = _normalize(source_view)
+        source_compact = _compact(source_view)
         c_features = _features(source, direction)
-        distinctive_anchors = _distinctive_shared_anchors(query, source, direction)
+        distinctive_anchors = _distinctive_shared_anchors(query, source_view, direction)
         coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf)
         score = 0.55 * harmonic + 0.30 * coverage + 0.15 * precision
         # Long Chinese notices make cosine-like overlap deceptively small even
@@ -466,8 +496,10 @@ def retrieve(
             long_shared = sum(1 for phrase in shared_han if len(phrase) >= 3)
             short_shared = sum(1 for phrase in shared_han if len(phrase) == 2)
             score += min(0.62, 0.13 * long_shared + 0.04 * short_shared)
-        if canonical_source_key(query) == canonical_source_key(source):
+        if canonical_source_key(query_original) == canonical_source_key(source):
             score = 10.0
+        elif canonical_source_key(query) == canonical_source_key(source_view):
+            score = max(score, 3.0)
         elif query_compact and source_compact and (query_compact in source_compact or source_compact in query_compact):
             shorter = min(len(query_compact), len(source_compact))
             longer = max(len(query_compact), len(source_compact))
@@ -485,7 +517,8 @@ def retrieve(
         # different sentence. Exact matches remain authoritative.
         if ((case.get("bad_target") or case.get("verified_correction"))
                 and not source_match and score < 9.0
-                and len(distinctive_anchors) < 2):
+                and len(distinctive_anchors) < 2
+                and canonical_source_key(query) != canonical_source_key(source_view)):
             continue
         if score < float(min_score):
             continue
@@ -502,6 +535,7 @@ def retrieve(
             distinctive_anchors=tuple(distinctive_anchors),
             verified_correction=bool(case.get("verified_correction")),
             revision=int(case.get("revision") or 0),
+            source_edits=tuple(source_understanding.source_differences(query_original, source)),
         ))
     ranked.sort(key=lambda item: (item.score, bool(item.bad_target), len(item.source)), reverse=True)
     return [item.as_dict() for item in ranked[: max(1, int(max_cases or 1))]]
@@ -635,16 +669,19 @@ def build_prompt(cases: Sequence[Mapping[str, Any]]) -> str:
     )
     for index, case in enumerate(cases, 1):
         lines.append(
-            f"<case index='{index}' id='{str(case.get('case_id') or '')}' score='{float(case.get('score') or 0):.3f}'>"
+            f"<case index='{index}' id='{escape(str(case.get('case_id') or ''), quote=True)}' score='{float(case.get('score') or 0):.3f}'>"
         )
-        lines.append("Source pattern: " + str(case.get("source") or ""))
+        lines.append("Source pattern: " + escape(str(case.get("source") or ""), quote=False))
         bad = str(case.get("bad_target") or "").strip()
         if bad:
-            lines.append("Known incorrect translation — do not repeat this error: " + bad)
-        lines.append("Verified translation: " + str(case.get("target") or ""))
+            lines.append("Known incorrect translation — do not repeat this error: " + escape(bad, quote=False))
+        lines.append("Verified translation: " + escape(str(case.get("target") or ""), quote=False))
         reason = str(case.get("reason") or "").strip()
         if reason:
-            lines.append("Correction rationale: " + reason)
+            lines.append("Correction rationale: " + escape(reason, quote=False))
+        if case.get("source_edits"):
+            lines.append("Current source changes (adapt these; never copy old values/status): "
+                         + escape(json.dumps(case["source_edits"], ensure_ascii=False), quote=False))
         lines.append("</case>")
     lines.append(
         "Silently compare the current source with these cases. Transfer only the relevant semantic distinction; preserve the current source's own actor, action, object, modality, scope, timing and methods."

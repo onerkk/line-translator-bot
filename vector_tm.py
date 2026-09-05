@@ -29,6 +29,7 @@ vector_tm.py — Vector RAG Translation Memory v1.0 (2026-05-20)
 
 import os
 import sqlite3
+from translation_source_identity import canonical_source_key
 import time
 import hashlib
 import logging
@@ -279,12 +280,6 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
     with _lock:
         _stats["lookups"] += 1
     
-    query_vec = _generate_embedding(src_text)
-    if query_vec is None:
-        with _lock:
-            _stats["misses"] += 1
-        return None
-    
     try:
         with sqlite3.connect(VECTOR_DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -292,16 +287,23 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
                 SELECT id, src_text, tgt_text, embedding, group_id, hit_count,
                        model, verified, allow_bypass, policy_fingerprint
                 FROM vector_entries
-                WHERE src_lang=? AND tgt_lang=?
+                WHERE src_lang=? AND tgt_lang=? AND group_id IN (?, '')
+                  AND embedding_model=?
                 ORDER BY (group_id=?) DESC, hit_count DESC, last_used_at DESC
                 LIMIT ?
-            """, (src_lang, tgt_lang, group_id or "", VECTOR_MAX_CANDIDATES)).fetchall()
+            """, (src_lang, tgt_lang, group_id or "", EMBEDDING_MODEL, group_id or "", VECTOR_MAX_CANDIDATES)).fetchall()
         
         if not candidates:
             with _lock:
                 _stats["misses"] += 1
             return None
         
+        # Do not pay for a vector when this scope/model has no usable rows.
+        query_vec = _generate_embedding(src_text)
+        if query_vec is None:
+            with _lock:
+                _stats["misses"] += 1
+            return None
         scored = []
         for c in candidates:
             try:
@@ -320,7 +322,9 @@ def vector_lookup(src_text: str, src_lang: str, tgt_lang: str,
         top_sim, top_c = scored[0]
         
         # Tier 1: vector bypass
-        if top_sim >= VECTOR_SIMILARITY_BYPASS and bool(top_c["allow_bypass"]):
+        if (top_sim >= VECTOR_SIMILARITY_BYPASS and bool(top_c["allow_bypass"])
+                and bool(top_c["verified"])
+                and canonical_source_key(src_text) == canonical_source_key(top_c["src_text"])):
             with _lock:
                 _stats["bypass_hits"] += 1
             try:
