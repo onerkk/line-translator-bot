@@ -13,8 +13,9 @@ import json
 import re
 from typing import Mapping
 import unicodedata
+import factory_pmi_semantics as pmi_semantics
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-07.1-reference-evidence-index"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-07.2-pmi-process-relations"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -24,6 +25,7 @@ _VARIANTS = {
         "秤眾": "秤重", "包裝完畢": "包裝完成", "物料": "材料",
         "檢査": "檢查", "確任": "確認", "標纖": "標籤", "標簽": "標籤",
         "潤滑由": "潤滑油", "不銹鋼": "不鏽鋼", "不锈钢": "不鏽鋼",
+        "驗剛種": "驗鋼種", "打剛種": "打鋼種",
     },
     "id": {
         "sdh": "sudah", "udah": "sudah", "udh": "sudah", "blm": "belum",
@@ -546,6 +548,7 @@ def factory_term_facts(text, lang, *, protected_names=()):
             facts.append({"sense": "employee_number", "evidence": _EMPLOYEE_NO.search(source).group(), "meaning": "工號／員工編號，不是員工人數；ID 料號和員工工號是不同欄位。"})
             if _SHIFT_ROLE.search(source) and not _SCHOOL.search(source):
                 facts.append({"sense": "shift_leader", "evidence": _SHIFT_ROLE.search(source).group(), "meaning": "這裡是工廠班長，不是學校班級或課長／股長。保留工號使用者及工號所有者。"})
+    facts.extend(pmi_semantics.build_facts(source, lang))
     return facts
 
 
@@ -554,7 +557,7 @@ def validate_factory_terms(analysis, target, src, tgt):
         return True, []
     text = str(target or "")
     facts = analysis.get("factory_terms") or []
-    issues = []
+    issues = pmi_semantics.validate(facts, target, tgt)
     for fact in facts:
         sense = fact["sense"]
         if sense == "erp_ol":

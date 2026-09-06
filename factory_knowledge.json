@@ -561,23 +561,6 @@
         "Stasiun packing barang bentuk khusus",
         "karena merasa pemeriksaan tersebut merepotkan"
       ],
-      "forbidden_target_phrases": [
-        "diberi tanda grade baja",
-        "memberi tanda grade baja",
-        "menandai grade baja",
-        "mencetak grade baja",
-        "mencetak jenis baja",
-        "memberi label grade baja",
-        "diberi label grade baja",
-        "menulis grade baja",
-        "mengukir grade baja",
-        "ditandai grade baja",
-        "diberi tanda jenis baja",
-        "menandai jenis baja",
-        "memberi label jenis baja",
-        "diberi label jenis baja",
-        "ditulis grade baja"
-      ],
       "requirements": [
         {
           "source_any": [
@@ -743,6 +726,37 @@
         {
           "source": "每把包裝前都要驗鋼種，沒有做 PMI 不可以包裝。",
           "target": "Grade baja setiap bundel harus diperiksa dengan PMI sebelum dikemas. Bundel yang belum diperiksa dengan PMI tidak boleh dikemas."
+        }
+      ],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "diberi tanda grade baja",
+            "memberi tanda grade baja",
+            "menandai grade baja",
+            "mencetak grade baja",
+            "mencetak jenis baja",
+            "memberi label grade baja",
+            "diberi label grade baja",
+            "menulis grade baja",
+            "mengukir grade baja",
+            "ditandai grade baja",
+            "diberi tanda jenis baja",
+            "menandai jenis baja",
+            "memberi label jenis baja",
+            "diberi label jenis baja",
+            "ditulis grade baja"
+          ],
+          "unless_source": {
+            "strong_phrases": [
+              "打印鋼種",
+              "列印鋼種",
+              "噴印鋼種",
+              "鋼種標籤",
+              "鋼種標示"
+            ],
+            "min_score": 8
+          }
         }
       ]
     },

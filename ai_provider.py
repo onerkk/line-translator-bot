@@ -113,6 +113,7 @@ import glossary_policy as gp_module
 import translation_privacy as privacy_module
 
 _TRANSLATION_REQUEST = ContextVar("translation_request_budget", default=None)
+_TRANSPORT_SCOPE = ContextVar("provider_transport_scope", default=None)
 _USAGE_OBSERVER = None
 
 
@@ -150,6 +151,45 @@ def translation_request_budget(function):
 
 def translation_budget_snapshot():
     return dict(_TRANSLATION_REQUEST.get() or {})
+
+
+def _bounded_provider_transport(function):
+    """One provider's compatibility retries share the original timeout.
+
+    The coordinator reserves/counts the first SDK attempt. Further actual SDK
+    calls consume the same request budget; a parameter fallback is not free.
+    Direct SDK-adapter callers also get a single per-provider deadline.
+    """
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        seconds = max(0.1, float(kwargs.get("timeout") or 90))
+        budget = _TRANSLATION_REQUEST.get()
+        deadline = time.monotonic() + seconds
+        if budget is not None and budget.get("deadline") is not None:
+            deadline = min(deadline, budget["deadline"])
+        token = _TRANSPORT_SCOPE.set({"deadline": deadline, "calls": 0})
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _TRANSPORT_SCOPE.reset(token)
+    return wrapped
+
+
+def _sdk_create(create, call_kwargs):
+    scope = _TRANSPORT_SCOPE.get()
+    kwargs = dict(call_kwargs)
+    if scope is not None:
+        remaining = scope["deadline"] - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Provider transport deadline exhausted")
+        budget = _TRANSLATION_REQUEST.get()
+        if scope["calls"] and budget is not None:
+            if budget["attempts"] >= budget["max_attempts"]:
+                raise TimeoutError("Translation transport attempt budget exhausted")
+            budget["attempts"] += 1
+        scope["calls"] += 1
+        kwargs["timeout"] = min(float(kwargs.get("timeout") or remaining), remaining)
+    return create(**kwargs)
 
 # ═══════════════════════════════════════════════════════════════════
 # 設定檔路徑
@@ -1884,6 +1924,7 @@ def _resolve_gemini_model(model):
     return gcfg.get("upgrade_model", "gemini-2.5-flash")
 
 
+@_bounded_provider_transport
 def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
                           timeout=90, stop=None, fast_quality=False, **kwargs):
     """v3.21: Gemini 路徑(官方 OpenAI 相容端點)。
@@ -1933,31 +1974,28 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         g_kwargs["reasoning_effort"] = _effort
 
     try:
-        return request_client.chat.completions.create(**g_kwargs)
+        return _sdk_create(request_client.chat.completions.create, g_kwargs)
     except Exception as e:
         # 相容端點對參數支援可能隨版本變動：minimal 不接受時先退 low，
         # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
         _msg = str(e).lower()
-        _param_error = any(x in _msg for x in (
-            "reasoning_effort", "invalid", "unrecognized", "unsupported", "400"
-        ))
+        _param_error = _is_feature_parameter_error(e, "reasoning_effort")
         if g_kwargs.get("reasoning_effort") == "minimal" and _param_error:
             g_kwargs["reasoning_effort"] = "low"
             try:
                 print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
-                return request_client.chat.completions.create(**g_kwargs)
+                return _sdk_create(request_client.chat.completions.create, g_kwargs)
             except Exception as e2:
                 e = e2
                 _msg = str(e2).lower()
         retried = False
         for _opt in ("response_format", "reasoning_effort", "stop"):
-            if _opt in g_kwargs and (_opt in _msg or "invalid" in _msg or "unrecognized" in _msg
-                                     or "unsupported" in _msg or "400" in _msg):
+            if _opt in g_kwargs and _is_feature_parameter_error(e, _opt):
                 g_kwargs.pop(_opt, None)
                 retried = True
         if retried:
             print(f"[ai_provider] Gemini 參數退階重試: {str(e)[:120]}", flush=True)
-            return request_client.chat.completions.create(**g_kwargs)
+            return _sdk_create(request_client.chat.completions.create, g_kwargs)
         raise
 
 
@@ -2353,9 +2391,12 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 elapsed = time.monotonic() - started
                 choices = getattr(response, "choices", None) or []
                 finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
-                truncated = finish in {"length", "max_tokens"}
-                if callable(response_validator) or (generation_limit and truncated):
-                    verdict = ((False, "translation_output_truncated:" + finish) if truncated
+                truncated = finish in {"length", "max_tokens", "model_context_window_exceeded"}
+                refused = finish in {"refusal", "content_filter"}
+                content = getattr(getattr(choices[0], "message", None), "content", "") if choices else ""
+                if callable(response_validator) or (generation_limit and truncated) or refused:
+                    verdict = ((False, "provider_refusal:" + finish) if refused else
+                               (False, "translation_output_truncated:" + finish) if truncated
                                else response_validator(response, provider))
                     if isinstance(verdict, tuple):
                         usable = bool(verdict[0])
@@ -2369,12 +2410,12 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                             _all_kwargs["model"] = repair_model
                         # A token-limited prefix is never a complete candidate,
                         # even if its surviving sentences pass semantic checks.
-                        if not truncated:
+                        if not truncated and not refused and str(content or "").strip():
                             best_rejected_response = response
                             best_rejected_provider = provider
                             best_rejected_reason = reason
                             best_rejected_elapsed = elapsed
-                        elif generation_limit:
+                        elif generation_limit and truncated:
                             budget_key = "max_completion_tokens" if _all_kwargs.get("max_completion_tokens") else "max_tokens"
                             budget = int(_all_kwargs.get(budget_key) or 1024)
                             _all_kwargs[budget_key] = max(budget, min(16384, budget * 2))
@@ -2487,6 +2528,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     raise TimeoutError(f"AI 翻譯超過總期限 {total_timeout:.0f} 秒")
 
 
+@_bounded_provider_transport
 def _chat_complete_openai(model, messages, **kwargs):
     client = _get_openai_client()
     if client is None:
@@ -2591,7 +2633,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     except Exception:
         pass
     try:
-        resp = request_client.chat.completions.create(**call_kwargs)
+        resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
     except Exception as _fe:
         if structured_schema and _is_feature_parameter_error(
                 _fe, "response_format", "json_schema", "structured output"):
@@ -2599,10 +2641,10 @@ def _chat_complete_openai(model, messages, **kwargs):
             # The audit prompt still requires JSON, so retry once without the
             # transport-level constraint rather than dropping the audit.
             call_kwargs.pop("response_format", None)
-            resp = request_client.chat.completions.create(**call_kwargs)
+            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
         elif _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
             call_kwargs.pop("service_tier", None)
-            resp = request_client.chat.completions.create(**call_kwargs)
+            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
         else:
             raise
 
@@ -2634,6 +2676,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     return resp
 
 
+@_bounded_provider_transport
 def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                               timeout=120, extra_stop=None, fast_quality=False,
                               structured_schema=None, structured_name="structured_response"):
@@ -2930,7 +2973,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
 
     # ─── Step 4: 呼叫 ───
     try:
-        resp = request_client.messages.create(**call_kwargs)
+        resp = _sdk_create(request_client.messages.create, call_kwargs)
     except Exception as e:
         err_msg = str(e).lower()
         # v3.2.7 根治: 所有 thinking 相關錯誤都 fallback,不再只抓特定關鍵字。
@@ -2946,7 +2989,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                 call_kwargs["output_config"] = output_config
             else:
                 call_kwargs.pop("output_config", None)
-            resp = request_client.messages.create(**call_kwargs)
+            resp = _sdk_create(request_client.messages.create, call_kwargs)
         elif thinking_applied and _is_feature_parameter_error(
                 e, "thinking", "adaptive", "budget_tokens", "effort", "display"):
             print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
@@ -2970,7 +3013,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                     call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
                     thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
                 try:
-                    resp = request_client.messages.create(**call_kwargs)
+                    resp = _sdk_create(request_client.messages.create, call_kwargs)
                 except Exception as e2:
                     print(f"[ai_provider] legacy fallback 也失敗: {e2}", flush=True)
                     # Fallback B: legacy → 完全關掉 thinking
@@ -2984,7 +3027,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                         thinking_mode_used = "none(all_thinking_failed)"
                     call_kwargs["max_tokens"] = int(max_tokens or 1024)
                     thinking_applied = False
-                    resp = request_client.messages.create(**call_kwargs)
+                    resp = _sdk_create(request_client.messages.create, call_kwargs)
             else:
                 # enabled mode 失敗 → 關掉 thinking
                 if is_sonnet5:
@@ -2997,7 +3040,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                     thinking_mode_used = "none(thinking_failed)"
                 call_kwargs["max_tokens"] = int(max_tokens or 1024)
                 thinking_applied = False
-                resp = request_client.messages.create(**call_kwargs)
+                resp = _sdk_create(request_client.messages.create, call_kwargs)
         # 非 thinking 錯誤:grounding/citation/cache/stop 的 fallback
         elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
             print(f"[ai_provider] grounding/citation 失敗,fallback: {e}", flush=True)
@@ -3011,25 +3054,24 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                             merged[i]["content"] = text_only
             call_kwargs["messages"] = merged
             grounding_used = False
-            resp = request_client.messages.create(**call_kwargs)
+            resp = _sdk_create(request_client.messages.create, call_kwargs)
         elif use_cache_1h and ("extended-cache" in err_msg or "beta" in err_msg or "ttl" in err_msg):
             print(f"[ai_provider] 1h cache fallback to 5min: {e}", flush=True)
             if isinstance(call_kwargs.get("system"), list):
                 for blk in call_kwargs["system"]:
                     if isinstance(blk, dict) and "cache_control" in blk:
                         blk["cache_control"] = {"type": "ephemeral"}
-            resp = request_client.messages.create(**call_kwargs)
+            resp = _sdk_create(request_client.messages.create, call_kwargs)
         elif use_stop and ("stop_sequence" in err_msg or "too many" in err_msg):
             print(f"[ai_provider] stop_sequences fallback: {e}", flush=True)
             call_kwargs.pop("stop_sequences", None)
-            resp = request_client.messages.create(**call_kwargs)
+            resp = _sdk_create(request_client.messages.create, call_kwargs)
         else:
             raise
 
-    # Sonnet 5 may return HTTP 200 with stop_reason=refusal. Treat it as an
-    # unusable provider response so the unified coordinator can try another AI.
-    if getattr(resp, "stop_reason", None) == "refusal":
-        raise RuntimeError("Anthropic refusal response")
+    # Preserve usage even for HTTP-200 refusal responses. The coordinator must
+    # count the generation and its cost before rejecting it and failing over.
+    refused = getattr(resp, "stop_reason", None) == "refusal"
 
     # ─── Step 5: 抽出文字 + Phase 9 citations ───
     full_text = ""
@@ -3074,15 +3116,23 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     if resp.usage:
         usage.cache_read_tokens = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
         usage.cache_creation_tokens = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
+        cache_creation = getattr(resp.usage, "cache_creation", None)
+        usage.cache_creation_1h_tokens = (
+            cache_creation.get("ephemeral_1h_input_tokens", 0)
+            if isinstance(cache_creation, dict) else
+            getattr(cache_creation, "ephemeral_1h_input_tokens", 0)
+        ) or 0
 
     result = _UnifiedResponse(
-        content=full_text,
+        content="" if refused else full_text,
         model=anthropic_model,
         usage=usage,
         finish_reason=getattr(resp, "stop_reason", "stop") or "stop",
         logprobs=None,
         citations=citations_list,
     )
+    # Direct adapter callers and failover can differ from the active provider.
+    result._jy_provider = "anthropic"
 
     # debug 標記:這次用了哪些 Claude 能力
     result._jy_claude_features_used = {

@@ -56,7 +56,7 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
         self.assertIsNotNone(price_table)
         self.assertEqual(price_table["gpt-5.6-luna"], (0.20, 1.20))
         self.assertEqual(price_table["gpt-5.6-terra"], (2.00, 12.00))
-        self.assertEqual(price_table["gpt-5.6-sol"], (5.00, 30.00))
+        self.assertEqual(price_table["gpt-5.6-sol"], (4.00, 20.00))
         self.assertIn("Luna($0.20/$1.20", source)
         self.assertIn("Terra($2/$12", source)
 

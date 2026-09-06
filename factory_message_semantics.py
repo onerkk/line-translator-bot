@@ -4922,6 +4922,7 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             elif segment_type == "shopfloor_alert":
                 if not _has_phrase(low, (
                     "waspada", "berhati-hati", "hati-hati", "perhatikan",
+                    "mohon perhatian", "harap diperhatikan", "mohon diperhatikan",
                 )):
                     issues.append(
                         "factory_message_semantics:shopfloor_alert_attention_missing"

@@ -1246,7 +1246,8 @@ OPENAI_PRICE_PER_M = {
     # 現行翻譯選單
     "gpt-5.6-luna":  (0.20,  1.20),
     "gpt-5.6-terra": (2.00, 12.00),
-    "gpt-5.6-sol":   (5.00, 30.00),
+    # https://developers.openai.com/api/docs/models/gpt-5.6-sol (2026-09-06)
+    "gpt-5.6-sol":   (4.00, 20.00),
     "gpt-5.4-nano":  (0.20,  1.25),
     "gpt-5.4-mini":  (0.75,  4.50),
     "gpt-5.4":       (2.50, 15.00),
@@ -1278,13 +1279,14 @@ def _match_price(model_name, table, default_key):
 
 
 def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
-                  cache_read=0, cache_write=0, cached_input=0):
-    """統一計價:依 provider + 實際 model + 各類 token → 精確 USD。
+                  cache_read=0, cache_write=0, cached_input=0, cache_write_1h=0,
+                  service_tier=""):
+    """依回應用量及標準費率估算 USD；實際費用以供應商帳單為準。
 
     Anthropic:
         input_tok    = 純新 input(不含 cache)
         cache_read   = cache 命中(base × 0.10)
-        cache_write  = cache 寫入(base × 1.25)
+        cache_write  = cache 寫入總量；其中 1h 部分 × 2，5m 部分 × 1.25
         output_tok   = output(含 thinking)
     OpenAI:
         input_tok    = prompt_tokens 總量(含 cached_input)
@@ -1294,10 +1296,13 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
     p = (provider or "").lower()
     if p == "anthropic":
         in_rate, out_rate = _match_price(model, ANTHROPIC_PRICE_PER_M, "claude-haiku-4-5")
+        # https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+        one_hour = max(0, min(cache_write, cache_write_1h))
         cost = (
             input_tok   * in_rate                              / 1_000_000
             + cache_read  * in_rate * ANTHROPIC_CACHE_READ_MULT  / 1_000_000
-            + cache_write * in_rate * ANTHROPIC_CACHE_WRITE_MULT / 1_000_000
+            + (cache_write - one_hour) * in_rate * ANTHROPIC_CACHE_WRITE_MULT / 1_000_000
+            + one_hour * in_rate * 2.0 / 1_000_000
             + output_tok  * out_rate                             / 1_000_000
         )
         return cost
@@ -1316,12 +1321,19 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
     in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5.6-luna")
     # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
     cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
-    non_cached = max(0, input_tok - cached_input)
+    # Cache details are subsets of prompt_tokens, not extra input tokens.
+    # https://developers.openai.com/api/docs/pricing
+    cached_input = max(0, min(input_tok, cached_input))
+    cache_write = max(0, min(input_tok - cached_input, cache_write))
+    non_cached = max(0, input_tok - cached_input - cache_write)
     cost = (
         non_cached    * in_rate              / 1_000_000
         + cached_input  * in_rate * cache_mult / 1_000_000
+        + cache_write * in_rate * 1.25 / 1_000_000
         + output_tok    * out_rate             / 1_000_000
     )
+    if (model or "").lower().startswith("gpt-5.6"):
+        cost *= {"flex": 0.5, "fast": 2.0, "priority": 2.0}.get(str(service_tier).lower(), 1.0)
     return cost
 
 
@@ -1340,7 +1352,14 @@ def track_tokens(response, group_id=None):
     try:
         if not (response and getattr(response, 'usage', None)):
             return
+        if group_id is None:
+            group_id = getattr(globals().get("_tl"), "group_id", None)
         if getattr(response, "_jy_tokens_tracked", False):
+            # A direct adapter caller may identify its group only afterwards.
+            delta = getattr(response, "_jy_usage_delta", None)
+            if group_id and delta and not getattr(response, "_jy_usage_group", None):
+                _attribute_usage_to_group(group_id, delta)
+                response._jy_usage_group = group_id
             return
         # The provider observer accounts even for rejected responses/reviews.
         # Legacy call sites still invoke this function; count the object once.
@@ -1390,8 +1409,10 @@ def track_tokens(response, group_id=None):
                 "input": in_tok, "output": out_tok,
                 "cache_read": cached_input, "cache_write": 0, "reasoning": 0,
             }
+            response._jy_usage_delta = _delta
             if group_id:
                 _attribute_usage_to_group(group_id, _delta)
+                response._jy_usage_group = group_id
             return
 
         if is_anthropic:
@@ -1401,7 +1422,8 @@ def track_tokens(response, group_id=None):
             # 即時精確計價
             cost = calc_cost_usd("anthropic", model_used,
                                  input_tok=in_tok, output_tok=out_tok,
-                                 cache_read=cache_read, cache_write=cache_write)
+                                 cache_read=cache_read, cache_write=cache_write,
+                                 cache_write_1h=int(getattr(u, 'cache_creation_1h_tokens', 0) or 0))
             with _stats_lock:
                 bot_stats["ant_input"]       = bot_stats.get("ant_input", 0) + in_tok
                 bot_stats["ant_output"]      = bot_stats.get("ant_output", 0) + out_tok
@@ -1419,11 +1441,13 @@ def track_tokens(response, group_id=None):
         else:
             # OpenAI:cached 在 prompt_tokens_details.cached_tokens;reasoning 在 completion_tokens_details
             cached_input = 0
+            cache_written = 0
             reasoning = 0
             try:
                 _pt = getattr(u, 'prompt_tokens_details', None)
                 if _pt:
                     cached_input = int(getattr(_pt, 'cached_tokens', 0) or 0)
+                    cache_written = int(getattr(_pt, 'cache_write_tokens', 0) or 0)
                 _ct = getattr(u, 'completion_tokens_details', None)
                 if _ct:
                     reasoning = int(getattr(_ct, 'reasoning_tokens', 0) or 0)
@@ -1432,10 +1456,12 @@ def track_tokens(response, group_id=None):
             provider = "openai"
             cost = calc_cost_usd("openai", model_used,
                                  input_tok=in_tok, output_tok=out_tok,
-                                 cached_input=cached_input)
+                                 cached_input=cached_input, cache_write=cache_written,
+                                 service_tier=getattr(response, "service_tier", ""))
             with _stats_lock:
                 bot_stats["oai_input"]     = bot_stats.get("oai_input", 0) + in_tok
                 bot_stats["oai_cached"]    = bot_stats.get("oai_cached", 0) + cached_input
+                bot_stats["oai_cache_write"] = bot_stats.get("oai_cache_write", 0) + cache_written
                 bot_stats["oai_output"]    = bot_stats.get("oai_output", 0) + out_tok
                 bot_stats["oai_reasoning"] = bot_stats.get("oai_reasoning", 0) + reasoning
                 bot_stats["oai_cost_usd"]  = bot_stats.get("oai_cost_usd", 0.0) + cost
@@ -1444,12 +1470,14 @@ def track_tokens(response, group_id=None):
             _delta = {
                 "provider": "openai", "model": model_used, "cost_usd": cost,
                 "input": in_tok, "output": out_tok,
-                "cache_read": cached_input, "cache_write": 0, "reasoning": reasoning,
+                "cache_read": cached_input, "cache_write": cache_written, "reasoning": reasoning,
             }
 
         # 即時歸帳到群組(不靠 snapshot diff,直接傳 delta)
+        response._jy_usage_delta = _delta
         if group_id:
             _attribute_usage_to_group(group_id, _delta)
+            response._jy_usage_group = group_id
     except Exception as e:
         logger.warning("track_tokens error: %s", e)
 
@@ -1470,7 +1498,9 @@ def _attribute_usage_to_group(group_id, delta):
             }
         g = group_api_usage[group_id]
         # 相容舊欄位
-        g["tokens_prompt"]     = g.get("tokens_prompt", 0) + delta["input"] + delta.get("cache_read", 0) + delta.get("cache_write", 0)
+        extra_cache = (delta.get("cache_read", 0) + delta.get("cache_write", 0)
+                       if delta["provider"] == "anthropic" else 0)
+        g["tokens_prompt"]     = g.get("tokens_prompt", 0) + delta["input"] + extra_cache
         g["tokens_completion"] = g.get("tokens_completion", 0) + delta["output"]
         g["cache_read"]  = g.get("cache_read", 0) + delta.get("cache_read", 0)
         g["cache_write"] = g.get("cache_write", 0) + delta.get("cache_write", 0)
@@ -1482,33 +1512,12 @@ def _attribute_usage_to_group(group_id, delta):
 
 
 def track_group_usage(group_id, before_prompt, before_completion, before_cost=0.0):
-    """snapshot diff 歸帳 token + 精確 cost (v3.9.53).
+    """Legacy call-site compatibility; responses are attributed by track_tokens.
 
-    before_cost: 操作前的全域累計 cost(ant_cost_usd + oai_cost_usd)。
-    track_tokens 已在每次 API 回應後即時把精確 cost 累加進 bot_stats,
-    這裡 diff 出本批操作的真實花費,直接歸帳群組 — 不再事後用 token 估算。
+    Global before/after subtraction mixes simultaneous groups, counts requests
+    twice and omits Gemini costs. Never use it for per-group accounting.
     """
-    after_prompt = bot_stats.get("tokens_prompt", 0)
-    after_completion = bot_stats.get("tokens_completion", 0)
-    after_cost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
-    dp = after_prompt - before_prompt
-    dc = after_completion - before_completion
-    dcost = after_cost - before_cost
-    if group_id and (dp > 0 or dc > 0 or dcost > 0):
-        with _stats_lock:
-            if group_id not in group_api_usage:
-                group_api_usage[group_id] = {
-                    "tokens_prompt": 0, "tokens_completion": 0,
-                    "cost_usd": 0.0, "provider": "", "model": "",
-                }
-            g = group_api_usage[group_id]
-            g["tokens_prompt"] = g.get("tokens_prompt", 0) + max(0, dp)
-            g["tokens_completion"] = g.get("tokens_completion", 0) + max(0, dc)
-            g["cost_usd"] = g.get("cost_usd", 0.0) + max(0.0, dcost)
-            # 記錄本批使用的 provider/model(供 fallback 估算 + UI 顯示)
-            _prov = ai_provider.get_active_provider()
-            g["provider"] = _prov
-            g["model"] = claude_model_default if _prov == "anthropic" else model_default
+    return None
 
 
 def calc_group_cost_twd(group_id):
@@ -3809,7 +3818,7 @@ BUILTIN_EXAMPLES = [
     {"zh": "再強調一次", "id": "Saya tegaskan lagi", "dir": "zh2id"},
     {"zh": "一定要確實執行", "id": "harus benar-benar dijalankan", "dir": "zh2id"},
     {"zh": "一定要標示清楚", "id": "harus diberi penandaan yang jelas", "dir": "zh2id"},
-    {"zh": "PMI作業", "id": "pemeriksaan grade baja batang dengan spektrometer", "dir": "zh2id"},
+    {"zh": "PMI作業", "id": "pemeriksaan grade baja dengan PMI", "dir": "zh2id"},
     {"zh": "台車", "id": "troli", "dir": "zh2id"},
     {"zh": "台車滿了", "id": "troli sudah penuh", "dir": "zh2id"},
     {"zh": "麻煩一下", "id": "tolong bantu", "dir": "zh2id"},
@@ -3849,7 +3858,7 @@ BUILTIN_EXAMPLES = [
     },
     {
         "id": "Bahan tercampur dengan grade lain, harus dipisahkan dulu.",
-        "zh": "材料混到其他等級了,要先分開。",
+        "zh": "材料混到其他鋼種了,要先分開。",
         "dir": "id2zh"
     },
     {
@@ -24509,7 +24518,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
         <option value="gpt-5.6-luna">⭐ 5.6 Luna($0.20/$1.20，日常翻譯)</option>
         <option value="gpt-5.6-terra">🟡 5.6 Terra($2/$12，長文)</option>
-        <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
+        <option value="gpt-5.6-sol">🔴 5.6 Sol($4/$20，最高品質)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1-mini">🟢 4.1-mini($0.40/$1.60)</option>
         <option value="gpt-5.4-nano">💰 5.4-nano($0.20/$1.25)</option>
@@ -24520,7 +24529,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
       <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
         <option value="gpt-5.6-terra">⭐ 5.6 Terra($2/$12，推薦長文)</option>
-        <option value="gpt-5.6-sol">🔴 5.6 Sol($5/$30，最高品質)</option>
+        <option value="gpt-5.6-sol">🔴 5.6 Sol($4/$20，最高品質)</option>
         <option value="gpt-5.6-luna">🟢 5.6 Luna($0.20/$1.20，速度優先)</option>
         <option value="gpt-5.4">5.4($2.50/$15，相容)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
@@ -25181,7 +25190,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
 <option value="gpt-5.6-luna">⭐ gpt-5.6-luna（$0.20 / $1.20，即時翻譯）</option>
 <option value="gpt-5.6-terra">gpt-5.6-terra（$2 / $12，品質平衡）</option>
-<option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，最高品質）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，最高品質）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，相容）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60，穩定）</option>
 <option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最省）</option>
@@ -25194,7 +25203,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
 <option value="gpt-5.6-terra">⭐ gpt-5.6-terra（$2 / $12，推薦長文）</option>
-<option value="gpt-5.6-sol">gpt-5.6-sol（$5 / $30，關鍵公告）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，關鍵公告）</option>
 <option value="gpt-5.6-luna">gpt-5.6-luna（$0.20 / $1.20）</option>
 <option value="gpt-5.4">gpt-5.4（$2.50 / $15.00，相容）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
