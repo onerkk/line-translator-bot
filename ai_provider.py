@@ -106,9 +106,50 @@ import json
 import re
 import time
 import threading
+from contextvars import ContextVar
+from functools import wraps
 
 import glossary_policy as gp_module
 import translation_privacy as privacy_module
+
+_TRANSLATION_REQUEST = ContextVar("translation_request_budget", default=None)
+_USAGE_OBSERVER = None
+
+
+def set_usage_observer(observer):
+    """Observe every received provider response, including rejects and reviews."""
+    global _USAGE_OBSERVER
+    _USAGE_OBSERVER = observer
+
+
+def translation_request_budget(function):
+    """Share one generation/recovery/review budget, isolated between workers."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if _TRANSLATION_REQUEST.get() is not None:
+            return function(*args, **kwargs)
+        def setting(name, default, low, high):
+            try:
+                return max(low, min(high, float(os.environ.get(name, default))))
+            except (TypeError, ValueError):
+                return float(default)
+        # Start the clock at the first API request, after cache/preparation.
+        budget = dict(
+            deadline=None, attempts=0, generations=0,
+            seconds=setting("TRANSLATION_TOTAL_API_SECONDS", 35, 5, 90),
+            max_attempts=int(setting("TRANSLATION_TOTAL_API_ATTEMPTS", 3, 1, 6)),
+            max_generations=int(setting("TRANSLATION_TOTAL_GENERATIONS", 2, 1, 4)),
+        )
+        token = _TRANSLATION_REQUEST.set(budget)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _TRANSLATION_REQUEST.reset(token)
+    return wrapped
+
+
+def translation_budget_snapshot():
+    return dict(_TRANSLATION_REQUEST.get() or {})
 
 # ═══════════════════════════════════════════════════════════════════
 # 設定檔路徑
@@ -2207,6 +2248,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     # Translation callers cap completed candidate generations independently of
     # transport failover. Other chat/vision features retain their existing policy.
     generation_limit = max(0, int(kwargs.pop("translation_max_generations", 0) or 0))
+    repair_model = kwargs.pop("translation_repair_model", None)
     completed_generations = 0
     privacy_literals = kwargs.pop("privacy_literals", ()) or ()
     messages, privacy_envelope = _prepare_provider_privacy(
@@ -2232,6 +2274,16 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         providers = [active] if active in providers else providers[:1]
 
     deadline = time.monotonic() + total_timeout
+    request_budget = _TRANSLATION_REQUEST.get()
+    if request_budget is not None:
+        if request_budget["deadline"] is None:
+            request_budget["deadline"] = time.monotonic() + request_budget["seconds"]
+        deadline = min(deadline, request_budget["deadline"])
+    def shared_budget_exhausted():
+        return bool(request_budget is not None and (
+            request_budget["attempts"] >= request_budget["max_attempts"]
+            or request_budget["generations"] >= request_budget["max_generations"]
+        ))
     attempts = []
     last_error = None
     last_quality_error = None
@@ -2262,6 +2314,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     )
 
     for index, provider in enumerate(providers):
+        if shared_budget_exhausted():
+            break
         if generation_limit and completed_generations >= generation_limit:
             break
         # A sole configured provider also needs a bounded opportunity to repair
@@ -2269,20 +2323,32 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         # retry and completed-generation limits remain independent.
         provider_attempts = 2 if single_provider_retry or (len(providers) == 1 and generation_limit > 1) else 1
         for provider_attempt in range(provider_attempts):
+            if shared_budget_exhausted():
+                break
             if generation_limit and completed_generations >= generation_limit:
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            attempt_timeout = max(1.0, min(requested_timeout, per_provider_timeout, remaining))
+            attempt_timeout = max(0.1, min(requested_timeout, per_provider_timeout, remaining))
             started = time.monotonic()
             try:
                 if index and provider_attempt == 0:
                     print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
                 elif provider_attempt:
                     print(f"[ai_provider] {provider} 使用剩餘預算重試一次", flush=True)
+                if request_budget is not None:
+                    request_budget["attempts"] += 1
                 response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
                 completed_generations += 1
+                if request_budget is not None:
+                    request_budget["generations"] += 1
+                try:
+                    response._jy_provider = provider
+                    if _USAGE_OBSERVER is not None:
+                        _USAGE_OBSERVER(response)
+                except Exception as usage_error:
+                    print(f"[ai_provider] usage observer failed: {type(usage_error).__name__}", flush=True)
                 response = _restore_provider_privacy(response, privacy_envelope)
                 elapsed = time.monotonic() - started
                 choices = getattr(response, "choices", None) or []
@@ -2299,6 +2365,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                         reason = "quality validator rejected response"
                     if not usable:
                         last_quality_error = RuntimeError(reason)
+                        if repair_model:
+                            _all_kwargs["model"] = repair_model
                         # A token-limited prefix is never a complete candidate,
                         # even if its surviving sentences pass semantic checks.
                         if not truncated:
@@ -2593,6 +2661,14 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     if fast_quality:
         features["extended_thinking"] = False
         features["adaptive_thinking"] = False
+        # The application already supplies the exact source glossary and output
+        # contract. Extra citation blocks and emitted <thinking> waste tokens
+        # and compete with the instruction to return one translation only.
+        features["cot_thinking_tag"] = False
+        features["success_criteria"] = False
+        if any("<source_terminology>" in str(m.get("content", ""))
+               or "<required_terminology>" in str(m.get("content", "")) for m in messages):
+            features["glossary_grounding"] = False
     use_cache = features.get("prompt_caching", True)
     use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
     thinking_budget = int(features.get("thinking_budget", 2000))
@@ -2759,7 +2835,24 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         )
         cache_threshold_used = threshold
         cache_est_tokens = est_tok
-        if use_cache and should_cache:
+        if fast_quality:
+            # Never guess that 80% of a compiled request is stable. In the
+            # current format that includes per-message claims and references,
+            # causing a new premium cache write for almost every source.
+            boundary = system_text.find("</translation_principles>")
+            stable_end = boundary + len("</translation_principles>") if boundary >= 0 else 0
+            stable = system_text[:stable_end]
+            stable_cache, _, _ = _should_apply_cache(stable, anthropic_model, smart_mode=True)
+            if use_cache and stable and stable_cache:
+                call_kwargs["system"] = [
+                    {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+                ]
+                if system_text[stable_end:]:
+                    call_kwargs["system"].append({"type": "text", "text": system_text[stable_end:]})
+                caching_applied = True
+            else:
+                call_kwargs["system"] = system_text
+        elif use_cache and should_cache:
             if use_multi_cache:
                 # Phase 12: Multi-block — 把 system 拆 stable + dynamic 兩層 cache
                 blocks = _split_system_into_cache_blocks(
@@ -2994,7 +3087,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     # debug 標記:這次用了哪些 Claude 能力
     result._jy_claude_features_used = {
         "caching": caching_applied,
-        "caching_1h": caching_applied and use_cache_1h,
+        "caching_1h": caching_applied and use_cache_1h and not fast_quality,
         "multi_block_caching": multi_block_applied,  # D3 Phase 12
         "thinking": thinking_applied,
         "thinking_mode": thinking_mode_used,         # v3.2 Phase 13:adaptive_medium / legacy_2000 / none

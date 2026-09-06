@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+import factory_instruction_semantics as instruction_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.1-source-scoped-inspection"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.2-instruction-relations"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -372,8 +373,17 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     }
     if frame["src_lang"] != "zh" or frame["tgt_lang"] != "id" or not src.strip():
         return frame
+    relations = instruction_semantics.build_relations(src)
+    frame["instruction_relations"] = relations
+    for i, relation in enumerate(relations):
+        frame["claims"].append({
+            "claim_id": f"instruction_{i}_{relation['kind']}",
+            "source_evidence": (f"item {relation['item']}: " if relation['item'] else "") + relation["source_evidence"],
+            "meaning_zh": relation["meaning_zh"],
+            "required_target_meaning_id": relation["required_target_meaning_id"],
+        })
     package_quantity_cue = bool(re.search(_PACKAGE_QUANTITY_PHRASE, compact))
-    if not any(cue in compact for cue in _FACTORY_CUES) and not package_quantity_cue:
+    if not relations and not any(cue in compact for cue in _FACTORY_CUES) and not package_quantity_cue:
         return frame
 
     flags = frame["flags"]
@@ -409,7 +419,15 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         or re.search(r"先做(?!清楚|明確|明确|標記|标记|記號|记号)", compact)
     )
     flags["production"] = _contains_any(compact, ("生產", "生产", "加工", "跑料", "跑"))
-    flags["prohibition"] = _contains_any(compact, ("不可以", "不可", "不得", "禁止", "不能", "不要"))
+    # A prohibition over a negative result can be expressed positively in the
+    # target (不要讓庫存降不下來 -> pastikan stok bisa berkurang). Its relational
+    # validator is authoritative; only other source prohibitions need a literal
+    # prohibitive marker. This does not waive any other command in the notice.
+    unscoped_prohibition_source = compact
+    for relation in relations:
+        if relation.get("state") == "enable_decrease" and relation.get("polarity_evidence"):
+            unscoped_prohibition_source = unscoped_prohibition_source.replace(relation["polarity_evidence"], "", 1)
+    flags["prohibition"] = _contains_any(unscoped_prohibition_source, ("不可以", "不可", "不得", "禁止", "不能", "不要"))
     flags["hoist_or_load"] = _contains_any(compact, ("吊", "上料", "上機", "上机", "裝料", "装料"))
     flags["slow_run"] = _contains_any(compact, ("慢慢跑", "慢跑", "跑很慢", "慢慢生產", "慢慢生产"))
     flags["explicit_crane"] = _contains_any(compact, _EXPLICIT_CRANE_ZH)
@@ -1312,7 +1330,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         or flags.get("monthly_production_target")
         or flags.get("checkbox_after_pickup")
     )
-    frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive))
+    frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive or relations))
     return frame
 
 
@@ -1835,6 +1853,9 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     issues: List[str] = []
     if not low:
         return False, ["factory_semantic_audit:empty_translation"]
+    issues.extend(instruction_semantics.validate_relations(
+        frame.get("instruction_relations") or [], translation,
+    ))
 
     if flags.get("erp_release_to_ol"):
         ol_relation_ok = bool(

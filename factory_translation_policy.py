@@ -25,7 +25,7 @@ import re
 from typing import Any, Dict
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-30.1-learned-risk-adaptive-review"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-07.1-evidence-based-review-budget"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -135,6 +135,19 @@ _NOTICE_CONTROL_RE = re.compile(
 )
 
 
+def _has_serious_review_risk(source: str) -> bool:
+    for match in _SERIOUS_REVIEW_RE.finditer(source):
+        # A prevention instruction is not a report that mixing/wrong material
+        # has actually occurred. The first translation and local polarity checks
+        # still handle it; it does not automatically need a second paid model.
+        if match.group() in {"混料", "錯料"}:
+            prefix = source[max(0, match.start() - 12):match.start()]
+            if re.search(r"(?:不要|不得|禁止|避免|防止|預防|不可|不能)(?:再|發生|发生|出現|出现)*$", prefix):
+                continue
+        return True
+    return False
+
+
 def adaptive_review_risk(
     text: Any,
     src: Any,
@@ -192,12 +205,13 @@ def adaptive_review_risk(
     source = str(text or "").strip()
     if not source:
         return False
-    if _SERIOUS_REVIEW_RE.search(source):
+    if _has_serious_review_risk(source):
         return True
-    # A long/structured notice with an explicit prohibition or mandatory action
-    # is consequential enough to review.  A short routine command still gets the
-    # Terra quality tier and deterministic polarity checks, but stays one-call.
-    return bool(quality_critical and _NOTICE_CONTROL_RE.search(source))
+    # Length/numbering/mandatory wording already select the quality model and
+    # full local coverage checks. They alone must not pay for another complete
+    # translation. Unresolved context, learned defects and actual serious events
+    # above remain eligible; any failed candidate still gets a repair.
+    return False
 
 
 def require_source_review(text: Any, src: Any, tgt: Any, *, adaptive_risk: bool = False) -> bool:

@@ -199,6 +199,14 @@ def test_input_accepts_language_content_without_an_alphabet_allowlist(source):
 @pytest.fixture
 def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(queue, "DB_PATH", str(tmp_path / "retry.db"))
+    # A clean notice is now admitted to persistent TM. Each outage scenario
+    # needs its own database; clearing only the in-process cache let an earlier
+    # test satisfy a simulated provider outage from persistent storage.
+    monkeypatch.setenv("TM_DB_PATH", str(tmp_path / "tm.db"))
+    monkeypatch.setattr(app.tm_module, "TM_DB_PATH", None)
+    monkeypatch.setattr(app.tm_module, "_init_done", False)
+    monkeypatch.setattr(app, "_BG_POST_EXECUTOR", SimpleNamespace(
+        submit=lambda function, *args, **kwargs: function(*args, **kwargs)))
     monkeypatch.setattr(app, "_ensure_translation_retry_worker", lambda: False)
     monkeypatch.setattr(app, "_TRANSLATION_RETRY_INFLIGHT", set())
     monkeypatch.setattr(app, "_processed_msg_ids", app._collections_dedup.OrderedDict())

@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.1-source-grounded-reference-generalization"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.2-specific-bounded-references"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -300,6 +300,7 @@ _ZH_GENERIC_NOTICE_PHRASES = tuple(sorted({
     "務必", "必須", "確實", "執行", "程序", "事項", "相關", "此事", "情況", "方式", "以及",
     "並且", "立即", "處理", "進一步", "針對", "是否", "會以", "以", "及",
     "麻煩", "幫忙", "一下", "有沒有", "目前", "今天", "今日", "本月", "月底",
+    "一定要", "不要", "不可以", "要讓", "沒有", "一點", "一樣", "上面", "系統",
 }, key=len, reverse=True))
 
 
@@ -713,7 +714,7 @@ def exact_verified_target(
             return str(case.get("target") or "").strip()
     return None
 
-def build_prompt(cases: Sequence[Mapping[str, Any]], *, max_chars: int = 5600) -> str:
+def build_prompt(cases: Sequence[Mapping[str, Any]], *, max_chars: int = 2400) -> str:
     if not cases:
         return ""
     header = "<verified_translation_cases>\n" + (
@@ -746,9 +747,13 @@ def build_prompt(cases: Sequence[Mapping[str, Any]], *, max_chars: int = 5600) -
                 lines.append("Incorrect for the REFERENCE source only: " + field(case["bad_target"], 600))
             if case.get("reason"):
                 lines.append("Correction rationale: " + field(case["reason"], 450))
+            # Character-level diffs duplicated the entire current notice for
+            # every retrieved case. Keep those diagnostics in metadata, never
+            # send them as translation instructions. The source is sent once.
+            if case.get("fact_changes"):
+                lines.append("Changed fact categories (use CURRENT source values): "
+                             + field(", ".join(case["fact_changes"]), 180))
             for key, label in (
-                ("source_edits", "Current source changes; never copy old values/status: "),
-                ("fact_changes", "Changed source facts; old target labels do not decide this sentence: "),
                 ("spelling_hints", "Possible spelling hints only; preserve uncertain identifiers: "),
             ):
                 if case.get(key):

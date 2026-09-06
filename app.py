@@ -324,7 +324,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.1-source-scoped-inspection"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.2-instruction-relations"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -362,7 +362,7 @@ logger.info(
 )
 
 _EXPECTED_CASEBOOK_API_VERSION = 4
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-07.1-source-grounded-reference-generalization"
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-07.2-specific-bounded-references"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -374,7 +374,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-08-30.1-learned-risk-adaptive-review"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-07.1-evidence-based-review-budget"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -1340,6 +1340,11 @@ def track_tokens(response, group_id=None):
     try:
         if not (response and getattr(response, 'usage', None)):
             return
+        if getattr(response, "_jy_tokens_tracked", False):
+            return
+        # The provider observer accounts even for rejected responses/reviews.
+        # Legacy call sites still invoke this function; count the object once.
+        response._jy_tokens_tracked = True
         u = response.usage
         model_used = getattr(response, 'model', '') or ''
 
@@ -1447,6 +1452,9 @@ def track_tokens(response, group_id=None):
             _attribute_usage_to_group(group_id, _delta)
     except Exception as e:
         logger.warning("track_tokens error: %s", e)
+
+
+ai_provider.set_usage_observer(track_tokens)
 
 
 def _attribute_usage_to_group(group_id, delta):
@@ -2297,10 +2305,19 @@ def _translation_needs_upgrade_model(text):
     if bool(getattr(_tl, "quality_gate_critical", False)):
         return True
     contract = getattr(_tl, "semantic_contract", None)
-    if isinstance(contract, dict) and (
-        contract.get("has_risk") or contract.get("requires_llm")
-    ):
-        return True
+    if isinstance(contract, dict):
+        if contract.get("context_bound"):
+            return True
+        for risk in contract.get("risks") or ():
+            analysis = risk.get("analysis") or {}
+            frame = risk.get("frame") or {}
+            if analysis.get("suggestions") or frame.get("ambiguities"):
+                return True
+            if any(r.get("kind") == "inventory_change"
+                   for r in frame.get("instruction_relations") or ()):
+                return True
+        # has_risk also means a known glossary term/reference was retrieved.
+        # That is useful context, not evidence that a costly model is needed.
 
     compact = re.sub(r"\s+", "", source)
     line_count = len([line for line in source.splitlines() if line.strip()])
@@ -11360,6 +11377,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
             "translation_fast_quality": True,
             "translation_max_generations": 2,
+            "translation_repair_model": _translation_cp_tier_models()[1],
         }
         # Sampling parameters
         if model_supports(_model, "temperature"):
@@ -14214,6 +14232,7 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
         pass
     return False
 
+@ai_provider.translation_request_budget
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
 
@@ -15549,6 +15568,15 @@ def _translate_core(text, src, tgt):
             _review_already_attempted = bool(
                 getattr(_tl, "source_review_already_attempted", False)
             )
+            _review_budget = ai_provider.translation_budget_snapshot()
+            _review_can_call = not _review_already_attempted and (
+                not _review_budget or (
+                    _review_budget["generations"] < _review_budget["max_generations"]
+                    and _review_budget["attempts"] < _review_budget["max_attempts"]
+                    and (_review_budget["deadline"] is None
+                         or time.monotonic() < _review_budget["deadline"])
+                )
+            )
             try:
                 _continuous_learning_risk = al_module.assess_review_risk(
                     text,
@@ -15583,12 +15611,12 @@ def _translate_core(text, src, tgt):
                 text, src, tgt, adaptive_risk=_adaptive_review_risk
             )
             _force_source_review = bool(
-                _factory_review_required and not _review_already_attempted
+                _factory_review_required and _review_can_call
             )
             _require_review_success = bool(
                 _factory_review_required
                 and factory_translation_policy_module.require_review_success(src, tgt)
-                and not _review_already_attempted
+                and _review_can_call
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
             _learning_review_context = al_module.build_review_context(
@@ -15648,7 +15676,7 @@ def _translate_core(text, src, tgt):
                 ai_client=(
                     None
                     if (
-                        _review_already_attempted
+                        not _review_can_call
                         or factory_translation_policy_module.review_mode() == "off"
                     )
                     else ai_provider
@@ -15849,6 +15877,11 @@ def _translate_core(text, src, tgt):
         bool(isinstance(locals().get("_gate"), dict) and _gate.get("reviewed"))
     )
     _billable_calls_for_perf = _provider_attempts_for_perf + _review_calls_for_perf
+    _request_budget_for_perf = ai_provider.translation_budget_snapshot()
+    if _request_budget_for_perf:
+        # Include rejected generations and transport attempts from ALL stages.
+        # Attempts are not an invoice: usage accounting remains provider-based.
+        _billable_calls_for_perf = _request_budget_for_perf.get("attempts", 0)
     _verified_tm_fingerprint_for_bg = ""
     if (
         result
