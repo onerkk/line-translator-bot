@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "e3a51554cb5bc3007055699176f0464633a2065cd295c601ef23539f185a1be7",
-    "updated_at_iso": "2026-09-04T12:10:16.618996+00:00",
-    "updated_at_unix": 1788523816.618996
+    "state_hash": "ca262c19d7c2d909589c801d845cf8040c95496a5883d565176f1be3723a5361",
+    "updated_at_iso": "2026-09-06T22:20:01.509473+00:00",
+    "updated_at_unix": 1788733201.5094728
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -66,10 +66,10 @@
     "auto_switch_on_exhaust": true,
     "auto_switch_state": {
       "active": true,
-      "at": 1786541706,
-      "from": "anthropic",
-      "reason": "quota_exhausted",
-      "to": "openai"
+      "at": 1788733201,
+      "from": "openai",
+      "reason": "quota_exhausted_no_backup",
+      "to": null
     },
     "claude_features": {
       "adaptive_thinking": true,
@@ -150,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-03 00:13:27",
+    "last_updated": "2026-09-06 22:20:01",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -175,6 +175,10 @@
       "anthropic": {
         "at": 1786541706,
         "error": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011Cdx"
+      },
+      "openai": {
+        "at": 1788733201,
+        "error": "Error code: 429 - {'error': {'message': 'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.', 'type': 'insufficient_quota', 'param': None, 'code': 'credit_bala"
       }
     }
   },
