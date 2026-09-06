@@ -8,3 +8,6 @@ rapidfuzz>=3.5.0
 imageio-ffmpeg
 Pillow>=10,<12
 pypdf>=4,<6
+# The release gate also supports installing only requirements.txt + pytest.
+# Keep Lua enabled: reminder tests execute the real Redis atomic scripts.
+fakeredis[lua]==2.37.1
