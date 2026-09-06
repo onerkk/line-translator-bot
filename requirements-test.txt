@@ -1,0 +1,2 @@
+pytest>=8
+fakeredis[lua]==2.37.1

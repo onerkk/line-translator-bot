@@ -145,10 +145,13 @@ import threading
 import contextlib
 import functools
 import line_translation_delivery as line_delivery_module
+import reminders_web
+import scheduled_reminders
 from translation_request_guard import serialize_request
 import factory_source_understanding as source_understanding_module
 import translation_adaptive_memory as adaptive_memory_module
 import hashlib
+import hmac
 import copy
 try:
     import fcntl  # POSIX file lock,用於跨 worker 同步 file I/O
@@ -23818,6 +23821,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .dm-section{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:16px;margin-bottom:12px}
 .dm-toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 </style>
+<link rel="stylesheet" href="/static/admin_reminders.css?v=1">
+<script src="/static/admin_reminders.js?v=1" defer></script>
 </head>
 <body>
 <div id="app">
@@ -23881,8 +23886,11 @@ function handleGoogleLogin(response){
       document.getElementById('loginPage').style.display='none';
       document.getElementById('mainPage').style.display='block';
       window._ADMIN_KEY='';
+      try{localStorage.removeItem('bot_admin_key')}catch(e){}
       window._MANAGER_TABS=d.tabs;
       window._MANAGER_ID=d.user_id||'';
+      window._MANAGER_TOKEN=d.manager_token||'';
+      if(typeof KEY!=='undefined') KEY='';
       applyTabFilter(d.tabs);
       if(typeof loadAll==='function') loadAll();
     }else{m.style.color='#f04747';m.textContent=d.error||'登入失敗'}
@@ -23911,6 +23919,9 @@ document.getElementById('loginBtn').addEventListener('click',function(){
       document.getElementById('loginPage').style.display='none';
       document.getElementById('mainPage').style.display='block';
       window._ADMIN_KEY=k;
+      window._MANAGER_ID='';
+      window._MANAGER_TOKEN='';
+      window._MANAGER_TABS=null;
       try{localStorage.setItem('bot_admin_key',k)}catch(e){
     document.getElementById('aip-active-display').textContent = '⚠️ 連線失敗,3 秒後重試…';
     if(!_aipRetried){ _aipRetried = true; setTimeout(aipLoadStatus, 3000); }
@@ -23932,6 +23943,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="header"><h1>🤖 翻譯Bot 管理後台 <span class="platform">LINE</span></h1></div>
 <div class="tabs">
 <div class="tab active" onclick="switchTab('overview')">總覽</div>
+<div class="tab" onclick="switchTab('reminders')">自訂提醒</div>
 <div class="tab" onclick="switchTab('groups')">群組</div>
 <div class="tab" onclick="switchTab('skip')">白名單</div>
 <div class="tab" onclick="switchTab('users')">使用者</div>
@@ -23948,6 +23960,41 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('forms')">表單</div>
 <div class="tab" onclick="switchTab('aiprovider')">🔄 AI</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
+</div>
+
+<!-- Custom reminders: dates are always interpreted in Asia/Taipei. -->
+<div class="panel" id="panel-reminders">
+<h2 class="reminder-heading">自訂提醒</h2>
+<p class="reminder-hint">選擇群組、日期時間與標註對象，時間皆以台灣時間（UTC+8）計算。</p>
+<div id="reminder-health" class="reminder-notice" role="status">載入提醒設定中…</div>
+<div id="reminder-notice" class="reminder-notice" role="status" aria-live="polite" hidden></div>
+<form id="reminder-form" class="card">
+<h3 id="reminder-form-title" style="margin:0 0 16px">新增提醒</h3>
+<label for="reminder-group">提醒群組</label>
+<select id="reminder-group" class="input-field" required><option value="">請選擇群組</option></select>
+<div class="reminder-grid">
+<div><label for="reminder-date">日期（台灣）</label><input id="reminder-date" class="input-field" type="date" max="2099-12-31" required></div>
+<div><label for="reminder-time">時間（台灣）</label><input id="reminder-time" class="input-field" type="time" step="60" required></div>
+</div>
+<label for="reminder-mode">標註對象</label>
+<select id="reminder-mode" class="input-field"><option value="none">不標註</option><option value="all">所有人（@All）</option><option value="users">指定成員</option></select>
+<div id="reminder-member-wrap" hidden>
+<label for="reminder-search">搜尋群組成員</label><input id="reminder-search" class="input-field" type="search" placeholder="輸入成員名稱">
+<div id="reminder-members" class="reminder-members"></div><div id="reminder-selected-count" class="reminder-hint">已選 0 / 20 位</div>
+<p class="reminder-hint">名單來自曾在群組互動的成員。未列出者請先在群組發言，再重新整理。派送時指定成員仍須在群組內。</p>
+</div>
+<label for="reminder-content">提醒內容</label><textarea id="reminder-content" class="input-field" maxlength="1500" placeholder="例如：要開班股會議" required></textarea>
+<div id="reminder-count" class="reminder-hint">0 / 1500 字元</div>
+<label>訊息預覽</label><div id="reminder-preview" class="reminder-preview"></div>
+<div class="reminder-actions"><button id="reminder-save" class="btn btn-primary" type="submit" disabled>儲存提醒</button><button id="reminder-stop-edit" class="btn" type="button" hidden>結束修改</button><button id="reminder-reset" class="btn" type="button">清空／新增</button></div>
+<details><summary>提醒如何派送？</summary>
+提醒內容會照原文發送，不使用 AI 翻譯。這是單次提醒，可在開始派送前修改或取消。<br>
+主機正常運作時每 30 秒檢查排程；關閉後台頁面也會繼續執行。主機停機時無法準時發送，恢復後會補送。使用會休眠的主機，需搭配外部排程喚醒或持續運作的服務。<br>
+「LINE 已接受」表示 LINE API 已接受訊息，不代表每位成員已讀；推播用量依 LINE 帳號方案計算。
+</details>
+</form>
+<div class="reminder-actions" style="justify-content:space-between;margin:20px 0 14px"><h3 style="margin:0">提醒紀錄</h3><button id="reminder-refresh" class="btn btn-primary btn-sm" type="button">重新整理</button></div>
+<div id="reminder-list"></div><button id="reminder-more" class="btn btn-primary" type="button" hidden>載入更多</button>
 </div>
 
 <!-- Overview Panel -->
@@ -25527,11 +25574,17 @@ var API=window.location.origin+'/api/admin';
 
 function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)}
 
-function api(path,method,body){
-  method=method||'GET';
-  var h={'Content-Type':'application/json'};
+function adminHeaders(jsonBody){
+  var h={};
+  if(jsonBody) h['Content-Type']='application/json';
   if(KEY) h['X-Admin-Key']=KEY;
   if(window._MANAGER_ID) h['X-Manager-Id']=window._MANAGER_ID;
+  if(window._MANAGER_TOKEN) h['X-Manager-Token']=window._MANAGER_TOKEN;
+  return h;
+}
+function api(path,method,body){
+  method=method||'GET';
+  var h=adminHeaders(true);
   var opts={method:method,headers:h};
   if(body)opts.body=JSON.stringify(body);
   return fetch(API+path,opts).then(function(r){
@@ -25557,7 +25610,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','settings'];
+var TAB_KEYS=['overview','reminders','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','settings'];
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -25570,7 +25623,7 @@ async function enableAllRecommended(){
   if(!confirm('一鍵啟用所有 phase 建議設定?\n\n會配置:\n- Phase H 改 auto_fix(LLM 自動修術語)\n- Phase D/E/N/Q 全部啟用\n- 配置會持久化,重啟不還原')) return;
   try {
     const r = await fetch('/api/admin/all-phases/enable-recommended', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}
+      method:'POST', headers:adminHeaders(true)
     });
     const data = await r.json();
     if(data.ok){
@@ -25586,7 +25639,7 @@ async function dashLoadStats(){
   const dashSummary = document.getElementById('dash-summary');
   dashSummary.textContent = '載入中...';
   try {
-    const r = await fetch('/api/admin/dashboard/stats', {headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/dashboard/stats', {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){ dashSummary.textContent = '✗ ' + (data.error||'載入失敗'); return; }
     const ph = data.phases || {};
@@ -25739,7 +25792,7 @@ async function iclSetConfig(){
   if(min_score === null) return;
   try {
     const r = await fetch('/api/admin/icl/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled, max_examples:parseInt(max_examples), min_score:parseInt(min_score)})
     });
     const data = await r.json();
@@ -25753,7 +25806,7 @@ async function ldTestDetect(){
   if(!text) return;
   try {
     const r = await fetch('/api/admin/ld/detect', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({text:text})
     });
     const data = await r.json();
@@ -25767,7 +25820,7 @@ async function csSetConfig(){
   const enabled = confirm('啟用 Confidence Scoring?(取消 = 停用)');
   try {
     const r = await fetch('/api/admin/cs/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled})
     });
     const data = await r.json();
@@ -25782,7 +25835,7 @@ async function geSetConfig(){
   if(action === null) return;
   try {
     const r = await fetch('/api/admin/ge/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled, action:action})
     });
     const data = await r.json();
@@ -25796,7 +25849,7 @@ async function concordanceSearch(){
   if(!phrase) return;
   try {
     const r = await fetch('/api/admin/tm/concordance?phrase='+encodeURIComponent(phrase)+'&limit=20',
-                          {headers:{'X-Admin-Key':KEY}});
+                          {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'失敗')); return; }
     if(!data.results.length){ alert('沒找到匹配「'+phrase+'」的 TM 條目'); return; }
@@ -25810,7 +25863,7 @@ async function concordanceSearch(){
 
 async function batchListJobs(){
   try {
-    const r = await fetch('/api/admin/batch/list?limit=20', {headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/batch/list?limit=20', {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.jobs.length){ alert('沒有 batch jobs'); return; }
@@ -25831,7 +25884,7 @@ async function batchSetConfig(){
   if(anthropic_model === null) return;
   try {
     const r = await fetch('/api/admin/batch/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model})
     });
     const data = await r.json();
@@ -25855,7 +25908,7 @@ async function alSubmitCorrection(){
   if(!tgt_lang) return;
   try {
     const r = await fetch('/api/admin/al/submit', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({
         src_text:src, original_tgt:original, corrected_tgt:corrected,
         reason:reason||null, src_lang:src_lang, tgt_lang:tgt_lang,
@@ -25872,7 +25925,7 @@ async function alSubmitCorrection(){
 
 async function alListCorrections(){
   try {
-    const r = await fetch('/api/admin/al/list?limit=20', {headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/al/list?limit=20', {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.results.length){ alert('沒有人工修正紀錄'); return; }
@@ -25887,7 +25940,7 @@ async function alListCorrections(){
 
 async function alReviewPending(action){
   try {
-    const r = await fetch('/api/admin/al/list?status=pending&limit=20', {headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/al/list?status=pending&limit=20', {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){ alert('✗ '+(data.error||'')); return; }
     if(!data.results.length){ alert('目前沒有待審修正'); return; }
@@ -25904,7 +25957,7 @@ async function alReviewPending(action){
       if(reason===null) return;
     }
     const rr = await fetch('/api/admin/al/entry/'+id+'/'+action, {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({by:'admin dashboard', reason:reason})
     });
     const result = await rr.json();
@@ -25917,7 +25970,7 @@ async function maintDedup(){
   const real = confirm('去重操作:確定要實際刪除嗎?(取消 = dry_run 只報告)');
   try {
     const r = await fetch('/api/admin/tm-maint/dedup', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({dry_run: !real, preserve_human_corrected: true})
     });
     const data = await r.json();
@@ -25937,7 +25990,7 @@ async function maintPrune(){
   const real = confirm('Prune 操作:確定要實際刪除嗎?(取消 = dry_run 只報告)\n注意:human_corrected 永遠保留');
   try {
     const r = await fetch('/api/admin/tm-maint/prune', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({
         days_unused: parseInt(days), min_hits: parseInt(min_hits),
         dry_run: !real, preserve_human_corrected: true
@@ -25959,7 +26012,7 @@ async function maintDecay(){
   const real = confirm('Quality decay:確定執行?(取消 = dry_run)\n注意:human_corrected 不衰減');
   try {
     const r = await fetch('/api/admin/tm-maint/decay', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({
         days_old: parseInt(days), factor: parseFloat(factor), dry_run: !real
       })
@@ -25980,7 +26033,7 @@ async function tmImportTMX(){
     const file = e.target.files[0]; if(!file) return;
     const fd = new FormData(); fd.append('file', file);
     try {
-      const r = await fetch('/api/admin/tm/import', {method:'POST', headers:{'X-Admin-Key':KEY}, body: fd});
+      const r = await fetch('/api/admin/tm/import', {method:'POST', headers:adminHeaders(false), body: fd});
       const data = await r.json();
       alert(data.ok ? '匯入 '+data.imported+' 條' : '✗ '+(data.error||''));
       dashLoadStats();
@@ -25996,7 +26049,7 @@ async function tmAdjustThresholds(){
   if(fi === null) return;
   try {
     const r = await fetch('/api/admin/tm/thresholds', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({fuzzy_bypass:parseInt(fb), fuzzy_inject:parseInt(fi)})
     });
     const data = await r.json();
@@ -26012,7 +26065,7 @@ async function vecAdjustThresholds(){
   if(fi === null) return;
   try {
     const r = await fetch('/api/admin/vec-tm/thresholds', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({bypass:parseFloat(fb), inject:parseFloat(fi)})
     });
     const data = await r.json();
@@ -26028,7 +26081,7 @@ async function nmtSetConfig(){
   if(threshold === null) return;
   try {
     const r = await fetch('/api/admin/nmt/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({provider:provider, short_threshold:parseInt(threshold)})
     });
     const data = await r.json();
@@ -26047,7 +26100,7 @@ async function qeSetConfig(){
   if(sample === null) return;
   try {
     const r = await fetch('/api/admin/qe/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model, sample_rate:parseFloat(sample)})
     });
     const data = await r.json();
@@ -26066,7 +26119,7 @@ async function apeSetConfig(){
   if(trigger === null) return;
   try {
     const r = await fetch('/api/admin/ape/config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({enabled:enabled, openai_model:openai_model, anthropic_model:anthropic_model, trigger_qe_score:parseInt(trigger)})
     });
     const data = await r.json();
@@ -26083,7 +26136,7 @@ async function tbxImport(){
     const file = e.target.files[0]; if(!file) return;
     const fd = new FormData(); fd.append('file', file);
     try {
-      const r = await fetch('/api/admin/tbx/import', {method:'POST', headers:{'X-Admin-Key':KEY}, body: fd});
+      const r = await fetch('/api/admin/tbx/import', {method:'POST', headers:adminHeaders(false), body: fd});
       const data = await r.json();
       alert(data.ok ? '匯入 '+data.imported+' 條(新增 '+data.added_new+' 條)' : '✗ '+(data.error||''));
       dashLoadStats();
@@ -26097,7 +26150,7 @@ async function tbxImport(){
 var _aipRetried = false;
 async function aipLoadStatus(){
   try{
-    const r = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/ai-provider', {headers:adminHeaders(false)});
     const data = await r.json();
     if(!data.ok){
       // v3.32: 不再永遠卡「載入中…」— 顯示原因並自動重試一次(冷啟動常見)
@@ -26237,7 +26290,7 @@ async function aipToggleFeature(featureName, enabled){
   try{
     const r = await fetch('/api/admin/ai-provider/features', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body: JSON.stringify({features: {[featureName]: enabled}})
     });
     const data = await r.json();
@@ -26256,7 +26309,7 @@ async function aipSetThinkingEffort(effort){
   try{
     const r = await fetch('/api/admin/ai-provider/features', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body: JSON.stringify({features: {thinking_effort: effort}})
     });
     const data = await r.json();
@@ -26272,7 +26325,7 @@ async function aipSetThinkingDisplay(display){
   try{
     const r = await fetch('/api/admin/ai-provider/features', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body: JSON.stringify({features: {thinking_display: display}})
     });
     const data = await r.json();
@@ -26291,7 +26344,7 @@ async function aipCountTokens(){
   try{
     const r = await fetch('/api/admin/ai-provider/count-tokens', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body:'{}'
     });
     const data = await r.json();
@@ -26326,7 +26379,7 @@ async function aipUploadGlossary(){
   try{
     const r = await fetch('/api/admin/ai-provider/upload-glossary', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body:'{}'
     });
     const data = await r.json();
@@ -26349,7 +26402,7 @@ async function aipUploadGlossary(){
 async function aipSwitchProvider(p){
   if(!confirm('確定切換到 ' + p.toUpperCase() + '?\n下次翻譯請求立即用新 provider。')) return;
   try{
-    const r = await fetch('/api/admin/ai-provider/switch', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p})});
+    const r = await fetch('/api/admin/ai-provider/switch', {method:'POST', headers:adminHeaders(true), body: JSON.stringify({provider:p})});
     const data = await r.json();
     if(data.ok){ alert('✅ ' + (data.message || '已切換')); aipLoadStatus(); }
     else alert('❌ ' + (data.message || '切換失敗'));
@@ -26363,7 +26416,7 @@ async function aipUpdateKey(p){
   if(p === 'anthropic' && !val.startsWith('sk-ant-')){ if(!confirm('Anthropic key 通常 sk-ant- 開頭，確定？')) return; }
   if(p === 'gemini' && !val.startsWith('AIza')){ if(!confirm('Gemini key 通常 AIza 開頭，確定？')) return; }
   try{
-    const r = await fetch('/api/admin/ai-provider/key', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({provider:p, api_key:val})});
+    const r = await fetch('/api/admin/ai-provider/key', {method:'POST', headers:adminHeaders(true), body: JSON.stringify({provider:p, api_key:val})});
     const data = await r.json();
     if(data.ok){ alert('✅ ' + (data.message || 'Key 已更新')); input.value=''; aipLoadStatus(); }
     else alert('❌ ' + (data.message || '更新失敗'));
@@ -26388,14 +26441,14 @@ async function aipSaveOpenAIModels(){
   var md = document.getElementById('aip-oai-default').value;
   var mu = document.getElementById('aip-oai-upgrade').value;
   try{
-    const r = await fetch('/api/admin/ai-provider/openai-models', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({model_default: md, model_upgrade: mu})});
+    const r = await fetch('/api/admin/ai-provider/openai-models', {method:'POST', headers:adminHeaders(true), body: JSON.stringify({model_default: md, model_upgrade: mu})});
     const d = await r.json();
     alert(d.ok ? '✅ OpenAI 模型已儲存' : ('❌ ' + (d.error||'失敗')));
   }catch(e){ alert('❌ ' + e); }
 }
 async function aipSetFlexBg(on){
   try{
-    const r = await fetch('/api/admin/ai-provider/openai-features', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: JSON.stringify({flex_background: !!on})});
+    const r = await fetch('/api/admin/ai-provider/openai-features', {method:'POST', headers:adminHeaders(true), body: JSON.stringify({flex_background: !!on})});
     const d = await r.json();
     if(!d.ok) alert('❌ ' + (d.error||'失敗'));
   }catch(e){ alert('❌ ' + e); }
@@ -26404,7 +26457,7 @@ async function setupRichMenu(){
   var el = document.getElementById('richmenu-result');
   el.style.display='block'; el.textContent='安裝中…(建選單→傳圖→設預設)';
   try{
-    const r = await fetch('/api/admin/richmenu/setup', {method:'POST', headers:{'X-Admin-Key':KEY}});
+    const r = await fetch('/api/admin/richmenu/setup', {method:'POST', headers:adminHeaders(false)});
     const d = await r.json();
     el.textContent = d.ok ? ('✅ 完成!\n' + (d.steps||[]).join('\n')) : ('❌ 失敗: ' + (d.error||'') + '\n' + (d.steps||[]).join('\n'));
   }catch(e){ el.textContent='❌ ' + e; }
@@ -26415,7 +26468,7 @@ async function aipTestProvider(){
   box.style.color = '#aaa';
   box.textContent = '⏳ 測試呼叫中…';
   try{
-    const r = await fetch('/api/admin/ai-provider/test', {method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'}, body: '{}'});
+    const r = await fetch('/api/admin/ai-provider/test', {method:'POST', headers:adminHeaders(true), body: '{}'});
     const data = await r.json();
     if(data.ok){
       box.style.color = '#10b981';
@@ -26531,7 +26584,7 @@ async function aipSaveGeminiConfig(){
   }
   try{
     const r = await fetch('/api/admin/ai-provider/gemini-config', {
-      method:'POST', headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      method:'POST', headers:adminHeaders(true),
       body: JSON.stringify({default_model: gd.value, upgrade_model: gu.value, reasoning_effort: ge.value})
     });
     const data = await r.json();
@@ -26552,7 +26605,7 @@ async function aipSavePrefillText(){
     // 用 ai-provider/features endpoint(不是 admin/features),因為這是 ai_provider feature
     const r = await fetch('/api/admin/ai-provider/features', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body: JSON.stringify({features: {assistant_prefill_text: text}})
     });
     const data = await r.json();
@@ -26574,7 +26627,7 @@ async function aipUpdateAnthropicModel(){
   if (!confirm('套用 Anthropic 模型:' + newModel + '\n\n所有 LINE bot 翻譯都會走這個模型(不管 OpenAI tab 內怎麼設)。\n確定?')) return;
   try {
     // 先取目前完整 mapping
-    const cur = await fetch('/api/admin/ai-provider', {headers:{'X-Admin-Key':KEY}}).then(r=>r.json());
+    const cur = await fetch('/api/admin/ai-provider', {headers:adminHeaders(false)}).then(r=>r.json());
     if (!cur.ok) { alert('讀取設定失敗'); return; }
     const mapping = (cur.config && cur.config.model_mapping) || {};
     // 把 LINE bot 內所有 OpenAI 模型(主翻譯 + OCR + 修補 + 輔助等)全部映射到新模型
@@ -26588,7 +26641,7 @@ async function aipUpdateAnthropicModel(){
     // 送出
     const r = await fetch('/api/admin/ai-provider/mapping', {
       method:'POST',
-      headers:{'X-Admin-Key':KEY,'Content-Type':'application/json'},
+      headers:adminHeaders(true),
       body: JSON.stringify({mapping})
     });
     const data = await r.json();
@@ -26611,6 +26664,7 @@ function switchTab(name){if(name==='aiprovider')aipLoadStatus();
   document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
   document.getElementById('panel-'+name).classList.add('active');
   if(name==='overview') loadStats();
+  if(name==='reminders' && typeof loadReminders==='function') loadReminders();
   if(name==='groups'){loadGroups();loadDM();}
   if(name==='skip') loadGroupSelect();
   if(name==='users'){loadUsersGroupSelect();loadUsers();}
@@ -27143,7 +27197,7 @@ function _renderUsersList(){
   if(!el)return;
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
-  var TAB_OPTS=[['overview','總覽'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
+  var TAB_OPTS=[['overview','總覽'],['reminders','自訂提醒'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
@@ -27285,7 +27339,7 @@ async function uploadStorage(){
   var fd=new FormData();
   fd.append('file',storageFileData);
   try{
-    var r=await fetch(API+'/storage/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
+    var r=await fetch(API+'/storage/upload',{method:'POST',headers:adminHeaders(false),body:fd});
     if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.error){toast(d.error);return}
@@ -27301,7 +27355,7 @@ async function uploadStorage(){
 
 async function downloadJson(){
   try{
-    var r=await fetch(API+'/storage/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
+    var r=await fetch(API+'/storage/json',{headers:adminHeaders(false)});
     var blob=await r.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -27319,7 +27373,7 @@ async function loadGlossaryStats(){
   document.getElementById('glossaryStats').innerHTML='詞條數: <strong style="color:#7c6fef">'+d.count+'</strong>';
   // 順便載清單供搜尋
   try{
-    var r=await fetch(API+'/glossary/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
+    var r=await fetch(API+'/glossary/json',{headers:adminHeaders(false)});
     if(r.ok){
       _glossaryFull=await r.json();
       renderGlossaryList('');
@@ -27376,7 +27430,7 @@ async function uploadGlossary(){
   var fd=new FormData();
   fd.append('file',glossaryFileData);
   try{
-    var r=await fetch(API+'/glossary/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
+    var r=await fetch(API+'/glossary/upload',{method:'POST',headers:adminHeaders(false),body:fd});
     if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
     if(d.error){toast(d.error);return}
@@ -27389,7 +27443,7 @@ async function uploadGlossary(){
 }
 async function downloadGlossaryJson(){
   try{
-    var r=await fetch(API+'/glossary/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
+    var r=await fetch(API+'/glossary/json',{headers:adminHeaders(false)});
     var blob=await r.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -27415,7 +27469,7 @@ async function uploadPackaging(){
   if(!f){toast('請選擇檔案');return;}
   var fd=new FormData();fd.append('file',f);
   try{
-    var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
+    var r=await fetch(API+'/packaging/upload',{method:'POST',headers:adminHeaders(false),body:fd});
     var d=await r.json();
     if(!r.ok||!d.ok){toast(d.error||'上傳失敗('+r.status+')');return}
     toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';
@@ -27423,7 +27477,7 @@ async function uploadPackaging(){
 }
 async function downloadPackagingJson(){
   try{
-    var r=await fetch(API+'/packaging/json',{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
+    var r=await fetch(API+'/packaging/json',{headers:adminHeaders(false)});
     var blob=await r.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -28423,7 +28477,7 @@ async function doPushForm(fid){
 }
 
 async function viewFormSubmissions(fid){
-  var r=await fetch(API+'/forms/submissions/'+fid,{headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''}});
+  var r=await fetch(API+'/forms/submissions/'+fid,{headers:adminHeaders(false)});
   var data=await r.json();
   var subs=data.submissions||[];
   var form=data.form||{};
@@ -30505,7 +30559,7 @@ except Exception as e:
 
 def check_admin_key():
     key = request.headers.get("X-Admin-Key", "")
-    return key == ADMIN_KEY
+    return bool(key and ADMIN_KEY and hmac.compare_digest(key.encode("utf-8"), ADMIN_KEY.encode("utf-8")))
 
 
 def check_manager_access(required_tab=None):
@@ -30514,6 +30568,8 @@ def check_manager_access(required_tab=None):
         return True
     uid = request.headers.get("X-Manager-Id", "")
     if not uid or uid not in admin_users:
+        return False
+    if reminders_web.verified_manager(request.headers.get("X-Manager-Token", ""), ADMIN_KEY) != uid:
         return False
     if not admin_users[uid].get("is_admin"):
         return False
@@ -32099,9 +32155,11 @@ document.addEventListener('DOMContentLoaded',init);
 @app.route("/api/admin/manager-login", methods=["POST"])
 def api_admin_manager_login():
     """Login as manager using Google ID token."""
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "請提供 Google 登入憑證"}), 400
     credential = data.get("credential", "")
-    if not credential:
+    if not isinstance(credential, str) or not credential or len(credential) > 16384:
         return jsonify({"error": "缺少 Google 憑證"}), 400
     # Verify Google ID token
     try:
@@ -32123,9 +32181,18 @@ def api_admin_manager_login():
             verify_data = json.loads(resp.read().decode())
             if verify_data.get("aud") != GOOGLE_CLIENT_ID:
                 return jsonify({"error": "憑證驗證失敗"}), 403
+            # Reminder permissions use a signed session tied to Google's verified
+            # identity, never a client-supplied LINE user ID alone.
+            if (verify_data.get("email_verified") not in (True, "true")
+                    or verify_data.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
+                    or float(verify_data.get("exp", 0)) <= time.time()):
+                return jsonify({"error": "Google 憑證已過期或信箱尚未驗證"}), 403
+            email = str(verify_data.get("email", "")).lower().strip()
+            if not email:
+                return jsonify({"error": "無法取得已驗證的 Google 信箱"}), 403
     except Exception as e:
-        logger.error("Google token verify failed: %s", e)
-        return jsonify({"error": "Google 驗證失敗: " + str(e)}), 400
+        logger.error("Google token verify failed: %s", type(e).__name__)
+        return jsonify({"error": "Google 驗證失敗，請重新登入"}), 400
     # Find user by email
     found_uid = None
     for uid, info in admin_users.items():
@@ -32139,7 +32206,8 @@ def api_admin_manager_login():
     allowed = admin_users[found_uid].get("allowed_tabs", [])
     if not allowed:
         return jsonify({"error": "尚未設定可用功能，請聯繫超級管理員"}), 403
-    return jsonify({"ok": True, "role": "manager", "tabs": allowed, "email": email, "user_id": found_uid})
+    return jsonify({"ok": True, "role": "manager", "tabs": allowed, "email": email, "user_id": found_uid,
+                    "manager_token": reminders_web.issue_manager_token(found_uid, ADMIN_KEY)})
 
 
 @app.route("/api/admin/groups", methods=["GET"])
@@ -38553,6 +38621,42 @@ except Exception as _e:
 # ============================================================================
 # END OF v3.10 EXTENSIONS
 # ============================================================================
+
+
+def _reminder_catalog():
+    """Use the existing group/member catalogue without costly profile API scans."""
+    with _state_lock:
+        gids = set(group_tracking) | set(group_settings) | set(group_target_lang)
+        result = {}
+        for gid in sorted(gids):
+            if not isinstance(gid, str) or not scheduled_reminders.GROUP_ID.fullmatch(gid):
+                continue
+            result[gid] = {
+                "name": str(group_tracking.get(gid, {}).get("name") or gid),
+                "members": {uid: str(name or "未命名成員")
+                            for uid, name in group_user_names.get(gid, {}).items()
+                            if isinstance(uid, str) and scheduled_reminders.USER_ID.fullmatch(uid)},
+            }
+        return result
+
+
+def _authorize_reminders():
+    supplied = request.headers.get("X-Admin-Key", "")
+    if supplied and ADMIN_KEY and check_admin_key():
+        return "super-admin"
+    uid = reminders_web.verified_manager(request.headers.get("X-Manager-Token", ""), ADMIN_KEY)
+    if not uid or uid != request.headers.get("X-Manager-Id", ""):
+        return None
+    manager = admin_users.get(uid, {})
+    if manager.get("is_admin") and "reminders" in manager.get("allowed_tabs", []):
+        return uid
+    return None
+
+
+_start_reminders = reminders_web.register_reminders(
+    app, authorize=_authorize_reminders, catalog=_reminder_catalog,
+)
+_start_reminders()
 
 
 # Resume translations that were pending when the process last stopped.  This
