@@ -178,8 +178,9 @@ def test_audio_tts_is_nonblocking_and_text_file_translation_uses_main_pipeline()
     assert "push_tts_message" in audio
     assert "get_tts_enabled" in audio
     image_background = _function_source("_handle_image_background")
-    assert "if _overlay_qr:\n                            msg_obj.quick_reply = _overlay_qr\n                        _img_sender" in image_background
-    assert "api.push_message(PushMessageRequest" in image_background
-    assert "translate(part, lang, actual_tgt)" in file_handler
+    assert "msg_obj.quick_reply = _overlay_qr" in image_background
+    assert "_send_reply_with_push_fallback(" in image_background
+    assert "_translate_document_parts(_file_job_key, text, lang, actual_tgt)" in file_handler
+    assert "translate(core, src_lang, target_lang)" in _function_source("_translate_document_parts")
     assert "_TEXT_FILE_EXTENSIONS" in (ROOT / "app.py").read_text(encoding="utf-8")
     assert "quality_gate_critical" in file_handler

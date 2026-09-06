@@ -2195,7 +2195,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                   top_logprobs=None, logit_bias=None, stop=None, **kwargs):
     """跨三家 AI 的唯一協調層。
 
-    每家最多進入一次，所有嘗試共用一個總期限；provider SDK 內建重試另行關閉。
+    所有嘗試共用一個總期限與生成預算；單一供應商最多兩次嘗試。
+    provider SDK 內建重試另行關閉。
     required_capability / provider_preference / failover_* 為本層內部參數，不會送給 API。
     """
     _ensure_initialized()
@@ -2263,8 +2264,13 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     for index, provider in enumerate(providers):
         if generation_limit and completed_generations >= generation_limit:
             break
-        provider_attempts = 2 if single_provider_retry else 1
+        # A sole configured provider also needs a bounded opportunity to repair
+        # a rejected translation using the actual defect feedback. Transport
+        # retry and completed-generation limits remain independent.
+        provider_attempts = 2 if single_provider_retry or (len(providers) == 1 and generation_limit > 1) else 1
         for provider_attempt in range(provider_attempts):
+            if generation_limit and completed_generations >= generation_limit:
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -2274,13 +2280,17 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 if index and provider_attempt == 0:
                     print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
                 elif provider_attempt:
-                    print(f"[ai_provider] {provider} 暫時性錯誤，單次快速重試", flush=True)
+                    print(f"[ai_provider] {provider} 使用剩餘預算重試一次", flush=True)
                 response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
                 completed_generations += 1
                 response = _restore_provider_privacy(response, privacy_envelope)
                 elapsed = time.monotonic() - started
-                if callable(response_validator):
-                    verdict = response_validator(response, provider)
+                choices = getattr(response, "choices", None) or []
+                finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
+                truncated = finish in {"length", "max_tokens"}
+                if callable(response_validator) or (generation_limit and truncated):
+                    verdict = ((False, "translation_output_truncated:" + finish) if truncated
+                               else response_validator(response, provider))
                     if isinstance(verdict, tuple):
                         usable = bool(verdict[0])
                         reason = str(verdict[1]) if len(verdict) > 1 else "quality validator rejected response"
@@ -2289,10 +2299,17 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                         reason = "quality validator rejected response"
                     if not usable:
                         last_quality_error = RuntimeError(reason)
-                        best_rejected_response = response
-                        best_rejected_provider = provider
-                        best_rejected_reason = reason
-                        best_rejected_elapsed = elapsed
+                        # A token-limited prefix is never a complete candidate,
+                        # even if its surviving sentences pass semantic checks.
+                        if not truncated:
+                            best_rejected_response = response
+                            best_rejected_provider = provider
+                            best_rejected_reason = reason
+                            best_rejected_elapsed = elapsed
+                        elif generation_limit:
+                            budget_key = "max_completion_tokens" if _all_kwargs.get("max_completion_tokens") else "max_tokens"
+                            budget = int(_all_kwargs.get(budget_key) or 1024)
+                            _all_kwargs[budget_key] = max(budget, min(16384, budget * 2))
                         attempts.append({
                             "provider": provider,
                             "error": reason[:300],
@@ -2313,9 +2330,12 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                                     "Output only the complete translation; do not mention the validation."
                                 ),
                             })
-                        if not failover_enabled:
-                            raise last_quality_error
                         print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)
+                        if (len(providers) == 1 and generation_limit
+                                and completed_generations < generation_limit
+                                and provider_attempt + 1 < provider_attempts
+                                and deadline - time.monotonic() > 1.0):
+                            continue
                         break
                 last_error = None
                 _record_provider_success(provider, elapsed)

@@ -143,6 +143,8 @@ import zipfile
 from io import BytesIO
 import threading
 import contextlib
+import functools
+import line_translation_delivery as line_delivery_module
 from translation_request_guard import serialize_request
 import factory_source_understanding as source_understanding_module
 import translation_adaptive_memory as adaptive_memory_module
@@ -880,13 +882,20 @@ QE_GATING_ENABLED = False  # single-API commercial mode: no LLM judge/post-edito
 # 翻譯結果加上注解 / hint 可能超 5000;集中處理避免散落各處 [:4990]。
 LINE_TEXT_MAX = 5000
 def _clip_line_text(text, suffix="\n...(已截斷)"):
-    """Clip text to LINE's 5000-char limit. Adds suffix to indicate truncation."""
+    """Bound non-translation previews by LINE's UTF-16 limit."""
     if not text:
         return text
-    if len(text) <= LINE_TEXT_MAX:
+    if line_delivery_module.utf16_units(text) <= LINE_TEXT_MAX:
         return text
-    cap = LINE_TEXT_MAX - len(suffix)
-    return text[:cap] + suffix
+    cap = LINE_TEXT_MAX - line_delivery_module.utf16_units(suffix)
+    units, end = 0, 0
+    for char in text:
+        width = 2 if ord(char) > 0xFFFF else 1
+        if units + width > cap:
+            break
+        units += width
+        end += 1
+    return text[:end] + suffix
 
 
 # v3.9.30c B19 修補: 安全 int 轉換
@@ -957,6 +966,8 @@ def _release_webhook_message_claims(body):
         for item in events:
             message = item.get("message", {}) if isinstance(item, dict) else {}
             _release_processed_message(message.get("id") if isinstance(message, dict) else None)
+            if isinstance(item, dict) and item.get("replyToken"):
+                _release_processed_message("pbk:" + str(item["replyToken"]))
     except Exception:
         logger.debug("Unable to release failed webhook message claims", exc_info=True)
 
@@ -13207,60 +13218,261 @@ def _build_expression_visual_message(source_text, translated_text, source_lang, 
         return None
 
 
-def _send_reply_with_push_fallback(
-    *,
-    reply_token,
-    target_id,
-    message_obj,
-    fallback_text,
-    retry_key=None,
-    notification_disabled=False,
-    append_messages=None,
-):
-    """Send through LINE reply API, then fall back to push if token expired.
+_translation_delivery_state = threading.local()
 
-    Long translations can legitimately finish after the reply token is no
-    longer usable.  Delivery fallback is independent from AI failover and does
-    not trigger another translation request.
-    """
+
+@contextlib.contextmanager
+def _translation_job_scope():
+    """Isolate request semantics and keep only actively running jobs leased."""
+    previous_tl = dict(_tl.__dict__)
+    previous_delivery = dict(_translation_delivery_state.__dict__)
+    _tl.__dict__.clear()
+    _translation_delivery_state.__dict__.clear()
+    leases = {}
     try:
-        with ApiClient(configuration) as api_client:
-            api_line = MessagingApi(api_client)
-            # Keep the actual translation first. Optional mood visuals follow it,
-            # so users never need to scroll past a decorative image to read text.
-            _messages = [message_obj] + list(append_messages or [])
-            req = ReplyMessageRequest(reply_token=reply_token, messages=_messages)
-            if notification_disabled:
-                req.notification_disabled = True
+        with contextlib.ExitStack() as stack:
+            _translation_delivery_state.stack = stack
+            _translation_delivery_state.leases = leases
+            yield
+    finally:
+        for key, (owner, _check) in leases.items():
             try:
-                if retry_key:
-                    response = api_line.reply_message(req, x_line_retry_key=retry_key)
-                else:
-                    response = api_line.reply_message(req)
-            except TypeError:
-                response = api_line.reply_message(req)
-        return response, "reply"
-    except Exception as reply_exc:
-        logger.warning(
-            "LINE reply failed; falling back to push target=%s error=%s",
-            target_id, str(reply_exc)[:300],
-        )
+                translation_retry_queue_module.reschedule(
+                    key, owner=owner, delay_seconds=2, error="foreground_work_pending"
+                )
+            except Exception as exc:
+                logger.warning("[TranslationOutbox] release failed: %s", exc)
+        _translation_delivery_state.__dict__.clear()
+        _translation_delivery_state.__dict__.update(previous_delivery)
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+        if leases:
+            _TRANSLATION_RETRY_WAKE.set()
+
+
+def _claim_foreground_translation(job_key):
+    state = _translation_delivery_state
+    if not job_key or not hasattr(state, "stack"):
+        return
+    if job_key in state.leases:
+        return
+    owner = "foreground-" + uuid.uuid4().hex
+    if not translation_retry_queue_module.claim_job(job_key, owner=owner):
+        raise translation_retry_queue_module.LeaseLostError("job is already being handled")
+    check = state.stack.enter_context(
+        translation_retry_queue_module.maintain_lease(job_key, owner=owner)
+    )
+    state.leases[job_key] = (owner, check)
+
+
+def _delivery_owner(job_key):
+    lease = getattr(_translation_delivery_state, "leases", {}).get(job_key)
+    if lease:
+        lease[1]()
+        return lease[0]
+    return None
+
+
+def _durable_background_image(func):
+    @functools.wraps(func)
+    def run(ctx):
+        with _translation_job_scope():
+            key = ctx.get("durable_job_key")
+            try:
+                if key and translation_retry_queue_module.was_delivered(key):
+                    return
+                if key and translation_retry_queue_module.get(key):
+                    _claim_foreground_translation(key)
+                return func(ctx)
+            except translation_retry_queue_module.LeaseLostError:
+                logger.info("[ImageRetry] image work already owned")
+    return run
+
+
+def _translation_postback_scope(func):
+    @functools.wraps(func)
+    def run(event):
+        with _translation_job_scope():
+            try:
+                return func(event)
+            except Exception:
+                _release_processed_message("pbk:" + str(getattr(event, "reply_token", "") or ""))
+                raise
+    return run
+
+
+def _schedule_variant_translation(event, context, mode, group_id, user_id):
+    identity = str(getattr(event, "webhook_event_id", "") or getattr(event, "reply_token", "") or "")
+    if not identity:
+        raise ValueError("translation action needs an event identity")
+    key = str(group_id or user_id) + ":variant:" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+    payload = {
+        "job_kind": "variant", "group_id": group_id, "user_id": user_id,
+        "context": dict(context), "mode": mode,
+    }
+    if not translation_retry_queue_module.enqueue(key, payload, job_kind="variant", delay_seconds=75):
+        _ensure_translation_retry_worker()
+        return None
+    _claim_foreground_translation(key)
+    _ensure_translation_retry_worker()
+    return key
+
+
+def _durable_translation_event(kind):
+    def decorate(func):
+        @functools.wraps(func)
+        def run(event):
+            source = event.source
+            target = (getattr(source, "group_id", None) or getattr(source, "room_id", None)
+                      or getattr(source, "user_id", None))
+            message_id = str(getattr(event.message, "id", "") or "")
+            key = f"{target}:{message_id}" + (":" + kind if kind in {"image", "audio", "video", "file"} else "")
+            if target and message_id:
+                if translation_retry_queue_module.was_delivered(key):
+                    return
+                if translation_retry_queue_module.get(key):
+                    _ensure_translation_retry_worker()
+                    return
+            with _translation_job_scope():
+                try:
+                    return func(event)
+                except translation_retry_queue_module.LeaseLostError:
+                    logger.info("[TranslationOutbox] event already owned: %s", key[-24:])
+        return run
+    return decorate
+
+
+def _delivery_checkpoint(job_key, updates):
+    if job_key and translation_retry_queue_module.get(job_key):
+        if not translation_retry_queue_module.checkpoint(job_key, updates, owner=_delivery_owner(job_key)):
+            raise translation_retry_queue_module.LeaseLostError("cannot checkpoint delivery")
+
+
+def _prepare_translation_delivery(job_key, payload, text, delivered_targets=None):
+    row = translation_retry_queue_module.get(job_key) if job_key else None
+    stored = dict((row or {}).get("payload") or payload or {})
+    plan = stored.get("delivery")
+    if plan:
+        return plan
+    plan = {
+        "text": str(text or ""),
+        "targets": list(delivered_targets if delivered_targets is not None else stored.get("target_langs") or []),
+        "fingerprint": _translation_cache_asset_fingerprint(),
+        "next_batch": 0,
+        "attempted": False,
+        "round": int(stored.get("delivery_round") or 0),
+    }
+    if not plan["text"]:
+        raise ValueError("translation delivery must contain text")
+    _delivery_checkpoint(job_key, {"delivery": plan})
+    return plan
+
+
+def _push_translation_batch(target_id, messages, stable_key, *, notification_disabled=False):
+    """Retry only expired quote metadata; an acknowledged duplicate is success."""
+    with ApiClient(configuration) as api_client:
+        api = MessagingApi(api_client)
+        req = PushMessageRequest(to=target_id, messages=messages)
+        if notification_disabled:
+            req.notification_disabled = True
+
+        def send():
+            try:
+                return api.push_message(req, x_line_retry_key=stable_key, _request_timeout=30)
+            except TypeError as exc:
+                # Some older SDKs accept retry headers but not timeout kwargs.
+                if "_request_timeout" not in str(exc):
+                    raise
+                return api.push_message(req, x_line_retry_key=stable_key)
+
         try:
-            _event_log_write("line_reply_fallback_push", {
-                "target": str(target_id or "")[-16:],
-                "error": str(reply_exc)[:300],
-            })
-        except Exception:
-            pass
-        with ApiClient(configuration) as api_client:
-            api_line = MessagingApi(api_client)
-            push_msg = TextMessage(text=_clip_line_text(fallback_text))
-            _push_messages = [push_msg] + list(append_messages or [])
-            response = api_line.push_message(PushMessageRequest(
-                to=target_id,
-                messages=_push_messages,
-            ))
-        return response, "push"
+            return send()
+        except Exception as exc:
+            if line_delivery_module.already_accepted(exc):
+                return None
+            if not line_delivery_module.invalid_quote(exc):
+                raise
+            for msg in req.messages:
+                if getattr(msg, "quote_token", None):
+                    msg.quote_token = None
+            try:
+                return send()
+            except Exception as retry_exc:
+                if line_delivery_module.already_accepted(retry_exc):
+                    return None
+                raise
+
+
+def _send_reply_with_push_fallback(
+    *, reply_token, target_id, message_obj, fallback_text, retry_key=None,
+    notification_disabled=False, append_messages=None, job_key=None, delivered_targets=None,
+):
+    """Persist the complete result before attempting reply or idempotent push."""
+    payload = {"group_id": target_id, "quote_token": getattr(message_obj, "quote_token", None),
+               "notification_disabled": bool(notification_disabled)}
+    plan = _prepare_translation_delivery(job_key, payload, fallback_text, delivered_targets)
+    chunks = line_delivery_module.split_text(plan["text"])
+    if len(chunks) == 1:
+        if hasattr(message_obj, "text"):
+            message_obj.text = chunks[0]
+        messages = [message_obj]
+    else:
+        messages = [TextMessage(text=chunk) for chunk in chunks]
+    messages += list(append_messages or [])[:max(0, 5 - len(messages))]
+    if reply_token and len(messages) <= 5 and not plan.get("next_batch"):
+        plan["attempted"] = True
+        _delivery_checkpoint(job_key, {"delivery": plan})
+        try:
+            _delivery_owner(job_key)
+            with ApiClient(configuration) as api_client:
+                req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
+                if notification_disabled:
+                    req.notification_disabled = True
+                # Reply does not support X-Line-Retry-Key.
+                response = MessagingApi(api_client).reply_message(req)
+            plan["next_batch"] = len(line_delivery_module.text_batches(plan["text"]))
+            _delivery_checkpoint(job_key, {"delivery": plan})
+            return response, "reply"
+        except translation_retry_queue_module.LeaseLostError:
+            raise
+        except Exception as exc:
+            logger.warning("LINE reply failed; using durable push: %s", str(exc)[:200])
+    response = _translation_retry_push_chunks(
+        job_key or retry_key or uuid.uuid4().hex, payload, plan["text"],
+        prepared_plan=plan, persist_key=job_key,
+    )
+    return response, "push"
+
+
+def _translation_retry_push(job_key, payload, reply_text):
+    return _translation_retry_push_chunks(job_key, payload, reply_text)
+
+
+def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5,
+                                   prepared_plan=None, persist_key=None):
+    """Deliver every UTF-16-safe batch and resume at the first unaccepted batch."""
+    target = payload.get("group_id") or payload.get("user_id")
+    if not target:
+        raise ValueError("translation retry has no LINE target")
+    checkpoint_key = job_key if persist_key is None else persist_key
+    plan = prepared_plan or _prepare_translation_delivery(checkpoint_key, payload, text)
+    batches = line_delivery_module.text_batches(plan["text"], max_messages=max_messages)
+    response = None
+    round_key = str(job_key) + (":round:" + str(plan["round"]) if plan["round"] else "")
+    for index in range(int(plan["next_batch"]), len(batches)):
+        _delivery_owner(checkpoint_key)
+        plan["attempted"] = True
+        _delivery_checkpoint(checkpoint_key, {"delivery": plan})
+        messages = [TextMessage(text=chunk) for chunk in batches[index]]
+        if index == 0 and payload.get("quote_token"):
+            messages[0].quote_token = payload["quote_token"]
+        response = _push_translation_batch(
+            target, messages, line_delivery_module.retry_key(round_key, index),
+            notification_disabled=bool(payload.get("notification_disabled")),
+        )
+        plan["next_batch"] = index + 1
+        _delivery_checkpoint(checkpoint_key, {"delivery": plan})
+    return response
 
 
 def _translation_retry_delays():
@@ -13305,80 +13517,6 @@ def _translation_retry_key(ctx, source_text, src_lang, target_langs):
     return target_id + ":sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
-def _translation_retry_push(job_key, payload, reply_text):
-    """Push one completed retry with a stable LINE idempotency key."""
-    import uuid
-
-    target_id = payload.get("group_id") or payload.get("user_id")
-    if not target_id:
-        raise ValueError("translation retry has no LINE target")
-    text = _clip_line_text(reply_text)
-    quote_token = payload.get("quote_token")
-    stable_retry_key = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-translation-retry:" + str(job_key)))
-
-    def _push(message):
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            request_obj = PushMessageRequest(to=target_id, messages=[message])
-            try:
-                return api.push_message(request_obj, x_line_retry_key=stable_retry_key)
-            except TypeError:
-                return api.push_message(request_obj)
-
-    message = TextMessage(text=text)
-    if quote_token:
-        try:
-            message.quote_token = quote_token
-        except Exception:
-            pass
-    try:
-        return _push(message)
-    except Exception:
-        # A quote token can expire while a durable retry is waiting.  The
-        # translation itself must still be delivered, so retry the push without
-        # quote metadata and with the same stable retry key.
-        return _push(TextMessage(text=text))
-
-
-
-def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5):
-    """Push a long durable result without truncating supported document text."""
-    target_id = payload.get("group_id") or payload.get("user_id")
-    if not target_id:
-        raise ValueError("translation retry has no LINE target")
-    value = str(text or "")
-    chunks = []
-    while value and len(chunks) < max(1, int(max_messages or 5)):
-        cut = min(4700, len(value))
-        if cut < len(value):
-            boundary = max(value.rfind("\n", 0, cut), value.rfind(" ", 0, cut))
-            if boundary >= 1000:
-                cut = boundary + 1
-        chunks.append(value[:cut])
-        value = value[cut:]
-    if value:
-        # TEXT_FILE_MAX_CHARS keeps normal jobs below this limit. Preserve a
-        # clear continuation marker rather than silently slicing mid-sentence.
-        chunks[-1] = chunks[-1][:4650] + "\n…"
-    messages = [TextMessage(text=_clip_line_text(chunk)) for chunk in chunks if chunk]
-    if not messages:
-        raise ValueError("translation retry has empty LINE payload")
-    quote_token = payload.get("quote_token")
-    if quote_token:
-        try:
-            messages[0].quote_token = quote_token
-        except Exception:
-            pass
-    stable_retry_key = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-translation-retry:" + str(job_key)))
-    with ApiClient(configuration) as api_client:
-        api = MessagingApi(api_client)
-        request_obj = PushMessageRequest(to=target_id, messages=messages)
-        try:
-            return api.push_message(request_obj, x_line_retry_key=stable_retry_key)
-        except TypeError:
-            return api.push_message(request_obj)
-
-
 def _translation_retry_attempt(job, lease_owner=None):
     """Process one durable text job. Returns True only after LINE delivery."""
     payload = dict((job or {}).get("payload") or {})
@@ -13389,7 +13527,7 @@ def _translation_retry_attempt(job, lease_owner=None):
     targets = list(dict.fromkeys(x for x in targets if x))
     target_id = payload.get("group_id") or payload.get("user_id")
     if not job_key or not source_text or not targets or not target_id:
-        translation_retry_queue_module.remove(job_key)
+        translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
         return True
 
     previous = {}
@@ -13421,13 +13559,9 @@ def _translation_retry_attempt(job, lease_owner=None):
 
         if payload.get("from_file"):
             primary_target = targets[0]
-            translated_parts = []
-            for part in _split_text_for_translation(source_text):
-                translated = translate(part, src_lang, primary_target)
-                if not translated:
-                    return False
-                translated_parts.append(translated)
-            translated_file = "".join(translated_parts)
+            translated_file = _translate_document_parts(job_key, source_text, src_lang, primary_target)
+            if not translated_file:
+                return False
             reply_text = "📄 %s → %s\n%s" % (
                 str(payload.get("file_name") or "file"),
                 LANG_NAMES_ZH.get(primary_target, primary_target),
@@ -13451,8 +13585,11 @@ def _translation_retry_attempt(job, lease_owner=None):
             delivered_map = {primary_target: translated} if translated else {}
 
         if not reply_text or _is_translation_failure_sentinel(reply_text):
+            if _translation_was_intentionally_skipped():
+                return _complete_durable_text_job(job_key, lease_owner=lease_owner)
             return False
 
+        _prepare_translation_delivery(job_key, payload, reply_text, list(delivered_map))
         if payload.get("from_file"):
             _translation_retry_push_chunks(job_key, payload, reply_text)
         else:
@@ -13464,9 +13601,7 @@ def _translation_retry_attempt(job, lease_owner=None):
             except Exception:
                 pass
         _stats_inc("text_translations", max(1, len(delivered_map)))
-        translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-        with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
+        completed = _complete_durable_text_job(job_key, lease_owner=lease_owner)
         _event_log_write("translation_retry_delivered", {
             "target": str(target_id)[-16:],
             "attempt": int((job or {}).get("attempts") or 0) + 1,
@@ -13475,7 +13610,7 @@ def _translation_retry_attempt(job, lease_owner=None):
             "message_id": message_id,
             "durable": True,
         })
-        return True
+        return completed
     finally:
         for attr, value in previous.items():
             try:
@@ -13495,7 +13630,7 @@ def _translation_retry_image_attempt(job, lease_owner=None):
     message_id = str(payload.get("message_id") or "")
     target_id = payload.get("group_id") or payload.get("user_id")
     if not job_key or not message_id or not target_id:
-        translation_retry_queue_module.remove(job_key)
+        translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
         return True
 
     previous = dict(getattr(_tl, "__dict__", {}))
@@ -13513,6 +13648,7 @@ def _translation_retry_image_attempt(job, lease_owner=None):
         extracted = str(payload.get("ocr_text") or "").strip()
         _tl.factory_reason_image_expected_rows = int(payload.get("factory_reason_image_expected_rows") or 0)
         if not extracted:
+            _tl.ocr_extraction_state = "unknown"
             img_base64, img_raw = download_line_image(message_id)
             if not img_base64 or not img_raw:
                 return False
@@ -13520,9 +13656,11 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             extracted = ocr_image_openai(img_base64, mime_type=mime)
         if _is_factory_reason_ocr_failure_text(extracted):
             return False
-        if not extracted or len(str(extracted).strip()) < 2:
+        if not extracted or not str(extracted).strip():
             # Empty output can also be a provider timeout. It is not evidence
             # of a blank image and must never silently complete a pending job.
+            if getattr(_tl, "ocr_extraction_state", "unknown") == "empty":
+                return _complete_durable_text_job(job_key, lease_owner=lease_owner)
             return False
         extracted = str(extracted).strip()
         translation_retry_queue_module.checkpoint(job_key, {
@@ -13579,161 +13717,80 @@ def _translation_retry_image_attempt(job, lease_owner=None):
 
 
 def _translation_retry_audio_attempt(job, lease_owner=None):
-    """Re-download, transcribe, translate and deliver one durable audio job."""
-    payload = dict((job or {}).get("payload") or {})
-    job_key = str((job or {}).get("job_key") or "")
-    message_id = str(payload.get("message_id") or "")
-    target_id = payload.get("group_id") or payload.get("user_id")
-    if not job_key or not message_id or not target_id:
-        translation_retry_queue_module.remove(job_key)
-        return True
-    audio_bytes = download_line_audio(message_id)
-    if not audio_bytes:
+    """Reuse a durable transcript after extraction or delivery interruptions."""
+    payload = dict(job.get("payload") or {})
+    key = job["job_key"]
+    transcribed = str(payload.get("transcribed_text") or "").strip()
+    if not transcribed:
+        _tl.audio_transcription_state = "unknown"
+        audio = download_line_audio(payload["message_id"])
+        if not audio:
+            return False
+        transcribed = str(transcribe_audio_openai(audio) or "").strip()
+    # Empty also means timeout/provider failure; it cannot confirm silence.
+    if not transcribed:
+        if getattr(_tl, "audio_transcription_state", "unknown") == "empty":
+            return _complete_durable_text_job(key, lease_owner=lease_owner)
         return False
-    transcribed = transcribe_audio_openai(audio_bytes)
-    if not transcribed or len(str(transcribed).strip()) < 2:
-        # Silence/no speech is not a translation failure.  Confirm it across
-        # several independent attempts, then close the silent job.
-        if int((job or {}).get("attempts") or 0) >= 2:
-            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            return True
-        return False
-    transcribed = str(transcribed).strip()
+    _delivery_checkpoint(key, {"transcribed_text": transcribed})
     lang = detect_language(transcribed) or ("zh" if has_chinese(transcribed) else "auto")
-    preferred = str(payload.get("tgt") or group_target_lang.get(payload.get("group_id"), "id") or "id")
-    actual_tgt = preferred if lang == "zh" else "zh"
-    result = translate(transcribed, lang, actual_tgt)
+    tgt = str(payload.get("tgt") or "id") if lang == "zh" else "zh"
+    result = translate(transcribed, lang, tgt)
     if not result:
-        # Preserve the already-extracted source independently from LINE media
-        # retention, then retire this media job.
-        _schedule_text_translation_retry(
-            payload,
-            source_text=transcribed,
-            src_lang=lang,
-            target_langs=[actual_tgt],
-            from_image_ocr=False,
-        )
-        translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-        with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-        return True
-    reply_text = "🎤 " + LANG_FLAGS.get(actual_tgt, "") + "\n💬 " + transcribed + "\n📝 " + result
-    _translation_retry_push(job_key, payload, reply_text)
+        return False
+    reply = "🎤 " + LANG_FLAGS.get(tgt, "") + "\n💬 " + transcribed + "\n📝 " + result
+    _translation_retry_push(key, payload, reply)
     _stats_inc("voice_translations")
-    translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-    with _TRANSLATION_RETRY_LOCK:
-        _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-    return True
+    return _complete_durable_text_job(key, lease_owner=lease_owner)
 
 
 def _translation_retry_video_attempt(job, lease_owner=None):
-    """Re-download a video preview, OCR, translate and deliver it."""
-    payload = dict((job or {}).get("payload") or {})
-    job_key = str((job or {}).get("job_key") or "")
-    message_id = str(payload.get("message_id") or "")
-    target_id = payload.get("group_id") or payload.get("user_id")
-    if not job_key or not message_id or not target_id:
-        translation_retry_queue_module.remove(job_key)
-        return True
-    with ApiClient(configuration) as api_client:
-        content = MessagingApiBlob(api_client).get_message_content_preview(message_id)
-    content = _coerce_blob_bytes(content)
-    if not content or len(content) <= 100:
+    payload = dict(job.get("payload") or {})
+    key = job["job_key"]
+    extracted = str(payload.get("ocr_text") or "").strip()
+    if not extracted:
+        _tl.ocr_extraction_state = "unknown"
+        with ApiClient(configuration) as api_client:
+            raw = MessagingApiBlob(api_client).get_message_content_preview(payload["message_id"])
+        raw = _coerce_blob_bytes(raw)
+        if not raw or len(raw) <= 100:
+            return False
+        extracted = str(ocr_image_openai(base64.b64encode(raw).decode(), mime_type="image/jpeg") or "").strip()
+    if not extracted or _is_factory_reason_ocr_failure_text(extracted):
+        if getattr(_tl, "ocr_extraction_state", "unknown") == "empty":
+            return _complete_durable_text_job(key, lease_owner=lease_owner)
         return False
-    b64 = base64.b64encode(content).decode()
-    extracted = ocr_image_openai(b64, mime_type="image/jpeg")
-    if not extracted or len(str(extracted).strip()) < 2:
-        if int((job or {}).get("attempts") or 0) >= 2:
-            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            return True
-        return False
-    extracted = str(extracted).strip()
+    _delivery_checkpoint(key, {"ocr_text": extracted})
     lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")
-    preferred = str(payload.get("tgt") or group_target_lang.get(payload.get("group_id"), "id") or "id")
-    actual_tgt = preferred if lang == "zh" else "zh"
-    result = translate(extracted, lang, actual_tgt)
+    tgt = str(payload.get("tgt") or "id") if lang == "zh" else "zh"
+    result = translate(extracted, lang, tgt)
     if not result:
-        _schedule_text_translation_retry(
-            payload,
-            source_text=extracted,
-            src_lang=lang,
-            target_langs=[actual_tgt],
-            from_image_ocr=True,
-        )
-        translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-        with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-        return True
-    _translation_retry_push(job_key, payload, "🎬 " + LANG_FLAGS.get(actual_tgt, "") + " " + result)
+        return False
+    _translation_retry_push(key, payload, "🎬 " + LANG_FLAGS.get(tgt, "") + " " + result)
     _stats_inc("image_translations")
-    translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-    with _TRANSLATION_RETRY_LOCK:
-        _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-    return True
+    return _complete_durable_text_job(key, lease_owner=lease_owner)
 
 
 def _translation_retry_file_attempt(job, lease_owner=None):
-    """Re-download and translate one durable text-file job."""
-    payload = dict((job or {}).get("payload") or {})
-    job_key = str((job or {}).get("job_key") or "")
-    message_id = str(payload.get("message_id") or "")
-    target_id = payload.get("group_id") or payload.get("user_id")
-    if not job_key or not message_id or not target_id:
-        translation_retry_queue_module.remove(job_key)
-        return True
-    with ApiClient(configuration) as api_client:
-        raw = _coerce_blob_bytes(MessagingApiBlob(api_client).get_message_content(message_id))
-    text = _extract_uploaded_document(raw, str(payload.get("ext") or ""))
+    payload = dict(job.get("payload") or {})
+    key = job["job_key"]
+    text = payload.get("document_text")
+    if text is None:
+        with ApiClient(configuration) as api_client:
+            raw = _coerce_blob_bytes(MessagingApiBlob(api_client).get_message_content(payload["message_id"]))
+        text = _extract_uploaded_document(raw, str(payload.get("ext") or ""))
     if text is None or not text.strip():
-        # Encoding/content is deterministic; repeated network retries cannot
-        # make binary data translatable. Close silently after confirmation.
-        if int((job or {}).get("attempts") or 0) >= 1:
-            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            return True
         return False
-    text = text[:_TEXT_FILE_MAX_CHARS]
+    _delivery_checkpoint(key, {"document_text": text})
     lang = detect_language(text[:4000]) or ("zh" if has_chinese(text) else "auto")
-    preferred = str(payload.get("tgt") or group_target_lang.get(payload.get("group_id"), "id") or "id")
-    actual_tgt = preferred if lang == "zh" else "zh"
-    translated_parts = []
-    for part in _split_text_for_translation(text):
-        translated = translate(part, lang, actual_tgt)
-        if not translated:
-            # Persist the complete extracted document, not only the failed row,
-            # so later delivery remains ordered and complete after LINE media
-            # retention expires.
-            _schedule_text_translation_retry(
-                payload,
-                source_text=text,
-                src_lang=lang,
-                target_langs=[actual_tgt],
-                from_file=True,
-                file_name=str(payload.get("file_name") or "file"),
-            )
-            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            return True
-        translated_parts.append(translated)
-    if not translated_parts:
+    tgt = str(payload.get("tgt") or "id") if lang == "zh" else "zh"
+    translated = _translate_document_parts(key, text, lang, tgt)
+    if not translated:
         return False
     fname = str(payload.get("file_name") or "file")
-    _translation_retry_push_chunks(
-        job_key,
-        payload,
-        "📄 %s → %s\n%s" % (fname, LANG_NAMES_ZH.get(actual_tgt, actual_tgt), "".join(translated_parts)),
-    )
+    _translation_retry_push_chunks(key, payload, "📄 %s → %s\n%s" % (fname, LANG_NAMES_ZH.get(tgt, tgt), translated))
     _stats_inc("file_translations")
-    translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-    with _TRANSLATION_RETRY_LOCK:
-        _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-    return True
+    return _complete_durable_text_job(key, lease_owner=lease_owner)
 
 
 def _translation_retry_worker_loop():
@@ -13745,7 +13802,7 @@ def _translation_retry_worker_loop():
             if translation_retry_queue_module.pending_count() == 0:
                 return
             claimed = translation_retry_queue_module.claim_due_jobs(
-                owner=owner, limit=20, lease_seconds=240
+                owner=owner, limit=1, lease_seconds=240
             )
             if not claimed:
                 pending = translation_retry_queue_module.list_pending(limit=500)
@@ -13765,16 +13822,7 @@ def _translation_retry_worker_loop():
                 job_key = str(job.get("job_key") or "")
                 kind = str(job.get("job_kind") or (job.get("payload") or {}).get("job_kind") or "text")
                 try:
-                    if kind == "image":
-                        delivered = _translation_retry_image_attempt(job, lease_owner=owner)
-                    elif kind == "audio":
-                        delivered = _translation_retry_audio_attempt(job, lease_owner=owner)
-                    elif kind == "video":
-                        delivered = _translation_retry_video_attempt(job, lease_owner=owner)
-                    elif kind == "file":
-                        delivered = _translation_retry_file_attempt(job, lease_owner=owner)
-                    else:
-                        delivered = _translation_retry_attempt(job, lease_owner=owner)
+                    delivered = _run_translation_retry_job(job, owner)
                     if delivered:
                         continue
                     completed = int(job.get("attempts") or 0) + 1
@@ -13811,6 +13859,8 @@ def _translation_retry_worker_loop():
             try:
                 if translation_retry_queue_module.pending_count() == 0:
                     _TRANSLATION_RETRY_INFLIGHT.clear()
+                else:
+                    _ensure_translation_retry_worker()
             except Exception:
                 pass
 
@@ -13905,7 +13955,11 @@ def _schedule_text_translation_retry(
         )
     except Exception as exc:
         logger.exception("[TranslationRetry] durable enqueue failed: %s", exc)
+        if hasattr(_translation_delivery_state, "stack"):
+            raise
         return False
+    if first_delay >= 60:
+        _claim_foreground_translation(retry_key)
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(retry_key)
     _ensure_translation_retry_worker()
@@ -13923,19 +13977,123 @@ def _schedule_text_translation_retry(
     return True
 
 
-def _complete_durable_text_job(job_key):
-    """Remove a pre-persisted text intent only after LINE accepted delivery."""
+def _complete_durable_text_job(job_key, lease_owner=None):
+    """Acknowledge accepted batches; keep undelivered target languages queued."""
     key = str(job_key or "").strip()
     if not key:
         return False
     try:
-        translation_retry_queue_module.mark_delivered(key)
-        with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_INFLIGHT.discard(key)
-        return True
+        owner = lease_owner or _delivery_owner(key)
+        row = translation_retry_queue_module.get(key)
+        if not row:
+            return translation_retry_queue_module.was_delivered(key)
+        payload = row["payload"]
+        plan = payload.get("delivery") or {}
+        if plan:
+            if int(plan.get("next_batch") or 0) < len(line_delivery_module.text_batches(plan["text"])):
+                return False
+            remaining = [lang for lang in payload.get("target_langs") or []
+                         if lang not in plan.get("targets", [])]
+            if remaining:
+                if not translation_retry_queue_module.checkpoint(key, {
+                    "target_langs": remaining, "delivery": None,
+                    "delivery_round": int(plan.get("round") or 0) + 1,
+                }, owner=owner):
+                    return False
+                translation_retry_queue_module.reschedule(key, delay_seconds=2, owner=owner,
+                                                          error="remaining_target_languages")
+                _TRANSLATION_RETRY_WAKE.set()
+                return True
+        completed = translation_retry_queue_module.mark_delivered(key, owner=owner)
+        if completed:
+            with _TRANSLATION_RETRY_LOCK:
+                _TRANSLATION_RETRY_INFLIGHT.discard(key)
+        return completed
     except Exception as exc:
         logger.warning("[TranslationOutbox] completion failed job=%s: %s", key[-24:], exc)
         return False
+
+
+def _run_translation_retry_job(job, owner):
+    """One context and one live lease cover extraction, generation and delivery."""
+    key = job["job_key"]
+    payload = job["payload"]
+    kind = str(job.get("job_kind") or payload.get("job_kind") or "text")
+    previous_tl = dict(_tl.__dict__)
+    previous_delivery = dict(_translation_delivery_state.__dict__)
+    _tl.__dict__.clear()
+    _translation_delivery_state.__dict__.clear()
+    try:
+        with translation_retry_queue_module.maintain_lease(key, owner=owner) as check:
+            _translation_delivery_state.leases = {key: (owner, check)}
+            group_id = payload.get("group_id")
+            _tl.group_id = group_id or "__dm__"
+            _tl.user_id = payload.get("user_id") or ""
+            _tl.from_image_ocr = kind in {"image", "video"} or bool(payload.get("from_image_ocr"))
+            _tl.from_file = kind == "file" or bool(payload.get("from_file"))
+            _tl.line_mentions = list(payload.get("line_mentions") or [])
+            _tl.quoted_context_source = payload.get("quoted_context_source") or ""
+            _tl.quoted_context_message_id = payload.get("quoted_context_message_id") or ""
+            _tl.tone, _tl.tone_custom = get_group_tone(group_id) if group_id else (translation_tone, translation_tone_custom)
+            plan = payload.get("delivery")
+            if plan:
+                # An accepted batch fixes the content of this delivery. Before
+                # any acceptance, policy changes invalidate the prepared result.
+                if plan.get("attempted") or plan.get("next_batch") or plan.get("fingerprint") == _translation_cache_asset_fingerprint():
+                    _translation_retry_push_chunks(key, payload, plan["text"])
+                    return _complete_durable_text_job(key, lease_owner=owner)
+                _delivery_checkpoint(key, {"delivery": None})
+                payload["delivery"] = None
+            if kind == "image":
+                return _translation_retry_image_attempt(job, lease_owner=owner)
+            if kind == "audio":
+                return _translation_retry_audio_attempt(job, lease_owner=owner)
+            if kind == "video":
+                return _translation_retry_video_attempt(job, lease_owner=owner)
+            if kind == "file":
+                return _translation_retry_file_attempt(job, lease_owner=owner)
+            if kind == "variant":
+                context, mode = payload["context"], payload["mode"]
+                result, _src, _tgt = _execute_translation_variant(context, mode, group_id, payload.get("user_id"))
+                if not result:
+                    return False
+                label = _translation_action_labels(context.get("src"), context.get("tgt"))[mode]
+                _translation_retry_push(key, payload, label + "\n" + result)
+                return _complete_durable_text_job(key, lease_owner=owner)
+            return _translation_retry_attempt(job, lease_owner=owner)
+    finally:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+        _translation_delivery_state.__dict__.clear()
+        _translation_delivery_state.__dict__.update(previous_delivery)
+
+
+def _translate_document_parts(job_key, text, src_lang, target_lang):
+    """Checkpoint each verified part; preserve whitespace outside the model."""
+    row = translation_retry_queue_module.get(job_key) if job_key else None
+    payload = (row or {}).get("payload") or {}
+    fingerprint = _translation_cache_asset_fingerprint()
+    signature = hashlib.sha256((text + "\x1f" + src_lang + "\x1f" + target_lang + fingerprint).encode()).hexdigest()
+    progress = payload.get("document_progress") or {}
+    parts = list(progress.get("parts") or []) if progress.get("signature") == signature else []
+    chunks = _split_text_for_translation(text)
+    for part in chunks[len(parts):]:
+        core = part.strip()
+        if not core:
+            translated = part
+        else:
+            translated = translate(core, src_lang, target_lang)
+            if not translated:
+                if _translation_was_intentionally_skipped():
+                    translated = core  # e.g. an ID-only document row
+                else:
+                    return None
+            leading = part[:len(part) - len(part.lstrip())]
+            trailing = part[len(part.rstrip()):]
+            translated = leading + translated.strip() + trailing
+        parts.append(translated)
+        _delivery_checkpoint(job_key, {"document_progress": {"signature": signature, "parts": parts}})
+    return "".join(parts)
 
 
 def _schedule_media_translation_retry(ctx, job_kind, *, delay_seconds=75, **extra):
@@ -13962,7 +14120,11 @@ def _schedule_media_translation_retry(ctx, job_kind, *, delay_seconds=75, **extr
         )
     except Exception as exc:
         logger.exception("[MediaRetry] durable enqueue failed kind=%s: %s", kind, exc)
+        if hasattr(_translation_delivery_state, "stack"):
+            raise
         return False
+    if delay_seconds >= 60:
+        _claim_foreground_translation(job_key)
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(job_key)
     _ensure_translation_retry_worker()
@@ -14002,6 +14164,8 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
         )
     except Exception as exc:
         logger.exception("[ImageRetry] durable enqueue failed: %s", exc)
+        if hasattr(_translation_delivery_state, "stack"):
+            raise
         return False
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(job_key)
@@ -14027,13 +14191,7 @@ def _complete_durable_image_job(ctx):
             job_key = f"{target_id}:{message_id}:image"
     if not job_key:
         return False
-    try:
-        translation_retry_queue_module.mark_delivered(job_key)
-        with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-        return True
-    except Exception:
-        return False
+    return _complete_durable_text_job(job_key)
 
 
 def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
@@ -16325,6 +16483,7 @@ def _vision_call(messages, max_tokens, cache_key=None,
         "messages": messages,
         "timeout": 24,
         "required_capability": "vision",
+        "translation_max_generations": 2,
         "provider_preference": preference,
         "latency_profile": "vision",
         "translation_fast_quality": True,
@@ -16383,8 +16542,8 @@ def _vision_call(messages, max_tokens, cache_key=None,
         logger.info("[Vision] provider=%s model=%s finish=%s content_len=%d",
                     provider_used, getattr(response, "model", model), finish,
                     len(content) if content else 0)
-        if finish == "length":
-            logger.warning("[Vision] output truncated (finish_reason=length)")
+        if str(finish or "").lower() in {"length", "max_tokens"}:
+            raise RuntimeError("vision_output_truncated")
         return response
     except Exception as exc:
         try:
@@ -17000,6 +17159,7 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     """
     from work_order_detection import WORK_ORDER_OCR_HINT
 
+    _tl.ocr_extraction_state = "unknown"
     if not _has_ai_capability("vision"):
         return None
     # v3.9.17: HEIC OpenAI 不支援,改用 jpeg(雖然會失敗但至少 OpenAI 會給明確錯誤)
@@ -17066,12 +17226,12 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
         if not result:
             logger.warning("[OCR] empty result")
             return None
-        # 結果過短且看起來像「沒文字」回應
-        if len(result) < 30:
-            for marker in no_text_markers:
-                if marker.lower() in result_lower:
-                    logger.info("[OCR] detected no-text marker: %s", marker)
-                    return None
+        # Only an exact sentinel confirms no text. A sentence that contains
+        # e.g. 圖中沒有 must not be discarded as an empty image.
+        if result_lower in {marker.lower() for marker in no_text_markers[:4]}:
+            _tl.ocr_extraction_state = "empty"
+            logger.info("[OCR] confirmed no-text sentinel")
+            return None
         # v3.9.27: 後處理 — 清掉殘留的狀態列文字(雙重保險)
         result = _clean_ocr_status_bar(result)
         # v3.40: normalize only lossless OCR spacing around factory organization
@@ -17080,6 +17240,7 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
         result = factory_terminology_module.normalize_ocr_text(result)
         # 清完後若空,當沒文字
         if not result.strip():
+            _tl.ocr_extraction_state = "empty"
             logger.info("[OCR] all content cleaned as status bar")
             return None
 
@@ -17524,6 +17685,7 @@ def transcribe_audio_openai(audio_bytes, suffix=".m4a"):
         station numbers, and Indonesian mechanical terms.
       * Auto-fallback to whisper-1 if the new model isn't available on the account.
     """
+    _tl.audio_transcription_state = "unknown"
     if not oai:
         return None
     allowed_suffixes = {".m4a", ".mp4", ".mp3", ".mpeg", ".mpga", ".wav", ".webm"}
@@ -17534,9 +17696,7 @@ def transcribe_audio_openai(audio_bytes, suffix=".m4a"):
         suffix = ".m4a"
     primary = STT_MODEL
     last_err = None
-    for attempt_model in (primary, STT_FALLBACK_MODEL):
-        if attempt_model == STT_FALLBACK_MODEL and primary == STT_FALLBACK_MODEL:
-            break  # already tried as primary
+    for attempt_model in dict.fromkeys((primary, STT_FALLBACK_MODEL)):
         try:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
                 tmp.write(audio_bytes)
@@ -17557,7 +17717,11 @@ def transcribe_audio_openai(audio_bytes, suffix=".m4a"):
                 if r is None:
                     logger.warning("STT model %s returned None", attempt_model)
                     continue
-                text = (getattr(r, 'text', None) or "").strip() or None
+                raw_text = getattr(r, 'text', None)
+                if not isinstance(raw_text, str):
+                    continue
+                text = raw_text.strip() or None
+                _tl.audio_transcription_state = "text" if text else "empty"
                 if attempt_model != primary:
                     logger.warning("STT fell back from %s to %s", primary, attempt_model)
                 return text
@@ -19266,6 +19430,7 @@ def callback():
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
+@_durable_translation_event("text")
 def handle_message(event):
     if _should_skip_message_event(event):
         logger.warning("[handle_message] duplicate, skipping msg_id=%s",
@@ -19711,7 +19876,7 @@ def handle_message(event):
                 target_id=user_id,
                 message_obj=_dm_message,
                 fallback_text=reply,
-                retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-text-outbox:" + _dm_outbox_key)),
+                job_key=_dm_outbox_key, delivered_targets=[tgt],
             )
             _complete_durable_text_job(_dm_outbox_key)
         except Exception as _dm_send_exc:
@@ -20263,7 +20428,7 @@ def handle_message(event):
     # Stable idempotency key shared by the immediate send and durable retry.
     # This minimizes duplicates if a worker dies after LINE accepted the reply
     # but before the outbox row was removed.
-    _retry_key = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-text-outbox:" + _outbox_key))
+    _retry_key = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-translation-retry:" + _outbox_key))
 
     # v3.8: capture last logged entry id BEFORE send, so reaction events can
     # still be mapped when the reply API succeeds.  If the reply token expired,
@@ -20295,7 +20460,8 @@ def handle_message(event):
         target_id=group_id,
         message_obj=_message_obj,
         fallback_text=reply,
-        retry_key=_retry_key,
+        retry_key=_retry_key, job_key=_outbox_key,
+        delivered_targets=([row[0] for row in (_trs or [])] if lang == "zh" else ["zh"]),
         notification_disabled=get_group_feature(group_id, 'silent'),
         append_messages=([_expression_visual_message] if _expression_visual_message else None),
     )
@@ -20324,6 +20490,7 @@ def handle_message(event):
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
+@_durable_translation_event("image")
 def handle_image(event):
     """Handle image messages: OCR + translate with layout-preserving text."""
     if _should_skip_message_event(event):
@@ -20529,6 +20696,7 @@ def handle_image(event):
     return
 
 
+@_durable_background_image
 def _handle_image_background(ctx):
     """v3.9.25: 在背景 thread 跑 OCR + 翻譯 + 回應 LINE。
     webhook 主執行緒已經 return 了,所以可以慢慢做不會 timeout。
@@ -20613,7 +20781,7 @@ def _handle_image_background(ctx):
 
         if extracted and not _is_factory_reason_ocr_failure_text(extracted):
             _image_key = ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image"
-            translation_retry_queue_module.checkpoint(_image_key, {
+            _delivery_checkpoint(_image_key, {
                 "ocr_text": str(extracted),
                 "factory_reason_image_expected_rows": int(getattr(_tl, "factory_reason_image_expected_rows", 0) or 0),
             })
@@ -20655,8 +20823,10 @@ def _handle_image_background(ctx):
             except Exception as _sce:
                 logger.warning("scene describe error: %s", _sce)
 
-        if not extracted or len(extracted.strip()) < 2:
+        if not extracted or not extracted.strip():
             _event_log_write("image_aborted", {"reason": "ocr_empty_or_too_short", "len": len(extracted) if extracted else 0})
+            if getattr(_tl, "ocr_extraction_state", "unknown") == "empty":
+                _complete_durable_image_job(ctx)
             _send_background_failure_notice(ctx, kind="image_no_text", detail="ocr_empty")
             return
 
@@ -20673,26 +20843,13 @@ def _handle_image_background(ctx):
         wo_on = bool(ctx.get("wo_setting", group_wo_settings.get(group_id, True)))
         wo_reply = format_storage_for_work_order(wo_customer) if wo_customer and wo_on else None
         if wo_reply:
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    msg_obj = TextMessage(text=wo_reply)
-                    if ctx.get("quote_token"):
-                        msg_obj.quote_token = ctx["quote_token"]
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=ctx["reply_token"], messages=[msg_obj]
-                    ))
-                _event_log_write("image_done", {"path": "work_order", "method": "reply"})
-            except Exception:
-                try:
-                    _translation_retry_push(
-                        ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image",
-                        ctx, wo_reply,
-                    )
-                    _event_log_write("image_done", {"path": "work_order", "method": "push"})
-                except Exception as exc:
-                    logger.warning("Work order delivery pending: %s", exc)
-                    return
+            msg_obj = TextMessage(text=_clip_line_text(wo_reply))
+            if ctx.get("quote_token"):
+                msg_obj.quote_token = ctx["quote_token"]
+            _send_reply_with_push_fallback(
+                reply_token=ctx.get("reply_token"), target_id=group_id,
+                message_obj=msg_obj, fallback_text=wo_reply, job_key=ctx.get("durable_job_key"),
+            )
             _stats_inc("work_order_detections")
             track_group_usage(group_id, _bp, _bc, _bcost)
             _complete_durable_image_job(ctx)
@@ -20729,74 +20886,19 @@ def _handle_image_background(ctx):
         _tl.from_image_ocr = True
         _ctx_snapshot = _snapshot_translation_thread_context()
 
-        # v3.9.24: 用 threading 強制限制 translate() 最多 50 秒,
-        # 因為 translate() 內部有多個 OpenAI 呼叫(分段、品質檢查、反譯),
-        # 即使各別都有 timeout,加總可能超過 LINE webhook 限制。
-        import threading
-        _trans_result = [None]
-        _trans_exc = [None]
-        def _do_translate():
-            try:
-                if lang == "zh":
-                    _trans_result[0] = _translate_with_thread_context(
-                        translate, extracted, "zh", actual_tgt, _ctx_snapshot
-                    )
-                else:
-                    _trans_result[0] = _translate_with_thread_context(
-                        translate, extracted, lang, actual_tgt, _ctx_snapshot
-                    )
-            except Exception as e:
-                _trans_exc[0] = e
-        _t = threading.Thread(target=_do_translate, daemon=True)
-        _t.start()
-        _t.join(timeout=50.0)  # 最多等 50 秒
-
-        if _t.is_alive():
-            # The synchronous image deadline expired, but OCR source text is
-            # already available. Persist that text and let the durable queue
-            # deliver the actual translation later; never post a failure/status
-            # message in place of the translation.
-            _event_log_write("image_step_error", {"step": "translate", "err": "thread timeout after 50s"})
-            logger.error("Translate thread timeout after 50s; queued durably")
-            _schedule_text_translation_retry(
-                ctx,
-                source_text=extracted,
-                src_lang=lang,
-                target_langs=[actual_tgt],
-                line_mentions=[],
-                from_image_ocr=True,
-            )
+        try:
+            if lang == "zh":
+                result = _translate_with_thread_context(
+                    translate, extracted, "zh", actual_tgt, _ctx_snapshot
+                )
+            else:
+                result = _translate_with_thread_context(
+                    translate, extracted, lang, actual_tgt, _ctx_snapshot
+                )
+        except Exception as exc:
+            logger.warning("Image translation pending on the same durable job: %s", exc)
             return
-        if _trans_exc[0]:
-            _event_log_write("image_step_error", {"step": "translate", "err": str(_trans_exc[0])[:300]})
-            logger.error("Translate exception queued durably: %s", _trans_exc[0])
-            _schedule_text_translation_retry(
-                ctx,
-                source_text=extracted,
-                src_lang=lang,
-                target_langs=[actual_tgt],
-                line_mentions=[],
-                from_image_ocr=True,
-            )
-            return
-        result = _trans_result[0]
-        _event_log_write("image_step", {
-            "step": "translate_done",
-            "result_len": len(result) if result else 0,
-            "result_preview": (result[:100] if result else None),
-        })
-
         if not result:
-            _event_log_write("image_aborted", {"reason": "translate_returned_empty_queued"})
-            track_group_usage(group_id, _bp, _bc, _bcost)
-            _schedule_text_translation_retry(
-                ctx,
-                source_text=extracted,
-                src_lang=lang,
-                target_langs=[actual_tgt],
-                line_mentions=[],
-                from_image_ocr=True,
-            )
             return
 
         reply = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
@@ -20815,14 +20917,10 @@ def _handle_image_background(ctx):
         _ocr_expression_visual = None
         try:
             _ocr_expression_visual = _build_expression_visual_message(
-                extracted, lang, group_id, from_image_ocr=True
+                extracted, result, lang, group_id, from_image_ocr=True
             )
         except Exception as _visual_exc:
             logger.debug("OCR expression visual selection skipped: %s", _visual_exc)
-
-        # LINE message limit is 5000 chars
-        if len(reply) > 5000:
-            reply = reply[:4990] + "\n..."
 
         track_group_usage(group_id, _bp, _bc, _bcost)
         try:
@@ -20834,63 +20932,24 @@ def _handle_image_background(ctx):
             pass
         _stats_inc("image_translations")
         _event_log_write("image_step", {"step": "before_reply"})
-        # v3.8: thread quote_token onto image translation reply.
-        qt = ctx["quote_token"]
-        _image_delivered = False
-        try:
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    msg_obj = TextMessage(text=reply)
-                    if _overlay_qr:
-                        msg_obj.quick_reply = _overlay_qr
-                    _img_sender = get_sender_object(
-                        name_override=get_display_name(group_id, user_id),
-                        icon_url_override=get_user_picture_url(group_id, user_id)
-                    )
-                    if _img_sender:
-                        msg_obj.sender = _img_sender
-                    if qt:
-                        try:
-                            msg_obj.quote_token = qt
-                        except Exception:
-                            pass
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=ctx["reply_token"],
-                        messages=[msg_obj] + ([_ocr_expression_visual] if _ocr_expression_visual else [])
-                    ))
-                _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "reply"})
-                _image_delivered = True
-            except Exception as _re_reply:
-                # v3.9.23: reply_token 過期或無效 → fallback 用 push
-                _event_log_write("image_step_error", {"step": "reply", "err": str(_re_reply)[:300], "fallback": "push"})
-                logger.warning("Reply failed, trying push: %s", _re_reply)
-                try:
-                    with ApiClient(configuration) as api_client:
-                        api = MessagingApi(api_client)
-                        msg_obj = TextMessage(text=reply)
-                        if _overlay_qr:
-                            msg_obj.quick_reply = _overlay_qr
-                        _img_sender = get_sender_object(
-                            name_override=get_display_name(group_id, user_id),
-                            icon_url_override=get_user_picture_url(group_id, user_id)
-                        )
-                        if _img_sender:
-                            msg_obj.sender = _img_sender
-                        api.push_message(PushMessageRequest(
-                            to=group_id,
-                            messages=[msg_obj] + ([_ocr_expression_visual] if _ocr_expression_visual else [])
-                        ))
-                    _event_log_write("image_done", {"path": "auto_translate", "reply_len": len(reply), "method": "push"})
-                    _image_delivered = True
-                except Exception as _pe:
-                    _event_log_write("image_step_error", {"step": "push", "err": str(_pe)[:300]})
-                    logger.exception("Push also failed: %s", _pe)
-        except Exception as _re:
-            _event_log_write("image_step_error", {"step": "reply_outer", "err": str(_re)[:300]})
-            logger.exception("Reply exception: %s", _re)
-        if _image_delivered:
-            _complete_durable_image_job(ctx)
+        msg_obj = TextMessage(text=_clip_line_text(reply))
+        if _overlay_qr:
+            msg_obj.quick_reply = _overlay_qr
+        sender = get_sender_object(
+            name_override=get_display_name(group_id, user_id),
+            icon_url_override=get_user_picture_url(group_id, user_id),
+        )
+        if sender:
+            msg_obj.sender = sender
+        if ctx.get("quote_token"):
+            msg_obj.quote_token = ctx["quote_token"]
+        _response, method = _send_reply_with_push_fallback(
+            reply_token=ctx.get("reply_token"), target_id=group_id,
+            message_obj=msg_obj, fallback_text=reply, job_key=ctx.get("durable_job_key"),
+            append_messages=[_ocr_expression_visual] if _ocr_expression_visual else None,
+        )
+        _event_log_write("image_done", {"path": "auto_translate", "method": method})
+        _complete_durable_image_job(ctx)
 
 
 
@@ -20924,227 +20983,29 @@ def _process_pending_image_translate(event, message_id):
         return None
 
 def _process_pending_image_translate_inner(event, message_id):
-    """v3.9.10: 詢問模式下,使用者按了「翻譯這張」之後執行實際翻譯。
-    重用 handle_image 的下載/OCR/翻譯邏輯,但 reply_token 來自 postback event。
-    
-    v3.9.11: 增加全程 logging + 最終 fallback push,避免任何路徑靜默失敗。
-    v3.9.13: 改用磁碟版 pending(跨 worker)+ 外層 wrapper catch-all。
-    """
-    # v3.9.13: 從磁碟讀(支援多 worker)
-    _all_pending = _load_pending_imgs()
-    logger.info("[ImgAsk] postback triggered for msg=%s, pending_count=%d",
-                message_id, len(_all_pending))
-    
-    # v3.9.15: 直接 push(reply_token 已被外層 "🔄 正在翻譯圖片..." 用掉)
-    # 從 event.source 抓 group_id;若失敗才 fallback 用 info 裡的
-    _src = getattr(event, 'source', None)
-    _push_to = (getattr(_src, 'group_id', None) or
-                getattr(_src, 'room_id', None) or
-                getattr(_src, 'user_id', None))
-    
-    def _reply_or_push(text, quick_reply=None, append_messages=None):
-        target = _push_to
-        if not target and info:
-            target = info.get("group_id")
-        if not target:
-            logger.error("[ImgAsk] no push target! cannot send: %s", text[:80])
-            return False
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                _msg = TextMessage(text=text)
-                if quick_reply:
-                    _msg.quick_reply = quick_reply
-                _original_uid = (info or {}).get("user_id", "")
-                _img_sender = get_sender_object(
-                    name_override=get_display_name(target, _original_uid),
-                    icon_url_override=get_user_picture_url(target, _original_uid)
-                )
-                if _img_sender:
-                    _msg.sender = _img_sender
-                api.push_message(PushMessageRequest(
-                    to=target,
-                    messages=[_msg] + list(append_messages or [])
-                ))
-            logger.info("[ImgAsk] push sent to %s: %s", target[:8], text[:80])
-            return True
-        except Exception as _pe:
-            logger.error("[ImgAsk] push failed: %s | text=%s", _pe, text[:80])
-            return False
-
+    """Claim ask-mode input and use the same durable image pipeline as auto mode."""
     info = _pending_img_pop(message_id)
     if not info:
-        # v3.9.30: 完全靜默 — 兩種情況:
-        # (1) 外層已攔截過(已過期)→ 不應該到這裡,但保險
-        # (2) Race condition:另一個 worker 已搶先 pop 並處理中 → 那個 worker 會 push 翻譯結果
-        # 兩種情況都不該再發訊息打擾群組
-        logger.warning("[ImgAsk] message %s not in pending (expired or other worker fetched) → silent", message_id)
         return
-
     group_id = info["group_id"]
-    _ask_retry_ctx = {
-        "message_id": str(message_id or ""),
-        "group_id": group_id,
-        "user_id": (info or {}).get("user_id", ""),
-        "quote_token": None,
+    ctx = {
+        "message_id": str(message_id), "group_id": group_id,
+        "user_id": info.get("user_id") or "",
+        "reply_token": None, "quote_token": None,
         "tgt": group_target_lang.get(group_id, "id"),
+        "tone_info": get_group_tone(group_id),
+        "wo_setting": group_wo_settings.get(group_id, True),
+        "mark_read_setting": False, "is_dm_img": False,
     }
-    _ask_retry_ctx["durable_job_key"] = _schedule_image_translation_retry(
-        _ask_retry_ctx, delay_seconds=75
-    ) or ""
-
-    if not _has_ai_capability("vision"):
-        logger.warning("[ImgAsk] vision provider unavailable; durable image job remains pending")
-        return
-
-    show_loading(group_id)
-
-    # 下載圖片
-    logger.info("[ImgAsk] downloading image %s", message_id)
-    try:
-        img_base64, img_raw = download_line_image(message_id)
-    except Exception as _de:
-        logger.error("[ImgAsk] download exception; durable image job remains pending: %s", _de)
-        return
-    if not img_base64:
-        logger.warning("[ImgAsk] image content unavailable; durable image job remains pending")
-        return
-    # v3.9.17: 偵測 MIME 格式
-    img_mime = detect_image_mime(img_raw)
-    logger.info("[ImgAsk] downloaded %d bytes, mime=%s", len(img_raw) if img_raw else 0, img_mime)
-
-    tgt = group_target_lang.get(group_id, "id")
-    _bp, _bc = bot_stats.get("tokens_prompt", 0), bot_stats.get("tokens_completion", 0)
-    _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
-    
-    logger.info("[ImgAsk] running OCR")
-    try:
-        extracted = ocr_image_openai(img_base64, mime_type=img_mime)
-    except Exception as _oe:
-        logger.error("[ImgAsk] OCR exception; durable image job remains pending: %s", _oe)
-        return
-    if not extracted or len(extracted.strip()) < 2:
-        logger.info("[ImgAsk] OCR returned no text; durable image worker will retry")
-        return
-    if _is_factory_reason_ocr_failure_text(extracted):
-        logger.warning("[ImgAsk] factory reason OCR degraded; using general OCR/translation path: %s", extracted[:120])
-    logger.info("[ImgAsk] OCR ok: %d chars", len(extracted))
-
-    # 工單偵測
-    try:
-        wo_analysis = analyze_work_order(extracted)
-        if wo_analysis.get("is_work_order"):
-            store_work_order_media_context(
-                group_id, (info or {}).get("user_id", ""), message_id
-            )
-        wo_customer = wo_analysis.get("customer") if wo_analysis.get("is_work_order") else None
-        if wo_customer:
-            wo_on = group_wo_settings.get(group_id, True)
-            if wo_on:
-                wo_reply = format_storage_for_work_order(wo_customer)
-                if wo_reply:
-                    _stats_inc("work_order_detections")
-                    _reply_or_push(wo_reply)
-            track_group_usage(group_id, _bp, _bc, _bcost)
-            _complete_durable_image_job(_ask_retry_ctx)
-            return
-    except Exception as e:
-        logger.error("[ImgAsk] Work order detection error: %s", e)
-
-    lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")
-    actual_tgt = tgt if lang == "zh" else "zh"
-    logger.info("[ImgAsk] translating %s -> %s", lang, actual_tgt)
-
-    _tone, _tone_custom = get_group_tone(group_id)
-    _tl.tone = _tone
-    _tl.tone_custom = _tone_custom
-    _tl.group_id = group_id or ""
-    _tl.user_id = (info or {}).get("user_id", "")
-    _tl.from_image_ocr = True
-
-    # v3.12 IMAGE ROOT FIX:詢問模式也必須與自動圖片相同,只做 OCR → translate()。
-    # 不再走圖片直譯專用 prompt,避免繞過工廠用語/詞庫/品質閘門。
-    try:
-        if lang == "zh":
-            result = translate(extracted, "zh", actual_tgt)
-        else:
-            result = translate(extracted, lang, actual_tgt)
-    except Exception as _te:
-        logger.error("[ImgAsk] translate exception queued durably: %s", _te)
-        _schedule_text_translation_retry(
-            {
-                "group_id": group_id,
-                "user_id": (info or {}).get("user_id", ""),
-                "message_id": str(message_id or ""),
-            },
-            source_text=extracted,
-            src_lang=lang,
-            target_langs=[actual_tgt],
-            line_mentions=[],
-            from_image_ocr=True,
-        )
-        return
-
-    if not result:
-        logger.warning("[ImgAsk] translate returned empty; queued durably")
-        _schedule_text_translation_retry(
-            {
-                "group_id": group_id,
-                "user_id": (info or {}).get("user_id", ""),
-                "message_id": str(message_id or ""),
-            },
-            source_text=extracted,
-            src_lang=lang,
-            target_langs=[actual_tgt],
-            line_mentions=[],
-            from_image_ocr=True,
-        )
-        track_group_usage(group_id, _bp, _bc, _bcost)
-        return
-
-    reply_text = "\U0001f5bc\ufe0f " + LANG_FLAGS.get(actual_tgt, "") + "\n" + result
-    if len(reply_text) > 5000:
-        reply_text = reply_text[:4990] + "\n..."
-
-    track_group_usage(group_id, _bp, _bc, _bcost)
-    try:
-        _record_recent_group_message(
-            group_id, (info or {}).get("user_id", ""),
-            get_display_name(group_id, (info or {}).get("user_id", "")),
-            extracted, lang, {actual_tgt: result},
-        )
-    except Exception:
-        pass
-    _overlay_token = _store_image_overlay_context(
-        img_raw, extracted, result, lang, actual_tgt, group_id
-    )
-    _ocr_expression_visual = None
-    try:
-        _ocr_expression_visual = _build_expression_visual_message(
-            extracted, result, lang, group_id, from_image_ocr=True
-        )
-    except Exception as _visual_exc:
-        logger.debug("ImgAsk expression visual selection skipped: %s", _visual_exc)
-    _stats_inc("image_translations")
-    _ask_delivered = _reply_or_push(
-        reply_text,
-        quick_reply=_build_image_translation_action_quick_reply(
-            group_id,
-            extracted,
-            result,
-            lang,
-            actual_tgt,
-            msg_id=message_id,
-            overlay_token=_overlay_token,
-        ),
-        append_messages=([_ocr_expression_visual] if _ocr_expression_visual else None),
-    )
-    if _ask_delivered:
-        _complete_durable_image_job(_ask_retry_ctx)
-    logger.info("[ImgAsk] DONE")
+    ctx["durable_job_key"] = _schedule_image_translation_retry(ctx, delay_seconds=75)
+    if not ctx["durable_job_key"]:
+        raise RuntimeError("cannot persist requested image translation")
+    if _has_ai_capability("vision"):
+        _handle_image_background(ctx)
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
+@_durable_translation_event("audio")
 def handle_audio(event):
     """Handle audio/voice messages: Whisper STT + detect language + translate."""
     if _should_skip_message_event(event):
@@ -21222,8 +21083,12 @@ def handle_audio(event):
 
     # Transcribe with Whisper
     transcribed = transcribe_audio_openai(audio_bytes)
-    if not transcribed or len(transcribed.strip()) < 2:
+    if not transcribed or not transcribed.strip():
+        if getattr(_tl, "audio_transcription_state", "unknown") == "empty":
+            _complete_durable_media_job(_audio_job_key)
         return
+
+    _delivery_checkpoint(_audio_job_key, {"transcribed_text": transcribed})
 
     # Detect language
     lang = detect_language(transcribed) or ("zh" if has_chinese(transcribed) else "auto")
@@ -21265,13 +21130,6 @@ def handle_audio(event):
             })
         except Exception:
             pass
-        _schedule_text_translation_retry(
-            _audio_ctx,
-            source_text=transcribed,
-            src_lang=lang,
-            target_langs=[actual_tgt or (tgt if lang == "zh" else "zh")],
-        )
-        _complete_durable_media_job(_audio_job_key)
         return
 
     if not is_dm_aud:
@@ -21304,7 +21162,7 @@ def handle_audio(event):
             target_id=group_id,
             message_obj=msg_obj,
             fallback_text=reply,
-            retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-media-outbox:" + str(_audio_job_key))),
+            job_key=_audio_job_key,
         )
         _complete_durable_media_job(_audio_job_key)
     except Exception as _audio_send_exc:
@@ -21334,6 +21192,7 @@ if StickerMessageContent:
 
 if VideoMessageContent:
     @handler.add(MessageEvent, message=VideoMessageContent)
+    @_durable_translation_event("video")
     def handle_video(event):
         """Durably OCR and translate a video's preview frame."""
         if _should_skip_message_event(event):
@@ -21382,9 +21241,15 @@ if VideoMessageContent:
                 logger.warning("video scene describe error: %s", scene_exc)
 
             ocr_result = ocr_image_openai(b64, mime_type="image/jpeg")
-            if not ocr_result or len(str(ocr_result).strip()) <= 2:
+            if not ocr_result or not str(ocr_result).strip():
+                if getattr(_tl, "ocr_extraction_state", "unknown") == "empty":
+                    _complete_durable_media_job(_video_job_key)
                 return
             ocr_result = str(ocr_result).strip()
+            if _is_factory_reason_ocr_failure_text(ocr_result):
+                return
+            _delivery_checkpoint(_video_job_key, {"ocr_text": ocr_result})
+            _tl.from_image_ocr = True
             lang = detect_language(ocr_result) or ("zh" if has_chinese(ocr_result) else "auto")
             _tone, _tone_custom = get_group_tone(group_id)
             _tl.tone, _tl.tone_custom = _tone, _tone_custom
@@ -21396,14 +21261,6 @@ if VideoMessageContent:
                 actual_tgt = "zh"
             result = translate(ocr_result, lang, actual_tgt)
             if not result:
-                _schedule_text_translation_retry(
-                    _video_ctx,
-                    source_text=ocr_result,
-                    src_lang=lang,
-                    target_langs=[actual_tgt],
-                    from_image_ocr=True,
-                )
-                _complete_durable_media_job(_video_job_key)
                 return
 
             reply = "🎬 " + LANG_FLAGS.get(actual_tgt, "") + " " + result
@@ -21419,7 +21276,7 @@ if VideoMessageContent:
                 target_id=group_id,
                 message_obj=message_obj,
                 fallback_text=reply,
-                retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-media-outbox:" + str(_video_job_key))),
+                job_key=_video_job_key,
             )
             _complete_durable_media_job(_video_job_key)
             _stats_inc("image_translations")
@@ -21447,6 +21304,17 @@ def _coerce_blob_bytes(content):
 
 def _decode_uploaded_text(raw):
     """Decode common Taiwan/Indonesia text-file encodings without silent loss."""
+    # Office exports often use UTF-16. Decoding their BOM as cp1252 used to
+    # pass mojibake and embedded NULs into language detection and translation.
+    for markers, encoding in (((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"), "utf-32"),
+                              ((b"\xff\xfe", b"\xfe\xff"), "utf-16")):
+        if raw.startswith(markers):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                return None
+    if b"\x00" in raw:
+        return None
     for encoding in ("utf-8-sig", "utf-8", "cp950", "big5", "cp1252"):
         try:
             return raw.decode(encoding)
@@ -21539,11 +21407,12 @@ def _split_text_for_translation(text, max_chars=None):
             current += part
     if current:
         chunks.append(current)
-    return [chunk for chunk in chunks if chunk.strip()]
+    return chunks
 
 
 if FileMessageContent:
     @handler.add(MessageEvent, message=FileMessageContent)
+    @_durable_translation_event("file")
     def handle_file(event):
         """Extract and durably translate supported text/document files."""
         if _should_skip_message_event(event):
@@ -21610,9 +21479,7 @@ if FileMessageContent:
                 # Keep the durable job for a second independent extraction. The
                 # retry worker closes deterministic non-text files silently.
                 return
-            text = text.strip()
-            if len(text) > _TEXT_FILE_MAX_CHARS:
-                text = text[:_TEXT_FILE_MAX_CHARS]
+            _delivery_checkpoint(_file_job_key, {"document_text": text})
             lang = detect_language(text[:4000]) or ("zh" if has_chinese(text) else "auto")
             actual_tgt = group_target_lang.get(group_id, "id") if lang == "zh" else "zh"
 
@@ -21625,28 +21492,13 @@ if FileMessageContent:
                 _tl.quality_gate_critical = True
                 _tone, _tone_custom = get_group_tone(group_id)
                 _tl.tone, _tl.tone_custom = _tone, _tone_custom
-                for part in _split_text_for_translation(text):
-                    translated = translate(part, lang, actual_tgt)
-                    if not translated:
-                        translated_parts = []
-                        break
-                    translated_parts.append(translated)
+                translated_file = _translate_document_parts(_file_job_key, text, lang, actual_tgt)
+                translated_parts = [translated_file] if translated_file else []
             finally:
                 _tl.__dict__.clear()
                 _tl.__dict__.update(previous_tl)
 
             if not translated_parts:
-                # Source text has already been extracted; persist it separately
-                # so LINE media expiry cannot cause data loss.
-                _schedule_text_translation_retry(
-                    _file_ctx,
-                    source_text=text,
-                    src_lang=lang,
-                    target_langs=[actual_tgt],
-                    from_file=True,
-                    file_name=fname,
-                )
-                _complete_durable_media_job(_file_job_key)
                 return
 
             reply_text = "📄 %s → %s\n%s" % (
@@ -21654,16 +21506,11 @@ if FileMessageContent:
                 LANG_NAMES_ZH.get(actual_tgt, actual_tgt),
                 "".join(translated_parts),
             )
-            reply_chunks = _split_text_for_translation(reply_text, 4700)[:5]
-            messages = [TextMessage(text=_clip_line_text(chunk)) for chunk in reply_chunks]
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                request_obj = ReplyMessageRequest(reply_token=event.reply_token, messages=messages)
-                stable = str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-media-outbox:" + str(_file_job_key)))
-                try:
-                    api.reply_message(request_obj, x_line_retry_key=stable)
-                except TypeError:
-                    api.reply_message(request_obj)
+            _send_reply_with_push_fallback(
+                reply_token=event.reply_token, target_id=group_id,
+                message_obj=TextMessage(text=_clip_line_text(reply_text)),
+                fallback_text=reply_text, job_key=_file_job_key,
+            )
             _complete_durable_media_job(_file_job_key)
             _stats_inc("file_translations")
         except Exception as exc:
@@ -21672,6 +21519,7 @@ if FileMessageContent:
 
 if LocationMessageContent:
     @handler.add(MessageEvent, message=LocationMessageContent)
+    @_durable_translation_event("text")
     def handle_location(event):
         """Durably translate a location title/address in any detected language."""
         if _should_skip_message_event(event):
@@ -21726,7 +21574,7 @@ if LocationMessageContent:
                 target_id=group_id,
                 message_obj=message_obj,
                 fallback_text=reply,
-                retry_key=str(uuid.uuid5(uuid.NAMESPACE_URL, "jy-text-outbox:" + _loc_key)),
+                job_key=_loc_key, delivered_targets=[actual_tgt],
             )
             _complete_durable_text_job(_loc_key)
         except Exception as exc:
@@ -22070,13 +21918,11 @@ def _execute_translation_variant(context, mode, group_id, user_id, preferred=Non
 
 if PostbackEvent:
     @handler.add(PostbackEvent)
+    @_translation_postback_scope
     def handle_postback(event):
         """Handle postback actions from Quick Reply / Flex buttons."""
         # v3.9.30c B18 修補: postback 也會 redelivery,且會跑翻譯花錢
         # postback 沒有 message.id,改用 reply_token 當 dedup key(每個 reply_token 唯一)
-        if _is_redelivery(event):
-            logger.warning("[handle_postback] redelivery, skipping")
-            return
         _rtok = getattr(event, 'reply_token', None)
         if _rtok and _is_duplicate_message("pbk:" + _rtok):
             logger.warning("[handle_postback] duplicate reply_token, skipping")
@@ -22316,32 +22162,24 @@ if PostbackEvent:
 
             labels = _translation_action_labels(context.get("src"), context.get("tgt"))
             show_loading(_gid)
+            _variant_job_key = _schedule_variant_translation(event, context, mode, _gid, _uid)
+            if not _variant_job_key:
+                return
             result, _src_lang, _tgt_lang = _execute_translation_variant(
                 context, mode, _gid, _uid
             )
             if not result:
-                fail_text = (
-                    "⚠️ 無法產生這個版本。\n"
-                    "⚠️ Versi ini belum dapat dibuat."
-                )
-                try:
-                    with ApiClient(configuration) as api_client:
-                        MessagingApi(api_client).reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[TextMessage(text=fail_text)],
-                        ))
-                except Exception:
-                    pass
                 return
             reply_text = labels[mode] + "\n" + result
             try:
-                with ApiClient(configuration) as api_client:
-                    MessagingApi(api_client).reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text=_clip_line_text(reply_text))],
-                    ))
+                _send_reply_with_push_fallback(
+                    reply_token=event.reply_token, target_id=_gid,
+                    message_obj=TextMessage(text=_clip_line_text(reply_text)),
+                    fallback_text=reply_text, job_key=_variant_job_key,
+                )
+                _complete_durable_text_job(_variant_job_key)
             except Exception as exc:
-                logger.warning("[translation_variant] reply failed: %s", exc)
+                logger.warning("[translation_variant] delivery pending: %s", exc)
             return
 
         if action == "image_overlay":
@@ -22849,7 +22687,7 @@ def safe_reply(reply_token, messages, retry=True):
             if retry:
                 # SDK v3 supports x_line_retry_key param
                 try:
-                    api.reply_message(req, x_line_retry_key=generate_retry_key())
+                    api.reply_message(req)
                 except TypeError:
                     api.reply_message(req)
             else:
@@ -36198,7 +36036,7 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     重跑整條翻譯管線，避免重複成本與 LINE 回覆逾時。
     """
     _set_translation_outcome("started", "multi_target_translation")
-    real_targets = [t for t in targets if t != src]
+    real_targets = list(dict.fromkeys(t for t in targets if t and t != src))
     if not real_targets:
         _set_translation_outcome("skipped", "no_distinct_target_language")
         return []
@@ -36206,12 +36044,15 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     # 複製當前 thread-local 上下文給 worker(pipeline 依賴這些)
     _ctx = {}
     for _a in ('group_id', 'user_id', 'from_image_ocr', 'tone', 'tone_custom',
-               'line_mentions', 'quoted_context_source', 'quoted_context_message_id'):
+               'line_mentions', 'quoted_context_source', 'quoted_context_message_id',
+               'from_file', 'force_model', 'translation_variant', 'disable_tone_emoji'):
         if hasattr(_tl, _a):
             _ctx[_a] = getattr(_tl, _a)
 
     def _translate_one(tgt_lang, _in_worker):
+        _worker_previous = dict(_tl.__dict__) if _in_worker else None
         if _in_worker:
+            _tl.__dict__.clear()
             for _k, _v in _ctx.items():
                 setattr(_tl, _k, _v)
         _previous_external_mentions = getattr(
@@ -36253,16 +36094,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
             except Exception:
                 pass
             if _in_worker:
-                # 清 worker 執行緒殘留(executor 執行緒會被重用)
-                for _k in list(_ctx.keys()) + [
-                    'force_model', 'last_entry_id',
-                    'external_mention_placeholders', 'translation_outcome',
-                ]:
-                    try:
-                        if hasattr(_tl, _k):
-                            delattr(_tl, _k)
-                    except Exception:
-                        pass
+                _tl.__dict__.clear()
+                _tl.__dict__.update(_worker_previous)
 
     out = []
     if len(real_targets) == 1:
@@ -36283,12 +36116,14 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
 
     # 多目標:並行
     futures = [(t, _MULTI_TGT_EXECUTOR.submit(_translate_one, t, True)) for t in real_targets]
+    _deadline = time.monotonic() + 120
     _last_entry = None
     _outcomes = []
     for tgt_lang, fut in futures:
         try:
-            res, _eid, _outcome = fut.result(timeout=120)
+            res, _eid, _outcome = fut.result(timeout=max(0, _deadline - time.monotonic()))
         except Exception as e:
+            fut.cancel()
             logger.warning("translate_multi parallel future failed tgt=%s: %s", tgt_lang, e)
             _outcomes.append({
                 "status": "failed",

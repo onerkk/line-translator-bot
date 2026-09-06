@@ -6,7 +6,7 @@ The queue is the availability boundary for text and media translation jobs:
 * multiple Gunicorn workers cannot process the same job concurrently;
 * leases expire automatically after a worker crash;
 * retries have no terminal exhausted state;
-* payloads remain source-only until a translation is actually delivered.
+* extracted source and prepared deliveries survive transport failures.
 
 The public API keeps the v1 helpers used by older application code while adding
 ``claim_due_jobs`` for safe multi-process workers and ``job_kind`` for media
@@ -15,11 +15,13 @@ reprocessing.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import os
 import sqlite3
 import threading
 import time
 import uuid
+from threading import Thread as _LeaseThread
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,10 +46,18 @@ def _default_db_path() -> str:
 DB_PATH = _default_db_path()
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def _connect() -> sqlite3.Connection:
     path = Path(DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=30, isolation_level=None, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
@@ -103,6 +113,8 @@ def initialize() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_translation_retry_due "
                 "ON translation_retry_jobs(status, next_attempt_at, lease_until)"
             )
+            conn.execute("CREATE TABLE IF NOT EXISTS translation_delivery_receipts "
+                         "(job_key TEXT PRIMARY KEY, delivered_at REAL NOT NULL)")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -118,8 +130,8 @@ def enqueue(
 ) -> bool:
     """Insert or refresh one job; return ``True`` only for a new row.
 
-    Refresh does not erase attempt history.  A leased job is not stolen; its
-    payload is updated and it becomes eligible again when the lease expires.
+    A repeated webhook never overwrites extracted source, a prepared delivery,
+    or completed target languages. Only checkpoint() may update existing work.
     """
     initialize()
     key = str(job_key or "").strip()
@@ -133,6 +145,10 @@ def enqueue(
     with _LOCK, _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if conn.execute("SELECT 1 FROM translation_delivery_receipts WHERE job_key=? AND delivered_at>?",
+                            (key, now - 7 * 86400)).fetchone():
+                conn.execute("COMMIT")
+                return False
             row = conn.execute(
                 "SELECT job_key, status, next_attempt_at FROM translation_retry_jobs WHERE job_key=?",
                 (key,),
@@ -155,13 +171,12 @@ def enqueue(
                 conn.execute(
                     """
                     UPDATE translation_retry_jobs
-                       SET job_kind=?, payload_json=?,
-                           next_attempt_at=?, updated_at=?,
+                       SET next_attempt_at=?, updated_at=?,
                            status=CASE WHEN status='leased' THEN 'leased' ELSE 'pending' END,
                            schema_version=?
                      WHERE job_key=?
                     """,
-                    (kind, body, min(current_due, due) if status == "pending" else current_due,
+                    (min(current_due, due) if status == "pending" else current_due,
                      now, _SCHEMA_VERSION, key),
                 )
             conn.execute("COMMIT")
@@ -311,14 +326,61 @@ def renew_lease(job_key: str, *, owner: str, lease_seconds: float = 180.0) -> bo
             """
             UPDATE translation_retry_jobs
                SET lease_until=?, updated_at=?
-             WHERE job_key=? AND status='leased' AND lease_owner=?
+             WHERE job_key=? AND status='leased' AND lease_owner=? AND lease_until>?
             """,
-            (now + max(15.0, float(lease_seconds or 180.0)), now, str(job_key), str(owner)),
+            (now + max(15.0, float(lease_seconds or 180.0)), now, str(job_key), str(owner), now),
         )
     return bool(cur.rowcount)
 
 
-def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Optional[str] = None) -> None:
+class LeaseLostError(RuntimeError):
+    pass
+
+
+def claim_job(job_key: str, *, owner: str, lease_seconds: float = 240.0) -> bool:
+    """Claim a foreground intent, even before its delayed retry due time."""
+    initialize()
+    now = time.time()
+    with _LOCK, _connect() as conn:
+        cur = conn.execute(
+            "UPDATE translation_retry_jobs SET status='leased',lease_owner=?,lease_until=?,updated_at=? "
+            "WHERE job_key=? AND (status='pending' OR (status='leased' AND lease_until<=?))",
+            (str(owner), now + max(15.0, lease_seconds), now, str(job_key), now),
+        )
+    return bool(cur.rowcount)
+
+
+@contextmanager
+def maintain_lease(job_key: str, *, owner: str, lease_seconds: float = 240.0):
+    """Renew only this active job, stopping immediately when its scope exits."""
+    stop = threading.Event()
+    lost = threading.Event()
+    interval = max(1.0, min(30.0, lease_seconds / 3.0))
+
+    def ensure_owned():
+        if lost.is_set() or not renew_lease(job_key, owner=owner, lease_seconds=lease_seconds):
+            lost.set()
+            raise LeaseLostError("translation job lease is no longer owned")
+
+    def heartbeat():
+        while not stop.wait(interval):
+            try:
+                ensure_owned()
+            except Exception:
+                lost.set()
+                return
+
+    ensure_owned()
+    worker = _LeaseThread(target=heartbeat, name="translation-job-lease", daemon=True)
+    worker.start()
+    try:
+        yield ensure_owned
+    finally:
+        stop.set()
+        worker.join(timeout=1.0)
+
+
+def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Optional[str] = None) -> bool:
     """Release a job back to pending and increment attempt count."""
     initialize()
     now = time.time()
@@ -328,12 +390,12 @@ def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Op
         str(error or "")[:2000],
         str(job_key),
     ]
-    owner_clause = ""
+    owner_clause = " AND status='pending'"
     if owner:
-        owner_clause = " AND (lease_owner=? OR lease_owner='')"
-        params.append(str(owner))
+        owner_clause = " AND status='leased' AND lease_owner=? AND lease_until>?"
+        params.extend((str(owner), now))
     with _LOCK, _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE translation_retry_jobs
                SET attempts=attempts+1, next_attempt_at=?, updated_at=?,
@@ -342,20 +404,38 @@ def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Op
             """ + owner_clause,
             tuple(params),
         )
+    return bool(cur.rowcount)
 
 
-def mark_delivered(job_key: str, *, owner: Optional[str] = None) -> None:
+def mark_delivered(job_key: str, *, owner: Optional[str] = None) -> bool:
     initialize()
     params: list[Any] = [str(job_key)]
-    owner_clause = ""
+    now = time.time()
+    owner_clause = " AND status='pending'"
     if owner:
-        owner_clause = " AND (lease_owner=? OR lease_owner='')"
-        params.append(str(owner))
+        owner_clause = " AND status='leased' AND lease_owner=? AND lease_until>?"
+        params.extend((str(owner), now))
     with _LOCK, _connect() as conn:
-        conn.execute(
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
             "DELETE FROM translation_retry_jobs WHERE job_key=?" + owner_clause,
             tuple(params),
         )
+        if cur.rowcount:
+            conn.execute("INSERT OR REPLACE INTO translation_delivery_receipts VALUES (?,?)",
+                         (str(job_key), now))
+            conn.execute("DELETE FROM translation_delivery_receipts WHERE delivered_at<?",
+                         (now - 7 * 86400,))
+    return bool(cur.rowcount)
+
+
+def was_delivered(job_key: str) -> bool:
+    initialize()
+    with _LOCK, _connect() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM translation_delivery_receipts WHERE job_key=? AND delivered_at>?",
+            (str(job_key), time.time() - 7 * 86400),
+        ).fetchone())
 
 
 def remove(job_key: str) -> None:

@@ -56,11 +56,10 @@ def test_ask_mode_image_translation_uses_same_standard_pipeline():
     fn = _function_source("_process_pending_image_translate_inner")
     assert "translate_sensitive_image_table" not in fn
     assert "_looks_like_sensitive_ocr_table" not in fn
-    assert "_tl.group_id = group_id or" in fn
-    assert "_tl.user_id = (info or {}).get(\"user_id\", \"\")" in fn
-    assert "_tl.from_image_ocr = True" in fn
-    assert "result = translate(extracted, \"zh\", actual_tgt)" in fn
-    assert "result = translate(extracted, lang, actual_tgt)" in fn
+    assert "_handle_image_background(ctx)" in fn
+    assert "_schedule_image_translation_retry(ctx" in fn
+    assert '"user_id": info.get("user_id")' in fn
+    assert "ocr_image_openai(" not in fn  # no divergent ask-mode pipeline
 
 
 def _exec_factory_reason_semantic_subset():
@@ -329,7 +328,7 @@ def test_image_handlers_never_send_factory_reason_failure_text_as_translation():
     ask_fn = _function_source("_process_pending_image_translate_inner")
     assert "_is_factory_reason_ocr_failure_text(extracted)" in bg_fn
     assert "_factory_reason_user_failure_reply()" not in bg_fn
-    assert "_is_factory_reason_ocr_failure_text(extracted)" in ask_fn
+    assert "_handle_image_background(ctx)" in ask_fn
     assert "_factory_reason_user_failure_reply()" not in ask_fn
     assert "durable" in bg_fn.lower()
     assert "durable" in ask_fn.lower()
