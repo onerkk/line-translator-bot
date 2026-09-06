@@ -137,6 +137,7 @@ class FactoryKnowledgeStore:
             document = self._read()
             canonical = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             self._document = document
+            self._casebook_examples = self._collect_casebook_examples(document)
             self._mtime_ns = stat.st_mtime_ns
             self._hash = hashlib.sha256(canonical).hexdigest()
             return self.health()
@@ -164,6 +165,31 @@ class FactoryKnowledgeStore:
         self._reload_if_changed()
         with self._lock:
             return copy.deepcopy(self._document)
+
+    @staticmethod
+    def _collect_casebook_examples(document):
+        examples = []
+        for entry in document.get("entries", []):
+            if entry.get("enabled") is False:
+                continue
+            for example in entry.get("examples", []) or []:
+                if not isinstance(example, dict) or not example.get("source") or not example.get("target"):
+                    continue
+                for direction, src, tgt in (("zh-id", "zh", "id"), ("id-zh", "id", "zh")):
+                    if direction not in entry.get("directions", []):
+                        continue
+                    examples.append({src: str(example["source"]), tgt: str(example["target"]),
+                        "dir": src + "2" + tgt, "bad_target": str(example.get("bad_target") or ""),
+                        "reason": str(example.get("reason") or ""), "origin": "factory_knowledge",
+                        "case_id": str(entry.get("id") or "factory_knowledge"),
+                        "source_match": copy.deepcopy(entry.get("match") or {})})
+        return examples
+
+    def casebook_examples(self):
+        """Reuse the compact index; edits reload atomically and callers get copies."""
+        self._reload_if_changed()
+        with self._lock:
+            return copy.deepcopy(self._casebook_examples)
 
     @staticmethod
     def _score_entry(entry: Dict[str, Any], normalized_text: str) -> Optional[MatchResult]:
@@ -222,7 +248,7 @@ class FactoryKnowledgeStore:
         return [item.as_card() for item in matches[: max(1, int(limit or 1))]]
 
     @staticmethod
-    def build_prompt(cards: Sequence[Dict[str, Any]]) -> str:
+    def build_prompt(cards: Sequence[Dict[str, Any]], *, include_examples: bool = True) -> str:
         if not cards:
             return ""
         lines = ["<factory_context_knowledge>"]
@@ -240,7 +266,7 @@ class FactoryKnowledgeStore:
             forbidden = card.get("forbidden_target_phrases", []) or []
             if forbidden:
                 lines.append("Forbidden target wording for this sense: " + "; ".join(str(x) for x in forbidden))
-            for example in card.get("examples", []) or []:
+            for example in (card.get("examples", []) or []) if include_examples else ():
                 if isinstance(example, dict) and example.get("source") and example.get("target"):
                     lines.append("Example source: " + str(example["source"]))
                     lines.append("Example target: " + str(example["target"]))
@@ -344,8 +370,8 @@ def retrieve(text: str, src: str, tgt: str, limit: int = 3) -> List[Dict[str, An
     return get_store().retrieve(text, src, tgt, limit=limit)
 
 
-def build_prompt(cards: Sequence[Dict[str, Any]]) -> str:
-    return get_store().build_prompt(cards)
+def build_prompt(cards: Sequence[Dict[str, Any]], *, include_examples: bool = True) -> str:
+    return get_store().build_prompt(cards, include_examples=include_examples)
 
 
 def validate_translation(cards: Sequence[Dict[str, Any]], source_text: str, translation: str) -> Tuple[bool, List[str]]:

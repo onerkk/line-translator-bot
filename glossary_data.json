@@ -1,8 +1,13 @@
 {
   "M7導板": {
-    "idn": "Tongkat Pemisah",
+    "idn": "alat perata ujung batang M7",
     "note_zh": "是一種應用於不銹鋼冷精棒製程中的手持工具，可將小尺寸棒材敲齊",
-    "note_id": "Untuk misahin barang yang besar(1ton)"
+    "note_id": "Alat genggam untuk meratakan ujung batang berukuran kecil dengan mengetuknya.",
+    "legacy_idn": "Tongkat Pemisah",
+    "canonical_idn": "alat perata ujung batang M7",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "天車電子磅秤": {
     "idn": "timbangan gantung elektronik",
@@ -50,7 +55,12 @@
     "note_id": "Label yang ditempel pada produk untuk mencantumkan berat, nomor pesanan, pelanggan, dan lokasi penyimpanan.",
     "canonical_idn": "label produk",
     "translation_mode": "hard",
-    "reverse_safe": true
+    "reverse_safe": true,
+    "forbidden_idn": [
+      "Faktur Pemesanan",
+      "Surat pesanan pelanggan"
+    ],
+    "policy_migrated": true
   },
   "秤重台": {
     "idn": "Meja Timbangan",
@@ -63,9 +73,14 @@
     "note_id": "Untuk memantau kerjaan yang ada di layar monitor"
   },
   "打包機": {
-    "idn": "Plester/Alat pengikat",
+    "idn": "alat pengikat pita baja",
     "note_zh": "是一種用手拿的機器，用來把鋼帶拉緊並扣緊固定，讓不銹鋼產品包裝得牢固又不會鬆脫。",
-    "note_id": "Alat untuk Membungkus, mengepak, menyegel produk"
+    "note_id": "Alat genggam untuk menegangkan dan mengunci pita baja pada kemasan.",
+    "legacy_idn": "Plester/Alat pengikat",
+    "canonical_idn": "alat pengikat pita baja",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "鋼帶": {
     "idn": "Tali baja",
@@ -78,14 +93,27 @@
     "note_id": "Digunakan bersama 鋼帶 (steel strapping / tali baja) untuk mengunci atau mengencangkan ikatan di sekitar barang."
   },
   "膠膜": {
-    "idn": "Sejenis Bubble Wrap",
+    "idn": "plastik pembungkus",
     "note_zh": "是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。",
-    "note_id": "Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan."
+    "note_id": "Untuk membungkus produk lebih rapi dan padat agar tidak mudah di masukin debu dan air hujan.",
+    "canonical_idn": "plastik pembungkus",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "forbidden_idn": [
+      "Sejenis Bubble Wrap",
+      "bubble wrap sejenis"
+    ],
+    "policy_migrated": true
   },
   "PP布": {
-    "idn": "Untuk melindungi bahan (PP bu bahannya semacam goni)",
+    "idn": "kain PP",
     "note_zh": "是一種用來包裹產品的材料，讓包裝更緊密、整齊，也能防止灰塵或雨水進入。",
-    "note_id": "Untuk mencegah karatan"
+    "note_id": "Kain PP untuk membungkus dan melindungi material dari debu dan air.",
+    "legacy_idn": "Untuk melindungi bahan (PP bu bahannya semacam goni)",
+    "canonical_idn": "kain PP",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "膠帶": {
     "idn": "Selotip",
@@ -173,7 +201,12 @@
     "note_id": "Mesin untuk menggerinda dan menghaluskan permukaan batang baja tahan karat.",
     "canonical_idn": "mesin grinding",
     "translation_mode": "hard",
-    "reverse_safe": true
+    "reverse_safe": true,
+    "forbidden_idn": [
+      "Mesin Penghalus cetakkan",
+      "Mesin Penghalus cetakan"
+    ],
+    "policy_migrated": true
   },
   "調機工作台車": {
     "idn": "Troli Peralatan kerja",
@@ -181,19 +214,34 @@
     "note_id": "Troli Peralatan kerja"
   },
   "I9置料台": {
-    "idn": "Station Pelurusan Material I9",
+    "idn": "meja penempatan material I9",
     "note_zh": "是一個用來暫時放置棒材的工作台",
-    "note_id": "Station Pelurusan Material I9"
+    "note_id": "Meja untuk menempatkan batang material sementara.",
+    "legacy_idn": "Station Pelurusan Material I9",
+    "canonical_idn": "meja penempatan material I9",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "I9置料台 旁按鈕「置料台前進」": {
-    "idn": "Mesin Pelurusan Maju",
+    "idn": "meja penempatan material maju",
     "note_zh": "1.特別留意：「置料台前進」翻譯未置入主詞\n2.定義：放置不銹鋼材料的工作台 往前",
-    "note_id": "Mesin pelurusan bergerak maju ke depan"
+    "note_id": "Meja penempatan material bergerak maju.",
+    "legacy_idn": "Mesin Pelurusan Maju",
+    "canonical_idn": "meja penempatan material maju",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "I9置料台旁按鈕「置料台後退」": {
-    "idn": "Mesin Pelurusan Mundur",
+    "idn": "meja penempatan material mundur",
     "note_zh": "1.特別留意：「置料台後退」翻譯未置入主詞\n2.定義：放置不銹鋼材料的工作台 後退",
-    "note_id": "Mesin Pelurusan bergerak mundur ke belakang"
+    "note_id": "Meja penempatan material bergerak mundur.",
+    "legacy_idn": "Mesin Pelurusan Mundur",
+    "canonical_idn": "meja penempatan material mundur",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "I9置料台旁按鈕「緊急停水」": {
     "idn": "Tombol darurat berhenti air",
@@ -336,9 +384,14 @@
     "note_id": "Shift"
   },
   "冷抽上料區": {
-    "idn": "Mesin produksi Coil",
+    "idn": "area pemuatan material cold drawing",
     "note_zh": "在 冷抽上料區，操作員將管件放置在導軌上，準備送入冷抽機進行加工。",
-    "note_id": "Operator menaruh pipa di rel, siap proses untuk memotong besi sesuai pesanan konsumen. contoh pemotongan :R,H,S,F."
+    "note_id": "Area untuk menempatkan material pada rel pemandu sebelum diproses di mesin cold drawing.",
+    "legacy_idn": "Mesin produksi Coil",
+    "canonical_idn": "area pemuatan material cold drawing",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "AIR管": {
     "idn": "Pipa udara",
@@ -351,14 +404,22 @@
     "note_id": "Untuk menggunting kawat kecil."
   },
   "塑膠槌": {
-    "idn": "Palu",
+    "idn": "palu plastik",
     "note_zh": "操作員使用 塑膠槌 輕輕敲打材料，避免損壞表面。",
-    "note_id": "Untuk memukul atau menekan benda tanpa merusak permukaan."
+    "note_id": "Palu plastik untuk mengetuk material tanpa merusak permukaannya.",
+    "legacy_idn": "Palu",
+    "canonical_idn": "palu plastik",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "PE帶剪刀": {
     "idn": "Gunting besi plat",
     "note_zh": "操作員使用 PE帶剪刀 將金屬帶切割成所需長度。",
-    "note_id": "Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan."
+    "note_id": "Yang besar untuk menggunting size sekitar 13-14mm. Yang kecil untuk menggunting 3-9mm, dan operator akan menggunting sesuai dengan pesanan pelanggan.",
+    "translation_mode": "disabled",
+    "reverse_safe": false,
+    "review_note": "標題為 PE 帶剪刀，備註卻描述金屬帶與尺寸；材質定義互相矛盾，不作自動術語依據。"
   },
   "鐵管": {
     "idn": "Pipa besi",
@@ -368,7 +429,11 @@
   "工單": {
     "idn": "work order",
     "note_zh": "工廠現場使用的製造/作業工單，是各站依照執行的工作文件。",
-    "note_id": "Dokumen work order untuk acuan proses produksi di setiap stasiun."
+    "note_id": "Dokumen work order untuk acuan proses produksi di setiap stasiun.",
+    "canonical_idn": "work order",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "發料": {
     "idn": "mengubah status data menjadi OL",
@@ -390,7 +455,12 @@
     "aliases_id": [
       "mengubah status data menjadi OL",
       "membuat data berstatus OL",
-      "meng-OL-kan data"
+      "meng-OL-kan data",
+      "di OL",
+      "di-OL",
+      "diOL",
+      "di-OL-kan",
+      "mengOLkan"
     ],
     "forbidden_idn": [
       "mengeluarkan material",
@@ -401,29 +471,52 @@
     ]
   },
   "E6冷抽機─張力輥向下/向上": {
-    "idn": "Pengaturan roller penegang naik/turun",
+    "idn": "roller penegang turun/naik",
     "note_zh": "操作員可控制 張力輥向下或向上，以確保管件在拉拔過程中保持平直和均勻張力",
-    "note_id": "Operator bisa mengatur tension roller naik atau turun supaya pipa tetap lurus dan tegangan merata selama proses penarikan."
+    "note_id": "Mengatur roller penegang turun atau naik.",
+    "legacy_idn": "Pengaturan roller penegang naik/turun",
+    "canonical_idn": "roller penegang turun/naik",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "E6冷抽機─張力輥下部大槌向下/向上": {
-    "idn": "Palu besar bagian bawah tension roller naik/turun",
+    "idn": "palu besar di bawah roller penegang turun/naik",
     "note_zh": "操作員可控制 張力輥下部大槌向下或向上，以調整壓力並確保材料穩定通過",
-    "note_id": "Untuk mengatur tekanan agar material tetap stabil saat lewat."
+    "note_id": "Untuk mengatur tekanan agar material tetap stabil saat lewat.",
+    "legacy_idn": "Palu besar bagian bawah tension roller naik/turun",
+    "canonical_idn": "palu besar di bawah roller penegang turun/naik",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "E6冷抽機─張力輥上部大槌向下/向上": {
-    "idn": "Palu besar bagian atas tension roller naik/turun",
+    "idn": "palu besar di atas roller penegang turun/naik",
     "note_zh": "操作員可控制 張力輥上部大槌向下或向上，以調整上方壓力，確保材料穩定運行。",
-    "note_id": "Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan."
+    "note_id": "Untuk menyesuaikan tekanan dari atas material tetap stabil saat berjalan.",
+    "legacy_idn": "Palu besar bagian atas tension roller naik/turun",
+    "canonical_idn": "palu besar di atas roller penegang turun/naik",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "綜合冷抽機E6─放線架拉置單元關": {
-    "idn": "Rak gulungan -  Unit penarik Off",
+    "idn": "unit penarik rak gulungan off",
     "note_zh": "如需停止拉拔動作，可按下 拉置單元關，使設備停止運轉。",
-    "note_id": "Jika ingin menarik proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja."
+    "note_id": "Jika ingin menghentikan proses penarikan, tekan unit penarik off sehingga mesin berhenti bekerja.",
+    "legacy_idn": "Rak gulungan -  Unit penarik Off",
+    "canonical_idn": "unit penarik rak gulungan off",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "綜合冷抽機E6─放線架轉盤開關": {
     "idn": "Saklar putaran cepat dan lambatnya nampan",
     "note_zh": "轉盤快/慢速按鈕",
-    "note_id": "Tombol putaran cepat dan lambatnya nampan"
+    "note_id": "Tombol putaran cepat dan lambatnya nampan",
+    "translation_mode": "disabled",
+    "reverse_safe": false,
+    "review_note": "標題為轉盤開關，備註為快慢速；不可由此條目推定按鈕動作。"
   },
   "綜合冷抽機E6─放線架矯直板 傾斜/水平": {
     "idn": "Pelat pelurus miring/datar",
@@ -436,9 +529,14 @@
     "note_id": "Plat pelurus bisa di naikkan atau dibuat tegak untuk menyesuaikan masuknya material dan menjaga tetap stabil."
   },
   "綜合冷抽機E6─放線架矯直板 向後/向前轉": {
-    "idn": "Pelat pelurus berputar ke depan/ atau berputar ke belakang",
+    "idn": "pelat pelurus berputar ke belakang/ke depan",
     "note_zh": "可將矯直板向前或向後轉動，以調整材料通過方向並保持平直。",
-    "note_id": "Pengaturan putaran pelat pelurus kedepan/belakang agar arah material tetap lurus dan stabil."
+    "note_id": "Pelat pelurus berputar ke belakang atau ke depan.",
+    "legacy_idn": "Pelat pelurus berputar ke depan/ atau berputar ke belakang",
+    "canonical_idn": "pelat pelurus berputar ke belakang/ke depan",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "綜合冷抽機E6─放線架液壓關": {
     "idn": "Tombol mengatur mesin hidrolik off",
@@ -463,7 +561,10 @@
   "綜合冷抽機E6─放線架故障重置": {
     "idn": "Lampu sensor error",
     "note_zh": "當設備出現問題時，故障指示燈會亮起，提示操作員進行檢查和維護。",
-    "note_id": "Lampu untuk mendeteksi adanya error pada mesin"
+    "note_id": "Lampu untuk mendeteksi adanya error pada mesin",
+    "translation_mode": "disabled",
+    "reverse_safe": false,
+    "review_note": "標題為故障重置，備註為故障指示燈；不可混同重置按鈕與指示燈。"
   },
   "砂光機": {
     "idn": "Alat Mengamplas",
@@ -496,19 +597,46 @@
     "note_id": "Menghidupkan unit penarikan agar material mulai bergerak melalui mesin."
   },
   "綜合冷抽機E6─精矯直設備TRAPO後端測試關閉依主管建議調整成「後夾輪 夾緊/鬆開」": {
-    "idn": "TRAPO ujung belakang dimatikan",
+    "idn": "roda penjepit belakang: menjepit/melepas",
     "note_zh": "1.TRAPO後端測試關閉\n依主管建議調整成「後夾輪 夾緊/鬆開」\n\n2.定義：後夾輪，就是位於後端固定棒材的夾具",
-    "note_id": "Roda penjepit belakang : menjepit/melepas"
+    "note_id": "Roda penjepit belakang untuk menjepit atau melepas batang material.",
+    "legacy_idn": "TRAPO ujung belakang dimatikan",
+    "canonical_idn": "roda penjepit belakang: menjepit/melepas",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。",
+    "aliases_zh": [
+      "後夾輪 夾緊/鬆開",
+      "後夾輪夾緊/鬆開"
+    ]
   },
   "綜合冷抽機E6─精矯直設備TRAPO前端測試關閉依主管建議調整成「前夾輪 夾緊/鬆開」": {
-    "idn": "Mesin Uji TRAPO dibagian depan off",
+    "idn": "roda penjepit depan: menjepit/melepas",
     "note_zh": "1.TRAPO前端測試關閉\n依主管建議調整成「前夾輪 夾緊/鬆開」\n2.定義：前夾輪，是位於前端固定棒材的夾具",
-    "note_id": "Roda penjepit depan : menjepit/melepas"
+    "note_id": "Roda penjepit depan untuk menjepit atau melepas batang material.",
+    "legacy_idn": "Mesin Uji TRAPO dibagian depan off",
+    "canonical_idn": "roda penjepit depan: menjepit/melepas",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。",
+    "aliases_zh": [
+      "前夾輪 夾緊/鬆開",
+      "前夾輪夾緊/鬆開"
+    ]
   },
   "綜合冷抽機E6─精矯直設備使用/不使用測量輪依主管建議調整成「計長輪 啟動/停用」": {
-    "idn": "Lampu indikator (penggunaan/tidak penggunaan roda pengukur)",
+    "idn": "roda pengukur panjang: aktif/nonaktif",
     "note_zh": "1.使用/不使用測量輪\n依主管建議調整成「計長輪 啟動/停用」\n2.定義：計長輪，就是測量棒材 長度的工具",
-    "note_id": "Roda penghitung panjang adalah alat untuk mengukur panjang batang material."
+    "note_id": "Roda pengukur panjang batang material; aktif/nonaktif.",
+    "legacy_idn": "Lampu indikator (penggunaan/tidak penggunaan roda pengukur)",
+    "canonical_idn": "roda pengukur panjang: aktif/nonaktif",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。",
+    "aliases_zh": [
+      "計長輪 啟動/停用",
+      "計長輪啟動/停用"
+    ]
   },
   "綜合冷抽機E6─精矯直設備TRAPO前端測試調整 +/-": {
     "idn": "Penyesuaian roda- pengumpan depan",
@@ -608,7 +736,10 @@
   "綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌插入材料」依主管建議調整成「夾輪 出料」": {
     "idn": "Rel pipa memasukkan material",
     "note_zh": "1.依主管建議調整成「夾輪 入料」\n2.定義：料床內導管夾入材料會被導軌進入到加工位置，準備進行下一步作業。",
-    "note_id": "Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya."
+    "note_id": "Definisi: di dalam bed material, material yang dijepit oleh pipa pemandu akan dibawa oleh rel pemandu menuju posisi proses, dan dipersiapkan untuk langkah kerja berikutnya.",
+    "translation_mode": "disabled",
+    "reverse_safe": false,
+    "review_note": "標題新名稱為夾輪出料，中文備註新名稱卻為夾輪入料；方向未確認前不作自動術語依據。"
   },
   "綜合冷抽機E6-前後輸送管箱設備上按鈕「管件導軌清空」": {
     "idn": "Rel pipa dikosongkan",
@@ -726,9 +857,14 @@
     "note_id": "mengaktifkan kembali sistem kontrol mesin agar berjalan normal."
   },
   "綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「設定/自動」": {
-    "idn": "Otomatis/Manual",
+    "idn": "pengaturan manual/otomatis",
     "note_zh": "用來切換設備手動模式與自動運轉模式之間",
-    "note_id": "Tombol untuk ganti mode dari otomatis ke manual."
+    "note_id": "Beralih antara mode pengaturan manual dan mode otomatis.",
+    "legacy_idn": "Otomatis/Manual",
+    "canonical_idn": "pengaturan manual/otomatis",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "綜合冷抽機E6-雙輥矯直設備 面板旁按鈕「控制 關」": {
     "idn": "Kontrol Off",
@@ -801,9 +937,14 @@
     "note_id": "Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."
   },
   "E824拋光設備區 旁按鈕「停用煞車」": {
-    "idn": "Rem (brake)",
+    "idn": "nonaktifkan rem",
     "note_zh": "停用煞車",
-    "note_id": "Tombol untuk mengerem."
+    "note_id": "Menonaktifkan rem, bukan mengaktifkan pengereman.",
+    "legacy_idn": "Rem (brake)",
+    "canonical_idn": "nonaktifkan rem",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "E824拋光設備區 旁按鈕「門開啟」": {
     "idn": "Pintu terbuka",
@@ -901,9 +1042,14 @@
     "note_id": "Nama Penerima"
   },
   "工單訂單資訊「生計交期」": {
-    "idn": "Tanggal Pemesanan Produk",
+    "idn": "estimasi tanggal pengiriman",
     "note_zh": "生計交期",
-    "note_id": "Tanggal Pemesanan Produk"
+    "note_id": "Estimasi tanggal pengiriman, bukan tanggal pemesanan.",
+    "legacy_idn": "Tanggal Pemesanan Produk",
+    "canonical_idn": "estimasi tanggal pengiriman",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "工單訂單資訊「性質碼」": {
     "idn": "Kode Jenis",
@@ -911,9 +1057,14 @@
     "note_id": "Kode Jenis"
   },
   "工單訂單資訊「倒角」": {
-    "idn": "Sudut yang diinginkan",
+    "idn": "chamfer",
     "note_zh": "倒角",
-    "note_id": "Sudut yang diinginkan"
+    "note_id": "Chamfer pada ujung material.",
+    "legacy_idn": "Sudut yang diinginkan",
+    "canonical_idn": "chamfer",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "工單訂單資訊「砂光痕等級」": {
     "idn": "Tingkat bekas pengamplasan",
@@ -986,7 +1137,8 @@
     "note_id": "Panjang MIN",
     "canonical_idn": "Panjang MIN",
     "translation_mode": "hard",
-    "reverse_safe": true
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "工單訂單資訊「長度 MAX」": {
     "idn": "Panjang MAX",
@@ -994,7 +1146,8 @@
     "note_id": "Panjang MAX",
     "canonical_idn": "Panjang MAX",
     "translation_mode": "hard",
-    "reverse_safe": true
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "工單訂單資訊「計畫量」": {
     "idn": "Jumlah rencana produksi",
@@ -1202,12 +1355,18 @@
     "note_id": "Panjang",
     "canonical_idn": "Panjang",
     "translation_mode": "hard",
-    "reverse_safe": true
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "工單製程紀錄「重量/支數」": {
-    "idn": "Berat batang/pcs",
+    "idn": "berat / jumlah batang",
     "note_zh": "重量/支數",
-    "note_id": "Berat batang/pcs"
+    "note_id": "Berat material / jumlah batang material.",
+    "legacy_idn": "Berat batang/pcs",
+    "canonical_idn": "berat / jumlah batang",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "review_note": "依原中文欄位及既有備註校正詞義與動作順序。"
   },
   "工單製程紀錄「主機手」": {
     "idn": "Operator utama",
@@ -1248,7 +1407,8 @@
       "kotak kayu"
     ],
     "note_zh": "工廠出貨與包裝用的大型木製運輸箱／木製板條箱，統一用 peti kayu，不是一般小盒子 kotak kayu。",
-    "note_id": "Peti kayu industri untuk pengemasan dan pengiriman material; bukan kotak kayu kecil."
+    "note_id": "Peti kayu industri untuk pengemasan dan pengiriman material; bukan kotak kayu kecil.",
+    "policy_migrated": true
   },
   "裝箱": {
     "idn": "memasukkan material ke dalam peti kayu",
@@ -1260,7 +1420,8 @@
       "memasukkan barang ke dalam kotak kayu"
     ],
     "note_zh": "把產品／材料裝入出貨木箱。依句型可自然屈折為 dimasukkan、jangan dimasukkan、proses pengemasan ke dalam peti kayu。",
-    "note_id": "Memasukkan produk atau material ke dalam peti kayu untuk pengiriman."
+    "note_id": "Memasukkan produk atau material ke dalam peti kayu untuk pengiriman.",
+    "policy_migrated": true
   },
   "支援裝箱": {
     "idn": "membantu proses pengemasan ke dalam peti kayu",
@@ -1271,7 +1432,8 @@
       "bantu proses memasukkan barang ke dalam kotak kayu"
     ],
     "note_zh": "其他站別／人員支援把材料裝入木製運輸箱的作業。",
-    "note_id": "Membantu proses pengemasan material ke dalam peti kayu."
+    "note_id": "Membantu proses pengemasan material ke dalam peti kayu.",
+    "policy_migrated": true
   },
   "木箱包": {
     "idn": "pengemasan dengan peti kayu",
@@ -1282,7 +1444,8 @@
       "packing kotak kayu"
     ],
     "note_zh": "現場對木箱包裝作業或木箱包裝量的簡稱。",
-    "note_id": "Istilah singkat untuk proses atau jumlah pengemasan dengan peti kayu."
+    "note_id": "Istilah singkat untuk proses atau jumlah pengemasan dengan peti kayu.",
+    "policy_migrated": true
   },
   "工單資訊": {
     "idn": "informasi pada work order",
@@ -1290,24 +1453,48 @@
     "note_id": "Informasi yang tercantum pada work order."
   },
   "噴漆": {
-    "idn": "spray cat",
+    "idn": "pengecatan semprot",
     "note_zh": "現場材料標示用的噴漆作業或噴漆標示。",
-    "note_id": "Proses spray cat untuk penandaan material di lapangan."
+    "note_id": "Proses spray cat untuk penandaan material di lapangan.",
+    "canonical_idn": "pengecatan semprot",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "spray cat",
+      "di-spray cat",
+      "tidak spray cat"
+    ],
+    "policy_migrated": true
   },
   "來料尺寸": {
     "idn": "ukuran material masuk",
     "note_zh": "材料進到該站時需確認的尺寸。",
-    "note_id": "Ukuran material yang masuk ke stasiun dan perlu dikonfirmasi."
+    "note_id": "Ukuran material yang masuk ke stasiun dan perlu dikonfirmasi.",
+    "canonical_idn": "ukuran material masuk",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "表面品質": {
     "idn": "kualitas permukaan",
     "note_zh": "材料表面的品質狀態，例如刮傷、痕跡或其他外觀問題。",
-    "note_id": "Kondisi kualitas permukaan material."
+    "note_id": "Kondisi kualitas permukaan material.",
+    "canonical_idn": "kualitas permukaan",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "短尺維護": {
     "idn": "penanganan material pendek",
     "note_zh": "短尺材料/短尺料的處理與維護，不是尺規或量尺。",
-    "note_id": "Penanganan material pendek; bukan penggaris pendek."
+    "note_id": "Penanganan material pendek; bukan penggaris pendek.",
+    "canonical_idn": "penanganan material pendek",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "forbidden_idn": [
+      "perawatan ukuran pendek"
+    ],
+    "policy_migrated": true
   },
   "短尺料": {
     "idn": "material pendek",
@@ -1317,7 +1504,11 @@
   "重量確認": {
     "idn": "konfirmasi berat",
     "note_zh": "確認材料或產品重量是否正確。",
-    "note_id": "Konfirmasi berat material atau produk."
+    "note_id": "Konfirmasi berat material atau produk.",
+    "canonical_idn": "konfirmasi berat",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "policy_migrated": true
   },
   "作業流程": {
     "idn": "alur kerja",
@@ -1943,7 +2134,8 @@
       "rekap data"
     ],
     "note_zh": "工廠出貨／客戶帳務語境中的會計結帳、關帳，不是抓取、檢查或彙整資料。",
-    "note_id": "Penutupan pembukuan/akuntansi; bukan pengecekan atau rekap data."
+    "note_id": "Penutupan pembukuan/akuntansi; bukan pengecekan atau rekap data.",
+    "policy_migrated": true
   },
   "會計結帳": {
     "idn": "tutup buku",
@@ -1956,7 +2148,8 @@
       "rekap data"
     ],
     "note_zh": "會計期間結帳／關帳。",
-    "note_id": "Penutupan pembukuan akuntansi."
+    "note_id": "Penutupan pembukuan akuntansi.",
+    "policy_migrated": true
   },
   "陸續到料": {
     "idn": "material akan tiba secara bertahap",
@@ -1964,7 +2157,8 @@
     "translation_mode": "soft",
     "reverse_safe": false,
     "note_zh": "材料不是一次到齊，而是之後分批、接續抵達。",
-    "note_id": "Material akan datang/tiba dalam beberapa tahap."
+    "note_id": "Material akan datang/tiba dalam beberapa tahap.",
+    "policy_migrated": true
   },
   "到料": {
     "idn": "material tiba",
@@ -1972,7 +2166,8 @@
     "translation_mode": "soft",
     "reverse_safe": false,
     "note_zh": "生產材料抵達現場／到貨；不是資料到達。",
-    "note_id": "Material produksi tiba di lokasi."
+    "note_id": "Material produksi tiba di lokasi.",
+    "policy_migrated": true
   },
   "優先安排包裝": {
     "idn": "memprioritaskan pengaturan proses pengemasan",
@@ -1980,7 +2175,8 @@
     "translation_mode": "soft",
     "reverse_safe": false,
     "note_zh": "把該客戶／該批材料排在包裝作業的前面，不是只口頭提醒。",
-    "note_id": "Menempatkan proses pengemasan material tersebut sebagai prioritas."
+    "note_id": "Menempatkan proses pengemasan material tersebut sebagai prioritas.",
+    "policy_migrated": true
   },
   "關帳": {
     "idn": "tutup buku",
@@ -2075,7 +2271,8 @@
     "translation_mode": "hard",
     "reverse_safe": true,
     "note_zh": "設備上的電子控制／電子系統。",
-    "note_id": "Sistem elektronik atau kontrol elektronik pada peralatan."
+    "note_id": "Sistem elektronik atau kontrol elektronik pada peralatan.",
+    "policy_migrated": true
   },
   "自然拉動": {
     "idn": "tarikan alami/pasif",
@@ -2088,7 +2285,8 @@
       "pengoperasian manual"
     ],
     "note_zh": "依設備本身的自然／被動機械牽引，不等於人工手拉；來源未寫手動時不得補成 manual。",
-    "note_id": "Tarikan mekanis alami/pasif, bukan ditarik manual oleh operator."
+    "note_id": "Tarikan mekanis alami/pasif, bukan ditarik manual oleh operator.",
+    "policy_migrated": true
   },
   "儲格": {
     "idn": "slot penyimpanan",

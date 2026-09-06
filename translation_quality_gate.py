@@ -27,12 +27,13 @@ import glossary_policy as gp_module
 import factory_semantic_audit as fsa_module
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
+import factory_source_understanding as fsu_module
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-04.1-validated-delivery-only"
+QUALITY_GATE_BUILD_ID = "2026-09-06.1-source-term-integrity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -81,7 +82,7 @@ _MENTION_RE = re.compile(
 # curated set of globally stable industrial acronyms is treated as an immutable
 # bare-alpha token; every other identifier must have a digit or separator.
 _KNOWN_TECH_ACRONYMS = frozenset({
-    "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR",
+    "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR", "OL",
     "PLC", "QA", "QC", "RPM", "SOP", "TAG", "TIG", "UI", "UPS", "URL", "WIP", "WO",
 })
 _KNOWN_TECH_ACRONYM_PATTERN = "|".join(
@@ -1841,6 +1842,13 @@ def validate_translation(
     )
     if not operational_ok or operational_issues:
         issues.extend(operational_issues)
+
+    # The same source-grounded terminology check applies to provider output,
+    # persistent memory, cache hits and learning admission. It is local and does
+    # not need fuzzy spelling suggestions or a second model call.
+    term_frame = {"original": source, "factory_terms": fsu_module.factory_term_facts(source, src)}
+    _, term_issues = fsu_module.validate_factory_terms(term_frame, candidate, src, tgt)
+    issues.extend(term_issues)
 
     issues = _dedupe(issues)
     hard, warnings = _partition_issues(issues)

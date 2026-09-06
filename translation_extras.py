@@ -712,6 +712,14 @@ def _analysis_for_semantic_expression(source: str, structured: bool) -> ToneAnal
             match = re.search(pattern, source, re.I)
             if not match:
                 continue
+            # A shift can be an actor in a production report, not a schedule.
+            if name == "work_schedule" and not re.search(
+                r"班表|排班|調班|輪班|上班|下班|加班|交班|幾點|出勤|明天|明日|今天.*(?:班|點)|"
+                r"\d{1,2}[:：.]\d{2}|\b(?:jadwal|pukul|jam|lembur|besok|"
+                r"masuk\s+kerja|pulang\s+kerja|serah\s+terima|overtime|handover|schedule)\b",
+                source, re.I,
+            ):
+                continue
             choices = () if structured else emoji_choices
             candidates.append(ToneAnalysis(
                 primary=name,

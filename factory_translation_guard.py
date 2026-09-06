@@ -27,7 +27,7 @@ import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-05.1-operation-status-boundary"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-06.1-source-term-integrity"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -396,6 +396,8 @@ class FactoryTranslationGuard:
         analysis = source_understanding.analyze(source_text, _lang(src), protected_names=protected_names)
         _state_ok, state_issues = source_understanding.validate_operational_states(analysis, target_text, _lang(src), _lang(tgt))
         issues.extend("factory_guard:" + issue for issue in state_issues)
+        _term_ok, term_issues = source_understanding.validate_factory_terms(analysis, target_text, _lang(src), _lang(tgt))
+        issues.extend("factory_guard:" + issue for issue in term_issues)
         issues.extend(self._validate_quantities(source_text, target_text, _lang(src), _lang(tgt)))
         quantity_frame = fqs_module.build_frame(source_text, _lang(src), _lang(tgt))
         quantity_ok, quantity_issues = fqs_module.validate_translation(quantity_frame, target_text)
