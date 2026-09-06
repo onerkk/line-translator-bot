@@ -5,6 +5,8 @@ on:
     paths:
       - "*.py"
       - "requirements.txt"
+      - "requirements-test.txt"
+      - "static/admin_reminders.*"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -19,6 +21,8 @@ on:
     paths:
       - "*.py"
       - "requirements.txt"
+      - "requirements-test.txt"
+      - "static/admin_reminders.*"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -42,12 +46,13 @@ jobs:
       - name: Validate versioned factory assets
         run: python validate_factory_translation_assets.py --json
       - name: Install runtime and test dependencies
-        run: python -m pip install -r requirements.txt pytest
+        run: python -m pip install -r requirements.txt -r requirements-test.txt
       - name: Run all translation regression tests without API credentials
         env:
           LINE_CHANNEL_SECRET: offline-ci-secret
           LINE_CHANNEL_ACCESS_TOKEN: offline-ci-token
           REQUIRE_CLOUD_SETTINGS: "0"
+          REMINDERS_WORKER_ENABLED: "0"
           TM_DB_PATH: ${{ runner.temp }}/translation-memory.db
           VECTOR_TM_DB_PATH: ${{ runner.temp }}/vector-memory.db
           ACTIVE_LEARNING_DB_PATH: ${{ runner.temp }}/active-learning.db
