@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "ca262c19d7c2d909589c801d845cf8040c95496a5883d565176f1be3723a5361",
-    "updated_at_iso": "2026-09-06T22:20:01.509473+00:00",
-    "updated_at_unix": 1788733201.5094728
+    "state_hash": "89b4d0f32a7e6cb55ed0bc163cb7e57bb79acf54c59a689ba1dd27a2325b2c9f",
+    "updated_at_iso": "2026-09-06T22:52:06.417475+00:00",
+    "updated_at_unix": 1788735126.4174747
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -197,7 +197,7 @@
     "oai_input": 144097,
     "oai_output": 1337,
     "oai_reasoning": 0,
-    "text_translations": 255,
+    "text_translations": 258,
     "tokens_completion": 18793,
     "tokens_prompt": 4378868,
     "tokens_prompt_cached": 138368,
@@ -241,7 +241,8 @@
   ],
   "dm_known_users": {
     "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
-    "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
+    "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
+    "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
   },
   "dm_master_enabled": true,
   "dm_target_lang": {
@@ -460,6 +461,10 @@
   "group_target_langs": {},
   "group_tone_settings": {},
   "group_tracking": {
+    "C28bb7127640539f3c1bc743ecdf61a24": {
+      "joined_at": 1788735126.4128182,
+      "name": "異常檔案"
+    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "joined_at": 1780198990.8479366,
       "name": "寶貝相簿3"
