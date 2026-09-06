@@ -18204,63 +18204,10 @@ def handle_qry_command(text):
 
 
 def handle_pkg_command(text):
-    """Handle /pkg <code> command to lookup packaging info."""
-    parts = text.strip().split(None, 1)
-    if len(parts) < 2:
-        return (
-            "⚠️ 請輸入包裝碼 / Masukkan kode kemasan\n"
-            "範例 / Contoh: /pkg U\n"
-            "範例 / Contoh: /pkg G"
-        )
-    query = parts[1].strip()
-    query_upper = query.upper()
-    if not PACKAGING_LOOKUP:
-        return "⚠️ 包裝碼資料尚未上傳\nData kode kemasan belum diupload"
-    # Try exact match (case-insensitive)
-    entry = PACKAGING_LOOKUP.get(query) or PACKAGING_LOOKUP.get(query_upper)
-    matched_key = query if PACKAGING_LOOKUP.get(query) else query_upper
-    if not entry:
-        for k in PACKAGING_LOOKUP:
-            if k.upper() == query_upper:
-                entry = PACKAGING_LOOKUP[k]
-                matched_key = k
-                break
-    # Try partial match
-    if not entry:
-        matches = [k for k in PACKAGING_LOOKUP if query_upper in k.upper()]
-        if len(matches) == 1:
-            matched_key = matches[0]
-            entry = PACKAGING_LOOKUP[matched_key]
-        elif len(matches) > 1:
-            result = "🔍 找到多筆符合 / Beberapa hasil ditemukan:\n"
-            for m in matches[:15]:
-                result += "  • " + m + "\n"
-            return result
-    if not entry:
-        return "❌ 找不到包裝碼 / Kode kemasan tidak ditemukan: " + query
-    # Build response - show specific fields in order
-    # Match Excel headers by keyword → display label
-    PKG_DISPLAY = [
-        ("簡稱",       ["簡稱"]),
-        ("詳細包裝方式", ["詳細包裝", "包裝方式說明", "包裝方式"]),
-        ("內包裝",     ["內包裝"]),
-        ("外包裝",     ["外包裝"]),
-        ("固定繩",     ["固定繩", "固定"]),
-    ]
-    lines = []
-    lines.append("📦 包裝碼 / Kode kemasan: " + matched_key)
-    lines.append("=" * 20)
-    if isinstance(entry, dict):
-        for display_label, keywords in PKG_DISPLAY:
-            # Find matching field in entry
-            for field_name, field_val in entry.items():
-                if field_val and any(kw in field_name for kw in keywords):
-                    lines.append(display_label + ": " + str(field_val))
-                    break
-    elif isinstance(entry, str):
-        lines.append(entry)
-    lines.append("=" * 20)
-    return "\n".join(lines)
+    """Resolve a complete new or legacy code against the same packaging row."""
+    from packaging_lookup import format_packaging_reply
+
+    return format_packaging_reply(text, PACKAGING_LOOKUP)
 
 
 def get_display_name(group_id, user_id):
@@ -24281,8 +24228,8 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="panel" id="panel-packaging">
 <div class="card">
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:15px">📦 包裝碼資料更新</div>
-<div class="card-sub" style="margin-bottom:14px">上傳 Excel 檔案（第一列標題列，含代碼/Code欄位）</div>
-<input type="file" id="packagingFile" accept=".xlsx,.xls" style="display:none" onchange="previewPackaging()">
+<div class="card-sub" style="margin-bottom:14px">上傳包裝方式 Excel（含包裝碼、簡稱或包裝方式）。支援「原包裝碼」與「品保設計(新版)」雙碼查詢；同一舊碼的不同方式會分別保留。</div>
+<input type="file" id="packagingFile" accept=".xlsx" style="display:none" onchange="previewPackaging()">
 <button class="btn btn-primary btn-sm" onclick="document.getElementById('packagingFile').click()">選擇 Excel 檔案</button>
 <div id="packagingFileName" style="margin-top:8px;font-size:13px;color:#8a8a9a"></div>
 </div>
@@ -27587,10 +27534,9 @@ async function uploadPackaging(){
   var fd=new FormData();fd.append('file',f);
   try{
     var r=await fetch(API+'/packaging/upload',{method:'POST',headers:{'X-Admin-Key':KEY,'X-Manager-Id':window._MANAGER_ID||''},body:fd});
-    if(!r.ok){toast('上傳失敗('+r.status+')');return}
     var d=await r.json();
-    if(d.ok){toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';}
-    else{toast(d.error||'上傳失敗');}
+    if(!r.ok||!d.ok){toast(d.error||'上傳失敗('+r.status+')');return}
+    toast(d.message);loadPackagingStats();document.getElementById('packagingActions').style.display='none';
   }catch(e){toast('上傳失敗: '+e);}
 }
 async function downloadPackagingJson(){
@@ -34287,65 +34233,19 @@ def api_admin_packaging_upload():
         return jsonify({"error": "沒有檔案"}), 400
     try:
         import openpyxl
-        wb = openpyxl.load_workbook(f, data_only=True)
-        # Use first sheet (直棒包裝 or whatever)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            return jsonify({"error": "空的 Excel"}), 400
-        header = [str(c).strip() if c else "" for c in rows[0]]
-        # Find the code column: look for header containing 碼/code
-        code_col = None
-        for i, h in enumerate(header):
-            hl = h.lower().replace(" ", "")
-            if "包裝碼" in h or "代碼" in h or "代号" in h or "code" in hl:
-                code_col = i
-                break
-        # Fallback: if header contains just "碼" somewhere
-        if code_col is None:
-            for i, h in enumerate(header):
-                if "碼" in h:
-                    code_col = i
-                    break
-        # Last fallback: first non-empty header column
-        if code_col is None:
-            for i, h in enumerate(header):
-                if h:
-                    code_col = i
-                    break
-        if code_col is None:
-            return jsonify({"error": "找不到包裝碼欄位"}), 400
-        # All other columns with non-empty headers become data fields
-        data_cols = []  # [(col_index, header_name), ...]
-        for i, h in enumerate(header):
-            if i != code_col and h:
-                data_cols.append((i, h))
-        # Build lookup
-        new_data = {}
-        for row in rows[1:]:
-            if not row:
-                continue
-            if code_col >= len(row) or not row[code_col]:
-                continue
-            code = str(row[code_col]).strip()
-            if not code:
-                continue
-            entry = {}
-            for col_idx, col_name in data_cols:
-                if col_idx < len(row) and row[col_idx] is not None:
-                    val = str(row[col_idx]).strip()
-                    if val:
-                        entry[col_name] = val
-            if entry:
-                new_data[code] = entry
-        if not new_data:
-            return jsonify({"error": "無法解析 Excel，請確認第一列為標題列，含包裝碼欄位"}), 400
+        from packaging_lookup import packaging_from_rows
+
+        wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+        try:
+            new_data, header = packaging_from_rows(wb.active.iter_rows(values_only=True))
+        finally:
+            wb.close()
         PACKAGING_LOOKUP = new_data
         logger.info("Packaging updated via admin: %d codes, columns: %s",
-                     len(new_data), [c[1] for c in data_cols])
+                     len(new_data), header)
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_packaging_to_github(json_str)
-        cols_info = "、".join([c[1] for c in data_cols])
+        cols_info = "、".join(h for h in header if h)
         msg = "已更新 " + str(len(new_data)) + " 筆包裝碼（欄位：" + cols_info + "）"
         if gh_ok:
             msg += "\n已自動推送 GitHub，永久生效"
