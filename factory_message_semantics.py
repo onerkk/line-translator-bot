@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-02.1-operational-data-continuity"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.2-release-predicate-polarity"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -424,11 +424,11 @@ _ZH_VEHICLE_BACKLOG_RE = re.compile(
 # everyday meaning "put/place".
 _ZH_RELEASE_OBJECT_RE = re.compile(
     r"(?P<deictic>這|这|那|該|该)?"
-    r"(?P<count>\d{1,3}|[零〇一二兩两三四五六七八九十]{1,3})?"
+    r"(?P<count>(?<![A-Za-z0-9_])\d{1,3}|[零〇一二兩两三四五六七八九十]{1,3})?"
     r"(?P<object>把|捆|批|(?:張|张|筆|笔|個|个)?(?:工單|工单|單|单|資料|资料|數據|数据))"
     r"(?=$|[\s,，。.!！?？:：;；()（）\[\]{}]|"
     r"(?:麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|叫|讓|让|"
-    r"都|全都|先|再|要|需|已經|已经|已|放))",
+    r"都|全都|先|再|要|需|已經|已经|已|放|還|还|尚|未|沒|没|無|无|不|異常|异常|可|能))",
     re.I,
 )
 _ZH_RELEASE_REQUEST_RE = re.compile(
@@ -1523,6 +1523,106 @@ def _strip_zh_release_supported_tokens(source: str, object_evidence: str) -> str
     return re.sub(r"[\s,，。.!！?？:：;；()（）\[\]{}]+", "", value)
 
 
+def _release_clauses(text: str) -> list[str]:
+    # Keep question marks attached to their own clause. An inspection in
+    # parentheses or a later unpacking question cannot change release status.
+    return [part.strip() for part in re.split(r"[，,。！!；;\n（）()]", text) if part.strip()]
+
+
+def _release_reference_codes(text: str) -> set[str]:
+    return {code.upper() for code in re.findall(
+        r"(?<![A-Za-z0-9_])(?:[A-Za-z]{1,4}\d{1,4}|\d{3,})(?![A-Za-z0-9_])", text)}
+
+
+def _release_mode(prefix: str, suffix: str, lang: str) -> str:
+    patterns = {
+        "zh": (
+            ("request", r"不要忘(?:記|记)?|別忘(?:記|记)?|别忘(?:記|记)?"),
+            ("prohibited", r"禁止|不可以|不可|不得|不准|不要|勿|別|别"),
+            ("unable", r"無法|无法|不能|沒辦法|没办法|未能|不成功|失敗|失败"),
+            ("pending", r"尚未|還未|还未|還沒(?:有)?|还没(?:有)?|沒有|没有|未|沒|没"),
+            ("negative", r"不"),
+            ("completed", r"已經|已经|已"),
+            ("request", r"麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|先|優先|优先"),
+        ),
+        "id": (
+            ("request", r"\bjangan\s+lupa\b"),
+            ("prohibited", r"\b(?:jangan|dilarang|tidak\s+boleh)\b"),
+            ("unable", r"\b(?:(?:tidak|belum|tdk|gak)\s+(?:bisa|dapat|berhasil)|gagal)\b"),
+            ("pending", r"\b(?:belum|blm)\b"),
+            ("negative", r"\b(?:tidak|tdk|gak)\b"),
+            ("completed", r"\b(?:sudah|sdh|telah|berhasil|selesai)\b"),
+            ("request", r"\b(?:tolong|mohon|harap|silakan)\b"),
+        ),
+    }
+    hits = [(m.end(), len(m.group()), -rank, mode)
+            for rank, (mode, pattern) in enumerate(patterns[lang])
+            for m in re.finditer(pattern, prefix, re.I)]
+    mode = max(hits)[-1] if hits else "plain"
+    if lang == "zh":
+        if re.match(r"(?:不(?:了|成)|失敗|失败|未成功)", suffix):
+            return "unable"
+        if mode == "plain" and re.match(r"(?:完成|好了?|完(?:了)?|了)", suffix):
+            return "completed"
+        if mode == "plain" and suffix.startswith("一下"):
+            return "request"
+    return mode
+
+
+def _release_source_relations(visible: str) -> list[dict]:
+    relations = []
+    for raw in _release_clauses(visible):
+        clause = _compact(raw)
+        # Classify each clause, not the entire document. Explicit production
+        # data or next-station evidence disambiguates a nearby QC mention.
+        data_context = bool(re.search(r"資料|资料|數據|数据|ERP|下(?:一)?站(?:別|别)?", clause, re.I))
+        if not data_context and _ZH_RELEASE_QC_RE.search(clause):
+            continue
+        if _ZH_RELEASE_PHYSICAL_RE.search(clause) or "放假" in clause or "放料" in clause:
+            continue
+        if "放行" not in clause and _ZH_RELEASE_PHYSICAL_OBJECT_RE.search(clause):
+            continue
+        objects = _ZH_RELEASE_OBJECT_RE.search(clause)
+        if "放行" not in clause and not objects:
+            continue
+        actions = list(re.finditer(r"放行|放(?=一下|了|好|完|這|这|那|\Z)", clause))
+        # The short imperative can end after its object (放這張工單).
+        previous_end = 0
+        for index, action in enumerate(actions):
+            prefix = clause[previous_end:action.start()]
+            suffix = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else len(clause)]
+            mode = _release_mode(prefix, suffix, "zh")
+            question = bool(re.search(r"是否|有沒有|有没有|能不能|可不可以", prefix)
+                            or re.search(r"嗎|吗|[?？]", suffix))
+            relations.append({"mode": mode, "question": question, "evidence": prefix + action.group() + suffix,
+                              "clause": clause, "explicit": action.group() == "放行",
+                              "codes": sorted(_release_reference_codes(prefix))})
+            previous_end = action.end()
+    return relations
+
+
+def _release_target_relations(target: str) -> list[dict]:
+    relations = []
+    action_re = re.compile(r"\b(?:release|rilis|merilis|me-?release|di-?release|dirilis)\b", re.I)
+    for clause in _release_clauses(target):
+        actions = list(action_re.finditer(clause))
+        previous_end = 0
+        for index, action in enumerate(actions):
+            prefix = clause[previous_end:action.start()]
+            suffix = clause[action.end():actions[index + 1].start() if index + 1 < len(actions) else len(clause)]
+            relations.append({"mode": _release_mode(prefix, suffix, "id"),
+                              "question": bool(re.search(r"\b(?:apa(?:kah)?|bisakah|bolehkah|sudahkah|belumkah)\b", prefix, re.I)
+                                               or "?" in suffix), "clause": clause,
+                              "codes": sorted(_release_reference_codes(prefix + suffix))})
+            previous_end = action.end()
+    return relations
+
+
+def build_data_release_frame(source: str) -> dict:
+    """One relation contract for runtime guards and editable knowledge cards."""
+    return _build_zh_id_data_release_frame(source, _base_frame(source, "zh", "id"))
+
+
 def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
     """Classify ERP data release from syntax and reject physical/QC senses.
 
@@ -1533,44 +1633,21 @@ def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
     leaving 「這把刀放在架上」and「品保放行」to their correct senses.
     """
     visible = _MENTION_RE.sub("", str(source or ""))
-    compact = _compact(visible)
-    if not compact:
+    relations = _release_source_relations(visible)
+    if not relations:
         return frame
-    if "放假" in compact or "放料" in compact:
-        return frame
-    if _ZH_RELEASE_QC_RE.search(compact):
-        return frame
-    if _ZH_RELEASE_PHYSICAL_RE.search(compact):
-        return frame
-    if "放行" not in compact and _ZH_RELEASE_PHYSICAL_OBJECT_RE.search(compact):
-        return frame
-
+    compact = "，".join(dict.fromkeys(row["clause"] for row in relations))
     object_match = _ZH_RELEASE_OBJECT_RE.search(compact)
-    explicit_release = "放行" in compact
-    completed = bool(_ZH_RELEASE_COMPLETED_RE.search(compact))
-    request = bool(_ZH_RELEASE_REQUEST_RE.search(compact) or "放一下" in compact)
-    shorthand_action = bool(
-        object_match
-        and (
-            "放一下" in compact
-            or completed
-            or re.search(r"(?:先|再|優先|优先|趕快|赶快)放", compact)
-            or re.search(r"放.{0,8}" + re.escape(object_match.group(0)), compact)
-            or re.search(re.escape(object_match.group(0)) + r".{0,16}放", compact)
-        )
-    )
-    # Explicit 放行 is already an ERP workflow verb unless QC won above.  Bare
-    # 放 needs a production-record object plus request/completion/imperative
-    # syntax; a lone everyday 放 therefore never activates this frame.
-    if not explicit_release and not shorthand_action:
-        return frame
+    explicit_release = any(row["explicit"] for row in relations)
+    completed = any(row["mode"] == "completed" and not row["question"] for row in relations)
+    request = any(row["mode"] == "request" and not row["question"] for row in relations)
 
     object_raw = object_match.group("object") if object_match else ""
     object_kind = _release_object_kind(object_raw)
     object_count_raw = object_match.group("count") if object_match else ""
     object_count = _parse_zh_release_count(object_count_raw)
     deictic = bool(object_match and object_match.group("deictic"))
-    delegate = _release_delegate(compact)
+    delegate = _release_delegate(compact) if request else ""
     priority = any(term in compact for term in ("先放", "優先放", "优先放"))
     repeat = "再放" in compact
     evidence = object_match.group(0) if object_match else ""
@@ -1580,7 +1657,8 @@ def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
     frame["slots"].update({
         "explicit_release": explicit_release,
         "completed": completed,
-        "request": request or not completed,
+        "request": request,
+        "release_relations": relations,
         "delegate": delegate,
         "priority": priority,
         "repeat": repeat,
@@ -1616,7 +1694,7 @@ def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
                 "data": "data",
             }[object_kind]),
         )
-    if request or not completed:
+    if request:
         _claim(
             frame,
             "erp_release_request",
@@ -1637,13 +1715,28 @@ def _build_zh_id_data_release_frame(source: str, frame: dict) -> dict:
                 "second_singular": "Anda/kamu",
             }[delegate],
         )
-    if completed:
-        _claim(frame, "erp_release_completed", "已／都／放了", "資料放行已完成", "sudah di-release")
+    meanings = {
+        "pending": ("尚未完成放行，不是請求放行", "belum di-release"),
+        "unable": ("無法放行／放行失敗，不是禁止或已完成", "tidak bisa/dapat di-release; gagal dirilis"),
+        "prohibited": ("禁止放行，不是無法執行", "jangan release; dilarang merilis"),
+        "negative": ("未執行／不執行放行", "tidak di-release"),
+        "completed": ("資料放行已完成", "sudah/telah di-release"),
+    }
+    for i, relation in enumerate(relations):
+        if relation["mode"] in meanings:
+            meaning, target_hint = meanings[relation["mode"]]
+            if relation["question"]:
+                meaning = "詢問此狀態，不能改成確定敘述：" + meaning
+            _claim(frame, f"erp_release_status_{i}", relation["evidence"], meaning, target_hint)
+        if relation["question"]:
+            _claim(frame, f"erp_release_question_{i}", relation["evidence"], "保留放行疑問語氣", "apakah/bisakah ... ?")
     frame["unparsed"] = unparsed
     frame["active"] = True
     # A source-first rendering is allowed only when the referenced record is
     # explicit and every non-mention token belongs to this relation.
-    frame["complete"] = bool(object_kind and not unparsed)
+    frame["complete"] = bool(object_kind and not unparsed and len(relations) == 1
+                             and not relations[0]["question"]
+                             and relations[0]["mode"] in {"request", "completed"})
     return frame
 
 
@@ -4920,13 +5013,10 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
 
     elif frame.get("kind") == "zh_id_erp_data_release":
         low = _norm(target)
+        target_relations = _release_target_relations(target)
         release_relation = bool(
-            re.search(
-                r"\b(?:release|rilis|merilis|me-?release|di-?release|dirilis)\b",
-                low,
-                re.I,
-            )
-            and _has_phrase(low, ("data",))
+            target_relations
+            and re.search(r"\b(?:data(?:nya)?|record|catatan)\b", low)
             and _has_phrase(low, (
                 "stasiun berikutnya", "proses berikutnya", "tahap berikutnya",
                 "untuk dilanjutkan",
@@ -4934,7 +5024,7 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         )
         if not release_relation:
             issues.append("factory_message_semantics:erp_data_release_relation_missing")
-        if re.search(
+        if not release_relation and re.search(
             r"\b(?:meletakkan|menaruh|taruh|letakkan|menempatkan|"
             r"menyimpan|simpan|melepaskan)\b",
             low,
@@ -4949,7 +5039,7 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("factory_message_semantics:erp_release_batch_reference_missing")
         elif object_kind == "work_order" and not _has_phrase(low, ("work order",)):
             issues.append("factory_message_semantics:erp_release_work_order_reference_missing")
-        elif object_kind == "data" and not _has_phrase(low, ("data",)):
+        elif object_kind == "data" and not re.search(r"\b(?:data(?:nya)?|record|catatan)\b", low):
             issues.append("factory_message_semantics:erp_release_data_reference_missing")
 
         count = slots.get("object_count")
@@ -4960,8 +5050,19 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
                 issues.append("factory_message_semantics:erp_release_object_count_missing")
         if slots.get("object_deictic") and not _has_phrase(low, ("ini",)):
             issues.append("factory_message_semantics:erp_release_deictic_reference_missing")
-        if slots.get("request") and not _has_phrase(low, ("tolong", "mohon", "harap")):
-            issues.append("factory_message_semantics:erp_release_request_modality_missing")
+        source_relations = slots.get("release_relations") or []
+        for relation in source_relations:
+            # Bind identifiable records to their own status, while allowing
+            # normal clause reordering. Sentence position is not an identity.
+            codes = set(relation.get("codes") or [])
+            candidates = [row for row in target_relations if codes.issubset(row["codes"])]
+            mode = relation["mode"]
+            allowed = {"negative": {"negative", "pending"}}.get(mode, {mode})
+            matching = [row for row in candidates if mode == "plain" or row["mode"] in allowed]
+            if not matching:
+                issues.append("factory_message_semantics:erp_release_status_changed:" + mode)
+            elif relation["question"] and not any(row["question"] for row in matching):
+                issues.append("factory_message_semantics:erp_release_question_missing")
         delegate_terms = {
             "third_plural": ("mereka",),
             "third_singular": ("dia",),
@@ -4970,8 +5071,6 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         }.get(slots.get("delegate"), ())
         if delegate_terms and not _has_phrase(low, delegate_terms):
             issues.append("factory_message_semantics:erp_release_delegate_missing")
-        if slots.get("completed") and not _has_phrase(low, ("sudah", "telah")):
-            issues.append("factory_message_semantics:erp_release_completed_aspect_missing")
         if slots.get("priority") and not _has_phrase(low, (
             "terlebih dahulu", "dulu", "prioritas", "diprioritaskan",
         )):
@@ -5253,9 +5352,12 @@ def build_prompt(frame: Mapping) -> str:
             "bundle/batch/work-order reference plus 放/放一下 means release the linked data to "
             "the next station. Indonesian must explicitly say release data ke stasiun berikutnya "
             "and preserve the referenced bundel/batch/work order, request modality, delegate and "
-            "completion/priority aspect. Never use meletakkan, menaruh, taruh, menempatkan, "
+            "completion/priority aspect. Only explicit requests call for tolong/mohon. "
+            "未/還沒 = belum; 無法/不能 = tidak bisa/dapat; 不要 = jangan. A question "
+            "must stay a question. Passive word order and datanya are valid; release data "
+            "is a meaning, not a mandatory adjacent phrase. Never use meletakkan, menaruh, taruh, menempatkan, "
             "menyimpan or melepaskan for this sense. Spatial/capacity wording and QC actors are "
-            "classified separately and do not use this data-release frame."
+            "classified separately per clause; other clauses may still describe physical movement or QC."
         )
     elif frame.get("kind") == "id_zh_weight_display_relation":
         lines.append(

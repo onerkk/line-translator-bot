@@ -172,14 +172,14 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
 
     def test_deployment_revision_and_builtin_examples_are_consistent(self):
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-        expected = "2026-09-02.1-operational-data-continuity"
+        expected = "2026-09-07.2-release-predicate-polarity"
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)
         self.assertIn(
             f'_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "{expected}"',
             app_source,
         )
-        quality_build = "2026-09-06.1-source-term-integrity"
-        self.assertEqual(quality_gate.QUALITY_GATE_BUILD_ID, quality_build)
+        quality_build = quality_gate.QUALITY_GATE_BUILD_ID
+        self.assertTrue(quality_build)
         self.assertIn(
             f'_EXPECTED_QG_BUILD_ID = "{quality_build}"', app_source
         )

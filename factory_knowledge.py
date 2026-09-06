@@ -18,6 +18,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import factory_message_semantics as message_semantics
+
 FACTORY_KNOWLEDGE_API_VERSION = 1
 DEFAULT_FILENAME = "factory_knowledge.json"
 
@@ -77,17 +79,32 @@ def validate_document(document: Dict[str, Any]) -> Dict[str, Any]:
         match = entry.get("match") or {}
         if not isinstance(match, dict):
             raise KnowledgeError(f"entries[{index}].match must be an object")
+        if match.get("semantic_relation") not in (None, "erp_data_release"):
+            raise KnowledgeError(f"entries[{index}].match has an unknown semantic relation")
+        if entry.get("semantic_validator") not in (None, "erp_data_release"):
+            raise KnowledgeError(f"entries[{index}] has an unknown semantic validator")
         has_positive = any(match.get(key) for key in ("strong_phrases", "any_terms", "all_groups", "regex_any"))
         if not has_positive:
             raise KnowledgeError(f"entries[{index}].match has no positive matcher")
         for group_index, group in enumerate(_safe_list(match.get("all_groups", []), "all_groups")):
             if not isinstance(group, list) or not any(str(x).strip() for x in group):
                 raise KnowledgeError(f"entries[{index}].match.all_groups[{group_index}] is invalid")
-        for regex in _safe_list(match.get("regex_any", []), "regex_any"):
+        for regex in (_safe_list(match.get("regex_any", []), "regex_any")
+                      + _safe_list(match.get("required_regex_any", []), "required_regex_any")):
             try:
                 re.compile(str(regex), re.I)
             except re.error as exc:
                 raise KnowledgeError(f"entries[{index}] invalid regex {regex!r}: {exc}") from exc
+        for rule in _safe_list(entry.get("forbidden_target_rules", []), "forbidden_target_rules"):
+            if not isinstance(rule, dict) or not _safe_list(rule.get("phrases"), "phrases"):
+                raise KnowledgeError(f"entries[{index}] has invalid forbidden_target_rules")
+            for field in ("when_source", "unless_source"):
+                condition = rule.get(field)
+                if condition:
+                    # Reuse the matcher schema, including mandatory sense evidence.
+                    validate_document({"schema_version": 1, "entries": [{
+                        "id": "condition", "directions": directions, "match": condition,
+                    }]})
         requirements = _safe_list(entry.get("requirements", []), f"entries[{index}].requirements")
         for req_index, req in enumerate(requirements):
             if not isinstance(req, dict) or not _safe_list(req.get("target_any"), "target_any"):
@@ -195,9 +212,19 @@ class FactoryKnowledgeStore:
     def _score_entry(entry: Dict[str, Any], normalized_text: str) -> Optional[MatchResult]:
         match = entry.get("match") or {}
         evidence: List[str] = []
+        if match.get("semantic_relation") == "erp_data_release":
+            if not message_semantics.build_data_release_frame(normalized_text).get("active"):
+                return None
         for term in match.get("none_terms", []) or []:
             if _contains(normalized_text, term):
                 return None
+        # Lexical overlap retrieves context; it cannot establish the word's
+        # sense. Require explicit relation evidence when a card declares it.
+        # Apply this before scoring so repeated incidental words never override it.
+        required = match.get("required_regex_any", []) or []
+        if required and not any(re.search(str(pattern), normalized_text, re.I)
+                                for pattern in required):
+            return None
         score = 0
         strong_hits = [str(term) for term in match.get("strong_phrases", []) or [] if _contains(normalized_text, term)]
         if strong_hits:
@@ -245,7 +272,10 @@ class FactoryKnowledgeStore:
                 if matched:
                     matches.append(matched)
         matches.sort(key=lambda item: (int(item.entry.get("priority", 50)), item.score), reverse=True)
-        return [item.as_card() for item in matches[: max(1, int(limit or 1))]]
+        cards = [item.as_card() for item in matches[: max(1, int(limit or 1))]]
+        for card in cards:
+            card["_active_forbidden_phrases"] = applicable_forbidden_phrases(card, text)
+        return cards
 
     @staticmethod
     def build_prompt(cards: Sequence[Dict[str, Any]], *, include_examples: bool = True) -> str:
@@ -263,7 +293,8 @@ class FactoryKnowledgeStore:
             preferred = card.get("preferred_target_phrases", []) or []
             if preferred:
                 lines.append("Preferred target concepts/phrases: " + "; ".join(str(x) for x in preferred))
-            forbidden = card.get("forbidden_target_phrases", []) or []
+            forbidden = card.get("_active_forbidden_phrases",
+                                 card.get("forbidden_target_phrases", [])) or []
             if forbidden:
                 lines.append("Forbidden target wording for this sense: " + "; ".join(str(x) for x in forbidden))
             for example in (card.get("examples", []) or []) if include_examples else ():
@@ -286,7 +317,18 @@ class FactoryKnowledgeStore:
             return False, ["factory_knowledge:empty_translation"]
         for card in cards:
             entry_id = str(card.get("id") or "unknown")
-            for phrase in card.get("forbidden_target_phrases", []) or []:
+            # A caller may hold a card retrieved for an earlier/different source.
+            # Always establish applicability from the current message again.
+            if card.get("match") and not match_source(source_text, card["match"])[0]:
+                continue
+            if card.get("semantic_validator") == "erp_data_release":
+                # This card supplies terminology and examples, while the same
+                # predicate contract used by the runtime owns factual validation.
+                # Fixed target substrings cannot model negation or passive voice.
+                frame = message_semantics.build_data_release_frame(source_text)
+                _, relation_issues = message_semantics.validate_translation(frame, translation)
+                issues.extend(relation_issues)
+            for phrase in applicable_forbidden_phrases(card, source_text):
                 if _contains(tgt_norm, phrase):
                     issues.append(f"factory_knowledge:{entry_id}:forbidden:{phrase}")
             for req in card.get("requirements", []) or []:
@@ -351,6 +393,37 @@ class FactoryKnowledgeStore:
         health = self.replace_document(document)
         health["deleted_id"] = entry_id
         return health
+
+
+def match_source(text: str, match: Dict[str, Any]) -> Tuple[bool, int, List[str]]:
+    """One source contract for knowledge, historical examples and validation."""
+    if not match:
+        return True, 0, []
+    try:
+        result = FactoryKnowledgeStore._score_entry({"match": match}, _normalize(text))
+    except (re.error, TypeError, ValueError):
+        # Malformed historical/user examples are ineligible; they must never
+        # take down translation. Persisted knowledge edits are validated earlier.
+        return False, 0, ["invalid_source_match"]
+    if result is None:
+        return False, 0, []
+    return True, result.score, list(result.evidence)
+
+
+def applicable_forbidden_phrases(card: Dict[str, Any], source: str) -> List[str]:
+    """A phrase forbidden in one sense may be required by another source claim.
+
+    Conditional rules are resolved against source evidence, never against the
+    candidate. This prevents a translation from granting itself an exception.
+    """
+    phrases = list(card.get("forbidden_target_phrases", []) or [])
+    for rule in card.get("forbidden_target_rules", []) or []:
+        if rule.get("when_source") and not match_source(source, rule["when_source"])[0]:
+            continue
+        if rule.get("unless_source") and match_source(source, rule["unless_source"])[0]:
+            continue
+        phrases.extend(rule.get("phrases", []) or [])
+    return list(dict.fromkeys(phrases))
 
 
 _DEFAULT_STORE: Optional[FactoryKnowledgeStore] = None

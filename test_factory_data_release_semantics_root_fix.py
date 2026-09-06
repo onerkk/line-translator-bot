@@ -144,10 +144,13 @@ def test_deployment_contract_pins_the_new_semantic_build_and_keeps_source_first_
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-02.1-operational-data-continuity"'
+        '"2026-09-07.2-release-predicate-polarity"'
     ) in source
     assert "factory_message_semantics_module.translate_source_directly(" in source
     knowledge = json.loads(
         (ROOT / "factory_knowledge.json").read_text(encoding="utf-8")
     )
-    assert knowledge["build_id"] == "2026-08-25.1-packaging-consolidation-workflow"
+    assert knowledge["schema_version"] == 1
+    assert knowledge["build_id"]
+    assert any(entry["id"] == "erp_colloquial_data_release_to_next_station"
+               for entry in knowledge["entries"])

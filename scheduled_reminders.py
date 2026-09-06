@@ -24,6 +24,11 @@ from line_translation_delivery import utf16_units
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 ACTIVE = {"pending", "retrying", "sending"}
+TERMINAL = {"sent", "failed", "uncertain", "cancelled"}
+HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
+HISTORY_CLEANUP_BATCH = 500
+# Terminal records cannot be edited; updated_at is their final transition time.
+_TERMINAL_SQL = "('sent','failed','uncertain','cancelled')"
 LEASE_SECONDS = 120
 # LINE retry keys expire after 24 h. Stop before expiry if delivery is uncertain.
 RETRY_WINDOW = 23 * 3600
@@ -66,6 +71,7 @@ class SQLiteReminderStore:
             conn.execute("CREATE TABLE IF NOT EXISTS reminders "
                          "(id TEXT PRIMARY KEY, body TEXT NOT NULL, due REAL, updated REAL NOT NULL)")
             conn.execute("CREATE INDEX IF NOT EXISTS reminders_due ON reminders(due)")
+            conn.execute("CREATE INDEX IF NOT EXISTS reminders_updated ON reminders(updated)")
 
     def _connect(self):
         class Connection(sqlite3.Connection):
@@ -83,11 +89,24 @@ class SQLiteReminderStore:
             row = conn.execute("SELECT body FROM reminders WHERE id=?", (key,)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def list(self, offset=0, limit=100):
+    def list(self, offset=0, limit=100, *, now=None):
+        cutoff = None if now is None else now - HISTORY_RETENTION_SECONDS
         with self._connect() as conn:
-            rows = conn.execute("SELECT body FROM reminders ORDER BY updated DESC,id DESC LIMIT ? OFFSET ?",
-                                (limit, offset)).fetchall()
+            rows = conn.execute("SELECT body FROM reminders WHERE ? IS NULL OR updated>? OR "
+                                "json_extract(body,'$.status') NOT IN " + _TERMINAL_SQL +
+                                " ORDER BY updated DESC,id DESC LIMIT ? OFFSET ?",
+                                (cutoff, cutoff, limit, offset)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def prune_history(self, now, limit=HISTORY_CLEANUP_BATCH):
+        """Delete old terminal bodies, atomically; active jobs have no expiry."""
+        with self._connect() as conn:
+            result = conn.execute(
+                "DELETE FROM reminders WHERE id IN (SELECT id FROM reminders "
+                "WHERE updated<=? AND due IS NULL AND json_extract(body,'$.status') IN " +
+                _TERMINAL_SQL + " ORDER BY updated,id LIMIT ?)",
+                (now - HISTORY_RETENTION_SECONDS, limit))
+            return result.rowcount
 
     def due(self, now, limit=10):
         with self._connect() as conn:
@@ -124,11 +143,42 @@ end
 redis.call('ZADD', KEYS[3], ARGV[5], ARGV[1])
 return 1
 """
-_READ_LUA = """
+_HISTORY_LUA = """
+local function expired(row, cutoff)
+    if not cutoff then return false end
+    local ok, record = pcall(cjson.decode, row)
+    if not ok or type(record) ~= 'table' then return false end
+    local status = record.status
+    local ended = tonumber(record.updated_at)
+    return ended and ended <= cutoff and
+        (status == 'sent' or status == 'failed' or status == 'uncertain' or status == 'cancelled')
+end
+"""
+_READ_LUA = _HISTORY_LUA + """
 local ids
 if ARGV[1] == 'due' then
     ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[2], 'LIMIT', 0, ARGV[3])
 else
+    local cutoff = tonumber(ARGV[4])
+    if cutoff then
+        -- Count visible records, not expired rows. This also reaches old future
+        -- jobs behind a large historical backlog while background pruning runs.
+        local rows, cursor, visible = {}, 0, 0
+        local offset, last = tonumber(ARGV[2]), tonumber(ARGV[3])
+        repeat
+            ids = redis.call('ZREVRANGE', KEYS[3], cursor, cursor + 499)
+            for _, id in ipairs(ids) do
+                local row = redis.call('HGET', KEYS[1], id)
+                if row and not expired(row, cutoff) then
+                    if visible >= offset then table.insert(rows, row) end
+                    visible = visible + 1
+                    if visible > last then return rows end
+                end
+            end
+            cursor = cursor + #ids
+        until #ids < 500
+        return rows
+    end
     ids = redis.call('ZREVRANGE', KEYS[3], ARGV[2], ARGV[3])
 end
 local rows = {}
@@ -137,6 +187,25 @@ for _, id in ipairs(ids) do
     if row then table.insert(rows, row) end
 end
 return rows
+"""
+_PRUNE_LUA = _HISTORY_LUA + """
+local cutoff, offset, limit = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
+local ids = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', cutoff, 'LIMIT', offset, limit)
+local removed = 0
+for _, id in ipairs(ids) do
+    local row = redis.call('HGET', KEYS[1], id)
+    if not row or expired(row, cutoff) then
+        redis.call('HDEL', KEYS[1], id)
+        redis.call('ZREM', KEYS[2], id)
+        redis.call('ZREM', KEYS[3], id)
+        removed = removed + 1
+    end
+end
+-- Advance past retained active jobs, so old future schedules cannot starve
+-- history cleanup. Revisit from the beginning after every complete scan.
+local next_offset = 0
+if #ids == limit then next_offset = offset + #ids - removed end
+return {removed, next_offset}
 """
 
 
@@ -149,6 +218,8 @@ class RedisReminderStore:
         self.url, self.token = url.rstrip("/"), token
         tag = hashlib.sha256(namespace.encode()).hexdigest()[:24]
         self.keys = ["reminders:{" + tag + "}:" + suffix for suffix in ("jobs", "due", "history")]
+        self._cleanup_offset = 0
+        self._cleanup_lock = threading.Lock()
 
     def _command(self, args):
         req = urllib.request.Request(self.url, data=_encode(args).encode("utf-8"), method="POST",
@@ -168,9 +239,17 @@ class RedisReminderStore:
         value = self._command(["HGET", self.keys[0], key])
         return json.loads(value) if value is not None else None
 
-    def list(self, offset=0, limit=100):
-        values = self._command(["EVAL", _READ_LUA, 3, *self.keys, "list", offset, offset + limit - 1])
+    def list(self, offset=0, limit=100, *, now=None):
+        values = self._command(["EVAL", _READ_LUA, 3, *self.keys, "list", offset, offset + limit - 1,
+                                "" if now is None else now - HISTORY_RETENTION_SECONDS])
         return [json.loads(value) for value in values]
+
+    def prune_history(self, now, limit=HISTORY_CLEANUP_BATCH):
+        with self._cleanup_lock:
+            removed, offset = self._command(["EVAL", _PRUNE_LUA, 3, *self.keys,
+                                            now - HISTORY_RETENTION_SECONDS, self._cleanup_offset, limit])
+            self._cleanup_offset = int(offset)
+            return int(removed)
 
     def due(self, now, limit=10):
         values = self._command(["EVAL", _READ_LUA, 3, *self.keys, "due", now, limit])
@@ -301,6 +380,11 @@ class ReminderService:
     def __init__(self, store, catalog, sender=send_line_reminder, clock=time.time):
         self.store, self.catalog, self.sender, self.clock = store, catalog, sender, clock
 
+    def list(self, offset=0, limit=100):
+        now = self.clock()
+        self.store.prune_history(now)
+        return self.store.list(offset, limit, now=now)
+
     def create(self, data, actor, _races=0):
         if not isinstance(data, dict):
             raise ReminderError("請提供提醒資料。")
@@ -388,6 +472,9 @@ class ReminderService:
             # If this write fails, the lease expires and the SAME push is retried.
             if self.store.compare_swap(claimed, current):
                 result[current["status"]] += 1
+        # Runs even without due jobs, from the background worker and cron wake.
+        # Existing records use their persisted terminal updated_at automatically.
+        result["purged"] = self.store.prune_history(self.clock())
         return result
 
 

@@ -343,11 +343,11 @@ def test_deployment_contract_and_boot_self_test_are_release_locked():
     assert "_EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3" in app_source
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-02.1-operational-data-continuity"'
+        '"2026-09-07.2-release-predicate-polarity"'
     ) in app_source
     health = semantics.health()
     assert health["api_version"] == 3
-    assert health["build_id"] == "2026-09-02.1-operational-data-continuity"
+    assert health["build_id"] == "2026-09-07.2-release-predicate-polarity"
     assert health["self_test"]["ok"] is True
     assert glossary["短尺維護"]["idn"] == "penanganan material pendek"
     assert glossary["短尺料"]["idn"] == "material pendek"

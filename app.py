@@ -305,7 +305,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-06.1-source-term-integrity"
+_EXPECTED_QG_BUILD_ID = "2026-09-07.1-notice-coverage-integrity"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -324,7 +324,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-04.1-universal-vs-sequential-bundles"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.1-source-scoped-inspection"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -339,7 +339,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-02.1-operational-data-continuity"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.2-release-predicate-polarity"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -5030,35 +5030,13 @@ def has_chinese(text):
 
 
 def has_translatable_content(text):
-    """v3.9.56: 判斷訊息是否含「可翻譯的語言內容」。
+    """Accept writing in any Unicode script; providers handle unknown languages.
 
-    全面短文翻譯:取代散落各處的 `len(text) < 2` 無條件門檻。
-    原本 len<2 會漏掉單字中文(好/對/是/懂)、單個假名/韓文/泰文字。
-
-    回 True 的條件(任一):
-      - 含至少 1 個 CJK/假名/韓文/泰文/天城文字
-      - 含至少 1 個「2 字母以上」的拉丁詞(maaf/ok/sudah...)
-      - 含至少 2 個拉丁字母(救 hi/no/ya 這類 2 字母詞)
-    回 False(跳過,不翻):
-      - 純 emoji / 純標點 / 純數字 / 純空白
-      - 單個拉丁字母(a/i/x 這類無意義)
+    A hard-coded alphabet allowlist silently discarded Arabic, Cyrillic,
+    Burmese and single-letter words before language detection could run.
+    Pure whitespace, punctuation, emoji and numbers have no language to convert.
     """
-    if not text:
-        return False
-    s = text.strip()
-    if not s:
-        return False
-    # 任何 CJK / 假名 / 韓文 / 泰文 / 天城文 → 有內容
-    if re.search(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff'
-                 r'\uac00-\ud7af\u0e00-\u0e7f\u0900-\u097f]', s):
-        return True
-    # 2 字母以上的拉丁詞 → 有內容(maaf, ok, sudah)
-    if re.search(r'[a-zA-Z]{2,}', s):
-        return True
-    # 至少 2 個拉丁字母(救 "hi"=2字母已被上面抓,這裡兜底如 "a b")
-    if len(re.findall(r'[a-zA-Z]', s)) >= 2:
-        return True
-    return False
+    return any(char.isalpha() for char in str(text or ""))
 
 
 def has_japanese(text):
@@ -5561,12 +5539,6 @@ def is_translation_acceptable(src_text, result, src, tgt):
     """Synchronous immutable, glossary and factory-semantic admission gate."""
     if not is_translation_valid(result, src, tgt):
         return False
-    strict = bool(
-        factory_translation_policy_module.should_force_factory_pipeline(
-            src_text, src, tgt, heuristic_match=_is_factory_context(src_text)
-        )
-        and factory_translation_policy_module.fail_closed(src, tgt)
-    )
     try:
         _env = tqg_module.protect_immutable_spans(src_text)
         _pairs = ge_module.collect_applicable_pairs(
@@ -5583,8 +5555,9 @@ def is_translation_acceptable(src_text, result, src, tgt):
             return False
     except Exception as _e:
         logger.warning("[QualityGate] deterministic validation exception: %s", _e)
-        if strict:
-            return False
+        # Delivery can retain a candidate during a validator outage; admission
+        # to cache/TM still needs completed validation, independent of policy.
+        return False
     try:
         _factory_report = _factory_guard_report(src_text, result, src, tgt)
         if not _factory_report.ok:
@@ -5592,8 +5565,7 @@ def is_translation_acceptable(src_text, result, src, tgt):
             return False
     except Exception as _e:
         logger.warning("[FactoryGuard] deterministic validation exception: %s", _e)
-        if strict:
-            return False
+        return False
     return True
 
 
@@ -9012,8 +8984,14 @@ def build_translation_semantic_contract(text, src, tgt):
         # whole application module.  Fail open there; production startup always
         # verifies and loads the shared terminology engine above.
         _ft_module = globals().get("factory_terminology_module")
+        # A display name can contain a role/section, e.g. @name（研磨股班長）.
+        # It is an identity label, not another department that the prose must
+        # translate. Use the same mention boundary as language detection even
+        # when the caller has no webhook metadata (retry/OCR/provider checks).
+        _strip_mentions = globals().get("strip_mentions_for_detect")
+        _organization_source = _strip_mentions(text) if callable(_strip_mentions) else text
         _org_matches = (
-            _ft_module.collect_organization_matches(text, src, tgt, globals().get("GLOSSARY_LOOKUP") or {})
+            _ft_module.collect_organization_matches(_organization_source, src, tgt, globals().get("GLOSSARY_LOOKUP") or {})
             if _ft_module is not None else []
         )
         if _org_matches:
@@ -12639,6 +12617,11 @@ def _partition_delivery_issues(issues):
         "ambiguous_reverse_glossary:",
         "primary_translation_",
         "emergency_nmt_used:",
+        "validation_exception:",
+        "generic_validation_exception:",
+        "factory_validation_exception:",
+        "measurement_validation_exception:",
+        "local_safe_check_exception:",
     )
     objective = []
     advisory = []
@@ -19770,9 +19753,8 @@ def handle_message(event):
                 ))
             return
 
-        # DM: skip other / commands
-        if text.startswith("/"):
-            return
+        # Unrecognized slash-prefixed text is still message content. Recognized
+        # commands above already returned after producing their own response.
 
         # DM master toggle check
         if not dm_master_enabled and user_id not in dm_whitelist:
@@ -19937,7 +19919,8 @@ def handle_message(event):
                     reply_token=event.reply_token,
                     messages=[TextMessage(text=_clip_line_text(cmd_result))]
                 ))
-        return
+        if cmd_result is not None:
+            return
 
     # ─── v3.14 競品 UX 升級:非 / 開頭的設定入口(僅群組,DM 不適用) ───
     if group_id and not is_dm:
@@ -19977,14 +19960,13 @@ def handle_message(event):
 
     is_on = group_settings.get(group_id, True)
     if not is_on:
+        _event_log_write("text_skipped", {"reason": "translation_off", "group_id": group_id})
         return
 
     # Check skip list
     sender_id = getattr(source, 'user_id', None)
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
-        return
-
-    if text.startswith("!"):
+        _event_log_write("text_skipped", {"reason": "user_in_skip_list", "group_id": group_id})
         return
 
     # Normalize LINE mention spans first.  This also repairs a malformed @()
@@ -23994,6 +23976,7 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 </details>
 </form>
 <div class="reminder-actions" style="justify-content:space-between;margin:20px 0 14px"><h3 style="margin:0">提醒紀錄</h3><button id="reminder-refresh" class="btn btn-primary btn-sm" type="button">重新整理</button></div>
+<p class="reminder-hint">已結束的提醒紀錄保留 7 天，之後自動移除。等待提醒、派送中及等待重試的提醒會繼續保留。</p>
 <div id="reminder-list"></div><button id="reminder-more" class="btn btn-primary" type="button" hidden>載入更多</button>
 </div>
 

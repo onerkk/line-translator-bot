@@ -87,12 +87,13 @@ def register_reminders(flask_app, *, authorize, catalog):
             raise ReminderError("清單頁碼無效。") from exc
         groups = catalog()
         status = {"timezone": "Asia/Taipei", "server_time": time.time(),
+                  "history_retention_days": 7,
                   "worker_enabled": os.environ.get("REMINDERS_WORKER_ENABLED", "1") != "0",
                   "cron_configured": len(os.environ.get("REMINDERS_CRON_SECRET", "")) >= 32,
                   "last_check_at": worker.last_check_at, "last_error": worker.last_error}
         try:
             instance = service()
-            rows = instance.store.list(offset, 101)
+            rows = instance.list(offset, 101)
             status.update(ready=bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")), storage=instance.store.kind,
                           message="" if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else "尚未設定 LINE 存取權杖。")
         except StoreUnavailable as exc:

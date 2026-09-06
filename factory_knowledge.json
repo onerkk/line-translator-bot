@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-08-25.1-packaging-consolidation-workflow",
+  "build_id": "2026-09-07.2-shared-release-relation",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -1504,10 +1504,16 @@
           "3750"
         ],
         "require_all_groups": true,
-        "min_score": 8
+        "min_score": 8,
+        "required_regex_any": [
+          "(?:入庫|進倉)(?:量|目標|預估|估計)",
+          "(?:入庫|進倉|入到)[^。！？!?；;，,]{0,12}\\d+(?:[.,]\\d+)?\\s*(?:噸|吨|ton)",
+          "\\d+(?:[.,]\\d+)?\\s*(?:噸|吨)[^。！？!?；;，,]{0,10}(?:入庫|進倉)",
+          "(?:預估|估計|目標|總計)[^。！？!?；;，,]{0,10}(?:入庫|進倉|入到)[^。！？!?；;，,]{0,8}\\d+"
+        ]
       },
       "context": [
-        "這裡的入庫是產品實際完成後計入倉庫的數量，不是 490→801 的 ERP 過帳時間。",
+        "此規則只適用原文明示的入庫數量、目標或噸數預估。原文的入庫時間、入帳時間或非本月暫存屬於另一個概念，不得套用數量義。若同一公告同時談數量與時間，兩個概念都必須保留。",
         "中文常只在其中一個數字寫「噸」，後續同一入庫／產量指標省略單位；印尼文必須在每個目標、每日平均、範圍與月底預估數值後明確寫出 ton。",
         "「入庫量」宜用 jumlah pemasukan gudang；「能入到 X」宜表達 total pemasukan gudang bisa mencapai X ton。"
       ],
@@ -1517,10 +1523,54 @@
         "ton per hari",
         "total pemasukan gudang bisa mencapai"
       ],
-      "forbidden_target_phrases": [
-        "waktu masuk gudang",
-        "posting data",
-        "pemindahan data dari stasiun 490 ke stasiun 801"
+      "forbidden_target_phrases": [],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "waktu masuk gudang"
+          ],
+          "unless_source": {
+            "regex_any": [
+              "(?:入庫|進倉|入帳|過帳|登錄|記錄)(?:時間|時刻|日期)"
+            ],
+            "min_score": 3
+          }
+        },
+        {
+          "phrases": [
+            "posting data"
+          ],
+          "unless_source": {
+            "any_terms": [
+              "入帳",
+              "過帳",
+              "登錄",
+              "資料"
+            ],
+            "min_score": 1
+          }
+        },
+        {
+          "phrases": [
+            "pemindahan data dari stasiun 490 ke stasiun 801"
+          ],
+          "unless_source": {
+            "all_groups": [
+              [
+                "490"
+              ],
+              [
+                "801"
+              ],
+              [
+                "移",
+                "轉",
+                "過帳"
+              ]
+            ],
+            "min_score": 12
+          }
+        }
       ],
       "requirements": [
         {
@@ -2503,122 +2553,27 @@
           "优先",
           "下一站"
         ],
-        "none_terms": [
-          "放不下",
-          "放不進",
-          "放在",
-          "放到",
-          "儲格",
-          "储格",
-          "儲位",
-          "储位",
-          "位置",
-          "地方",
-          "地上",
-          "架上",
-          "照片",
-          "圖片",
-          "图片",
-          "品保放行",
-          "品保有放行",
-          "QC放行",
-          "檢驗放行",
-          "检验放行",
-          "放料",
-          "放假"
-        ],
+        "none_terms": [],
         "regex_any": [
           "(?:這|这|那|該|该)?(?:[零〇一二兩两三四五六七八九十\\d]+)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据).{0,16}(?:麻煩|麻烦|請|请|幫|帮|叫|讓|让)?.{0,12}放(?:行|一下|了|好|完)?",
           "(?:麻煩|麻烦|請|请|幫|帮).{0,16}放(?:行|一下)?.{0,10}(?:這|这|那|該|该)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据)"
         ],
-        "min_score": 8
+        "min_score": 8,
+        "semantic_relation": "erp_data_release"
       },
       "context": [
         "本廠生產流程語境中，把／捆／批／工單／資料參照搭配『放、放一下、放了、先放』時，是『放行』的口語省略：把對應 ERP 生產資料放行到下一站，不是搬動或擺放實體物品。",
-        "判斷順序固定：品保／QC 是檢驗放行，不加 data；來源有放在／放到／儲格／位置／容量／照片等空間證據時才是實體放置；其餘符合生產資料參照句型者是資料放行。",
-        "譯文必須保留請求者、被請求者、這把／這批／這單的指涉，以及已完成、優先或再次執行等狀態。"
+        "逐句判斷資料放行、品保檢驗放行及實體擺放；其他子句提到檢驗、吊出、拆包或位置，不得抹除本句的資料放行語意。",
+        "保留原文狀態及語氣：未／還沒=belum，無法／不能=tidak bisa/dapat，不要=jangan，已完成=sudah/telah，疑問保留 apakah／問號。只有確實請求放行才要求 tolong，不能把狀態通知強制改成命令。",
+        "放行動作、資料對象、下站關係以同一個語意驗證器檢查；接受主動、被動及 datanya 的文法，不要求固定相鄰字序。"
       ],
       "preferred_target_phrases": [
         "release data ke stasiun berikutnya",
         "release data untuk bundel ini ke stasiun berikutnya",
         "data untuk bundel ini sudah di-release ke stasiun berikutnya"
       ],
-      "forbidden_target_phrases": [
-        "meletakkan bundel",
-        "menaruh bundel",
-        "taruh bundel",
-        "menempatkan bundel",
-        "menyimpan bundel",
-        "melepaskan bundel"
-      ],
-      "requirements": [
-        {
-          "target_any": [
-            "release data",
-            "data di-release",
-            "data sudah di-release",
-            "sudah di-release",
-            "merilis data",
-            "data dirilis"
-          ],
-          "issue": "missing_erp_data_release_action"
-        },
-        {
-          "target_any": [
-            "stasiun berikutnya",
-            "proses berikutnya",
-            "tahap berikutnya",
-            "untuk dilanjutkan"
-          ],
-          "issue": "missing_next_station_relation"
-        },
-        {
-          "source_any": [
-            "這把",
-            "这把",
-            "那把",
-            "一把",
-            "兩把",
-            "两把",
-            "三把",
-            "這捆",
-            "这捆",
-            "一捆",
-            "兩捆",
-            "两捆"
-          ],
-          "target_any": [
-            "bundel"
-          ],
-          "issue": "missing_bundle_record_reference"
-        },
-        {
-          "source_any": [
-            "麻煩",
-            "麻烦",
-            "請",
-            "请",
-            "幫",
-            "帮"
-          ],
-          "target_any": [
-            "tolong",
-            "mohon",
-            "harap"
-          ],
-          "issue": "missing_release_request_modality"
-        },
-        {
-          "source_any": [
-            "他們",
-            "他们"
-          ],
-          "target_any": [
-            "mereka"
-          ],
-          "issue": "missing_release_delegate"
-        }
-      ],
+      "forbidden_target_phrases": [],
+      "requirements": [],
       "examples": [
         {
           "source": "這把麻煩他們放一下。",
@@ -2636,7 +2591,8 @@
           "target": "Tolong release data untuk work order ini ke stasiun berikutnya terlebih dahulu.",
           "reason": "工單是資料放行對象，先的優先時序必須保留。"
         }
-      ]
+      ],
+      "semantic_validator": "erp_data_release"
     },
     {
       "id": "customer_storage_slot_photo_overflow_placement",

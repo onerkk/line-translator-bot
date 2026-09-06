@@ -284,54 +284,8 @@ def _matches_source_guard(query: str, guard: Mapping[str, Any]) -> Tuple[bool, i
     notice wording such as "today / random check / each shift" from activating
     an unrelated machine-loading correction.
     """
-    if not guard:
-        return True, 0, []
-    normalized = _normalize(query)
-    evidence: List[str] = []
-    for term in guard.get("none_terms", []) or []:
-        if _guard_contains(normalized, term):
-            return False, 0, ["excluded:" + str(term)]
-
-    score = 0
-    strong_hits = [str(term) for term in guard.get("strong_phrases", []) or []
-                   if _guard_contains(normalized, term)]
-    if strong_hits:
-        score += 8 + min(4, len(strong_hits) - 1)
-        evidence.extend("strong:" + term for term in strong_hits[:4])
-
-    all_groups = guard.get("all_groups", []) or []
-    require_all = bool(guard.get("require_all_groups", True))
-    matched_groups = 0
-    for group in all_groups:
-        hits = [str(term) for term in (group or []) if _guard_contains(normalized, term)]
-        if hits:
-            matched_groups += 1
-            score += 4
-            evidence.append("group:" + hits[0])
-        elif require_all:
-            return False, score, evidence
-    if all_groups and not require_all and matched_groups == 0:
-        return False, score, evidence
-
-    any_hits = [str(term) for term in guard.get("any_terms", []) or []
-                if _guard_contains(normalized, term)]
-    score += min(6, len(any_hits))
-    evidence.extend("term:" + term for term in any_hits[:6])
-
-    regex_hits: List[str] = []
-    for pattern in guard.get("regex_any", []) or []:
-        try:
-            if re.search(str(pattern), normalized, flags=re.I):
-                regex_hits.append(str(pattern))
-        except re.error:
-            continue
-    score += min(6, len(regex_hits) * 3)
-    evidence.extend("regex:" + pattern for pattern in regex_hits[:2])
-
-    if guard.get("require_any") and not (strong_hits or any_hits or regex_hits):
-        return False, score, evidence
-    min_score = int(guard.get("min_score", 1) or 1)
-    return score >= min_score, score, evidence
+    import factory_knowledge
+    return factory_knowledge.match_source(query, dict(guard or {}))
 
 
 _ZH_GENERIC_NOTICE_PHRASES = tuple(sorted({

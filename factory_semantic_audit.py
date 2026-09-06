@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-04.1-universal-vs-sequential-bundles"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.1-source-scoped-inspection"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -458,9 +458,19 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         and _contains_any(compact, ("取消", "停辦", "停办", "不再", "停止"))
     )
     flags["k3_department"] = _contains_any(compact, ("安衛", "安卫", "工安", "K3", "k3"))
-    flags["unscheduled_check"] = _contains_any(compact, (
-        "不定時", "不定时", "不定期", "無固定時間", "无固定时间", "隨機", "随机",
-    ))
+    # Random sampling and an unspecified schedule are different source claims.
+    # Neither may be inferred from an unrelated modifier elsewhere in a notice
+    # (e.g. 隨機選料 / 不定時停機). Bind each modifier to an inspection clause.
+    inspection_clauses = [
+        _compact(clause) for clause in _source_clauses(src)
+        if re.search(r"抽查|稽查|查核|查班|檢查|检查|巡查|點名|点名", clause)
+    ]
+    flags["unscheduled_check"] = any(_contains_any(clause, (
+        "不定時", "不定时", "不定期", "無固定時間", "无固定时间",
+    )) for clause in inspection_clauses)
+    flags["random_inspection"] = any(_contains_any(clause, (
+        "隨機", "随机", "抽查",
+    )) for clause in inspection_clauses)
     flags["factory_spot_check"] = bool(
         _contains_any(compact, ("抽查", "稽查", "查核"))
         and _contains_any(compact, ("入廠", "入厂", "到廠", "到厂", "進廠", "进厂", "廠內", "厂内"))
@@ -957,6 +967,12 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             "抽查沒有固定時程",
             "tanpa jadwal tetap / pada waktu yang tidak ditentukan",
         )
+    if flags["random_inspection"]:
+        add(
+            "random_inspection_method", "隨機查班／抽查",
+            "檢查採隨機或抽查方式；不額外指定查班時程或部門",
+            "pemeriksaan / pengecekan / inspeksi ... secara acak",
+        )
     if flags["night_attendance_check"]:
         frame["ambiguities"].append({
             "source_term": "夜間點名",
@@ -1254,6 +1270,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         "attendance_check_abolished": 2,
         "k3_department": 1,
         "unscheduled_check": 2,
+        "random_inspection": 3,
         "factory_spot_check": 3,
         "procedure_replacement": 2,
         "advance_leave_notice": 2,
@@ -1914,6 +1931,11 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         "tanpa waktu tetap", "secara berkala tanpa jadwal tetap",
     )):
         issues.append("factory_semantic_audit:unscheduled_inspection_timing_missing")
+    if flags.get("random_inspection") and not _same_clause_has(low, (
+        ("pemeriksaan", "pengecekan", "inspeksi", "memeriksa", "mengecek", "cek", "kontrol"),
+        ("acak", "random", "mendadak", "tanpa pemberitahuan", "tanpa jadwal tetap"),
+    )):
+        issues.append("factory_semantic_audit:random_inspection_method_missing")
 
     counts = frame.get("counts") or {}
     units = frame.get("units") or {}

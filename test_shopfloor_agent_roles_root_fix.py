@@ -265,7 +265,7 @@ class ShopfloorAgentRolesRootFixTests(unittest.TestCase):
         )
 
     def test_deployment_build_id_and_behavioral_health_are_synchronized(self):
-        expected = "2026-09-02.1-operational-data-continuity"
+        expected = "2026-09-07.2-release-predicate-polarity"
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
 
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)

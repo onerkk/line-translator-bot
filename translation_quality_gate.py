@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-06.1-source-term-integrity"
+QUALITY_GATE_BUILD_ID = "2026-09-07.1-notice-coverage-integrity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -84,6 +85,7 @@ _MENTION_RE = re.compile(
 _KNOWN_TECH_ACRONYMS = frozenset({
     "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR", "OL",
     "PLC", "QA", "QC", "RPM", "SOP", "TAG", "TIG", "UI", "UPS", "URL", "WIP", "WO",
+    "PMI", "PPE", "LOTO", "MSDS", "SDS", "OEE", "JSA", "EHS",
 })
 _KNOWN_TECH_ACRONYM_PATTERN = "|".join(
     sorted((re.escape(value) for value in _KNOWN_TECH_ACRONYMS), key=len, reverse=True)
@@ -167,6 +169,19 @@ _FACTORY_UNIT_TROLLEY_RUN_RE = re.compile(
 
 _LATIN_RUN_RE = re.compile(r'(?:\b[A-Za-z]{2,}\b(?:[\s,;:/()\-]+|$)){4,}', re.I)
 _MARKERS = ("✅", "❌", "⚠️", "📢", "•", "▪", "▫", "→")
+_NUMBERED_ITEM_RE = re.compile(
+    r"(?m)^[ \t]*(?:\((?P<paren>\d{1,3})\)|(?P<plain>\d{1,3})[.、)])(?!\d)"
+)
+
+
+def _numbered_item_sequence(text: str) -> List[str]:
+    # NFKC permits full-width punctuation and digits without treating a decimal
+    # measurement (1.5 mm) as item 1. Labels must start their own logical line.
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    return [str(int(match.group("paren") or match.group("plain")))
+            for match in _NUMBERED_ITEM_RE.finditer(normalized)]
+
+
 _HAN_RE = re.compile(r'[\u3400-\u9fff]')
 _LATIN_WORD_RE = re.compile(r'(?<![A-Za-z])([A-Za-z]{1,32})(?![A-Za-z])')
 _LATIN_TOKEN_RE = re.compile(
@@ -1770,6 +1785,12 @@ def validate_translation(
     for marker in _MARKERS:
         if source.count(marker) > candidate.count(marker):
             issues.append(f"missing_marker:{marker}")
+    source_items = _numbered_item_sequence(source)
+    if len(source_items) >= 2:
+        target_items = _numbered_item_sequence(candidate)
+        if source_items != target_items:
+            issues.append("numbered_item_sequence:" + ",".join(source_items)
+                          + "->" + ",".join(target_items))
     issues.extend(_comparison_integrity_issues(source, candidate))
 
     if require_paragraph_fidelity:
