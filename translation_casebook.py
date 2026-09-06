@@ -23,10 +23,11 @@ import unicodedata
 from translation_source_identity import canonical_source_key
 from collections import Counter
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-05.1-bidirectional-adaptive-retrieval"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.1-source-grounded-reference-generalization"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -122,10 +123,15 @@ def _case_from_example(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[
     }
 
 
+def _correction_is_eligible(raw: Mapping[str, Any]) -> bool:
+    return ((raw.get("status") is None or str(raw.get("status")).lower() == "approved")
+            and str(raw.get("validation_state") or "legacy").lower() in {"passed", "override", "legacy"})
+
+
 def _case_from_correction(raw: Mapping[str, Any], index: int = 0) -> Optional[Dict[str, Any]]:
     # Rows created before moderation have no status and are historical approved
     # corrections. New pending/rejected feedback is evidence only, never truth.
-    if raw.get("status") is not None and str(raw.get("status")).lower() != "approved":
+    if not _correction_is_eligible(raw):
         return None
     # New corrections must pass the current local acceptance boundary before
     # becoming prompt evidence. Historical rows remain eligible and are still
@@ -231,7 +237,7 @@ def collect_cases(
 
     # list_corrections() is newest-first.  Earlier rows therefore win ties.
     for index, raw in enumerate(corrections or ()):
-        if not isinstance(raw, Mapping):
+        if not isinstance(raw, Mapping) or not _correction_is_eligible(raw):
             continue
         case = raw if {"source", "target", "direction"}.issubset(raw.keys()) else _case_from_correction(raw, index)
         if case:
@@ -279,10 +285,9 @@ def _guard_contains(text: str, term: Any) -> bool:
 def _matches_source_guard(query: str, guard: Mapping[str, Any]) -> Tuple[bool, int, List[str]]:
     """Evaluate the same conservative match contract used by factory knowledge.
 
-    A case with an explicit guard must not participate in fuzzy retrieval unless
-    the current source satisfies that domain contract. This prevents generic
-    notice wording such as "today / random check / each shift" from activating
-    an unrelated machine-loading correction.
+    A full match can activate guarded correction checks. Paraphrase retrieval
+    separately preserves mandatory sense/exclusion rules and demands specific
+    evidence; generic notice wording cannot activate an unrelated workflow.
     """
     import factory_knowledge
     return factory_knowledge.match_source(query, dict(guard or {}))
@@ -294,17 +299,22 @@ _ZH_GENERIC_NOTICE_PHRASES = tuple(sorted({
     "請各班", "各班要求", "各班", "每班", "班別", "請", "要求", "注意", "人員", "操作員",
     "務必", "必須", "確實", "執行", "程序", "事項", "相關", "此事", "情況", "方式", "以及",
     "並且", "立即", "處理", "進一步", "針對", "是否", "會以", "以", "及",
+    "麻煩", "幫忙", "一下", "有沒有", "目前", "今天", "今日", "本月", "月底",
 }, key=len, reverse=True))
 
 
-def _zh_content_sequence(text: str) -> str:
+def _zh_content_runs(text: str) -> List[str]:
     value = _normalize(text)
+    value = re.sub(r"上[、，,/\s]+下\s*料", "上下料", value)
     for phrase in _ZH_GENERIC_NOTICE_PHRASES:
         value = value.replace(phrase, " ")
-    return "".join(_HAN_RUN_RE.findall(value))
+    # Never manufacture an anchor across a removed phrase or sentence boundary
+    # (e.g. 到料，有看到 becoming 料有).
+    return _HAN_RUN_RE.findall(value)
 
 
-def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 6) -> List[str]:
+def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 10,
+                                shared_features=()) -> List[str]:
     if direction == "id2zh":
         # Reverse corrections were all dropped: the old implementation returned
         # no Indonesian anchors, while callers required at least two anchors.
@@ -314,31 +324,45 @@ def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: 
                     if len(w) >= 4 and w not in _ID_STOPWORDS
                     and w not in {"mohon", "tolong", "harap", "harus", "bisa", "dapat"}}
         anchors = sorted(content_words(query) & content_words(source), key=lambda w: (-len(w), w))
-        shared_concepts = source_understanding.concepts(query) & source_understanding.concepts(source)
-        # Synonyms/inflections can share no content word at all (cek bahan /
-        # periksa material). Independent domain concepts also count as anchors.
-        anchors.extend("concept:" + name for name in sorted(shared_concepts - {"machine", "shift"})
-                       if name not in source_understanding.concepts(" ".join(anchors)))
-        return anchors[:limit]
+        return _add_semantic_anchors(anchors, query, source, shared_features)[:limit]
     if direction != "zh2id":
         return []
-    q = _zh_content_sequence(query)
-    s = _zh_content_sequence(source)
-    if len(q) < 2 or len(s) < 2:
-        return []
+    query_runs = _zh_content_runs(query)
+    source_runs = _zh_content_runs(source)
     shared: List[str] = []
-    max_size = min(6, len(q), len(s))
-    for size in range(max_size, 1, -1):
-        for pos in range(0, len(s) - size + 1):
-            phrase = s[pos:pos + size]
-            if phrase not in q:
-                continue
-            if any(phrase in existing or existing in phrase for existing in shared):
-                continue
-            shared.append(phrase)
-            if len(shared) >= max(1, int(limit)):
-                return shared
-    return shared
+    for size in range(6, 1, -1):
+        for run in source_runs:
+            for pos in range(0, len(run) - size + 1):
+                phrase = run[pos:pos + size]
+                if not any(phrase in part for part in query_runs):
+                    continue
+                if any(phrase in existing or existing in phrase for existing in shared):
+                    continue
+                shared.append(phrase)
+                if len(shared) >= max(1, int(limit)):
+                    return _add_semantic_anchors(shared, query, source, shared_features)[:limit]
+    return _add_semantic_anchors(shared, query, source, shared_features)[:limit]
+
+
+def _add_semantic_anchors(anchors, query, source, shared_features):
+    # The same rule now applies in BOTH directions. In particular 過磅/秤重
+    # and 吊牌/標籤 are useful evidence without sharing Chinese characters.
+    shared = set(shared_features) | {
+        "concept:" + name for name in
+        source_understanding.concepts(query) & source_understanding.concepts(source)
+    }
+    shared -= {"concept:machine", "concept:shift", "concept:loading", "concept:unloading"}
+    covered = {"concept:" + name for name in source_understanding.concepts(" ".join(anchors))}
+    redundant_terms = {key for key in shared if key.startswith("term:") and (
+        any(key[5:] in anchor for anchor in anchors)
+        or bool({"concept:" + name for name in source_understanding.concepts(key[5:])} & covered)
+    )}
+    # A literal label plus its glossary entry is one anchor, not two independent
+    # facts. Alias-only matches still contribute the canonical term feature.
+    shared -= redundant_terms
+    codes = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,8}|\d{2,8})(?![A-Za-z0-9])")
+    shared_codes = {x.upper() for x in codes.findall(query)} & {x.upper() for x in codes.findall(source)}
+    return list(anchors) + sorted(shared - covered) + ["code:" + x for x in sorted(shared_codes)]
 
 @lru_cache(maxsize=8192)
 def _features(text: str, direction: str) -> Counter[str]:
@@ -413,6 +437,7 @@ def retrieve(
     corrections: Sequence[Mapping[str, Any]] = (),
     max_cases: int = 3,
     min_score: float = 0.22,
+    glossary: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     direction = direction_key(src, tgt)
     if not direction or not str(query or "").strip():
@@ -425,7 +450,12 @@ def retrieve(
     query = source_understanding.normalized_view(str(query), src)
     query_norm = _normalize(query)
     query_compact = _compact(query)
-    q_features = _features(query, direction)
+    lexicon = source_understanding.reference_lexicon(glossary)
+    q_actual, q_inferred, spelling_hints = lexicon.profile(query, src)
+    q_semantic = q_actual | q_inferred
+    q_features = Counter(_features(query, direction))
+    for feature in q_semantic:
+        q_features[feature] = max(q_features[feature], 1.8 if feature in q_actual else 0.9)
     idf = _idf(direction_cases, direction)
     ranked: List[RetrievedCase] = []
     for case in direction_cases:
@@ -433,14 +463,32 @@ def retrieve(
         source_match = case.get("source_match") if isinstance(case.get("source_match"), Mapping) else {}
         guarded, guard_score, _guard_evidence = _matches_source_guard(query, source_match)
         if source_match and not guarded:
-            continue
+            import factory_knowledge
+            if not factory_knowledge.reference_source_eligible(query, dict(source_match)):
+                continue
         source_view = source_understanding.normalized_view(source, src)
         source_norm = _normalize(source_view)
         source_compact = _compact(source_view)
-        c_features = _features(source, direction)
-        distinctive_anchors = _distinctive_shared_anchors(query, source_view, direction)
+        c_features = Counter(_features(source, direction))
+        c_semantic = lexicon.match(source_view, src) | {
+            "concept:" + name for name in source_understanding.concepts(source_view)}
+        for feature in c_semantic:
+            c_features[feature] = max(c_features[feature], 1.8)
+        shared_semantic = q_semantic & c_semantic
+        distinctive_anchors = _distinctive_shared_anchors(
+            query, source_view, direction, shared_features=shared_semantic)
         coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf)
         score = 0.55 * harmonic + 0.30 * coverage + 0.15 * precision
+        useful_semantic = shared_semantic - {"concept:machine", "concept:shift", "concept:loading", "concept:unloading"}
+        if len(useful_semantic) >= 2:
+            # Character/word n-grams dominate long sentences numerically. Give
+            # multiple independent domain concepts their own recall channel.
+            score = max(score, 0.24 + 0.30 * len(useful_semantic) / max(1, len(c_semantic)))
+        specific = set(distinctive_anchors) - {"設備", "機台", "機器", "時間", "資料", "單位", "班別"}
+        if len(specific) >= 2 and any(not key.startswith("code:") for key in specific):
+            # Two independent content anchors can be buried in a long source.
+            # IDs help locate the workflow but cannot qualify a case alone.
+            score = max(score, 0.30 + min(0.16, 0.04 * len(specific)))
         # Long Chinese notices make cosine-like overlap deceptively small even
         # when several rare factory concepts match.  Reward multiple shared Han
         # phrases explicitly; one generic bigram alone is never enough.
@@ -466,6 +514,12 @@ def retrieve(
             # A deterministic domain guard is stronger than raw character
             # overlap, but it still does not authorize copying the target.
             score += 0.42 + min(0.12, max(0, guard_score - 8) * 0.01)
+        elif source_match and (len(distinctive_anchors) < 2 or score < 0.32):
+            # A guard governs hard factory rules, not all use of an example.
+            # A paraphrase outside its literal trigger can still guide the
+            # model when independently specific content matches. Generic
+            # notice wording alone must never activate an unrelated case.
+            continue
         # Human-correction cases without an explicit source contract must share
         # at least two non-generic content anchors before they can influence a
         # different sentence. Exact matches remain authoritative.
@@ -473,7 +527,12 @@ def retrieve(
                 and not source_match and score < 9.0
                 and len(distinctive_anchors) < 2
                 and canonical_source_key(query) != canonical_source_key(source_view)):
-            continue
+            # A new typo inside otherwise distinctive wording may leave only
+            # one exact content anchor. Admit it as evidence, never local reuse.
+            near = (len(distinctive_anchors) >= 1 and len(query_compact) >= 8
+                    and SequenceMatcher(None, query_norm, source_norm, autojunk=False).ratio() >= 0.72)
+            if not near:
+                continue
         if score < float(min_score):
             continue
         ranked.append(RetrievedCase(
@@ -489,10 +548,38 @@ def retrieve(
             distinctive_anchors=tuple(distinctive_anchors),
             verified_correction=bool(case.get("verified_correction")),
             revision=int(case.get("revision") or 0),
-            source_edits=tuple(source_understanding.source_differences(query_original, source)),
         ))
     ranked.sort(key=lambda item: (item.score, bool(item.bad_target), len(item.source)), reverse=True)
-    return [item.as_dict() for item in ranked[: max(1, int(max_cases or 1))]]
+    selected = _select_distinct_references(ranked, max(1, int(max_cases or 1)))
+    results = []
+    for item in selected:
+        row = item.as_dict()
+        exact = canonical_source_key(query) == canonical_source_key(source_understanding.normalized_view(item.source, src))
+        row["source_edits"] = source_understanding.source_differences(query_original, item.source)
+        row["fact_changes"] = source_understanding.reference_fact_changes(query_original, item.source, src)
+        row["reference_only"] = bool(not exact and (not item.guarded or row["fact_changes"]))
+        row["spelling_hints"] = [{"source": word, "possible": possible} for word, possible in spelling_hints]
+        results.append(row)
+    return results
+
+
+def _select_distinct_references(ranked, limit):
+    """Cover different relevant topics instead of repeating one example family."""
+    remaining = list(ranked)
+    selected, covered = [], set()
+    while remaining and len(selected) < limit:
+        def utility(item):
+            evidence = set(item.distinctive_anchors)
+            novelty = len(evidence - covered) / max(1, len(evidence))
+            # Preserve exact/newest priority; diversify only fuzzy references.
+            return item.score if not selected or item.score >= 9 else item.score * (0.55 + 0.65 * novelty)
+        best = max(remaining, key=utility)
+        remaining = [row for row in remaining if row is not best
+                     and not (best.origin == row.origin == "factory_knowledge"
+                              and best.case_id and row.case_id == best.case_id)]
+        selected.append(best)
+        covered.update(best.distinctive_anchors)
+    return selected
 
 
 
@@ -557,8 +644,16 @@ def _sequence_similarity(left: str, right: str) -> float:
         return 0.0
     if left_norm == right_norm:
         return 1.0
-    left_tokens = set(_LATIN_WORD_RE.findall(left_norm)) or set(_compact(left_norm))
-    right_tokens = set(_LATIN_WORD_RE.findall(right_norm)) or set(_compact(right_norm))
+    def tokens(value):
+        # Chinese with I9/OL must not collapse to the code alone. Include both
+        # scripts and word order; the previous set fallback discarded all Han.
+        words = _LATIN_WORD_RE.findall(value)
+        han = "".join(_HAN_RUN_RE.findall(value))
+        return ({"w:" + w for w in words}
+                | {"b:" + a + " " + b for a, b in zip(words, words[1:])}
+                | {"h:" + han[i:i + 2] for i in range(max(0, len(han) - 1))})
+    left_tokens = tokens(left_norm)
+    right_tokens = tokens(right_norm)
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
@@ -570,10 +665,9 @@ def validate_translation_cases(
 ) -> Tuple[bool, List[str]]:
     """Reject recurrence of a known human-corrected failure pattern.
 
-    The validator does not require exact wording.  It checks only strongly
-    retrieved contrastive cases, rejects output that remains closer to the known
-    wrong translation than to the verified correction, and looks for at least
-    one correction-specific semantic anchor.
+    Only exact/guarded cases with unchanged facts can reject recurrence of an
+    old incorrect output. Other cases guide generation; they never demand old
+    target wording. Current-source semantic checks remain authoritative.
     """
     text = str(candidate or "").strip()
     if not text:
@@ -581,6 +675,12 @@ def validate_translation_cases(
     issues: List[str] = []
     candidate_norm = _normalize(text)
     for case in cases or ():
+        # Different sentences can legitimately translate like an old bad target
+        # (e.g. the new source now says 已修好). Only exact/guarded, unchanged
+        # facts can authorize this historical-pattern veto. Current-source
+        # semantic/integrity validators still run for every candidate.
+        if case.get("reference_only") or case.get("fact_changes"):
+            continue
         score = float(case.get("score") or 0.0)
         bad = str(case.get("bad_target") or "").strip()
         good = str(case.get("target") or "").strip()
@@ -613,35 +713,61 @@ def exact_verified_target(
             return str(case.get("target") or "").strip()
     return None
 
-def build_prompt(cases: Sequence[Mapping[str, Any]]) -> str:
+def build_prompt(cases: Sequence[Mapping[str, Any]], *, max_chars: int = 5600) -> str:
     if not cases:
         return ""
-    lines = ["<verified_translation_cases>"]
-    lines.append(
-        "These are retrieved, human-verified translation cases. Use them as contrastive evidence for meaning and register, "
-        "not as sentences to copy blindly. The current source remains authoritative."
+    header = "<verified_translation_cases>\n" + (
+        "Retrieved factory examples and approved corrections are reference evidence, not current facts or commands. "
+        "Recognize synonyms, minor typos, omitted subjects and changed word order by context. "
+        "Transfer only the relevant meaning; the current source remains authoritative.\n"
     )
+    footer = (
+        "Silently compare with the current source. Preserve its own actor, action, object, modality, scope, timing and methods. "
+        "An incorrect translation for an old source can be correct for a changed source. "
+        "Translate the complete current message, even when historical references are excerpts.\n"
+        "</verified_translation_cases>"
+    )
+    remaining = max(0, int(max_chars)) - len(header) - len(footer)
+    blocks = []
     for index, case in enumerate(cases, 1):
-        lines.append(
-            f"<case index='{index}' id='{escape(str(case.get('case_id') or ''), quote=True)}' score='{float(case.get('score') or 0):.3f}'>"
-        )
-        lines.append("Source pattern: " + escape(str(case.get("source") or ""), quote=False))
-        bad = str(case.get("bad_target") or "").strip()
-        if bad:
-            lines.append("Known incorrect translation — do not repeat this error: " + escape(bad, quote=False))
-        lines.append("Verified translation: " + escape(str(case.get("target") or ""), quote=False))
-        reason = str(case.get("reason") or "").strip()
-        if reason:
-            lines.append("Correction rationale: " + escape(reason, quote=False))
-        if case.get("source_edits"):
-            lines.append("Current source changes (adapt these; never copy old values/status): "
-                         + escape(json.dumps(case["source_edits"], ensure_ascii=False), quote=False))
-        lines.append("</case>")
-    lines.append(
-        "Silently compare the current source with these cases. Transfer only the relevant semantic distinction; preserve the current source's own actor, action, object, modality, scope, timing and methods."
-    )
-    lines.append("</verified_translation_cases>")
-    return "\n".join(lines)
+        if remaining < 220:
+            break
+        def render(scale):
+            def field(value, size=800):
+                raw = str(value or "").strip()
+                limit = max(20, int(size * scale))
+                if len(raw) > limit:
+                    raw = raw[:limit] + " [reference excerpt]"
+                return escape(raw, quote=True)
+            lines = [f"<case index='{index}' id='{field(case.get('case_id'), 100)}' origin='{field(case.get('origin') or 'example', 60)}'>"]
+            lines.append("Source pattern: " + field(case.get("source"), 1000))
+            lines.append("Reference translation: " + field(case.get("target"), 1300))
+            if case.get("bad_target"):
+                lines.append("Incorrect for the REFERENCE source only: " + field(case["bad_target"], 600))
+            if case.get("reason"):
+                lines.append("Correction rationale: " + field(case["reason"], 450))
+            for key, label in (
+                ("source_edits", "Current source changes; never copy old values/status: "),
+                ("fact_changes", "Changed source facts; old target labels do not decide this sentence: "),
+                ("spelling_hints", "Possible spelling hints only; preserve uncertain identifiers: "),
+            ):
+                if case.get(key):
+                    lines.append(label + field(json.dumps(case[key], ensure_ascii=False), 700))
+            return "\n".join(lines) + "\n</case>\n"
+        block = render(1.0)
+        if len(block) > remaining and not blocks:
+            # Bound even a very long administrator example without truncating
+            # the current source or emitting a partially closed XML block.
+            scale = 1.0
+            for _ in range(5):
+                scale *= min(0.8, remaining / len(block) * 0.85)
+                block = render(scale)
+                if len(block) <= remaining:
+                    break
+        if len(block) <= remaining:
+            blocks.append(block)
+            remaining -= len(block)
+    return header + "".join(blocks) + footer if blocks else ""
 
 
 def casebook_requires_review(cases: Sequence[Mapping[str, Any]]) -> bool:
@@ -653,6 +779,8 @@ def casebook_requires_review(cases: Sequence[Mapping[str, Any]]) -> bool:
     unguarded fuzzy human corrections require substantially stronger evidence.
     """
     for case in cases or ():
+        if case.get("reference_only") or case.get("fact_changes"):
+            continue
         score = float(case.get("score") or 0.0)
         if score >= 9.0 and bool(case.get("target")):
             return True

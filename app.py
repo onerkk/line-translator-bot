@@ -362,7 +362,7 @@ logger.info(
 )
 
 _EXPECTED_CASEBOOK_API_VERSION = 4
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-05.1-bidirectional-adaptive-retrieval"
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-07.1-source-grounded-reference-generalization"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -457,7 +457,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-06.1-retain-source-terminology"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-07.1-reference-context-all-routes"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -3022,7 +3022,8 @@ def _translation_needs_conversation_history(text):
     return bare_quantity or any(cue in compact for cue in cues)
 
 
-def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, source_text=None):
+def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, source_text=None,
+                               include_examples=True, reference_messages=None):
     """v3.2-0426e: Build messages array using OpenAI standard few-shot format.
     Inserts BUILTIN_EXAMPLES + custom_translation_examples as
     {role: "system", name: "example_user"/"example_assistant"} pairs.
@@ -3083,7 +3084,7 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
     # The semantic contract already contains the selected contrastive cases.
     # Sending the same targets again as few-shot pairs doubles their token cost
     # and gives historical wording undue weight over the current source.
-    chosen = [] if "<verified_translation_cases>" in sys_prompt else _retrieve_verified_translation_cases(
+    chosen = [] if not include_examples or "<verified_translation_cases>" in sys_prompt else _retrieve_verified_translation_cases(
         retrieval_source, src, tgt, max_cases=runtime_max, group_id=group_id
     )
 
@@ -3111,6 +3112,11 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
         # 這是讓範例真正進入 prompt 並影響翻譯的關鍵修復。
         msgs.append({"role": "user", "content": user_eg})
         msgs.append({"role": "assistant", "content": assistant_eg})
+
+    # TM's ICL pairs share this context assembly path. They must not bypass a
+    # quoted LINE reply or the selected factory correction context.
+    if reference_messages:
+        msgs.extend(reference_messages)
 
     # v3.10: 加入該群組最近對話歷史 (上下文記憶)
     # 順序很重要:在 few-shot 之後、本句之前 → caching 友善
@@ -4015,6 +4021,7 @@ def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3, group_id=N
         corrections=corrections,
         max_cases=max_cases,
         min_score=0.22,
+        glossary=globals().get("GLOSSARY_LOOKUP") or {},
     )
 
 
@@ -9186,6 +9193,10 @@ def build_translation_semantic_contract(text, src, tgt):
             _logger.warning("[TranslationCasebook] retrieval failed open: %s", exc)
         casebook_cases = []
     _casebook_module = globals().get("translation_casebook_module")
+    # Retrieval and safety review are separate decisions. Related examples must
+    # reach the FIRST provider prompt even when they do not justify hard rules,
+    # independent review, or a paid call instead of a verified exact-memory hit.
+    contract["reference_cases"] = casebook_cases
     if (_casebook_module is not None
             and _casebook_module.casebook_requires_review(casebook_cases)):
         contract["has_risk"] = True
@@ -9208,9 +9219,21 @@ def semantic_contract_requires_llm(contract):
     return bool(contract and contract.get("requires_llm"))
 
 def build_translation_semantic_contract_prompt(contract):
-    """Turn contract into a compact XML prompt block. Empty when no risk."""
-    if not contract or not contract.get("has_risk"):
+    """Keep source constraints separate from bounded, advisory reference cases."""
+    if not contract:
         return ""
+    _casebook_module = globals().get("translation_casebook_module")
+    reference_cases = contract.get("reference_cases", [])
+    if not reference_cases:
+        reference_cases = [case for risk in contract.get("risks", [])
+                           if risk.get("sense") == "verified_correction_cases"
+                           for case in risk.get("cases", [])]
+    reference_prompt = (_casebook_module.build_prompt(reference_cases)
+                        if _casebook_module is not None else "")
+    reference_block = ("<translation_reference_context>" + reference_prompt
+                       + "</translation_reference_context>") if reference_prompt else ""
+    if not contract.get("has_risk"):
+        return reference_block
     lines = ["<semantic_contract>"]
     lines.append("This block is generated by deterministic pre-translation semantic analysis. It overrides TM/NMT/examples/general dictionary meanings.")
     for risk in contract.get("risks", []):
@@ -9247,11 +9270,9 @@ def build_translation_semantic_contract_prompt(contract):
             if knowledge_prompt:
                 lines.append(knowledge_prompt)
         elif risk.get("sense") == "verified_correction_cases":
-            _casebook_module = globals().get("translation_casebook_module")
-            case_prompt = (_casebook_module.build_prompt(risk.get("cases", []))
-                           if _casebook_module is not None else "")
-            if case_prompt:
-                lines.append(case_prompt)
+            # Render once outside deterministic constraints; a reference is not
+            # a command to impose historical facts/wording on the new source.
+            continue
         elif risk.get("sense") == "factory_organization_terms":
             lines.append("<risk term='factory_organization_unit' sense='factory_organization_terms'>")
             lines.append("These are factory organization levels, not names. Use the plant ERP/glossary mapping for 股 units. In this plant 一股 means Bagian Cold Drawing 1; never translate it as Yigu, Regu 1, or Subseksi 1. 一課 means Seksi 1.")
@@ -9296,7 +9317,7 @@ def build_translation_semantic_contract_prompt(contract):
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
     lines.append("</semantic_contract>")
-    return " ".join(lines)
+    return " ".join(lines) + ("\n" + reference_block if reference_block else "")
 
 def translation_satisfies_semantic_contract(contract, translation):
     if not contract or not contract.get("has_risk"):
@@ -11264,16 +11285,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # v3.2-0426e: build messages array, optionally using few-shot "messages" format
         # which separates examples into example_user/example_assistant pairs (OpenAI standard).
         # v3.9.41 Phase N: 若 ICL 啟用,直接用 ICL messages(已含 user/assistant 對 + 最後 user)
-        if _icl_messages:
-            _msgs = [{"role": "system", "content": sys_prompt}] + _icl_messages
-        elif fewshot_mode == "messages":
-            _gid_for_ctx = getattr(_tl, 'group_id', None)
-            _msgs = _build_messages_with_fewshot(sys_prompt, msg, src, tgt, group_id=_gid_for_ctx, source_text=text)
-        else:
-            _msgs = [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": msg}
-            ]
+        _msgs = _build_messages_with_fewshot(
+            sys_prompt, msg, src, tgt, group_id=getattr(_tl, 'group_id', None), source_text=text,
+            include_examples=(fewshot_mode == "messages" and not _icl_messages),
+            reference_messages=(_icl_messages[:-1] if _icl_messages else None),
+        )
         # Last outbound boundary: also scan TM/few-shot messages so historical
         # examples cannot leak an unrelated e-mail/phone/account value.
         _msgs = translation_privacy_module.mask_messages(_msgs, _privacy_envelope)

@@ -212,18 +212,10 @@ class FactoryKnowledgeStore:
     def _score_entry(entry: Dict[str, Any], normalized_text: str) -> Optional[MatchResult]:
         match = entry.get("match") or {}
         evidence: List[str] = []
-        if match.get("semantic_relation") == "erp_data_release":
-            if not message_semantics.build_data_release_frame(normalized_text).get("active"):
-                return None
-        for term in match.get("none_terms", []) or []:
-            if _contains(normalized_text, term):
-                return None
         # Lexical overlap retrieves context; it cannot establish the word's
         # sense. Require explicit relation evidence when a card declares it.
         # Apply this before scoring so repeated incidental words never override it.
-        required = match.get("required_regex_any", []) or []
-        if required and not any(re.search(str(pattern), normalized_text, re.I)
-                                for pattern in required):
+        if not _required_source_scope(normalized_text, match):
             return None
         score = 0
         strong_hits = [str(term) for term in match.get("strong_phrases", []) or [] if _contains(normalized_text, term)]
@@ -393,6 +385,32 @@ class FactoryKnowledgeStore:
         health = self.replace_document(document)
         health["deleted_id"] = entry_id
         return health
+
+
+def _required_source_scope(normalized_text: str, match: Dict[str, Any]) -> bool:
+    relation = match.get("semantic_relation")
+    if relation and (relation != "erp_data_release"
+                     or not message_semantics.build_data_release_frame(normalized_text).get("active")):
+        return False
+    if any(_contains(normalized_text, term) for term in match.get("none_terms", []) or []):
+        return False
+    required = match.get("required_regex_any", []) or []
+    return not required or any(re.search(str(pattern), normalized_text, re.I) for pattern in required)
+
+
+def reference_source_eligible(text: str, match: Dict[str, Any]) -> bool:
+    """Allow lexical paraphrases while retaining mandatory sense/exclusion rules.
+
+    This permits evidence retrieval only. Hard terminology/validation activation
+    still uses match_source's complete contract. Malformed guards never qualify.
+    """
+    try:
+        for key in ("regex_any", "required_regex_any"):
+            for pattern in match.get(key, []) or []:
+                re.compile(str(pattern), re.I)
+        return _required_source_scope(_normalize(text), match)
+    except (re.error, TypeError, ValueError):
+        return False
 
 
 def match_source(text: str, match: Dict[str, Any]) -> Tuple[bool, int, List[str]]:

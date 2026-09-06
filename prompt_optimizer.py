@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-09-06.1-retain-source-terminology"
+PROMPT_OPTIMIZER_VERSION = "2026-09-07.1-reference-context-all-routes"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -488,7 +488,8 @@ def compile_translation_prompt(
         semantic_block = ("<semantic_contract>" + semantic_contract + "</semantic_contract>") if semantic_contract else ""
         required_blocks = []
         for name in ("implicit_quantity_units", "factory_acceptance_boundary", "source_bound_context",
-                     "source_terminology", "factory_terminology", "factory_organization_terms"):
+                     "source_terminology", "factory_terminology", "factory_organization_terms",
+                     "translation_reference_context"):
             content = _tag(original, name)
             if content and ("<" + name) not in semantic_block and not any(
                 ("<" + name) in block for block in required_blocks

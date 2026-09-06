@@ -14,7 +14,7 @@ import re
 from typing import Mapping
 import unicodedata
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-06.1-operational-term-evidence"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-07.1-reference-evidence-index"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -89,6 +89,130 @@ def _concepts_cached(value):
 def concepts(text):
     value = unicodedata.normalize("NFKC", str(text or "")).casefold()
     return set(_concepts_cached(value))
+
+
+def reference_lexicon(glossary=None):
+    """Compile the current approved terminology into reusable retrieval features.
+
+    Alias matching is evidence for retrieval, not a replacement operation. Do
+    not infer synonyms from a whole translation, definition or legacy bad term.
+    An edited glossary produces a new immutable index, including edited aliases.
+    """
+    rows = []
+    for key, row in (glossary or {}).items():
+        if not isinstance(row, Mapping) or row.get("enabled") is False:
+            continue
+        if row.get("quarantined") or row.get("validation_state") in {"failed", "quarantined"}:
+            continue
+        def aliases(value):
+            if isinstance(value, str):
+                return [value]
+            return [v for v in value if isinstance(v, str)] if isinstance(value, (list, tuple, set)) else []
+        zh = [str(key)] + aliases(row.get("aliases_zh"))
+        idn = [str(row.get("canonical_idn") or row.get("idn") or "")] + aliases(row.get("aliases_id"))
+        for lang, surfaces in (("zh", zh), ("id", idn)):
+            for surface in surfaces:
+                surface = unicodedata.normalize("NFKC", str(surface)).casefold().strip()
+                if len(surface) >= 2:
+                    rows.append((lang, surface, str(key)))
+    return _reference_lexicon_cached(tuple(sorted(set(rows))))
+
+
+@lru_cache(maxsize=4)
+def _reference_lexicon_cached(rows):
+    return _ReferenceLexicon(rows)
+
+
+class _ReferenceLexicon:
+    """Trie lookup avoids scanning the whole glossary for every stored example."""
+    def __init__(self, rows):
+        aliases = {}
+        self.tries = {"zh": {}, "id": {}}
+        self.vocabulary = set()
+        for lang, surface, canonical in rows:
+            aliases.setdefault((lang, surface), set()).add(canonical)
+        for (lang, surface), keys in aliases.items():
+            if len(keys) != 1:  # Ambiguous aliases do not invent equivalence.
+                continue
+            node = self.tries[lang]
+            for char in surface:
+                node = node.setdefault(char, {})
+            node[None] = (surface, next(iter(keys)))
+            if lang == "id":
+                self.vocabulary.update(re.findall(r"\b[a-z]{5,}\b", surface))
+
+    @lru_cache(maxsize=8192)
+    def match(self, text, lang):
+        value = unicodedata.normalize("NFKC", str(text)).casefold()
+        # A name or URL containing a factory word is not domain evidence.
+        value = re.sub(r"https?://\S+|[\w.+-]+@[\w.-]+\.[a-z]+|@[^\s,，。;；]+|__[a-z0-9_]+__", " ", value)
+        found = set()
+        for start in range(len(value)):
+            node = self.tries.get(lang, {})
+            pos = start
+            while pos < len(value) and value[pos] in node:
+                node = node[value[pos]]
+                pos += 1
+                if None not in node:
+                    continue
+                surface, key = node[None]
+                if re.match(r"[a-z0-9_]", surface) and start and re.match(r"[a-z0-9_]", value[start - 1]):
+                    continue
+                if re.search(r"[a-z0-9_]$", surface) and pos < len(value) and re.match(r"[a-z0-9_]", value[pos]):
+                    continue
+                found.add("term:" + key)
+        return frozenset(found)
+
+    @lru_cache(maxsize=4096)
+    def profile(self, text, lang):
+        normalized = normalized_view(str(text), lang)
+        actual = frozenset({"concept:" + c for c in concepts(normalized)}) | self.match(normalized, lang)
+        hints = []
+        if lang == "id" and actual:
+            vocabulary = self.vocabulary | {term for terms in _CONCEPTS.values() for term in terms
+                                           if re.fullmatch(r"[a-z]{5,}", term)}
+            spans = _protected_ranges(normalized)
+            for match in _WORD.finditer(normalized):
+                word = match.group()
+                if len(word) < 5 or not word.islower() or word in vocabulary or _overlaps(*match.span(), spans):
+                    continue
+                near = [v for v in vocabulary if _one_edit(word, v)]
+                if len(near) == 1:
+                    hints.append((word, near[0]))
+                if len(hints) == 4:
+                    break
+        hint_text = " ".join(possible for _, possible in hints)
+        inferred = frozenset({"concept:" + c for c in concepts(hint_text)}) | self.match(hint_text, lang)
+        return actual, inferred - actual, tuple(hints)
+
+
+def reference_fact_changes(query, reference, lang):
+    """Identify source differences that make an old wrong target unsafe to veto.
+
+    This is a conservative comparison, not a proof of semantic equivalence. The
+    current-source validators remain responsible for accepting a translation.
+    """
+    def facts(text):
+        value = normalized_view(str(text), lang)
+        states = sorted((s["action"], s["mode"], s.get("code") or "")
+                        for s in operational_states(value, lang) if s["mode"] != "plain")
+        # 不定期/不鏽鋼 and an embedded 查核是否 are not a negative
+        # operation or a question from the speaker. Do not veto references on
+        # the basis of isolated Chinese characters inside unrelated words.
+        patterns = _MODES.get(lang, {}) if lang != "zh" else {
+            "prohibited": r"禁止|不可|不得|不要|不准|切勿",
+            "pending": r"尚未|還沒|未曾|未完成|未修|未包|未秤",
+            "completed": r"已經|已完成|已修|已包|已秤",
+            "unable": r"不能|無法", "allowed": r"可以|允許|准許",
+        }
+        modes = sorted({mode for mode, pattern in patterns.items() if re.search(pattern, value, re.I)})
+        numbers = re.findall(r"[A-Za-z]*\d+(?:[.,]\d+)?(?:[-/][A-Za-z0-9]+)*", value)
+        directions = re.findall(r"前端|後端|尾端|往|回|移入|移出|\b(?:depan|belakang|keluar|masuk|kembali)\b", value, re.I)
+        return {"states": states, "modality": modes, "codes_and_numbers": sorted(numbers),
+                "direction": sorted(directions), "question": bool(re.search(r"[?？]|^\s*(?:是否|有沒有|apakah\b)", value, re.I))}
+    before, after = facts(reference), facts(query)
+    return {key: {"reference": before[key], "current": after[key]}
+            for key in before if before[key] != after[key]}
 
 
 def _protected_ranges(text, protected_names=()):
