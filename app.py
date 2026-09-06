@@ -16185,58 +16185,16 @@ def _translate_inner(text, src, tgt):
 
     return None
 
-WORK_ORDER_OCR_KEYWORDS = (
-    "冷精棒製造指示書", "製造指示書", "訂單編號", "客戶名稱", "成品尺寸",
-    "FINAL流程", "FINAL", "MIC_NO", "ID_NO", "HRITABPDIL", "退火代碼",
-    "冷精棒", "收貨人", "短尺", "品保", "特殊", "削皮", "訂單資訊",
-    "成品尺寸MIN", "成品尺寸MAX", "製造指示",
-)
-
-
 def analyze_work_order(ocr_text):
-    """Classify OCR text as a work order independently of customer extraction.
+    """Classify the old/new bilingual form, then read its customer field only."""
+    from work_order_detection import analyze_work_order_text
 
-    Older code used the customer string as the work-order boolean.  That meant a
-    real 製造指示書 with unreadable/absent customer name was treated as an
-    ordinary image, so the next terse text message lost its order context.
-    """
-    if not ocr_text:
-        return {"is_work_order": False, "customer": None, "keyword_count": 0}
-    keyword_count = sum(1 for kw in WORK_ORDER_OCR_KEYWORDS if kw in ocr_text)
+    analysis = analyze_work_order_text(ocr_text, globals().get("STORAGE_LOOKUP", {}))
     logger.info(
-        "Work order detection: %d keywords matched in OCR text (%d chars)",
-        keyword_count, len(ocr_text),
+        "Work order detection: %d field families, confirmed=%s, customer=%s",
+        analysis["keyword_count"], analysis["is_work_order"], analysis["customer"],
     )
-    if keyword_count < 2:
-        return {"is_work_order": False, "customer": None, "keyword_count": keyword_count}
-
-    customer = None
-    patterns = [
-        r'客戶名稱[:\s：]*([^\s\n|,，]+)',
-        r'客戶[:\s：]*([^\s\n|,，]+)',
-        r'客[户戶]名[称稱][:\s：]*([^\s\n|,，]+)',
-    ]
-    for pat in patterns:
-        m = re.search(pat, ocr_text)
-        if m:
-            candidate = m.group(1).strip()
-            if candidate and len(candidate) >= 2:
-                customer = candidate
-                logger.info("Work order customer detected: %s", customer)
-                break
-    if not customer:
-        for name in CUSTOMER_NAMES:
-            if len(name) >= 2 and name in ocr_text:
-                customer = name
-                logger.info("Work order customer matched from list: %s", customer)
-                break
-    if not customer:
-        logger.info("Work order detected but no customer name found")
-    return {
-        "is_work_order": True,
-        "customer": customer,
-        "keyword_count": keyword_count,
-    }
+    return analysis
 
 
 def detect_work_order(ocr_text):
@@ -16262,13 +16220,12 @@ def format_length_zh(code):
 
 def format_storage_for_work_order(customer_name):
     """Format storage lookup for work order image detection."""
+    from work_order_detection import resolve_storage_customer
+
+    customer_name = resolve_storage_customer(customer_name, STORAGE_LOOKUP)
+    if not customer_name:
+        return None
     entries = STORAGE_LOOKUP.get(customer_name)
-    if not entries:
-        for key in STORAGE_LOOKUP:
-            if key.lower() == customer_name.lower() or customer_name in key or key in customer_name:
-                entries = STORAGE_LOOKUP[key]
-                customer_name = key
-                break
     if not entries:
         return None
     lines = []
@@ -16513,8 +16470,15 @@ def _should_run_factory_reason_table_ocr(text):
     if not text or not isinstance(text, str):
         return False
     compact = _compact_factory_reason_text(text)
-    has_id = bool(re.search(r"(?<![A-Za-z0-9])ID(?![A-Za-z0-9])", text or "", re.I))
+    has_id = bool(re.search(r"(?<![A-Za-z0-9_])ID(?![A-Za-z0-9_]|\s+NO\b)", text or "", re.I))
     has_reason_header = bool(re.search(r"原\s*[因囚困]|原因|理由", text or ""))
+    if not has_reason_header:
+        from work_order_detection import analyze_work_order_text
+
+        # ID_NO + 倒角/退火 are ordinary fields on a manufacturing form, not
+        # an ERP ID/原因 table. Do not pay for a second, wrong-schema OCR pass.
+        if analyze_work_order_text(text)["is_work_order"]:
+            return False
     has_reason_word = any(_compact_factory_reason_text(v) in compact
                           for e in _FACTORY_REASON_ACTIONS
                           for v in (list(e.get("variants", ())) + list(e.get("reason_only_variants", ()))))
@@ -16990,6 +16954,8 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
       - 失敗時詳細記錄 raw response,方便偵錯
     v3.9.17: 加 mime_type 參數 — 不能再寫死 jpeg,LINE 可能傳 PNG/HEIC
     """
+    from work_order_detection import WORK_ORDER_OCR_HINT
+
     if not _has_ai_capability("vision"):
         return None
     # v3.9.17: HEIC OpenAI 不支援,改用 jpeg(雖然會失敗但至少 OpenAI 會給明確錯誤)
@@ -17015,6 +16981,8 @@ def ocr_image_openai(image_base64, mime_type="image/jpeg"):
                         "    讀代碼時逐字辨認 8/3/6/5/S、0/O、1/I/L、B/8、A/4;真的看不清楚的單一字元用 ? 取代,不要猜。\n"
                         "3c. **ERP 原因欄保護**:若表格標題是 ID / 原因,標題必須輸出 `ID | 原因`,不得改成爐號、料號、Nomor Material、Nomor Tungku。\n"
                         "    原因欄內容如 削皮/拋光/倒角/退火/改端漆/補毛重/改Tag/取樣/併包/改包裝 只做 OCR 原文輸出,不得翻譯。\n"
+                        + WORK_ORDER_OCR_HINT
+                        +
                         "4. **忽略手機螢幕介面元素**:狀態列(時間 / 4G / 5G / WiFi / 電量百分比 / 訊號)、\n"
                         "   未讀數(99+)、輸入框文字(輸入訊息)、鍵盤按鍵(注音、空白鍵、換行等)、\n"
                         "   應用程式名稱、底部 navigation bar — 這些都不要輸出\n"
