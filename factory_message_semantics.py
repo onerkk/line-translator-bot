@@ -27,7 +27,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.3-preserve-question-mode"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.1-release-priority-availability"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -1527,12 +1527,34 @@ def _strip_zh_release_supported_tokens(source: str, object_evidence: str) -> str
 def _release_clauses(text: str) -> list[str]:
     # Keep question marks attached to their own clause. An inspection in
     # parentheses or a later unpacking question cannot change release status.
-    return [part.strip() for part in re.split(r"[，,。！!；;\n（）()]", text) if part.strip()]
+    return [part.strip() for part in re.split(r"[，,。！!；;\n（）()]|\.(?=\s|$)", text) if part.strip()]
 
 
 def _release_reference_codes(text: str) -> set[str]:
     return {code.upper() for code in re.findall(
         r"(?<![A-Za-z0-9_])(?:[A-Za-z]{1,4}\d{1,4}|\d{3,})(?![A-Za-z0-9_])", text)}
+
+
+_RELEASE_PRIORITY_ID_RE = re.compile(
+    r"\b(?:terlebih\s+dahulu|(?:lebih\s+)?dahulu|dulu|prioritas|"
+    r"(?:mem|di)?prioritaskan|(?:meng|di)?utamakan|(?:men|di)?dahulukan)\b", re.I)
+_RELEASE_DATA_ID_RE = re.compile(r"\b(?:data(?:nya)?|record|catatan)\b", re.I)
+_RELEASE_NEXT_STATION_ID_RE = re.compile(
+    r"\b(?:(?:stasiun|proses|tahap)\s+(?:berikutnya|selanjutnya)|untuk\s+dilanjutkan)\b", re.I)
+
+
+def _release_has_priority(clause: str, *, affirmative: bool) -> bool:
+    """Accept priority morphology, but not a denial of requested priority."""
+    for match in _RELEASE_PRIORITY_ID_RE.finditer(clause):
+        prefix = clause[:match.start()]
+        # 'Jangan lupa' requests an action; ordinary negation denies it.
+        prefix = re.sub(r"\bjangan\s+lupa\b", "", prefix, flags=re.I)
+        if affirmative and re.search(
+            r"\b(?:tidak|bukan|jangan|tanpa|belum)\b(?:\s+\w+){0,3}\s*$", prefix, re.I
+        ):
+            continue
+        return True
+    return False
 
 
 def _release_mode(prefix: str, suffix: str, lang: str) -> str:
@@ -1544,7 +1566,7 @@ def _release_mode(prefix: str, suffix: str, lang: str) -> str:
             ("pending", r"尚未|還未|还未|還沒(?:有)?|还没(?:有)?|沒有|没有|未|沒|没"),
             ("negative", r"不"),
             ("completed", r"已經|已经|已"),
-            ("request", r"麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助|先|優先|优先"),
+            ("request", r"麻煩|麻烦|拜託|拜托|請|请|幫忙|帮忙|幫|帮|協助|协助"),
         ),
         "id": (
             ("request", r"\bjangan\s+lupa\b"),
@@ -1567,6 +1589,11 @@ def _release_mode(prefix: str, suffix: str, lang: str) -> str:
             return "completed"
         if mode == "plain" and suffix.startswith("一下"):
             return "request"
+        # Priority modifies a request/status; it cannot overwrite 不要/已經.
+        if mode == "plain" and re.search(r"優先|优先|先$", prefix):
+            return "request"
+    elif mode == "plain" and re.search(r"\b(?:prioritaskan|utamakan|dahulukan)\b", prefix, re.I):
+        return "request"
     return mode
 
 
@@ -1597,6 +1624,8 @@ def _release_source_relations(visible: str) -> list[dict]:
                             or re.search(r"嗎|吗|[?？]", suffix))
             relations.append({"mode": mode, "question": question, "evidence": prefix + action.group() + suffix,
                               "clause": clause, "explicit": action.group() == "放行",
+                              "priority": bool(re.search(r"優先|优先|先$", prefix)),
+                              "next_station": bool(re.search(r"下(?:一)?(?:站(?:別|别)?|道工序|個製程|个制程)", prefix + suffix)),
                               "codes": sorted(_release_reference_codes(prefix))})
             previous_end = action.end()
     return relations
@@ -1604,7 +1633,9 @@ def _release_source_relations(visible: str) -> list[dict]:
 
 def _release_target_relations(target: str) -> list[dict]:
     relations = []
-    action_re = re.compile(r"\b(?:release|rilis|merilis|me-?release|di-?release|dirilis)\b", re.I)
+    action_re = re.compile(
+        r"\b(?:release|rilis|merilis|me-?release|di-?release|dirilis|"
+        r"pelepasan(?=\s+(?:data(?:nya)?|record|catatan)\b))\b", re.I)
     for clause in _release_clauses(target):
         actions = list(action_re.finditer(clause))
         previous_end = 0
@@ -1614,6 +1645,8 @@ def _release_target_relations(target: str) -> list[dict]:
             relations.append({"mode": _release_mode(prefix, suffix, "id"),
                               "question": bool(re.search(r"\b(?:apa(?:kah)?|bisakah|bolehkah|sudahkah|belumkah)\b", prefix, re.I)
                                                or "?" in suffix), "clause": clause,
+                              "data": bool(_RELEASE_DATA_ID_RE.search(prefix + suffix)),
+                              "next_station": bool(_RELEASE_NEXT_STATION_ID_RE.search(prefix + suffix)),
                               "codes": sorted(_release_reference_codes(prefix + suffix))})
             previous_end = action.end()
     return relations
@@ -5022,14 +5055,10 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     elif frame.get("kind") == "zh_id_erp_data_release":
         low = _norm(target)
         target_relations = _release_target_relations(target)
-        release_relation = bool(
-            target_relations
-            and re.search(r"\b(?:data(?:nya)?|record|catatan)\b", low)
-            and _has_phrase(low, (
-                "stasiun berikutnya", "proses berikutnya", "tahap berikutnya",
-                "untuk dilanjutkan",
-            ))
-        )
+        # Validate the data-release meaning within its clause. A fluent
+        # 'prioritaskan rilis data' must not need the exact glossary sentence.
+        # An explicit source destination is checked on the matching relation.
+        release_relation = any(row["data"] for row in target_relations)
         if not release_relation:
             issues.append("factory_message_semantics:erp_data_release_relation_missing")
         if not release_relation and re.search(
@@ -5071,6 +5100,13 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
                 issues.append("factory_message_semantics:erp_release_status_changed:" + mode)
             elif relation["question"] and not any(row["question"] for row in matching):
                 issues.append("factory_message_semantics:erp_release_question_missing")
+            if relation.get("next_station") and not any(row["next_station"] for row in matching):
+                issues.append("factory_message_semantics:erp_release_destination_missing")
+            if relation.get("priority") and not any(
+                row["data"] and _release_has_priority(row["clause"], affirmative=mode in {"request", "completed", "plain"})
+                for row in matching
+            ):
+                issues.append("factory_message_semantics:erp_release_priority_missing")
         delegate_terms = {
             "third_plural": ("mereka",),
             "third_singular": ("dia",),
@@ -5079,10 +5115,6 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         }.get(slots.get("delegate"), ())
         if delegate_terms and not _has_phrase(low, delegate_terms):
             issues.append("factory_message_semantics:erp_release_delegate_missing")
-        if slots.get("priority") and not _has_phrase(low, (
-            "terlebih dahulu", "dulu", "prioritas", "diprioritaskan",
-        )):
-            issues.append("factory_message_semantics:erp_release_priority_missing")
         if slots.get("repeat") and not _has_phrase(low, ("lagi", "sekali lagi")):
             issues.append("factory_message_semantics:erp_release_repeat_missing")
 
@@ -5358,12 +5390,14 @@ def build_prompt(frame: Mapping) -> str:
         lines.append(
             "This is an ERP production-data release relation. In bare factory shorthand, a "
             "bundle/batch/work-order reference plus 放/放一下 means release the linked data to "
-            "the next station. Indonesian must explicitly say release data ke stasiun berikutnya "
+            "the next station. Express release of production data (for example release data ke stasiun berikutnya) "
             "and preserve the referenced bundel/batch/work order, request modality, delegate and "
             "completion/priority aspect. Only explicit requests call for tolong/mohon. "
             "未/還沒 = belum; 無法/不能 = tidak bisa/dapat; 不要 = jangan. A question "
             "must stay a question. Passive word order and datanya are valid; release data "
-            "is a meaning, not a mandatory adjacent phrase. Never use meletakkan, menaruh, taruh, menempatkan, "
+            "is a meaning, not a mandatory adjacent phrase. Rilis/pelepasan data and prioritaskan/"
+            "utamakan/dahulukan are valid grammatical forms; preserve an explicit next-station destination "
+            "when the source states one. Never use meletakkan, menaruh, taruh, menempatkan, "
             "menyimpan or melepaskan for this sense. Spatial/capacity wording and QC actors are "
             "classified separately per clause; other clauses may still describe physical movement or QC."
         )

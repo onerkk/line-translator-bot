@@ -153,10 +153,10 @@ def test_deployment_contract_requires_the_new_role_integrity_engine():
 
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-07.3-preserve-question-mode"'
+        '"2026-09-08.1-release-priority-availability"'
     ) in app_source
     health = semantics.health()
-    assert health["build_id"] == "2026-09-07.3-preserve-question-mode"
+    assert health["build_id"] == "2026-09-08.1-release-priority-availability"
     assert health["self_test"]["ok"] is True
     assert health["self_test"]["checks"] >= 42
     assert glossary["點名"]["canonical_idn"] == "pengecekan kehadiran"
