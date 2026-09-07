@@ -8,10 +8,12 @@ on:
       - "requirements-test.txt"
       - "static/admin_reminders.*"
       - "static/*factory*"
+      - "static/admin_quick_reply.*"
       - "static/liff_forms.js"
       - "templates/line_factory.html"
       - "templates/liff_entry.html"
       - "tests/*factory*"
+      - "tests/unified_menu_ui_smoke.cjs"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -29,10 +31,12 @@ on:
       - "requirements-test.txt"
       - "static/admin_reminders.*"
       - "static/*factory*"
+      - "static/admin_quick_reply.*"
       - "static/liff_forms.js"
       - "templates/line_factory.html"
       - "templates/liff_entry.html"
       - "tests/*factory*"
+      - "tests/unified_menu_ui_smoke.cjs"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -80,6 +84,7 @@ jobs:
       - name: Check frontend syntax
         run: |
           node --check static/admin_factory.js
+          node --check static/admin_quick_reply.js
           node --check static/line_factory.js
           node --check static/liff_forms.js
       - name: Install isolated DOM test runtime
