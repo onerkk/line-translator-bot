@@ -12,6 +12,16 @@ app=hub.app
 app.template_folder=str(repo/'templates')
 app.static_folder=str(repo/'static')
 original, payload, messages=cases.notice(hub)
+feedback=[]
+hub.h['_send_reply_with_push_fallback']=lambda **kwargs: feedback.append(kwargs['fallback_text'])
+
+@app.route('/preview-receipt-reply',methods=['POST'])
+def receipt_reply():
+ data=request.get_json(silent=True) or {}
+ hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=int(data.get('timestamp',500))),
+              {'action':data.get('action','factory_ack'),'token':original})
+ return jsonify(ok=True,feedback=feedback[-1])
+
 hub.insight=lambda menu, start, end, mode='summary': {
  'privacy_limited':False,'cached':False,'note':'測試資料 UTC+9',
  'data':{'impression':{'metrics':[{'date':'20260906','count':42,'uniqueUsers':21}] if mode=='daily' else {'count':42,'uniqueUsers':21}},'clicks':[]}}
