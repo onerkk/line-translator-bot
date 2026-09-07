@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "38c1676d4ddcc24b9aab7cef94a1cdb2a2aed3dde0b673dad6d829f31df709cc",
-    "updated_at_iso": "2026-09-07T15:00:29.892120+00:00",
-    "updated_at_unix": 1788793229.8921201
+    "state_hash": "8c22e17854ee3caaa06dacd516858584b0e75cdf74ce611c76a03ab4dccf393a",
+    "updated_at_iso": "2026-09-07T15:05:23.657192+00:00",
+    "updated_at_unix": 1788793523.6571925
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -188,7 +188,7 @@
     "ant_cost_usd": 2.813750450000001,
     "ant_input": 242459,
     "ant_output": 12283,
-    "commands": 13,
+    "commands": 14,
     "followers": 1,
     "image_translations": 4,
     "oai_cache_write": 11447,
@@ -197,7 +197,7 @@
     "oai_input": 155553,
     "oai_output": 1565,
     "oai_reasoning": 0,
-    "text_translations": 263,
+    "text_translations": 264,
     "tokens_completion": 19021,
     "tokens_prompt": 4390324,
     "tokens_prompt_cached": 138368,
@@ -1747,7 +1747,7 @@
         ]
       },
       "C6c708f629dd38d6864669ecacf7712f4": {
-        "acknowledgements": "all",
+        "acknowledgements": "off",
         "enabled": true,
         "items": [
           {
