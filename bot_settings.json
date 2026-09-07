@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "a16242680e8900157992fbfb6c237b1d9fad8a4bf14c181c416457a0d18a9759",
-    "updated_at_iso": "2026-09-07T00:40:39.464580+00:00",
-    "updated_at_unix": 1788741639.4645796
+    "state_hash": "f13e3664a7cefa087c452548a29a4f58ef4d798efeb3128e756c2a1d328a05af",
+    "updated_at_iso": "2026-09-07T08:13:22.338809+00:00",
+    "updated_at_unix": 1788768802.3388085
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -150,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 00:40:38",
+    "last_updated": "2026-09-07 07:51:13",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -332,6 +332,19 @@
       "華新麗華",
       "ORISTAR"
     ]
+  },
+  "factory_line_settings": {
+    "groups": {
+      "C28bb7127640539f3c1bc743ecdf61a24": {
+        "acknowledgements": "all",
+        "edit_translation": true,
+        "native_mentions": true,
+        "sharing": true,
+        "station_tools": true,
+        "translation_mode": "all"
+      }
+    },
+    "stations": []
   },
   "fewshot_mode": "messages",
   "flex_enabled": false,
