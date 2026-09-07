@@ -1,0 +1,117 @@
+{
+  "version": "2026-09-07.1",
+  "purpose": "Offline regression and prompt/local-latency comparison only. Targets are manually specified fixtures, not model generations or measured accuracy.",
+  "samples": [
+    {
+      "id": "routine_id_1",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Besok saya masuk kerja seperti biasa.",
+      "target": "明天我照常上班。"
+    },
+    {
+      "id": "routine_id_2",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Nanti saya kirim fotonya setelah makan.",
+      "target": "等一下吃完飯我再傳照片。"
+    },
+    {
+      "id": "routine_id_3",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Terima kasih, nanti saya kabari lagi.",
+      "target": "謝謝，我晚點再通知你。"
+    },
+    {
+      "id": "routine_id_4",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Saya sudah membaca pesan yang dikirim tadi.",
+      "target": "剛才傳的訊息我已經看了。"
+    },
+    {
+      "id": "routine_id_5",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Tolong kirim foto kemasan ke grup ini.",
+      "target": "請把包裝的照片傳到這個群組。"
+    },
+    {
+      "id": "routine_id_6",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Hari ini saya pulang bersama teman.",
+      "target": "今天我和朋友一起回家。"
+    },
+    {
+      "id": "packing_progress_today",
+      "src": "zh",
+      "tgt": "id",
+      "source": "今天下午再確認包裝進度。",
+      "target": "Sore ini, periksa lagi progres pengemasan."
+    },
+    {
+      "id": "packing_progress_tomorrow",
+      "src": "zh",
+      "tgt": "id",
+      "source": "明天下午再確認包裝進度。",
+      "target": "Besok sore, periksa lagi progres pengemasan."
+    },
+    {
+      "id": "pmi_pending",
+      "src": "zh",
+      "tgt": "id",
+      "source": "PMI還沒檢測。",
+      "target": "PMI belum diperiksa.",
+      "bad_target": "PMI sudah diperiksa."
+    },
+    {
+      "id": "pmi_pending_typo",
+      "src": "zh",
+      "tgt": "id",
+      "source": "PMI還没檢測。",
+      "target": "PMI belum diuji.",
+      "bad_target": "PMI sudah diuji."
+    },
+    {
+      "id": "pmi_pending_nominal",
+      "src": "zh",
+      "tgt": "id",
+      "source": "PMI檢驗尚未完成。",
+      "target": "Pemeriksaan PMI belum selesai.",
+      "bad_target": "Pemeriksaan PMI sudah selesai."
+    },
+    {
+      "id": "pmi_completed",
+      "src": "zh",
+      "tgt": "id",
+      "source": "PMI檢測已經完成。",
+      "target": "Pemeriksaan PMI sudah selesai.",
+      "bad_target": "Pemeriksaan PMI belum selesai."
+    },
+    {
+      "id": "pmi_instrument",
+      "src": "zh",
+      "tgt": "id",
+      "source": "PMI一定要檢測。",
+      "target": "Pemeriksaan PMI wajib dilakukan.",
+      "bad_target": "Alat PMI wajib diperiksa."
+    },
+    {
+      "id": "data_heavy",
+      "src": "zh",
+      "tgt": "id",
+      "source": "請核對 I5、I15、BF3、E11 各機台的生產紀錄與目前的包裝進度。",
+      "target": "Cocokkan catatan produksi mesin I5, I15, BF3, dan E11 dengan progres pengemasan saat ini."
+    },
+    {
+      "id": "critical_mixup",
+      "src": "zh",
+      "tgt": "id",
+      "source": "禁止混料，必須立即停機。",
+      "target": "Dilarang mencampur material. Mesin harus segera dihentikan.",
+      "bad_target": "Boleh mencampur material. Mesin harus segera dijalankan."
+    }
+  ]
+}

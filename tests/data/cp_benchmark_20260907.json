@@ -1,1 +1,453 @@
-
+{
+  "baseline_commit": "617463f23ee74902b52fb4ac52a9ce6f93d2d653",
+  "build": "2026-09-07.factory-cp.3",
+  "verification": {
+    "tests_passed": 1257,
+    "subtests_passed": 438,
+    "factory_assets_ok": true
+  },
+  "before": {
+    "mode": "offline",
+    "network": "blocked",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "timing_scope": "local reference retrieval only; warmed process caches, no request memo",
+    "prompt_metric": "characters, not billed tokens",
+    "runs_per_sample": 9,
+    "corpus_sha256": "6bd280382a16808bc4595fdeb31037391f0625c5db707ada9c76a71134fd29b5",
+    "repo": "/workspace/scratch/65f1f6f36c84/review/extreme-before",
+    "rows": [
+      {
+        "id": "routine_id_1",
+        "source": "Besok saya masuk kerja seperti biasa.",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 3054,
+        "prompt_sha256": "cfdeeb413b2e06dbd1ba83f5d09c30997dad8e7eb510da6a755b17c0196e7207",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.501,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_2",
+        "source": "Nanti saya kirim fotonya setelah makan.",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 2958,
+        "prompt_sha256": "5c9f56d8dc6457bc6569495dae6133964e3164f3bc63eac020480eb50ad72529",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.246,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_3",
+        "source": "Terima kasih, nanti saya kabari lagi.",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 3132,
+        "prompt_sha256": "58917e9337571a89a47a7dd41d00ab85f907a44daad28f8975d1890f68398250",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.317,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_4",
+        "source": "Saya sudah membaca pesan yang dikirim tadi.",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 3120,
+        "prompt_sha256": "09c938f784999a55bc6879dd8e2400b635d48dedfa7c6d2b95c0d63f6f857f73",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.844,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_5",
+        "source": "Tolong kirim foto kemasan ke grup ini.",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 3215,
+        "prompt_sha256": "5aaeef785aea21313201323b044f8ee6340a7f97e62bd66555f83dab5fb241da",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.505,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_6",
+        "source": "Hari ini saya pulang bersama teman.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3131,
+        "prompt_sha256": "7c27bf5f8b7fb60fcdd2641f69eae04c2f69ecf575d90f26e01100821628c1e8",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.236,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "packing_progress_today",
+        "source": "今天下午再確認包裝進度。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 5089,
+        "prompt_sha256": "2f251f0d51d9bbbe4348ff84ec4dfc2fdc7330cd02c2779dd0e3bb6a2c95bb09",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:23",
+          "month_end_staffing_target_without_invented_unit"
+        ],
+        "reference_lookup_median_ms": 8.035,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "packing_progress_tomorrow",
+        "source": "明天下午再確認包裝進度。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 5089,
+        "prompt_sha256": "18a688865c85d17dabb56de79ef010ea0073e9a32de226ea45e71cf354df9540",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "month_end_staffing_target_without_invented_unit",
+          "example:23"
+        ],
+        "reference_lookup_median_ms": 7.8,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "pmi_pending",
+        "source": "PMI還沒檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 4915,
+        "prompt_sha256": "933d8119b976cb479432eb97eca601cf64f6b40a674dface08e0dd50c02a902f",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 7.287,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      },
+      {
+        "id": "pmi_pending_typo",
+        "source": "PMI還没檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3938,
+        "prompt_sha256": "12f42581a7feaa1debff2f26d478153c520bf366afaf5f8d90c552e14f97d87f",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 7.429,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      },
+      {
+        "id": "pmi_pending_nominal",
+        "source": "PMI檢驗尚未完成。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 7634,
+        "prompt_sha256": "73ed9526e041e6b0a84931f45ab14c7fe0bb37d6ca39026a6df1082b8859d6cd",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "pmi_grade_verification_bundle_packaging",
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 7.705,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      },
+      {
+        "id": "pmi_completed",
+        "source": "PMI檢測已經完成。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 7746,
+        "prompt_sha256": "a014860056a149ee57204d52a79a4d64ae525dc4b467e45ffb4103b504fd425c",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "pmi_grade_verification_bundle_packaging",
+          "erp_release_data_to_ol_status",
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 7.4,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      },
+      {
+        "id": "pmi_instrument",
+        "source": "PMI一定要檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 5213,
+        "prompt_sha256": "63aa1fb9a0b8305a5578210ddaad09220d4029275032f25dbbb3d9879cd064d2",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:7",
+          "example:6",
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 7.407,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      },
+      {
+        "id": "data_heavy",
+        "source": "請核對 I5、I15、BF3、E11 各機台的生產紀錄與目前的包裝進度。",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 5703,
+        "prompt_sha256": "f8993cd27e23a0cfc4ec0307e19aeebb4fe18f33832be6def8ec4c5cfb33e8b4",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "month_end_staffing_target_without_invented_unit",
+          "polishing_large_bar_month_end_priority"
+        ],
+        "reference_lookup_median_ms": 9.263,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "critical_mixup",
+        "source": "禁止混料，必須立即停機。",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 4698,
+        "prompt_sha256": "9c5fd56d07f3889bf439594be3d7213f74f2c37ea75edf978ff7d079b6aef356",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:25"
+        ],
+        "reference_lookup_median_ms": 8.65,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": false
+      }
+    ],
+    "summary": {
+      "samples": 15,
+      "prompt_chars_total": 68635,
+      "reference_lookup_median_ms": 7.4,
+      "good_fixtures_accepted": 15,
+      "bad_fixtures_rejected": 0,
+      "bad_fixture_count": 6
+    }
+  },
+  "after": {
+    "mode": "offline",
+    "network": "blocked",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "timing_scope": "local reference retrieval only; warmed process caches, no request memo",
+    "prompt_metric": "characters, not billed tokens",
+    "runs_per_sample": 9,
+    "corpus_sha256": "6bd280382a16808bc4595fdeb31037391f0625c5db707ada9c76a71134fd29b5",
+    "repo": "/workspace/scratch/65f1f6f36c84/review/line-translator-bot-main",
+    "rows": [
+      {
+        "id": "routine_id_1",
+        "source": "Besok saya masuk kerja seperti biasa.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3054,
+        "prompt_sha256": "cfdeeb413b2e06dbd1ba83f5d09c30997dad8e7eb510da6a755b17c0196e7207",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 2.442,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_2",
+        "source": "Nanti saya kirim fotonya setelah makan.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 2958,
+        "prompt_sha256": "5c9f56d8dc6457bc6569495dae6133964e3164f3bc63eac020480eb50ad72529",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 2.518,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_3",
+        "source": "Terima kasih, nanti saya kabari lagi.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3132,
+        "prompt_sha256": "58917e9337571a89a47a7dd41d00ab85f907a44daad28f8975d1890f68398250",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 3.781,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_4",
+        "source": "Saya sudah membaca pesan yang dikirim tadi.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3120,
+        "prompt_sha256": "09c938f784999a55bc6879dd8e2400b635d48dedfa7c6d2b95c0d63f6f857f73",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 2.664,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_5",
+        "source": "Tolong kirim foto kemasan ke grup ini.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3215,
+        "prompt_sha256": "5aaeef785aea21313201323b044f8ee6340a7f97e62bd66555f83dab5fb241da",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 2.482,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "routine_id_6",
+        "source": "Hari ini saya pulang bersama teman.",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3131,
+        "prompt_sha256": "7c27bf5f8b7fb60fcdd2641f69eae04c2f69ecf575d90f26e01100821628c1e8",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 2.635,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "packing_progress_today",
+        "source": "今天下午再確認包裝進度。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3168,
+        "prompt_sha256": "0319d6330ad8ac93160598d9bbfb9a05ee277531d90e45bf1038f45f08d58218",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 4.999,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "packing_progress_tomorrow",
+        "source": "明天下午再確認包裝進度。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 3168,
+        "prompt_sha256": "a2716479ca79f03b82120d523321f27731f7e01321797ee3574bf84754138b9a",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 5.156,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "pmi_pending",
+        "source": "PMI還沒檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 5405,
+        "prompt_sha256": "b4d70080d28eff3e0402c83d40ef84d406e5fc158938ee8343387d70b4ea178d",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:8",
+          "pmi_grade_verification_bundle_packaging"
+        ],
+        "reference_lookup_median_ms": 6.416,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      },
+      {
+        "id": "pmi_pending_typo",
+        "source": "PMI還没檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 4855,
+        "prompt_sha256": "224276fb7cfcd9ec2c20134d319225a14e3c8fb60fd4c56df97f3fb13b3f43e0",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 5.838,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      },
+      {
+        "id": "pmi_pending_nominal",
+        "source": "PMI檢驗尚未完成。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 7636,
+        "prompt_sha256": "8abbbacc71d4c81240477ddaee99c55065395767f35cad79a75d55737009bf6a",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "pmi_grade_verification_bundle_packaging",
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 5.778,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      },
+      {
+        "id": "pmi_completed",
+        "source": "PMI檢測已經完成。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 7511,
+        "prompt_sha256": "c06f08e3502429231346785c4c3c0883f45329281dd4e3f838f29a7fd4afccaf",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "pmi_grade_verification_bundle_packaging",
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 5.608,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      },
+      {
+        "id": "pmi_instrument",
+        "source": "PMI一定要檢測。",
+        "model_selected": "gpt-5.6-luna",
+        "prompt_chars": 4926,
+        "prompt_sha256": "91b50ae890ae1cac0e6e4b7819a58ea0e70e79f40e89bd969ae11d03dcbb9535",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "example:8"
+        ],
+        "reference_lookup_median_ms": 5.734,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      },
+      {
+        "id": "data_heavy",
+        "source": "請核對 I5、I15、BF3、E11 各機台的生產紀錄與目前的包裝進度。",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 5703,
+        "prompt_sha256": "f8993cd27e23a0cfc4ec0307e19aeebb4fe18f33832be6def8ec4c5cfb33e8b4",
+        "mocked_generation_calls": 1,
+        "reference_ids": [
+          "month_end_staffing_target_without_invented_unit",
+          "polishing_large_bar_month_end_priority"
+        ],
+        "reference_lookup_median_ms": 6.17,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": null
+      },
+      {
+        "id": "critical_mixup",
+        "source": "禁止混料，必須立即停機。",
+        "model_selected": "gpt-5.6-terra",
+        "prompt_chars": 4303,
+        "prompt_sha256": "8eeef7a8da0a6b57f6b004e17761332953909838589beff694e9106b492c8358",
+        "mocked_generation_calls": 1,
+        "reference_ids": [],
+        "reference_lookup_median_ms": 5.829,
+        "good_fixture_accepted": true,
+        "bad_fixture_rejected": true
+      }
+    ],
+    "summary": {
+      "samples": 15,
+      "prompt_chars_total": 65285,
+      "reference_lookup_median_ms": 5.156,
+      "good_fixtures_accepted": 15,
+      "bad_fixtures_rejected": 6,
+      "bad_fixture_count": 6
+    }
+  }
+}
