@@ -9,6 +9,7 @@ import copy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 import hashlib
 import json
 import os
@@ -26,10 +27,10 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from linebot.v3.messaging import Message, TextMessage, QuickReply, QuickReplyItem, PostbackAction
 
 import line_translation_delivery as delivery
-from line_factory_store import FeatureStore, configured_store, StoreError, encode
+from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-07.factory-tools.1"
+BUILD_ID = "2026-09-07.factory-speed.2"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
@@ -154,6 +155,29 @@ def station_scope():
     return hashlib.sha256(station_prompt().encode()).hexdigest()[:16] if _STATION.get() else ""
 
 
+def measure_delivery(kind):
+    """Include pre-translation storage and LINE delivery in request timing."""
+    def decorate(fn):
+        @wraps(fn)
+        def run(*args, **kwargs):
+            with measure_storage() as stats:
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    from flask import current_app, has_app_context
+                    if has_app_context():
+                        logger = current_app.logger
+                    else:
+                        import logging
+                        logger = logging.getLogger("app")
+                    logger.info("[DeliveryPerf] kind=%s total=%dms sent=%s storage=%dms storage_calls=%d storage_skipped=%d",
+                                kind, (time.monotonic() - stats["started"]) * 1000,
+                                (str(round(stats["delivered_ms"])) + "ms") if stats["delivered_ms"] is not None else "none",
+                                stats["milliseconds"], stats["requests"], stats["skipped"])
+        return run
+    return decorate
+
+
 class FactoryHub:
     def __init__(self, app, host, store=None):
         self.app, self.h = app, host
@@ -189,23 +213,10 @@ class FactoryHub:
             return self._revision_db
 
     def _update_revision(self, key, advance):
-        if self.revisions.get(key) is None:
-            try:
-                remote = self.store.get(key)
-                if remote:
-                    self.revisions.update(key, lambda old: old or remote, 30 * 86400)
-            except StoreError:
-                pass
         latest = self.revisions.update(key, advance, 30 * 86400)
         try:
-            remote = self.store.update(key, advance, 30 * 86400)
-            def newer(old):
-                if not old or remote.get("cancelled"):
-                    return remote
-                if old.get("cancelled"):
-                    return old
-                return max((old, remote), key=lambda r: (r.get("timestamp", 0), r.get("order", "")))
-            latest = self.revisions.update(key, newer, 30 * 86400)
+            remote = self.store.merge_revision(key, latest, 30 * 86400)
+            latest = self.revisions.merge_revision(key, remote, 30 * 86400)
         except StoreError:
             self.app.logger.warning("[FactoryTools] cloud interactions unavailable; local revision journal retained")
         return latest
@@ -311,19 +322,27 @@ class FactoryHub:
                 if context.get("group_id") == group and context.get("msg_id") == mid:
                     cache.pop(token, None)
 
+    def _wants_notice(self, group, record):
+        ack = self.options(group)["acknowledgements"]
+        return group.startswith(("C", "R")) and (
+            ack == "all" or (ack == "work" and bool(_WORK.search(record.get("original", "")))))
+
     def save_context(self, token, record):
         record = copy.deepcopy(record)
         record["token"] = token
         record["factory_event"] = record.get("factory_event") or self.payload_metadata()
         remaining = max(1, int(record.get("expires_at", time.time() + 86400) - time.time()))
-        self.store.put("context:" + token, record, remaining)
-        group, mid = record.get("group_id"), record.get("msg_id")
-        if group and mid:
-            key = "source-contexts:" + self._rev_key(group, mid)
-            def index(previous):
-                tokens = (previous or {}).get("tokens", [])
-                return {"tokens": list(dict.fromkeys(tokens + [token]))}
-            self.store.update(key, index, 30 * 86400)
+        group, mid = record.get("group_id", ""), record.get("msg_id")
+        source_key = "source-contexts:" + self._rev_key(group, mid) if group and mid else None
+        notice = None
+        if self._wants_notice(group, record):
+            record["_notice_prepared"] = True
+            members = self.h.get("group_user_names", {}).get(group, {})
+            notice = {**record, "created_at": time.time(), "responses": {},
+                      "delivery_state": "prepared",
+                      "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid)},
+                      "roster_basis": "known_chat_members"}
+        self.store.save_interaction(record, remaining, source_key=source_key, notice=notice)
         return record
 
     def get_context(self, token, group=None):
@@ -337,23 +356,48 @@ class FactoryHub:
 
     def _context_for_delivery(self, messages, payload, rendered):
         group = payload.get("group_id") or payload.get("user_id") or ""
+        def tokens(value):
+            if isinstance(value, dict):
+                if value.get("type") == "postback":
+                    token = dict(urllib.parse.parse_qsl(value.get("data") or "")).get("token")
+                    if token:
+                        yield token
+                for child in value.values():
+                    yield from tokens(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from tokens(child)
+        seen = set()
         for message in messages:
-            qr = getattr(message, "quick_reply", None)
-            for item in getattr(qr, "items", []) or []:
-                data = getattr(getattr(item, "action", None), "data", "") or ""
-                token = dict(urllib.parse.parse_qsl(data)).get("token")
-                if token:
+            # Flex buttons and Quick Reply can both already own this context.
+            for token in tokens(message.to_dict()):
+                if token in seen:
+                    continue
+                seen.add(token)
+                with self.h.get("_translation_action_lock", self._lock):
+                    record = copy.deepcopy(self.h.get("_translation_action_cache", {}).get(token))
+                if not record:
                     record = self.get_context(token, group)
-                    if record:
-                        metadata = payload.get("factory_event")
-                        if metadata and not record.get("factory_event") and str(record.get("msg_id")) == str(metadata.get("message_id")):
-                            record["factory_event"] = metadata
-                            record = self.save_context(token, record)
-                            with self.h.get("_translation_action_lock", self._lock):
-                                cache = self.h.get("_translation_action_cache", {})
-                                if token in cache:
-                                    cache[token] = record
-                        return token, record
+                elif (record.get("expires_at", 0) <= time.time() or record.get("group_id") != group or
+                      not self.current(record.get("factory_event"))):
+                    record = None
+                if record:
+                    metadata = payload.get("factory_event")
+                    if metadata and not record.get("factory_event") and str(record.get("msg_id")) == str(metadata.get("message_id")):
+                        record["factory_event"] = metadata
+                        record = self.save_context(token, record)
+                        # Media extraction may register controls before the
+                        # delivery job supplies its revision. Bind that receipt
+                        # too, preserving any concurrently recorded responses.
+                        self.store.update("notice:" + group + ":" + token,
+                                          lambda row: {**row, "factory_event": metadata}
+                                          if row and not row.get("factory_event") else row,
+                                          7 * 86400)
+                        with self.h.get("_translation_action_lock", self._lock):
+                            cache = self.h.get("_translation_action_cache", {})
+                            if token in cache:
+                                cache[token] = record
+                    return token, record
         original = (payload.get("source_text") or payload.get("ocr_text") or
                     payload.get("transcribed_text") or payload.get("document_text") or "")
         if not original:
@@ -384,15 +428,10 @@ class FactoryHub:
                 buttons.append(("📤 分享/Bagikan", "factory_share"))
             if options["station_tools"]:
                 buttons.append(("🏭 工具/Alat", "factory_open"))
-            ack = options["acknowledgements"]
-            if group.startswith(("C", "R")) and (ack == "all" or (ack == "work" and _WORK.search(record["original"]))):
-                members = self.h.get("group_user_names", {}).get(group, {})
-                notice = {**record, "created_at": time.time(), "responses": {},
-                          "delivery_state": "prepared",
-                          "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid)},
-                          "roster_basis": "known_chat_members"}
+            if self._wants_notice(group, record):
                 try:
-                    self.store.update("notice:" + group + ":" + token, lambda previous: previous or notice, 7 * 86400)
+                    if not record.get("_notice_prepared"):
+                        record = self.save_context(token, record)
                     payload["factory_notice_token"] = token
                     buttons.extend([("✅ 了解/Paham", "factory_ack"), ("❓ 說明/Jelaskan", "factory_help"),
                                     ("📋 確認/Status", "factory_receipts")])
@@ -424,6 +463,7 @@ class FactoryHub:
         return messages
 
     def delivery_accepted(self, payload, plan):
+        mark_delivery()
         token = plan.get("factory_notice_token")
         if not token:
             return

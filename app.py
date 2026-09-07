@@ -4049,14 +4049,35 @@ def _scoped_translation_casebook_inputs(group_id=None):
 
 def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3, group_id=None):
     examples, corrections = _scoped_translation_casebook_inputs(group_id)
-    return translation_casebook_module.retrieve(
+    glossary = globals().get("GLOSSARY_LOOKUP") or {}
+    memo = getattr(globals().get("_tl"), "casebook_lookup_memo", None)
+    key = None
+    if memo is not None:
+        # The same message is validated at several stages. Reuse only its
+        # identical reference search, never the validation decision. Snapshot
+        # actual scoped assets so live corrections/glossary edits invalidate it.
+        examples, corrections, glossary = copy.deepcopy((examples, corrections, glossary))
+        try:
+            snapshot = json.dumps([text, src, tgt, max_cases, examples, corrections, glossary],
+                                  ensure_ascii=False, separators=(",", ":"))
+            key = hashlib.sha256(snapshot.encode()).hexdigest()
+        except (TypeError, ValueError):
+            pass  # Unserializable custom assets take the normal retrieval path.
+        if key in memo:
+            return copy.deepcopy(memo[key])
+    result = translation_casebook_module.retrieve(
         text, src, tgt,
         examples=examples,
         corrections=corrections,
         max_cases=max_cases,
         min_score=0.22,
-        glossary=globals().get("GLOSSARY_LOOKUP") or {},
+        glossary=glossary,
     )
+    if key is not None:
+        if len(memo) >= 8:
+            memo.pop(next(iter(memo)))
+        memo[key] = copy.deepcopy(result)
+    return result
 
 
 _CASEBOOK_BOOT_SELFTEST = _retrieve_verified_translation_cases(
@@ -13270,6 +13291,7 @@ def _translation_job_scope():
     previous_tl = dict(_tl.__dict__)
     previous_delivery = dict(_translation_delivery_state.__dict__)
     _tl.__dict__.clear()
+    _tl.casebook_lookup_memo = {}
     _translation_delivery_state.__dict__.clear()
     leases = {}
     try:
@@ -13364,8 +13386,9 @@ def _schedule_variant_translation(event, context, mode, group_id, user_id):
 
 def _durable_translation_event(kind):
     def decorate(func):
+        @line_factory_features.measure_delivery(kind)
         @functools.wraps(func)
-        def run(event):
+        def dispatch(event):
             scope = factory_hub.message_scope(event, kind) if factory_hub else contextlib.nullcontext(True)
             with scope as accepted:
                 if not accepted:
@@ -13385,6 +13408,11 @@ def _durable_translation_event(kind):
                         return func(event)
                     except translation_retry_queue_module.LeaseLostError:
                         logger.info("[TranslationOutbox] source superseded or owned: %s", key[-24:])
+        @functools.wraps(func)
+        def run(event):
+            # LINE dispatches by argspec, including varargs. Keep its one-event
+            # interface outside the generic timing wrapper.
+            return dispatch(event)
         return run
     return decorate
 
@@ -14105,6 +14133,7 @@ def _complete_durable_text_job(job_key, lease_owner=None):
         return False
 
 
+@line_factory_features.measure_delivery("retry")
 def _run_translation_retry_job(job, owner):
     """One context and one live lease cover extraction, generation and delivery."""
     key = job["job_key"]
@@ -14113,6 +14142,7 @@ def _run_translation_retry_job(job, owner):
     previous_tl = dict(_tl.__dict__)
     previous_delivery = dict(_translation_delivery_state.__dict__)
     _tl.__dict__.clear()
+    _tl.casebook_lookup_memo = {}
     _translation_delivery_state.__dict__.clear()
     try:
         with translation_retry_queue_module.maintain_lease(key, owner=owner) as check:
@@ -18529,40 +18559,61 @@ def handle_pkg_command(text):
     return format_packaging_reply(text, PACKAGING_LOOKUP)
 
 
+_line_profile_cache = {}
+_line_profile_lock = threading.Lock()
+
+
+def _get_line_member_profile(chat_id, user_id):
+    """Share name/avatar lookups, including an absent avatar or failed lookup."""
+    key, now = (str(chat_id or ""), str(user_id)), time.monotonic()
+    with _line_profile_lock:
+        cached = _line_profile_cache.get(key)
+        if cached and cached[0] > now:
+            return cached[1]
+        if len(_line_profile_cache) >= 1024:
+            for expired in [k for k, row in _line_profile_cache.items() if row[0] <= now]:
+                _line_profile_cache.pop(expired, None)
+            if len(_line_profile_cache) >= 1024:
+                _line_profile_cache.pop(next(iter(_line_profile_cache)))
+        # Other simultaneous messages can use existing display information
+        # while this optional lookup runs; they must not duplicate the request.
+        _line_profile_cache[key] = (now + 10, None)
+    profile = None
+    try:
+        with ApiClient(configuration) as api_client:
+            api = MessagingApi(api_client)
+            if chat_id and not str(chat_id).startswith("U"):
+                lookup = api.get_room_member_profile if str(chat_id).startswith("R") else api.get_group_member_profile
+                try:
+                    profile = lookup(chat_id, user_id, _request_timeout=(1, 2))
+                except Exception as exc:
+                    # A different endpoint cannot fix a timeout / rate limit.
+                    # Direct-profile fallback remains useful for 403/404 only.
+                    if getattr(exc, "status", None) not in (403, 404):
+                        raise
+            if profile is None:
+                profile = api.get_profile(user_id, _request_timeout=(1, 2))
+    except Exception as exc:
+        logger.debug("[LineProfile] optional lookup unavailable (%s)", type(exc).__name__)
+    finally:
+        with _line_profile_lock:
+            _line_profile_cache[key] = (time.monotonic() + (600 if profile is not None else 15), profile)
+    return profile
+
+
 def get_display_name(group_id, user_id):
     """Get the author's LINE display name without exposing raw user IDs.
 
-    Group, room and direct-profile APIs are tried in order because ``group_id``
-    may actually be a room ID or a DM target in shared translation paths.
-    Successful lookups are cached for sender-name and sender-avatar modes.
+    The chat ID selects the appropriate profile API. Name and avatar retrieval
+    share a bounded cache, including unavailable optional profile information.
     """
     if not user_id:
         return None
     if group_id in group_user_names and user_id in group_user_names[group_id]:
         return group_user_names[group_id][user_id]
 
-    profile = None
-    try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            if group_id:
-                try:
-                    profile = api.get_group_member_profile(group_id, user_id)
-                except Exception:
-                    try:
-                        profile = api.get_room_member_profile(group_id, user_id)
-                    except Exception:
-                        profile = None
-            if profile is None:
-                try:
-                    profile = api.get_profile(user_id)
-                except Exception:
-                    profile = None
-    except Exception as e:
-        logger.debug("Failed to create LINE profile client for %s: %s", user_id, e)
-
+    profile = _get_line_member_profile(group_id, user_id)
     if profile is None:
-        logger.warning("Failed to get display name for %s", user_id)
         return None
 
     name = str(getattr(profile, 'display_name', '') or '').strip()
@@ -18583,8 +18634,7 @@ def get_user_picture_url(chat_id, user_id):
 
     The URL is cached per user.  A cached display name alone is not enough:
     older settings may contain names but no picture URLs, so this function
-    independently fills the avatar cache.  Group, room, and direct-profile
-    APIs are tried in that order and all failures are non-fatal.
+    fills the avatar cache through the shared, bounded profile lookup.
     """
     if not user_id:
         return ""
@@ -18592,26 +18642,7 @@ def get_user_picture_url(chat_id, user_id):
     if cached.startswith("https://"):
         return cached
 
-    profile = None
-    try:
-        with ApiClient(configuration) as api_client:
-            api = MessagingApi(api_client)
-            if chat_id:
-                try:
-                    profile = api.get_group_member_profile(chat_id, user_id)
-                except Exception:
-                    try:
-                        profile = api.get_room_member_profile(chat_id, user_id)
-                    except Exception:
-                        profile = None
-            if profile is None:
-                try:
-                    profile = api.get_profile(user_id)
-                except Exception:
-                    profile = None
-    except Exception as e:
-        logger.debug("Failed to create LINE profile client for %s: %s", user_id, e)
-
+    profile = _get_line_member_profile(chat_id, user_id)
     if profile is None:
         return ""
 
@@ -36711,19 +36742,22 @@ def _get_translation_action_context(token, group_id=None):
         return None
     now = time.time()
     with _translation_action_lock:
-        record = _translation_action_cache.get(token)
-        if not record and globals().get("factory_hub"):
-            record = factory_hub.get_context(token, group_id)
-        if not record:
-            return None
-        if globals().get("factory_hub") and not factory_hub.current(record.get("factory_event")):
-            return None
-        if float(record.get("expires_at", 0)) <= now:
+        cached = _translation_action_cache.get(token)
+        record = dict(cached) if cached else None
+    # A slow cloud read must not hold the global lock for every chat's buttons.
+    if not record and globals().get("factory_hub"):
+        record = factory_hub.get_context(token, group_id)
+    if not record:
+        return None
+    if globals().get("factory_hub") and not factory_hub.current(record.get("factory_event")):
+        return None
+    if float(record.get("expires_at", 0)) <= now:
+        with _translation_action_lock:
             _translation_action_cache.pop(token, None)
-            return None
-        if group_id and record.get("group_id") and record.get("group_id") != group_id:
-            return None
-        return dict(record)
+        return None
+    if group_id and record.get("group_id") and record.get("group_id") != group_id:
+        return None
+    return dict(record)
 
 
 def _translation_action_handover_rows(group_id, max_rows=120):

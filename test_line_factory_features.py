@@ -306,6 +306,8 @@ def test_cloud_interaction_outage_does_not_stop_translation_or_revision_guard(hu
         raise StoreError("cloud unavailable")
     monkeypatch.setattr(hub.store, "get", down)
     monkeypatch.setattr(hub.store, "update", down)
+    monkeypatch.setattr(hub.store, "merge_revision", down)
+    monkeypatch.setattr(hub.store, "save_interaction", down)
     with hub.message_scope(event(), "text") as active:
         assert active
         metadata = hub.payload_metadata()

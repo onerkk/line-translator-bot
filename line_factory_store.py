@@ -7,13 +7,16 @@ and offline tests; readiness reports distinguish it from cloud persistence.
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
-import urllib.request
+import requests
 
 
 class StoreError(RuntimeError):
@@ -22,6 +25,79 @@ class StoreError(RuntimeError):
 
 def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+_IO = ContextVar("factory_storage_io", default=None)
+
+
+@contextmanager
+def measure_storage():
+    stats = {"requests": 0, "milliseconds": 0.0, "skipped": 0, "delivered_ms": None,
+             "started": time.monotonic()}
+    marker = _IO.set(stats)
+    try:
+        yield stats
+    finally:
+        _IO.reset(marker)
+
+
+def mark_delivery():
+    stats = _IO.get()
+    if stats is not None and stats["delivered_ms"] is None:
+        stats["delivered_ms"] = (time.monotonic() - stats["started"]) * 1000
+
+
+_WRITE = """
+local function write(key, bucket, value, ttl)
+  redis.call('SET', key, value, 'EX', ttl)
+  redis.call('ZADD', bucket, tonumber(ARGV[1]) + tonumber(ttl), key)
+  redis.call('ZREMRANGEBYSCORE', bucket, '-inf', ARGV[1])
+  redis.call('EXPIRE', bucket, tonumber(ttl) + 86400)
+end
+"""
+
+_PUT = _WRITE + """
+write(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+return 1
+"""
+
+_REVISION = _WRITE + """
+local oldraw = redis.call('GET', KEYS[1])
+local incoming = cjson.decode(ARGV[2])
+if oldraw then
+  local old = cjson.decode(oldraw)
+  if old.cancelled then return oldraw end
+  if not incoming.cancelled and old.identity ~= incoming.identity then
+    local older = (tonumber(incoming.timestamp) or 0) < (tonumber(old.timestamp) or 0)
+    local tied = (tonumber(incoming.timestamp) or 0) == (tonumber(old.timestamp) or 0)
+    if not incoming.edited or older or (tied and (incoming.order or '') <= (old.order or '')) then
+      return oldraw
+    end
+  end
+  if oldraw == ARGV[2] then return oldraw end
+end
+write(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+return ARGV[2]
+"""
+
+_INTERACTION = _WRITE + """
+local source_value = nil
+if ARGV[5] == '1' then
+  local raw = redis.call('GET', KEYS[3])
+  local tokens = raw and cjson.decode(raw).tokens or {}
+  local found = false
+  for _, token in ipairs(tokens) do if token == ARGV[4] then found = true end end
+  if not found then
+    table.insert(tokens, ARGV[4])
+    source_value = '{"tokens":' .. cjson.encode(tokens) .. '}'
+  end
+end
+local oldnotice = ARGV[6] ~= '' and redis.call('GET', KEYS[5]) or nil
+write(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+if source_value then write(KEYS[3], KEYS[4], source_value, ARGV[7]) end
+if ARGV[6] ~= '' and not oldnotice then write(KEYS[5], KEYS[6], ARGV[6], ARGV[8]) end
+return 1
+"""
 
 
 _CAS = """
@@ -57,6 +133,9 @@ class FeatureStore:
         self.kind = "sqlite" if self.path else "upstash"
         self.prefix = "factory:{" + hashlib.sha256(namespace.encode()).hexdigest()[:20] + "}:"
         self._override = command
+        self._http = threading.local()
+        self._health_lock = threading.Lock()
+        self._unavailable_until = 0.0
         if not self.path and not command and (not self.url.startswith("https://") or not self.token):
             raise StoreError("工廠工具儲存設定不完整。")
 
@@ -70,19 +149,46 @@ class FeatureStore:
         return db
 
     def command(self, args):
-        if self._override:
-            return self._override(args)
-        req = urllib.request.Request(self.url, data=encode(args).encode(), method="POST",
-                                     headers={"Authorization": "Bearer " + self.token,
-                                              "Content-Type": "application/json"})
+        stats = _IO.get()
+        with self._health_lock:
+            unavailable = time.monotonic() < self._unavailable_until
+        if unavailable:
+            if stats is not None:
+                stats["skipped"] += 1
+            raise StoreError("工廠工具儲存正在恢復連線，操作尚未確認成功。")
+        started = time.monotonic()
+        if stats is not None:
+            stats["requests"] += 1
         try:
-            with urllib.request.urlopen(req, timeout=6) as response:
-                result = json.loads(response.read(2_000_000))
+            if self._override:
+                return self._override(args)
+            # Per-thread sessions reuse TLS/HTTP connections without sharing
+            # mutable session state across Flask worker threads. No SDK retries.
+            session = getattr(self._http, "session", None)
+            if session is None:
+                session = self._http.session = requests.Session()
+            with session.post(self.url, data=encode(args).encode(), stream=True,
+                              allow_redirects=False, timeout=(2, 3), headers={
+                                  "Authorization": "Bearer " + self.token,
+                                  "Content-Type": "application/json"}) as response:
+                if response.status_code != 200:
+                    raise ValueError("invalid storage status")
+                raw = response.raw.read(2_000_001, decode_content=True)
+                if len(raw) > 2_000_000:
+                    raise ValueError("storage response too large")
+                result = json.loads(raw)
             if "error" in result or "result" not in result:
                 raise ValueError("invalid storage response")
             return result["result"]
         except Exception as exc:
+            # One outage must not cost another full timeout at every button /
+            # revision stage in this request and every subsequent message.
+            with self._health_lock:
+                self._unavailable_until = time.monotonic() + 15
             raise StoreError("工廠工具儲存暫時無法連線，操作尚未確認成功。") from exc
+        finally:
+            if stats is not None:
+                stats["milliseconds"] += (time.monotonic() - started) * 1000
 
     @staticmethod
     def _bucket(key):
@@ -147,7 +253,77 @@ class FeatureStore:
         raise StoreError("同時有其他操作更新資料，請重新整理後再試。")
 
     def put(self, key, value, ttl=604800):
+        if value is None:
+            return self.delete(key)
+        if not self.path:
+            self.command(["EVAL", _PUT, 2, self.prefix + key,
+                          self.prefix + "index:" + self._bucket(key), time.time(), encode(value), max(1, int(ttl))])
+            return value
         return self.update(key, lambda _: value, ttl)
+
+    def merge_revision(self, key, incoming, ttl=2592000):
+        """Atomically compare source versions in one cloud round trip."""
+        if not self.path:
+            raw = self.command(["EVAL", _REVISION, 2, self.prefix + key,
+                                self.prefix + "index:" + self._bucket(key),
+                                time.time(), encode(incoming), max(1, int(ttl))])
+            return json.loads(raw)
+        def advance(old):
+            if old:
+                if old.get("cancelled"):
+                    return old
+                if not incoming.get("cancelled") and old.get("identity") != incoming.get("identity"):
+                    if not incoming.get("edited") or (
+                            incoming.get("timestamp", 0), incoming.get("order", "")) <= (
+                            old.get("timestamp", 0), old.get("order", "")):
+                        return old
+            return incoming
+        return self.update(key, advance, ttl)
+
+    def save_interaction(self, record, ttl, *, source_key=None, notice=None):
+        """Persist button context, source index and initial receipt together.
+
+        Existing acknowledgements are never replaced when a delivery retries.
+        JSON records retain canonical encoding for the older CAS update API.
+        """
+        token = record["token"]
+        context_key = "context:" + token
+        notice_key = "notice:" + str(record.get("group_id", "")) + ":" + token
+        ttl = max(1, int(ttl))
+        if not self.path:
+            keys = []
+            for key in (context_key, source_key or "unused-source", notice_key):
+                keys.extend([self.prefix + key, self.prefix + "index:" + self._bucket(key)])
+            self.command(["EVAL", _INTERACTION, 6, *keys, time.time(), encode(record), ttl, token,
+                          "1" if source_key else "0", encode(notice) if notice else "", 2592000, 604800])
+            return record
+        now = time.time()
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            def read(key):
+                row = db.execute("SELECT value FROM factory_state WHERE key=? AND expires>?", (key, now)).fetchone()
+                return json.loads(row[0]) if row else None
+            def write(key, value, duration):
+                db.execute("INSERT INTO factory_state VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE "
+                           "SET value=excluded.value,expires=excluded.expires,bucket=excluded.bucket",
+                           (key, self._bucket(key), encode(value), now + duration))
+            write(context_key, record, ttl)
+            if source_key:
+                tokens = (read(source_key) or {}).get("tokens", [])
+                if token not in tokens:
+                    write(source_key, {"tokens": tokens + [token]}, 2592000)
+            if notice and read(notice_key) is None:
+                write(notice_key, notice, 604800)
+            db.execute("DELETE FROM factory_state WHERE key IN "
+                       "(SELECT key FROM factory_state WHERE expires<=? LIMIT 100)", (now,))
+            db.commit()
+            return record
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def delete(self, key):
         return self.update(key, lambda _: None)
