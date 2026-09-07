@@ -1,6 +1,7 @@
 (function(){
   'use strict';
-  let state=null,editing=null,ready=false,sequence=0;
+  let state=null,editing=null,ready=false,sequence=0,receiptSequence=0,receiptBusy=false,lastReceiptAt=0;
+  const groupStorageKey='factory-selected-group-v1';
   const $=id=>document.getElementById('fa-'+id);
   function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
   function notice(text,error=false){$('notice').textContent=text;$('notice').className='factory-notice'+(error?' factory-error':'');$('notice').hidden=!text;}
@@ -13,6 +14,23 @@
   function guard(button,operation){return async event=>{event?.preventDefault();if(button.disabled)return;button.disabled=true;try{await operation();}catch(e){notice(e.message,true);}finally{button.disabled=false;}};}
   function option(value,label){const o=node('option',label);o.value=value;return o;}
   function group(){return $('group').value;}
+  function rememberedGroup(){try{return localStorage.getItem(groupStorageKey)||'';}catch(_){return '';}}
+  function rememberGroup(){try{localStorage.setItem(groupStorageKey,group());}catch(_){}}
+  function groupName(){return state?.groups.find(g=>g.id===group())?.name||'尚未選擇群組';}
+  function syncReceiptGroup(){
+    $('receipt-group').value=group();
+    $('receipt-scope').textContent='查詢群組：'+groupName();
+  }
+  function changeGroup(value){
+    $('group').value=value;rememberGroup();fillOptions();syncReceiptGroup();
+    $('receipts').replaceChildren();loadStations().catch(e=>notice(e.message,true));
+    loadReceipts().catch(e=>notice(e.message,true));
+  }
+  function refreshVisibleReceipts(){
+    if(!state||!group()||receiptBusy||document.visibilityState==='hidden'||Date.now()-lastReceiptAt<20000)return;
+    const rect=$('receipts-section').getBoundingClientRect();
+    if(rect.height>0&&rect.top<window.innerHeight&&rect.bottom>0)loadReceipts().catch(()=>{});
+  }
   function init(){
     if(ready)return;ready=true;
     const root=document.getElementById('factory-admin-root');
@@ -27,9 +45,10 @@
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
 <label>簡稱與設備背景<textarea id="fa-context" maxlength="1200" rows="3" placeholder="說明這個代碼代表什麼，僅供翻譯辨識"></textarea></label><div class="factory-grid"><label>中文作業說明<textarea id="fa-sop-zh" maxlength="5000" rows="5"></textarea></label><label>印尼文作業說明<textarea id="fa-sop-id" maxlength="5000" rows="5"></textarea></label></div>
 <label>相關表單<select id="fa-form-id"><option value="">不連結表單</option></select></label><div class="factory-row"><button id="fa-save-station" type="submit">儲存設備</button><button id="fa-reset-station" type="button" class="factory-secondary">取消編輯</button></div></form><div id="fa-qr-preview"></div></section>
-<section class="factory-card"><h2>作業確認紀錄</h2><p class="factory-hint">依上方選定群組顯示。這是同事主動按鈕回覆的紀錄；未回覆名單僅包含機器人已知成員。</p><button id="fa-load-receipts" type="button" class="factory-secondary">查看最新確認</button><div id="fa-receipts"></div></section>
+<section class="factory-card" id="fa-receipts-section"><h2>作業確認紀錄</h2><label>查詢群組<select id="fa-receipt-group"></select></label><p id="fa-receipt-scope" class="factory-hint"></p><p class="factory-hint">這是同事主動回覆的紀錄，了解不代表作業完成。未回覆名單僅包含機器人已知成員。此區顯示時每 20 秒更新，也可按下方按鈕查詢。</p><button id="fa-load-receipts" type="button" class="factory-secondary">查看最新確認</button><p id="fa-receipt-status" class="factory-hint" role="status" aria-live="polite"></p><div id="fa-receipts"></div></section>
 <section class="factory-card"><h2>圖文選單使用統計</h2><p class="factory-hint">LINE 以日本時間 UTC+9 統計，通常次日完成。少於 20 位點擊使用者時，官方可能不提供數據。</p><form id="fa-insight-form"><label>圖文選單 ID<input id="fa-menu" pattern="richmenu-[0-9a-f]{32}" placeholder="richmenu-…" required></label><div class="factory-grid"><label>開始日期<input type="date" id="fa-from" required></label><label>結束日期<input type="date" id="fa-to" required></label></div><label>統計方式<select id="fa-insight-mode"><option value="summary">期間彙總</option><option value="daily">每日統計</option></select></label><button id="fa-load-insight" type="submit">查詢官方統計</button></form><div id="fa-insight-result"></div></section>`;
-    $('group').addEventListener('change',()=>{fillOptions();loadStations().catch(e=>notice(e.message,true));$('receipts').replaceChildren();});
+    $('group').addEventListener('change',()=>changeGroup(group()));
+    $('receipt-group').addEventListener('change',()=>changeGroup($('receipt-group').value));
     $('refresh').addEventListener('click',guard($('refresh'),load));
     $('options-form').addEventListener('submit',guard($('save-options'),async()=>{
       const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked,sharing:$('share').checked,station_tools:$('station-tools').checked,acknowledgements:$('ack').value}});
@@ -42,21 +61,25 @@
     }));
     $('reset-station').addEventListener('click',resetStation);
     $('load-receipts').addEventListener('click',guard($('load-receipts'),loadReceipts));
+    window.setInterval(refreshVisibleReceipts,20000);
+    document.addEventListener('visibilitychange',refreshVisibleReceipts);
+    window.addEventListener('focus',refreshVisibleReceipts);
     $('insight-form').addEventListener('submit',guard($('load-insight'),loadInsight));
     const today=new Date(Date.now()+9*3600000),yesterday=new Date(today.getTime()-86400000),month=new Date(today.getTime()-30*86400000);
     $('from').value=month.toISOString().slice(0,10);$('to').value=yesterday.toISOString().slice(0,10);
   }
   async function load(){
-    init();const seq=++sequence,selected=group();notice('正在讀取設定…');const data=await call();if(seq!==sequence)return;
-    state=data;$('group').replaceChildren();$('station-group').replaceChildren(option('','所有群組'));
-    data.groups.forEach(g=>{$('group').append(option(g.id,g.name));$('station-group').append(option(g.id,g.name));});
+    init();const seq=++sequence,selected=group()||rememberedGroup();notice('正在讀取設定…');const data=await call();if(seq!==sequence)return;
+    state=data;$('group').replaceChildren();$('receipt-group').replaceChildren();$('station-group').replaceChildren(option('','所有群組'));
+    data.groups.forEach(g=>{$('group').append(option(g.id,g.name));$('receipt-group').append(option(g.id,g.name));$('station-group').append(option(g.id,g.name));});
     if(data.groups.some(g=>g.id===selected))$('group').value=selected;
+    rememberGroup();syncReceiptGroup();
     $('form-id').replaceChildren(option('','不連結表單'));(data.forms||[]).forEach(f=>$('form-id').append(option(f.id,f.title)));
     $('health').replaceChildren();const health=data.readiness;
     [['訊息編輯',health.edit_event_supported?'支援':'請更新 LINE SDK'],['原生點名',health.native_mentions_supported?'支援':'請更新 LINE SDK'],['LIFF 掃碼／分享',health.liff_configured?'已填 LIFF ID，需從手機驗證官方開關':'尚未設定 LIFF_ID'],['填表身分驗證',health.form_identity_configured?'已設定 LINE Login Channel ID':'尚未設定 LINE_LOGIN_CHANNEL_ID'],['互動紀錄儲存',health.persistent?'已連接持久儲存':health.storage_message||'請確認儲存設定']].forEach(([key,value])=>{$('health').append(node('p',key+'：'+value));});
     const reasons={missing_key:'未設定金鑰',quota_exhausted:'額度停用，請於 AI 頁重新測試',circuit_open:'連線暫停',eligible:'已設定，尚需實際呼叫確認',unsupported_capability:'不支援'};
     (health.provider?.providers||[]).forEach(p=>$('health').append(node('span',p.provider+' · '+(reasons[p.reason]||p.reason),'factory-pill')));
-    fillOptions();await loadStations();notice('');
+    fillOptions();await Promise.all([loadStations(),loadReceipts()]);notice('');
   }
   function fillOptions(){
     const settings={...state.defaults,...(state.settings.groups||{})[group()]};
@@ -87,12 +110,31 @@
     const old=$('qr-preview').dataset.url;if(old)URL.revokeObjectURL(old);$('qr-preview').dataset.url=objectUrl;$('qr-preview').replaceChildren(node('h3',row.code+' · '+row.name_zh),img,link);$('qr-preview').scrollIntoView({behavior:'smooth',block:'center'});
   }
   async function loadReceipts(){
-    const chosen=group(),data=await call('/receipts?group_id='+encodeURIComponent(chosen));if(chosen!==group())return;$('receipts').replaceChildren();
-    if(!data.notices.length){$('receipts').append(node('p','目前沒有作業確認紀錄。','factory-hint'));return;}
-    for(const row of data.notices){const card=node('details'),title=node('summary',(row.current?'':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+row.original.slice(0,80));card.append(title,node('p',row.original,'factory-preserve'));
-      const responses=Object.entries(row.responses||{});for(const [status,label] of [['understood','✅ 已了解'],['needs_help','❓ 需要說明']]){card.append(node('p',label+'：'+(responses.filter(([,r])=>r.status===status).map(([,r])=>r.name).join('、')||'—')));}
-      card.append(node('p','⏳ 已知成員未回覆：'+(Object.entries(row.expected||{}).filter(([uid])=>!row.responses?.[uid]).map(([,name])=>name).join('、')||'—')));$('receipts').append(card);
-    }
+    const chosen=group(),seq=++receiptSequence;
+    if(!chosen){$('receipt-status').textContent='請先選擇群組。';return;}
+    receiptBusy=true;lastReceiptAt=Date.now();syncReceiptGroup();$('receipt-status').textContent='正在查詢「'+groupName()+'」…';
+    const formatTime=seconds=>seconds?new Date(seconds*1000).toLocaleString('zh-TW',{hour12:false}):'—';
+    try{
+      const data=await call('/receipts?group_id='+encodeURIComponent(chosen));
+      if(seq!==receiptSequence||chosen!==group())return;
+      if(data.group_id&&data.group_id!==chosen)throw new Error('群組資料不一致，請重新查詢。');
+      const opened=new Set([...$('receipts').querySelectorAll('details[open]')].map(el=>el.dataset.token));
+      $('receipts').replaceChildren();
+      $('receipt-status').textContent='「'+(data.group_name||groupName())+'」共 '+data.notices.length+' 則通知；更新時間：'+formatTime(data.checked_at||Date.now()/1000);
+      if(!data.notices.length){$('receipts').append(node('p','「'+groupName()+'」目前沒有作業確認紀錄。請確認這裡選的是 LINE 通知所在群組；開啟功能後，需重新傳送一則通知。','factory-hint'));return;}
+      for(const row of data.notices){
+        const responses=Object.entries(row.responses||{}),understood=responses.filter(([,r])=>r.status==='understood'),help=responses.filter(([,r])=>r.status==='needs_help');
+        const card=node('details'),title=node('summary',(row.current?'':row.expired?'［已過期］':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+'✅ '+understood.length+'　❓ '+help.length+'　'+String(row.original||'').slice(0,80));
+        card.dataset.token=row.token||'';card.open=opened.has(card.dataset.token)||data.notices.length===1;
+        card.append(title,node('p','通知 #'+String(row.token||'').slice(0,6)+' · 發起人：'+(row.sender_name||'未取得姓名')+' · '+formatTime(row.created_at),'factory-hint'),node('p',row.original||'','factory-preserve'));
+        if(row.translated)card.append(node('p',row.translated,'factory-preserve'));
+        for(const [entries,label] of [[understood,'✅ 已了解'],[help,'❓ 需要說明']])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
+        card.append(node('p','⏳ 已知成員未回覆：'+(Object.entries(row.expected||{}).filter(([uid])=>!row.responses?.[uid]).map(([,name])=>name).join('、')||'—')));$('receipts').append(card);
+      }
+    }catch(error){
+      if(seq===receiptSequence&&chosen===group())$('receipt-status').textContent='查詢失敗：'+error.message+'；目前無法確認最新紀錄。';
+      throw error;
+    }finally{if(seq===receiptSequence)receiptBusy=false;}
   }
   async function loadInsight(){
     const data=await call('/insight?'+new URLSearchParams({menu_id:$('menu').value.trim(),from:$('from').value.replaceAll('-',''),to:$('to').value.replaceAll('-',''),mode:$('insight-mode').value}));
