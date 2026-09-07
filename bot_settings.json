@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "7b671c5708ebaa6a9ef7e004a5bfaf7a5fffc31575cd3cb0c1bb7037dbbcaac4",
-    "updated_at_iso": "2026-09-07T08:13:45.614854+00:00",
-    "updated_at_unix": 1788768825.6148539
+    "state_hash": "12252b50c4054194e411ebbde709e8e9bba5eed196b1eb1ad48c98a552cd23cf",
+    "updated_at_iso": "2026-09-07T08:16:48.086318+00:00",
+    "updated_at_unix": 1788769008.0863183
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -194,7 +194,7 @@
     "oai_input": 148282,
     "oai_output": 1537,
     "oai_reasoning": 0,
-    "text_translations": 259,
+    "text_translations": 260,
     "tokens_completion": 18993,
     "tokens_prompt": 4383053,
     "tokens_prompt_cached": 138368,
@@ -344,12 +344,12 @@
         "translation_mode": "all"
       },
       "C6c708f629dd38d6864669ecacf7712f4": {
-        "acknowledgements": "work",
+        "acknowledgements": "all",
         "edit_translation": true,
         "native_mentions": true,
         "sharing": true,
         "station_tools": true,
-        "translation_mode": "all"
+        "translation_mode": "mentioned"
       },
       "Cd188e1adc7792e407c90f3fa78850316": {
         "acknowledgements": "work",
