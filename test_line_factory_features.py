@@ -170,7 +170,9 @@ def test_flex_and_existing_quick_replies_survive_factory_decoration(hub):
         result = hub.decorate_delivery([flex], payload, "Periksa PMI")
     restored = delivery.restore_messages([delivery.message_dict(m) for m in result])
     assert [m.type for m in restored] == ["textV2", "flex"]
-    assert restored[-1].contents.to_dict() == flex.contents.to_dict()
+    content = restored[-1].contents.to_dict()
+    assert {key: content[key] for key in flex.contents.to_dict()} == flex.contents.to_dict()
+    assert 'action=factory_ack' in json.dumps(content['footer'])
     assert restored[-1].quick_reply.items[0].action.data == "old=1"
     assert any("factory_ack" in x.action.data for x in restored[-1].quick_reply.items)
 

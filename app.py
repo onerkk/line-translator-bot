@@ -23989,7 +23989,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=1">
-<script src="/static/admin_factory.js?v=1" defer></script>
+<script src="/static/admin_factory.js?v=20260907-receipts4" defer></script>
 </head>
 <body>
 <div id="app">

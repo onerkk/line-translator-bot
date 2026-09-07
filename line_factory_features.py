@@ -24,15 +24,18 @@ import urllib.request
 
 from flask import jsonify, request, render_template
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from linebot.v3.messaging import Message, TextMessage, QuickReply, QuickReplyItem, PostbackAction
+from linebot.v3.messaging import Message, TextMessage, FlexMessage, FlexContainer, QuickReply, QuickReplyItem, PostbackAction
 
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-07.factory-cp.3"
+BUILD_ID = "2026-09-07.factory-receipts.4"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
+_CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
+NOTICE_TTL = 7 * 86400
+NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
             "sharing": True, "station_tools": True, "acknowledgements": "work"}
 _USER = re.compile(r"U[0-9a-f]{32}\Z")
@@ -327,6 +330,81 @@ class FactoryHub:
         return group.startswith(("C", "R")) and (
             ack == "all" or (ack == "work" and bool(_WORK.search(record.get("original", "")))))
 
+    @staticmethod
+    def _short(value, units=160):
+        value = str(value or "")
+        encoded = value.encode("utf-16-le")
+        return value if len(encoded) <= units * 2 else encoded[:(units - 1) * 2].decode("utf-16-le", errors="ignore") + "…"
+
+    def _member_name(self, group, uid, *, lookup=False):
+        name = self.h.get("group_user_names", {}).get(group, {}).get(uid)
+        if not name and uid and lookup and callable(self.h.get("get_display_name")):
+            try:
+                name = self.h["get_display_name"](group, uid)
+            except Exception:
+                self.app.logger.warning("[FactoryReceipt] member name lookup unavailable")
+        # A missing optional profile must not prevent recording the signed user.
+        return self._short(name or "未取得姓名 / Nama belum tersedia", 80)
+
+    def _notice_footer(self, token):
+        buttons = [("✅ 了解/Paham", "factory_ack"), ("❓ 說明/Jelaskan", "factory_help"),
+                   ("📋 確認/Status", "factory_receipts")]
+        return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
+            {"type": "text", "text": "作業確認 / Konfirmasi", "size": "sm", "weight": "bold"},
+            *[{"type": "button", "height": "sm", "style": "secondary",
+               "action": {"type": "postback", "label": label,
+                          "data": "action=" + action + "&token=" + token}}
+              for label, action in buttons],
+            {"type": "text", "text": "原通知起 7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari sejak pemberitahuan; paham bukan berarti pekerjaan selesai.",
+             "size": "xs", "wrap": True, "color": "#667085"}]}
+
+    def _notice_card(self, token, text):
+        return FlexMessage(alt_text=self._short(text, 350), contents=FlexContainer.from_dict({
+            "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+                {"type": "text", "text": self._short(text, 1900), "wrap": True, "size": "sm"}]},
+            "footer": self._notice_footer(token)}))
+
+    def _attach_notice(self, messages, token, record):
+        # Embed controls in the translated bubble so another chat message cannot
+        # dismiss them. Reuse the same token; never create a second receipt.
+        for index in range(len(messages) - 1, -1, -1):
+            obj = messages[index].to_dict()
+            bubble = obj.get("contents", {})
+            if obj.get("type") != "flex" or bubble.get("type") != "bubble":
+                continue
+            if "action=factory_ack&token=" + token in encode(bubble):
+                return messages
+            footer = self._notice_footer(token)
+            if bubble.get("footer"):
+                bubble["footer"] = {"type": "box", "layout": "vertical", "spacing": "sm",
+                                    "contents": [bubble["footer"], footer]}
+            else:
+                bubble["footer"] = footer
+            if len(encode(bubble).encode()) < 28000:
+                messages[index] = Message.from_dict(obj)
+                return messages
+        text = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n" + self._short(record.get("original"), 240)
+        card = self._notice_card(token, text)
+        if messages:
+            card.quick_reply = getattr(messages[-1], "quick_reply", None)
+            messages[-1].quick_reply = None
+        messages.append(card)
+        return messages
+
+    def get_notice(self, token, group):
+        if not group or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", str(token or "")):
+            return None
+        row = self.store.get("notice:" + group + ":" + token)
+        if not row:
+            return None
+        # Style controls have a 30-minute TTL. Receipts have their own seven-day
+        # lifetime, including notices created by the previous release.
+        if (row.get("group_id") != group or
+                float(row.get("created_at", 0)) + NOTICE_TTL <= time.time() or
+                not self.current(row.get("factory_event"))):
+            return None
+        return row
+
     def save_context(self, token, record):
         record = copy.deepcopy(record)
         record["token"] = token
@@ -338,7 +416,10 @@ class FactoryHub:
         if self._wants_notice(group, record):
             record["_notice_prepared"] = True
             members = self.h.get("group_user_names", {}).get(group, {})
-            notice = {**record, "created_at": time.time(), "responses": {},
+            created = time.time()
+            sender_id = (record.get("factory_event") or {}).get("user_id") or record.get("user_id", "")
+            notice = {**record, "created_at": created, "expires_at": created + NOTICE_TTL,
+                      "sender_id": sender_id, "sender_name": self._member_name(group, sender_id), "responses": {},
                       "delivery_state": "prepared",
                       "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid)},
                       "roster_basis": "known_chat_members"}
@@ -390,7 +471,9 @@ class FactoryHub:
                         # delivery job supplies its revision. Bind that receipt
                         # too, preserving any concurrently recorded responses.
                         self.store.update("notice:" + group + ":" + token,
-                                          lambda row: {**row, "factory_event": metadata}
+                                          lambda row: {**row, "factory_event": metadata,
+                                                       "sender_id": metadata.get("user_id", ""),
+                                                       "sender_name": self._member_name(group, metadata.get("user_id", ""))}
                                           if row and not row.get("factory_event") else row,
                                           7 * 86400)
                         with self.h.get("_translation_action_lock", self._lock):
@@ -411,6 +494,8 @@ class FactoryHub:
 
     def decorate_delivery(self, messages, payload, text):
         """Create complete, serializable deliveries before their first send."""
+        if _CONTROL_REPLY.get():
+            return messages
         self.assert_current(payload)
         group = payload.get("group_id") or payload.get("user_id") or ""
         options = self.options(group)
@@ -433,6 +518,7 @@ class FactoryHub:
                     if not record.get("_notice_prepared"):
                         record = self.save_context(token, record)
                     payload["factory_notice_token"] = token
+                    messages = self._attach_notice(messages, token, record)
                     buttons.extend([("✅ 了解/Paham", "factory_ack"), ("❓ 說明/Jelaskan", "factory_help"),
                                     ("📋 確認/Status", "factory_receipts")])
                 except StoreError:
@@ -503,15 +589,19 @@ class FactoryHub:
         except BadSignature as exc:
             raise PermissionError("連結已過期，請回 LINE 按「工廠工具」。 / Tautan kedaluwarsa; buka kembali dari LINE.") from exc
 
-    def _reply(self, event, text, *, url=None):
+    def _reply(self, event, text, *, url=None, notice=None, retry_suffix=""):
         from linebot.v3.messaging import URIAction
         group, _ = source_ids(event)
-        msg = TextMessage(text=text)
+        msg = self._notice_card(notice["token"], text) if notice else TextMessage(text=text)
         if url:
             msg.quick_reply = QuickReply(items=[QuickReplyItem(action=URIAction(label="開啟/Buka", uri=url))])
-        self.h["_send_reply_with_push_fallback"](
-            reply_token=field(event, "reply_token"), target_id=group, message_obj=msg,
-            fallback_text=text, retry_key="factory-control:" + str(field(event, "webhook_event_id") or field(event, "reply_token")))
+        marker = _CONTROL_REPLY.set(True)
+        try:
+            self.h["_send_reply_with_push_fallback"](
+                reply_token=field(event, "reply_token"), target_id=group, message_obj=msg,
+                fallback_text=text, retry_key="factory-control:" + str(field(event, "webhook_event_id") or field(event, "reply_token")) + retry_suffix)
+        finally:
+            _CONTROL_REPLY.reset(marker)
 
     def command(self, event):
         text = str(field(field(event, "message", {}), "text", "") or "").strip()
@@ -530,8 +620,23 @@ class FactoryHub:
         action = params.get("action", "")
         if not action.startswith("factory_"):
             return False
+        try:
+            return self._postback(event, params)
+        except StoreError:
+            self.app.logger.exception("[FactoryReceipt] action=%s storage operation unconfirmed", action)
+            try:
+                self._reply(event, "⚠️ 尚未確認儲存成功，請稍後重按；請勿視為已完成確認。\n"
+                                  "Penyimpanan belum terkonfirmasi. Coba tekan lagi nanti.", retry_suffix=":storage-error")
+            except Exception:
+                self.app.logger.warning("[FactoryReceipt] error feedback delivery unavailable")
+            raise  # Keep webhook redelivery possible; never acknowledge a lost write.
+
+    def _postback(self, event, params):
+        action = params.get("action", "")
         group, uid = source_ids(event)
         token = params.get("token", "")
+        if action in NOTICE_ACTIONS:
+            return self._receipt_postback(event, action, token, group, uid)
         context = self.get_context(token, group) if token else None
         if action != "factory_open" and not context:
             self._reply(event, "原文已更新、收回或操作已過期，請使用最新翻譯。\nGunakan terjemahan terbaru; teks telah berubah atau tautan kedaluwarsa.")
@@ -544,20 +649,33 @@ class FactoryHub:
             self._reply(event, ("📤 預覽並分享 / Pratinjau dan bagikan\n" if action == "factory_share"
                                else "🏭 工廠工具 / Alat pabrik\n") + url, url=url)
             return True
+        raise ValueError("未知的工廠工具操作。")
+
+    def _receipt_postback(self, event, action, token, group, uid):
+        if self.options(group)["acknowledgements"] == "off" and action != "factory_receipts":
+            self._reply(event, "此群組已關閉作業確認。 / Konfirmasi dinonaktifkan.")
+            return True
         notice_key = "notice:" + group + ":" + token
-        notice = self.store.get(notice_key)
+        notice = self.get_notice(token, group)
+        # A valid stored button context can repair an absent initial notice,
+        # e.g. from an interrupted earlier write. Do not recreate an expired or
+        # superseded notice that is already present in the store.
+        if not notice and not self.store.get(notice_key):
+            context = self.get_context(token, group)
+            if context and self._wants_notice(group, context):
+                self.save_context(token, context)
+                notice = self.get_notice(token, group)
         if not notice:
-            self._reply(event, "找不到這筆作業確認。 / Catatan konfirmasi tidak ditemukan.")
+            self._reply(event, "這筆確認已過期、原文已更新或不屬於此群組；請使用最新通知。\n"
+                              "Gunakan pemberitahuan terbaru di grup asal; konfirmasi ini tidak berlaku.")
             return True
         if action in {"factory_ack", "factory_help"}:
-            if self.options(group)["acknowledgements"] == "off":
-                self._reply(event, "此群組已關閉作業確認。 / Konfirmasi dinonaktifkan.")
+            if not _USER.fullmatch(str(uid or "")):
+                self._reply(event, "LINE 未提供回覆者身分，本次無法記錄。\nIdentitas pengguna tidak tersedia; konfirmasi belum dicatat.")
                 return True
-            if not uid:
-                raise PermissionError("無法辨識確認者。")
             state = "understood" if action == "factory_ack" else "needs_help"
             timestamp = int(field(event, "timestamp", 0) or 0)
-            name = self.h.get("group_user_names", {}).get(group, {}).get(uid, "成員 / Anggota")
+            name = self._member_name(group, uid, lookup=True)
             def record_reply(row):
                 if not row:
                     raise ValueError("作業確認已過期。")
@@ -568,22 +686,35 @@ class FactoryHub:
                     responses[uid] = {"status": state, "name": str(name), "at": time.time(),
                                       "event_timestamp": timestamp}
                 return row
-            notice = self.store.update(notice_key, record_reply, 7 * 86400)
+            remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
+            notice = self.store.update(notice_key, record_reply, remaining)
             saved_state = notice["responses"][uid]["status"]
-            self._reply(event, ("✅ 已記錄：已了解。 / Dicatat: sudah paham." if saved_state == "understood"
-                               else "❓ 已記錄：需要說明。 / Dicatat: perlu penjelasan."))
+            name = notice["responses"][uid]["name"]
+            feedback = ("✅ " + name + " 已了解 / sudah paham" if saved_state == "understood"
+                        else "❓ " + name + " 需要說明 / perlu penjelasan")
+            self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
+            self._reply(event, self._receipt_text(notice, feedback), notice=notice)
         elif action == "factory_receipts":
-            responses = notice.get("responses", {})
-            understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
-            help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
-            pending = [name for uid, name in notice.get("expected", {}).items() if uid not in responses]
-            self._reply(event, "📋 作業確認 / Konfirmasi\n✅ 了解/Paham: " + ("、".join(understood) or "—") +
-                        "\n❓ 需說明/Perlu penjelasan: " + ("、".join(help_names) or "—") +
-                        "\n⏳ 已知成員未回覆/Belum menjawab: " + ("、".join(pending) or "—") +
-                        "\n僅記錄主動按鈕回覆；成員清單依已知發言者。\nHanya konfirmasi tombol; daftar berdasarkan anggota yang dikenal bot.")
-        else:
-            raise ValueError("未知的工廠工具操作。")
+            self._reply(event, self._receipt_text(notice, "📋 作業確認 / Konfirmasi"), notice=notice)
         return True
+
+    def _receipt_text(self, notice, heading):
+        responses = notice.get("responses", {})
+        understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
+        help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
+        pending = [name for uid, name in notice.get("expected", {}).items() if uid not in responses]
+        sender_id = notice.get("sender_id") or (notice.get("factory_event") or {}).get("user_id", "")
+        sender = notice.get("sender_name") or self._member_name(notice["group_id"], sender_id)
+        text = (heading + "\n通知 / Pesan #" + notice["token"][:6] + "\n發起人 / Pengirim: " + sender +
+                "\n" + self._short(notice.get("original"), 160) +
+                "\n" + self._short(notice.get("translated"), 220) +
+                "\n\n✅ 了解/Paham (" + str(len(understood)) + "): " + self._short("、".join(understood) or "—", 300) +
+                "\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names) or "—", 300) +
+                "\n⏳ 已知成員未回覆/Belum menjawab (" + str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
+                "\n名單為本次查詢結果；按「確認」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
+        if help_names:
+            text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
+        return self._short(text, 1900)
 
     def station_catalog(self, group):
         result = {}
@@ -841,12 +972,15 @@ class FactoryHub:
         @protected()
         def factory_receipts(_):
             group = request.args.get("group_id", "")
-            if group not in self.h["_reminder_catalog"]():
+            catalog = self.h["_reminder_catalog"]()
+            if group not in catalog:
                 raise ValueError("請選擇群組。")
             rows = self.store.recent("notice:" + group, 100)
             for row in rows:
-                row["current"] = self.current(row.get("factory_event"))
-            return jsonify(ok=True, notices=rows)
+                row["expired"] = float(row.get("created_at", 0)) + NOTICE_TTL <= time.time()
+                row["current"] = not row["expired"] and self.current(row.get("factory_event"))
+            return jsonify(ok=True, notices=rows, group_id=group, group_name=catalog[group]["name"],
+                           checked_at=time.time(), build_id=BUILD_ID)
 
         @self.app.route("/api/admin/factory/insight")
         @protected()
