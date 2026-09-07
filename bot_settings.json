@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "8c22e17854ee3caaa06dacd516858584b0e75cdf74ce611c76a03ab4dccf393a",
-    "updated_at_iso": "2026-09-07T15:05:23.657192+00:00",
-    "updated_at_unix": 1788793523.6571925
+    "state_hash": "f41ce804262c271df18498f354e88ce16efd5a28c74f07a0dac7fa440261402d",
+    "updated_at_iso": "2026-09-07T15:06:50.246424+00:00",
+    "updated_at_unix": 1788793610.246424
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -197,7 +197,7 @@
     "oai_input": 155553,
     "oai_output": 1565,
     "oai_reasoning": 0,
-    "text_translations": 264,
+    "text_translations": 265,
     "tokens_completion": 19021,
     "tokens_prompt": 4390324,
     "tokens_prompt_cached": 138368,
@@ -2717,7 +2717,7 @@
         ]
       },
       "Cf5e2ea027bb3db193677e7ef3b51adea": {
-        "acknowledgements": "all",
+        "acknowledgements": "off",
         "enabled": true,
         "items": [
           {
@@ -2872,7 +2872,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_ack",
             "label": "✅ 了解/Paham",
             "link_key": "",
@@ -2888,7 +2888,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_help",
             "label": "❓ 說明/Jelaskan",
             "link_key": "",
@@ -2904,7 +2904,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_receipts",
             "label": "📋 確認/Status",
             "link_key": "",
@@ -2935,7 +2935,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_context_qry",
             "label": "📋 查此工單/Gudang",
             "link_key": "",
@@ -3159,7 +3159,7 @@
               "text",
               "image"
             ],
-            "enabled": false,
+            "enabled": true,
             "id": "link_saran",
             "label": "💡 提案/Saran",
             "link_key": "saran",
@@ -3175,7 +3175,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "location",
             "label": "📍 位置/Lokasi",
             "link_key": "",
