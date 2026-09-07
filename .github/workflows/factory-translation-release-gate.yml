@@ -7,6 +7,11 @@ on:
       - "requirements.txt"
       - "requirements-test.txt"
       - "static/admin_reminders.*"
+      - "static/*factory*"
+      - "static/liff_forms.js"
+      - "templates/line_factory.html"
+      - "templates/liff_entry.html"
+      - "tests/*factory*"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -23,6 +28,11 @@ on:
       - "requirements.txt"
       - "requirements-test.txt"
       - "static/admin_reminders.*"
+      - "static/*factory*"
+      - "static/liff_forms.js"
+      - "templates/line_factory.html"
+      - "templates/liff_entry.html"
+      - "tests/*factory*"
       - "factory_*.py"
       - "factory_*.json"
       - "translation_casebook.py"
@@ -63,3 +73,18 @@ jobs:
           LAST_TRANSLATE_DEBUG_FILE: ${{ runner.temp }}/last-translate.json
           TRANSLATION_LOG_FILE: ${{ runner.temp }}/translation-log.json
         run: python -m pytest -q test_*.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Check frontend syntax
+        run: |
+          node --check static/admin_factory.js
+          node --check static/line_factory.js
+          node --check static/liff_forms.js
+      - name: Install isolated DOM test runtime
+        run: npm install --prefix "${{ runner.temp }}/factory-ui" --no-audit --no-fund jsdom@30.0.1
+      - name: Exercise factory pages with local fake LINE and AI transports
+        env:
+          JSDOM_PATH: ${{ runner.temp }}/factory-ui/node_modules/jsdom
+        run: python tests/run_factory_ui.py
