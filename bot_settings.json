@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "d08bd9e79cf349b186d982e3c6a834dd7463be724bbd57edd4af5ec60f4eaebd",
-    "updated_at_iso": "2026-09-07T14:34:59.574169+00:00",
-    "updated_at_unix": 1788791699.5741694
+    "state_hash": "38c1676d4ddcc24b9aab7cef94a1cdb2a2aed3dde0b673dad6d829f31df709cc",
+    "updated_at_iso": "2026-09-07T15:00:29.892120+00:00",
+    "updated_at_unix": 1788793229.8921201
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -197,7 +197,7 @@
     "oai_input": 155553,
     "oai_output": 1565,
     "oai_reasoning": 0,
-    "text_translations": 262,
+    "text_translations": 263,
     "tokens_completion": 19021,
     "tokens_prompt": 4390324,
     "tokens_prompt_cached": 138368,
@@ -539,6 +539,9 @@
   },
   "group_tts_settings": {},
   "group_user_names": {
+    "C28bb7127640539f3c1bc743ecdf61a24": {
+      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多"
+    },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
@@ -1745,7 +1748,7 @@
       },
       "C6c708f629dd38d6864669ecacf7712f4": {
         "acknowledgements": "all",
-        "enabled": false,
+        "enabled": true,
         "items": [
           {
             "action": "natural",
@@ -1755,7 +1758,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_natural",
             "label": "✨ 自然/Alami",
             "link_key": "",
@@ -1771,7 +1774,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_literal",
             "label": "🔎 直譯/Harfiah",
             "link_key": "",
@@ -1787,7 +1790,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_formal",
             "label": "📢 正式/Formal",
             "link_key": "",
@@ -1803,7 +1806,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_backcheck",
             "label": "↩ 回譯/Cek balik",
             "link_key": "",
@@ -1835,7 +1838,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "handover",
             "label": "📋 交班摘要/Serah",
             "link_key": "",
@@ -1851,7 +1854,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "interpreter",
             "label": "🎙 即時口譯/Interpret",
             "link_key": "",
@@ -1867,7 +1870,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_share",
             "label": "📤 分享/Bagikan",
             "link_key": "",
@@ -1883,7 +1886,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_factory_open",
             "label": "🏭 工具/Alat",
             "link_key": "",
@@ -1902,22 +1905,6 @@
             "enabled": true,
             "id": "builtin_factory_ack",
             "label": "✅ 了解/Paham",
-            "link_key": "",
-            "text": "",
-            "type": "builtin",
-            "uri": ""
-          },
-          {
-            "action": "factory_help",
-            "clipboard_text": "",
-            "cmd_check": "",
-            "contexts": [
-              "text",
-              "image"
-            ],
-            "enabled": true,
-            "id": "builtin_factory_help",
-            "label": "❓ 說明/Jelaskan",
             "link_key": "",
             "text": "",
             "type": "builtin",
@@ -1955,6 +1942,22 @@
             "uri": ""
           },
           {
+            "action": "factory_help",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_factory_help",
+            "label": "❓ 說明/Jelaskan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
             "action": "context_qry",
             "clipboard_text": "",
             "cmd_check": "",
@@ -1962,7 +1965,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_context_qry",
             "label": "📋 查此工單/Gudang",
             "link_key": "",
@@ -1978,7 +1981,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "builtin_tts_replay",
             "label": "🔊 重播/Ulang",
             "link_key": "",
@@ -1994,7 +1997,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "help",
             "label": "📖 說明/Info",
             "link_key": "",
@@ -2026,7 +2029,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "wrong",
             "label": "❌ 標錯/Salah",
             "link_key": "",
@@ -2074,7 +2077,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "pw1",
             "label": "🔑 班長密碼/PW1",
             "link_key": "",
@@ -2090,7 +2093,7 @@
               "text",
               "image"
             ],
-            "enabled": true,
+            "enabled": false,
             "id": "pw2",
             "label": "🏭 儲運密碼/PW2",
             "link_key": "",
