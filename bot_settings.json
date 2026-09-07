@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "f41ce804262c271df18498f354e88ce16efd5a28c74f07a0dac7fa440261402d",
-    "updated_at_iso": "2026-09-07T15:06:50.246424+00:00",
-    "updated_at_unix": 1788793610.246424
+    "state_hash": "73750b3eac2bb41072ca6db0071b186ffbe382c590377a722fadc8ec229418e2",
+    "updated_at_iso": "2026-09-07T16:01:34.452421+00:00",
+    "updated_at_unix": 1788796894.4524212
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -153,7 +153,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 14:24:10",
+    "last_updated": "2026-09-07 15:33:56",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -191,15 +191,15 @@
     "commands": 14,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 11447,
+    "oai_cache_write": 15206,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.14319095,
-    "oai_input": 155553,
-    "oai_output": 1565,
+    "oai_cost_usd": 0.14418050000000002,
+    "oai_input": 159315,
+    "oai_output": 1606,
     "oai_reasoning": 0,
-    "text_translations": 265,
-    "tokens_completion": 19021,
-    "tokens_prompt": 4390324,
+    "text_translations": 267,
+    "tokens_completion": 19062,
+    "tokens_prompt": 4394086,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -407,11 +407,14 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cost_usd": 1.80345775,
+      "cache_read": 0,
+      "cache_write": 3759,
+      "cost_usd": 1.8044472999999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
-      "tokens_completion": 6172,
-      "tokens_prompt": 1834987
+      "reasoning": 0,
+      "tokens_completion": 6213,
+      "tokens_prompt": 1838749
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -540,7 +543,8 @@
   "group_tts_settings": {},
   "group_user_names": {
     "C28bb7127640539f3c1bc743ecdf61a24": {
-      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多"
+      "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
+      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
