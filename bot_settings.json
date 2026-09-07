@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "764af64c3a3e89c596e58ec0699f1facdc0b5a9b60be9852e2d4ca74909039c3",
-    "updated_at_iso": "2026-09-07T00:39:14.635843+00:00",
-    "updated_at_unix": 1788741554.6358428
+    "state_hash": "bde0b737d25fc9ff8820cad59f70c1caf827966f7d35968537c789854bf78d99",
+    "updated_at_iso": "2026-09-07T00:39:41.443826+00:00",
+    "updated_at_unix": 1788741581.4438262
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -47,7 +47,7 @@
       "is_admin": true
     }
   },
-  "ai_active_provider": "anthropic",
+  "ai_active_provider": "openai",
   "ai_gemini_features": {
     "reasoning_effort": "minimal"
   },
@@ -59,7 +59,7 @@
     "flex_background": true
   },
   "ai_provider_config": {
-    "active_provider": "anthropic",
+    "active_provider": "openai",
     "anthropic": {
       "default_model": "claude-haiku-4-5-20251001"
     },
@@ -144,7 +144,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 00:39:14",
+    "last_updated": "2026-09-07 00:39:41",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -165,12 +165,7 @@
       "flex_background": true
     },
     "provider_failover": true,
-    "quota_exhausted_providers": {
-      "openai": {
-        "at": 1788733201,
-        "error": "Error code: 429 - {'error': {'message': 'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.', 'type': 'insufficient_quota', 'param': None, 'code': 'credit_bala"
-      }
-    }
+    "quota_exhausted_providers": {}
   },
   "auto_tone_emoji_enabled": true,
   "bot_stats": {
