@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "03ed6da61ae8b471bb46e8935a3acfb67381edfdb07647e86373bf8c4beaf8df",
-    "updated_at_iso": "2026-09-07T14:28:49.978245+00:00",
-    "updated_at_unix": 1788791329.9782448
+    "state_hash": "738b83d3590c81d1230f4034470e7d721c33abee09bfdd107dcb439b5f60ea59",
+    "updated_at_iso": "2026-09-07T14:31:21.969989+00:00",
+    "updated_at_unix": 1788791481.9699888
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -773,8 +773,8 @@
   ],
   "quick_reply_menu_settings": {
     "default": {
-      "acknowledgements": "work",
-      "enabled": false,
+      "acknowledgements": "all",
+      "enabled": true,
       "items": [
         {
           "action": "natural",
@@ -784,7 +784,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_natural",
           "label": "✨ 自然/Alami",
           "link_key": "",
@@ -800,7 +800,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_literal",
           "label": "🔎 直譯/Harfiah",
           "link_key": "",
@@ -816,7 +816,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_formal",
           "label": "📢 正式/Formal",
           "link_key": "",
@@ -832,7 +832,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_backcheck",
           "label": "↩ 回譯/Cek balik",
           "link_key": "",
@@ -864,7 +864,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "handover",
           "label": "📋 交班摘要/Serah",
           "link_key": "",
@@ -880,7 +880,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "interpreter",
           "label": "🎙 即時口譯/Interpret",
           "link_key": "",
@@ -896,7 +896,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_factory_share",
           "label": "📤 分享/Bagikan",
           "link_key": "",
@@ -912,7 +912,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_factory_open",
           "label": "🏭 工具/Alat",
           "link_key": "",
@@ -944,7 +944,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_factory_help",
           "label": "❓ 說明/Jelaskan",
           "link_key": "",
@@ -960,7 +960,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_factory_receipts",
           "label": "📋 確認/Status",
           "link_key": "",
@@ -975,7 +975,7 @@
           "contexts": [
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_overlay",
           "label": "🖼 圖文對照/Gambar",
           "link_key": "",
@@ -1007,7 +1007,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "builtin_tts_replay",
           "label": "🔊 重播/Ulang",
           "link_key": "",
@@ -1023,7 +1023,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "help",
           "label": "📖 說明/Info",
           "link_key": "",
@@ -1055,7 +1055,7 @@
             "text",
             "image"
           ],
-          "enabled": true,
+          "enabled": false,
           "id": "wrong",
           "label": "❌ 標錯/Salah",
           "link_key": "",
