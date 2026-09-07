@@ -5,7 +5,7 @@ import urllib.request
 import urllib.parse
 import logging
 from datetime import datetime, timezone
-from line_quote_context import get_quote_token, resolve_quote_context
+from line_quote_context import get_quote_token, get_quoted_message_id, resolve_quote_context
 import translation_retry_queue as translation_retry_queue_module
 import offline_translation as offline_translation_module
 from flask import Flask, request, abort, jsonify, g, has_request_context
@@ -144,6 +144,7 @@ from io import BytesIO
 import threading
 import contextlib
 import translation_request_cache
+import conversation_context
 import translation_mentions
 import functools
 import line_translation_delivery as line_delivery_module
@@ -347,7 +348,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.1-release-priority-availability"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.2-original-conversation-snapshot"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -382,7 +383,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-07.1-evidence-based-review-budget"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-08.2-conversation-review-budget"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -2330,7 +2331,7 @@ def _translation_needs_upgrade_model(text):
         return True
     contract = getattr(_tl, "semantic_contract", None)
     if isinstance(contract, dict):
-        if contract.get("context_bound"):
+        if contract.get("context_bound") and not contract.get("conversation_only_context"):
             return True
         for risk in contract.get("risks") or ():
             analysis = risk.get("analysis") or {}
@@ -3065,23 +3066,7 @@ def _is_zh_id_factory_announcement_source(text):
 
 
 def _translation_needs_conversation_history(text):
-    """Use chat history only when the current message is genuinely elliptical.
-
-    Previous builds appended up to three unrelated translation pairs to every
-    request.  Besides cost, those pairs could override the current sentence's
-    actor or register.  Full standalone notices do not need history.
-    """
-    source = str(text or "").strip()
-    if not source or len(source) > 90 or "\n\n" in source:
-        return False
-    compact = re.sub(r"\s+", "", source)
-    cues = (
-        "這個", "那個", "這些", "那些", "這把", "那把", "這批", "那批",
-        "剛剛", "上面那個", "下面那個", "一樣", "再來", "還有", "他說",
-        "她說", "它", "這裡", "那裡", "前面", "後面",
-    )
-    bare_quantity = bool(re.fullmatch(r"[一二兩三四五六七八九十\d]+(?:台|把|支|個|件|批)", compact))
-    return bare_quantity or any(cue in compact for cue in cues)
+    return conversation_context.needs_history(text)
 
 
 def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, source_text=None,
@@ -3102,23 +3087,13 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
     """
     retrieval_source = user_msg if source_text is None else source_text
     msgs = [{"role": "system", "content": sys_prompt}]
+    snapshot = conversation_context.current_for(retrieval_source)
     quoted_context = str(getattr(_tl, 'quoted_context_source', '') or '').strip()
-    if quoted_context:
-        # The quoted message is context, not additional source content.  This
-        # fixes elliptical LINE replies such as「放不下再放照片裡這些位置」
-        # without duplicating the earlier sentence in the translation output.
-        msgs.append({
-            "role": "system",
-            "content": (
-                "<line_reply_context>\n"
-                "The user is replying to the quoted message below. Use it only to resolve omitted "
-                "actors, objects, locations and references in the CURRENT source. Translate only the "
-                "current user message. Never repeat, summarize or translate the quoted message as an "
-                "extra sentence.\nQUOTED MESSAGE:\n"
-                + quoted_context[:1200]
-                + "\n</line_reply_context>"
-            ),
-        })
+    if snapshot and snapshot.get("entries"):
+        # Stable instructions first; original user text remains untrusted data.
+        msgs.append({"role": "system", "content": conversation_context.PROMPT_RULES})
+    elif quoted_context:
+        msgs.append({"role": "system", "content": conversation_context.PROMPT_RULES})
     direction_key = translation_casebook_module.direction_key(src, tgt)
 
     # Score examples by relevance and inject only a small, useful set.  The old
@@ -3180,29 +3155,13 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
     if reference_messages:
         msgs.extend(reference_messages)
 
-    # v3.10: 加入該群組最近對話歷史 (上下文記憶)
-    # 順序很重要:在 few-shot 之後、本句之前 → caching 友善
-    # v3.15 根治:歷史過濾改按 (src, tgt) 精確配對,不再綁 few-shot 的 direction_key。
-    # 舊邏輯兩個問題:
-    #   1. direction_key 只有 zh2id/id2zh → zh→vi/th/tl 等方向「完全沒有上下文記憶」
-    #      (v3.14 新增越南/菲律賓後這缺口變成實際問題)
-    #   2. 舊過濾只看 h["src"] → 多語廣播群裡 zh→id 的 prompt 會混進 zh→vi 的
-    #      歷史對(目標語污染,與 v3.9.44 修掉的 few-shot 污染同類 bug)
-    # buffer 本來就存了 src/tgt 兩欄,精確配對即可,所有方向通用。
-    try:
-        if (group_id and get_conv_context_enabled(group_id)
-                and _translation_needs_conversation_history(retrieval_source)):
-            history = _conv_buffer_get(group_id)
-            matching_history = [
-                h for h in history
-                if h.get("src") == src and h.get("tgt") == tgt
-            ][-1:]
-            for h in matching_history:
-                msgs.append({"role": "user", "content": h["src_text"]})
-                msgs.append({"role": "assistant", "content": h["tgt_text"]})
-    except (NameError, Exception):
-        # 上下文功能不可用就跳過,不影響翻譯
-        pass
+    if snapshot and snapshot.get("entries"):
+        msgs.append({"role": "user", "content": "<conversation_context>\n"
+                     + conversation_context.prompt_data(snapshot) + "\n</conversation_context>"})
+    elif quoted_context:
+        msgs.append({"role": "user", "content": "<line_reply_context>\n"
+                     + json.dumps({"quoted_original": quoted_context[:1200]}, ensure_ascii=False)
+                     + "\n</line_reply_context>"})
 
     msgs.append({"role": "user", "content": user_msg})
     return msgs
@@ -8994,6 +8953,8 @@ def build_translation_semantic_contract(text, src, tgt):
             contract["risks"].append({"sense": "source_understanding", "analysis": _source_analysis})
             # Only recognized spelling/colloquial variants reach local rules.
             # Novel fuzzy guesses remain prompt evidence; source facts are kept.
+            if globals().get("conversation_context"):
+                conversation_context.register_source_form(text, _source_analysis["normalized"])
             text = _source_analysis["normalized"]
     if src == "id" and tgt == "zh":
         # Several dependency-free regression tests intentionally execute this
@@ -9192,7 +9153,8 @@ def build_translation_semantic_contract(text, src, tgt):
         contract["vector_bypass_allowed"] = False
         contract["nmt_allowed"] = False
         contract["requires_llm"] = True
-        contract["requires_independent_review"] = True
+        if not relation_frame.get("context_bound"):
+            contract["requires_independent_review"] = True
 
     # Compositional number/classifier semantics. This is generated from atoms
     # and relations, not from sentence matches, and therefore protects paraphrases
@@ -9278,6 +9240,13 @@ def build_translation_semantic_contract(text, src, tgt):
         contract["nmt_allowed"] = False
         contract["requires_llm"] = True
         contract["requires_independent_review"] = True
+    _context_module = globals().get("conversation_context")
+    _snapshot = _context_module.current_for(text) if _context_module else None
+    if _snapshot and _snapshot.get("entries"):
+        contract["conversation_only_context"] = not contract.get("context_bound")
+        contract.update(context_bound=True, tm_bypass_allowed=False,
+                        vector_bypass_allowed=False, nmt_allowed=False, requires_llm=True)
+        contract["conversation_fingerprint"] = _context_module.fingerprint(_snapshot)
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -10677,6 +10646,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         _immutable = tqg_module.inspect_immutable_spans(input_text)
         protected, placeholders = protect_mentions(_privacy_envelope.masked)
         _provider_source_text = protected
+        conversation_context.register_source_form(input_text, _provider_source_text)
 
         extra_rule = ""
         if strict_no_source_script and src != tgt:
@@ -11191,8 +11161,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "e.g. Q:『需要幾台台車?』 A:『兩台』 (=兩台台車=two troli, NOT 'two units'). "
             "Q:『要幾把?』 A:『3把』 (=3 bundel). "
             "Q:『幾支?』 A:『5支』 (=5 batang). "
-            "Because each message is translated independently WITHOUT conversation context, DO NOT invent or guess the noun. "
-            "Translate these short replies with a GENERIC Indonesian quantity phrase that stays neutral: "
+            "Resolve the omitted noun from the supplied original conversation evidence when it is unambiguous. "
+            "Only when no relevant evidence is supplied, use a GENERIC Indonesian quantity phrase that stays neutral: "
             "兩台/兩個/兩支/兩把/兩件 (when noun is omitted) → 'dua' or 'dua buah'(generic), NEVER 'dua unit'(too formal and wrong in casual chat). "
             "The word 'unit' in Indonesian suggests abstract units/modules and is WRONG for physical countable items like troli/batang/bundel. "
             "Default mapping for bare quantity replies: 台=buah(generic) or keep context-neutral, 把=bundel, 支=batang, 個=buah, 件=potong(for items/pieces), 頂=buah(for headwear), 包/袋=bungkus. Never map 包/袋 to bundel. "
@@ -11949,10 +11919,8 @@ def _translation_cache_context_bound(text):
         return True
     if get_recent_media_scene(getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)):
         return True
-    try:
-        return bool(_translation_needs_conversation_history(text))
-    except Exception:
-        return False
+    snapshot = conversation_context.current_for(text)
+    return bool(snapshot and snapshot.get("entries"))
 
 
 def _translation_cache_scope():
@@ -11961,11 +11929,13 @@ def _translation_cache_scope():
         # Group-local names, terminology, examples and tone settings may alter
         # wording even when the visible source is identical.  Keep reuse inside
         # the same group rather than leaking one group's convention to another.
-        "group_id": str(getattr(_tl, "group_id", "") or ""),
+        "group_id": _conversation_group_id(),
         "tone": str(getattr(_tl, "tone", "") or ""),
         "tone_custom": str(getattr(_tl, "tone_custom", "") or ""),
         "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
         "station": line_factory_features.station_scope(),
+        "conversation": conversation_context.fingerprint(
+            getattr(_tl, "conversation_snapshot", None)),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -11987,6 +11957,7 @@ def _translation_cache_asset_fingerprint():
         "erp_reason_semantics": globals().get("_FACTORY_REASON_SEMANTICS_BUILD_ID", ""),
         "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
+        "conversation_context": conversation_context.BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),
         "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
@@ -12585,6 +12556,8 @@ def _factory_route_is_strict(source_text, src, tgt):
 
 def _factory_exact_fallback(source_text, src, tgt):
     """Return a locally verified exact correction, never a fuzzy sentence."""
+    if _translation_cache_context_bound(source_text):
+        return None
     exact = factory_translation_guard_module.exact_verified_target(source_text, src, tgt)
     if not exact:
         return None
@@ -13663,7 +13636,7 @@ def _translation_retry_attempt(job, lease_owner=None):
     attrs = (
         "group_id", "user_id", "line_mentions", "tone", "tone_custom",
         "disable_tone_emoji", "quoted_context_source", "quoted_context_message_id",
-        "from_image_ocr",
+        "from_image_ocr", "conversation_snapshot",
     )
     try:
         for attr in attrs:
@@ -13674,6 +13647,8 @@ def _translation_retry_attempt(job, lease_owner=None):
         _tl.line_mentions = list(payload.get("line_mentions") or [])
         _tl.quoted_context_source = str(payload.get("quoted_context_source") or "")
         _tl.quoted_context_message_id = str(payload.get("quoted_context_message_id") or "")
+        _tl.conversation_snapshot = payload.get("conversation_snapshot") or conversation_context.empty(
+            group_id or payload.get("user_id"), source_text, "legacy_job_without_snapshot")
         _tl.from_image_ocr = bool(payload.get("from_image_ocr"))
         if group_id:
             try:
@@ -14074,6 +14049,7 @@ def _schedule_text_translation_retry(
         "line_mentions": list(line_mentions or []),
         "quoted_context_source": str(quoted_context_source or ""),
         "quoted_context_message_id": str(quoted_context_message_id or ""),
+        "conversation_snapshot": getattr(_tl, "conversation_snapshot", None),
         "from_image_ocr": bool(from_image_ocr),
         "from_file": bool(from_file),
         "file_name": str(file_name or ""),
@@ -14173,6 +14149,7 @@ def _run_translation_retry_job(job, owner):
             _tl.line_mentions = list(payload.get("line_mentions") or [])
             _tl.quoted_context_source = payload.get("quoted_context_source") or ""
             _tl.quoted_context_message_id = payload.get("quoted_context_message_id") or ""
+            _tl.conversation_snapshot = payload.get("conversation_snapshot")
             _tl.tone, _tl.tone_custom = get_group_tone(group_id) if group_id else (translation_tone, translation_tone_custom)
             plan = payload.get("delivery")
             if plan:
@@ -14353,8 +14330,49 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
         pass
     return False
 
+def _conversation_journal():
+    return conversation_context.SourceJournal(str(translation_retry_queue_module.DB_PATH) + ".context")
+
+
+def _conversation_group_id():
+    group = str(getattr(_tl, "group_id", "") or "")
+    return str(getattr(_tl, "user_id", "") or "") if group.startswith("__dm") else group
+
+
+def _conversation_translation_scope(function):
+    @functools.wraps(function)
+    def run(text, src, tgt):
+        group = _conversation_group_id()
+        snapshot = getattr(_tl, "conversation_snapshot", None)
+        enabled = bool(group and get_conv_context_enabled(group))
+        if not enabled:
+            snapshot = conversation_context.empty(group, text, "disabled")
+        elif not (snapshot and snapshot.get("group_id") == group
+                  and snapshot.get("source_key") == conversation_context.source_key(text)):
+            # Only webhook ingestion records an original. Internal/direct
+            # translations must not manufacture extra conversation turns.
+            snapshot = _conversation_journal().capture(
+                group, "", text, author=getattr(_tl, "user_id", ""), lang=src, record=False)
+        else:
+            snapshot = _conversation_journal().sanitize(snapshot)
+        _tl.conversation_snapshot = snapshot
+        with conversation_context.scope(snapshot):
+            result = function(text, src, tgt)
+            _update_last_translate_debug(conversation_context={
+                "enabled": enabled, "reason": snapshot.get("reason"),
+                "selection": snapshot.get("selection"),
+                "original_count": len(snapshot.get("entries", [])),
+                "message_ids": [row["message_id"] for row in snapshot.get("entries", [])],
+                "fingerprint": conversation_context.fingerprint(snapshot),
+                "resolution": conversation_context.resolve_action(text, src, snapshot),
+            })
+            return result
+    return run
+
+
 @ai_provider.translation_request_budget
 @translation_request_cache.scoped
+@_conversation_translation_scope
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
 
@@ -14396,7 +14414,7 @@ def translate(text, src, tgt):
     # work-order, station and @All corrections, triggering unnecessary API calls.
     _original_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
     _has_live_corrections = bool(custom_translation_examples or _active_translation_corrections_for_casebook())
-    if _original_exact or _has_live_corrections:
+    if (_original_exact or _has_live_corrections) and not _translation_cache_context_bound(text):
         _original_cases = _retrieve_verified_translation_cases(text, src, tgt, max_cases=8)
         _original_exact = translation_casebook_module.exact_verified_target(text, _original_cases) or _original_exact
         if _original_exact:
@@ -14724,6 +14742,8 @@ def translate(text, src, tgt):
     # name-bearing messages through the LLM (no fuzzy TM/NMT bypass), but the
     # source and cache key now contain the real name.
     protected_text = _mention_protected_text
+    conversation_context.register_source_form(text, canonical_text)
+    conversation_context.register_source_form(canonical_text, protected_text)
     _name_map = {}
     _visible_names = collect_visible_protected_names(canonical_text)
     _prev_pnm = getattr(_tl, 'protected_name_map', None)
@@ -15205,7 +15225,7 @@ def _translate_core(text, src, tgt):
     except Exception as _exact_exc:
         logger.warning("[FactoryPolicy] exact verified lookup failed open: %s", _exact_exc)
         _exact_verified = None
-    if _exact_verified:
+    if _exact_verified and not _context_bound_translation:
         _exact_candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
         _exact_sem_ok, _exact_sem_reason = translation_satisfies_semantic_contract(
             _semantic_contract, _exact_candidate
@@ -15240,7 +15260,7 @@ def _translate_core(text, src, tgt):
     except Exception as _guard_exact_exc:
         logger.error("[FactoryGuard] exact lookup failed closed: %s", _guard_exact_exc)
         _guard_exact = None
-    if _guard_exact:
+    if _guard_exact and not _context_bound_translation:
         _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
         _guard_sem_ok, _guard_sem_reason = translation_satisfies_semantic_contract(
             _semantic_contract, _guard_candidate
@@ -15280,7 +15300,7 @@ def _translate_core(text, src, tgt):
     # under the exact same guard/glossary/policy build and is revalidated against
     # this request's semantic contract.  The in-process cache is fastest; the
     # persistent exact TM preserves the same guarantee across workers/restarts.
-    _verified_cached = cache_get(text, src, tgt)
+    _verified_cached = None if _context_bound_translation else cache_get(text, src, tgt)
     if _verified_cached:
         try:
             _log_translation(
@@ -15742,6 +15762,11 @@ def _translate_core(text, src, tgt):
                 and _review_can_call
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
+            _review_snapshot = conversation_context.current_for(text)
+            if _review_snapshot and _review_snapshot.get("entries"):
+                _review_context += ("\n" + conversation_context.PROMPT_RULES
+                    + "\n<conversation_context>\n" + conversation_context.prompt_data(_review_snapshot)
+                    + "\n</conversation_context>")
             _learning_review_context = al_module.build_review_context(
                 _continuous_learning_risk
             )
@@ -15827,7 +15852,7 @@ def _translate_core(text, src, tgt):
                         text, _verified_cases
                     )
                 _exact_candidate = None
-                if _exact_verified:
+                if _exact_verified and not _context_bound_translation:
                     _candidate = finalize_factory_translation(text, _exact_verified, src, tgt)
                     _candidate_ok, _candidate_issues = _tm_bypass_integrity_ok(
                         text, _candidate, src, tgt
@@ -16214,7 +16239,7 @@ def _translate_single_paragraph(text, src, tgt):
     )
 
     _guard_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
-    if _guard_exact:
+    if _guard_exact and not _translation_cache_context_bound(text):
         _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
         if is_translation_acceptable(text, _guard_candidate, src, tgt):
             return _guard_candidate
@@ -16317,6 +16342,7 @@ def _translate_inner(text, src, tgt):
             except Exception:
                 pass
             # 用標準化版本後續處理
+            conversation_context.register_source_form(text, normalized)
             text = normalized
         # 進階:nano 模型語意級規範化(成本高)
         if id_preprocessing_nano:
@@ -16325,7 +16351,7 @@ def _translate_inner(text, src, tgt):
                 text = text_nano
     
     _guard_exact = factory_translation_guard_module.exact_verified_target(text, src, tgt)
-    if _guard_exact:
+    if _guard_exact and not _translation_cache_context_bound(text):
         _guard_candidate = finalize_factory_translation(text, _guard_exact, src, tgt)
         if is_translation_acceptable(text, _guard_candidate, src, tgt):
             return _guard_candidate
@@ -19954,6 +19980,13 @@ def handle_message(event):
         if lang == tgt:
             tgt = "id" if lang == "zh" else "zh"
 
+        _dm_event_ms = line_factory_features.field(event, "timestamp", 0) or 0
+        _tl.conversation_snapshot = _conversation_journal().capture(
+            user_id, getattr(event.message, "id", ""), text, author=user_id, lang=lang,
+            timestamp=float(_dm_event_ms) / 1000 if _dm_event_ms else None,
+            quoted_id=get_quoted_message_id(event.message) or "",
+            enabled=get_conv_context_enabled(user_id))
+
         # Durable outbox: persist the source before the first provider call.
         # If the process crashes or every provider is temporarily unavailable,
         # the same source survives and is delivered after recovery.
@@ -20244,11 +20277,22 @@ def handle_message(event):
     # message.  Feed that cached quote only as disambiguation context; the
     # current message remains the sole translation source.
     try:
-        _tl.quoted_context_source = (_quoted_for(lang) or quoted_text or "").strip()
+        _tl.quoted_context_source = (quoted_text or "").strip()
         _tl.quoted_context_message_id = str(quoted_id or "")
     except Exception:
         _tl.quoted_context_source = ""
         _tl.quoted_context_message_id = ""
+
+    _tl.group_id, _tl.user_id = group_id, user_id or ""
+    _event_ms = line_factory_features.field(event, "timestamp", 0) or 0
+    _recipients = [row["userId"] for row in line_factory_features.native_mentions(event.message)
+                   if row.get("userId")]
+    _tl.conversation_snapshot = _conversation_journal().capture(
+        group_id, msg_id, text, author=user_id or "", recipients=_recipients, lang=lang,
+        timestamp=float(_event_ms) / 1000 if _event_ms else None,
+        quoted_id=str(quoted_id or ""), enabled=get_conv_context_enabled(group_id))
+    if _tl.conversation_snapshot.get("selection") == "quoted_original":
+        _tl.quoted_context_source = _tl.conversation_snapshot["entries"][-1]["text"]
 
     tgt = group_target_lang.get(group_id, "id")
 
@@ -22042,6 +22086,8 @@ def _execute_translation_variant(context, mode, group_id, user_id, preferred=Non
         _tl.group_id = group_id or ""
         _tl.user_id = user_id or ""
         _tl.translation_variant = mode
+        _tl.conversation_snapshot = context.get("conversation_snapshot") or conversation_context.empty(
+            group_id, source_text, "legacy_action_without_snapshot")
         _tl.quality_gate_critical = True
         # Preserve the exact semantic relation captured when the original
         # translation was created.  This makes 自然/直譯/正式 share one meaning
@@ -22066,7 +22112,12 @@ def _execute_translation_variant(context, mode, group_id, user_id, preferred=Non
                 canonical, _ = resolve_factory_station_aliases(source_text)
             elif src_lang == "id" and id_preprocessing_enabled:
                 canonical, _ = normalize_indonesian_text(source_text)
-            result = _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang)
+            _variant_snapshot = _conversation_journal().sanitize(_tl.conversation_snapshot)
+            if not get_conv_context_enabled(group_id):
+                _variant_snapshot = conversation_context.empty(group_id, canonical, "disabled")
+            with conversation_context.scope(_variant_snapshot):
+                conversation_context.register_source_form(source_text, canonical)
+                result = _translate_variant_preserving_mentions(canonical, src_lang, tgt_lang)
         return result, src_lang, tgt_lang
     except Exception as exc:
         logger.exception("[translation_variant] %s failed: %s", mode, exc)
@@ -35630,83 +35681,32 @@ group_target_langs = globals().get("group_target_langs", {})   # preserve cloud-
 
 
 # ============================================================================
-# Conversation Context Ring Buffer (上下文記憶,讓 AI 看得懂接話)
+# Original conversation context (共用原文記錄與群組開關)
 # ============================================================================
 # 目的:解決翻譯時看不到上下文導致誤譯的問題。
 #   範例:小麥說「什麼事都沒做就默默升官了」
 #        Dato 接話「要被調走了要升一下」
 #   沒上下文:AI 把「升一下」翻成 "dinaikkan" (物理抬起來) → 錯
 #   有上下文:AI 看到上一句「升官」→ 知道這裡的「升」是升職 → 翻成 "naik jabatan"
-#
-# 設計原則 (照官方文件):
-# 1. 只保留最近 N 對 (預設 4 對 = 8 條 user+assistant)
-# 2. 歷史對話只「附加」不「修改」 → 維持 prefix 穩定 → 兩家 API 都能 cache
-# 3. OpenAI 自動 prompt caching (≥1024 tokens 自動 50% off, 無需改 code)
-# 4. Anthropic 用 cache_control 標記 (cache reads 10% 原價, cache writes 125%)
-# 5. 第一次翻譯付 cache write 略貴,第二次起 cache hit 比原本還便宜
-
-from collections import deque
-
-# {group_id: deque([(原文,翻譯,src_lang,tgt_lang,timestamp), ...])}
-group_conversation_buffer = {}
-_conv_buffer_lock = _threading_v310.Lock()
-
-# {group_id: bool} — 上下文記憶 per-group 開關 (獨立於 flex_v2,因為這是翻譯邏輯不是視覺)
+# Original LINE evidence lives in conversation_context.SourceJournal. The
+# per-group switch controls both capture and use; translations are never
+# replayed as conversation facts.
 group_conv_settings = globals().get("group_conv_settings", {})
-
-# 預設保留最近 4 對對話 = 8 條 messages。可在後台 per-group 調整。
-CONV_BUFFER_DEFAULT_TURNS = 4
-CONV_BUFFER_MAX_TURNS = 8         # 上限,避免 token 爆炸
-CONV_BUFFER_TTL_SECONDS = 3600    # v3.11(2026-05-26): 10 分鐘改 1 小時
-                                  # 原因:工廠對話節奏較慢,班長/組長回覆常隔 20-40 分鐘,
-                                  # 10 分鐘 TTL 會把上下文清掉,導致「兩把都放了」這種
-                                  # 接話訊息失去「放行」語意(誤譯成 sudah di-taruh)。
-                                  # 1 小時內主題不易跨大跳,副作用低。
-CONV_BUFFER_MAX_LEN_PER_MSG = 200 # 單條訊息超過 200 字會截斷,避免大段文章吃掉 cache
-
-
-def _conv_buffer_get(group_id, max_turns=None):
-    """取出該群組最近 N 對對話。回傳 list of dict
-    [{src, tgt, src_text, tgt_text, ts}, ...]
-    舊到新排列。"""
-    if not group_id:
-        return []
-    n = max_turns or CONV_BUFFER_DEFAULT_TURNS
-    with _conv_buffer_lock:
-        buf = group_conversation_buffer.get(group_id)
-        if not buf:
-            return []
-        now = time.time()
-        # 過濾過期項目
-        valid = [e for e in buf if (now - e.get("ts", 0)) <= CONV_BUFFER_TTL_SECONDS]
-        return valid[-n:]
 
 
 def _conv_buffer_add(group_id, src_text, tgt_text, src_lang, tgt_lang):
-    """新增一對對話到 buffer。"""
-    if not group_id or not src_text or not tgt_text:
-        return
-    # 截長訊息 (整篇文章吃掉 cache 又對上下文沒幫助)
-    src_clip = (src_text or "")[:CONV_BUFFER_MAX_LEN_PER_MSG]
-    tgt_clip = (tgt_text or "")[:CONV_BUFFER_MAX_LEN_PER_MSG]
-    with _conv_buffer_lock:
-        if group_id not in group_conversation_buffer:
-            group_conversation_buffer[group_id] = deque(maxlen=CONV_BUFFER_MAX_TURNS)
-        group_conversation_buffer[group_id].append({
-            "src": src_lang,
-            "tgt": tgt_lang,
-            "src_text": src_clip,
-            "tgt_text": tgt_clip,
-            "ts": time.time(),
-        })
+    """Compatibility hook: originals are captured before translation now."""
+    return
 
 
 def _conv_buffer_clear(group_id):
     """清掉特定群組的 buffer (用於 admin command 或群組退出)。"""
     if not group_id:
         return
-    with _conv_buffer_lock:
-        group_conversation_buffer.pop(group_id, None)
+    try:
+        _conversation_journal().clear(group_id)
+    except Exception as exc:
+        logger.warning("[ConversationContext] clear failed: %s", exc)
 
 
 def get_conv_context_enabled(group_id):
@@ -35725,6 +35725,8 @@ def set_conv_context_enabled(group_id, value):
     if not group_id:
         return False
     group_conv_settings[group_id] = bool(value)
+    if not value:
+        _conv_buffer_clear(group_id)
     try:
         save_settings()
     except Exception:
@@ -35788,7 +35790,8 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
     _ctx = {}
     for _a in ('group_id', 'user_id', 'from_image_ocr', 'tone', 'tone_custom',
                'line_mentions', 'quoted_context_source', 'quoted_context_message_id',
-               'from_file', 'force_model', 'translation_variant', 'disable_tone_emoji'):
+               'from_file', 'force_model', 'translation_variant', 'disable_tone_emoji',
+               'conversation_snapshot'):
         if hasattr(_tl, _a):
             _ctx[_a] = getattr(_tl, _a)
 
@@ -36347,6 +36350,7 @@ def _register_translation_action_context(group_id, original_text, translated_tex
         "expires_at": now + max(60, _TRANSLATION_ACTION_TTL),
         "menu_kind": menu_kind,
         "menu_overlay_token": menu_overlay_token,
+        "conversation_snapshot": getattr(_tl, "conversation_snapshot", None),
     }
     if isinstance(measurement_work_order_context, bool):
         record["measurement_work_order_context"] = measurement_work_order_context

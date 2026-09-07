@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import re
 from translation_request_cache import memoize
+import conversation_context
 import unicodedata
 from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.1-release-priority-availability"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.2-original-conversation-snapshot"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -3315,11 +3316,27 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
     return frame
 
 
-@memoize
 def build_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
-    """Extract source-side semantic relations for either supported direction."""
+    return _build_frame_with_context(source, src_lang, tgt_lang,
+                                     conversation_context.current_for(source))
+
+
+@memoize
+def _build_frame_with_context(source, src_lang, tgt_lang, snapshot):
+    """Context is an explicit memo input, shared with the first provider prompt."""
     frame = _base_frame(source, src_lang, tgt_lang)
     if not str(source or "").strip():
+        return frame
+    resolution = conversation_context.resolve_action(source, src_lang, snapshot)
+    if resolution and (src_lang, tgt_lang) in {("zh", "id"), ("id", "zh")}:
+        frame.update(active=True, complete=False, kind="conversation_action_reply",
+                     context_bound=True, context_resolution=resolution)
+        sense = resolution["sense"]
+        meaning = ("ERP 生產資料放行 / release data" if sense == "erp_data_release"
+                   else "實體物品放置 / physical placement")
+        _claim(frame, "conversation_action_state", conversation_context.body(source),
+               meaning + "; current state=" + resolution["state"],
+               "Preserve this action and state; translate only the current reply, not the previous request")
         return frame
     if frame["src_lang"] == "id" and frame["tgt_lang"] == "zh":
         return _build_id_zh_frame(source, frame)
@@ -3975,7 +3992,8 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     if not target:
         return False, ["factory_message_semantics:empty_translation"]
     slots = frame.get("slots") or {}
-    issues: list[str] = []
+    issues: list[str] = conversation_context.validate_resolution(
+        frame.get("context_resolution"), target, frame.get("tgt_lang"))
 
     if frame.get("kind") == "id_zh_machine_oil_leak":
         for code in slots.get("equipment_codes") or ():

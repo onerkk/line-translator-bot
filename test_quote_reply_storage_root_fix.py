@@ -166,7 +166,10 @@ def test_app_persists_empty_quote_translation_without_status_only_reply_or_flex_
     assert "quoted_context_source" in source
     assert "quoted_context_message_id" in source
     assert "getattr(event.message, 'quote_token', None)" not in source
-    assert "Translate only the " in source and "current user message" in source
+    # Prompt wording now lives in the shared original-conversation module.
+    import conversation_context
+    assert "Translate ONLY the current source" in conversation_context.PROMPT_RULES
+    assert "conversation_context.PROMPT_RULES" in source
 
 
 def test_legacy_backup_retry_status_is_detected_without_importing_runtime_dependencies():

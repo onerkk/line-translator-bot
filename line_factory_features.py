@@ -265,6 +265,12 @@ class FactoryHub:
                 return
             if edited:
                 queue.cancel_source(group, mid, except_identity=identity)
+                journal_factory = self.h.get("_conversation_journal")
+                if journal_factory:
+                    try:
+                        journal_factory().invalidate_edit(group, mid, timestamp / 1000)
+                    except Exception as exc:
+                        self.app.logger.warning("[ConversationContext] edited evidence cleanup failed: %s", exc)
         if filtered:
             yield False
             return
@@ -306,6 +312,12 @@ class FactoryHub:
             **(old or {}), "group_id": group, "message_id": mid, "cancelled": True,
         })
         queue.cancel_source(group, mid)
+        # Conversation evidence follows the same unsend lifecycle as replies.
+        import conversation_context
+        try:
+            conversation_context.SourceJournal(str(queue.DB_PATH) + ".context").remove(group, mid)
+        except Exception as exc:
+            self.app.logger.warning("[ConversationContext] unsend cleanup failed: %s", exc)
         # Do not keep accessible copies in receipts or translation buttons.
         try:
             indexed = self.store.get("source-contexts:" + self._rev_key(group, mid)) or {}

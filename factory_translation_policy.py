@@ -25,7 +25,7 @@ import re
 from typing import Any, Dict
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-07.1-evidence-based-review-budget"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-08.2-conversation-review-budget"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -179,8 +179,11 @@ def adaptive_review_risk(
         return False
 
     contract = semantic_contract if isinstance(semantic_contract, dict) else {}
-    if contract.get("context_bound"):
+    if contract.get("context_bound") and not contract.get("conversation_only_context"):
         return True
+    # Ordinary original chat evidence is sent in the first request. Its
+    # presence alone must not double all short-message traffic. Learned risk,
+    # serious incidents and rejected candidates still trigger review below.
     # Strong verified-correction matches explicitly request review. Do not use
     # the broad contract-level flag here: quantity/source frames also set it and
     # already have deterministic validators, so honoring it globally would

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 import factory_measurement_semantics as measurement
+import conversation_context
 
 ROOT = Path(__file__).resolve().parent
 APP_SOURCE = (ROOT / "app.py").read_text(encoding="utf-8")
@@ -303,6 +304,7 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
                 "os": types.SimpleNamespace(environ={}),
                 "secrets": secrets,
                 "time": time,
+                "_tl": types.SimpleNamespace(),
                 "logger": types.SimpleNamespace(warning=lambda *a, **k: None),
                 "_build_id_zh_measurement_frame": lambda text: measurement.build_frame(
                     text, equipment_codes=["I5"], work_order_context=True
@@ -333,6 +335,9 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
             extra={
                 "_tl": tl,
                 "user_languages": {},
+                "conversation_context": conversation_context,
+                "_conversation_journal": lambda: types.SimpleNamespace(sanitize=lambda value: value),
+                "get_conv_context_enabled": lambda *_a: True,
                 "dm_target_lang": {},
                 "get_group_tone": lambda group_id: ("factory", ""),
                 "id_preprocessing_enabled": False,
