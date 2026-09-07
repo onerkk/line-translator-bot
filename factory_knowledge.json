@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-07.2-shared-release-relation",
+  "build_id": "2026-09-07.3-collar-source-object",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -3931,6 +3931,41 @@
           "target": "I15 機台故障",
           "bad_target": "i15 損壞",
           "reason": "設備代碼是主詞，rusak 表示機台功能故障。"
+        }
+      ]
+    },
+    {
+      "id": "protective_collar_source_object",
+      "enabled": true,
+      "priority": 200,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "套環是實體零件，保留補裝動作",
+      "match": {
+        "strong_phrases": [
+          "套環",
+          "套环"
+        ],
+        "require_any": true,
+        "min_score": 8
+      },
+      "context": [
+        "既有工單詞庫將套環定義為 Cincin Pelindung；一般群組訊息也沿用此名稱。",
+        "套環要補上表示把缺少的套環裝上。補上必須依原句的物件判斷，不能因為有補字就改成補毛重或重新秤重。",
+        "保留原句的要求、否定、詢問或已完成狀態；不要一律改成命令。"
+      ],
+      "preferred_target_phrases": [
+        "cincin pelindung",
+        "ring pelindung"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "cincin",
+            "ring"
+          ],
+          "issue": "missing_protective_collar_object"
         }
       ]
     }

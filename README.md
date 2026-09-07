@@ -387,3 +387,20 @@ python benchmark_translation_cp.py --runs 9 --output after.json
 ```
 
 將 ZIP 內的 6 個檔案依原路徑覆蓋到專案根目錄；務必同時上傳新增的 `line_api_transport.py`。不需要更換金鑰、調整環境變數或重設群組選單。
+
+
+## 2026-09-07：修正「套環要補上」被改成秤毛重
+
+這次錯譯可在舊版完整 LINE handler 離線重現，過程沒有呼叫 AI：ERP 原因欄的寬鬆比對把一般句子裡的單字「補」當作「補毛重」。同類規則也會吞掉物件、否定、問句及完成狀態。
+
+- ERP 固定譯文只接受完整且已知的原因標籤。單字縮寫只限明確的原因欄或 ID 表格；一般短句交回正常翻譯流程。
+- 語義契約使用同一個完整標籤判斷，避免另一條路徑重新注入錯誤秤重指令。
+- 混合表格有未知原因或不完整儲存格時，不可只輸出已識別的部分。
+- 既有詞條「工單訂單資訊『套環』→ Cincin Pelindung」增加一般訊息別名；共用知識驗證要求保留套環物件，拒絕整句變成無關秤重指令。這不是新增整句固定答案。
+- ERP 判斷版本納入翻譯快取指紋，使舊版快取／持久翻譯記憶的結果失效；保留先前加速版的連線與案例檢索重用。
+
+參考譯文：`套環要補上` → `Cincin pelindung harus dipasang.`（套環必須裝上。）
+
+更新包僅包含 `app.py`、`glossary_data.json`、`factory_knowledge.json`、`test_factory_reason_scope.py`、`README.md`，請依原路徑完整覆蓋。部署成功後，在測試群組重新傳送「套環要補上」驗證；已送出的 LINE 訊息不會因部署而改寫。
+
+驗證：`python -m pytest -q test_*.py` 與 `python validate_factory_translation_assets.py --json`。新增案例涵蓋實際 LINE 傳送流程、錯誤候選攔截、否定／完成／問句、ERP OCR 正常表格、未知儲存格和舊快取失效；使用離線 AI／LINE 替身，不代表已在 Render 部署或保證所有模型輸出正確。

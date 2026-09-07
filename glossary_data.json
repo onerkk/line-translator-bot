@@ -1182,7 +1182,8 @@
   "工單訂單資訊「套環」": {
     "idn": "Cincin Pelindung",
     "note_zh": "套環",
-    "note_id": "Cincin Pelindung"
+    "note_id": "Cincin Pelindung",
+    "aliases_zh": ["套環", "套环"]
   },
   "工單訂單資訊「顏色」": {
     "idn": "Warna",
