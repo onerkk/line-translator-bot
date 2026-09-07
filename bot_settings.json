@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "077fc9b0ef1c7922c115f30dc0cbf93af74fbbcb5c066ede518987ad2de86ff0",
-    "updated_at_iso": "2026-09-07T08:26:58.975836+00:00",
-    "updated_at_unix": 1788769618.9758356
+    "state_hash": "3abd041cc0e14ab9801605df61527bc50346a55e26e31d861a2d6609aac06039",
+    "updated_at_iso": "2026-09-07T08:27:02.627513+00:00",
+    "updated_at_unix": 1788769622.6275134
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -27,7 +27,8 @@
         "external_links",
         "insight",
         "storage",
-        "factory"
+        "factory",
+        "reminders"
       ],
       "google_email": "onerkk@gmail.com",
       "is_admin": true
