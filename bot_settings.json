@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "0a561aff1a459dbdc508d8b10bcdf5da8aea27d2976350f28d4729f7dd436e6f",
-    "updated_at_iso": "2026-09-06T22:52:12.471550+00:00",
-    "updated_at_unix": 1788735132.47155
+    "state_hash": "764af64c3a3e89c596e58ec0699f1facdc0b5a9b60be9852e2d4ca74909039c3",
+    "updated_at_iso": "2026-09-07T00:39:14.635843+00:00",
+    "updated_at_unix": 1788741554.6358428
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -47,7 +47,7 @@
       "is_admin": true
     }
   },
-  "ai_active_provider": "openai",
+  "ai_active_provider": "anthropic",
   "ai_gemini_features": {
     "reasoning_effort": "minimal"
   },
@@ -59,18 +59,12 @@
     "flex_background": true
   },
   "ai_provider_config": {
-    "active_provider": "openai",
+    "active_provider": "anthropic",
     "anthropic": {
       "default_model": "claude-haiku-4-5-20251001"
     },
     "auto_switch_on_exhaust": true,
-    "auto_switch_state": {
-      "active": true,
-      "at": 1788733201,
-      "from": "openai",
-      "reason": "quota_exhausted_no_backup",
-      "to": null
-    },
+    "auto_switch_state": {},
     "claude_features": {
       "adaptive_thinking": true,
       "assistant_prefill": false,
@@ -150,7 +144,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-06 22:20:01",
+    "last_updated": "2026-09-07 00:39:14",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -172,10 +166,6 @@
     },
     "provider_failover": true,
     "quota_exhausted_providers": {
-      "anthropic": {
-        "at": 1786541706,
-        "error": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011Cdx"
-      },
       "openai": {
         "at": 1788733201,
         "error": "Error code: 429 - {'error': {'message': 'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.', 'type': 'insufficient_quota', 'param': None, 'code': 'credit_bala"
@@ -197,7 +187,7 @@
     "oai_input": 144097,
     "oai_output": 1337,
     "oai_reasoning": 0,
-    "text_translations": 258,
+    "text_translations": 259,
     "tokens_completion": 18793,
     "tokens_prompt": 4378868,
     "tokens_prompt_cached": 138368,
