@@ -80,7 +80,7 @@ def extract_mentions(text):
     # translatable sentence.  The Chinese-target purity gate then (correctly for
     # ordinary source words, incorrectly for this name) rejects it as an
     # untranslated Indonesian word.  Extend the textual mention by up to two
-    # conservative lowercase Latin name tokens, but stop before common
+    # conservative Latin name tokens, but stop before common
     # Indonesian sentence words so ``@阿明 jika ...`` never swallows ``jika``.
     for m in re.finditer(
         r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?',
@@ -90,7 +90,7 @@ def extract_mentions(text):
         tail_end = end
         # A closing name/role parenthesis explicitly ends the mention.
         for _ in range(0 if text[end - 1:end] in {")", "）"} else 2):
-            tail = re.match(r'\s+([a-z][a-z0-9_.-]{1,31})', text[tail_end:])
+            tail = re.match(r'\s+([A-Za-z][A-Za-z0-9_.-]{1,31})', text[tail_end:])
             if not tail:
                 break
             token = tail.group(1)

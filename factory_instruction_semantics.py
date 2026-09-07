@@ -7,10 +7,11 @@ correct word elsewhere cannot excuse a reversed action in the current item.
 from __future__ import annotations
 
 import re
+import factory_record_semantics as record_semantics
 from translation_request_cache import memoize
 import unicodedata
 
-BUILD_ID = "2026-09-07.3-noncurrent-record-scope"
+BUILD_ID = "2026-09-07.4-record-object-direction"
 _ITEM = re.compile(r"(?m)^\s*[（(]?(\d+)[）).、．]\s*(?!\d)")
 _INVENTORY = r"(?:庫存|库存|存貨|存货)"
 _BLOCKED_DECREASE = r"(?:降不下(?:來|来|去)?|減不下(?:來|来|去)?|减不下(?:來|来|去)?|降低不了|(?:無法|无法|不能|不會|不会|一直不)(?:再)?(?:下降|降低|減少|减少)|下不[來来])"
@@ -94,10 +95,10 @@ def build_relations(source):
                 meaning += "；暫存是系統中的暫存紀錄，不能只用『目前／暫時注意』取代"
             add("noncurrent_period", m.group(), meaning, hint,
                 other_period_explicit=bool(re.search(r"上個?月|上个月|下個?月|下个月|前月|次月", compact)))
-        m = re.search(r"(?:帳|账|資料|资料|記錄|记录).{0,8}?(?:先)?(?:移出|轉出|转出|搬出)|(?:移出|轉出|转出|搬出)[^，。;；]{0,18}?(?:帳|账|資料|资料|記錄|记录)", compact)
-        if m:
-            add("record_move_out", m.group(), "把已存入的資料先移出分類，並非刪除帳號或再新增一筆",
-                "keluarkan/pindahkan catatan yang sudah dimasukkan", completed=bool(re.search(r"(?:先丟進去|先丢进去|已.{0,4}(?:入|存)|存進去|存进去|丟進去|丢进去)", compact)))
+        for transfer in (record_semantics.build_transfers(text, intro)
+                + record_semantics.build_status_markers(text)
+                + record_semantics.build_movement_permissions(text)):
+            relations.append(dict(transfer, item=item))
         m = re.search(r"(?:眼色|眼力)(?:要)?(?:好|機靈|机灵)(?:一點|一点|點|点)?|(?:機靈|机灵|識相|识相)一點", compact)
         if m:
             add("situational_awareness", m.group(), "提醒對情況機靈、識相、小心，不是改善外表",
@@ -155,14 +156,16 @@ def validate_relations(relations, translation):
             if relation.get('cross_prohibited'):
                 good = good and any(re.search(r"\b(?:jangan|dilarang|tidak boleh)\b", c) and re.search(r"\b(?:lintas|antar|lain|beda|berbeda|menyeberang)\b", c) and 'shift' in c for c in clauses)
         elif kind == 'noncurrent_period':
-            good = bool(re.search(r"\b(?:bukan|selain|di luar)\s+(?:untuk\s+|dari\s+)?(?:(?:pengiriman|periode|produksi|pencatatan)\s+)?bulan\s+(?:ini|berjalan)\b|\btidak\s+termasuk\s+bulan\s+ini\b|\bnon[ -]bulan\s+(?:ini|berjalan)\b", text))
+            good = bool(re.search(record_semantics.NONCURRENT_ID, text))
             good = good and not re.search(r"\b(?:anda|kamu|kalian)\s+(?:tidak|bukan)\s+(?:berada|bekerja)\b", text)
             if not relation.get("other_period_explicit"):
                 good = good and not re.search(r"\bbulan\s+(?:lalu|depan)\b", text)
-        elif kind == 'record_move_out':
-            good = any(re.search(r"\b(?:data|catatan|pencatatan|entri)\b", c) and re.search(r"\b(?:keluarkan|dikeluarkan|mengeluarkan|pindahkan|dipindahkan|memindahkan)\b", c) and not re.search(r"\b(?:hapus|dihapus|menghapus|akun)\b", c) for c in clauses)
-            if relation.get('completed'):
-                good = good and any(re.search(r"\b(?:sudah|telah)\s+(?:di)?(?:masuk\w*|input\w*|simpan\w*|catat\w*)", c) and re.search(r"\b(?:data|catatan|entri)\b", c) for c in clauses)
+        elif kind == 'record_transfer':
+            good = record_semantics.validate_transfer(relation, text)
+        elif kind == 'packing_status_marker':
+            good = record_semantics.validate_status_marker(relation, text)
+        elif kind == 'movement_permission':
+            good = record_semantics.validate_movement_permission(relation, text)
         elif kind == 'situational_awareness':
             good = bool(re.search(r"\b(?:peka|sigap|waspada|tanggap|hati-hati|hati hati|mawas diri|pandai membaca situasi)\b", text)) and not re.search(r"\b(?:terlihat|tampak|kelihatan)\s+lebih\s+baik\b", text)
         elif kind == 'cctv_review':
@@ -175,3 +178,27 @@ def validate_relations(relations, translation):
             scope = f"item_{relation['item']}:" if relation['item'] is not None else ''
             issues.append(f"factory_instruction:{scope}{kind}:preserve_{relation.get('state', 'source_action')}")
     return list(dict.fromkeys(issues))
+
+
+def canonicalize_record_terms(source, target):
+    relations = build_relations(source)
+    if not any(r.get("kind") in {"record_transfer", "packing_status_marker"} for r in relations):
+        return target
+    # Preserve every numbered item boundary and all unrelated target text.
+    marks = list(_ITEM.finditer(target))
+    if not marks:
+        relevant = [r for r in relations if r.get("item") is None]
+        return record_semantics.canonicalize_transfer_terms(relevant, target)
+    replacements = []
+    occurrences = {}
+    for index, mark in enumerate(marks):
+        number = mark.group(1)
+        occurrences[number] = occurrences.get(number, 0) + 1
+        key = number if occurrences[number] == 1 else f"{number}#{occurrences[number]}"
+        start = mark.end()
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(target)
+        relevant = [r for r in relations if r.get("item") == key]
+        replacements.append((start, end, record_semantics.canonicalize_transfer_terms(relevant, target[start:end])))
+    for start, end, value in reversed(replacements):
+        target = target[:start] + value + target[end:]
+    return target

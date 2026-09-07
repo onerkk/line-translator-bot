@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import expressive_assets
 import translation_extras
 
-EXPRESSIVE_ENGINE_VERSION = "2026-08-05.2-formal-workplace-output-fidelity"
+EXPRESSIVE_ENGINE_VERSION = "2026-09-07.1-inspection-and-ledger-fidelity"
 
 
 @dataclass(frozen=True)
@@ -116,7 +116,7 @@ def enhance_translation(
         context in {"factory", "workplace"}
         or re.search(
             r"削皮|包裝|TAG|重量(?:異常|不正常)|客訴|懲處|工單|料號|機台|設備|"
-            r"研磨|拋光|冷抽|退火|酸洗|矯直|倒角|生產|作業|品保|"
+            r"研磨|拋光|冷抽|退火|酸洗|矯直|倒角|生產|作業|品保|巡廠|巡厂|裝箱|装箱|帳務|账务|"
             r"\b(?:peeling|packing|packaging|weight|complaint|sanction|work\s*order|machine|production|quality)\b",
             source,
             re.I,

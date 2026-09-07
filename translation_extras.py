@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
+TRANSLATION_EXTRAS_VERSION = "2026-09-07.1-uncertainty-safe-expression"
 
 
 
@@ -1016,10 +1016,21 @@ def build_expression_plan(
     for _priority, unit_index, source_unit, unit_analysis in selected:
         target_unit = target_units[unit_index]
         choices = unit_analysis.emoji_choices or ((unit_analysis.emoji,) if unit_analysis.emoji else ())
+        # Inspection is not a passed inspection; a possible outcome is not a
+        # confirmed result. Preserve original symbols, but don't invent a tick
+        # or celebration just because the prose mentions inspection/completion.
+        uncertain = bool(re.search(
+            r"可能|或許|也許|不確定|不确定|不知道|不清楚|聽說|听说|可信度|"
+            r"\b(?:mungkin|barangkali|sepertinya|katanya|kabarnya|tidak\s+tahu|belum\s+(?:pasti|dikonfirmasi)|might|maybe|uncertain)\b",
+            source_unit + ' ' + target_unit, re.I))
+        if uncertain or unit_analysis.primary == 'quality_notice':
+            choices = tuple(e for e in choices if e not in {'✅', '☑️', '✔️', '🎉', '🥳', '✨'})
+            if not choices:
+                continue
         if str(intensity or "natural").strip().lower() == "lively" and choices:
             emoji = _stable_pick(choices, source_unit + target_unit + unit_analysis.primary)
         else:
-            emoji = unit_analysis.emoji or (choices[0] if choices else "")
+            emoji = unit_analysis.emoji if unit_analysis.emoji in choices else (choices[0] if choices else "")
         if emoji in used_emoji:
             emoji = next((candidate for candidate in choices if candidate not in used_emoji), emoji)
         if not emoji:

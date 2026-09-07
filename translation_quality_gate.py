@@ -31,12 +31,13 @@ import factory_semantic_audit as fsa_module
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 import factory_source_understanding as fsu_module
+import factory_terminology as terminology_module
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-07.3-shared-mention-boundaries"
+QUALITY_GATE_BUILD_ID = "2026-09-07.4-record-and-computer-semantics"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1713,6 +1714,14 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
     return _dedupe(issues)
 
 
+def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
+    """Normalize unambiguous source-bound terms without a model call."""
+    result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
+    if src_lang == "zh" and tgt_lang == "id" and result:
+        result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
+    return result
+
+
 def validate_translation(
     source: str,
     candidate: str,
@@ -1765,6 +1774,10 @@ def _validate_normalized_translation(
     issues = []
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
+
+    if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)
+            and re.search(r"計算機|计算机", candidate)):
+        issues.append("computer_term_requires_taiwan_computer")
 
     # A provider-bound privacy placeholder is valid only when the same token is
     # present in the masked source. Canonicalize harmless spacing/bracket drift

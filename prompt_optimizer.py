@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-09-07.1-reference-context-all-routes"
+PROMPT_OPTIMIZER_VERSION = "2026-09-07.2-record-and-marker-objects"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -409,11 +409,11 @@ def _direction_principles(src: str, tgt: str) -> str:
             "Use plain, immediately understandable Indonesian factory language: standard spelling, short sentences and direct actor-action-object order. Match source formality; use casual slang only when the source is casual. Use kita for shared workplace impact and kalian only for a direct instruction to workers."
         )
         rules.append(
-            "Do not literalize Taiwanese workplace concepts: leadership pressure, collective welfare, perfunctory reporting, factory material handling and ERP operations must be rendered by their operational meaning and original severity, without adding accusations or facts."
+            "Do not literalize Taiwanese workplace concepts: leadership pressure, collective welfare, perfunctory reporting, factory material handling and ERP operations must be rendered by their operational meaning and original severity, without adding accusations or facts. Distinguish record transfers from physical transport. A symbol preceding a label can denote status, not a physical position; preserve its label, symbol and state without inventing locations."
         )
     if tgt_l.startswith("zh"):
         rules.append(
-            "Write natural Traditional Chinese used in Taiwan, never Simplified Chinese or Mainland-specific phrasing. Normalize Indonesian chat abbreviations internally while preserving the worker's tone."
+            "Write natural Traditional Chinese used in Taiwan, never Simplified Chinese or Mainland-specific phrasing (komputer = 電腦; kalkulator = 計算機). Normalize Indonesian chat abbreviations internally while preserving the worker's tone."
         )
         rules.append(
             "For rusak and similar defect wording, distinguish function from surface condition: broken/nonfunctional equipment or safety devices use 損壞/故障; processed material or product surface defects use 損傷."

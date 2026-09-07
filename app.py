@@ -313,7 +313,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-07.3-shared-mention-boundaries"
+_EXPECTED_QG_BUILD_ID = "2026-09-07.4-record-and-computer-semantics"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -464,8 +464,8 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-07-14.10-taipei-handover-time"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-07.1-reference-context-all-routes"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-07.1-uncertainty-safe-expression"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-07.2-record-and-marker-objects"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -503,7 +503,7 @@ if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PRO
         f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
         "Replace app.py and prompt_optimizer.py together in the project root."
     )
-_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-08-05.2-formal-workplace-output-fidelity"
+_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-09-07.1-inspection-and-ledger-fidelity"
 _EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-09-02.1-operational-record-context"
 if getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", None) != _EXPECTED_EXPRESSIVE_ENGINE_VERSION:
     raise RuntimeError(
@@ -1940,6 +1940,8 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
             return False, f"{provider} returned refusal/meta text"
         if len(source_compact) >= 6 and re.sub(r"\s+", "", text).casefold() == source_compact.casefold():
             return False, f"{provider} echoed the source instead of translating"
+
+        text = tqg_module.canonicalize_source_terms(source, text, src_lang, tgt_lang)
 
         # Objective local checks are cheap and provider-neutral.  Warning-only
         # style diagnostics do not trigger another paid call.
@@ -7272,6 +7274,7 @@ def finalize_factory_translation(src_text, result, src, tgt):
     # Defense in depth for cache/custom-example/NMT paths that do not pass
     # through translate_openai's response parser.
     result = _repair_pipeline_mention_placeholders(src_text, result)
+    result = tqg_module.canonicalize_source_terms(src_text, result, src, tgt)
     if src == "id" and tgt == "zh":
         result = post_fix_factory_id_to_zh(src_text, result)
         result = factory_terminology_module.canonicalize_organization_translation(
@@ -10090,7 +10093,7 @@ GLOSSARY_LOOKUP = gp_module.normalize_glossary(GLOSSARY_LOOKUP)
 ge_module.invalidate_glossary_cache()
 _FACTORY_TERMINOLOGY_HEALTH = factory_terminology_module.get_engine(GLOSSARY_LOOKUP).health()
 if (_FACTORY_TERMINOLOGY_HEALTH.get("api_version") != 1
-        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-08-18.1-reversible-management-titles"
+        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-09-07.1-taiwan-computer-terminology"
         or _FACTORY_TERMINOLOGY_HEALTH.get("glossary_entries", 0) < 1):
     raise RuntimeError("factory terminology deployment mismatch: " + repr(_FACTORY_TERMINOLOGY_HEALTH))
 logger.info("[FactoryTerminology] verified %s", _FACTORY_TERMINOLOGY_HEALTH)
@@ -12934,6 +12937,7 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
         return None
     if _is_translation_failure_sentinel(candidate):
         return None
+    candidate = tqg_module.canonicalize_source_terms(source_text, candidate, src, tgt)
     original = candidate.strip()
     if not original:
         return None
@@ -15574,6 +15578,7 @@ def _translate_core(text, src, tgt):
     
     # Runtime plant-context repair + semantic contract enforcement after NMT/LLM/TM-inject.
     if result and isinstance(result, str):
+        result = tqg_module.canonicalize_source_terms(text, result, src, tgt)
         result = _maybe_repair_factory_knowledge_translation(text, result, src, tgt, _semantic_contract)
         result = enforce_translation_semantic_contract(_semantic_contract, text, result)
         # Resolve unambiguous management-title drift locally before glossary

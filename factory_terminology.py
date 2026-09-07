@@ -21,11 +21,26 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-08-18.1-reversible-management-titles"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-07.1-taiwan-computer-terminology"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
 _TRIE_END = object()
+
+
+def computer_term_is_unambiguous(source, src_lang, tgt_lang):
+    """Use Taiwan's computer term without renaming calculators or quoted UI."""
+    return (
+        str(src_lang).startswith("id") and str(tgt_lang).startswith("zh")
+        and bool(re.search(r"\bkomputer\b", source or "", re.I))
+        and not re.search(r"\bkalkulator\b|計算機|计算机|計算器|计算器", source or "", re.I)
+    )
+
+
+def canonicalize_computer_translation(source, candidate, src_lang, tgt_lang):
+    if computer_term_is_unambiguous(source, src_lang, tgt_lang):
+        return str(candidate or "").replace("計算機", "電腦").replace("计算机", "電腦")
+    return candidate
 
 _ZH_NUMERAL_VALUES = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-07.4-storage-voice-and-source-scope",
+  "build_id": "2026-09-07.5-record-transfer-and-computer",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -3991,6 +3991,112 @@
             "ring"
           ],
           "issue": "missing_protective_collar_object"
+        }
+      ]
+    },
+    {
+      "id": "taiwan_computer_not_calculator",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "臺灣職場電腦用語",
+      "match": {
+        "regex_any": [
+          "\\bkomputer\\b"
+        ],
+        "any_terms": [
+          "komputer"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "komputer 在臺灣工作現場譯為「電腦」；kalkulator 才是計算機。不要寫「中間計算機」使人誤以為是手持計算工具。",
+        "komputer tengah 是中間那台電腦；保留左右、中間等位置。tolong bukakan 表示請幫忙開啟，不可自行添加重開機、解鎖、登入成功或解除警報。",
+        "若同句也有 kalkulator 或明確引用名為「計算機」的應用程式，分別保留各自對象，不做全句替換。"
+      ],
+      "preferred_target_phrases": [
+        "電腦",
+        "中間那台電腦"
+      ],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "計算機",
+            "计算机"
+          ],
+          "unless_source": {
+            "regex_any": [
+              "\\bkalkulator\\b|計算機|计算机|計算器|计算器"
+            ]
+          }
+        }
+      ],
+      "requirements": [],
+      "examples": [
+        {
+          "source": "Komputer di sebelah kanan sedang rusak.",
+          "target": "右邊那台電腦目前故障。",
+          "reason": "電腦與計算機的臺灣常用語要區分，保留右邊位置及故障狀態。"
+        }
+      ]
+    },
+    {
+      "id": "inventory_record_transfer_object",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "庫存帳與非本月分類的紀錄操作",
+      "match": {
+        "regex_any": [
+          "(?:移到|移進|移入|轉入|转入)(?:庫存|库存)?[帳账](?!號|号|戶|户|篷|單|单)",
+          "(?:[帳账](?!號|号|戶|户|篷)|紀錄|記錄|记录|資料|资料).{0,16}(?:移出|轉出|转出)"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "移到帳／轉入庫存帳是在系統中把材料紀錄轉入庫存帳，譯為 pindahkan/masukkan catatan material ke pencatatan stok；帳不是 area akun 這種實體區域，也不是登入帳號。",
+        "先辨認動作對象。帳、資料、紀錄的移入／移出作用於 data/catatan；木箱、材料、儲區的實際搬運仍是材料移動。不要因為同段出現帳就把所有搬運改成資料操作。",
+        "同一項指示先講入帳，接著說非本月這兩捆不要移出時，應明說非本月分類中對應這兩捆的紀錄不要移出。保留兩捆、非當月分類及禁止移出三個資訊。",
+        "移入、移出與禁止各自綁定所屬子句，不可把另一句的 jangan 或 catatan 借來通過檢查；非本月不等於上個月。"
+      ],
+      "preferred_target_phrases": [
+        "pencatatan stok",
+        "catatan material",
+        "jangan keluarkan catatan dari kategori bukan untuk bulan ini"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "帳",
+            "账",
+            "資料",
+            "资料",
+            "紀錄",
+            "記錄",
+            "记录"
+          ],
+          "target_any": [
+            "catatan",
+            "data",
+            "pencatatan",
+            "entri",
+            "pembukuan",
+            "buku stok",
+            "buku persediaan"
+          ],
+          "issue": "inventory_transfer_requires_record_object"
+        }
+      ],
+      "examples": [
+        {
+          "source": "這三捆的帳先不要移出。",
+          "target": "Catatan untuk tiga bundel ini jangan dikeluarkan dulu.",
+          "bad_target": "Tiga bundel ini jangan dipindahkan keluar dulu.",
+          "reason": "保留三捆及暫時禁止移出的意思，並明確指定移出對象是紀錄。"
         }
       ]
     }
