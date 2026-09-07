@@ -146,6 +146,7 @@ import contextlib
 import translation_request_cache
 import conversation_context
 import translation_mentions
+import line_user_names
 import functools
 import line_translation_delivery as line_delivery_module
 import line_factory_features
@@ -10475,13 +10476,21 @@ def _storage_protected_names(storage_lookup=None):
     return names
 
 
+def _line_user_protected_names():
+    # Derive from the directory on every read: existing users work immediately
+    # after loading settings, and renames cannot leave a second stale name list.
+    with _state_lock:
+        return line_user_names.known_names(group_user_names, dm_known_users)
+
+
 def protected_name_inventory():
-    """Build the admin-facing union of manual and storage-managed names.
+    """Build the admin-facing union of manual, storage and LINE profile names.
 
     Storage customers remain owned by ``storage_data.json`` and are not copied
     into ``extra_names_by_group``.  This single-source design makes every
     storage update immediately update the no-translation list while preventing
     the same customer from being persistently added a second time.
+    LINE names similarly remain owned by the existing durable user directory.
     """
     with _state_lock:
         manual_names, _removed = _clean_protected_name_list(
@@ -10489,10 +10498,12 @@ def protected_name_inventory():
         )
         storage_names = _storage_protected_names()
         storage_set = set(storage_names)
+        user_names = _line_user_protected_names()
+        user_set = set(user_names)
 
         names = []
         seen = set()
-        for name in manual_names + storage_names:
+        for name in manual_names + storage_names + user_names:
             if name in seen:
                 continue
             seen.add(name)
@@ -10501,9 +10512,11 @@ def protected_name_inventory():
     return {
         "names": names,
         "storage_names": storage_names,
+        "user_names": user_names,
         "count": len(names),
         "storage_count": len(storage_names),
-        "manual_count": sum(1 for name in names if name not in storage_set),
+        "user_count": len(user_names),
+        "manual_count": sum(1 for name in names if name not in storage_set | user_set),
     }
 
 
@@ -11934,6 +11947,7 @@ def _translation_cache_scope():
         "tone_custom": str(getattr(_tl, "tone_custom", "") or ""),
         "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
         "station": line_factory_features.station_scope(),
+        "protected_names": sorted(set(CUSTOMER_NAMES + _line_user_protected_names())),
         "conversation": conversation_context.fingerprint(
             getattr(_tl, "conversation_snapshot", None)),
     }
@@ -12037,6 +12051,11 @@ def cache_get(text, src, tgt):
             src,
             tgt,
         )
+        with _cache_lock:
+            translation_cache.pop(selected_key, None)
+        return None
+
+    if any(name not in result for name in collect_visible_protected_names(text)):
         with _cache_lock:
             translation_cache.pop(selected_key, None)
         return None
@@ -12369,7 +12388,7 @@ def protect_names(text):
     if not text or not isinstance(text, str):
         return text, {}
     try:
-        names = sorted(CUSTOMER_NAMES, key=lambda x: -len(x))
+        names = collect_visible_protected_names(text)
     except Exception:
         return text, {}
     result = text
@@ -12380,7 +12399,10 @@ def protect_names(text):
             n += 1
             ph = "__PERSON_%d__" % n
             name_map[ph] = name
-            result = result.replace(name, ph)
+            if name in CUSTOMER_NAMES:
+                result = result.replace(name, ph)
+            else:
+                result = line_user_names.name_pattern(name).sub(lambda _m: ph, result)
     return result, name_map
 
 
@@ -12402,7 +12424,8 @@ def collect_visible_protected_names(text):
     for name in names:
         if name and name in text and name not in found:
             found.append(name)
-    return found
+    found.extend(line_user_names.visible_names(text, _line_user_protected_names()))
+    return sorted(set(found), key=lambda name: (-len(name), name))
 
 
 def restore_names(text, name_map):
@@ -13394,6 +13417,12 @@ def _durable_translation_event(kind):
                         return
                 with _translation_job_scope():
                     try:
+                        # Also discover authors of commands and non-text media.
+                        # Profile failures must never prevent message delivery.
+                        try:
+                            record_user_name(target, _uid)
+                        except Exception as exc:
+                            logger.debug("[LineProfile] author discovery unavailable (%s)", type(exc).__name__)
                         return func(event)
                     except translation_retry_queue_module.LeaseLostError:
                         logger.info("[TranslationOutbox] source superseded or owned: %s", key[-24:])
@@ -18605,6 +18634,70 @@ def handle_pkg_command(text):
 
 _line_profile_cache = {}
 _line_profile_lock = threading.Lock()
+_line_profile_refreshing = set()
+
+
+def _remember_line_profile(chat_id, user_id, profile):
+    """Update the existing durable directory and its automatic name protection."""
+    if profile is None or not user_id:
+        return None
+    name = line_user_names.clean_name(getattr(profile, "display_name", None), user_id)
+    lang = getattr(profile, "language", None)
+    pic = str(getattr(profile, "picture_url", "") or "").strip()
+    changed = False
+    with _state_lock:
+        if name:
+            # LINE display names belong to a user ID, not an individual group.
+            # Update every known occurrence; manually entered aliases stay owned
+            # by the administrator and are never removed on a profile rename.
+            for users in group_user_names.values():
+                if isinstance(users, dict) and user_id in users and users[user_id] != name:
+                    users[user_id] = name
+                    changed = True
+            if chat_id and not str(chat_id).startswith("U"):
+                users = group_user_names.setdefault(chat_id, {})
+                if users.get(user_id) != name:
+                    users[user_id] = name
+                    changed = True
+            if chat_id == user_id or user_id in dm_known_users:
+                if dm_known_users.get(user_id) != name:
+                    dm_known_users[user_id] = name
+                    changed = True
+        if lang and user_id not in user_languages:
+            user_languages[user_id] = lang
+            changed = True
+        if pic.startswith("https://") and user_pictures.get(user_id) != pic:
+            user_pictures[user_id] = pic
+            changed = True
+    if changed:
+        save_settings()
+    return name or None
+
+
+def _refresh_line_profile_later(chat_id, user_id):
+    """Refresh cached authors at most once per TTL, off the translation path."""
+    key = (str(chat_id or ""), str(user_id))
+    with _line_profile_lock:
+        row = _line_profile_cache.get(key)
+        if (row and row[0] > time.monotonic()) or user_id in _line_profile_refreshing:
+            return
+        if len(_line_profile_refreshing) >= 4:
+            return  # A later interaction can retry; never grow an unbounded queue.
+        _line_profile_refreshing.add(user_id)
+
+    def refresh():
+        try:
+            _remember_line_profile(chat_id, user_id, _get_line_member_profile(chat_id, user_id))
+        except Exception as exc:
+            logger.debug("[LineProfile] background refresh unavailable (%s)", type(exc).__name__)
+        finally:
+            with _line_profile_lock:
+                _line_profile_refreshing.discard(user_id)
+    try:
+        threading.Thread(target=refresh, name="line-profile-refresh", daemon=True).start()
+    except Exception:
+        with _line_profile_lock:
+            _line_profile_refreshing.discard(user_id)
 
 
 def _get_line_member_profile(chat_id, user_id):
@@ -18641,6 +18734,11 @@ def _get_line_member_profile(chat_id, user_id):
         logger.debug("[LineProfile] optional lookup unavailable (%s)", type(exc).__name__)
     finally:
         with _line_profile_lock:
+            if profile is not None:
+                # A cached profile from another group must not revert a rename.
+                for other_key in list(_line_profile_cache):
+                    if other_key[1] == str(user_id):
+                        _line_profile_cache[other_key] = (time.monotonic() + 600, profile)
             _line_profile_cache[key] = (time.monotonic() + (600 if profile is not None else 15), profile)
     return profile
 
@@ -18653,24 +18751,18 @@ def get_display_name(group_id, user_id):
     """
     if not user_id:
         return None
-    if group_id in group_user_names and user_id in group_user_names[group_id]:
-        return group_user_names[group_id][user_id]
+    cached_name = line_user_names.clean_name(
+        (group_user_names.get(group_id, {}) or {}).get(user_id)
+        or (dm_known_users.get(user_id) if group_id == user_id else None), user_id)
+    if cached_name:
+        _refresh_line_profile_later(group_id, user_id)
+        return cached_name
 
     profile = _get_line_member_profile(group_id, user_id)
     if profile is None:
         return None
 
-    name = str(getattr(profile, 'display_name', '') or '').strip()
-    lang = getattr(profile, 'language', None)
-    pic = str(getattr(profile, 'picture_url', '') or '').strip()
-    if name and group_id:
-        group_user_names.setdefault(group_id, {})[user_id] = name
-    if lang and user_id not in user_languages:
-        user_languages[user_id] = lang
-        logger.info("User %s language: %s", name or "(unknown)", lang)
-    if pic.startswith("https://"):
-        user_pictures[user_id] = pic
-    return name or None
+    return _remember_line_profile(group_id, user_id, profile)
 
 
 def get_user_picture_url(chat_id, user_id):
@@ -18685,20 +18777,19 @@ def get_user_picture_url(chat_id, user_id):
     cached = str(user_pictures.get(user_id, "") or "").strip()
     if cached.startswith("https://"):
         return cached
+    known = line_user_names.clean_name(
+        (group_user_names.get(chat_id, {}) or {}).get(user_id)
+        or (dm_known_users.get(user_id) if chat_id == user_id else None), user_id)
+    if known:
+        _refresh_line_profile_later(chat_id, user_id)
+        return ""  # Missing avatars are optional; a refresh must not delay LINE.
 
     profile = _get_line_member_profile(chat_id, user_id)
     if profile is None:
         return ""
 
     pic = str(getattr(profile, "picture_url", "") or "").strip()
-    name = str(getattr(profile, "display_name", "") or "").strip()
-    lang = getattr(profile, "language", None)
-    if pic.startswith("https://"):
-        user_pictures[user_id] = pic
-    if name and chat_id:
-        group_user_names.setdefault(chat_id, {})[user_id] = name
-    if lang and user_id not in user_languages:
-        user_languages[user_id] = lang
+    _remember_line_profile(chat_id, user_id, profile)
     return pic if pic.startswith("https://") else ""
 
 
@@ -18706,12 +18797,8 @@ def record_user_name(group_id, user_id):
     """Record user display name and avatar (best effort)."""
     if not group_id or not user_id:
         return
-    has_name = user_id in group_user_names.get(group_id, {})
-    has_picture = str(user_pictures.get(user_id, "") or "").startswith("https://")
-    if not has_name:
-        get_display_name(group_id, user_id)
-    if not has_picture:
-        get_user_picture_url(group_id, user_id)
+    # The shared lookup already records the avatar, including its absence.
+    return get_display_name(group_id, user_id)
 
 
 def find_user_by_name(group_id, name_query):
@@ -19688,14 +19775,7 @@ def handle_message(event):
     # --- DM (private message) mode ---
     if is_dm and user_id:
         # Record DM user for admin panel
-        if user_id not in dm_known_users:
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    profile = api.get_profile(user_id)
-                    dm_known_users[user_id] = profile.display_name or user_id
-            except Exception:
-                dm_known_users[user_id] = user_id
+        record_user_name(user_id, user_id)
 
         # DM commands
         cmd = text.strip().lower()
@@ -21833,7 +21913,7 @@ if MemberJoinedEvent:
             logger.warning("[handle_member_joined] duplicate, skipping")
             return
         source = event.source
-        group_id = getattr(source, 'group_id', None)
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
         if not group_id:
             return
         # Record new members
@@ -21894,16 +21974,7 @@ if FollowEvent:
         user_id = getattr(event.source, 'user_id', None)
         if not user_id:
             return
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                profile = api.get_profile(user_id)
-                dm_known_users[user_id] = profile.display_name or user_id
-                lang = getattr(profile, 'language', None)
-                if lang:
-                    user_languages[user_id] = lang
-        except Exception:
-            dm_known_users[user_id] = user_id
+        record_user_name(user_id, user_id)
         _stats_inc("followers")
         save_settings()
         logger.info("New follower: %s", dm_known_users.get(user_id, user_id))
@@ -24259,7 +24330,8 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="panel" id="panel-names">
 <div class="card">
 <div style="font-weight:700;font-size:15px;margin-bottom:4px">🛡️ 翻譯保護名單</div>
-<div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻；儲區客戶會自動同步並去除重複名稱</div>
+<div class="card-sub" style="margin-bottom:12px">名單內的名字翻譯時會保持原樣不翻；儲區客戶會自動同步並去除重複名稱。LINE 使用者名稱自動保護：已知使用者立即補入，新使用者互動或加入群組後自動加入；改名會在後續互動時背景更新。使用完整顯示名稱，不猜測或拆分暱稱。</div>
+<button class="btn btn-secondary btn-sm" onclick="loadNames()" style="margin-bottom:12px">重新整理名單</button>
 <div style="display:flex;gap:8px;margin-bottom:12px">
 <input id="newNameInput" type="text" placeholder="輸入名字..." onkeydown="if(event.key==='Enter')addName()" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:14px;outline:none">
 <button class="btn btn-primary btn-sm" onclick="addName()">新增</button>
@@ -27401,21 +27473,28 @@ function renderUsersList(){
 }
 
 var _protectedNames=[];
-var _storageProtectedNames={};
+var _storageProtectedNames=Object.create(null);
+var _lineUserProtectedNames=Object.create(null);
 async function loadNames(){
   var d=await api('/names');
   if(!d)return;
   _protectedNames=d.names||[];
-  _storageProtectedNames={};
+  _storageProtectedNames=Object.create(null);
+  _lineUserProtectedNames=Object.create(null);
   var storageNames=d.storage_names||[];
   for(var s=0;s<storageNames.length;s++)_storageProtectedNames[storageNames[s]]=true;
+  var userNames=d.user_names||[];
+  for(var u=0;u<userNames.length;u++)_lineUserProtectedNames[userNames[u]]=true;
   var el=document.getElementById('namesList');
-  document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個保護名稱（儲區自動 '+(d.storage_count||0)+'、手動 '+(d.manual_count||0)+'）';
+  document.getElementById('namesCount').textContent='共 '+_protectedNames.length+' 個不重複名稱；LINE 自動 '+(d.user_count||0)+'、儲區自動 '+(d.storage_count||0)+'、僅手動 '+(d.manual_count||0)+'（同名可有多個來源）';
   if(!_protectedNames.length){el.innerHTML='<div style="padding:8px 0;font-size:13px;color:#5a5a6a">尚無保護名稱</div>';return}
   var html='<div style="display:flex;flex-wrap:wrap;gap:8px">';
   for(var i=0;i<_protectedNames.length;i++){
     var isStorage=!!_storageProtectedNames[_protectedNames[i]];
-    var action=isStorage?'<span style="color:#7c6fef;font-size:10px;font-weight:700">📦儲區</span>':'<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span>';
+    var isUser=!!_lineUserProtectedNames[_protectedNames[i]];
+    var action=(isStorage?'<span style="color:#7c6fef;font-size:10px;font-weight:700">📦儲區</span>':'')+
+      (isUser?'<span style="color:#64d8c7;font-size:10px;font-weight:700">👤LINE 自動</span>':'');
+    if(!isStorage&&!isUser)action='<span style="cursor:pointer;color:#f04747;font-weight:700;font-size:15px" onclick="removeName('+i+')"> ×</span>';
     html+='<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#2a2a3e;border:1px solid #3a3a4e;border-radius:8px;font-size:13px">'+
     escapeHtml(_protectedNames[i])+action+'</span>';
   }
@@ -27433,6 +27512,7 @@ function removeName(idx){
   var name=_protectedNames[idx];
   if(!name)return;
   if(_storageProtectedNames[name]){toast('此名稱由儲區自動同步，請更新儲區資料');return}
+  if(_lineUserProtectedNames[name]){toast('此名稱由 LINE 使用者資料自動同步，改名後會自動更新');return}
   if(!confirm('確定移除「'+name+'」？'))return;
   api('/names','POST',{action:'remove',name:name}).then(function(d){if(d){toast(d.message||'已移除: '+name);loadNames()}});
 }
@@ -33407,6 +33487,7 @@ def api_admin_names():
         if not name:
             return jsonify({"error": "missing name"}), 400
         storage_names = set(_storage_protected_names())
+        user_names = set(_line_user_protected_names())
         if action == "add":
             if name in storage_names:
                 inventory = protected_name_inventory()
@@ -33416,6 +33497,12 @@ def api_admin_names():
                     "source": "storage",
                     "message": "名稱已由儲區自動保護，未重複新增",
                     **inventory,
+                })
+            if name in user_names:
+                return jsonify({
+                    "ok": True, "added": False, "source": "line_user",
+                    "message": "名稱已由 LINE 使用者資料自動保護，未重複新增",
+                    **protected_name_inventory(),
                 })
             if name in names_list:
                 inventory = protected_name_inventory()
@@ -33446,6 +33533,13 @@ def api_admin_names():
                     "locked": True,
                     "message": "此名稱由儲區自動同步，請更新儲區資料",
                     **inventory,
+                })
+            if name in user_names:
+                return jsonify({
+                    "ok": False, "removed": False, "locked": True,
+                    "source": "line_user",
+                    "message": "此名稱由 LINE 使用者資料自動同步，改名後會自動更新",
+                    **protected_name_inventory(),
                 })
             if name in names_list:
                 names_list.remove(name)

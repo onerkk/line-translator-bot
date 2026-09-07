@@ -10,6 +10,9 @@ import app
 
 @pytest.fixture
 def isolated_protected_names(monkeypatch):
+    # Storage-only scenarios must not inherit profiles learned by other tests.
+    monkeypatch.setattr(app, "group_user_names", {})
+    monkeypatch.setattr(app, "dm_known_users", {})
     original_storage = copy.deepcopy(app.STORAGE_LOOKUP)
     original_groups = copy.deepcopy(app.extra_names_by_group)
     save_calls = []
