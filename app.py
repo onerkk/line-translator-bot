@@ -143,6 +143,7 @@ import zipfile
 from io import BytesIO
 import threading
 import contextlib
+import translation_request_cache
 import functools
 import line_translation_delivery as line_delivery_module
 import line_factory_features
@@ -14457,6 +14458,7 @@ def _send_background_failure_notice(ctx, *, kind="translation", detail=""):
     return False
 
 @ai_provider.translation_request_budget
+@translation_request_cache.scoped
 def translate(text, src, tgt):
     """Public translate wrapper — 邊界層正規化與保護。
 

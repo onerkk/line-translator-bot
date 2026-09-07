@@ -72,6 +72,12 @@ def _columns(conn: sqlite3.Connection) -> set[str]:
 def initialize() -> None:
     """Create or migrate the queue schema without dropping pending v1 jobs."""
     with _LOCK, _connect() as conn:
+        # This used to take a write transaction, inspect every column and run
+        # migration UPDATEs before every read/checkpoint/lease check. Persist
+        # readiness in SQLite itself so all workers can take a read-only fast
+        # path, while a new/replaced database still gets migrated normally.
+        if conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION:
+            return
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
@@ -115,6 +121,7 @@ def initialize() -> None:
             )
             conn.execute("CREATE TABLE IF NOT EXISTS translation_delivery_receipts "
                          "(job_key TEXT PRIMARY KEY, delivered_at REAL NOT NULL)")
+            conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

@@ -8,6 +8,7 @@ data, not as Python sentence patches.
 from __future__ import annotations
 
 import copy
+import translation_request_cache
 import hashlib
 import json
 import os
@@ -155,6 +156,10 @@ class FactoryKnowledgeStore:
             canonical = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             self._document = document
             self._casebook_examples = self._collect_casebook_examples(document)
+            # JSON assets contain only JSON values. Decoding their precompiled
+            # snapshot produces independent nested objects without recursively
+            # deep-copying the entire example collection for every validator.
+            self._casebook_examples_json = json.dumps(self._casebook_examples, ensure_ascii=False)
             self._mtime_ns = stat.st_mtime_ns
             self._hash = hashlib.sha256(canonical).hexdigest()
             return self.health()
@@ -206,7 +211,7 @@ class FactoryKnowledgeStore:
         """Reuse the compact index; edits reload atomically and callers get copies."""
         self._reload_if_changed()
         with self._lock:
-            return copy.deepcopy(self._casebook_examples)
+            return json.loads(self._casebook_examples_json)
 
     @staticmethod
     def _score_entry(entry: Dict[str, Any], normalized_text: str) -> Optional[MatchResult]:
@@ -253,6 +258,16 @@ class FactoryKnowledgeStore:
 
     def retrieve(self, text: str, src: str, tgt: str, limit: int = 3) -> List[Dict[str, Any]]:
         self._reload_if_changed()
+        # Check the on-disk version on every call. Only scoring the identical
+        # query against the same loaded document is shared inside a request.
+        with self._lock:
+            return translation_request_cache.reuse(
+                ("factory_knowledge", id(self)),
+                (self._hash, text, src, tgt, limit),
+                lambda: self._retrieve_loaded(text, src, tgt, limit),
+            )
+
+    def _retrieve_loaded(self, text, src, tgt, limit):
         normalized_text = _normalize(text)
         direction = _direction_key(src, tgt)
         matches: List[MatchResult] = []

@@ -7,6 +7,7 @@ correct word elsewhere cannot excuse a reversed action in the current item.
 from __future__ import annotations
 
 import re
+from translation_request_cache import memoize
 import unicodedata
 
 BUILD_ID = "2026-09-07.3-noncurrent-record-scope"
@@ -40,6 +41,7 @@ def segments(text):
     return out
 
 
+@memoize
 def build_relations(source):
     relations = []
     scopes = segments(source)

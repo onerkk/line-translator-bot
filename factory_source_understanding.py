@@ -11,6 +11,7 @@ from functools import lru_cache
 from html import escape
 import json
 import re
+from translation_request_cache import memoize
 from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
@@ -376,6 +377,7 @@ _MODES = {
 }
 
 
+@memoize
 def operational_states(text, lang):
     """Extract only explicit local action/status relations, with equipment IDs.
 
@@ -563,6 +565,7 @@ def _ol_mode(clause, lang):
     return "plain"
 
 
+@memoize
 def factory_term_facts(text, lang, *, protected_names=()):
     """Resolve contextual terms with source evidence; retain separate clauses."""
     if lang not in {"zh", "id"}:

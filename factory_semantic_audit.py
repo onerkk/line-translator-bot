@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from translation_request_cache import memoize
 import unicodedata
 import factory_instruction_semantics as instruction_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
@@ -347,6 +348,7 @@ def _extract_erp_record_kind(source: str) -> str:
     return ""
 
 
+@memoize
 def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, Any]:
     """Build a deterministic claim frame for Chinese -> Indonesian factory text."""
     src = str(source or "")

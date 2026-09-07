@@ -21,6 +21,7 @@ path.
 from __future__ import annotations
 
 import re
+from translation_request_cache import memoize
 import unicodedata
 from typing import Any, Iterable, Mapping
 
@@ -3281,6 +3282,7 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
     return frame
 
 
+@memoize
 def build_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
     """Extract source-side semantic relations for either supported direction."""
     frame = _base_frame(source, src_lang, tgt_lang)

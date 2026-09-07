@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+from translation_request_cache import memoize
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -651,6 +652,7 @@ def _immutable_quoted_value_count(text: str) -> int:
     )
 
 
+@memoize
 def protect_immutable_spans(text: str) -> ProtectedText:
     """Protect mentions, field values, codes and measurements.
 
@@ -679,6 +681,7 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     return ProtectedText(text, protected, mapping)
 
 
+@memoize
 def inspect_immutable_spans(text: str) -> ProtectedText:
     """Inventory immutable data without hiding it from the translator.
 
@@ -1742,6 +1745,22 @@ def validate_translation(
     else:
         immutable_literals = list(immutable_literals)
 
+    return _validate_normalized_translation(
+        source, candidate, src_lang, tgt_lang,
+        immutable_literals=tuple(immutable_literals),
+        glossary_pairs=tuple(tuple(pair) for pair in glossary_pairs),
+        require_paragraph_fidelity=bool(require_paragraph_fidelity),
+    )
+
+
+@memoize
+def _validate_normalized_translation(
+    source, candidate, src_lang, tgt_lang, *, immutable_literals,
+    glossary_pairs, require_paragraph_fidelity,
+):
+    # The full source, candidate, glossary and fidelity policy are the key.
+    # Restoration/decoration or an edited glossary necessarily revalidates.
+    issues = []
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 

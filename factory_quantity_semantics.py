@@ -9,6 +9,7 @@ without adding a verified full-sentence replacement.
 from __future__ import annotations
 
 import re
+from translation_request_cache import memoize
 import unicodedata
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
@@ -179,6 +180,7 @@ def _looks_like_packaging_verb(text: str, match: re.Match[str]) -> bool:
     return bool(re.search(r"(?:要|需|先|再|幫|帮)?包$", left))
 
 
+@memoize
 def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict[str, Any]:
     if not str(src_lang or "").lower().startswith("zh") or not str(tgt_lang or "").lower().startswith("id"):
         return {"active": False, "atoms": [], "relations": [], "distributive": False}
