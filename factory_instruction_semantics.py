@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-BUILD_ID = "2026-09-07.1-instruction-action-and-polarity"
+BUILD_ID = "2026-09-07.2-notice-equivalent-predicates"
 _ITEM = re.compile(r"(?m)^\s*[（(]?(\d+)[）).、．]\s*(?!\d)")
 _INVENTORY = r"(?:庫存|库存|存貨|存货)"
 _BLOCKED_DECREASE = r"(?:降不下(?:來|来|去)?|減不下(?:來|来|去)?|减不下(?:來|来|去)?|降低不了|(?:無法|无法|不能|不會|不会|一直不)(?:再)?(?:下降|降低|減少|减少)|下不[來来])"
@@ -138,7 +138,7 @@ def validate_relations(relations, translation):
             if relation.get('cross_prohibited'):
                 good = good and any(re.search(r"\b(?:jangan|dilarang|tidak boleh)\b", c) and re.search(r"\b(?:lintas|antar|lain|beda|berbeda|menyeberang)\b", c) and 'shift' in c for c in clauses)
         elif kind == 'noncurrent_period':
-            good = bool(re.search(r"\b(?:bukan|selain|di luar)\s+(?:untuk\s+|dari\s+)?(?:(?:pengiriman|periode|produksi|pencatatan)\s+)?bulan\s+(?:ini|berjalan)\b|\btidak\s+termasuk\s+bulan\s+ini\b", text))
+            good = bool(re.search(r"\b(?:bukan|selain|di luar)\s+(?:untuk\s+|dari\s+)?(?:(?:pengiriman|periode|produksi|pencatatan)\s+)?bulan\s+(?:ini|berjalan)\b|\btidak\s+termasuk\s+bulan\s+ini\b|\bnon[ -]bulan\s+(?:ini|berjalan)\b", text))
             good = good and not re.search(r"\b(?:anda|kamu|kalian)\s+(?:tidak|bukan)\s+(?:berada|bekerja)\b", text)
             if not relation.get("other_period_explicit"):
                 good = good and not re.search(r"\bbulan\s+(?:lalu|depan)\b", text)
@@ -149,9 +149,9 @@ def validate_relations(relations, translation):
         elif kind == 'situational_awareness':
             good = bool(re.search(r"\b(?:peka|sigap|waspada|tanggap|hati-hati|hati hati|mawas diri|pandai membaca situasi)\b", text)) and not re.search(r"\b(?:terlihat|tampak|kelihatan)\s+lebih\s+baik\b", text)
         elif kind == 'cctv_review':
-            good = any(re.search(r"\b(?:rekaman|rekam|video|tayangan)\b", c) and re.search(r"\b(?:cctv|kamera|pengawas|pengawasan|pemantau)\b", c) and re.search(r"\b(?:memeriksa|periksa|melihat|lihat|meninjau|mengecek|cek|mengakses|memutar|menonton|mengevaluasi)\b", c) for c in clauses)
+            good = any(re.search(r"\b(?:rekaman|rekam|video|tayangan)\b", c) and re.search(r"\b(?:cctv|kamera|pengawas|pengawasan|pemantau)\b", c) and re.search(r"\b(?:memeriksa|periksa|melihat|lihat|meninjau|mengecek|cek|mengakses|memutar|menonton|mengevaluasi|mengambil|meminta|membuka|menarik|menelusuri|ditinjau|diperiksa|dilihat|diminta|diambil)\b", c) for c in clauses)
         elif kind == 'entry_time_scrutiny':
-            good = any(re.search(r"\b(?:memeriksa|mempermasalahkan|mengawasi|mengecek|mengusut|memantau|menyoroti|mempersoalkan|mempertanyakan|cek|periksa)\b", c) and re.search(r"\b(?:waktu|jam)\b", c) and re.search(r"\b(?:input|masuk|pencatatan|stok|gudang)\b", c) for c in clauses)
+            good = any(re.search(r"\b(?:memeriksa|mempermasalahkan|mengawasi|mengecek|mengusut|memantau|menyoroti|mempersoalkan|mempertanyakan|memperhatikan|mencermati|meneliti|cek|periksa)\b", c) and re.search(r"\b(?:waktu|jam)\b", c) and re.search(r"\b(?:input|masuk|pencatatan|stok|gudang)\b", c) for c in clauses)
             if relation.get('softened'):
                 good = good and any(re.search(r"\b(?:tidak|tak|jarang)\b", c) and re.search(r"\b(?:terlalu|begitu|begitunya|sering|khusus|secara khusus)\b", c) and re.search(r"\b(?:waktu|jam)\b", c) for c in clauses)
         if not good:

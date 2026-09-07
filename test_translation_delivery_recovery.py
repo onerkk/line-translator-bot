@@ -131,7 +131,7 @@ def test_reply_timeout_then_acknowledged_push_reuses_prepared_translation(runtim
             reply_token="token", target_id="group", message_obj=app.TextMessage(text="preview"),
             fallback_text=text, job_key="group:msg",
         )
-    assert calls[0][2] == {}  # unsupported retry headers must not reach Reply
+    assert "x_line_retry_key" not in calls[0][2]  # Reply has no retry-key support
     assert queue.get("group:msg")["payload"]["delivery"]["text"] == text
     api.on_push = lambda *_a: (_ for _ in ()).throw(LineError(
         409, "already accepted", {"X-Line-Accepted-Request-Id": "accepted-id"}

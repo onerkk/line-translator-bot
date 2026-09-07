@@ -11948,6 +11948,8 @@ def _translation_cache_asset_fingerprint():
         "quality_gate": getattr(tqg_module, "QUALITY_GATE_BUILD_ID", ""),
         "prompt_compiler": getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", ""),
         "source_understanding": getattr(globals().get("source_understanding_module"), "SOURCE_UNDERSTANDING_VERSION", ""),
+        "pmi_semantics": source_understanding_module.pmi_semantics.BUILD_ID,
+        "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),
         "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
@@ -13458,7 +13460,7 @@ def _send_reply_with_push_fallback(
                 if notification_disabled:
                     req.notification_disabled = True
                 # Reply does not support X-Line-Retry-Key.
-                response = MessagingApi(api_client).reply_message(req)
+                response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
             plan["next_batch"] = len(line_delivery_module.text_batches(plan["text"]))
             _delivery_checkpoint(job_key, {"delivery": plan})
             return response, "reply"
