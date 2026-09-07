@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "006e82f3307cb8ca6d5b072ff648ece86e8da9521baff07028d88b877b8c8df5",
-    "updated_at_iso": "2026-09-07T08:25:00.352582+00:00",
-    "updated_at_unix": 1788769500.3525822
+    "state_hash": "7c140c9e7559b7a7e856cc794ddeaf5ef2e2b22ec80e963fbe1226bfd3a1ea57",
+    "updated_at_iso": "2026-09-07T08:25:01.188967+00:00",
+    "updated_at_unix": 1788769501.1889668
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -475,9 +475,7 @@
   "group_image_ocr_expressive_settings": {},
   "group_image_translation_action_modes": {},
   "group_image_translation_actions_settings": {},
-  "group_img_ask_settings": {
-    "C28bb7127640539f3c1bc743ecdf61a24": true
-  },
+  "group_img_ask_settings": {},
   "group_img_settings": {
     "C28bb7127640539f3c1bc743ecdf61a24": false,
     "C6c708f629dd38d6864669ecacf7712f4": false,
