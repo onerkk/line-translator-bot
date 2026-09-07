@@ -1,0 +1,33 @@
+const assert=require('node:assert/strict');
+const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
+const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
+async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw new Error('Timeout: '+label);}
+async function open(path){const vc=new VirtualConsole();const errors=[];vc.on('jsdomError',e=>{errors.push(e.message);console.error('DOM error',e.message)});const dom=await JSDOM.fromURL(base+path,{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.fetch=(url,options)=>fetch(new URL(url,w.location.href),options);w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:test-qr';w.URL.revokeObjectURL=()=>{};w.navigator.clipboard={writeText:async text=>{w.lastCopied=text}};w.alert=text=>{w.lastAlert=text};}});return {dom,w:dom.window,d:dom.window.document,errors};}
+(async()=>{
+ const admin=await open('/preview-admin');const {w,d}=admin;await until(()=>d.querySelector('#fa-code')&&d.querySelector('#fa-health').textContent.includes('訊息編輯'),'admin loaded').catch(e=>{console.log(d.body.textContent.slice(0,1500));throw e});
+ const initialVersion=JSON.parse(await (await fetch(base+'/api/admin/factory')).text()).settings_version;
+ d.querySelector('#fa-mode').value='mentioned';d.querySelector('#fa-save-options').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設定已儲存'),'mode save');
+ let saved=await (await fetch(base+'/api/admin/factory')).json();assert.equal(saved.settings.groups[Object.keys(saved.settings.groups)[0]].translation_mode,'mentioned');assert.notEqual(saved.settings_version,initialVersion);
+ for(const [id,value] of [['code','TEST9'],['name-zh','測試站'],['name-id','Stasiun uji'],['context','PMI 檢驗流程'],['sop-zh','先確認鋼種'],['sop-id','Pastikan jenis baja']]) d.querySelector('#fa-'+id).value=value;
+ d.querySelector('#fa-save-station').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設備資料已儲存'),'station save');assert(d.querySelector('#fa-station-list').textContent.includes('TEST9'));
+ const tr=[...d.querySelectorAll('#fa-station-list tr')].find(e=>e.textContent.includes('TEST9'));[...tr.querySelectorAll('button')].find(e=>e.textContent==='QR Code').click();await until(()=>d.querySelector('#fa-qr-preview img'),'QR preview');assert(d.querySelector('#fa-qr-preview a').download.includes('TEST9'));
+ d.querySelector('#fa-load-receipts').click();await until(()=>d.querySelector('#fa-receipts').textContent.includes('PMI'),'receipt load');assert(d.querySelector('#fa-receipts').textContent.includes('未回覆'));
+ d.querySelector('#fa-menu').value='richmenu-'+'a'.repeat(32);d.querySelector('#fa-insight-mode').value='daily';d.querySelector('#fa-load-insight').click();await until(()=>d.querySelector('#fa-insight-result').textContent.includes('20260906'),'daily insight');assert(d.querySelector('#fa-insight-result').textContent.includes('42'));
+ console.log('PASS admin: mode persistence, equipment/SOP save, QR preview, receipt list');
+ const member=await open('/preview-factory');await until(()=>member.d.querySelector('#factory-group').textContent.includes('A 班'),'member loaded');
+ member.d.querySelector('#factory-code').value='TEST9';member.d.querySelector('#factory-lookup button').click();await until(()=>member.d.querySelector('#factory-station-name').textContent.includes('TEST9'),'station lookup');assert.equal(member.d.querySelector('#factory-sop-zh').textContent,'先確認鋼種');
+ member.d.querySelector('#factory-input').value='檢驗一下';member.d.querySelector('#factory-translate').click();await until(()=>member.d.querySelector('#factory-message').textContent.includes('翻譯完成'),'station translation');assert(member.d.querySelector('#factory-station-output').textContent.includes('檢驗一下'));
+ member.d.querySelector('#factory-copy').click();await until(()=>member.w.lastCopied,'copy');assert(member.w.lastCopied.includes('Pemeriksaan PMI'));
+ member.d.querySelector('#factory-share').click();await until(()=>member.d.querySelector('#factory-message').textContent.includes('已分享'),'share success');
+ member.w.liff.shareTargetPicker=async()=>undefined;member.d.querySelector('#factory-share').click();await until(()=>member.d.querySelector('#factory-message').textContent.includes('已取消'),'share cancel');
+ member.d.querySelector('#factory-scan').click();await until(()=>member.d.querySelector('#factory-station-name').textContent.startsWith('PMI'),'scan lookup');
+ member.w.liff.scanCodeV2=async()=>{throw new Error('相機權限未開啟')};member.d.querySelector('#factory-scan').click();await until(()=>member.d.querySelector('#factory-message').textContent.includes('相機'),'scan failure');assert(!member.d.querySelector('#factory-scan').disabled);
+ console.log('PASS member: manual/QR lookup, bilingual SOP, translation, full copy, share success/cancel, camera failure');
+ const form=await open('/liff/settings?view=form&id=f1');await until(()=>form.d.querySelector('#field-pmi'),'form loaded');
+ form.d.querySelector('button[type=submit]').click();assert(!form.d.querySelector('#verifiedForm').checkValidity());
+ form.d.querySelector('#field-pmi').checked=true;form.d.querySelector('#field-quantity').value='3.5';form.d.querySelector('button[type=submit]').click();await until(()=>form.d.body.textContent.includes('提交成功'),'verified form submit');form.dom.window.close();
+ const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');duplicate.dom.window.close();
+ console.log('PASS form: LIFF entry, required fields, numeric input, submit, duplicate display');
+ assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
+ admin.dom.window.close();member.dom.window.close();
+})().catch(e=>{console.error(e);process.exitCode=1;});
