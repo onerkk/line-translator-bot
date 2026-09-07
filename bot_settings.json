@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "3abd041cc0e14ab9801605df61527bc50346a55e26e31d861a2d6609aac06039",
-    "updated_at_iso": "2026-09-07T08:27:02.627513+00:00",
-    "updated_at_unix": 1788769622.6275134
+    "state_hash": "03ed6da61ae8b471bb46e8935a3acfb67381edfdb07647e86373bf8c4beaf8df",
+    "updated_at_iso": "2026-09-07T14:28:49.978245+00:00",
+    "updated_at_unix": 1788791329.9782448
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -153,7 +153,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 07:51:13",
+    "last_updated": "2026-09-07 14:24:10",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -771,6 +771,2436 @@
       "type": "message"
     }
   ],
+  "quick_reply_menu_settings": {
+    "default": {
+      "acknowledgements": "work",
+      "enabled": false,
+      "items": [
+        {
+          "action": "natural",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_natural",
+          "label": "✨ 自然/Alami",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "literal",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_literal",
+          "label": "🔎 直譯/Harfiah",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "formal",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_formal",
+          "label": "📢 正式/Formal",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "backcheck",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_backcheck",
+          "label": "↩ 回譯/Cek balik",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "personal",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_personal",
+          "label": "👤 我的語言/Bahasa",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "handover",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "handover",
+          "label": "📋 交班摘要/Serah",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "interpreter",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "interpreter",
+          "label": "🎙 即時口譯/Interpret",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "factory_share",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_factory_share",
+          "label": "📤 分享/Bagikan",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "factory_open",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_factory_open",
+          "label": "🏭 工具/Alat",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "factory_ack",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_factory_ack",
+          "label": "✅ 了解/Paham",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "factory_help",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_factory_help",
+          "label": "❓ 說明/Jelaskan",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "factory_receipts",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_factory_receipts",
+          "label": "📋 確認/Status",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "overlay",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_overlay",
+          "label": "🖼 圖文對照/Gambar",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "context_qry",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_context_qry",
+          "label": "📋 查此工單/Gudang",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "tts_replay",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "builtin_tts_replay",
+          "label": "🔊 重播/Ulang",
+          "link_key": "",
+          "text": "",
+          "type": "builtin",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "help",
+          "label": "📖 說明/Info",
+          "link_key": "",
+          "text": "/help",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "qry",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "qry",
+          "label": "🔍 儲區/Gudang",
+          "link_key": "",
+          "text": "/qry",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "wrong",
+          "label": "❌ 標錯/Salah",
+          "link_key": "",
+          "text": "/wrong",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "skip",
+          "label": "❌ 不翻我/Lewati",
+          "link_key": "",
+          "text": "/skip",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "unskip",
+          "label": "✅ 翻譯我/Terjemah",
+          "link_key": "",
+          "text": "/unskip",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "pw1",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "pw1",
+          "label": "🔑 班長密碼/PW1",
+          "link_key": "",
+          "text": "/pw1",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "pw2",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "pw2",
+          "label": "🏭 儲運密碼/PW2",
+          "link_key": "",
+          "text": "/pw2",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "pkg",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "pkg",
+          "label": "📦 包裝碼/Kemas",
+          "link_key": "",
+          "text": "/pkg",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "scrap",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "scrap",
+          "label": "🎨 廢料色/Warna",
+          "link_key": "",
+          "text": "/scrap",
+          "type": "message",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": false,
+          "id": "camera",
+          "label": "📷 拍照/Foto",
+          "link_key": "",
+          "text": "",
+          "type": "camera",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "/qry",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": false,
+          "id": "clipboard",
+          "label": "📋 複製儲區指令",
+          "link_key": "",
+          "text": "",
+          "type": "clipboard",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": false,
+          "id": "camera_roll",
+          "label": "🖼 相簿/Album",
+          "link_key": "",
+          "text": "",
+          "type": "camera_roll",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": false,
+          "id": "location",
+          "label": "📍 位置/Lokasi",
+          "link_key": "",
+          "text": "",
+          "type": "location",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "link_saran",
+          "label": "💡 提案/Saran",
+          "link_key": "saran",
+          "text": "",
+          "type": "external_link",
+          "uri": ""
+        },
+        {
+          "action": "",
+          "clipboard_text": "",
+          "cmd_check": "",
+          "contexts": [
+            "text",
+            "image"
+          ],
+          "enabled": true,
+          "id": "link_absen",
+          "label": "📅 差勤/Absen",
+          "link_key": "absen",
+          "text": "",
+          "type": "external_link",
+          "uri": ""
+        }
+      ]
+    },
+    "groups": {
+      "C28bb7127640539f3c1bc743ecdf61a24": {
+        "acknowledgements": "all",
+        "enabled": false,
+        "items": [
+          {
+            "action": "natural",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_natural",
+            "label": "✨ 自然/Alami",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "literal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_literal",
+            "label": "🔎 直譯/Harfiah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "formal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_formal",
+            "label": "📢 正式/Formal",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "backcheck",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_backcheck",
+            "label": "↩ 回譯/Cek balik",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "personal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_personal",
+            "label": "👤 我的語言/Bahasa",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "handover",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "handover",
+            "label": "📋 交班摘要/Serah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "interpreter",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "interpreter",
+            "label": "🎙 即時口譯/Interpret",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_share",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_share",
+            "label": "📤 分享/Bagikan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_open",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_open",
+            "label": "🏭 工具/Alat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_ack",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_ack",
+            "label": "✅ 了解/Paham",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_help",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_help",
+            "label": "❓ 說明/Jelaskan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_receipts",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_receipts",
+            "label": "📋 確認/Status",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "overlay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_overlay",
+            "label": "🖼 圖文對照/Gambar",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "context_qry",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_context_qry",
+            "label": "📋 查此工單/Gudang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "tts_replay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_tts_replay",
+            "label": "🔊 重播/Ulang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "help",
+            "label": "📖 說明/Info",
+            "link_key": "",
+            "text": "/help",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "qry",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "qry",
+            "label": "🔍 儲區/Gudang",
+            "link_key": "",
+            "text": "/qry",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "wrong",
+            "label": "❌ 標錯/Salah",
+            "link_key": "",
+            "text": "/wrong",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "skip",
+            "label": "❌ 不翻我/Lewati",
+            "link_key": "",
+            "text": "/skip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "unskip",
+            "label": "✅ 翻譯我/Terjemah",
+            "link_key": "",
+            "text": "/unskip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw1",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw1",
+            "label": "🔑 班長密碼/PW1",
+            "link_key": "",
+            "text": "/pw1",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw2",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw2",
+            "label": "🏭 儲運密碼/PW2",
+            "link_key": "",
+            "text": "/pw2",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pkg",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pkg",
+            "label": "📦 包裝碼/Kemas",
+            "link_key": "",
+            "text": "/pkg",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "scrap",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "scrap",
+            "label": "🎨 廢料色/Warna",
+            "link_key": "",
+            "text": "/scrap",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera",
+            "label": "📷 拍照/Foto",
+            "link_key": "",
+            "text": "",
+            "type": "camera",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "/qry",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "clipboard",
+            "label": "📋 複製儲區指令",
+            "link_key": "",
+            "text": "",
+            "type": "clipboard",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera_roll",
+            "label": "🖼 相簿/Album",
+            "link_key": "",
+            "text": "",
+            "type": "camera_roll",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "location",
+            "label": "📍 位置/Lokasi",
+            "link_key": "",
+            "text": "",
+            "type": "location",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_saran",
+            "label": "💡 提案/Saran",
+            "link_key": "saran",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_absen",
+            "label": "📅 差勤/Absen",
+            "link_key": "absen",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          }
+        ]
+      },
+      "C6c708f629dd38d6864669ecacf7712f4": {
+        "acknowledgements": "all",
+        "enabled": false,
+        "items": [
+          {
+            "action": "natural",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_natural",
+            "label": "✨ 自然/Alami",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "literal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_literal",
+            "label": "🔎 直譯/Harfiah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "formal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_formal",
+            "label": "📢 正式/Formal",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "backcheck",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_backcheck",
+            "label": "↩ 回譯/Cek balik",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "personal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_personal",
+            "label": "👤 我的語言/Bahasa",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "handover",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "handover",
+            "label": "📋 交班摘要/Serah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "interpreter",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "interpreter",
+            "label": "🎙 即時口譯/Interpret",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_share",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_share",
+            "label": "📤 分享/Bagikan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_open",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_open",
+            "label": "🏭 工具/Alat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_ack",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_ack",
+            "label": "✅ 了解/Paham",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_help",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_help",
+            "label": "❓ 說明/Jelaskan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_receipts",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_receipts",
+            "label": "📋 確認/Status",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "overlay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_overlay",
+            "label": "🖼 圖文對照/Gambar",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "context_qry",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_context_qry",
+            "label": "📋 查此工單/Gudang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "tts_replay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_tts_replay",
+            "label": "🔊 重播/Ulang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "help",
+            "label": "📖 說明/Info",
+            "link_key": "",
+            "text": "/help",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "qry",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "qry",
+            "label": "🔍 儲區/Gudang",
+            "link_key": "",
+            "text": "/qry",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "wrong",
+            "label": "❌ 標錯/Salah",
+            "link_key": "",
+            "text": "/wrong",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "skip",
+            "label": "❌ 不翻我/Lewati",
+            "link_key": "",
+            "text": "/skip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "unskip",
+            "label": "✅ 翻譯我/Terjemah",
+            "link_key": "",
+            "text": "/unskip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw1",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw1",
+            "label": "🔑 班長密碼/PW1",
+            "link_key": "",
+            "text": "/pw1",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw2",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw2",
+            "label": "🏭 儲運密碼/PW2",
+            "link_key": "",
+            "text": "/pw2",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pkg",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pkg",
+            "label": "📦 包裝碼/Kemas",
+            "link_key": "",
+            "text": "/pkg",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "scrap",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "scrap",
+            "label": "🎨 廢料色/Warna",
+            "link_key": "",
+            "text": "/scrap",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera",
+            "label": "📷 拍照/Foto",
+            "link_key": "",
+            "text": "",
+            "type": "camera",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "/qry",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "clipboard",
+            "label": "📋 複製儲區指令",
+            "link_key": "",
+            "text": "",
+            "type": "clipboard",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera_roll",
+            "label": "🖼 相簿/Album",
+            "link_key": "",
+            "text": "",
+            "type": "camera_roll",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "location",
+            "label": "📍 位置/Lokasi",
+            "link_key": "",
+            "text": "",
+            "type": "location",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_saran",
+            "label": "💡 提案/Saran",
+            "link_key": "saran",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_absen",
+            "label": "📅 差勤/Absen",
+            "link_key": "absen",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          }
+        ]
+      },
+      "Cd188e1adc7792e407c90f3fa78850316": {
+        "acknowledgements": "all",
+        "enabled": false,
+        "items": [
+          {
+            "action": "natural",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_natural",
+            "label": "✨ 自然/Alami",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "literal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_literal",
+            "label": "🔎 直譯/Harfiah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "formal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_formal",
+            "label": "📢 正式/Formal",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "backcheck",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_backcheck",
+            "label": "↩ 回譯/Cek balik",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "personal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_personal",
+            "label": "👤 我的語言/Bahasa",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "handover",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "handover",
+            "label": "📋 交班摘要/Serah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "interpreter",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "interpreter",
+            "label": "🎙 即時口譯/Interpret",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_share",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_share",
+            "label": "📤 分享/Bagikan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_open",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_open",
+            "label": "🏭 工具/Alat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_ack",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_ack",
+            "label": "✅ 了解/Paham",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_help",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_help",
+            "label": "❓ 說明/Jelaskan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_receipts",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_receipts",
+            "label": "📋 確認/Status",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "overlay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_overlay",
+            "label": "🖼 圖文對照/Gambar",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "context_qry",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_context_qry",
+            "label": "📋 查此工單/Gudang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "tts_replay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_tts_replay",
+            "label": "🔊 重播/Ulang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "help",
+            "label": "📖 說明/Info",
+            "link_key": "",
+            "text": "/help",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "qry",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "qry",
+            "label": "🔍 儲區/Gudang",
+            "link_key": "",
+            "text": "/qry",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "wrong",
+            "label": "❌ 標錯/Salah",
+            "link_key": "",
+            "text": "/wrong",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "skip",
+            "label": "❌ 不翻我/Lewati",
+            "link_key": "",
+            "text": "/skip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "unskip",
+            "label": "✅ 翻譯我/Terjemah",
+            "link_key": "",
+            "text": "/unskip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw1",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw1",
+            "label": "🔑 班長密碼/PW1",
+            "link_key": "",
+            "text": "/pw1",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw2",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw2",
+            "label": "🏭 儲運密碼/PW2",
+            "link_key": "",
+            "text": "/pw2",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pkg",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pkg",
+            "label": "📦 包裝碼/Kemas",
+            "link_key": "",
+            "text": "/pkg",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "scrap",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "scrap",
+            "label": "🎨 廢料色/Warna",
+            "link_key": "",
+            "text": "/scrap",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera",
+            "label": "📷 拍照/Foto",
+            "link_key": "",
+            "text": "",
+            "type": "camera",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "/qry",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "clipboard",
+            "label": "📋 複製儲區指令",
+            "link_key": "",
+            "text": "",
+            "type": "clipboard",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera_roll",
+            "label": "🖼 相簿/Album",
+            "link_key": "",
+            "text": "",
+            "type": "camera_roll",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "location",
+            "label": "📍 位置/Lokasi",
+            "link_key": "",
+            "text": "",
+            "type": "location",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_saran",
+            "label": "💡 提案/Saran",
+            "link_key": "saran",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_absen",
+            "label": "📅 差勤/Absen",
+            "link_key": "absen",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          }
+        ]
+      },
+      "Cf5e2ea027bb3db193677e7ef3b51adea": {
+        "acknowledgements": "all",
+        "enabled": true,
+        "items": [
+          {
+            "action": "natural",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_natural",
+            "label": "✨ 自然/Alami",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "literal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_literal",
+            "label": "🔎 直譯/Harfiah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "formal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_formal",
+            "label": "📢 正式/Formal",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "backcheck",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_backcheck",
+            "label": "↩ 回譯/Cek balik",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "personal",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_personal",
+            "label": "👤 我的語言/Bahasa",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "handover",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "handover",
+            "label": "📋 交班摘要/Serah",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "interpreter",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "interpreter",
+            "label": "🎙 即時口譯/Interpret",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_share",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_factory_share",
+            "label": "📤 分享/Bagikan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_open",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_factory_open",
+            "label": "🏭 工具/Alat",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_ack",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_ack",
+            "label": "✅ 了解/Paham",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_help",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_help",
+            "label": "❓ 說明/Jelaskan",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "factory_receipts",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_factory_receipts",
+            "label": "📋 確認/Status",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "overlay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_overlay",
+            "label": "🖼 圖文對照/Gambar",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "context_qry",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "builtin_context_qry",
+            "label": "📋 查此工單/Gudang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "tts_replay",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "builtin_tts_replay",
+            "label": "🔊 重播/Ulang",
+            "link_key": "",
+            "text": "",
+            "type": "builtin",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "help",
+            "label": "📖 說明/Info",
+            "link_key": "",
+            "text": "/help",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "qry",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "qry",
+            "label": "🔍 儲區/Gudang",
+            "link_key": "",
+            "text": "/qry",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "wrong",
+            "label": "❌ 標錯/Salah",
+            "link_key": "",
+            "text": "/wrong",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "skip",
+            "label": "❌ 不翻我/Lewati",
+            "link_key": "",
+            "text": "/skip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "unskip",
+            "label": "✅ 翻譯我/Terjemah",
+            "link_key": "",
+            "text": "/unskip",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw1",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw1",
+            "label": "🔑 班長密碼/PW1",
+            "link_key": "",
+            "text": "/pw1",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pw2",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pw2",
+            "label": "🏭 儲運密碼/PW2",
+            "link_key": "",
+            "text": "/pw2",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "pkg",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "pkg",
+            "label": "📦 包裝碼/Kemas",
+            "link_key": "",
+            "text": "/pkg",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "scrap",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "scrap",
+            "label": "🎨 廢料色/Warna",
+            "link_key": "",
+            "text": "/scrap",
+            "type": "message",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera",
+            "label": "📷 拍照/Foto",
+            "link_key": "",
+            "text": "",
+            "type": "camera",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "/qry",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "clipboard",
+            "label": "📋 複製儲區指令",
+            "link_key": "",
+            "text": "",
+            "type": "clipboard",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "camera_roll",
+            "label": "🖼 相簿/Album",
+            "link_key": "",
+            "text": "",
+            "type": "camera_roll",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": false,
+            "id": "link_saran",
+            "label": "💡 提案/Saran",
+            "link_key": "saran",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "location",
+            "label": "📍 位置/Lokasi",
+            "link_key": "",
+            "text": "",
+            "type": "location",
+            "uri": ""
+          },
+          {
+            "action": "",
+            "clipboard_text": "",
+            "cmd_check": "",
+            "contexts": [
+              "text",
+              "image"
+            ],
+            "enabled": true,
+            "id": "link_absen",
+            "label": "📅 差勤/Absen",
+            "link_key": "absen",
+            "text": "",
+            "type": "external_link",
+            "uri": ""
+          }
+        ]
+      }
+    },
+    "schema": 1
+  },
   "reasoning_effort": "medium",
   "retry_key_enabled": true,
   "scrap_text": "🎨 廢料鋼種顏色 / Warna Scrap\n==================\nU物料(廢料) / U Material:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  209 → 特藍/Biru Khusus\n  174 → 紫羅蘭/Ungu\n  400系列 → 紅/Merah\n\n委外代工 / Outsource:\n  303 → 白/Putih\n  304 → 黃/Kuning\n  316 → 桃/Pink\n  403 → 紅/Merah\n==================",
