@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "738b83d3590c81d1230f4034470e7d721c33abee09bfdd107dcb439b5f60ea59",
-    "updated_at_iso": "2026-09-07T14:31:21.969989+00:00",
-    "updated_at_unix": 1788791481.9699888
+    "state_hash": "d08bd9e79cf349b186d982e3c6a834dd7463be724bbd57edd4af5ec60f4eaebd",
+    "updated_at_iso": "2026-09-07T14:34:59.574169+00:00",
+    "updated_at_unix": 1788791699.5741694
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -191,15 +191,15 @@
     "commands": 13,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 7809,
+    "oai_cache_write": 11447,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.14226765000000002,
-    "oai_input": 151912,
-    "oai_output": 1554,
+    "oai_cost_usd": 0.14319095,
+    "oai_input": 155553,
+    "oai_output": 1565,
     "oai_reasoning": 0,
-    "text_translations": 261,
-    "tokens_completion": 19010,
-    "tokens_prompt": 4386683,
+    "text_translations": 262,
+    "tokens_completion": 19021,
+    "tokens_prompt": 4390324,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -384,13 +384,13 @@
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 0,
-      "cache_write": 7809,
-      "cost_usd": 0.3995139499999999,
+      "cache_write": 11447,
+      "cost_usd": 0.4004372499999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2477,
-      "tokens_prompt": 266181
+      "tokens_completion": 2488,
+      "tokens_prompt": 269822
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
