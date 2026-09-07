@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.2-specific-bounded-references"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.3-reference-relevance-cost"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -301,17 +301,19 @@ _ZH_GENERIC_NOTICE_PHRASES = tuple(sorted({
     "並且", "立即", "處理", "進一步", "針對", "是否", "會以", "以", "及",
     "麻煩", "幫忙", "一下", "有沒有", "目前", "今天", "今日", "本月", "月底",
     "一定要", "不要", "不可以", "要讓", "沒有", "一點", "一樣", "上面", "系統",
+    "上午", "中午", "下午", "晚上", "明天", "昨天", "明日",
 }, key=len, reverse=True))
 
 
-def _zh_content_runs(text: str) -> List[str]:
+@lru_cache(maxsize=4096)
+def _zh_content_runs(text: str) -> Tuple[str, ...]:
     value = _normalize(text)
     value = re.sub(r"上[、，,/\s]+下\s*料", "上下料", value)
     for phrase in _ZH_GENERIC_NOTICE_PHRASES:
         value = value.replace(phrase, " ")
     # Never manufacture an anchor across a removed phrase or sentence boundary
     # (e.g. 到料，有看到 becoming 料有).
-    return _HAN_RUN_RE.findall(value)
+    return tuple(_HAN_RUN_RE.findall(value))
 
 
 def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 10,
@@ -363,7 +365,25 @@ def _add_semantic_anchors(anchors, query, source, shared_features):
     shared -= redundant_terms
     codes = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,8}|\d{2,8})(?![A-Za-z0-9])")
     shared_codes = {x.upper() for x in codes.findall(query)} & {x.upper() for x in codes.findall(source)}
+    # Domain abbreviations without digits are evidence too. Do not treat all
+    # capitalized Indonesian words as codes (e.g. WAJIB or BESOK).
+    acronyms = re.compile(r"(?<![A-Za-z0-9])(?:PMI|ERP|QC|ET|UT|OL)(?![A-Za-z0-9])", re.I)
+    shared_codes |= {x.upper() for x in acronyms.findall(query)} & {x.upper() for x in acronyms.findall(source)}
     return list(anchors) + sorted(shared - covered) + ["code:" + x for x in sorted(shared_codes)]
+
+
+_GENERIC_REFERENCE_ANCHORS = frozenset({
+    "設備", "機台", "機器", "時間", "資料", "單位", "班別", "進行", "完成",
+    "上午", "中午", "下午", "晚上", "明天", "今天", "昨天", "星期", "禮拜",
+    "concept:inspect", "besok", "kemarin", "siang", "sore", "malam", "pagi",
+})
+
+
+def _specific_reference_anchors(anchors):
+    # Generic timing and '確認/check' cannot activate a different production
+    # workflow. Keep them in ranking, but require actual shared subject matter
+    # before using an untriggered guarded case as prompt evidence.
+    return set(anchors) - _GENERIC_REFERENCE_ANCHORS
 
 @lru_cache(maxsize=8192)
 def _features(text: str, direction: str) -> Counter[str]:
@@ -411,14 +431,16 @@ def _idf(cases: Sequence[Mapping[str, Any]], direction: str) -> Dict[str, float]
                              if str(case.get("direction")) == direction), direction)
 
 
-def _weighted_overlap(query: Counter[str], candidate: Counter[str], idf: Mapping[str, float]) -> Tuple[float, float, float]:
+def _weighted_overlap(query: Counter[str], candidate: Counter[str], idf: Mapping[str, float],
+                      query_total: Optional[float] = None) -> Tuple[float, float, float]:
     if not query or not candidate:
         return 0.0, 0.0, 0.0
     overlap = 0.0
-    q_total = 0.0
+    q_total = query_total if query_total is not None else 0.0
     c_total = 0.0
-    for feature, weight in query.items():
-        q_total += float(weight) * float(idf.get(feature, 1.0))
+    if query_total is None:
+        for feature, weight in query.items():
+            q_total += float(weight) * float(idf.get(feature, 1.0))
     for feature, weight in candidate.items():
         c_total += float(weight) * float(idf.get(feature, 1.0))
     for feature in query.keys() & candidate.keys():
@@ -458,6 +480,13 @@ def retrieve(
     for feature in q_semantic:
         q_features[feature] = max(q_features[feature], 1.8 if feature in q_actual else 0.9)
     idf = _idf(direction_cases, direction)
+    query_total = 0.0
+    for feature, weight in q_features.items():
+        query_total += float(weight) * float(idf.get(feature, 1.0))
+    # These identities do not depend on the candidate. The previous inner loop
+    # repeatedly normalized/serialized a long notice hundreds of times.
+    query_identity = canonical_source_key(query_original)
+    query_view_identity = canonical_source_key(query)
     ranked: List[RetrievedCase] = []
     for case in direction_cases:
         source = str(case.get("source") or "").strip()
@@ -478,14 +507,14 @@ def retrieve(
         shared_semantic = q_semantic & c_semantic
         distinctive_anchors = _distinctive_shared_anchors(
             query, source_view, direction, shared_features=shared_semantic)
-        coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf)
+        coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf, query_total)
         score = 0.55 * harmonic + 0.30 * coverage + 0.15 * precision
         useful_semantic = shared_semantic - {"concept:machine", "concept:shift", "concept:loading", "concept:unloading"}
         if len(useful_semantic) >= 2:
             # Character/word n-grams dominate long sentences numerically. Give
             # multiple independent domain concepts their own recall channel.
             score = max(score, 0.24 + 0.30 * len(useful_semantic) / max(1, len(c_semantic)))
-        specific = set(distinctive_anchors) - {"設備", "機台", "機器", "時間", "資料", "單位", "班別"}
+        specific = _specific_reference_anchors(distinctive_anchors)
         if len(specific) >= 2 and any(not key.startswith("code:") for key in specific):
             # Two independent content anchors can be buried in a long source.
             # IDs help locate the workflow but cannot qualify a case alone.
@@ -499,9 +528,11 @@ def retrieve(
             long_shared = sum(1 for phrase in shared_han if len(phrase) >= 3)
             short_shared = sum(1 for phrase in shared_han if len(phrase) == 2)
             score += min(0.62, 0.13 * long_shared + 0.04 * short_shared)
-        if canonical_source_key(query_original) == canonical_source_key(source):
+        source_identity = canonical_source_key(source)
+        source_view_identity = canonical_source_key(source_view)
+        if query_identity == source_identity:
             score = 10.0
-        elif canonical_source_key(query) == canonical_source_key(source_view):
+        elif query_view_identity == source_view_identity:
             score = max(score, 3.0)
         elif query_compact and source_compact and (query_compact in source_compact or source_compact in query_compact):
             shorter = min(len(query_compact), len(source_compact))
@@ -515,11 +546,17 @@ def retrieve(
             # A deterministic domain guard is stronger than raw character
             # overlap, but it still does not authorize copying the target.
             score += 0.42 + min(0.12, max(0, guard_score - 8) * 0.01)
-        elif source_match and (len(distinctive_anchors) < 2 or score < 0.32):
+        elif source_match and score < 3.0 and (len(specific) < 2 or score < 0.32):
             # A guard governs hard factory rules, not all use of an example.
             # A paraphrase outside its literal trigger can still guide the
             # model when independently specific content matches. Generic
             # notice wording alone must never activate an unrelated case.
+            continue
+        elif (not source_match and score < 3.0 and not specific
+              and not (query_compact in source_compact or source_compact in query_compact)):
+            # '一定要' or '今天下午' alone is no reason to inject an unrelated
+            # maintenance/staffing example into a packaging message. Explicit
+            # source containment still retains useful short phrase examples.
             continue
         # Human-correction cases without an explicit source contract must share
         # at least two non-generic content anchors before they can influence a
@@ -527,7 +564,7 @@ def retrieve(
         if ((case.get("bad_target") or case.get("verified_correction"))
                 and not source_match and score < 9.0
                 and len(distinctive_anchors) < 2
-                and canonical_source_key(query) != canonical_source_key(source_view)):
+                and query_view_identity != source_view_identity):
             # A new typo inside otherwise distinctive wording may leave only
             # one exact content anchor. Admit it as evidence, never local reuse.
             near = (len(distinctive_anchors) >= 1 and len(query_compact) >= 8

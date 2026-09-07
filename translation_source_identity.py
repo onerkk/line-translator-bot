@@ -7,6 +7,7 @@ and must never disappear from an exact-correction key.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 import re
 import unicodedata
 
@@ -15,7 +16,17 @@ _TOKENS = re.compile(r"[\u3400-\u9fff]|[^\W\u3400-\u9fff]+|[^\w\s]", re.UNICODE)
 
 
 def canonical_source_key(value) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    raw = str(value or "")
+    # Pure text identity only, never a translation/acceptance cache. Keep
+    # unusual large documents outside the bounded cache to limit worker memory.
+    if len(raw) > 4096:
+        return _canonical_source_key_cached.__wrapped__(raw)
+    return _canonical_source_key_cached(raw)
+
+
+@lru_cache(maxsize=1024)
+def _canonical_source_key_cached(raw: str) -> str:
+    text = unicodedata.normalize("NFKC", raw).casefold()
     chars = []
     for index, char in enumerate(text):
         if char in ",.。;":

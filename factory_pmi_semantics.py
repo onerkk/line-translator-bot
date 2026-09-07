@@ -11,9 +11,10 @@ import unicodedata
 
 from factory_instruction_semantics import segments
 
-BUILD_ID = "2026-09-07.4-pmi-qualified-predicates"
+BUILD_ID = "2026-09-07.5-pmi-completion-scope"
 _PMI = re.compile(r"(?<![A-Za-z0-9_])PMI(?![A-Za-z0-9_])", re.I)
 _ZH_CHECK = re.compile(r"(?:檢驗|檢查|檢測|確認|打|驗|測)(?:材料)?(?:鋼種|材質)")
+_ZH_OPERATION = r"(?:檢驗|檢查|檢測|測試|作業|流程)"
 _ID_CHECK = r"(?:pemeriksaan|memeriksa|diperiksa|periksa|pengecekan|mengecek|dicek|cek|pengujian|menguji|diuji|uji|pengetesan|mengetes|dites|tes|inspeksi|diinspeksi|verifikasi|diverifikasi)"
 _ID_SKIP = r"(?:terlewat|dilewatkan|dilewati|diabaikan|dilupakan|melewatkan|melewati|mengabaikan|melupakan|lewatkan|abaikan|lupakan)"
 _ID_ACTION = r"(?:" + _ID_CHECK + r"|" + _ID_SKIP + r"|dilakukan|melakukan|lakukan|dilaksanakan|melaksanakan|laksanakan|dijalankan|menjalankan|jalankan)"
@@ -31,7 +32,9 @@ _CODE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,4})(?![A-Za-z0-9])")
 
 
 def _norm(text):
-    return unicodedata.normalize("NFKC", str(text or "")).replace("檢驗剛種", "檢驗鋼種").replace("驗剛種", "驗鋼種")
+    return (unicodedata.normalize("NFKC", str(text or ""))
+            .replace("没", "沒").replace("檢査", "檢查")
+            .replace("檢驗剛種", "檢驗鋼種").replace("驗剛種", "驗鋼種"))
 
 
 def _id_after(after):
@@ -61,10 +64,17 @@ def _anchors(clause, lang):
         start, end = match.span()
         before, after = clause[:start], clause[end:]
         if lang == "zh":
+            if re.match(r"\s*(?:儀器|設備|機器|探頭|槍)", after):
+                continue  # Checking the instrument is not inspecting steel.
             leading = re.search(r"(?:檢驗|檢查|檢測|測試|做|打|驗)\s*$", before)
-            trailing = re.match(r"\s*(?:檢驗|檢查|檢測|測試|作業|流程|(?:還|尚)?(?:沒|未)|已|做|要|必須|一定|務必)", after)
+            trailing = re.match(r"\s*(?:" + _ZH_OPERATION + r"|(?:還|尚)?(?:沒|未)|已|做|要|必須|一定|務必|"
+                                r"(?:不必|不需(?:要)?|不用|無需|不得|不要|不可)(?:做|打|檢驗|檢測|檢查))", after)
         else:
             leading = re.search(r"\b" + _ID_ACTION + r"(?:\s+[a-z]+){0,6}\s*$", before, re.I)
+            instrument = re.search(r"\b(?:alat|mesin|instrumen|perangkat)\s*$", before, re.I)
+            if instrument and not re.search(r"\b(?:dengan|menggunakan|pakai|memakai)\s*$",
+                                            before[:instrument.start()], re.I):
+                continue
             trailing = _id_after(after)
         if leading or trailing:
             spans.append((leading.start() if leading else start, end))
@@ -83,13 +93,24 @@ def _mode(clause, start, end, lang):
     if re.search(r"[?？]|是否|有沒有|\bapakah\b", clause, re.I):
         return "question"
     if lang == "zh":
+        # PMI may precede its operation noun: 'PMI檢測尚未完成'. Bind
+        # completion/negation to that predicate, without scanning ahead into
+        # another operation ('PMI檢測，包裝已經完成').
+        after = re.sub(r"^\s*" + _ZH_OPERATION + r"\s*", "", after)
         neg = r"(?:尚未|還未|還沒(?:有)?|沒有|未|沒)(?:完成|進行|做|打|先|再|直接)?\s*$"
         done = r"(?:已經|已|完成)(?:完成|進行|做)?\s*$"
-        if re.search(neg, before) or re.match(r"\s*(?:還沒|尚未|未|沒)(?:做|打|驗|完成)", after):
+        if re.search(r"(?:不必|不需(?:要)?|不用|無需)(?:做|打|進行)?\s*$", before) or re.match(
+                r"\s*(?:不必|不需(?:要)?|不用|無需)", after):
+            return "optional"
+        if re.search(neg, before) or re.match(
+                r"\s*(?:還沒(?:有)?|尚未|還未|沒有|未|沒)(?:做|打|驗|檢驗|檢測|檢查|完成|進行|$)", after):
+            return "pending"
+        if re.match(r"\s*(?:尚)?未完成|\s*沒(?:有)?完成", after):
             return "pending"
         if re.search(done, before) or re.match(r"\s*(?:已經|已|做完|完成|完畢|完了)", after):
             return "completed"
-        if re.search(r"(?:禁止|不要|不得|不可|不准)(?:做|打|進行)?\s*$", before):
+        if re.search(r"(?:禁止|不要|不得|不可|不准)(?:做|打|進行)?\s*$", before) or re.match(
+                r"\s*(?:禁止|不要|不得|不可|不准)", after):
             return "prohibited"
         if re.search(r"(?:一定要?|務必|必須|必需|要|需)(?:做|打|進行)?\s*$", before) or re.match(r"\s*(?:一定要?|務必|必須|必需|要|需)", after):
             return "required"
@@ -195,7 +216,7 @@ def validate(facts, target, lang):
         scope = target_scopes.get(fact["item"], "") if fact["item"] is not None else str(target)
         if fact["sense"] == "pmi_inspection":
             ok = bool(related and _PMI.search(scope))
-            if fact["mode"] in {"pending", "completed", "prohibited", "required"}:
+            if fact["mode"] in {"pending", "completed", "prohibited", "required", "optional"}:
                 matching_mode = any(f["mode"] == fact["mode"] for f in related)
                 if fact["mode"] == "required" and lang == "zh":
                     # Chinese can express an imperative directly ('做PMI檢查')

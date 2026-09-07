@@ -365,7 +365,7 @@ logger.info(
 )
 
 _EXPECTED_CASEBOOK_API_VERSION = 4
-_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-07.2-specific-bounded-references"
+_EXPECTED_CASEBOOK_BUILD_ID = "2026-09-07.3-reference-relevance-cost"
 if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", None) != _EXPECTED_CASEBOOK_API_VERSION
         or getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_BUILD_ID", None) != _EXPECTED_CASEBOOK_BUILD_ID):
     raise RuntimeError(
@@ -2330,6 +2330,15 @@ def _translation_needs_upgrade_model(text):
             frame = risk.get("frame") or {}
             if analysis.get("suggestions") or frame.get("ambiguities"):
                 return True
+            # Sequence or different inspection states need stronger reasoning.
+            # A single clear PMI predicate stays on the routine tier: its state
+            # is checked locally, and a rejected candidate gets the one quality
+            # repair already allowed by the shared request budget.
+            pmi_facts = analysis.get("factory_terms") or ()
+            if (any(f.get("sense") == "pmi_sequence" for f in pmi_facts)
+                    or len({f.get("mode") for f in pmi_facts
+                            if f.get("sense") == "pmi_inspection"}) > 1):
+                return True
             if any(r.get("kind") == "inventory_change"
                    for r in frame.get("instruction_relations") or ()):
                 return True
@@ -2341,7 +2350,15 @@ def _translation_needs_upgrade_model(text):
     # Multi-row instructions and code/measurement-heavy messages are more prone
     # to omissions and deserve the stronger model even when under the char limit.
     technical_atoms = re.findall(
-        r"(?:[A-Z]{1,6}[-_/.:]?[A-Z0-9]{1,16}|\d+(?:\.\d+)?(?:mm|cm|kg|g|t|%|°C|℃)?)",
+        # Both a letter and a digit are required for a code. The old re.I
+        # alphabet-only branch counted virtually every Indonesian word, so a
+        # routine sentence such as 'Besok saya masuk kerja seperti biasa'
+        # silently paid for the quality tier. Keep actual IDs and measurements.
+        r"(?<![A-Za-z0-9_])(?:"
+        r"(?=[A-Za-z0-9_./:-]*[A-Za-z])(?=[A-Za-z0-9_./:-]*\d)"
+        r"[A-Za-z0-9]+(?:[-_/.:][A-Za-z0-9]+)*"
+        r"|\d+(?:[.,]\d+)?(?:\s*(?:mm|cm|kg|g|t|%|°C|℃))?"
+        r")(?![A-Za-z0-9_])",
         source,
         re.I,
     )
@@ -2357,7 +2374,11 @@ def _translation_needs_upgrade_model(text):
         "abnormal", "scrap", "salah material", "segera", "darurat",
     )
     lowered = source.casefold()
-    return len(compact) >= 6 and any(cue.casefold() in lowered for cue in critical_cues)
+    return len(compact) >= 6 and any(
+        re.search(r"(?<![a-z])" + re.escape(cue) + r"(?![a-z])", lowered)
+        if re.search(r"[a-z]", cue) else cue in lowered
+        for cue in critical_cues
+    )
 
 
 def _translation_cp_router_enabled():

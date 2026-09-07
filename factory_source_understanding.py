@@ -15,7 +15,7 @@ from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-07.2-pmi-process-relations"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-07.4-pmi-and-operation-polarity"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -354,7 +354,11 @@ _ACTIONS = {
     "use": {"id": r"\b(?:gunakan|digunakan|menggunakan|pakai|dipakai|dioperasikan|operasikan)\b", "zh": r"使用|操作|運轉|開機|啟動"},
     "weigh": {"id": r"\b(?:timbang|ditimbang|menimbang|penimbangan)\b", "zh": r"秤重|過磅"},
     "pack": {"id": r"\b(?:dikemas|kemas|mengemas|pengemasan|packing|dibungkus|bungkus)\b", "zh": r"包裝|打包|裝箱"},
+    "mix_material": {"id": r"\b(?:mencampur|campur|tercampur|dicampur)(?:kan)?\b", "zh": r"混料|混用材料|混合材料"},
+    "stop_machine": {"id": r"\b(?:hentikan|dihentikan|menghentikan|matikan|dimatikan|berhenti|stop)\b", "zh": r"停機|停線|關機"},
+    "start_machine": {"id": r"\b(?:jalankan|dijalankan|nyalakan|dinyalakan|menyalakan)\b", "zh": r"開機|啟動|開線"},
 }
+_SAFETY_ACTIONS = frozenset({"mix_material", "stop_machine", "start_machine"})
 _CODE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,4})(?![A-Za-z0-9])")
 _MODES = {
     "id": {
@@ -382,7 +386,7 @@ def operational_states(text, lang):
         return []
     states = []
     document_codes = {m.group().upper() for m in _CODE.finditer(text)}
-    for clause in re.split(r"[，,;；。!！\n]", text):
+    for clause in re.split(r"[，,;；。!！\n]|(?<!\d)\.|\.(?!\d)", text):
         if re.search(r"[?？]|是否|有沒有|\bapakah\b", clause, re.I):
             continue
         occurrences = sorted((m.start(), m.end(), action, m.group())
@@ -390,6 +394,10 @@ def operational_states(text, lang):
             for m in re.finditer(patterns[lang], clause, re.I))
         previous_end = 0
         for start, end, action, spelling in occurrences:
+            if lang == "id" and action in _SAFETY_ACTIONS:
+                subject = r"\b(?:material|bahan)\b" if action == "mix_material" else r"\b(?:mesin|lini)\b"
+                if not re.search(subject, clause, re.I):
+                    continue  # Mixing drinks/stopping shipments is a different action.
             prefix = clause[previous_end:start]
             previous_end = end
             # A marker must belong to this predicate, not an earlier sentence.
@@ -402,14 +410,28 @@ def operational_states(text, lang):
                     between = prefix[match.end():]
                     if lang == "id":
                         local = re.fullmatch(r"(?:\s+(?:selesai|juga|sempat|pernah|lagi|sepenuhnya))*\s*", between, re.I)
+                        if not local and action in _SAFETY_ACTIONS:
+                            local = re.fullmatch(r"(?:\s+(?:sampai|biarkan|ada|segera|langsung|juga|dulu|lagi|tetap|"
+                                                 r"mesin|lini|material|bahan|ini|itu|[a-z]{1,4}\d{1,4}))*\s*",
+                                                 between, re.I)
                     else:
                         local = re.fullmatch(r"(?:\s|完成|進行|重新|完全|全部|先|再|直接|隨便|任意|擅自|去)*", between)
+                        if not local and action in _SAFETY_ACTIONS:
+                            local = re.fullmatch(r"(?:\s|立即|馬上|立刻|再|先|直接|隨便|任意|擅自)*", between)
                     if local:
                         hits.append((match.start(), name))
             if hits:
                 # 'tidak boleh' includes 'tidak'; at equal positions the more
                 # specific prohibition must win over unfinished-state markers.
                 _, mode = max(hits, key=lambda item: (item[0], item[1] == "prohibited"))
+            if mode == "plain" and action in {"stop_machine", "start_machine"}:
+                if lang == "zh" and re.search(r"(?<!不)(?:必須|務必|一定要|請|立即|馬上|立刻)(?:立即|馬上|立刻|先|再|\s)*$", prefix):
+                    mode = "required"
+                elif lang == "id" and (re.search(r"\b(?:harus|wajib|mesti|tolong|harap)(?:\s+(?:segera|langsung|dulu|mesin|lini|ini|itu))*\s*$", prefix, re.I)
+                        and not re.search(r"\b(?:tidak|tak|belum|jangan)\b", prefix, re.I)):
+                    mode = "required"
+                elif lang == "id" and spelling.casefold() in {"hentikan", "matikan", "jalankan", "nyalakan"}:
+                    mode = "required"
             suffix = clause[end:end + (40 if lang == "id" else 18)]
             suffix = re.sub(r"^\s*(?:mesin\s+)?[A-Za-z]{1,4}\d{1,4}\s*", " ", suffix, flags=re.I)
             if lang == "zh":
@@ -445,11 +467,18 @@ def validate_operational_states(analysis, target, src, tgt):
         # Other validators check missing/unknown actions. This check protects
         # polarity when the target explicitly contains that same operation.
         if not related:
+            if fact["action"] in {"stop_machine", "start_machine"} and fact["mode"] == "required":
+                opposite = "start_machine" if fact["action"] == "stop_machine" else "stop_machine"
+                if any(row["action"] == opposite and row["mode"] in {"required", "plain", "completed"}
+                       and (not fact["code"] or row["code"] == fact["code"]) for row in target_states):
+                    issues.append("operation_status_changed:" + fact["action"] + ":opposite_action")
             continue
         if fact["mode"] in {"pending", "prohibited"}:
             ok = any(row["mode"] == fact["mode"] for row in related)
         elif fact["mode"] == "not_done":
             ok = any(row["mode"] in {"not_done", "pending"} for row in related)
+        elif fact["mode"] == "required":
+            ok = any(row["mode"] in {"plain", "required"} for row in related)
         else:
             ok = any(row["mode"] in {"plain", "completed"} for row in related)
         if not ok:

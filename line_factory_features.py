@@ -30,7 +30,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-07.factory-speed.2"
+BUILD_ID = "2026-09-07.factory-cp.3"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
