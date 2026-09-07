@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>開啟 LINE 工具</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='line_factory.css') }}">
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script></head>
+<body class="factory-page"><main class="factory-shell"><section class="factory-card">
+<h1>開啟 LINE 工具 / Membuka alat LINE</h1><p id="entry-status" role="status">正在連接 / Menghubungkan…</p>
+</section></main><script>
+document.addEventListener('DOMContentLoaded', async () => {
+  const output=document.getElementById('entry-status');
+  try {
+    const id={{ liff_id|tojson }};
+    if (!id || !window.liff) throw new Error('請先設定 LIFF_ID，並確認網路連線。');
+    // Official primary redirect must initialize LIFF before handling liff.state.
+    await liff.init({liffId:id});
+    const raw=new URLSearchParams(location.search).get('liff.state');
+    if (!raw) return;
+    const state=new URL(raw, location.origin+'/liff/settings');
+    if (state.origin!==location.origin || !['/liff/settings','/liff/form'].includes(state.pathname)) throw new Error('連結格式不正確，請從 LINE 重新開啟。');
+    const next=new URL('/liff/settings',location.origin);
+    for (const key of ['view','nonce','session','id']) if(state.searchParams.has(key)) next.searchParams.set(key,state.searchParams.get(key));
+    if(state.pathname==='/liff/form') next.searchParams.set('view','form');
+    location.replace(next.href);
+  } catch(error) { output.textContent=(error.message||'連線失敗')+' / Buka kembali dari LINE.'; }
+});
+</script></body></html>

@@ -1,1 +1,39 @@
-
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer"><title>工廠工具 · Alat pabrik</title>
+<link rel="stylesheet" href="/static/line_factory.css?v=1">
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
+<script src="/static/line_factory.js?v=1" defer></script>
+</head>
+<body class="factory-page" data-liff-id="{{ liff_id }}">
+<main class="factory-shell">
+<header class="factory-header"><span class="factory-eyebrow">LINE · 工廠雙語助手</span><h1>工廠工具 <small>Alat pabrik</small></h1><p id="factory-group">載入中 / Memuat…</p></header>
+<div id="factory-message" class="factory-notice" role="status" aria-live="polite">正在開啟工具 / Membuka alat…</div>
+<section class="factory-card" id="factory-share-card" hidden>
+<h2>雙語公告 <small>Pengumuman bilingual</small></h2>
+<p class="factory-hint">確認內容後，由你選擇分享對象。 / Periksa isi, lalu pilih penerima.</p>
+<div class="factory-original" id="factory-original"></div><div class="factory-result" id="factory-translated"></div>
+<div class="factory-row"><button type="button" id="factory-share">📤 分享 / Bagikan</button><button type="button" id="factory-copy" class="factory-secondary">複製全文 / Salin</button></div>
+</section>
+<section class="factory-card" id="factory-station-card">
+<h2>設備與站別 <small>Mesin & stasiun</small></h2>
+<button type="button" id="factory-scan">▣ 掃描 QR Code / Pindai QR</button>
+<p class="factory-hint">也可以選擇或輸入設備代碼。 / Pilih atau ketik kode mesin.</p>
+<form id="factory-lookup" class="factory-row"><label class="factory-grow" for="factory-code">設備代碼 / Kode<input id="factory-code" list="factory-codes" maxlength="80" placeholder="例如 I5、PMI" required></label><button type="submit" class="factory-secondary">查詢 / Cari</button></form>
+<datalist id="factory-codes"></datalist>
+<div id="factory-station-detail" hidden><h3 id="factory-station-name"></h3><p id="factory-station-context" class="factory-hint"></p>
+<details><summary>雙語作業說明 / Petunjuk kerja</summary><p id="factory-sop-zh" class="factory-preserve"></p><p id="factory-sop-id" class="factory-preserve"></p></details>
+<a id="factory-form-link" class="factory-link" hidden>開啟相關表單 / Buka formulir</a>
+<form id="factory-translate-form"><h3>依此站別翻譯 <small>Terjemahkan di stasiun ini</small></h3>
+<div class="factory-row"><label class="factory-grow">來源 / Dari<select id="factory-src"><option value="zh">中文</option><option value="id">Indonesia</option></select></label>
+<button id="factory-swap" type="button" class="factory-secondary" aria-label="交換語言 / Tukar bahasa">⇄</button>
+<label class="factory-grow">目標 / Ke<select id="factory-tgt"><option value="id">Indonesia</option><option value="zh">中文</option></select></label></div>
+<label for="factory-input">原文 / Teks asli</label><textarea id="factory-input" rows="5" maxlength="5000" required placeholder="輸入需要翻譯的內容 / Masukkan teks"></textarea>
+<button type="submit" id="factory-translate">翻譯 / Terjemahkan</button></form>
+<div id="factory-station-output" class="factory-result" hidden></div>
+<div class="factory-row" id="factory-station-share-row" hidden><button id="factory-station-share" type="button">分享譯文 / Bagikan</button><button id="factory-station-copy" type="button" class="factory-secondary">複製 / Salin</button></div>
+</div></section>
+<p class="factory-footnote">連結有效 10 分鐘；過期後請回 LINE 重新開啟。<br>Tautan berlaku 10 menit; buka kembali dari LINE jika kedaluwarsa.</p>
+</main></body></html>
