@@ -1,0 +1,30 @@
+#quickreply-admin-root{color:#e8eaf2;max-width:960px;margin:auto}
+#quickreply-admin-root .qr-panel{background:#191d30;border:1px solid #31384e;border-radius:16px;padding:20px}
+#quickreply-admin-root h2{font-size:20px;margin:0 0 12px}
+#quickreply-admin-root h3{font-size:16px;margin:0 0 10px}
+#quickreply-admin-root .qr-hint{color:#aeb8cd;line-height:1.65;font-size:13px}
+#quickreply-admin-root label{display:block;font-size:14px;margin:12px 0}
+#quickreply-admin-root input:not([type=checkbox]),#quickreply-admin-root select,#quickreply-admin-root textarea{box-sizing:border-box;display:block;width:100%;background:#0e1525;border:1px solid #46526d;color:#eff3fa;border-radius:8px;padding:11px;font:inherit;margin-top:7px}
+#quickreply-admin-root textarea{min-height:65px;resize:vertical}
+#quickreply-admin-root input[type=checkbox]{width:19px;height:19px;accent-color:#7c6fef;flex-shrink:0;margin:0 8px 0 0}
+#quickreply-admin-root fieldset{border:0;margin:0;padding:0;min-width:0}
+#quickreply-admin-root button{background:#30405a;border:0;border-radius:8px;color:#edf0fa;min-height:42px;padding:10px 13px;font:inherit;cursor:pointer}
+#quickreply-admin-root button:disabled{opacity:.45;cursor:default}
+#quickreply-admin-root .qr-primary{background:#70dbc3;color:#132936;font-weight:700}
+#quickreply-admin-root .qr-check{display:flex;align-items:center;gap:3px}
+#quickreply-admin-root .qr-status{margin:12px 0;line-height:1.5;color:#8fe2ca;font-size:14px;min-height:22px}
+#quickreply-admin-root .qr-error{color:#ffb4ac}
+#quickreply-admin-root .qr-item{background:#11192a;border:1px solid #34415c;padding:12px;border-radius:12px;margin:10px 0}
+#quickreply-admin-root .qr-item-head{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#quickreply-admin-root .qr-item-head>label{flex:1;min-width:135px;margin:3px 0}
+#quickreply-admin-root .qr-item-head button{padding:8px 10px}
+#quickreply-admin-root summary{cursor:pointer;color:#bbc8e0;font-size:13px;padding:12px 0 3px}
+#quickreply-admin-root .qr-contexts{display:flex;flex-wrap:wrap;gap:14px}
+#quickreply-admin-root .qr-contexts label{display:flex;align-items:center;font-size:13px}
+#quickreply-admin-root .qr-preview{padding:16px;background:#202b41;border-radius:12px;margin:18px 0}
+#quickreply-admin-root .qr-preview-buttons{display:flex;flex-wrap:wrap;gap:8px;padding:8px 0}
+#quickreply-admin-root .qr-preview-buttons span{background:#4c607b;color:#fff;border-radius:24px;padding:10px 12px;font-size:14px}
+#quickreply-admin-root .qr-toolbar{display:flex;flex-wrap:wrap;gap:10px;padding-top:16px;border-top:1px solid #34415c;margin-top:16px}
+#quickreply-admin-root .qr-add-row{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
+#quickreply-admin-root .qr-add-row label{flex:1;min-width:180px;margin-bottom:0}
+@media(max-width:480px){#quickreply-admin-root .qr-panel{padding:14px}#quickreply-admin-root .qr-item-head>label{flex-basis:100%}#quickreply-admin-root .qr-toolbar button{flex:1}#quickreply-admin-root .qr-preview{padding:12px}}

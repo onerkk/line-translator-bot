@@ -39,8 +39,8 @@
 <section class="factory-card"><h2>連線與功能狀態</h2><div id="fa-health"></div><div class="factory-row"><button type="button" id="fa-refresh" class="factory-secondary">重新整理</button></div><p class="factory-hint">在 LINE 群組傳送 <strong>/factory</strong>，即可開啟掃碼與站別翻譯。掃碼、分享需先在 LINE Developers 啟用 LIFF 的 Scan QR 與分享選擇器，畫面大小設為 Full。</p></section>
 <section class="factory-card"><h2>群組翻譯與互動</h2><label>群組<select id="fa-group"></select></label><form id="fa-options-form">
 <label>文字翻譯模式<select id="fa-mode"><option value="all">自動翻譯所有文字</option><option value="mentioned">只有 @ 機器人時翻譯文字</option></select></label><p class="factory-hint">圖片、語音、文件維持各自的既有開關；管理指令仍可操作。</p>
-<label><input type="checkbox" id="fa-edit">原文修改後補發更正翻譯</label><label><input type="checkbox" id="fa-mentions">譯文保留真正的 LINE @ 點名</label><label><input type="checkbox" id="fa-share">開放雙語公告分享</label><label><input type="checkbox" id="fa-station-tools">開放設備掃碼與站別翻譯</label>
-<label>作業確認按鈕<select id="fa-ack"><option value="work">工作相關訊息顯示</option><option value="all">所有翻譯顯示</option><option value="off">關閉</option></select></label><button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
+<label><input type="checkbox" id="fa-edit">原文修改後補發更正翻譯</label><label><input type="checkbox" id="fa-mentions">譯文保留真正的 LINE @ 點名</label>
+<p class="factory-hint">公告確認按鈕、分享與工具入口統一於「快捷鍵」依群組設定。</p><button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
 <section class="factory-card"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
 <label>簡稱與設備背景<textarea id="fa-context" maxlength="1200" rows="3" placeholder="說明這個代碼代表什麼，僅供翻譯辨識"></textarea></label><div class="factory-grid"><label>中文作業說明<textarea id="fa-sop-zh" maxlength="5000" rows="5"></textarea></label><label>印尼文作業說明<textarea id="fa-sop-id" maxlength="5000" rows="5"></textarea></label></div>
@@ -51,7 +51,7 @@
     $('receipt-group').addEventListener('change',()=>changeGroup($('receipt-group').value));
     $('refresh').addEventListener('click',guard($('refresh'),load));
     $('options-form').addEventListener('submit',guard($('save-options'),async()=>{
-      const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked,sharing:$('share').checked,station_tools:$('station-tools').checked,acknowledgements:$('ack').value}});
+      const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked}});
       state=data;notice('群組設定已儲存。');
     }));
     $('station-form').addEventListener('submit',guard($('save-station'),async()=>{
@@ -83,7 +83,7 @@
   }
   function fillOptions(){
     const settings={...state.defaults,...(state.settings.groups||{})[group()]};
-    $('mode').value=settings.translation_mode;$('edit').checked=settings.edit_translation;$('mentions').checked=settings.native_mentions;$('share').checked=settings.sharing;$('station-tools').checked=settings.station_tools;$('ack').value=settings.acknowledgements;
+    $('mode').value=settings.translation_mode;$('edit').checked=settings.edit_translation;$('mentions').checked=settings.native_mentions;
     $('save-options').disabled=!group();$('load-receipts').disabled=!group();
   }
   function resetStation(){editing=null;$('station-form').reset();$('editor-title').textContent='新增設備對照';}
