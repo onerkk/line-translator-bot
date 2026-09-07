@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.2-release-predicate-polarity"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.3-preserve-question-mode"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -3301,6 +3301,11 @@ def _with_mentions(frame: Mapping, text: str) -> str:
 def deterministic_translation(frame: Mapping) -> str:
     """Render a complete source frame directly; return an empty string otherwise."""
     if not frame or not frame.get("active") or not frame.get("complete"):
+        return ""
+    # The relation renderers below produce assertions/instructions, not
+    # questions. Some parsers discard punctuation while checking coverage;
+    # never let that turn "I15 rusak?" into a confirmed machine failure.
+    if re.search(r"[?？]", str(frame.get("source") or "")):
         return ""
     slots = frame.get("slots") or {}
     if frame.get("kind") == "id_zh_machine_oil_leak":

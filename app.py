@@ -311,7 +311,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-07.1-notice-coverage-integrity"
+_EXPECTED_QG_BUILD_ID = "2026-09-07.2-source-scoped-glossary-lint"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -345,7 +345,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.2-release-predicate-polarity"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-07.3-preserve-question-mode"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -6267,6 +6267,31 @@ FACTORY_ID_ZH_EQUIPMENT_STATUS = {
 }
 
 
+_FACTORY_SEMANTIC_SCOPE_BUILD_ID = "2026-09-07.1-complete-source-shortcuts"
+
+
+def _factory_slots_cover_source(text, slots):
+    """A fixed translation must account for the entire source, exactly once.
+
+    Finding nouns and defects is insufficient: unmatched negation, quantities,
+    time, another instruction, or question punctuation must reach the normal
+    translator. Do not use _clean_factory_id here: it erases question marks.
+    """
+    raw = str(text or "").strip()
+    if not raw or re.search(r"[?？\n\r:：;；]", raw):
+        return False
+    remainder = re.sub(r"[.。．!！,，]+$", "", raw).lower().strip()
+    remainder = re.sub(r"\s+", " ", remainder)
+    for slot in sorted((str(s).lower() for s in slots if s), key=len, reverse=True):
+        remainder, count = re.subn(
+            r"(?<![\w])" + re.escape(slot) + r"(?![\w])",
+            " ", remainder, count=1,
+        )
+        if count != 1:
+            return False
+    return not remainder.strip()
+
+
 def factory_semantic_translate_equipment_status_id_zh(text):
     """Translate a complete, simple equipment-status sentence deterministically.
 
@@ -6298,6 +6323,13 @@ def factory_semantic_translate_equipment_status_id_zh(text):
 
     state_zh = FACTORY_ID_ZH_EQUIPMENT_STATUS.get(remainder)
     if not state_zh:
+        return None
+
+    machine_subject = re.match(r"^\s*(mesin(?:nya)?)\b", cleaned)
+    slots = codes + [remainder]
+    if machine_subject:
+        slots.append(machine_subject.group(1))
+    if not _factory_slots_cover_source(semantic_source, slots):
         return None
 
     prefix = (" ".join(mentions) + " ") if mentions else ""
@@ -6638,6 +6670,17 @@ def factory_semantic_translate_pre_operation_issue_id_zh(text):
     leading_codes = re.findall(r"\b(?:[A-Z]\d[A-Z0-9-]{3,}|\d+[A-Z][A-Z0-9-]{2,})\b", raw)
     prefix = (" ".join(dict.fromkeys(leading_codes)) + " ") if leading_codes else ""
 
+    subject_key, _ = _factory_find_phrase({key: key for key in (
+        "barang id ini", "barang ini", "barangnya", "barang",
+        "batang ini", "batangnya", "batang baja", "batang",
+        "material ini", "materialnya", "material", "bahan ini", "bahannya", "bahan",
+    )}, t)
+    slots = [subject_key, _time_key, _pos_key, _issue_key] + leading_codes
+    if re.search(r"\bjuga\b", t):
+        slots.append("juga")
+    if not _factory_slots_cover_source(raw, slots):
+        return None
+
     if issue_zh in ("有一點問題", "有問題"):
         tail = issue_zh
     else:
@@ -6760,6 +6803,13 @@ def factory_semantic_translate_id_zh(text):
     obj_key, obj_zh = _find_longest_phrase(FACTORY_ID_ZH_OBJECTS, t)
     defect_key, defect_zh = _find_longest_phrase(FACTORY_ID_ZH_DEFECTS, t)
     pos_key, pos_zh = _find_longest_phrase(FACTORY_ID_ZH_POSITIONS, t)
+
+    slots = [obj_key, defect_key, pos_key] + leading_codes
+    # Colloquial "mesin ya" is a spelling variant of "mesinnya".
+    if obj_key == "mesin" and re.search(r"\bmesin ya\b", t):
+        slots.append("ya")
+    if not _factory_slots_cover_source(raw, slots):
+        return None
 
     result = None
     if obj_zh and defect_zh:
@@ -8113,9 +8163,38 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     result = re.sub(r"Pabrik Taichung\s*\(台中廠\)", _stash, result, flags=re.I)
     result = re.sub(r"Departemen Keselamatan Kerja\s*\(職安署\)", _stash, result, flags=re.I)
     
-    # Step 2: 套用詞庫(由長到短,避免短詞先吃掉長詞的部分)
+    # Ambiguous words have valid literal meanings outside the original repair
+    # case. A factory keyword somewhere in the message is not enough evidence.
+    def _source_allows_repair(wrong):
+        low = wrong.lower()
+        if any(word in low for word in ("dicuri", "mencuri", "pencuri")):
+            return ("品保" in src and "偷跑" in src
+                    and not re.search(r"偷竊|失竊|被偷|偷走|盜竊|窃|盗", src))
+        if "bereaksi" in low:
+            reporting = re.search(r"回報|反映|反應給|跟.{1,8}反應|向.{1,8}反應", src)
+            return bool((reporting or ("品保" in src and "反應" in src))
+                        and not re.search(r"化學|化学|反應[爐炉器]|反應速度|反應時間", src))
+        if "tertelan" in low:
+            return bool(re.search(r"清洗|酸洗", src) and re.search(r"刮傷|刮伤|痕跡|痕迹", src)
+                        and not re.search(r"吞|誤食|误食", src))
+        if low in ("dinas k3", "biro k3", "otoritas k3"):
+            return "職安署" in src
+        if any(word in low for word in ("buku bahan", "perintah kerja", "lembar kerja")):
+            return bool(re.search(r"工[單单]", src)
+                        and not re.search(r"工作表|試算表|工作指令|作業指示|材料手冊", src))
+        if "penggaris pendek" in low:
+            return "短尺" in src and not re.search(r"尺規|尺规|直尺|尺子", src)
+        if low in ("kena tangkap", "tertangkap"):
+            return bool(re.search(r"抓到|查獲|查获|查到", src)
+                        and not re.search(r"警察|警方|逮捕|被捕|拘捕", src))
+        if "kepala shift" in low or wrong == "班長":
+            return "班長" in src or "班长" in src
+        return True
+
+    # Step 2: only apply source-supported, whole-word repairs.
     for wrong, correct in sorted(FACTORY_ZH_ID_POST_FIX.items(), key=lambda x: -len(x[0])):
-        result = re.sub(re.escape(wrong), correct, result, flags=re.I)
+        if _source_allows_repair(wrong):
+            result = re.sub(r"(?<!\w)" + re.escape(wrong) + r"(?!\w)", correct, result, flags=re.I)
     # v3.20: source-grounded factory term repair.  This uses the same semantic contract
     # as the pre-LLM route and is not a blind global replacement.
     try:
@@ -8125,41 +8204,42 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     except Exception:
         pass
     
-    # Step 3: 處理 standalone Yanshui — 沒中文標註的 Yanshui 都升級成完整名稱
-    # 不管前面有沒有 "Pabrik",只要後面沒接 "(" 就升級
-    # 「Pabrik Yanshui sudah」→「Pabrik Yanshui (鹽水廠) sudah」(前面 Pabrik 被吃掉,重新加)
-    # 「Yanshui sudah」→「Pabrik Yanshui (鹽水廠) sudah」
-    # 「Pabrik Yanshui (鹽水廠)」→ 不變(已被 stash)
-    result = re.sub(
-        r"(?:Pabrik\s+|pabrik\s+)?\bYanshui\b(?!\s*\()",
-        "Pabrik Yanshui (鹽水廠)",
-        result
-    )
-    result = re.sub(
-        r"(?:Pabrik\s+|pabrik\s+)?\bTaichung\b(?!\s*\()",
-        "Pabrik Taichung (台中廠)",
-        result
-    )
+    # Step 3: normalize only explicit factory names supported by the source.
+    # A city name alone must not turn into a factory. If the source also names
+    # the city separately, keep the model's disambiguation rather than replacing
+    # every occurrence of that city across unrelated clauses.
+    for city, factory_name, city_pattern in (
+        ("Yanshui", "鹽水廠", r"鹽水[廠厂]"),
+        ("Taichung", "台中廠", r"[台臺]中[廠厂]"),
+    ):
+        city_only = re.sub(city_pattern, "", src)
+        bare_city = r"鹽水|盐水" if city == "Yanshui" else r"[台臺]中"
+        if re.search(city_pattern, src) and not re.search(bare_city, city_only):
+            result = re.sub(
+                r"(?:Pabrik\s+)?\b" + city + r"\b(?!\s*\()",
+                f"Pabrik {city} ({factory_name})", result, flags=re.I,
+            )
     
     # Step 4: 把 placeholder 還原
     for i, ph_text in enumerate(placeholders):
         result = result.replace(f"\x00PH{i}\x00", ph_text)
     
     # v3.9.30d B22 修補:夜點費條件式翻譯
-    # 「夜點費」在台灣勞基法 = 因輪到夜班領的固定津貼,不論加班(uang shift malam)
+    # Project terminology: 「夜點費」= 夜班津貼 (uang shift malam).
     # 「夜班加班費」才是 uang lembur malam
     # GPT 常把兩者混淆,這裡只在原文明確含「夜點費」/「日點費」/「夜班津貼」時修
-    if "夜點費" in src or "夜班津貼" in src or "夜點" in src:
+    has_overtime = bool(re.search(r"加班|超時|超时|延長工時", src))
+    if not has_overtime and ("夜點費" in src or "夜班津貼" in src or "夜點" in src):
         # 把譯文裡的 uang lembur malam 改成 uang shift malam
         result = re.sub(r'\buang\s+lembur\s+malam\b', 'uang shift malam', result, flags=re.I)
         # 處理變體:uang lembur shift malam / lembur shift malam(連 uang 一起包以免重複)
         result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+malam\b', 'uang shift malam', result, flags=re.I)
         # 處理已經是 shift 但前面誤加 lembur 的:lembur uang shift malam
         result = re.sub(r'\blembur\s+uang\s+shift\s+malam\b', 'uang shift malam', result, flags=re.I)
-    if "日點費" in src or "日班津貼" in src:
+    if not has_overtime and ("日點費" in src or "日班津貼" in src):
         result = re.sub(r'\buang\s+lembur\s+siang\b', 'uang shift siang', result, flags=re.I)
         result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+siang\b', 'uang shift siang', result, flags=re.I)
-    if "中班津貼" in src:
+    if not has_overtime and "中班津貼" in src:
         result = re.sub(r'\buang\s+lembur\s+sore\b', 'uang shift sore', result, flags=re.I)
         result = re.sub(r'\b(?:uang\s+)?lembur\s+shift\s+sore\b', 'uang shift sore', result, flags=re.I)
     
@@ -8190,7 +8270,8 @@ def post_fix_factory_zh_to_id(src_text, id_text):
     # v3.9.37: 「有好處理的」≠「sudah selesai」reactive fix
     # 「有好處理的料」= 容易處理的料(yang mudah/gampang diproses)
     # 常被誤譯為 sudah selesai(已完成)— 完全相反意思
-    if "有好處理" in src or "好處理的" in src:
+    if (("有好處理" in src or "好處理的" in src)
+            and not re.search(r"完成|完工|做好|做完|處理好|處理完|加工好|加工完|包好|包完", src)):
         # batang ... yang sudah selesai → batang ... yang mudah diproses
         result = re.sub(
             r'\byang\s+sudah\s+selesai\b',
@@ -9744,12 +9825,11 @@ def factory_semantic_translate_zh_id(text):
     # High-risk physical-placement reply.  The repeated「放」means putting
     # material into a storage slot / overflow location, not ERP data release.
     # Keep the customer identifier 大成 exactly as written.
-    if (("週末" in compact or "周末" in compact)
-            and "大成" in compact
-            and ("儲格" in compact or "储格" in compact)
-            and "放不下" in compact
-            and ("照片" in compact or "圖片" in compact or "图片" in compact)
-            and ("位置" in compact or "地方" in compact)):
+    if re.fullmatch(
+        r"(?:週末|周末)大成(?:儲格|储格)能放就放[，,；;]?放不下[，,]?再放"
+        r"(?:照片|圖片|图片)[裡里](?:這些|这些)(?:位置|地方)[。.!！]?",
+        compact,
+    ):
         return (
             "Pada akhir pekan, jika slot penyimpanan 大成 masih dapat menampung material, "
             "letakkan material di sana. Jika tidak muat, letakkan material di lokasi-lokasi "
@@ -9758,24 +9838,17 @@ def factory_semantic_translate_zh_id(text):
     # Material storage instruction: keep the customer name and storage code
     # verbatim; 「集中放這格」is a physical slot assignment, not awkward
     # word-for-word "dikumpulkan taruh" and not a data operation.
-    if (("入儲" in compact or "入庫" in compact or "入库" in compact)
-            and "EH33" in compact and "峰作金屬" in compact
-            and ("集中放" in compact or "統一放" in compact or "统一放" in compact)
-            and ("這格" in compact or "这格" in compact)):
+    if re.fullmatch(
+        r"(?:入儲|入庫|入库)[時时]EH33峰作金屬"
+        r"(?:集中放|統一放|统一放)(?:這格|这格)[。.!！]?",
+        compact,
+    ):
         return (
             "Saat material masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 "
             "ditempatkan bersama di slot ini."
         )
-    if all(k in compact for k in ["清洗前", "料", "品保"]) and ("偷跑" in compact or "吊去" in compact) and "刮傷" in compact:
-        return (
-            "Kalau material sebelum dicuci ditemukan sudah dibawa QC duluan, harus segera lapor. "
-            "Sebelum dicuci, perhatikan dulu apakah material masuk ada goresan; "
-            "kalau tidak, setelah dicuci goresannya bisa hilang atau tertutup."
-        )
-    if "偷跑" in compact and "品保" in compact:
-        return "Kalau material sudah dibawa QC duluan tanpa konfirmasi, harus segera lapor."
-    if "吊去" in compact and "品保" in compact:
-        return "Material sudah dibawa oleh QC, harus segera dikonfirmasi."
+    # QC movement has no complete fixed sentence grammar. The model and shared
+    # terminology contract must preserve who moves what, direction and negation.
     return None
 
 
@@ -12027,6 +12100,7 @@ def _translation_cache_asset_fingerprint():
         "source_understanding": getattr(globals().get("source_understanding_module"), "SOURCE_UNDERSTANDING_VERSION", ""),
         "pmi_semantics": source_understanding_module.pmi_semantics.BUILD_ID,
         "erp_reason_semantics": globals().get("_FACTORY_REASON_SEMANTICS_BUILD_ID", ""),
+        "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),

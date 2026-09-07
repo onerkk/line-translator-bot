@@ -44,7 +44,7 @@ class ReverseGlossaryRootFixTests(unittest.TestCase):
             'SHORT_INCIDENT_MAX_LEN',
         }
         wanted_defs = {
-            '_clean_factory_id', '_find_longest_phrase',
+            '_clean_factory_id', '_find_longest_phrase', '_factory_slots_cover_source',
             'classify_factory_message', 'factory_semantic_translate_id_zh',
         }
         nodes = []

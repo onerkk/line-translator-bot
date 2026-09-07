@@ -137,7 +137,7 @@ def test_glossary_and_app_require_the_same_versioned_safety_engine():
     app_source = (root / "app.py").read_text(encoding="utf-8")
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-07.2-release-predicate-polarity"'
+        '"2026-09-07.3-preserve-question-mode"'
     ) in app_source
     assert semantics.health()["self_test"]["ok"] is True
 

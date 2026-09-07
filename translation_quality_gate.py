@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-07.1-notice-coverage-integrity"
+QUALITY_GATE_BUILD_ID = "2026-09-07.2-source-scoped-glossary-lint"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1598,7 +1598,7 @@ def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -
     if "@@" not in source and re.search(r"(?<!@)@@+", candidate):
         issues.append("duplicated_mention_marker")
 
-    for phrase in gp_module.deprecated_indonesian_phrases():
+    for phrase in gp_module.deprecated_indonesian_phrases(source):
         if phrase.casefold() in low:
             issues.append(f"deprecated_glossary_phrase:{phrase}")
 

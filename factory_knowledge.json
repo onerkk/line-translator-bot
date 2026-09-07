@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-07.3-collar-source-object",
+  "build_id": "2026-09-07.4-storage-voice-and-source-scope",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -2821,7 +2821,8 @@
         "這是材料入儲與儲格配置指示：入儲是材料進入儲存區，不是登入、輸入資料或一般進入倉庫的敘述。",
         "「集中放這格」表示同一客戶、同一鋼種的材料全部集中放在指定實體儲格，應譯為 ditempatkan bersama di slot ini。",
         "峰作金屬是客戶識別名稱，必須原樣保留為峰作金屬；不得音譯為 Peng Zuo Metal、Feng Zuo Metal 或翻成一般金屬名詞。",
-        "EH33 是儲位／材料識別代碼，必須原樣保留。"
+        "EH33 是儲位／材料識別代碼，必須原樣保留。",
+        "本卡只解釋材料與儲格術語，不得把原文「不要／不能／還沒」改成肯定的放置指令；主動式 tempatkan ... bersama 與被動式 ditempatkan bersama 都可表達集中放置。"
       ],
       "preferred_target_phrases": [
         "masuk ke area penyimpanan",
@@ -2848,7 +2849,12 @@
           "target_any": [
             "masuk ke area penyimpanan",
             "dimasukkan ke area penyimpanan",
-            "masuk penyimpanan"
+            "masuk penyimpanan",
+            "masuk ke penyimpanan",
+            "masuk area penyimpanan",
+            "dimasukkan ke penyimpanan",
+            "masuk ke gudang",
+            "dimasukkan ke gudang"
           ],
           "issue": "missing_storage_entry_semantics"
         },
@@ -2879,9 +2885,28 @@
           "target_any": [
             "ditempatkan bersama",
             "letakkan semuanya",
-            "ditempatkan di slot ini"
+            "ditempatkan di slot ini",
+            "tempatkan",
+            "meletakkan",
+            "menempatkan",
+            "letakkan bersama"
           ],
           "issue": "missing_concentrated_slot_placement"
+        },
+        {
+          "source_any": [
+            "集中放",
+            "統一放",
+            "统一放"
+          ],
+          "target_any": [
+            "bersama",
+            "semuanya",
+            "semua material",
+            "terpusat",
+            "dikumpulkan"
+          ],
+          "issue": "missing_concentrated_placement_scope"
         }
       ],
       "examples": [

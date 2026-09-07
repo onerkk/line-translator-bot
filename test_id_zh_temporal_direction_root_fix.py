@@ -23,6 +23,7 @@ class IndonesianTemporalDirectionRootFixTests(unittest.TestCase):
         }
         wanted_defs = {
             '_clean_factory_id', '_find_longest_phrase', '_factory_find_phrase',
+            '_factory_slots_cover_source',
             '_factory_material_subject_zh_id_to_zh', '_has_factory_pre_operation_marker',
             '_fix_zh_temporal_direction_boundary',
             'factory_semantic_translate_pre_operation_issue_id_zh',

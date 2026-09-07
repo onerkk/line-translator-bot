@@ -303,11 +303,24 @@ def forbidden_phrases(value: Any) -> Tuple[str, ...]:
 
 
 
-def deprecated_indonesian_phrases() -> Tuple[str, ...]:
-    """Phrases removed by glossary migrations and never valid as final output."""
+def deprecated_indonesian_phrases(source_text: str | None = None) -> Tuple[str, ...]:
+    """Deprecated translations of *matched source terms*, not a language ban.
+
+    With no source this returns the full migration list for asset cleanup.
+    Runtime validation must pass the actual source: ``lembar kerja`` is valid
+    for 工作表 and ``periksa data`` is valid for 確認資料, for example.
+    """
     out: list[str] = []
     seen = set()
-    for migration in _CORE_MIGRATIONS.values():
+    compact_source = re.sub(r"\s+", "", source_text) if source_text is not None else None
+    for term, migration in _CORE_MIGRATIONS.items():
+        if compact_source is not None and term not in compact_source:
+            continue
+        if (compact_source is not None and term == "工單"
+                and any(x in compact_source for x in ("工作表", "試算表", "工作指令", "作業指示"))):
+            # Mixed work-order/worksheet instructions need clause-level model
+            # validation; a message-wide ban cannot assign the target phrase.
+            continue
         raw = migration.get("forbidden_idn") or ()
         for phrase in raw:
             cleaned = _clean_target(phrase)

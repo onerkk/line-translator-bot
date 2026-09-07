@@ -15,7 +15,7 @@ from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-07.4-pmi-and-operation-polarity"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-07.5-negated-completion-scope"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -407,6 +407,21 @@ def operational_states(text, lang):
             hits = []
             for name, pattern in _MODES[lang].items():
                 for match in re.finditer(pattern, prefix, re.I):
+                    if name == "completed":
+                        # "belum selesai diperbaiki" / "未完成維修":
+                        # completion is governed by negation, not a second,
+                        # closer affirmative status marker.
+                        before_marker = prefix[:match.start()]
+                        negated_completion = (
+                            re.search(r"\b(?:belum|tidak|jangan|dilarang)"
+                                      r"(?:\s+(?:boleh|juga|sempat|pernah|lagi|sepenuhnya))*\s*$",
+                                      before_marker, re.I)
+                            if lang == "id" else
+                            re.search(r"(?:尚未|還沒(?:有)?|未|沒(?:有)?|不|不要|不得)"
+                                      r"(?:\s|完全|全部|先|再)*$", before_marker)
+                        )
+                        if negated_completion:
+                            continue
                     between = prefix[match.end():]
                     if lang == "id":
                         local = re.fullmatch(r"(?:\s+(?:selesai|juga|sempat|pernah|lagi|sepenuhnya))*\s*", between, re.I)
@@ -435,7 +450,7 @@ def operational_states(text, lang):
             suffix = clause[end:end + (40 if lang == "id" else 18)]
             suffix = re.sub(r"^\s*(?:mesin\s+)?[A-Za-z]{1,4}\d{1,4}\s*", " ", suffix, flags=re.I)
             if lang == "zh":
-                if spelling == "待修" or re.match(r"(?:尚未|還沒|未)(?:完成|修好)", suffix):
+                if spelling == "待修" or re.match(r"(?:尚未|還沒(?:有)?|沒有|未)(?:完成|修好)", suffix):
                     mode = "pending"
                 elif mode == "plain" and re.match(r"(?:完成|完畢|好了|完了|已完成)", suffix):
                     mode = "completed"
