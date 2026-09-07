@@ -147,6 +147,7 @@ import functools
 import line_translation_delivery as line_delivery_module
 import line_factory_features
 import line_quick_reply
+import line_api_transport
 quick_reply_menu_settings = None
 factory_line_settings = {"groups": {}, "stations": []}
 factory_hub = None
@@ -4077,7 +4078,6 @@ def _retrieve_verified_translation_cases(text, src, tgt, max_cases=3, group_id=N
         # The same message is validated at several stages. Reuse only its
         # identical reference search, never the validation decision. Snapshot
         # actual scoped assets so live corrections/glossary edits invalidate it.
-        examples, corrections, glossary = copy.deepcopy((examples, corrections, glossary))
         try:
             snapshot = json.dumps([text, src, tgt, max_cases, examples, corrections, glossary],
                                   ensure_ascii=False, separators=(",", ":"))
@@ -13478,7 +13478,7 @@ def _prepare_translation_delivery(job_key, payload, text, delivered_targets=None
 
 def _push_translation_batch(target_id, messages, stable_key, *, notification_disabled=False, mentions=None):
     """Retry only expired quote metadata; an acknowledged duplicate is success."""
-    with ApiClient(configuration) as api_client:
+    with line_api_transport.client(ApiClient, configuration) as api_client:
         api = MessagingApi(api_client)
         req = PushMessageRequest(to=target_id, messages=messages)
         if notification_disabled:
@@ -13553,7 +13553,7 @@ def _send_reply_with_push_fallback(
             _delivery_owner(job_key)
             if factory_hub:
                 factory_hub.assert_current(payload)
-            with ApiClient(configuration) as api_client:
+            with line_api_transport.client(ApiClient, configuration) as api_client:
                 req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
                 if notification_disabled:
                     req.notification_disabled = True
@@ -18613,7 +18613,7 @@ def _get_line_member_profile(chat_id, user_id):
         _line_profile_cache[key] = (now + 10, None)
     profile = None
     try:
-        with ApiClient(configuration) as api_client:
+        with line_api_transport.client(ApiClient, configuration) as api_client:
             api = MessagingApi(api_client)
             if chat_id and not str(chat_id).startswith("U"):
                 lookup = api.get_room_member_profile if str(chat_id).startswith("R") else api.get_group_member_profile

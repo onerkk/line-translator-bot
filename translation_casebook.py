@@ -469,6 +469,43 @@ def retrieve(
     direction_cases = [case for case in cases if str(case.get("direction")) == direction]
     if not direction_cases:
         return []
+    # Cache only deterministic reference ranking, never a translation or a
+    # validation decision. The complete input snapshot changes on any in-place
+    # glossary, source guard, example or approved-correction edit. Selection
+    # limits can share one ranking (the pipeline asks for 3, 4 and 8 cases).
+    try:
+        snapshot = json.dumps([query, src, tgt, direction_cases, glossary, min_score],
+                              ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                              allow_nan=False)
+    except (TypeError, ValueError):
+        snapshot = None
+    if snapshot is not None and len(snapshot.encode("utf-8")) <= 262144:
+        version = (TRANSLATION_CASEBOOK_BUILD_ID, source_understanding.SOURCE_UNDERSTANDING_VERSION)
+        ranked, spelling_hints, normalized_query = _rank_snapshot(snapshot, version)
+    else:
+        ranked, spelling_hints, normalized_query = _rank_references(
+            query, src, tgt, direction_cases, glossary, min_score)
+    query_original, query = query, normalized_query
+    selected = _select_distinct_references(ranked, max(1, int(max_cases or 1)))
+    results = []
+    for item in selected:
+        row = item.as_dict()
+        exact = canonical_source_key(query) == canonical_source_key(source_understanding.normalized_view(item.source, src))
+        row["source_edits"] = source_understanding.source_differences(query_original, item.source)
+        row["fact_changes"] = source_understanding.reference_fact_changes(query_original, item.source, src)
+        row["reference_only"] = bool(not exact and (not item.guarded or row["fact_changes"]))
+        row["spelling_hints"] = [{"source": word, "possible": possible} for word, possible in spelling_hints]
+        results.append(row)
+    return results
+
+
+@lru_cache(maxsize=16)
+def _rank_snapshot(snapshot, version):
+    return _rank_references(*json.loads(snapshot))
+
+
+def _rank_references(query, src, tgt, direction_cases, glossary, min_score):
+    direction = direction_key(src, tgt)
     query_original = query
     query = source_understanding.normalized_view(str(query), src)
     query_norm = _normalize(query)
@@ -588,17 +625,9 @@ def retrieve(
             revision=int(case.get("revision") or 0),
         ))
     ranked.sort(key=lambda item: (item.score, bool(item.bad_target), len(item.source)), reverse=True)
-    selected = _select_distinct_references(ranked, max(1, int(max_cases or 1)))
-    results = []
-    for item in selected:
-        row = item.as_dict()
-        exact = canonical_source_key(query) == canonical_source_key(source_understanding.normalized_view(item.source, src))
-        row["source_edits"] = source_understanding.source_differences(query_original, item.source)
-        row["fact_changes"] = source_understanding.reference_fact_changes(query_original, item.source, src)
-        row["reference_only"] = bool(not exact and (not item.guarded or row["fact_changes"]))
-        row["spelling_hints"] = [{"source": word, "possible": possible} for word, possible in spelling_hints]
-        results.append(row)
-    return results
+    # RetrievedCase is frozen and contains only scalar/tuple fields. Callers
+    # construct fresh result dictionaries, so edits cannot poison this cache.
+    return tuple(ranked), tuple(spelling_hints), query
 
 
 def _select_distinct_references(ranked, limit):

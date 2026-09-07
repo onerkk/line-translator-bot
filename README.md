@@ -365,3 +365,25 @@ python validate_factory_translation_assets.py --json
 ```
 
 完整變更與驗證方式請參閱 `ROOT_FIX_2026-07-25_UNIFIED_FACTORY_TRANSLATION.md`。
+
+## 翻譯等待時間優化（2026-09-07）
+
+此次更新基於 `b38af1abdb2048045e91085a5e926fb06cfbf29b`，只調整本地案例檢索與 LINE 連線生命週期。
+
+- `translation_casebook.py` 重用相同來源與相同資料版本的案例排名，不同取用筆數可共用一次排名。詞庫、案例、來源規則、群組提供的核准更正或方向改變時，完整輸入快照會改變，重新計算排名。保留最多 16 筆排名，超過 256 KiB 的單筆輸入不進入此快取。
+- `app.py` 移除案例快照前的重複深層複製；JSON 快照與回傳資料的隔離仍保留。
+- `line_api_transport.py` 讓同一工作執行緒的 LINE 回覆、推送重試、名稱與頭像查詢沿用可用 HTTP 連線。更換金鑰、端點、設定物件或程序時重建連線池，各執行緒分開使用。
+- 模型、提示內容、品質檢查、重試期限及訊息內容維持原設定。這個排名快取不直接提供譯文，也不略過每次交付前的驗證。
+
+驗證結果：1,308 個 Python 測試及 438 個子測試通過；工廠資產、後台、作業確認及統一選單測試通過。本機 HTTP 測試確認相同的 3 次請求由建立 3 條連線改為重用 1 條連線，金鑰更新後重新建立連線並使用新認證。
+
+以 `tests/data/cp_holdout_20260907.json` 的 15 組案例、每組 9 次本機查詢比較，案例檢索中位時間由 **5.423 ms 降至 1.966 ms**。15 組模型選擇、完整提示內容指紋、案例選擇及檢查結果一致，15 組正確測試譯文通過、6 組錯誤測試譯文被攔下。這是暖機後的本地案例檢索量測，排除 AI、Render 喚醒和外網 LINE 延遲，不能當成整段翻譯時間；未呼叫付費 AI 或傳送真實 LINE 訊息。
+
+可用同一份工具比較兩個程式版本：
+
+```bash
+python benchmark_translation_cp.py --repo /path/to/previous-version --runs 9 --output before.json
+python benchmark_translation_cp.py --runs 9 --output after.json
+```
+
+將 ZIP 內的 6 個檔案依原路徑覆蓋到專案根目錄；務必同時上傳新增的 `line_api_transport.py`。不需要更換金鑰、調整環境變數或重設群組選單。
