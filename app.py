@@ -146,6 +146,8 @@ import contextlib
 import functools
 import line_translation_delivery as line_delivery_module
 import line_factory_features
+import line_quick_reply
+quick_reply_menu_settings = None
 factory_line_settings = {"groups": {}, "stations": []}
 factory_hub = None
 import reminders_web
@@ -3580,6 +3582,8 @@ for _qr_item in quick_reply_items_settings:
     if _qr_item.get("id") in _CORE_BILINGUAL_QR_LABELS:
         _qr_item["label"] = _CORE_BILINGUAL_QR_LABELS[_qr_item["id"]][:20]
 
+quick_reply_menu = line_quick_reply.Menu(globals())
+
 _QR_VALID_TYPES = {"message", "camera", "camera_roll", "location", "clipboard"}
 
 def _qr_sanitize_item(raw, fallback=None):
@@ -3597,8 +3601,6 @@ def _qr_sanitize_item(raw, fallback=None):
     if item_type not in _QR_VALID_TYPES:
         item_type = "message"
     label = str(raw.get("label", fb.get("label", ""))).strip()[:20]  # LINE 20 字硬上限
-    if item_id in _CORE_BILINGUAL_QR_LABELS:
-        label = _CORE_BILINGUAL_QR_LABELS[item_id][:20]
     text = str(raw.get("text", fb.get("text", "")))[:300]
     clipboard_text = str(raw.get("clipboard_text", fb.get("clipboard_text", "")))[:1000]
     enabled = bool(raw.get("enabled", fb.get("enabled", True)))
@@ -3641,8 +3643,6 @@ def _qr_merge_loaded(loaded_list):
         fb = defaults_by_id.get(rid)
         item = _qr_sanitize_item(raw, fallback=fb)
         if item:
-            if rid in _CORE_BILINGUAL_QR_LABELS:
-                item["label"] = _CORE_BILINGUAL_QR_LABELS[rid][:20]
             result.append(item)
             seen_ids.add(rid)
     # 補上磁碟沒有的預設按鈕(版本升級時新增的)
@@ -4166,6 +4166,12 @@ USD_TO_TWD = 32.0
 
 def get_group_feature(group_id, feature):
     """Get per-group feature setting with global fallback."""
+    if quick_reply_menu_settings and feature in {'quick_reply', 'camera_qr', 'clipboard_qr', 'camera_roll_qr', 'location_qr'}:
+        profile = quick_reply_menu.profile(group_id or "")
+        if feature == 'quick_reply':
+            return profile['enabled']
+        kind = feature[:-3]
+        return profile['enabled'] and any(row['enabled'] and row['type'] == kind for row in profile['items'])
     _map = {
         'flex': (group_flex_settings, 'flex_enabled'),
         'quick_reply': (group_qr_settings, 'quick_reply_enabled'),
@@ -4288,6 +4294,9 @@ def get_expressive_runtime_settings(group_id, *, include_images=True):
 
 
 def get_image_translation_actions_enabled(group_id):
+    if quick_reply_menu_settings:
+        profile = quick_reply_menu.profile(group_id or "")
+        return profile['enabled'] and any(row['enabled'] and 'image' in row['contexts'] for row in profile['items'])
     """Return whether photo/OCR result action buttons are enabled."""
     if group_id and group_id in group_image_translation_actions_settings:
         return bool(group_image_translation_actions_settings[group_id])
@@ -4305,6 +4314,9 @@ def _normalise_image_translation_action_modes(value, base=None):
 
 
 def get_image_translation_action_modes(group_id):
+    if quick_reply_menu_settings:
+        return {mode: quick_reply_menu.enabled_action(group_id or "", mode, "image")
+                for mode in IMAGE_TRANSLATION_ACTION_MODE_DEFAULTS}
     """Return merged global/per-group photo translation action modes."""
     modes = _normalise_image_translation_action_modes(image_translation_action_modes)
     if group_id and group_id in group_image_translation_action_modes:
@@ -20559,14 +20571,12 @@ def handle_message(event):
         try:
             _msg_id = getattr(event.message, 'id', None)
             _action_tgt = (tgt if lang == "zh" else "zh")
-            _flex_has_actions = bool(flex_msg and get_flex_v2(group_id, "buttons"))
-            if not _flex_has_actions:
-                _action_qr = _build_translation_action_quick_reply(
-                    group_id, text, translated_text, lang, _action_tgt, _msg_id
-                )
+            _action_qr = _build_translation_action_quick_reply(
+                group_id, text, translated_text, lang, _action_tgt, _msg_id
+            )
         except Exception as _aqe:
             logger.warning("translation action Quick Reply build failed: %s", _aqe)
-    qr = _action_qr or (build_quick_reply(group_id) if get_group_feature(group_id, 'quick_reply') else None)
+    qr = _action_qr or build_quick_reply(group_id)
 
     # Plan the optional visual before assigning a custom sender.  When a visual
     # accompanies a translation, both messages must visibly come from the bot;
@@ -21992,7 +22002,7 @@ def _verify_bilingual_action_labels():
 
 
 _verify_bilingual_action_labels()
-logger.info("[ActionUI] bilingual labels hard-locked build=%s", VERSION)
+logger.info("[ActionUI] bilingual defaults ready; labels controlled by Quick Reply build=%s", VERSION)
 
 
 def _personal_language_menu_text(locale="id", current=None):
@@ -22101,6 +22111,26 @@ if PostbackEvent:
             params = {}
 
         action = params.get("action", "")
+        if action == "quick_reply_page":
+            group = (getattr(event.source, "group_id", None) or getattr(event.source, "room_id", None)
+                     or getattr(event.source, "user_id", None) or "")
+            token = params.get("token")
+            context = _get_translation_action_context(token, group) if token else None
+            try:
+                page = min(100, max(0, int(params.get("page", 0))))
+            except (TypeError, ValueError):
+                page = 0
+            kind = (context or {}).get("menu_kind", params.get("kind", "text"))
+            if kind not in {"text", "image"}:
+                kind = "text"
+            if token and not context:
+                message = TextMessage(text="此翻譯選單已到期或不屬於此群組，請使用最新翻譯。\nMenu kedaluwarsa; gunakan terjemahan terbaru.")
+            else:
+                menu = quick_reply_menu.build(group, context, token, kind, page)
+                message = TextMessage(text="快捷選單 / Menu cepat" if menu else "此群組的快捷選單已關閉。 / Menu dinonaktifkan.", quick_reply=menu)
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[message]))
+            return
         if factory_hub and factory_hub.postback(event, params):
             return
 
@@ -23788,84 +23818,8 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
 
 
 def build_quick_reply(group_id=None):
-    """Build Quick Reply buttons from quick_reply_items_settings (v3.11 完全後台化).
-    
-    - 順序 / 顯示 / label / text 全部從後台設定。
-    - cmd_check 欄位仍會檢查 is_cmd_enabled(),指令本身被關掉時按鈕也跳過。
-    - external_links_settings 仍動態追加在最後(這個是另一個獨立管理層)。
-    - LINE Quick Reply 硬上限 13 顆。
-    """
-    LINE_QR_HARD_LIMIT = 13
-    items = []
-    try:
-        for cfg in quick_reply_items_settings:
-            if len(items) >= LINE_QR_HARD_LIMIT:
-                logger.warning("[QuickReply] hit %d-item LINE limit at custom-items stage", LINE_QR_HARD_LIMIT)
-                break
-            if not cfg.get("enabled", True):
-                continue
-            cmd_check = cfg.get("cmd_check")
-            if cmd_check and not is_cmd_enabled(group_id, cmd_check):
-                continue
-            label = (cfg.get("label", "") or "").strip()[:20]
-            if not label:
-                continue
-            t = cfg.get("type", "message")
-            try:
-                if t == "message":
-                    text = (cfg.get("text", "") or "").strip()
-                    if not text:
-                        continue
-                    items.append(QuickReplyItem(action=MessageAction(label=label, text=text)))
-                elif t == "camera":
-                    if not MsgCameraAction:
-                        continue
-                    items.append(QuickReplyItem(action=MsgCameraAction(label=label)))
-                elif t == "camera_roll":
-                    if not MsgCameraRollAction:
-                        continue
-                    items.append(QuickReplyItem(action=MsgCameraRollAction(label=label)))
-                elif t == "location":
-                    if not MsgLocationAction:
-                        continue
-                    items.append(QuickReplyItem(action=MsgLocationAction(label=label)))
-                elif t == "clipboard":
-                    if not MsgClipboardAction:
-                        continue
-                    clip = cfg.get("clipboard_text", "") or ""
-                    items.append(QuickReplyItem(action=MsgClipboardAction(label=label, clipboard_text=clip)))
-            except Exception as _bie:
-                logger.warning("[QuickReply] build item failed id=%s: %s", cfg.get("id"), _bie)
-        # external_links_settings → 動態追加(保留 v3.9.39+ 行為)
-        try:
-            for _link_key, _link_cfg in external_links_settings.items():
-                if len(items) >= LINE_QR_HARD_LIMIT:
-                    logger.warning("[QuickReply] hit %d-item LINE limit, skipping remaining external links",
-                                   LINE_QR_HARD_LIMIT)
-                    break
-                if not _link_cfg.get("enabled", True):
-                    continue
-                if not _link_cfg.get("url", "").strip():
-                    continue
-                _btn_label_zh = _link_cfg.get("label_zh", "").strip()
-                _btn_label_id = _link_cfg.get("label_id", "").strip()
-                if _btn_label_zh and _btn_label_id:
-                    _full_label = f"{_btn_label_zh}/{_btn_label_id}"
-                else:
-                    _full_label = _btn_label_zh or _btn_label_id or _link_key
-                _full_label = _full_label[:20]
-                items.append(QuickReplyItem(action=MessageAction(
-                    label=_full_label,
-                    text=f"/{_link_key}"
-                )))
-        except Exception:
-            pass
-        if not items:
-            return None
-        return QuickReply(items=items)
-    except Exception as e:
-        logger.warning("build_quick_reply failed: %s", e)
-        return None
+    """All generic buttons use the same group menu as translation replies."""
+    return quick_reply_menu.build(group_id or "")
 
 
 # ─── Admin Panel ────────────────────────────────────────
@@ -23989,7 +23943,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=1">
-<script src="/static/admin_factory.js?v=20260907-receipts4" defer></script>
+<script src="/static/admin_factory.js?v=20260907-menu1" defer></script>
+<link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
+<script src="/static/admin_quick_reply.js?v=20260907-menu1" defer></script>
 </head>
 <body>
 <div id="app">
@@ -24392,25 +24348,8 @@ label 是按鈕顯示文字、name 是回覆訊息抬頭、url 是要帶使用�
 </div>
 </div>
 
-<!-- Quick Reply Panel (v3.11 完全後台化) -->
-<div class="panel" id="panel-quickreply">
-<div class="card">
-<div style="font-weight:700;font-size:15px;margin-bottom:8px">⚡ Quick Reply 按鈕設定</div>
-<div class="card-sub" style="margin-bottom:14px">
-LINE 每則翻譯訊息底下的快捷按鈕。順序、開關、文字、觸發指令都可調。<br>
-LINE 硬上限 13 顆;超過會自動截斷尾端,外連按鈕(/saran、/absen 等)會在這之後追加。<br>
-類型:訊息=送固定文字、相機=直接開相機、相簿=開相簿、位置=分享位置、剪貼簿=複製文字。<br>
-若按鈕綁定的指令本身被群組關閉(cmd_check 欄位),該群組就不顯示這顆。
-</div>
-<div id="quickreplyList" style="display:flex;flex-direction:column;gap:8px"></div>
-<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-<button class="btn btn-primary btn-sm" onclick="qrAdd()">＋ 新增按鈕</button>
-<button class="btn btn-primary btn-sm" onclick="qrSaveAll()">💾 儲存全部變更</button>
-<button class="btn btn-sm" onclick="qrReset()" style="background:#3a2a3a;color:#e0a0a0">↺ 重設預設</button>
-</div>
-<div id="quickreplyMsg" style="margin-top:10px;font-size:13px"></div>
-</div>
-</div>
+<!-- Unified per-group Quick Reply editor -->
+<div class="panel" id="panel-quickreply"><div id="quickreply-admin-root"></div></div>
 
 <!-- Insight Panel -->
 <div class="panel" id="panel-insight">
@@ -25166,10 +25105,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <label class="toggle"><input type="checkbox" id="flexToggle" onchange="toggleFeatureSetting('flex_enabled',this.checked)"><span class="slider"></span></label>
 </div>
 
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">⚡ Quick Reply 按鈕</span><br><span style="font-size:12px;color:#8a8a9a">翻譯後顯示快捷操作</span></div>
-<label class="toggle"><input type="checkbox" id="qrToggle" onchange="toggleFeatureSetting('quick_reply_enabled',this.checked)"><span class="slider"></span></label>
-</div>
+
 
 <div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">🔇 靜音模式</span><br><span style="font-size:12px;color:#8a8a9a">翻譯訊息不震動手機</span></div>
@@ -25196,25 +25132,13 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <label class="toggle"><input type="checkbox" id="retryKeyToggle" onchange="toggleFeatureSetting('retry_key_enabled',this.checked)"><span class="slider"></span></label>
 </div>
 
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">📷 拍照快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入拍照按鈕</span></div>
-<label class="toggle"><input type="checkbox" id="cameraQrToggle" onchange="toggleFeatureSetting('camera_qr_enabled',this.checked)"><span class="slider"></span></label>
-</div>
 
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">📋 複製快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入複製指令按鈕</span></div>
-<label class="toggle"><input type="checkbox" id="clipboardQrToggle" onchange="toggleFeatureSetting('clipboard_qr_enabled',this.checked)"><span class="slider"></span></label>
-</div>
 
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">🖼️ 相簿快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入開啟相簿按鈕</span></div>
-<label class="toggle"><input type="checkbox" id="cameraRollQrToggle" onchange="toggleFeatureSetting('camera_roll_qr_enabled',this.checked)"><span class="slider"></span></label>
-</div>
 
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">📍 位置快捷鈕</span><br><span style="font-size:12px;color:#8a8a9a">Quick Reply 加入分享位置按鈕</span></div>
-<label class="toggle"><input type="checkbox" id="locationQrToggle" onchange="toggleFeatureSetting('location_qr_enabled',this.checked)"><span class="slider"></span></label>
-</div>
+
+
+
+
 
 <div class="wl-item" style="border-color:#2a2a3e">
 <div><span style="font-weight:600">✨ 智慧生動翻譯</span><br><span style="font-size:12px;color:#8a8a9a">逐句判斷語氣與情境，智慧加入表情、插畫或正式圖卡；不增加 AI API 呼叫</span></div>
@@ -25272,22 +25196,6 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <div class="wl-item" style="border-color:#24243a;padding:9px 0">
     <div><span style="font-size:13px;font-weight:600">📷 照片 OCR 翻譯也套用</span><br><span style="font-size:11px;color:#8a8a9a">獨立開關；與照片翻譯下方的快捷功能完全分開</span></div>
     <label class="toggle"><input type="checkbox" id="imageOcrExpressiveToggle" onchange="saveExpressiveSetting('image_ocr_expressive_enabled',this.checked)"><span class="slider"></span></label>
-  </div>
-</div>
-
-<div class="wl-item" style="border-color:#2a2a3e">
-<div><span style="font-weight:600">📷 照片翻譯快捷模式</span><br><span style="font-size:12px;color:#8a8a9a">控制照片 OCR 翻譯下方的「更自然／直譯／正式／回譯」等按鈕</span></div>
-<label class="toggle"><input type="checkbox" id="imageActionsToggle" onchange="toggleImageTranslationActions(this.checked)"><span class="slider"></span></label>
-</div>
-<div id="imageActionModesWrap" style="padding:8px 0 14px 12px;border-bottom:1px solid #2a2a3e">
-  <div style="font-size:12px;color:#8a8a9a;margin-bottom:8px">選擇照片翻譯要顯示的模式（可複選）</div>
-  <div style="display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;color:#d0d0d8">
-    <label><input type="checkbox" id="imgModeNatural" onchange="saveImageTranslationActionModes()"> ✨ 更自然</label>
-    <label><input type="checkbox" id="imgModeLiteral" onchange="saveImageTranslationActionModes()"> 🔎 直譯</label>
-    <label><input type="checkbox" id="imgModeFormal" onchange="saveImageTranslationActionModes()"> 📢 正式</label>
-    <label><input type="checkbox" id="imgModeBackcheck" onchange="saveImageTranslationActionModes()"> ↩ 回譯</label>
-    <label><input type="checkbox" id="imgModePersonal" onchange="saveImageTranslationActionModes()"> 👤 我的語言</label>
-    <label><input type="checkbox" id="imgModeOverlay" onchange="saveImageTranslationActionModes()"> 🖼 原圖＋譯文圖</label>
   </div>
 </div>
 
@@ -27130,7 +27038,6 @@ var FLEX_V2_DEFS=[
   {k:'quote',     n:'Quote 引用視覺化',         desc:'回覆訊息用左邊框',                    d:true},
   {k:'multilang', n:'多語廣播獨立 box',         desc:'多語翻譯各放各 box,不擠在一起',      d:true},
   {k:'carousel',  n:'Carousel (3+ 語滑動)',     desc:'多語時改成左右滑卡,每張一語言',      d:false},
-  {k:'buttons',   n:'互動按鈕 (查儲區/標錯/重唸)',desc:'卡片下方加可點按鈕',                  d:true},
   {k:'hero',      n:'Hero Image (圖片翻譯)',    desc:'拍工單時附原圖縮圖',                  d:false},
   {k:'span',      n:'Span 高亮 (數字/時間)',    desc:'譯文內數字/時間用色塊強調',          d:false},
   {k:'dynsize',   n:'動態 size',                desc:'長短訊息自動用不同尺寸',              d:true}
@@ -27140,7 +27047,7 @@ function buildFlexV2Picker(g, idx){
   if(!g._flexV2Open) return '';
   var v2=g.flex_v2||{};
   var h='<div style="margin:6px 0 10px;padding:12px;background:rgba(251,191,36,.06);border-radius:8px;border:1px solid rgba(251,191,36,.25)">';
-  h+='<div style="font-size:12px;color:#fbbf24;margin-bottom:8px;font-weight:600">🎨 視覺升級開關 (9 項,可個別開關)</div>';
+  h+='<div style="font-size:12px;color:#fbbf24;margin-bottom:8px;font-weight:600">🎨 視覺升級開關 (8 項,可個別開關)</div>';
   for(var k=0;k<FLEX_V2_DEFS.length;k++){
     var def=FLEX_V2_DEFS[k];
     // 後端沒回該 key (undefined) 時用 client side default,確保 UI 跟後端 _V2_DEFAULTS 一致
@@ -27771,166 +27678,6 @@ async function extlinksReset(){
 // ─── Quick Reply Tab (v3.11) ───
 // 用最樸實的純 vanilla JS:全 var + function,字串用 + 拼接,
 // 不用 template literal、不用箭頭函式,避開上次截圖那種 SyntaxError。
-var _qrCache=[]; // 當前畫面狀態,點上下/刪除直接改這個 array,按儲存才送到 server
-
-function qrEscape(s){
-  if(s==null)return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-async function qrLoad(){
-  var d=await api('/quick-reply/list');
-  if(!d||!d.items){
-    document.getElementById('quickreplyList').innerHTML='<div style="color:#a04444">載入失敗</div>';
-    return;
-  }
-  _qrCache=d.items.slice(); // shallow copy,避免直接改 server 回來的 reference
-  qrRender();
-}
-
-function qrRender(){
-  var box=document.getElementById('quickreplyList');
-  if(!_qrCache.length){
-    box.innerHTML='<div style="color:#8a8a9a">沒有按鈕。點下方「新增按鈕」加一條,或「重設預設」還原。</div>';
-    return;
-  }
-  var html='';
-  for(var i=0;i<_qrCache.length;i++){
-    var it=_qrCache[i];
-    var idStr=qrEscape(it.id);
-    var labelStr=qrEscape(it.label);
-    var textStr=qrEscape(it.text||'');
-    var clipStr=qrEscape(it.clipboard_text||'');
-    var cmdStr=qrEscape(it.cmd_check||'');
-    var typeStr=qrEscape(it.type||'message');
-    var enabled=it.enabled?'checked':'';
-    var bgColor=it.enabled?'#1a2a1a':'#2a1a1a';
-    var borderColor=it.enabled?'#3a5a3a':'#5a3a3a';
-    // 順序按鈕
-    var upDisabled=(i===0)?'disabled':'';
-    var downDisabled=(i===_qrCache.length-1)?'disabled':'';
-    html+='<div style="background:'+bgColor+';border:1px solid '+borderColor+';border-radius:8px;padding:10px">';
-    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-    html+='<div style="font-size:11px;color:#8a8a9a;width:24px">#'+(i+1)+'</div>';
-    html+='<button class="btn btn-sm" '+upDisabled+' onclick="qrMove('+i+',-1)" style="padding:2px 8px;font-size:14px">▲</button>';
-    html+='<button class="btn btn-sm" '+downDisabled+' onclick="qrMove('+i+',1)" style="padding:2px 8px;font-size:14px">▼</button>';
-    html+='<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#ccc">';
-    html+='<input type="checkbox" data-i="'+i+'" data-f="enabled" '+enabled+' onchange="qrFieldChange(this)"> 啟用';
-    html+='</label>';
-    html+='<div style="font-size:11px;color:#666;margin-left:auto">id: '+idStr+'</div>';
-    html+='<button class="btn btn-sm" onclick="qrDel('+i+')" style="padding:2px 8px;background:#3a2a2a;color:#e08080">刪除</button>';
-    html+='</div>';
-    // 第二排:類型 + label
-    html+='<div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;margin-bottom:6px">';
-    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">類型</div>';
-    html+='<select data-i="'+i+'" data-f="type" onchange="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px">';
-    var TYPES=[['message','訊息'],['camera','相機'],['camera_roll','相簿'],['location','位置'],['clipboard','剪貼簿']];
-    for(var j=0;j<TYPES.length;j++){
-      var sel=(TYPES[j][0]===typeStr)?'selected':'';
-      html+='<option value="'+TYPES[j][0]+'" '+sel+'>'+TYPES[j][1]+'</option>';
-    }
-    html+='</select></div>';
-    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">按鈕文字(最長 20 字)</div>';
-    html+='<input type="text" data-i="'+i+'" data-f="label" value="'+labelStr+'" maxlength="20" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
-    html+='</div>';
-    // 第三排:type 相關欄位
-    if(typeStr==='message'){
-      html+='<div style="margin-bottom:6px"><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">送出文字(例 /qry )</div>';
-      html+='<input type="text" data-i="'+i+'" data-f="text" value="'+textStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
-    }else if(typeStr==='clipboard'){
-      html+='<div style="margin-bottom:6px"><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">複製到剪貼簿的文字</div>';
-      html+='<input type="text" data-i="'+i+'" data-f="clipboard_text" value="'+clipStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
-    }
-    // cmd_check 選填
-    html+='<div><div style="font-size:11px;color:#8a8a9a;margin-bottom:2px">綁定指令開關 cmd_check(選填,例 qry / pw1 / pkg / scrap;指令本身被關時這顆按鈕也跳過)</div>';
-    html+='<input type="text" data-i="'+i+'" data-f="cmd_check" value="'+cmdStr+'" onchange="qrFieldChange(this)" oninput="qrFieldChange(this)" placeholder="留空 = 不檢查" style="width:100%;padding:4px;background:#0e0e1a;color:#fff;border:1px solid #2a2a3e;border-radius:4px;font-size:12px;box-sizing:border-box"></div>';
-    html+='</div>';
-  }
-  box.innerHTML=html;
-  // 上限提示
-  var msg=document.getElementById('quickreplyMsg');
-  if(msg){
-    var enabledCount=0;
-    for(var k=0;k<_qrCache.length;k++){if(_qrCache[k].enabled)enabledCount++;}
-    var color=(enabledCount>13)?'#e0a040':'#8a8a9a';
-    msg.innerHTML='<span style="color:'+color+'">目前啟用 '+enabledCount+' 顆 / LINE 上限 13 顆(超過會被截斷,外連按鈕還會追加在後面)</span>';
-  }
-}
-
-function qrFieldChange(el){
-  var i=parseInt(el.getAttribute('data-i'),10);
-  var f=el.getAttribute('data-f');
-  if(isNaN(i)||!_qrCache[i])return;
-  var v;
-  if(el.type==='checkbox'){v=el.checked;}
-  else{v=el.value;}
-  _qrCache[i][f]=v;
-  // type 改變要重畫(才能切顯 text vs clipboard_text 欄)
-  // enabled 改變要重畫(才能更新上限提示)
-  if(f==='type'||f==='enabled'){
-    qrRender();
-  }
-}
-
-function qrMove(i,delta){
-  var j=i+delta;
-  if(j<0||j>=_qrCache.length)return;
-  var tmp=_qrCache[i];
-  _qrCache[i]=_qrCache[j];
-  _qrCache[j]=tmp;
-  qrRender();
-}
-
-function qrDel(i){
-  if(!_qrCache[i])return;
-  if(!confirm('刪除「'+(_qrCache[i].label||_qrCache[i].id)+'」?(按儲存後才生效)'))return;
-  _qrCache.splice(i,1);
-  qrRender();
-}
-
-function qrAdd(){
-  var newId=prompt('輸入新按鈕的唯一 id(英數字,例 myaction):','');
-  if(!newId)return;
-  newId=newId.trim();
-  if(!/^[a-zA-Z0-9_]+$/.test(newId)){alert('id 只能用英數底線');return;}
-  for(var i=0;i<_qrCache.length;i++){
-    if(_qrCache[i].id===newId){alert('id 已存在');return;}
-  }
-  _qrCache.push({
-    id:newId,type:'message',label:'新按鈕',text:'/'+newId,
-    clipboard_text:'',enabled:true,cmd_check:null,editable:true
-  });
-  qrRender();
-}
-
-async function qrSaveAll(){
-  if(!_qrCache||!_qrCache.length){alert('沒有資料');return;}
-  // 簡單前端驗證:label 不能空、message 類 text 不能空
-  for(var i=0;i<_qrCache.length;i++){
-    var it=_qrCache[i];
-    if(!it.label||!String(it.label).trim()){alert('第 '+(i+1)+' 條 label 不能空');return;}
-    if(it.type==='message'&&(!it.text||!String(it.text).trim())){
-      alert('第 '+(i+1)+' 條(訊息類型)送出文字不能空');return;
-    }
-  }
-  var d=await api('/quick-reply/save','POST',{items:_qrCache});
-  if(d&&d.ok){
-    toast('已儲存 '+d.count+' 條');
-    qrLoad(); // reload 拿回 server 端 sanitize 後的版本
-  }else{
-    toast('儲存失敗'+(d&&d.error?': '+d.error:''));
-  }
-}
-
-async function qrReset(){
-  if(!confirm('重設為內建預設?所有自訂改動會消失。'))return;
-  var d=await api('/quick-reply/reset','POST',{});
-  if(d&&d.ok){
-    toast('已重設');
-    qrLoad();
-  }
-}
-
 // ─── Insight Tab ───
 async function loadInsightTab(){
   // Load trend
@@ -28772,16 +28519,11 @@ async function _loadFeatures(gid){
   document.getElementById('welcomeZh').value=d.welcome_text_zh||'';
   document.getElementById('welcomeId').value=d.welcome_text_id||'';
   document.getElementById('flexToggle').checked=d.flex_enabled;
-  document.getElementById('qrToggle').checked=d.quick_reply_enabled;
   document.getElementById('silentToggle').checked=d.silent_mode;
   document.getElementById('videoToggle').checked=d.video_ocr_enabled!==false;
   document.getElementById('locationToggle').checked=d.location_translate_enabled!==false;
   document.getElementById('markReadToggle').checked=d.mark_read_enabled!==false;
   document.getElementById('retryKeyToggle').checked=d.retry_key_enabled!==false;
-  document.getElementById('cameraQrToggle').checked=d.camera_qr_enabled||false;
-  document.getElementById('clipboardQrToggle').checked=d.clipboard_qr_enabled||false;
-  document.getElementById('cameraRollQrToggle').checked=d.camera_roll_qr_enabled||false;
-  document.getElementById('locationQrToggle').checked=d.location_qr_enabled||false;
   document.getElementById('autoToneEmojiToggle').checked=d.auto_tone_emoji_enabled!==false;
   document.getElementById('expressiveModeSelect').value=d.expressive_translation_mode||'smart';
   document.getElementById('expressiveIntensitySelect').value=(d.expressive_translation_intensity==='balanced'?'natural':(d.expressive_translation_intensity||'natural'));
@@ -28793,15 +28535,6 @@ async function _loadFeatures(gid){
   document.getElementById('expressiveFormalSafetyToggle').checked=d.expressive_formal_safety_enabled!==false;
   document.getElementById('imageOcrExpressiveToggle').checked=d.image_ocr_expressive_enabled!==false;
   updateExpressiveSettingsUI();
-  document.getElementById('imageActionsToggle').checked=d.image_translation_actions_enabled!==false;
-  var iam=d.image_translation_action_modes||{};
-  document.getElementById('imgModeNatural').checked=iam.natural!==false;
-  document.getElementById('imgModeLiteral').checked=iam.literal!==false;
-  document.getElementById('imgModeFormal').checked=iam.formal!==false;
-  document.getElementById('imgModeBackcheck').checked=iam.backcheck!==false;
-  document.getElementById('imgModePersonal').checked=iam.personal!==false;
-  document.getElementById('imgModeOverlay').checked=iam.overlay!==false;
-  updateImageTranslationActionModesUI();
   document.getElementById('toneSelect').value=d.translation_tone||'casual';
   document.getElementById('toneCustom').value=d.translation_tone_custom||'';
   // Model settings (global only, not per-group)
@@ -28924,31 +28657,6 @@ function toggleExpressiveMaster(enabled){
 function saveExpressiveSetting(key,val){
   if(key==='expressive_translation_mode'||key==='expressive_images_enabled'||key==='expressive_short_message_image_enabled')updateExpressiveSettingsUI();
   toggleFeatureSetting(key,val);
-}
-function updateImageTranslationActionModesUI(){
-  var master=document.getElementById('imageActionsToggle');
-  var wrap=document.getElementById('imageActionModesWrap');
-  if(!master||!wrap)return;
-  var enabled=!!master.checked;
-  wrap.style.opacity=enabled?'1':'0.45';
-  var inputs=wrap.querySelectorAll('input[type=checkbox]');
-  for(var i=0;i<inputs.length;i++)inputs[i].disabled=!enabled;
-}
-function toggleImageTranslationActions(enabled){
-  updateImageTranslationActionModesUI();
-  toggleFeatureSetting('image_translation_actions_enabled',!!enabled);
-}
-function saveImageTranslationActionModes(){
-  var body={image_translation_action_modes:{
-    natural:document.getElementById('imgModeNatural').checked,
-    literal:document.getElementById('imgModeLiteral').checked,
-    formal:document.getElementById('imgModeFormal').checked,
-    backcheck:document.getElementById('imgModeBackcheck').checked,
-    personal:document.getElementById('imgModePersonal').checked,
-    overlay:document.getElementById('imgModeOverlay').checked
-  }};
-  if(_settingsGid)body.group_id=_settingsGid;
-  api('/features','POST',body).then(function(d){if(d)toast(_settingsGid?'照片模式已更新':'照片模式預設已更新')});
 }
 // v3.9.7: 前端模型能力對照表(鏡像後端 MODEL_CAPABILITIES)
 function _modelFamily(name){
@@ -29988,6 +29696,7 @@ def _do_save_impl():
             data = {
             "group_settings": group_settings,
             "factory_line_settings": copy.deepcopy(factory_line_settings),
+            "quick_reply_menu_settings": copy.deepcopy(quick_reply_menu.document()),
             "group_target_lang": group_target_lang,
             "group_img_settings": group_img_settings,
             "group_img_ask_settings": group_img_ask_settings,
@@ -30185,7 +29894,7 @@ def _do_save_impl():
 def load_settings():
     """Load bot settings from GitHub on startup."""
     global dm_master_enabled, dm_whitelist, dm_known_users, dm_target_lang
-    global factory_line_settings
+    global factory_line_settings, quick_reply_menu_settings
     global group_settings, group_target_lang, group_img_settings, group_img_ask_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
@@ -30236,6 +29945,10 @@ def load_settings():
         # Keep API keys and the user's active-provider choice, but replace stale
         # model IDs and latency/quality defaults so no dashboard edits are needed.
         _migrate_all_ai_defaults = _loaded_settings_schema < _SETTINGS_SCHEMA_VERSION
+        _menu = data.get("quick_reply_menu_settings")
+        quick_reply_menu_settings = ({"schema": 1, "default": line_quick_reply.clean_profile(_menu["default"]),
+                                      "groups": {gid: line_quick_reply.clean_profile(value) for gid, value in _menu.get("groups", {}).items()}}
+                                     if isinstance(_menu, dict) and _menu.get("schema") == 1 else None)
         factory_line_settings = data.get("factory_line_settings", {"groups": {}, "stations": []})
         if not isinstance(factory_line_settings, dict):
             factory_line_settings = {"groups": {}, "stations": []}
@@ -32859,6 +32572,8 @@ def api_admin_features():
     gid = request.args.get("group_id", "") if request.method == "GET" else (request.get_json() or {}).get("group_id", "")
     if request.method == "POST":
         data = request.get_json() or {}
+        if set(data) & line_quick_reply.REMOVED_FEATURES:
+            return jsonify({"error": "底部選單請統一到「快捷鍵」依群組設定。"}), 400
         if gid:
             # Per-group settings
             _feat_map = {
@@ -34144,93 +33859,6 @@ def api_admin_external_links_reset():
 # ══════════════════════════════════════════════════════════════════════
 # Quick Reply 管理 API(v3.11 完全後台化)
 # ══════════════════════════════════════════════════════════════════════
-
-@app.route("/api/admin/quick-reply/list", methods=["GET"])
-def api_admin_quick_reply_list():
-    """列出當前所有 quick reply 按鈕(含順序)。"""
-    if not check_manager_access("settings"):
-        return jsonify({"error": "forbidden"}), 403
-    # 用 dict 包一層,前端比較好處理
-    return jsonify({
-        "items": list(quick_reply_items_settings),
-        "max": 13,
-        "types": ["message", "camera", "camera_roll", "location", "clipboard"],
-    })
-
-
-@app.route("/api/admin/quick-reply/save", methods=["POST"])
-def api_admin_quick_reply_save():
-    """整批覆寫 quick_reply_items_settings。
-    
-    Body: { "items": [ {id, type, label, text, clipboard_text, enabled, cmd_check}, ... ] }
-    順序以送進來的 list 為主。
-    """
-    global quick_reply_items_settings
-    if not check_manager_access("settings"):
-        return jsonify({"error": "forbidden"}), 403
-    data = request.get_json(silent=True) or {}
-    raw_items = data.get("items")
-    if not isinstance(raw_items, list):
-        return jsonify({"error": "items must be a list"}), 400
-    if len(raw_items) > 30:
-        # 上限保護:後台最多儲存 30 條,實際展示時還會被 LINE 13 顆限制再切
-        return jsonify({"error": "too many items (max 30)"}), 400
-    # sanitize 每一條;掉重複 id;保留順序
-    defaults_by_id = {d["id"]: d for d in QUICK_REPLY_DEFAULTS}
-    seen = set()
-    cleaned = []
-    for raw in raw_items:
-        if not isinstance(raw, dict):
-            continue
-        rid = str(raw.get("id", "")).strip()
-        if not rid or rid in seen:
-            continue
-        item = _qr_sanitize_item(raw, fallback=defaults_by_id.get(rid))
-        if item:
-            cleaned.append(item)
-            seen.add(rid)
-    if not cleaned:
-        return jsonify({"error": "no valid items"}), 400
-    quick_reply_items_settings = cleaned
-    save_settings()
-    return jsonify({"ok": True, "items": list(quick_reply_items_settings), "count": len(quick_reply_items_settings)})
-
-
-@app.route("/api/admin/quick-reply/reset", methods=["POST"])
-def api_admin_quick_reply_reset():
-    """重設為內建預設清單。"""
-    global quick_reply_items_settings
-    if not check_manager_access("settings"):
-        return jsonify({"error": "forbidden"}), 403
-    quick_reply_items_settings = _qr_copy.deepcopy(QUICK_REPLY_DEFAULTS)
-    save_settings()
-    return jsonify({"ok": True, "items": list(quick_reply_items_settings)})
-
-
-@app.route("/api/admin/quick-reply/add", methods=["POST"])
-def api_admin_quick_reply_add():
-    """新增一條 quick reply。Body: 一個 item dict(會被 sanitize)。"""
-    global quick_reply_items_settings
-    if not check_manager_access("settings"):
-        return jsonify({"error": "forbidden"}), 403
-    raw = request.get_json(silent=True) or {}
-    if not isinstance(raw, dict):
-        return jsonify({"error": "body must be a dict"}), 400
-    rid = str(raw.get("id", "")).strip()
-    if not rid:
-        return jsonify({"error": "id required"}), 400
-    if any(it["id"] == rid for it in quick_reply_items_settings):
-        return jsonify({"error": "id already exists"}), 400
-    if len(quick_reply_items_settings) >= 30:
-        return jsonify({"error": "too many items (max 30)"}), 400
-    item = _qr_sanitize_item(raw)
-    if not item:
-        return jsonify({"error": "invalid item"}), 400
-    quick_reply_items_settings.append(item)
-    save_settings()
-    return jsonify({"ok": True, "item": item, "items": list(quick_reply_items_settings)})
-
-
 
 @app.route("/api/admin/examples", methods=["GET"])
 def api_admin_examples_get():
@@ -36699,7 +36327,8 @@ _TRANSLATION_ACTION_TTL = int(os.environ.get("TRANSLATION_ACTION_TTL", "1800"))
 _TRANSLATION_ACTION_MAX = int(os.environ.get("TRANSLATION_ACTION_MAX", "500"))
 
 
-def _register_translation_action_context(group_id, original_text, translated_text, src_lang, tgt_lang, msg_id=None):
+def _register_translation_action_context(group_id, original_text, translated_text, src_lang, tgt_lang, msg_id=None,
+                                         menu_kind="text", menu_overlay_token=None):
     """Store source/translation server-side and return a short postback token.
 
     LINE postback data is limited and must not contain a full factory message.  A
@@ -36731,6 +36360,8 @@ def _register_translation_action_context(group_id, original_text, translated_tex
         "tgt": tgt_lang or "",
         "msg_id": msg_id or "",
         "expires_at": now + max(60, _TRANSLATION_ACTION_TTL),
+        "menu_kind": menu_kind,
+        "menu_overlay_token": menu_overlay_token,
     }
     if isinstance(measurement_work_order_context, bool):
         record["measurement_work_order_context"] = measurement_work_order_context
@@ -36833,179 +36464,38 @@ def _translation_variant_button(label, token, mode):
     }
 
 
+def _build_unified_translation_menu(group_id, original_text, translated_text, src_lang, tgt_lang,
+                                    msg_id=None, kind="text", overlay_token=None):
+    group_id = group_id or ""
+    if not quick_reply_menu.profile(group_id)["enabled"]:
+        return None
+    token = None
+    record = {"original": original_text or "", "translated": translated_text or "", "src": src_lang,
+              "tgt": tgt_lang, "menu_kind": kind, "menu_overlay_token": overlay_token}
+    if original_text and translated_text and src_lang and tgt_lang and quick_reply_menu.needs_context(group_id, kind):
+        token = _register_translation_action_context(group_id, original_text, translated_text,
+                    src_lang, tgt_lang, msg_id, menu_kind=kind, menu_overlay_token=overlay_token)
+        with _translation_action_lock:
+            record = dict(_translation_action_cache.get(token) or {})
+    return quick_reply_menu.build(group_id, record, token, kind)
+
+
 def _build_translation_action_quick_reply(group_id, original_text, translated_text,
                                           src_lang, tgt_lang, msg_id=None):
-    """Build usable controls in the language of the translated result."""
-    if not (PostbackAction and original_text and translated_text and src_lang and tgt_lang):
-        return None
-    try:
-        token = _register_translation_action_context(
-            group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
-        )
-        labels = _translation_action_labels(src_lang, tgt_lang)
-        items = []
-        for mode in ("natural", "literal", "formal", "backcheck"):
-            label = labels[mode][:20]
-            items.append(QuickReplyItem(action=PostbackAction(
-                label=label,
-                data="action=translation_variant&mode=" + mode + "&token=" + token,
-                display_text=label,
-            )))
-        items.extend([
-            QuickReplyItem(action=PostbackAction(
-                label=labels["personal"][:20],
-                data="action=show_language_menu&token=" + token,
-                display_text=labels["personal"][:20],
-            )),
-            QuickReplyItem(action=PostbackAction(
-                label=labels["handover"][:20],
-                data="action=handover_summary&token=" + token,
-                display_text=labels["handover"][:20],
-            )),
-            QuickReplyItem(action=PostbackAction(
-                label=labels["interpreter"][:20],
-                data="action=open_interpreter&token=" + token,
-                display_text=labels["interpreter"][:20],
-            )),
-        ])
-        return QuickReply(items=items)
-    except Exception as exc:
-        logger.warning("translation action Quick Reply unavailable: %s", exc)
-        return None
+    return _build_unified_translation_menu(group_id, original_text, translated_text,
+                                           src_lang, tgt_lang, msg_id)
 
-def _build_image_translation_action_quick_reply(
-        group_id, original_text, translated_text, src_lang, tgt_lang,
-        msg_id=None, overlay_token=None):
-    """Build independently configurable actions for photo/OCR translations.
 
-    This is separate from the normal text Quick Reply switch and from the fixed
-    or custom translation-tone prompt.  Administrators can disable the whole
-    photo action row or select exactly which modes are shown.
-    """
-    if not get_image_translation_actions_enabled(group_id):
-        return None
-    if not PostbackAction:
-        return None
-
-    modes = get_image_translation_action_modes(group_id)
-    items = []
-    token = None
-    labels = _translation_action_labels(src_lang, tgt_lang)
-    variant_defs = tuple((mode, labels[mode]) for mode in (
-        "natural", "literal", "formal", "backcheck", "personal"
-    ))
-    try:
-        if original_text and translated_text and src_lang and tgt_lang:
-            if any(modes.get(mode, False) for mode, _label in variant_defs):
-                token = _register_translation_action_context(
-                    group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
-                )
-            if token:
-                for mode, label in variant_defs:
-                    if not modes.get(mode, False):
-                        continue
-                    data = (
-                        "action=show_language_menu&token=" + token
-                        if mode == "personal"
-                        else "action=translation_variant&mode=" + mode + "&token=" + token
-                    )
-                    items.append(QuickReplyItem(action=PostbackAction(
-                        label=label,
-                        data=data,
-                        display_text=label,
-                    )))
-
-        if overlay_token and modes.get("overlay", False):
-            overlay_label = "🖼 圖文對照/Gambar"
-            items.append(QuickReplyItem(action=PostbackAction(
-                label=overlay_label[:20],
-                data="action=image_overlay&token=" + overlay_token,
-                display_text=overlay_label[:20],
-            )))
-
-        return QuickReply(items=items[:13]) if items else None
-    except Exception as exc:
-        logger.warning("image translation action Quick Reply unavailable: %s", exc)
-        return None
+def _build_image_translation_action_quick_reply(group_id, original_text, translated_text,
+                                               src_lang, tgt_lang, msg_id=None, overlay_token=None):
+    return _build_unified_translation_menu(group_id, original_text, translated_text,
+                                           src_lang, tgt_lang, msg_id, "image", overlay_token)
 
 
 def _flex_v2_button_row(group_id, original_text, translated_text, tgt_lang, msg_id=None, src_lang=None):
-    """LV4 互動按鈕 — 根據內容偵測決定要顯示哪幾顆按鈕。"""
-    buttons = []
-
-    # One-click quality controls.  The original/translation stay in a short-lived
-    # server-side cache; postback data carries only the opaque token.
-    if original_text and translated_text and src_lang and tgt_lang:
-        _ctx_token = _register_translation_action_context(
-            group_id, original_text, translated_text, src_lang, tgt_lang, msg_id
-        )
-        _labels = _translation_action_labels(src_lang, tgt_lang)
-        buttons.extend([
-            _translation_variant_button(_labels["natural"], _ctx_token, "natural"),
-            _translation_variant_button(_labels["literal"], _ctx_token, "literal"),
-            _translation_variant_button(_labels["formal"], _ctx_token, "formal"),
-            _translation_variant_button(_labels["backcheck"], _ctx_token, "backcheck"),
-            _translation_variant_button(_labels["personal"], _ctx_token, "personal"),
-        ])
-
-    # 偵測工單號 (ABC123, A-12345, 12345 等格式)
-    wo_match = re.search(r'[A-Z]{1,5}[-\s]?\d{3,8}|\b\d{5,10}\b', (original_text or "") + " " + (translated_text or ""))
-    if wo_match and is_cmd_enabled(group_id, "qry"):
-        wo_id = wo_match.group(0).strip()[:50]
-        # urlencode 避免特殊字元壞掉 postback parser
-        _qry_data = "action=qry&q=" + urllib.parse.quote(wo_id, safe="")
-        buttons.append({
-            "type": "button", "style": "secondary", "height": "sm",
-            "adjustMode": "shrink-to-fit",
-            "action": {"type": "postback",
-                       "label": "📋 儲區/Gudang",
-                       "data": _qry_data,
-                       "displayText": "/qry " + wo_id},
-        })
-
-    # 重唸 TTS (如果群組開了 TTS)
-    if get_tts_enabled(group_id) and translated_text:
-        # postback data LINE 限 300 bytes,前綴 ~30 bytes,留 ~230 bytes 給 text
-        # urlencode 後 byte 數會膨脹 (中文字 1 char -> 9 bytes 編碼),所以先截更短
-        _safe_text = _byte_safe_truncate(translated_text, 80)
-        _enc = urllib.parse.quote(_safe_text, safe="")
-        # 再次確保 urlencode 後總 length 安全
-        while len(("action=tts_replay&lang=" + tgt_lang + "&t=" + _enc).encode("utf-8")) > 280 and _safe_text:
-            _safe_text = _safe_text[:-1]
-            _enc = urllib.parse.quote(_safe_text, safe="")
-        if _safe_text:
-            buttons.append({
-                "type": "button", "style": "secondary", "height": "sm",
-                "adjustMode": "shrink-to-fit",
-                "action": {"type": "postback",
-                           "label": "🔊 重播/Ulang",
-                           "data": "action=tts_replay&lang=" + tgt_lang + "&t=" + _enc,
-                           "displayText": "🔊 重唸 / Putar ulang"},
-            })
-
-    # v3.11 (2026-05-26): 拿掉「👎 翻錯」按鈕(歐那要求)
-    # 工人仍可用打字「/wrong」標錯,後端 mark_only 模式照常運作。
-
-    # 最多 6 顆,每列兩顆。
-    # - 1 顆: 單一橫排
-    # - 2-3 顆: 雙列 (避免 3 顆並排手機寬度被截)
-    if not buttons:
-        return None
-
-    buttons = buttons[:6]
-    rows = []
-    for index in range(0, len(buttons), 2):
-        rows.append({
-            "type": "box", "layout": "horizontal",
-            "spacing": "sm", "margin": "sm",
-            "contents": buttons[index:index + 2],
-        })
-
-    return {
-        "type": "box", "layout": "vertical",
-        "margin": "md", "spacing": "none",
-        "contents": [{"type": "separator", "margin": "none"}] + rows,
-    }
+    # Translation controls now live only in the configured bottom menu.
+    # Durable acknowledgement controls are attached separately to the notice.
+    return None
 
 
 def _flex_v2_text_with_spans(text, highlights=None):
@@ -38738,6 +38228,7 @@ def _authorize_reminders():
     return None
 
 
+quick_reply_menu.register(app)
 factory_hub = line_factory_features.install(app, globals())
 
 _start_reminders = reminders_web.register_reminders(

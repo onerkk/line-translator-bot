@@ -161,7 +161,7 @@ def test_identical_display_names_keep_distinct_verified_mention_targets():
     assert [item["mentionee"]["userId"] for item in converted["substitution"].values()] == [USER, COLLEAGUE]
 
 
-def test_flex_and_existing_quick_replies_survive_factory_decoration(hub):
+def test_flex_survives_and_unconfigured_buttons_are_replaced_by_group_menu(hub):
     e = event("@Adi PMI", mentions=[{"type": "user", "userId": COLLEAGUE, "index": 0, "length": 4}])
     flex = FlexMessage(alt_text="PMI", contents=FlexContainer.from_dict({"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "PMI"}]}}),
                        quick_reply=QuickReply(items=[QuickReplyItem(action=PostbackAction(label="原有按鈕", data="old=1"))]))
@@ -173,7 +173,8 @@ def test_flex_and_existing_quick_replies_survive_factory_decoration(hub):
     content = restored[-1].contents.to_dict()
     assert {key: content[key] for key in flex.contents.to_dict()} == flex.contents.to_dict()
     assert 'action=factory_ack' in json.dumps(content['footer'])
-    assert restored[-1].quick_reply.items[0].action.data == "old=1"
+    assert all(x.action.data != "old=1" for x in restored[-1].quick_reply.items)
+    assert parse_qs(restored[-1].quick_reply.items[0].action.data)["mode"] == ["natural"]
     assert any("factory_ack" in x.action.data for x in restored[-1].quick_reply.items)
 
 
@@ -221,7 +222,7 @@ def test_failed_save_rolls_back_and_form_scope_is_validated(hub):
     before = copy.deepcopy(hub.settings())
     hub.h["save_settings"] = lambda **kw: False
     with pytest.raises(StoreError):
-        hub.update_settings({"group_id": GROUP, "options": {"sharing": False}, "expected_version": hub.settings_version()})
+        hub.update_settings({"group_id": GROUP, "options": {"edit_translation": False}, "expected_version": hub.settings_version()})
     assert hub.settings() == before
     with pytest.raises(ValueError, match="群組"):
         hub.update_settings({"stations": [{"code": "PMI", "name_zh": "PMI", "name_id": "PMI", "form_id": "f1"}], "expected_version": hub.settings_version()})
@@ -316,7 +317,8 @@ def test_cloud_interaction_outage_does_not_stop_translation_or_revision_guard(hu
         payload = {"group_id": GROUP, "message_id": "123", "source_text": "PMI檢驗", "factory_event": metadata}
         rendered = hub.decorate_delivery([TextMessage(text="Periksa PMI.")], payload, "Periksa PMI.")
     assert len(rendered) == 1 and rendered[0].text == "Periksa PMI."
-    assert not rendered[0].quick_reply
+    assert {parse_qs(item.action.data)["action"][0] for item in rendered[0].quick_reply.items} == {"handover_summary", "open_interpreter"}
+    assert all("token" not in parse_qs(item.action.data) for item in rendered[0].quick_reply.items)
     assert hub.current(metadata)
     with hub.message_scope(event(stamp=200, edited=True), "text") as active:
         assert active and not hub.current(metadata)

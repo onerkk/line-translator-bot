@@ -26,6 +26,7 @@ from flask import jsonify, request, render_template
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from linebot.v3.messaging import Message, TextMessage, FlexMessage, FlexContainer, QuickReply, QuickReplyItem, PostbackAction
 
+import line_quick_reply
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
@@ -184,6 +185,7 @@ def measure_delivery(kind):
 class FactoryHub:
     def __init__(self, app, host, store=None):
         self.app, self.h = app, host
+        self.menu = host.get("quick_reply_menu") or line_quick_reply.Menu(host)
         self._store = store
         self._lock = threading.RLock()
         self._insight_cache = {}
@@ -200,7 +202,7 @@ class FactoryHub:
         return self.h.get("factory_line_settings") or {}
 
     def options(self, group):
-        return {**DEFAULTS, **self.settings().get("groups", {}).get(group, {})}
+        return {**DEFAULTS, **self.settings().get("groups", {}).get(group, {}), **self.menu.factory_options(group)}
 
     def _rev_key(self, group, message):
         return "revision:" + hashlib.sha256((group + ":" + message).encode()).hexdigest()
@@ -326,9 +328,7 @@ class FactoryHub:
                     cache.pop(token, None)
 
     def _wants_notice(self, group, record):
-        ack = self.options(group)["acknowledgements"]
-        return group.startswith(("C", "R")) and (
-            ack == "all" or (ack == "work" and bool(_WORK.search(record.get("original", "")))))
+        return bool(self.menu.notice_rows(group, record.get("original", ""), record.get("menu_kind", "text")))
 
     @staticmethod
     def _short(value, units=160):
@@ -346,9 +346,9 @@ class FactoryHub:
         # A missing optional profile must not prevent recording the signed user.
         return self._short(name or "未取得姓名 / Nama belum tersedia", 80)
 
-    def _notice_footer(self, token):
-        buttons = [("✅ 了解/Paham", "factory_ack"), ("❓ 說明/Jelaskan", "factory_help"),
-                   ("📋 確認/Status", "factory_receipts")]
+    def _notice_footer(self, token, record):
+        buttons = [(row["label"], row["action"]) for row in self.menu.notice_rows(
+            record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"))]
         return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
             {"type": "text", "text": "作業確認 / Konfirmasi", "size": "sm", "weight": "bold"},
             *[{"type": "button", "height": "sm", "style": "secondary",
@@ -358,11 +358,11 @@ class FactoryHub:
             {"type": "text", "text": "原通知起 7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari sejak pemberitahuan; paham bukan berarti pekerjaan selesai.",
              "size": "xs", "wrap": True, "color": "#667085"}]}
 
-    def _notice_card(self, token, text):
+    def _notice_card(self, token, text, record):
         return FlexMessage(alt_text=self._short(text, 350), contents=FlexContainer.from_dict({
             "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
                 {"type": "text", "text": self._short(text, 1900), "wrap": True, "size": "sm"}]},
-            "footer": self._notice_footer(token)}))
+            "footer": self._notice_footer(token, record)}))
 
     def _attach_notice(self, messages, token, record):
         # Embed controls in the translated bubble so another chat message cannot
@@ -374,7 +374,7 @@ class FactoryHub:
                 continue
             if "action=factory_ack&token=" + token in encode(bubble):
                 return messages
-            footer = self._notice_footer(token)
+            footer = self._notice_footer(token, record)
             if bubble.get("footer"):
                 bubble["footer"] = {"type": "box", "layout": "vertical", "spacing": "sm",
                                     "contents": [bubble["footer"], footer]}
@@ -384,7 +384,7 @@ class FactoryHub:
                 messages[index] = Message.from_dict(obj)
                 return messages
         text = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n" + self._short(record.get("original"), 240)
-        card = self._notice_card(token, text)
+        card = self._notice_card(token, text, record)
         if messages:
             card.quick_reply = getattr(messages[-1], "quick_reply", None)
             messages[-1].quick_reply = None
@@ -440,7 +440,8 @@ class FactoryHub:
         def tokens(value):
             if isinstance(value, dict):
                 if value.get("type") == "postback":
-                    token = dict(urllib.parse.parse_qsl(value.get("data") or "")).get("token")
+                    params = dict(urllib.parse.parse_qsl(value.get("data") or ""))
+                    token = params.get("context_token") or params.get("token")
                     if token:
                         yield token
                 for child in value.values():
@@ -502,37 +503,32 @@ class FactoryHub:
         metadata = payload.get("factory_event") or self.payload_metadata() or {}
         if metadata.get("edited"):
             messages.insert(0, TextMessage(text="✏️ 原文已修改，以下為更正翻譯。\nTeks asli diedit; berikut terjemahan terbaru."))
+        kind = "image" if payload.get("kind") in {"image", "video"} else "text"
+        token = None
+        record = {"group_id": group, "original": (payload.get("source_text") or payload.get("ocr_text") or
+                  payload.get("transcribed_text") or payload.get("document_text") or ""),
+                  "translated": text, "tgt": (payload.get("target_langs") or [""])[0], "menu_kind": kind}
         try:
-            token, record = self._context_for_delivery(messages, payload, text)
+            if self.menu.needs_context(group, kind):
+                token, record = self._context_for_delivery(messages, payload, text)
         except StoreError:
             self.app.logger.warning("[FactoryTools] interaction buttons unavailable; translation delivery continues")
-            token, record = None, None
-        if token:
-            buttons = []
-            if options["sharing"]:
-                buttons.append(("📤 分享/Bagikan", "factory_share"))
-            if options["station_tools"]:
-                buttons.append(("🏭 工具/Alat", "factory_open"))
-            if self._wants_notice(group, record):
-                try:
-                    if not record.get("_notice_prepared"):
-                        record = self.save_context(token, record)
-                    payload["factory_notice_token"] = token
-                    messages = self._attach_notice(messages, token, record)
-                    buttons.extend([("✅ 了解/Paham", "factory_ack"), ("❓ 說明/Jelaskan", "factory_help"),
-                                    ("📋 確認/Status", "factory_receipts")])
-                except StoreError:
-                    self.app.logger.warning("[FactoryTools] receipt storage unavailable; no confirmation buttons added")
-            if buttons:
-                # The last message owns Quick Reply, so long replies retain it.
-                current = list(getattr(getattr(messages[-1], "quick_reply", None), "items", []) or [])
-                needed = [QuickReplyItem(action=PostbackAction(label=label, data="action=" + action + "&token=" + token))
-                          for label, action in buttons]
-                if len(current) + len(needed) <= 13:
-                    messages[-1].quick_reply = QuickReply(items=current + needed)
-                else:
-                    messages.append(TextMessage(text="🏭 工廠工具 / Alat pabrik",
-                                                quick_reply=QuickReply(items=needed)))
+        if token and self._wants_notice(group, record):
+            try:
+                if not record.get("_notice_prepared"):
+                    record = self.save_context(token, record)
+                payload["factory_notice_token"] = token
+                messages = self._attach_notice(messages, token, record)
+            except StoreError:
+                self.app.logger.warning("[FactoryTools] receipt storage unavailable; no confirmation buttons added")
+                token, record = None, None
+        # No independently appended buttons. The final message owns exactly
+        # the same ordered menu the administrator configured for this group.
+        kind = (record or {}).get("menu_kind", kind)
+        for message in messages:
+            message.quick_reply = None
+        if messages:
+            messages[-1].quick_reply = self.menu.build(group, record, token, kind)
         if options["native_mentions"] and group.startswith(("C", "R")) and metadata.get("mentions"):
             mentions = metadata["mentions"]
             # A companion native mention preserves the existing Flex card.
@@ -592,7 +588,7 @@ class FactoryHub:
     def _reply(self, event, text, *, url=None, notice=None, retry_suffix=""):
         from linebot.v3.messaging import URIAction
         group, _ = source_ids(event)
-        msg = self._notice_card(notice["token"], text) if notice else TextMessage(text=text)
+        msg = self._notice_card(notice["token"], text, notice) if notice else TextMessage(text=text)
         if url:
             msg.quick_reply = QuickReply(items=[QuickReplyItem(action=URIAction(label="開啟/Buka", uri=url))])
         marker = _CONTROL_REPLY.set(True)
@@ -817,6 +813,8 @@ class FactoryHub:
             if group not in groups:
                 raise ValueError("請選擇已加入的群組。")
             supplied = data["options"]
+            if isinstance(supplied, dict) and set(supplied) & {"sharing", "station_tools", "acknowledgements"}:
+                raise ValueError("公告按鈕、分享與工具入口請統一到「快捷鍵」設定。")
             if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS):
                 raise ValueError("功能設定包含未知欄位。")
             options = {**self.options(group), **supplied}

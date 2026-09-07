@@ -88,7 +88,8 @@ def test_retry_preserves_all_attachments_and_last_controls(runtime):
     assert run_job()
     accepted = calls[0][1].messages + calls[-1][1].messages
     assert [m.text for m in accepted] == ["譯文"] + ["附件 " + str(i) for i in range(6)]
-    assert accepted[-1].quick_reply.items[0].action.data == "old=1"
+    assert accepted[-1].quick_reply.to_dict() == plan["messages"][-1]["quickReply"]
+    assert all(item.action.to_dict().get("data") != "old=1" for item in accepted[-1].quick_reply.items)
 
 
 def test_departed_mention_falls_back_to_readable_original_name(runtime):

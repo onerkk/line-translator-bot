@@ -162,7 +162,8 @@ def test_line_result_buttons_and_postback_modes_are_integrated():
     assert "📢 正式/Formal" in source
     assert "↩ 回譯/Cek balik" in source
     assert "action=translation_variant" in button
-    assert "_translation_variant_button" in row
+    assert "_translation_variant_button" not in row
+    assert "quick_reply_menu.build" in _function_source("_build_unified_translation_menu")
     assert 'action == "translation_variant"' in handler
     for mode in ("natural", "literal", "formal", "backcheck"):
         assert f'"{mode}"' in handler

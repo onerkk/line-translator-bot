@@ -167,14 +167,10 @@ def test_interpreter_page_and_api(monkeypatch):
     assert data["audio_url"].endswith(".m4a")
 
 
-def test_translation_flex_has_personal_language_button():
-    row = app._flex_v2_button_row(
-        "C_TEST", "I9先停機", "Hentikan I9", "id", "M1", "zh"
+def test_translation_menu_has_personal_language_button_without_duplicate_flex_row():
+    row = app._build_translation_action_quick_reply(
+        "C_TEST", "I9先停機", "Hentikan I9", "zh", "id", "M1"
     )
-    labels = []
-    for content in row["contents"]:
-        for button in content.get("contents", []):
-            label = button.get("action", {}).get("label")
-            if label:
-                labels.append(label)
+    labels = [item.action.label for item in row.items]
     assert "👤 我的語言/Bahasa" in labels
+    assert app._flex_v2_button_row("C_TEST", "I9先停機", "Hentikan I9", "id", "M1", "zh") is None
