@@ -11,6 +11,7 @@ hub=cases.hub.__wrapped__(FeatureStore(path=path/'state.db'),pytest.MonkeyPatch(
 app=hub.app
 app.template_folder=str(repo/'templates')
 app.static_folder=str(repo/'static')
+hub.menu.register(app)
 original, payload, messages=cases.notice(hub)
 feedback=[]
 hub.h['_send_reply_with_push_fallback']=lambda **kwargs: feedback.append(kwargs['fallback_text'])
@@ -46,6 +47,9 @@ def form_submit():
 @app.route('/preview-admin')
 def admin():
  return '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/line_factory.css"></head><body class="factory-page"><main id="factory-admin-root" class="factory-shell"></main><script>function adminHeaders(){return {"Content-Type":"application/json"}}</script><script src="/static/admin_factory.js"></script><script>loadFactoryTools()</script></body></html>'
+@app.route('/preview-menu')
+def menu():
+ return '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/admin_quick_reply.css"></head><body style="background:#101525"><main id="quickreply-admin-root"></main><script>function adminHeaders(){return {"Content-Type":"application/json"}}</script><script src="/static/admin_quick_reply.js"></script><script>qrLoad()</script></body></html>'
 @app.route('/preview-factory')
 def factory():
  return redirect('/liff/settings?'+hub.session_url(cases.GROUP,cases.USER,original).split('?',1)[1])

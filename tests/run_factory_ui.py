@@ -11,7 +11,8 @@ with tempfile.TemporaryFile() as log:
    except OSError:time.sleep(.03)
   else:
    log.seek(0);print(log.read().decode());raise RuntimeError('UI fixture did not start')
-  result=subprocess.run(['node',str(root/'factory_ui_smoke.cjs')],timeout=45)
-  raise SystemExit(result.returncode)
+  for filename in ('factory_ui_smoke.cjs', 'unified_menu_ui_smoke.cjs'):
+   result=subprocess.run(['node',str(root/filename)],timeout=45)
+   if result.returncode:raise SystemExit(result.returncode)
  finally:
   server.terminate();server.wait(timeout=5)
