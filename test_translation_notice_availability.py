@@ -268,7 +268,56 @@ def event(text=SOURCE):
 
 
 def delivered_text(state):
-    return "".join(message.text for _, request, _ in state.sends for message in request.messages)
+    """Read visible text from mixed LINE deliveries, including Flex layouts.
+
+    Alternate notifications and postback payloads are deliberately excluded:
+    they must not make a missing translation in the message body pass a test.
+    """
+    def visible_text(node):
+        if isinstance(node, list):
+            return "".join(visible_text(child) for child in node)
+        if not isinstance(node, dict):
+            return ""
+        if node.get("type") in {"text", "textV2", "span"} and isinstance(node.get("text"), str):
+            return node["text"]
+        return "".join(visible_text(node.get(key))
+                       for key in ("header", "hero", "body", "footer", "contents"))
+
+    result = []
+    for _, request, _ in state.sends:
+        for message in request.messages:
+            if hasattr(message, "to_dict"):
+                result.append(visible_text(message.to_dict()))
+            elif isinstance(message, dict):
+                result.append(visible_text(message))
+            else:
+                result.append(getattr(message, "text", "") or "")
+    return "".join(result)
+
+
+@pytest.mark.parametrize("carousel", [False, True])
+def test_delivered_text_reads_flex_and_rich_text_alongside_plain_messages(carousel):
+    bubble = {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+        {"type": "text", "text": "Pemeriksaan PMI "},
+        {"type": "text", "contents": [{"type": "span", "text": "wajib "},
+                                       {"type": "span", "text": "dilakukan."}]}]},
+        "footer": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "button", "action": {"type": "postback", "label": "Paham",
+                                            "data": "action=factory_ack", "displayText": "not-a-translation"}}]}}
+    contents = {"type": "carousel", "contents": [bubble]} if carousel else bubble
+    flex = app.FlexMessage(alt_text="alternate-notification", contents=app.FlexContainer.from_dict(contents))
+    state = SimpleNamespace(sends=[("reply", SimpleNamespace(messages=[
+        app.TextMessage(text="通知："), flex, app.TextMessage(text="結束")]), {})])
+    assert delivered_text(state) == "通知：Pemeriksaan PMI wajib dilakukan.結束"
+
+
+def test_alt_text_cannot_hide_an_empty_flex_translation_body():
+    flex = app.FlexMessage(alt_text=TARGET[:200], contents=app.FlexContainer.from_dict({
+        "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "text", "text": "沒有譯文"}]}}))
+    state = SimpleNamespace(sends=[("reply", SimpleNamespace(messages=[flex]), {})])
+    assert delivered_text(state) == "沒有譯文"
+    assert TARGET[:200] not in delivered_text(state)
 
 
 def retry_pending():
