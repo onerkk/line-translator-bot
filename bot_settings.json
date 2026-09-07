@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "bde0b737d25fc9ff8820cad59f70c1caf827966f7d35968537c789854bf78d99",
-    "updated_at_iso": "2026-09-07T00:39:41.443826+00:00",
-    "updated_at_unix": 1788741581.4438262
+    "state_hash": "a16242680e8900157992fbfb6c237b1d9fad8a4bf14c181c416457a0d18a9759",
+    "updated_at_iso": "2026-09-07T00:40:39.464580+00:00",
+    "updated_at_unix": 1788741639.4645796
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -64,7 +64,13 @@
       "default_model": "claude-haiku-4-5-20251001"
     },
     "auto_switch_on_exhaust": true,
-    "auto_switch_state": {},
+    "auto_switch_state": {
+      "active": true,
+      "at": 1788741638,
+      "from": "anthropic",
+      "reason": "quota_exhausted",
+      "to": "openai"
+    },
     "claude_features": {
       "adaptive_thinking": true,
       "assistant_prefill": false,
@@ -144,7 +150,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 00:39:41",
+    "last_updated": "2026-09-07 00:40:38",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -165,7 +171,12 @@
       "flex_background": true
     },
     "provider_failover": true,
-    "quota_exhausted_providers": {}
+    "quota_exhausted_providers": {
+      "anthropic": {
+        "at": 1788741638,
+        "error": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011Ceo"
+      }
+    }
   },
   "auto_tone_emoji_enabled": true,
   "bot_stats": {
@@ -177,14 +188,15 @@
     "commands": 13,
     "followers": 1,
     "image_translations": 4,
+    "oai_cache_write": 4182,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.1284789,
-    "oai_input": 144097,
-    "oai_output": 1337,
+    "oai_cost_usd": 0.14133990000000002,
+    "oai_input": 148282,
+    "oai_output": 1537,
     "oai_reasoning": 0,
     "text_translations": 259,
-    "tokens_completion": 18793,
-    "tokens_prompt": 4378868,
+    "tokens_completion": 18993,
+    "tokens_prompt": 4383053,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -331,11 +343,14 @@
   "gemini_model_upgrade": "gemini-2.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cost_usd": 0.3857251999999999,
-      "model": "claude-haiku-4-5-20251001",
-      "provider": "anthropic",
-      "tokens_completion": 2260,
-      "tokens_prompt": 258366
+      "cache_read": 0,
+      "cache_write": 4182,
+      "cost_usd": 0.3985861999999999,
+      "model": "gpt-5.6-terra",
+      "provider": "openai",
+      "reasoning": 0,
+      "tokens_completion": 2460,
+      "tokens_prompt": 262551
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
