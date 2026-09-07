@@ -28,6 +28,8 @@ REAL_TRANSLATE_OPENAI = app.translate_openai
 NATURAL_VARIANTS = [
     ("Pemeriksaan PMI wajib dilakukan", "PMI wajib dites"),
     ("Pemeriksaan PMI wajib dilakukan", "PMI harus selalu dilakukan"),
+    ("Pemeriksaan PMI wajib dilakukan", "Pemeriksaan PMI untuk memastikan jenis baja wajib dilakukan"),
+    ("Pemeriksaan PMI wajib dilakukan", "PMI untuk memeriksa jenis baja wajib dilakukan"),
     ("Pemeriksaan PMI wajib dilakukan", "PMI wajib tetap diperiksa"),
     ("Pemeriksaan PMI wajib dilakukan", "Pengujian PMI harus dilaksanakan"),
     ("Pemeriksaan PMI wajib dilakukan", "Wajib melakukan inspeksi PMI"),
@@ -118,8 +120,9 @@ def _signed_webhook(text):
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
 @pytest.mark.parametrize("reply_down", [False, True])
-def test_signed_webhook_with_real_provider_pipeline_delivers_once(runtime, offline_transport, monkeypatch, reply_down, provider):
-    target = TRANSLATION.replace("Pemeriksaan PMI wajib dilakukan", "PMI harus selalu dilakukan")
+@pytest.mark.parametrize("pmi_wording", ["PMI harus selalu dilakukan", "Pemeriksaan PMI untuk memastikan jenis baja wajib dilakukan"])
+def test_signed_webhook_with_real_provider_pipeline_delivers_once(runtime, offline_transport, monkeypatch, reply_down, provider, pmi_wording):
+    target = TRANSLATION.replace("Pemeriksaan PMI wajib dilakukan", pmi_wording)
     calls = []
     monkeypatch.setattr(app, "translate_openai", REAL_TRANSLATE_OPENAI)
     offline_transport["active_provider"] = provider

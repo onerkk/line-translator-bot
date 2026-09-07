@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-BUILD_ID = "2026-09-07.2-notice-equivalent-predicates"
+BUILD_ID = "2026-09-07.3-noncurrent-record-scope"
 _ITEM = re.compile(r"(?m)^\s*[（(]?(\d+)[）).、．]\s*(?!\d)")
 _INVENTORY = r"(?:庫存|库存|存貨|存货)"
 _BLOCKED_DECREASE = r"(?:降不下(?:來|来|去)?|減不下(?:來|来|去)?|减不下(?:來|来|去)?|降低不了|(?:無法|无法|不能|不會|不会|一直不)(?:再)?(?:下降|降低|減少|减少)|下不[來来])"
@@ -42,7 +42,9 @@ def segments(text):
 
 def build_relations(source):
     relations = []
-    for item, text in segments(source):
+    scopes = segments(source)
+    intro = scopes[0][1] if len(scopes) > 1 and scopes[0][0] is None else ""
+    for item, text in scopes:
         compact = re.sub(r"\s+", "", text)
         def add(kind, evidence, meaning, hint, **fields):
             relations.append(dict(kind=kind, item=item, source_evidence=evidence,
@@ -74,8 +76,21 @@ def build_relations(source):
                 "input data sesuai shift; jangan input lintas shift", cross_prohibited=bool(re.search(_PREVENT + r"跨班", compact)))
         m = re.search(r"非本月|不是本月|不屬於本月|不属于本月", compact)
         if m:
-            add("noncurrent_period", m.group(), "非本月是非當月的資料分類，不限定為上個月，也不是人不在本月上班",
-                "data/catatan kategori bukan untuk bulan ini / selain bulan berjalan",
+            # The notice's introduction supplies record context to its items.
+            # An unrelated numbered item's accounts do not redefine shipping
+            # schedules or material dates in the current item.
+            context = intro + text
+            temporary = bool(re.search(r"暫存|暂存", context))
+            records = bool(re.search(r"資料|资料|紀錄|記錄|记录|帳|账|建檔|建档", context)
+                           or (temporary and re.search(r"系統|系统", context)))
+            meaning = ("非本月是非當月的資料分類；存入／移出作用於帳務紀錄，不是搬運材料；不限定上個月"
+                       if records else "非本月表示不屬於當月，保留原文修飾的材料、交期等對象，不限定上個月")
+            hint = "bukan untuk bulan ini / selain bulan berjalan"
+            if records:
+                hint = ("catatan sementara" if temporary else "data/catatan") + " kategori " + hint
+            if records and temporary:
+                meaning += "；暫存是系統中的暫存紀錄，不能只用『目前／暫時注意』取代"
+            add("noncurrent_period", m.group(), meaning, hint,
                 other_period_explicit=bool(re.search(r"上個?月|上个月|下個?月|下个月|前月|次月", compact)))
         m = re.search(r"(?:帳|账|資料|资料|記錄|记录).{0,8}?(?:先)?(?:移出|轉出|转出|搬出)|(?:移出|轉出|转出|搬出)[^，。;；]{0,18}?(?:帳|账|資料|资料|記錄|记录)", compact)
         if m:

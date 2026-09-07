@@ -11,7 +11,7 @@ import unicodedata
 
 from factory_instruction_semantics import segments
 
-BUILD_ID = "2026-09-07.3-pmi-predicate-grammar"
+BUILD_ID = "2026-09-07.4-pmi-qualified-predicates"
 _PMI = re.compile(r"(?<![A-Za-z0-9_])PMI(?![A-Za-z0-9_])", re.I)
 _ZH_CHECK = re.compile(r"(?:檢驗|檢查|檢測|確認|打|驗|測)(?:材料)?(?:鋼種|材質)")
 _ID_CHECK = r"(?:pemeriksaan|memeriksa|diperiksa|periksa|pengecekan|mengecek|dicek|cek|pengujian|menguji|diuji|uji|pengetesan|mengetes|dites|tes|inspeksi|diinspeksi|verifikasi|diverifikasi)"
@@ -19,6 +19,11 @@ _ID_SKIP = r"(?:terlewat|dilewatkan|dilewati|diabaikan|dilupakan|melewatkan|mele
 _ID_ACTION = r"(?:" + _ID_CHECK + r"|" + _ID_SKIP + r"|dilakukan|melakukan|lakukan|dilaksanakan|melaksanakan|laksanakan|dijalankan|menjalankan|jalankan)"
 _ID_AUX = r"(?:belum|sudah|telah|harus|wajib|mesti|perlu|tidak|tak|boleh|jangan|dilarang|sampai|selalu|tetap|segera|juga|pernah|sempat|benar-benar|untuk|lagi|rutin|kembali|selesai)"
 _ID_AFTER = re.compile(r"\s+(?:" + _ID_AUX + r"\s+){0,10}(?:" + _ID_ACTION + r"|selesai)\b", re.I)
+_ID_QUALIFIER = re.compile(r"\s+(?:untuk|pada|terhadap)\b", re.I)
+_ID_SCOPE_BREAK = re.compile(
+    r"\b(?:belum|sudah|telah|harus|wajib|mesti|perlu|tidak|tak|boleh|jangan|dilarang|"
+    r"tanpa|selesai|dan|atau|tetapi|namun|sedangkan|sementara|karena|jika|kalau|"
+    r"apabila|bila|ketika|agar|supaya|yang)\b|[,;.!?，；。！？\n]", re.I)
 _PACK = {"zh": re.compile(r"包裝|打包|(?<=就)包|(?<=再)包"),
          "id": re.compile(r"\b(?:dikemas|kemas|mengemas|pengemasan|packing|dibungkus)\b", re.I)}
 _CLAUSE = re.compile(r"[，,;；。.!！\n]")
@@ -27,6 +32,26 @@ _CODE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,4})(?![A-Za-z0-9])")
 
 def _norm(text):
     return unicodedata.normalize("NFKC", str(text or "")).replace("檢驗剛種", "檢驗鋼種").replace("驗剛種", "驗鋼種")
+
+
+def _id_after(after):
+    """Find the operation after a bounded purpose/material qualifier.
+
+    In 'PMI untuk memastikan jenis baja wajib dilakukan', the purpose is
+    not the finite predicate. Never skip a negation, condition, relative
+    clause or another coordinated operation to borrow its modal instead.
+    """
+    direct = _ID_AFTER.match(after)
+    qualifier = _ID_QUALIFIER.match(after)
+    if qualifier:
+        for candidate in _ID_AFTER.finditer(after[:240]):
+            if candidate.start() <= qualifier.end():
+                continue
+            prefix = after[:candidate.start()]
+            if len(prefix.split()) > 20 or _ID_SCOPE_BREAK.search(prefix):
+                break
+            return candidate
+    return direct
 
 
 def _anchors(clause, lang):
@@ -40,7 +65,7 @@ def _anchors(clause, lang):
             trailing = re.match(r"\s*(?:檢驗|檢查|檢測|測試|作業|流程|(?:還|尚)?(?:沒|未)|已|做|要|必須|一定|務必)", after)
         else:
             leading = re.search(r"\b" + _ID_ACTION + r"(?:\s+[a-z]+){0,6}\s*$", before, re.I)
-            trailing = _ID_AFTER.match(after)
+            trailing = _id_after(after)
         if leading or trailing:
             spans.append((leading.start() if leading else start, end))
     # A written PMI name and an adjacent grade-check verb are one predicate.
@@ -74,7 +99,7 @@ def _mode(clause, start, end, lang):
         # Scope modifiers to this inspection predicate. An adverb between
         # 'harus' and 'dilakukan' does not make the PMI action disappear.
         gap = r"(?:\s+(?:" + _ID_AUX + r"|" + _ID_ACTION + r"))*\s*$"
-        tail = _ID_AFTER.match(after)
+        tail = _id_after(after)
         tail_text = tail.group() if tail else ""
         def has(pattern):
             return bool(re.search(r"\b(?:" + pattern + ")" + gap, before, re.I)
@@ -91,7 +116,7 @@ def _mode(clause, start, end, lang):
             return "pending"
         if has(r"harus|wajib|mesti|perlu|pastikan|harap|mohon|tolong"):
             return "required"
-        if has(r"sudah|telah") or re.match(r"\s+(?:dilakukan|selesai)\b", after, re.I):
+        if has(r"sudah|telah") or re.match(r"\s+(?:dilakukan|selesai)\b", tail_text, re.I):
             return "completed"
         if re.match(r"(?:lakukan|periksa|cek|uji|tes|laksanakan|jalankan)\b", clause[start:end], re.I):
             return "required"
@@ -141,10 +166,14 @@ def build_facts(source, lang):
     for item, text in segments(_norm(source)):
         for clause in _CLAUSE.split(text):
             for start, end in _anchors(clause, lang):
+                mode = _mode(clause, start, end, lang)
+                meaning = "PMI 是檢驗、確認鋼種的作業流程；鋼材是受檢對象，不是檢查 PMI 儀器或列印鋼種標籤。保留是否已檢驗、未檢驗便包裝及先後順序。"
+                if lang == "zh" and mode == "required":
+                    meaning += " 必須執行可寫 Pemeriksaan PMI wajib dilakukan untuk memastikan jenis baja。"
                 facts.append({"sense": "pmi_inspection", "item": item,
-                    "evidence": clause.strip(), "mode": _mode(clause, start, end, lang),
+                    "evidence": clause.strip(), "mode": mode,
                     "codes": sorted({m.group().upper() for m in _CODE.finditer(clause)}),
-                    "meaning": "PMI 是檢驗、確認鋼種的作業流程，不是列印或標示鋼種。保留是否已檢驗、未檢驗便包裝及先後順序。"})
+                    "meaning": meaning})
         order = _order(text, lang)
         if order:
             facts.append({"sense": "pmi_sequence", "item": item, "order": order,
