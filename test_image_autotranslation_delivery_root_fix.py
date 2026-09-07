@@ -228,7 +228,7 @@ def _run_image_background(
     )
     monkeypatch.setattr(app, "ApiClient", DummyApiClient)
     monkeypatch.setattr(app, "MessagingApi", DummyMessagingApi)
-    monkeypatch.setattr(app, "TextMessage", DummyTextMessage)
+    # Keep the real SDK message serializer; only external LINE calls are fake.
     monkeypatch.setattr(app, "ReplyMessageRequest", DummyReplyRequest)
     monkeypatch.setattr(app, "PushMessageRequest", DummyPushRequest)
 

@@ -1,5 +1,5 @@
 flask
-line-bot-sdk
+line-bot-sdk>=3.25.0,<4
 openai
 gunicorn
 openpyxl
@@ -7,6 +7,7 @@ anthropic>=0.40.0
 rapidfuzz>=3.5.0
 imageio-ffmpeg
 Pillow>=10,<12
+qrcode>=8,<9
 pypdf>=4,<6
 # The release gate also supports installing only requirements.txt + pytest.
 # Keep Lua enabled: reminder tests execute the real Redis atomic scripts.

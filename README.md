@@ -1,3 +1,11 @@
+## 2026-09-07：LINE 工廠工具整合
+
+新增原文編輯重譯、原生點名、群組點名翻譯模式、設備 QR／站別翻譯、雙語分享、作業確認與圖文選單統計，並修正訊息／附件重試、執行中金鑰更新、表單身分驗證及 LIFF 導向。
+
+**本次 ZIP 是相對 Git commit `32ddc95b980c77bdc2563a0c6b6df0358945856b` 的異動檔案包。** 請連同新增模組、static 與 templates 一起覆蓋目前專案；詳細部署、LINE Console 開關及驗證限制請看 [LINE_FACTORY_UPGRADE.md](LINE_FACTORY_UPGRADE.md)。下方的舊版更新說明屬歷史紀錄，其「累積更新」描述不適用本次 ZIP。
+
+---
+
 ## 2026-09-05 第二版：錯字、近義句與工廠操作狀態
 
 這次 ZIP 是相對最初上傳專案的**累積更新**，包含上一版修正；不論是否已套用上一包，都可解壓覆蓋專案根目錄後重新部署。ZIP 僅放變更／新增檔案，保留既有詞庫、設定與資料庫。新增模組 `factory_source_understanding.py`、`translation_adaptive_memory.py` 必須與本包其他檔案一起部署。

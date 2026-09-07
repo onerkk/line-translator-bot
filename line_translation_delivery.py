@@ -69,3 +69,56 @@ def invalid_quote(error: Exception) -> bool:
         body = json.dumps(body)
     text = str(body or error).casefold().replace("_", "")
     return "quotetoken" in text or "quote token" in text
+
+
+def message_dict(message):
+    """Persist complete LINE objects, including Flex, Quick Reply and textV2."""
+    if isinstance(message, dict):
+        return json.loads(json.dumps(message, ensure_ascii=False))
+    if hasattr(message, "to_dict"):
+        return message.to_dict()
+    if hasattr(message, "model_dump"):
+        return message.model_dump(by_alias=True, exclude_none=True)
+    raise TypeError("cannot serialize LINE message")
+
+
+def restore_messages(values):
+    from linebot.v3.messaging import Message
+    return [Message.from_dict(value) for value in values]
+
+
+def message_batches(values, max_messages=5):
+    size = max(1, min(5, int(max_messages)))
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
+def invalid_mention(error):
+    return str(getattr(error, "status", "")) == "400" and "mention" in str(getattr(error, "body", "") or error).lower()
+
+
+def without_native_mentions(message, mentions=None):
+    """Readable fallback if a mentioned member left before the send."""
+    import re
+    obj = message_dict(message)
+    if obj.get("type") != "textV2":
+        return message
+    substitutions = obj.pop("substitution", {})
+    pattern = re.compile(r"\{\{|\}\}|\{([A-Za-z0-9_]+)\}")
+    def replace(match):
+        if match.group(0) == "{{":
+            return "{"
+        if match.group(0) == "}}":
+            return "}"
+        item = substitutions.get(match.group(1), {})
+        if item.get("type") == "mention":
+            target = item.get("mentionee", {})
+            for original in mentions or []:
+                if original.get("type") == target.get("type") and (
+                    target.get("type") == "all" or original.get("userId") == target.get("userId")
+                ):
+                    return original["label"]
+            return "@All" if target.get("type") == "all" else "@成員"
+        return match.group(0)
+    obj.update(type="text", text=pattern.sub(replace, obj.get("text", "")))
+    from linebot.v3.messaging import Message
+    return Message.from_dict(obj)

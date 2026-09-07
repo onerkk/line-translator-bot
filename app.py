@@ -145,6 +145,9 @@ import threading
 import contextlib
 import functools
 import line_translation_delivery as line_delivery_module
+import line_factory_features
+factory_line_settings = {"groups": {}, "stations": []}
+factory_hub = None
 import reminders_web
 import scheduled_reminders
 from translation_request_guard import serialize_request
@@ -783,7 +786,16 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
 configuration = Configuration(access_token=LINE_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
-oai = OpenAI(api_key=OPENAI_KEY, timeout=90.0) if OPENAI_KEY else None  # v3.9.57: 30→90 長訊息需要
+class _NativeOpenAIProxy:
+    """STT/TTS use the same refreshed key/client as the provider admin panel."""
+    def __bool__(self):
+        return ai_provider._provider_has_key("openai")
+
+    def __getattr__(self, name):
+        return getattr(ai_provider.get_native_client("openai"), name)
+
+
+oai = _NativeOpenAIProxy()
 
 
 # ★ AI Provider 統一介面(v1.0 2026-05-15)
@@ -803,12 +815,8 @@ class _AIProxy:
         class _Transcriptions:
             @staticmethod
             def create(model, file, **kwargs):
-                # 音訊轉文字:Anthropic 不支援,active=anthropic 時拋例外讓上層 catch
-                if ai_provider.get_active_provider() == "anthropic":
-                    raise NotImplementedError(
-                        "Anthropic 不支援語音轉文字,請切回 OpenAI 或回覆用戶改用文字"
-                    )
-                if oai is None:
+                # Speech capability is independent of the text provider.
+                if not oai:
                     raise RuntimeError("OpenAI client 未初始化(OPENAI_API_KEY 缺?)")
                 # v3.21 治本:原寫 ai.audio...(呼叫自己=無限遞迴),改用原生 oai client。
                 # Gemini active 時語音轉文字也照常走 OpenAI(gpt-4o-transcribe)。
@@ -968,9 +976,9 @@ def _release_webhook_message_claims(body):
         events = payload.get("events", []) if isinstance(payload, dict) else []
         for item in events:
             message = item.get("message", {}) if isinstance(item, dict) else {}
-            _release_processed_message(message.get("id") if isinstance(message, dict) else None)
+            _release_processed_message(line_factory_features.event_identity(item))
             if isinstance(item, dict) and item.get("replyToken"):
-                _release_processed_message("pbk:" + str(item["replyToken"]))
+                _release_processed_message(line_factory_features.postback_identity(item))
     except Exception:
         logger.debug("Unable to release failed webhook message claims", exc_info=True)
 
@@ -991,7 +999,7 @@ def _should_skip_message_event(event):
     An unseen redelivery is intentionally accepted: it is the recovery path for
     a previous process that never reached a durable completion boundary.
     """
-    message_id = getattr(getattr(event, "message", None), "id", None)
+    message_id = line_factory_features.event_identity(event)
     if _is_duplicate_message(message_id):
         return True
     if _is_redelivery(event):
@@ -11239,6 +11247,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _prompt_stats.fallback_used,
         )
         _locked_note = tqg_module.visible_glossary_instruction(_locked_pairs)
+        sys_prompt += line_factory_features.station_prompt()
         if _locked_note:
             # Dynamic terminology mapping belongs after the stable prefix so
             # provider prompt caching can reuse the principles block.
@@ -11909,6 +11918,8 @@ def translate_google(text, src, tgt):
 def _translation_cache_context_bound(text):
     """Return True when source text alone cannot identify the intended meaning."""
     contract = getattr(_tl, "semantic_contract", None) or {}
+    if line_factory_features.station_scope():
+        return True
     if bool(contract.get("context_bound")):
         return True
     if str(getattr(_tl, "quoted_context_source", "") or "").strip():
@@ -11931,6 +11942,7 @@ def _translation_cache_scope():
         "tone": str(getattr(_tl, "tone", "") or ""),
         "tone_custom": str(getattr(_tl, "tone_custom", "") or ""),
         "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
+        "station": line_factory_features.station_scope(),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -13327,7 +13339,7 @@ def _translation_postback_scope(func):
             try:
                 return func(event)
             except Exception:
-                _release_processed_message("pbk:" + str(getattr(event, "reply_token", "") or ""))
+                _release_processed_message(line_factory_features.postback_identity(event))
                 raise
     return run
 
@@ -13340,6 +13352,7 @@ def _schedule_variant_translation(event, context, mode, group_id, user_id):
     payload = {
         "job_kind": "variant", "group_id": group_id, "user_id": user_id,
         "context": dict(context), "mode": mode,
+        "factory_event": context.get("factory_event"),
     }
     if not translation_retry_queue_module.enqueue(key, payload, job_kind="variant", delay_seconds=75):
         _ensure_translation_retry_worker()
@@ -13353,22 +13366,25 @@ def _durable_translation_event(kind):
     def decorate(func):
         @functools.wraps(func)
         def run(event):
-            source = event.source
-            target = (getattr(source, "group_id", None) or getattr(source, "room_id", None)
-                      or getattr(source, "user_id", None))
-            message_id = str(getattr(event.message, "id", "") or "")
-            key = f"{target}:{message_id}" + (":" + kind if kind in {"image", "audio", "video", "file"} else "")
-            if target and message_id:
-                if translation_retry_queue_module.was_delivered(key):
+            scope = factory_hub.message_scope(event, kind) if factory_hub else contextlib.nullcontext(True)
+            with scope as accepted:
+                if not accepted:
                     return
-                if translation_retry_queue_module.get(key):
-                    _ensure_translation_retry_worker()
-                    return
-            with _translation_job_scope():
-                try:
-                    return func(event)
-                except translation_retry_queue_module.LeaseLostError:
-                    logger.info("[TranslationOutbox] event already owned: %s", key[-24:])
+                target, _uid = line_factory_features.source_ids(event)
+                message_id = str(getattr(event.message, "id", "") or "")
+                identity = line_factory_features.event_identity(event)
+                key = f"{target}:{identity}" + (":" + kind if kind in {"image", "audio", "video", "file"} else "")
+                if target and message_id:
+                    if translation_retry_queue_module.was_delivered(key):
+                        return
+                    if translation_retry_queue_module.get(key):
+                        _ensure_translation_retry_worker()
+                        return
+                with _translation_job_scope():
+                    try:
+                        return func(event)
+                    except translation_retry_queue_module.LeaseLostError:
+                        logger.info("[TranslationOutbox] source superseded or owned: %s", key[-24:])
         return run
     return decorate
 
@@ -13399,7 +13415,7 @@ def _prepare_translation_delivery(job_key, payload, text, delivered_targets=None
     return plan
 
 
-def _push_translation_batch(target_id, messages, stable_key, *, notification_disabled=False):
+def _push_translation_batch(target_id, messages, stable_key, *, notification_disabled=False, mentions=None):
     """Retry only expired quote metadata; an acknowledged duplicate is success."""
     with ApiClient(configuration) as api_client:
         api = MessagingApi(api_client)
@@ -13421,11 +13437,14 @@ def _push_translation_batch(target_id, messages, stable_key, *, notification_dis
         except Exception as exc:
             if line_delivery_module.already_accepted(exc):
                 return None
-            if not line_delivery_module.invalid_quote(exc):
+            if line_delivery_module.invalid_mention(exc):
+                req.messages = [line_delivery_module.without_native_mentions(msg, mentions) for msg in req.messages]
+            elif line_delivery_module.invalid_quote(exc):
+                for msg in req.messages:
+                    if getattr(msg, "quote_token", None):
+                        msg.quote_token = None
+            else:
                 raise
-            for msg in req.messages:
-                if getattr(msg, "quote_token", None):
-                    msg.quote_token = None
             try:
                 return send()
             except Exception as retry_exc:
@@ -13438,31 +13457,50 @@ def _send_reply_with_push_fallback(
     *, reply_token, target_id, message_obj, fallback_text, retry_key=None,
     notification_disabled=False, append_messages=None, job_key=None, delivered_targets=None,
 ):
-    """Persist the complete result before attempting reply or idempotent push."""
-    payload = {"group_id": target_id, "quote_token": getattr(message_obj, "quote_token", None),
-               "notification_disabled": bool(notification_disabled)}
+    """Persist the complete LINE rendering before reply or idempotent push."""
+    payload = dict((translation_retry_queue_module.get(job_key) or {}).get("payload") or {}) if job_key else {}
+    payload.update(group_id=target_id, quote_token=getattr(message_obj, "quote_token", None),
+                   notification_disabled=bool(notification_disabled))
+    if factory_hub and not payload.get("factory_event"):
+        payload["factory_event"] = factory_hub.payload_metadata()
     plan = _prepare_translation_delivery(job_key, payload, fallback_text, delivered_targets)
-    chunks = line_delivery_module.split_text(plan["text"])
-    if len(chunks) == 1:
-        if hasattr(message_obj, "text"):
-            message_obj.text = chunks[0]
-        messages = [message_obj]
-    else:
-        messages = [TextMessage(text=chunk) for chunk in chunks]
-    messages += list(append_messages or [])[:max(0, 5 - len(messages))]
+    if not plan.get("messages"):
+        chunks = line_delivery_module.split_text(plan["text"])
+        if len(chunks) == 1:
+            if hasattr(message_obj, "text"):
+                message_obj.text = chunks[0]
+            messages = [message_obj]
+        else:
+            messages = [TextMessage(text=chunk) for chunk in chunks]
+            # Keep the original quote on the first chunk and controls on the last.
+            if getattr(message_obj, "quote_token", None):
+                messages[0].quote_token = message_obj.quote_token
+            if getattr(message_obj, "quick_reply", None):
+                messages[-1].quick_reply = message_obj.quick_reply
+        messages.extend(list(append_messages or []))
+        if factory_hub:
+            messages = factory_hub.decorate_delivery(messages, payload, plan["text"])
+        plan["messages"] = [line_delivery_module.message_dict(message) for message in messages]
+        plan["factory_event"] = payload.get("factory_event")
+        plan["factory_notice_token"] = payload.get("factory_notice_token")
+        _delivery_checkpoint(job_key, {"delivery": plan, "factory_event": payload.get("factory_event")})
+    messages = line_delivery_module.restore_messages(plan["messages"])
     if reply_token and len(messages) <= 5 and not plan.get("next_batch"):
         plan["attempted"] = True
         _delivery_checkpoint(job_key, {"delivery": plan})
         try:
             _delivery_owner(job_key)
+            if factory_hub:
+                factory_hub.assert_current(payload)
             with ApiClient(configuration) as api_client:
                 req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
                 if notification_disabled:
                     req.notification_disabled = True
-                # Reply does not support X-Line-Retry-Key.
                 response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
-            plan["next_batch"] = len(line_delivery_module.text_batches(plan["text"]))
+            plan["next_batch"] = len(line_delivery_module.message_batches(plan["messages"]))
             _delivery_checkpoint(job_key, {"delivery": plan})
+            if factory_hub:
+                factory_hub.delivery_accepted(payload, plan)
             return response, "reply"
         except translation_retry_queue_module.LeaseLostError:
             raise
@@ -13481,28 +13519,42 @@ def _translation_retry_push(job_key, payload, reply_text):
 
 def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5,
                                    prepared_plan=None, persist_key=None):
-    """Deliver every UTF-16-safe batch and resume at the first unaccepted batch."""
+    """Resume complete LINE message batches, preserving buttons and attachments."""
     target = payload.get("group_id") or payload.get("user_id")
     if not target:
         raise ValueError("translation retry has no LINE target")
     checkpoint_key = job_key if persist_key is None else persist_key
     plan = prepared_plan or _prepare_translation_delivery(checkpoint_key, payload, text)
-    batches = line_delivery_module.text_batches(plan["text"], max_messages=max_messages)
+    if not plan.get("messages"):
+        messages = [TextMessage(text=chunk) for chunk in line_delivery_module.split_text(plan["text"])]
+        if messages and payload.get("quote_token"):
+            messages[0].quote_token = payload["quote_token"]
+        # Previously attempted legacy batches retain their exact text framing.
+        if factory_hub and not plan.get("attempted") and not plan.get("next_batch"):
+            messages = factory_hub.decorate_delivery(messages, payload, plan["text"])
+        plan["messages"] = [line_delivery_module.message_dict(message) for message in messages]
+        plan["factory_event"] = payload.get("factory_event")
+        plan["factory_notice_token"] = payload.get("factory_notice_token")
+        _delivery_checkpoint(checkpoint_key, {"delivery": plan})
+    batches = line_delivery_module.message_batches(plan["messages"], max_messages)
     response = None
     round_key = str(job_key) + (":round:" + str(plan["round"]) if plan["round"] else "")
     for index in range(int(plan["next_batch"]), len(batches)):
         _delivery_owner(checkpoint_key)
+        if factory_hub:
+            factory_hub.assert_current({"factory_event": payload.get("factory_event") or plan.get("factory_event")})
         plan["attempted"] = True
         _delivery_checkpoint(checkpoint_key, {"delivery": plan})
-        messages = [TextMessage(text=chunk) for chunk in batches[index]]
-        if index == 0 and payload.get("quote_token"):
-            messages[0].quote_token = payload["quote_token"]
+        messages = line_delivery_module.restore_messages(batches[index])
         response = _push_translation_batch(
             target, messages, line_delivery_module.retry_key(round_key, index),
             notification_disabled=bool(payload.get("notification_disabled")),
+            mentions=(payload.get("factory_event") or plan.get("factory_event") or {}).get("mentions"),
         )
         plan["next_batch"] = index + 1
         _delivery_checkpoint(checkpoint_key, {"delivery": plan})
+    if factory_hub:
+        factory_hub.delivery_accepted(payload, plan)
     return response
 
 
@@ -13538,7 +13590,8 @@ def _translation_retry_key(ctx, source_text, src_lang, target_langs):
     message_id = str((ctx or {}).get("message_id") or "").strip()
     target_id = str((ctx or {}).get("group_id") or (ctx or {}).get("user_id") or "").strip()
     if message_id:
-        return target_id + ":" + message_id
+        default_key = target_id + ":" + message_id
+        return factory_hub.job_key(target_id, message_id, default_key) if factory_hub else default_key
     payload = "\x1f".join([
         target_id,
         str(src_lang or ""),
@@ -13871,6 +13924,10 @@ def _translation_retry_worker_loop():
                         "next_delay": delay,
                         "durable": True,
                     })
+                except line_factory_features.SupersededMessage:
+                    translation_retry_queue_module.mark_delivered(job_key, owner=owner)
+                    with _TRANSLATION_RETRY_LOCK:
+                        _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
                 except Exception as exc:
                     completed = int(job.get("attempts") or 0) + 1
                     delay = _translation_retry_backoff(completed)
@@ -13977,6 +14034,7 @@ def _schedule_text_translation_retry(
         "from_file": bool(from_file),
         "file_name": str(file_name or ""),
         "job_kind": "text",
+        "factory_event": factory_hub.payload_metadata() if factory_hub else None,
     }
     first_delay = (_translation_retry_delays()[0] if delay_seconds is None
                    else max(0.0, float(delay_seconds or 0.0)))
@@ -14021,7 +14079,9 @@ def _complete_durable_text_job(job_key, lease_owner=None):
         payload = row["payload"]
         plan = payload.get("delivery") or {}
         if plan:
-            if int(plan.get("next_batch") or 0) < len(line_delivery_module.text_batches(plan["text"])):
+            batches = (line_delivery_module.message_batches(plan["messages"]) if plan.get("messages")
+                       else line_delivery_module.text_batches(plan["text"]))
+            if int(plan.get("next_batch") or 0) < len(batches):
                 return False
             remaining = [lang for lang in payload.get("target_langs") or []
                          if lang not in plan.get("targets", [])]
@@ -14057,6 +14117,8 @@ def _run_translation_retry_job(job, owner):
     try:
         with translation_retry_queue_module.maintain_lease(key, owner=owner) as check:
             _translation_delivery_state.leases = {key: (owner, check)}
+            if factory_hub:
+                factory_hub.assert_current(payload)
             group_id = payload.get("group_id")
             _tl.group_id = group_id or "__dm__"
             _tl.user_id = payload.get("user_id") or ""
@@ -14138,6 +14200,7 @@ def _schedule_media_translation_retry(ctx, job_kind, *, delay_seconds=75, **extr
     job_key = f"{target_id}:{message_id}:{kind}"
     payload = {
         "job_kind": kind,
+        "factory_event": factory_hub.payload_metadata() if factory_hub else None,
         "group_id": ctx.get("group_id"),
         "user_id": ctx.get("user_id"),
         "message_id": message_id,
@@ -14182,6 +14245,7 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
     job_key = f"{target_id}:{message_id}:image"
     payload = {
         "job_kind": "image",
+        "factory_event": factory_hub.payload_metadata() if factory_hub else None,
         "wo_setting": bool(ctx.get("wo_setting", group_wo_settings.get(ctx.get("group_id"), True))),
         "group_id": ctx.get("group_id"),
         "user_id": ctx.get("user_id"),
@@ -17870,6 +17934,7 @@ HELP_COMMAND_SECTIONS = [
         "admin_only": True,
         "items": [
             ("/liff",         "圖形化群組設定", "Setelan grup grafis"),
+            ("/factory",      "工廠工具／掃碼", "Alat pabrik / pindai"),
             ("/lang id,th",   "設定翻譯語言",   "Atur bahasa"),
             ("/skipterm 詞",  "加不翻譯詞",     "Tambah kata skip"),
             ("/skipadd 名字", "加入白名單",   "Tambah whitelist"),
@@ -19484,6 +19549,8 @@ def handle_message(event):
         return
     
     text = event.message.text.strip()
+    if factory_hub and factory_hub.command(event):
+        return
     # v3.9.56: 全面短文翻譯 — 改用 has_translatable_content,
     # 放行單字中文(好/對/是)、單假名/韓/泰字;只擋純 emoji/標點/數字。
     if not has_translatable_content(text):
@@ -21967,10 +22034,10 @@ if PostbackEvent:
     def handle_postback(event):
         """Handle postback actions from Quick Reply / Flex buttons."""
         # v3.9.30c B18 修補: postback 也會 redelivery,且會跑翻譯花錢
-        # postback 沒有 message.id,改用 reply_token 當 dedup key(每個 reply_token 唯一)
-        _rtok = getattr(event, 'reply_token', None)
-        if _rtok and _is_duplicate_message("pbk:" + _rtok):
-            logger.warning("[handle_postback] duplicate reply_token, skipping")
+        # A redelivery can carry a different reply token; webhookEventId is stable.
+        _postback_key = line_factory_features.postback_identity(event)
+        if _postback_key != "pbk:" and _is_duplicate_message(_postback_key):
+            logger.warning("[handle_postback] duplicate event, skipping")
             return
         data = event.postback.data if hasattr(event.postback, 'data') else ""
         logger.info("Postback: %s", data)
@@ -21982,6 +22049,8 @@ if PostbackEvent:
             params = {}
 
         action = params.get("action", "")
+        if factory_hub and factory_hub.postback(event, params):
+            return
 
         # Multilingual one-click actions.  Controls are bilingual and use
         # postbacks so users never need to memorise Chinese-only slash commands.
@@ -22440,6 +22509,8 @@ if UnsendEvent:
     @handler.add(UnsendEvent)
     def handle_unsend(event):
         """Clean up cached message when user unsends."""
+        if factory_hub:
+            factory_hub.unsend(event)
         msg_id = getattr(event.unsend, 'message_id', None) if hasattr(event, 'unsend') else None
         if msg_id and msg_id in message_cache:
             del message_cache[msg_id]
@@ -22680,7 +22751,7 @@ def show_loading(chat_id):
 def mark_as_read(chat_id, mark_as_read_token=None):
     """Mark messages as read (shows 'read' indicator).
     
-    v3.11: 優先用 2025/11/05 釋出的 token-based API(只標單一訊息),
+    v3.11: 優先用 token-based API，標記該訊息及之前的訊息為已讀，
     舊 SDK 沒有 MarkMessagesAsReadByTokenRequest 或 event 沒帶 token 時,
     退回原本 chat_id 版本(標整個聊天)。
     
@@ -22694,7 +22765,7 @@ def mark_as_read(chat_id, mark_as_read_token=None):
         try:
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
-                # 路徑 A:有 token + 新 SDK → 用 token 版本(精準標單一訊息)
+                # 路徑 A: token 指定讀取界線，不是同事已讀回條。
                 if mark_as_read_token and MarkMessagesAsReadByTokenRequest:
                     try:
                         api.mark_messages_as_read_by_token(
@@ -23865,6 +23936,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </style>
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
+<link rel="stylesheet" href="/static/line_factory.css?v=1">
+<script src="/static/admin_factory.js?v=1" defer></script>
 </head>
 <body>
 <div id="app">
@@ -24001,10 +24074,12 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div class="tab" onclick="switchTab('examples')">翻譯範例</div>
 <div class="tab" onclick="switchTab('forms')">表單</div>
 <div class="tab" onclick="switchTab('aiprovider')">🔄 AI</div>
+<div class="tab" onclick="switchTab('factory')">🏭 工廠工具</div>
 <div class="tab" onclick="switchTab('settings')">設定</div>
 </div>
 
 <!-- Custom reminders: dates are always interpreted in Asia/Taipei. -->
+<div class="panel" id="panel-factory"><div id="factory-admin-root"></div></div>
 <div class="panel" id="panel-reminders">
 <h2 class="reminder-heading">自訂提醒</h2>
 <p class="reminder-hint">選擇群組、日期時間與標註對象，時間皆以台灣時間（UTC+8）計算。</p>
@@ -25653,7 +25728,7 @@ function doLogin(){
 <script>
 var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
 
-var TAB_KEYS=['overview','reminders','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','settings'];
+var TAB_KEYS=['overview','reminders','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','factory','settings'];
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -26204,9 +26279,14 @@ async function aipLoadStatus(){
     _aipRetried = false;
     const provider = data.active_provider || 'openai';
     const cfg = data.config || {};
+    const readiness = ((data.diagnostics || {}).providers || []).find(x => x.provider === provider);
+    const reasons = {missing_key:'尚未設定金鑰',quota_exhausted:'額度停用，補足後請按測試',circuit_open:'連線暫停，請按測試',eligible:'已設定；可按測試驗證',unsupported_capability:'不支援此功能'};
     const displayMap = {openai:'🟢 OpenAI (GPT)', anthropic:'🟣 Anthropic (Claude)', gemini:'🔵 Google (Gemini)'};
-    document.getElementById('aip-active-display').textContent = displayMap[provider] || provider;
+    document.getElementById('aip-active-display').textContent = (displayMap[provider] || provider) + (readiness ? ' · ' + (reasons[readiness.reason] || readiness.reason) : '');
     document.getElementById('aip-last-updated').textContent = cfg.last_updated ? ('最後更新：' + cfg.last_updated) : '';
+    if(readiness && readiness.configured && !readiness.environment_matches){
+      document.getElementById('aip-last-updated').textContent += ' · 目前金鑰與部署環境不同；重新部署前請同步 Render 環境變數。';
+    }
     // v3.21: 三 provider 高亮(active 上色、其餘灰底)
     const provBtns = {
       openai:    {el: document.getElementById('aip-btn-openai'),    bg:'linear-gradient(135deg, #10b981, #059669)', bd:'#10b981', fg:'#fff'},
@@ -26227,15 +26307,15 @@ async function aipLoadStatus(){
     if(gemPrev) gemPrev.textContent = (cfg.gemini && cfg.gemini.api_key_preview) || '(未設定)';
     // v3.25: OpenAI 頁填值 + 首次載入自動開「目前主力」的分頁
     try{
-      if(d.openai_models){
-        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = d.openai_models.default || 'gpt-5.6-luna';
-        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = d.openai_models.upgrade || 'gpt-5.6-terra';
+      if(data.openai_models){
+        var _e1=document.getElementById('aip-oai-default'); if(_e1) _e1.value = data.openai_models.default || 'gpt-5.6-luna';
+        var _e2=document.getElementById('aip-oai-upgrade'); if(_e2) _e2.value = data.openai_models.upgrade || 'gpt-5.6-terra';
       }
       var _fx=document.getElementById('aip-oai-flex');
       if(_fx) _fx.checked = !(cfg.openai_features && cfg.openai_features.flex_background === false);
       if(!_aipPageInit){
         _aipPageInit = true;
-        var _ap = d.active_provider || 'openai';
+        var _ap = data.active_provider || 'openai';
         aipShowPage(_ap === 'anthropic' ? 'claude' : _ap);
       }
     }catch(e){}
@@ -26722,6 +26802,7 @@ function switchTab(name){if(name==='aiprovider')aipLoadStatus();
   if(name==='insight') loadInsightTab();
   if(name==='examples'){loadExamples();loadTranslationLog();}
   if(name==='forms') loadFormsTab();
+  if(name==='factory' && window.loadFactoryTools) window.loadFactoryTools();
   if(name==='settings') loadFeatureSettings();
 }
 
@@ -27240,7 +27321,7 @@ function _renderUsersList(){
   if(!el)return;
   if(!_allUsers.length){el.innerHTML='<div class="empty">尚無使用者紀錄<br>使用者互動後會自動出現</div>';return}
   var html='';
-  var TAB_OPTS=[['overview','總覽'],['reminders','自訂提醒'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['settings','設定']];
+  var TAB_OPTS=[['overview','總覽'],['reminders','自訂提醒'],['groups','群組'],['skip','白名單'],['users','使用者'],['names','保護名單'],['storage','儲區'],['glossary','印尼詞庫'],['packaging','包裝碼'],['passwords','密碼'],['scrap','廢料色'],['external_links','外連'],['quickreply','快捷鍵'],['insight','數據'],['examples','翻譯範例'],['forms','表單'],['aiprovider','🔄 AI'],['factory','🏭 工廠工具'],['settings','設定']];
   for(var i=0;i<_allUsers.length;i++){
     var u=_allUsers[i];
     var langBadge=u.line_lang?'<span class="badge badge-on" style="font-size:11px">'+u.line_lang+'</span>':'';
@@ -29854,6 +29935,7 @@ def _do_save_impl():
         try:
             data = {
             "group_settings": group_settings,
+            "factory_line_settings": copy.deepcopy(factory_line_settings),
             "group_target_lang": group_target_lang,
             "group_img_settings": group_img_settings,
             "group_img_ask_settings": group_img_ask_settings,
@@ -30051,6 +30133,7 @@ def _do_save_impl():
 def load_settings():
     """Load bot settings from GitHub on startup."""
     global dm_master_enabled, dm_whitelist, dm_known_users, dm_target_lang
+    global factory_line_settings
     global group_settings, group_target_lang, group_img_settings, group_img_ask_settings, group_audio_settings
     global group_wo_settings, group_skip_users, group_tracking, group_user_names
     global admin_users, bot_stats
@@ -30101,6 +30184,9 @@ def load_settings():
         # Keep API keys and the user's active-provider choice, but replace stale
         # model IDs and latency/quality defaults so no dashboard edits are needed.
         _migrate_all_ai_defaults = _loaded_settings_schema < _SETTINGS_SCHEMA_VERSION
+        factory_line_settings = data.get("factory_line_settings", {"groups": {}, "stations": []})
+        if not isinstance(factory_line_settings, dict):
+            factory_line_settings = {"groups": {}, "stations": []}
         group_settings.update(data.get("group_settings", {}))
         group_target_lang.update(data.get("group_target_lang", {}))
         group_img_settings.update(data.get("group_img_settings", {}))
@@ -30688,6 +30774,7 @@ def api_admin_ai_provider_get():
         "ok": True,
         "config": ai_provider.get_current_config_safe(),
         "active_provider": ai_provider.get_active_provider(),
+        "diagnostics": ai_provider.get_provider_diagnostics(),
         # v3.25: OpenAI 分頁填值用
         "openai_models": {"default": model_default, "upgrade": model_upgrade},
     })
@@ -30845,7 +30932,11 @@ def api_admin_ai_provider_set_key():
     if not api_key:
         return jsonify({"ok": False, "message": "api_key 為空"}), 400
     ok, msg = ai_provider.update_provider_key(provider, api_key)
-    return jsonify({"ok": ok, "message": msg})
+    if ok:
+        # Persist the quota reset too. Secrets remain outside cloud snapshots.
+        save_settings(force=True)
+    diagnostics = ai_provider.get_provider_diagnostics()
+    return jsonify({"ok": ok, "message": msg, "diagnostics": diagnostics})
 
 
 @app.route("/api/admin/ai-provider/mapping", methods=["POST"])
@@ -30865,45 +30956,44 @@ def api_admin_ai_provider_mapping():
 
 @app.route("/api/admin/ai-provider/test", methods=["POST"])
 def api_admin_ai_provider_test():
-    """測試呼叫:用目前 active provider 跑一個小翻譯,確認 key 可用 + 顯示用了哪些 Claude 能力"""
+    """Probe the selected provider only; never call empty output a success."""
     if not check_manager_access("aiprovider"):
         return jsonify({"error": "forbidden"}), 403
+    provider = ai_provider.get_active_provider()
+    started = time.monotonic()
     try:
-        resp = ai_provider.chat_complete(
-            model=ai_provider.DEFAULT_OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": "你是專業工廠翻譯。請忠實翻譯,不加註解。"},
-                {"role": "user", "content": "請把這句翻成印尼文:鋼帶不夠了,打包機停了"},
-            ],
-            max_tokens=200,
-            temperature=0.0,
-        )
+        with _translation_job_scope():
+            resp = ai_provider.chat_complete(
+                model=ai_provider.DEFAULT_OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "你是專業工廠翻譯。請忠實翻譯,不加註解。"},
+                    {"role": "user", "content": "請把這句翻成印尼文:鋼帶不夠了,打包機停了"},
+                ],
+                max_tokens=200, temperature=0.0, diagnostic_probe=provider,
+                timeout=25, failover_total_timeout=30, translation_max_generations=1,
+            )
         text = resp.choices[0].message.content if resp.choices else ""
-        result = {
-            "ok": True,
-            "provider": ai_provider.get_active_provider(),
-            "model_used": getattr(resp, "model", "?"),
-            "result": text,
-            "usage": {
-                "input": getattr(resp.usage, "prompt_tokens", 0),
-                "output": getattr(resp.usage, "completion_tokens", 0),
-                "cache_read": getattr(resp.usage, "cache_read_tokens", 0),
-                "cache_creation": getattr(resp.usage, "cache_creation_tokens", 0),
-            } if resp.usage else {},
-        }
-        # v3.0: 帶上實際啟用的 Claude features(讓歐那看到真有跑)
-        claude_features_used = getattr(resp, "_jy_claude_features_used", None)
-        if claude_features_used:
-            result["claude_features_used"] = claude_features_used
-        # Citations(Phase 9)
-        citations = getattr(resp, "_jy_citations", None)
-        if citations:
-            result["citations"] = citations
-        return jsonify(result)
-    except NotImplementedError as e:
-        return jsonify({"ok": False, "error": "功能不支援:" + str(e)}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        if not isinstance(text, str) or not text.strip() or _is_translation_failure_sentinel(text):
+            raise ValueError("AI 未回傳完整翻譯，不能判定測試成功。")
+        actual = getattr(resp, "_jy_provider", provider)
+        if actual != provider:
+            raise ValueError("實際提供者與選定的測試對象不符。")
+        ai_provider.complete_provider_probe(actual)
+        save_settings(force=True)
+        usage = getattr(resp, "usage", None)
+        return jsonify(ok=True, provider=actual, model_used=getattr(resp, "model", "?"), result=text.strip(),
+                       latency_ms=round((time.monotonic()-started)*1000),
+                       usage={"input": getattr(usage, "prompt_tokens", 0), "output": getattr(usage, "completion_tokens", 0),
+                              "cache_read": getattr(usage, "cache_read_tokens", 0), "cache_creation": getattr(usage, "cache_creation_tokens", 0)},
+                       diagnostics=ai_provider.get_provider_diagnostics())
+    except Exception as exc:
+        code = str(getattr(exc, "code", "") or "")
+        error = str(exc)
+        if "missing_scope" in error or "model.request" in error:
+            error = "API 金鑰缺少 model.request 權限，請檢查專案權限或更換具模型呼叫權限的金鑰。"
+        elif "401" in error or code == "invalid_api_key":
+            error = "API 驗證失敗，請確認金鑰、專案與帳號權限。"
+        return jsonify(ok=False, provider=provider, error=error, diagnostics=ai_provider.get_provider_diagnostics()), 502
 
 
 @app.route("/api/admin/ai-provider/features", methods=["POST"])
@@ -34512,148 +34602,16 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 </div>
 <script>
 var LIFF_ID=__LIFF_ID_JSON__;
-var API_BASE=location.origin;
-var currentUser=null;
-var formId=null;
-
-async function initLiff(){
-  try{
-    await liff.init({liffId:LIFF_ID});
-    if(!liff.isLoggedIn()){liff.login();return}
-    var profile=await liff.getProfile();
-    currentUser={userId:profile.userId,displayName:profile.displayName,pictureUrl:profile.pictureUrl||''};
-    var params=new URLSearchParams(location.search);
-    formId=params.get('id');
-    if(formId){
-      await loadForm(formId);
-    }else{
-      await loadFormList();
-    }
-  }catch(e){
-    /* v3.9.30c B12 修補: e.message 用 esc() 防 XSS */
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
-  }
-}
-
-async function loadFormList(){
-  try{
-    var r=await fetch(API_BASE+'/api/liff/forms');
-    var data=await r.json();
-    var forms=data.forms||[];
-    var active=forms.filter(function(f){return f.status==='active'});
-    if(active.length===0){
-      document.getElementById('app').innerHTML='<div style="text-align:center;padding:40px;color:#8a8a9a">目前沒有表單<br>No forms available</div>';
-      return;
-    }
-    var html='<div class="form-list">';
-    for(var i=0;i<active.length;i++){
-      var f=active[i];
-      html+='<div class="form-item" onclick="location.href=location.pathname+&apos;?id='+f.id+'&apos;"><h3>'+esc(f.title_zh)+'</h3><div class="sub">'+esc(f.title_id)+'</div></div>';
-    }
-    html+='</div>';
-    document.getElementById('app').innerHTML=html;
-  }catch(e){
-    /* v3.9.30c B12 修補: e.message 用 esc() */
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
-  }
-}
-
-async function loadForm(fid){
-  try{
-    var r=await fetch(API_BASE+'/api/liff/form/'+fid+'?user_id='+currentUser.userId);
-    var data=await r.json();
-    if(data.error){
-      document.getElementById('app').innerHTML='<div class="error-box"><h2>錯誤</h2><p>'+esc(data.error)+'</p></div>';
-      return;
-    }
-    if(data.already_submitted){
-      document.getElementById('app').innerHTML='<div class="already-box"><h2>✅ 已填寫 Sudah diisi</h2><p>你已經提交過此表單<br>Anda sudah mengisi formulir ini</p></div>';
-      return;
-    }
-    renderForm(data.form);
-  }catch(e){
-    /* v3.9.30c B12 修補: e.message 用 esc() */
-    document.getElementById('app').innerHTML='<div class="error-box"><h2>Error</h2><p>'+esc(e.message||'')+'</p></div>';
-  }
-}
-
-function renderForm(form){
-  var html='<div class="card" style="margin-bottom:16px"><h2 style="font-size:18px;margin-bottom:4px">'+esc(form.title_zh)+'</h2><div style="font-size:13px;color:#8a8a9a">'+esc(form.title_id)+'</div></div>';
-  var fields=form.fields||[];
-  for(var i=0;i<fields.length;i++){
-    var f=fields[i];
-    html+='<div class="card">';
-    html+='<div class="field-label">'+esc(f.label_zh)+(f.required?'<span class="required-mark">*</span>':'')+'</div>';
-    html+='<div class="field-label-id">'+esc(f.label_id)+'</div>';
-    if(f.type==='text'){
-      html+='<input type="text" id="f_'+f.id+'" placeholder="">';
-    }else if(f.type==='number'){
-      html+='<input type="number" id="f_'+f.id+'" placeholder="">';
-    }else if(f.type==='date'){
-      html+='<input type="date" id="f_'+f.id+'">';
-    }else if(f.type==='textarea'){
-      html+='<textarea id="f_'+f.id+'"></textarea>';
-    }else if(f.type==='select'){
-      html+='<select id="f_'+f.id+'"><option value="">-- 請選擇 Pilih --</option>';
-      var opts=f.options||[];
-      for(var j=0;j<opts.length;j++){
-        html+='<option value="'+esc(opts[j].zh)+'">'+esc(opts[j].zh)+' / '+esc(opts[j].id)+'</option>';
-      }
-      html+='</select>';
-    }else if(f.type==='checkbox'){
-      html+='<div class="checkbox-wrap"><input type="checkbox" id="f_'+f.id+'"><label for="f_'+f.id+'">'+esc(f.label_zh)+' / '+esc(f.label_id)+'</label></div>';
-    }
-    html+='</div>';
-  }
-  html+='<button class="btn btn-primary" id="submitBtn" onclick="submitForm()">提交 Kirim</button>';
-  document.getElementById('app').innerHTML=html;
-}
-
-async function submitForm(){
-  var btn=document.getElementById('submitBtn');
-  btn.disabled=true;btn.textContent='提交中 Mengirim...';
-  try{
-    var r=await fetch(API_BASE+'/api/liff/form/'+formId+'?user_id='+currentUser.userId);
-    var meta=await r.json();
-    var fields=meta.form.fields||[];
-    var answers={};
-    for(var i=0;i<fields.length;i++){
-      var f=fields[i];
-      var el=document.getElementById('f_'+f.id);
-      if(!el)continue;
-      var val='';
-      if(f.type==='checkbox'){val=el.checked?'yes':'no'}
-      else{val=el.value.trim()}
-      if(f.required && !val && f.type!=='checkbox'){
-        alert('請填寫: '+f.label_zh+'\nHarap isi: '+f.label_id);
-        btn.disabled=false;btn.textContent='提交 Kirim';return;
-      }
-      answers[f.id]=val;
-    }
-    var body={user_id:currentUser.userId,user_name:currentUser.displayName,picture_url:currentUser.pictureUrl,answers:answers};
-    var r2=await fetch(API_BASE+'/api/liff/form/'+formId+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    var res=await r2.json();
-    if(res.ok){
-      document.getElementById('app').innerHTML='<div class="success-box"><h2>✅ 提交成功 Berhasil</h2><p>感謝填寫！<br>Terima kasih sudah mengisi!</p></div>';
-      setTimeout(function(){if(liff.isInClient())liff.closeWindow()},2000);
-    }else{
-      alert(res.error||'Error');btn.disabled=false;btn.textContent='提交 Kirim';
-    }
-  }catch(e){
-    alert('Error: '+e.message);btn.disabled=false;btn.textContent='提交 Kirim';
-  }
-}
-
-function esc(s){if(!s)return '';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-
-document.addEventListener('DOMContentLoaded',initLiff);
 </script>
+<script src="/static/liff_forms.js?v=1" defer></script>
 </body>
 </html>"""
 
 
 @app.route("/liff/form")
 def liff_form_page():
+    if "liff.state" in request.args:
+        return line_factory_features.entry_page(app, LIFF_ID)
     html = LIFF_FORM_HTML.replace(
         "__LIFF_ID_JSON__",
         _json_for_inline_script(LIFF_ID),
@@ -34665,54 +34623,63 @@ def liff_form_page():
 
 @app.route("/api/liff/forms")
 def api_liff_forms_list():
-    """Public: list active forms (no auth needed, LIFF user sees these)."""
-    result = []
-    for fid, f in forms_data.items():
-        if f.get("status") == "active":
-            result.append({"id": fid, "title_zh": f["title_zh"], "title_id": f["title_id"], "field_count": len(f.get("fields", []))})
-    return jsonify({"forms": result})
+    import line_liff_forms as forms_auth
+    try:
+        user = forms_auth.actor(globals())
+        result = [{"id": fid, "title_zh": f.get("title_zh", ""), "title_id": f.get("title_id", ""),
+                   "status": "active", "field_count": len(f.get("fields", []))}
+                  for fid, f in forms_data.items() if f.get("status") == "active" and forms_auth.allowed(f, user)]
+        return jsonify(forms=result)
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
 
 
 @app.route("/api/liff/form/<form_id>")
 def api_liff_form_detail(form_id):
-    """Public: get form detail + check if user already submitted."""
-    f = forms_data.get(form_id)
-    if not f:
-        return jsonify({"error": "表單不存在 Form not found"}), 404
-    if f.get("status") != "active":
-        return jsonify({"error": "表單已關閉 Form closed"}), 403
-    user_id = request.args.get("user_id", "")
-    already = False
-    if user_id and form_id in forms_submissions:
-        already = user_id in forms_submissions[form_id]
-    return jsonify({"form": f, "already_submitted": already})
+    import line_liff_forms as forms_auth
+    try:
+        user = forms_auth.actor(globals())
+        form = forms_data.get(form_id)
+        if not form:
+            return jsonify(error="表單不存在 / Formulir tidak ditemukan"), 404
+        if form.get("status") != "active" or not forms_auth.allowed(form, user):
+            return jsonify(error="表單未開放給此帳號；群組表單請先在該群組輸入 /factory。"), 403
+        return jsonify(form=form, already_submitted=user["user_id"] in forms_submissions.get(form_id, {}))
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
 
 
 @app.route("/api/liff/form/<form_id>/submit", methods=["POST"])
 def api_liff_form_submit(form_id):
-    """Public: submit form answers."""
-    f = forms_data.get(form_id)
-    if not f:
-        return jsonify({"error": "表單不存在"}), 404
-    if f.get("status") != "active":
-        return jsonify({"error": "表單已關閉"}), 403
-    body = request.get_json(force=True)
-    user_id = body.get("user_id", "")
-    if not user_id:
-        return jsonify({"error": "缺少用戶ID"}), 400
-    if form_id not in forms_submissions:
-        forms_submissions[form_id] = {}
-    if user_id in forms_submissions[form_id]:
-        return jsonify({"error": "已填寫過 Sudah diisi"}), 409
-    forms_submissions[form_id][user_id] = {
-        "user_name": body.get("user_name", ""),
-        "picture_url": body.get("picture_url", ""),
-        "answers": body.get("answers", {}),
-        "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "approved": False,
-    }
-    save_settings()
-    return jsonify({"ok": True})
+    import line_liff_forms as forms_auth
+    import copy
+    try:
+        if request.content_length and request.content_length > 600_000:
+            return jsonify(error="資料過大。"), 413
+        user = forms_auth.actor(globals())
+        with _state_lock:
+            form = forms_data.get(form_id)
+            if not form:
+                return jsonify(error="表單不存在"), 404
+            if form.get("status") != "active" or not forms_auth.allowed(form, user):
+                return jsonify(error="表單未開放給此帳號；群組表單請先在該群組輸入 /factory。"), 403
+            answers = forms_auth.answers(form, request.get_json(silent=True))
+            uid = user["user_id"]
+            previous = copy.deepcopy(forms_submissions.get(form_id, {}))
+            if uid in previous:
+                return jsonify(error="已填寫過 / Sudah diisi"), 409
+            forms_submissions.setdefault(form_id, {})[uid] = {
+                "user_name": user["user_name"], "picture_url": user["picture_url"], "answers": answers,
+                "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"), "approved": False,
+            }
+            if not save_settings(force=True):
+                forms_submissions[form_id] = previous
+                return jsonify(error="尚未確認儲存成功，請重試。 / Belum tersimpan; coba lagi."), 503
+        return jsonify(ok=True)
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
 
 # ─── Admin Form Management API ─────────────────────────
@@ -36728,6 +36695,14 @@ def _register_translation_action_context(group_id, original_text, translated_tex
             for key, _ in oldest:
                 _translation_action_cache.pop(key, None)
         _translation_action_cache[token] = record
+    if globals().get("factory_hub"):
+        record["factory_event"] = factory_hub.payload_metadata()
+        try:
+            record = factory_hub.save_context(token, record)
+        except line_factory_features.StoreError:
+            logger.warning("[FactoryTools] cloud action storage unavailable; keeping local action context")
+        with _translation_action_lock:
+            _translation_action_cache[token] = record
     return token
 
 
@@ -36737,7 +36712,11 @@ def _get_translation_action_context(token, group_id=None):
     now = time.time()
     with _translation_action_lock:
         record = _translation_action_cache.get(token)
+        if not record and globals().get("factory_hub"):
+            record = factory_hub.get_context(token, group_id)
         if not record:
+            return None
+        if globals().get("factory_hub") and not factory_hub.current(record.get("factory_event")):
             return None
         if float(record.get("expires_at", 0)) <= now:
             _translation_action_cache.pop(token, None)
@@ -38097,7 +38076,7 @@ def resolve_liff_nonce(nonce):
             if entry:
                 # 加進記憶體 cache
                 _liff_nonces[nonce] = entry
-    if not entry:
+    if not entry or len(entry) < 3 or float(entry[2]) <= time.time():
         return None
     return entry[0], entry[1]
 
@@ -38335,6 +38314,7 @@ async function init(){
     if (window.liff && liffId) await liff.init({liffId: liffId.content});
   } catch(e){ /* ignore — nonce flow doesn't need LIFF */ }
 
+  NONCE = new URLSearchParams(location.search).get("nonce") || NONCE;
   if (!NONCE) { showErr("⚠️ 缺少授權 token / Token tidak ada\n請從 LINE 群組打 /liff 重新取得連結"); return; }
 
   try {
@@ -38558,11 +38538,18 @@ def api_interpreter_translate():
 
 @app.route("/liff/settings")
 def liff_settings_page():
+    if "liff.state" in request.args:
+        return line_factory_features.entry_page(app, LIFF_ID)
+    if request.args.get("view", "").lower() == "factory":
+        return line_factory_features.factory_page(app, LIFF_ID)
+    if request.args.get("view", "").lower() == "form":
+        return liff_form_page()
     """Serve group settings or the voice interpreter inside the same LIFF endpoint."""
     if request.args.get("view") == "interpreter":
         body = translation_extras_module.build_interpreter_html(liff_id=LIFF_ID)
     else:
-        body = LIFF_SETTINGS_HTML
+        import html as html_module
+        body = LIFF_SETTINGS_HTML.replace('</head>', '<meta name="liff-id" content="' + html_module.escape(LIFF_ID or "", quote=True) + '"></head>')
     resp = app.response_class(body, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
@@ -38695,6 +38682,8 @@ def _authorize_reminders():
         return uid
     return None
 
+
+factory_hub = line_factory_features.install(app, globals())
 
 _start_reminders = reminders_web.register_reminders(
     app, authorize=_authorize_reminders, catalog=_reminder_catalog,

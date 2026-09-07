@@ -621,8 +621,18 @@ def _save_config_to_disk(cfg):
     global _last_config_mtime
     try:
         cfg["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(PROVIDER_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(PROVIDER_CONFIG_PATH))
+        descriptor, temporary = tempfile.mkstemp(prefix=".ai-provider-", dir=directory)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, PROVIDER_CONFIG_PATH)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         # 存檔後更新 mtime,避免自己的 _ensure_initialized 又 reload 一次
         try:
             _last_config_mtime = os.path.getmtime(PROVIDER_CONFIG_PATH)
@@ -903,6 +913,37 @@ def has_available_provider(capability="chat"):
     return bool(get_available_providers(capability=capability))
 
 
+def get_provider_diagnostics(capability="chat"):
+    """Report eligibility separately from a successful live request."""
+    _ensure_initialized()
+    rows = []
+    for provider, variable in (("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY"),
+                               ("gemini", "GEMINI_API_KEY")):
+        key = str((_current_config or {}).get(provider, {}).get("api_key") or "")
+        configured = bool(key.strip())
+        blocked = _provider_quota_blocked(provider)
+        supported = _provider_supports(provider, capability)
+        reason = ("missing_key" if not configured else "unsupported_capability" if not supported
+                  else "quota_exhausted" if blocked else "circuit_open" if _circuit_is_open(provider) else "eligible")
+        env_key = os.environ.get(variable, "") or (os.environ.get("GOOGLE_API_KEY", "") if provider == "gemini" else "")
+        rows.append({"provider": provider, "configured": configured, "quota_blocked": blocked,
+                     "reason": reason, "eligible": reason == "eligible",
+                     "environment_matches": bool(key and env_key and key == env_key),
+                     "environment_configured": bool(env_key)})
+    return {"active_provider": get_active_provider(), "providers": rows,
+            "available": get_available_providers(capability), "capability": capability}
+
+
+def complete_provider_probe(provider):
+    """Clear a stale exhaustion flag after that provider actually succeeded."""
+    _ensure_initialized()
+    with _config_lock:
+        _current_config.setdefault("quota_exhausted_providers", {}).pop(provider, None)
+        saved = _save_config_to_disk(_current_config)
+    reset_provider_health(provider)
+    return saved
+
+
 def get_native_client(provider):
     """供同專案的原生 API 模組（Batch/TTS 以外）取得已套用統一設定的 client。"""
     if provider == "openai":
@@ -948,6 +989,7 @@ def update_provider_key(provider, api_key):
         return False, f"unknown provider: {provider}"
     _ensure_initialized()
     with _config_lock:
+        previous = json.loads(json.dumps(_current_config))
         _current_config.setdefault(provider, {})["api_key"] = (api_key or "").strip()
         # A new/re-entered key is the strongest signal that billing credentials
         # were repaired.  Allow this provider to participate again, but do not
@@ -962,6 +1004,8 @@ def update_provider_key(provider, api_key):
             else:
                 _anthropic_client = None
             return True, f"{provider} key 已更新"
+        _current_config.clear()
+        _current_config.update(previous)
         return False, "存檔失敗"
 
 
@@ -2281,6 +2325,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     _ensure_initialized()
     required_capability = str(kwargs.pop("required_capability", "chat") or "chat")
     provider_preference = kwargs.pop("provider_preference", None)
+    diagnostic_probe = kwargs.pop("diagnostic_probe", None)
     latency_profile = str(kwargs.pop("latency_profile", "") or "").strip()
     response_validator = kwargs.pop("response_validator", None)
     # Translation callers cap completed candidate generations independently of
@@ -2305,9 +2350,17 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     failover_enabled = bool((_current_config or {}).get("provider_failover", True))
 
     providers = get_available_providers(required_capability, preference=provider_preference)
+    if diagnostic_probe is not None:
+        if diagnostic_probe not in ("openai", "anthropic", "gemini") or not _provider_supports(diagnostic_probe, required_capability):
+            raise ValueError("不支援的測試提供者。")
+        if not _provider_has_key(diagnostic_probe):
+            raise RuntimeError(diagnostic_probe + " 尚未設定 API 金鑰。")
+        providers = [diagnostic_probe]
     if not providers:
-        raise RuntimeError(f"沒有已設定且支援 {required_capability} 的 AI provider")
-    if not failover_enabled:
+        diagnostic = get_provider_diagnostics(required_capability)
+        reasons = "; ".join(row["provider"] + ":" + row["reason"] for row in diagnostic["providers"])
+        raise RuntimeError("沒有可用的 " + required_capability + " AI 提供者（" + reasons + "）。請在 AI 頁檢查金鑰並測試呼叫。")
+    if not failover_enabled and diagnostic_probe is None:
         active = get_active_provider()
         providers = [active] if active in providers else providers[:1]
 
@@ -2476,7 +2529,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 # Only explicit credit/quota exhaustion permanently changes the
                 # active provider. Generic 429 means temporary rate limiting and
                 # is handled by this request's failover + circuit cooldown.
-                if _is_quota_exhausted_error(err):
+                if _is_quota_exhausted_error(err) and diagnostic_probe is None:
                     _auto_switch_on_exhaust(provider, err)
 
                 if can_retry_same:

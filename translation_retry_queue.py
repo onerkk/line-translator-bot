@@ -442,6 +442,23 @@ def remove(job_key: str) -> None:
     mark_delivered(job_key)
 
 
+def cancel_source(target_id: str, message_id: str, *, except_identity: str = "") -> int:
+    """Cancel exact superseded/unsent source identities, invalidating leases."""
+    initialize()
+    prefix = str(target_id) + ":" + str(message_id)
+    keep = str(target_id) + ":" + except_identity if except_identity else ""
+    removed = 0
+    with _LOCK, _connect() as conn:
+        rows = conn.execute("SELECT job_key FROM translation_retry_jobs").fetchall()
+        for row in rows:
+            key = row[0]
+            if key != keep and (key == prefix or key.startswith(prefix + ":")):
+                removed += conn.execute("DELETE FROM translation_retry_jobs WHERE job_key=?", (key,)).rowcount
+                conn.execute("INSERT OR IGNORE INTO translation_delivery_receipts(job_key,delivered_at) VALUES(?,?)",
+                             (key, time.time()))
+    return removed
+
+
 def pending_count() -> int:
     initialize()
     with _LOCK, _connect() as conn:

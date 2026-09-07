@@ -148,13 +148,12 @@ def test_durable_retry_pushes_translation_without_status_or_resend(monkeypatch, 
     app._TRANSLATION_RETRY_WORKER = None
     app._TRANSLATION_RETRY_INFLIGHT.clear()
     app._TRANSLATION_RETRY_WAKE.clear()
-    monkeypatch.setattr(app.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(app, "_ensure_translation_retry_worker", lambda: False)
     monkeypatch.setattr(app, "_translation_retry_delays", lambda: (0,))
     monkeypatch.setattr(app, "translate", lambda *_a, **_k: "請研磨人員注意。")
     monkeypatch.setattr(app, "ApiClient", DummyApiClient)
     monkeypatch.setattr(app, "MessagingApi", DummyMessagingApi)
-    monkeypatch.setattr(app, "TextMessage", DummyTextMessage)
-    monkeypatch.setattr(app, "PushMessageRequest", DummyPushRequest)
+    # Keep real SDK objects: delivery now persists/restores the full rendering.
     monkeypatch.setattr(app, "_event_log_write", lambda *_a, **_k: None)
     monkeypatch.setattr(app, "_stats_inc", lambda *_a, **_k: None)
     monkeypatch.setattr(app, "message_cache", {})
@@ -172,6 +171,9 @@ def test_durable_retry_pushes_translation_without_status_or_resend(monkeypatch, 
     )
 
     assert scheduled is True
+    key = "group-1:message-1"
+    assert app.translation_retry_queue_module.claim_job(key, owner="test")
+    assert app._run_translation_retry_job(app.translation_retry_queue_module.get(key), "test")
     assert len(pushed) == 1
     assert pushed[0].to == "group-1"
     assert "請研磨人員注意" in pushed[0].messages[0].text
