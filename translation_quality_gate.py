@@ -21,6 +21,7 @@ import logging
 import os
 import re
 from translation_request_cache import memoize
+import translation_mentions
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-07.2-source-scoped-glossary-lint"
+QUALITY_GATE_BUILD_ID = "2026-09-07.3-shared-mention-boundaries"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -73,10 +74,6 @@ _QUOTED_CONTROL_WORDS = frozenset({
     "NO", "YES", "Y", "N", "OK", "NG", "PASS", "FAIL", "ON", "OFF",
     "OPEN", "CLOSE", "HOLD", "RELEASE", "START", "STOP", "AUTO", "MANUAL",
 })
-
-_MENTION_RE = re.compile(
-    r'@[^\s,，。!?！？:：;；]{1,48}(?:\s+[a-z][a-z0-9_.-]{1,31}){0,2}'
-)
 
 # Plain uppercase words are not identifiers.  Indonesian factory notices are
 # frequently written in all caps, so the former ``[A-Z]{1,4}`` rule incorrectly
@@ -670,7 +667,13 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     if not text or not isinstance(text, str):
         return ProtectedText(text or "", text or "", {})
     mapping: Dict[str, str] = {}
-    protected = _replace_matches(text, _MENTION_RE, mapping)
+    chunks = []
+    cursor = 0
+    for start, end, literal in translation_mentions.mention_spans(text):
+        chunks.extend((text[cursor:start], _new_placeholder(mapping, literal)))
+        cursor = end
+    chunks.append(text[cursor:])
+    protected = "".join(chunks)
     protected = _protect_explicit_code_lists(protected, mapping)
     protected = _protect_contextual_numeric_identifiers(protected, mapping)
     protected = _protect_document_defined_labels(protected, mapping)
@@ -992,11 +995,10 @@ def _probable_source_proper_name(token: str, source: str, src_lang: str) -> bool
     # Exact mixed case is a strong brand signal (OpenAI/iPhone/eSIM).
     if _looks_like_technical_identifier(t):
         return True
-    # Any Latin token inside an @mention/display-name span is immutable, even
-    # when the display name is lowercase.  The mention regex intentionally
-    # accepts up to two lowercase continuation tokens after the @name.
-    for match in _MENTION_RE.finditer(source or ""):
-        if _whole_word_in_source(t, match.group(0)):
+    # Use the same bounded display-name spans as source protection. Sentence
+    # words after a name must not become immutable data or purity exceptions.
+    for _start, _end, literal in translation_mentions.mention_spans(source or ""):
+        if _whole_word_in_source(t, literal):
             return True
 
     # The public translation boundary replaces each LINE mention with a stable

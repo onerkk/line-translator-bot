@@ -144,6 +144,7 @@ from io import BytesIO
 import threading
 import contextlib
 import translation_request_cache
+import translation_mentions
 import functools
 import line_translation_delivery as line_delivery_module
 import line_factory_features
@@ -312,7 +313,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-07.2-source-scoped-glossary-lint"
+_EXPECTED_QG_BUILD_ID = "2026-09-07.3-shared-mention-boundaries"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -4583,103 +4584,8 @@ def _mention_has_visible_name(value):
 
 
 def extract_mentions(text):
-    """Extract textual @mentions without requiring LINE mention metadata.
-
-    Besides native ``@name`` mentions, workers frequently paste the display-name
-    form ``@(杰弗)`` / ``@（杰弗）`` as ordinary text.  The old parser did not
-    recognize that form, so the name was sent to the translation model and could
-    be deleted while only ``@()`` survived.  Keep the exact source substring.
-    """
-    if not text or not isinstance(text, str):
-        return []
-    _id_skip = {
-        'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
-        'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
-        'sedang','harus','boleh','mau','bukan','jangan','terima','kasih','baik',
-        'bagus','benar','salah','kerja','pulang','pergi','karena','tapi','atau',
-        'kalau','masih','lagi','nanti','sekarang','siap','izin','minta','cepat',
-        'capek','sakit','gak','udah','gimana','dong','banget','kipas','mesin',
-        'rusak','bocor','macet','stok','habis','ganti','pasang','gudang','masuk',
-        'keluar','tutup','buka','material','selesai','beres','datang','besok',
-        'kemarin','libur','lembur','cuti','proses','produksi','diperhatikan',
-        'selalu','mohon','pakai','pake','cek','lihat','bilang','ambil','kirim',
-        'tunggu','bantu','butuh','perlu','panggil','suruh','hati','awas',
-        'bahaya','lantai','mesin','pompa','pipa','oli','besi','baja','batang',
-    }
-    mentions = []
-
-    # Plain-text LINE-style display names: @(杰弗), @（杰弗）, @(John Doe).
-    # Require a non-empty body so a damaged literal @() is never treated as a
-    # valid identity-bearing mention.
-    for match in re.finditer(
-        r'@\((?=[^)\r\n]{1,80}\))(?=[^)\r\n]*\S)[^)\r\n]{1,80}\)'
-        r'|@（(?=[^）\r\n]{1,80}）)(?=[^）\r\n]*\S)[^）\r\n]{1,80}）',
-        text,
-    ):
-        mention = match.group(0)
-        if _mention_has_visible_name(mention) and mention not in mentions:
-            mentions.append(mention)
-
-    # English @mentions: grab @word + up to 2 more, trim Indonesian words from end.
-    for m in re.finditer(r'@([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\s+([A-Za-z0-9_.-]+))?(?:\s+([A-Za-z0-9_.-]+))?', text):
-        first = m.group(1)
-        if first.lower() in _id_skip:
-            continue
-        # ``@All`` is a reserved LINE broadcast mention, never a person's
-        # multi-word display name.  The generic Latin-name parser used to
-        # greedily swallow the next two Indonesian words (for example,
-        # ``@All Harap perhatikan``), causing those words to bypass translation
-        # and sometimes trip the purity/fidelity guards.  Bound it exactly even
-        # when webhook mention metadata is absent or malformed.
-        if first.lower() == 'all':
-            mention = text[m.start():m.start() + len(first) + 1]
-            if mention not in mentions:
-                mentions.append(mention)
-            continue
-        parts = [first]
-        for g in [m.group(2), m.group(3)]:
-            if g and g.lower() not in _id_skip:
-                parts.append(g)
-            else:
-                break
-        mention = '@' + ' '.join(parts)
-        if mention not in mentions:
-            mentions.append(mention)
-    # Chinese/Japanese @mentions, optionally followed by a parenthesized role.
-    #
-    # LINE metadata frequently marks only the CJK part as the actual mention,
-    # while workers append the person's Latin display name as plain text, e.g.
-    # ``@蘇比 sobirin``.  Protecting only ``@蘇比`` leaves ``sobirin`` inside the
-    # translatable sentence.  The Chinese-target purity gate then (correctly for
-    # ordinary source words, incorrectly for this name) rejects it as an
-    # untranslated Indonesian word.  Extend the textual mention by up to two
-    # conservative lowercase Latin name tokens, but stop before common
-    # Indonesian sentence words so ``@阿明 jika ...`` never swallows ``jika``.
-    for m in re.finditer(
-        r'@[\u4e00-\u9fff\u3040-\u30ff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?',
-        text,
-    ):
-        end = m.end()
-        tail_end = end
-        for _ in range(2):
-            tail = re.match(r'\s+([a-z][a-z0-9_.-]{1,31})', text[tail_end:])
-            if not tail:
-                break
-            token = tail.group(1)
-            _mention_stopwords = _id_skip | set(
-                getattr(tqg_module, "_COMMON_ID_WORDS", set()) or set()
-            )
-            if token.lower() in _mention_stopwords:
-                break
-            tail_end += tail.end()
-        mention = text[m.start():tail_end].rstrip()
-        if mention and len(mention) > 1 and mention not in mentions:
-            mentions.append(mention)
-    # @All
-    for m in re.findall(r'@[Aa][Ll][Ll]', text):
-        if m not in mentions:
-            mentions.append(m)
-    return list(dict.fromkeys(mentions))
+    """Use the same mention boundaries as the final translation quality gate."""
+    return translation_mentions.extract_mentions(text)
 
 
 def _line_span_to_python_indices(text, index, length):
@@ -4990,31 +4896,6 @@ def strip_mentions_for_detect(text, line_mentions=None):
     for mention in sorted(candidates, key=len, reverse=True):
         clean = clean.replace(mention, ' ')
 
-    _id_skip = {
-        'tolong','semua','untuk','yang','dan','ini','itu','ada','tidak','akan',
-        'sudah','bisa','juga','saya','kami','kita','mereka','dia','apa','belum',
-        'sedang','harus','boleh','mau','bukan','jangan','terima','kasih','baik',
-        'kerja','pulang','pergi','karena','tapi','atau','kalau','masih','lagi',
-        'siap','izin','minta','capek','sakit','gak','udah','gimana','dong',
-        'kipas','mesin','rusak','bocor','macet','stok','habis','ganti','pasang',
-        'gudang','masuk','keluar','tutup','buka','material','selesai','beres',
-        'datang','besok','kemarin','libur','lembur','cuti','proses','produksi',
-        'selalu','mohon','pakai','pake','cek','lihat','bilang','ambil','kirim',
-        'tunggu','bantu','butuh','perlu','panggil','suruh','hati','awas',
-    }
-    def _replace_en(match):
-        first_word = re.match(r'@([A-Za-z0-9]+)', match.group(0))
-        if first_word and first_word.group(1).lower() in _id_skip:
-            return match.group(0)
-        return ' '
-    clean = re.sub(
-        r'@[A-Za-z0-9][A-Za-z0-9 _.-]*(?:\s+[\u4e00-\u9fff]{1,4})?'
-        r'(?=(?:\s|[\n,\uff0c\u3002!\uff01?\uff1f:\uff1a;\uff1b()\uff08\uff09\[\]{}<>\u201c\u201d]|$))',
-        _replace_en,
-        clean,
-    )
-    clean = re.sub(r'@[\u4e00-\u9fff]+(?:\s*[\uff08(][^\uff09)]*[\uff09)])?', ' ', clean)
-    clean = re.sub(r'@\([^)]*\)|@（[^）]*）', ' ', clean)
     return clean
 
 
@@ -13199,7 +13080,18 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
             mention, expected,
         )
 
-    candidate = re.sub(r'[ \t]{2,}', ' ', candidate)
+    # Clean surplus separator whitespace without changing exact display names.
+    # Collapsing spaces inside a restored name makes the final identity gate
+    # reject an otherwise complete translation.
+    if expected_counts:
+        names = "|".join(re.escape(name) for name in sorted(expected_counts, key=len, reverse=True))
+        parts = re.split("(" + names + ")", candidate)
+        candidate = "".join(
+            part if index % 2 else re.sub(r'[ \t]{2,}', ' ', part)
+            for index, part in enumerate(parts)
+        )
+    else:
+        candidate = re.sub(r'[ \t]{2,}', ' ', candidate)
     return candidate.strip()
 
 
