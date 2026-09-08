@@ -2459,7 +2459,11 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                     print(f"[ai_provider] {provider} 使用剩餘預算重試一次", flush=True)
                 if request_budget is not None:
                     request_budget["attempts"] += 1
-                response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+                try:
+                    response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
+                finally:
+                    import webhook_runtime
+                    webhook_runtime.note_ai_attempt(time.monotonic() - started)
                 completed_generations += 1
                 if request_budget is not None:
                     request_budget["generations"] += 1

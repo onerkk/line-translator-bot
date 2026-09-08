@@ -6,6 +6,7 @@ import json
 import time
 
 import pytest
+from conftest import wait_for_webhooks
 from line_factory_store import StoreError
 from test_line_factory_features import hub, storage, notice, event, GROUP, OTHER, USER, COLLEAGUE
 
@@ -127,7 +128,9 @@ def test_real_signed_postback_reaches_storage_admin_and_group_feedback(hub, monk
         if isinstance(secret, str):
             secret = secret.encode()
         signature = base64.b64encode(hmac.new(secret, raw, hashlib.sha256).digest()).decode()
-        return client.post('/callback', data=raw, headers={'X-Line-Signature': signature, 'Content-Type': 'application/json'})
+        response = client.post('/callback', data=raw, headers={'X-Line-Signature': signature, 'Content-Type': 'application/json'})
+        wait_for_webhooks()
+        return response
     assert click(COLLEAGUE, 'receipt-click').status_code == 200
     assert len(sends) == 1 and sends[0]['target_id'] == GROUP
     assert 'Adi' in sends[0]['fallback_text'] and 'PMI' in sends[0]['fallback_text']

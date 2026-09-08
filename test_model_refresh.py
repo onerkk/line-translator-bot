@@ -122,7 +122,7 @@ def test_current_defaults_and_deployment_files():
     assert b"\x00" not in docker
     docker_text = docker.decode("utf-8")
     assert '"--workers", "1"' in docker_text
-    assert '"--threads", "4"' in docker_text
+    assert '"--threads", "8"' in docker_text
     assert '"--timeout", "180"' in docker_text
 
 

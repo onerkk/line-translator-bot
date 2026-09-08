@@ -164,7 +164,9 @@ def measure_delivery(kind):
     def decorate(fn):
         @wraps(fn)
         def run(*args, **kwargs):
-            with measure_storage() as stats:
+            import webhook_runtime
+            with measure_storage() as stats, webhook_runtime.timing_scope():
+                timing = webhook_runtime.event_timing(args[0] if args else None)
                 try:
                     return fn(*args, **kwargs)
                 finally:
@@ -174,10 +176,17 @@ def measure_delivery(kind):
                     else:
                         import logging
                         logger = logging.getLogger("app")
-                    logger.info("[DeliveryPerf] kind=%s total=%dms sent=%s storage=%dms storage_calls=%d storage_skipped=%d",
+                    ai_ms, attempts = webhook_runtime.ai_timing()
+                    sent = stats["delivered_ms"]
+                    event_sent = (timing["event_age_ms"] + round(sent)
+                                  if timing["event_age_ms"] is not None and sent is not None else None)
+                    logger.info("[DeliveryPerf] kind=%s total=%dms sent=%s storage=%dms storage_calls=%d storage_skipped=%d "
+                                "trace=%s ingress_ms=%s queue_ms=%s event_sent_ms=%s uptime_ms=%s ai_ms=%s ai_attempts=%s",
                                 kind, (time.monotonic() - stats["started"]) * 1000,
                                 (str(round(stats["delivered_ms"])) + "ms") if stats["delivered_ms"] is not None else "none",
-                                stats["milliseconds"], stats["requests"], stats["skipped"])
+                                stats["milliseconds"], stats["requests"], stats["skipped"],
+                                timing["trace"], timing["ingress_ms"], timing["queue_ms"], event_sent,
+                                timing["uptime_ms"], ai_ms, attempts)
         return run
     return decorate
 

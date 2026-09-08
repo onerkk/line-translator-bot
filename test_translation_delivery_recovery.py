@@ -329,38 +329,62 @@ def test_document_code_only_row_is_preserved_when_translation_intentionally_skip
 
 
 def test_worker_claims_only_the_job_it_can_start(runtime, monkeypatch):
+    import threading
+    from durable_workers import WorkerPool
     for index in range(3):
         enqueue("group:msg" + str(index))
-    handled = []
-
+    handled, done = [], threading.Event()
     def run(job, owner):
         assert sum(row["status"] == "leased" for row in queue.list_pending()) == 1
         handled.append(job["job_key"])
-        return queue.mark_delivered(job["job_key"], owner=owner)
-
-    monkeypatch.setattr(app, "_run_translation_retry_job", run)
-    app._translation_retry_worker_loop()
-    assert len(handled) == 3
-    assert queue.pending_count() == 0
+        result = queue.mark_delivered(job["job_key"], owner=owner)
+        if len(handled) == 3:
+            done.set()
+        return result
+    pool = WorkerPool("claim-test", run, workers=1, include_kinds=("text",))
+    try:
+        pool.ensure_started()
+        assert done.wait(3)
+        assert len(handled) == 3 and queue.pending_count() == 0
+    finally:
+        pool.stop()
 
 
 def test_enqueue_racing_worker_exit_wakes_a_replacement(runtime, monkeypatch):
-    reads = 0
-    restarts = []
-    original = queue.pending_count
-
-    def count():
-        nonlocal reads
-        reads += 1
-        if reads == 1:
-            enqueue()
-            return 0  # empty observation immediately before the new enqueue
-        return original()
-
-    monkeypatch.setattr(queue, "pending_count", count)
-    monkeypatch.setattr(app, "_ensure_translation_retry_worker", lambda: restarts.append(True))
-    app._translation_retry_worker_loop()
-    assert restarts == [True]
+    import threading
+    from durable_workers import WorkerPool
+    idle, inserted, done = threading.Event(), threading.Event(), threading.Event()
+    handled = []
+    original = queue.next_ready_delay
+    def due(**kwargs):
+        result = original(**kwargs)
+        if result is None and threading.current_thread().name == "exit-race" and not idle.is_set():
+            idle.set()
+            assert inserted.wait(3)
+        return result
+    monkeypatch.setattr(queue, "next_ready_delay", due)
+    def run(job, owner):
+        handled.append(job["job_key"])
+        result = queue.mark_delivered(job["job_key"], owner=owner)
+        if job["job_key"] == "late":
+            done.set()
+        return result
+    pool = WorkerPool("exit-race", run, workers=1, include_kinds=("text",))
+    def concurrent_enqueue():
+        assert idle.wait(3)
+        queue.enqueue("late", {}, job_kind="text")
+        inserted.set()
+        pool.ensure_started()
+    writer = threading.Thread(target=concurrent_enqueue)
+    queue.enqueue("first", {}, job_kind="text")
+    writer.start()
+    try:
+        pool.ensure_started()
+        assert done.wait(3)
+        assert handled == ["first", "late"] and queue.pending_count() == 0
+    finally:
+        writer.join(3)
+        pool.stop()
 
 
 def test_failed_foreground_persistence_propagates_for_webhook_redelivery(runtime, monkeypatch):

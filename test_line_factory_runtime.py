@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from conftest import wait_for_webhooks
 import app
 import ai_provider
 import line_factory_features as factory
@@ -25,7 +26,9 @@ def signed_post(client, event):
     secret = app.handler.parser.signature_validator.channel_secret
     if isinstance(secret, str): secret = secret.encode()
     signature = base64.b64encode(hmac.new(secret, raw.encode(), hashlib.sha256).digest()).decode()
-    return client.post("/callback", data=raw.encode(), headers={"X-Line-Signature": signature, "Content-Type": "application/json"})
+    response = client.post("/callback", data=raw.encode(), headers={"X-Line-Signature": signature, "Content-Type": "application/json"})
+    wait_for_webhooks()
+    return response
 
 
 def test_station_catalog_uses_actual_equipment_and_station_assets(monkeypatch):

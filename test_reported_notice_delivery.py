@@ -10,6 +10,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from conftest import wait_for_webhooks
 
 import ai_provider
 import app
@@ -149,6 +150,7 @@ def test_signed_webhook_with_real_provider_pipeline_delivers_once(runtime, offli
     client = app.app.test_client()
     result = client.post("/callback", data=body, headers={"X-Line-Signature": signature}, content_type="application/json")
     assert result.status_code == 200
+    wait_for_webhooks()
     assert target in delivered_text(runtime)
     assert len(calls) == 1
     assert len(runtime.sends) == 1

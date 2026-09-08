@@ -20,7 +20,7 @@ import factory_instruction_semantics as instruction_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.2-instruction-relations"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-08.1-prerequisite-and-report-relations"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -427,7 +427,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     # prohibitive marker. This does not waive any other command in the notice.
     unscoped_prohibition_source = compact
     for relation in relations:
-        if relation.get("state") == "enable_decrease" and relation.get("polarity_evidence"):
+        if (relation.get("state") == "enable_decrease" or relation.get("kind") == "measurement_before_production") and relation.get("polarity_evidence"):
             unscoped_prohibition_source = unscoped_prohibition_source.replace(relation["polarity_evidence"], "", 1)
     flags["prohibition"] = _contains_any(unscoped_prohibition_source, ("不可以", "不可", "不得", "禁止", "不能", "不要"))
     flags["hoist_or_load"] = _contains_any(compact, ("吊", "上料", "上機", "上机", "裝料", "装料"))
@@ -2402,7 +2402,9 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         "berukuran kecil", "ukuran kecil", "berdimensi kecil", "diameter kecil",
     )):
         issues.append("factory_semantic_audit:missing_small_size")
-    if flags.get("polishing") and not _has_any_target(low, (
+    report_polishing = any(r.get("kind") == "report_location_question" and r.get("process") == "polishing"
+                           for r in frame.get("instruction_relations") or [])
+    if flags.get("polishing") and not report_polishing and not _has_any_target(low, (
         "mesin polishing", "proses polishing", "mesin pemoles", "proses pemolesan", "pemolesan",
     )):
         issues.append("factory_semantic_audit:missing_polishing_context")

@@ -272,6 +272,8 @@ def claim_due_jobs(
     now: Optional[float] = None,
     limit: int = 20,
     lease_seconds: float = 180.0,
+    include_kinds=None,
+    exclude_kinds=(),
 ) -> List[Dict[str, Any]]:
     """Atomically lease due jobs to one worker.
 
@@ -284,18 +286,20 @@ def claim_due_jobs(
     worker = str(owner or f"pid-{os.getpid()}-{uuid.uuid4().hex[:12]}")
     lim = max(1, min(int(limit or 20), 200))
     lease_until = ts + max(15.0, float(lease_seconds or 180.0))
+    kind_sql, kind_args = _kind_filter(include_kinds, exclude_kinds)
     with _LOCK, _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             rows = conn.execute(
                 """
                 SELECT job_key FROM translation_retry_jobs
-                 WHERE (status='pending' AND next_attempt_at<=?)
-                    OR (status='leased' AND lease_until<=?)
+                 WHERE ((status='pending' AND next_attempt_at<=?)
+                    OR (status='leased' AND lease_until<=?))
+                """ + kind_sql + """
                  ORDER BY next_attempt_at ASC, created_at ASC
                  LIMIT ?
                 """,
-                (ts, ts, lim),
+                (ts, ts, *kind_args, lim),
             ).fetchall()
             keys = [str(row["job_key"]) for row in rows]
             for key in keys:
@@ -323,6 +327,34 @@ def claim_due_jobs(
             conn.execute("ROLLBACK")
             raise
     return [_row_to_job(row) for row in claimed]
+
+
+def _kind_filter(include_kinds=None, exclude_kinds=()):
+    """Keep lane selection inside the lease transaction, never claim then filter."""
+    clauses, args = [], []
+    for values, operator in ((include_kinds, "IN"), (exclude_kinds, "NOT IN")):
+        if values is None:
+            continue
+        values = tuple(dict.fromkeys(str(v) for v in values))
+        if values:
+            clauses.append("job_kind " + operator + " (" + ",".join("?" for _ in values) + ")")
+            args.extend(values)
+        elif operator == "IN":
+            clauses.append("0")
+    return "".join(" AND " + c for c in clauses), args
+
+
+def next_ready_delay(*, include_kinds=None, exclude_kinds=(), now=None):
+    """Return this lane's next due delay, without loading stored message bodies."""
+    initialize()
+    sql, args = _kind_filter(include_kinds, exclude_kinds)
+    ts = time.time() if now is None else float(now)
+    with _LOCK, _connect() as conn:
+        row = conn.execute(
+            "SELECT MIN(CASE WHEN status='leased' THEN lease_until ELSE next_attempt_at END) "
+            "FROM translation_retry_jobs WHERE status IN ('pending','leased')" + sql, args,
+        ).fetchone()
+    return None if row[0] is None else max(0.0, float(row[0]) - ts)
 
 
 def renew_lease(job_key: str, *, owner: str, lease_seconds: float = 180.0) -> bool:
@@ -466,12 +498,13 @@ def cancel_source(target_id: str, message_id: str, *, except_identity: str = "")
     return removed
 
 
-def pending_count() -> int:
+def pending_count(*, include_kinds=None, exclude_kinds=()) -> int:
     initialize()
+    kind_sql, kind_args = _kind_filter(include_kinds, exclude_kinds)
     with _LOCK, _connect() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM translation_retry_jobs "
-            "WHERE status IN ('pending','leased')"
+            "WHERE status IN ('pending','leased')" + kind_sql, kind_args,
         ).fetchone()
     return int(row["n"] if row else 0)
 

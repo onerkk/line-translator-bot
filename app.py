@@ -152,6 +152,9 @@ import line_translation_delivery as line_delivery_module
 import line_factory_features
 import line_quick_reply
 import line_api_transport
+import webhook_runtime
+from durable_workers import WorkerPool
+from contextvars import copy_context
 quick_reply_menu_settings = None
 factory_line_settings = {"groups": {}, "stations": []}
 factory_hub = None
@@ -247,7 +250,7 @@ try:
     if _gunicorn_workers is not None and _gunicorn_workers > 1:
         print(f"⚠️  [CRITICAL] gunicorn --workers={_gunicorn_workers} > 1！"
               f"群組設定/tracking/費用 會各 worker 獨立、不同步。"
-              f"請改用 gunicorn.conf.py（強制 workers=1 threads=4）。", flush=True)
+              f"請改用 gunicorn.conf.py（維持 workers=1，建議 threads=8）。", flush=True)
 except Exception:
     pass
 
@@ -334,7 +337,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-07.2-instruction-relations"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-08.1-prerequisite-and-report-relations"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -13390,7 +13393,7 @@ def _translation_job_scope():
         _tl.__dict__.clear()
         _tl.__dict__.update(previous_tl)
         if leases:
-            _TRANSLATION_RETRY_WAKE.set()
+            _wake_translation_retry_workers()
 
 
 def _claim_foreground_translation(job_key):
@@ -13991,100 +13994,38 @@ def _translation_retry_file_attempt(job, lease_owner=None):
     return _complete_durable_text_job(key, lease_owner=lease_owner)
 
 
-def _translation_retry_worker_loop():
-    """Drain the durable queue with cross-process leases and infinite retry."""
-    global _TRANSLATION_RETRY_WORKER
-    owner = f"pid-{os.getpid()}-thread-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
+def _run_scheduled_translation(job, owner):
     try:
-        while True:
-            if translation_retry_queue_module.pending_count() == 0:
-                return
-            claimed = translation_retry_queue_module.claim_due_jobs(
-                owner=owner, limit=1, lease_seconds=240
-            )
-            if not claimed:
-                pending = translation_retry_queue_module.list_pending(limit=500)
-                if not pending:
-                    return
-                now = time.time()
-                next_due = min(
-                    max(float(job.get("next_attempt_at") or now),
-                        float(job.get("lease_until") or 0) if job.get("status") == "leased" else 0)
-                    for job in pending
-                )
-                _TRANSLATION_RETRY_WAKE.wait(max(0.2, min(30.0, next_due - now)))
-                _TRANSLATION_RETRY_WAKE.clear()
-                continue
-
-            for job in claimed:
-                job_key = str(job.get("job_key") or "")
-                kind = str(job.get("job_kind") or (job.get("payload") or {}).get("job_kind") or "text")
-                try:
-                    delivered = _run_translation_retry_job(job, owner)
-                    if delivered:
-                        continue
-                    completed = int(job.get("attempts") or 0) + 1
-                    delay = _translation_retry_backoff(completed)
-                    translation_retry_queue_module.reschedule(
-                        job_key,
-                        delay_seconds=delay,
-                        error="empty_translation_or_media_not_ready",
-                        owner=owner,
-                    )
-                    _event_log_write("translation_retry_attempt_empty", {
-                        "kind": kind,
-                        "attempt": completed,
-                        "message_id": str((job.get("payload") or {}).get("message_id") or ""),
-                        "next_delay": delay,
-                        "durable": True,
-                    })
-                except line_factory_features.SupersededMessage:
-                    translation_retry_queue_module.mark_delivered(job_key, owner=owner)
-                    with _TRANSLATION_RETRY_LOCK:
-                        _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-                except Exception as exc:
-                    completed = int(job.get("attempts") or 0) + 1
-                    delay = _translation_retry_backoff(completed)
-                    translation_retry_queue_module.reschedule(
-                        job_key,
-                        delay_seconds=delay,
-                        error=type(exc).__name__ + ":" + str(exc)[:1200],
-                        owner=owner,
-                    )
-                    logger.warning(
-                        "[TranslationRetry] durable attempt=%s kind=%s job=%s failed: %s",
-                        completed, kind, job_key[-24:], str(exc)[:300],
-                    )
-    finally:
+        return _run_translation_retry_job(job, owner)
+    except line_factory_features.SupersededMessage:
+        translation_retry_queue_module.mark_delivered(job["job_key"], owner=owner)
         with _TRANSLATION_RETRY_LOCK:
-            _TRANSLATION_RETRY_WORKER = None
-            try:
-                if translation_retry_queue_module.pending_count() == 0:
-                    _TRANSLATION_RETRY_INFLIGHT.clear()
-                else:
-                    _ensure_translation_retry_worker()
-            except Exception:
-                pass
+            _TRANSLATION_RETRY_INFLIGHT.discard(job["job_key"])
+        return True
+
+
+# Two text recovery slots remain available while media extraction is slow.
+# Unknown/legacy media kinds stay in the media lane instead of being lost.
+_TEXT_RETRY_POOL = WorkerPool(
+    "translation-text-retry", _run_scheduled_translation, workers=2,
+    include_kinds=("text", "variant"), backoff=lambda n: _translation_retry_backoff(n),
+)
+_MEDIA_RETRY_POOL = WorkerPool(
+    "translation-media-retry", _run_scheduled_translation, workers=1,
+    exclude_kinds=("text", "variant", "webhook"), backoff=lambda n: _translation_retry_backoff(n),
+)
+
 
 def _ensure_translation_retry_worker():
-    global _TRANSLATION_RETRY_WORKER
-    with _TRANSLATION_RETRY_LOCK:
-        worker = _TRANSLATION_RETRY_WORKER
-        try:
-            alive = bool(worker and worker.is_alive())
-        except Exception:
-            alive = bool(worker)
-        if alive:
-            _TRANSLATION_RETRY_WAKE.set()
-            return False
-        worker = threading.Thread(
-            target=_translation_retry_worker_loop,
-            name="translation-retry-durable",
-            daemon=True,
-        )
-        _TRANSLATION_RETRY_WORKER = worker
-        worker.start()
-        return True
+    text_started = _TEXT_RETRY_POOL.ensure_started()
+    media_started = _MEDIA_RETRY_POOL.ensure_started()
+    return text_started or media_started
+
+
+def _wake_translation_retry_workers():
+    _TRANSLATION_RETRY_WAKE.set()  # compatibility for existing admin/tests
+    _TEXT_RETRY_POOL.wake()
+    _MEDIA_RETRY_POOL.wake()
 
 
 def _resume_persisted_translation_retries():
@@ -14167,7 +14108,7 @@ def _schedule_text_translation_retry(
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(retry_key)
     _ensure_translation_retry_worker()
-    _TRANSLATION_RETRY_WAKE.set()
+    _wake_translation_retry_workers()
     try:
         _event_log_write("translation_retry_persisted", {
             "target": str(target_id)[-16:],
@@ -14208,7 +14149,7 @@ def _complete_durable_text_job(job_key, lease_owner=None):
                     return False
                 translation_retry_queue_module.reschedule(key, delay_seconds=2, owner=owner,
                                                           error="remaining_target_languages")
-                _TRANSLATION_RETRY_WAKE.set()
+                _wake_translation_retry_workers()
                 return True
         completed = translation_retry_queue_module.mark_delivered(key, owner=owner)
         if completed:
@@ -14340,7 +14281,7 @@ def _schedule_media_translation_retry(ctx, job_kind, *, delay_seconds=75, **extr
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(job_key)
     _ensure_translation_retry_worker()
-    _TRANSLATION_RETRY_WAKE.set()
+    _wake_translation_retry_workers()
     return job_key
 
 
@@ -14383,7 +14324,7 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
     with _TRANSLATION_RETRY_LOCK:
         _TRANSLATION_RETRY_INFLIGHT.add(job_key)
     _ensure_translation_retry_worker()
-    _TRANSLATION_RETRY_WAKE.set()
+    _wake_translation_retry_workers()
     try:
         _event_log_write("image_retry_persisted", {
             "target": str(target_id)[-16:],
@@ -19749,42 +19690,40 @@ def handle_command(text, group_id, user_id=None):
     return None
 
 
+_WEBHOOK_INBOX = webhook_runtime.WebhookInbox(
+    handler, _release_webhook_message_claims,
+    workers=_safe_int(os.environ.get("LINE_WEBHOOK_WORKERS"), 8, min_val=1, max_val=12),
+    context=app.app_context,
+)
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
+    received_at = time.time()
     sig = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
-    # v3.9.19: 記錄所有進來的 webhook(只記事件 type 跟 message type,不記內容)
     try:
-        _b = json.loads(body) if body else {}
-        _evts = _b.get("events", [])
-        _summary = []
-        for ev in _evts:
-            _t = ev.get("type", "?")
-            _msg = ev.get("message", {})
-            _src = ev.get("source", {})
-            _summary.append({
-                "type": _t,
-                "message_type": _msg.get("type") if _msg else None,
-                "message_id": _msg.get("id") if _msg else None,
-                "source_type": _src.get("type"),
-                "group_id": _src.get("groupId") or _src.get("roomId"),
-                "user_id_tail": (_src.get("userId") or "")[-6:] if _src.get("userId") else None,
-            })
-        _event_log_write("webhook_in", {"events_count": len(_evts), "events": _summary})
-    except Exception as _le:
-        _event_log_write("webhook_parse_error", {"error": str(_le)[:200]})
-    try:
-        handler.handle(body, sig)
+        _WEBHOOK_INBOX.accept(body, sig, received_at=received_at)
     except InvalidSignatureError:
         _event_log_write("webhook_invalid_sig", {})
         abort(400)
     except Exception:
-        # The request will return 500 and LINE will redeliver it.  Release the
-        # in-memory claims now; otherwise the recovery webhook would be marked
-        # duplicate and the translation could be lost permanently.
-        _release_webhook_message_claims(body)
-        logger.exception("[callback] webhook handler failed; message claims released")
+        # No success ACK unless durable persistence succeeded. LINE can retry;
+        # the inbox key and the existing translation receipts suppress duplicates.
+        logger.exception("[callback] webhook persistence/dispatch failed")
         raise
+    events = (json.loads(body) or {}).get("events") or []
+    _event_log_write("webhook_in", {
+        "events_count": len(events),
+        "events": [{"type": ev.get("type"),
+                    "message_type": (ev.get("message") or {}).get("type"),
+                    "message_id": (ev.get("message") or {}).get("id"),
+                    "source_type": (ev.get("source") or {}).get("type")}
+                   for ev in events],
+        "accepted": True,
+        "ack_ms": round((time.time() - received_at) * 1000),
+        "build": webhook_runtime.BUILD_ID,
+    })
     return "OK"
 
 
@@ -36041,7 +35980,7 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
         return out
 
     # 多目標:並行
-    futures = [(t, _MULTI_TGT_EXECUTOR.submit(_translate_one, t, True)) for t in real_targets]
+    futures = [(t, _MULTI_TGT_EXECUTOR.submit(copy_context().run, _translate_one, t, True)) for t in real_targets]
     _deadline = time.monotonic() + 120
     _last_entry = None
     _outcomes = []
@@ -38410,7 +38349,10 @@ _start_reminders()
 # runs after all handlers/helpers are defined so the worker can call the normal
 # translation and LINE delivery pipeline.
 try:
+    logger.info("[TranslationRuntime] build=%s async_ingress=%s webhook_workers=%s text_retry_workers=2 media_retry_workers=1",
+                webhook_runtime.BUILD_ID, webhook_runtime.asynchronous_ingress(), _WEBHOOK_INBOX.pool.workers)
     _resume_persisted_translation_retries()
+    _WEBHOOK_INBOX.pool.ensure_started()
 except Exception as _retry_boot_exc:
     logging.getLogger("app").warning(
         "[TranslationRetry] startup resume failed (continuing): %s", _retry_boot_exc

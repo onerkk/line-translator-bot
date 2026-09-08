@@ -284,7 +284,7 @@ railway up
 3. 連結你的 GitHub repo
 4. 設定：
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 4 --timeout 180 app:app`
+   - **Start Command**: `gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 8 --timeout 180 app:app`
 5. 在 Environment 頁面加入三個環境變數
 6. 部署完成後取得網址
 
