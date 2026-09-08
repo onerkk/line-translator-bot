@@ -1,0 +1,1238 @@
+{
+  "date": "2026-09-08",
+  "scope": "Offline regression and identical-fixture comparison only. No live AI latency, translation accuracy, token billing or LINE delivery measurement.",
+  "baseline_archive_sha256": "82dd2afd79ad77ecacaaf7622a56caa8d7c53273223ce0da45fe24d9932108f6",
+  "modified_files": [
+    "active_learning.py",
+    "ai_provider.py",
+    "app.py",
+    "conftest.py",
+    "prompt_optimizer.py",
+    "translation_request_guard.py"
+  ],
+  "new_files": [
+    "test_translation_speed_economy.py",
+    "benchmark_translation_speed_economy.py",
+    "run_translation_offline_checks.py",
+    "TRANSLATION_SPEED_COST_20260908.md",
+    "tests/data/translation_speed_economy_20260908.json"
+  ],
+  "code_sha256": {
+    "active_learning.py": "e63d5b88c8b1fd8751131b659990243e332168dbc71a3f687b72bf8390e7a31d",
+    "ai_provider.py": "ca1299f67dd95494c8e2a1c52844571d514c27a21b4a2bb0df08f924da504e20",
+    "app.py": "5a4c8ffaac9a00556e1b16838e818234e73a25d725c1b464bd8120f58f0087e9",
+    "conftest.py": "e0a6a8675b9ae1f3e31386fffdf85fdfe7966fb5c3790b4886f74545c6c352c4",
+    "prompt_optimizer.py": "dc4f8100fd9164c11276efc5b6b2a2e0a57aa0132fe71cb85f4948cdf021f0c3",
+    "translation_request_guard.py": "86bfeb85ca60d852f4b5ff7d448df085e805c35f857393b7734459beffc8df1d",
+    "test_translation_speed_economy.py": "5ea93a82b9723fee9f30332fb7d1d680c87b95a73569d75e1f686d5f39378c60",
+    "benchmark_translation_speed_economy.py": "0136c007cd2a68a2c9224d5dff1d3274be9b47befd141fa4bf60aaf196ab3783",
+    "run_translation_offline_checks.py": "0793e8263f1fbf248727b41ce39821f153851ed187a987680aa2796c229be91f"
+  },
+  "runtime": {
+    "python": "3.12.13",
+    "packages": {
+      "pytest": "9.1.1",
+      "pytest-subtests": "0.15.0",
+      "openai": "3.8.0",
+      "anthropic": "1.4.0"
+    }
+  },
+  "full_regression": {
+    "result": "1681 passed, 438 subtests passed in 56.67s",
+    "tests_passed": 1681,
+    "subtests_passed": 438,
+    "new_test_cases": 35,
+    "external_connections": "blocked",
+    "loopback": "allowed only for the SDK connection-reuse fixture",
+    "live_ai_requests": 0,
+    "line_messages_sent": 0
+  },
+  "factory_asset_validation": {
+    "errors": [],
+    "guard": {
+      "api_version": 1,
+      "asset_fingerprint": "71c4382aaf836c7983dc0e81890cb22222e42c0e91b3a7e45f9750dafb5ef7d5",
+      "build_id": "2026-09-06.1-source-term-integrity",
+      "exact_case_count": 53,
+      "knowledge": {
+        "api_version": 1,
+        "build_id": "2026-09-07.5-record-transfer-and-computer",
+        "enabled_count": 32,
+        "entry_count": 32,
+        "path": "factory_knowledge.json",
+        "schema_version": 1,
+        "sha256": "03c36f6be3805a350267d232b44f9d9d908ef941a06cb7c7000eb02de55bd827"
+      },
+      "regression_path": "factory_translation_regression.json",
+      "self_test": {
+        "approved_examples_validated": 43,
+        "known_bad_examples_rejected": 18,
+        "ok": true,
+        "regression_cases": 30
+      }
+    },
+    "measurement_semantics": {
+      "api_version": 1,
+      "build_id": "2026-08-08.3-id-zh-work-order-material-dimension",
+      "self_test": {
+        "checks": 16,
+        "ok": true
+      }
+    },
+    "message_semantics": {
+      "api_version": 3,
+      "build_id": "2026-09-08.2-original-conversation-snapshot",
+      "self_test": {
+        "checks": 102,
+        "ok": true
+      }
+    },
+    "ok": true,
+    "policy": {
+      "always_review_opt_in": false,
+      "api_version": 8,
+      "block_unverified_delivery": false,
+      "build_id": "2026-09-08.2-conversation-review-budget",
+      "emergency_nmt_fallback": true,
+      "fail_closed": false,
+      "generic_nmt_fallback": false,
+      "mode": "always",
+      "review_mode": "adaptive",
+      "review_success_required": false,
+      "verified_cache_required": true
+    },
+    "regression": {
+      "case_count": 30,
+      "forbidden_probes_rejected": 29,
+      "verified_targets_accepted": 30
+    },
+    "warnings": []
+  },
+  "comparison": {
+    "before": {
+      "mode": "offline",
+      "network": "blocked",
+      "live_ai_requests": 0,
+      "line_messages_sent": 0,
+      "metrics": "Adapter SDK request counts and text characters; context scenarios count generation requests at the mocked coordinator. Not billed tokens/costs; timing is local CPU/I/O with fixed AI responses",
+      "corpus_sha256": "6bd280382a16808bc4595fdeb31037391f0625c5db707ada9c76a71134fd29b5",
+      "rows": [
+        {
+          "sample": "routine_id_1",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4219,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "4cd1d58edcb81fd9074e53f50729eeca91727b9981223bc27a34fa4dc1ff37d1"
+        },
+        {
+          "sample": "routine_id_1",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3896,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "f55dca54c2230ff327d93e7eeff14710e9983dbb2b1d543efa72a59ad830124e"
+        },
+        {
+          "sample": "routine_id_1",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3088,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "091fe297eee1923d25c4a5795a2c346f15402760229d81d1a1c2142d3e4a284e"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4123,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "cc363a2f0868e48c0828a353c35723792f1567f4be0e8744f15b199dbf5a15a3"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3800,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "673c192dde778bd854638e19b577a724806a46b400107d5ff0e778789221d6c9"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 2992,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "3c5cc392d71a97503c747b491ca354d9b8a695f644550b57131c97441318d764"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4297,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "4906a5ba237ec27554e505f17f8a0d43148bf6f56e8c6b9035c38911b77b156a"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3974,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "51f157964d0d9e4034e0ceffc25c1ff2e42469bd476e27f3ad565e6db2515ceb"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3166,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "3ea5b951a0e15e63f854dd126cc1b1216962646897bdcdf7566c4658ceaa1994"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4285,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1f8a9f2a1d6ce7c160c226ff6ff55af2aa3d2a11d60a9324c437f215d771a758"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3962,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1239a3a7c947bf4e6e40977b410b7d601275db5f1a3022f1886ecbf053eec102"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3154,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "79aee0abf311dcc64a0095f084c35d1e5fc7ef2bc4bfb66aa448c8992b5a60b7"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4380,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "93fac32eb55438e9aa2e9f99c4eaa550db923b183bd95b0c928382b2fd64b6bc"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 4057,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1c306124733ce51a308c0c3a4f5cf3daa906fe02231f9ba03118a5d30244e735"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3249,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1f09a95a0d360556f667ed28e20f88c65729556636db93189e4a91e4d5c91a6c"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4296,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "7f6e00f45ea4da7ca1977dc630ff37a81240008e88e01e6b38ed3b0cc79a3a23"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3973,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "3dbcbd6efc88acb4db664582f26c244ce0df98e2e08f7bf58ccb2e6ebea60453"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3165,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "01082f9d811b9c969fa3d457643e6efc90b4185305e051150d654e140d48dc32"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4490,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "73e6604c679d99c1397e19c725150eb7ea35edbf5d582732955b4fcf0644c16d"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 4167,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "888c9ab0abc48a145b20c0ec3cb78a0aaef77b742db06d7c4c23b0e0ea594215"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3359,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "0b735a70c7785e7e94d09e55c3c8aadbf46e883c153ea93044110bb3af1b21a6"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4490,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "699c29ae871db5eebc5a0676e165e9bcc663fd9764fcaa5cbf3d62cd89f12a88"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 4167,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "215a19e8cdd101c2d6628613c442a9851503ec0fdc5088496c17244853ff687a"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3359,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "d76cd5ed9403543fd849061d070b689364211318617891dc7ffe2a8a51d63b5b"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 6727,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "42e135e35e85b30021eb23cefad66335c76c4f61dda64cfd2756a73b2b052966"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 6404,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "c7105aa7823100ae9f758ae269f890ecc4278973c61bacd15f24b43e5706269c"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 5596,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "3033551b6024e3d22535655b43115f72f2cf39d9c0cb1e0d2f383fab890a2086"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 6177,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "63402d8cd8ffddae62968021fe33cbe1e1766cf0f380d3dd9d33a57896c34826"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 5854,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "46992748a5e08c9647dc8c538a6eb983ad230b3284234b4e7d5c87aeab58b0c9"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 5046,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "49b998fc19768403bb6fb447a6f22f621aa019f3b9631e124787443f7d57eb13"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 8958,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "35c13455fa1016c935c12bbaade134ffe681b49e04ec95779b048fe247312d9e"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 8635,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "5f7457061eb3b9117a08b08cc599a08528a80befa1fb7f91d6190ef7c277ea97"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 7827,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "634f0dd0519f4767dcb722840bcd17e8e015ad1c28d8f609aeecdcadba7e69b1"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 8833,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "b15853bf536d4863ddf3910725044e388243604a3eb53a6d58ec8d379ac3a9fa"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 8510,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "94ae39576783aaa81ced8c33e9da690a86a4d39782215f648ebad99dce21b271"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 7702,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "a4088b227a326ff3647b388846118ebbe0e57da1cd8539cbdba879235f8edbe7"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 6248,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "6b6dd08b67164f49c6ab501a5a73a33a3d8a1223307fb6337200610c3d71d0aa"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 5925,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "78e79158741a439ff4b857445d260d2c3bf5dc1fc988e108e90c1601d2fcad67"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 5117,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "03048f340ff03de27986488ebdc6429bd84ad0f41dc63dcf1d6dfbeb2f3fc393"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5",
+          "input_text_characters": 7025,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": {
+            "type": "disabled"
+          },
+          "prompt_cache_options": null,
+          "payload_sha256": "93c6bc6a0a2b5e826adf839ec0a65ba837b51ded79cf812361f988c3a86022b7"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "openai",
+          "model": "gpt-5.6-terra",
+          "input_text_characters": 6702,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "b26e59654b23579bba1d1a31195df0d4c67ab54d29336b4b8e09c4ade4267220"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "gemini",
+          "model": "gemini-2.5-flash",
+          "input_text_characters": 5894,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "595372ab0150c56dcfde3c9201704b82e9b2d2853c7d78d0288a7819da4770e2"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5",
+          "input_text_characters": 5625,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": {
+            "type": "disabled"
+          },
+          "prompt_cache_options": null,
+          "payload_sha256": "98252a1983a4e65ca4ef0ecf3aec6f228df395d1b4766e761f94a8f5f3d4808c"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "openai",
+          "model": "gpt-5.6-terra",
+          "input_text_characters": 5302,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "b896c49b2695aa653d0c731a80083176b67a7a4ee5622baa44cee5af9df56dba"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "gemini",
+          "model": "gemini-2.5-flash",
+          "input_text_characters": 4494,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "9b27888e1558e8ca5a3fd98787c5e292c4d8decfb2438d907151811c4ab1ab50"
+        }
+      ],
+      "summary": {
+        "input_text_characters_by_provider": {
+          "anthropic": 84173,
+          "openai": 79328,
+          "gemini": 67208
+        },
+        "samples_per_provider": 15,
+        "exact_context_calls_per_turn": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "exact_context_calls_total": 11,
+        "exact_context_local_ms": [
+          51.888,
+          30.295,
+          27.955,
+          27.66,
+          29.619,
+          26.623
+        ],
+        "exact_context_repeated_median_local_ms": 27.955,
+        "cache_disabled_context_calls_per_turn": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cache_disabled_context_calls_total": 11
+      }
+    },
+    "after": {
+      "mode": "offline",
+      "network": "blocked",
+      "live_ai_requests": 0,
+      "line_messages_sent": 0,
+      "metrics": "Adapter SDK request counts and text characters; context scenarios count generation requests at the mocked coordinator. Not billed tokens/costs; timing is local CPU/I/O with fixed AI responses",
+      "corpus_sha256": "6bd280382a16808bc4595fdeb31037391f0625c5db707ada9c76a71134fd29b5",
+      "rows": [
+        {
+          "sample": "routine_id_1",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3094,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "f25dcefe72a23201622d3fdef683aa83e2f8ae3965268d73281f3cfe990af87e"
+        },
+        {
+          "sample": "routine_id_1",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3094,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "2487b59749e1af70150bd7ab08b81819dd54e271f0213c82127b5a1b1f7306e5"
+        },
+        {
+          "sample": "routine_id_1",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 2925,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "228fa9d7ca99af850da37a2aabb5238cad7a97936e9f901368a779013aa04a7b"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 2998,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "298c4020c28e413a47c7c60bf2de896e36ba21bfed2d0da6e6627150085ec4ac"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 2998,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "0938b5ceec7faf9e5e2cdf3a6829758957542704a31ae3e30d9d73ec988064b6"
+        },
+        {
+          "sample": "routine_id_2",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 2829,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "83c6a3637b8f8f8fac57b15122d9bb373903da049bf9bf0eb8f8440cf6e5c870"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3172,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "c51953e37bd09d8961c7af1d6a4656c9bf3a5dc1f6a16fd5325cd65527e34137"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3172,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "ce01f7dd292e9604782c61d385640d63ae19e4a44cd576b56cae9a05a10624b3"
+        },
+        {
+          "sample": "routine_id_3",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3003,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "bdbcdb2f2e243034f8f0dfd9c3df4f6f8495221e6299423c59e90d28d8fe5ff1"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3160,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "41e0901376208e61b8cef29979b10d16a2171110da3d309e19e71bac47f60c0b"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3160,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "585be4f4b4d79faf880ba3dde7be1a2c9ec185b2bc84de5d780e8302091a6f19"
+        },
+        {
+          "sample": "routine_id_4",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 2991,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "2951a64c82d045df1e320f92c3eaf7a3ba9a259c9eb7a1a218495ec376d5215e"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3255,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "98926a7b7f22e6075d94775b4766f989d8d3ac4b3859d7337939ec2c3a5f1112"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3255,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "20f81eeafda25b6e5f5b94b57569df0a527d2321c7b4d4545e25f90eaf5387a4"
+        },
+        {
+          "sample": "routine_id_5",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3086,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "ccc2ac4fba0a15b4bf00f3c17c3745e1f4f1252233bcbb096ce506e82c9b6c28"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3171,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "969e06915c9f4208479a5da060fbf18dd2bfa6d869133a5bd87b1bf56e7ca950"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3171,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "d12ffa4c64baad6fb1092c3bb048c94d37a87fb8eebb672579712ebad75fc885"
+        },
+        {
+          "sample": "routine_id_6",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3002,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "da835b9360969db47f9e5037f9772be4c40d7ef953c56d3f04f74443d10b1f20"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3224,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "aea9510dc40f38eee7167fde2c9a1dbbc27aac37a592baf9a02fe8ede2fe5b20"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3224,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "e95d8cfd67e716641b3651efad6db41baaefd891d0151e41e031ae72a02c853d"
+        },
+        {
+          "sample": "packing_progress_today",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3055,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "ca0a76882b1ee44b42758c48d290aaec1c165bac9f3be2327b4a9e423fa4aab0"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 3224,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "f3ef2508cb842eac2f1a47cb7f3e6701716f2da47c90076abe0fb69b8caeb79a"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 3224,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "c066066d9a2680710b747ba0d19fbdb20e8a3fb821ede46df5d1bae36a442847"
+        },
+        {
+          "sample": "packing_progress_tomorrow",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 3055,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "bb71f378f10c26e5f4d6120f876c6af422ca2b597996aad58fd8bc321f954e94"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 5461,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "3ae2ed7909af479d63e3fab32717feef9dc87a3a3e586cb0ec11c10f56b42bfc"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 5461,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "fbc1cc05771097df62db50939e2e6544d3f0420cc9f367b45d5ae9d9acba70b4"
+        },
+        {
+          "sample": "pmi_pending",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 5292,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1356f009ee80cf2cb1b13d9572f49eaef4877b4b13d4ff3f3b316cead2c17f4f"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4911,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "ad925e304a5c441f1a4894c4a42a234e60a936660bab7cb7e771b1c472c612fc"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 4911,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "d68b5e074f6a399565c248e73a9771d8a2d86814c04d095ce4e061ea92868cca"
+        },
+        {
+          "sample": "pmi_pending_typo",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 4742,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "d2e3ab5eb39eb8e6201f3115470ffc4c90433a3f4c52ebdad7b2654717040df9"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 7692,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1a2b85191b9637eb52380078997c7288819a033393a9a42cc09d3defc4304750"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 7692,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "ef0e6e70d7855106147009b4adc0a7904e5fd54fa6a98e0d07545844e6383054"
+        },
+        {
+          "sample": "pmi_pending_nominal",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 7523,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1b5521713cae4d0e9055c723dadce5f6b313f4b43b0808d91aa860ca5294cb7f"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 7567,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "1253b7010664b4f44b242113811f910e87dbbaeeda5ff8a60fecf75764ec88b3"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 7567,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "348741d41689d74dee39bd70f48043c7387e6fa85702599f456b6e962af7f6f8"
+        },
+        {
+          "sample": "pmi_completed",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 7398,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "4e67394612240edd35b5a52af6e4bf160b4117aad951b00593c116e7dec93fc0"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "anthropic",
+          "model": "claude-haiku-4-5-20251001",
+          "input_text_characters": 4982,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "0ce6f80088de4ded87af8404c37ebae289834a6575f8fa70ff9d53db6a88ae11"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "openai",
+          "model": "gpt-5.6-luna",
+          "input_text_characters": 4982,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "d4e174b94dfa7b9d843395f8a99331f5f174f1390a597a862e178d2ad039e0ed"
+        },
+        {
+          "sample": "pmi_instrument",
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "input_text_characters": 4813,
+          "sdk_requests": 1,
+          "reasoning_effort": "minimal",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "d63e83106a752bfb67039731ac276a6b085361c9f8522df144b809cd4ce36b60"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5",
+          "input_text_characters": 5759,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": {
+            "type": "disabled"
+          },
+          "prompt_cache_options": null,
+          "payload_sha256": "7115ab0f42cc065095258a6d88c094e63eb9f4d0c6d0c8ca9cf8f9d9344a6d28"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "openai",
+          "model": "gpt-5.6-terra",
+          "input_text_characters": 5759,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "8d9df7ae906d877c7d4f6c98895f90946ca21d8e0031cf7effb0449122da7495"
+        },
+        {
+          "sample": "data_heavy",
+          "provider": "gemini",
+          "model": "gemini-2.5-flash",
+          "input_text_characters": 5590,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "fb69e3fdce74a01e2730928aebad8dcecc921b5afefab6179b2206b71d1a1188"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "anthropic",
+          "model": "claude-sonnet-5",
+          "input_text_characters": 4359,
+          "sdk_requests": 1,
+          "reasoning_effort": null,
+          "thinking": {
+            "type": "disabled"
+          },
+          "prompt_cache_options": null,
+          "payload_sha256": "2ac9b879107e9f4e3de18bf2f979f761cc36764c896e1445938c465d23628924"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "openai",
+          "model": "gpt-5.6-terra",
+          "input_text_characters": 4359,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": {
+            "mode": "explicit"
+          },
+          "payload_sha256": "8c7b94e6e90e25a8b7ed7106ff8ba21922af06f88fc5823d0a90c660b725bf13"
+        },
+        {
+          "sample": "critical_mixup",
+          "provider": "gemini",
+          "model": "gemini-2.5-flash",
+          "input_text_characters": 4190,
+          "sdk_requests": 1,
+          "reasoning_effort": "none",
+          "thinking": null,
+          "prompt_cache_options": null,
+          "payload_sha256": "e400085b72dc473d89b55343442568cee6f69b5d06cd74f57fa84f69c799c765"
+        }
+      ],
+      "summary": {
+        "input_text_characters_by_provider": {
+          "anthropic": 66029,
+          "openai": 66029,
+          "gemini": 63494
+        },
+        "samples_per_provider": 15,
+        "exact_context_calls_per_turn": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "exact_context_calls_total": 1,
+        "exact_context_local_ms": [
+          53.855,
+          7.866,
+          5.62,
+          5.721,
+          5.509,
+          5.981
+        ],
+        "exact_context_repeated_median_local_ms": 5.721,
+        "cache_disabled_context_calls_per_turn": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "cache_disabled_context_calls_total": 6
+      }
+    }
+  },
+  "interpretation": {
+    "text_length": "Unicode text characters across 15 fixed samples per provider, not model tokens or invoice reductions.",
+    "context_calls": "Mocked coordinator generation/review requests for six repetitions of one source with fixed effective context. A changing context must miss the cache.",
+    "timing": "Local CPU/I/O with fixed model responses. Includes cache key/validation work; first-call overhead can increase. Values vary with process scheduling.",
+    "quality": "Static target fixtures and bad-output probes validate program behavior; no live model quality A/B was performed.",
+    "cost": "Fewer generation requests and less redundant text reduce the work requested in these cases. Live invoice savings remain unmeasured."
+  }
+}
