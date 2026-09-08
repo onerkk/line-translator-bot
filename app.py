@@ -315,7 +315,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-07.4-record-and-computer-semantics"
+_EXPECTED_QG_BUILD_ID = "2026-09-08.1-material-rework-semantics"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -8366,11 +8366,11 @@ _FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
         # central glossary policy marks the old Chinglish phrase ``spray cat``
         # as deprecated, while natural Indonesian may use a noun or verb form.
         "required_groups": ((
-            "pengecatan semprot", "proses pengecatan", "mengecat",
+            "pengecatan semprot", "proses pengecatan", "mengecat", "dicat semprot",
             "menyemprot cat", "penyemprotan cat", "disemprot cat",
         ),),
         "forbidden_id_terms": ("spray cat", "di-spray cat", "tidak spray cat"),
-        "note": "噴漆作業使用自然印尼文 pengecatan semprot／mengecat；禁止舊詞 spray cat。",
+        "note": "噴漆依句法使用 pengecatan semprot／mengecat／dicat semprot；動詞及被動形式不可硬換成名詞；禁止舊詞 spray cat。",
     },
     {
         "key": "incoming_material_size",
@@ -8708,6 +8708,9 @@ def _factory_domain_translation_contains(entry, translation_lower):
     for bad in entry.get("forbidden_id_terms", ()):
         if bad and bad.lower() in translation_lower:
             return False
+    if entry.get("key") == "spray_cat":
+        from factory_rework_semantics import painting_present
+        return painting_present(translation_lower)
     for group in entry.get("required_groups", ()): 
         if not any(token.lower() in translation_lower for token in group):
             return False
@@ -8772,8 +8775,9 @@ def _repair_factory_domain_term_translation(translation, risk):
         sub(r"\bdi-?spray\s+cat\b", "disemprot cat")
         sub(r"\bmelakukan\s+spray\s+cat\b", "melakukan pengecatan semprot")
         sub(r"\bspray\s+cat\b", "pengecatan semprot")
-        sub(r"\bpenyemprotan\s+cat\b", "pengecatan semprot")
-        sub(r"\bcat\s+semprot\b", "pengecatan semprot")
+        # Natural inflections and noun modifiers retain their sentence role.
+        # Rewriting cat semprot here could turn a model's verb phrase back
+        # into the very noun concatenation that the source gate must reject.
     if "incoming_material_size" in active:
         sub(r"\bukuran\s+material\s+yang\s+masuk\b", "ukuran material masuk")
         sub(r"\bukuran\s+bahan\s+yang\s+masuk\b", "ukuran material masuk")

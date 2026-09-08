@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-07.4-record-and-computer-semantics"
+QUALITY_GATE_BUILD_ID = "2026-09-08.1-material-rework-semantics"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1719,6 +1719,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
+        result = fsa_module.instruction_semantics.rework_semantics.canonicalize_noun_phrase(source, result)
     return result
 
 

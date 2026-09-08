@@ -279,7 +279,8 @@ def test_reported_spray_washing_instruction_keeps_both_actions_and_name(runtime)
     app.handle_message(event(source))
     actual = delivered_text(runtime)
     assert '@法比恩 Fabian' in actual
-    assert 'salah pengecatan semprot' in actual and 'cuci ulang' in actual
+    assert 'Bundel yang salah dicat semprot ini' in actual and 'cuci ulang' in actual
+    assert 'salah pengecatan semprot' not in actual
     assert len(runtime.generations) == 1 and queue.pending_count() == 0
 
 

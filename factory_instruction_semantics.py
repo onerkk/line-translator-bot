@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import re
 import factory_record_semantics as record_semantics
+import factory_rework_semantics as rework_semantics
 from translation_request_cache import memoize
 import unicodedata
 
-BUILD_ID = "2026-09-07.4-record-object-direction"
+BUILD_ID = "2026-09-08.1-material-rework-relations"
 _ITEM = re.compile(r"(?m)^\s*[（(]?(\d+)[）).、．]\s*(?!\d)")
 _INVENTORY = r"(?:庫存|库存|存貨|存货)"
 _BLOCKED_DECREASE = r"(?:降不下(?:來|来|去)?|減不下(?:來|来|去)?|减不下(?:來|来|去)?|降低不了|(?:無法|无法|不能|不會|不会|一直不)(?:再)?(?:下降|降低|減少|减少)|下不[來来])"
@@ -97,7 +98,8 @@ def build_relations(source):
                 other_period_explicit=bool(re.search(r"上個?月|上个月|下個?月|下个月|前月|次月", compact)))
         for transfer in (record_semantics.build_transfers(text, intro)
                 + record_semantics.build_status_markers(text)
-                + record_semantics.build_movement_permissions(text)):
+                + record_semantics.build_movement_permissions(text)
+                + rework_semantics.build_relations(text)):
             relations.append(dict(transfer, item=item))
         m = re.search(r"(?:眼色|眼力)(?:要)?(?:好|機靈|机灵)(?:一點|一点|點|点)?|(?:機靈|机灵|識相|识相)一點", compact)
         if m:
@@ -166,6 +168,8 @@ def validate_relations(relations, translation):
             good = record_semantics.validate_status_marker(relation, text)
         elif kind == 'movement_permission':
             good = record_semantics.validate_movement_permission(relation, text)
+        elif kind == 'material_rework':
+            good = rework_semantics.validate_relation(relation, text)
         elif kind == 'situational_awareness':
             good = bool(re.search(r"\b(?:peka|sigap|waspada|tanggap|hati-hati|hati hati|mawas diri|pandai membaca situasi)\b", text)) and not re.search(r"\b(?:terlihat|tampak|kelihatan)\s+lebih\s+baik\b", text)
         elif kind == 'cctv_review':

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-07.5-record-transfer-and-computer",
+  "build_id": "2026-09-08.1-painting-inflection-and-rework",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -1118,27 +1118,21 @@
         "min_score": 8
       },
       "context": [
-        "『噴漆』是塗裝作業，可依句型使用 pengecatan semprot、mengecat dengan semprotan、disemprot cat；不要使用不自然的 spray cat。"
+        "『噴漆』可依語法使用名詞 pengecatan semprot、動詞 mengecat dengan semprotan 或被動 dicat semprot/disemprot cat。術語指引不是要求逐字嵌入固定名詞。",
+        "『噴漆錯誤的』描述被噴錯的材料，使用 yang salah dicat semprot 或 yang pengecatan semprotnya salah；不要拼接成 yang salah pengecatan semprot。材料的把／捆不可漏譯為只有 Yang。",
+        "重洗是再次進行清洗，保留 cuci ulang/dicuci ulang；除非原文明示，不得自行增加重新噴漆、改顏色、退漆藥劑或原因。"
       ],
       "preferred_target_phrases": [
         "pengecatan semprot",
+        "dicat semprot",
         "disemprot cat",
         "mengecat dengan semprotan"
       ],
       "forbidden_target_phrases": [
         "spray cat"
       ],
-      "requirements": [
-        {
-          "target_any": [
-            "pengecatan semprot",
-            "disemprot cat",
-            "mengecat dengan semprotan",
-            "menyemprot cat"
-          ],
-          "issue": "missing_spray_painting_semantics"
-        }
-      ]
+      "requirements": [],
+      "semantic_validator": "spray_painting"
     },
     {
       "id": "management_shift_smoking_area_notice",

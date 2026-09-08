@@ -82,7 +82,7 @@ def validate_document(document: Dict[str, Any]) -> Dict[str, Any]:
             raise KnowledgeError(f"entries[{index}].match must be an object")
         if match.get("semantic_relation") not in (None, "erp_data_release"):
             raise KnowledgeError(f"entries[{index}].match has an unknown semantic relation")
-        if entry.get("semantic_validator") not in (None, "erp_data_release"):
+        if entry.get("semantic_validator") not in (None, "erp_data_release", "spray_painting"):
             raise KnowledgeError(f"entries[{index}] has an unknown semantic validator")
         has_positive = any(match.get(key) for key in ("strong_phrases", "any_terms", "all_groups", "regex_any"))
         if not has_positive:
@@ -335,6 +335,12 @@ class FactoryKnowledgeStore:
                 frame = message_semantics.build_data_release_frame(source_text)
                 _, relation_issues = message_semantics.validate_translation(frame, translation)
                 issues.extend(relation_issues)
+            elif card.get("semantic_validator") == "spray_painting":
+                # A soft glossary term is a concept, not a compulsory noun
+                # substring. Accept source-faithful passive/active inflections.
+                from factory_rework_semantics import painting_present
+                if not painting_present(translation):
+                    issues.append(f"factory_knowledge:{entry_id}:missing_spray_painting_semantics")
             for phrase in applicable_forbidden_phrases(card, source_text):
                 if _contains(tgt_norm, phrase):
                     issues.append(f"factory_knowledge:{entry_id}:forbidden:{phrase}")
