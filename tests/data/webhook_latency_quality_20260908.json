@@ -1,0 +1,263 @@
+{
+  "source_zip_sha256": "b0c720a6d0f72381eadba1cf99bfa465cd0d99b2738366f11365fe8233d8b6b5",
+  "before": {
+    "mode": "offline controlled delay",
+    "external_network": "blocked",
+    "live_ai_requests": 0,
+    "live_line_messages": 0,
+    "runs": 5,
+    "artificial_work_ms": {
+      "webhook_handler": 120,
+      "each_media_job": 100,
+      "text_job": 5
+    },
+    "webhook_ack_ms": [
+      141.72,
+      121.352,
+      121.354,
+      121.188,
+      121.229
+    ],
+    "webhook_ack_median_ms": 121.352,
+    "text_recovery_after_two_media_jobs_ms": [
+      211.548,
+      211.175,
+      210.731,
+      211.509,
+      211.533
+    ],
+    "text_recovery_median_ms": 211.509,
+    "semantic_checks": [
+      {
+        "case": "screenshot_production",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kebulatan terlebih dahulu, baru produksi.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kebulatan terlebih dahulu, baru produksi."
+      },
+      {
+        "case": "wrong_metric",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kekasaran permukaan terlebih dahulu, baru produksi.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kekasaran permukaan terlebih dahulu, baru produksi."
+      },
+      {
+        "case": "reversed_sequence",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nProduksi dulu, kemudian bagian R&D mengukur kebulatan.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nProduksi dulu, kemudian bagian R&D mengukur kebulatan."
+      },
+      {
+        "case": "equivalent_prerequisite",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nProduksi baru boleh dimulai setelah bagian R&D selesai mengukur roundness.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nProduksi baru boleh dimulai setelah bagian R&D selesai mengukur roundness."
+      },
+      {
+        "case": "screenshot_report",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing kemarin diletakkan di mana?",
+        "accepted": true,
+        "output": "@福迪 Laporan tulis tangan proses polishing kemarin diletakkan di mana?"
+      },
+      {
+        "case": "wrong_day",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing hari ini diletakkan di mana?",
+        "accepted": true,
+        "output": "@福迪 Laporan tulis tangan proses polishing hari ini diletakkan di mana?"
+      },
+      {
+        "case": "question_changed_to_answer",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing kemarin sudah diletakkan di meja.",
+        "accepted": true,
+        "output": "@福迪 Laporan tulis tangan proses polishing kemarin sudah diletakkan di meja."
+      },
+      {
+        "case": "natural_report_noun",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan polishing tulisan tangan kemarin ada di mana?",
+        "accepted": true,
+        "output": "@福迪 Laporan polishing tulisan tangan kemarin ada di mana?"
+      }
+    ],
+    "render_ephemeral_mode": {
+      "http_threads_from_dockerfile": 4,
+      "messages_per_burst": 16,
+      "burst_total_ms": [
+        493.12,
+        490.427,
+        489.432
+      ],
+      "burst_median_ms": 490.427,
+      "note": "Real Flask callback, local thread executor with simulated 120 ms work. Not live Gunicorn/Render."
+    },
+    "limits": "Timing measures local scheduling with identical artificial delays, not online speed. Fixed candidates measure guard behavior, not model translation accuracy. No bill or production logs were available."
+  },
+  "after": {
+    "mode": "offline controlled delay",
+    "external_network": "blocked",
+    "live_ai_requests": 0,
+    "live_line_messages": 0,
+    "runs": 5,
+    "artificial_work_ms": {
+      "webhook_handler": 120,
+      "each_media_job": 100,
+      "text_job": 5
+    },
+    "webhook_ack_ms": [
+      22.71,
+      3.856,
+      3.268,
+      3.111,
+      2.511
+    ],
+    "webhook_ack_median_ms": 3.268,
+    "text_recovery_after_two_media_jobs_ms": [
+      7.404,
+      8.657,
+      8.505,
+      7.507,
+      8.289
+    ],
+    "text_recovery_median_ms": 8.289,
+    "semantic_checks": [
+      {
+        "case": "screenshot_production",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kebulatan terlebih dahulu, baru produksi.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kebulatan terlebih dahulu, baru produksi."
+      },
+      {
+        "case": "wrong_metric",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nJangan produksi dulu. Tunggu bagian R&D mengukur kekasaran permukaan terlebih dahulu, baru produksi.",
+        "accepted": false,
+        "output": null
+      },
+      {
+        "case": "reversed_sequence",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nProduksi dulu, kemudian bagian R&D mengukur kebulatan.",
+        "accepted": false,
+        "output": null
+      },
+      {
+        "case": "equivalent_prerequisite",
+        "source": "@All\n7J821007\n7J821008\n7J821009\n先不要生產，等研發單位量過圓度在生產",
+        "candidate": "@All\n7J821007\n7J821008\n7J821009\nProduksi baru boleh dimulai setelah bagian R&D selesai mengukur roundness.",
+        "accepted": true,
+        "output": "@All\n7J821007\n7J821008\n7J821009\nProduksi baru boleh dimulai setelah bagian R&D selesai mengukur roundness."
+      },
+      {
+        "case": "screenshot_report",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing kemarin diletakkan di mana?",
+        "accepted": true,
+        "output": "@福迪 Laporan tulis tangan proses polishing kemarin diletakkan di mana?"
+      },
+      {
+        "case": "wrong_day",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing hari ini diletakkan di mana?",
+        "accepted": false,
+        "output": null
+      },
+      {
+        "case": "question_changed_to_answer",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan tulis tangan proses polishing kemarin sudah diletakkan di meja.",
+        "accepted": false,
+        "output": null
+      },
+      {
+        "case": "natural_report_noun",
+        "source": "@福迪 昨天拋光手寫報表放在哪裡",
+        "candidate": "@福迪 Laporan polishing tulisan tangan kemarin ada di mana?",
+        "accepted": true,
+        "output": "@福迪 Laporan polishing tulisan tangan kemarin ada di mana?"
+      }
+    ],
+    "render_ephemeral_mode": {
+      "http_threads_from_dockerfile": 8,
+      "messages_per_burst": 16,
+      "burst_total_ms": [
+        255.985,
+        278.767,
+        271.167
+      ],
+      "burst_median_ms": 271.167,
+      "note": "Real Flask callback, local thread executor with simulated 120 ms work. Not live Gunicorn/Render."
+    },
+    "limits": "Timing measures local scheduling with identical artificial delays, not online speed. Fixed candidates measure guard behavior, not model translation accuracy. No bill or production logs were available."
+  },
+  "regression": {
+    "summary": "1781 passed, 438 subtests passed in 49.78s",
+    "assets": {
+      "errors": [],
+      "guard": {
+        "api_version": 1,
+        "asset_fingerprint": "0ed1349e06d5f240340b30ad3e7169cc3191ef1dd79f5ebd72a00e2b1be0515b",
+        "build_id": "2026-09-06.1-source-term-integrity",
+        "exact_case_count": 53,
+        "knowledge": {
+          "api_version": 1,
+          "build_id": "2026-09-08.1-painting-inflection-and-rework",
+          "enabled_count": 32,
+          "entry_count": 32,
+          "path": "/workspace/scratch/bbbd280e31a7/latency-work/line-translator-bot-main/factory_knowledge.json",
+          "schema_version": 1,
+          "sha256": "81732a78c22d635ddc6d03750e6b9874ce22420503bcec5db4344458b9ea7d76"
+        },
+        "regression_path": "/workspace/scratch/bbbd280e31a7/latency-work/line-translator-bot-main/factory_translation_regression.json",
+        "self_test": {
+          "approved_examples_validated": 43,
+          "known_bad_examples_rejected": 18,
+          "ok": true,
+          "regression_cases": 30
+        }
+      },
+      "measurement_semantics": {
+        "api_version": 1,
+        "build_id": "2026-08-08.3-id-zh-work-order-material-dimension",
+        "self_test": {
+          "checks": 16,
+          "ok": true
+        }
+      },
+      "message_semantics": {
+        "api_version": 3,
+        "build_id": "2026-09-08.2-original-conversation-snapshot",
+        "self_test": {
+          "checks": 102,
+          "ok": true
+        }
+      },
+      "ok": true,
+      "policy": {
+        "always_review_opt_in": false,
+        "api_version": 8,
+        "block_unverified_delivery": false,
+        "build_id": "2026-09-08.2-conversation-review-budget",
+        "emergency_nmt_fallback": true,
+        "fail_closed": false,
+        "generic_nmt_fallback": false,
+        "mode": "always",
+        "review_mode": "adaptive",
+        "review_success_required": false,
+        "verified_cache_required": true
+      },
+      "regression": {
+        "case_count": 30,
+        "forbidden_probes_rejected": 29,
+        "verified_targets_accepted": 30
+      },
+      "warnings": []
+    }
+  }
+}
