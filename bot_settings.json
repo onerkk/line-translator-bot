@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "90e6b72ed8285d92b5a84954bfda3b33f4f3f52a52acd9c4049422831940e36d",
-    "updated_at_iso": "2026-09-07T21:21:30.403875+00:00",
-    "updated_at_unix": 1788816090.4038749
+    "state_hash": "2a1ceb89847679b931f6f2b3f222d32c4ddb4dfd6b1ce4f9116af0134ac072e5",
+    "updated_at_iso": "2026-09-08T01:45:06.318030+00:00",
+    "updated_at_unix": 1788831906.3180296
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 21:14:59",
+    "last_updated": "2026-09-07 23:59:45",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 15,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 15206,
+    "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.14418050000000002,
-    "oai_input": 159315,
-    "oai_output": 1606,
+    "oai_cost_usd": 0.14529360000000002,
+    "oai_input": 163504,
+    "oai_output": 1661,
     "oai_reasoning": 0,
-    "text_translations": 267,
-    "tokens_completion": 19062,
-    "tokens_prompt": 4394086,
+    "text_translations": 268,
+    "tokens_completion": 19117,
+    "tokens_prompt": 4398275,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -385,13 +385,13 @@
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 0,
-      "cache_write": 11447,
-      "cost_usd": 0.4004372499999999,
+      "cache_write": 15633,
+      "cost_usd": 0.4015503499999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2488,
-      "tokens_prompt": 269822
+      "tokens_completion": 2543,
+      "tokens_prompt": 274011
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
