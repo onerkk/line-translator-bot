@@ -34,7 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 logger = logging.getLogger(__name__)
 
 ACTIVE_LEARNING_API_VERSION = 2
-ACTIVE_LEARNING_BUILD_ID = "2026-09-04.1-lossless-correction-migration"
+ACTIVE_LEARNING_BUILD_ID = "2026-09-08.2-objective-review-risk"
 VALID_STATUSES = frozenset({
     "pending", "approved", "rejected", "superseded", "quarantined",
 })
@@ -985,17 +985,21 @@ def _risk_similarity(left: str, right: str, lang: str) -> float:
     return min(1.0, score)
 
 
-def _risk_weight(*, issues: Sequence[str], path: str, candidate: str, final: str,
-                 reviewed: bool, cacheable: bool) -> float:
-    changed = bool(candidate and final and candidate.strip() != final.strip())
+def _content_risk_issues(issues: Sequence[str]) -> List[str]:
     transient_markers = (
         "review_unavailable", "provider_unavailable", "timeout", "rate_limit",
         "connection", "network", "api_unavailable", "temporarily_unavailable",
     )
-    content_issues = [
+    return [
         str(item) for item in issues
         if not any(marker in str(item).casefold() for marker in transient_markers)
     ]
+
+
+def _risk_weight(*, issues: Sequence[str], path: str, candidate: str, final: str,
+                 reviewed: bool, cacheable: bool) -> float:
+    changed = bool(candidate and final and candidate.strip() != final.strip())
+    content_issues = _content_risk_issues(issues)
     if changed and content_issues and (
         "review" in path or "rebuild" in path or "repair" in path
     ):
@@ -1006,10 +1010,9 @@ def _risk_weight(*, issues: Sequence[str], path: str, candidate: str, final: str
         return 0.75
     if issues:
         return 0.0
-    if not cacheable:
-        return 0.65
-    if reviewed and changed and content_issues:
-        return 0.7
+    # Cache admission may be denied solely because the source needs context.
+    # That is not evidence of mistranslation. Treating it as 0.65 risk made a
+    # clean first turn trigger an extra paid review on every subsequent turn.
     return 0.0
 
 
@@ -1050,7 +1053,7 @@ def record_translation_outcome(
         "translation_warning" if cleaned_issues or not cacheable else
         "translation_reviewed"
     ))
-    meaningful = bool(cleaned_issues or changed or reviewed or not cacheable or event_type)
+    meaningful = bool(cleaned_issues or changed or reviewed or event_type)
     if not meaningful:
         return {"recorded": False, "risk_updated": False}
     now = int(time.time())
@@ -1123,6 +1126,7 @@ def assess_review_risk(
     group_id: Optional[str] = None,
     *,
     limit: int = 300,
+    record_trigger: bool = True,
 ) -> Dict[str, Any]:
     """Return whether prior objective failures justify source review now."""
     if not _init_done:
@@ -1133,6 +1137,7 @@ def assess_review_risk(
     if not source or (source_lang, target_lang) not in _SUPPORTED_DIRECTIONS:
         return {"requires_review": False, "score": 0.0, "matches": [], "reasons": []}
     scope = str(group_id or "")
+    recovered_issues = {}
     try:
         with _connect() as conn:
             if scope:
@@ -1153,6 +1158,27 @@ def assess_review_risk(
                     """,
                     (source_lang, target_lang, max(1, int(limit))),
                 ).fetchall()
+            # Older builds created risk rows without any content issue merely
+            # because a contextual result was not source-cacheable. Ignore those
+            # false signals, but recover any retained real failure that an old
+            # later no-issue write overwrote. One batched read, never one per row.
+            empty_hashes = list({str(row["canonical_hash"]) for row in rows
+                                 if not _content_risk_issues(_read_json_list(row["issue_codes"]))})
+            if empty_hashes:
+                placeholders = ",".join("?" for _ in empty_hashes)
+                scopes = (scope, "") if scope else ("",)
+                scope_marks = ",".join("?" for _ in scopes)
+                evidence = conn.execute(
+                    "SELECT src_text_hash,group_id,issues_json FROM learning_events "
+                    "WHERE src_lang=? AND tgt_lang=? AND group_id IN (" + scope_marks + ") "
+                    "AND src_text_hash IN (" + placeholders + ") AND issues_json!='[]' "
+                    "ORDER BY id DESC",
+                    (source_lang, target_lang, *scopes, *empty_hashes),
+                )
+                for event in evidence:
+                    codes = _content_risk_issues(_read_json_list(event["issues_json"]))
+                    if codes:
+                        recovered_issues.setdefault((event["src_text_hash"], event["group_id"]), codes)
     except Exception as exc:
         logger.warning("[AL] risk assessment unavailable: %s", exc)
         return {"requires_review": False, "score": 0.0, "matches": [], "reasons": []}
@@ -1160,6 +1186,10 @@ def assess_review_risk(
     now = time.time()
     matches: List[Dict[str, Any]] = []
     for row in rows:
+        issue_codes = _content_risk_issues(_read_json_list(row["issue_codes"])) or recovered_issues.get(
+            (row["canonical_hash"], row["group_id"]), [])
+        if not issue_codes:
+            continue
         similarity = _risk_similarity(source, str(row["src_text"] or ""), source_lang)
         if similarity < 0.54:
             continue
@@ -1177,7 +1207,7 @@ def assess_review_risk(
                 "similarity": round(similarity, 4),
                 "occurrences": count,
                 "last_path": str(row["last_path"] or ""),
-                "issues": _read_json_list(row["issue_codes"])[:8],
+                "issues": issue_codes[:8],
                 "exact": bool(exact),
             })
     matches.sort(key=lambda item: (item["exact"], item["score"], item["occurrences"]), reverse=True)
@@ -1193,7 +1223,7 @@ def assess_review_risk(
         if match["last_path"]:
             reasons.append("prior_path:" + match["last_path"])
     reasons = list(dict.fromkeys(reasons))[:10]
-    if requires_review:
+    if requires_review and record_trigger:
         with _lock:
             _stats["risk_reviews_triggered"] += 1
     return {

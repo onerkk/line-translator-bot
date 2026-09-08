@@ -157,7 +157,7 @@ factory_line_settings = {"groups": {}, "stations": []}
 factory_hub = None
 import reminders_web
 import scheduled_reminders
-from translation_request_guard import serialize_request
+from translation_request_guard import serialize_request, get_context_result, set_context_result
 import factory_source_understanding as source_understanding_module
 import translation_adaptive_memory as adaptive_memory_module
 import hashlib
@@ -467,7 +467,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-07.1-uncertainty-safe-expression"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-07.2-record-and-marker-objects"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-08.3-compact-stable-prefix"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -767,7 +767,7 @@ logger.info(
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
 _EXPECTED_ACTIVE_LEARNING_API_VERSION = 2
-_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-09-04.1-lossless-correction-migration"
+_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-09-08.2-objective-review-risk"
 if (getattr(al_module, "ACTIVE_LEARNING_API_VERSION", None)
         != _EXPECTED_ACTIVE_LEARNING_API_VERSION
         or getattr(al_module, "ACTIVE_LEARNING_BUILD_ID", None)
@@ -1905,7 +1905,15 @@ def _translation_response_text(response):
         if choices:
             message = getattr(choices[0], "message", None)
             content = getattr(message, "content", None) if message is not None else None
-            return str(content or "").strip()
+            text = str(content or "").strip()
+            if text.startswith("{"):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict) and isinstance(parsed.get("translation"), str):
+                        return parsed["translation"].strip()
+                except (ValueError, TypeError):
+                    pass
+            return text
     except Exception:
         pass
     return ""
@@ -1944,6 +1952,13 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
             return False, f"{provider} echoed the source instead of translating"
 
         text = tqg_module.canonicalize_source_terms(source, text, src_lang, tgt_lang)
+        # Apply the same source-grounded title correction as the final pipeline
+        # BEFORE rejecting a provider and paying for another generation.
+        _terminology = globals().get("factory_terminology_module")
+        if _terminology is not None:
+            text = _terminology.canonicalize_organization_translation(
+                source, text, src_lang, tgt_lang
+            )
 
         # Objective local checks are cheap and provider-neutral.  Warning-only
         # style diagnostics do not trigger another paid call.
@@ -11480,49 +11495,16 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             if _meta:
                 _kwargs["metadata"] = _meta
                 _kwargs["store"] = True
-        # Structured Outputs (json_schema)
+        # One provider-neutral structured field. The old schema requested two
+        # unused full alternatives plus self-reported metadata, and was only
+        # forwarded to OpenAI. Local guards validate the actual source directly.
         if structured_output_enabled and model_supports(_model, "structured_output"):
-            _kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "translation_result",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "translation": {
-                                "type": "string",
-                                "description": "The final translation, no notes/explanations"
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "description": "0-1 confidence score for this translation"
-                            },
-                            "covered_all_information": {
-                                "type": "boolean",
-                                "description": "Whether the translation covers ALL information points from the source (key for announcement-type messages)"
-                            },
-                            "message_type": {
-                                "type": "string",
-                                "enum": ["announcement", "incident", "general", "question", "command"],
-                                "description": "What kind of message this is"
-                            },
-                            "preserved_terms": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of terms kept verbatim (machine codes like BF/BF2/CYA, names, numbers)"
-                            },
-                            "alternatives": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Up to 2 alternative phrasings"
-                            }
-                        },
-                        "required": ["translation", "confidence", "covered_all_information",
-                                     "message_type", "preserved_terms", "alternatives"],
-                        "additionalProperties": False
-                    }
-                }
+            _kwargs["structured_name"] = "translation_result"
+            _kwargs["structured_schema"] = {
+                "type": "object",
+                "properties": {"translation": {"type": "string"}},
+                "required": ["translation"],
+                "additionalProperties": False,
             }
         # Logprobs (信心度)
         _supports_logprobs = model_supports(_model, "logprobs")
@@ -11936,7 +11918,7 @@ def _translation_cache_context_bound(text):
     return bool(snapshot and snapshot.get("entries"))
 
 
-def _translation_cache_scope():
+def _translation_cache_scope(*, effective_conversation=None):
     """Bind cached wording to the tone/variant inputs that can change output."""
     payload = {
         # Group-local names, terminology, examples and tone settings may alter
@@ -11948,11 +11930,90 @@ def _translation_cache_scope():
         "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
         "station": line_factory_features.station_scope(),
         "protected_names": sorted(set(CUSTOMER_NAMES + _line_user_protected_names())),
-        "conversation": conversation_context.fingerprint(
-            getattr(_tl, "conversation_snapshot", None)),
+        "conversation": (conversation_context.fingerprint(
+            getattr(_tl, "conversation_snapshot", None))
+            if effective_conversation is None else effective_conversation),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _context_translation_request_key(text, src, tgt):
+    """Key short-lived reuse by the exact effective context and current policy.
+
+    Source-only caches still reject contextual translations. This separate
+    process-local cache includes the original-turn payload (age and ordering),
+    speaker, recipients, quote, station prompt, names and semantic assets.
+    Current event IDs/timestamps are delivery metadata. Unsend/edit sanitization
+    runs in _conversation_translation_scope before this key is computed.
+    """
+    if os.environ.get("TRANSLATION_CONTEXT_CACHE_ENABLED", "1").lower() in {"0", "false", "off", "no"}:
+        return None
+    if not factory_translation_policy_module.supports_direction(src, tgt):
+        return None
+    if not _translation_cache_context_bound(text):
+        return None
+    # Media has visual state outside the text snapshot; retain its full pipeline.
+    if getattr(_tl, "from_image_ocr", False) or get_recent_media_scene(
+            getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)):
+        return None
+    snapshot = conversation_context.current_for(text) or {}
+    if snapshot.get("reason") == "store_unavailable":
+        return None
+    effective = conversation_context.prompt_data(snapshot) if snapshot.get("entries") else ""
+    payload = {
+        "version": "2026-09-08.1-context-exact-reuse",
+        "source": text, "src": src, "tgt": tgt,
+        "scope": _translation_cache_scope(effective_conversation=effective),
+        "speaker": str(getattr(_tl, "user_id", "") or snapshot.get("author", "")),
+        "recipients": snapshot.get("recipients", []),
+        "quote": str(getattr(_tl, "quoted_context_source", "") or ""),
+        "station_prompt": line_factory_features.station_prompt(),
+        "identities": getattr(_tl, "protected_name_map", {}) or {},
+        "assets": _translation_cache_asset_fingerprint(),
+        "provider_config": ai_provider.get_current_config_safe(),
+        "models": (model_default, model_upgrade, model_threshold,
+                   _translation_cp_tier_models(), getattr(_tl, "force_model", None)),
+        "review": (factory_translation_policy_module.review_mode(),
+                   factory_translation_policy_module.require_review_success(src, tgt)),
+        "runtime_policy": {name: value for name, value in os.environ.items()
+                           if name.startswith(("FACTORY_", "TRANSLATION_", "PROMPT_"))},
+        "learned_risk": al_module.assess_review_risk(
+            text, src, tgt, _conversation_group_id(), record_trigger=False),
+        "generation": (translation_temperature, translation_top_p, translation_seed,
+                       fewshot_mode, FEWSHOT_INJECT_MAX, structured_output_enabled),
+        "tone_analysis": str(getattr(_tl, "auto_tone_analysis", None)),
+    }
+    return "context:" + hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()
+
+
+def _translate_with_context_reuse(key, text, src, tgt):
+    # Same-key waiters use the owner's admitted result; other work stays parallel.
+    with serialize_request(key):
+        result = get_context_result(key)
+        if result is not None:
+            _tl.llm_api_ms = 0.0
+            _tl.provider_attempt_count = 0
+            _gid = getattr(_tl, "group_id", "") or ""
+            _log_translation(text, result, src, tgt, "verified_context_cache", 0, 1.0, False, 1.0, _gid)
+            if _gid:
+                _conv_buffer_add(_gid, text, result, src, tgt)
+            _update_last_translate_debug(pipeline_status="verified_context_cache",
+                final_candidate=result[:2000], openai_status="not_needed")
+            logger.info("[ContextCache] exact context hit | api=0ms calls=0 src=%s tgt=%s", src, tgt)
+            return result
+        _tl.context_result_cacheable = False
+        result = _translate_core(text, src, tgt)
+        if result and getattr(_tl, "context_result_cacheable", False):
+            # Do not admit under an old key if assets/settings changed meanwhile.
+            try:
+                if _context_translation_request_key(text, src, tgt) == key:
+                    set_context_result(key, result)
+            except Exception as exc:
+                logger.warning("[ContextCache] admission skipped: %s", type(exc).__name__)
+        return result
 
 
 def _translation_cache_asset_fingerprint():
@@ -11972,6 +12033,7 @@ def _translation_cache_asset_fingerprint():
         "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
         "conversation_context": conversation_context.BUILD_ID,
+        "active_learning": al_module.ACTIVE_LEARNING_BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),
         "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
@@ -14416,6 +14478,7 @@ def translate(text, src, tgt):
         "semantic_contract", "source_review_already_attempted", "provider_attempt_count",
         "quality_gate_pending", "delivery_degraded", "delivery_degraded_issues",
         "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
+        "context_result_cacheable",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -14801,8 +14864,17 @@ def translate(text, src, tgt):
         _request_key = None
         if not _translation_cache_context_bound(protected_text):
             _request_key = (protected_text, src, tgt, _translation_cache_scope())
-        with serialize_request(_request_key):
-            result = _translate_core(protected_text, src, tgt)
+        _context_key_fn = globals().get("_context_translation_request_key")
+        try:
+            _context_key = _context_key_fn(protected_text, src, tgt) if _context_key_fn else None
+        except Exception as _context_key_error:
+            logger.warning("[ContextCache] key unavailable: %s", type(_context_key_error).__name__)
+            _context_key = None
+        if _context_key:
+            result = _translate_with_context_reuse(_context_key, protected_text, src, tgt)
+        else:
+            with serialize_request(_request_key):
+                result = _translate_core(protected_text, src, tgt)
     finally:
         # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
         try:
@@ -15718,6 +15790,7 @@ def _translate_core(text, src, tgt):
         logger.warning("[MetaLeak] 偵測 exception: %s", _mle)
 
     _quality_cacheable = not _meta_leak_detected
+    _quality_cacheable_for_context = False
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
     # Newly generated high-risk factory translations may receive one
@@ -15968,6 +16041,7 @@ def _translate_core(text, src, tgt):
                             )
                             result = _pre_gate_result
                 if _context_bound_translation:
+                    _quality_cacheable_for_context = _quality_cacheable
                     _quality_cacheable = False
                 if result and _quality_cacheable:
                     cache_set(text, src, tgt, result, force=True)
@@ -16002,9 +16076,17 @@ def _translate_core(text, src, tgt):
                     _quality_cacheable = True
                 else:
                     _quality_cacheable = False
+                    _quality_cacheable_for_context = False
         except Exception as _core_guard_exc:
             logger.exception("[FactoryGuard] in-core validation exception; preserving candidate: %s", _core_guard_exc)
             _quality_cacheable = False
+            _quality_cacheable_for_context = False
+
+    # Fully validated context-bound text can be reused with ALL its context;
+    # it still must never teach the source-only cache/TM/vector stores.
+    _tl.context_result_cacheable = bool(result and (
+        _quality_cacheable or _quality_cacheable_for_context
+    ))
 
     # Persist only meaningful interventions. These records never become target
     # translations by themselves; they teach the adaptive policy that a similar

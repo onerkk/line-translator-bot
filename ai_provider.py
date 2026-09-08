@@ -1708,6 +1708,27 @@ def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
     if not raw_system:
         return raw_system
 
+    # The runtime compiler emits <translation_principles>, not the legacy
+    # <critical_rules>. Previously every compiled Claude request was wrapped
+    # again in a second role/task/rules/glossary/LINE policy. This both billed
+    # duplicate instructions and put a generic Indonesian task before zh output.
+    # The compiler already owns role, glossary priority, tone and LINE format.
+    if ("<role>" in raw_system and "<translation_principles>" in raw_system
+            and not cot_tag and not success_criteria):
+        parts = [raw_system.rstrip()]
+        if ocr_strict:
+            parts.append(
+                '<layout_preservation>Keep OCR rows, numbering, indentation and blanks; '
+                'mark unreadable text instead of inventing it.</layout_preservation>'
+            )
+        if output_tag:
+            parts.append(
+                '<output_format priority="highest">Return one <translation>...</translation> '
+                'element containing only the complete target translation; no text outside it.'
+                '</output_format>'
+            )
+        return "\n".join(parts)
+
     # v3.3 (2026-05-20):偵測 raw_system 是否已是 app.py 提供的分區 XML 結構
     # 新分區結構:<role>/<critical_rules>/<factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>
     # 雙系統共用 — Anthropic 不再二次包裝,只 append Anthropic 專屬條件 tag(glossary_priority + 條件 tag)
@@ -2011,10 +2032,18 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
             },
         }
     _effort = "minimal" if fast_quality else (features.get("reasoning_effort") or "minimal").strip().lower()
-    # 舊版後台可能存 none；Gemini 3 相容端點使用 minimal 作為最低延遲檔。
-    if _effort == "none":
-        _effort = "minimal"
-    if _effort in ("minimal", "low", "medium", "high"):
+    # Official compatibility mapping: minimal still reserves 1,024 thinking
+    # tokens on 2.5. Only 2.5 Flash/Flash-Lite can disable thinking with none.
+    # Pro/3.x cannot disable it; 3.7/3.8 Flash support low, not minimal.
+    # https://ai.google.dev/gemini-api/docs/openai#thinking
+    _gemini_low = str(g_model).lower()
+    _can_disable = _gemini_low.startswith("gemini-2.5-flash")
+    _lowest = ("none" if _can_disable else "low" if (
+        "pro" in _gemini_low or _gemini_low.startswith(("gemini-3.7-", "gemini-3.8-"))
+    ) else "minimal")
+    if fast_quality or _effort == "none" or (_effort == "minimal" and _lowest == "low"):
+        _effort = _lowest
+    if _effort in ("none", "minimal", "low", "medium", "high"):
         g_kwargs["reasoning_effort"] = _effort
 
     try:
@@ -2024,7 +2053,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
         _msg = str(e).lower()
         _param_error = _is_feature_parameter_error(e, "reasoning_effort")
-        if g_kwargs.get("reasoning_effort") == "minimal" and _param_error:
+        if g_kwargs.get("reasoning_effort") in ("none", "minimal") and _param_error:
             g_kwargs["reasoning_effort"] = "low"
             try:
                 print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
@@ -2581,6 +2610,53 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
     raise TimeoutError(f"AI 翻譯超過總期限 {total_timeout:.0f} 秒")
 
 
+_openai_cache_unsupported_until = {}
+
+
+def _configure_openai_translation_cache(call_kwargs):
+    """Write only a reusable compiled prefix on GPT-5.6 Chat Completions.
+
+    Dynamic source/context prefixes otherwise incur a 1.25x cache-write charge.
+    Explicit mode with no eligible breakpoint performs ordinary uncached input
+    processing. No padding/count-tokens request is used to reach the threshold.
+    extra_body keeps this wire field compatible with older installed SDKs.
+    """
+    model = str(call_kwargs.get("model", ""))
+    if not model.startswith("gpt-5.6"):
+        return False
+    if os.environ.get("OPENAI_TRANSLATION_EXPLICIT_CACHE", "1").lower() in {"0", "false", "off", "no"}:
+        return False
+    with _provider_health_lock:
+        if _openai_cache_unsupported_until.get(model, 0) > time.monotonic():
+            return False
+    messages = call_kwargs.get("messages") or []
+    # Only the first message is guaranteed to be a stable prefix. Never move
+    # user text or an image across another message to manufacture cacheability.
+    if not messages or messages[0].get("role") not in {"system", "developer"}:
+        return False
+    content = messages[0].get("content")
+    if not isinstance(content, str) or "<translation_principles>" not in content:
+        return False
+    boundary = content.find("</translation_principles>")
+    if boundary < 0:
+        return False
+    end = boundary + len("</translation_principles>")
+    stable = content[:end]
+    extra = dict(call_kwargs.get("extra_body") or {})
+    # An explicit caller-supplied policy remains authoritative.
+    if "prompt_cache_options" in call_kwargs or "prompt_cache_options" in extra:
+        return False
+    extra["prompt_cache_options"] = {"mode": "explicit"}
+    call_kwargs["extra_body"] = extra
+    if _estimate_tokens_from_text(stable) >= 1024:
+        parts = [{"type": "text", "text": stable,
+                  "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        if content[end:]:
+            parts.append({"type": "text", "text": content[end:]})
+        call_kwargs["messages"] = [{**messages[0], "content": parts}, *messages[1:]]
+    return True
+
+
 @_bounded_provider_transport
 def _chat_complete_openai(model, messages, **kwargs):
     client = _get_openai_client()
@@ -2623,6 +2699,12 @@ def _chat_complete_openai(model, messages, **kwargs):
             "5. Output exactly ONE <translation> tag, not multiple, not nested.\n"
             "</output_format>\n"
         )
+        if any("<translation_principles>" in str(m.get("content", "")) for m in messages):
+            tag_instruction = (
+                '\n<output_format priority="highest">Return one <translation>...</translation> '
+                'element containing only the complete target translation; no text outside it.'
+                '</output_format>'
+            )
         for m in messages:
             if not injected and isinstance(m, dict) and m.get("role") in ("system", "developer"):
                 content = m.get("content", "")
@@ -2685,10 +2767,27 @@ def _chat_complete_openai(model, messages, **kwargs):
                 _flex_used = True
     except Exception:
         pass
+    _cache_original_messages = call_kwargs["messages"]
+    _cache_original_extra = call_kwargs.get("extra_body")
+    _explicit_cache_used = _configure_openai_translation_cache(call_kwargs)
     try:
         resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
     except Exception as _fe:
-        if structured_schema and _is_feature_parameter_error(
+        if _explicit_cache_used and _is_feature_parameter_error(
+                _fe, "prompt_cache_options", "prompt_cache_breakpoint"):
+            # A compatibility rejection is one bounded transport attempt. Avoid
+            # repeating rejected requests while the endpoint lacks this feature.
+            with _provider_health_lock:
+                if len(_openai_cache_unsupported_until) >= 64:
+                    _openai_cache_unsupported_until.clear()
+                _openai_cache_unsupported_until[model] = time.monotonic() + 300
+            call_kwargs["messages"] = _cache_original_messages
+            if _cache_original_extra is None:
+                call_kwargs.pop("extra_body", None)
+            else:
+                call_kwargs["extra_body"] = _cache_original_extra
+            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
+        elif structured_schema and _is_feature_parameter_error(
                 _fe, "response_format", "json_schema", "structured output"):
             # Older compatibility endpoints may not implement strict JSON schema.
             # The audit prompt still requires JSON, so retry once without the

@@ -6,6 +6,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_factory_interactions(tmp_path, monkeypatch):
+    # Each scenario has separate durable history/settings; its process-local
+    # contextual result cache must have the same isolation as the ordinary TM.
+    import translation_request_guard
+    from collections import OrderedDict
+    if hasattr(translation_request_guard, "_context_results"):
+        monkeypatch.setattr(translation_request_guard, "_context_results", OrderedDict())
     app = sys.modules.get("app")
     if app is not None and getattr(app, "factory_hub", None):
         from line_factory_store import FeatureStore
