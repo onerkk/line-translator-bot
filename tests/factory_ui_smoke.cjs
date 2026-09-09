@@ -49,6 +49,14 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  form.d.querySelector('#field-pmi').checked=true;form.d.querySelector('#field-quantity').value='3.5';form.d.querySelector('button[type=submit]').click();await until(()=>form.d.body.textContent.includes('提交成功'),'verified form submit');form.dom.window.close();
  const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');duplicate.dom.window.close();
  console.log('PASS form: LIFF entry, required fields, numeric input, submit, duplicate display');
+ const reminder=await (await fetch(base+'/preview-ack-reminder',{method:'POST'})).json();
+ assert.equal(reminder.state,'sent_all');assert.equal(reminder.messages[0].type,'textV2');
+ assert.deepEqual(Object.values(reminder.messages[0].substitution).map(item=>item.mentionee),[{type:'all'}]);
+ d.querySelector('#fa-load-receipts').click();
+ await until(()=>d.querySelector('#fa-receipts').textContent.includes('已用 @All 補提醒一次'),'actual fallback reminder status');
+ assert(d.querySelector('#fa-receipts').textContent.includes('另有 1 人尚未取得身分'));
+ assert(d.querySelector('#fa-receipts').textContent.includes('已知 0 人不代表全員了解'));
+ console.log('PASS reminders: incomplete roster, actual scheduler payload, native all mention, visible delivery status');
  assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
  admin.dom.window.close();member.dom.window.close();
 })().catch(e=>{console.error(e);process.exitCode=1;});

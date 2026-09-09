@@ -1,4 +1,4 @@
-import sys, tempfile, os, ast
+import sys, tempfile, os, ast, time
 from pathlib import Path
 repo=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(repo))
@@ -22,6 +22,20 @@ def receipt_reply():
  hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=int(data.get('timestamp',500))),
               {'action':data.get('action','factory_ack'),'token':original})
  return jsonify(ok=True,feedback=feedback[-1])
+
+@app.route('/preview-ack-reminder',methods=['POST'])
+def reminder_due():
+ def unavailable(group):raise RuntimeError('LINE member IDs unavailable')
+ hub.h['_factory_member_ids']=unavailable
+ hub.h['_factory_member_count']=lambda group:3
+ sent=[]
+ hub.reminders.sender=lambda group,messages,key:sent.append(messages)
+ key='notice:'+cases.GROUP+':'+original
+ now=time.time()
+ hub.store.update(key,lambda row:dict(row,notice_command=True,delivery_state='delivered',
+     reminder_minutes=1,reminder_due_at=now-1,wake_at=now-1,roster_basis='known_chat_members'))
+ hub.reminders.run_due()
+ return jsonify(state=hub.store.get(key)['reminder_state'],messages=sent[-1] if sent else [])
 
 hub.insight=lambda menu, start, end, mode='summary': {
  'privacy_limited':False,'cached':False,'note':'測試資料 UTC+9',
