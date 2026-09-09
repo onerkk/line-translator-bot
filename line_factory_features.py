@@ -750,7 +750,9 @@ class FactoryHub:
             return True
         rows = self.menu.notice_rows(group, content, requested=True)
         if not any(row["action"] in {"factory_ack", "factory_help"} for row in rows):
-            self._reply(event, "此群組未啟用作業確認，請在後台「快捷鍵」啟用指令確認與回覆按鈕。\nKonfirmasi belum diaktifkan untuk grup ini.")
+            self._reply(event, "此群組已關閉作業確認。請在後台「快捷鍵」選擇此群組，"
+                              "將「作業確認觸發方式」設為「輸入 /ack 或 /確認 指令才建立」，並按「儲存此設定」。\n"
+                              "Konfirmasi dinonaktifkan untuk grup ini. Aktifkan mode perintah /ack di pengaturan grup, lalu simpan.")
             return True
         metadata = self.payload_metadata() or {"group_id": group, "user_id": uid,
                                                 "message_id": str(field(field(event, "message", {}), "id", "")),

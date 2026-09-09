@@ -1,0 +1,41 @@
+{
+  "release": "ack108",
+  "base": "translation107",
+  "files": [
+    {
+      "path": "app.py",
+      "sha256": "387345b53dde3eb95470ddfbf5ff21a3919424f63e1cef82a74e0f2c76a22375",
+      "previous_sha256": "316e82498d4659fc933f624383da78f90377d12c5c84572290bb377be1c5b0d3"
+    },
+    {
+      "path": "line_factory_features.py",
+      "sha256": "efa3a850618015cdf61efa668149b234bc001560b0997cb66b4c4d0dfbad6b59",
+      "previous_sha256": "90447ed4ce95f0808a4993ecd868b39ecc06acd2c69b3f072cb04033cd8d26a2"
+    },
+    {
+      "path": "line_quick_reply.py",
+      "sha256": "ef0b9a8254f65107a9f1ca0d73aced015afeca1cc79facb1e51809ad3e8e46a2",
+      "previous_sha256": "2ccc20cd135619d0360a254a6414526166a6cca0f602d65721bc6b92914beb9e"
+    },
+    {
+      "path": "static/admin_quick_reply.js",
+      "sha256": "be9517432385bb5fe104673c730635d259a48d9a5def24f4cb27ba0687fe1b0d",
+      "previous_sha256": "4e28df92d67181e3334696ca966148eace92b3f09cc5371ac0ccc0e78c5dc393"
+    },
+    {
+      "path": "test_ack_configuration.py",
+      "sha256": "2b80f12d99cea8dea34cc8af0b00d0f5d5c46077a8ce42a03a9d28df0ebbdd69",
+      "previous_sha256": null
+    },
+    {
+      "path": "tests/unified_menu_ui_smoke.cjs",
+      "sha256": "fa7ae36327d4e76d47f3a15aada3b945071f0e3d5b7fdc0d2200ad34250a1f31",
+      "previous_sha256": "1ee680c7ae2287ab59de384aaa1b5830760545d31f47fe7ac5751d23eb84777b"
+    },
+    {
+      "path": "README_ACK108.md",
+      "sha256": "45909a85fcea43d559e500e2ffb322714bf8ca7000a4c12ab65ac82676c26355",
+      "previous_sha256": null
+    }
+  ]
+}

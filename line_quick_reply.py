@@ -179,9 +179,7 @@ class Menu:
         profile = self.profile(group)
         return {"sharing": self.enabled_action(group, "factory_share"),
                 "station_tools": self.enabled_action(group, "factory_open"),
-                "acknowledgements": profile["acknowledgements"] if any(
-                    row["enabled"] and row["type"] == "builtin" and row["action"] in NOTICE_ACTIONS
-                    for row in profile["items"]) else "off"}
+                "acknowledgements": profile["acknowledgements"]}
 
     def notice_rows(self, group, original, kind="text", profile=None, *, requested=False):
         profile = profile or self.profile(group)
@@ -189,7 +187,25 @@ class Menu:
             return []
         if not requested:
             return []
-        return [r for r in profile["items"] if r["enabled"] and r["type"] == "builtin" and r["action"] in NOTICE_ACTIONS and kind in r["contexts"]]
+        # An explicit confirmation must be answerable. The bottom-menu master,
+        # row visibility and text/image contexts cannot turn off /ack. Only the
+        # acknowledgement mode above controls that. Keep the stored menu intact
+        # so hiding/deleting a shortcut still applies to the bottom menu.
+        rows = []
+        has_ack = False
+        for row in profile["items"]:
+            if row["type"] != "builtin" or row["action"] not in NOTICE_ACTIONS:
+                continue
+            if row["action"] == "factory_ack":
+                rows.append({**row, "enabled": True})
+                has_ack = True
+            elif row["enabled"] and kind in row["contexts"]:
+                rows.append(copy.deepcopy(row))
+        if not has_ack:
+            rows.insert(0, {"id": "builtin_factory_ack", "type": "builtin", "action": "factory_ack",
+                            "label": BUILTINS["factory_ack"], "enabled": True,
+                            "contexts": ["text", "image"]})
+        return rows
 
     def needs_context(self, group, kind="text"):
         return any(self.enabled_action(group, a, kind) for a in BUILTINS
