@@ -82,19 +82,18 @@ class NoticeTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 2)
         self.assertEqual(self.store.get(key)["delivered_at"], self.now - 1800)
 
-    def test_timeout_retries_identical_payload_and_key(self):
+    def test_timeout_retries_identical_payload_and_key_when_recipients_unchanged(self):
         key = self.create()
         def timeout(*args):
             self.send(*args)
             raise TimeoutError("ambiguous response")
         self.service.sender = timeout
         self.service.run_due()
-        self.store.update(key, lambda row: dict(row, responses={PEOPLE[0]: {"status": "understood"}}))
         self.now += 16
         self.service.sender = self.send
         self.service.run_due()
         self.assertEqual(self.sent[0], self.sent[1])
-        self.assertIn(PEOPLE[0], self.store.get(key)["responses"])
+        self.assertEqual(self.store.get(key)["reminder_state"], "sent")
 
     def test_multiple_workers_claim_once_while_receipt_arrives(self):
         key = self.create()

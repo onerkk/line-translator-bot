@@ -77,7 +77,7 @@ def test_positive_pending_keeps_repeating_until_the_final_person_answers(hub):
     assert len(sent) == 2
 
 
-def test_last_reply_cancels_a_frozen_uncertain_all_retry(hub):
+def test_last_reply_cancels_a_frozen_uncertain_personal_retry(hub):
     row, sent, _ = start(hub, count=3)
     def timeout(*args):
         sent.append(copy.deepcopy(args))
@@ -85,7 +85,9 @@ def test_last_reply_cancels_a_frozen_uncertain_all_retry(hub):
     hub.reminders.sender = timeout
     tick(hub, row["reminder_due_at"])
     retry = stored(hub, row)
-    assert retry["reminder_state"] == "retrying" and retry["pending_batch"]["all_fallback"]
+    assert retry["reminder_state"] == "retrying"
+    assert retry["pending_batch"]["ids"] == [COLLEAGUE]
+    assert not retry["pending_batch"]["all_fallback"]
     answer(hub, row)
     assert_finished(hub, row)
     tick(hub, retry["wake_at"] + 3600)

@@ -64,7 +64,7 @@ def test_repeats_on_interval_then_stops_after_everyone_replies(hub):
 def test_unknown_member_later_speaks_and_next_round_mentions_only_them(hub):
     row, sends, _ = setup(hub, complete=False)
     tick(hub, row["reminder_due_at"])
-    assert people(sends) == [{"type": "all"}]
+    assert people(sends) == [{"type": "user", "userId": COLLEAGUE}]
     with hub.message_scope(event("到了", uid=THIRD, mid="new-member-message"), "text"):
         pass
     # Same persistent disk, fresh hub/cache: no dependence on process memory.
@@ -168,9 +168,10 @@ def test_stopping_one_notice_does_not_stop_another(hub):
     assert stored(hub, other)["reminder_state"] == "repeat_pending"
 
 
-def test_repeating_all_uses_new_keys_each_round_but_same_key_on_retry(hub):
+def test_repeating_personal_mentions_use_new_round_keys_and_same_unchanged_retry_key(hub):
     row, sends, _ = setup(hub, complete=False)
     tick(hub, row["reminder_due_at"])
+    assert people(sends) == [{"type": "user", "userId": COLLEAGUE}]
     first_key = sends[-1][2]
     due = stored(hub, row)["next_reminder_at"]
     def uncertain(*args):

@@ -59,7 +59,8 @@ def test_incomplete_roster_does_not_report_everyone_understood(hub, count):
     row, sent = prepare(hub, count)
     saved = due(hub, row)
     assert len(sent) == 2
-    assert saved["reminder_state"] == "sent_all"
+    assert saved["reminder_state"] == "sent"
+    assert mentionees(sent) == [{"type": "user", "userId": COLLEAGUE}]
     assert ("名單完整性尚未確認" if count is None else "名單不完整") in hub._receipt_text(saved, "查詢")
     result = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).get_json()
     assert result["notices"][0]["unknown_member_count"] == (1 if count else None)
@@ -105,11 +106,12 @@ def test_empty_ids_response_is_not_evidence_of_a_complete_roster(hub):
     row, sent = prepare(hub, 3)
     hub.h["_factory_member_ids"] = lambda group: []
     saved = due(hub, row)
-    assert mentionees(sent) == [{"type": "all"}]
-    assert saved["reminder_state"] == "sent_all"
+    assert mentionees(sent) == [{"type": "user", "userId": COLLEAGUE}]
+    assert saved["reminder_state"] == "sent"
+    assert reminders.unknown_member_count(saved) == 1
 
 
-def test_fallback_retry_keeps_the_frozen_payload_even_if_a_response_arrives(hub):
+def test_incomplete_roster_retry_retires_old_targets_when_a_response_arrives(hub):
     row, sent = prepare(hub, 4, members=(COLLEAGUE, THIRD))
     def uncertain(*args):
         sent.append(copy.deepcopy(args))
@@ -122,10 +124,15 @@ def test_fallback_retry_keeps_the_frozen_payload_even_if_a_response_arrives(hub)
     hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
     hub.reminders.clock = lambda: saved["wake_at"] + 1
     hub.reminders.run_due()
-    assert sent[-1] == sent[-2]
+    assert len(sent) == 2  # Initial card plus the uncertain original reminder.
     updated = hub.store.get("notice:" + GROUP + ":" + row["token"])
     assert COLLEAGUE in updated["responses"]
-    assert updated["reminder_state"] == "sent_all"
+    assert updated["reminder_state"] == "pending" and updated["pending_batch"] is None
+    hub.reminders.clock = lambda: updated["wake_at"]
+    hub.reminders.run_due()
+    assert len(sent) == 3 and sent[-1][2] != sent[-2][2]
+    assert mentionees(sent) == [{"type": "user", "userId": THIRD}]
+    assert hub.store.get("notice:" + GROUP + ":" + row["token"])["reminder_state"] == "sent"
 
 
 def test_scheduler_sends_without_another_webhook_or_admin_refresh(hub, monkeypatch):
@@ -144,7 +151,7 @@ def test_scheduler_sends_without_another_webhook_or_admin_refresh(hub, monkeypat
     finally:
         hub.reminder_worker.stop()
         hub.reminder_worker._thread.join(3)
-    assert mentionees(sent) == [{"type": "all"}]
+    assert mentionees(sent) == [{"type": "user", "userId": COLLEAGUE}]
 
 
 @pytest.mark.parametrize("native", [False, True])

@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-09.ack-known-zero-stop.4"
+BUILD_ID = "2026-09-09.ack-pending-mentions.5"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -169,7 +169,7 @@ class NoticeService:
             if type(value) is int and value >= 0:
                 count = value
         except Exception:
-            pass  # Roster completeness affects mentions, never the stop rule.
+            pass  # Completeness is informational; remind only known pending IDs.
         if ids is not None and hasattr(self.hub, "remember_members"):
             self.hub.remember_members(group, {uid: names.get(uid, "未取得姓名 / Nama belum tersedia") for uid in ids})
         def refresh(current):
@@ -204,39 +204,66 @@ class NoticeService:
         if row.get("pending_batch"):
             return row
         group, token = row["group_id"], row["token"]
-        all_fallback = False
         if initial:
             messages, ids, number = row["initial_messages"], [], "initial"
         else:
             done = set(row.get("reminded_ids", []))
-            all_fallback = unknown_member_count(row, departed) != 0
-            ids = [uid for uid in pending_ids(row, departed) if uid not in done]
-            if not all_fallback:
-                ids = ids[:20]
-            if not ids and not all_fallback:
+            ids = [uid for uid in pending_ids(row, departed) if uid not in done][:20]
+            if not ids:
                 if done:
                     return self._complete_round(row, row.get("last_batch_sent_at", now), "users",
                                                 still_pending=bool(pending_ids(row, departed)))
                 return finish_if_no_pending(row, departed, now=now)
             number = "reminder:" + str(row.get("reminder_round", 0)) + ":" + str(row.get("reminder_batch", 0))
-            substitutions = ({"everyone": {"type": "mention", "mentionee": {"type": "all"}}}
-                             if all_fallback else
-                             {"p" + str(i): {"type": "mention", "mentionee": {"type": "user", "userId": uid}}
-                              for i, uid in enumerate(ids)})
+            substitutions = {"p" + str(i): {"type": "mention", "mentionee": {"type": "user", "userId": uid}}
+                             for i, uid in enumerate(ids)}
             content = ("⏰ 作業確認提醒 / Pengingat konfirmasi #" + token[:6] + "\n" +
                        " ".join("{" + name + "}" for name in substitutions) +
                        "\n尚未回覆的同仁，請按下方「了解」。\n"
                        "Bagi yang belum menjawab, silakan tekan Paham.")
-            if all_fallback:
-                content += ("\n\nLINE 未提供完整名單，本次提醒全體；已回覆者請忽略。\n"
-                            "Daftar anggota belum lengkap; pengingat dikirim ke semua. "
-                            "Abaikan jika sudah menjawab.")
             messages = [{"type": "textV2", "text": content, "substitution": substitutions},
                         self.hub._notice_card(token, self.hub._short(row["original"], 1000), row).to_dict()]
         batch = {"messages": messages, "ids": ids, "initial": initial, "started_at": now,
-                 "all_fallback": all_fallback,
+                 "all_fallback": False, "prepared_only": True,
                  "key": str(uuid.uuid5(uuid.NAMESPACE_URL, "factory-ack:" + group + ":" + token + ":" + number))}
         return dict(row, pending_batch=batch)
+
+    def _ready_batch(self, row, departed, now):
+        """Recheck recipients atomically immediately before handing off to LINE.
+
+        A retried request must keep its original content and key. If a target
+        has answered/left, or an old release queued @All, retire that request
+        and schedule a fresh targeted batch after the configured interval.
+        Newly prepared requests that have never reached I/O can be rebuilt now.
+        """
+        batch = row.get("pending_batch")
+        if not batch:
+            return row
+        if not batch["initial"]:
+            row = finish_if_no_pending(row, departed, now=now)
+            if not row.get("pending_batch"):
+                return row
+            everyone = batch.get("all_fallback") or any(
+                item.get("mentionee", {}).get("type") == "all"
+                for message in batch["messages"]
+                for item in (message.get("substitution") or {}).values())
+            outdated = everyone or not set(batch["ids"]).issubset(pending_ids(row, departed))
+            if outdated:
+                row = dict(row, pending_batch=None,
+                           reminder_batch=row.get("reminder_batch", 0) + 1)
+                if batch.get("prepared_only") is True:
+                    row = self._prepare_batch(row, False, departed, now)
+                    batch = row.get("pending_batch")
+                    if not batch:
+                        return row
+                else:
+                    due = now + row.get("reminder_minutes", 0) * 60
+                    due = due if due < row["expires_at"] else None
+                    return dict(row, lease_id="", wake_at=due, next_reminder_at=due,
+                                reminder_state="pending" if due is not None else "cancelled",
+                                roster_checked_at=None, attempts=0, last_error="",
+                                reminder_retry_retired_at=now)
+        return dict(row, pending_batch=dict(batch, prepared_only=False))
 
     def run_due(self, limit=10, budget_seconds=20):
         started = time.monotonic()
@@ -291,9 +318,6 @@ class NoticeService:
                 if not row or row.get("lease_id") != lease or not row.get("pending_batch"):
                     return
                 batch = row["pending_batch"]
-            if now - batch["started_at"] >= RETRY_WINDOW:
-                self._finish(key, lease, reminder_state="uncertain", last_error="超過安全重試時限，請到群組確認是否收到。")
-                return
             # Never change this payload after a possibly accepted attempt.
             latest = self.store.get(key)
             if not latest or latest.get("lease_id") != lease or latest.get("reminder_stopped_at"):
@@ -303,11 +327,14 @@ class NoticeService:
                     or (not batch["initial"] and not options["ack_reminder_enabled"])):
                 self._finish(key, lease, reminder_state="cancelled")
                 return
-            if not batch["initial"]:
-                departed = self.store.get("members-left:" + group) or {}
-                latest = self._update(key, lease, lambda current: finish_if_no_pending(current, departed, now=now))
-                if not latest or latest.get("lease_id") != lease:
-                    return
+            departed = {} if batch["initial"] else self.store.get("members-left:" + group) or {}
+            latest = self._update(key, lease, lambda current: self._ready_batch(current, departed, now))
+            if not latest or latest.get("lease_id") != lease or not latest.get("pending_batch"):
+                return
+            batch = latest["pending_batch"]
+            if now - batch["started_at"] >= RETRY_WINDOW:
+                self._finish(key, lease, reminder_state="uncertain", last_error="超過安全重試時限，請到群組確認是否收到。")
+                return
             self.sender(group, copy.deepcopy(batch["messages"]), batch["key"])
             accepted = self.clock()
             def delivered(current):
@@ -325,16 +352,16 @@ class NoticeService:
                     # repeat notices after this round; stopping is separate.
                     if options.get("ack_reminder_repeat") is False:
                         current["reminder_repeat"] = False
-                    if batch.get("all_fallback"):
-                        current["all_reminded_at"] = accepted
-                        current = self._complete_round(current, accepted, "all")
-                    else:
+                    if set(pending_ids(current, departed)) - set(current["reminded_ids"]):
                         current.update(reminder_batch=current.get("reminder_batch", 0) + 1,
                                        reminder_state="sending", wake_at=accepted)
+                    else:
+                        current = self._complete_round(current, accepted, "users",
+                                                       still_pending=bool(pending_ids(current, departed)))
                 return finish_if_no_pending(current, departed, now=accepted)
             self._update(key, lease, delivered)
             self.hub.app.logger.info("[FactoryAck] accepted kind=%s recipients=%d",
-                                     "initial" if batch["initial"] else "all_fallback" if batch.get("all_fallback") else "users",
+                                     "initial" if batch["initial"] else "users",
                                      len(batch["ids"]))
         except Exception as exc:
             retryable = not isinstance(exc, SendError) or exc.retryable
