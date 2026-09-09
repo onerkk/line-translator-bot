@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-09.ci98-lifecycle
+// FACTORY_ADMIN_BUILD: 2026-09-09.ui104
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 (function(){
   'use strict';
@@ -53,9 +53,10 @@
     if(ready)return;ready=true;
     const root=document.getElementById('factory-admin-root');
     root.innerHTML=`<div class="factory-header"><span class="factory-eyebrow">LINE · 工廠協作</span><h1>工廠工具</h1><p>翻譯模式、設備資料、公告確認與選單數據</p></div>
+<nav class="factory-nav" aria-label="工廠工具導覽"><a href="#fa-group-section">翻譯與提醒</a><a href="#fa-receipts-section">作業確認紀錄</a><a href="#fa-station-section">設備與作業說明</a></nav>
 <div id="fa-notice" class="factory-notice" role="status" aria-live="polite" hidden></div>
 <section class="factory-card"><h2>連線與功能狀態</h2><div id="fa-health"></div><div class="factory-row"><button type="button" id="fa-refresh" class="factory-secondary">重新整理</button></div><p class="factory-hint">在 LINE 群組傳送 <strong>/factory</strong>，即可開啟掃碼與站別翻譯。掃碼、分享需先在 LINE Developers 啟用 LIFF 的 Scan QR 與分享選擇器，畫面大小設為 Full。</p></section>
-<section class="factory-card"><h2>群組翻譯與互動</h2><label>群組<select id="fa-group"></select></label><form id="fa-options-form">
+<section class="factory-card" id="fa-group-section"><h2>群組翻譯與互動</h2><label>群組<select id="fa-group"></select></label><form id="fa-options-form">
 <label>文字翻譯模式<select id="fa-mode"><option value="all">自動翻譯所有文字</option><option value="mentioned">只有 @ 機器人時翻譯文字</option></select></label><p class="factory-hint">圖片、語音、文件維持各自的既有開關；管理指令仍可操作。</p>
 <label><input type="checkbox" id="fa-edit">原文修改後補發更正翻譯</label><label><input type="checkbox" id="fa-mentions">譯文保留真正的 LINE @ 點名</label>
 <p class="factory-hint">作業確認僅在群組輸入 <strong>/ack 通知內容</strong> 或 <strong>/確認 通知內容</strong> 時建立。確認按鈕、分享與工具入口統一於「快捷鍵」依群組設定。</p>
@@ -66,7 +67,7 @@
 <p class="factory-hint">若 LINE 仍未提供完整名單，該輪會用 @All 提醒全體，已回覆者也會收到、可忽略；累積足夠身分後改為個別標記。</p>
 <button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
 <section class="factory-card"><h2>已辨識的群組成員</h2><p class="factory-hint">成員發言、加入、按確認卡，或被 LINE 原生 @ 單獨標記時會自動記錄。尚未辨識者可在群組發一個字，或由您逐一 @；@All 不會提供每人的身分。</p><button id="fa-load-members" type="button" class="factory-secondary">重新讀取名單</button><div id="fa-members"></div></section>
-<section class="factory-card"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
+<section class="factory-card" id="fa-station-section"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
 <label>簡稱與設備背景<textarea id="fa-context" maxlength="1200" rows="3" placeholder="說明這個代碼代表什麼，僅供翻譯辨識"></textarea></label><div class="factory-grid"><label>中文作業說明<textarea id="fa-sop-zh" maxlength="5000" rows="5"></textarea></label><label>印尼文作業說明<textarea id="fa-sop-id" maxlength="5000" rows="5"></textarea></label></div>
 <label>相關表單<select id="fa-form-id"><option value="">不連結表單</option></select></label><div class="factory-row"><button id="fa-save-station" type="submit">儲存設備</button><button id="fa-reset-station" type="button" class="factory-secondary">取消編輯</button></div></form><div id="fa-qr-preview"></div></section>
@@ -163,11 +164,12 @@
       if(!data.notices.length){$('receipts').append(node('p','「'+groupName()+'」目前沒有作業確認紀錄。請在此 LINE 群組輸入 /ack 通知內容，建立第一則確認。','factory-hint'));return;}
       for(const row of data.notices){
         const responses=Object.entries(row.responses||{}),understood=responses.filter(([,r])=>r.status==='understood'),help=responses.filter(([,r])=>r.status==='needs_help');
-        const card=node('details'),title=node('summary',(row.current?'':row.expired?'［已過期］':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+'✅ '+understood.length+'　❓ '+help.length+'　'+String(row.original||'').slice(0,80));
+        const card=node('details',undefined,'factory-receipt'),title=node('summary',(row.current?'':row.expired?'［已過期］':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+String(row.original||'').slice(0,160));
+        title.append(node('div','已了解 '+understood.length+(help.length?' · 需說明 '+help.length:''),'factory-receipt-counts'));
         card.dataset.token=row.token||'';card.open=opened.has(card.dataset.token)||data.notices.length===1;
-        card.append(title,node('p','通知 #'+String(row.token||'').slice(0,6)+' · 發起人：'+(row.sender_name||'未取得姓名')+' · '+formatTime(row.created_at),'factory-hint'),node('p',row.original||'','factory-preserve'));
-        if(row.translated)card.append(node('p',row.translated,'factory-preserve'));
-        for(const [entries,label] of [[understood,'✅ 已了解'],[help,'❓ 需要說明']])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
+        card.append(title,node('p','通知 #'+String(row.token||'').slice(0,6)+' · 發起人：'+(row.sender_name||'未取得姓名')+' · '+formatTime(row.created_at),'factory-hint'),node('p',row.original||'','factory-original'));
+        if(row.translated)card.append(node('p',row.translated,'factory-result'));
+        for(const [entries,label] of [[understood,'✅ 已了解'],...(help.length?[[help,'❓ 需要說明']]:[])])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
         const pending=row.pending_ids||Object.keys(row.expected||{}).filter(uid=>uid!==row.sender_id&&!row.responses?.[uid]);
         card.append(node('p','⏳ 已知成員未回覆：'+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
         card.append(node('p','名單範圍：'+(row.roster_basis==='line_group_members'?'LINE 提供的群組成員':'機器人已知成員（可能不完整）')+'；不含發起人。','factory-hint'));

@@ -1,16 +1,24 @@
 (function(){
   'use strict';
-  const $=id=>document.getElementById('factory-'+id);
+  const pageDocument=document;
+  let suspended=false,generation=0;
+  const pending=new Set();
+  const active=()=>!suspended&&window.document===pageDocument;
+  const $=id=>pageDocument.getElementById('factory-'+id);
+  const inactive=()=>{const e=new Error('Page inactive');e.name='FactoryPageInactive';return e;};
+  window.addEventListener('pagehide',()=>{suspended=true;generation++;lookupVersion++;translationVersion++;for(const ctl of pending)ctl.abort();});
+  window.addEventListener('pageshow',()=>{if(!suspended)return;suspended=false;pageDocument.querySelectorAll('button').forEach(b=>b.disabled=false);if(!state)loadSession();});
   const params=new URLSearchParams(location.search);
   const session=params.get('session')||'';
   let state=null,station=null,translation=null,liffReady=false,lookupVersion=0,translationVersion=0;
-  function notice(text,error=false){$('message').textContent=text;$('message').className='factory-notice'+(error?' factory-error':'');$('message').hidden=!text;}
+  function notice(text,error=false){if(!active()||!$('message'))return;$('message').textContent=text;$('message').className='factory-notice'+(error?' factory-error':'');$('message').hidden=!text;}
   async function api(path,method='GET',body){
-    const control=new AbortController(),timer=setTimeout(()=>control.abort(),45000);
+    if(!active())throw inactive();
+    const current=generation,control=new AbortController(),timer=setTimeout(()=>control.abort(),45000);pending.add(control);
     try{
       const response=await fetch('/api/factory/'+path,{method,headers:{'Content-Type':'application/json','X-Factory-Session':session},body:body?JSON.stringify(body):undefined,cache:'no-store',signal:control.signal});
-      const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'操作失敗 / Gagal');return data;
-    }catch(error){if(error.name==='AbortError')throw new Error('連線逾時，請重新確認。 / Waktu koneksi habis.');throw error;}finally{clearTimeout(timer);}
+      const data=await response.json();if(!active()||current!==generation)throw inactive();if(!response.ok||!data.ok)throw new Error(data.message||'操作失敗 / Gagal');return data;
+    }catch(error){if(!active()||current!==generation)throw inactive();if(error.name==='AbortError')throw new Error('連線逾時，請重新確認。 / Waktu koneksi habis.');throw error;}finally{clearTimeout(timer);pending.delete(control);}
   }
   async function readyLiff(){
     if(liffReady)return true;
@@ -18,7 +26,7 @@
     await liff.init({liffId:state.liff_id});liffReady=true;return true;
   }
   function busy(button,operation){
-    return async event=>{event?.preventDefault();if(button.disabled)return;button.disabled=true;try{await operation();}catch(error){notice(error.message||'操作失敗 / Gagal',true);}finally{button.disabled=false;}};
+    return async event=>{event?.preventDefault();if(button.disabled)return;button.disabled=true;try{await operation();}catch(error){if(error.name!=='FactoryPageInactive')notice(error.message||'操作失敗 / Gagal',true);}finally{button.disabled=false;}};
   }
   async function copy(text){
     try{await navigator.clipboard.writeText(text);notice('已複製全文 / Teks lengkap disalin.');}
@@ -39,7 +47,7 @@
   }
   async function lookup(value){
     const version=++lookupVersion;translationVersion++;station=null;translation=null;
-    $('station-output').hidden=true;$('station-share-row').hidden=true;
+    $('station-detail').hidden=true;$('station-output').hidden=true;$('station-share-row').hidden=true;
     const data=await api('station','POST',{value});if(version!==lookupVersion)return;station=data.station;
     $('station-detail').hidden=false;$('station-output').hidden=true;$('station-share-row').hidden=true;
     $('code').value=station.code;$('station-name').textContent=station.code+' · '+station.name_zh+' / '+station.name_id;
@@ -58,7 +66,11 @@
   }));
   $('share').addEventListener('click',busy($('share'),async()=>{const data=await api('share');await share(data.messages);}));
   $('copy').addEventListener('click',busy($('copy'),async()=>{const data=await api('share');await copy(data.copy_text);}));
-  $('swap').addEventListener('click',()=>{const src=$('src').value;$('src').value=$('tgt').value;$('tgt').value=src;});
+  function invalidateTranslation(){translationVersion++;translation=null;$('station-output').hidden=true;$('station-share-row').hidden=true;}
+  $('input').addEventListener('input',invalidateTranslation);
+  $('src').addEventListener('change',invalidateTranslation);
+  $('tgt').addEventListener('change',invalidateTranslation);
+  $('swap').addEventListener('click',()=>{invalidateTranslation();const src=$('src').value;$('src').value=$('tgt').value;$('tgt').value=src;});
   $('translate-form').addEventListener('submit',busy($('translate'),async()=>{
     if(!station)throw new Error('請先選站別 / Pilih stasiun terlebih dahulu.');
     const version=++translationVersion;
@@ -69,14 +81,15 @@
   }));
   $('station-copy').addEventListener('click',busy($('station-copy'),()=>copy(translation.original+'\n\n'+translation.translated)));
   $('station-share').addEventListener('click',busy($('station-share'),()=>share(split(translation.original+'\n\n'+translation.translated))));
-  (async()=>{
+  async function loadSession(){
     try{
       if(!session)throw new Error('請在 LINE 傳送 /factory，或按翻譯下方「工廠工具」。 / Kirim /factory di LINE.');
-      state=await api('session');$('group').textContent=state.group_name;
+      state=await api('session');$('codes').replaceChildren();$('group').textContent=state.group_name;
       $('station-card').hidden=!state.options.station_tools;
       state.stations.forEach(item=>{const opt=document.createElement('option');opt.value=item.code;opt.label=item.name_zh+' / '+item.name_id;$('codes').append(opt);});
       if(state.context){$('share-card').hidden=false;$('original').textContent=state.context.original;$('translated').textContent=state.context.translated;$('share').hidden=!state.options.sharing;$('copy').hidden=!state.options.sharing;}
       notice('');
-    }catch(error){notice(error.message,true);$('station-card').hidden=true;}
-  })();
+    }catch(error){if(error.name!=='FactoryPageInactive'){notice(error.message,true);if(active())$('station-card').hidden=true;}}
+  }
+  loadSession();
 })();
