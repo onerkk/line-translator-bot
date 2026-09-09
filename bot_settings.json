@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "b1a1f58d47ae4585b72b869b0e16c9380a3c814f903f131eaec5cf3e94a80f5c",
-    "updated_at_iso": "2026-09-09T04:55:10.563994+00:00",
-    "updated_at_unix": 1788929710.5639942
+    "state_hash": "64350a0b1153df2de60532b43e2058303213255ad7f76588f67317cd4b209850",
+    "updated_at_iso": "2026-09-09T05:45:26.213088+00:00",
+    "updated_at_unix": 1788932726.2130883
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-09 04:53:28",
+    "last_updated": "2026-09-09 05:01:29",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -189,18 +189,18 @@
     "ant_cost_usd": 2.813750450000001,
     "ant_input": 242459,
     "ant_output": 12283,
-    "commands": 15,
+    "commands": 16,
     "followers": 1,
     "image_translations": 4,
     "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.14673920000000001,
-    "oai_input": 170462,
-    "oai_output": 1706,
+    "oai_cost_usd": 0.1575066,
+    "oai_input": 188614,
+    "oai_output": 1811,
     "oai_reasoning": 0,
-    "text_translations": 270,
-    "tokens_completion": 19162,
-    "tokens_prompt": 4405233,
+    "text_translations": 273,
+    "tokens_completion": 19267,
+    "tokens_prompt": 4423385,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -366,11 +366,14 @@
         "translation_mode": "all"
       },
       "Cf5e2ea027bb3db193677e7ef3b51adea": {
-        "acknowledgements": "all",
+        "ack_reminder_enabled": true,
+        "ack_reminder_minutes": 60,
+        "ack_reminder_repeat": true,
+        "acknowledgements": "off",
         "edit_translation": true,
         "native_mentions": true,
-        "sharing": true,
-        "station_tools": true,
+        "sharing": false,
+        "station_tools": false,
         "translation_mode": "all"
       }
     },
@@ -388,12 +391,12 @@
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 0,
       "cache_write": 15633,
-      "cost_usd": 0.4029959499999999,
+      "cost_usd": 0.4037099499999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2588,
-      "tokens_prompt": 280969
+      "tokens_completion": 2604,
+      "tokens_prompt": 284443
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
@@ -412,12 +415,12 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
       "cache_write": 3759,
-      "cost_usd": 1.8044472999999999,
-      "model": "gpt-5.6-luna",
+      "cost_usd": 1.8145006999999997,
+      "model": "gpt-5.6-terra",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 6213,
-      "tokens_prompt": 1838749
+      "tokens_completion": 6302,
+      "tokens_prompt": 1853427
     },
     "__dm__": {
       "tokens_completion": 42,
