@@ -44,7 +44,7 @@ COMMANDS = [
     entry("whoami", "我是誰", "start", "查看自己的 LINE ID 與管理員身分。", "Lihat ID LINE dan status admin Anda.", "/我是誰"),
     entry("status", "狀態", "start", "查看此群組的語言、文字模式及圖片、語音、工單開關。", "Lihat bahasa, mode teks, gambar, suara dan foto WO di grup.", "/狀態", scope="group"),
     entry("to", "私訊語言", "start", "查看私訊互譯說明；設定閱讀語言請用 /mylang／/我的語言。", "Info terjemahan pribadi; gunakan /mylang untuk memilih bahasa.", "/私訊語言", scope="dm"),
-    entry("ack", "確認", "ack", "建立雙語作業確認。按「了解」記錄已理解；「查看回覆」查名單。", "Buat konfirmasi bilingual. Paham mencatat pemahaman; Status menampilkan jawaban.", "/確認 今天下班前請完成設備檢查。", aliases=("确认",), scope="group", usage="通知內容"),
+    entry("ack", "確認", "ack", "建立雙語確認。@All 或未標記追蹤全群；只 @ 指定成員則僅追蹤那些人。按了解只記錄；查看回覆查名單。", "Konfirmasi bilingual. @All atau tanpa mention: seluruh grup; mention tertentu: hanya anggota terpilih. Paham dicatat tanpa balasan; Status menampilkan daftar.", "/確認 @同事 請完成設備檢查。（請用 LINE 的 @ 選人）", aliases=("确认",), scope="group", usage="[@All／@成員] 通知內容"),
     entry("handover", "交班摘要", "ack", "整理本群組最近 12 小時的翻譯紀錄；摘要需由交接人核對。", "Ringkas terjemahan 12 jam terakhir di grup; periksa saat serah terima.", "/交班摘要", aliases=("summary", "ringkasan", "serahterima", "今天重點", "今天重点", "未完成事項", "未完成事项"), scope="group"),
     entry("notice", "公告", "ack", "產生雙語公告，不建立了解回覆紀錄；需要追蹤請用 /ack／/確認。", "Buat pengumuman bilingual tanpa catatan Paham; gunakan /ack untuk melacak jawaban.", "/公告 明天上午八點開會。", admin=True, scope="group", usage="公告內容"),
     entry("factory", "工廠", "tools", "開啟設備查詢、雙語作業說明、站別翻譯、複製與分享。", "Buka pencarian mesin, SOP bilingual, terjemahan, salin dan bagikan.", "/工廠"),

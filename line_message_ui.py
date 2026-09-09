@@ -61,6 +61,12 @@ def notice_card(token, text, record, footer):
     sender = str(record.get("sender_name") or "")
     header = [txt("作業確認 / KONFIRMASI", "xs", "#90E0D1", weight="bold"),
               txt("#" + token[:6] + ("  ·  " + short(sender, 80) if sender else ""), "xs", "#D3E1E9", margin="xs")]
+    if record.get("recipient_scope") == "mentioned":
+        count = len(set(record.get("recipient_ids", [])) - {record.get("sender_id")})
+        header.append(txt("追蹤：指定 " + str(count) + " 人 / " + str(count) + " anggota terpilih",
+                          "xs", "#D3E1E9", margin="xs"))
+    elif record.get("recipient_scope") == "all":
+        header.append(txt("追蹤：全群 / Seluruh grup", "xs", "#D3E1E9", margin="xs"))
     return {"type": "bubble", "size": "mega",
             "header": {"type": "box", "layout": "vertical", "paddingAll": "16px", "backgroundColor": "#102F42", "contents": header},
             "body": {"type": "box", "layout": "vertical", "paddingAll": "20px", "backgroundColor": "#FFFFFF", "contents": body},

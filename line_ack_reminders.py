@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-09.ack-silent-receipts.6"
+BUILD_ID = "2026-09-09.ack-recipient-scope.7"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -76,9 +76,26 @@ def member_ids(group):
     raise RuntimeError("incomplete member list")
 
 
+def tracked_members(notice):
+    expected = notice.get("expected", {})
+    if notice.get("recipient_scope") != "mentioned":
+        return expected  # Older notifications keep their original group scope.
+    return {uid: expected.get(uid, "未取得姓名 / Nama belum tersedia")
+            for uid in dict.fromkeys(notice.get("recipient_ids", []))
+            if isinstance(uid, str) and USER_ID.fullmatch(uid) and uid != notice.get("sender_id")}
+
+
+def tracked_responses(notice):
+    responses = notice.get("responses", {})
+    if notice.get("recipient_scope") != "mentioned":
+        return responses
+    members = tracked_members(notice)
+    return {uid: response for uid, response in responses.items() if uid in members}
+
+
 def pending_ids(notice, departed=None):
     responses = notice.get("responses", {})
-    return [uid for uid in notice.get("expected", {})
+    return [uid for uid in tracked_members(notice)
             if uid != notice.get("sender_id") and uid not in responses and uid not in (departed or {})]
 
 
@@ -116,6 +133,8 @@ def member_count(group):
 
 def unknown_member_count(notice, departed=None):
     """None means unknown, not zero. LINE's count excludes the bot itself."""
+    if notice.get("recipient_scope") == "mentioned":
+        return 0  # All selected identities are known; a full group list is irrelevant.
     count = notice.get("roster_count")
     if type(count) is int:
         known = set(notice.get("expected", {})) | set(notice.get("responses", {}))
@@ -154,6 +173,12 @@ class NoticeService:
         host = getattr(self.hub, "h", {})
         names = (self.hub.known_members(group) if hasattr(self.hub, "known_members") else
                  dict(host.get("group_user_names", {}).get(group, {})))
+        if row.get("recipient_scope") == "mentioned":
+            def refresh_selected(current):
+                members = tracked_members(current)
+                return dict(current, expected={uid: names.get(uid) or name for uid, name in members.items()},
+                            roster_basis="explicit_mentions", roster_count=None, roster_checked_at=now)
+            return self._update(key, lease, refresh_selected)
         basis, ids, count = row.get("roster_basis", "known_chat_members"), None, None
         try:
             ids = host.get("_factory_member_ids", member_ids)(group)

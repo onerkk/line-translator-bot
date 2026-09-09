@@ -34,7 +34,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.ack-silent-receipts.6"
+BUILD_ID = "2026-09-09.ack-recipient-scope.7"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -111,6 +111,33 @@ def native_mentions(message):
         if len(result) == 20:
             break
     return result
+
+
+def ack_recipient_scope(message, mentions):
+    """Select scope from the original LINE message, never translated names."""
+    if any(item["type"] == "all" for item in mentions):
+        return "all"
+    raw = bytearray(str(field(message, "text", "") or "").encode("utf-16-le"))
+    users = [item for item in field(field(message, "mention", {}), "mentionees", []) or []
+             if field(item, "type") == "user"]
+    # A person actually named All remains an individual mention. Only literal
+    # @all outside native user spans is the command's all-members shorthand.
+    for item in users:
+        try:
+            start, length = int(field(item, "index")), int(field(item, "length"))
+            if start >= 0 and length > 0 and (start + length) * 2 <= len(raw):
+                raw[start * 2:(start + length) * 2] = b" \x00" * length
+        except (TypeError, ValueError):
+            pass
+    if re.search(r"(?<![A-Za-z0-9_@])@all(?![A-Za-z0-9_])", raw.decode("utf-16-le", errors="replace"), re.I):
+        return "all"
+    if users:
+        if sum(not field(item, "is_self", False) for item in users) != sum(
+                item["type"] == "user" for item in mentions):
+            raise ValueError("未取得指定成員的 LINE 身分，請重新使用 @ 選人後發送指令。\n"
+                             "Identitas anggota belum tersedia. Pilih anggota melalui @ lalu kirim lagi.")
+        return "mentioned"
+    return "all"
 
 
 def text_with_mentions(message, mentions):
@@ -744,7 +771,12 @@ class FactoryHub:
             return True
         if not content:
             self._reply(event, "發起作業確認：/ack 通知內容\n也可使用 /確認 通知內容\n"
-                              "例如：/ack 今天下班前請完成設備檢查。\nBuat konfirmasi: /ack isi pesan")
+                              "例如：/ack 今天下班前請完成設備檢查。\n"
+                              "@All 或未標記：追蹤全群；只 @ 指定成員：僅追蹤那些人。\n"
+                              "請用 LINE 的 @ 選人；按了解只記錄，不另發訊息。\n"
+                              "Buat konfirmasi: /ack isi pesan. @All atau tanpa mention: seluruh grup; "
+                              "mention anggota tertentu: hanya mereka. Pilih anggota lewat @ di LINE. "
+                              "Jawaban dicatat tanpa pesan balasan.")
             return True
         if delivery.utf16_units(content) > 1500:
             self._reply(event, "通知內容最多 1500 個 LINE 字元，請分段發起。\nMaksimal 1500 karakter per pemberitahuan.")
@@ -767,23 +799,29 @@ class FactoryHub:
         try:
             existing = self.store.get(key)
             if not existing:
+                recipient_scope = ack_recipient_scope(field(event, "message", {}), mentions)
                 src, translated = self._translate_notice(group, uid, content)
                 self.assert_current({"factory_event": metadata})
-                members = self.known_members(group)
+                known = self.known_members(group)
+                members = dict(known) if recipient_scope == "all" else {}
                 basis = "known_chat_members"
-                try:
-                    ids = self.h.get("_factory_member_ids", line_ack_reminders.member_ids)(group)
-                    if not isinstance(ids, list) or not ids or any(
-                            not isinstance(member, str) or not _USER.fullmatch(member) for member in ids):
-                        raise ValueError("LINE member list is incomplete")
-                    members = {member: members.get(member) or self._member_name(group, member)
-                               for member in ids if isinstance(member, str) and _USER.fullmatch(member)}
-                    basis = "line_group_members"
-                except Exception:
-                    self.app.logger.info("[FactoryAck] using known chat member snapshot")
+                if recipient_scope == "mentioned":
+                    basis = "explicit_mentions"
+                else:
+                    try:
+                        ids = self.h.get("_factory_member_ids", line_ack_reminders.member_ids)(group)
+                        if not isinstance(ids, list) or not ids or any(
+                                not isinstance(member, str) or not _USER.fullmatch(member) for member in ids):
+                            raise ValueError("LINE member list is incomplete")
+                        members = {member: members.get(member) or self._member_name(group, member)
+                                   for member in ids if isinstance(member, str) and _USER.fullmatch(member)}
+                        basis = "line_group_members"
+                    except Exception:
+                        self.app.logger.info("[FactoryAck] using known chat member snapshot")
                 for mention in mentions:
                     if mention["type"] == "user":
-                        members.setdefault(mention["userId"], self._short(mention["label"].lstrip("@"), 80))
+                        members.setdefault(mention["userId"], known.get(mention["userId"]) or
+                                           self._short(mention["label"].lstrip("@"), 80))
                 departed = self.store.get("members-left:" + group) or {}
                 members = {member: name for member, name in members.items() if member not in departed and member != uid}
                 self.remember_members(group, members)
@@ -791,7 +829,8 @@ class FactoryHub:
                     "translated": translated, "src": src, "msg_id": metadata.get("message_id", ""),
                     "factory_event": metadata, "expires_at": time.time() + NOTICE_TTL,
                     "notice_requested": True, "notice_command": True, "notice_mentions": mentions,
-                    "expected": members, "roster_basis": basis})
+                    "expected": members, "roster_basis": basis, "recipient_scope": recipient_scope,
+                    "recipient_ids": list(members) if recipient_scope == "mentioned" else []})
             self.reminders.process(key)
             self.reminder_worker.start()
         except StoreError:
@@ -921,6 +960,9 @@ class FactoryHub:
             return previous and (previous.get("status") == state
                                  or timestamp < previous.get("event_timestamp", 0))
 
+        if (responding and notice and notice.get("recipient_scope") == "mentioned"
+                and uid not in line_ack_reminders.tracked_members(notice)):
+            return True  # Other group members are not respondents for this notice.
         # Repeated taps stay silent across cards, restarts and group switches.
         # Keep the original response time/name and avoid another profile lookup.
         if responding and notice and _USER.fullmatch(str(uid or "")) and unchanged_response(notice):
@@ -953,18 +995,31 @@ class FactoryHub:
             def record_reply(row):
                 if not row:
                     raise ValueError("作業確認已過期。")
+                if row.get("recipient_scope") == "mentioned" and uid not in line_ack_reminders.tracked_members(row):
+                    return row
                 # Recheck inside CAS: concurrent taps can both read no response
                 # above, but only one response should be committed.
                 if unchanged_response(row):
                     return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
                 responses = row.setdefault("responses", {})
+                recorded_at = time.time()
+                if (row.get("delivery_state") != "delivered" and row.get("notice_command")
+                        and row.get("reminder_state") in {"waiting_delivery", "retrying"}
+                        and not row.get("reminder_stopped_at")):
+                    # A signed tap confirms an uncertain initial delivery (or
+                    # repairs a lost notice). Retire its initial-send lease and
+                    # wait the configured interval instead of broadcasting now.
+                    due = recorded_at + row["reminder_minutes"] * 60 if row.get("reminder_minutes") else None
+                    row.update(delivered_at=recorded_at, reminder_due_at=due, next_reminder_at=due,
+                               wake_at=due, reminder_state="pending" if due is not None else "off",
+                               pending_batch=None, lease_id="", attempts=0, last_error="")
                 row["delivery_state"] = "delivered"  # The signed button proves receipt.
-                responses[uid] = {"status": state, "name": str(name), "at": time.time(),
+                responses[uid] = {"status": state, "name": str(name), "at": recorded_at,
                                   "event_timestamp": timestamp, "recording_id": operation_id}
                 return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
-            if notice["responses"][uid].get("recording_id") != operation_id:
+            if notice["responses"].get(uid, {}).get("recording_id") != operation_id:
                 return True
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
             # Successful taps only persist receipts, even the first tap or a
@@ -986,7 +1041,8 @@ class FactoryHub:
             row, departed, now=time.time())) or notice
 
     def _receipt_text(self, notice, heading, *, departed=None):
-        responses = notice.get("responses", {})
+        responses = line_ack_reminders.tracked_responses(notice)
+        selected = notice.get("recipient_scope") == "mentioned"
         understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
         help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
         if departed is None:
@@ -997,7 +1053,8 @@ class FactoryHub:
                 # make a status query report that acknowledgement was lost.
                 departed = {}
         # A scheduler-supplied roster keeps rendering inside CAS free of I/O.
-        pending = [notice["expected"][uid] for uid in line_ack_reminders.pending_ids(notice, departed)]
+        members = line_ack_reminders.tracked_members(notice)
+        pending = [members[uid] for uid in line_ack_reminders.pending_ids(notice, departed)]
         sender_id = notice.get("sender_id") or (notice.get("factory_event") or {}).get("user_id", "")
         sender = notice.get("sender_name") or self._member_name(notice["group_id"], sender_id)
         text = (heading + "\n通知 / Pesan #" + notice["token"][:6] + "\n發起人 / Pengirim: " + sender +
@@ -1005,7 +1062,8 @@ class FactoryHub:
                 "\n" + self._short(notice.get("translated"), 220) +
                 "\n\n✅ 了解/Paham (" + str(len(understood)) + "): " + self._short("、".join(understood) or "—", 300) +
                 ("\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names), 300) if help_names else "") +
-                "\n⏳ 已知成員未回覆/Belum menjawab (" + str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
+                ("\n⏳ 指定成員未回覆/Belum menjawab (" if selected else "\n⏳ 已知成員未回覆/Belum menjawab (") +
+                str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
                 "\n名單為本次查詢結果；按「查看回覆」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
         unknown = line_ack_reminders.unknown_member_count(notice, departed)
         if unknown is None:
@@ -1015,7 +1073,8 @@ class FactoryHub:
             text += ("\n⚠️ 名單不完整；另有 " + str(unknown) + " 人尚未取得身分，未列於上方名單。\n"
                      "Daftar belum lengkap; identitas " + str(unknown) + " anggota belum tersedia dan belum tercantum di atas.")
         if not pending:
-            text += "\n✅ 已知成員未回覆為 0。\nTidak ada anggota yang diketahui belum menjawab."
+            text += ("\n✅ 指定成員未回覆為 0。\nSemua anggota yang ditunjuk sudah menjawab atau keluar dari grup."
+                     if selected else "\n✅ 已知成員未回覆為 0。\nTidak ada anggota yang diketahui belum menjawab.")
         if notice.get("reminder_state") == "no_pending":
             text += "\n✅ 此通知已自動停止提醒。\nPengingat untuk pemberitahuan ini dihentikan otomatis."
         if help_names:
@@ -1335,6 +1394,8 @@ class FactoryHub:
                 row["current"] = not row["expired"] and self.current(row.get("factory_event"))
                 row["pending_ids"] = line_ack_reminders.pending_ids(row, departed)
                 row["unknown_member_count"] = line_ack_reminders.unknown_member_count(row, departed)
+                row["expected"] = line_ack_reminders.tracked_members(row)
+                row["responses"] = line_ack_reminders.tracked_responses(row)
                 for private in ("initial_messages", "pending_batch", "lease_id"):
                     row.pop(private, None)
             return jsonify(ok=True, notices=rows, group_id=group, group_name=catalog[group]["name"],
