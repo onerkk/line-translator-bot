@@ -1,7 +1,10 @@
 """Run the real DOM checks against an isolated local fake LINE/AI fixture."""
+import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -10,8 +13,25 @@ import time
 import urllib.request
 
 
+def check_admin_asset(repo):
+    path = repo / "static" / "admin_factory.js"
+    raw = path.read_bytes() if path.is_file() else b""
+    source = raw.decode("utf-8", errors="replace")
+    build = re.search(r"^// FACTORY_ADMIN_BUILD: (.+)$", source, re.M)
+    api = re.search(r"^// FACTORY_ADMIN_LIFECYCLE_API: (\d+)$", source, re.M)
+    digest = hashlib.sha256(raw).hexdigest()
+    print(f"CHECK admin asset: {path.resolve()} build={build.group(1) if build else 'legacy/missing'} sha256={digest}", flush=True)
+    if not api or api.group(1) != "1":
+        raise RuntimeError(
+            "Factory UI tests require the page-lifecycle update in static/admin_factory.js. "
+            "The file loaded above is old, missing, or incompatible. "
+            "Apply static/admin_factory.js and tests/ from the same update ZIP at their repository paths."
+        )
+
+
 def main():
     root = Path(__file__).resolve().parent
+    check_admin_asset(root.parent)
     env = dict(os.environ)
     if not env.get("FACTORY_UI_PORT"):
         with socket.socket() as sock:
@@ -56,4 +76,10 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-assets", action="store_true", help="check the matched frontend before installing test dependencies")
+    args = parser.parse_args()
+    if args.check_assets:
+        check_admin_asset(Path(__file__).resolve().parents[1])
+        raise SystemExit(0)
     raise SystemExit(main())
