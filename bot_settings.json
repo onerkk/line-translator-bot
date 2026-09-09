@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "2ec798e96281ea10632994a01b4a928a24d7da13a20920524722b141d8082d99",
-    "updated_at_iso": "2026-09-09T08:11:45.198353+00:00",
-    "updated_at_unix": 1788941505.1983528
+    "state_hash": "870c8694b48c4bd92625ccb83185552f13eee4d3b828b85b81a15a96fd611ede",
+    "updated_at_iso": "2026-09-09T08:25:18.996168+00:00",
+    "updated_at_unix": 1788942318.9961681
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-09 08:02:49",
+    "last_updated": "2026-09-09 08:24:25",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -583,6 +583,7 @@
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "U98def5ae6e4786c8ecc3e4a2f510cfb8": "辰",
       "U9a70db5b38f2b61dd0473cfff4c84b68": "十元",
       "Uacd199ee8dc09268d0bab80702ebb2ac": "秋情",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
@@ -3255,6 +3256,7 @@
     "U78ae67bff0f53d01e513be10be1d7162": "https://sprofile.line-scdn.net/0h1CBjw1z4bmxvE3rRSw8QEx9DbQZMYjd-E3cjC1gWZ1QHdnw_RXdyCAhENlQHKyA7EyUkCA1EMl1jABkKcUWSWGgjM11TKywzRHYmiQ",
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
+    "U98def5ae6e4786c8ecc3e4a2f510cfb8": "https://sprofile.line-scdn.net/0ho5vCSgzYMBpbOi7k8ftOJCtqM3B4S2kIdl96dTppOS02CHFJfgx3dG86bCtkA3YecVp2ezxuO3h5S3QuNigtBx1OGE84DBckLDUoPxJFbG0ZTig-Ex4bBhRaOF5iXTwVASUleT5AHV45XyUMKyc8ITQ8NyInfH4EEW1cTF4IXpk0OEdPdl13eWc9bS3l",
     "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
     "Ua29c1bea13a5a3b288d0eeed13d90049": "https://sprofile.line-scdn.net/0hP4lfdP5lDxtBHx-vsdVxZDFPDHFiblYJOHlFKnxNUH8oLkofanBEf3xLA34vKxwdPnAXKnQZUn5NDHh9X0nzL0YvUip9J01EanpH_g",
     "Uacd199ee8dc09268d0bab80702ebb2ac": "https://sprofile.line-scdn.net/0hAiOWEgTCHkZiLjfqaTlgORJ-HSxBX0dUR0sGIVYuSXRYSw0XHU1XIFMuRHMKSQ5CTkxRKVV8RyRuPWkgfHjicmUeQ3deFlwZSUtWow",
