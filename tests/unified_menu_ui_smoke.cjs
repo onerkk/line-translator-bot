@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
-console.log('CHECK unified menu: ack108-command-switch');
+console.log('CHECK unified menu: ci116-matched-ack');
 const windows=new Set();
 async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,30));}throw new Error('Timeout: '+label);}
 const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id='+encodeURIComponent(group||''))).json();
@@ -16,6 +16,22 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  const change=(el,type='change')=>el.dispatchEvent(new w.Event(type,{bubbles:true}));
  await until(()=>$('status')?.textContent==='已載入。','initial menu');
  const groups=[...$('group').options].map(x=>x.value).filter(Boolean);assert.equal(groups.length,2);
+ // Exercise the real preview endpoint before waiting on the UI. A mixed old
+ // backend must report its actual response instead of a generic DOM timeout.
+ const initial=await read(''),ack=initial.profile.items.find(r=>r.action==='factory_ack');
+ assert(ack,'The fixture must expose its default acknowledgement control');
+ for(const [scenario,profile,labels] of [
+  ['hidden',{enabled:true,acknowledgements:'command',items:[{...ack,enabled:false,label:'API了解/Paham'}]},['API了解/Paham']],
+  ['deleted',{enabled:true,acknowledgements:'command',items:[]},[initial.builtins.factory_ack]],
+  ['image-only',{enabled:true,acknowledgements:'command',items:[{...ack,contexts:['image'],label:'API了解/Paham'}]},['API了解/Paham']],
+  ['menu-off',{enabled:false,acknowledgements:'command',items:[]},[initial.builtins.factory_ack]],
+  ['explicit-off',{enabled:true,acknowledgements:'off',items:[ack]},[]],
+ ]){
+  const response=await fetch(base+'/api/admin/quick-reply/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_id:groups[0],profile,kind:'ack'})});
+  const data=await response.json(),detail='Acknowledgement preview '+scenario+': HTTP '+response.status+' '+JSON.stringify(data)+'. Check line_quick_reply.py and static/admin_quick_reply.js from the same update.';
+  assert(response.ok&&data.ok,detail);assert.equal(data.count,labels.length,detail);assert.deepEqual(data.pages.flat(),labels,detail);
+ }
+ console.log('PASS acknowledgement API: hidden/deleted/image-only controls, menu off, explicit off');
  async function scope(group){$('group').value=group;change($('group'));await until(()=>$('status').textContent==='已載入。'&&!$('group').disabled,'group load');}
  async function save(){ $('save').click();await until(()=>$('status').textContent.startsWith('已儲存；'),'save menu'); }
  await scope(groups[0]);
@@ -43,7 +59,7 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  // Reproduce the saved-command / hidden-shortcut mismatch in the real editor.
  const defaults=await read(''),ackRow=defaults.profile.items.find(r=>r.action==='factory_ack');
  const ackCard=[...$('list').children].find(el=>el.dataset.itemId===ackRow.id);
- assert(ackCard.textContent.includes('確認卡固定保留'));
+ assert(ackCard.textContent.includes('確認卡固定保留'),'static/admin_quick_reply.js is missing the acknowledgement guidance; update the file inside static/, not only the test or a root-level copy.');
  const ackName=ackCard.querySelector('input[type=text]');ackName.value='測試了解/Paham';change(ackName,'input');
  for(const toggle of $('list').querySelectorAll('.qr-item-head input[type=checkbox]')){toggle.checked=false;change(toggle);}
  await until(()=>$('count').textContent.includes('共 1 顆按鈕')&&$('preview').textContent==='測試了解/Paham','hidden acknowledgement remains answerable');

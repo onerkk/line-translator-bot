@@ -31,6 +31,40 @@ _ASSETS = (
     ("form", "static/liff_forms.js", "FACTORY_FORM", _COMPATIBLE_UNMARKED_FORM_ASSETS),
 )
 
+# The ACK108 files already implement this behavior without version markers.
+# Accept those verified bytes as well as the declared API; real HTTP/DOM
+# behavior is still tested below. This check uses only the standard library
+# because CI runs --check-assets before installing Flask and the LINE SDK.
+_QUICK_REPLY_ASSETS = (
+    ("line_quick_reply.py", r'^BUILD_ID\s*=\s*"([^"]+)"', r'^ACK_COMMAND_API\s*=\s*(\d+)',
+     "ef0b9a8254f65107a9f1ca0d73aced015afeca1cc79facb1e51809ad3e8e46a2"),
+    ("static/admin_quick_reply.js", r'^// QUICK_REPLY_BUILD: (.+)$', r'^// QUICK_REPLY_ACK_API: (\d+)$',
+     "be9517432385bb5fe104673c730635d259a48d9a5def24f4cb27ba0687fe1b0d"),
+)
+
+
+def check_quick_reply_assets(repo):
+    failures = []
+    for relative, build_pattern, api_pattern, compatible_hash in _QUICK_REPLY_ASSETS:
+        path = repo / relative
+        raw = path.read_bytes() if path.is_file() else b""
+        normalized = raw.replace(b"\r\n", b"\n")
+        source = normalized.decode("utf-8", errors="replace")
+        build = re.search(build_pattern, source, re.M)
+        api = re.search(api_pattern, source, re.M)
+        compatible = hashlib.sha256(normalized).hexdigest() == compatible_hash
+        version = build.group(1).strip() if build else "ack108-verified" if compatible else "old/unmarked/missing"
+        print(f"CHECK acknowledgement asset: {path.resolve()} build={version} sha256={hashlib.sha256(raw).hexdigest()}", flush=True)
+        if not (api.group(1) == "1" if api else compatible):
+            hint = ""
+            if path.parent != repo and (repo / path.name).is_file():
+                hint = f" {path.name} is also at repository root; the runtime loads {relative}."
+            failures.append(relative + ": missing or incompatible command acknowledgement API 1." + hint)
+    if failures:
+        raise RuntimeError("Acknowledgement update is incomplete:\n- " + "\n- ".join(failures) +
+                           "\nApply line_quick_reply.py and static/admin_quick_reply.js together at their repository paths, "
+                           "or run python apply_ack116_update.py --repo .\nNo source files were changed by this check.")
+
 
 def _check_asset(repo, label, relative_path, prefix, compatible):
     path = repo / relative_path
@@ -82,6 +116,7 @@ def check_frontend_assets(repo):
 def main():
     root = Path(__file__).resolve().parent
     check_frontend_assets(root.parent)
+    check_quick_reply_assets(root.parent)
     env = dict(os.environ)
     if not env.get("FACTORY_UI_PORT"):
         with socket.socket() as sock:
@@ -131,5 +166,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.check_assets:
         check_frontend_assets(Path(__file__).resolve().parents[1])
+        check_quick_reply_assets(Path(__file__).resolve().parents[1])
         raise SystemExit(0)
     raise SystemExit(main())
