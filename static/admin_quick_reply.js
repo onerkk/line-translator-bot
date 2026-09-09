@@ -1,3 +1,5 @@
+// QUICK_REPLY_BUILD: 2026-09-09.ci116-matched-ack
+// QUICK_REPLY_ACK_API: 1
 (function(){
   'use strict';
   let ready=false,state=null,dirty=false,sequence=0,previewSequence=0,previewTimer=0,busy=false,previewPage=0,pages=[];
