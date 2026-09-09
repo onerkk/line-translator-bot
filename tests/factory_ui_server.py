@@ -22,9 +22,11 @@ hub.h['_send_reply_with_push_fallback']=lambda **kwargs: feedback.append(kwargs[
 @app.route('/preview-receipt-reply',methods=['POST'])
 def receipt_reply():
  data=request.get_json(silent=True) or {}
+ before=len(feedback)
  hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=int(data.get('timestamp',500))),
               {'action':data.get('action','factory_ack'),'token':data.get('token',original)})
- return jsonify(ok=True,feedback=feedback[-1])
+ emitted=feedback[before:]
+ return jsonify(ok=True,feedback=emitted[-1] if emitted else '',emitted_count=len(emitted))
 
 @app.route('/preview-ack-reminder',methods=['POST'])
 def reminder_due():
