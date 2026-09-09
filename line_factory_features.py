@@ -976,9 +976,18 @@ class FactoryHub:
                 "\n⏳ 已知成員未回覆/Belum menjawab (" + str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
                 "\n名單為本次查詢結果；按「查看回覆」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
         unknown = line_ack_reminders.unknown_member_count(notice, departed)
-        if unknown != 0:
-            text += ("\n⚠️ 名單不完整；" + ("另有 " + str(unknown) + " 人未取得身分。" if unknown is not None else "實際未回覆總人數尚無法確認。") +
-                     "已知 0 人不代表全員了解。\nDaftar belum lengkap; jumlah yang belum menjawab belum dapat dipastikan.")
+        if unknown is None:
+            text += ("\nℹ️ 名單完整性尚未確認；目前只列出已辨識成員，尚無法確認全群是否都已列入。\n"
+                     "Kelengkapan daftar belum terkonfirmasi; hanya anggota yang sudah dikenal yang ditampilkan.")
+        elif unknown > 0:
+            text += ("\n⚠️ 名單不完整；另有 " + str(unknown) + " 人尚未取得身分，未列於上方名單。\n"
+                     "Daftar belum lengkap; identitas " + str(unknown) + " anggota belum tersedia dan belum tercantum di atas.")
+        if not pending:
+            if unknown != 0:
+                text += ("\n已辨識的應回覆成員均已回覆；確認完整名單前，仍可能提醒全體。\n"
+                         "Semua anggota yang diketahui perlu menjawab sudah merespons; pengingat ke semua masih dapat dikirim sampai daftar lengkap dikonfirmasi.")
+            else:
+                text += "\n✅ 本次應回覆成員已全數回覆。\nSemua anggota yang perlu menjawab sudah merespons."
         if help_names:
             text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
         if notice.get("reminder_stopped_at"):

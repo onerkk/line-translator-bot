@@ -58,7 +58,7 @@ def test_incomplete_roster_does_not_report_everyone_understood(hub, count):
     saved = due(hub, row)
     assert len(sent) == 2
     assert saved["reminder_state"] == "sent_all"
-    assert "名單不完整" in hub._receipt_text(saved, "查詢")
+    assert ("名單完整性尚未確認" if count is None else "名單不完整") in hub._receipt_text(saved, "查詢")
     result = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).get_json()
     assert result["notices"][0]["unknown_member_count"] == (2 if count else None)
 
@@ -171,3 +171,58 @@ def test_count_endpoint_does_not_depend_on_member_list_permission(monkeypatch, g
         return io.BytesIO(b'{"count": 3}')
     with patch.object(reminders.urllib.request, "urlopen", response):
         assert reminders.member_count(group) == 3
+
+
+def receipt_snapshot(hub, *, complete=False, all_answered=False, count=None):
+    members = {"U" + format(i, "032x"): "成員" + str(i) for i in range(1, 14)}
+    answers = list(members) if all_answered else list(members)[:5]
+    return {"group_id": GROUP, "token": "roster-status-snapshot", "sender_id": USER,
+            "sender_name": "發起人", "original": "請確認作業內容", "translated": "Pahami instruksi kerja.",
+            "expected": members, "responses": {uid: {"name": members[uid], "status": "understood"} for uid in answers},
+            "roster_basis": "line_group_members" if complete else "known_chat_members", "roster_count": count}
+
+
+@pytest.mark.parametrize("count", [None, 16])
+def test_five_replies_eight_pending_never_display_a_zero_pending_warning(hub, count):
+    row = receipt_snapshot(hub, count=count)
+    text = hub._receipt_text(row, "查詢")
+    assert "了解/Paham (5)" in text and "Belum menjawab (8)" in text
+    assert "已知 0 人" not in text
+    assert "均已回覆" not in text and "已全數回覆" not in text
+    if count is None:
+        assert "名單完整性尚未確認" in text
+        assert "名單不完整" not in text
+    else:
+        assert "另有 2 人尚未取得身分" in text
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_zero_known_pending_does_not_imply_unknown_members_have_answered(hub, complete):
+    row = receipt_snapshot(hub, complete=complete, all_answered=True)
+    text = hub._receipt_text(row, "查詢")
+    if complete:
+        assert "本次應回覆成員已全數回覆" in text
+        assert "名單完整性尚未確認" not in text and "仍可能提醒全體" not in text
+    else:
+        assert "已辨識的應回覆成員均已回覆" in text and "仍可能提醒全體" in text
+        assert "本次應回覆成員已全數回覆" not in text
+
+
+def test_sender_and_self_mentioned_bot_do_not_need_to_reply_to_stop_reminders(hub):
+    configure(hub, 1, repeat=True)
+    bot_id = "U" + "f" * 32
+    hub.observe_members(event("@bot", mentions=[
+        {"type": "user", "userId": bot_id, "isSelf": True, "index": 0, "length": 4}]))
+    assert bot_id not in hub.known_members(GROUP)
+    hub.h["_factory_member_ids"] = unavailable
+    hub.h["_factory_member_count"] = lambda group: 2  # LINE excludes this bot.
+    sent = []
+    hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
+    hub.h["_send_reply_with_push_fallback"] = lambda **kwargs: None
+    row = command(hub)
+    assert set(row["expected"]) == {COLLEAGUE}
+    hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
+    saved = due(hub, row)
+    assert set(saved["responses"]) == {COLLEAGUE}
+    assert saved["reminder_state"] == "no_pending" and saved["wake_at"] is None
+    assert len(sent) == 1

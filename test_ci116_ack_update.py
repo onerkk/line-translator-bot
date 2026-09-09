@@ -71,14 +71,22 @@ def test_single_file_update_restores_both_paths_without_reverting_translation_or
     assert 'app.py' not in files and 'settings.json' not in files
     for relative in ['line_quick_reply.py', 'static/admin_quick_reply.js', 'line_factory_features.py',
                      'tests/run_factory_ui.py', 'tests/unified_menu_ui_smoke.cjs', 'test_ack_configuration.py']:
-        assert files[relative] == (ROOT / relative).read_bytes()
+        # The CI116 installer is a fixed historical release. Later updates may
+        # change the checkout; verify restored bytes instead of requiring a
+        # new runtime to equal an older installer's embedded snapshot.
+        assert relative in files
     changed, backup = update.apply_update(tmp_path, files)
     assert 'line_quick_reply.py' in changed and 'static/admin_quick_reply.js' in changed
     assert (backup / 'line_quick_reply.py').read_bytes() == b'# old backend\n'
     assert (backup / 'static/admin_quick_reply.js').read_bytes() == b'// old frontend\n'
     assert (tmp_path / 'app.py').read_bytes() == b'# current translation application\n'
     assert (tmp_path / 'settings.json').read_bytes() == b'{"group":"keep"}'
-    runner.check_quick_reply_assets(tmp_path)
+    for relative, data in files.items():
+        assert (tmp_path / relative).read_bytes() == data
+    installed_spec = importlib.util.spec_from_file_location('installed_ci116_runner', tmp_path / 'tests/run_factory_ui.py')
+    installed_runner = importlib.util.module_from_spec(installed_spec)
+    installed_spec.loader.exec_module(installed_runner)
+    installed_runner.check_quick_reply_assets(tmp_path)
     assert update.apply_update(tmp_path, files) == ([], None)
 
 
