@@ -123,7 +123,7 @@ class FactoryQuantitySemanticsRootFixTests(unittest.TestCase):
         self.assertIn('"sense": "factory_quantity_semantics"', source)
         self.assertIn("factory_quantity_semantics_module.build_prompt", source)
         self.assertIn("factory_quantity_semantics_module.validate_translation", source)
-        self.assertIn("2026-08-18.1-person-prefix-boundary", source)
+        self.assertIn(fqs.FACTORY_QUANTITY_SEMANTICS_BUILD_ID, source)
 
 
 if __name__ == "__main__":

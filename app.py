@@ -423,7 +423,7 @@ if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok"
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
 _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-18.1-person-prefix-boundary"
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
@@ -24081,7 +24081,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=1">
-<script src="/static/admin_factory.js?v=20260909-ci96-lifecycle" defer></script>
+<script src="/static/admin_factory.js?v=20260909-ci98-lifecycle" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
 <script src="/static/admin_quick_reply.js?v=20260909-ack1" defer></script>
 </head>

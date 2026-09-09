@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-08-18.1-person-prefix-boundary"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
 
 
 @dataclass(frozen=True)
@@ -220,6 +220,9 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
             quantifier = "cardinal"
             if value is not None and match.group("half_suffix"):
                 value += Decimal("0.5")
+            if (value is not None and value == value.to_integral_value()
+                    and start > 0 and text[start - 1] == "第"):
+                quantifier = "ordinal"
         spec = _CLASSIFIERS.get(str(classifier or ""))
         if not spec or value is None:
             continue
@@ -307,8 +310,28 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
     unit_pattern = "(?:" + "|".join(re.escape(x) for x in unit_terms) + ")"
     if atom.get("quantifier") == "each":
         return [re.compile(rf"(?<![A-Za-z])(?:setiap|tiap)\s+{unit_pattern}(?![A-Za-z])", re.I)]
+    number = Decimal(value)
+    word = _number_words(int(number)) if number == number.to_integral_value() else None
+    if atom.get("quantifier") == "ordinal":
+        forms = [rf"ke-?{re.escape(value)}"]
+        if word:
+            forms.append("ke" + word)
+        if number == 1:
+            forms.append("pertama")
+        ordinal = "(?:" + "|".join(forms) + ")"
+        return [re.compile(rf"(?<![A-Za-z]){unit_pattern}\s+(?:yang\s+)?{ordinal}(?![A-Za-z0-9]|\s+(?:belas|puluh|ratus|ribu|juta|miliar|triliun)\b)", re.I)]
     value_pattern = _value_pattern(value)
-    patterns = [re.compile(rf"(?<![A-Za-z0-9]){value_pattern}\s+(?:\w+\s+){{0,2}}?{unit_pattern}(?![A-Za-z])", re.I)]
+    # Do not consume a multiplier/fraction as an adjective between count and
+    # unit: 'tiga puluh bundel' is thirty, not three bundles.
+    number_tail = r"(?:belas|puluh|ratus|ribu|juta|miliar|triliun|setengah|koma)"
+    gap = rf"(?:(?!{number_tail}\b)\w+\s+){{0,2}}?"
+    patterns = [re.compile(rf"(?<![A-Za-z0-9.,]){value_pattern}\s+{gap}{unit_pattern}(?![A-Za-z])", re.I)]
+    if word and number >= 2:
+        # Collective ke- precedes the noun ('ketiga bundel' = all three).
+        # The same numeral after the noun is ordinal ('bundel ketiga').
+        # Require the complete number phrase adjacent to its unit so a longer
+        # collective such as 'ketiga puluh bundel' cannot match three.
+        patterns.append(re.compile(rf"(?<![A-Za-z0-9])ke{word}\s+{unit_pattern}(?![A-Za-z])", re.I))
     if Decimal(value) == Decimal("1"):
         for fused in atom.get("singular_fused_id", ()) or ():
             patterns.append(re.compile(rf"(?<![A-Za-z]){re.escape(str(fused))}(?![A-Za-z])", re.I))
@@ -318,9 +341,20 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
 def _find_atom(candidate: str, atom: Mapping[str, Any], start: int = 0) -> Tuple[int, int] | None:
     best: Tuple[int, int] | None = None
     for pattern in _atom_patterns(atom):
-        match = pattern.search(candidate or "", pos=max(0, start))
-        if match and (best is None or match.start() < best[0]):
-            best = match.span()
+        for match in pattern.finditer(candidate or "", pos=max(0, start)):
+            # A suffix of a larger spelled-out value isn't a second quantity:
+            # 'dua puluh tiga bundel' cannot satisfy a source saying 三把.
+            before = (candidate or "")[:match.start()]
+            previous = re.search(r"([A-Za-z]+)\s+$", before)
+            if (atom.get("quantifier") == "cardinal" and previous
+                    and previous.group(1).casefold() in {
+                        *(_ID_NUMBER_WORDS.values()), "belas", "puluh", "ratus", "ribu",
+                        "juta", "miliar", "triliun", "setengah", "koma",
+                    }):
+                continue
+            if best is None or match.start() < best[0]:
+                best = match.span()
+            break
     return best
 
 
@@ -393,6 +427,7 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
     lines = [
         "<factory_quantity_semantics>",
         "This is a compositional quantity frame, not a sentence example. Preserve each value, classifier and relation exactly.",
+        "Cardinal counts may use digits, number words, or collective ke- before the classifier (ketiga bundel = all three bundles). Ordinals marked 第 use the classifier before the ordinal (bundel ketiga = the third bundle). Do not interchange a count and an ordinal.",
     ]
     for atom in frame.get("atoms", []) or []:
         lines.append(
