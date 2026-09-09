@@ -27,9 +27,9 @@
 <label>設定範圍<select id="qr-group"><option value="">全群組預設</option></select></label><p id="qr-scope" class="qr-hint"></p>
 <div id="qr-status" class="qr-status" role="status" aria-live="polite"></div>
 <fieldset id="qr-editor"><label class="qr-check"><input id="qr-enabled" type="checkbox">顯示底部快捷選單</label>
-<label>公告確認顯示時機<select id="qr-notice"><option value="work">工作相關訊息</option><option value="all">所有翻譯</option><option value="off">關閉公告確認</option></select></label>
-<p class="qr-hint">「了解／說明／確認」依下方開關顯示，也會保留在公告卡片，方便之後回覆；不另設第二組開關。</p>
-<div class="qr-preview"><h3>選單預覽</h3><label>預覽情境<select id="qr-kind"><option value="text">文字工作公告（含工單號）</option><option value="image">圖片工作公告（含工單號）</option></select></label><div id="qr-preview" class="qr-preview-buttons"></div><p id="qr-count" class="qr-hint"></p><p class="qr-hint">工單查詢、圖片對照與語音重播，僅在訊息具備對應內容或功能時顯示。超過 13 顆會以「更多」換頁。</p></div>
+<label>作業確認觸發方式<select id="qr-notice"><option value="command">輸入 /ack 或 /確認 指令才建立</option><option value="off">關閉作業確認</option></select></label><p class="factory-hint">一般翻譯不會自動附確認卡。請在群組輸入 /ack 通知內容；未回覆提醒時間於「工廠工具」設定。</p>
+<p class="qr-hint">「了解／說明／確認」依下方按鈕開關顯示於指令確認卡。底部選單關閉後，仍可使用指令建立確認卡；要停用請將作業確認觸發方式設為關閉。</p>
+<div class="qr-preview"><h3>選單預覽</h3><label>預覽情境<select id="qr-kind"><option value="text">文字翻譯（含工單號）</option><option value="image">圖片翻譯（含工單號）</option><option value="ack">指令作業確認卡</option></select></label><div id="qr-preview" class="qr-preview-buttons"></div><p id="qr-count" class="qr-hint"></p><p class="qr-hint">工單查詢、圖片對照與語音重播，僅在訊息具備對應內容或功能時顯示。超過 13 顆會以「更多」換頁。</p></div>
 <div id="qr-list"></div><div class="qr-add-row"><label>新增功能<select id="qr-add-kind"></select></label><button type="button" id="qr-add">＋ 新增按鈕</button></div></fieldset>
 <div class="qr-toolbar"><button type="button" id="qr-save" class="qr-primary">儲存此設定</button><button type="button" id="qr-reload">重新載入</button><button type="button" id="qr-inherit" hidden>恢復使用全群組預設</button></div></div>`;
     $('enabled').addEventListener('change',()=>{state.profile.enabled=$('enabled').checked;mark();});
