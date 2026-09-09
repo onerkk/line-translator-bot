@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "864a560f26e2b6660541cb7294cb1a297c66bf3a2328c35a22c3d8dee6ccabe8",
-    "updated_at_iso": "2026-09-09T06:53:54.958188+00:00",
-    "updated_at_unix": 1788936834.9581876
+    "state_hash": "eaef42867a38605518bd8cd4dd3c4e67c360b004cf0c8b7b03ca991ac7ebd135",
+    "updated_at_iso": "2026-09-09T08:04:46.512338+00:00",
+    "updated_at_unix": 1788941086.5123384
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-09 06:42:15",
+    "last_updated": "2026-09-09 08:02:49",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -194,13 +194,13 @@
     "image_translations": 4,
     "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.1582134,
-    "oai_input": 192082,
-    "oai_output": 1822,
+    "oai_cost_usd": 0.1590022,
+    "oai_input": 195588,
+    "oai_output": 1895,
     "oai_reasoning": 0,
     "text_translations": 273,
-    "tokens_completion": 19278,
-    "tokens_prompt": 4426853,
+    "tokens_completion": 19351,
+    "tokens_prompt": 4430359,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -418,12 +418,12 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
       "cache_write": 3759,
-      "cost_usd": 1.8145006999999997,
-      "model": "gpt-5.6-terra",
+      "cost_usd": 1.8152894999999998,
+      "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 6302,
-      "tokens_prompt": 1853427
+      "tokens_completion": 6375,
+      "tokens_prompt": 1856933
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -583,6 +583,7 @@
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "U9a70db5b38f2b61dd0473cfff4c84b68": "十元",
+      "Uacd199ee8dc09268d0bab80702ebb2ac": "秋情",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
       "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
