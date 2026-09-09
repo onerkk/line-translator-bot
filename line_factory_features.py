@@ -34,7 +34,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.ack-repeat-stop.3"
+BUILD_ID = "2026-09-09.ack-known-zero-stop.4"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -452,7 +452,8 @@ class FactoryHub:
     def _notice_footer(self, token, record):
         buttons = [(row["label"], row["action"]) for row in self.menu.notice_rows(
             record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"), requested=True)]
-        if record.get("reminder_minutes") and not record.get("reminder_stopped_at"):
+        if (record.get("reminder_minutes") and not record.get("reminder_stopped_at")
+                and record.get("reminder_state") != "no_pending"):
             buttons.append(("🛑 停止提醒/Stop", "factory_stop"))
         buttons = [("查看回覆/Status" if action == "factory_receipts" and label in {"📋 確認/Status", "確認/Status"} else label, action) for label, action in buttons]
         return line_message_ui.notice_footer(token, buttons)
@@ -926,6 +927,10 @@ class FactoryHub:
             self._reply(event, "這筆確認已過期、原文已更新或不屬於此群組；請使用最新通知。\n"
                               "Gunakan pemberitahuan terbaru di grup asal; konfirmasi ini tidak berlaku.")
             return True
+        try:
+            departed = self.store.get("members-left:" + group) or {}
+        except StoreError:
+            departed = {}  # An optional roster read must not lose a signed ack.
         if action in {"factory_ack", "factory_help"}:
             if not _USER.fullmatch(str(uid or "")):
                 self._reply(event, "LINE 未提供回覆者身分，本次無法記錄。\nIdentitas pengguna tidak tersedia; konfirmasi belum dicatat.")
@@ -942,7 +947,7 @@ class FactoryHub:
                 if not previous or timestamp >= previous.get("event_timestamp", 0):
                     responses[uid] = {"status": state, "name": str(name), "at": time.time(),
                                       "event_timestamp": timestamp}
-                return row
+                return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
             saved_state = notice["responses"][uid]["status"]
@@ -952,8 +957,19 @@ class FactoryHub:
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
             self._reply(event, self._receipt_text(notice, feedback), notice=notice)
         elif action == "factory_receipts":
+            notice = self._finish_answered_notice(notice, departed)
             self._reply(event, self._receipt_text(notice, "📋 作業確認 / Konfirmasi"), notice=notice)
         return True
+
+    def _finish_answered_notice(self, notice, departed):
+        # Reconcile older queued notices when someone views their status. Use
+        # the latest stored responses inside CAS, not the UI's snapshot.
+        finished = line_ack_reminders.finish_if_no_pending(notice, departed, now=time.time())
+        if finished == notice:
+            return notice
+        key = "notice:" + notice["group_id"] + ":" + notice["token"]
+        return self.store.update(key, lambda row: line_ack_reminders.finish_if_no_pending(
+            row, departed, now=time.time())) or notice
 
     def _receipt_text(self, notice, heading):
         responses = notice.get("responses", {})
@@ -983,11 +999,9 @@ class FactoryHub:
             text += ("\n⚠️ 名單不完整；另有 " + str(unknown) + " 人尚未取得身分，未列於上方名單。\n"
                      "Daftar belum lengkap; identitas " + str(unknown) + " anggota belum tersedia dan belum tercantum di atas.")
         if not pending:
-            if unknown != 0:
-                text += ("\n已辨識的應回覆成員均已回覆；確認完整名單前，仍可能提醒全體。\n"
-                         "Semua anggota yang diketahui perlu menjawab sudah merespons; pengingat ke semua masih dapat dikirim sampai daftar lengkap dikonfirmasi.")
-            else:
-                text += "\n✅ 本次應回覆成員已全數回覆。\nSemua anggota yang perlu menjawab sudah merespons."
+            text += "\n✅ 已知成員未回覆為 0。\nTidak ada anggota yang diketahui belum menjawab."
+        if notice.get("reminder_state") == "no_pending":
+            text += "\n✅ 此通知已自動停止提醒。\nPengingat untuk pemberitahuan ini dihentikan otomatis."
         if help_names:
             text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
         if notice.get("reminder_stopped_at"):
@@ -1298,7 +1312,9 @@ class FactoryHub:
                 raise ValueError("請選擇群組。")
             rows = self.store.recent("notice:" + group, 100)
             departed = self.store.get("members-left:" + group) or {}
-            for row in rows:
+            for index, row in enumerate(rows):
+                row = self._finish_answered_notice(row, departed)
+                rows[index] = row
                 row["expired"] = float(row.get("created_at", 0)) + NOTICE_TTL <= time.time()
                 row["current"] = not row["expired"] and self.current(row.get("factory_event"))
                 row["pending_ids"] = line_ack_reminders.pending_ids(row, departed)

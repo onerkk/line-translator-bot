@@ -14,9 +14,12 @@ def unavailable(group):
     raise RuntimeError("LINE member-list permission unavailable")
 
 
-def prepare(hub, count=3):
+THIRD = "U" + "c" * 32
+
+
+def prepare(hub, count=3, *, members=(COLLEAGUE,)):
     configure(hub, 1)
-    hub.h["group_user_names"][GROUP] = {USER: "管理者"}
+    hub.h["group_user_names"][GROUP] = {USER: "管理者", **{uid: "Adi" if uid == COLLEAGUE else "同事" for uid in members}}
     hub.h["_factory_member_ids"] = unavailable
     hub.h["_factory_member_count"] = lambda group: count
     sent = []
@@ -36,20 +39,19 @@ def mentionees(sent):
     return [item["mentionee"] for item in sent[-1][1][0]["substitution"].values()]
 
 
-def test_reported_author_only_snapshot_still_reminds_the_group_once(hub):
-    row, sent = prepare(hub)
+def test_author_only_snapshot_delivers_card_but_stops_without_any_known_pending(hub):
+    row, sent = prepare(hub, members=())
     assert row["expected"] == {}
     hub.postback(event(uid=USER), {"action": "factory_ack", "token": row["token"]})
     saved = due(hub, row)
-    assert len(sent) == 2
-    assert mentionees(sent) == [{"type": "all"}]
-    assert sent[-1][1][0]["type"] == "textV2"
-    assert "已回覆" in sent[-1][1][0]["text"]
-    assert saved["reminder_state"] == "sent_all"
-    assert reminders.unknown_member_count(saved) == 2
+    assert len(sent) == 1
+    assert sent[0][1][-1]["type"] == "flex"
+    assert row["delivery_state"] == "delivered"
+    assert row["reminder_state"] == saved["reminder_state"] == "no_pending"
+    assert reminders.unknown_member_count(saved) is None
     assert saved["wake_at"] is None
     hub.reminders.run_due()
-    assert len(sent) == 2
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize("count", [None, 3])
@@ -60,28 +62,29 @@ def test_incomplete_roster_does_not_report_everyone_understood(hub, count):
     assert saved["reminder_state"] == "sent_all"
     assert ("名單完整性尚未確認" if count is None else "名單不完整") in hub._receipt_text(saved, "查詢")
     result = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).get_json()
-    assert result["notices"][0]["unknown_member_count"] == (2 if count else None)
+    assert result["notices"][0]["unknown_member_count"] == (1 if count else None)
 
 
 @pytest.mark.parametrize("recover_api", [False, True])
 def test_member_discovered_before_deadline_gets_a_personal_mention(hub, recover_api):
-    row, sent = prepare(hub, 2)
-    hub.h["group_user_names"][GROUP][COLLEAGUE] = "Adi"
+    row, sent = prepare(hub, 3)
+    hub.h["group_user_names"][GROUP][THIRD] = "同事"
     if recover_api:
-        hub.h["_factory_member_ids"] = lambda group: [USER, COLLEAGUE]
+        hub.h["_factory_member_ids"] = lambda group: [USER, COLLEAGUE, THIRD]
     saved = due(hub, row)
-    assert mentionees(sent) == [{"type": "user", "userId": COLLEAGUE}]
-    assert saved["expected"] == {COLLEAGUE: "Adi"}
+    assert {item["userId"] for item in mentionees(sent)} == {COLLEAGUE, THIRD}
+    assert saved["expected"] == {COLLEAGUE: "Adi", THIRD: "同事"}
     assert reminders.unknown_member_count(saved) == 0
 
 
 def test_signed_response_from_previously_unknown_person_prevents_false_all_ping(hub):
-    row, sent = prepare(hub, 2)
+    row, sent = prepare(hub, 2, members=())
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
     saved = due(hub, row)
     assert len(sent) == 1
     assert saved["reminder_state"] == "no_pending"
-    assert reminders.unknown_member_count(saved) == 0
+    assert COLLEAGUE in saved["responses"]
+    assert reminders.pending_ids(saved) == []
 
 
 def test_complete_roster_mentions_only_unanswered_members(hub):
@@ -107,7 +110,7 @@ def test_empty_ids_response_is_not_evidence_of_a_complete_roster(hub):
 
 
 def test_fallback_retry_keeps_the_frozen_payload_even_if_a_response_arrives(hub):
-    row, sent = prepare(hub)
+    row, sent = prepare(hub, 4, members=(COLLEAGUE, THIRD))
     def uncertain(*args):
         sent.append(copy.deepcopy(args))
         raise TimeoutError("response lost after possible LINE acceptance")
@@ -115,7 +118,7 @@ def test_fallback_retry_keeps_the_frozen_payload_even_if_a_response_arrives(hub)
     saved = due(hub, row)
     assert saved["reminder_state"] == "retrying"
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
-    hub.h["_factory_member_ids"] = lambda group: [USER, COLLEAGUE]
+    hub.h["_factory_member_ids"] = lambda group: [USER, COLLEAGUE, THIRD]
     hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
     hub.reminders.clock = lambda: saved["wake_at"] + 1
     hub.reminders.run_due()
@@ -199,13 +202,14 @@ def test_five_replies_eight_pending_never_display_a_zero_pending_warning(hub, co
 @pytest.mark.parametrize("complete", [False, True])
 def test_zero_known_pending_does_not_imply_unknown_members_have_answered(hub, complete):
     row = receipt_snapshot(hub, complete=complete, all_answered=True)
+    row["reminder_state"] = "no_pending"
     text = hub._receipt_text(row, "查詢")
+    assert "已知成員未回覆為 0" in text and "此通知已自動停止提醒" in text
+    assert "仍可能提醒全體" not in text and "本次應回覆成員已全數回覆" not in text
     if complete:
-        assert "本次應回覆成員已全數回覆" in text
-        assert "名單完整性尚未確認" not in text and "仍可能提醒全體" not in text
+        assert "名單完整性尚未確認" not in text
     else:
-        assert "已辨識的應回覆成員均已回覆" in text and "仍可能提醒全體" in text
-        assert "本次應回覆成員已全數回覆" not in text
+        assert "名單完整性尚未確認" in text
 
 
 def test_sender_and_self_mentioned_bot_do_not_need_to_reply_to_stop_reminders(hub):

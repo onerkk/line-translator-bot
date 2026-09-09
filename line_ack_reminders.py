@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-09.ack-repeat-stop.3"
+BUILD_ID = "2026-09-09.ack-known-zero-stop.4"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -82,6 +82,22 @@ def pending_ids(notice, departed=None):
             if uid != notice.get("sender_id") and uid not in responses and uid not in (departed or {})]
 
 
+def finish_if_no_pending(notice, departed=None, *, now):
+    """Stop reminders when known recipients are done, regardless of roster size.
+
+    Use inside the notice's atomic update. Clearing the lease also prevents an
+    in-flight sender from scheduling another round or retry after the last ack.
+    The initial card must still be delivered when the known roster is empty.
+    """
+    if (not notice or notice.get("delivery_state") != "delivered"
+            or not notice.get("reminder_minutes") or notice.get("reminder_stopped_at")
+            or pending_ids(notice, departed)):
+        return notice
+    return dict(notice, reminder_state="no_pending", wake_at=None,
+                next_reminder_at=None, pending_batch=None, lease_id="", last_error="",
+                reminder_completed_at=notice.get("reminder_completed_at") or now)
+
+
 def member_count(group):
     """Unlike member IDs, LINE exposes the group count to unverified accounts."""
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
@@ -129,7 +145,7 @@ class NoticeService:
 
     def _refresh_roster(self, key, lease, row, now):
         # Network calls stay outside CAS and the translation response path.
-        # Retry a frozen LINE request unchanged, even after membership changes.
+        # Retry a frozen LINE request unchanged while known recipients remain.
         if row.get("roster_checked_at") is not None or row.get("pending_batch"):
             return row
         if not row.get("notice_command") and row.get("roster_basis") != "known_chat_members":
@@ -153,7 +169,7 @@ class NoticeService:
             if type(value) is int and value >= 0:
                 count = value
         except Exception:
-            pass  # Unknown size still needs one visible group reminder.
+            pass  # Roster completeness affects mentions, never the stop rule.
         if ids is not None and hasattr(self.hub, "remember_members"):
             self.hub.remember_members(group, {uid: names.get(uid, "未取得姓名 / Nama belum tersedia") for uid in ids})
         def refresh(current):
@@ -183,6 +199,8 @@ class NoticeService:
 
     def _prepare_batch(self, row, initial, departed, now):
         """Called inside CAS retry: recipients come from the latest responses."""
+        if not initial and not pending_ids(row, departed):
+            return finish_if_no_pending(row, departed, now=now)
         if row.get("pending_batch"):
             return row
         group, token = row["group_id"], row["token"]
@@ -199,7 +217,7 @@ class NoticeService:
                 if done:
                     return self._complete_round(row, row.get("last_batch_sent_at", now), "users",
                                                 still_pending=bool(pending_ids(row, departed)))
-                return dict(row, wake_at=None, lease_id="", reminder_state="no_pending", next_reminder_at=None)
+                return finish_if_no_pending(row, departed, now=now)
             number = "reminder:" + str(row.get("reminder_round", 0)) + ":" + str(row.get("reminder_batch", 0))
             substitutions = ({"everyone": {"type": "mention", "mentionee": {"type": "all"}}}
                              if all_fallback else
@@ -236,6 +254,7 @@ class NoticeService:
         row = self.store.update(key, claim)
         if not row or row.get("lease_id") != lease:
             return
+        departed = {}
         try:
             group, token = row["group_id"], row["token"]
             options = getattr(self.hub, "ack_options", self.hub.options)(group)
@@ -255,6 +274,11 @@ class NoticeService:
             # Signed receipts can update this row while the worker owns a lease.
             row = self.store.get(key)
             if not row or row.get("lease_id") != lease:
+                return
+            initial = row.get("delivery_state") != "delivered"
+            departed = {} if initial else self.store.get("members-left:" + group) or {}
+            if not initial and not pending_ids(row, departed):
+                self._update(key, lease, lambda current: finish_if_no_pending(current, departed, now=now))
                 return
             batch = row.get("pending_batch")
             if not batch:
@@ -279,6 +303,11 @@ class NoticeService:
                     or (not batch["initial"] and not options["ack_reminder_enabled"])):
                 self._finish(key, lease, reminder_state="cancelled")
                 return
+            if not batch["initial"]:
+                departed = self.store.get("members-left:" + group) or {}
+                latest = self._update(key, lease, lambda current: finish_if_no_pending(current, departed, now=now))
+                if not latest or latest.get("lease_id") != lease:
+                    return
             self.sender(group, copy.deepcopy(batch["messages"]), batch["key"])
             accepted = self.clock()
             def delivered(current):
@@ -298,11 +327,11 @@ class NoticeService:
                         current["reminder_repeat"] = False
                     if batch.get("all_fallback"):
                         current["all_reminded_at"] = accepted
-                        return self._complete_round(current, accepted, "all")
+                        current = self._complete_round(current, accepted, "all")
                     else:
                         current.update(reminder_batch=current.get("reminder_batch", 0) + 1,
                                        reminder_state="sending", wake_at=accepted)
-                return current
+                return finish_if_no_pending(current, departed, now=accepted)
             self._update(key, lease, delivered)
             self.hub.app.logger.info("[FactoryAck] accepted kind=%s recipients=%d",
                                      "initial" if batch["initial"] else "all_fallback" if batch.get("all_fallback") else "users",
@@ -315,7 +344,7 @@ class NoticeService:
                                reminder_state="retrying" if retryable else "failed",
                                last_error=str(exc) if isinstance(exc, SendError) else "派送尚未確認，稍後重試。",
                                wake_at=self.clock() + min(300, 15 * 2 ** min(attempts - 1, 5)) if retryable else None)
-                return current
+                return finish_if_no_pending(current, departed, now=self.clock())
             self._update(key, lease, failed)
             self.hub.app.logger.warning("[FactoryAck] delivery unconfirmed: %s", type(exc).__name__)
 

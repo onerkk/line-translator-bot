@@ -63,7 +63,6 @@ def test_repeats_on_interval_then_stops_after_everyone_replies(hub):
 
 def test_unknown_member_later_speaks_and_next_round_mentions_only_them(hub):
     row, sends, _ = setup(hub, complete=False)
-    hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
     tick(hub, row["reminder_due_at"])
     assert people(sends) == [{"type": "all"}]
     with hub.message_scope(event("到了", uid=THIRD, mid="new-member-message"), "text"):
@@ -72,6 +71,9 @@ def test_unknown_member_later_speaks_and_next_round_mentions_only_them(hub):
     fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
     assert THIRD in fresh.known_members(GROUP)
     assert THIRD not in fresh.known_members(OTHER)
+    tick(hub, stored(hub, row)["next_reminder_at"])
+    assert {person["userId"] for person in people(sends)} == {COLLEAGUE, THIRD}
+    hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
     tick(hub, stored(hub, row)["next_reminder_at"])
     assert people(sends) == [{"type": "user", "userId": THIRD}]
 
