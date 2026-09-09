@@ -59,7 +59,16 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  d.querySelector('#fa-load-receipts').click();
  await until(()=>d.querySelector('#fa-receipts').textContent.includes('已用 @All 補提醒一次'),'actual fallback reminder status');
  assert(d.querySelector('#fa-receipts').textContent.includes('另有 1 人尚未取得身分'));
- assert(d.querySelector('#fa-receipts').textContent.includes('已知 0 人不代表全員了解'));
+ assert(d.querySelector('#fa-receipts').textContent.includes('已知成員未回覆為 0 即自動停止提醒'));
+ const completing=await (await fetch(base+'/preview-ack-reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repeat:true})})).json();
+ assert.equal(completing.state,'repeat_pending');
+ const completed=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:completing.token,timestamp:800})})).json();
+ assert(completed.feedback.includes('此通知已自動停止提醒'));
+ d.querySelector('#fa-load-receipts').click();
+ await until(()=>d.querySelector('[data-token="'+completing.token+'"]')?.textContent.includes('已知成員未回覆為 0，已自動停止提醒'),'zero pending auto stop status');
+ assert(!d.querySelector('[data-stop-token="'+completing.token+'"]'));
+ const finished=(await (await fetch(base+'/api/admin/factory/receipts?group_id='+firstGroup)).json()).notices.find(row=>row.token===completing.token);
+ assert.equal(finished.wake_at,null);assert.equal(finished.next_reminder_at,null);assert.equal(finished.reminder_state,'no_pending');
  const repeating=await (await fetch(base+'/preview-ack-reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repeat:true})})).json();
  assert.equal(repeating.state,'repeat_pending');
  d.querySelector('#fa-load-receipts').click();
@@ -72,7 +81,7 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  d.querySelector('#fa-ack-reminder').checked=false;d.querySelector('#fa-save-options').click();
  await until(()=>d.querySelector('#fa-notice').textContent.includes('群組設定已儲存'),'group reminders off');
  const disabled=await (await fetch(base+'/api/admin/factory')).json();assert.equal(disabled.ack_settings.groups[firstGroup].ack_reminder_enabled,false);
- console.log('PASS reminders: fresh roster fixture, native all mention, repeated schedule, individual stop, group off, member list');
+ console.log('PASS reminders: native all mention while pending, zero known pending stops incomplete roster, repeated schedule, individual stop, group off, member list');
  assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
  close(admin.w);close(member.w);
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)close(w);});

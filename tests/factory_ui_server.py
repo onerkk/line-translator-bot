@@ -23,7 +23,7 @@ hub.h['_send_reply_with_push_fallback']=lambda **kwargs: feedback.append(kwargs[
 def receipt_reply():
  data=request.get_json(silent=True) or {}
  hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=int(data.get('timestamp',500))),
-              {'action':data.get('action','factory_ack'),'token':original})
+              {'action':data.get('action','factory_ack'),'token':data.get('token',original)})
  return jsonify(ok=True,feedback=feedback[-1])
 
 @app.route('/preview-ack-reminder',methods=['POST'])
@@ -42,7 +42,8 @@ def reminder_due():
   hub.command(event)
  row=next(row for row in hub.store.recent('notice:'+cases.GROUP) if row.get('factory_event')==metadata)
  token=row['token']
- hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=700),{'action':'factory_ack','token':token})
+ # Keep one known person pending; zero known pending now stops even with an
+ # incomplete roster. The UI test records their final reply separately.
  key='notice:'+cases.GROUP+':'+token
  now=time.time()
  hub.store.update(key,lambda row:dict(row,reminder_repeat=bool(data.get('repeat')),
