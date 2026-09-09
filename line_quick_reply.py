@@ -18,6 +18,8 @@ from linebot.v3.messaging import QuickReply
 
 KEY = "quick_reply_menu_settings"
 SCHEMA = 1
+ACK_COMMAND_API = 1
+BUILD_ID = "2026-09-09.ci116-matched-ack"
 NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
 WORK = re.compile(r"PMI|檢[驗測查]|检[验测查]|生產|生产|產量|设备|設備|班[別次]|交[接班]|入[庫帐帳]|出[貨库庫]|包裝|包装|秤[重料]|標[籤签]|工[單单]|\b(?:produksi|periksa|pemeriksaan|shift|mesin|timbang|gudang|label)\b", re.I)
 BUILTINS = {
@@ -197,7 +199,7 @@ class Menu:
             if row["type"] != "builtin" or row["action"] not in NOTICE_ACTIONS:
                 continue
             if row["action"] == "factory_ack":
-                rows.append({**row, "enabled": True})
+                rows.append({**row, "enabled": True, "contexts": ["text", "image"]})
                 has_ack = True
             elif row["enabled"] and kind in row["contexts"]:
                 rows.append(copy.deepcopy(row))
