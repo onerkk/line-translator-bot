@@ -43,7 +43,7 @@
 <p class="factory-hint">作業確認僅在群組輸入 <strong>/ack 通知內容</strong> 或 <strong>/確認 通知內容</strong> 時建立。確認按鈕、分享與工具入口統一於「快捷鍵」依群組設定。</p>
 <label><input type="checkbox" id="fa-ack-reminder">自動 @ 提醒尚未回覆的人</label>
 <label>通知送出後等待幾分鐘<input id="fa-ack-minutes" type="number" min="1" max="10079" step="1" required></label>
-<p class="factory-hint">新通知依此時間提醒一次；發起人、已離群及已按「了解／需要說明」的人不會列入。修改時間適用於新通知；關閉提醒也會停止尚未發送的提醒。未能取得完整群組名單時，僅追蹤機器人已知成員。</p>
+<p class="factory-hint">新通知依此時間提醒一次，提醒前會補查群組名單。有完整身分時，僅 @ 尚未回覆者，排除發起人與已離群者。若 LINE 仍未提供完整名單，會改用 @All 提醒全體一次，已回覆者也會收到、可忽略。修改時間適用於新通知；關閉提醒會停止尚未發送的提醒。</p>
 <button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
 <section class="factory-card"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
@@ -137,9 +137,12 @@
         if(row.translated)card.append(node('p',row.translated,'factory-preserve'));
         for(const [entries,label] of [[understood,'✅ 已了解'],[help,'❓ 需要說明']])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
         const pending=row.pending_ids||Object.keys(row.expected||{}).filter(uid=>uid!==row.sender_id&&!row.responses?.[uid]);
-        card.append(node('p','⏳ 未回覆：'+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
-        card.append(node('p','名單範圍：'+(row.roster_basis==='line_group_members'?'發起時 LINE 群組成員':'發起時機器人已知成員（可能不完整）')+'；不含發起人。','factory-hint'));
-        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待提醒',sending:'分批提醒中',sent:'已完成提醒',no_pending:'無需提醒，沒有未回覆者',off:'未啟用',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
+        card.append(node('p','⏳ 已知成員未回覆：'+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
+        card.append(node('p','名單範圍：'+(row.roster_basis==='line_group_members'?'LINE 提供的群組成員':'機器人已知成員（可能不完整）')+'；不含發起人。','factory-hint'));
+        const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
+        if(incomplete)card.append(node('p','⚠️ 名單不完整：'+(Number(unknown)>0?'另有 '+unknown+' 人尚未取得身分。':'實際未回覆總人數尚無法確認。')+'已知 0 人不代表全員了解；排程提醒會以 @All 補提醒一次，已回覆者也可能收到。','factory-hint'));
+        if(row.roster_checked_at)card.append(node('p','名單最近補查：'+formatTime(row.roster_checked_at),'factory-hint'));
+        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待提醒',sending:'分批提醒中',sent:'已完成個別 @ 提醒',sent_all:'已用 @All 補提醒一次（名單不完整）',no_pending:incomplete?'舊紀錄名單不完整，未發送提醒；請重新發起通知':'無需提醒，沒有未回覆者',off:'未啟用',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
         card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+(row.reminder_due_at?' · 預定 '+formatTime(row.reminder_due_at):''),'factory-hint'));
         if(row.last_error)card.append(node('p',row.last_error,'factory-error'));
         $('receipts').append(card);
