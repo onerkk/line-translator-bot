@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "bb4fd3c435171dff027dc4856231e5fed9931e4816a010088384f2ffb289cec9",
-    "updated_at_iso": "2026-09-09T03:15:40.410495+00:00",
-    "updated_at_unix": 1788923740.4104948
+    "state_hash": "9e123f6e272be7b93037fe8f3a07631fe19e42c709377b2c3119223a7e31266b",
+    "updated_at_iso": "2026-09-09T03:17:59.704892+00:00",
+    "updated_at_unix": 1788923879.704892
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -194,13 +194,13 @@
     "image_translations": 4,
     "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.14529360000000002,
-    "oai_input": 163504,
-    "oai_output": 1661,
+    "oai_cost_usd": 0.1460104,
+    "oai_input": 166980,
+    "oai_output": 1679,
     "oai_reasoning": 0,
-    "text_translations": 268,
-    "tokens_completion": 19117,
-    "tokens_prompt": 4398275,
+    "text_translations": 269,
+    "tokens_completion": 19135,
+    "tokens_prompt": 4401751,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -388,12 +388,12 @@
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 0,
       "cache_write": 15633,
-      "cost_usd": 0.4015503499999999,
+      "cost_usd": 0.4022671499999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2543,
-      "tokens_prompt": 274011
+      "tokens_completion": 2561,
+      "tokens_prompt": 277487
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
@@ -1754,7 +1754,7 @@
         ]
       },
       "C6c708f629dd38d6864669ecacf7712f4": {
-        "acknowledgements": "off",
+        "acknowledgements": "command",
         "enabled": true,
         "items": [
           {
