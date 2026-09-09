@@ -70,7 +70,7 @@ def main():
                     time.sleep(.03)
             else:
                 raise RuntimeError("UI fixture did not start")
-            for filename in ("factory_ui_lifecycle.cjs", "factory_ui_smoke.cjs", "unified_menu_ui_smoke.cjs"):
+            for filename in ("factory_ui_lifecycle.cjs", "member_ui_lifecycle.cjs", "factory_ui_smoke.cjs", "unified_menu_ui_smoke.cjs"):
                 result = subprocess.run(["node", str(root / filename)], timeout=45, env=env)
                 if result.returncode:
                     return result.returncode
