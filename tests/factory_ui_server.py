@@ -23,7 +23,7 @@ hub.h['_send_reply_with_push_fallback']=lambda **kwargs: feedback.append(kwargs[
 def receipt_reply():
  data=request.get_json(silent=True) or {}
  before=len(feedback)
- hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=int(data.get('timestamp',500))),
+ hub.postback(cases.event(uid=data.get('uid',cases.COLLEAGUE),stamp=int(data.get('timestamp',500))),
               {'action':data.get('action','factory_ack'),'token':data.get('token',original)})
  emitted=feedback[before:]
  return jsonify(ok=True,feedback=emitted[-1] if emitted else '',emitted_count=len(emitted))
@@ -39,6 +39,10 @@ def reminder_due():
  sent=[]
  hub.reminders.sender=lambda group,messages,key:sent.append(messages)
  event=cases.event('/ack PMI 提醒測試',mid='ui-reminder-'+str(time.monotonic_ns()))
+ if data.get('scope')=='mentioned':
+  hub.remember_members(cases.GROUP,{'U'+'c'*32:'Budi 未指定'})
+  event=cases.event('/確認 @Adi PMI 指定提醒測試',mid='ui-selected-'+str(time.monotonic_ns()),
+      mentions=[{'type':'user','userId':cases.COLLEAGUE,'index':4,'length':4}])
  with hub.message_scope(event,'text'):
   metadata=hub.payload_metadata()
   hub.command(event)
