@@ -910,11 +910,24 @@ class FactoryHub:
         return self.store.update("notice:" + group + ":" + token, stop)
 
     def _receipt_postback(self, event, action, token, group, uid):
+        notice_key = "notice:" + group + ":" + token
+        notice = self.get_notice(token, group)
+        responding = action in {"factory_ack", "factory_help"}
+        state = "understood" if action == "factory_ack" else "needs_help"
+        timestamp = int(field(event, "timestamp", 0) or 0) if responding else 0
+
+        def unchanged_response(row):
+            previous = row.get("responses", {}).get(uid)
+            return previous and (previous.get("status") == state
+                                 or timestamp < previous.get("event_timestamp", 0))
+
+        # Repeated taps stay silent across cards, restarts and group switches.
+        # Keep the original response time/name and avoid another profile lookup.
+        if responding and notice and _USER.fullmatch(str(uid or "")) and unchanged_response(notice):
+            return True
         if self.options(group)["acknowledgements"] == "off" and action != "factory_receipts":
             self._reply(event, "此群組已關閉作業確認。 / Konfirmasi dinonaktifkan.")
             return True
-        notice_key = "notice:" + group + ":" + token
-        notice = self.get_notice(token, group)
         # A valid stored button context can repair an absent initial notice,
         # e.g. from an interrupted earlier write. Do not recreate an expired or
         # superseded notice that is already present in the store.
@@ -931,25 +944,28 @@ class FactoryHub:
             departed = self.store.get("members-left:" + group) or {}
         except StoreError:
             departed = {}  # An optional roster read must not lose a signed ack.
-        if action in {"factory_ack", "factory_help"}:
+        if responding:
             if not _USER.fullmatch(str(uid or "")):
                 self._reply(event, "LINE 未提供回覆者身分，本次無法記錄。\nIdentitas pengguna tidak tersedia; konfirmasi belum dicatat.")
                 return True
-            state = "understood" if action == "factory_ack" else "needs_help"
-            timestamp = int(field(event, "timestamp", 0) or 0)
             name = self._member_name(group, uid, lookup=True)
+            operation_id = secrets.token_hex(16)
             def record_reply(row):
                 if not row:
                     raise ValueError("作業確認已過期。")
+                # Recheck inside CAS: concurrent taps can both read no response
+                # above, but only the committed writer owns the feedback.
+                if unchanged_response(row):
+                    return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
                 responses = row.setdefault("responses", {})
                 row["delivery_state"] = "delivered"  # The signed button proves receipt.
-                previous = responses.get(uid)
-                if not previous or timestamp >= previous.get("event_timestamp", 0):
-                    responses[uid] = {"status": state, "name": str(name), "at": time.time(),
-                                      "event_timestamp": timestamp}
+                responses[uid] = {"status": state, "name": str(name), "at": time.time(),
+                                  "event_timestamp": timestamp, "recording_id": operation_id}
                 return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
+            if notice["responses"][uid].get("recording_id") != operation_id:
+                return True
             saved_state = notice["responses"][uid]["status"]
             name = notice["responses"][uid]["name"]
             feedback = ("✅ " + name + " 已了解 / sudah paham" if saved_state == "understood"
