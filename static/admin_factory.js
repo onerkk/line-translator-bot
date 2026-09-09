@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-09.ack119-pending-mentions
+// FACTORY_ADMIN_BUILD: 2026-09-09.ack122-recipient-scope
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 (function(){
   'use strict';
@@ -64,14 +64,14 @@
 <label>提醒間隔（分鐘）<input id="fa-ack-minutes" type="number" min="1" max="10079" step="1" required></label>
 <label><input type="checkbox" id="fa-ack-repeat">持續提醒，直到已知成員未回覆為 0 或手動停止</label>
 <p class="factory-hint">新通知按此間隔首次提醒；勾選持續提醒後，每輪會重新排除已回覆者，最長至通知 7 天有效期。取消勾選則提醒一次。可在下方單獨停止某筆通知；取消「自動 @ 提醒」會關閉整個群組的後續提醒。間隔設定適用於新通知。</p>
-<p class="factory-hint">每輪重新提醒時，僅以真正的 LINE @ 標記仍未回覆的已知成員；名單不完整也不改用 @All。已知成員未回覆為 0 時立即停止。發起人、本機器人、已回覆及已離群者不列入提醒對象。</p>
+<p class="factory-hint">/確認、/ack 含 @All 或未標記時追蹤全群；只 @ 指定成員時，僅追蹤那些人。指定成員請用 LINE 的 @ 選人。每輪只標記追蹤範圍內仍未回覆的人；名單不完整也不改用 @All。未回覆為 0 時立即停止。發起人、本機器人、已回覆及已離群者不列入提醒對象。</p>
 <button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
 <section class="factory-card"><h2>已辨識的群組成員</h2><p class="factory-hint">成員發言、加入、按確認卡，或被 LINE 原生 @ 單獨標記時會自動記錄。尚未辨識者可在群組發一個字，或由您逐一 @；@All 不會提供每人的身分。</p><button id="fa-load-members" type="button" class="factory-secondary">重新讀取名單</button><div id="fa-members"></div></section>
 <section class="factory-card" id="fa-station-section"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
 <label>簡稱與設備背景<textarea id="fa-context" maxlength="1200" rows="3" placeholder="說明這個代碼代表什麼，僅供翻譯辨識"></textarea></label><div class="factory-grid"><label>中文作業說明<textarea id="fa-sop-zh" maxlength="5000" rows="5"></textarea></label><label>印尼文作業說明<textarea id="fa-sop-id" maxlength="5000" rows="5"></textarea></label></div>
 <label>相關表單<select id="fa-form-id"><option value="">不連結表單</option></select></label><div class="factory-row"><button id="fa-save-station" type="submit">儲存設備</button><button id="fa-reset-station" type="button" class="factory-secondary">取消編輯</button></div></form><div id="fa-qr-preview"></div></section>
-<section class="factory-card" id="fa-receipts-section"><h2>作業確認紀錄</h2><label>查詢群組<select id="fa-receipt-group"></select></label><p id="fa-receipt-scope" class="factory-hint"></p><p class="factory-hint">這是同事主動回覆的紀錄，了解不代表作業完成。未回覆名單僅包含機器人已知成員。此區顯示時每 20 秒更新，也可按下方按鈕查詢。</p><button id="fa-load-receipts" type="button" class="factory-secondary">查看最新確認</button><p id="fa-receipt-status" class="factory-hint" role="status" aria-live="polite"></p><div id="fa-receipts"></div></section>
+<section class="factory-card" id="fa-receipts-section"><h2>作業確認紀錄</h2><label>查詢群組<select id="fa-receipt-group"></select></label><p id="fa-receipt-scope" class="factory-hint"></p><p class="factory-hint">這是同事主動回覆的紀錄，了解不代表作業完成。每筆通知會標示全群或指定成員範圍；全群名單僅列出已辨識成員。按了解只記錄，不另發群組訊息。此區顯示時每 20 秒更新，也可按下方按鈕查詢。</p><button id="fa-load-receipts" type="button" class="factory-secondary">查看最新確認</button><p id="fa-receipt-status" class="factory-hint" role="status" aria-live="polite"></p><div id="fa-receipts"></div></section>
 <section class="factory-card"><h2>圖文選單使用統計</h2><p class="factory-hint">LINE 以日本時間 UTC+9 統計，通常次日完成。少於 20 位點擊使用者時，官方可能不提供數據。</p><form id="fa-insight-form"><label>圖文選單 ID<input id="fa-menu" pattern="richmenu-[0-9a-f]{32}" placeholder="richmenu-…" required></label><div class="factory-grid"><label>開始日期<input type="date" id="fa-from" required></label><label>結束日期<input type="date" id="fa-to" required></label></div><label>統計方式<select id="fa-insight-mode"><option value="summary">期間彙總</option><option value="daily">每日統計</option></select></label><button id="fa-load-insight" type="submit">查詢官方統計</button></form><div id="fa-insight-result"></div></section>`;
     $('group').addEventListener('change',()=>changeGroup(group()));
     $('receipt-group').addEventListener('change',()=>changeGroup($('receipt-group').value));
@@ -163,6 +163,7 @@
       $('receipt-status').textContent='「'+(data.group_name||groupName())+'」共 '+data.notices.length+' 則通知；更新時間：'+formatTime(data.checked_at||Date.now()/1000);
       if(!data.notices.length){$('receipts').append(node('p','「'+groupName()+'」目前沒有作業確認紀錄。請在此 LINE 群組輸入 /ack 通知內容，建立第一則確認。','factory-hint'));return;}
       for(const row of data.notices){
+        const selected=row.recipient_scope==='mentioned';
         const responses=Object.entries(row.responses||{}),understood=responses.filter(([,r])=>r.status==='understood'),help=responses.filter(([,r])=>r.status==='needs_help');
         const card=node('details',undefined,'factory-receipt'),title=node('summary',(row.current?'':row.expired?'［已過期］':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+String(row.original||'').slice(0,160));
         title.append(node('div','已了解 '+understood.length+(help.length?' · 需說明 '+help.length:''),'factory-receipt-counts'));
@@ -171,12 +172,13 @@
         if(row.translated)card.append(node('p',row.translated,'factory-result'));
         for(const [entries,label] of [[understood,'✅ 已了解'],...(help.length?[[help,'❓ 需要說明']]:[])])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
         const pending=row.pending_ids||Object.keys(row.expected||{}).filter(uid=>uid!==row.sender_id&&!row.responses?.[uid]);
-        card.append(node('p','⏳ 已知成員未回覆：'+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
-        card.append(node('p','名單範圍：'+(row.roster_basis==='line_group_members'?'LINE 提供的群組成員':'機器人已知成員（可能不完整）')+'；不含發起人。','factory-hint'));
+        card.append(node('p',(selected?'⏳ 指定成員未回覆：':'⏳ 已知成員未回覆：')+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
+        card.append(node('p','名單範圍：'+(selected?'僅追蹤指令中 @ 的指定成員':row.roster_basis==='line_group_members'?'全群（LINE 提供的群組成員）':'全群（機器人已知成員，可能不完整）')+'；不含發起人。','factory-hint'));
         const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
-        if(incomplete)card.append(node('p',(Number(unknown)>0?'⚠️ 名單不完整：另有 '+unknown+' 人尚未取得身分。':'ℹ️ 名單完整性尚未確認，目前只列出已辨識成員。')+'已知成員未回覆為 0 即自動停止提醒。','factory-hint'));
+        if(!selected&&incomplete)card.append(node('p',(Number(unknown)>0?'⚠️ 名單不完整：另有 '+unknown+' 人尚未取得身分。':'ℹ️ 名單完整性尚未確認，目前只列出已辨識成員。')+'已知成員未回覆為 0 即自動停止提醒。','factory-hint'));
         if(row.roster_checked_at)card.append(node('p','名單最近補查：'+formatTime(row.roster_checked_at),'factory-hint'));
         const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待個別 @ 未回覆者',repeat_pending:'持續提醒中，下輪僅 @ 未回覆者',sending:'分批標記未回覆者',sent:'已完成個別 @ 提醒',sent_all:'舊版曾用 @All 提醒',no_pending:'已知成員未回覆為 0，已自動停止提醒',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
+        if(selected)reminderLabels.no_pending='指定成員未回覆為 0，已自動停止提醒';
         const next=row.next_reminder_at||row.reminder_due_at;
         card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+' · 已提醒 '+(row.reminder_count||0)+' 輪'+(row.wake_at&&next?' · 下次 '+formatTime(next):''),'factory-hint'));
         if(row.last_reminder_scope)card.append(node('p','上次方式：'+(row.last_reminder_scope==='all'?'舊版 @All；後續僅個別標記未回覆者':'個別 @ 未回覆者'),'factory-hint'));
