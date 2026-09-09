@@ -57,6 +57,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Verify matched factory frontend and UI tests
+        run: python tests/run_factory_ui.py --check-assets
       - name: Validate versioned factory assets
         run: python validate_factory_translation_assets.py --json
       - name: Install runtime and test dependencies
