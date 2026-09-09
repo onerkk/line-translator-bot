@@ -1,5 +1,6 @@
-// FACTORY_ADMIN_BUILD: 2026-09-09.ack122-recipient-scope
+// FACTORY_ADMIN_BUILD: 2026-09-09.ci133-recipient-scope
 // FACTORY_ADMIN_LIFECYCLE_API: 1
+// FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1
 (function(){
   'use strict';
   let state=null,editing=null,ready=false,sequence=0,receiptSequence=0,receiptBusy=false,lastReceiptAt=0;
