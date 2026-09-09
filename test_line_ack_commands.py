@@ -10,10 +10,11 @@ from test_line_factory_features import hub, storage, event, GROUP, OTHER, USER, 
 import line_quick_reply
 
 
-def configure(hub, minutes=10):
+def configure(hub, minutes=10, repeat=False):
     hub.update_settings({"group_id": GROUP, "expected_version": hub.settings_version(),
                          "expected_ack_version": hub.ack_settings_version(hub.store.get("ack-settings")),
-                         "options": {"ack_reminder_enabled": True, "ack_reminder_minutes": minutes}})
+                         "options": {"ack_reminder_enabled": True, "ack_reminder_minutes": minutes,
+                                     "ack_reminder_repeat": repeat}})
 
 
 def command(hub, text="/ack 今天下班前請檢查設備", mid="ack-123"):

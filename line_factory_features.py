@@ -32,7 +32,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.ack-roster-reminders.2"
+BUILD_ID = "2026-09-09.ack-repeat-stop.3"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -40,7 +40,7 @@ NOTICE_TTL = 7 * 86400
 NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
             "sharing": True, "station_tools": True, "acknowledgements": "command",
-            "ack_reminder_enabled": False, "ack_reminder_minutes": 30}
+            "ack_reminder_enabled": False, "ack_reminder_minutes": 30, "ack_reminder_repeat": True}
 _USER = re.compile(r"U[0-9a-f]{32}\Z")
 _CODE = re.compile(r"[A-Za-z0-9\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff_.-]{0,39}\Z")
 _WORK = re.compile(r"PMI|檢[驗測查]|检[验测查]|生產|生产|產量|设备|設備|班[別次]|交[接班]|"
@@ -202,6 +202,7 @@ class FactoryHub:
         self._lock = threading.RLock()
         self._insight_cache = {}
         self._revision_db = None
+        self._member_seen = {}
         self.reminders = line_ack_reminders.NoticeService(self)
         self.reminder_worker = line_ack_reminders.NoticeWorker(self.reminders, app.logger)
 
@@ -213,6 +214,7 @@ class FactoryHub:
         old = self._store
         self._pid, self._lock = os.getpid(), threading.RLock()
         self._revision_db, self._insight_cache = None, {}
+        self._member_seen = {}
         if old is not None:
             self._store = FeatureStore(path=old.path, url=old.url, token=old.token, command=old._override)
             self._store.prefix = old.prefix
@@ -235,6 +237,54 @@ class FactoryHub:
         # Read only for explicit notices and the poller, never normal translations.
         shared = self.store.get("ack-settings") or {}
         return {**self.options(group), **shared.get("groups", {}).get(group, {})}
+
+    def remember_members(self, group, members):
+        """Keep IDs even when optional name lookup fails; use the local journal.
+
+        This adds no cloud lookup to ordinary translation. The reminder outbox
+        snapshots the discovered members into its own shared durable storage.
+        """
+        if not str(group).startswith(("C", "R")):
+            return
+        clean = {uid: self._short(name or "未取得姓名 / Nama belum tersedia", 80)
+                 for uid, name in members.items() if isinstance(uid, str) and _USER.fullmatch(uid)}
+        if not clean:
+            return
+        try:
+            self._reset_after_fork()
+            with self._lock:
+                changed = {uid: name for uid, name in clean.items() if self._member_seen.get((group, uid)) != name}
+                if not changed:
+                    return
+                def merge(old):
+                    old = old or {}
+                    for uid, name in changed.items():
+                        if uid not in old or name != "未取得姓名 / Nama belum tersedia":
+                            old[uid] = name
+                    return old
+                self.revisions.update("known-members:" + group, merge, 365 * 86400)
+                if len(self._member_seen) > 5000:
+                    self._member_seen.clear()
+                self._member_seen.update({(group, uid): name for uid, name in changed.items()})
+        except Exception:
+            self.app.logger.warning("[FactoryMembers] local member journal unavailable")
+
+    def known_members(self, group):
+        try:
+            members = self.revisions.get("known-members:" + group) or {}
+        except Exception:
+            members = {}
+        members.update(self.h.get("group_user_names", {}).get(group, {}))
+        return {uid: str(name or "未取得姓名 / Nama belum tersedia") for uid, name in members.items()
+                if isinstance(uid, str) and _USER.fullmatch(uid)}
+
+    def observe_members(self, event):
+        group, uid = source_ids(event)
+        members = {uid: self._member_name(group, uid)} if _USER.fullmatch(str(uid)) else {}
+        for item in native_mentions(field(event, "message", {})):
+            if item["type"] == "user":
+                members[item["userId"]] = item["label"].lstrip("@")
+        self.remember_members(group, members)
 
     @staticmethod
     def ack_settings_version(document):
@@ -266,6 +316,7 @@ class FactoryHub:
     @contextmanager
     def message_scope(self, event, kind):
         group, uid = source_ids(event)
+        self.observe_members(event)
         message = field(event, "message", {})
         mid = str(field(message, "id", "") or "")
         options = self.options(group)
@@ -399,6 +450,8 @@ class FactoryHub:
     def _notice_footer(self, token, record):
         buttons = [(row["label"], row["action"]) for row in self.menu.notice_rows(
             record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"), requested=True)]
+        if record.get("reminder_minutes") and not record.get("reminder_stopped_at"):
+            buttons.append(("🛑 停止提醒/Stop", "factory_stop"))
         return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
             {"type": "text", "text": "作業確認 / Konfirmasi", "size": "sm", "weight": "bold"},
             *[{"type": "button", "height": "sm", "style": "secondary",
@@ -476,7 +529,8 @@ class FactoryHub:
             if record.get("notice_command"):
                 options = self.ack_options(group)
                 notice.update(wake_at=created, reminder_state="waiting_delivery",
-                              reminder_minutes=options["ack_reminder_minutes"] if options["ack_reminder_enabled"] else 0)
+                              reminder_minutes=options["ack_reminder_minutes"] if options["ack_reminder_enabled"] else 0,
+                              reminder_repeat=options["ack_reminder_repeat"], reminder_round=0, reminder_count=0)
                 body = str(record.get("original", "")) + "\n\n" + str(record.get("translated", ""))
                 heading = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n"
                 if delivery.utf16_units(heading + body) <= 1800:
@@ -717,7 +771,7 @@ class FactoryHub:
             if not existing:
                 src, translated = self._translate_notice(group, uid, content)
                 self.assert_current({"factory_event": metadata})
-                members = dict(self.h.get("group_user_names", {}).get(group, {}))
+                members = self.known_members(group)
                 basis = "known_chat_members"
                 try:
                     ids = self.h.get("_factory_member_ids", line_ack_reminders.member_ids)(group)
@@ -734,6 +788,7 @@ class FactoryHub:
                         members.setdefault(mention["userId"], self._short(mention["label"].lstrip("@"), 80))
                 departed = self.store.get("members-left:" + group) or {}
                 members = {member: name for member, name in members.items() if member not in departed and member != uid}
+                self.remember_members(group, members)
                 self.save_context(token, {"group_id": group, "user_id": uid, "original": content,
                     "translated": translated, "src": src, "msg_id": metadata.get("message_id", ""),
                     "factory_event": metadata, "expires_at": time.time() + NOTICE_TTL,
@@ -783,6 +838,8 @@ class FactoryHub:
 
     def member_presence(self, group, uid, *, left, timestamp=None):
         if _USER.fullmatch(str(uid or "")):
+            if not left:
+                self.remember_members(group, {uid: self._member_name(group, uid)})
             def change(row):
                 row = row or {}
                 if left:
@@ -796,6 +853,7 @@ class FactoryHub:
         action = params.get("action", "")
         if not action.startswith("factory_"):
             return False
+        self.observe_members(event)
         try:
             return self._postback(event, params)
         except StoreError:
@@ -811,6 +869,19 @@ class FactoryHub:
         action = params.get("action", "")
         group, uid = source_ids(event)
         token = params.get("token", "")
+        if action == "factory_stop":
+            manager = self.h.get("admin_users", {}).get(uid, {})
+            admin = bool(manager.get("is_admin") and "factory" in manager.get("allowed_tabs", []))
+            try:
+                notice = self.stop_notice(group, token, uid, admin=admin)
+            except PermissionError:
+                self._reply(event, "只有發起人或工廠工具管理員可以停止提醒。\nHanya pengirim atau admin yang dapat menghentikan pengingat.")
+                return True
+            except ValueError as exc:
+                self._reply(event, str(exc))
+                return True
+            self._reply(event, "🛑 已停止這筆通知的後續提醒。\nPengingat untuk pemberitahuan ini telah dihentikan.", notice=notice)
+            return True
         if action in NOTICE_ACTIONS:
             return self._receipt_postback(event, action, token, group, uid)
         context = self.get_context(token, group) if token else None
@@ -826,6 +897,19 @@ class FactoryHub:
                                else "🏭 工廠工具 / Alat pabrik\n") + url, url=url)
             return True
         raise ValueError("未知的工廠工具操作。")
+
+    def stop_notice(self, group, token, actor, *, admin=False):
+        if not self.get_notice(token, group):
+            raise ValueError("通知不存在或已過期。")
+        def stop(row):
+            if not row:
+                raise ValueError("通知不存在或已過期。")
+            if not admin and (not actor or actor != row.get("sender_id")):
+                raise PermissionError("只有發起人或管理員可以停止提醒。")
+            return dict(row, reminder_stopped_at=row.get("reminder_stopped_at") or time.time(),
+                        stopped_by=actor, reminder_state="stopped", wake_at=None,
+                        pending_batch=None, lease_id="", next_reminder_at=None)
+        return self.store.update("notice:" + group + ":" + token, stop)
 
     def _receipt_postback(self, event, action, token, group, uid):
         if self.options(group)["acknowledgements"] == "off" and action != "factory_receipts":
@@ -900,6 +984,8 @@ class FactoryHub:
                      "已知 0 人不代表全員了解。\nDaftar belum lengkap; jumlah yang belum menjawab belum dapat dipastikan.")
         if help_names:
             text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
+        if notice.get("reminder_stopped_at"):
+            text += "\n🛑 此通知已停止提醒。 / Pengingat dihentikan."
         return self._short(text, 1900)
 
     def station_catalog(self, group):
@@ -1012,12 +1098,12 @@ class FactoryHub:
                 raise ValueError("公告按鈕、分享與工具入口請統一到「快捷鍵」設定。")
             if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS):
                 raise ValueError("功能設定包含未知欄位。")
-            touches_ack = bool(set(supplied) & {"ack_reminder_enabled", "ack_reminder_minutes"})
+            touches_ack = bool(set(supplied) & {"ack_reminder_enabled", "ack_reminder_minutes", "ack_reminder_repeat"})
             ack_before = self.store.get("ack-settings") if touches_ack else None
             options = {**self.options(group), **(ack_before or {}).get("groups", {}).get(group, {}), **supplied}
             if options["translation_mode"] not in {"all", "mentioned"} or options["acknowledgements"] not in {"off", "command"}:
                 raise ValueError("翻譯模式或確認模式不正確。")
-            for key in ("edit_translation", "native_mentions", "sharing", "station_tools", "ack_reminder_enabled"):
+            for key in ("edit_translation", "native_mentions", "sharing", "station_tools", "ack_reminder_enabled", "ack_reminder_repeat"):
                 if type(options[key]) is not bool:
                     raise ValueError("開關值必須是布林值。")
             if type(options["ack_reminder_minutes"]) is not int or not 1 <= options["ack_reminder_minutes"] <= 10079:
@@ -1027,7 +1113,7 @@ class FactoryHub:
                     raise ValueError("提醒設定已變更，請重新整理後再儲存。")
                 ack_update = copy.deepcopy(ack_before or {"groups": {}})
                 ack_update.setdefault("groups", {})[group] = {
-                    key: options[key] for key in ("ack_reminder_enabled", "ack_reminder_minutes")}
+                    key: options[key] for key in ("ack_reminder_enabled", "ack_reminder_minutes", "ack_reminder_repeat")}
             result.setdefault("groups", {})[group] = options
         if "stations" in data:
             items = data["stations"]
@@ -1162,6 +1248,28 @@ class FactoryHub:
         def factory_stations(_):
             group = request.args.get("group_id", "")
             return jsonify(ok=True, stations=self.station_catalog(group))
+
+        @self.app.route("/api/admin/factory/members")
+        @protected()
+        def factory_members(_):
+            group = request.args.get("group_id", "")
+            if group not in self.h["_reminder_catalog"]():
+                raise ValueError("請選擇群組。")
+            departed = self.store.get("members-left:" + group) or {}
+            members = self.known_members(group)
+            return jsonify(ok=True, group_id=group, members=[{"id": uid, "name": name}
+                           for uid, name in members.items() if uid not in departed])
+
+        @self.app.route("/api/admin/factory/receipts/stop", methods=["POST"])
+        @protected()
+        def factory_stop_reminder(_):
+            data = request.get_json(silent=True) or {}
+            group = data.get("group_id", "")
+            if group not in self.h["_reminder_catalog"]():
+                raise ValueError("請選擇群組。")
+            row = self.stop_notice(group, data.get("token", ""),
+                                   request.headers.get("X-Manager-Id", "admin"), admin=True)
+            return jsonify(ok=True, reminder_state=row["reminder_state"], token=row["token"])
 
         @self.app.route("/api/admin/factory/qr")
         @protected()

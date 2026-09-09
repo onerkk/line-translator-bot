@@ -1,4 +1,4 @@
-"""Persistent, command-created notices and one reminder round per notice.
+"""Persistent, command-created notices with stoppable reminder rounds.
 
 The notice and its due index are one atomic write on SQLite and Redis. Each
 LINE request is frozen before I/O and has a stable retry key, including the
@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 
 LEASE_SECONDS = 120
+BUILD_ID = "2026-09-09.ack-repeat-stop.3"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -135,7 +136,8 @@ class NoticeService:
             return row
         group = row["group_id"]
         host = getattr(self.hub, "h", {})
-        names = dict(host.get("group_user_names", {}).get(group, {}))
+        names = (self.hub.known_members(group) if hasattr(self.hub, "known_members") else
+                 dict(host.get("group_user_names", {}).get(group, {})))
         basis, ids, count = row.get("roster_basis", "known_chat_members"), None, None
         try:
             ids = host.get("_factory_member_ids", member_ids)(group)
@@ -152,6 +154,8 @@ class NoticeService:
                 count = value
         except Exception:
             pass  # Unknown size still needs one visible group reminder.
+        if ids is not None and hasattr(self.hub, "remember_members"):
+            self.hub.remember_members(group, {uid: names.get(uid, "未取得姓名 / Nama belum tersedia") for uid in ids})
         def refresh(current):
             expected = dict(current.get("expected", {}))
             expected.update({uid: str(name) for uid, name in names.items()
@@ -162,6 +166,20 @@ class NoticeService:
             return dict(current, expected=expected, roster_basis=basis,
                         roster_count=count, roster_checked_at=now)
         return self._update(key, lease, refresh)
+
+    def _complete_round(self, row, now, scope, *, still_pending=True):
+        row.update(reminder_count=row.get("reminder_count", 0) + 1,
+                   reminded_at=now, last_reminder_scope=scope, lease_id="")
+        due = now + row.get("reminder_minutes", 0) * 60
+        if (still_pending and row.get("reminder_repeat") and not row.get("reminder_stopped_at")
+                and row.get("reminder_minutes", 0) > 0 and due < row["expires_at"]):
+            row.update(reminder_state="repeat_pending", wake_at=due, next_reminder_at=due,
+                       reminder_round=row.get("reminder_round", 0) + 1,
+                       reminder_batch=0, reminded_ids=[], roster_checked_at=None)
+        else:
+            row.update(reminder_state=("sent_all" if scope == "all" else "sent") if still_pending else "no_pending",
+                       wake_at=None, next_reminder_at=None)
+        return row
 
     def _prepare_batch(self, row, initial, departed, now):
         """Called inside CAS retry: recipients come from the latest responses."""
@@ -178,9 +196,11 @@ class NoticeService:
             if not all_fallback:
                 ids = ids[:20]
             if not ids and not all_fallback:
-                return dict(row, wake_at=None, lease_id="", reminder_state="sent" if done else "no_pending",
-                            reminded_at=now if done else None)
-            number = "reminder:" + str(row.get("reminder_batch", 0))
+                if done:
+                    return self._complete_round(row, row.get("last_batch_sent_at", now), "users",
+                                                still_pending=bool(pending_ids(row, departed)))
+                return dict(row, wake_at=None, lease_id="", reminder_state="no_pending", next_reminder_at=None)
+            number = "reminder:" + str(row.get("reminder_round", 0)) + ":" + str(row.get("reminder_batch", 0))
             substitutions = ({"everyone": {"type": "mention", "mentionee": {"type": "all"}}}
                              if all_fallback else
                              {"p" + str(i): {"type": "mention", "mentionee": {"type": "user", "userId": uid}}
@@ -219,6 +239,9 @@ class NoticeService:
         try:
             group, token = row["group_id"], row["token"]
             options = getattr(self.hub, "ack_options", self.hub.options)(group)
+            if row.get("reminder_stopped_at"):
+                self._finish(key, lease, reminder_state="stopped", next_reminder_at=None)
+                return
             bot_left = self.store.get("bot-left:" + group) or {}
             if (row["expires_at"] <= now or not self.hub.current(row.get("factory_event"))
                     or bot_left.get("at", 0) >= row["created_at"]
@@ -248,7 +271,12 @@ class NoticeService:
                 self._finish(key, lease, reminder_state="uncertain", last_error="超過安全重試時限，請到群組確認是否收到。")
                 return
             # Never change this payload after a possibly accepted attempt.
-            if not self.hub.current(row.get("factory_event")):
+            latest = self.store.get(key)
+            if not latest or latest.get("lease_id") != lease or latest.get("reminder_stopped_at"):
+                return
+            options = getattr(self.hub, "ack_options", self.hub.options)(group)
+            if (not self.hub.current(row.get("factory_event")) or options["acknowledgements"] == "off"
+                    or (not batch["initial"] and not options["ack_reminder_enabled"])):
                 self._finish(key, lease, reminder_state="cancelled")
                 return
             self.sender(group, copy.deepcopy(batch["messages"]), batch["key"])
@@ -263,9 +291,14 @@ class NoticeService:
                                    reminder_state="pending" if enabled else "off", wake_at=due if enabled else None)
                 else:
                     current["reminded_ids"] = list(dict.fromkeys(current.get("reminded_ids", []) + batch["ids"]))
+                    current["last_batch_sent_at"] = accepted
+                    # Turning off repeat in the group also finishes existing
+                    # repeat notices after this round; stopping is separate.
+                    if options.get("ack_reminder_repeat") is False:
+                        current["reminder_repeat"] = False
                     if batch.get("all_fallback"):
-                        current.update(reminder_state="sent_all", reminded_at=accepted,
-                                       all_reminded_at=accepted, wake_at=None)
+                        current["all_reminded_at"] = accepted
+                        return self._complete_round(current, accepted, "all")
                     else:
                         current.update(reminder_batch=current.get("reminder_batch", 0) + 1,
                                        reminder_state="sending", wake_at=accepted)
