@@ -28,7 +28,7 @@
 <div id="qr-status" class="qr-status" role="status" aria-live="polite"></div>
 <fieldset id="qr-editor"><label class="qr-check"><input id="qr-enabled" type="checkbox">顯示底部快捷選單</label>
 <label>作業確認觸發方式<select id="qr-notice"><option value="command">輸入 /ack 或 /確認 指令才建立</option><option value="off">關閉作業確認</option></select></label><p class="factory-hint">一般翻譯不會自動附確認卡。請在群組輸入 /ack 通知內容；未回覆提醒時間於「工廠工具」設定。</p>
-<p class="qr-hint">「了解／說明／確認」依下方按鈕開關顯示於指令確認卡。底部選單關閉後，仍可使用指令建立確認卡；要停用請將作業確認觸發方式設為關閉。</p>
+<p class="qr-hint">啟用指令模式後，確認卡固定保留「了解」按鈕；關閉底部選單、取消勾選或移除快捷鍵，都不會停用指令。要停用請選「關閉作業確認」，再按「儲存此設定」。未回覆提醒的開關與間隔另於「工廠工具」設定。</p>
 <div class="qr-preview"><h3>選單預覽</h3><label>預覽情境<select id="qr-kind"><option value="text">文字翻譯（含工單號）</option><option value="image">圖片翻譯（含工單號）</option><option value="ack">指令作業確認卡</option></select></label><div id="qr-preview" class="qr-preview-buttons"></div><p id="qr-count" class="qr-hint"></p><p class="qr-hint">工單查詢、圖片對照與語音重播，僅在訊息具備對應內容或功能時顯示。超過 13 顆會以「更多」換頁。</p></div>
 <div id="qr-list"></div><div class="qr-add-row"><label>新增功能<select id="qr-add-kind"></select></label><button type="button" id="qr-add">＋ 新增按鈕</button></div></fieldset>
 <div class="qr-toolbar"><button type="button" id="qr-save" class="qr-primary">儲存此設定</button><button type="button" id="qr-reload">重新載入</button><button type="button" id="qr-inherit" hidden>恢復使用全群組預設</button></div></div>`;
@@ -81,6 +81,9 @@
         b.addEventListener('click',()=>{const rows=state.profile.items;[rows[i],rows[i+delta]]=[rows[i+delta],rows[i]];mark();render();});head.append(b);
       }
       const del=node('button','移除');del.type='button';del.addEventListener('click',()=>{if(confirm('移除「'+row.label+'」？儲存後生效。')){state.profile.items.splice(i,1);mark();render();}});head.append(del);card.append(head);
+      if(row.type==='builtin'&&row.action==='factory_ack'){
+        const hint=node('p','確認卡固定保留「了解」。此勾選與顯示情境只控制底部快捷鍵；移除後，確認卡會使用預設名稱。');hint.className='qr-hint';card.append(hint);
+      }
       const detail=node('details'),summary=node('summary','編輯名稱與顯示情境');detail.append(summary);
       const name=field(detail,'按鈕名稱',row.label,v=>{row.label=v;label.lastChild.textContent=v;});name.maxLength=20;
       const kinds=node('div');kinds.className='qr-contexts';
