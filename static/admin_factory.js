@@ -25,6 +25,7 @@
     $('group').value=value;rememberGroup();fillOptions();syncReceiptGroup();
     $('receipts').replaceChildren();loadStations().catch(e=>notice(e.message,true));
     loadReceipts().catch(e=>notice(e.message,true));
+    loadMembers().catch(e=>notice(e.message,true));
   }
   function refreshVisibleReceipts(){
     if(!state||!group()||receiptBusy||document.visibilityState==='hidden'||Date.now()-lastReceiptAt<20000)return;
@@ -42,9 +43,12 @@
 <label><input type="checkbox" id="fa-edit">原文修改後補發更正翻譯</label><label><input type="checkbox" id="fa-mentions">譯文保留真正的 LINE @ 點名</label>
 <p class="factory-hint">作業確認僅在群組輸入 <strong>/ack 通知內容</strong> 或 <strong>/確認 通知內容</strong> 時建立。確認按鈕、分享與工具入口統一於「快捷鍵」依群組設定。</p>
 <label><input type="checkbox" id="fa-ack-reminder">自動 @ 提醒尚未回覆的人</label>
-<label>通知送出後等待幾分鐘<input id="fa-ack-minutes" type="number" min="1" max="10079" step="1" required></label>
-<p class="factory-hint">新通知依此時間提醒一次，提醒前會補查群組名單。有完整身分時，僅 @ 尚未回覆者，排除發起人與已離群者。若 LINE 仍未提供完整名單，會改用 @All 提醒全體一次，已回覆者也會收到、可忽略。修改時間適用於新通知；關閉提醒會停止尚未發送的提醒。</p>
+<label>提醒間隔（分鐘）<input id="fa-ack-minutes" type="number" min="1" max="10079" step="1" required></label>
+<label><input type="checkbox" id="fa-ack-repeat">持續提醒，直到全員回覆或手動停止</label>
+<p class="factory-hint">新通知按此間隔首次提醒；勾選持續提醒後，每輪會重新排除已回覆者，最長至通知 7 天有效期。取消勾選則提醒一次。可在下方單獨停止某筆通知；取消「自動 @ 提醒」會關閉整個群組的後續提醒。間隔設定適用於新通知。</p>
+<p class="factory-hint">若 LINE 仍未提供完整名單，該輪會用 @All 提醒全體，已回覆者也會收到、可忽略；累積足夠身分後改為個別標記。</p>
 <button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
+<section class="factory-card"><h2>已辨識的群組成員</h2><p class="factory-hint">成員發言、加入、按確認卡，或被 LINE 原生 @ 單獨標記時會自動記錄。尚未辨識者可在群組發一個字，或由您逐一 @；@All 不會提供每人的身分。</p><button id="fa-load-members" type="button" class="factory-secondary">重新讀取名單</button><div id="fa-members"></div></section>
 <section class="factory-card"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
 <form id="fa-station-form"><h3 id="fa-editor-title">新增設備對照</h3><div class="factory-grid"><label>設備／站別代碼<input id="fa-code" maxlength="40" required placeholder="I5"></label><label>適用群組<select id="fa-station-group"></select></label><label>中文名稱<input id="fa-name-zh" maxlength="100" required></label><label>印尼文名稱<input id="fa-name-id" maxlength="200" required></label></div>
 <label>簡稱與設備背景<textarea id="fa-context" maxlength="1200" rows="3" placeholder="說明這個代碼代表什麼，僅供翻譯辨識"></textarea></label><div class="factory-grid"><label>中文作業說明<textarea id="fa-sop-zh" maxlength="5000" rows="5"></textarea></label><label>印尼文作業說明<textarea id="fa-sop-id" maxlength="5000" rows="5"></textarea></label></div>
@@ -55,7 +59,7 @@
     $('receipt-group').addEventListener('change',()=>changeGroup($('receipt-group').value));
     $('refresh').addEventListener('click',guard($('refresh'),load));
     $('options-form').addEventListener('submit',guard($('save-options'),async()=>{
-      const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,expected_ack_version:state.ack_settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked,ack_reminder_enabled:$('ack-reminder').checked,ack_reminder_minutes:Number($('ack-minutes').value)}});
+      const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,expected_ack_version:state.ack_settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked,ack_reminder_enabled:$('ack-reminder').checked,ack_reminder_minutes:Number($('ack-minutes').value),ack_reminder_repeat:$('ack-repeat').checked}});
       state=data;notice('群組設定已儲存。');
     }));
     $('station-form').addEventListener('submit',guard($('save-station'),async()=>{
@@ -65,6 +69,7 @@
     }));
     $('reset-station').addEventListener('click',resetStation);
     $('load-receipts').addEventListener('click',guard($('load-receipts'),loadReceipts));
+    $('load-members').addEventListener('click',guard($('load-members'),loadMembers));
     window.setInterval(refreshVisibleReceipts,20000);
     document.addEventListener('visibilitychange',refreshVisibleReceipts);
     window.addEventListener('focus',refreshVisibleReceipts);
@@ -85,15 +90,21 @@
     $('health').append(node('p','作業確認排程：'+(health.ack_worker_enabled===false?'未啟用，需啟用排程服務':health.ack_last_check_at?'最近檢查 '+new Date(health.ack_last_check_at*1000).toLocaleString('zh-TW',{hour12:false}):'已啟用，等待首次檢查')));
     if(health.ack_worker_error)$('health').append(node('p',health.ack_worker_error,'factory-error'));
     (health.provider?.providers||[]).forEach(p=>$('health').append(node('span',p.provider+' · '+(reasons[p.reason]||p.reason),'factory-pill')));
-    fillOptions();await Promise.all([loadStations(),loadReceipts()]);notice('');
+    fillOptions();await Promise.all([loadStations(),loadReceipts(),loadMembers()]);notice('');
   }
   function fillOptions(){
     const settings={...state.defaults,...(state.settings.groups||{})[group()],...(state.ack_settings?.groups||{})[group()]};
     $('mode').value=settings.translation_mode;$('edit').checked=settings.edit_translation;$('mentions').checked=settings.native_mentions;
     $('ack-reminder').checked=settings.ack_reminder_enabled;$('ack-minutes').value=settings.ack_reminder_minutes;
+    $('ack-repeat').checked=settings.ack_reminder_repeat;
     $('save-options').disabled=!group();$('load-receipts').disabled=!group();
   }
   function resetStation(){editing=null;$('station-form').reset();$('editor-title').textContent='新增設備對照';}
+  async function loadMembers(){
+    const chosen=group();if(!chosen)return;
+    const data=await call('/members?group_id='+encodeURIComponent(chosen));if(chosen!==group())return;
+    $('members').replaceChildren(node('p','已辨識 '+data.members.length+' 位成員（含發起人）。'),node('p',data.members.map(row=>row.name).join('、')||'尚無名單'));
+  }
   function editStation(row){
     const custom=(state.settings.stations||[]).find(x=>x.code===row.code&&x.group_id===group())||(state.settings.stations||[]).find(x=>x.code===row.code&&!x.group_id);editing=custom?{code:custom.code,group_id:custom.group_id}:null;
     const data=custom||{...row,group_id:group()};
@@ -140,10 +151,16 @@
         card.append(node('p','⏳ 已知成員未回覆：'+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
         card.append(node('p','名單範圍：'+(row.roster_basis==='line_group_members'?'LINE 提供的群組成員':'機器人已知成員（可能不完整）')+'；不含發起人。','factory-hint'));
         const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
-        if(incomplete)card.append(node('p','⚠️ 名單不完整：'+(Number(unknown)>0?'另有 '+unknown+' 人尚未取得身分。':'實際未回覆總人數尚無法確認。')+'已知 0 人不代表全員了解；排程提醒會以 @All 補提醒一次，已回覆者也可能收到。','factory-hint'));
+        if(incomplete)card.append(node('p','⚠️ 名單不完整：'+(Number(unknown)>0?'另有 '+unknown+' 人尚未取得身分。':'實際未回覆總人數尚無法確認。')+'已知 0 人不代表全員了解；需提醒時會以 @All 補提醒，已回覆者也可能收到。','factory-hint'));
         if(row.roster_checked_at)card.append(node('p','名單最近補查：'+formatTime(row.roster_checked_at),'factory-hint'));
-        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待提醒',sending:'分批提醒中',sent:'已完成個別 @ 提醒',sent_all:'已用 @All 補提醒一次（名單不完整）',no_pending:incomplete?'舊紀錄名單不完整，未發送提醒；請重新發起通知':'無需提醒，沒有未回覆者',off:'未啟用',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
-        card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+(row.reminder_due_at?' · 預定 '+formatTime(row.reminder_due_at):''),'factory-hint'));
+        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待提醒',repeat_pending:'持續提醒中，等待下一輪',sending:'分批提醒中',sent:'已完成個別 @ 提醒',sent_all:'已用 @All 補提醒一次（名單不完整）',no_pending:incomplete?'舊紀錄名單不完整，未發送提醒；請重新發起通知':'無需提醒，沒有未回覆者',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
+        const next=row.next_reminder_at||row.reminder_due_at;
+        card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+' · 已提醒 '+(row.reminder_count||0)+' 輪'+(row.wake_at&&next?' · 下次 '+formatTime(next):''),'factory-hint'));
+        if(row.last_reminder_scope)card.append(node('p','上次方式：'+(row.last_reminder_scope==='all'?'@All（名單不完整）':'個別 @ 未回覆者'),'factory-hint'));
+        if(row.current&&row.reminder_minutes&&!row.reminder_stopped_at&&row.wake_at){
+          const stop=node('button','停止此通知提醒','factory-danger');stop.type='button';stop.dataset.stopToken=row.token;
+          stop.addEventListener('click',guard(stop,async()=>{await call('/receipts/stop','POST',{group_id:chosen,token:row.token});await loadReceipts();notice('已停止這筆通知的後續提醒。');}));card.append(stop);
+        }
         if(row.last_error)card.append(node('p',row.last_error,'factory-error'));
         $('receipts').append(card);
       }
