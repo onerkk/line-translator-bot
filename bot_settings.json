@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "eaef42867a38605518bd8cd4dd3c4e67c360b004cf0c8b7b03ca991ac7ebd135",
-    "updated_at_iso": "2026-09-09T08:04:46.512338+00:00",
-    "updated_at_unix": 1788941086.5123384
+    "state_hash": "2ec798e96281ea10632994a01b4a928a24d7da13a20920524722b141d8082d99",
+    "updated_at_iso": "2026-09-09T08:11:45.198353+00:00",
+    "updated_at_unix": 1788941505.1983528
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -577,6 +577,7 @@
       "U1447d16f768aad47c0efaf2409505f97": "Dato潘",
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
       "U23dcb7e4d994d56ca3a6726b62ea0ba2": "啊堂",
+      "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
       "U66a8711792ba58d51144dac2f8c4c47c": "鄭黑輪",
       "U6aac5039042433ab3d48f9b3e9cae0a2": "EggEgg",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
