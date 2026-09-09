@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
-console.log('CHECK unified menu: ci91-cleanup');
+console.log('CHECK unified menu: ack108-command-switch');
 const windows=new Set();
 async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,30));}throw new Error('Timeout: '+label);}
 const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id='+encodeURIComponent(group||''))).json();
@@ -40,6 +40,25 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  $('kind').value='ack';change($('kind'));
  await until(()=>$('count').textContent.includes('共 '+ackLabels.length+' 顆按鈕'),'explicit acknowledgement preview');
  assert.deepEqual([...$('preview').querySelectorAll('span')].map(el=>el.textContent),ackLabels);
+ // Reproduce the saved-command / hidden-shortcut mismatch in the real editor.
+ const defaults=await read(''),ackRow=defaults.profile.items.find(r=>r.action==='factory_ack');
+ const ackCard=[...$('list').children].find(el=>el.dataset.itemId===ackRow.id);
+ assert(ackCard.textContent.includes('確認卡固定保留'));
+ const ackName=ackCard.querySelector('input[type=text]');ackName.value='測試了解/Paham';change(ackName,'input');
+ for(const toggle of $('list').querySelectorAll('.qr-item-head input[type=checkbox]')){toggle.checked=false;change(toggle);}
+ await until(()=>$('count').textContent.includes('共 1 顆按鈕')&&$('preview').textContent==='測試了解/Paham','hidden acknowledgement remains answerable');
+ $('notice').value='off';change($('notice'));
+ await until(()=>$('count').textContent.includes('共 0 顆按鈕'),'explicit acknowledgement off');
+ $('notice').value='command';change($('notice'));
+ await until(()=>$('preview').textContent==='測試了解/Paham','command mode restores acknowledgement');
+ ackCard.querySelectorAll('.qr-item-head button')[2].click();
+ await until(()=>$('count').textContent.includes('共 1 顆按鈕')&&$('preview').textContent===defaults.builtins.factory_ack,'deleted shortcut retains card default');
+ await save();
+ const persisted=await read('');assert.equal(persisted.profile.acknowledgements,'command');assert.equal(persisted.profile.enabled,false);
+ assert(!persisted.profile.items.some(r=>r.action==='factory_ack'));
+ $('reload').click();await until(()=>$('status').textContent==='已載入。','reload command without shortcut');
+ assert.equal($('notice').value,'command');
+ await until(()=>$('count').textContent.includes('共 1 顆按鈕')&&$('preview').textContent===defaults.builtins.factory_ack,'reloaded acknowledgement preview');
  // Pagination gets its own fixed fixture; default menu size can change as
  // features move between translation controls and command-only cards.
  $('enabled').checked=true;change($('enabled'));$('kind').value='image';change($('kind'));
@@ -55,5 +74,5 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  const edit=$('list').firstElementChild.querySelector('input[type=text]');edit.value='未儲存測試';change(edit,'input');failSave=true;$('save').click();
  await until(()=>$('status').textContent==='測試儲存失敗','failed-save feedback');assert.equal((await read('')).profile.items[0].label,before);assert.equal(edit.value,'未儲存測試');
  assert.deepEqual(errors,[]);dom.window.close();
- console.log('PASS unified menu: independent groups, labels, text/photo conditions, reorder, deletion after reload, inheritance, command-only acknowledgement preview, pagination, failed-save feedback');
+ console.log('PASS unified menu: independent groups, labels, text/photo conditions, reorder, deletion after reload, inheritance, mandatory acknowledgement after hide/delete/save/reload, explicit off, pagination, failed-save feedback');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)w.close();});
