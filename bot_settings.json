@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "4131531055bcec1551e0feca628c34a93be4aea7bac74472c4123978599bf947",
-    "updated_at_iso": "2026-09-09T05:46:32.874713+00:00",
-    "updated_at_unix": 1788932792.874713
+    "state_hash": "2ba2eb37d256a14e3618f94392e198c03b465616aabebd87788430c1efb66890",
+    "updated_at_iso": "2026-09-09T05:46:55.981890+00:00",
+    "updated_at_unix": 1788932815.98189
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -358,7 +358,10 @@
         "translation_mode": "all"
       },
       "Cd188e1adc7792e407c90f3fa78850316": {
-        "acknowledgements": "all",
+        "ack_reminder_enabled": true,
+        "ack_reminder_minutes": 60,
+        "ack_reminder_repeat": true,
+        "acknowledgements": "command",
         "edit_translation": true,
         "native_mentions": true,
         "sharing": true,
