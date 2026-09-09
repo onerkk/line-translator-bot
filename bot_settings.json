@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "2a1ceb89847679b931f6f2b3f222d32c4ddb4dfd6b1ce4f9116af0134ac072e5",
-    "updated_at_iso": "2026-09-08T01:45:06.318030+00:00",
-    "updated_at_unix": 1788831906.3180296
+    "state_hash": "bb4fd3c435171dff027dc4856231e5fed9931e4816a010088384f2ffb289cec9",
+    "updated_at_iso": "2026-09-09T03:15:40.410495+00:00",
+    "updated_at_unix": 1788923740.4104948
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-07 23:59:45",
+    "last_updated": "2026-09-09 03:15:05",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -348,11 +348,13 @@
         "translation_mode": "all"
       },
       "C6c708f629dd38d6864669ecacf7712f4": {
-        "acknowledgements": "all",
+        "ack_reminder_enabled": true,
+        "ack_reminder_minutes": 1,
+        "acknowledgements": "off",
         "edit_translation": true,
         "native_mentions": true,
-        "sharing": true,
-        "station_tools": true,
+        "sharing": false,
+        "station_tools": false,
         "translation_mode": "all"
       },
       "Cd188e1adc7792e407c90f3fa78850316": {
@@ -781,7 +783,7 @@
   ],
   "quick_reply_menu_settings": {
     "default": {
-      "acknowledgements": "all",
+      "acknowledgements": "command",
       "enabled": true,
       "items": [
         {
@@ -1267,7 +1269,7 @@
     },
     "groups": {
       "C28bb7127640539f3c1bc743ecdf61a24": {
-        "acknowledgements": "all",
+        "acknowledgements": "command",
         "enabled": false,
         "items": [
           {
@@ -2237,7 +2239,7 @@
         ]
       },
       "Cd188e1adc7792e407c90f3fa78850316": {
-        "acknowledgements": "all",
+        "acknowledgements": "command",
         "enabled": false,
         "items": [
           {
