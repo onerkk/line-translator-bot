@@ -43,6 +43,37 @@ _QUICK_REPLY_ASSETS = (
 )
 
 
+def check_recipient_scope_asset(repo):
+    """Reject CI133's mixed upload before Flask/Node instead of a DOM timeout."""
+    relative = "static/admin_factory.js"
+    path = repo / relative
+    raw = path.read_bytes() if path.is_file() else b""
+    normalized = raw.replace(b"\r\n", b"\n")
+    source = normalized.decode("utf-8", errors="replace")
+    build = re.search(r"^// FACTORY_ADMIN_BUILD: (.+)$", source, re.M)
+    api = re.search(r"^// FACTORY_ADMIN_RECIPIENT_SCOPE_API: (\d+)$", source, re.M)
+    # The actual ACK122 release implements recipient scope without this marker.
+    # Accept its verified bytes; a lifecycle marker alone cannot prove support.
+    compatible = hashlib.sha256(normalized).hexdigest() == (
+        "424e9a7257ddd477011b4d02bccec52b55b6f19473aca891cd2bf52bdc30225f")
+    supported = api.group(1) == "1" if api else compatible
+    version = build.group(1).strip() if build else "unmarked/missing"
+    print(f"CHECK admin recipient scope: {path.resolve()} build={version} "
+          f"api={api.group(1) if api else 'ack122-verified' if compatible else 'missing'} "
+          f"sha256={hashlib.sha256(raw).hexdigest()}", flush=True)
+    if not supported:
+        misplaced = repo / "admin_factory.js"
+        hint = (" admin_factory.js also exists at repository root; the page does not load that file."
+                if misplaced.is_file() else "")
+        raise RuntimeError(
+            "Recipient-scope update is incomplete: static/admin_factory.js does not support "
+            "the all/selected audience used by the current UI tests. Loaded build=" + version + "."
+            + hint + " Replace static/admin_factory.js with the ACK122 or CI133 file, keeping its static/ path. "
+            "In GitHub, open the static folder before uploading admin_factory.js. "
+            "Then rerun python tests/run_factory_ui.py --check-assets. "
+            "This check is read-only; the selected-audience DOM test remains required.")
+
+
 def check_quick_reply_assets(repo):
     failures = []
     for relative, build_pattern, api_pattern, compatible_hash in _QUICK_REPLY_ASSETS:
@@ -117,6 +148,7 @@ def main():
     root = Path(__file__).resolve().parent
     check_frontend_assets(root.parent)
     check_quick_reply_assets(root.parent)
+    check_recipient_scope_asset(root.parent)
     env = dict(os.environ)
     if not env.get("FACTORY_UI_PORT"):
         with socket.socket() as sock:
@@ -167,5 +199,6 @@ if __name__ == "__main__":
     if args.check_assets:
         check_frontend_assets(Path(__file__).resolve().parents[1])
         check_quick_reply_assets(Path(__file__).resolve().parents[1])
+        check_recipient_scope_asset(Path(__file__).resolve().parents[1])
         raise SystemExit(0)
     raise SystemExit(main())
