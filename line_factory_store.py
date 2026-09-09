@@ -47,12 +47,26 @@ def mark_delivery():
         stats["delivered_ms"] = (time.monotonic() - stats["started"]) * 1000
 
 
-_WRITE = """
+_SCHEDULE = """
+local function schedule(key, value)
+  local prefix = string.match(key, '^(.*}:)notice:')
+  if not prefix then return end
+  local due = value and cjson.decode(value).wake_at or nil
+  if type(due) == 'number' then
+    redis.call('ZADD', prefix .. 'notice-due', due, key)
+  else
+    redis.call('ZREM', prefix .. 'notice-due', key)
+  end
+end
+"""
+
+_WRITE = _SCHEDULE + """
 local function write(key, bucket, value, ttl)
   redis.call('SET', key, value, 'EX', ttl)
   redis.call('ZADD', bucket, tonumber(ARGV[1]) + tonumber(ttl), key)
   redis.call('ZREMRANGEBYSCORE', bucket, '-inf', ARGV[1])
   redis.call('EXPIRE', bucket, tonumber(ttl) + 86400)
+  schedule(key, value)
 end
 """
 
@@ -100,16 +114,18 @@ return 1
 """
 
 
-_CAS = """
+_CAS = _SCHEDULE + """
 local old = redis.call('GET', KEYS[1])
 if (old or '') ~= ARGV[1] then return 0 end
 if ARGV[2] == '' then
   redis.call('DEL', KEYS[1]); redis.call('ZREM', KEYS[2], KEYS[1])
+  schedule(KEYS[1], nil)
 else
   redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
   redis.call('ZADD', KEYS[2], ARGV[4], KEYS[1])
   redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[5])
   redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]) + 86400)
+  schedule(KEYS[1], ARGV[2])
 end
 return 1
 """
@@ -146,6 +162,8 @@ class FeatureStore:
         db.execute("CREATE TABLE IF NOT EXISTS factory_state "
                    "(key TEXT PRIMARY KEY, bucket TEXT NOT NULL, value TEXT NOT NULL, expires REAL NOT NULL)")
         db.execute("CREATE INDEX IF NOT EXISTS factory_expiry ON factory_state(bucket, expires)")
+        db.execute("CREATE INDEX IF NOT EXISTS factory_notice_due ON factory_state "
+                   "(json_extract(value,'$.wake_at')) WHERE key LIKE 'notice:%'")
         return db
 
     def command(self, args):
@@ -338,6 +356,30 @@ class FeatureStore:
             return [json.loads(row[0]) for row in db.execute(
                 "SELECT value FROM factory_state WHERE bucket=? AND expires>? ORDER BY expires DESC LIMIT ?",
                 (bucket, time.time(), limit)).fetchall()]
+        finally:
+            db.close()
+
+    def due_notices(self, now, limit=10):
+        """Global due index; independent of per-group history display limits."""
+        limit = max(1, min(100, int(limit)))
+        if not self.path:
+            script = """
+local keys = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+local result = {}
+for _, key in ipairs(keys) do
+  local raw = redis.call('GET', key)
+  if raw then table.insert(result, raw) else redis.call('ZREM', KEYS[1], key) end
+end
+return result
+"""
+            return [json.loads(raw) for raw in self.command(
+                ['EVAL', script, 1, self.prefix + 'notice-due', now, limit])]
+        db = self._connect()
+        try:
+            return [json.loads(row[0]) for row in db.execute(
+                "SELECT value FROM factory_state WHERE key LIKE 'notice:%' AND expires>? "
+                "AND json_extract(value,'$.wake_at')<=? ORDER BY json_extract(value,'$.wake_at') LIMIT ?",
+                (now, now, limit))]
         finally:
             db.close()
 

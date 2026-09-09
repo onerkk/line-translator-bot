@@ -1,0 +1,78 @@
+{
+  "build": "2026-09-09.command-ack-reminders.1",
+  "base_zip_sha256": "a4a037b4203ffe5b5052cf6592b3a1cf2a22da8cbc7772d9399f04d4a05f1495",
+  "files": [
+    {
+      "path": "app.py",
+      "kind": "modified",
+      "sha256": "56ca4b6819162cdb1d8fb705832ea1fedf1b05d049cd5a2d5b83a21e207a9f81",
+      "base_sha256": "b5d83a71f54236ace75bc5c0a0ea958ee9f73cf6af8317c0e9fae3d377280a9c"
+    },
+    {
+      "path": "line_factory_features.py",
+      "kind": "modified",
+      "sha256": "23448774bcab3080959827474bc6cda2fbb2f9c4b0b0ab143cbecd6ba422dd14",
+      "base_sha256": "c4b041f5587b4d141d7d10b5c3d7a6c83b6396dc0fcc331ee0a6f4ac29e4bc7c"
+    },
+    {
+      "path": "line_factory_store.py",
+      "kind": "modified",
+      "sha256": "c3c1d530c6f7e6fada2fc36fdeac7038ca8acb3465cb2b59b55c6888a8038467",
+      "base_sha256": "88b38e673d8b8cf206ab4f8129e8b8080183eaa9a55e98a9e110d724a04886c8"
+    },
+    {
+      "path": "line_quick_reply.py",
+      "kind": "modified",
+      "sha256": "bc25227abee2f14da6bdd2ba6a155021029d3d1760de19f263ad6fe8835e6b8d",
+      "base_sha256": "d39c3adfb3828dcf1bfa09f62f7b306318a1c891b80e7cbebc8e1571a8a0daf0"
+    },
+    {
+      "path": "line_ack_reminders.py",
+      "kind": "added",
+      "sha256": "694cbe68250ac03e3d52f74398b2e8c7b7e4d87c710c4659817bfe82a9017b48",
+      "base_sha256": null
+    },
+    {
+      "path": "static/admin_factory.js",
+      "kind": "modified",
+      "sha256": "a1b589930c56599db84381cc013db5d0ba4451ac12237db4fca07b1df374198d",
+      "base_sha256": "590d5e4a97e4295f7d80fe15cb1f5742d159043e83f2f70aeb6e6dd56ede9b58"
+    },
+    {
+      "path": "static/admin_quick_reply.js",
+      "kind": "modified",
+      "sha256": "4e28df92d67181e3334696ca966148eace92b3f09cc5371ac0ccc0e78c5dc393",
+      "base_sha256": "96af1a5c5e21e5a3017b00148fd752ed4bbffa144c9e89c022960c724c39f106"
+    },
+    {
+      "path": "test_line_factory_features.py",
+      "kind": "modified",
+      "sha256": "f3affc316e268c31d19d134695702a23314999ee519473fb24708c85c511aff6",
+      "base_sha256": "3af81bc6d65b2380728b85c0709c139904430ea5c7d23100d1bf33daba64097d"
+    },
+    {
+      "path": "test_unified_quick_reply.py",
+      "kind": "modified",
+      "sha256": "0361ebb3be9644567b973b62ede39b8b7241ee12fcdfdc7b2c62e7a1386ab9e0",
+      "base_sha256": "89f94b21e3b102bf13a0342cfc0745d8f34d58b29439139b53b30151ecf11bd1"
+    },
+    {
+      "path": "test_ack_reminders_offline.py",
+      "kind": "added",
+      "sha256": "257b20af85148a939daed306c8ce171400656958de71a7f9e85f6e34dda3ef3f",
+      "base_sha256": null
+    },
+    {
+      "path": "test_line_ack_commands.py",
+      "kind": "added",
+      "sha256": "df7ccfde842739ead40626cd1610fc144659fd2c2743ddc0ec70c34102fbf9fe",
+      "base_sha256": null
+    },
+    {
+      "path": "ACK_UPDATE_README.md",
+      "kind": "added",
+      "sha256": "50c83ae90d8c030ef4c8d67bd16ceaeabf6c9255a5a6a59096f268ec7983ac21",
+      "base_sha256": null
+    }
+  ]
+}

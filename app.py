@@ -21948,6 +21948,8 @@ if MemberJoinedEvent:
                 uid = getattr(member, 'user_id', None)
                 if uid:
                     record_user_name(group_id, uid)
+                    if factory_hub:
+                        factory_hub.member_presence(group_id, uid, left=False)
         # Send welcome if enabled
         ws = get_group_welcome(group_id)
         if not ws.get("enabled", True):
@@ -21978,7 +21980,7 @@ if MemberLeftEvent:
     def handle_member_left(event):
         """Track when a member leaves the group."""
         source = event.source
-        group_id = getattr(source, 'group_id', None)
+        group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
         if not group_id:
             return
         left = getattr(event, 'left', None)
@@ -21986,6 +21988,8 @@ if MemberLeftEvent:
             for member in left.members:
                 uid = getattr(member, 'user_id', None)
                 if uid:
+                    if factory_hub:
+                        factory_hub.member_presence(group_id, uid, left=True)
                     # Remove from skip list
                     if group_id in group_skip_users:
                         group_skip_users[group_id].discard(uid)
@@ -22021,6 +22025,8 @@ if BotLeaveEvent:
         """Clean up when bot is removed from a group."""
         group_id = getattr(event.source, 'group_id', None) or getattr(event.source, 'room_id', None)
         if group_id:
+            if factory_hub:
+                factory_hub.store.put("bot-left:" + group_id, {"at": time.time()}, 30 * 86400)
             group_tracking.pop(group_id, None)
             group_settings.pop(group_id, None)
             group_target_lang.pop(group_id, None)
@@ -24075,9 +24081,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=1">
-<script src="/static/admin_factory.js?v=20260907-menu1" defer></script>
+<script src="/static/admin_factory.js?v=20260909-ack1" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
-<script src="/static/admin_quick_reply.js?v=20260907-menu1" defer></script>
+<script src="/static/admin_quick_reply.js?v=20260909-ack1" defer></script>
 </head>
 <body>
 <div id="app">
@@ -38338,6 +38344,7 @@ def _authorize_reminders():
 
 quick_reply_menu.register(app)
 factory_hub = line_factory_features.install(app, globals())
+factory_hub.reminder_worker.start()
 
 _start_reminders = reminders_web.register_reminders(
     app, authorize=_authorize_reminders, catalog=_reminder_catalog,

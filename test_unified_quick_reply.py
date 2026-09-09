@@ -118,7 +118,7 @@ def test_context_buttons_and_notices_obey_same_profile_and_master(menu):
     m, _ = menu
     rows = [item("ack", "收到/Paham", action="factory_ack"), item("style", action="natural", kind=["image"])]
     m.save(GROUP, profile(rows), m.version())
-    record = {"original": "PMI一定要檢測", "translated": "Periksa PMI", "tgt": "id"}
+    record = {"original": "PMI一定要檢測", "translated": "Periksa PMI", "tgt": "id", "notice_requested": True}
     assert [x.action.label for x in m.build(GROUP, record, "test_context").items] == ["收到/Paham"]
     assert len(m.build(GROUP, record, "test_context", "image").items) == 2
     assert m.build(GROUP, {"original": "早安"}, "test_context") is None

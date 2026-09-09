@@ -1,7 +1,7 @@
 """LINE factory tools: revisions, native mentions, QR, sharing and receipts.
 
-All LINE sends use the application's durable delivery boundary. Web pages only
-preview/share on an explicit user click; no background broadcast is performed.
+Translations use the application's durable delivery boundary. Explicit /ack
+notices use a persistent outbox and can schedule one unanswered-member reminder.
 """
 from __future__ import annotations
 
@@ -27,18 +27,20 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from linebot.v3.messaging import Message, TextMessage, FlexMessage, FlexContainer, QuickReply, QuickReplyItem, PostbackAction
 
 import line_quick_reply
+import line_ack_reminders
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-07.factory-receipts.4"
+BUILD_ID = "2026-09-09.command-ack-reminders.1"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
 NOTICE_TTL = 7 * 86400
 NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
-            "sharing": True, "station_tools": True, "acknowledgements": "work"}
+            "sharing": True, "station_tools": True, "acknowledgements": "command",
+            "ack_reminder_enabled": False, "ack_reminder_minutes": 30}
 _USER = re.compile(r"U[0-9a-f]{32}\Z")
 _CODE = re.compile(r"[A-Za-z0-9\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff_.-]{0,39}\Z")
 _WORK = re.compile(r"PMI|檢[驗測查]|检[验测查]|生產|生产|產量|设备|設備|班[別次]|交[接班]|"
@@ -196,12 +198,28 @@ class FactoryHub:
         self.app, self.h = app, host
         self.menu = host.get("quick_reply_menu") or line_quick_reply.Menu(host)
         self._store = store
+        self._pid = os.getpid()
         self._lock = threading.RLock()
         self._insight_cache = {}
         self._revision_db = None
+        self.reminders = line_ack_reminders.NoticeService(self)
+        self.reminder_worker = line_ack_reminders.NoticeWorker(self.reminders, app.logger)
+
+    def _reset_after_fork(self):
+        if self._pid == os.getpid():
+            return
+        # A preloaded parent may fork while its poller holds a storage lock.
+        # Child workers must not inherit locked mutexes or HTTP sessions.
+        old = self._store
+        self._pid, self._lock = os.getpid(), threading.RLock()
+        self._revision_db, self._insight_cache = None, {}
+        if old is not None:
+            self._store = FeatureStore(path=old.path, url=old.url, token=old.token, command=old._override)
+            self._store.prefix = old.prefix
 
     @property
     def store(self):
+        self._reset_after_fork()
         with self._lock:
             if self._store is None:
                 self._store = configured_store()
@@ -213,11 +231,21 @@ class FactoryHub:
     def options(self, group):
         return {**DEFAULTS, **self.settings().get("groups", {}).get(group, {}), **self.menu.factory_options(group)}
 
+    def ack_options(self, group):
+        # Read only for explicit notices and the poller, never normal translations.
+        shared = self.store.get("ack-settings") or {}
+        return {**self.options(group), **shared.get("groups", {}).get(group, {})}
+
+    @staticmethod
+    def ack_settings_version(document):
+        return hashlib.sha256(encode(document or {}).encode()).hexdigest()[:24]
+
     def _rev_key(self, group, message):
         return "revision:" + hashlib.sha256((group + ":" + message).encode()).hexdigest()
 
     @property
     def revisions(self):
+        self._reset_after_fork()
         # Same local persistence boundary as the durable LINE outbox. Optional
         # cloud interaction storage must not stop core translation during outage.
         path = str(queue.DB_PATH) + ".revisions"
@@ -349,7 +377,8 @@ class FactoryHub:
                     cache.pop(token, None)
 
     def _wants_notice(self, group, record):
-        return bool(self.menu.notice_rows(group, record.get("original", ""), record.get("menu_kind", "text")))
+        return bool(self.menu.notice_rows(group, record.get("original", ""), record.get("menu_kind", "text"),
+                                          requested=bool(record.get("notice_requested"))))
 
     @staticmethod
     def _short(value, units=160):
@@ -369,7 +398,7 @@ class FactoryHub:
 
     def _notice_footer(self, token, record):
         buttons = [(row["label"], row["action"]) for row in self.menu.notice_rows(
-            record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"))]
+            record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"), requested=True)]
         return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
             {"type": "text", "text": "作業確認 / Konfirmasi", "size": "sm", "weight": "bold"},
             *[{"type": "button", "height": "sm", "style": "secondary",
@@ -436,14 +465,28 @@ class FactoryHub:
         notice = None
         if self._wants_notice(group, record):
             record["_notice_prepared"] = True
-            members = self.h.get("group_user_names", {}).get(group, {})
+            members = record.get("expected", self.h.get("group_user_names", {}).get(group, {}))
             created = time.time()
             sender_id = (record.get("factory_event") or {}).get("user_id") or record.get("user_id", "")
             notice = {**record, "created_at": created, "expires_at": created + NOTICE_TTL,
                       "sender_id": sender_id, "sender_name": self._member_name(group, sender_id), "responses": {},
                       "delivery_state": "prepared",
-                      "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid)},
-                      "roster_basis": "known_chat_members"}
+                      "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid) and uid != sender_id},
+                      "roster_basis": record.get("roster_basis", "known_chat_members")}
+            if record.get("notice_command"):
+                options = self.ack_options(group)
+                notice.update(wake_at=created, reminder_state="waiting_delivery",
+                              reminder_minutes=options["ack_reminder_minutes"] if options["ack_reminder_enabled"] else 0)
+                body = str(record.get("original", "")) + "\n\n" + str(record.get("translated", ""))
+                heading = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n"
+                if delivery.utf16_units(heading + body) <= 1800:
+                    messages = [self._notice_card(token, heading + body, notice)]
+                else:
+                    messages = [TextMessage(text=part) for part in delivery.split_text(body)]
+                    messages.append(self._notice_card(token, heading + self._short(record.get("original"), 250), notice))
+                if len(messages) > 5:
+                    raise ValueError("通知與譯文過長，請分成較短的 /ack 通知。")
+                notice["initial_messages"] = [message.to_dict() for message in messages]
         self.store.save_interaction(record, remaining, source_key=source_key, notice=notice)
         return record
 
@@ -530,7 +573,7 @@ class FactoryHub:
                   payload.get("transcribed_text") or payload.get("document_text") or ""),
                   "translated": text, "tgt": (payload.get("target_langs") or [""])[0], "menu_kind": kind}
         try:
-            if self.menu.needs_context(group, kind):
+            if self.menu.needs_context(group, kind) or payload.get("notice_requested"):
                 token, record = self._context_for_delivery(messages, payload, text)
         except StoreError:
             self.app.logger.warning("[FactoryTools] interaction buttons unavailable; translation delivery continues")
@@ -622,6 +665,9 @@ class FactoryHub:
 
     def command(self, event):
         text = str(field(field(event, "message", {}), "text", "") or "").strip()
+        match = re.fullmatch(r"/(?:ack|確認|确认)(?:\s+([\s\S]*))?", text, re.I)
+        if match:
+            return self._notice_command(event, (match.group(1) or "").strip())
         if text.casefold() not in {"/factory", "/工廠", "/qr", "/掃碼"}:
             return False
         group, uid = source_ids(event)
@@ -632,6 +678,103 @@ class FactoryHub:
         self._reply(event, "🏭 工廠工具 / Alat pabrik\n掃描站別、查看作業說明與雙語翻譯。\n"
                           "Pindai stasiun, lihat petunjuk, dan terjemahkan.\n" + url, url=url)
         return True
+
+    def _notice_command(self, event, content):
+        group, uid = source_ids(event)
+        if not group.startswith(("C", "R")) or not _USER.fullmatch(uid):
+            self._reply(event, "請在群組使用 /ack 通知內容。\nGunakan /ack isi pesan di grup.")
+            return True
+        if not content:
+            self._reply(event, "發起作業確認：/ack 通知內容\n也可使用 /確認 通知內容\n"
+                              "例如：/ack 今天下班前請完成設備檢查。\nBuat konfirmasi: /ack isi pesan")
+            return True
+        if delivery.utf16_units(content) > 1500:
+            self._reply(event, "通知內容最多 1500 個 LINE 字元，請分段發起。\nMaksimal 1500 karakter per pemberitahuan.")
+            return True
+        rows = self.menu.notice_rows(group, content, requested=True)
+        if not any(row["action"] in {"factory_ack", "factory_help"} for row in rows):
+            self._reply(event, "此群組未啟用作業確認，請在後台「快捷鍵」啟用指令確認與回覆按鈕。\nKonfirmasi belum diaktifkan untuk grup ini.")
+            return True
+        metadata = self.payload_metadata() or {"group_id": group, "user_id": uid,
+                                                "message_id": str(field(field(event, "message", {}), "id", "")),
+                                                "identity": event_identity(event)}
+        identity = metadata.get("identity") or str(field(event, "webhook_event_id") or "")
+        if not identity:
+            raise ValueError("通知缺少 LINE 訊息識別碼。")
+        token = hashlib.sha256((group + ":ack:" + identity).encode()).hexdigest()[:24]
+        key = "notice:" + group + ":" + token
+        try:
+            existing = self.store.get(key)
+            if not existing:
+                src, translated = self._translate_notice(group, uid, content)
+                self.assert_current({"factory_event": metadata})
+                members = dict(self.h.get("group_user_names", {}).get(group, {}))
+                basis = "known_chat_members"
+                try:
+                    ids = self.h.get("_factory_member_ids", line_ack_reminders.member_ids)(group)
+                    members = {member: members.get(member) or self._member_name(group, member)
+                               for member in ids if isinstance(member, str) and _USER.fullmatch(member)}
+                    basis = "line_group_members"
+                except Exception:
+                    self.app.logger.info("[FactoryAck] using known chat member snapshot")
+                departed = self.store.get("members-left:" + group) or {}
+                members = {member: name for member, name in members.items() if member not in departed and member != uid}
+                self.save_context(token, {"group_id": group, "user_id": uid, "original": content,
+                    "translated": translated, "src": src, "msg_id": metadata.get("message_id", ""),
+                    "factory_event": metadata, "expires_at": time.time() + NOTICE_TTL,
+                    "notice_requested": True, "notice_command": True, "expected": members, "roster_basis": basis})
+            self.reminders.process(key)
+            self.reminder_worker.start()
+        except StoreError:
+            self._reply(event, "通知尚未確認建立成功，請稍後重試。\nPemberitahuan belum terkonfirmasi; coba lagi nanti.",
+                        retry_suffix=":ack-storage-error")
+            raise
+        except ValueError as exc:
+            self._reply(event, str(exc), retry_suffix=":ack-input-error")
+        return True
+
+    def _translate_notice(self, group, uid, content):
+        """Use the existing translation pipeline with isolated thread context."""
+        local = self.h.get("_tl")
+        previous = dict(local.__dict__) if local is not None else None
+        try:
+            if local is not None:
+                local.__dict__.clear()
+                local.group_id, local.user_id = group, uid
+                local.from_image_ocr, local.line_mentions = False, []
+                if callable(self.h.get("get_group_tone")):
+                    local.tone, local.tone_custom = self.h["get_group_tone"](group)
+            src = self.h.get("detect_language", lambda _: "zh")(content)
+            configured = self.h.get("get_group_target_langs", lambda _: ["id"])(group)
+            targets = [lang for lang in configured if lang != src]
+            if src != "zh" and "zh" not in targets:
+                targets.insert(0, "zh")
+            if not targets:
+                return src, ""
+            if callable(self.h.get("translate_multi")):
+                result = self.h["translate_multi"](content, src, targets)
+            else:
+                result = [(target, self.h["translate"](content, src, target)) for target in targets]
+            valid = {lang: value for lang, value in result if value and not self.h.get(
+                "_is_translation_failure_sentinel", lambda _: False)(value)}
+            if any(target not in valid for target in targets):
+                raise StoreError("通知翻譯未完成，尚未建立確認。")
+            return src, "\n\n".join("[" + target + "] " + valid[target] for target in targets)
+        finally:
+            if local is not None:
+                local.__dict__.clear()
+                local.__dict__.update(previous)
+
+    def member_presence(self, group, uid, *, left, timestamp=None):
+        if _USER.fullmatch(str(uid or "")):
+            def change(row):
+                row = row or {}
+                if left:
+                    row[uid] = timestamp or time.time()
+                else:
+                    row.pop(uid, None)
+                return row
+            self.store.update("members-left:" + group, change, 30 * 86400)
 
     def postback(self, event, params):
         action = params.get("action", "")
@@ -719,7 +862,13 @@ class FactoryHub:
         responses = notice.get("responses", {})
         understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
         help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
-        pending = [name for uid, name in notice.get("expected", {}).items() if uid not in responses]
+        try:
+            departed = self.store.get("members-left:" + notice["group_id"]) or {}
+        except StoreError:
+            # The receipt is already durable; an optional roster refresh must
+            # never report that the user's successful acknowledgement was lost.
+            departed = {}
+        pending = [notice["expected"][uid] for uid in line_ack_reminders.pending_ids(notice, departed)]
         sender_id = notice.get("sender_id") or (notice.get("factory_event") or {}).get("user_id", "")
         sender = notice.get("sender_name") or self._member_name(notice["group_id"], sender_id)
         text = (heading + "\n通知 / Pesan #" + notice["token"][:6] + "\n發起人 / Pengirim: " + sender +
@@ -810,11 +959,14 @@ class FactoryHub:
             storage = self.store.kind
             path = self.store.path or ""
             persistent = storage == "upstash" or path.startswith(("/var/data/", "/data/"))
-            store_error = "" if persistent else "目前使用本機儲存；Render 免費主機重新部署可能清除互動紀錄。"
+            store_error = "" if persistent else "目前使用本機資料庫；請確認資料庫路徑位於持久磁碟。"
         except Exception:
             storage, persistent, store_error = "unavailable", False, "工廠工具儲存無法連線。"
         return {"build": BUILD_ID, "liff_configured": bool(self.h.get("LIFF_ID")), "storage": storage,
                 "persistent": persistent, "storage_message": store_error,
+                "ack_worker_enabled": os.environ.get("FACTORY_ACK_WORKER_ENABLED", os.environ.get("REMINDERS_WORKER_ENABLED", "1")) != "0",
+                "ack_last_check_at": self.reminder_worker.last_check_at,
+                "ack_worker_error": self.reminder_worker.last_error,
                 "edit_event_supported": hasattr(webhooks, "MessageEditedEvent"),
                 "native_mentions_supported": hasattr(messaging, "TextMessageV2"),
                 "form_identity_configured": bool(os.environ.get("LINE_LOGIN_CHANNEL_ID", "").strip()),
@@ -829,6 +981,8 @@ class FactoryHub:
             raise ValueError("設定已變更，請重新整理後再修改，避免覆蓋其他管理員的更新。")
         result = copy.deepcopy(previous)
         group = data.get("group_id", "")
+        ack_before = None
+        ack_update = None
         if "options" in data:
             groups = self.h["_reminder_catalog"]()
             if group not in groups:
@@ -838,12 +992,22 @@ class FactoryHub:
                 raise ValueError("公告按鈕、分享與工具入口請統一到「快捷鍵」設定。")
             if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS):
                 raise ValueError("功能設定包含未知欄位。")
-            options = {**self.options(group), **supplied}
-            if options["translation_mode"] not in {"all", "mentioned"} or options["acknowledgements"] not in {"off", "work", "all"}:
+            touches_ack = bool(set(supplied) & {"ack_reminder_enabled", "ack_reminder_minutes"})
+            ack_before = self.store.get("ack-settings") if touches_ack else None
+            options = {**self.options(group), **(ack_before or {}).get("groups", {}).get(group, {}), **supplied}
+            if options["translation_mode"] not in {"all", "mentioned"} or options["acknowledgements"] not in {"off", "command"}:
                 raise ValueError("翻譯模式或確認模式不正確。")
-            for key in ("edit_translation", "native_mentions", "sharing", "station_tools"):
+            for key in ("edit_translation", "native_mentions", "sharing", "station_tools", "ack_reminder_enabled"):
                 if type(options[key]) is not bool:
                     raise ValueError("開關值必須是布林值。")
+            if type(options["ack_reminder_minutes"]) is not int or not 1 <= options["ack_reminder_minutes"] <= 10079:
+                raise ValueError("未回覆提醒時間須為 1～10079 分鐘的整數。")
+            if touches_ack:
+                if data.get("expected_ack_version") != self.ack_settings_version(ack_before):
+                    raise ValueError("提醒設定已變更，請重新整理後再儲存。")
+                ack_update = copy.deepcopy(ack_before or {"groups": {}})
+                ack_update.setdefault("groups", {})[group] = {
+                    key: options[key] for key in ("ack_reminder_enabled", "ack_reminder_minutes")}
             result.setdefault("groups", {})[group] = options
         if "stations" in data:
             items = data["stations"]
@@ -880,6 +1044,8 @@ class FactoryHub:
         if not self.h["save_settings"](force=True):
             self.h["factory_line_settings"] = previous
             raise StoreError("設定未確認持久儲存，已保留原設定。")
+        if ack_update is not None and not self.store.compare_swap("ack-settings", ack_before, ack_update, 10 * 365 * 86400):
+            raise ValueError("其他管理員已更新提醒設定，請重新整理確認後再儲存。")
         return result
 
     def settings_version(self):
@@ -963,8 +1129,10 @@ class FactoryHub:
                 with self.h["_state_lock"]:
                     self.update_settings(request.get_json(silent=True))
             groups = self.h["_reminder_catalog"]()
+            ack_settings = self.store.get("ack-settings")
             return jsonify(ok=True, settings=self.settings(), defaults=DEFAULTS,
                            settings_version=self.settings_version(),
+                           ack_settings=ack_settings or {}, ack_settings_version=self.ack_settings_version(ack_settings),
                            forms=[{"id": fid, "title": f.get("title_zh", fid)} for fid, f in self.h.get("forms_data", {}).items() if f.get("status") == "active"],
                            groups=[{"id": gid, "name": data["name"]} for gid, data in groups.items()],
                            readiness=self.readiness())
@@ -995,9 +1163,13 @@ class FactoryHub:
             if group not in catalog:
                 raise ValueError("請選擇群組。")
             rows = self.store.recent("notice:" + group, 100)
+            departed = self.store.get("members-left:" + group) or {}
             for row in rows:
                 row["expired"] = float(row.get("created_at", 0)) + NOTICE_TTL <= time.time()
                 row["current"] = not row["expired"] and self.current(row.get("factory_event"))
+                row["pending_ids"] = line_ack_reminders.pending_ids(row, departed)
+                for private in ("initial_messages", "pending_batch", "lease_id"):
+                    row.pop(private, None)
             return jsonify(ok=True, notices=rows, group_id=group, group_name=catalog[group]["name"],
                            checked_at=time.time(), build_id=BUILD_ID)
 
@@ -1088,6 +1260,7 @@ def install(app, host, store=None):
     hub = FactoryHub(app, host, store)
     hub.register_routes()
     app.extensions["line_factory"] = hub
+    app.before_request(hub.reminder_worker.start)
     # Explicit registration: edited text has its own event class and identity.
     try:
         from linebot.v3.webhooks import MessageEditedEvent

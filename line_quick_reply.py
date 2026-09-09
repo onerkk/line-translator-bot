@@ -43,8 +43,10 @@ def short(text, units=20):
 def clean_profile(raw):
     if not isinstance(raw, dict) or type(raw.get("enabled")) is not bool:
         raise ValueError("請設定快捷選單總開關。")
-    mode = raw.get("acknowledgements", "work")
-    if mode not in {"off", "work", "all"}:
+    mode = raw.get("acknowledgements", "command")
+    if mode in {"work", "all"}:
+        mode = "command"  # Migrate automatic cards without resetting button choices.
+    if mode not in {"off", "command"}:
         raise ValueError("作業確認模式不正確。")
     if not isinstance(raw.get("items"), list) or len(raw["items"]) > 60:
         raise ValueError("快捷鍵清單最多 60 筆。")
@@ -144,6 +146,10 @@ class Menu:
     def document(self):
         saved = self.h.get(KEY)
         if isinstance(saved, dict) and saved.get("schema") == SCHEMA:
+            saved = copy.deepcopy(saved)
+            for profile in [saved["default"], *saved.get("groups", {}).values()]:
+                if profile.get("acknowledgements", "work") in {"work", "all"}:
+                    profile["acknowledgements"] = "command"
             return saved
         groups = set((self.h.get("factory_line_settings") or {}).get("groups", {}))
         for name in ("group_qr_settings", "group_image_translation_actions_settings", "group_image_translation_action_modes",
@@ -158,6 +164,7 @@ class Menu:
         saved = self.h.get(KEY)
         if not isinstance(saved, dict) or saved.get("schema") != SCHEMA:
             return self._legacy_profile(group or "")
+        saved = self.document()
         return saved.get("groups", {}).get(group) or saved["default"]
 
     def version(self):
@@ -172,20 +179,21 @@ class Menu:
         profile = self.profile(group)
         return {"sharing": self.enabled_action(group, "factory_share"),
                 "station_tools": self.enabled_action(group, "factory_open"),
-                "acknowledgements": profile["acknowledgements"] if any(self.enabled_action(group, a) for a in NOTICE_ACTIONS) else "off"}
+                "acknowledgements": profile["acknowledgements"] if any(
+                    row["enabled"] and row["type"] == "builtin" and row["action"] in NOTICE_ACTIONS
+                    for row in profile["items"]) else "off"}
 
-    def notice_rows(self, group, original, kind="text", profile=None):
+    def notice_rows(self, group, original, kind="text", profile=None, *, requested=False):
         profile = profile or self.profile(group)
-        if not profile["enabled"] or not str(group).startswith(("C", "R")) or profile["acknowledgements"] == "off":
+        if not str(group).startswith(("C", "R")) or profile["acknowledgements"] == "off":
             return []
-        if profile["acknowledgements"] == "work" and not WORK.search(str(original or "")):
+        if not requested:
             return []
         return [r for r in profile["items"] if r["enabled"] and r["type"] == "builtin" and r["action"] in NOTICE_ACTIONS and kind in r["contexts"]]
 
     def needs_context(self, group, kind="text"):
         return any(self.enabled_action(group, a, kind) for a in BUILTINS
-                   if a not in {"handover", "interpreter", "context_qry", "tts_replay"}
-                   and (a not in NOTICE_ACTIONS or self.profile(group)["acknowledgements"] != "off"))
+                   if a not in {"handover", "interpreter", "context_qry", "tts_replay"} | NOTICE_ACTIONS)
 
     def actions(self, group, record=None, token=None, kind="text", profile=None, preview=False):
         profile = profile or self.profile(group)
@@ -193,7 +201,8 @@ class Menu:
             return []
         record = record or {}
         result, seen = [], set()
-        notice_allowed = {r["action"] for r in self.notice_rows(group, record.get("original"), kind, profile)}
+        notice_allowed = {r["action"] for r in self.notice_rows(group, record.get("original"), kind, profile,
+                                                              requested=bool(record.get("notice_requested")))}
         for row in profile["items"]:
             if not row["enabled"] or kind not in row["contexts"]:
                 continue
@@ -349,7 +358,10 @@ class Menu:
                 kind = "image" if data.get("kind") == "image" else "text"
                 record = {"original": "PMI ABC123 入庫，請確認", "translated": "Periksa PMI ABC123 sebelum masuk gudang.",
                           "tgt": "id", "menu_overlay_token": "preview_image" if kind == "image" else None}
-                rows = self.actions(group, record, "preview_context", kind, profile)
+                if data.get("kind") == "ack":
+                    rows = self.notice_rows(group, record["original"], "text", profile, requested=True)
+                else:
+                    rows = self.actions(group, record, "preview_context", kind, profile)
                 size = 12 if len(rows) > 13 else 13
                 return jsonify(ok=True, pages=[[r["label"] for r in rows[i:i + size]] for i in range(0, len(rows), size)],
                                count=len(rows))

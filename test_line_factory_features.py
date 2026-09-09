@@ -42,6 +42,7 @@ def storage(request, tmp_path):
 
 @pytest.fixture
 def hub(storage, monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTORY_ACK_WORKER_ENABLED", "0")
     monkeypatch.setattr(queue, "DB_PATH", str(tmp_path / "queue.db"))
     app = Flask(__name__)
     host = {"factory_line_settings": {"groups": {}, "stations": []},
@@ -73,8 +74,15 @@ def notice(hub):
     with hub.message_scope(event(), "text") as active:
         assert active
         payload = {"group_id": GROUP, "user_id": USER, "message_id": "123", "source_text": "PMI一定要檢測。",
+                   "notice_requested": True,
                    "factory_event": hub.payload_metadata(), "target_langs": ["id"], "src_lang": "zh"}
-        messages = hub.decorate_delivery([TextMessage(text="Pemeriksaan PMI wajib dilakukan.")], payload, "Pemeriksaan PMI wajib dilakukan.")
+        token = "explicit_notice_context"
+        hub.save_context(token, {"group_id": GROUP, "user_id": USER, "msg_id": "123",
+            "original": payload["source_text"], "translated": "Pemeriksaan PMI wajib dilakukan.",
+            "notice_requested": True, "expires_at": time.time() + 1800})
+        card = TextMessage(text="Pemeriksaan PMI wajib dilakukan.", quick_reply=QuickReply(items=[
+            QuickReplyItem(action=PostbackAction(label="確認", data="action=factory_receipts&token=" + token))]))
+        messages = hub.decorate_delivery([card], payload, "Pemeriksaan PMI wajib dilakukan.")
     qr = messages[-1].quick_reply.items
     token = dict(parse_qs(qr[0].action.data))["token"][0]
     return token, payload, messages
