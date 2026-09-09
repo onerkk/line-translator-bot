@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-09.ack118-known-zero-stop
+// FACTORY_ADMIN_BUILD: 2026-09-09.ack119-pending-mentions
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 (function(){
   'use strict';
@@ -64,7 +64,7 @@
 <label>提醒間隔（分鐘）<input id="fa-ack-minutes" type="number" min="1" max="10079" step="1" required></label>
 <label><input type="checkbox" id="fa-ack-repeat">持續提醒，直到已知成員未回覆為 0 或手動停止</label>
 <p class="factory-hint">新通知按此間隔首次提醒；勾選持續提醒後，每輪會重新排除已回覆者，最長至通知 7 天有效期。取消勾選則提醒一次。可在下方單獨停止某筆通知；取消「自動 @ 提醒」會關閉整個群組的後續提醒。間隔設定適用於新通知。</p>
-<p class="factory-hint">已知成員未回覆為 0 時，立即停止此通知的提醒，即使完整名單尚未確認也會停止。發起人、機器人與已離群者不列入待回覆。仍有已知成員未回覆且名單不完整時，該輪會用 @All 提醒；名單完整後改為個別標記。</p>
+<p class="factory-hint">每輪重新提醒時，僅以真正的 LINE @ 標記仍未回覆的已知成員；名單不完整也不改用 @All。已知成員未回覆為 0 時立即停止。發起人、本機器人、已回覆及已離群者不列入提醒對象。</p>
 <button id="fa-save-options" type="submit">儲存群組設定</button></form></section>
 <section class="factory-card"><h2>已辨識的群組成員</h2><p class="factory-hint">成員發言、加入、按確認卡，或被 LINE 原生 @ 單獨標記時會自動記錄。尚未辨識者可在群組發一個字，或由您逐一 @；@All 不會提供每人的身分。</p><button id="fa-load-members" type="button" class="factory-secondary">重新讀取名單</button><div id="fa-members"></div></section>
 <section class="factory-card" id="fa-station-section"><h2>設備、站別與作業說明</h2><p class="factory-hint">既有設備詞庫可直接查閱；自訂資料可指定群組。作業說明請填入實際核准內容。</p><div id="fa-station-list" class="factory-table-wrap"></div>
@@ -176,10 +176,11 @@
         const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
         if(incomplete)card.append(node('p',(Number(unknown)>0?'⚠️ 名單不完整：另有 '+unknown+' 人尚未取得身分。':'ℹ️ 名單完整性尚未確認，目前只列出已辨識成員。')+'已知成員未回覆為 0 即自動停止提醒。','factory-hint'));
         if(row.roster_checked_at)card.append(node('p','名單最近補查：'+formatTime(row.roster_checked_at),'factory-hint'));
-        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待提醒',repeat_pending:'持續提醒中，等待下一輪',sending:'分批提醒中',sent:'已完成個別 @ 提醒',sent_all:'已用 @All 補提醒一次（名單不完整）',no_pending:'已知成員未回覆為 0，已自動停止提醒',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
+        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待個別 @ 未回覆者',repeat_pending:'持續提醒中，下輪僅 @ 未回覆者',sending:'分批標記未回覆者',sent:'已完成個別 @ 提醒',sent_all:'舊版曾用 @All 提醒',no_pending:'已知成員未回覆為 0，已自動停止提醒',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
         const next=row.next_reminder_at||row.reminder_due_at;
         card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+' · 已提醒 '+(row.reminder_count||0)+' 輪'+(row.wake_at&&next?' · 下次 '+formatTime(next):''),'factory-hint'));
-        if(row.last_reminder_scope)card.append(node('p','上次方式：'+(row.last_reminder_scope==='all'?'@All（名單不完整）':'個別 @ 未回覆者'),'factory-hint'));
+        if(row.last_reminder_scope)card.append(node('p','上次方式：'+(row.last_reminder_scope==='all'?'舊版 @All；後續僅個別標記未回覆者':'個別 @ 未回覆者'),'factory-hint'));
+        if(row.reminder_retry_retired_at)card.append(node('p','提醒對象已更新，已取消舊請求；到下次排程時重新核對未回覆者。','factory-hint'));
         if(row.current&&row.reminder_minutes&&!row.reminder_stopped_at&&row.wake_at){
           const stop=node('button','停止此通知提醒','factory-danger');stop.type='button';stop.dataset.stopToken=row.token;
           stop.addEventListener('click',guard(stop,async()=>{await call('/receipts/stop','POST',{group_id:chosen,token:row.token});await loadReceipts();notice('已停止這筆通知的後續提醒。');}));card.append(stop);
