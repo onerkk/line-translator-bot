@@ -27,6 +27,8 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from linebot.v3.messaging import Message, TextMessage, FlexMessage, FlexContainer, QuickReply, QuickReplyItem, PostbackAction
 
 import line_quick_reply
+import line_message_ui
+import line_command_catalog
 import line_ack_reminders
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
@@ -452,20 +454,13 @@ class FactoryHub:
             record.get("group_id", ""), record.get("original", ""), record.get("menu_kind", "text"), requested=True)]
         if record.get("reminder_minutes") and not record.get("reminder_stopped_at"):
             buttons.append(("🛑 停止提醒/Stop", "factory_stop"))
-        return {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-            {"type": "text", "text": "作業確認 / Konfirmasi", "size": "sm", "weight": "bold"},
-            *[{"type": "button", "height": "sm", "style": "secondary",
-               "action": {"type": "postback", "label": label,
-                          "data": "action=" + action + "&token=" + token}}
-              for label, action in buttons],
-            {"type": "text", "text": "原通知起 7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari sejak pemberitahuan; paham bukan berarti pekerjaan selesai.",
-             "size": "xs", "wrap": True, "color": "#667085"}]}
+        buttons = [("查看回覆/Status" if action == "factory_receipts" and label in {"📋 確認/Status", "確認/Status"} else label, action) for label, action in buttons]
+        return line_message_ui.notice_footer(token, buttons)
 
     def _notice_card(self, token, text, record):
-        return FlexMessage(alt_text=self._short(text, 350), contents=FlexContainer.from_dict({
-            "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
-                {"type": "text", "text": self._short(text, 1900), "wrap": True, "size": "sm"}]},
-            "footer": self._notice_footer(token, record)}))
+        card = line_message_ui.notice_card(token, text, record, self._notice_footer(token, record))
+        return FlexMessage(alt_text=self._short("作業確認：" + str(record.get("original") or text), 350),
+                           contents=FlexContainer.from_dict(card))
 
     def _attach_notice(self, messages, token, record):
         # Embed controls in the translated bubble so another chat message cannot
@@ -726,7 +721,7 @@ class FactoryHub:
             _CONTROL_REPLY.reset(marker)
 
     def command(self, event):
-        text = str(field(field(event, "message", {}), "text", "") or "").strip()
+        text = line_command_catalog.normalize_command(str(field(field(event, "message", {}), "text", "") or "").strip())
         match = re.fullmatch(r"/(?:ack|確認|确认)(?:\s+([\s\S]*))?", text, re.I)
         if match:
             return self._notice_command(event, (match.group(1) or "").strip())
@@ -975,9 +970,9 @@ class FactoryHub:
                 "\n" + self._short(notice.get("original"), 160) +
                 "\n" + self._short(notice.get("translated"), 220) +
                 "\n\n✅ 了解/Paham (" + str(len(understood)) + "): " + self._short("、".join(understood) or "—", 300) +
-                "\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names) or "—", 300) +
+                ("\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names), 300) if help_names else "") +
                 "\n⏳ 已知成員未回覆/Belum menjawab (" + str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
-                "\n名單為本次查詢結果；按「確認」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
+                "\n名單為本次查詢結果；按「查看回覆」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
         unknown = line_ack_reminders.unknown_member_count(notice, departed)
         if unknown != 0:
             text += ("\n⚠️ 名單不完整；" + ("另有 " + str(unknown) + " 人未取得身分。" if unknown is not None else "實際未回覆總人數尚無法確認。") +

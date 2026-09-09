@@ -144,6 +144,7 @@ from io import BytesIO
 import threading
 import contextlib
 import translation_request_cache
+import line_command_catalog
 import conversation_context
 import translation_mentions
 import line_user_names
@@ -7531,17 +7532,24 @@ def _match_factory_reason_action(cell, reason_context=False):
     c = _compact_factory_reason_text(cell)
     if not c:
         return None
-    for entry in _FACTORY_REASON_ACTIONS:
-        variants = list(entry.get("variants", (entry["key"],)))
-        if reason_context:
-            variants.extend(entry.get("reason_only_variants", ()))
-        for v in variants:
-            vc = _compact_factory_reason_text(v)
-            if not vc or (not reason_context and len(vc) < 2):
-                continue
-            if c == vc:
-                return entry
-    return None
+    # Cache only the normalized rule vocabulary, never the message or decision.
+    # Include every alias in the signature so live rule edits take effect now.
+    actions = list(_FACTORY_REASON_ACTIONS)
+    signature = tuple((tuple(entry.get("variants", (entry["key"],))),
+                       tuple(entry.get("reason_only_variants", ()))) for entry in actions)
+    cached = getattr(_match_factory_reason_action, "_variant_index", None)
+    if cached is None or cached[0] != signature:
+        index = {}
+        for pos, (variants, contextual) in enumerate(signature):
+            for context in (False, True):
+                for variant in variants + (contextual if context else ()):
+                    normalized = _compact_factory_reason_text(variant)
+                    if normalized and (context or len(normalized) >= 2):
+                        index.setdefault((context, normalized), pos)
+        cached = (signature, index)
+        _match_factory_reason_action._variant_index = cached
+    pos = cached[1].get((bool(reason_context), c))
+    return actions[pos] if pos is not None else None
 
 def _is_factory_reason_header_line(line):
     s = line or ""
@@ -18038,60 +18046,6 @@ def get_help_text(group_id):
 # Switch language via postback: action=help&lang=zh|id
 # ======================================================================
 
-HELP_COMMAND_SECTIONS = [
-    {
-        "num": "I", "zh_tag": "SWITCH", "zh_name": "開關",
-        "id_tag": "SAKELAR", "id_name": "TOMBOL",
-        "items": [
-            ("/on · /off",   "開啟 / 關閉翻譯",       "Aktif / nonaktif"),
-            ("/img on·off·ask",  "圖片翻譯(ask=按鈕詢問)", "Terjemahan gambar"),
-            ("/voice on·off","語音翻譯",              "Terjemahan suara"),
-            ("/wo on·off",   "拍工單查儲區",          "Foto WO cek gudang"),
-        ],
-    },
-    {
-        "num": "II", "zh_tag": "PERSONAL", "zh_name": "個人",
-        "id_tag": "PRIBADI", "id_name": "PERSONAL",
-        "items": [
-            ("/skip",   "不翻譯我",   "Jangan terjemahkan saya"),
-            ("/unskip", "恢復翻譯",   "Terjemahkan lagi"),
-            ("/whoami", "查我的 LINE ID", "Cek LINE ID saya"),
-        ],
-    },
-    {
-        "num": "III", "zh_tag": "ADMIN", "zh_name": "管理",
-        "id_tag": "ADMIN", "id_name": "PENGELOLA",
-        "admin_only": True,
-        "items": [
-            ("/liff",         "圖形化群組設定", "Setelan grup grafis"),
-            ("/factory",      "工廠工具／掃碼", "Alat pabrik / pindai"),
-            ("/lang id,th",   "設定翻譯語言",   "Atur bahasa"),
-            ("/skipterm 詞",  "加不翻譯詞",     "Tambah kata skip"),
-            ("/skipadd 名字", "加入白名單",   "Tambah whitelist"),
-            ("/skipdel 名字", "移出白名單",   "Hapus whitelist"),
-            ("/skiplist",     "查看白名單",   "Lihat whitelist"),
-            ("/wrong 譯文",   "標最新翻譯錯", "Tandai salah"),
-            ("/wrong N 譯文", "標倒數第N筆",  "Tandai ke-N salah"),
-            ("/wrong list",   "看最近10筆",   "10 terjemahan terakhir"),
-            ("/export",       "訓練資料統計", "Statistik data"),
-            ("/export jsonl", "匯出訓練資料", "Ekspor data training"),
-        ],
-    },
-    {
-        "num": "IV", "zh_tag": "FUNCTION", "zh_name": "功能",
-        "id_tag": "FUNGSI", "id_name": "FITUR",
-        "items": [
-            ("/notice 內容",  "雙語公告",       "Pengumuman 2 bahasa"),
-            ("/qry 客戶",     "查儲區",         "Cek gudang"),
-            ("/pkg 代碼",     "查包裝碼",       "Cek kode kemasan"),
-            ("/pw1",          "班長密碼",       "Password mandor"),
-            ("/pw2",          "儲運密碼",       "Password gudang"),
-            ("/scrap",        "廢料顏色",       "Warna scrap"),
-            ("/status",       "查看狀態",       "Cek status"),
-        ],
-    },
-]
-
 # Color palette per language
 _HELP_COLORS = {
     "zh": {
@@ -18123,252 +18077,14 @@ _HELP_COLORS = {
 }
 
 
-def _help_cmd_row(cmd, desc, c):
-    """Build a single command row: [cmd_code]  [description]"""
-    return {
-        "type": "box",
-        "layout": "baseline",
-        "spacing": "md",
-        "paddingTop": "sm",
-        "paddingBottom": "sm",
-        "contents": [
-            {
-                "type": "text",
-                "text": cmd,
-                "size": "xs",
-                "color": c["cmd_color"],
-                "weight": "bold",
-                "flex": 4,
-                "wrap": False,
-            },
-            {
-                "type": "text",
-                "text": desc,
-                "size": "xs",
-                "color": c["desc_color"],
-                "flex": 5,
-                "wrap": True,
-            },
-        ],
-    }
+def build_help_flex(primary_lang="zh", is_admin=False, topic=""):
+    return line_command_catalog.build_help(primary_lang, is_admin=is_admin, topic=topic)
 
 
-def _help_section(num, tag, name, items, lang):
-    """Build one section: header row + divider + command rows."""
-    c = _HELP_COLORS[lang]
-    rows = []
-    # Section header
-    rows.append({
-        "type": "box",
-        "layout": "baseline",
-        "spacing": "sm",
-        "margin": "lg",
-        "contents": [
-            {
-                "type": "text",
-                "text": num + " / " + tag,
-                "size": "xxs",
-                "color": c["accent"],
-                "weight": "bold",
-                "flex": 0,
-            },
-            {
-                "type": "text",
-                "text": name,
-                "size": "xs",
-                "color": c["cmd_color"],
-                "weight": "bold",
-                "flex": 0,
-                "margin": "md",
-            },
-            {"type": "filler"},
-        ],
-    })
-    rows.append({
-        "type": "separator",
-        "color": c["divider"],
-        "margin": "sm",
-    })
-    for i, (cmd, zh_desc, id_desc) in enumerate(items):
-        desc = zh_desc if lang == "zh" else id_desc
-        rows.append(_help_cmd_row(cmd, desc, c))
-        if i < len(items) - 1:
-            rows.append({"type": "separator", "color": c["divider"]})
-    return rows
-
-
-def _build_help_bubble(lang, is_admin=False):
-    """Build one Flex bubble for the given language ('zh' or 'id').
-    非管理員(is_admin=False)會自動跳過標 admin_only 的 section(III / ADMIN)。
-    """
-    c = _HELP_COLORS[lang]
-    if lang == "zh":
-        hdr_meta = "COMMAND REFERENCE · ZH-TW"
-        hdr_title = "翻譯機器人"
-        hdr_sub = "不鏽鋼棒線部"
-        info_line_1 = "📷 拍工單　直接傳照片自動查儲區"
-        info_line_2 = "中文 ⇄ 印尼文　即時互譯・免指令"
-        switch_btn_label = "BAHASA INDONESIA  ›"
-        switch_lang = "id"
-    else:
-        hdr_meta = "DAFTAR PERINTAH · ID"
-        hdr_title = "Bot Penerjemah"
-        hdr_sub = "Stainless Steel"
-        info_line_1 = "📷 Foto WO　Kirim foto otomatis cek gudang"
-        info_line_2 = "Mandarin ⇄ Indonesia　Terjemah langsung"
-        switch_btn_label = "中文版 / MANDARIN  ›"
-        switch_lang = "zh"
-
-    body_contents = []
-    for sect in HELP_COMMAND_SECTIONS:
-        if sect.get("admin_only") and not is_admin:
-            continue
-        tag = sect["zh_tag"] if lang == "zh" else sect["id_tag"]
-        name = sect["zh_name"] if lang == "zh" else sect["id_name"]
-        body_contents.extend(_help_section(sect["num"], tag, name, sect["items"], lang))
-
-    # Info strip
-    body_contents.append({
-        "type": "box",
-        "layout": "vertical",
-        "margin": "xl",
-        "paddingAll": "md",
-        "backgroundColor": c["info_bg"],
-        "cornerRadius": "sm",
-        "contents": [
-            {
-                "type": "text",
-                "text": info_line_1,
-                "size": "xxs",
-                "color": c["info_text"],
-                "wrap": True,
-            },
-            {
-                "type": "text",
-                "text": info_line_2,
-                "size": "xxs",
-                "color": c["info_text"],
-                "wrap": True,
-                "margin": "xs",
-            },
-        ],
-    })
-
-    bubble = {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": c["header_bg"],
-            "paddingAll": "xl",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": hdr_meta,
-                    "size": "xxs",
-                    "color": c["accent"],
-                    "weight": "bold",
-                },
-                {
-                    "type": "text",
-                    "text": hdr_title,
-                    "size": "xl",
-                    "color": "#FFFFFF",
-                    "weight": "bold",
-                    "margin": "xs",
-                },
-                {
-                    "type": "text",
-                    "text": hdr_sub,
-                    "size": "xxs",
-                    "color": c["desc_color"],
-                    "margin": "sm",
-                },
-            ],
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": c["body_bg"],
-            "paddingAll": "xl",
-            "spacing": "none",
-            "contents": body_contents,
-        },
-        "footer": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": c["body_bg"],
-            "paddingTop": "md",
-            "paddingBottom": "lg",
-            "paddingStart": "xl",
-            "paddingEnd": "xl",
-            "contents": [
-                {
-                    "type": "separator",
-                    "color": c["divider"],
-                },
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "color": c["btn_bg"],
-                    "height": "sm",
-                    "margin": "lg",
-                    "action": {
-                        "type": "postback",
-                        "label": switch_btn_label,
-                        "data": "action=help&lang=" + switch_lang,
-                        "displayText": switch_btn_label,
-                    },
-                },
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "margin": "md",
-                    "contents": [
-                        {
-                            "type": "text",
-                            "text": "MODEL · " + VERSION.upper(),
-                            "size": "xxs",
-                            "color": c["plate_text"],
-                            "align": "start",
-                        },
-                        {
-                            "type": "text",
-                            "text": "UNIT · GRINDING-C",
-                            "size": "xxs",
-                            "color": c["plate_text"],
-                            "align": "end",
-                        },
-                    ],
-                },
-            ],
-        },
-        "styles": {
-            "header": {"separator": False},
-            "body": {"separator": False},
-            "footer": {"separator": False},
-        },
-    }
-    return bubble
-
-
-def build_help_flex(primary_lang="zh", is_admin=False):
-    """Build the complete help Flex carousel (2 bubbles)."""
-    if primary_lang == "id":
-        contents = [_build_help_bubble("id", is_admin=is_admin), _build_help_bubble("zh", is_admin=is_admin)]
-        alt_text = "🌐 Daftar Perintah Bot Penerjemah / 翻譯機器人指令"
-    else:
-        contents = [_build_help_bubble("zh", is_admin=is_admin), _build_help_bubble("id", is_admin=is_admin)]
-        alt_text = "🌐 翻譯機器人指令 / Daftar Perintah"
-    carousel = {"type": "carousel", "contents": contents}
-    return alt_text, carousel
-
-
-def send_help_flex(reply_token, primary_lang="zh", is_admin=False):
+def send_help_flex(reply_token, primary_lang="zh", is_admin=False, topic=""):
     """Send help Flex carousel via reply token."""
     try:
-        alt_text, carousel = build_help_flex(primary_lang, is_admin=is_admin)
+        alt_text, carousel = build_help_flex(primary_lang, is_admin=is_admin, topic=topic)
         with ApiClient(configuration) as api_client:
             api = MessagingApi(api_client)
             api.reply_message(ReplyMessageRequest(
@@ -18820,6 +18536,47 @@ def get_user_picture_url(chat_id, user_id):
     return pic if pic.startswith("https://") else ""
 
 
+_group_title_lock = threading.Lock()
+_group_title_pending = set()
+
+
+def _track_group_later(group_id):
+    """Group titles are display metadata; do not put an HTTP call before AI."""
+    if not group_id:
+        return
+    with _group_title_lock:
+        if group_id in group_tracking:
+            return
+        record = {"name": "", "joined_at": time.time()}
+        group_tracking[group_id] = record
+        if len(_group_title_pending) >= 4:
+            return
+        _group_title_pending.add(group_id)
+
+    def refresh():
+        try:
+            if str(group_id).startswith("C"):
+                with line_api_transport.client(ApiClient, configuration) as api_client:
+                    summary = MessagingApi(api_client).get_group_summary(group_id, _request_timeout=(1, 2))
+                with _group_title_lock:
+                    if group_tracking.get(group_id) is record and not record.get("name"):
+                        record["name"] = str(getattr(summary, "group_name", "") or "")
+        except Exception as exc:
+            logger.debug("[GroupTitle] optional lookup unavailable (%s)", type(exc).__name__)
+        finally:
+            with _group_title_lock:
+                _group_title_pending.discard(group_id)
+            try:
+                save_settings()
+            except Exception as exc:
+                logger.debug("[GroupTitle] optional persistence deferred (%s)", type(exc).__name__)
+    try:
+        threading.Thread(target=refresh, name="line-group-title", daemon=True).start()
+    except Exception:
+        with _group_title_lock:
+            _group_title_pending.discard(group_id)
+
+
 def record_user_name(group_id, user_id):
     """Record user display name and avatar (best effort)."""
     if not group_id or not user_id:
@@ -18862,7 +18619,7 @@ def mark_translation_wrong(group_id, correct_translation="", add_to_examples=Tru
     target = None
     if entry_id:
         for entry in translation_log:
-            if entry.get("id") == entry_id:
+            if entry.get("id") == entry_id and (not group_id or entry.get("group_id") == group_id):
                 target = entry
                 break
         if not target:
@@ -19324,6 +19081,10 @@ def build_group_handover_summary(group_id, hours=12, extra_rows=None):
 
 def handle_command(text, group_id, user_id=None):
     _stats_inc("commands")
+    text = line_command_catalog.normalize_command(text)
+    head = line_command_catalog.command_key(text)
+    if head not in line_command_catalog.BY_KEY:
+        return None
     cmd = text.strip().lower()
 
     # ========================================================================
@@ -19354,7 +19115,7 @@ def handle_command(text, group_id, user_id=None):
                     "⚠️ Perintah ini khusus admin\n\n"
                     "(打 /whoami 取得你的 LINE ID,請管理員加你為 admin)")
 
-    if cmd == "/help":
+    if head == "help":
         # Return sentinel; caller detects this and sends Flex instead of Text
         return "__FLEX_HELP__"
     elif cmd == "/whoami":
@@ -19368,7 +19129,7 @@ def handle_command(text, group_id, user_id=None):
         return ("🪪 你的 LINE userID:\n" + user_id + "\n\n"
                 "管理員身分 / Status admin: " + _is_a + "\n\n"
                 "(把此 ID 加到環境變數 BOOTSTRAP_ADMIN_USER_IDS 即可成為管理員)")
-    elif cmd.startswith("/wrong") or cmd.startswith("/markwrong") or cmd.startswith("/錯") or cmd.startswith("/標錯"):
+    elif head == "wrong":
         # v3.4: rich /wrong syntax (see parse_wrong_command for supported forms)
         parsed = parse_wrong_command(text)
         mode = parsed.get("mode")
@@ -19622,20 +19383,17 @@ def handle_command(text, group_id, user_id=None):
         return "\n".join(lines)
     elif cmd == "/status":
         is_on = group_settings.get(group_id, True)
-        if is_on:
-            img_on = group_img_settings.get(group_id, True)
-            img_status = "✅ 開啟 / Aktif" if img_on else "❌ 關閉 / Nonaktif"
-            audio_on = group_audio_settings.get(group_id, True)
-            audio_status = "✅ 開啟 / Aktif" if audio_on else "❌ 關閉 / Nonaktif"
-            wo_on = group_wo_settings.get(group_id, True)
-            wo_status = "✅ 開啟 / Aktif" if wo_on else "❌ 關閉 / Nonaktif"
-            return ("✅ 翻譯:開啟中 / Penerjemah aktif\n"
-                    "中文 ⇄ 🇮🇩 印尼文 / Mandarin ⇄ Indonesia\n"
-                    "🖼️ 圖片翻譯 / Terjemahan gambar:" + img_status + "\n"
-                    "🎤 語音翻譯 / Terjemahan suara:" + audio_status + "\n"
-                    "📋 拍工單查儲區 / Foto WO cek gudang:" + wo_status)
-        else:
-            return "❌ 翻譯:已關閉 / Penerjemah nonaktif"
+        mode = factory_hub.options(group_id)["translation_mode"] if factory_hub else "all"
+        modes = {"all": "全部文字 / Semua teks", "mentioned": "只翻譯 @ 機器人 / Saat bot disebut"}
+        state = lambda enabled: "開啟 / Aktif" if enabled else "關閉 / Nonaktif"
+        img_status = ("詢問後翻譯 / Tanya dahulu" if group_img_ask_settings.get(group_id, False)
+                      else state(group_img_settings.get(group_id, True)))
+        targets = get_group_target_langs(group_id)
+        return ("翻譯狀態 / Status terjemahan\n" + "總開關：" + state(is_on) +
+                "\n中文 ⇄ " + "、".join(_language_name_bilingual(code) for code in targets) +
+                "\n文字模式：" + modes.get(mode, mode) +
+                "\n圖片：" + img_status + "\n語音：" + state(group_audio_settings.get(group_id, True)) +
+                "\n工單查儲區：" + state(group_wo_settings.get(group_id, True)))
     elif cmd == "/clearcache":
         # v3.9.3: clear translation cache (e.g. after fixing a bad translation
         # that got cached, or after switching to a new model). Anyone in the
@@ -19647,7 +19405,7 @@ def handle_command(text, group_id, user_id=None):
         return f"🧹 已清除翻譯快取 / Cache terjemahan dibersihkan\n清除筆數 / Jumlah: {n}"
     elif cmd.startswith("/lang"):
         return handle_lang_command(text, group_id)
-    elif text.strip().startswith("/notice ") or text.strip().startswith("/notice\u3000"):
+    elif head == "notice":
         if not is_cmd_enabled(group_id, "notice"):
             return None
         content = text.strip()[8:].strip()
@@ -19681,13 +19439,16 @@ def handle_command(text, group_id, user_id=None):
         if not is_cmd_enabled(group_id, "pkg"):
             return None
         return handle_pkg_command(text)
+    elif head in {"img", "voice", "wo"}:
+        return line_command_catalog.usage_text(head)
     elif cmd == "/saran":
         # v3.9.39+: 改成可從後台變更的設定(external_links_settings)
         return _format_external_link_reply("saran")
     elif cmd == "/absen":
-        # v3.9.39+: 改成可從後台變更的設定
         return _format_external_link_reply("absen")
-    return None
+    if line_command_catalog.BY_KEY[head]["scope"] == "dm":
+        return "請私訊機器人使用此指令。 / Gunakan di chat pribadi.\n\n" + line_command_catalog.usage_text(head)
+    return line_command_catalog.usage_text(head)
 
 
 _WEBHOOK_INBOX = webhook_runtime.WebhookInbox(
@@ -19735,7 +19496,7 @@ def handle_message(event):
                        getattr(event.message, 'id', None))
         return
     
-    text = event.message.text.strip()
+    text = line_command_catalog.normalize_command(event.message.text.strip())
     if factory_hub and factory_hub.command(event):
         return
     # v3.9.56: 全面短文翻譯 — 改用 has_translatable_content,
@@ -19808,33 +19569,11 @@ def handle_message(event):
         # ═══ v3.24: Rich Menu 商用按鈕回覆(販售版選單按鈕送出這些關鍵字)═══
         _menu_reply = None
         _t_exact = text.strip()
-        if _t_exact in ("功能說明", "功能说明"):
-            _menu_reply = (
-                "🌐 翻譯小助手 功能一覽\n"
-                "─────────────\n"
-                "💬 文字即時翻譯:中文 ⇄ 印尼/越南/泰/菲律賓/英/日/韓/印地\n"
-                "🌍 群組多語廣播(最多 5 語同時)\n"
-                "📷 圖片翻譯:工單/告示拍照即譯,保留版面\n"
-                "🎤 語音翻譯:語音訊息自動轉文字翻譯\n"
-                "🔊 TTS 語音播報譯文\n"
-                "📋 工單偵測 + 客戶儲區查詢(/qry)\n"
-                "🏭 232 條工廠專業術語庫(吊運/製程/設備)\n"
-                "🧠 翻譯記憶:重複句 0 秒即回\n"
-                "⚙️ 群組打「設定」開語言面板;/help 看完整指令"
-            )
+        if _t_exact in ("功能說明", "功能说明", "使用說明", "使用说明"):
+            send_help_flex(event.reply_token, is_admin=is_group_admin(user_id))
+            return
         elif _t_exact in ("收費標準", "收费标准"):
             _menu_reply = service_price_text
-        elif _t_exact in ("使用說明", "使用说明"):
-            _menu_reply = (
-                "📖 使用說明\n"
-                "─────────────\n"
-                "1️⃣ 請先與我聯絡開通服務\n"
-                "　 LINE ID: moneyshop\n"
-                "2️⃣ 加機器人好友 @764menna\n"
-                "3️⃣ 把機器人邀進你的群組\n"
-                "4️⃣ 群組打「設定」選擇翻譯語言,即可使用\n"
-                "有任何問題隨時私訊我 🙌"
-            )
         elif _t_exact in ("與我聯絡", "与我联络", "聯絡我"):
             _menu_reply = (
                 "📞 與我聯絡\n"
@@ -19844,7 +19583,7 @@ def handle_message(event):
                 "🛍️ 蝦皮賣場:https://tw.shp.ee/7f6j5kVT\n"
                 "看到訊息會盡快回覆您!"
             )
-        elif cmd.startswith("/setprice"):
+        elif line_command_catalog.command_key(text) == "setprice":
             # 管理員修改收費標準文字(持久化,重啟不丟)
             if not is_group_admin(user_id):
                 _menu_reply = "⚠️ 此指令僅限管理員"
@@ -19864,7 +19603,7 @@ def handle_message(event):
         # /audit [n]      抽最近 n 句(預設 10)翻譯讓懂雙語的人檢查
         # /mark 3 o       標第 3 句正確    /mark 3 x  標第 3 句錯誤
         # /auditstats     看累計人工準確率(persisted,重啟不丟)
-        elif cmd.startswith("/audit") and not cmd.startswith("/auditstats"):
+        elif line_command_catalog.command_key(text) == "audit":
             if not is_group_admin(user_id):
                 _menu_reply = "⚠️ 此指令僅限管理員"
             else:
@@ -19880,7 +19619,8 @@ def handle_message(event):
                 if not _sample:
                     _menu_reply = "目前沒有可抽樣的翻譯紀錄(或全部已標註過)"
                 else:
-                    globals()["_audit_last_sample"] = _sample
+                    samples = globals().setdefault("_audit_samples_by_user", {})
+                    samples[user_id] = (time.time(), _sample)
                     _lines = ["🔍 人工抽檢 %d 句(請懂雙語的人核對):" % len(_sample), "─────"]
                     for _i, _e in enumerate(_sample, 1):
                         _lines.append("%d. [%s→%s] %s\n   → %s" % (
@@ -19890,12 +19630,14 @@ def handle_message(event):
                     _lines.append("標註:/mark 編號 o(對)或 x(錯)")
                     _lines.append("例:/mark 1 o   /mark 3 x")
                     _menu_reply = "\n".join(_lines)
-        elif cmd.startswith("/mark "):
+        elif line_command_catalog.command_key(text) == "mark":
             if not is_group_admin(user_id):
                 _menu_reply = "⚠️ 此指令僅限管理員"
             else:
                 _parts = cmd.split()
-                _sample = globals().get("_audit_last_sample") or []
+                _sample_at, _sample = (globals().get("_audit_samples_by_user", {}).get(user_id) or (0, []))
+                if time.time() - _sample_at > 3600:
+                    _sample = []
                 if len(_parts) != 3 or _parts[2] not in ("o", "x") or not _parts[1].isdigit():
                     _menu_reply = "格式:/mark 編號 o|x(先用 /audit 抽樣)"
                 elif not (1 <= int(_parts[1]) <= len(_sample)):
@@ -19936,7 +19678,7 @@ def handle_message(event):
                     _lines.append(("✅ 實測合成成功!" + str(_u)) if _u
                                   else "❌ 實測合成失敗 — 看 Render log 的 OpenAI TTS/ffmpeg 錯誤行")
                 _menu_reply = "\n".join(_lines)
-        elif cmd == "/auditstats":
+        elif cmd == "/auditstats" and is_group_admin(user_id):
             _ok = bot_stats.get("audit_ok", 0)
             _bad = bot_stats.get("audit_bad", 0)
             _tot = _ok + _bad
@@ -19957,13 +19699,14 @@ def handle_message(event):
                 ))
             return
 
-        if cmd == "/help":
+        if line_command_catalog.command_key(text) == "help":
             # DM /help also uses Flex carousel (ZH + ID bilingual)
             # 非管理員不顯示 III / ADMIN 區塊
             send_help_flex(event.reply_token, primary_lang="zh",
-                           is_admin=is_group_admin(user_id))
+                           is_admin=is_group_admin(user_id),
+                           topic=text.partition(" ")[2])
             return
-        if cmd.startswith("/to"):
+        if line_command_catalog.command_key(text) == "to":
             with ApiClient(configuration) as api_client:
                 api = MessagingApi(api_client)
                 api.reply_message(ReplyMessageRequest(
@@ -19975,7 +19718,7 @@ def handle_message(event):
                 ))
             return
         # DM: handle /qry command
-        if text.strip().lower().startswith("/qry"):
+        if line_command_catalog.command_key(text) == "qry":
             qry_result = handle_qry_command(text)
             if qry_result:
                 with ApiClient(configuration) as api_client:
@@ -19993,7 +19736,7 @@ def handle_message(event):
             dm_cmd_result = "🏭 儲運密碼 / PW Gudang\n" + "=" * 18 + "\n" + pw2_text + "\n" + "=" * 18
         elif cmd == "/scrap":
             dm_cmd_result = scrap_text
-        elif text.strip().lower().startswith("/pkg"):
+        elif line_command_catalog.command_key(text) == "pkg":
             dm_cmd_result = handle_pkg_command(text)
         if dm_cmd_result:
             with ApiClient(configuration) as api_client:
@@ -20058,6 +19801,16 @@ def handle_message(event):
                         "⚠️ Ringkasan serah terima hanya dapat digunakan di grup."
                     ))],
                 ))
+            return
+
+        _catalog_key = line_command_catalog.command_key(text)
+        if _catalog_key in line_command_catalog.BY_KEY:
+            _scope = line_command_catalog.BY_KEY[_catalog_key]["scope"]
+            _info = ("請在群組使用此指令。 / Gunakan perintah ini di grup.\n\n"
+                     if _scope == "group" else ("此指令僅限管理員。 / Khusus admin.\n\n" if line_command_catalog.BY_KEY[_catalog_key]["admin"] and not is_group_admin(user_id) else "請依下方格式使用。 / Ikuti format berikut.\n\n"))
+            _send_reply_with_push_fallback(reply_token=event.reply_token, target_id=user_id,
+                message_obj=TextMessage(text=_info + line_command_catalog.usage_text(_catalog_key)),
+                fallback_text=_info + line_command_catalog.usage_text(_catalog_key))
             return
 
         # Unrecognized slash-prefixed text is still message content. Recognized
@@ -20188,16 +19941,7 @@ def handle_message(event):
         record_user_name(group_id, user_id)
     # Track group for admin panel
     if group_id and not is_dm and group_id not in group_tracking:
-        gname = ""
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                summary = api.get_group_summary(group_id)
-                gname = summary.group_name or ""
-        except Exception:
-            pass
-        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
-        save_settings()
+        _track_group_later(group_id)
 
     if text.startswith("/"):
         # Set tone before commands that may translate (e.g. /notice)
@@ -20209,7 +19953,7 @@ def handle_message(event):
             # /help uses Flex Message carousel (ZH + ID bilingual)
             # 非管理員不顯示 III / ADMIN 區塊
             send_help_flex(event.reply_token, primary_lang="zh",
-                           is_admin=is_group_admin(user_id))
+                           is_admin=is_group_admin(user_id), topic=text.partition(" ")[2])
         elif cmd_result == "__PERSONAL_LANGUAGE_MENU__":
             current = user_languages.get(user_id) or dm_target_lang.get(user_id)
             with ApiClient(configuration) as api_client:
@@ -21906,16 +21650,7 @@ if JoinEvent:
         group_id = getattr(source, 'group_id', None) or getattr(source, 'room_id', None)
         if not group_id:
             return
-        gname = ""
-        try:
-            with ApiClient(configuration) as api_client:
-                api = MessagingApi(api_client)
-                summary = api.get_group_summary(group_id)
-                gname = summary.group_name or ""
-        except Exception:
-            pass
-        group_tracking[group_id] = {"name": gname, "joined_at": time.time()}
-        save_settings()
+        _track_group_later(group_id)
 
         # v3.10: Bot 第一次被邀請進群組時送 onboarding flex 引導選語言
         try:
@@ -22673,7 +22408,7 @@ if PostbackEvent:
             # 切換語言時也要重新檢查管理員身分(誰按按鈕就以誰的權限重建)
             _uid = getattr(event.source, "user_id", None)
             send_help_flex(event.reply_token, primary_lang=lang,
-                           is_admin=is_group_admin(_uid))
+                           is_admin=is_group_admin(_uid), topic=params.get("topic", ""))
             return
 
         # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」
@@ -23984,7 +23719,7 @@ ADMIN_HTML = r'''<!DOCTYPE html>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>翻譯Bot 管理後台</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="manifest" href="/manifest.json">
@@ -24080,12 +23815,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </style>
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
-<link rel="stylesheet" href="/static/line_factory.css?v=1">
-<script src="/static/admin_factory.js?v=20260909-ci98-lifecycle" defer></script>
+<link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
+<script src="/static/admin_factory.js?v=20260909-ui104" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
 <script src="/static/admin_quick_reply.js?v=20260909-ack1" defer></script>
+<link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">
 </head>
-<body>
+<body class="bot-admin">
 <div id="app">
 
 <!-- Login -->
@@ -34400,7 +34136,7 @@ LIFF_FORM_HTML = r"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>表單系統</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
@@ -34435,8 +34171,9 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 .form-item .sub{font-size:12px;color:#8a8a9a}
 .expired{opacity:.5}
 </style>
+<link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">
 </head>
-<body>
+<body class="bot-form">
 <div class="header">📋 表單系統 Form System</div>
 <div class="container" id="app">
 <div class="loading" id="loadingBox">載入中 Loading...</div>
@@ -34444,7 +34181,7 @@ select{appearance:none;-webkit-appearance:none;background-image:url("data:image/
 <script>
 var LIFF_ID=__LIFF_ID_JSON__;
 </script>
-<script src="/static/liff_forms.js?v=1" defer></script>
+<script src="/static/liff_forms.js?v=20260909-ui104" defer></script>
 </body>
 </html>"""
 
@@ -35777,7 +35514,7 @@ def _is_admin_only_command(text):
     """
     if not text:
         return False
-    cmd_lower = text.strip().lower()
+    cmd_lower = line_command_catalog.normalize_command(text).strip().lower()
     if cmd_lower in _ADMIN_ONLY_EQ:
         return True
     for pref in _ADMIN_ONLY_STARTSWITH:
@@ -36272,12 +36009,12 @@ def _byte_safe_truncate(s, max_bytes):
 # 所有 v2 開關(header/emphasis/quote/buttons/dynsize...)全部沿用,
 # 同名函式內升級 → 呼叫端與群組設定零改動;任何例外 fallback 舊版。
 # ═══════════════════════════════════════════════════════════════════
-_V3_BG        = "#0e1220"   # 卡片底:深靛黑
-_V3_SURFACE   = "#1a2036"   # 譯文區塊面
-_V3_SURFACE_2 = "#141a2c"   # 原文區塊面
-_V3_TEXT_SUB  = "#aeb6cc"   # 次要文字
-_V3_TEXT_MUTE = "#7c849c"   # 弱化文字
-_V3_BAR_MUTE  = "#3a4158"   # 原文左色條(中性)
+_V3_BG        = "#102637"   # 卡片底:深靛黑
+_V3_SURFACE   = "#1D3D4D"   # 譯文區塊面
+_V3_SURFACE_2 = "#142F40"   # 原文區塊面
+_V3_TEXT_SUB  = "#C2D4E0"   # 次要文字
+_V3_TEXT_MUTE = "#A6BECC"   # 弱化文字
+_V3_BAR_MUTE  = "#507283"   # 原文左色條(中性)
 
 
 def _now_hhmm_tw():
@@ -37856,7 +37593,7 @@ LIFF_SETTINGS_HTML = r"""<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>群組設定 / Setelan Grup</title>
 <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
@@ -37894,8 +37631,9 @@ LIFF_SETTINGS_HTML = r"""<!DOCTYPE html>
   .ok-toast.show { opacity:1; }
   .empty { font-size:12px; color:#9ca3af; text-align:center; padding:12px; }
 </style>
+<link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">
 </head>
-<body>
+<body class="bot-settings">
 <header>
   <h1>🌐 翻譯機器人設定</h1>
   <div class="sub">Setelan Bot Penerjemah</div>

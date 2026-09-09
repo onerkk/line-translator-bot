@@ -30,7 +30,8 @@ def test_confirmation_controls_are_in_the_message_not_only_quick_reply(hub):
         body.pop('quickReply', None)
         bodies.extend(actions(body))
     assert any('action=factory_ack&token=' + token == data for data in bodies)
-    assert any('action=factory_help&token=' + token == data for data in bodies)
+    # New notices default to Paham and status; old help postbacks stay readable.
+    assert not any('action=factory_help&token=' + token == data for data in bodies)
     assert any('action=factory_receipts&token=' + token == data for data in bodies)
 
 

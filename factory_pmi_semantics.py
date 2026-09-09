@@ -7,6 +7,7 @@ It verifies explicit action, completion state and inspection/packing order.
 from __future__ import annotations
 
 import re
+from translation_request_cache import memoize
 import unicodedata
 
 from factory_instruction_semantics import segments
@@ -180,6 +181,7 @@ def _order(text, lang):
     return ""
 
 
+@memoize
 def build_facts(source, lang):
     if lang not in {"zh", "id"}:
         return []

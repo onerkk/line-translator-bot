@@ -26,7 +26,7 @@ BUILTINS = {
     "personal": "👤 我的語言/Bahasa", "handover": "📋 交班摘要/Serah",
     "interpreter": "🎙 即時口譯/Interpret", "factory_share": "📤 分享/Bagikan",
     "factory_open": "🏭 工具/Alat", "factory_ack": "✅ 了解/Paham",
-    "factory_help": "❓ 說明/Jelaskan", "factory_receipts": "📋 確認/Status",
+    "factory_help": "❓ 說明/Jelaskan", "factory_receipts": "查看回覆/Status",
     "overlay": "🖼 圖文對照/Gambar", "context_qry": "📋 查此工單/Gudang",
     "tts_replay": "🔊 重播/Ulang",
 }
@@ -102,7 +102,7 @@ class Menu:
         items = []
         for action, label in BUILTINS.items():
             contexts = ["image"] if action == "overlay" else ["text", "image"]
-            enabled = True
+            enabled = action != "factory_help"
             if action in {"natural", "literal", "formal", "backcheck", "personal", "overlay"}:
                 if not image_on or not modes.get(action, True):
                     contexts = [k for k in contexts if k != "image"]
