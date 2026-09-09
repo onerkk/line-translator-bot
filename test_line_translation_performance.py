@@ -3,6 +3,7 @@
 AI and LINE transports are fake; no external messages or paid calls are made.
 """
 import copy
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -38,23 +39,27 @@ def test_notice_storage_does_not_delay_line_with_redundant_reads(runtime, monkey
         app.handle_message(message)
     assert TARGET in delivered_text(runtime)
     assert len(runtime.generations) == 1
-    assert calls == [("EVAL", True), ("EVAL", True), ("GET", False), ("EVAL", False)]
+    # Normal translation stores its revision and action context atomically;
+    # command-only receipts add no before/after-delivery storage operations.
+    assert calls == [("EVAL", True), ("EVAL", True)]
     timing = [r.message for r in caplog.records if "[DeliveryPerf]" in r.message]
-    assert len(timing) == 1 and "storage_calls=4" in timing[0] and "sent=none" not in timing[0]
+    assert len(timing) == 1 and "storage_calls=2" in timing[0] and "sent=none" not in timing[0]
     assert "PMI" not in timing[0] and GROUP not in timing[0]
     # LINE redelivery must not repeat a paid generation or delivery.
     app.handle_message(message)
     assert len(runtime.sends) == len(runtime.generations) == 1
     notices = app.factory_hub.store.recent("notice:" + GROUP)
-    assert len(notices) == 1 and notices[0]["delivery_state"] == "delivered"
-    # A newly posted identical notice may reuse a verified translation, while
-    # still getting its own delivery and receipt (distinct from redelivery).
+    assert notices == []
+    assert all("factory_ack" not in json.dumps(message.to_dict())
+               for _, request, _ in runtime.sends for message in request.messages)
+    # A newly posted identical message reuses verified translation, while
+    # still getting its own delivery (distinct from webhook redelivery).
     again = event()
     again.message.id = "new-notice-message"
     again.source.group_id, again.source.user_id = GROUP, USER
     app.handle_message(again)
     assert len(runtime.sends) == 2 and len(runtime.generations) == 1
-    assert len(app.factory_hub.store.recent("notice:" + GROUP)) == 2
+    assert app.factory_hub.store.recent("notice:" + GROUP) == []
 
 
 def test_atomic_registration_preserves_acknowledgements_and_source_index(storage):
@@ -196,25 +201,47 @@ def test_profile_timeout_does_not_cascade_to_three_endpoints(monkeypatch):
     assert calls == ["group"]
 
 
-def test_existing_flex_context_is_reused_and_late_media_revision_binds_receipt(hub):
+@pytest.mark.parametrize("notice_requested", [False, True], ids=["translation", "explicit-notice"])
+def test_existing_flex_context_is_reused_and_late_media_revision_binds_receipt(hub, monkeypatch, notice_requested):
     with hub.message_scope(raw_event(), "image"):
         metadata = hub.payload_metadata()
     token = "existing_media_context"
     record = hub.save_context(token, {"group_id": GROUP, "msg_id": "123", "original": "PMI 檢驗",
-                                      "translated": "Pemeriksaan PMI", "expires_at": 10**12})
+                                      "translated": "Pemeriksaan PMI", "expires_at": 10**12,
+                                      "notice_requested": notice_requested})
     hub.h["_translation_action_cache"] = {token: record}
     key = "notice:" + GROUP + ":" + token
-    hub.store.update(key, lambda row: {**row, "responses": {USER: "understood"}})
+    if notice_requested:
+        assert hub.store.get(key) is not None
+        hub.store.update(key, lambda row: {**row, "responses": {USER: "understood"}})
+    else:
+        assert hub.store.get(key) is None
     flex = app.FlexMessage(alt_text="PMI", contents=app.FlexContainer.from_dict({
         "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [
             {"type": "button", "action": {"type": "postback", "label": "翻譯",
              "data": "action=translation_variant&token=" + token}}]}}))
     payload = {"group_id": GROUP, "message_id": "123", "source_text": "PMI 檢驗", "factory_event": metadata}
-    hub.decorate_delivery([flex], payload, "Pemeriksaan PMI")
+    reads = []
+    get = hub.store.get
+    def recorded_get(name):
+        reads.append(name)
+        return get(name)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(hub.store, "get", recorded_get)
+        messages = hub.decorate_delivery([flex], payload, "Pemeriksaan PMI")
+    assert hub.store.get("context:" + token)["factory_event"] == metadata
+    assert hub.h["_translation_action_cache"][token]["factory_event"] == metadata
+    assert len(hub.store.recent("context")) == 1
     notices = hub.store.recent("notice:" + GROUP)
-    assert len(notices) == 1 and payload["factory_notice_token"] == token
-    assert notices[0]["responses"] == {USER: "understood"}
-    assert notices[0]["factory_event"] == metadata
+    if notice_requested:
+        assert len(notices) == 1 and payload["factory_notice_token"] == token
+        assert notices[0]["responses"] == {USER: "understood"}
+        assert notices[0]["factory_event"] == metadata
+        assert key in reads
+    else:
+        assert notices == [] and "factory_notice_token" not in payload
+        assert key not in reads  # No redundant lookup for a nonexistent receipt.
+        assert "factory_ack" not in json.dumps([message.to_dict() for message in messages])
 
 
 def test_remote_revision_is_checked_before_original_after_restart(hub):

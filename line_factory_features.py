@@ -532,15 +532,17 @@ class FactoryHub:
                     if metadata and not record.get("factory_event") and str(record.get("msg_id")) == str(metadata.get("message_id")):
                         record["factory_event"] = metadata
                         record = self.save_context(token, record)
-                        # Media extraction may register controls before the
-                        # delivery job supplies its revision. Bind that receipt
-                        # too, preserving any concurrently recorded responses.
-                        self.store.update("notice:" + group + ":" + token,
-                                          lambda row: {**row, "factory_event": metadata,
-                                                       "sender_id": metadata.get("user_id", ""),
-                                                       "sender_name": self._member_name(group, metadata.get("user_id", ""))}
-                                          if row and not row.get("factory_event") else row,
-                                          7 * 86400)
+                        # Only an existing receipt needs late revision binding.
+                        # Ordinary media has no receipt in command-only mode;
+                        # don't spend a cloud read looking for one. The prepared
+                        # marker also covers receipts from the older release.
+                        if record.get("_notice_prepared"):
+                            self.store.update("notice:" + group + ":" + token,
+                                              lambda row: {**row, "factory_event": metadata,
+                                                           "sender_id": metadata.get("user_id", ""),
+                                                           "sender_name": self._member_name(group, metadata.get("user_id", ""))}
+                                              if row and not row.get("factory_event") else row,
+                                              7 * 86400)
                         with self.h.get("_translation_action_lock", self._lock):
                             cache = self.h.get("_translation_action_cache", {})
                             if token in cache:

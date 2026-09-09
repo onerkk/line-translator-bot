@@ -169,21 +169,39 @@ def test_identical_display_names_keep_distinct_verified_mention_targets():
     assert [item["mentionee"]["userId"] for item in converted["substitution"].values()] == [USER, COLLEAGUE]
 
 
-def test_flex_survives_and_unconfigured_buttons_are_replaced_by_group_menu(hub):
+@pytest.mark.parametrize("notice_requested", [False, True], ids=["translation", "explicit-notice"])
+def test_flex_survives_and_unconfigured_buttons_are_replaced_by_group_menu(hub, notice_requested):
     e = event("@Adi PMI", mentions=[{"type": "user", "userId": COLLEAGUE, "index": 0, "length": 4}])
     flex = FlexMessage(alt_text="PMI", contents=FlexContainer.from_dict({"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "PMI"}]}}),
                        quick_reply=QuickReply(items=[QuickReplyItem(action=PostbackAction(label="原有按鈕", data="old=1"))]))
     with hub.message_scope(e, "text"):
         payload = {"group_id": GROUP, "message_id": "123", "source_text": "@Adi PMI", "factory_event": hub.payload_metadata()}
+        if notice_requested:
+            # The command path owns the receipt; plain translation must never
+            # infer one merely because the original contains factory terms.
+            token = "explicit_flex_context"
+            hub.save_context(token, {"group_id": GROUP, "msg_id": "123", "original": "@Adi PMI",
+                "translated": "Periksa PMI", "notice_requested": True, "expires_at": time.time() + 1800})
+            flex.quick_reply.items[0].action.data = "old=1&token=" + token
+        original_contents = copy.deepcopy(flex.contents.to_dict())
         result = hub.decorate_delivery([flex], payload, "Periksa PMI")
     restored = delivery.restore_messages([delivery.message_dict(m) for m in result])
     assert [m.type for m in restored] == ["textV2", "flex"]
     content = restored[-1].contents.to_dict()
-    assert {key: content[key] for key in flex.contents.to_dict()} == flex.contents.to_dict()
-    assert 'action=factory_ack' in json.dumps(content['footer'])
-    assert all(x.action.data != "old=1" for x in restored[-1].quick_reply.items)
+    assert {key: content[key] for key in original_contents} == original_contents
+    actions = [item.action.data for item in restored[-1].quick_reply.items]
+    assert not any(data.startswith("old=1") for data in actions)
     assert parse_qs(restored[-1].quick_reply.items[0].action.data)["mode"] == ["natural"]
-    assert any("factory_ack" in x.action.data for x in restored[-1].quick_reply.items)
+    if notice_requested:
+        assert 'action=factory_ack' in json.dumps(content['footer'])
+        assert any("factory_ack" in data for data in actions)
+        assert payload["factory_notice_token"] == token
+        assert hub.get_notice(token, GROUP)
+    else:
+        assert "footer" not in content
+        assert not any("factory_ack" in data for data in actions)
+        assert "factory_notice_token" not in payload
+        assert hub.store.recent("notice:" + GROUP) == []
 
 
 def test_acknowledgements_are_atomic_user_actions_and_replay_cannot_undo(hub, monkeypatch):

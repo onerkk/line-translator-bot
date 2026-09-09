@@ -6,6 +6,7 @@ python run_translation_offline_checks.py test_translation_speed_economy.py
 The existing SDK connection-reuse regression needs a local loopback server;
 only 127.0.0.1/::1 are allowed. No provider or LINE connection is allowed.
 """
+import importlib.util
 import os
 from pathlib import Path
 import socket
@@ -38,7 +39,10 @@ def main():
             ai_provider.PROVIDER_CONFIG_PATH = str(Path(state) / "providers.json")
             import pytest
             tests = sys.argv[1:] or sorted(path.name for path in repo.glob("test_*.py"))
-            return pytest.main(["-q", "-p", "pytest_subtests", "--tb=short", *tests])
+            # Pytest 9 ships the subtests fixture itself. Only older pytest
+            # versions need the separate plugin; never load both providers.
+            plugins = [] if importlib.util.find_spec("_pytest.subtests") else ["-p", "pytest_subtests"]
+            return pytest.main(["-q", *plugins, "--tb=short", *tests])
 
 
 if __name__ == "__main__":
