@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "9e123f6e272be7b93037fe8f3a07631fe19e42c709377b2c3119223a7e31266b",
-    "updated_at_iso": "2026-09-09T03:17:59.704892+00:00",
-    "updated_at_unix": 1788923879.704892
+    "state_hash": "b1a1f58d47ae4585b72b869b0e16c9380a3c814f903f131eaec5cf3e94a80f5c",
+    "updated_at_iso": "2026-09-09T04:55:10.563994+00:00",
+    "updated_at_unix": 1788929710.5639942
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-09 03:15:05",
+    "last_updated": "2026-09-09 04:53:28",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -194,13 +194,13 @@
     "image_translations": 4,
     "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.1460104,
-    "oai_input": 166980,
-    "oai_output": 1679,
+    "oai_cost_usd": 0.14673920000000001,
+    "oai_input": 170462,
+    "oai_output": 1706,
     "oai_reasoning": 0,
-    "text_translations": 269,
-    "tokens_completion": 19135,
-    "tokens_prompt": 4401751,
+    "text_translations": 270,
+    "tokens_completion": 19162,
+    "tokens_prompt": 4405233,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -388,12 +388,12 @@
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 0,
       "cache_write": 15633,
-      "cost_usd": 0.4022671499999999,
+      "cost_usd": 0.4029959499999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2561,
-      "tokens_prompt": 277487
+      "tokens_completion": 2588,
+      "tokens_prompt": 280969
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cost_usd": 0.6199644000000009,
@@ -559,6 +559,7 @@
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
       "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
+      "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
       "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
       "Ud6d80f6f0662aae57ef286998a0f83ad": "武駿",
