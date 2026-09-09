@@ -1,3 +1,5 @@
+// FACTORY_ADMIN_BUILD: 2026-09-09.ci98-lifecycle
+// FACTORY_ADMIN_LIFECYCLE_API: 1
 (function(){
   'use strict';
   let state=null,editing=null,ready=false,sequence=0,receiptSequence=0,receiptBusy=false,lastReceiptAt=0;
