@@ -5,6 +5,9 @@ sys.path.insert(0,str(repo))
 import pytest
 from flask import render_template, redirect, request, jsonify
 import test_line_factory_features as cases
+import line_ack_reminders
+if getattr(line_ack_reminders,'BUILD_ID',None)!=cases.factory.BUILD_ID:
+ raise RuntimeError('Reminder modules do not match. Update line_ack_reminders.py and line_factory_features.py together in the repository root.')
 from line_factory_store import FeatureStore
 path=Path(tempfile.mkdtemp(prefix='factory-ui-'))
 hub=cases.hub.__wrapped__(FeatureStore(path=path/'state.db'),pytest.MonkeyPatch(),path)
@@ -25,17 +28,32 @@ def receipt_reply():
 
 @app.route('/preview-ack-reminder',methods=['POST'])
 def reminder_due():
+ data=request.get_json(silent=True) or {}
  def unavailable(group):raise RuntimeError('LINE member IDs unavailable')
  hub.h['_factory_member_ids']=unavailable
- hub.h['_factory_member_count']=lambda group:3
+ # This scenario explicitly contains one additional unidentifiable member;
+ # earlier UI interactions must not change whether the fixture is incomplete.
+ hub.h['_factory_member_count']=lambda group:len(hub.known_members(group))+1
  sent=[]
  hub.reminders.sender=lambda group,messages,key:sent.append(messages)
- key='notice:'+cases.GROUP+':'+original
+ event=cases.event('/ack PMI 提醒測試',mid='ui-reminder-'+str(time.monotonic_ns()))
+ with hub.message_scope(event,'text'):
+  metadata=hub.payload_metadata()
+  hub.command(event)
+ row=next(row for row in hub.store.recent('notice:'+cases.GROUP) if row.get('factory_event')==metadata)
+ token=row['token']
+ hub.postback(cases.event(uid=cases.COLLEAGUE,stamp=700),{'action':'factory_ack','token':token})
+ key='notice:'+cases.GROUP+':'+token
  now=time.time()
- hub.store.update(key,lambda row:dict(row,notice_command=True,delivery_state='delivered',
-     reminder_minutes=1,reminder_due_at=now-1,wake_at=now-1,roster_basis='known_chat_members'))
+ hub.store.update(key,lambda row:dict(row,reminder_repeat=bool(data.get('repeat')),
+     reminder_minutes=1,reminder_due_at=now-1,wake_at=now-1))
  hub.reminders.run_due()
- return jsonify(state=hub.store.get(key)['reminder_state'],messages=sent[-1] if sent else [])
+ row=hub.store.get(key)
+ return jsonify(token=token,state=row['reminder_state'],unknown=row.get('roster_count'),messages=sent[-1] if sent else [])
+
+@app.route('/preview-fixture-health')
+def fixture_health():
+ return jsonify(build=cases.factory.BUILD_ID,reminder_build=line_ack_reminders.BUILD_ID)
 
 hub.insight=lambda menu, start, end, mode='summary': {
  'privacy_limited':False,'cached':False,'note':'測試資料 UTC+9',

@@ -1,17 +1,18 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
-console.log('CHECK factory pages: ci88-reminder-settings');
+console.log('CHECK factory pages: ci91-repeat-stop');
+const windows=new Set();
 async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw new Error('Timeout: '+label);}
-async function open(path,savedGroup){const vc=new VirtualConsole();const errors=[];vc.on('jsdomError',e=>{errors.push(e.message);console.error('DOM error',e.message)});const dom=await JSDOM.fromURL(base+path,{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){if(savedGroup)w.localStorage.setItem('factory-selected-group-v1',savedGroup);w.factoryRequests=[];w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.fetch=(url,options)=>{w.factoryRequests.push(String(url));return fetch(new URL(url,w.location.href),options);};w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:test-qr';w.URL.revokeObjectURL=()=>{};w.navigator.clipboard={writeText:async text=>{w.lastCopied=text}};w.alert=text=>{w.lastAlert=text};}});return {dom,w:dom.window,d:dom.window.document,errors};}
+async function open(path,savedGroup){const vc=new VirtualConsole();const errors=[];vc.on('jsdomError',e=>{errors.push(e.message);console.error('DOM error',e.message)});const dom=await JSDOM.fromURL(base+path,{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){windows.add(w);if(savedGroup)w.localStorage.setItem('factory-selected-group-v1',savedGroup);w.factoryRequests=[];w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.fetch=(url,options)=>{w.factoryRequests.push(String(url));return fetch(new URL(url,w.location.href),options);};w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:test-qr';w.URL.revokeObjectURL=()=>{};w.navigator.clipboard={writeText:async text=>{w.lastCopied=text}};w.alert=text=>{w.lastAlert=text};}});return {dom,w:dom.window,d:dom.window.document,errors};}
 (async()=>{
  const admin=await open('/preview-admin');const {w,d}=admin;await until(()=>d.querySelector('#fa-code')&&d.querySelector('#fa-health').textContent.includes('訊息編輯'),'admin loaded').catch(e=>{console.log(d.body.textContent.slice(0,1500));throw e});
  const initialVersion=JSON.parse(await (await fetch(base+'/api/admin/factory')).text()).settings_version;
- assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');
+ assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');assert.equal(d.querySelector('#fa-ack-repeat').checked,true);
  d.querySelector('#fa-ack-reminder').checked=true;d.querySelector('#fa-ack-minutes').value='15';
  d.querySelector('#fa-mode').value='mentioned';d.querySelector('#fa-save-options').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設定已儲存'),'mode and reminder save');
  let saved=await (await fetch(base+'/api/admin/factory')).json();assert.equal(saved.settings.groups[Object.keys(saved.settings.groups)[0]].translation_mode,'mentioned');assert.notEqual(saved.settings_version,initialVersion);
- assert.deepEqual(saved.ack_settings.groups[d.querySelector('#fa-group').value],{ack_reminder_enabled:true,ack_reminder_minutes:15});
+ assert.deepEqual(saved.ack_settings.groups[d.querySelector('#fa-group').value],{ack_reminder_enabled:true,ack_reminder_minutes:15,ack_reminder_repeat:true});
  for(const [id,value] of [['code','TEST9'],['name-zh','測試站'],['name-id','Stasiun uji'],['context','PMI 檢驗流程'],['sop-zh','先確認鋼種'],['sop-id','Pastikan jenis baja']]) d.querySelector('#fa-'+id).value=value;
  d.querySelector('#fa-save-station').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設備資料已儲存'),'station save');assert(d.querySelector('#fa-station-list').textContent.includes('TEST9'));
  const tr=[...d.querySelectorAll('#fa-station-list tr')].find(e=>e.textContent.includes('TEST9'));[...tr.querySelectorAll('button')].find(e=>e.textContent==='QR Code').click();await until(()=>d.querySelector('#fa-qr-preview img'),'QR preview');assert(d.querySelector('#fa-qr-preview a').download.includes('TEST9'));
@@ -19,7 +20,7 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const firstGroup=d.querySelector('#fa-group').value,secondGroup=[...d.querySelector('#fa-group').options].find(o=>o.value!==firstGroup).value;
  d.querySelector('#fa-receipt-group').value=secondGroup;d.querySelector('#fa-receipt-group').dispatchEvent(new w.Event('change'));
  await until(()=>d.querySelector('#fa-receipts').textContent.includes('B 班'),'other group result');assert.equal(d.querySelector('#fa-group').value,secondGroup);assert(d.querySelector('#fa-receipt-scope').textContent.includes('B 班'));
- assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');
+ assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');assert.equal(d.querySelector('#fa-ack-repeat').checked,true);
  assert.equal(w.localStorage.getItem('factory-selected-group-v1'),secondGroup);
  const reopened=await open('/preview-admin',w.localStorage.getItem('factory-selected-group-v1'));
  await until(()=>reopened.d.querySelector('#fa-receipts')?.textContent.includes('B 班'),'remembered group after reload');assert.equal(reopened.d.querySelector('#fa-group').value,secondGroup);assert.deepEqual(reopened.errors,[]);reopened.dom.window.close();
@@ -50,13 +51,25 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');duplicate.dom.window.close();
  console.log('PASS form: LIFF entry, required fields, numeric input, submit, duplicate display');
  const reminder=await (await fetch(base+'/preview-ack-reminder',{method:'POST'})).json();
- assert.equal(reminder.state,'sent_all');assert.equal(reminder.messages[0].type,'textV2');
+ assert.equal(reminder.state,'sent_all',JSON.stringify(reminder));assert.equal(reminder.messages[0].type,'textV2');
  assert.deepEqual(Object.values(reminder.messages[0].substitution).map(item=>item.mentionee),[{type:'all'}]);
  d.querySelector('#fa-load-receipts').click();
  await until(()=>d.querySelector('#fa-receipts').textContent.includes('已用 @All 補提醒一次'),'actual fallback reminder status');
  assert(d.querySelector('#fa-receipts').textContent.includes('另有 1 人尚未取得身分'));
  assert(d.querySelector('#fa-receipts').textContent.includes('已知 0 人不代表全員了解'));
- console.log('PASS reminders: incomplete roster, actual scheduler payload, native all mention, visible delivery status');
+ const repeating=await (await fetch(base+'/preview-ack-reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repeat:true})})).json();
+ assert.equal(repeating.state,'repeat_pending');
+ d.querySelector('#fa-load-receipts').click();
+ await until(()=>d.querySelector('[data-stop-token="'+repeating.token+'"]'),'per-notice stop control');
+ d.querySelector('[data-stop-token="'+repeating.token+'"]').click();
+ await until(()=>d.querySelector('#fa-notice').textContent.includes('已停止這筆通知'),'stop reminder feedback');
+ assert(d.querySelector('[data-token="'+repeating.token+'"]').textContent.includes('此通知已手動停止提醒'));
+ assert(!d.querySelector('[data-stop-token="'+repeating.token+'"]'));
+ assert(d.querySelector('#fa-members').textContent.includes('Adi'));
+ d.querySelector('#fa-ack-reminder').checked=false;d.querySelector('#fa-save-options').click();
+ await until(()=>d.querySelector('#fa-notice').textContent.includes('群組設定已儲存'),'group reminders off');
+ const disabled=await (await fetch(base+'/api/admin/factory')).json();assert.equal(disabled.ack_settings.groups[firstGroup].ack_reminder_enabled,false);
+ console.log('PASS reminders: fresh roster fixture, native all mention, repeated schedule, individual stop, group off, member list');
  assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
  admin.dom.window.close();member.dom.window.close();
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)w.close();});

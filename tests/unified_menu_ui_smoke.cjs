@@ -1,13 +1,14 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
-console.log('CHECK unified menu: ci88-fixed-pagination');
+console.log('CHECK unified menu: ci91-cleanup');
+const windows=new Set();
 async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,30));}throw new Error('Timeout: '+label);}
 const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id='+encodeURIComponent(group||''))).json();
 (async()=>{
  const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
  let failSave=false;
- const dom=await JSDOM.fromURL(base+'/preview-menu',{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){
+ const dom=await JSDOM.fromURL(base+'/preview-menu',{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){windows.add(w);
   w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=()=>{};
   w.fetch=(url,options)=>{if(failSave&&String(url).endsWith('/save')){failSave=false;return Promise.resolve({ok:false,json:async()=>({error:'測試儲存失敗'})});}return fetch(new URL(url,w.location.href),options);};
  }});
@@ -55,4 +56,4 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  await until(()=>$('status').textContent==='測試儲存失敗','failed-save feedback');assert.equal((await read('')).profile.items[0].label,before);assert.equal(edit.value,'未儲存測試');
  assert.deepEqual(errors,[]);dom.window.close();
  console.log('PASS unified menu: independent groups, labels, text/photo conditions, reorder, deletion after reload, inheritance, command-only acknowledgement preview, pagination, failed-save feedback');
-})().catch(e=>{console.error(e);process.exitCode=1;});
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)w.close();});
