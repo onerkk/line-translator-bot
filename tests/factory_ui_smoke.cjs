@@ -54,10 +54,12 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');close(duplicate.w);
  console.log('PASS form: LIFF entry, required fields, numeric input, submit, duplicate display');
  const reminder=await (await fetch(base+'/preview-ack-reminder',{method:'POST'})).json();
- assert.equal(reminder.state,'sent_all',JSON.stringify(reminder));assert.equal(reminder.messages[0].type,'textV2');
- assert.deepEqual(Object.values(reminder.messages[0].substitution).map(item=>item.mentionee),[{type:'all'}]);
+ assert.equal(reminder.state,'sent',JSON.stringify(reminder));assert.equal(reminder.messages[0].type,'textV2');
+ assert.deepEqual(Object.values(reminder.messages[0].substitution).map(item=>item.mentionee),[{type:'user',userId:'U'+'b'.repeat(32)}]);
+ assert(!reminder.messages[0].text.includes('提醒全體'));
  d.querySelector('#fa-load-receipts').click();
- await until(()=>d.querySelector('#fa-receipts').textContent.includes('已用 @All 補提醒一次'),'actual fallback reminder status');
+ await until(()=>d.querySelector('#fa-receipts').textContent.includes('已完成個別 @ 提醒'),'actual individual mention status');
+ assert(d.querySelector('#fa-group-section').textContent.includes('名單不完整也不改用 @All'));
  assert(d.querySelector('#fa-receipts').textContent.includes('另有 1 人尚未取得身分'));
  assert(d.querySelector('#fa-receipts').textContent.includes('已知成員未回覆為 0 即自動停止提醒'));
  const completing=await (await fetch(base+'/preview-ack-reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repeat:true})})).json();
@@ -81,7 +83,7 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  d.querySelector('#fa-ack-reminder').checked=false;d.querySelector('#fa-save-options').click();
  await until(()=>d.querySelector('#fa-notice').textContent.includes('群組設定已儲存'),'group reminders off');
  const disabled=await (await fetch(base+'/api/admin/factory')).json();assert.equal(disabled.ack_settings.groups[firstGroup].ack_reminder_enabled,false);
- console.log('PASS reminders: native all mention while pending, zero known pending stops incomplete roster, repeated schedule, individual stop, group off, member list');
+ console.log('PASS reminders: native individual mentions with incomplete roster, zero pending auto stop, repeated schedule, individual stop, group off, member list');
  assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
  close(admin.w);close(member.w);
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)close(w);});
