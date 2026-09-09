@@ -28,11 +28,30 @@ const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id=
  [...$('list').children].find(e=>e.dataset.itemId===originalId).querySelectorAll('.qr-item-head button')[2].click();await save();
  $('reload').click();await until(()=>$('status').textContent==='已載入。','reload deleted button');assert(!(await read(groups[0])).profile.items.some(x=>x.id===originalId));
  $('inherit').click();await until(()=>$('status').textContent.includes('已恢復使用'),'inherit default');assert.equal((await read(groups[0])).customized,false);
- await scope('');$('kind').value='image';change($('kind'));await until(()=>$('count').textContent.includes('分 2 頁'),'image pagination');
- assert($('preview').querySelectorAll('span').length<=12);$('preview').querySelector('button').click();assert($('preview').querySelector('button').textContent.includes('2/2'));
+ await scope('');
+ assert.deepEqual([...$('notice').options].map(o=>o.value),['command','off']);
+ const ackActions=new Set(['factory_ack','factory_help','factory_receipts']);
+ const ackLabels=(await read('')).profile.items.filter(r=>r.enabled&&ackActions.has(r.action)&&r.contexts.includes('text')).map(r=>r.label);
+ assert(ackLabels.length>0);
+ $('enabled').checked=false;change($('enabled'));$('kind').value='text';change($('kind'));
+ await until(()=>$('count').textContent.includes('共 0 顆按鈕'),'disabled translation preview');
+ $('kind').value='ack';change($('kind'));
+ await until(()=>$('count').textContent.includes('共 '+ackLabels.length+' 顆按鈕'),'explicit acknowledgement preview');
+ assert.deepEqual([...$('preview').querySelectorAll('span')].map(el=>el.textContent),ackLabels);
+ // Pagination gets its own fixed fixture; default menu size can change as
+ // features move between translation controls and command-only cards.
+ $('enabled').checked=true;change($('enabled'));$('kind').value='image';change($('kind'));
+ for(const toggle of $('list').querySelectorAll('.qr-item-head input[type=checkbox]')){toggle.checked=false;change(toggle);}
+ for(let i=0;i<14;i++){
+  $('add-kind').value='clipboard';$('add').click();
+  const text=$('list').lastElementChild.querySelector('textarea');text.value='pagination-'+i;change(text,'input');
+ }
+ await until(()=>$('count').textContent.includes('共 14 顆按鈕')&&$('count').textContent.includes('分 2 頁'),'image pagination');
+ assert.equal($('preview').querySelectorAll('span').length,12);$('preview').querySelector('button').click();
+ assert.equal($('preview').querySelectorAll('span').length,2);assert($('preview').querySelector('button').textContent.includes('2/2'));
  const before=(await read('')).profile.items[0].label;
  const edit=$('list').firstElementChild.querySelector('input[type=text]');edit.value='未儲存測試';change(edit,'input');failSave=true;$('save').click();
  await until(()=>$('status').textContent==='測試儲存失敗','failed-save feedback');assert.equal((await read('')).profile.items[0].label,before);assert.equal(edit.value,'未儲存測試');
  assert.deepEqual(errors,[]);dom.window.close();
- console.log('PASS unified menu: independent groups, labels, text/photo conditions, reorder, deletion after reload, inheritance, pagination, failed-save feedback');
+ console.log('PASS unified menu: independent groups, labels, text/photo conditions, reorder, deletion after reload, inheritance, command-only acknowledgement preview, pagination, failed-save feedback');
 })().catch(e=>{console.error(e);process.exitCode=1;});

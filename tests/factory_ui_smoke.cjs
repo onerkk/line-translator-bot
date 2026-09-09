@@ -6,8 +6,11 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
 (async()=>{
  const admin=await open('/preview-admin');const {w,d}=admin;await until(()=>d.querySelector('#fa-code')&&d.querySelector('#fa-health').textContent.includes('訊息編輯'),'admin loaded').catch(e=>{console.log(d.body.textContent.slice(0,1500));throw e});
  const initialVersion=JSON.parse(await (await fetch(base+'/api/admin/factory')).text()).settings_version;
- d.querySelector('#fa-mode').value='mentioned';d.querySelector('#fa-save-options').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設定已儲存'),'mode save');
+ assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');
+ d.querySelector('#fa-ack-reminder').checked=true;d.querySelector('#fa-ack-minutes').value='15';
+ d.querySelector('#fa-mode').value='mentioned';d.querySelector('#fa-save-options').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設定已儲存'),'mode and reminder save');
  let saved=await (await fetch(base+'/api/admin/factory')).json();assert.equal(saved.settings.groups[Object.keys(saved.settings.groups)[0]].translation_mode,'mentioned');assert.notEqual(saved.settings_version,initialVersion);
+ assert.deepEqual(saved.ack_settings.groups[d.querySelector('#fa-group').value],{ack_reminder_enabled:true,ack_reminder_minutes:15});
  for(const [id,value] of [['code','TEST9'],['name-zh','測試站'],['name-id','Stasiun uji'],['context','PMI 檢驗流程'],['sop-zh','先確認鋼種'],['sop-id','Pastikan jenis baja']]) d.querySelector('#fa-'+id).value=value;
  d.querySelector('#fa-save-station').click();await until(()=>d.querySelector('#fa-notice').textContent.includes('設備資料已儲存'),'station save');assert(d.querySelector('#fa-station-list').textContent.includes('TEST9'));
  const tr=[...d.querySelectorAll('#fa-station-list tr')].find(e=>e.textContent.includes('TEST9'));[...tr.querySelectorAll('button')].find(e=>e.textContent==='QR Code').click();await until(()=>d.querySelector('#fa-qr-preview img'),'QR preview');assert(d.querySelector('#fa-qr-preview a').download.includes('TEST9'));
@@ -15,10 +18,12 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const firstGroup=d.querySelector('#fa-group').value,secondGroup=[...d.querySelector('#fa-group').options].find(o=>o.value!==firstGroup).value;
  d.querySelector('#fa-receipt-group').value=secondGroup;d.querySelector('#fa-receipt-group').dispatchEvent(new w.Event('change'));
  await until(()=>d.querySelector('#fa-receipts').textContent.includes('B 班'),'other group result');assert.equal(d.querySelector('#fa-group').value,secondGroup);assert(d.querySelector('#fa-receipt-scope').textContent.includes('B 班'));
+ assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');
  assert.equal(w.localStorage.getItem('factory-selected-group-v1'),secondGroup);
  const reopened=await open('/preview-admin',w.localStorage.getItem('factory-selected-group-v1'));
  await until(()=>reopened.d.querySelector('#fa-receipts')?.textContent.includes('B 班'),'remembered group after reload');assert.equal(reopened.d.querySelector('#fa-group').value,secondGroup);assert.deepEqual(reopened.errors,[]);reopened.dom.window.close();
  d.querySelector('#fa-receipt-group').value=firstGroup;d.querySelector('#fa-receipt-group').dispatchEvent(new w.Event('change'));await until(()=>d.querySelector('#fa-receipts').textContent.includes('PMI'),'return to first group');
+ assert.equal(d.querySelector('#fa-ack-reminder').checked,true);assert.equal(d.querySelector('#fa-ack-minutes').value,'15');
  const reply=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();assert(reply.feedback.includes('Adi')&&reply.feedback.includes('PMI')&&reply.feedback.includes('管理者'));
  d.querySelector('#fa-load-receipts').click();await until(()=>d.querySelector('#fa-receipts').textContent.includes('✅ 已了解：Adi'),'actual acknowledgement in admin');
  assert(d.querySelector('#fa-receipt-status').textContent.includes('A 班'));assert(d.querySelector('#fa-receipts').textContent.includes('發起人：管理者'));
@@ -28,7 +33,7 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  Object.defineProperty(d,'visibilityState',{configurable:true,value:'hidden'});const requests=w.factoryRequests.length;w.Date.now=()=>originalNow()+45000;w.dispatchEvent(new w.Event('focus'));await new Promise(r=>setTimeout(r,30));assert.equal(w.factoryRequests.length,requests);w.Date.now=originalNow;
  console.log('PASS receipts: correct group, remembered selection, named feedback, stored response, visible refresh, hidden pause');
  d.querySelector('#fa-menu').value='richmenu-'+'a'.repeat(32);d.querySelector('#fa-insight-mode').value='daily';d.querySelector('#fa-load-insight').click();await until(()=>d.querySelector('#fa-insight-result').textContent.includes('20260906'),'daily insight');assert(d.querySelector('#fa-insight-result').textContent.includes('42'));
- console.log('PASS admin: mode persistence, equipment/SOP save, QR preview, receipt list');
+ console.log('PASS admin: mode and per-group reminder persistence, equipment/SOP save, QR preview, receipt list');
  const member=await open('/preview-factory');await until(()=>member.d.querySelector('#factory-group').textContent.includes('A 班'),'member loaded');
  member.d.querySelector('#factory-code').value='TEST9';member.d.querySelector('#factory-lookup button').click();await until(()=>member.d.querySelector('#factory-station-name').textContent.includes('TEST9'),'station lookup');assert.equal(member.d.querySelector('#factory-sop-zh').textContent,'先確認鋼種');
  member.d.querySelector('#factory-input').value='檢驗一下';member.d.querySelector('#factory-translate').click();await until(()=>member.d.querySelector('#factory-message').textContent.includes('翻譯完成'),'station translation');assert(member.d.querySelector('#factory-station-output').textContent.includes('檢驗一下'));
