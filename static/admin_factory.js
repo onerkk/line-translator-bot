@@ -1,17 +1,32 @@
 (function(){
   'use strict';
   let state=null,editing=null,ready=false,sequence=0,receiptSequence=0,receiptBusy=false,lastReceiptAt=0;
+  const pageDocument=document,requests=new Set();
+  // Retired requests must not update a closed page or its restored successor.
+  let suspended=false,lifecycle=0,pollTimer=null;
   const groupStorageKey='factory-selected-group-v1';
-  const $=id=>document.getElementById('fa-'+id);
-  function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
-  function notice(text,error=false){$('notice').textContent=text;$('notice').className='factory-notice'+(error?' factory-error':'');$('notice').hidden=!text;}
+  const $=id=>pageDocument.getElementById('fa-'+id);
+  const active=()=>!suspended&&window.document===pageDocument&&!!pageDocument.getElementById('factory-admin-root')?.isConnected;
+  function ensureActive(generation=lifecycle){if(!active()||generation!==lifecycle){const error=new Error('頁面已離開。');error.name='FactoryPageInactive';throw error;}}
+  function node(tag,text,cls){const el=pageDocument.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;}
+  function notice(text,error=false){if(!active())return;const box=$('notice');if(!box)return;box.textContent=text;box.className='factory-notice'+(error?' factory-error':'');box.hidden=!text;}
+  function report(error){if(error.name!=='FactoryPageInactive')notice(error.message,true);}
   function headers(){return typeof adminHeaders==='function'?adminHeaders(true):{'Content-Type':'application/json'};}
-  async function call(path='',method='GET',body){
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
-    try{const r=await fetch('/api/admin/factory'+path,{method,headers:headers(),body:body?JSON.stringify(body):undefined,cache:'no-store',signal:controller.signal});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.message||'操作失敗，請重新登入。');return data;}
-    catch(e){if(e.name==='AbortError')throw new Error('連線逾時，請重新整理確認儲存結果。');throw e;}finally{clearTimeout(timer);}
+  async function request(url,options,read){
+    ensureActive();const generation=lifecycle,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);requests.add(controller);
+    try{const response=await fetch(url,{...options,signal:controller.signal});const data=await read(response);ensureActive(generation);return data;}
+    catch(e){ensureActive(generation);if(e.name==='AbortError')throw new Error('連線逾時，請重新整理確認儲存結果。');throw e;}
+    finally{clearTimeout(timer);requests.delete(controller);}
   }
-  function guard(button,operation){return async event=>{event?.preventDefault();if(button.disabled)return;button.disabled=true;try{await operation();}catch(e){notice(e.message,true);}finally{button.disabled=false;}};}
+  async function call(path='',method='GET',body){return request('/api/admin/factory'+path,{method,headers:headers(),body:body?JSON.stringify(body):undefined,cache:'no-store'},async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'操作失敗，請重新登入。');return data;});}
+  function guard(button,operation){return async event=>{event?.preventDefault();if(!active()||button.disabled)return;button.disabled=true;try{await operation();}catch(e){report(e);}finally{button.disabled=false;}};}
+  function startPolling(){if(pollTimer===null&&active())pollTimer=window.setInterval(refreshVisibleReceipts,20000);}
+  window.addEventListener('pagehide',()=>{
+    suspended=true;lifecycle++;sequence++;receiptSequence++;receiptBusy=false;
+    if(pollTimer!==null){window.clearInterval(pollTimer);pollTimer=null;}
+    for(const controller of requests)controller.abort();
+  });
+  window.addEventListener('pageshow',()=>{if(suspended){suspended=false;if(ready&&active()){startPolling();load().catch(report);}}});
   function option(value,label){const o=node('option',label);o.value=value;return o;}
   function group(){return $('group').value;}
   function rememberedGroup(){try{return localStorage.getItem(groupStorageKey)||'';}catch(_){return '';}}
@@ -23,12 +38,12 @@
   }
   function changeGroup(value){
     $('group').value=value;rememberGroup();fillOptions();syncReceiptGroup();
-    $('receipts').replaceChildren();loadStations().catch(e=>notice(e.message,true));
-    loadReceipts().catch(e=>notice(e.message,true));
-    loadMembers().catch(e=>notice(e.message,true));
+    $('receipts').replaceChildren();loadStations().catch(report);
+    loadReceipts().catch(report);
+    loadMembers().catch(report);
   }
   function refreshVisibleReceipts(){
-    if(!state||!group()||receiptBusy||document.visibilityState==='hidden'||Date.now()-lastReceiptAt<20000)return;
+    if(!active()||!state||!group()||receiptBusy||pageDocument.visibilityState==='hidden'||Date.now()-lastReceiptAt<20000)return;
     const rect=$('receipts-section').getBoundingClientRect();
     if(rect.height>0&&rect.top<window.innerHeight&&rect.bottom>0)loadReceipts().catch(()=>{});
   }
@@ -70,15 +85,18 @@
     $('reset-station').addEventListener('click',resetStation);
     $('load-receipts').addEventListener('click',guard($('load-receipts'),loadReceipts));
     $('load-members').addEventListener('click',guard($('load-members'),loadMembers));
-    window.setInterval(refreshVisibleReceipts,20000);
-    document.addEventListener('visibilitychange',refreshVisibleReceipts);
+    startPolling();
+    pageDocument.addEventListener('visibilitychange',refreshVisibleReceipts);
     window.addEventListener('focus',refreshVisibleReceipts);
     $('insight-form').addEventListener('submit',guard($('load-insight'),loadInsight));
     const today=new Date(Date.now()+9*3600000),yesterday=new Date(today.getTime()-86400000),month=new Date(today.getTime()-30*86400000);
     $('from').value=month.toISOString().slice(0,10);$('to').value=yesterday.toISOString().slice(0,10);
   }
   async function load(){
-    init();const seq=++sequence,selected=group()||rememberedGroup();notice('正在讀取設定…');const data=await call();if(seq!==sequence)return;
+    if(!active())return;
+    init();const seq=++sequence,selected=group()||rememberedGroup(),root=pageDocument.getElementById('factory-admin-root');root.setAttribute('aria-busy','true');
+    try{
+    notice('正在讀取設定…');const data=await call();if(!active()||seq!==sequence)return;
     state=data;$('group').replaceChildren();$('receipt-group').replaceChildren();$('station-group').replaceChildren(option('','所有群組'));
     data.groups.forEach(g=>{$('group').append(option(g.id,g.name));$('receipt-group').append(option(g.id,g.name));$('station-group').append(option(g.id,g.name));});
     if(data.groups.some(g=>g.id===selected))$('group').value=selected;
@@ -90,7 +108,8 @@
     $('health').append(node('p','作業確認排程：'+(health.ack_worker_enabled===false?'未啟用，需啟用排程服務':health.ack_last_check_at?'最近檢查 '+new Date(health.ack_last_check_at*1000).toLocaleString('zh-TW',{hour12:false}):'已啟用，等待首次檢查')));
     if(health.ack_worker_error)$('health').append(node('p',health.ack_worker_error,'factory-error'));
     (health.provider?.providers||[]).forEach(p=>$('health').append(node('span',p.provider+' · '+(reasons[p.reason]||p.reason),'factory-pill')));
-    fillOptions();await Promise.all([loadStations(),loadReceipts(),loadMembers()]);notice('');
+    fillOptions();await Promise.all([loadStations(),loadReceipts(),loadMembers()]);if(seq===sequence)notice('');
+    }finally{if(active()&&seq===sequence)root.setAttribute('aria-busy','false');}
   }
   function fillOptions(){
     const settings={...state.defaults,...(state.settings.groups||{})[group()],...(state.ack_settings?.groups||{})[group()]};
@@ -102,7 +121,7 @@
   function resetStation(){editing=null;$('station-form').reset();$('editor-title').textContent='新增設備對照';}
   async function loadMembers(){
     const chosen=group();if(!chosen)return;
-    const data=await call('/members?group_id='+encodeURIComponent(chosen));if(chosen!==group())return;
+    const data=await call('/members?group_id='+encodeURIComponent(chosen));if(!active()||chosen!==group())return;
     $('members').replaceChildren(node('p','已辨識 '+data.members.length+' 位成員（含發起人）。'),node('p',data.members.map(row=>row.name).join('、')||'尚無名單'));
   }
   function editStation(row){
@@ -112,7 +131,7 @@
     $('editor-title').textContent=editing?'修改設備對照':'建立自訂設備對照';$('station-form').scrollIntoView({behavior:'smooth',block:'start'});
   }
   async function loadStations(){
-    const chosen=group(),data=await call('/stations?group_id='+encodeURIComponent(chosen));if(chosen!==group())return;
+    const chosen=group(),data=await call('/stations?group_id='+encodeURIComponent(chosen));if(!active()||chosen!==group())return;
     const table=node('table',undefined,'factory-table'),head=node('tr');['代碼／名稱','操作'].forEach(text=>head.append(node('th',text)));table.append(head);
     for(const row of data.stations){const tr=node('tr'),name=node('td');name.append(node('div',row.code+' · '+row.name_zh),node('small',row.name_id));const actions=node('td'),edit=node('button','編輯','factory-secondary'),qr=node('button','QR Code','factory-secondary');edit.type=qr.type='button';edit.addEventListener('click',()=>editStation(row));qr.addEventListener('click',guard(qr,()=>showQr(row)));actions.append(edit,qr);
       const custom=(state.settings.stations||[]).find(x=>x.code===row.code&&x.group_id===chosen)||(state.settings.stations||[]).find(x=>x.code===row.code&&!x.group_id);
@@ -123,8 +142,8 @@
   }
   async function showQr(row){
     const url='/api/admin/factory/qr?'+new URLSearchParams({code:row.code,group_id:group()});
-    const response=await fetch(url,{headers:headers(),cache:'no-store'});if(!response.ok){const d=await response.json();throw new Error(d.message||'無法產生 QR Code');}
-    const blob=await response.blob(),objectUrl=URL.createObjectURL(blob),img=node('img',undefined,'factory-qr-image'),link=node('a','下載 '+row.code+' QR Code','factory-link');img.src=objectUrl;img.alt=row.code+' QR Code';link.href=objectUrl;link.download='station-'+row.code+'.png';
+    const blob=await request(url,{headers:headers(),cache:'no-store'},async response=>{if(!response.ok){const data=await response.json();throw new Error(data.message||'無法產生 QR Code');}return response.blob();});if(!active())return;
+    const objectUrl=URL.createObjectURL(blob),img=node('img',undefined,'factory-qr-image'),link=node('a','下載 '+row.code+' QR Code','factory-link');img.src=objectUrl;img.alt=row.code+' QR Code';link.href=objectUrl;link.download='station-'+row.code+'.png';
     const old=$('qr-preview').dataset.url;if(old)URL.revokeObjectURL(old);$('qr-preview').dataset.url=objectUrl;$('qr-preview').replaceChildren(node('h3',row.code+' · '+row.name_zh),img,link);$('qr-preview').scrollIntoView({behavior:'smooth',block:'center'});
   }
   async function loadReceipts(){
@@ -134,7 +153,7 @@
     const formatTime=seconds=>seconds?new Date(seconds*1000).toLocaleString('zh-TW',{hour12:false}):'—';
     try{
       const data=await call('/receipts?group_id='+encodeURIComponent(chosen));
-      if(seq!==receiptSequence||chosen!==group())return;
+      if(!active()||seq!==receiptSequence||chosen!==group())return;
       if(data.group_id&&data.group_id!==chosen)throw new Error('群組資料不一致，請重新查詢。');
       const opened=new Set([...$('receipts').querySelectorAll('details[open]')].map(el=>el.dataset.token));
       $('receipts').replaceChildren();
@@ -165,12 +184,13 @@
         $('receipts').append(card);
       }
     }catch(error){
-      if(seq===receiptSequence&&chosen===group())$('receipt-status').textContent='查詢失敗：'+error.message+'；目前無法確認最新紀錄。';
+      if(error.name!=='FactoryPageInactive'&&active()&&seq===receiptSequence&&chosen===group())$('receipt-status').textContent='查詢失敗：'+error.message+'；目前無法確認最新紀錄。';
       throw error;
     }finally{if(seq===receiptSequence)receiptBusy=false;}
   }
   async function loadInsight(){
     const data=await call('/insight?'+new URLSearchParams({menu_id:$('menu').value.trim(),from:$('from').value.replaceAll('-',''),to:$('to').value.replaceAll('-',''),mode:$('insight-mode').value}));
+    if(!active())return;
     const box=$('insight-result');box.replaceChildren(node('p',data.note,'factory-hint'));
     if(data.privacy_limited){box.append(node('p','官方未提供統計值，可能未達隱私門檻或尚未完成彙整；不是 0 次。'));return;}
     const impression=data.data.impression?.metrics;
@@ -181,5 +201,5 @@
     if(daily.length)metricsTable(daily.map(r=>({name:r.date+' · 顯示',count:r.count,users:r.uniqueUsers})));
     if(!impression&&!clicks.length&&!daily.length)box.append(node('p','官方已回傳資料；此期間尚無可顯示的明細。'));
   }
-  window.loadFactoryTools=()=>load().catch(error=>notice(error.message,true));
+  window.loadFactoryTools=()=>load().catch(report);
 })();
