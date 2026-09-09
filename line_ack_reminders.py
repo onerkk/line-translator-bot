@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -18,6 +19,7 @@ import uuid
 
 LEASE_SECONDS = 120
 RETRY_WINDOW = 23 * 3600
+USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
 
 class SendError(RuntimeError):
@@ -79,6 +81,33 @@ def pending_ids(notice, departed=None):
             if uid != notice.get("sender_id") and uid not in responses and uid not in (departed or {})]
 
 
+def member_count(group):
+    """Unlike member IDs, LINE exposes the group count to unverified accounts."""
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+    if not token:
+        raise RuntimeError("member count unavailable")
+    kind = "group" if group.startswith("C") else "room"
+    req = urllib.request.Request(
+        "https://api.line.me/v2/bot/" + kind + "/" + group + "/members/count",
+        headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=4) as response:
+        count = json.load(response).get("count")
+    if type(count) is not int or count < 0:
+        raise RuntimeError("invalid member count")
+    return count
+
+
+def unknown_member_count(notice, departed=None):
+    """None means unknown, not zero. LINE's count excludes the bot itself."""
+    count = notice.get("roster_count")
+    if type(count) is int:
+        known = set(notice.get("expected", {})) | set(notice.get("responses", {}))
+        known.add(notice.get("sender_id"))
+        known = {uid for uid in known if isinstance(uid, str) and USER_ID.fullmatch(uid)}
+        return max(0, count - len(known - set(departed or {})))
+    return None if notice.get("roster_basis") == "known_chat_members" else 0
+
+
 class NoticeService:
     def __init__(self, hub, sender=send_messages, clock=time.time):
         self.hub, self.sender, self.clock = hub, sender, clock
@@ -97,29 +126,77 @@ class NoticeService:
     def _finish(self, key, lease, **changes):
         return self._update(key, lease, lambda row: dict(row, wake_at=None, lease_id="", **changes))
 
+    def _refresh_roster(self, key, lease, row, now):
+        # Network calls stay outside CAS and the translation response path.
+        # Retry a frozen LINE request unchanged, even after membership changes.
+        if row.get("roster_checked_at") is not None or row.get("pending_batch"):
+            return row
+        if not row.get("notice_command") and row.get("roster_basis") != "known_chat_members":
+            return row
+        group = row["group_id"]
+        host = getattr(self.hub, "h", {})
+        names = dict(host.get("group_user_names", {}).get(group, {}))
+        basis, ids, count = row.get("roster_basis", "known_chat_members"), None, None
+        try:
+            ids = host.get("_factory_member_ids", member_ids)(group)
+            if not isinstance(ids, list) or not ids or any(
+                    not isinstance(uid, str) or not USER_ID.fullmatch(uid) for uid in ids):
+                raise ValueError("incomplete member IDs")
+            ids = set(ids)
+            basis = "line_group_members"
+        except Exception:
+            ids = None
+        try:
+            value = host.get("_factory_member_count", member_count)(group)
+            if type(value) is int and value >= 0:
+                count = value
+        except Exception:
+            pass  # Unknown size still needs one visible group reminder.
+        def refresh(current):
+            expected = dict(current.get("expected", {}))
+            expected.update({uid: str(name) for uid, name in names.items()
+                             if isinstance(uid, str) and USER_ID.fullmatch(uid)})
+            if ids is not None:
+                expected = {uid: expected.get(uid, "未取得姓名 / Nama belum tersedia") for uid in ids}
+            expected.pop(current.get("sender_id"), None)
+            return dict(current, expected=expected, roster_basis=basis,
+                        roster_count=count, roster_checked_at=now)
+        return self._update(key, lease, refresh)
+
     def _prepare_batch(self, row, initial, departed, now):
         """Called inside CAS retry: recipients come from the latest responses."""
         if row.get("pending_batch"):
             return row
         group, token = row["group_id"], row["token"]
+        all_fallback = False
         if initial:
             messages, ids, number = row["initial_messages"], [], "initial"
         else:
             done = set(row.get("reminded_ids", []))
-            ids = [uid for uid in pending_ids(row, departed) if uid not in done][:20]
-            if not ids:
+            all_fallback = unknown_member_count(row, departed) != 0
+            ids = [uid for uid in pending_ids(row, departed) if uid not in done]
+            if not all_fallback:
+                ids = ids[:20]
+            if not ids and not all_fallback:
                 return dict(row, wake_at=None, lease_id="", reminder_state="sent" if done else "no_pending",
                             reminded_at=now if done else None)
             number = "reminder:" + str(row.get("reminder_batch", 0))
-            substitutions = {"p" + str(i): {"type": "mention", "mentionee": {"type": "user", "userId": uid}}
-                             for i, uid in enumerate(ids)}
+            substitutions = ({"everyone": {"type": "mention", "mentionee": {"type": "all"}}}
+                             if all_fallback else
+                             {"p" + str(i): {"type": "mention", "mentionee": {"type": "user", "userId": uid}}
+                              for i, uid in enumerate(ids)})
             content = ("⏰ 作業確認提醒 / Pengingat konfirmasi #" + token[:6] + "\n" +
                        " ".join("{" + name + "}" for name in substitutions) +
-                       "\n尚未回覆，請按下方「了解」或「需要說明」。\n"
-                       "Belum menjawab. Silakan pilih Paham atau Perlu penjelasan.")
+                       "\n尚未回覆的同仁，請按下方「了解」。\n"
+                       "Bagi yang belum menjawab, silakan tekan Paham.")
+            if all_fallback:
+                content += ("\n\nLINE 未提供完整名單，本次提醒全體；已回覆者請忽略。\n"
+                            "Daftar anggota belum lengkap; pengingat dikirim ke semua. "
+                            "Abaikan jika sudah menjawab.")
             messages = [{"type": "textV2", "text": content, "substitution": substitutions},
                         self.hub._notice_card(token, self.hub._short(row["original"], 1000), row).to_dict()]
         batch = {"messages": messages, "ids": ids, "initial": initial, "started_at": now,
+                 "all_fallback": all_fallback,
                  "key": str(uuid.uuid5(uuid.NAMESPACE_URL, "factory-ack:" + group + ":" + token + ":" + number))}
         return dict(row, pending_batch=batch)
 
@@ -158,6 +235,10 @@ class NoticeService:
                 return
             batch = row.get("pending_batch")
             if not batch:
+                if not initial:
+                    row = self._refresh_roster(key, lease, row, now)
+                    if not row or row.get("lease_id") != lease:
+                        return
                 departed = {} if initial else self.store.get("members-left:" + group) or {}
                 row = self._update(key, lease, lambda current: self._prepare_batch(current, initial, departed, now))
                 if not row or row.get("lease_id") != lease or not row.get("pending_batch"):
@@ -182,10 +263,17 @@ class NoticeService:
                                    reminder_state="pending" if enabled else "off", wake_at=due if enabled else None)
                 else:
                     current["reminded_ids"] = list(dict.fromkeys(current.get("reminded_ids", []) + batch["ids"]))
-                    current.update(reminder_batch=current.get("reminder_batch", 0) + 1,
-                                   reminder_state="sending", wake_at=accepted)
+                    if batch.get("all_fallback"):
+                        current.update(reminder_state="sent_all", reminded_at=accepted,
+                                       all_reminded_at=accepted, wake_at=None)
+                    else:
+                        current.update(reminder_batch=current.get("reminder_batch", 0) + 1,
+                                       reminder_state="sending", wake_at=accepted)
                 return current
             self._update(key, lease, delivered)
+            self.hub.app.logger.info("[FactoryAck] accepted kind=%s recipients=%d",
+                                     "initial" if batch["initial"] else "all_fallback" if batch.get("all_fallback") else "users",
+                                     len(batch["ids"]))
         except Exception as exc:
             retryable = not isinstance(exc, SendError) or exc.retryable
             def failed(current):

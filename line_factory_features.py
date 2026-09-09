@@ -32,7 +32,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.command-ack-reminders.1"
+BUILD_ID = "2026-09-09.ack-roster-reminders.2"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -484,6 +484,12 @@ class FactoryHub:
                 else:
                     messages = [TextMessage(text=part) for part in delivery.split_text(body)]
                     messages.append(self._notice_card(token, heading + self._short(record.get("original"), 250), notice))
+                mentions = record.get("notice_mentions") or []
+                if mentions and self.options(group)["native_mentions"]:
+                    # Flex text renders @names literally. A separate textV2
+                    # message retains the signed webhook's actual mentions.
+                    mention_line = TextMessage(text="📣 " + " ".join(item["label"] for item in mentions))
+                    messages.insert(0, Message.from_dict(text_with_mentions(mention_line, mentions)))
                 if len(messages) > 5:
                     raise ValueError("通知與譯文過長，請分成較短的 /ack 通知。")
                 notice["initial_messages"] = [message.to_dict() for message in messages]
@@ -705,6 +711,7 @@ class FactoryHub:
             raise ValueError("通知缺少 LINE 訊息識別碼。")
         token = hashlib.sha256((group + ":ack:" + identity).encode()).hexdigest()[:24]
         key = "notice:" + group + ":" + token
+        mentions = native_mentions(field(event, "message", {}))
         try:
             existing = self.store.get(key)
             if not existing:
@@ -714,17 +721,24 @@ class FactoryHub:
                 basis = "known_chat_members"
                 try:
                     ids = self.h.get("_factory_member_ids", line_ack_reminders.member_ids)(group)
+                    if not isinstance(ids, list) or not ids or any(
+                            not isinstance(member, str) or not _USER.fullmatch(member) for member in ids):
+                        raise ValueError("LINE member list is incomplete")
                     members = {member: members.get(member) or self._member_name(group, member)
                                for member in ids if isinstance(member, str) and _USER.fullmatch(member)}
                     basis = "line_group_members"
                 except Exception:
                     self.app.logger.info("[FactoryAck] using known chat member snapshot")
+                for mention in mentions:
+                    if mention["type"] == "user":
+                        members.setdefault(mention["userId"], self._short(mention["label"].lstrip("@"), 80))
                 departed = self.store.get("members-left:" + group) or {}
                 members = {member: name for member, name in members.items() if member not in departed and member != uid}
                 self.save_context(token, {"group_id": group, "user_id": uid, "original": content,
                     "translated": translated, "src": src, "msg_id": metadata.get("message_id", ""),
                     "factory_event": metadata, "expires_at": time.time() + NOTICE_TTL,
-                    "notice_requested": True, "notice_command": True, "expected": members, "roster_basis": basis})
+                    "notice_requested": True, "notice_command": True, "notice_mentions": mentions,
+                    "expected": members, "roster_basis": basis})
             self.reminders.process(key)
             self.reminder_worker.start()
         except StoreError:
@@ -880,6 +894,10 @@ class FactoryHub:
                 "\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names) or "—", 300) +
                 "\n⏳ 已知成員未回覆/Belum menjawab (" + str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
                 "\n名單為本次查詢結果；按「確認」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
+        unknown = line_ack_reminders.unknown_member_count(notice, departed)
+        if unknown != 0:
+            text += ("\n⚠️ 名單不完整；" + ("另有 " + str(unknown) + " 人未取得身分。" if unknown is not None else "實際未回覆總人數尚無法確認。") +
+                     "已知 0 人不代表全員了解。\nDaftar belum lengkap; jumlah yang belum menjawab belum dapat dipastikan.")
         if help_names:
             text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
         return self._short(text, 1900)
@@ -1170,6 +1188,7 @@ class FactoryHub:
                 row["expired"] = float(row.get("created_at", 0)) + NOTICE_TTL <= time.time()
                 row["current"] = not row["expired"] and self.current(row.get("factory_event"))
                 row["pending_ids"] = line_ack_reminders.pending_ids(row, departed)
+                row["unknown_member_count"] = line_ack_reminders.unknown_member_count(row, departed)
                 for private in ("initial_messages", "pending_batch", "lease_id"):
                     row.pop(private, None)
             return jsonify(ok=True, notices=rows, group_id=group, group_name=catalog[group]["name"],
