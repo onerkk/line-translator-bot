@@ -1,12 +1,15 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
-console.log('CHECK factory pages: ci91-repeat-stop');
+console.log('CHECK factory pages: ci96-page-lifecycle');
 const windows=new Set();
 async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw new Error('Timeout: '+label);}
+async function adminReady(page,label){await until(()=>page.d.querySelector('#factory-admin-root')?.getAttribute('aria-busy')==='false',label);assert(!page.d.querySelector('#fa-notice').classList.contains('factory-error'),page.d.querySelector('#fa-notice').textContent);}
+function close(w){if(w.document)w.dispatchEvent(new w.Event('pagehide'));w.close();windows.delete(w);}
 async function open(path,savedGroup){const vc=new VirtualConsole();const errors=[];vc.on('jsdomError',e=>{errors.push(e.message);console.error('DOM error',e.message)});const dom=await JSDOM.fromURL(base+path,{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){windows.add(w);if(savedGroup)w.localStorage.setItem('factory-selected-group-v1',savedGroup);w.factoryRequests=[];w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.fetch=(url,options)=>{w.factoryRequests.push(String(url));return fetch(new URL(url,w.location.href),options);};w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:test-qr';w.URL.revokeObjectURL=()=>{};w.navigator.clipboard={writeText:async text=>{w.lastCopied=text}};w.alert=text=>{w.lastAlert=text};}});return {dom,w:dom.window,d:dom.window.document,errors};}
 (async()=>{
- const admin=await open('/preview-admin');const {w,d}=admin;await until(()=>d.querySelector('#fa-code')&&d.querySelector('#fa-health').textContent.includes('訊息編輯'),'admin loaded').catch(e=>{console.log(d.body.textContent.slice(0,1500));throw e});
+ const admin=await open('/preview-admin');const {w,d}=admin;await adminReady(admin,'admin fully loaded').catch(e=>{console.log(d.body.textContent.slice(0,1500));throw e});
+ assert(d.querySelector('#fa-health').textContent.includes('訊息編輯'));
  const initialVersion=JSON.parse(await (await fetch(base+'/api/admin/factory')).text()).settings_version;
  assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');assert.equal(d.querySelector('#fa-ack-repeat').checked,true);
  d.querySelector('#fa-ack-reminder').checked=true;d.querySelector('#fa-ack-minutes').value='15';
@@ -23,7 +26,7 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  assert.equal(d.querySelector('#fa-ack-reminder').checked,false);assert.equal(d.querySelector('#fa-ack-minutes').value,'30');assert.equal(d.querySelector('#fa-ack-repeat').checked,true);
  assert.equal(w.localStorage.getItem('factory-selected-group-v1'),secondGroup);
  const reopened=await open('/preview-admin',w.localStorage.getItem('factory-selected-group-v1'));
- await until(()=>reopened.d.querySelector('#fa-receipts')?.textContent.includes('B 班'),'remembered group after reload');assert.equal(reopened.d.querySelector('#fa-group').value,secondGroup);assert.deepEqual(reopened.errors,[]);reopened.dom.window.close();
+ await adminReady(reopened,'remembered group fully loaded');assert(reopened.d.querySelector('#fa-receipts').textContent.includes('B 班'));assert.equal(reopened.d.querySelector('#fa-group').value,secondGroup);assert.deepEqual(reopened.errors,[]);close(reopened.w);
  d.querySelector('#fa-receipt-group').value=firstGroup;d.querySelector('#fa-receipt-group').dispatchEvent(new w.Event('change'));await until(()=>d.querySelector('#fa-receipts').textContent.includes('PMI'),'return to first group');
  assert.equal(d.querySelector('#fa-ack-reminder').checked,true);assert.equal(d.querySelector('#fa-ack-minutes').value,'15');
  const reply=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();assert(reply.feedback.includes('Adi')&&reply.feedback.includes('PMI')&&reply.feedback.includes('管理者'));
@@ -47,8 +50,8 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  console.log('PASS member: manual/QR lookup, bilingual SOP, translation, full copy, share success/cancel, camera failure');
  const form=await open('/liff/settings?view=form&id=f1');await until(()=>form.d.querySelector('#field-pmi'),'form loaded');
  form.d.querySelector('button[type=submit]').click();assert(!form.d.querySelector('#verifiedForm').checkValidity());
- form.d.querySelector('#field-pmi').checked=true;form.d.querySelector('#field-quantity').value='3.5';form.d.querySelector('button[type=submit]').click();await until(()=>form.d.body.textContent.includes('提交成功'),'verified form submit');form.dom.window.close();
- const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');duplicate.dom.window.close();
+ form.d.querySelector('#field-pmi').checked=true;form.d.querySelector('#field-quantity').value='3.5';form.d.querySelector('button[type=submit]').click();await until(()=>form.d.body.textContent.includes('提交成功'),'verified form submit');close(form.w);
+ const duplicate=await open('/liff/settings?view=form&id=f1');await until(()=>duplicate.d.body.textContent.includes('已填寫'),'duplicate form');close(duplicate.w);
  console.log('PASS form: LIFF entry, required fields, numeric input, submit, duplicate display');
  const reminder=await (await fetch(base+'/preview-ack-reminder',{method:'POST'})).json();
  assert.equal(reminder.state,'sent_all',JSON.stringify(reminder));assert.equal(reminder.messages[0].type,'textV2');
@@ -71,5 +74,5 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const disabled=await (await fetch(base+'/api/admin/factory')).json();assert.equal(disabled.ack_settings.groups[firstGroup].ack_reminder_enabled,false);
  console.log('PASS reminders: fresh roster fixture, native all mention, repeated schedule, individual stop, group off, member list');
  assert.deepEqual(admin.errors,[]);assert.deepEqual(member.errors,[]);
- admin.dom.window.close();member.dom.window.close();
-})().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)w.close();});
+ close(admin.w);close(member.w);
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{for(const w of windows)close(w);});
