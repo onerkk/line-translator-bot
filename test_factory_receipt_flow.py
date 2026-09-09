@@ -46,6 +46,9 @@ def test_clicked_receipt_survives_style_context_expiry(hub, monkeypatch):
     assert hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
     row = hub.store.get('notice:' + GROUP + ':' + token)
     assert row['responses'][COLLEAGUE]['status'] == 'understood'
+    assert replies == []
+    hub.postback(event(uid=COLLEAGUE), {'action': 'factory_receipts', 'token': token})
+    assert len(replies) == 1
     assert 'Adi' in replies[-1] and 'PMI' in replies[-1]
     assert '管理者' in replies[-1]
 
@@ -111,7 +114,7 @@ def test_seven_day_receipt_expiry_is_independent_of_updates(hub, monkeypatch):
     assert '過期' in replies[-1]
 
 
-def test_real_signed_postback_reaches_storage_admin_and_group_feedback(hub, monkeypatch):
+def test_real_signed_postback_records_in_admin_without_group_feedback(hub, monkeypatch):
     import app
     monkeypatch.setattr(app, 'factory_hub', hub)
     monkeypatch.setattr(app, '_processed_msg_ids', app._collections_dedup.OrderedDict())
@@ -133,28 +136,34 @@ def test_real_signed_postback_reaches_storage_admin_and_group_feedback(hub, monk
         wait_for_webhooks()
         return response
     assert click(COLLEAGUE, 'receipt-click').status_code == 200
-    assert len(sends) == 1 and sends[0]['target_id'] == GROUP
-    assert 'Adi' in sends[0]['fallback_text'] and 'PMI' in sends[0]['fallback_text']
-    assert '管理者' in sends[0]['fallback_text']
+    assert sends == []
     data = hub.app.test_client().get('/api/admin/factory/receipts?group_id=' + GROUP).json
     assert data['notices'][0]['responses'][COLLEAGUE]['status'] == 'understood'
     assert click(COLLEAGUE, 'receipt-click', reply='new-reply').status_code == 200
-    assert len(sends) == 1  # Redelivery does not notify the group twice.
+    assert sends == []  # Neither the first tap nor redelivery posts a card.
+    assert click(COLLEAGUE, 'receipt-second-tap', reply='another-reply').status_code == 200
+    assert sends == []
     assert click(USER, 'receipt-help', 'factory_help').status_code == 200
     row = hub.store.get('notice:' + GROUP + ':' + token)
     assert len(row['responses']) == 2 and row['responses'][USER]['status'] == 'needs_help'
+    assert sends == []
 
 
 def test_control_feedback_does_not_create_or_redecorate_another_notice(hub):
     token, _, _ = notice(hub)
     rows_before = len(hub.store.recent('notice:' + GROUP))
+    sent = []
     def sending(**kw):
         message = kw['message_obj']
         before = message.to_dict()
         result = hub.decorate_delivery([message], {'group_id': GROUP}, kw['fallback_text'])
         assert len(result) == 1 and result[0].to_dict() == before
+        sent.append(before)
     hub.h['_send_reply_with_push_fallback'] = sending
     hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
+    assert sent == []
+    hub.postback(event(uid=COLLEAGUE), {'action': 'factory_receipts', 'token': token})
+    assert len(sent) == 1
     assert len(hub.store.recent('notice:' + GROUP)) == rows_before
 
 

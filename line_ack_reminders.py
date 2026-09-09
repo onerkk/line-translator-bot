@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-09.ack-pending-mentions.5"
+BUILD_ID = "2026-09-09.ack-silent-receipts.6"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -197,6 +197,10 @@ class NoticeService:
                        wake_at=None, next_reminder_at=None)
         return row
 
+    def _reminder_card(self, row, departed):
+        text = self.hub._receipt_text(row, "⏰ 作業確認提醒 / Pengingat konfirmasi", departed=departed)
+        return self.hub._notice_card(row["token"], text, row).to_dict()
+
     def _prepare_batch(self, row, initial, departed, now):
         """Called inside CAS retry: recipients come from the latest responses."""
         if not initial and not pending_ids(row, departed):
@@ -222,7 +226,7 @@ class NoticeService:
                        "\n尚未回覆的同仁，請按下方「了解」。\n"
                        "Bagi yang belum menjawab, silakan tekan Paham.")
             messages = [{"type": "textV2", "text": content, "substitution": substitutions},
-                        self.hub._notice_card(token, self.hub._short(row["original"], 1000), row).to_dict()]
+                        self._reminder_card(row, departed)]
         batch = {"messages": messages, "ids": ids, "initial": initial, "started_at": now,
                  "all_fallback": False, "prepared_only": True,
                  "key": str(uuid.uuid5(uuid.NAMESPACE_URL, "factory-ack:" + group + ":" + token + ":" + number))}
@@ -263,6 +267,11 @@ class NoticeService:
                                 reminder_state="pending" if due is not None else "cancelled",
                                 roster_checked_at=None, attempts=0, last_error="",
                                 reminder_retry_retired_at=now)
+            if batch.get("prepared_only") is True:
+                # Refresh the receipt summary from the same latest CAS row,
+                # including answers by people outside this 20-person batch.
+                # Never change a payload after a possibly accepted send.
+                batch = dict(batch, messages=[*batch["messages"][:-1], self._reminder_card(row, departed)])
         return dict(row, pending_batch=dict(batch, prepared_only=False))
 
     def run_due(self, limit=10, budget_seconds=20):

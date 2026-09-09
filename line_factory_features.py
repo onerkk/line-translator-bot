@@ -34,7 +34,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.ack-pending-mentions.5"
+BUILD_ID = "2026-09-09.ack-silent-receipts.6"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -878,7 +878,7 @@ class FactoryHub:
             except ValueError as exc:
                 self._reply(event, str(exc))
                 return True
-            self._reply(event, "🛑 已停止這筆通知的後續提醒。\nPengingat untuk pemberitahuan ini telah dihentikan.", notice=notice)
+            self._reply(event, "🛑 已停止這筆通知的後續提醒。\nPengingat untuk pemberitahuan ini telah dihentikan.")
             return True
         if action in NOTICE_ACTIONS:
             return self._receipt_postback(event, action, token, group, uid)
@@ -954,7 +954,7 @@ class FactoryHub:
                 if not row:
                     raise ValueError("作業確認已過期。")
                 # Recheck inside CAS: concurrent taps can both read no response
-                # above, but only the committed writer owns the feedback.
+                # above, but only one response should be committed.
                 if unchanged_response(row):
                     return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
                 responses = row.setdefault("responses", {})
@@ -966,12 +966,10 @@ class FactoryHub:
             notice = self.store.update(notice_key, record_reply, remaining)
             if notice["responses"][uid].get("recording_id") != operation_id:
                 return True
-            saved_state = notice["responses"][uid]["status"]
-            name = notice["responses"][uid]["name"]
-            feedback = ("✅ " + name + " 已了解 / sudah paham" if saved_state == "understood"
-                        else "❓ " + name + " 需要說明 / perlu penjelasan")
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
-            self._reply(event, self._receipt_text(notice, feedback), notice=notice)
+            # Successful taps only persist receipts, even the first tap or a
+            # late answer after stop. The scheduled reminder owns group updates;
+            # returning handled also prevents the webhook's generic reply path.
         elif action == "factory_receipts":
             notice = self._finish_answered_notice(notice, departed)
             self._reply(event, self._receipt_text(notice, "📋 作業確認 / Konfirmasi"), notice=notice)
@@ -987,16 +985,18 @@ class FactoryHub:
         return self.store.update(key, lambda row: line_ack_reminders.finish_if_no_pending(
             row, departed, now=time.time())) or notice
 
-    def _receipt_text(self, notice, heading):
+    def _receipt_text(self, notice, heading, *, departed=None):
         responses = notice.get("responses", {})
         understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
         help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
-        try:
-            departed = self.store.get("members-left:" + notice["group_id"]) or {}
-        except StoreError:
-            # The receipt is already durable; an optional roster refresh must
-            # never report that the user's successful acknowledgement was lost.
-            departed = {}
+        if departed is None:
+            try:
+                departed = self.store.get("members-left:" + notice["group_id"]) or {}
+            except StoreError:
+                # The receipt is durable; optional roster information must not
+                # make a status query report that acknowledgement was lost.
+                departed = {}
+        # A scheduler-supplied roster keeps rendering inside CAS free of I/O.
         pending = [notice["expected"][uid] for uid in line_ack_reminders.pending_ids(notice, departed)]
         sender_id = notice.get("sender_id") or (notice.get("factory_event") or {}).get("user_id", "")
         sender = notice.get("sender_name") or self._member_name(notice["group_id"], sender_id)

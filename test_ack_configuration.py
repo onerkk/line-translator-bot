@@ -69,7 +69,7 @@ def test_saved_command_mode_always_delivers_an_answerable_card(hub, client, case
     assert hub.menu.notice_rows(GROUP, row['original'], requested=False) == []
     assert hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': row['token']})
     assert hub.get_notice(row['token'], GROUP)['responses'][COLLEAGUE]['status'] == 'understood'
-    assert 'Adi 已了解' in replies[-1]
+    assert replies == []  # Hidden/menu-off cards still record without chat spam.
     assert hub.h[menus.KEY] == document
 
 

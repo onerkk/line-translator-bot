@@ -39,6 +39,7 @@ class NoticeTests(unittest.TestCase):
         self.sent = []
         self.hub = SimpleNamespace(store=self.store, options=lambda group: self.options,
             current=lambda metadata: True, app=SimpleNamespace(logger=logging.getLogger("ack-test")),
+            _receipt_text=lambda row, heading, **kwargs: heading,
             _short=lambda text, count: text[:count], _notice_card=lambda token, text, row:
                 SimpleNamespace(to_dict=lambda: {"type": "flex", "altText": text, "contents": {"type": "bubble"}}))
         self.service = NoticeService(self.hub, self.send, clock=lambda: self.now)

@@ -19,7 +19,8 @@ def notice_footer(token, buttons):
     contents = primary[:]
     if secondary:
         contents.append({"type": "box", "layout": "horizontal", "spacing": "sm", "contents": secondary})
-    contents.append(txt("7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari; paham ≠ pekerjaan selesai.", "xxs", "#657888"))
+    contents.append(txt("按了解只記錄，不另發訊息。\nPaham dicatat tanpa pesan balasan.\n"
+                        "7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari; paham ≠ pekerjaan selesai.", "xxs", "#657888"))
     return {"type": "box", "layout": "vertical", "spacing": "md", "paddingAll": "16px",
             "backgroundColor": "#F1F7F8", "contents": contents}
 

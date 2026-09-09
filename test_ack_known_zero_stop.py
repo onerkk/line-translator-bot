@@ -52,7 +52,11 @@ def test_last_known_answer_stops_immediately_without_waiting_for_deadline(hub, c
     answer(hub, row)
     saved = assert_finished(hub, row)  # No scheduler tick or admin refresh.
     assert reminders.unknown_member_count(saved) == (15 if count else None)
-    assert "此通知已自動停止提醒" in replies[-1]["fallback_text"]
+    assert replies == []
+    # A separately requested status query can show completion; the final tap
+    # itself must not post another card or an automatic completion broadcast.
+    hub.postback(event(), {"action": "factory_receipts", "token": row["token"]})
+    assert len(replies) == 1 and "此通知已自動停止提醒" in replies[-1]["fallback_text"]
     card = json.dumps(replies[-1]["message_obj"].to_dict(), ensure_ascii=False)
     assert "此通知已自動停止提醒" in card and "factory_ack" in card
     assert "factory_stop" not in card and "仍可能提醒全體" not in card
