@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
+console.log('CHECK unified menu: ci88-fixed-pagination');
 async function until(fn,label){for(let i=0;i<150;i++){if(fn())return;await new Promise(r=>setTimeout(r,30));}throw new Error('Timeout: '+label);}
 const read=async group=>(await fetch(base+'/api/admin/quick-reply/list?group_id='+encodeURIComponent(group||''))).json();
 (async()=>{

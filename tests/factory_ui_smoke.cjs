@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'jsdom');
 const base=process.env.FACTORY_UI_URL||'http://127.0.0.1:8765';
+console.log('CHECK factory pages: ci88-reminder-settings');
 async function until(fn,label){for(let i=0;i<100;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw new Error('Timeout: '+label);}
 async function open(path,savedGroup){const vc=new VirtualConsole();const errors=[];vc.on('jsdomError',e=>{errors.push(e.message);console.error('DOM error',e.message)});const dom=await JSDOM.fromURL(base+path,{runScripts:'dangerously',resources:'usable',virtualConsole:vc,beforeParse(w){if(savedGroup)w.localStorage.setItem('factory-selected-group-v1',savedGroup);w.factoryRequests=[];w.AbortController=AbortController;w.AbortSignal=AbortSignal;w.fetch=(url,options)=>{w.factoryRequests.push(String(url));return fetch(new URL(url,w.location.href),options);};w.HTMLElement.prototype.scrollIntoView=()=>{};w.URL.createObjectURL=()=> 'blob:test-qr';w.URL.revokeObjectURL=()=>{};w.navigator.clipboard={writeText:async text=>{w.lastCopied=text}};w.alert=text=>{w.lastAlert=text};}});return {dom,w:dom.window,d:dom.window.document,errors};}
 (async()=>{
