@@ -1,0 +1,591 @@
+{
+  "update": "2026-09-09.translation107",
+  "environment": "Python 3.12, Linux; offline fixtures",
+  "method": "ABBA: baseline, updated, updated, baseline; 2 rounds x 7 measured runs per scenario per version; warmup/cProfile excluded",
+  "scope": "Isolated-source handle_message with conversation disabled; includes validation, durable outbox and LINE payload assembly; mocked AI/LINE; async postprocessing excluded",
+  "limitations": [
+    "Not live model accuracy or real LINE delivery latency",
+    "Small local sample; host I/O variance present",
+    "Conversation correctness and context reuse are covered separately by regression tests"
+  ],
+  "benchmark_fix": "Disable conversational reuse for isolated misses and assert constant generation counts; repeated identical turns must not become hidden context-cache hits.",
+  "external_network_calls": 0,
+  "line_messages_sent": 0,
+  "baseline_code_sha256": {
+    "app.py": "ce811fb96da4167b63d87c7ab693e706b1ca7e8c8de37db1b9a4567f4c68a138",
+    "translation_quality_gate.py": "baf7081ad5f91e4ea4690b6d59c63d584dd2d43e447fdad0ada87b4673d4b02c",
+    "translation_retry_queue.py": "fa7503170406ceacd6e03943db9683deb6af3e8c0b1bbcc2239583088115e724",
+    "durable_workers.py": "5e7d9415dddf1fecc9a74d29d24f406f072c57c718c02823a19e56b3a2190e22"
+  },
+  "updated_code_sha256": {
+    "app.py": "316e82498d4659fc933f624383da78f90377d12c5c84572290bb377be1c5b0d3",
+    "translation_quality_gate.py": "3c4b9653c2b1a0d36088729563a32cf35191f6bee0e5addcd19e0fa1d3bbedf9",
+    "factory_record_contract.py": "9b74cc75049b9fcfb82e602e1546125e592cb17717992d26b8d083092127d2c1",
+    "translation_retry_queue.py": "bdbc0ca9759eea3d1d930dfed12c6cae6f2fdcb0fd194fa9da91bdd47ca347c6",
+    "durable_workers.py": "a5303f16f0bdbe794cd3c803305224cd2d376f86b4eb72102569e724e58b81d0"
+  },
+  "benchmark_script_sha256": "0c20e3dac4df544c4242fb5b4298b22acacb3dbb5755dee3de58e2991c765ed3",
+  "corpus_sha256": "bf8242b5b3c3923db1ea2443cb08307ebdffde448db1fde19fb5c0c0b81f758b",
+  "scenarios": [
+    {
+      "sample": "routine",
+      "cache_mode": "miss",
+      "before": {
+        "median_ms": 66.786,
+        "measured_ms": [
+          64.828,
+          55.77,
+          53.933,
+          55.529,
+          66.815,
+          59.915,
+          55.68,
+          75.22,
+          66.758,
+          88.241,
+          80.564,
+          68.726,
+          73.115,
+          77.346
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          3253
+        ]
+      },
+      "after": {
+        "median_ms": 58.238,
+        "measured_ms": [
+          52.836,
+          50.616,
+          52.724,
+          60.976,
+          60.034,
+          57.175,
+          62.075,
+          55.041,
+          56.004,
+          58.142,
+          61.71,
+          62.057,
+          58.334,
+          64.154
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          3253
+        ]
+      },
+      "local_median_reduction_percent": 12.8
+    },
+    {
+      "sample": "routine",
+      "cache_mode": "hit",
+      "before": {
+        "median_ms": 55.07,
+        "measured_ms": [
+          43.493,
+          51.091,
+          51.624,
+          50.465,
+          56.839,
+          47.909,
+          57.443,
+          82.906,
+          60.44,
+          62.808,
+          55.892,
+          54.247,
+          60.25,
+          50.066
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "after": {
+        "median_ms": 40.861,
+        "measured_ms": [
+          41.572,
+          42.566,
+          46.012,
+          38.962,
+          41.223,
+          41.292,
+          39.125,
+          40.098,
+          36.694,
+          39.028,
+          40.498,
+          42.625,
+          49.38,
+          38.828
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 25.8
+    },
+    {
+      "sample": "collar",
+      "cache_mode": "miss",
+      "before": {
+        "median_ms": 61.922,
+        "measured_ms": [
+          55.884,
+          54.921,
+          59.031,
+          55.308,
+          58.111,
+          57.74,
+          61.133,
+          66.313,
+          62.712,
+          74.935,
+          69.466,
+          73.799,
+          72.694,
+          71.673
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          4486
+        ]
+      },
+      "after": {
+        "median_ms": 56.48,
+        "measured_ms": [
+          61.274,
+          57.389,
+          64.185,
+          54.265,
+          52.862,
+          56.335,
+          52.71,
+          56.626,
+          59.672,
+          64.763,
+          62.023,
+          52.596,
+          51.102,
+          52.092
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          4486
+        ]
+      },
+      "local_median_reduction_percent": 8.8
+    },
+    {
+      "sample": "collar",
+      "cache_mode": "hit",
+      "before": {
+        "median_ms": 51.952,
+        "measured_ms": [
+          49.635,
+          46.325,
+          47.67,
+          44.767,
+          44.285,
+          44.582,
+          45.89,
+          69.728,
+          54.269,
+          55.027,
+          56.949,
+          54.901,
+          55.05,
+          59.603
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "after": {
+        "median_ms": 40.496,
+        "measured_ms": [
+          39.951,
+          46.559,
+          39.586,
+          40.156,
+          46.049,
+          47.47,
+          38.233,
+          40.505,
+          40.167,
+          40.487,
+          40.41,
+          42.059,
+          41.009,
+          40.556
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 22.1
+    },
+    {
+      "sample": "notice",
+      "cache_mode": "miss",
+      "before": {
+        "median_ms": 93.403,
+        "measured_ms": [
+          81.268,
+          81.833,
+          79.875,
+          81.739,
+          82.389,
+          104.861,
+          83.985,
+          95.942,
+          149.499,
+          95.489,
+          112.02,
+          97.059,
+          91.316,
+          117.768
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          9233
+        ]
+      },
+      "after": {
+        "median_ms": 85.794,
+        "measured_ms": [
+          89.957,
+          87.052,
+          81.248,
+          119.071,
+          104.01,
+          83.851,
+          84.467,
+          85.543,
+          91.898,
+          110.039,
+          86.045,
+          85.343,
+          85.236,
+          83.138
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          9233
+        ]
+      },
+      "local_median_reduction_percent": 8.1
+    },
+    {
+      "sample": "notice",
+      "cache_mode": "hit",
+      "before": {
+        "median_ms": 59.841,
+        "measured_ms": [
+          52.114,
+          53.645,
+          54.462,
+          54.503,
+          53.64,
+          56.181,
+          59.737,
+          66.522,
+          64.373,
+          64.602,
+          59.944,
+          62.119,
+          62.339,
+          75.566
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "after": {
+        "median_ms": 55.947,
+        "measured_ms": [
+          54.481,
+          68.481,
+          59.53,
+          51.646,
+          53.948,
+          57.98,
+          59.721,
+          54.894,
+          54.049,
+          67.38,
+          64.861,
+          56.119,
+          55.774,
+          53.894
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 6.5
+    },
+    {
+      "sample": "record-fields",
+      "cache_mode": "miss",
+      "before": {
+        "median_ms": 60.817,
+        "measured_ms": [
+          60.159,
+          62.975,
+          61.476,
+          58.353,
+          55.114,
+          54.405,
+          55.933,
+          82.243,
+          74.011,
+          65.463,
+          61.729,
+          62.994,
+          58.399,
+          58.454
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          3354
+        ]
+      },
+      "after": {
+        "median_ms": 29.378,
+        "measured_ms": [
+          31.283,
+          33.629,
+          29.548,
+          35.206,
+          42.525,
+          30.95,
+          28.876,
+          29.133,
+          29.921,
+          28.165,
+          27.944,
+          28.914,
+          29.208,
+          28.559
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 51.7
+    },
+    {
+      "sample": "record-fields",
+      "cache_mode": "hit",
+      "before": {
+        "median_ms": 45.358,
+        "measured_ms": [
+          42.85,
+          43.166,
+          44.146,
+          42.537,
+          43.041,
+          43.939,
+          42.257,
+          49.813,
+          46.569,
+          48.098,
+          48.834,
+          54.939,
+          50.152,
+          112.881
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "after": {
+        "median_ms": 30.285,
+        "measured_ms": [
+          38.64,
+          33.869,
+          34.611,
+          29.896,
+          29.661,
+          29.73,
+          31.331,
+          29.797,
+          29.043,
+          28.065,
+          30.21,
+          30.505,
+          30.36,
+          30.819
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 33.2
+    },
+    {
+      "sample": "record-question",
+      "cache_mode": "miss",
+      "before": {
+        "median_ms": 71.142,
+        "measured_ms": [
+          59.906,
+          65.148,
+          59.337,
+          59.751,
+          58.226,
+          56.796,
+          55.717,
+          79.741,
+          89.957,
+          87.197,
+          92.825,
+          82.508,
+          85.954,
+          77.137
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          4095
+        ]
+      },
+      "after": {
+        "median_ms": 58.623,
+        "measured_ms": [
+          56.82,
+          54.174,
+          57.117,
+          60.296,
+          64.12,
+          62.967,
+          66.11,
+          58.702,
+          60.837,
+          62.793,
+          58.544,
+          58.433,
+          55.232,
+          54.655
+        ],
+        "generation_counts": [
+          1
+        ],
+        "prompt_chars_per_measured_request": [
+          4738
+        ]
+      },
+      "local_median_reduction_percent": 17.6
+    },
+    {
+      "sample": "record-question",
+      "cache_mode": "hit",
+      "before": {
+        "median_ms": 55.197,
+        "measured_ms": [
+          41.637,
+          42.748,
+          42.682,
+          46.168,
+          52.77,
+          62.146,
+          56.24,
+          72.195,
+          57.342,
+          70.309,
+          58.848,
+          60.123,
+          54.153,
+          53.438
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "after": {
+        "median_ms": 45.616,
+        "measured_ms": [
+          42.019,
+          47.676,
+          45.327,
+          47.723,
+          45.097,
+          44.402,
+          42.683,
+          45.474,
+          56.484,
+          49.5,
+          45.758,
+          53.323,
+          48.003,
+          45.151
+        ],
+        "generation_counts": [
+          0
+        ],
+        "prompt_chars_per_measured_request": [
+          0
+        ]
+      },
+      "local_median_reduction_percent": 17.4
+    }
+  ],
+  "profile_notice_cache_miss": {
+    "queue_connections_before": 48,
+    "queue_connections_after": 24
+  },
+  "source_report_sha256": {
+    "translation107-isolated-paired-0-baseline.json": "69d68c6a1bc81d4de3f4eaebd79d9e90750fdf401c9e1bd19f7f25caedbd696a",
+    "translation107-isolated-paired-1-updated.json": "5ad38c816adba91c1f69ce2ef8fa69471fb34033ef17677473bb240034598498",
+    "translation107-isolated-paired-2-updated.json": "5f0c337cb68b1c11f453e4a85ca6703f2b3c0a36c0380f22242e629dfb9a31ea",
+    "translation107-isolated-paired-3-baseline.json": "9831beee774ddc4494019a64373b11a76e6e5cb161f1d4d59db29be5f96cf009"
+  }
+}

@@ -144,6 +144,7 @@ from io import BytesIO
 import threading
 import contextlib
 import translation_request_cache
+import factory_record_contract
 import line_command_catalog
 import conversation_context
 import translation_mentions
@@ -319,7 +320,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-08.1-material-rework-semantics"
+_EXPECTED_QG_BUILD_ID = "2026-09-09.107-record-facts"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -9213,6 +9214,16 @@ def build_translation_semantic_contract(text, src, tgt):
         contract["requires_llm"] = True
         contract["requires_independent_review"] = True
 
+    # The same source-derived facts feed the first generation and every
+    # acceptance path. Do not add an unconditional paid review for clean facts.
+    _record_module = globals().get("factory_record_contract")
+    _record_frame = _record_module.build_frame(text, src, tgt) if _record_module else {}
+    if _record_frame.get("active"):
+        contract["has_risk"] = True
+        contract["risks"].append({"sense": "record_field_facts", "frame": _record_frame})
+        contract.update(tm_bypass_allowed=False, vector_bypass_allowed=False,
+                        nmt_allowed=False, requires_llm=True)
+
     # Generic plant-context retrieval.  This is direction-neutral and data-driven:
     # adding a new workflow means editing factory_knowledge.json, not app.py.
     try:
@@ -9320,6 +9331,8 @@ def build_translation_semantic_contract_prompt(contract):
             )
             if relation_prompt:
                 lines.append(relation_prompt)
+        elif risk.get("sense") == "record_field_facts":
+            lines.append(factory_record_contract.build_prompt(risk.get("frame") or {}))
         elif risk.get("sense") == "factory_quantity_semantics":
             quantity_prompt = factory_quantity_semantics_module.build_prompt(risk.get("frame") or {})
             if quantity_prompt:
@@ -9417,6 +9430,10 @@ def translation_satisfies_semantic_contract(contract, translation):
                 )
                 if not ok:
                     return False, issues[0] if issues else "factory_message_source_relations_failed"
+        elif risk.get("sense") == "record_field_facts":
+            ok, issues = factory_record_contract.validate_translation(risk.get("frame") or {}, t)
+            if not ok:
+                return False, issues[0]
         elif risk.get("sense") == "factory_quantity_semantics":
             ok, issues = factory_quantity_semantics_module.validate_translation(risk.get("frame") or {}, t)
             if not ok:
@@ -12047,6 +12064,7 @@ def _translation_cache_asset_fingerprint():
         "erp_reason_semantics": globals().get("_FACTORY_REASON_SEMANTICS_BUILD_ID", ""),
         "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
+        "record_contract": getattr(globals().get("factory_record_contract"), "BUILD_ID", ""),
         "conversation_context": conversation_context.BUILD_ID,
         "active_learning": al_module.ACTIVE_LEARNING_BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
@@ -14476,6 +14494,24 @@ def translate(text, src, tgt):
                     _update_last_translate_debug(pipeline_status="verified_original_exact",
                                                 final_candidate=_approved[:2000], openai_status="not_needed")
                     return _approved
+    # A fully parsed set of explicit weight/record fields needs no inference.
+    # Questions and any unparsed prose take the normal path. Prior chat cannot
+    # override these fully explicit current values or supply an unstated unit.
+    _record_frame = factory_record_contract.build_frame(text, src, tgt)
+    _record_candidate = factory_record_contract.render_complete(_record_frame)
+    if _record_candidate:
+        _record_ok, _ = _tm_bypass_integrity_ok(text, _record_candidate, src, tgt)
+        if _record_ok:
+            _record_candidate = _final_delivery_guard(text, _record_candidate, src, tgt)
+            if _record_candidate:
+                _gid = getattr(_tl, "group_id", "") or ""
+                _log_translation(text, _record_candidate, src, tgt, "structured_record_fields", 0, 1.0, False, 1.0, _gid)
+                if _gid:
+                    _conv_buffer_add(_gid, text, _record_candidate, src, tgt)
+                _set_translation_outcome("delivered", "structured_record_fields")
+                _update_last_translate_debug(pipeline_status="structured_record_fields",
+                    final_candidate=_record_candidate[:2000], openai_status="not_needed")
+                return _record_candidate
     # A complete ERP status statement has no unbound prose to infer. Render
     # its subject, state and station locally, then use the ordinary delivery
     # gate. Partial parses always continue to the normal translation pipeline.

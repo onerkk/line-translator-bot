@@ -63,6 +63,9 @@ SAMPLES = [
     ('routine', '今天下午再確認包裝進度。', 'Sore ini, periksa lagi progres pengemasan.'),
     ('collar', '套環要補上', 'Cincin Pelindung perlu dipasang.'),
     ('notice', SOURCE, TARGET),
+    ('record-fields', '實重682 TAG入677', 'Berat aktual 682; Angka pada TAG tercatat 677.'),
+    ('record-question', '這是入非本月沒有換TAG嗎？',
+     'Apakah data ini sudah dimasukkan ke kategori bukan untuk bulan ini, tetapi TAG-nya belum diganti?'),
 ]
 
 def test_latency_probe(runtime, monkeypatch):
@@ -73,6 +76,10 @@ def test_latency_probe(runtime, monkeypatch):
     monkeypatch.setattr(app, '_BG_POST_EXECUTOR', SimpleNamespace(submit=lambda *a, **k: None))
     monkeypatch.setattr(app, '_build_translation_action_quick_reply', app._build_unified_translation_menu)
     monkeypatch.setattr(app, 'get_group_feature', lambda gid, feature: feature == 'flex')
+    # Isolate each source: repeated identical benchmark messages otherwise
+    # converge to a conversation-cache hit after four turns, even in "miss"
+    # mode. Context accuracy/reuse has separate conversation regressions.
+    monkeypatch.setattr(app, 'get_conv_context_enabled', lambda *_: False)
     monkeypatch.setattr(app, 'translate_openai', TRANSLATE_OPENAI)
     calls=[]
     current=['']
@@ -88,7 +95,7 @@ def test_latency_probe(runtime, monkeypatch):
     for name,source,target in SAMPLES:
         current[0]=target
         for mode in ('miss','hit'):
-            times=[];runs=[]
+            times=[];runs=[];miss_generations=None
             for i in range(9):
                 if mode=='miss':app.translation_cache.clear()
                 app._tl.__dict__.clear()
@@ -102,14 +109,21 @@ def test_latency_probe(runtime, monkeypatch):
                 elapsed=(time.perf_counter()-start)*1000
                 result=delivered_text(runtime)
                 assert runtime.sends and target in result, (name,mode,'expected translation missing')
+                if mode=='miss':
+                    if miss_generations is None:miss_generations=len(calls)
+                    assert len(calls)==miss_generations, (name,'cache leaked into miss benchmark',i,len(calls))
                 runs.append({'ms':round(elapsed,3),'calls':list(calls),'text':result})
                 if 1<=i<=7:times.append(elapsed)
                 if profiler:profiler.dump_stats(str(base)+f'-{name}-{mode}.pstats')
             rows.append({'sample':name,'mode':mode,'median_ms':round(statistics.median(times),3),'runs':runs})
     Path(str(base)+'.json').write_text(json.dumps({'mode':'offline','network':'blocked','live_ai_calls':0,
-        'line_messages_sent':0,'scope':'handle_message local execution; mocked AI and LINE transport; asynchronous postprocessing excluded',
+        'line_messages_sent':0,'scope':'isolated-source handle_message; conversation disabled; mocked AI and LINE transport; asynchronous postprocessing excluded',
         'repo':str(Path(app.__file__).resolve().parent),
         'app_sha256':hashlib.sha256(Path(app.__file__).read_bytes()).hexdigest(),
+        'implementation_sha256':{name:hashlib.sha256(Path(app.__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ('app.py','translation_quality_gate.py','factory_record_contract.py',
+                         'translation_retry_queue.py','durable_workers.py')
+            if Path(app.__file__).with_name(name).exists()},
         'corpus_sha256':hashlib.sha256(json.dumps(SAMPLES,ensure_ascii=False).encode()).hexdigest(),
         'measured_runs_per_sample':7, 'rows':rows},ensure_ascii=False,indent=2)+'\n')
     print([(r['sample'],r['mode'],r['median_ms']) for r in rows])

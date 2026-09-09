@@ -69,63 +69,74 @@ def _columns(conn: sqlite3.Connection) -> set[str]:
     return {str(row[1]) for row in conn.execute("PRAGMA table_info(translation_retry_jobs)")}
 
 
+def _initialize_connection(conn) -> None:
+    # This used to take a write transaction, inspect every column and run
+    # migration UPDATEs before every read/checkpoint/lease check. Persist
+    # readiness in SQLite itself so all workers can take a read-only fast
+    # path, while a new/replaced database still gets migrated normally.
+    if conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS translation_retry_jobs (
+                job_key TEXT PRIMARY KEY,
+                job_kind TEXT NOT NULL DEFAULT 'text',
+                payload_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                last_error TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                lease_owner TEXT NOT NULL DEFAULT '',
+                lease_until REAL NOT NULL DEFAULT 0,
+                schema_version INTEGER NOT NULL DEFAULT 2
+            )
+            """
+        )
+        cols = _columns(conn)
+        migrations = {
+            "job_kind": "ALTER TABLE translation_retry_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'text'",
+            "lease_owner": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''",
+            "lease_until": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0",
+        }
+        for name, sql in migrations.items():
+            if name not in cols:
+                conn.execute(sql)
+        conn.execute(
+            "UPDATE translation_retry_jobs SET status='pending', lease_owner='', lease_until=0 "
+            "WHERE status NOT IN ('pending','leased') OR status IS NULL"
+        )
+        conn.execute(
+            "UPDATE translation_retry_jobs SET schema_version=? WHERE schema_version < ?",
+            (_SCHEMA_VERSION, _SCHEMA_VERSION),
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_translation_retry_due "
+            "ON translation_retry_jobs(status, next_attempt_at, lease_until)"
+        )
+        conn.execute("CREATE TABLE IF NOT EXISTS translation_delivery_receipts "
+                     "(job_key TEXT PRIMARY KEY, delivered_at REAL NOT NULL)")
+        conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+@contextmanager
+def _ready_connection():
+    with _connect() as conn:
+        _initialize_connection(conn)
+        yield conn
+
+
 def initialize() -> None:
-    """Create or migrate the queue schema without dropping pending v1 jobs."""
-    with _LOCK, _connect() as conn:
-        # This used to take a write transaction, inspect every column and run
-        # migration UPDATEs before every read/checkpoint/lease check. Persist
-        # readiness in SQLite itself so all workers can take a read-only fast
-        # path, while a new/replaced database still gets migrated normally.
-        if conn.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION:
-            return
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS translation_retry_jobs (
-                    job_key TEXT PRIMARY KEY,
-                    job_kind TEXT NOT NULL DEFAULT 'text',
-                    payload_json TEXT NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    next_attempt_at REAL NOT NULL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    lease_owner TEXT NOT NULL DEFAULT '',
-                    lease_until REAL NOT NULL DEFAULT 0,
-                    schema_version INTEGER NOT NULL DEFAULT 2
-                )
-                """
-            )
-            cols = _columns(conn)
-            migrations = {
-                "job_kind": "ALTER TABLE translation_retry_jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'text'",
-                "lease_owner": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''",
-                "lease_until": "ALTER TABLE translation_retry_jobs ADD COLUMN lease_until REAL NOT NULL DEFAULT 0",
-            }
-            for name, sql in migrations.items():
-                if name not in cols:
-                    conn.execute(sql)
-            conn.execute(
-                "UPDATE translation_retry_jobs SET status='pending', lease_owner='', lease_until=0 "
-                "WHERE status NOT IN ('pending','leased') OR status IS NULL"
-            )
-            conn.execute(
-                "UPDATE translation_retry_jobs SET schema_version=? WHERE schema_version < ?",
-                (_SCHEMA_VERSION, _SCHEMA_VERSION),
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_translation_retry_due "
-                "ON translation_retry_jobs(status, next_attempt_at, lease_until)"
-            )
-            conn.execute("CREATE TABLE IF NOT EXISTS translation_delivery_receipts "
-                         "(job_key TEXT PRIMARY KEY, delivered_at REAL NOT NULL)")
-            conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    """Create/migrate the database, preserving pending work across upgrades."""
+    with _LOCK, _ready_connection():
+        pass
 
 
 def enqueue(
@@ -140,7 +151,6 @@ def enqueue(
     A repeated webhook never overwrites extracted source, a prepared delivery,
     or completed target languages. Only checkpoint() may update existing work.
     """
-    initialize()
     key = str(job_key or "").strip()
     if not key:
         raise ValueError("job_key is required")
@@ -149,7 +159,7 @@ def enqueue(
     now = time.time()
     due = now + max(0.0, float(delay_seconds or 0.0))
     body = json.dumps(body_payload, ensure_ascii=False, separators=(",", ":"))
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             if conn.execute("SELECT 1 FROM translation_delivery_receipts WHERE job_key=? AND delivered_at>?",
@@ -199,8 +209,7 @@ def checkpoint(job_key: str, updates: Dict[str, Any], *, owner: Optional[str] = 
     A retrying worker may write only while it owns the live lease. The immediate
     handler may checkpoint only before any worker has claimed the pending job.
     """
-    initialize()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT payload_json,status,lease_owner,lease_until FROM translation_retry_jobs WHERE job_key=?",
@@ -223,8 +232,7 @@ def checkpoint(job_key: str, updates: Dict[str, Any], *, owner: Optional[str] = 
 
 
 def get(job_key: str) -> Optional[Dict[str, Any]]:
-    initialize()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         row = conn.execute(
             "SELECT * FROM translation_retry_jobs WHERE job_key=?",
             (str(job_key),),
@@ -234,8 +242,7 @@ def get(job_key: str) -> Optional[Dict[str, Any]]:
 
 def list_pending(*, limit: int = 500) -> List[Dict[str, Any]]:
     """Return all outstanding jobs, including currently leased jobs."""
-    initialize()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         rows = conn.execute(
             """
             SELECT * FROM translation_retry_jobs
@@ -250,9 +257,8 @@ def list_pending(*, limit: int = 500) -> List[Dict[str, Any]]:
 
 def due_jobs(*, now: Optional[float] = None, limit: int = 20) -> List[Dict[str, Any]]:
     """Compatibility read-only due query; workers should use ``claim_due_jobs``."""
-    initialize()
     ts = time.time() if now is None else float(now)
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         rows = conn.execute(
             """
             SELECT * FROM translation_retry_jobs
@@ -281,13 +287,12 @@ def claim_due_jobs(
     in-memory worker and prevents duplicate provider calls across Gunicorn
     processes while guaranteeing crash recovery.
     """
-    initialize()
     ts = time.time() if now is None else float(now)
     worker = str(owner or f"pid-{os.getpid()}-{uuid.uuid4().hex[:12]}")
     lim = max(1, min(int(limit or 20), 200))
     lease_until = ts + max(15.0, float(lease_seconds or 180.0))
     kind_sql, kind_args = _kind_filter(include_kinds, exclude_kinds)
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             rows = conn.execute(
@@ -346,10 +351,9 @@ def _kind_filter(include_kinds=None, exclude_kinds=()):
 
 def next_ready_delay(*, include_kinds=None, exclude_kinds=(), now=None):
     """Return this lane's next due delay, without loading stored message bodies."""
-    initialize()
     sql, args = _kind_filter(include_kinds, exclude_kinds)
     ts = time.time() if now is None else float(now)
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         row = conn.execute(
             "SELECT MIN(CASE WHEN status='leased' THEN lease_until ELSE next_attempt_at END) "
             "FROM translation_retry_jobs WHERE status IN ('pending','leased')" + sql, args,
@@ -358,9 +362,8 @@ def next_ready_delay(*, include_kinds=None, exclude_kinds=(), now=None):
 
 
 def renew_lease(job_key: str, *, owner: str, lease_seconds: float = 180.0) -> bool:
-    initialize()
     now = time.time()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         cur = conn.execute(
             """
             UPDATE translation_retry_jobs
@@ -378,9 +381,8 @@ class LeaseLostError(RuntimeError):
 
 def claim_job(job_key: str, *, owner: str, lease_seconds: float = 240.0) -> bool:
     """Claim a foreground intent, even before its delayed retry due time."""
-    initialize()
     now = time.time()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         cur = conn.execute(
             "UPDATE translation_retry_jobs SET status='leased',lease_owner=?,lease_until=?,updated_at=? "
             "WHERE job_key=? AND (status='pending' OR (status='leased' AND lease_until<=?))",
@@ -421,7 +423,6 @@ def maintain_lease(job_key: str, *, owner: str, lease_seconds: float = 240.0):
 
 def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Optional[str] = None) -> bool:
     """Release a job back to pending and increment attempt count."""
-    initialize()
     now = time.time()
     params: list[Any] = [
         now + max(1.0, float(delay_seconds or 1.0)),
@@ -433,7 +434,7 @@ def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Op
     if owner:
         owner_clause = " AND status='leased' AND lease_owner=? AND lease_until>?"
         params.extend((str(owner), now))
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         cur = conn.execute(
             """
             UPDATE translation_retry_jobs
@@ -447,14 +448,13 @@ def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Op
 
 
 def mark_delivered(job_key: str, *, owner: Optional[str] = None) -> bool:
-    initialize()
     params: list[Any] = [str(job_key)]
     now = time.time()
     owner_clause = " AND status='pending'"
     if owner:
         owner_clause = " AND status='leased' AND lease_owner=? AND lease_until>?"
         params.extend((str(owner), now))
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         cur = conn.execute(
             "DELETE FROM translation_retry_jobs WHERE job_key=?" + owner_clause,
@@ -469,8 +469,7 @@ def mark_delivered(job_key: str, *, owner: Optional[str] = None) -> bool:
 
 
 def was_delivered(job_key: str) -> bool:
-    initialize()
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         return bool(conn.execute(
             "SELECT 1 FROM translation_delivery_receipts WHERE job_key=? AND delivered_at>?",
             (str(job_key), time.time() - 7 * 86400),
@@ -483,11 +482,10 @@ def remove(job_key: str) -> None:
 
 def cancel_source(target_id: str, message_id: str, *, except_identity: str = "") -> int:
     """Cancel exact superseded/unsent source identities, invalidating leases."""
-    initialize()
     prefix = str(target_id) + ":" + str(message_id)
     keep = str(target_id) + ":" + except_identity if except_identity else ""
     removed = 0
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         rows = conn.execute("SELECT job_key FROM translation_retry_jobs").fetchall()
         for row in rows:
             key = row[0]
@@ -499,9 +497,8 @@ def cancel_source(target_id: str, message_id: str, *, except_identity: str = "")
 
 
 def pending_count(*, include_kinds=None, exclude_kinds=()) -> int:
-    initialize()
     kind_sql, kind_args = _kind_filter(include_kinds, exclude_kinds)
-    with _LOCK, _connect() as conn:
+    with _LOCK, _ready_connection() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM translation_retry_jobs "
             "WHERE status IN ('pending','leased')" + kind_sql, kind_args,

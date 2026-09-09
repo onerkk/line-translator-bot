@@ -30,10 +30,18 @@ class WorkerPool:
             if self.stopping:
                 return False
             self.condition.notify_all()
-            if queue.next_ready_delay(**self.filters) is None:
-                return False
             started = False
-            slots = min(self.workers, queue.pending_count(**self.filters))
+            try:
+                if queue.next_ready_delay(**self.filters) is None:
+                    return False
+                slots = min(self.workers, queue.pending_count(**self.filters))
+            except Exception:
+                # The intent may already be durable. A transient inspection
+                # failure after enqueue must not leave it without any worker
+                # until the next webhook/restart. The normal worker loop has
+                # bounded waits and recovers its own database reads.
+                logger.exception("[DurableWorker] lane=%s start inspection failed; scheduling recovery", self.name)
+                slots = 1
             while len(self.threads) < slots:
                 thread = threading.Thread(target=self._work, name=self.name, daemon=True)
                 self.threads.add(thread)

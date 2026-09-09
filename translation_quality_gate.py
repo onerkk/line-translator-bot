@@ -30,6 +30,7 @@ import glossary_policy as gp_module
 import factory_semantic_audit as fsa_module
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
+import factory_record_contract as record_contract
 import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
 
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-08.1-material-rework-semantics"
+QUALITY_GATE_BUILD_ID = "2026-09-09.107-record-facts"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1879,6 +1880,11 @@ def _validate_normalized_translation(
     # readings, differences, reporting roles, movement, destinations and
     # inspection actions remain attached to the same source roles. It applies
     # before any cache/learning decision and is compositional across paraphrases.
+    _, record_issues = record_contract.validate_translation(
+        record_contract.build_frame(source, src, tgt), candidate
+    )
+    issues.extend(record_issues)
+
     relation_frame = fmr_module.build_frame(source, src, tgt)
     relation_ok, relation_issues = fmr_module.validate_translation(
         relation_frame, candidate
