@@ -1,3 +1,5 @@
+// FACTORY_FORM_BUILD: 2026-09-09.ci106
+// FACTORY_FORM_LIFECYCLE_API: 1
 /* Shared, server-verified form entry. Preserve input across page navigation. */
 (() => {
   'use strict';

@@ -1,3 +1,5 @@
+// FACTORY_MEMBER_BUILD: 2026-09-09.ci106
+// FACTORY_MEMBER_LIFECYCLE_API: 1
 (function(){
   'use strict';
   const pageDocument=document;
