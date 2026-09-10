@@ -37,6 +37,11 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  }
  d.querySelector('#fa-load-receipts').click();await until(()=>d.querySelector('#fa-receipts').textContent.includes('✅ 已了解：Adi'),'actual acknowledgement in admin');
  assert(d.querySelector('#fa-receipt-status').textContent.includes('A 班'));assert(d.querySelector('#fa-receipts').textContent.includes('發起人：管理者'));
+ const viewed=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_receipts',timestamp:590})})).json();
+ assert.equal(viewed.emitted_count,0);assert.equal(viewed.feedback,'');
+ const ignored=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_receipts',uid:'U'+'9'.repeat(32)})})).json();
+ assert.equal(ignored.emitted_count,0);
+ d.querySelector('#fa-load-receipts').click();await until(()=>d.querySelector('#fa-receipts').textContent.includes('查閱按鈕紀錄（不算回覆）：Adi'),'silent status view in admin');
  await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_help',timestamp:600})});
  Object.defineProperty(d,'visibilityState',{configurable:true,value:'visible'});d.querySelector('#fa-receipts-section').getBoundingClientRect=()=>({height:500,top:0,bottom:500});
  const originalNow=w.Date.now;w.Date.now=()=>originalNow()+21000;w.dispatchEvent(new w.Event('focus'));await until(()=>d.querySelector('#fa-receipts').textContent.includes('❓ 需要說明：Adi'),'visible receipt auto refresh');
