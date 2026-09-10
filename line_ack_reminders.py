@@ -20,7 +20,7 @@ import uuid
 from line_factory_store import mark_delivery
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-10.4-owner-only-controls"
+BUILD_ID = "2026-09-10.5-private-ack-once"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 

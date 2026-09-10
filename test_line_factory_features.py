@@ -50,6 +50,7 @@ def hub(storage, monkeypatch, tmp_path):
             "group_tracking": {GROUP: {"name": "A 班"}},
             "group_user_names": {GROUP: {USER: "管理者", COLLEAGUE: "Adi"}},
             "save_settings": lambda **kwargs: True,
+            "_factory_receipt_sender": lambda *args: None,  # Private LINE transport is offline too.
             "check_manager_access": lambda feature: True, "_state_lock": threading.RLock(),
             "LIFF_ID": "1234567890-test", "LINE_CHANNEL_SECRET": "test-secret",
             "_GLOSSARY_JSON": json.dumps({"I5": {"idn": "mesin I5", "note_zh": "內建 I5 說明"}}),

@@ -30,11 +30,12 @@ import line_quick_reply
 import line_message_ui
 import line_command_catalog
 import line_ack_reminders
+import line_ack_receipts
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-10.4-owner-only-controls"
+BUILD_ID = "2026-09-10.5-private-ack-once"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -1112,9 +1113,11 @@ class FactoryHub:
             return previous and (previous.get("status") == state
                                  or timestamp < previous.get("event_timestamp", 0))
 
-        # Repeated taps stay silent across cards, restarts and group switches.
-        # Keep the original response time/name and avoid another profile lookup.
+        # Repeated taps keep the original response time/name, with no profile
+        # lookup or group reply. Only an unfinished private send may resume.
         if responding and notice and _USER.fullmatch(str(uid or "")) and unchanged_response(notice):
+            if action == "factory_ack":
+                line_ack_receipts.send_pending(self, notice, uid)
             return True
         # A valid stored button context can repair an absent initial notice,
         # e.g. from an interrupted earlier write. Do not recreate an expired or
@@ -1166,15 +1169,18 @@ class FactoryHub:
                 row["delivery_state"] = "delivered"  # The signed button proves receipt.
                 responses[uid] = {"status": state, "name": str(name), "at": recorded_at,
                                   "event_timestamp": timestamp, "recording_id": operation_id}
+                if state == "understood":
+                    line_ack_receipts.prepare(row, uid, recorded_at)
                 return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
             if not notice or notice.get("responses", {}).get(uid, {}).get("recording_id") != operation_id:
                 return True
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
-            # Successful taps only persist receipts, even the first tap or a
-            # late answer after stop. The scheduled reminder owns group updates;
-            # returning handled also prevents the webhook's generic reply path.
+            if action == "factory_ack":
+                line_ack_receipts.send_pending(self, notice, uid)
+            # A successful ack only sends one private confirmation. Scheduled
+            # reminders still own group updates; never use the group reply path.
         return True
 
     def _finish_answered_notice(self, notice, departed):
