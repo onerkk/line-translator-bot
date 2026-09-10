@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "0cd4f19194feb5943f0cb3c46c7fb0b29edc9b1bd819855158aa89204d62901a",
-    "updated_at_iso": "2026-09-09T08:43:43.508757+00:00",
-    "updated_at_unix": 1788943423.5087574
+    "state_hash": "42baf61f5710f81c4e41a5f1f14e64d8f47248bfdedbb2aa398173d9bee615bf",
+    "updated_at_iso": "2026-09-10T01:31:37.286864+00:00",
+    "updated_at_unix": 1789003897.286864
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-09 08:24:25",
+    "last_updated": "2026-09-09 13:09:00",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -194,13 +194,13 @@
     "image_translations": 4,
     "oai_cache_write": 19392,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.1590022,
-    "oai_input": 195588,
-    "oai_output": 1895,
+    "oai_cost_usd": 0.2588284,
+    "oai_input": 294414,
+    "oai_output": 2641,
     "oai_reasoning": 0,
-    "text_translations": 273,
-    "tokens_completion": 19351,
-    "tokens_prompt": 4430359,
+    "text_translations": 277,
+    "tokens_completion": 20097,
+    "tokens_prompt": 4529185,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -359,7 +359,7 @@
       },
       "Cd188e1adc7792e407c90f3fa78850316": {
         "ack_reminder_enabled": true,
-        "ack_reminder_minutes": 60,
+        "ack_reminder_minutes": 240,
         "ack_reminder_repeat": true,
         "acknowledgements": "command",
         "edit_translation": true,
@@ -418,12 +418,12 @@
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
       "cache_write": 3759,
-      "cost_usd": 1.8152894999999998,
-      "model": "gpt-5.6-luna",
+      "cost_usd": 1.9151157,
+      "model": "gpt-5.6-terra",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 6375,
-      "tokens_prompt": 1856933
+      "tokens_completion": 7121,
+      "tokens_prompt": 1955759
     },
     "__dm__": {
       "tokens_completion": 42,
