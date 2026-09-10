@@ -30,7 +30,7 @@ def test_confirmation_controls_are_in_the_message_not_only_quick_reply(hub):
         body.pop('quickReply', None)
         bodies.extend(actions(body))
     assert any('action=factory_ack&token=' + token == data for data in bodies)
-    # New notices default to Paham and status; old help postbacks stay readable.
+    # New notices default to Paham and status; retired help buttons are absent.
     assert not any('action=factory_help&token=' + token == data for data in bodies)
     assert any('action=factory_receipts&token=' + token == data for data in bodies)
 
@@ -71,8 +71,8 @@ def test_missing_receipt_can_be_recovered_from_a_valid_stored_context(hub, monke
     token, _, _ = notice(hub)
     hub.store.delete('notice:' + GROUP + ':' + token)
     monkeypatch.setattr(hub, '_reply', lambda *a, **kw: None)
-    hub.postback(event(uid=COLLEAGUE), {'action': 'factory_help', 'token': token})
-    assert hub.store.get('notice:' + GROUP + ':' + token)['responses'][COLLEAGUE]['status'] == 'needs_help'
+    hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
+    assert hub.store.get('notice:' + GROUP + ':' + token)['responses'][COLLEAGUE]['status'] == 'understood'
 
 
 def test_storage_outage_is_silent_and_stays_retryable(hub, monkeypatch):

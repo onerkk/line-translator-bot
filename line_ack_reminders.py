@@ -7,6 +7,7 @@ initial card. A signed receipt can update responses without losing a lease.
 from __future__ import annotations
 
 import copy
+from collections import deque
 import json
 import os
 import re
@@ -20,7 +21,7 @@ import uuid
 from line_factory_store import mark_delivery
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-10.5-private-ack-once"
+BUILD_ID = "2026-09-10.8-understood-only"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -97,13 +98,19 @@ def tracked_members(notice):
 
 
 def tracked_responses(notice):
+    """Only an explicit acknowledgement completes a recipient's task.
+
+    Legacy needs_help entries remain stored for compatibility, but are neither
+    completed answers in queries nor grounds for excluding a reminder target.
+    """
     responses = notice.get("responses", {})
     members = tracked_members(notice)
-    return {uid: response for uid, response in responses.items() if uid in members}
+    return {uid: response for uid, response in responses.items()
+            if uid in members and isinstance(response, dict) and response.get("status") == "understood"}
 
 
 def pending_ids(notice, departed=None):
-    responses = notice.get("responses", {})
+    responses = tracked_responses(notice)
     return [uid for uid in tracked_members(notice)
             if uid != notice.get("sender_id") and uid not in responses and uid not in (departed or {})]
 
@@ -156,10 +163,96 @@ def unknown_member_count(notice, departed=None):
 class NoticeService:
     def __init__(self, hub, sender=send_messages, clock=time.time):
         self.hub, self.sender, self.clock = hub, sender, clock
+        self._legacy_scan_cursor, self._legacy_scan_next_at = "", 0
+        self._legacy_scan_pending = deque()
+        self._legacy_scan_lock = threading.Lock()
 
     @property
     def store(self):
         return self.hub.store
+
+    @staticmethod
+    def _legacy_completion(row, departed=None):
+        return bool(row and row.get("delivery_state") == "delivered"
+                    and row.get("reminder_state") == "no_pending"
+                    and not row.get("reminder_stopped_at") and not row.get("lease_id")
+                    and any(isinstance(row.get("responses", {}).get(uid), dict)
+                            and row["responses"][uid].get("status") == "needs_help"
+                            for uid in pending_ids(row, departed)))
+
+    def reconcile_legacy_notice(self, row, departed=None):
+        """Repair only automatic completion caused by a removed help response.
+
+        Never send from this path. Restore the original deadline (or the next
+        interval after a previous round), then let the existing worker recheck
+        permissions, expiry and recipients immediately before LINE I/O.
+        """
+        if not self._legacy_completion(row, departed):
+            return row
+        group, now = row["group_id"], self.clock()
+        if departed is None:
+            departed = self.store.get("members-left:" + group) or {}
+        if not self._legacy_completion(row, departed):
+            return row
+        options = getattr(self.hub, "ack_options", self.hub.options)(group)
+        bot_left = self.store.get("bot-left:" + group) or {}
+        allowed = (options["acknowledgements"] != "off" and options["ack_reminder_enabled"]
+                   and self.hub.current(row.get("factory_event")))
+
+        def repair(current):
+            if not self._legacy_completion(current, departed):
+                return current
+            interval = current.get("reminder_minutes", 0) * 60
+            base = current.get("delivered_at") or current["created_at"]
+            due = current.get("reminder_due_at") or base + interval
+            # A partial/uncertain old round must not be replayed immediately.
+            last_send = max(current.get("reminded_at") or 0, current.get("last_batch_sent_at") or 0)
+            completed = current.get("reminder_completed_at") or 0
+            if completed >= max(due, last_send + interval):
+                last_send = max(last_send, completed)
+            if last_send:
+                due = max(due, last_send + interval)
+            inactive = (not allowed or interval <= 0 or current["expires_at"] <= now
+                        or due >= current["expires_at"]
+                        or bot_left.get("at", 0) >= current["created_at"])
+            one_round_done = current.get("reminder_count", 0) > 0 and not current.get("reminder_repeat")
+            result = dict(current, reminder_completed_at=None, legacy_help_reconciled_at=now,
+                          pending_batch=None, lease_id="", wake_at=None, next_reminder_at=None)
+            if inactive or one_round_done:
+                return dict(result, reminder_state="cancelled" if inactive else "sent")
+            return dict(result, reminder_state="repeat_pending" if current.get("reminder_count") else "pending",
+                        wake_at=due, next_reminder_at=due, reminded_ids=[], reminder_batch=0,
+                        # Never reuse a possibly accepted old request's UUID for
+                        # the new audience or receipt summary after migration.
+                        reminder_round=current.get("reminder_round", 0) + 1,
+                        roster_checked_at=None, attempts=0, last_error="", last_error_stage="")
+
+        ttl = max(1, int(row["expires_at"] - now))
+        return self.store.update("notice:" + group + ":" + row["token"], repair, ttl) or row
+
+    def reconcile_legacy_notices(self, budget_seconds=3):
+        """Incremental startup repair; retry failed pages and recheck hourly.
+
+        No-pending notices have no wake index, so normal due polling cannot
+        find them. Page globally instead of relying on an admin viewing history.
+        """
+        if budget_seconds <= 0 or self.clock() < self._legacy_scan_next_at:
+            return
+        if not self._legacy_scan_lock.acquire(blocking=False):
+            return
+        started = time.monotonic()
+        try:
+            if not self._legacy_scan_pending:
+                rows, cursor = self.store.notice_page(self._legacy_scan_cursor)
+                self._legacy_scan_pending.extend(rows)
+                self._legacy_scan_cursor = cursor
+            while self._legacy_scan_pending and time.monotonic() - started < budget_seconds:
+                self.reconcile_legacy_notice(self._legacy_scan_pending[0])
+                self._legacy_scan_pending.popleft()  # Advance only after a confirmed repair/no-op.
+            if not self._legacy_scan_pending and not self._legacy_scan_cursor:
+                self._legacy_scan_next_at = self.clock() + 3600
+        finally:
+            self._legacy_scan_lock.release()
 
     def _update(self, key, lease, change):
         def apply(row):
@@ -318,6 +411,9 @@ class NoticeService:
                 submit_preparation(key)
             else:
                 self.process(key)
+        # Service existing deadlines first; migration never holds up translation
+        # preparation or a due reminder to scan the entire notice history.
+        self.reconcile_legacy_notices(min(3, budget_seconds - (time.monotonic() - started)))
 
     def process(self, key):
         now, lease = self.clock(), uuid.uuid4().hex

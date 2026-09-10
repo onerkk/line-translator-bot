@@ -35,7 +35,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-10.5-private-ack-once"
+BUILD_ID = "2026-09-10.8-understood-only"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -844,7 +844,7 @@ class FactoryHub:
             self._reply(event, "通知內容最多 1500 個 LINE 字元，請分段發起。\nMaksimal 1500 karakter per pemberitahuan.")
             return True
         rows = self.menu.notice_rows(group, content, requested=True)
-        if not any(row["action"] in {"factory_ack", "factory_help"} for row in rows):
+        if not any(row["action"] == "factory_ack" for row in rows):
             self._reply(event, "此群組已關閉作業確認。請在後台「快捷鍵」選擇此群組，"
                               "將「作業確認觸發方式」設為「輸入 /ack 或 /確認 指令才建立」，並按「儲存此設定」。\n"
                               "Konfirmasi dinonaktifkan untuk grup ini. Aktifkan mode perintah /ack di pengaturan grup, lalu simpan.")
@@ -994,6 +994,8 @@ class FactoryHub:
         action = params.get("action", "")
         if not action.startswith("factory_"):
             return False
+        if action == "factory_help":
+            return True  # Retired buttons: no read, write, recovery or feedback.
         quiet = action in NOTICE_CONTROL_ACTIONS
         marker = _QUIET_NOTICE_CONTROL.set(quiet)
         try:
@@ -1085,6 +1087,7 @@ class FactoryHub:
             return True
         # Only an authorized, explicitly requested status may reply. Return a
         # compact text snapshot, without re-posting the notice or native @ tags.
+        notice = self._finish_answered_notice(notice, departed)
         text = self._receipt_text(notice, "📋 回覆狀態 / Status jawaban", departed=departed, include_content=False)
         marker = _QUIET_NOTICE_CONTROL.set(False)
         try:
@@ -1094,24 +1097,25 @@ class FactoryHub:
         return True
 
     def _receipt_postback(self, event, action, token, group, uid):
-        if not _USER.fullmatch(str(uid or "")):
+        if action == "factory_help" or not _USER.fullmatch(str(uid or "")):
             return True
         notice_key = "notice:" + group + ":" + token
         notice = self.get_notice(token, group)
         if action in NOTICE_MANAGEMENT_ACTIONS:
             return self._notice_management_postback(event, action, notice, group, uid)
-        responding = action in {"factory_ack", "factory_help"}
+        responding = action == "factory_ack"
         # Check the frozen audience before any member/profile write or repair.
         # Legacy all-group notices also exclude the author and unlisted users.
         if notice and not self._notice_recipient(notice, uid):
             return True
-        state = "understood" if action == "factory_ack" else "needs_help"
+        state = "understood"
         timestamp = int(field(event, "timestamp", 0) or 0) if responding else 0
 
         def unchanged_response(row):
             previous = row.get("responses", {}).get(uid)
-            return previous and (previous.get("status") == state
-                                 or timestamp < previous.get("event_timestamp", 0))
+            # An old needs_help timestamp must never veto an actual ack,
+            # including an acknowledgement delivered out of timestamp order.
+            return isinstance(previous, dict) and previous.get("status") == state
 
         # Repeated taps keep the original response time/name, with no profile
         # lookup or group reply. Only an unfinished private send may resume.
@@ -1179,6 +1183,7 @@ class FactoryHub:
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
             if action == "factory_ack":
                 line_ack_receipts.send_pending(self, notice, uid)
+            self._finish_answered_notice(notice, departed)
             # A successful ack only sends one private confirmation. Scheduled
             # reminders still own group updates; never use the group reply path.
         return True
@@ -1186,6 +1191,7 @@ class FactoryHub:
     def _finish_answered_notice(self, notice, departed):
         # Reconcile older queued notices when someone views their status. Use
         # the latest stored responses inside CAS, not the UI's snapshot.
+        notice = self.reminders.reconcile_legacy_notice(notice, departed)
         finished = line_ack_reminders.finish_if_no_pending(notice, departed, now=time.time())
         if finished == notice:
             return notice
@@ -1197,7 +1203,6 @@ class FactoryHub:
         responses = line_ack_reminders.tracked_responses(notice)
         selected = notice.get("recipient_scope") == "mentioned"
         understood = [x["name"] for x in responses.values() if x["status"] == "understood"]
-        help_names = [x["name"] for x in responses.values() if x["status"] == "needs_help"]
         if departed is None:
             try:
                 departed = self.store.get("members-left:" + notice["group_id"]) or {}
@@ -1214,7 +1219,6 @@ class FactoryHub:
                 (("\n" + self._short(notice.get("original"), 160) +
                   "\n" + self._short(notice.get("translated"), 220)) if include_content else "") +
                 "\n\n✅ 了解/Paham (" + str(len(understood)) + "): " + self._short("、".join(understood) or "—", 300) +
-                ("\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names), 300) if help_names else "") +
                 ("\n⏳ 指定成員未回覆/Belum menjawab (" if selected else "\n⏳ 已知成員未回覆/Belum menjawab (") +
                 str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300))
         unknown = line_ack_reminders.unknown_member_count(notice, departed)
@@ -1227,10 +1231,8 @@ class FactoryHub:
         if not pending:
             text += ("\n✅ 指定成員未回覆為 0。\nSemua anggota yang ditunjuk sudah menjawab atau keluar dari grup."
                      if selected else "\n✅ 已知成員未回覆為 0。\nTidak ada anggota yang diketahui belum menjawab.")
-        if notice.get("reminder_state") == "no_pending":
+        if not pending and notice.get("reminder_state") == "no_pending":
             text += "\n✅ 此通知已自動停止提醒。\nPengingat untuk pemberitahuan ini dihentikan otomatis."
-        if help_names:
-            text += "\n請發起人協助說明。 / Pengirim diminta membantu menjelaskan."
         if notice.get("reminder_stopped_at"):
             text += "\n🛑 此通知已停止提醒。 / Pengingat dihentikan."
         return self._short(text, 1900)

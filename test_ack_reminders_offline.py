@@ -56,7 +56,7 @@ class NoticeTests(unittest.TestCase):
         self.store.save_interaction({"token": token, "group_id": GROUP}, 604800, notice=row)
         return "notice:" + GROUP + ":" + token
 
-    def test_waits_from_delivery_and_excludes_both_kinds_of_replies_and_author(self):
+    def test_waits_from_delivery_and_excludes_only_understood_and_author(self):
         key = self.create(delivered=False, responses={PEOPLE[0]: {"status": "understood"}, PEOPLE[1]: {"status": "needs_help"}})
         self.service.run_due()
         self.assertEqual(len(self.sent), 1)
@@ -67,7 +67,7 @@ class NoticeTests(unittest.TestCase):
         self.now += 1
         self.service.run_due()
         mentions = self.sent[1][1][0]["substitution"].values()
-        self.assertEqual([m["mentionee"]["userId"] for m in mentions], [PEOPLE[2]])
+        self.assertEqual([m["mentionee"]["userId"] for m in mentions], [PEOPLE[1], PEOPLE[2]])
         self.service.run_due()
         self.service.run_due()
         self.assertEqual(len(self.sent), 2)
@@ -116,7 +116,7 @@ class NoticeTests(unittest.TestCase):
         self.assertIn(PEOPLE[0], self.store.get(key)["responses"])
 
     def test_departed_and_all_answered_do_not_receive_reminders(self):
-        key = self.create(count=2, responses={PEOPLE[0]: {"status": "needs_help"}})
+        key = self.create(count=2, responses={PEOPLE[0]: {"status": "understood"}})
         self.store.put("members-left:" + GROUP, {PEOPLE[1]: self.now})
         self.service.run_due()
         self.assertEqual(self.sent, [])

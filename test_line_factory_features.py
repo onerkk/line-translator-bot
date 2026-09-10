@@ -213,7 +213,10 @@ def test_acknowledgements_are_atomic_user_actions_and_replay_cannot_undo(hub, mo
         hub.postback(event(uid=uid, stamp=stamp), {"action": action, "token": token})
     record = hub.store.get("notice:" + GROUP + ":" + token)
     assert USER not in record["responses"] and replies == []
-    assert record["responses"][COLLEAGUE]["status"] == "needs_help"
+    assert record["responses"][COLLEAGUE]["status"] == "understood"
+    assert record["responses"][COLLEAGUE]["event_timestamp"] == 200
+    hub.postback(event(uid=COLLEAGUE, stamp=500), {"action": "factory_help", "token": token})
+    assert hub.store.get("notice:" + GROUP + ":" + token) == record
     assert record["roster_basis"] == "known_chat_members"
     hub.postback(event(group=OTHER), {"action": "factory_ack", "token": token})
     assert hub.store.get("notice:" + OTHER + ":" + token) is None

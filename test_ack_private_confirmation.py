@@ -296,7 +296,7 @@ def test_receipt_after_manual_stop_notifies_only_actor_without_restarting_group_
     assert len(private.sent) == 1 and len(group_sends) == 1 and replies == []
 
 
-@pytest.mark.parametrize("reason", ["off", "departed", "removed", "changed_response", "expired"])
+@pytest.mark.parametrize("reason", ["off", "departed", "removed", "expired"])
 def test_pending_private_retry_respects_current_permissions_and_expiry(hub, private, reason):
     row, _, replies = start(hub)
     hub.h["_factory_receipt_sender"] = lambda *a: (_ for _ in ()).throw(TimeoutError())
@@ -311,13 +311,27 @@ def test_pending_private_retry_respects_current_permissions_and_expiry(hub, priv
         hub.member_presence(GROUP, COLLEAGUE, left=True)
     elif reason == "removed":
         hub.store.update(key, lambda r: dict(r, expected={}))
-    elif reason == "changed_response":
-        hub.postback(event(uid=COLLEAGUE, stamp=500), params(row, action="factory_help"))
     else:
         hub.store.update(key, lambda r: dict(r, created_at=time.time() - 8 * 86400, expires_at=time.time() - 1))
     before = stored(hub, row)
     answer(hub, row)
     assert stored(hub, row) == before and private.sent == replies == []
+
+
+def test_removed_help_cannot_cancel_a_pending_once_only_private_confirmation(hub, private):
+    row, group_sends, replies = start(hub)
+    hub.h["_factory_receipt_sender"] = lambda *a: (_ for _ in ()).throw(TimeoutError())
+    with pytest.raises(StoreError):
+        answer(hub, row)
+    before = stored(hub, row)
+    hub.postback(event(uid=COLLEAGUE, stamp=500), params(row, action="factory_help"))
+    assert stored(hub, row) == before
+    private.now = notification(hub, row)["next_attempt_at"] + 1
+    hub.h["_factory_receipt_sender"] = lambda *args: private.sent.append(args)
+    answer(hub, row)
+    answer(hub, row)
+    assert len(private.sent) == 1 and len(group_sends) == 1 and replies == []
+    assert stored(hub, row)["responses"][COLLEAGUE]["status"] == "understood"
 
 
 def test_private_retry_stops_before_line_deduplication_window_expires(hub, private):

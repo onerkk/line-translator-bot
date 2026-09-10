@@ -116,17 +116,19 @@ def test_non_manager_status_query_is_ignored_after_understood_tap(hub):
     assert replies == []
 
 
-def test_stale_legacy_action_is_silent_but_a_real_status_change_is_recorded(hub):
+def test_removed_legacy_action_is_silent_and_cannot_veto_an_ack(hub):
     row, _, replies = start(hub)
     params = {"action": "factory_help", "token": row["token"]}
     hub.postback(event(uid=COLLEAGUE, stamp=400), params)
     hub.postback(event(uid=COLLEAGUE, stamp=500), params)
+    assert COLLEAGUE not in stored(hub, row)["responses"]
     params["action"] = "factory_ack"
     hub.postback(event(uid=COLLEAGUE, stamp=200), params)
-    assert replies == [] and stored(hub, row)["responses"][COLLEAGUE]["status"] == "needs_help"
+    first = copy.deepcopy(stored(hub, row)["responses"][COLLEAGUE])
+    assert replies == [] and first["status"] == "understood" and first["event_timestamp"] == 200
     hub.postback(event(uid=COLLEAGUE, stamp=600), params)
     hub.postback(event(uid=COLLEAGUE, stamp=700), params)
-    assert replies == [] and stored(hub, row)["responses"][COLLEAGUE]["status"] == "understood"
+    assert replies == [] and stored(hub, row)["responses"][COLLEAGUE] == first
 
 
 def test_first_and_repeated_ack_never_call_the_reply_transport(hub):

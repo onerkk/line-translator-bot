@@ -365,6 +365,29 @@ class FeatureStore:
         finally:
             db.close()
 
+    def notice_page(self, cursor="", limit=40):
+        """Visit active stored notices, including rows absent from the due index.
+
+        An empty cursor starts/finishes a pass. Redis SCAN may return an empty
+        page with a nonzero cursor or duplicate keys; callers must tolerate both.
+        This intentionally does not use the 200-row per-group history limit.
+        """
+        limit = max(1, min(100, int(limit)))
+        if not self.path:
+            next_cursor, keys = self.command(
+                ["SCAN", cursor or "0", "MATCH", self.prefix + "notice:*", "COUNT", limit])
+            values = self.command(["MGET", *keys]) if keys else []
+            return ([json.loads(value) for value in values if value],
+                    "" if str(next_cursor) == "0" else str(next_cursor))
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT key,value FROM factory_state WHERE key LIKE 'notice:%' "
+                "AND key>? AND expires>? ORDER BY key LIMIT ?", (cursor, time.time(), limit)).fetchall()
+            return [json.loads(row[1]) for row in rows], rows[-1][0] if len(rows) == limit else ""
+        finally:
+            db.close()
+
     def due_notices(self, now, limit=10):
         """Global due index; independent of per-group history display limits."""
         limit = max(1, min(100, int(limit)))

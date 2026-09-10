@@ -45,16 +45,17 @@ def test_only_scheduled_deadline_posts_and_only_unanswered_members_are_mentioned
         assert len(sent) == 1 and replies == []
         assert stored(hub, row)["wake_at"] == due
     data = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).json["notices"][0]
-    assert data["pending_ids"] == [FOURTH]
-    assert set(data["responses"]) == {COLLEAGUE, THIRD}
+    assert data["pending_ids"] == [THIRD, FOURTH]
+    assert set(data["responses"]) == {COLLEAGUE}
     assert FOURTH not in data["status_views"]
     fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
     fresh.reminders.sender = hub.reminders.sender
     tick(fresh, due - 0.001)
     assert len(sent) == 1
     tick(fresh, due)
-    assert len(sent) == 2 and recipients(sent[-1]) == [FOURTH] and replies == []
+    assert len(sent) == 2 and recipients(sent[-1]) == [THIRD, FOURTH] and replies == []
     fresh.postback(event(uid=FOURTH), {"action": "factory_ack", "token": row["token"]})
+    fresh.postback(event(uid=THIRD), {"action": "factory_ack", "token": row["token"]})
     tick(fresh, due + 480 * 60)
     assert len(sent) == 2 and stored(hub, row)["reminder_state"] == "no_pending"
 
@@ -159,7 +160,7 @@ def test_audience_change_during_cas_cannot_commit_an_unlisted_action(hub, monkey
     monkeypatch.setattr(hub.store, "compare_swap", compare)
     hub.postback(event(uid=COLLEAGUE), {"action": action, "token": row["token"]})
     saved = stored(hub, row)
-    assert bool(raced) == (action != "factory_receipts")  # Status is rejected before CAS for a non-manager.
+    assert bool(raced) == (action == "factory_ack")  # Removed help and unauthorized status exit before CAS.
     assert COLLEAGUE not in saved["responses"] and COLLEAGUE not in saved.get("status_views", {})
     assert replies == [] and len(sent) == 1
 
