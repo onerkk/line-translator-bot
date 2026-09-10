@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "f90895222c477dbb65ea9127c716b674c749cbbdae1618c4aa0dae436322aa9d",
-    "updated_at_iso": "2026-09-10T02:26:39.296932+00:00",
-    "updated_at_unix": 1789007199.2969325
+    "state_hash": "17adba59dbd90010b0f82ea10eee02c9ce510a75a57f05a4b344c2cd6732c4b2",
+    "updated_at_iso": "2026-09-10T04:55:09.323856+00:00",
+    "updated_at_unix": 1789016109.3238564
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-10 02:17:57",
+    "last_updated": "2026-09-10 04:03:19",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 16,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 19392,
+    "oai_cache_write": 21164,
     "oai_cached": 9088,
-    "oai_cost_usd": 0.2664244,
-    "oai_input": 297912,
-    "oai_output": 2691,
+    "oai_cost_usd": 0.4055523999999999,
+    "oai_input": 356971,
+    "oai_output": 4368,
     "oai_reasoning": 0,
     "text_translations": 277,
-    "tokens_completion": 20147,
-    "tokens_prompt": 4532683,
+    "tokens_completion": 21824,
+    "tokens_prompt": 4591742,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -420,13 +420,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
-      "cache_write": 3759,
-      "cost_usd": 1.9151157,
+      "cache_write": 5531,
+      "cost_usd": 2.0542437000000002,
       "model": "gpt-5.6-terra",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 7121,
-      "tokens_prompt": 1955759
+      "tokens_completion": 8798,
+      "tokens_prompt": 2014818
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -555,6 +555,7 @@
   "group_tts_settings": {},
   "group_user_names": {
     "C28bb7127640539f3c1bc743ecdf61a24": {
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
     },
