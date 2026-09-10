@@ -31,6 +31,7 @@ import factory_semantic_audit as fsa_module
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 import factory_record_contract as record_contract
+import factory_structured_report as structured_report
 import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-09.107-record-facts"
+QUALITY_GATE_BUILD_ID = "2026-09-10.1-material-field-integrity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1064,6 +1065,14 @@ def _target_zh_language_purity_issues(
     allowed.update(_inline_bilingual_allowed_latin(source, candidate, src_lang))
     allowed.update(_source_parenthetical_alias_latin(source, src_lang))
     allowed.update(label.upper() for label in _document_defined_uppercase_labels(source))
+    material = structured_report.parse_material_report(source, src_lang)
+    if material:
+        allowed.update(unit.upper() for _role, _value, unit in material.rows if unit)
+    if material and any(role == "r_marker" for role, _value, _unit in material.rows):
+        # R before an explicit numeric field is an opaque source marker. The
+        # field contract below verifies its value and presence. A Chinese colon
+        # must not turn this preserved marker into "untranslated_source_word:R".
+        allowed.add("R")
     issues: List[str] = []
     common = _source_common_words(src_lang)
 
@@ -1884,6 +1893,7 @@ def _validate_normalized_translation(
         record_contract.build_frame(source, src, tgt), candidate
     )
     issues.extend(record_issues)
+    issues.extend(structured_report.validate_material_report(source, candidate, src, tgt))
 
     relation_frame = fmr_module.build_frame(source, src, tgt)
     relation_ok, relation_issues = fmr_module.validate_translation(

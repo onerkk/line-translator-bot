@@ -506,6 +506,25 @@ def pending_count(*, include_kinds=None, exclude_kinds=()) -> int:
     return int(row["n"] if row else 0)
 
 
+def has_pending_source(target_id: str, message_id: str) -> bool:
+    """Check exact source and revision/media suffixes without loading payloads.
+
+    A successful synchronous handler may have only queued its translation.
+    On ephemeral hosts that is not a durable success boundary for the webhook.
+    Use a bounded key range, not LIKE: source IDs must never be wildcards, and
+    message 1001 must not match 10010 or an unrelated group's pending work.
+    """
+    if not target_id or not message_id:
+        return False
+    prefix = str(target_id) + ":" + str(message_id)
+    with _LOCK, _ready_connection() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM translation_retry_jobs WHERE status IN ('pending','leased') "
+            "AND (job_key=? OR (job_key>=? AND job_key<?)) LIMIT 1",
+            (prefix, prefix + ":", prefix + ";"),
+        ).fetchone())
+
+
 def _row_to_job(row: sqlite3.Row) -> Dict[str, Any]:
     try:
         payload = json.loads(row["payload_json"] or "{}")

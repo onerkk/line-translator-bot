@@ -320,7 +320,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-09.107-record-facts"
+_EXPECTED_QG_BUILD_ID = "2026-09-10.1-material-field-integrity"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -12065,6 +12065,7 @@ def _translation_cache_asset_fingerprint():
         "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
         "record_contract": getattr(globals().get("factory_record_contract"), "BUILD_ID", ""),
+        "structured_report": factory_structured_report_module.FACTORY_STRUCTURED_REPORT_BUILD_ID,
         "conversation_context": conversation_context.BUILD_ID,
         "active_learning": al_module.ACTIVE_LEARNING_BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
@@ -14494,6 +14495,22 @@ def translate(text, src, tgt):
                     _update_last_translate_debug(pipeline_status="verified_original_exact",
                                                 final_candidate=_approved[:2000], openai_status="not_needed")
                     return _approved
+    # Fully explicit material fields are translated locally, including short
+    # length/weight reports. Preserve R and omitted units instead of asking a
+    # generative provider to guess them; unparsed prose takes the normal path.
+    # Existing source-identical approvals above retain their normal priority.
+    _material_candidate = factory_structured_report_module.translate_material_report(text, src, tgt)
+    if _material_candidate:
+        _material_candidate = _final_delivery_guard(text, _material_candidate, src, tgt)
+        if _material_candidate:
+            _gid = getattr(_tl, "group_id", "") or ""
+            _log_translation(text, _material_candidate, src, tgt, "structured_material_report", 0, 1.0, False, 1.0, _gid)
+            if _gid:
+                _conv_buffer_add(_gid, text, _material_candidate, src, tgt)
+            _set_translation_outcome("delivered", "structured_material_report")
+            _update_last_translate_debug(pipeline_status="structured_material_report",
+                final_candidate=_material_candidate[:2000], openai_status="not_needed")
+            return _material_candidate
     # A fully parsed set of explicit weight/record fields needs no inference.
     # Questions and any unparsed prose take the normal path. Prior chat cannot
     # override these fully explicit current values or supply an unstated unit.
@@ -19504,6 +19521,10 @@ def callback():
     except InvalidSignatureError:
         _event_log_write("webhook_invalid_sig", {})
         abort(400)
+    except webhook_runtime.PendingWebhookWork:
+        logger.warning("[callback] delivery pending on volatile storage; keeping webhook retry eligible")
+        _event_log_write("webhook_pending_delivery", {"build": webhook_runtime.BUILD_ID})
+        return "RETRY", 503
     except Exception:
         # No success ACK unless durable persistence succeeded. LINE can retry;
         # the inbox key and the existing translation receipts suppress duplicates.

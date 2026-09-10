@@ -16,20 +16,18 @@ from pathlib import Path
 import translation_retry_queue as queue
 from durable_workers import WorkerPool
 
-BUILD_ID = "2026-09-08.1-durable-webhook-lanes"
+BUILD_ID = "2026-09-10.1-unfinished-webhook-recovery"
 PROCESS_STARTED = time.monotonic()
 _CURRENT = ContextVar("line_webhook_timing", default=None)
 
 
-def asynchronous_ingress():
-    """Don't acknowledge volatile Render storage as durable background work.
+def persistent_outbox():
+    """Whether the configured local queue survives this host's restarts.
 
     Render Free replaces its local filesystem on restarts/deploys. Until a real
     persistent mount backs the outbox, keep the original synchronous ACK rule.
     More HTTP threads and the isolated recovery lanes still serve that mode.
     """
-    if os.environ.get("LINE_WEBHOOK_ASYNC", "").lower() in {"0", "false", "off"}:
-        return False
     if os.environ.get("RENDER", "").lower() != "true":
         return True
     path = Path(queue.DB_PATH).resolve()
@@ -37,6 +35,26 @@ def asynchronous_ingress():
     if any(path.is_relative_to(parent) for parent in volatile):
         return False
     return any(parent != Path("/") and os.path.ismount(parent) for parent in path.parents)
+
+
+def asynchronous_ingress():
+    return (os.environ.get("LINE_WEBHOOK_ASYNC", "").lower() not in {"0", "false", "off"}
+            and persistent_outbox())
+
+
+class PendingWebhookWork(RuntimeError):
+    """Processing returned, but its only remaining copy is on volatile disk."""
+
+
+def _pending_message_work(events):
+    for event in events:
+        if event.get("type") not in {"message", "messageEdited"}:
+            continue
+        source, message = event.get("source") or {}, event.get("message") or {}
+        target = source.get("groupId") or source.get("roomId") or source.get("userId")
+        if queue.has_pending_source(target, message.get("id")):
+            return True
+    return False
 
 
 @contextmanager
@@ -102,6 +120,13 @@ class WebhookInbox:
                 with timing_scope(received_at):
                     try:
                         self.handler.handle(body, signature)
+                        # Some handlers retain empty AI output or failed LINE
+                        # sends in the outbox without raising. Waiting for the
+                        # handler alone therefore did NOT ensure delivery.
+                        # Keep LINE redelivery eligible until these jobs finish
+                        # when the local outbox can disappear on Render sleep.
+                        if not persistent_outbox() and _pending_message_work(events):
+                            raise PendingWebhookWork("translation delivery is still pending")
                     except Exception:
                         self.release_claims(body)
                         raise
