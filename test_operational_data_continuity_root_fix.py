@@ -282,10 +282,10 @@ def test_release_contract_runs_the_new_behavioral_self_test_at_boot():
     assert 'VERSION = "v3.49.0-operational-data-continuity-root-fix-2026-09-02"' in app_source
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-08.2-original-conversation-snapshot"'
+        '"2026-09-10.9-order-urgency-and-request-state"'
     ) in app_source
     assert '_EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-09-02.1-operational-record-context"' in app_source
     assert f'_EXPECTED_QG_BUILD_ID = "{quality_gate.QUALITY_GATE_BUILD_ID}"' in app_source
     health = semantics.health()
-    assert health["build_id"] == "2026-09-08.2-original-conversation-snapshot"
+    assert health["build_id"] == "2026-09-10.9-order-urgency-and-request-state"
     assert health["self_test"]["ok"] is True

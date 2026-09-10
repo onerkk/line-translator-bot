@@ -137,7 +137,7 @@ def test_glossary_and_app_require_the_same_versioned_safety_engine():
     app_source = (root / "app.py").read_text(encoding="utf-8")
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
-        '"2026-09-08.2-original-conversation-snapshot"'
+        '"2026-09-10.9-order-urgency-and-request-state"'
     ) in app_source
     assert semantics.health()["self_test"]["ok"] is True
 

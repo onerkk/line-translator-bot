@@ -354,7 +354,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.2-original-conversation-snapshot"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-10.9-order-urgency-and-request-state"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -425,7 +425,7 @@ if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok"
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
 _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.6-contextual-abstract-classifiers"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
@@ -471,7 +471,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-07.1-uncertainty-safe-expression"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-08.3-compact-stable-prefix"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -510,7 +510,7 @@ if getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", None) != _EXPECTED_PRO
         f"module={getattr(prompt_opt_module, '__file__', '<unknown>')}. "
         "Replace app.py and prompt_optimizer.py together in the project root."
     )
-_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-09-07.1-inspection-and-ledger-fidelity"
+_EXPECTED_EXPRESSIVE_ENGINE_VERSION = "2026-09-10.9-order-request-fidelity"
 _EXPECTED_EXPRESSIVE_ASSETS_VERSION = "2026-09-02.1-operational-record-context"
 if getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", None) != _EXPECTED_EXPRESSIVE_ENGINE_VERSION:
     raise RuntimeError(
@@ -12076,8 +12076,10 @@ def _translation_cache_asset_fingerprint():
         "erp_reason_semantics": globals().get("_FACTORY_REASON_SEMANTICS_BUILD_ID", ""),
         "semantic_scope": globals().get("_FACTORY_SEMANTIC_SCOPE_BUILD_ID", ""),
         "instruction_semantics": factory_semantic_audit_module.instruction_semantics.BUILD_ID,
+        "order_semantics": factory_message_semantics_module.order_semantics.BUILD_ID,
         "record_contract": getattr(globals().get("factory_record_contract"), "BUILD_ID", ""),
         "structured_report": factory_structured_report_module.FACTORY_STRUCTURED_REPORT_BUILD_ID,
+        "quantity_semantics": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
         "conversation_context": conversation_context.BUILD_ID,
         "active_learning": al_module.ACTIVE_LEARNING_BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
@@ -13972,7 +13974,7 @@ def _translation_retry_video_attempt(job, lease_owner=None):
     if not extracted:
         _tl.ocr_extraction_state = "unknown"
         with ApiClient(configuration) as api_client:
-            raw = MessagingApiBlob(api_client).get_message_content_preview(payload["message_id"])
+            raw = MessagingApiBlob(api_client).get_message_content_preview(payload["message_id"], _request_timeout=(5, 20))
         raw = _coerce_blob_bytes(raw)
         if not raw or len(raw) <= 100:
             return False
@@ -13998,7 +14000,7 @@ def _translation_retry_file_attempt(job, lease_owner=None):
     text = payload.get("document_text")
     if text is None:
         with ApiClient(configuration) as api_client:
-            raw = _coerce_blob_bytes(MessagingApiBlob(api_client).get_message_content(payload["message_id"]))
+            raw = _coerce_blob_bytes(MessagingApiBlob(api_client).get_message_content(payload["message_id"], _request_timeout=(5, 20)))
         text = _extract_uploaded_document(raw, str(payload.get("ext") or ""))
     if text is None or not text.strip():
         return False
@@ -14953,6 +14955,7 @@ def translate(text, src, tgt):
         # glossary, identity and format guard.  It never creates another AI call.
         # Visual selection is handled later at the LINE delivery boundary, so this
         # pass only decorates text and cannot consume the image cooldown.
+        _validated_before_expression = result
         _expressive_enabled = (
             bool(get_auto_tone_emoji_enabled(_expression_gid))
             and get_expressive_translation_mode(_expression_gid) != "off"
@@ -15006,8 +15009,12 @@ def translate(text, src, tgt):
         # Expressive decoration is also untrusted output.  Re-run the absolute
         # boundary after it so no optional formatting step can bypass factory
         # facts, identities, quantities or terminology.
-        if result:
-            result = _final_delivery_guard(canonical_text, result, src, tgt)
+        if result != _validated_before_expression:
+            _checked_expression = _final_delivery_guard(canonical_text, result, src, tgt)
+            # Decoration is optional. If it changes meaning or introduces an
+            # unsupported symbol, keep the translation that already passed all
+            # guards instead of losing a valid message or paying for a retry.
+            result = _checked_expression or _validated_before_expression
     if _is_translation_failure_sentinel(result):
         result = None
     if result:
@@ -17914,7 +17921,7 @@ def download_line_image(message_id):
     try:
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
-            content = blob_api.get_message_content(message_id)
+            content = blob_api.get_message_content(message_id, _request_timeout=(5, 20))
             # v3.9.17: 確保 content 是 bytes(不是 bytearray 或其他)
             if isinstance(content, bytearray):
                 content = bytes(content)
@@ -17936,7 +17943,7 @@ def download_line_audio(message_id):
     try:
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
-            content = blob_api.get_message_content(message_id)
+            content = blob_api.get_message_content(message_id, _request_timeout=(5, 20))
             return content
     except Exception as e:
         logger.error("LINE audio download error: %s", e)
@@ -19515,13 +19522,17 @@ def callback():
         _event_log_write("webhook_invalid_sig", {})
         abort(400)
     except webhook_runtime.PendingWebhookWork:
-        logger.warning("[callback] delivery pending on volatile storage; keeping webhook retry eligible")
+        logger.warning("[callback] processing or delivery pending; keeping webhook retry eligible")
         _event_log_write("webhook_pending_delivery", {"build": webhook_runtime.BUILD_ID})
         return "RETRY", 503
-    except Exception:
+    except Exception as exc:
         # No success ACK unless durable persistence succeeded. LINE can retry;
         # the inbox key and the existing translation receipts suppress duplicates.
         logger.exception("[callback] webhook persistence/dispatch failed")
+        _event_log_write("webhook_failed", {
+            "build": webhook_runtime.BUILD_ID, "error_type": type(exc).__name__,
+            "ack_ms": round((time.time() - received_at) * 1000),
+        })
         raise
     events = (json.loads(body) or {}).get("events") or []
     _event_log_write("webhook_in", {
@@ -21341,7 +21352,7 @@ if VideoMessageContent:
         try:
             with ApiClient(configuration) as api_client:
                 content = _coerce_blob_bytes(
-                    MessagingApiBlob(api_client).get_message_content_preview(msg_id)
+                    MessagingApiBlob(api_client).get_message_content_preview(msg_id, _request_timeout=(5, 20))
                 )
             if not content or len(content) <= 100:
                 return
@@ -21585,7 +21596,7 @@ if FileMessageContent:
         try:
             with ApiClient(configuration) as api_client:
                 raw = _coerce_blob_bytes(
-                    MessagingApiBlob(api_client).get_message_content(msg_id)
+                    MessagingApiBlob(api_client).get_message_content(msg_id, _request_timeout=(5, 20))
                 )
             text = _extract_uploaded_document(raw, ext)
             if text is None or not text.strip():
@@ -22865,7 +22876,7 @@ def get_content_preview(message_id):
     try:
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
-            content = blob_api.get_message_content_preview(message_id)
+            content = blob_api.get_message_content_preview(message_id, _request_timeout=(5, 20))
             return content
     except Exception as e:
         logger.warning("get_content_preview failed: %s", e)
@@ -34631,6 +34642,10 @@ def health():
     return {
         "status": "ok",
         "version": VERSION,
+        "webhook_runtime_build": webhook_runtime.BUILD_ID,
+        "quantity_semantics_build": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
+        "glossary_policy_build": gp_module.BUILD_ID,
+        "http_server": app.config.get("TRANSLATION_SERVER_CONFIG", {"build": "unreported"}),
         "quality_gate_build": _ACTUAL_QG_BUILD_ID,
         "quality_gate_selftest": bool(_QG_BOOT_SELFTEST_OK),
         "factory_knowledge_selftest": bool(_FACTORY_KNOWLEDGE_SELFTEST_OK),
@@ -34830,7 +34845,8 @@ def admin_health_check():
     模型設定、進階設定相容性、環境變數、最近翻譯、資料持久化、群組統計。
     Usage: GET /admin/health-check?key=YOUR_ADMIN_KEY[&format=json]
     """
-    if request.args.get("key") != ADMIN_KEY:
+    if not (check_admin_key() or (ADMIN_KEY and hmac.compare_digest(
+            request.args.get("key", "").encode("utf-8"), ADMIN_KEY.encode("utf-8")))):
         return jsonify({"error": "forbidden, append ?key=YOUR_ADMIN_KEY"}), 403
 
     fmt = request.args.get("format", "html")
@@ -34840,16 +34856,30 @@ def admin_health_check():
     env_ok = {
         "LINE_CHANNEL_ACCESS_TOKEN": bool(LINE_TOKEN),
         "LINE_CHANNEL_SECRET": bool(LINE_SECRET),
-        "OPENAI_API_KEY": bool(OPENAI_KEY),
         "ADMIN_KEY": bool(ADMIN_KEY) and ADMIN_KEY != "changeme",
     }
-    try:
-        env_ok["GITHUB_TOKEN"] = bool(GITHUB_TOKEN)
-    except NameError:
-        env_ok["GITHUB_TOKEN"] = False
     for k, v in env_ok.items():
         if not v:
             issues.append(("error", f"環境變數未設或使用預設值: {k}"))
+    provider_state = ai_provider.get_provider_diagnostics("chat")
+    if not provider_state["available"]:
+        issues.append(("error", "目前沒有可用的文字翻譯供應商；請檢查 AI 後台的金鑰、額度與連線狀態。"))
+    runtime_state = {
+        "build": webhook_runtime.BUILD_ID,
+        "quantity_semantics_build": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
+        "glossary_policy_build": gp_module.BUILD_ID,
+        "asynchronous_ingress": webhook_runtime.asynchronous_ingress(),
+        "persistent_outbox": webhook_runtime.persistent_outbox(),
+        "http_server": app.config.get("TRANSLATION_SERVER_CONFIG", {"build": "unreported"}),
+        "providers": provider_state,
+    }
+    try:
+        runtime_state["queue"] = translation_retry_queue_module.status_snapshot()
+    except Exception as exc:
+        runtime_state["queue"] = {"error_type": type(exc).__name__}
+        issues.append(("error", "翻譯重試佇列無法讀取，請檢查資料磁碟。"))
+    if not runtime_state["persistent_outbox"]:
+        issues.append(("warning", "翻譯佇列位於暫存磁碟；主機休眠或重啟後可能遺失未完成訊息。請使用持續運行的主機與持久磁碟，並開啟 LINE Webhook redelivery。"))
 
     # ── 模型相容性檢查 ──
     incompat = []
@@ -34893,6 +34923,7 @@ def admin_health_check():
         "version": VERSION,
         "uptime_seconds": int(time.time() - bot_start_time),
         "environment": env_ok,
+        "translation_runtime": runtime_state,
         "models": {
             "translate_default": {"name": model_default, "family": _model_family(model_default), "threshold": model_threshold},
             "translate_upgrade": {"name": model_upgrade, "family": _model_family(model_upgrade)},
@@ -34943,6 +34974,9 @@ def admin_health_check():
     badge = '<span class="badge b-ok">✅ 全部正常</span>' if overall == "ok" else '<span class="badge b-err">⚠️ 有問題</span>'
     h.append(f'<h1 style="font-size:18px;margin:0 0 12px">🩺 Health Check {badge}</h1>')
     h.append(f'<div class="dim" style="font-size:12px;margin-bottom:12px">{VERSION} · uptime {data["uptime_seconds"]}s</div>')
+    from html import escape as _escape_runtime_html
+    h.append('<div class="card"><h2>翻譯處理狀態</h2><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'
+             + _escape_runtime_html(json.dumps(runtime_state, ensure_ascii=False, indent=2)) + '</pre></div>')
 
     if issues:
         h.append('<div class="card"><h2>⚠️ 待處理 / 提醒</h2>')

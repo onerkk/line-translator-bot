@@ -214,6 +214,8 @@ class FactoryTranslationGuard:
     def _calculate_fingerprint(self, regression: Mapping[str, Any], knowledge_doc: Mapping[str, Any]) -> str:
         payload = {
             "guard_build": FACTORY_TRANSLATION_GUARD_BUILD_ID,
+            "message_semantics_build": fmr_module.FACTORY_MESSAGE_SEMANTICS_BUILD_ID,
+            "order_semantics_build": fmr_module.order_semantics.BUILD_ID,
             "regression": regression,
             "knowledge": knowledge_doc,
         }

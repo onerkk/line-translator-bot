@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-09-07.1-uncertainty-safe-expression"
+TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
 
 
 
@@ -921,6 +921,22 @@ def _expression_priority(analysis: ToneAnalysis) -> float:
     return base + float(analysis.confidence)
 
 
+def _source_confirms_success(source):
+    """A polite request or the translator's wording is not completed work."""
+    text = str(source or '')
+    if re.search(r'[?？]|如果|若是|可能|也許|也许|不確定|不确定|尚未|還沒|还没|未完成|'
+                 r'並未|并未|沒有完成|没有完成|不算完成|請|请|麻煩|麻烦|幫忙|帮忙|'
+                 r'\b(?:jika|kalau|mungkin|belum|tidak|bukan|tolong|mohon|harap|'
+                 r'maybe|if|not|never|please)\b', text, re.I):
+        return False
+    return bool(re.search(
+        r'(?:已經|已经|已).{0,12}(?:完成|處理好|处理好|確認無誤|确认无误)|'
+        r'(?:完成|處理好|处理好)了|確認無誤|确认无误|沒問題|没问题|沒有問題|没有问题|'
+        r'恭喜|祝賀|祝贺|成功了|達成|达成|太好了|終於好了|终于好了|過關了|过关了|'
+        r'\b(?:sudah|telah)\s+(?:selesai|beres|berhasil|dikonfirmasi)|'
+        r'\b(?:confirmed|completed|done|approved|congratulations|berhasil)\b', text, re.I))
+
+
 def build_expression_plan(
     source_text: str | None,
     translated_text: str | None,
@@ -1023,7 +1039,7 @@ def build_expression_plan(
             r"可能|或許|也許|不確定|不确定|不知道|不清楚|聽說|听说|可信度|"
             r"\b(?:mungkin|barangkali|sepertinya|katanya|kabarnya|tidak\s+tahu|belum\s+(?:pasti|dikonfirmasi)|might|maybe|uncertain)\b",
             source_unit + ' ' + target_unit, re.I))
-        if uncertain or unit_analysis.primary == 'quality_notice':
+        if uncertain or unit_analysis.primary == 'quality_notice' or not _source_confirms_success(source_unit):
             choices = tuple(e for e in choices if e not in {'✅', '☑️', '✔️', '🎉', '🥳', '✨'})
             if not choices:
                 continue

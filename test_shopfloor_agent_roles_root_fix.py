@@ -219,9 +219,23 @@ class ShopfloorAgentRolesRootFixTests(unittest.TestCase):
         )
         for source in controls:
             with self.subTest(source=source):
-                self.assertFalse(
-                    semantics.build_frame(source, "zh", "id")["active"]
-                )
+                frame = semantics.build_frame(source, "zh", "id")
+                self.assertNotEqual(frame.get("kind"), "zh_id_shopfloor_agent_roles")
+                if "急單" in source:
+                    # The independent urgency guard now covers this long
+                    # request, without resolving stations as people or dropping
+                    # the packaging clause through a short-message fast path.
+                    self.assertTrue(frame["active"])
+                    self.assertEqual(frame["kind"], "order_urgency_request")
+                    self.assertFalse(frame["complete"])
+                    self.assertEqual(semantics.translate_source_directly(source, "zh", "id"), "")
+                    target = (
+                        "Di setiap stasiun, tolong prioritaskan penanganan work order mendesak. "
+                        "Saat material tiba di stasiun, tolong atur pengemasannya."
+                    )
+                    self.assertTrue(semantics.validate_translation(frame, target)[0])
+                else:
+                    self.assertFalse(frame["active"])
 
     def test_both_shared_acceptance_boundaries_reject_reported_bad_outputs(self):
         for source, good, bad in (
@@ -265,7 +279,7 @@ class ShopfloorAgentRolesRootFixTests(unittest.TestCase):
         )
 
     def test_deployment_build_id_and_behavioral_health_are_synchronized(self):
-        expected = "2026-09-08.2-original-conversation-snapshot"
+        expected = "2026-09-10.9-order-urgency-and-request-state"
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
 
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)

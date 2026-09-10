@@ -23,12 +23,13 @@ from __future__ import annotations
 import re
 from translation_request_cache import memoize
 import conversation_context
+import factory_order_semantics as order_semantics
 import unicodedata
 from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-08.2-original-conversation-snapshot"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-10.9-order-urgency-and-request-state"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -3317,8 +3318,14 @@ def _build_zh_id_frame(source: str, frame: dict) -> dict:
 
 
 def build_frame(source: str, src_lang: str, tgt_lang: str) -> dict:
-    return _build_frame_with_context(source, src_lang, tgt_lang,
-                                     conversation_context.current_for(source))
+    frame = dict(_build_frame_with_context(source, src_lang, tgt_lang,
+                                          conversation_context.current_for(source)))
+    order_frame = order_semantics.build_frame(source, src_lang, tgt_lang)
+    if order_frame['active']:
+        if not frame.get('active'):
+            frame.update(active=True, complete=bool(order_frame['direct']), kind='order_urgency_request')
+        frame['order_frame'] = order_frame
+    return frame
 
 
 @memoize
@@ -3360,6 +3367,8 @@ def deterministic_translation(frame: Mapping) -> str:
     if re.search(r"[?？]", str(frame.get("source") or "")):
         return ""
     slots = frame.get("slots") or {}
+    if frame.get('kind') == 'order_urgency_request':
+        return _with_mentions(frame, order_semantics.deterministic_translation(frame['order_frame']))
     if frame.get("kind") == "id_zh_machine_oil_leak":
         codes = [str(item) for item in slots.get("equipment_codes") or () if str(item)]
         if not codes:
@@ -3994,6 +4003,8 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
     slots = frame.get("slots") or {}
     issues: list[str] = conversation_context.validate_resolution(
         frame.get("context_resolution"), target, frame.get("tgt_lang"))
+    _, order_issues = order_semantics.validate_translation(frame.get('order_frame'), target)
+    issues.extend(order_issues)
 
     if frame.get("kind") == "id_zh_machine_oil_leak":
         for code in slots.get("equipment_codes") or ():
@@ -5244,6 +5255,9 @@ def build_prompt(frame: Mapping) -> str:
     if not frame or not frame.get("active"):
         return ""
     lines = ["<factory_message_source_relations>"]
+    order_prompt = order_semantics.build_prompt(frame.get('order_frame'))
+    if order_prompt:
+        lines.append(order_prompt)
     lines.append(
         "Translate from the source claims below. Preserve actor, action, movement, destination, "
         "equipment, reading-to-device attachment, comparison/difference, unit, reporting recipient "
@@ -5933,6 +5947,11 @@ def health() -> dict:
         )[0] is False,
         outage.get("active") is True and outage.get("complete") is True,
         translate_source_directly(outage_source, "zh", "id") == outage_target,
+        translate_source_directly('急單看一下，幫忙處理', 'zh', 'id')
+        == 'Tolong periksa work order mendesak ini dan bantu menanganinya.',
+        not validate_translation(build_frame('急單看一下，幫忙處理', 'zh', 'id'),
+                                 'Tolong segera periksa order ini dan bantu proses. ✅')[0],
+        not translate_source_directly('急單看一下，幫忙處理，4點前完成', 'zh', 'id'),
         all(not frame.get("active") for frame in controls),
     ]
     return {
