@@ -320,7 +320,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-10.1-material-field-integrity"
+_EXPECTED_QG_BUILD_ID = "2026-09-10.2-notice-duration-integrity"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -4759,6 +4759,7 @@ def protect_mentions(text, line_mentions=None):
 def restore_mentions(text, placeholders):
     restored = text or ""
     index_to_original = {}
+    replacements = {}
     for ph, original in (placeholders or {}).items():
         idx = ph.replace("__MENTION_", "").replace("__", "")
         index_to_original[str(idx)] = original
@@ -4779,25 +4780,20 @@ def restore_mentions(text, placeholders):
             f"__sebutan_{idx}__",
         ]
         for variant in variants:
-            restored = restored.replace(variant, original)
+            replacements[variant.casefold()] = original
 
     if placeholders:
         def _replace_indexed_residual(match):
-            return index_to_original.get(match.group(1), match.group(0))
+            return replacements.get(match.group(0).casefold(),
+                                    index_to_original.get(match.group("index"), match.group(0)))
 
+        # One pass, whole numeric indices: replacing MENTION_1 as a substring
+        # used to corrupt __MENTION_10__ ... __MENTION_19__. Longest variants
+        # also consume their wrappers. Never rescan an inserted display name.
+        alternatives = "|".join(re.escape(value) for value in sorted(replacements, key=len, reverse=True))
         restored = re.sub(
-            r'_{0,2}提及[_\s]?(\d+)_{0,2}',
-            _replace_indexed_residual,
-            restored,
-        )
-        restored = re.sub(
-            r'_{0,2}MENTION[_\s]?(\d+)_{0,2}',
-            _replace_indexed_residual,
-            restored,
-            flags=re.IGNORECASE,
-        )
-        restored = re.sub(
-            r'_{0,2}SEBUTAN[_\s]?(\d+)_{0,2}',
+            r'(?<![A-Za-z0-9])(?:' + alternatives +
+            r'|_{0,2}(?:提及|MENTION|SEBUTAN)[_\s]?(?P<index>\d+)_{0,2})(?!\d)',
             _replace_indexed_residual,
             restored,
             flags=re.IGNORECASE,
@@ -4805,9 +4801,11 @@ def restore_mentions(text, placeholders):
 
     # If a provider removed a placeholder entirely, restore each missing mention
     # instance rather than merely checking whether the name appears once.
-    remaining_counts = {}
-    for original in (placeholders or {}).values():
-        remaining_counts[original] = restored.count(original)
+    remaining_counts = dict.fromkeys((placeholders or {}).values(), 0)
+    if remaining_counts:
+        names = "|".join(re.escape(name) for name in sorted(remaining_counts, key=len, reverse=True))
+        for match in re.finditer(names, restored):
+            remaining_counts[match.group(0)] += 1
     missing_instances = []
     for original in (placeholders or {}).values():
         if remaining_counts.get(original, 0) > 0:
@@ -12058,6 +12056,7 @@ def _translation_cache_asset_fingerprint():
             "",
         ),
         "quality_gate": getattr(tqg_module, "QUALITY_GATE_BUILD_ID", ""),
+        "mention_restoration": "2026-09-10.whole-identity-tokens",
         "prompt_compiler": getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", ""),
         "source_understanding": getattr(globals().get("source_understanding_module"), "SOURCE_UNDERSTANDING_VERSION", ""),
         "pmi_semantics": source_understanding_module.pmi_semantics.BUILD_ID,
@@ -13133,48 +13132,29 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
         return None
     if _is_translation_failure_sentinel(candidate):
         return None
-    if re.search(r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}', candidate, re.I):
-        logger.warning("[MentionGuard] unresolved mention placeholder removed: %r", candidate[:200])
-        candidate = re.sub(
-            r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}',
-            ' ',
-            candidate,
-            flags=re.I,
-        )
     expected_counts = {}
     for mention in (mention_placeholders or {}).values():
         if mention:
             expected_counts[mention] = expected_counts.get(mention, 0) + 1
-    missing = []
-    for mention, expected in expected_counts.items():
-        actual = candidate.count(mention)
-        if actual < expected:
-            missing.extend([mention] * (expected - actual))
+    names = "|".join(re.escape(name) for name in sorted(expected_counts, key=len, reverse=True))
+    # Protect complete visible names while removing unresolved model tokens.
+    # Then count each occurrence once. @Adi is not an occurrence inside @Aditya.
+    parts = re.split("(" + names + ")", candidate) if names else [candidate]
+    candidate = "".join(part if names and index % 2 else re.sub(
+        r'_{0,2}(?:MENTION|提及|SEBUTAN)[_\s]?\d+_{0,2}', ' ', part, flags=re.I)
+        for index, part in enumerate(parts))
+    counts = dict.fromkeys(expected_counts, 0)
+    def keep_name(match):
+        name = match.group(0)
+        counts[name] += 1
+        return name if counts[name] <= expected_counts[name] else " "
+    if names:
+        candidate = re.sub(names, keep_name, candidate)
+    missing = [mention for mention, expected in expected_counts.items()
+               for _ in range(max(0, expected - counts[mention]))]
     if missing:
         logger.warning("[MentionGuard] restored translation lost mentions; reattaching: %s", missing[:5])
         candidate = (" ".join(missing) + " " + candidate).strip()
-
-    # Some emergency NMT engines resolve ``__MENTION_n__`` back to the visible
-    # mention even before our normal restoration step.  Restoring the placeholder
-    # again would then produce ``@All @All ...`` or duplicate a person's mention.
-    # Source mention multiplicity is authoritative: trim only surplus exact
-    # occurrences and preserve the first N occurrences in original order.
-    for mention, expected in expected_counts.items():
-        if expected < 0 or candidate.count(mention) <= expected:
-            continue
-        seen = 0
-        pattern = re.compile(re.escape(mention))
-
-        def _keep_expected(match):
-            nonlocal seen
-            seen += 1
-            return match.group(0) if seen <= expected else " "
-
-        candidate = pattern.sub(_keep_expected, candidate)
-        logger.warning(
-            "[MentionGuard] removed surplus restored mention mention=%r expected=%s",
-            mention, expected,
-        )
 
     # Clean surplus separator whitespace without changing exact display names.
     # Collapsing spaces inside a restored name makes the final identity gate
@@ -23873,7 +23853,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
-<script src="/static/admin_factory.js?v=20260909-ack122" defer></script>
+<script src="/static/admin_factory.js?v=20260910-ack-creation" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
 <script src="/static/admin_quick_reply.js?v=20260909-ack108" defer></script>
 <link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">

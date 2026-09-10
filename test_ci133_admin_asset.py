@@ -51,15 +51,20 @@ def test_wrong_admin_is_reported_with_correct_upload_path_without_writing(tmp_pa
     assert before == {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
-@pytest.mark.parametrize('version', ['ack122', 'ci133'])
+@pytest.mark.parametrize('version', ['ack122', 'ci133', 'current'])
 @pytest.mark.parametrize('endings', ['lf', 'crlf'])
 def test_verified_releases_support_both_checkout_line_endings(tmp_path, version, endings):
     root = checkout(tmp_path)
     path = root / 'static/admin_factory.js'
     data = path.read_bytes().replace(b'\r\n', b'\n')
-    if version == 'ack122':
-        data = data.replace(b'2026-09-09.ci133-recipient-scope', b'2026-09-09.ack122-recipient-scope')
-        data = data.replace(b'// FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1\n', b'')
+    if version in {'ack122', 'ci133'}:
+        # The current UI can evolve. Relabeling it cannot reconstruct the
+        # exact historical bytes covered by the legacy compatibility hash.
+        data = (ROOT / 'tests/fixtures/admin_factory_ack122.js').read_bytes().replace(b'\r\n', b'\n')
+        if version == 'ci133':
+            data = data.replace(b'2026-09-09.ack122-recipient-scope', b'2026-09-09.ci133-recipient-scope')
+            data = data.replace(b'// FACTORY_ADMIN_LIFECYCLE_API: 1\n',
+                                b'// FACTORY_ADMIN_LIFECYCLE_API: 1\n// FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1\n')
     if endings == 'crlf':
         data = data.replace(b'\n', b'\r\n')
     path.write_bytes(data)

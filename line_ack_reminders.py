@@ -17,10 +17,20 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from line_factory_store import mark_delivery
+
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-09.ack-recipient-scope.7"
+BUILD_ID = "2026-09-10.2-ack-creation-recovery"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
+
+
+class NoticeTranslationError(RuntimeError):
+    """The intent is durable but at least one translation is unfinished."""
+
+
+class NoticeInputError(ValueError):
+    """An explicit notice has no translatable body."""
 
 
 class SendError(RuntimeError):
@@ -299,23 +309,27 @@ class NoticeService:
                 batch = dict(batch, messages=[*batch["messages"][:-1], self._reminder_card(row, departed)])
         return dict(row, pending_batch=dict(batch, prepared_only=False))
 
-    def run_due(self, limit=10, budget_seconds=20):
+    def run_due(self, limit=10, budget_seconds=20, submit_preparation=None):
         started = time.monotonic()
         for row in self.store.due_notices(self.clock(), limit):
             if time.monotonic() - started > budget_seconds:
                 break
-            self.process("notice:" + row["group_id"] + ":" + row["token"])
+            key = "notice:" + row["group_id"] + ":" + row["token"]
+            if row.get("translation_pending") and submit_preparation is not None:
+                submit_preparation(key)
+            else:
+                self.process(key)
 
     def process(self, key):
         now, lease = self.clock(), uuid.uuid4().hex
         def claim(row):
             if not row or row.get("wake_at") is None or row["wake_at"] > now:
                 return row
-            return dict(row, lease_id=lease, wake_at=now + LEASE_SECONDS)
+            return dict(row, lease_id=lease, wake_at=now + (300 if row.get("translation_pending") else LEASE_SECONDS))
         row = self.store.update(key, claim)
         if not row or row.get("lease_id") != lease:
             return
-        departed = {}
+        departed, stage = {}, "storage"
         try:
             group, token = row["group_id"], row["token"]
             options = getattr(self.hub, "ack_options", self.hub.options)(group)
@@ -329,6 +343,18 @@ class NoticeService:
                 self._finish(key, lease, reminder_state="cancelled")
                 return
             initial = row.get("delivery_state") != "delivered"
+            if initial and row.get("translation_pending"):
+                stage = "translation"
+                prepared = self.hub.prepare_notice_translation(row)
+                stage = "storage"
+                row = self._update(key, lease, lambda current: dict(current, **prepared))
+                if not row or row.get("lease_id") != lease:
+                    return
+            if initial and row.get("context_pending"):
+                self.hub.sync_notice_context(row)
+                row = self._update(key, lease, lambda current: dict(current, context_pending=False))
+                if not row or row.get("lease_id") != lease:
+                    return
             if not initial and not options["ack_reminder_enabled"]:
                 self._finish(key, lease, reminder_state="cancelled")
                 return
@@ -369,10 +395,13 @@ class NoticeService:
             if now - batch["started_at"] >= RETRY_WINDOW:
                 self._finish(key, lease, reminder_state="uncertain", last_error="超過安全重試時限，請到群組確認是否收到。")
                 return
+            stage = "line"
             self.sender(group, copy.deepcopy(batch["messages"]), batch["key"])
             accepted = self.clock()
+            mark_delivery()
+            stage = "storage"
             def delivered(current):
-                current.update(pending_batch=None, lease_id="", attempts=0, last_error="")
+                current.update(pending_batch=None, lease_id="", attempts=0, last_error="", last_error_stage="")
                 if batch["initial"]:
                     due = accepted + current.get("reminder_minutes", 0) * 60
                     enabled = bool(current.get("reminder_minutes"))
@@ -398,16 +427,23 @@ class NoticeService:
                                      "initial" if batch["initial"] else "users",
                                      len(batch["ids"]))
         except Exception as exc:
-            retryable = not isinstance(exc, SendError) or exc.retryable
+            retryable = (not isinstance(exc, SendError) or exc.retryable) and not isinstance(exc, NoticeInputError)
             def failed(current):
                 attempts = current.get("attempts", 0) + 1
+                pending_translation = bool(current.get("translation_pending"))
+                delay = min(60, 2 * 2 ** min(attempts - 1, 5)) if pending_translation else min(300, 15 * 2 ** min(attempts - 1, 5))
                 current.update(lease_id="", attempts=attempts,
-                               reminder_state="retrying" if retryable else "failed",
-                               last_error=str(exc) if isinstance(exc, SendError) else "派送尚未確認，稍後重試。",
-                               wake_at=self.clock() + min(300, 15 * 2 ** min(attempts - 1, 5)) if retryable else None)
+                               reminder_state=("translation_retry" if pending_translation else "retrying") if retryable else "failed",
+                               last_error=(str(exc) if isinstance(exc, (SendError, NoticeInputError)) else
+                                           "通知翻譯尚未完成，已保留待辦自動重試。" if stage == "translation" else
+                                           "通知狀態儲存尚未確認，將自動重試。" if stage == "storage" else
+                                           "LINE 派送尚未確認，將自動重試。"),
+                               last_error_stage=stage,
+                               wake_at=self.clock() + delay if retryable else None)
                 return finish_if_no_pending(current, departed, now=self.clock())
             self._update(key, lease, failed)
-            self.hub.app.logger.warning("[FactoryAck] delivery unconfirmed: %s", type(exc).__name__)
+            self.hub.app.logger.warning("[FactoryAck] unconfirmed stage=%s token=%s error=%s", stage,
+                                        str(row.get("token", ""))[:6], type(exc).__name__)
 
 
 class NoticeWorker:
@@ -417,6 +453,7 @@ class NoticeWorker:
         self._thread = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._preparing = set()
         self.last_check_at = None
         self.last_error = ""
 
@@ -426,6 +463,7 @@ class NoticeWorker:
         if self._pid != os.getpid():
             self._pid, self._thread = os.getpid(), None
             self._lock, self._stop = threading.Lock(), threading.Event()
+            self._preparing = set()
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 self._stop.clear()
@@ -435,10 +473,34 @@ class NoticeWorker:
     def stop(self):
         self._stop.set()
 
+    def _submit_preparation(self, key):
+        # Bounded, separate workers keep a slow translation from blocking
+        # already-due acknowledgements in this or another group. Rows remain
+        # durable when both slots are busy and are claimed by the next poll.
+        with self._lock:
+            if self._stop.is_set() or key in self._preparing or len(self._preparing) >= 2:
+                return
+            self._preparing.add(key)
+        def run():
+            try:
+                with self.service.hub.app.app_context():
+                    self.service.process(key)
+            except Exception as exc:
+                self.logger.warning("[FactoryAck] preparation worker unavailable: %s", type(exc).__name__)
+            finally:
+                with self._lock:
+                    self._preparing.discard(key)
+        try:
+            threading.Thread(target=run, daemon=True, name="factory-ack-prepare").start()
+        except Exception:
+            with self._lock:
+                self._preparing.discard(key)
+            raise
+
     def _loop(self):
         while not self._stop.is_set():
             try:
-                self.service.run_due()
+                self.service.run_due(submit_preparation=self._submit_preparation)
                 self.last_check_at, self.last_error = time.time(), ""
             except Exception as exc:
                 self.last_error = "作業確認排程尚未完成檢查。"

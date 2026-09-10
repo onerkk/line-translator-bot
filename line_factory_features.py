@@ -1,7 +1,7 @@
 """LINE factory tools: revisions, native mentions, QR, sharing and receipts.
 
 Translations use the application's durable delivery boundary. Explicit /ack
-notices use a persistent outbox and can schedule one unanswered-member reminder.
+notices persist before translation and schedule unanswered-member reminders.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-09.ack-recipient-scope.7"
+BUILD_ID = "2026-09-10.2-ack-creation-recovery"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -551,33 +551,63 @@ class FactoryHub:
                       "roster_basis": record.get("roster_basis", "known_chat_members")}
             if record.get("notice_command"):
                 options = self.ack_options(group)
-                notice.update(wake_at=created, reminder_state="waiting_delivery",
+                pending = bool(record.get("translation_pending"))
+                notice.update(wake_at=created, reminder_state="waiting_translation" if pending else "waiting_delivery",
                               reminder_minutes=options["ack_reminder_minutes"] if options["ack_reminder_enabled"] else 0,
                               reminder_repeat=options["ack_reminder_repeat"], reminder_round=0, reminder_count=0)
-                body = str(record.get("original", "")) + "\n\n" + str(record.get("translated", ""))
-                heading = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n"
-                if delivery.utf16_units(heading + body) <= 1800:
-                    messages = [self._notice_card(token, heading + body, notice)]
-                else:
-                    messages = [TextMessage(text=part) for part in delivery.split_text(body)]
-                    messages.append(self._notice_card(token, heading + self._short(record.get("original"), 250), notice))
-                mentions = record.get("notice_mentions") or []
-                if mentions and self.options(group)["native_mentions"]:
-                    # Flex text renders @names literally. A separate textV2
-                    # message retains the signed webhook's actual mentions.
-                    mention_line = TextMessage(text="📣 " + " ".join(item["label"] for item in mentions))
-                    messages.insert(0, Message.from_dict(text_with_mentions(mention_line, mentions)))
-                if len(messages) > 5:
-                    raise ValueError("通知與譯文過長，請分成較短的 /ack 通知。")
-                notice["initial_messages"] = [message.to_dict() for message in messages]
+                if not pending:
+                    notice["initial_messages"] = self._notice_messages(notice)
         self.store.save_interaction(record, remaining, source_key=source_key, notice=notice)
         return record
+
+    def _notice_messages(self, notice):
+        token, group = notice["token"], notice["group_id"]
+        body = str(notice.get("original", "")) + "\n\n" + str(notice.get("translated", ""))
+        heading = "📋 作業確認 / Konfirmasi #" + token[:6] + "\n"
+        if delivery.utf16_units(heading + body) <= 1800:
+            messages = [self._notice_card(token, heading + body, notice)]
+        else:
+            messages = [TextMessage(text=part) for part in delivery.split_text(body)]
+            messages.append(self._notice_card(token, heading + self._short(notice.get("original"), 250), notice))
+        mentions = notice.get("notice_mentions") or []
+        if mentions and self.options(group)["native_mentions"]:
+            # Flex text renders names literally. textV2 retains real identities.
+            mention_line = TextMessage(text="📣 " + " ".join(item["label"] for item in mentions))
+            messages.insert(0, Message.from_dict(text_with_mentions(mention_line, mentions)))
+        if len(messages) > 5:
+            raise ValueError("通知與譯文過長，請分成較短的 /ack 通知。")
+        return [message.to_dict() for message in messages]
+
+    def prepare_notice_translation(self, notice):
+        """Run outside CAS; only the current lease may commit the result."""
+        marker = _EVENT.set(notice.get("factory_event"))
+        try:
+            src, translated = self._translate_notice(notice["group_id"], notice["sender_id"], notice["original"])
+            self.assert_current(notice)
+            prepared = dict(notice, src=src, translated=translated, translation_pending=False,
+                            reminder_state="waiting_delivery", context_pending=True, last_error="", last_error_stage="")
+            prepared["initial_messages"] = self._notice_messages(prepared)
+            return {key: prepared[key] for key in ("src", "translated", "translation_pending", "reminder_state",
+                                                  "context_pending", "last_error", "last_error_stage", "initial_messages")}
+        finally:
+            _EVENT.reset(marker)
+
+    def sync_notice_context(self, notice):
+        # If a restart interrupts this write, the translated notice remains the
+        # authoritative checkpoint. No model call or LINE send needs repeating.
+        self.assert_current(notice)
+        record = {key: copy.deepcopy(notice[key]) for key in (
+            "token", "group_id", "user_id", "original", "translated", "src", "msg_id", "factory_event",
+            "expires_at", "notice_requested", "notice_command", "notice_mentions", "expected", "roster_basis",
+            "recipient_scope", "recipient_ids", "translation_pending") if key in notice}
+        source_key = "source-contexts:" + self._rev_key(record["group_id"], record["msg_id"]) if record.get("msg_id") else None
+        self.store.save_interaction(record, max(1, int(notice["expires_at"] - time.time())), source_key=source_key)
 
     def get_context(self, token, group=None):
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", str(token or "")):
             return None
         record = self.store.get("context:" + token)
-        if (not record or record.get("expires_at", 0) <= time.time() or
+        if (not record or record.get("translation_pending") or record.get("expires_at", 0) <= time.time() or
                 (group and record.get("group_id") != group) or not self.current(record.get("factory_event"))):
             return None
         return record
@@ -787,20 +817,19 @@ class FactoryHub:
                               "將「作業確認觸發方式」設為「輸入 /ack 或 /確認 指令才建立」，並按「儲存此設定」。\n"
                               "Konfirmasi dinonaktifkan untuk grup ini. Aktifkan mode perintah /ack di pengaturan grup, lalu simpan.")
             return True
+        mentions = native_mentions(field(event, "message", {}))
         metadata = self.payload_metadata() or {"group_id": group, "user_id": uid,
                                                 "message_id": str(field(field(event, "message", {}), "id", "")),
-                                                "identity": event_identity(event)}
+                                                "identity": event_identity(event), "mentions": mentions}
         identity = metadata.get("identity") or str(field(event, "webhook_event_id") or "")
         if not identity:
             raise ValueError("通知缺少 LINE 訊息識別碼。")
         token = hashlib.sha256((group + ":ack:" + identity).encode()).hexdigest()[:24]
         key = "notice:" + group + ":" + token
-        mentions = native_mentions(field(event, "message", {}))
         try:
             existing = self.store.get(key)
             if not existing:
                 recipient_scope = ack_recipient_scope(field(event, "message", {}), mentions)
-                src, translated = self._translate_notice(group, uid, content)
                 self.assert_current({"factory_event": metadata})
                 known = self.known_members(group)
                 members = dict(known) if recipient_scope == "all" else {}
@@ -826,16 +855,33 @@ class FactoryHub:
                 members = {member: name for member, name in members.items() if member not in departed and member != uid}
                 self.remember_members(group, members)
                 self.save_context(token, {"group_id": group, "user_id": uid, "original": content,
-                    "translated": translated, "src": src, "msg_id": metadata.get("message_id", ""),
+                    "translated": "", "src": "", "translation_pending": True,
+                    "msg_id": metadata.get("message_id", ""),
                     "factory_event": metadata, "expires_at": time.time() + NOTICE_TTL,
                     "notice_requested": True, "notice_command": True, "notice_mentions": mentions,
                     "expected": members, "roster_basis": basis, "recipient_scope": recipient_scope,
                     "recipient_ids": list(members) if recipient_scope == "mentioned" else []})
             self.reminders.process(key)
             self.reminder_worker.start()
+            row = self.store.get(key)
+            if row and row.get("reminder_state") == "failed" and row.get("last_error"):
+                self._reply(event, row["last_error"], retry_suffix=":ack-preparation-error")
+            if row and row.get("delivery_state") != "delivered" and row.get("wake_at") is not None:
+                import webhook_runtime
+                if self.store.path and not webhook_runtime.persistent_outbox(self.store.path):
+                    # A Render temporary file cannot be the only acknowledged
+                    # copy of an unfinished command. Keep LINE redelivery open.
+                    raise webhook_runtime.PendingWebhookWork("notice preparation or delivery is still pending")
         except StoreError:
-            self._reply(event, "通知尚未確認建立成功，請稍後重試。\nPemberitahuan belum terkonfirmasi; coba lagi nanti.",
-                        retry_suffix=":ack-storage-error")
+            self.app.logger.exception("[FactoryAck] notice storage unconfirmed token=%s", token[:6])
+            try:
+                self._reply(event, "通知儲存暫時無法確認，請先查看群組是否已有確認卡。\n"
+                                  "Penyimpanan belum terkonfirmasi; periksa apakah kartu sudah ada di grup.",
+                            retry_suffix=":ack-storage-error")
+            except Exception:
+                # A failed status reply must not hide the StoreError needed by
+                # the webhook journal to retain and retry the original command.
+                self.app.logger.warning("[FactoryAck] storage error feedback unavailable")
             raise
         except ValueError as exc:
             self._reply(event, str(exc), retry_suffix=":ack-input-error")
@@ -846,13 +892,38 @@ class FactoryHub:
         local = self.h.get("_tl")
         previous = dict(local.__dict__) if local is not None else None
         try:
+            labels = [item["label"] for item in (self.payload_metadata() or {}).get("mentions", [])]
+            # Leading native recipients are immutable data, not model work.
+            # Preserve the exact header outside translation, including spaces,
+            # mixed scripts and duplicate display names. Never parse this list
+            # from guessed @name text or manufacture user IDs.
+            offset = 0
+            while offset < len(content):
+                begin = offset + len(content[offset:]) - len(content[offset:].lstrip())
+                label = next((label for label in sorted(labels, key=len, reverse=True)
+                              if content.startswith(label, begin)), None)
+                if not label:
+                    break
+                offset = begin + len(label)
+            header, body = content[:offset].strip(), content[offset:].strip()
+            literal_prefix = ""
+            if header and body.startswith(("@", "＠")) and not any(body.startswith(label) for label in labels):
+                # In /確認 @selected-users @測試新指令, the final @ is plain
+                # punctuation. The text-only name parser must not hide the
+                # announcement heading from the translator.
+                literal_prefix, body = body[0], body[1:]
+            if not body:
+                raise line_ack_reminders.NoticeInputError("請在 @ 點名後加入通知內容。\nTambahkan isi pemberitahuan setelah mention.")
             if local is not None:
                 local.__dict__.clear()
                 local.group_id, local.user_id = group, uid
-                local.from_image_ocr, local.line_mentions = False, []
+                local.from_image_ocr, local.line_mentions = False, labels
                 if callable(self.h.get("get_group_tone")):
                     local.tone, local.tone_custom = self.h["get_group_tone"](group)
-            src = self.h.get("detect_language", lambda _: "zh")(content)
+            probe = body
+            for label in sorted(labels, key=len, reverse=True):
+                probe = probe.replace(label, " ")
+            src = self.h.get("detect_language", lambda _: "zh")(probe)
             configured = self.h.get("get_group_target_langs", lambda _: ["id"])(group)
             targets = [lang for lang in configured if lang != src]
             if src != "zh" and "zh" not in targets:
@@ -860,14 +931,15 @@ class FactoryHub:
             if not targets:
                 return src, ""
             if callable(self.h.get("translate_multi")):
-                result = self.h["translate_multi"](content, src, targets)
+                result = self.h["translate_multi"](body, src, targets)
             else:
-                result = [(target, self.h["translate"](content, src, target)) for target in targets]
+                result = [(target, self.h["translate"](body, src, target)) for target in targets]
             valid = {lang: value for lang, value in result if value and not self.h.get(
                 "_is_translation_failure_sentinel", lambda _: False)(value)}
             if any(target not in valid for target in targets):
-                raise StoreError("通知翻譯未完成，尚未建立確認。")
-            return src, "\n\n".join("[" + target + "] " + valid[target] for target in targets)
+                raise line_ack_reminders.NoticeTranslationError("通知翻譯尚未完成，已保留待辦自動重試。")
+            return src, "\n\n".join("[" + target + "] " + (header + "\n" if header else "") +
+                                    literal_prefix + valid[target] for target in targets)
         finally:
             if local is not None:
                 local.__dict__.clear()
@@ -952,6 +1024,8 @@ class FactoryHub:
         notice_key = "notice:" + group + ":" + token
         notice = self.get_notice(token, group)
         responding = action in {"factory_ack", "factory_help"}
+        if responding and notice and notice.get("translation_pending"):
+            raise StoreError("通知翻譯尚未完成，不能提前記錄確認。")
         state = "understood" if action == "factory_ack" else "needs_help"
         timestamp = int(field(event, "timestamp", 0) or 0) if responding else 0
 

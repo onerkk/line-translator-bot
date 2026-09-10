@@ -14,14 +14,15 @@ import os
 from pathlib import Path
 
 import translation_retry_queue as queue
+from line_factory_store import StoreError
 from durable_workers import WorkerPool
 
-BUILD_ID = "2026-09-10.1-unfinished-webhook-recovery"
+BUILD_ID = "2026-09-10.2-ack-storage-recovery"
 PROCESS_STARTED = time.monotonic()
 _CURRENT = ContextVar("line_webhook_timing", default=None)
 
 
-def persistent_outbox():
+def persistent_outbox(storage_path=None):
     """Whether the configured local queue survives this host's restarts.
 
     Render Free replaces its local filesystem on restarts/deploys. Until a real
@@ -30,7 +31,7 @@ def persistent_outbox():
     """
     if os.environ.get("RENDER", "").lower() != "true":
         return True
-    path = Path(queue.DB_PATH).resolve()
+    path = Path(storage_path or queue.DB_PATH).resolve()
     volatile = (Path("/tmp"), Path("/dev/shm"), Path("/run"))
     if any(path.is_relative_to(parent) for parent in volatile):
         return False
@@ -127,14 +128,25 @@ class WebhookInbox:
                         # when the local outbox can disappear on Render sleep.
                         if not persistent_outbox() and _pending_message_work(events):
                             raise PendingWebhookWork("translation delivery is still pending")
+                    except StoreError:
+                        self.release_claims(body)
+                        # The primary interaction store may be unavailable
+                        # before a notice intent can be committed. Keep the
+                        # signed webhook in the existing local recovery queue
+                        # as well as returning non-2xx for LINE redelivery.
+                        self._enqueue(body, signature, payload, received_at)
+                        raise
                     except Exception:
                         self.release_claims(body)
                         raise
             return None
+        return self._enqueue(body, signature, payload, received_at)
+
+    def _enqueue(self, body, signature, payload, received_at=None):
         # Redelivery changes only deliveryContext; it must not create a second
         # queued generation. Preserve the original body/signature for dispatch.
         identity = {"destination": payload.get("destination"), "events": [
-            {k: v for k, v in event.items() if k != "deliveryContext"} for event in events
+            {k: v for k, v in event.items() if k != "deliveryContext"} for event in payload.get("events", [])
         ]}
         digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False,
                                            sort_keys=True, separators=(",", ":")).encode()).hexdigest()

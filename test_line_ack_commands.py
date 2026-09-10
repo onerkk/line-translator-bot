@@ -72,16 +72,18 @@ def test_alias_usage_and_known_member_fallback(hub):
     assert row["reminder_state"] == "off"
 
 
-def test_translation_failure_preserves_thread_context_and_creates_no_notice(hub):
+def test_translation_failure_preserves_thread_context_and_queues_without_sending_card(hub):
     hub.h["_tl"].group_id = "previous-group"
     hub.h["_tl"].from_image_ocr = True
     old = dict(hub.h["_tl"].__dict__)
     hub.h["translate"] = lambda *args: None
     hub.h["_send_reply_with_push_fallback"] = lambda **kwargs: None
-    from line_factory_store import StoreError
-    with pytest.raises(StoreError):
-        command(hub)
-    assert not hub.store.recent("notice:" + GROUP)
+    sends = []
+    hub.reminders.sender = lambda *args: sends.append(args)
+    row = command(hub)
+    assert row["translation_pending"] and row["wake_at"] is not None
+    assert row["delivery_state"] != "delivered" and "initial_messages" not in row
+    assert row["last_error_stage"] == "translation" and sends == []
     assert hub.h["_tl"].__dict__ == old
 
 

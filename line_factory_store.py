@@ -107,7 +107,8 @@ if ARGV[5] == '1' then
   end
 end
 local oldnotice = ARGV[6] ~= '' and redis.call('GET', KEYS[5]) or nil
-write(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+local preserve_context = oldnotice and cjson.decode(oldnotice).notice_command
+if not preserve_context then write(KEYS[1], KEYS[2], ARGV[2], ARGV[3]) end
 if source_value then write(KEYS[3], KEYS[4], source_value, ARGV[7]) end
 if ARGV[6] ~= '' and not oldnotice then write(KEYS[5], KEYS[6], ARGV[6], ARGV[8]) end
 return 1
@@ -326,12 +327,17 @@ class FeatureStore:
                 db.execute("INSERT INTO factory_state VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE "
                            "SET value=excluded.value,expires=excluded.expires,bucket=excluded.bucket",
                            (key, self._bucket(key), encode(value), now + duration))
-            write(context_key, record, ttl)
+            old_notice = read(notice_key) if notice else None
+            # A concurrent replay may still hold the original untranslated
+            # draft after another worker committed and delivered the notice.
+            # Explicit context checkpoints use notice=None and remain writable.
+            if not (old_notice and old_notice.get("notice_command")):
+                write(context_key, record, ttl)
             if source_key:
                 tokens = (read(source_key) or {}).get("tokens", [])
                 if token not in tokens:
                     write(source_key, {"tokens": tokens + [token]}, 2592000)
-            if notice and read(notice_key) is None:
+            if notice and old_notice is None:
                 write(notice_key, notice, 604800)
             db.execute("DELETE FROM factory_state WHERE key IN "
                        "(SELECT key FROM factory_state WHERE expires<=? LIMIT 100)", (now,))

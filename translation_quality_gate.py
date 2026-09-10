@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+from collections import Counter
+from decimal import Decimal
 from translation_request_cache import memoize
 import translation_mentions
 import unicodedata
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-10.1-material-field-integrity"
+QUALITY_GATE_BUILD_ID = "2026-09-10.2-notice-duration-integrity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1733,6 +1735,49 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     return result
 
 
+def _duration_integrity_issues(source, candidate, src_lang, tgt_lang):
+    """Bind explicit durations to their values, independent of model review.
+
+    Bare digits without mass/length units were previously unprotected: 8小時
+    could become 9 jam. Compare duration values, not digit substrings elsewhere
+    in the message or a source-data note appended to a wrong translation.
+    Clock forms such as 8點 / jam 8 are intentionally outside this grammar.
+    """
+    if src_lang not in {"zh", "id", "en"} or tgt_lang not in {"zh", "id", "en"}:
+        return []
+    units = {
+        "小時": 3600, "小时": 3600, "jam": 3600, "hour": 3600, "hours": 3600, "h": 3600,
+        "分鐘": 60, "分钟": 60, "menit": 60, "minute": 60, "minutes": 60,
+        "秒鐘": 1, "秒钟": 1, "秒": 1, "detik": 1, "second": 1, "seconds": 1,
+    }
+    words = {}
+    for vocabulary in (("零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二"),
+                       ("nol", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan", "sepuluh", "sebelas", "dua belas"),
+                       ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")):
+        words.update({word: str(number) for number, word in enumerate(vocabulary)})
+    words.update({"兩": "2", "两": "2", "半": "0.5", "half": "0.5", "setengah": "0.5"})
+    number = r"[+-]?\d+(?:[.,]\d+)?|" + "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+    pattern = re.compile(r"(?<![A-Za-z0-9_零〇一二三四五六七八九十百千萬万兩两])(?P<n>" + number + r")\s*(?:個|个)?\s*(?P<u>" +
+                         "|".join(re.escape(u) for u in sorted(units, key=len, reverse=True)) + r")(?![A-Za-z])", re.I)
+    def durations(text):
+        # Visible names and pipeline placeholders are identity, not durations.
+        for start, end, _ in reversed(translation_mentions.mention_spans(text)):
+            text = text[:start] + " " + text[end:]
+        text = _PIPELINE_TOKEN_RE.sub(" ", unicodedata.normalize("NFKC", text))
+        values = []
+        for m in pattern.finditer(text):
+            # Do not read the last word of "twenty eight" / "dua puluh
+            # delapan" as 8. Numeric factory data should retain its digits.
+            if re.search(r"\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|"
+                         r"belas|puluh|ratus|ribu|juta)\s*(?:-\s*|and\s+)?$", text[:m.start()], re.I):
+                continue
+            values.append(Decimal(words.get(m.group("n").lower(), m.group("n").replace(",", "."))) *
+                          units[m.group("u").lower()])
+        return Counter(values)
+    expected = durations(source)
+    return ["duration_value_or_unit_mismatch"] if expected and expected != durations(candidate) else []
+
+
 def validate_translation(
     source: str,
     candidate: str,
@@ -1837,6 +1882,7 @@ def _validate_normalized_translation(
             issues.append("numbered_item_sequence:" + ",".join(source_items)
                           + "->" + ",".join(target_items))
     issues.extend(_comparison_integrity_issues(source, candidate))
+    issues.extend(_duration_integrity_issues(source, candidate, src_lang, tgt_lang))
 
     if require_paragraph_fidelity:
         src_p = len(_paragraphs(source))
