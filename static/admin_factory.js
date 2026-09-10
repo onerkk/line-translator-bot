@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-10.owner-only-controls
+// FACTORY_ADMIN_BUILD: 2026-09-10.8-understood-only
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 // FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1
 (function(){
@@ -165,16 +165,16 @@
       if(!data.notices.length){$('receipts').append(node('p','「'+groupName()+'」目前沒有作業確認紀錄。請在此 LINE 群組輸入 /ack 通知內容，建立第一則確認。','factory-hint'));return;}
       for(const row of data.notices){
         const selected=row.recipient_scope==='mentioned';
-        const responses=Object.entries(row.responses||{}),understood=responses.filter(([,r])=>r.status==='understood'),help=responses.filter(([,r])=>r.status==='needs_help');
+        const responses=Object.entries(row.responses||{}),understood=responses.filter(([,r])=>r?.status==='understood');
         const card=node('details',undefined,'factory-receipt'),title=node('summary',(row.current?'':row.expired?'［已過期］':'［原文已更新］')+(row.delivery_state==='delivered'?'':'［尚未確認送達］')+String(row.original||'').slice(0,160));
-        title.append(node('div','已了解 '+understood.length+(help.length?' · 需說明 '+help.length:''),'factory-receipt-counts'));
+        title.append(node('div','已了解 '+understood.length,'factory-receipt-counts'));
         card.dataset.token=row.token||'';card.open=opened.has(card.dataset.token)||data.notices.length===1;
         card.append(title,node('p','通知 #'+String(row.token||'').slice(0,6)+' · 發起人：'+(row.sender_name||'未取得姓名')+' · '+formatTime(row.created_at),'factory-hint'),node('p',row.original||'','factory-original'));
         if(row.translated)card.append(node('p',row.translated,'factory-result'));
-        for(const [entries,label] of [[understood,'✅ 已了解'],...(help.length?[[help,'❓ 需要說明']]:[])])card.append(node('p',label+'：'+(entries.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
+        card.append(node('p','✅ 已了解：'+(understood.map(([,r])=>r.name+'（'+formatTime(r.at)+'）').join('、')||'—')));
         const viewed=Object.entries(row.status_views||{});
         if(viewed.length)card.append(node('p','📋 查閱按鈕紀錄（不算回覆）：'+viewed.map(([uid,r])=>(r.name||row.expected?.[uid]||(uid===row.sender_id?row.sender_name:'')||'未取得姓名')+'（'+formatTime(r.at)+'）').join('、'),'factory-hint'));
-        const pending=row.pending_ids||Object.keys(row.expected||{}).filter(uid=>uid!==row.sender_id&&!row.responses?.[uid]);
+        const pending=row.pending_ids||Object.keys(row.expected||{}).filter(uid=>uid!==row.sender_id&&row.responses?.[uid]?.status!=='understood');
         card.append(node('p',(selected?'⏳ 指定成員未回覆：':'⏳ 已知成員未回覆：')+(pending.map(uid=>row.expected?.[uid]||'未取得姓名').join('、')||'—')));
         card.append(node('p','名單範圍：'+(selected?'僅追蹤指令中 @ 的指定成員':row.roster_basis==='line_group_members'?'全群（LINE 提供的群組成員）':'全群（機器人已知成員，可能不完整）')+'；不含發起人。','factory-hint'));
         const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
