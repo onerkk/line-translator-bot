@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-09.ci133-recipient-scope
+// FACTORY_ADMIN_BUILD: 2026-09-10.ack-creation-recovery
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 // FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1
 (function(){
@@ -178,9 +178,9 @@
         const unknown=row.unknown_member_count,incomplete=unknown===null||Number(unknown)>0||(unknown===undefined&&row.roster_basis==='known_chat_members');
         if(!selected&&incomplete)card.append(node('p',(Number(unknown)>0?'⚠️ 名單不完整：另有 '+unknown+' 人尚未取得身分。':'ℹ️ 名單完整性尚未確認，目前只列出已辨識成員。')+'已知成員未回覆為 0 即自動停止提醒。','factory-hint'));
         if(row.roster_checked_at)card.append(node('p','名單最近補查：'+formatTime(row.roster_checked_at),'factory-hint'));
-        const reminderLabels={waiting_delivery:'等待通知送出',pending:'等待個別 @ 未回覆者',repeat_pending:'持續提醒中，下輪僅 @ 未回覆者',sending:'分批標記未回覆者',sent:'已完成個別 @ 提醒',sent_all:'舊版曾用 @All 提醒',no_pending:'已知成員未回覆為 0，已自動停止提醒',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
+        const reminderLabels={waiting_translation:'正在準備通知翻譯',translation_retry:'通知翻譯尚未完成，已保存並自動重試',waiting_delivery:'等待通知送出',pending:'等待個別 @ 未回覆者',repeat_pending:'持續提醒中，下輪僅 @ 未回覆者',sending:'分批標記未回覆者',sent:'已完成個別 @ 提醒',sent_all:'舊版曾用 @All 提醒',no_pending:'已知成員未回覆為 0，已自動停止提醒',off:'未啟用',stopped:'此通知已手動停止提醒',cancelled:'已停止',retrying:'傳送未確認，稍後重試',failed:'傳送失敗',uncertain:'請到群組確認是否收到'};
         if(selected)reminderLabels.no_pending='指定成員未回覆為 0，已自動停止提醒';
-        const next=row.next_reminder_at||row.reminder_due_at;
+        const next=row.next_reminder_at||row.reminder_due_at||row.wake_at;
         card.append(node('p','自動提醒：'+(reminderLabels[row.reminder_state]||'舊通知未排程')+' · 已提醒 '+(row.reminder_count||0)+' 輪'+(row.wake_at&&next?' · 下次 '+formatTime(next):''),'factory-hint'));
         if(row.last_reminder_scope)card.append(node('p','上次方式：'+(row.last_reminder_scope==='all'?'舊版 @All；後續僅個別標記未回覆者':'個別 @ 未回覆者'),'factory-hint'));
         if(row.reminder_retry_retired_at)card.append(node('p','提醒對象已更新，已取消舊請求；到下次排程時重新核對未回覆者。','factory-hint'));
