@@ -31,11 +31,12 @@ import line_message_ui
 import line_command_catalog
 import line_ack_reminders
 import line_ack_receipts
+import line_ack_completion
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-10.8-understood-only"
+BUILD_ID = "2026-09-10.9-all-confirmed-card"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -1118,10 +1119,10 @@ class FactoryHub:
             return isinstance(previous, dict) and previous.get("status") == state
 
         # Repeated taps keep the original response time/name, with no profile
-        # lookup or group reply. Only an unfinished private send may resume.
+        # lookup or group reply. Only existing unfinished notifications resume.
         if responding and notice and _USER.fullmatch(str(uid or "")) and unchanged_response(notice):
             if action == "factory_ack":
-                line_ack_receipts.send_pending(self, notice, uid)
+                self._send_ack_notifications(notice, uid)
             return True
         # A valid stored button context can repair an absent initial notice,
         # e.g. from an interrupted earlier write. Do not recreate an expired or
@@ -1175,6 +1176,7 @@ class FactoryHub:
                                   "event_timestamp": timestamp, "recording_id": operation_id}
                 if state == "understood":
                     line_ack_receipts.prepare(row, uid, recorded_at)
+                    line_ack_completion.prepare(row, recorded_at)
                 return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
@@ -1182,11 +1184,23 @@ class FactoryHub:
                 return True
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
             if action == "factory_ack":
-                line_ack_receipts.send_pending(self, notice, uid)
+                self._send_ack_notifications(notice, uid)
             self._finish_answered_notice(notice, departed)
-            # A successful ack only sends one private confirmation. Scheduled
-            # reminders still own group updates; never use the group reply path.
+            # Each ack has a private receipt; only the final ack also creates
+            # one durable group completion card, outside the group reply path.
         return True
+
+    def _send_ack_notifications(self, notice, uid):
+        # A failed private receipt must not suppress a group completion (or
+        # vice versa). Preserve either failure for signed-webhook recovery.
+        errors = []
+        for send in (line_ack_completion.send_pending, line_ack_receipts.send_pending):
+            try:
+                send(self, notice, uid)
+            except StoreError as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def _finish_answered_notice(self, notice, departed):
         # Reconcile older queued notices when someone views their status. Use

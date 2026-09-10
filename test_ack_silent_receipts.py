@@ -1,4 +1,4 @@
-"""Receipts stay silent; only due, active reminders publish fresh group lists."""
+"""Partial receipts stay silent; final receipts publish one completion card."""
 import json
 
 import pytest
@@ -20,6 +20,7 @@ def test_first_ack_is_stored_silently_then_due_broadcast_shows_current_list(hub)
     row, sent, replies = start(hub, people=(COLLEAGUE, THIRD))
     hub.h['group_user_names'][GROUP].update({COLLEAGUE: '已回覆同事', THIRD: '待回覆同事'})
     answer(hub, row)
+    assert hub.h['factory_completion_sends'] == []
     saved = admin_notice(hub, row)
     assert replies == [] and len(sent) == 1
     assert saved['responses'][COLLEAGUE]['status'] == 'understood'
@@ -37,18 +38,21 @@ def test_first_ack_is_stored_silently_then_due_broadcast_shows_current_list(hub)
     assert row['original'] in card and '作業確認提醒' in card
     assert '按了解只記錄，不另發訊息' not in card
 
-    # The final response stops the existing schedule silently, without a final
-    # completion card or restarting broadcasts after a process restart.
+    # The final response stops the schedule and emits exactly one completion;
+    # a restart must not publish the completion again or restart reminders.
     answer(hub, row, THIRD)
     completed = assert_finished(hub, row)
+    assert len(hub.h['factory_completion_sends']) == 1
+    assert completed['completion_notification']['state'] == 'accepted'
     fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
     fresh.reminders.sender = hub.reminders.sender
     tick(fresh, row['reminder_due_at'] + 7200)
     assert stored(hub, row) == completed and len(sent) == 2 and replies == []
+    assert len(hub.h['factory_completion_sends']) == 1
 
 
 @pytest.mark.parametrize('stop_via', ['button', 'admin'])
-def test_new_answers_after_manual_stop_are_saved_without_any_group_update(hub, stop_via):
+def test_answers_after_manual_stop_emit_only_the_final_completion(hub, stop_via):
     row, sent, replies = start(hub, people=(COLLEAGUE, THIRD))
     tick(hub, row['reminder_due_at'])
     assert len(sent) == 2
@@ -76,6 +80,7 @@ def test_new_answers_after_manual_stop_are_saved_without_any_group_update(hub, s
     assert len(sent) == 2 and len(replies) == boundary
     assert set(saved['responses']) == {COLLEAGUE, THIRD} and saved['pending_ids'] == []
     assert saved['reminder_state'] == 'stopped'
+    assert len(hub.h['factory_completion_sends']) == 1
 
 
 def test_stop_committed_during_ack_does_not_get_undone_by_the_cas_retry(hub, monkeypatch):

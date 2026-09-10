@@ -1,6 +1,68 @@
 """Content-first Flex cards; builders are pure and perform no cloud reads."""
 import re
+from datetime import datetime, timedelta, timezone
 from line_command_catalog import txt
+
+
+def completion_message(record, recipient_count, completed_at):
+    """A compact, image-free completion receipt; input is a committed snapshot.
+
+    This confirms receipt of a notice, never execution of the actual work.
+    All dynamic text is bounded in UTF-16 units before it reaches LINE.
+    """
+    token = str(record.get("token") or "")
+    completed = datetime.fromtimestamp(completed_at, timezone(timedelta(hours=8)))
+    original = short(" ".join(str(record.get("original") or "").split()), 96)
+    translated = short(" ".join(str(record.get("translated") or "").split()), 150)
+    sender = short(record.get("sender_name") or "—", 48)
+    count = str(recipient_count)
+    summary = [txt("通知摘要 / Ringkasan", "xs", "#087F78", weight="bold")]
+    if original:
+        summary.append(txt(original, "sm", "#173448", weight="bold", margin="sm"))
+    if translated:
+        summary.append(txt(translated, "xs", "#526577", margin="sm"))
+    summary.append(txt("發起人 / Pengirim · " + sender, "xs", "#657888", margin="md"))
+    scope = "依本通知目標名單核對。\nBerdasarkan daftar penerima pemberitahuan ini."
+    if record.get("recipient_scope") != "mentioned" and record.get("roster_basis") == "known_chat_members":
+        scope = "依本通知已列入的目標名單核對，未涵蓋尚未辨識的群組成員。\nHanya penerima yang tercantum; anggota yang belum dikenali tidak termasuk."
+    bubble = {
+        "type": "bubble", "size": "mega",
+        "header": {"type": "box", "layout": "vertical", "paddingAll": "18px",
+                   "backgroundColor": "#102F42", "contents": [
+                       txt("作業確認 / KONFIRMASI", "xs", "#90E0D1", weight="bold"),
+                       txt("通知 / Pemberitahuan #" + short(token[:6], 6), "xs", "#D3E1E9", margin="xs")]},
+        "body": {"type": "box", "layout": "vertical", "paddingAll": "20px", "contents": [
+            {"type": "box", "layout": "horizontal", "alignItems": "center", "spacing": "md", "contents": [
+                {"type": "box", "layout": "vertical", "width": "40px", "height": "40px",
+                 "cornerRadius": "20px", "backgroundColor": "#E3F4EC", "justifyContent": "center",
+                 "contents": [txt("✓", "xl", "#087F78", align="center", weight="bold")]},
+                {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+                    txt("全員確認完畢", "xl", "#173448", weight="bold"),
+                    txt("KONFIRMASI LENGKAP", "xxs", "#087F78", weight="bold", margin="xs")]}]},
+            txt("目標人員已全員確認完畢。", "sm", "#173448", margin="lg"),
+            txt("Seluruh penerima dalam daftar telah mengonfirmasi.", "xs", "#526577", margin="xs"),
+            {"type": "box", "layout": "vertical", "paddingAll": "16px", "margin": "lg",
+             "cornerRadius": "12px", "backgroundColor": "#ECF7F4", "contents": [
+                 {"type": "box", "layout": "horizontal", "alignItems": "center", "contents": [
+                     {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+                         txt(count + " / " + count, "xxl", "#087F78", weight="bold"),
+                         txt("已確認 / Terkonfirmasi", "xxs", "#526577", margin="xs")]},
+                     txt("100%", "xl", "#087F78", weight="bold", flex=0)]},
+                 {"type": "box", "layout": "vertical", "height": "4px", "margin": "md",
+                  "cornerRadius": "2px", "backgroundColor": "#087F78", "contents": []}]},
+            {"type": "box", "layout": "vertical", "margin": "lg", "contents": summary},
+            {"type": "separator", "margin": "lg", "color": "#E3EBEE"},
+            txt("確認完成時間 / Waktu konfirmasi", "xxs", "#657888", margin="md"),
+            txt(completed.strftime("%Y/%m/%d  %H:%M") + " · UTC+8", "xs", "#173448", margin="xs"),
+        ]},
+        "footer": {"type": "box", "layout": "vertical", "paddingAll": "16px",
+                   "backgroundColor": "#F1F7F8", "contents": [
+                       txt("感謝配合 / Terima kasih atas kerja samanya", "xs", "#087F78", weight="bold"),
+                       txt(scope, "xxs", "#657888", margin="sm")]},
+        "styles": {"body": {"backgroundColor": "#FFFFFF"}},
+    }
+    return {"type": "flex", "altText": "✅ 目標人員已全員確認完畢（" + count + "/" + count +
+            "）｜Semua penerima telah mengonfirmasi #" + short(token[:6], 6), "contents": bubble}
 
 
 def short(value, units):

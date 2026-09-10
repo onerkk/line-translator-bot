@@ -45,12 +45,15 @@ def hub(storage, monkeypatch, tmp_path):
     monkeypatch.setenv("FACTORY_ACK_WORKER_ENABLED", "0")
     monkeypatch.setattr(queue, "DB_PATH", str(tmp_path / "queue.db"))
     app = Flask(__name__)
+    completion_sends = []
     host = {"factory_line_settings": {"groups": {}, "stations": []},
             "_reminder_catalog": lambda: {GROUP: {"name": "A 班"}, OTHER: {"name": "B 班"}},
             "group_tracking": {GROUP: {"name": "A 班"}},
             "group_user_names": {GROUP: {USER: "管理者", COLLEAGUE: "Adi"}},
             "save_settings": lambda **kwargs: True,
             "_factory_receipt_sender": lambda *args: None,  # Private LINE transport is offline too.
+            "_factory_completion_sender": lambda *args: completion_sends.append(copy.deepcopy(args)),
+            "factory_completion_sends": completion_sends,
             "check_manager_access": lambda feature: True, "_state_lock": threading.RLock(),
             "LIFF_ID": "1234567890-test", "LINE_CHANNEL_SECRET": "test-secret",
             "_GLOSSARY_JSON": json.dumps({"I5": {"idn": "mesin I5", "note_zh": "內建 I5 說明"}}),

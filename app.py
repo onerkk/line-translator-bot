@@ -425,7 +425,9 @@ if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok"
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
 _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.6-contextual-abstract-classifiers"
+# Match the engine actually shipped in this bundle; keep the strict API/build
+# guard instead of claiming an absent classifier implementation is deployed.
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
