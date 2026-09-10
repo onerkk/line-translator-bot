@@ -425,9 +425,8 @@ if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok"
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
 _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-# Match the engine actually shipped in this bundle; keep the strict API/build
-# guard instead of claiming an absent classifier implementation is deployed.
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
+# This version binds abstract/record classifiers to their source referents.
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.10-referent-bound-quantities"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)
@@ -474,7 +473,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-08.3-compact-stable-prefix"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-10.10-contextual-quantity-prompts"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",

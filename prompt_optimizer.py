@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-09-08.3-compact-stable-prefix"
+PROMPT_OPTIMIZER_VERSION = "2026-09-10.10-contextual-quantity-prompts"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -79,7 +79,7 @@ _HISTORICAL_RULES: Sequence[Tuple[str, Tuple[str, ...], str, str]] = (
     (
         "bare-quantity",
         ("zh>id",),
-        r"(?:^|[，。！？\s])\d+\s*(?:台|把|支|個|件|頂|顶|包|袋)(?:半)?(?:$|[，。！？\s])|[一二兩三四五六七八九十]+(?:台|把|支|個|件|頂|顶|包|袋)(?:半)?",
+        r"(?:^|[，,。！？\s])(?:\d+(?:\.\d+)?|[一二兩两三四五六七八九十]+)\s*(?:台|把|支|個|个|件|頂|顶|包|袋)(?:半)?(?=$|[，,。！？\s])",
         "For a bare number+classifier reply with the noun omitted, preserve the classifier: 台/個/頂→buah, 把→bundel, 支→batang, 件→potong, 包/袋→bungkus. Half quantities stay explicit: 一包半→satu setengah bungkus. Never map 包/袋 to bundel, and never use unit unless the source literally says 單位.",
     ),
     (

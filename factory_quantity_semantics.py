@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-09.1-collective-and-ordinal-quantities"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.10-referent-bound-quantities"
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,26 @@ _CLASSIFIERS: Dict[str, ClassifierSpec] = {
     "桶": ClassifierSpec("桶", "drum", ("drum", "ember"), ("satu drum", "seember"), "container"),
     "顆": ClassifierSpec("顆", "buah", ("buah",), ("sebuah",), "generic_count"),
     "颗": ClassifierSpec("颗", "buah", ("buah",), ("sebuah",), "generic_count"),
+    "筆": ClassifierSpec("筆", "catatan", ("catatan", "data", "entri"), (), "record_count"),
+    "笔": ClassifierSpec("笔", "catatan", ("catatan", "data", "entri"), (), "record_count"),
 }
+
+# A generic Chinese classifier does not determine an Indonesian noun/classifier.
+# Bind it to its referent before deciding whether it is a count or a discourse
+# determiner. These are lexical categories, never whole-sentence replacements.
+_REFERENTS = {
+    "problem": (r"問題|问题", ("masalah", "persoalan", "kendala")),
+    "reason": (r"原因|理由", ("alasan", "penyebab", "sebab")),
+    "method": (r"方法|辦法|办法|方式", ("cara", "metode")),
+    "situation": (r"情況|情况|狀況|状况", ("situasi", "kondisi", "keadaan")),
+    "request": (r"要求|請求|请求", ("permintaan", "persyaratan", "syarat")),
+    "step": (r"步驟|步骤", ("langkah", "tahap")),
+    "plan": (r"方案|計畫|计划|計劃|计画", ("rencana", "solusi")),
+    "record": (r"資料|资料|數據|数据|紀錄|记录|記錄|纪录", ("catatan", "data", "entri", "rekaman")),
+    "report": (r"案件|案例|回報|回报|通報|通报", ("kasus", "laporan", "catatan", "data", "entri")),
+}
+_ABSTRACT_REFERENTS = set(_REFERENTS) - {"record", "report"}
+_NOUN_ADJECTIVE = r"(?:(?:新|嚴重|严重|重要|明顯|明显|不同|異常|异常)(?:的)?)?"
 
 _CLASSIFIER_PATTERN = "|".join(sorted((re.escape(k) for k in _CLASSIFIERS), key=len, reverse=True))
 _ZH_NUM_CHARS = "零〇○一二兩两俩三四五六七八九十百千萬万"
@@ -81,6 +100,13 @@ _ID_NUMBER_WORDS = {
     6: "enam", 7: "tujuh", 8: "delapan", 9: "sembilan", 10: "sepuluh",
     11: "sebelas",
 }
+_REFERENT_MATCHERS = [(key, re.compile(_NOUN_ADJECTIVE + "(?:" + noun + ")"))
+                      for key, (noun, _) in _REFERENTS.items()]
+_COUNT_WORD = "(?:" + "|".join(_ID_NUMBER_WORDS.values()) + "|seratus|seribu|belas|puluh|ratus|ribu|juta)"
+_COUNT_VALUE = rf"(?:\d+(?:[.,]\d+)?|{_COUNT_WORD}(?:\s+{_COUNT_WORD}){{0,6}}|sebuah)"
+_REFERENT_COUNTS = {key: re.compile(rf"\b(?P<number>{_COUNT_VALUE})\s+(?:buah\s+)?(?:"
+                                  + "|".join(re.escape(t) for t in terms) + r")\b", re.I)
+                    for key, (_, terms) in _REFERENTS.items()}
 
 
 @dataclass(frozen=True)
@@ -96,6 +122,7 @@ class QuantityAtom:
     accepted_id: Tuple[str, ...]
     singular_fused_id: Tuple[str, ...]
     category: str
+    referent: str = ""
 
 
 @dataclass(frozen=True)
@@ -226,9 +253,38 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
         spec = _CLASSIFIERS.get(str(classifier or ""))
         if not spec or value is None:
             continue
+        referent = ""
+        if classifier in {"個", "个", "件", "筆", "笔"}:
+            for key, noun_pattern in _REFERENT_MATCHERS:
+                noun_match = noun_pattern.match(text, end)
+                if noun_match:
+                    referent = key
+                    end = noun_match.end()
+                    break
+            # A bare 筆 is a record counter only with an explicit data/reporting
+            # context; it is not the pen noun in e.g. 一筆一畫.
+            if not referent and classifier in {"筆", "笔"}:
+                clause = re.split(r"[，,。;；!?！？\n]", text[:start])[-1]
+                if re.search(r"提報|提报|回報|回报|通報|通报|上報|上报", clause):
+                    referent = "report"
+                elif re.search(r"資料|资料|數據|数据|紀錄|记录|記錄|登錄|登录|存檔|存档", clause):
+                    referent = "record"
+                else:
+                    continue
+            if referent:
+                terms = _REFERENTS[referent][1]
+                spec = ClassifierSpec(classifier, terms[0], terms, (), "referent_count")
+                if quantifier == "cardinal" and value == 1 and referent in _ABSTRACT_REFERENTS:
+                    prefix = text[max(0, start - 5):start]
+                    if re.search(r"另(?:外)?$", prefix):
+                        quantifier = "other"
+                    elif re.search(r"同$", prefix):
+                        quantifier = "same"
+                    elif not re.search(r"只有|僅有|仅有|僅|仅|總共|总共|共有?|恰好|正好|加|又|少|多|第", prefix):
+                        quantifier = "indefinite"
         atoms.append(QuantityAtom(
             atom_id="",  # assigned after source-order sorting
-            source_text=match.group(0),
+            source_text=text[start:end],
             start=start,
             end=end,
             value=_decimal_string(value),
@@ -238,6 +294,7 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
             accepted_id=spec.accepted_id,
             singular_fused_id=spec.singular_fused_id,
             category=spec.category,
+            referent=referent,
         ))
         occupied.append((start, end))
 
@@ -308,6 +365,11 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
     value = str(atom.get("value") or "")
     unit_terms = [str(x) for x in atom.get("accepted_id", ()) if str(x)]
     unit_pattern = "(?:" + "|".join(re.escape(x) for x in unit_terms) + ")"
+    determiner = atom.get("quantifier")
+    if determiner in {"other", "same", "indefinite"}:
+        suffix = {"other": r"\s+(?:(?:yang|sama\s+sekali)\s+)?(?:lain(?:nya)?|berbeda|terpisah)",
+                  "same": r"\s+(?:yang\s+)?sama", "indefinite": ""}[determiner]
+        return [re.compile(rf"\b{unit_pattern}{suffix}\b", re.I)]
     if atom.get("quantifier") == "each":
         return [re.compile(rf"(?<![A-Za-z])(?:setiap|tiap)\s+{unit_pattern}(?![A-Za-z])", re.I)]
     number = Decimal(value)
@@ -324,7 +386,8 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
     # Do not consume a multiplier/fraction as an adjective between count and
     # unit: 'tiga puluh bundel' is thirty, not three bundles.
     number_tail = r"(?:belas|puluh|ratus|ribu|juta|miliar|triliun|setengah|koma)"
-    gap = rf"(?:(?!{number_tail}\b)\w+\s+){{0,2}}?"
+    gap = (r"(?:(?:buah|kasus|entri)\s+)?" if atom.get("referent") else
+           rf"(?:(?!{number_tail}\b)\w+\s+){{0,2}}?")
     patterns = [re.compile(rf"(?<![A-Za-z0-9.,]){value_pattern}\s+{gap}{unit_pattern}(?![A-Za-z])", re.I)]
     if word and number >= 2:
         # Collective ke- precedes the noun ('ketiga bundel' = all three).
@@ -333,6 +396,8 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
         # collective such as 'ketiga puluh bundel' cannot match three.
         patterns.append(re.compile(rf"(?<![A-Za-z0-9])ke{word}\s+{unit_pattern}(?![A-Za-z])", re.I))
     if Decimal(value) == Decimal("1"):
+        if atom.get("referent"):
+            patterns.append(re.compile(rf"\bsebuah\s+{unit_pattern}\b", re.I))
         for fused in atom.get("singular_fused_id", ()) or ():
             patterns.append(re.compile(rf"(?<![A-Za-z]){re.escape(str(fused))}(?![A-Za-z])", re.I))
     return patterns
@@ -358,10 +423,34 @@ def _find_atom(candidate: str, atom: Mapping[str, Any], start: int = 0) -> Tuple
     return best
 
 
+def _referent_count_issues(frame, target):
+    """Reject an explicit quantity moved onto a different abstract/data noun.
+
+    Existence/another-issue determiners cannot license '1 buah data' elsewhere.
+    Concrete object quantities continue through the existing classifier checks.
+    """
+    issues = []
+    expected = [a for a in frame.get("atoms", ()) if a.get("referent")]
+    for key, pattern in _REFERENT_COUNTS.items():
+        for match in pattern.finditer(target):
+            # The same surface noun (data/catatan) can describe a reported case
+            # or a record. Group those categories; unrelated nouns remain bound.
+            compatible = {key} if key not in {"record", "report"} else {"record", "report"}
+            value = match.group("number").lower()
+            if value == 'sebuah':
+                value = '1'
+            value = str(next((n for n, word in _ID_NUMBER_WORDS.items() if word == value), value))
+            candidates = [a for a in expected if a["referent"] in compatible]
+            if not any(re.fullmatch(_value_pattern(a['value']), value, re.I) for a in candidates):
+                issues.append("quantity_semantics:unsupported_referent_count:" + key + ":" + value)
+    return issues
+
+
 def _atom_map(frame: Mapping[str, Any]) -> Dict[str, Mapping[str, Any]]:
     return {str(atom.get("atom_id")): atom for atom in frame.get("atoms", []) or []}
 
 
+@memoize
 def validate_translation(frame: Mapping[str, Any], candidate: Any) -> Tuple[bool, List[str]]:
     if not frame or not frame.get("active"):
         return True, []
@@ -379,6 +468,7 @@ def validate_translation(frame: Mapping[str, Any], candidate: Any) -> Tuple[bool
             )
         else:
             found[atom_id] = span
+    issues.extend(_referent_count_issues(frame, target))
 
     # Classifier collision checks catch the exact family of error where 包 is
     # rendered as bundel.  They are source-conditioned so a genuine 把/捆 elsewhere
@@ -426,15 +516,22 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
     atoms = _atom_map(frame)
     lines = [
         "<factory_quantity_semantics>",
-        "This is a compositional quantity frame, not a sentence example. Preserve each value, classifier and relation exactly.",
-        "Cardinal counts may use digits, number words, or collective ke- before the classifier (ketiga bundel = all three bundles). Ordinals marked 第 use the classifier before the ordinal (bundel ketiga = the third bundle). Do not interchange a count and an ordinal.",
+        "This is a compositional quantity frame. Keep counts attached to their nouns; never move a count to another clause or invent a data count from 一下 or an indefinite article.",
     ]
     for atom in frame.get("atoms", []) or []:
+        if atom.get("referent"):
+            lines.append(f"Atom {atom['atom_id']}: source={atom['source_text']}; referent={atom['referent']}; "
+                         f"quantifier={atom['quantifier']}; value={atom['value']}; nouns={'/'.join(atom['accepted_id'])}. "
+                         + ("Translate other/same/indefinite as a natural determiner, not a mandatory 1 buah."
+                            if atom['quantifier'] in {'other', 'same', 'indefinite'} else "Preserve this noun's count."))
+            continue
         lines.append(
             f"Atom {atom.get('atom_id')}: source={atom.get('source_text')}; value={atom.get('value')}; "
             f"quantifier={atom.get('quantifier')}; classifier={atom.get('classifier')} "
             f"=> Indonesian classifier {atom.get('canonical_id')}."
         )
+    if any(a.get('quantifier') == 'ordinal' for a in frame.get('atoms', ())):
+        lines.append("第 marks an ordinal: noun before ordinal (bundel ketiga). Collective ketiga bundel is a count of three, not the third bundle.")
     for relation in frame.get("relations", []) or []:
         if relation.get("relation") == "addition":
             lines.append(

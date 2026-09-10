@@ -13,8 +13,9 @@ import unicodedata
 from collections import defaultdict
 
 from translation_request_cache import memoize
+import factory_input_semantics
 
-BUILD_ID = "2026-09-09.107-field-value-record-contract"
+BUILD_ID = "2026-09-10.10-field-values-and-input-method"
 
 _LABELS = {
     "zh": {
@@ -124,6 +125,7 @@ def build_frame(source, src_lang, tgt_lang):
     if (src, tgt) not in {("zh", "id"), ("id", "zh")}:
         return frame
     rows = fields(source, src)
+    frame['input_workflow'] = factory_input_semantics.build_frame(source, src, tgt)
     # A bare TAG number can be an identifier. Interpret it as a recorded value
     # only when another explicitly named weight field establishes that domain.
     if any(row["role"] != "tag_value" for row in rows):
@@ -138,12 +140,13 @@ def build_frame(source, src_lang, tgt_lang):
         if not frame["tag_unchanged"]:
             frame["tag_replaced"] = _tag_done_zh(source) if src == "zh" else _tag_done(source)
     frame["question"] = bool(re.search(r"[?？]|嗎|吗|是否|是不是", source) or (src == "id" and re.search(r"\bapakah\b", source, re.I)))
-    frame["active"] = bool(frame["fields"] or frame["record_category"])
+    frame["active"] = bool(frame["fields"] or frame["record_category"] or frame['input_workflow']['active'])
     residue = source
     for row in reversed(frame["fields"]):
         residue = residue[:row["start"]] + residue[row["end"]:]
     # Consume the ENTIRE source. No partial translation can replace a message.
     frame["complete_fields"] = bool(len(frame["fields"]) >= 2 and not frame["question"]
+                                    and not frame['input_workflow']['active']
                                     and not any(row.get("coordinated") for row in frame["fields"])
                                     and not re.sub(r"[\s,，;；。.]", "", residue))
     return frame
@@ -174,6 +177,7 @@ def validate_translation(frame, candidate):
     for row in frame["fields"]:
         expected[row["role"]].append(row)
     issues = []
+    issues.extend(factory_input_semantics.validate_translation(frame.get('input_workflow'), target)[1])
     units_supplied = any(row["unit"] for row in frame["fields"])
     for role, source_rows in expected.items():
         target_rows = actual[role]
@@ -213,6 +217,9 @@ def build_prompt(frame):
     facts = [{key: row[key] for key in ("role", "value", "unit")} for row in frame["fields"]]
     lines = ["<record_facts>",
              "Translate these current-source facts as natural connected language. Keep each value attached to its field. Do not infer units, dates or missing causes."]
+    workflow_prompt = factory_input_semantics.build_prompt(frame.get('input_workflow'))
+    if workflow_prompt:
+        lines.append(workflow_prompt)
     if facts:
         lines.append(json.dumps(facts, ensure_ascii=False, separators=(",", ":")))
         lines.append("actual_weight = berat aktual / 實重; tag_value = angka yang tercatat pada TAG / TAG 登錄值. These are separate fields, not commands to change a weight.")
