@@ -42,9 +42,14 @@ async function open(path,savedGroup){const vc=new VirtualConsole();const errors=
  const ignored=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_receipts',uid:'U'+'9'.repeat(32)})})).json();
  assert.equal(ignored.emitted_count,0);
  d.querySelector('#fa-load-receipts').click();await until(()=>d.querySelector('#fa-receipts').textContent.includes('查閱按鈕紀錄（不算回覆）：管理者'),'owner status view in admin');
- await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_help',timestamp:600})});
+ const removedHelp=await (await fetch(base+'/preview-receipt-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'factory_help',timestamp:600})})).json();
+ assert.equal(removedHelp.emitted_count,0);assert.equal(removedHelp.feedback,'');
+ const acknowledged=(await (await fetch(base+'/api/admin/factory/receipts?group_id='+firstGroup)).json()).notices;
+ assert(acknowledged.some(row=>row.responses['U'+'b'.repeat(32)]?.status==='understood'));
+ const legacy=await (await fetch(base+'/preview-legacy-help',{method:'POST'})).json();
  Object.defineProperty(d,'visibilityState',{configurable:true,value:'visible'});d.querySelector('#fa-receipts-section').getBoundingClientRect=()=>({height:500,top:0,bottom:500});
- const originalNow=w.Date.now;w.Date.now=()=>originalNow()+21000;w.dispatchEvent(new w.Event('focus'));await until(()=>d.querySelector('#fa-receipts').textContent.includes('❓ 需要說明：Adi'),'visible receipt auto refresh');
+ const originalNow=w.Date.now;w.Date.now=()=>originalNow()+21000;w.dispatchEvent(new w.Event('focus'));await until(()=>d.querySelector('[data-token="'+legacy.token+'"]')?.textContent.includes('已知成員未回覆：Adi'),'legacy help is pending on visible receipt auto refresh');
+ assert(!/需要說明|需說明|Perlu penjelasan|請發起人協助說明/.test(d.querySelector('#fa-receipts').textContent));
  Object.defineProperty(d,'visibilityState',{configurable:true,value:'hidden'});const requests=w.factoryRequests.length;w.Date.now=()=>originalNow()+45000;w.dispatchEvent(new w.Event('focus'));await new Promise(r=>setTimeout(r,30));assert.equal(w.factoryRequests.length,requests);w.Date.now=originalNow;
  console.log('PASS receipts: silent first/repeated taps and redelivery, stored response, correct group, visible refresh, hidden pause');
  d.querySelector('#fa-menu').value='richmenu-'+'a'.repeat(32);d.querySelector('#fa-insight-mode').value='daily';d.querySelector('#fa-load-insight').click();await until(()=>d.querySelector('#fa-insight-result').textContent.includes('20260906'),'daily insight');assert(d.querySelector('#fa-insight-result').textContent.includes('42'));

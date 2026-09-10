@@ -28,6 +28,14 @@ def receipt_reply():
  emitted=feedback[before:]
  return jsonify(ok=True,feedback=emitted[-1] if emitted else '',emitted_count=len(emitted))
 
+@app.route('/preview-legacy-help',methods=['POST'])
+def legacy_help():
+ # Test-only historical data, not a live help action or a production endpoint.
+ key='notice:'+cases.GROUP+':'+original
+ hub.store.update(key,lambda row:dict(row,responses={cases.COLLEAGUE:{
+     'status':'needs_help','name':'Adi','at':time.time(),'event_timestamp':600}}))
+ return jsonify(ok=True,token=original)
+
 @app.route('/preview-ack-reminder',methods=['POST'])
 def reminder_due():
  data=request.get_json(silent=True) or {}
