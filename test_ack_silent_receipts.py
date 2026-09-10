@@ -53,9 +53,9 @@ def test_new_answers_after_manual_stop_are_saved_without_any_group_update(hub, s
     tick(hub, row['reminder_due_at'])
     assert len(sent) == 2
     if stop_via == 'button':
-        assert hub.postback(event(uid=USER), {'action': 'factory_stop', 'token': row['token']})
-        assert len(replies) == 1 and replies[0]['message_obj'].to_dict()['type'] == 'text'
-        assert '已停止' in replies[0]['fallback_text']
+        hub.h['admin_users'] = {COLLEAGUE: {'is_admin': True, 'allowed_tabs': ['factory']}}
+        assert hub.postback(event(uid=COLLEAGUE), {'action': 'factory_stop', 'token': row['token']})
+        assert replies == []
     else:
         response = hub.app.test_client().post('/api/admin/factory/receipts/stop', json={
             'group_id': GROUP, 'token': row['token']})
@@ -103,7 +103,7 @@ def test_stop_committed_during_ack_does_not_get_undone_by_the_cas_retry(hub, mon
     assert len(sent) == 1
 
 
-def test_answer_outside_mention_batch_refreshes_summary_before_first_send(hub, monkeypatch):
+def test_unlisted_author_tap_cannot_change_summary_before_first_send(hub, monkeypatch):
     row, sent, replies = start(hub, people=(COLLEAGUE, THIRD))
     key = 'notice:' + GROUP + ':' + row['token']
     original_get, fired = hub.store.get, False
@@ -113,8 +113,8 @@ def test_answer_outside_mention_batch_refreshes_summary_before_first_send(hub, m
         value = original_get(name)
         if name == key and not fired and (value.get('pending_batch') or {}).get('prepared_only'):
             fired = True
-            # The sender can answer but is never a reminder recipient. Their
-            # response changes the summary without changing either target ID.
+            # An unlisted author's click must not alter the frozen send or
+            # create a response while the worker prepares its batch.
             answer(hub, row, USER)
             return original_get(name)
         return value
@@ -124,7 +124,7 @@ def test_answer_outside_mention_batch_refreshes_summary_before_first_send(hub, m
     assert fired and len(sent) == 2 and replies == []
     assert set(recipients(sent[-1])) == {COLLEAGUE, THIRD}
     card = json.dumps(sent[-1][1][-1], ensure_ascii=False)
-    assert '了解/Paham (1): 發起人' in card
+    assert '了解/Paham (0)' in card and USER not in stored(hub, row)['responses']
     assert '已知成員未回覆/Belum menjawab (2)' in card
 
 

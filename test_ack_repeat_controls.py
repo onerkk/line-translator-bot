@@ -99,12 +99,14 @@ def test_join_and_departure_update_the_available_roster(hub):
     assert THIRD in {row["id"] for row in data["members"]}
 
 
-def test_author_can_stop_but_another_member_cannot(hub):
+def test_unlisted_author_and_unauthorized_member_taps_cannot_stop_but_backend_can(hub):
     row, sends, replies = setup(hub)
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_stop", "token": row["token"]})
-    assert "只有發起人" in replies[-1]
+    assert replies == []
     assert not stored(hub, row).get("reminder_stopped_at")
     hub.postback(event(uid=USER), {"action": "factory_stop", "token": row["token"]})
+    assert not stored(hub, row).get("reminder_stopped_at") and replies == []
+    hub.stop_notice(GROUP, row["token"], USER)
     assert stored(hub, row)["reminder_state"] == "stopped"
     assert stored(hub, row)["wake_at"] is None
     tick(hub, row["reminder_due_at"] + 180)
@@ -128,10 +130,10 @@ def test_stop_api_requires_factory_admin_and_cannot_cross_groups(hub):
     assert response.get_json()["reminder_state"] == "stopped"
 
 
-def test_foreign_or_expired_stop_button_returns_feedback_without_changing_notice(hub):
+def test_foreign_or_expired_stop_button_is_silent_without_changing_notice(hub):
     row, _, replies = setup(hub)
     assert hub.postback(event(group=OTHER), {"action": "factory_stop", "token": row["token"]})
-    assert "不存在或已過期" in replies[-1]
+    assert replies == []
     assert not stored(hub, row).get("reminder_stopped_at")
 
 

@@ -103,17 +103,17 @@ def test_duplicate_is_silent_with_group_disabled_but_new_answers_are_still_block
     answer(hub, row)
     assert replies == []
     answer(hub, row, THIRD)
-    assert len(replies) == 1 and "已關閉作業確認" in replies[-1]["fallback_text"]
+    assert replies == []
     assert THIRD not in stored(hub, row)["responses"]
 
 
-def test_explicit_status_query_still_replies_when_understood_tap_is_silent(hub):
+def test_status_query_records_in_backend_without_posting_a_card(hub):
     row, _, replies = start(hub)
     answer(hub, row)
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_receipts", "token": row["token"]})
-    assert len(replies) == 1 and "此通知已自動停止提醒" in replies[-1]["fallback_text"]
+    assert replies == [] and COLLEAGUE in stored(hub, row)["status_views"]
     answer(hub, row)
-    assert len(replies) == 1
+    assert replies == []
 
 
 def test_stale_legacy_action_is_silent_but_a_real_status_change_is_recorded(hub):
@@ -154,8 +154,8 @@ def test_failed_storage_does_not_suppress_a_later_successful_first_ack(hub, monk
         with pytest.raises(StoreError):
             answer(hub, row)
     assert COLLEAGUE not in stored(hub, row)["responses"]
-    assert len(replies) == 1 and "尚未確認儲存成功" in replies[-1]["fallback_text"]
+    assert replies == []
     answer(hub, row)
     answer(hub, row)
-    assert len(replies) == 1  # Only the genuine storage failure was reported.
+    assert replies == []  # Storage failure remains retryable without chat feedback.
     assert_finished(hub, row)

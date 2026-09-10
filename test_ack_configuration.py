@@ -126,5 +126,5 @@ def test_hiding_shortcuts_keeps_existing_replies_and_repeat_reminders_until_expl
     assert len(sends) == count
     assert stored(hub, row)['reminder_state'] == 'cancelled'
     hub.postback(event(uid=THIRD), {'action': 'factory_ack', 'token': row['token']})
-    assert '此群組已關閉作業確認' in replies[-1]
+    assert replies == []
     assert THIRD not in stored(hub, row)['responses']

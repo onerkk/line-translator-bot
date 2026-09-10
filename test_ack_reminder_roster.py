@@ -78,13 +78,14 @@ def test_member_discovered_before_deadline_gets_a_personal_mention(hub, recover_
     assert reminders.unknown_member_count(saved) == 0
 
 
-def test_signed_response_from_previously_unknown_person_prevents_false_all_ping(hub):
+def test_unlisted_person_is_not_enrolled_by_a_tap_and_empty_roster_never_pings_all(hub):
     row, sent = prepare(hub, 2, members=())
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
     saved = due(hub, row)
     assert len(sent) == 1
     assert saved["reminder_state"] == "no_pending"
-    assert COLLEAGUE in saved["responses"]
+    assert COLLEAGUE not in saved["responses"]
+    assert COLLEAGUE not in hub.known_members(GROUP)
     assert reminders.pending_ids(saved) == []
 
 

@@ -53,11 +53,12 @@ def test_last_known_answer_stops_immediately_without_waiting_for_deadline(hub, c
     saved = assert_finished(hub, row)  # No scheduler tick or admin refresh.
     assert reminders.unknown_member_count(saved) == (15 if count else None)
     assert replies == []
-    # A separately requested status query can show completion; the final tap
-    # itself must not post another card or an automatic completion broadcast.
-    hub.postback(event(), {"action": "factory_receipts", "token": row["token"]})
-    assert len(replies) == 1 and "此通知已自動停止提醒" in replies[-1]["fallback_text"]
-    card = json.dumps(replies[-1]["message_obj"].to_dict(), ensure_ascii=False)
+    # Status clicks also stay silent; the current state is available in admin.
+    hub.postback(event(uid=COLLEAGUE), {"action": "factory_receipts", "token": row["token"]})
+    data = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).json["notices"][0]
+    assert replies == [] and data["reminder_state"] == "no_pending"
+    current = stored(hub, row)
+    card = json.dumps(hub.reminders._reminder_card(current, {}), ensure_ascii=False)
     assert "此通知已自動停止提醒" in card and "factory_ack" in card
     assert "factory_stop" not in card and "仍可能提醒全體" not in card
     tick(hub, row["reminder_due_at"] + 3600)
@@ -146,8 +147,8 @@ def test_existing_zero_pending_notice_stops_without_creating_a_new_notice(hub, e
     if entry == "worker":
         tick(hub, row["reminder_due_at"])
     elif entry == "status":
-        hub.postback(event(), {"action": "factory_receipts", "token": row["token"]})
-        assert "此通知已自動停止提醒" in replies[-1]["fallback_text"]
+        hub.postback(event(uid=COLLEAGUE), {"action": "factory_receipts", "token": row["token"]})
+        assert replies == []
     else:
         result = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).get_json()
         assert result["notices"][0]["reminder_state"] == "no_pending"

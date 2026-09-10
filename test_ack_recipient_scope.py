@@ -174,7 +174,10 @@ def test_context_recovery_keeps_selected_audience_and_old_event_redelivery_does_
     with hub.message_scope(ev, 'text'):
         assert hub.command(ev)
     assert stored(hub, row)['recipient_ids'] == recovered['recipient_ids']
-    assert recovered['reminder_due_at'] >= recovered['responses'][COLLEAGUE]['at'] + 60
+    # Repair marks receipt of the existing card before the response write, so
+    # no worker can see a fresh initial send in the intervening storage window.
+    assert recovered['reminder_due_at'] == recovered['delivered_at'] + 60
+    assert recovered['delivered_at'] <= recovered['responses'][COLLEAGUE]['at'] < recovered['reminder_due_at']
     assert replies == [] and len(sent) == 1
     tick(hub, recovered['reminder_due_at'] - 0.01)
     assert len(sent) == 1

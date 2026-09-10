@@ -34,12 +34,14 @@ import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-10.2-ack-creation-recovery"
+BUILD_ID = "2026-09-10.3-backend-only-notice-controls"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
+_QUIET_NOTICE_CONTROL = ContextVar("factory_quiet_notice_control", default=False)
 NOTICE_TTL = 7 * 86400
 NOTICE_ACTIONS = {"factory_ack", "factory_help", "factory_receipts"}
+NOTICE_CONTROL_ACTIONS = NOTICE_ACTIONS | {"factory_stop"}
 DEFAULTS = {"translation_mode": "all", "edit_translation": True, "native_mentions": True,
             "sharing": True, "station_tools": True, "acknowledgements": "command",
             "ack_reminder_enabled": False, "ack_reminder_minutes": 30, "ack_reminder_repeat": True}
@@ -482,7 +484,7 @@ class FactoryHub:
         if (record.get("reminder_minutes") and not record.get("reminder_stopped_at")
                 and record.get("reminder_state") != "no_pending"):
             buttons.append(("🛑 停止提醒/Stop", "factory_stop"))
-        buttons = [("查看回覆/Status" if action == "factory_receipts" and label in {"📋 確認/Status", "確認/Status"} else label, action) for label, action in buttons]
+        buttons = [("📋 記錄查閱/Catat" if action == "factory_receipts" else label, action) for label, action in buttons]
         return line_message_ui.notice_footer(token, buttons)
 
     def _notice_card(self, token, text, record):
@@ -531,7 +533,7 @@ class FactoryHub:
             return None
         return row
 
-    def save_context(self, token, record):
+    def save_context(self, token, record, *, receipt_at=None):
         record = copy.deepcopy(record)
         record["token"] = token
         record["factory_event"] = record.get("factory_event") or self.payload_metadata()
@@ -549,13 +551,24 @@ class FactoryHub:
                       "delivery_state": "prepared",
                       "expected": {uid: str(name) for uid, name in members.items() if _USER.fullmatch(uid) and uid != sender_id},
                       "roster_basis": record.get("roster_basis", "known_chat_members")}
+            # Freeze the same audience in the recovery context. A later tap
+            # must never enroll its actor before checking this snapshot.
+            record.update(expected=copy.deepcopy(notice["expected"]), sender_id=sender_id)
             if record.get("notice_command"):
                 options = self.ack_options(group)
                 pending = bool(record.get("translation_pending"))
                 notice.update(wake_at=created, reminder_state="waiting_translation" if pending else "waiting_delivery",
                               reminder_minutes=options["ack_reminder_minutes"] if options["ack_reminder_enabled"] else 0,
                               reminder_repeat=options["ack_reminder_repeat"], reminder_round=0, reminder_count=0)
-                if not pending:
+                if receipt_at is not None:
+                    # A signed recipient tap proves the old card exists. Never
+                    # expose a waiting_delivery row between repair and receipt
+                    # CAS: a worker could otherwise resend the full card.
+                    due = receipt_at + notice["reminder_minutes"] * 60 if notice["reminder_minutes"] else None
+                    notice.update(delivery_state="delivered", delivered_at=receipt_at,
+                                  reminder_due_at=due, next_reminder_at=due, wake_at=due,
+                                  reminder_state="pending" if due is not None else "off")
+                elif not pending:
                     notice["initial_messages"] = self._notice_messages(notice)
         self.store.save_interaction(record, remaining, source_key=source_key, notice=notice)
         return record
@@ -765,6 +778,8 @@ class FactoryHub:
             raise PermissionError("連結已過期，請回 LINE 按「工廠工具」。 / Tautan kedaluwarsa; buka kembali dari LINE.") from exc
 
     def _reply(self, event, text, *, url=None, notice=None, retry_suffix=""):
+        if _QUIET_NOTICE_CONTROL.get():
+            return  # Notice taps may never reach reply or push fallback.
         from linebot.v3.messaging import URIAction
         group, _ = source_ids(event)
         msg = self._notice_card(notice["token"], text, notice) if notice else TextMessage(text=text)
@@ -962,36 +977,30 @@ class FactoryHub:
         action = params.get("action", "")
         if not action.startswith("factory_"):
             return False
-        self.observe_members(event)
+        quiet = action in NOTICE_CONTROL_ACTIONS
+        marker = _QUIET_NOTICE_CONTROL.set(quiet)
         try:
+            if not quiet:
+                self.observe_members(event)
             return self._postback(event, params)
         except StoreError:
             self.app.logger.exception("[FactoryReceipt] action=%s storage operation unconfirmed", action)
+            if quiet:
+                raise  # Retain webhook recovery without a group error message.
             try:
                 self._reply(event, "⚠️ 尚未確認儲存成功，請稍後重按；請勿視為已完成確認。\n"
                                   "Penyimpanan belum terkonfirmasi. Coba tekan lagi nanti.", retry_suffix=":storage-error")
             except Exception:
                 self.app.logger.warning("[FactoryReceipt] error feedback delivery unavailable")
             raise  # Keep webhook redelivery possible; never acknowledge a lost write.
+        finally:
+            _QUIET_NOTICE_CONTROL.reset(marker)
 
     def _postback(self, event, params):
         action = params.get("action", "")
         group, uid = source_ids(event)
         token = params.get("token", "")
-        if action == "factory_stop":
-            manager = self.h.get("admin_users", {}).get(uid, {})
-            admin = bool(manager.get("is_admin") and "factory" in manager.get("allowed_tabs", []))
-            try:
-                notice = self.stop_notice(group, token, uid, admin=admin)
-            except PermissionError:
-                self._reply(event, "只有發起人或工廠工具管理員可以停止提醒。\nHanya pengirim atau admin yang dapat menghentikan pengingat.")
-                return True
-            except ValueError as exc:
-                self._reply(event, str(exc))
-                return True
-            self._reply(event, "🛑 已停止這筆通知的後續提醒。\nPengingat untuk pemberitahuan ini telah dihentikan.")
-            return True
-        if action in NOTICE_ACTIONS:
+        if action in NOTICE_CONTROL_ACTIONS:
             return self._receipt_postback(event, action, token, group, uid)
         context = self.get_context(token, group) if token else None
         if action != "factory_open" and not context:
@@ -1007,12 +1016,14 @@ class FactoryHub:
             return True
         raise ValueError("未知的工廠工具操作。")
 
-    def stop_notice(self, group, token, actor, *, admin=False):
+    def stop_notice(self, group, token, actor, *, admin=False, recipient_only=False):
         if not self.get_notice(token, group):
             raise ValueError("通知不存在或已過期。")
         def stop(row):
             if not row:
                 raise ValueError("通知不存在或已過期。")
+            if recipient_only and not self._notice_recipient(row, actor):
+                return row
             if not admin and (not actor or actor != row.get("sender_id")):
                 raise PermissionError("只有發起人或管理員可以停止提醒。")
             return dict(row, reminder_stopped_at=row.get("reminder_stopped_at") or time.time(),
@@ -1020,12 +1031,22 @@ class FactoryHub:
                         pending_batch=None, lease_id="", next_reminder_at=None)
         return self.store.update("notice:" + group + ":" + token, stop)
 
+    @staticmethod
+    def _notice_recipient(row, uid, departed=None):
+        sender = row.get("sender_id") or (row.get("factory_event") or {}).get("user_id") or row.get("user_id")
+        return bool(_USER.fullmatch(str(uid or "")) and uid != sender
+                    and uid in line_ack_reminders.tracked_members(row) and uid not in (departed or {}))
+
     def _receipt_postback(self, event, action, token, group, uid):
+        if not _USER.fullmatch(str(uid or "")):
+            return True
         notice_key = "notice:" + group + ":" + token
         notice = self.get_notice(token, group)
         responding = action in {"factory_ack", "factory_help"}
-        if responding and notice and notice.get("translation_pending"):
-            raise StoreError("通知翻譯尚未完成，不能提前記錄確認。")
+        # Check the frozen audience before any member/profile write or repair.
+        # Legacy all-group notices also exclude the author and unlisted users.
+        if notice and not self._notice_recipient(notice, uid):
+            return True
         state = "understood" if action == "factory_ack" else "needs_help"
         timestamp = int(field(event, "timestamp", 0) or 0) if responding else 0
 
@@ -1034,42 +1055,48 @@ class FactoryHub:
             return previous and (previous.get("status") == state
                                  or timestamp < previous.get("event_timestamp", 0))
 
-        if (responding and notice and notice.get("recipient_scope") == "mentioned"
-                and uid not in line_ack_reminders.tracked_members(notice)):
-            return True  # Other group members are not respondents for this notice.
         # Repeated taps stay silent across cards, restarts and group switches.
         # Keep the original response time/name and avoid another profile lookup.
         if responding and notice and _USER.fullmatch(str(uid or "")) and unchanged_response(notice):
             return True
-        if self.options(group)["acknowledgements"] == "off" and action != "factory_receipts":
-            self._reply(event, "此群組已關閉作業確認。 / Konfirmasi dinonaktifkan.")
-            return True
         # A valid stored button context can repair an absent initial notice,
         # e.g. from an interrupted earlier write. Do not recreate an expired or
         # superseded notice that is already present in the store.
-        if not notice and not self.store.get(notice_key):
+        if responding and not notice and not self.store.get(notice_key):
             context = self.get_context(token, group)
             if context and self._wants_notice(group, context):
-                self.save_context(token, context)
+                context = dict(context, expected=context.get("expected", self.known_members(group)))
+                if not self._notice_recipient(context, uid) or context.get("translation_pending"):
+                    return True
+                if self.ack_options(group)["acknowledgements"] == "off":
+                    return True
+                self.save_context(token, context, receipt_at=time.time())
                 notice = self.get_notice(token, group)
-        if not notice:
-            self._reply(event, "這筆確認已過期、原文已更新或不屬於此群組；請使用最新通知。\n"
-                              "Gunakan pemberitahuan terbaru di grup asal; konfirmasi ini tidak berlaku.")
+        if not notice or not self._notice_recipient(notice, uid) or notice.get("translation_pending"):
             return True
         try:
             departed = self.store.get("members-left:" + group) or {}
         except StoreError:
             departed = {}  # An optional roster read must not lose a signed ack.
+        if not self._notice_recipient(notice, uid, departed):
+            return True
+        if action == "factory_stop":
+            manager = self.h.get("admin_users", {}).get(uid, {})
+            admin = bool(manager.get("is_admin") and "factory" in manager.get("allowed_tabs", []))
+            try:
+                self.stop_notice(group, token, uid, admin=admin, recipient_only=True)
+            except (PermissionError, ValueError):
+                pass  # No record or feedback for an unauthorized stop tap.
+            return True
+        if self.ack_options(group)["acknowledgements"] == "off" and responding:
+            return True
         if responding:
-            if not _USER.fullmatch(str(uid or "")):
-                self._reply(event, "LINE 未提供回覆者身分，本次無法記錄。\nIdentitas pengguna tidak tersedia; konfirmasi belum dicatat.")
-                return True
-            name = self._member_name(group, uid, lookup=True)
+            name = (self.h.get("group_user_names", {}).get(group, {}).get(uid)
+                    or line_ack_reminders.tracked_members(notice).get(uid)
+                    or "未取得姓名 / Nama belum tersedia")
             operation_id = secrets.token_hex(16)
             def record_reply(row):
-                if not row:
-                    raise ValueError("作業確認已過期。")
-                if row.get("recipient_scope") == "mentioned" and uid not in line_ack_reminders.tracked_members(row):
+                if not row or not self._notice_recipient(row, uid, departed):
                     return row
                 # Recheck inside CAS: concurrent taps can both read no response
                 # above, but only one response should be committed.
@@ -1093,15 +1120,22 @@ class FactoryHub:
                 return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
             remaining = max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time()))
             notice = self.store.update(notice_key, record_reply, remaining)
-            if notice["responses"].get(uid, {}).get("recording_id") != operation_id:
+            if not notice or notice.get("responses", {}).get(uid, {}).get("recording_id") != operation_id:
                 return True
             self.app.logger.info("[FactoryReceipt] recorded group=%s action=%s responders=%d", group, action, len(notice["responses"]))
             # Successful taps only persist receipts, even the first tap or a
             # late answer after stop. The scheduled reminder owns group updates;
             # returning handled also prevents the webhook's generic reply path.
         elif action == "factory_receipts":
-            notice = self._finish_answered_notice(notice, departed)
-            self._reply(event, self._receipt_text(notice, "📋 作業確認 / Konfirmasi"), notice=notice)
+            def record_view(row):
+                if not row or not self._notice_recipient(row, uid, departed):
+                    return row
+                # This is a view audit, never an acknowledgement. Persist only
+                # the first view; duplicate deliveries/taps do not change it.
+                row.setdefault("status_views", {}).setdefault(uid, {"at": time.time()})
+                return line_ack_reminders.finish_if_no_pending(row, departed, now=time.time())
+            self.store.update(notice_key, record_view,
+                              max(1, int(float(notice["created_at"]) + NOTICE_TTL - time.time())))
         return True
 
     def _finish_answered_notice(self, notice, departed):
@@ -1138,7 +1172,8 @@ class FactoryHub:
                 ("\n❓ 需說明/Perlu penjelasan (" + str(len(help_names)) + "): " + self._short("、".join(help_names), 300) if help_names else "") +
                 ("\n⏳ 指定成員未回覆/Belum menjawab (" if selected else "\n⏳ 已知成員未回覆/Belum menjawab (") +
                 str(len(pending)) + "): " + self._short("、".join(pending) or "—", 300) +
-                "\n名單為本次查詢結果；按「查看回覆」更新。\nDaftar saat ini; tekan Status untuk memperbarui.")
+                "\n最新回覆紀錄請至管理後台查看；按鈕不另發群組訊息。\n"
+                "Lihat catatan terbaru di panel admin; tombol tidak mengirim pesan grup.")
         unknown = line_ack_reminders.unknown_member_count(notice, departed)
         if unknown is None:
             text += ("\nℹ️ 名單完整性尚未確認；目前只列出已辨識成員，尚無法確認全群是否都已列入。\n"
@@ -1470,6 +1505,8 @@ class FactoryHub:
                 row["unknown_member_count"] = line_ack_reminders.unknown_member_count(row, departed)
                 row["expected"] = line_ack_reminders.tracked_members(row)
                 row["responses"] = line_ack_reminders.tracked_responses(row)
+                row["status_views"] = {uid: view for uid, view in row.get("status_views", {}).items()
+                                       if uid in row["expected"]}
                 for private in ("initial_messages", "pending_batch", "lease_id"):
                     row.pop(private, None)
             return jsonify(ok=True, notices=rows, group_id=group, group_name=catalog[group]["name"],

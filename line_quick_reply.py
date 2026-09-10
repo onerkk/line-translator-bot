@@ -254,6 +254,8 @@ class Menu:
                         if name not in notice_allowed:
                             continue
                         data["action"] = name
+                        if name == "factory_receipts":
+                            label = "📋 記錄查閱/Catat"
                     elif name == "context_qry":
                         match = re.search(r"[A-Z]{1,5}[-\s]?\d{3,8}|\b\d{5,10}\b", record.get("original", ""))
                         if not match or not self.h.get("is_cmd_enabled", lambda *_: True)(group, "qry"):

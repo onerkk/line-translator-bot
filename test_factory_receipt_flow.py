@@ -48,9 +48,11 @@ def test_clicked_receipt_survives_style_context_expiry(hub, monkeypatch):
     assert row['responses'][COLLEAGUE]['status'] == 'understood'
     assert replies == []
     hub.postback(event(uid=COLLEAGUE), {'action': 'factory_receipts', 'token': token})
-    assert len(replies) == 1
-    assert 'Adi' in replies[-1] and 'PMI' in replies[-1]
-    assert '管理者' in replies[-1]
+    assert replies == []
+    data = hub.app.test_client().get('/api/admin/factory/receipts?group_id=' + GROUP).json['notices'][0]
+    assert COLLEAGUE in data['status_views']
+    assert data['responses'][COLLEAGUE]['name'] == 'Adi' and 'PMI' in data['original']
+    assert data['sender_name'] == '管理者'
 
 
 def test_receipt_query_explicitly_identifies_the_group_and_response(hub, monkeypatch):
@@ -73,7 +75,7 @@ def test_missing_receipt_can_be_recovered_from_a_valid_stored_context(hub, monke
     assert hub.store.get('notice:' + GROUP + ':' + token)['responses'][COLLEAGUE]['status'] == 'needs_help'
 
 
-def test_storage_outage_has_visible_feedback_and_stays_retryable(hub, monkeypatch):
+def test_storage_outage_is_silent_and_stays_retryable(hub, monkeypatch):
     token, _, _ = notice(hub)
     replies = []
     monkeypatch.setattr(hub, '_reply', lambda e, text, **kw: replies.append(text))
@@ -85,7 +87,7 @@ def test_storage_outage_has_visible_feedback_and_stays_retryable(hub, monkeypatc
     monkeypatch.setattr(hub.store, 'update', broken)
     with pytest.raises(StoreError):
         hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
-    assert replies and '尚未確認儲存成功' in replies[-1]
+    assert replies == []
     assert not hub.store.get('notice:' + GROUP + ':' + token)['responses']
 
 
@@ -111,11 +113,15 @@ def test_seven_day_receipt_expiry_is_independent_of_updates(hub, monkeypatch):
     monkeypatch.setattr(hub, '_reply', lambda e, text, **kw: replies.append(text))
     hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
     assert not hub.store.get(key)['responses']
-    assert '過期' in replies[-1]
+    assert replies == []
 
 
 def test_real_signed_postback_records_in_admin_without_group_feedback(hub, monkeypatch):
     import app
+    def no_line_api(*args, **kwargs):
+        pytest.fail('A notice postback reached a LINE API or loading animation')
+    monkeypatch.setattr(app, 'MessagingApi', no_line_api)
+    monkeypatch.setattr(app, 'show_loading', no_line_api)
     monkeypatch.setattr(app, 'factory_hub', hub)
     monkeypatch.setattr(app, '_processed_msg_ids', app._collections_dedup.OrderedDict())
     token, _, _ = notice(hub)
@@ -145,7 +151,14 @@ def test_real_signed_postback_records_in_admin_without_group_feedback(hub, monke
     assert sends == []
     assert click(USER, 'receipt-help', 'factory_help').status_code == 200
     row = hub.store.get('notice:' + GROUP + ':' + token)
-    assert len(row['responses']) == 2 and row['responses'][USER]['status'] == 'needs_help'
+    assert set(row['responses']) == {COLLEAGUE}  # The author is outside the tracked audience.
+    assert click(COLLEAGUE, 'receipt-status', 'factory_receipts').status_code == 200
+    assert COLLEAGUE in hub.store.get('notice:' + GROUP + ':' + token)['status_views']
+    before, members = hub.store.get('notice:' + GROUP + ':' + token), hub.known_members(GROUP)
+    for action in ('factory_ack', 'factory_help', 'factory_receipts', 'factory_stop'):
+        assert click('U' + '9' * 32, 'unlisted-' + action, action).status_code == 200
+    assert hub.store.get('notice:' + GROUP + ':' + token) == before
+    assert hub.known_members(GROUP) == members
     assert sends == []
 
 
@@ -163,14 +176,14 @@ def test_control_feedback_does_not_create_or_redecorate_another_notice(hub):
     hub.postback(event(uid=COLLEAGUE), {'action': 'factory_ack', 'token': token})
     assert sent == []
     hub.postback(event(uid=COLLEAGUE), {'action': 'factory_receipts', 'token': token})
-    assert len(sent) == 1
+    assert sent == []
     assert len(hub.store.recent('notice:' + GROUP)) == rows_before
 
 
-def test_unidentified_user_gets_feedback_without_anonymous_record(hub, monkeypatch):
+def test_unidentified_user_is_ignored_without_feedback_or_anonymous_record(hub, monkeypatch):
     token, _, _ = notice(hub)
     replies = []
     monkeypatch.setattr(hub, '_reply', lambda e, text, **kw: replies.append(text))
     hub.postback(event(uid=''), {'action': 'factory_ack', 'token': token})
     assert not hub.store.get('notice:' + GROUP + ':' + token)['responses']
-    assert '本次無法記錄' in replies[-1]
+    assert replies == []

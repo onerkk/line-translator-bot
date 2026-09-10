@@ -20,7 +20,7 @@ import uuid
 from line_factory_store import mark_delivery
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-10.2-ack-creation-recovery"
+BUILD_ID = "2026-09-10.3-backend-only-notice-controls"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -89,7 +89,8 @@ def member_ids(group):
 def tracked_members(notice):
     expected = notice.get("expected", {})
     if notice.get("recipient_scope") != "mentioned":
-        return expected  # Older notifications keep their original group scope.
+        return {uid: name for uid, name in expected.items()
+                if isinstance(uid, str) and USER_ID.fullmatch(uid) and uid != notice.get("sender_id")}
     return {uid: expected.get(uid, "未取得姓名 / Nama belum tersedia")
             for uid in dict.fromkeys(notice.get("recipient_ids", []))
             if isinstance(uid, str) and USER_ID.fullmatch(uid) and uid != notice.get("sender_id")}
@@ -97,8 +98,6 @@ def tracked_members(notice):
 
 def tracked_responses(notice):
     responses = notice.get("responses", {})
-    if notice.get("recipient_scope") != "mentioned":
-        return responses
     members = tracked_members(notice)
     return {uid: response for uid, response in responses.items() if uid in members}
 

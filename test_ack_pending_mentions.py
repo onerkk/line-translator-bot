@@ -26,13 +26,14 @@ def recipients(send):
 
 
 @pytest.mark.parametrize("count", [None, 20])
-def test_screenshot_eleven_responses_five_pending_mentions_only_those_five(hub, count):
+def test_ten_recipients_answer_and_unlisted_author_is_ignored_with_five_pending(hub, count):
     people = tuple("U" + format(i, "032x") for i in range(1, 16))
     row, sent, _ = start(hub, people=people, count=count)
-    # The sender may also press the button but is never a required recipient.
+    # The sender's unlisted tap creates no response; only the ten recipients count.
     for uid in [USER, *people[:10]]:
         answer(hub, row, uid)
-    assert len(stored(hub, row)["responses"]) == 11
+    assert len(stored(hub, row)["responses"]) == 10
+    assert USER not in stored(hub, row)["responses"]
     tick(hub, row["reminder_due_at"])
     assert set(recipients(sent[-1])) == set(people[10:])
     assert "factory_ack" in json.dumps(sent[-1][1][-1])
