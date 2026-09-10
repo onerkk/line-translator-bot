@@ -198,6 +198,8 @@ class Menu:
         for row in profile["items"]:
             if row["type"] != "builtin" or row["action"] not in NOTICE_ACTIONS:
                 continue
+            if row["action"] == "factory_help":
+                continue  # Removed from new cards; old signed postbacks stay compatible.
             if row["action"] == "factory_ack":
                 rows.append({**row, "enabled": True, "contexts": ["text", "image"]})
                 has_ack = True
@@ -231,6 +233,8 @@ class Menu:
             action = None
             if typ == "builtin":
                 name = row["action"]
+                if name == "factory_help":
+                    continue
                 if preview:
                     if name in NOTICE_ACTIONS and profile["acknowledgements"] == "off":
                         continue
@@ -255,7 +259,7 @@ class Menu:
                             continue
                         data["action"] = name
                         if name == "factory_receipts":
-                            label = "📋 記錄查閱/Catat"
+                            label = "查看回覆/Status"
                     elif name == "context_qry":
                         match = re.search(r"[A-Z]{1,5}[-\s]?\d{3,8}|\b\d{5,10}\b", record.get("original", ""))
                         if not match or not self.h.get("is_cmd_enabled", lambda *_: True)(group, "qry"):

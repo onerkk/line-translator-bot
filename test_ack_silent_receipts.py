@@ -35,7 +35,7 @@ def test_first_ack_is_stored_silently_then_due_broadcast_shows_current_list(hub)
     assert '了解/Paham (1): 已回覆同事' in card
     assert '已知成員未回覆/Belum menjawab (1): 待回覆同事' in card
     assert row['original'] in card and '作業確認提醒' in card
-    assert '按了解只記錄，不另發訊息' in card
+    assert '按了解只記錄，不另發訊息' not in card
 
     # The final response stops the existing schedule silently, without a final
     # completion card or restarting broadcasts after a process restart.

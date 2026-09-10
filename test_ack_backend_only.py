@@ -1,4 +1,4 @@
-"""Notice controls never publish; only current recipients can persist a tap."""
+"""Receipts and unauthorized management stay silent; reminders keep their due time."""
 import copy
 import json
 import time
@@ -24,7 +24,8 @@ def test_outside_audience_has_no_reply_profile_lookup_or_member_record(hub, monk
     writes = []
     monkeypatch.setattr(hub, "observe_members", lambda ev: writes.append("observed"))
     hub.h["get_display_name"] = lambda *args: writes.append("profile") or "Unexpected"
-    for uid in (OUTSIDER, USER, "", "invalid"):
+    actors = (OUTSIDER, "", "invalid") + ((USER,) if action in {"factory_ack", "factory_help"} else ())
+    for uid in actors:
         assert hub.postback(event(uid=uid), {"action": action, "token": row["token"]})
     assert stored(hub, row) == before
     assert hub.known_members(GROUP) == members and OUTSIDER not in members
@@ -46,7 +47,7 @@ def test_only_scheduled_deadline_posts_and_only_unanswered_members_are_mentioned
     data = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).json["notices"][0]
     assert data["pending_ids"] == [FOURTH]
     assert set(data["responses"]) == {COLLEAGUE, THIRD}
-    assert FOURTH in data["status_views"]
+    assert FOURTH not in data["status_views"]
     fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
     fresh.reminders.sender = hub.reminders.sender
     tick(fresh, due - 0.001)
@@ -126,8 +127,8 @@ def test_controls_have_no_client_chat_text_and_status_label_describes_backend(hu
             for child in value:
                 visit(child)
     visit(sent[0][1])
-    assert "記錄查閱/Catat" in json.dumps(sent[0][1], ensure_ascii=False)
-    assert "後台" in json.dumps(sent[0][1], ensure_ascii=False)
+    assert "查看回覆/Status" in json.dumps(sent[0][1], ensure_ascii=False)
+    assert "按了解只記錄" not in json.dumps(sent[0][1], ensure_ascii=False)
 
 
 def test_transport_guard_blocks_nested_notice_feedback_and_resets_for_factory_tools(hub, monkeypatch):
@@ -158,17 +159,18 @@ def test_audience_change_during_cas_cannot_commit_an_unlisted_action(hub, monkey
     monkeypatch.setattr(hub.store, "compare_swap", compare)
     hub.postback(event(uid=COLLEAGUE), {"action": action, "token": row["token"]})
     saved = stored(hub, row)
-    assert raced and COLLEAGUE not in saved["responses"] and COLLEAGUE not in saved.get("status_views", {})
+    assert bool(raced) == (action != "factory_receipts")  # Status is rejected before CAS for a non-manager.
+    assert COLLEAGUE not in saved["responses"] and COLLEAGUE not in saved.get("status_views", {})
     assert replies == [] and len(sent) == 1
 
 
 def test_status_view_is_idempotent_and_does_not_reschedule_or_count_as_ack(hub):
     row, sent, replies, _ = begin(hub, [tagged("@Adi", COLLEAGUE)])
     for stamp in (100, 200, 300):
-        hub.postback(event(uid=COLLEAGUE, stamp=stamp), {"action": "factory_receipts", "token": row["token"]})
+        hub.postback(event(uid=USER, stamp=stamp), {"action": "factory_receipts", "token": row["token"]})
         saved = stored(hub, row)
         if stamp == 100:
             first = copy.deepcopy(saved)
         assert saved == first and saved["responses"] == {} and saved["wake_at"] == row["wake_at"]
     tick(hub, row["reminder_due_at"])
-    assert len(sent) == 2 and recipients(sent[-1]) == [COLLEAGUE] and replies == []
+    assert len(sent) == 2 and recipients(sent[-1]) == [COLLEAGUE] and len(replies) == 3

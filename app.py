@@ -1137,8 +1137,19 @@ def _pending_img_set(message_id, info):
         data[message_id] = info
         _save_pending_imgs(data)
 
-def _pending_img_pop(message_id):
-    """取出並刪除一筆 pending(類似 dict.pop)。v3.10+ 修補:加 file lock。"""
+def _pending_img_allowed(event, info):
+    """Authorize against the stored original uploader and original chat."""
+    if not isinstance(info, dict):
+        return False
+    group, uid = line_factory_features.source_ids(event)
+    return bool(group and group == info.get("group_id") and
+                line_factory_features.owner_or_admin(globals(), uid, info.get("user_id")))
+
+
+def _pending_img_pop(message_id, *, event=None):
+    """Only the original uploader/admin in the same chat may consume a card."""
+    if not _pending_img_allowed(event, _load_pending_imgs().get(message_id)):
+        return None
     global _PENDING_IMG_FILE
     if _PENDING_IMG_FILE is None:
         _PENDING_IMG_FILE = _pending_img_path()
@@ -1146,16 +1157,18 @@ def _pending_img_pop(message_id):
     try:
         with _file_lock(lock_path):
             data = _load_pending_imgs()
-            info = data.pop(message_id, None)
-            if info is not None:
-                _save_pending_imgs(data)
+            info = data.get(message_id)
+            if not _pending_img_allowed(event, info):
+                return None
+            data.pop(message_id)
+            if not _save_pending_imgs(data):
+                raise line_factory_features.StoreError("圖片詢問狀態尚未確認儲存。")
             return info
-    except Exception:
-        data = _load_pending_imgs()
-        info = data.pop(message_id, None)
-        if info is not None:
-            _save_pending_imgs(data)
-        return info
+    except line_factory_features.StoreError:
+        raise
+    except Exception as exc:
+        # Never fall back to an unlocked, unchecked pop on a lock/read failure.
+        raise line_factory_features.StoreError("圖片詢問狀態暫時無法更新。") from exc
 # Audio/voice translation toggle per group, default True
 group_audio_settings = {}
 # Work order photo detection toggle per group, default True
@@ -21051,29 +21064,31 @@ def _handle_image_background(ctx):
 
 def _process_pending_image_translate(event, message_id):
     """Run ask-mode image translation; persist and retry on every exception."""
+    info = _load_pending_imgs().get(message_id)
+    if not _pending_img_allowed(event, info):
+        return
     try:
         return _process_pending_image_translate_inner(event, message_id)
     except Exception as exc:
         logger.exception("[ImgAsk] uncaught exception deferred durably: %s", exc)
-        source = getattr(event, "source", None)
-        group_id = (
-            getattr(source, "group_id", None)
-            or getattr(source, "room_id", None)
-            or getattr(source, "user_id", None)
-        )
-        user_id = getattr(source, "user_id", None)
-        _schedule_image_translation_retry({
+        # The queued job belongs to the photo's original sender/chat even if
+        # an administrator pressed the button. Never derive it from the actor.
+        group_id, user_id = info["group_id"], info.get("user_id") or ""
+        job = _schedule_image_translation_retry({
             "message_id": str(message_id or ""),
             "quote_token": None,
             "group_id": group_id,
             "user_id": user_id,
             "tgt": group_target_lang.get(group_id, "id"),
         }, delay_seconds=2)
+        if not job:
+            _pending_img_set(message_id, info)
+            raise line_factory_features.StoreError("圖片翻譯尚未確認保存，保留詢問待重試。") from exc
         return None
 
 def _process_pending_image_translate_inner(event, message_id):
     """Claim ask-mode input and use the same durable image pipeline as auto mode."""
-    info = _pending_img_pop(message_id)
+    info = _pending_img_pop(message_id, event=event)
     if not info:
         return
     group_id = info["group_id"]
@@ -21089,6 +21104,15 @@ def _process_pending_image_translate_inner(event, message_id):
     ctx["durable_job_key"] = _schedule_image_translation_retry(ctx, delay_seconds=75)
     if not ctx["durable_job_key"]:
         raise RuntimeError("cannot persist requested image translation")
+    # Only the winner of the authorized claim may announce work. Duplicate,
+    # foreign-chat and non-owner taps never get this far or spend AI credits.
+    try:
+        with ApiClient(configuration) as api_client:
+            MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                reply_token=line_factory_features.field(event, "reply_token"),
+                messages=[TextMessage(text="🔄 正在翻譯圖片...\nSedang menerjemahkan gambar...")]))
+    except Exception as exc:
+        logger.info("[ImgAsk] progress reply unavailable; durable translation continues: %s", exc)
     if _has_ai_capability("vision"):
         _handle_image_background(ctx)
 
@@ -22451,49 +22475,12 @@ if PostbackEvent:
         # v3.9.10: 圖片翻譯詢問模式 — 使用者按了「翻譯這張」
         if "img_translate" in params:
             msg_id = params["img_translate"]
-            logger.info("[ImgAsk] postback received, msg_id=%s", msg_id)
-
-            # v3.9.30: 過期 / 已處理 → 完全靜默,不發任何訊息(避免騷擾群組)
-            # 先檢查 pending 是否還在;不在就直接 return,連 ack 都不發
-            _pending_check = _load_pending_imgs()
-            if msg_id not in _pending_check:
-                logger.info("[ImgAsk] msg_id=%s not in pending (expired or already processed) → silent ignore", msg_id)
-                return
-
-            # 只有確認還在 pending 才 ack + 進入翻譯流程
-            # 立刻 reply 確認收到(reply_token 必須在 1 分鐘內用掉)
-            # 然後用 push 發實際翻譯結果(OCR + translate 可能需要 10+ 秒)
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="🔄 正在翻譯圖片...\nSedang menerjemahkan gambar...")]
-                    ))
-                logger.info("[ImgAsk] ack reply sent")
-            except Exception as _ake:
-                logger.warning("[ImgAsk] ack reply failed (token may be expired): %s", _ake)
-            # 然後處理 OCR + 翻譯,用 push 送結果
             _process_pending_image_translate(event, msg_id)
             return
         if "img_skip" in params:
-            # v3.9.30: 舊版 Flex 殘留的按鈕(新版已移除「跳過」),保留處理避免 500
-            # 過期 → 完全靜默;還在 pending → pop 掉並回覆已跳過
-            _msgid = params["img_skip"]
-            _pending_check = _load_pending_imgs()
-            if _msgid not in _pending_check:
-                logger.info("[ImgAsk] img_skip msg_id=%s expired → silent ignore", _msgid)
-                return
-            _pending_img_pop(_msgid)
-            try:
-                with ApiClient(configuration) as api_client:
-                    api = MessagingApi(api_client)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[TextMessage(text="✅ 已跳過 / Dilewati")]
-                    ))
-            except Exception:
-                pass
+            # Old cards may still have Skip. Apply the same owner/admin check
+            # and keep it silent; outsiders cannot discard another user's photo.
+            _pending_img_pop(params["img_skip"], event=event)
             return
 
 
@@ -23853,7 +23840,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=1">
 <script src="/static/admin_reminders.js?v=1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
-<script src="/static/admin_factory.js?v=20260910-backend-only-notice" defer></script>
+<script src="/static/admin_factory.js?v=20260910-owner-only-controls" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
 <script src="/static/admin_quick_reply.js?v=20260909-ack108" defer></script>
 <link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">

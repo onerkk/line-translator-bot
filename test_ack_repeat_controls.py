@@ -99,14 +99,13 @@ def test_join_and_departure_update_the_available_roster(hub):
     assert THIRD in {row["id"] for row in data["members"]}
 
 
-def test_unlisted_author_and_unauthorized_member_taps_cannot_stop_but_backend_can(hub):
+def test_author_can_stop_silently_but_an_ordinary_member_cannot(hub):
     row, sends, replies = setup(hub)
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_stop", "token": row["token"]})
     assert replies == []
     assert not stored(hub, row).get("reminder_stopped_at")
     hub.postback(event(uid=USER), {"action": "factory_stop", "token": row["token"]})
-    assert not stored(hub, row).get("reminder_stopped_at") and replies == []
-    hub.stop_notice(GROUP, row["token"], USER)
+    assert stored(hub, row).get("reminder_stopped_at") and replies == []
     assert stored(hub, row)["reminder_state"] == "stopped"
     assert stored(hub, row)["wake_at"] is None
     tick(hub, row["reminder_due_at"] + 180)

@@ -47,10 +47,10 @@ def test_clicked_receipt_survives_style_context_expiry(hub, monkeypatch):
     row = hub.store.get('notice:' + GROUP + ':' + token)
     assert row['responses'][COLLEAGUE]['status'] == 'understood'
     assert replies == []
-    hub.postback(event(uid=COLLEAGUE), {'action': 'factory_receipts', 'token': token})
-    assert replies == []
+    hub.postback(event(uid=USER), {'action': 'factory_receipts', 'token': token})
+    assert len(replies) == 1 and 'PMI' not in replies[0]
     data = hub.app.test_client().get('/api/admin/factory/receipts?group_id=' + GROUP).json['notices'][0]
-    assert COLLEAGUE in data['status_views']
+    assert USER in data['status_views']
     assert data['responses'][COLLEAGUE]['name'] == 'Adi' and 'PMI' in data['original']
     assert data['sender_name'] == '管理者'
 
@@ -153,13 +153,15 @@ def test_real_signed_postback_records_in_admin_without_group_feedback(hub, monke
     row = hub.store.get('notice:' + GROUP + ':' + token)
     assert set(row['responses']) == {COLLEAGUE}  # The author is outside the tracked audience.
     assert click(COLLEAGUE, 'receipt-status', 'factory_receipts').status_code == 200
-    assert COLLEAGUE in hub.store.get('notice:' + GROUP + ':' + token)['status_views']
+    assert COLLEAGUE not in hub.store.get('notice:' + GROUP + ':' + token).get('status_views', {})
     before, members = hub.store.get('notice:' + GROUP + ':' + token), hub.known_members(GROUP)
     for action in ('factory_ack', 'factory_help', 'factory_receipts', 'factory_stop'):
         assert click('U' + '9' * 32, 'unlisted-' + action, action).status_code == 200
     assert hub.store.get('notice:' + GROUP + ':' + token) == before
     assert hub.known_members(GROUP) == members
     assert sends == []
+    assert click(USER, 'owner-status', 'factory_receipts').status_code == 200
+    assert len(sends) == 1 and sends[0]['message_obj'].to_dict()['type'] == 'text'
 
 
 def test_control_feedback_does_not_create_or_redecorate_another_notice(hub):

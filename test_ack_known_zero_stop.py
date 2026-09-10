@@ -147,8 +147,8 @@ def test_existing_zero_pending_notice_stops_without_creating_a_new_notice(hub, e
     if entry == "worker":
         tick(hub, row["reminder_due_at"])
     elif entry == "status":
-        hub.postback(event(uid=COLLEAGUE), {"action": "factory_receipts", "token": row["token"]})
-        assert replies == []
+        hub.postback(event(uid=USER), {"action": "factory_receipts", "token": row["token"]})
+        assert len(replies) == 1
     else:
         result = hub.app.test_client().get("/api/admin/factory/receipts?group_id=" + GROUP).get_json()
         assert result["notices"][0]["reminder_state"] == "no_pending"

@@ -11,6 +11,8 @@ def short(value, units):
 def notice_footer(token, buttons):
     primary, secondary = [], []
     for label, action in buttons:
+        if action == "factory_help":
+            continue
         button = {"type": "button", "height": "sm", "style": "primary" if action == "factory_ack" else "link",
                   "color": "#087F78" if action != "factory_stop" else "#9B4854",
                   "action": {"type": "postback", "label": short(label, 20),
@@ -19,11 +21,6 @@ def notice_footer(token, buttons):
     contents = primary[:]
     if secondary:
         contents.append({"type": "box", "layout": "horizontal", "spacing": "sm", "contents": secondary})
-    contents.append(txt("按了解只記錄，不另發訊息。其他通知按鈕也只更新後台。\n"
-                        "Tombol pemberitahuan hanya mencatat di panel admin, tanpa pesan grup.\n"
-                        "不在追蹤名單的點擊不處理；最新回覆與停止提醒請至後台。\n"
-                        "Klik di luar daftar diabaikan; lihat jawaban dan hentikan pengingat di panel admin.\n"
-                        "7 天內可回覆；了解不代表作業完成。\nBerlaku 7 hari; paham ≠ pekerjaan selesai.", "xxs", "#657888"))
     return {"type": "box", "layout": "vertical", "spacing": "md", "paddingAll": "16px",
             "backgroundColor": "#F1F7F8", "contents": contents}
 

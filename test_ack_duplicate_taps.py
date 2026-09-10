@@ -107,11 +107,11 @@ def test_duplicate_is_silent_with_group_disabled_but_new_answers_are_still_block
     assert THIRD not in stored(hub, row)["responses"]
 
 
-def test_status_query_records_in_backend_without_posting_a_card(hub):
+def test_non_manager_status_query_is_ignored_after_understood_tap(hub):
     row, _, replies = start(hub)
     answer(hub, row)
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_receipts", "token": row["token"]})
-    assert replies == [] and COLLEAGUE in stored(hub, row)["status_views"]
+    assert replies == [] and COLLEAGUE not in stored(hub, row).get("status_views", {})
     answer(hub, row)
     assert replies == []
 
