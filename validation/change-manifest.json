@@ -1,0 +1,115 @@
+{
+  "kind": "cumulative_changed_files",
+  "base_upload": "line-translator-bot-main.zip",
+  "base_sha256": "fb5baa677b2deb341127e2bde6ade2a7c0d6c3d4db4c61deb1e96cb4bc9a35c5",
+  "date": "2026-09-10",
+  "runtime_files_changed": 9,
+  "project_files_changed": 17,
+  "files": [
+    {
+      "path": "UPDATE_ACK_COMPLETION_20260910.md",
+      "bytes": 4411,
+      "sha256": "fdea4aef24fbd7a72193aedff12c5d558deb37ccad7d6de38dadd9a367414524"
+    },
+    {
+      "path": "UPDATE_TRANSLATION_ROOT_FIX_20260910.md",
+      "bytes": 6414,
+      "sha256": "08d00a760ff044e56b0735d6ce35c73d34eaa4ae31cb3465ba00d348fa4a7b12"
+    },
+    {
+      "path": "app.py",
+      "bytes": 2205032,
+      "sha256": "8f1dabd906251c25a398b7c462b2afc1c82c16dce4efbfb2917032acf2d5bfc8"
+    },
+    {
+      "path": "benchmark_contextual_translation.py",
+      "bytes": 4753,
+      "sha256": "bac74e3c43a71ce27c097130887daff32c9c9743d2055e424cc348ae2e32fbce"
+    },
+    {
+      "path": "factory_input_semantics.py",
+      "bytes": 10586,
+      "sha256": "ba9c0a84b4feeaf17ca8c4ba33d0ea3bc8f775206163285272b03419c76c5e18"
+    },
+    {
+      "path": "factory_quantity_semantics.py",
+      "bytes": 27682,
+      "sha256": "925cd8aafb02b3a0817c4138c177a8c9fc7a334daa84c955c3709b670a877ee6"
+    },
+    {
+      "path": "factory_record_contract.py",
+      "bytes": 14147,
+      "sha256": "e386f4bf53ebd95900d90b16e68c97fece5f12f5fccc5a99cbeb44fc4f61cc37"
+    },
+    {
+      "path": "line_ack_completion.py",
+      "bytes": 6056,
+      "sha256": "0f7fe94460a0b6402252907caa91f5fb39e8ca3c74dc9ecdb9b0af7afc11d1ce"
+    },
+    {
+      "path": "line_ack_reminders.py",
+      "bytes": 32091,
+      "sha256": "51800dbc911e970d3aa38b49e5b70a3bca884317931741291acaf0c9108753ed"
+    },
+    {
+      "path": "line_factory_features.py",
+      "bytes": 95464,
+      "sha256": "e5ec9631042207913ddaeb640efcb382cb553605e6eb92b6dd797a16f12392b1"
+    },
+    {
+      "path": "line_message_ui.py",
+      "bytes": 8859,
+      "sha256": "fd68e4696afa9148343eeecaec66ed7ce940bb8d354dc279d23aeae14e1d058e"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "bytes": 29816,
+      "sha256": "d8f7edd16834daef2f5640aa98da53ab3640ed702e00ba128a760d7fe735fe6e"
+    },
+    {
+      "path": "test_ack_completion.py",
+      "bytes": 16947,
+      "sha256": "a3503230e278e0f8c3997746da59bda19ba711a84706072ad7e196d7a8e00d4b"
+    },
+    {
+      "path": "test_ack_silent_receipts.py",
+      "bytes": 6808,
+      "sha256": "bb8c08439020a0a5f8751fcc51810271b41107caa818f4a5b4b3880bf1543b92"
+    },
+    {
+      "path": "test_contextual_factory_translation.py",
+      "bytes": 9830,
+      "sha256": "1a99a2a8ae714d6eae5353ea0a4a74dd057e108a0e4172900f7152da1765292a"
+    },
+    {
+      "path": "test_line_factory_features.py",
+      "bytes": 19997,
+      "sha256": "da0f9798a17564afa7fcf8b1b41cd31c56185257b5457992a46b25795773d9f6"
+    },
+    {
+      "path": "tests/data/contextual_translation_20260910.json",
+      "bytes": 2178,
+      "sha256": "e53ba5e72d70016c397df9bdf6945fba092f4e6d04818ce98df266f81014e102"
+    },
+    {
+      "path": "validation/confirmation-card-preview.png",
+      "bytes": 200271,
+      "sha256": "f2bf1b653cc9a216b2eb1d3d062aef1258d7c29fa522dd18d5eb8f26b482a3e8"
+    },
+    {
+      "path": "validation/full-regression.txt",
+      "bytes": 3458,
+      "sha256": "aec468cc97ac1d293d4647f29339650cf0828d5742a76a781bb95c783ded4dea"
+    },
+    {
+      "path": "validation/replay-after.json",
+      "bytes": 821,
+      "sha256": "32c32a14fad92f055578171081ddeeee256171ec4355ae283e37ba4700104a0a"
+    },
+    {
+      "path": "validation/replay-before.json",
+      "bytes": 895,
+      "sha256": "4a7b4284f30fafc3fd42f8713662c76270dfad54375cb3a8b0b440377b007aef"
+    }
+  ]
+}

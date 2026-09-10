@@ -4,32 +4,29 @@
   "rows": [
     {
       "id": "abstract_issue_and_zero_rods",
-      "generations_for_reviewed_output": 2,
+      "generations_for_reviewed_output": 1,
       "reviewed_output_returned": true,
-      "good_accepted": false,
-      "bad_rejected": false,
-      "good_issues": [
-        "quantity_semantics:atom_missing:q1:1:buah"
-      ],
+      "good_accepted": true,
+      "bad_rejected": true,
+      "good_issues": [],
       "payload_chars_per_generation": [
-        5958,
-        6202
+        6410
       ],
-      "quantity_prompt_chars": 624,
-      "quantity_eight_checks_median_ms": 0.925
+      "quantity_prompt_chars": 506,
+      "quantity_eight_checks_median_ms": 0.683
     },
     {
       "id": "scale_entry_and_seven_reports",
       "generations_for_reviewed_output": 1,
       "reviewed_output_returned": true,
       "good_accepted": true,
-      "bad_rejected": false,
+      "bad_rejected": true,
       "good_issues": [],
       "payload_chars_per_generation": [
-        3331
+        5041
       ],
-      "quantity_prompt_chars": 0,
-      "quantity_eight_checks_median_ms": 0.053
+      "quantity_prompt_chars": 364,
+      "quantity_eight_checks_median_ms": 0.441
     }
   ]
 }
