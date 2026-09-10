@@ -1,0 +1,14 @@
+[
+  {
+    "id": "abstract_issue_and_zero_rods",
+    "source": "最新新系統問題很多沒錯，磅秤收集後，近期多互相提醒存檔前要檢視一下重量 ID 支數異常。目前支數換算異常是另一個問題，但像這樣0支明顯的標籤異常你們一定要有辦法主動發現。貼TAG本來就要核對資訊，這樣很危險。",
+    "good": "Memang benar, sistem baru ini memiliki banyak masalah. Setelah data diperoleh dari timbangan, belakangan ini kalian perlu saling mengingatkan untuk memeriksa apakah berat, ID, dan jumlah batang tidak normal sebelum menyimpan data. Masalah konversi jumlah batang adalah masalah lain. Namun, kalian harus dapat secara aktif menemukan label yang jelas tidak normal, seperti jumlah 0 batang ini. Informasi pada TAG memang harus dicocokkan saat memasangnya. Kondisi seperti ini sangat berbahaya.",
+    "bad": "Memang benar, sistem baru ini memiliki banyak masalah. Setelah data diperoleh dari timbangan, belakangan ini kalian perlu saling mengingatkan untuk memeriksa apakah berat, ID, dan jumlah batang tidak normal sebelum menyimpan 1 buah data. Masalah konversi jumlah batang adalah masalah lain. Namun, kalian harus dapat secara aktif menemukan label yang jelas tidak normal, seperti jumlah 0 batang ini. Informasi pada TAG memang harus dicocokkan saat memasangnya. Kondisi seperti ini sangat berbahaya."
+  },
+  {
+    "id": "scale_entry_and_seven_reports",
+    "source": "@All 包裝的重量嚴禁手打，雖然欄位目前沒鎖欄位，但是一律要磅秤收集，手打系統會有異常重量，目前已經提報七筆",
+    "good": "@All Data berat hasil pengemasan dilarang keras diinput secara manual. Meskipun kolom saat ini belum dikunci, data berat wajib diperoleh langsung dari timbangan. Jika diinput secara manual, sistem akan mencatat berat yang tidak normal. Saat ini sudah dilaporkan tujuh kasus.",
+    "bad": "@All Data berat hasil pengemasan boleh diinput secara manual. Meskipun kolom saat ini belum dikunci, data berat wajib diperoleh langsung dari timbangan. Jika diinput secara manual, sistem akan mencatat berat yang tidak normal. Saat ini sudah dilaporkan tujuh kasus."
+  }
+]
