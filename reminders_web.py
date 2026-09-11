@@ -30,7 +30,7 @@ def verified_manager(token, secret):
 
 def _public(record):
     return {key: value for key, value in record.items()
-            if key not in {"retry_key", "lease_token", "lease_until", "created_by"}}
+            if key not in {"retry_key", "lease_token", "lease_until", "created_by", "delivery_messages"}}
 
 
 def register_reminders(flask_app, *, authorize, catalog):

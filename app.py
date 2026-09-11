@@ -23884,8 +23884,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .dm-section{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:16px;margin-bottom:12px}
 .dm-toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 </style>
-<link rel="stylesheet" href="/static/admin_reminders.css?v=1">
-<script src="/static/admin_reminders.js?v=1" defer></script>
+<link rel="stylesheet" href="/static/admin_reminders.css?v=20260911-card1">
+<script src="/static/admin_reminders.js?v=20260911-card1" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
 <script src="/static/admin_factory.js?v=20260910-owner-only-controls" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">

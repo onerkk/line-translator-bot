@@ -6,6 +6,7 @@ Both stores use compare-and-swap for edit, cancel, claim and acknowledgement.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from line_translation_delivery import utf16_units
+from line_message_ui import scheduled_reminder_message
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 ACTIVE = {"pending", "retrying", "sending"}
@@ -323,6 +325,7 @@ def validate_spec(data, groups, now):
 
 
 def build_line_message(record):
+    """Legacy text payload, retained for requests already attempted pre-update."""
     content = ("⏰ 自訂提醒\n" + record["local_time"].replace("T", " ") + "（台灣時間）\n")
     mode = record["mention_mode"]
     if mode == "none":
@@ -339,6 +342,31 @@ def build_line_message(record):
     return {"type": "textV2", "text": content, "substitution": substitutions}
 
 
+def build_line_messages(record):
+    """Keep native mentions beside the Flex card, in the same LINE request.
+
+    Freeze before the first attempt. A pre-update request already handed to
+    LINE must retain its old text and retry key, even across a deployment.
+    """
+    if "delivery_messages" in record:
+        return copy.deepcopy(record["delivery_messages"])
+    if record.get("attempts", 0):
+        return [build_line_message(record)]
+    messages = []
+    mode = record["mention_mode"]
+    if mode != "none":
+        targets = [{"type": "all"}] if mode == "all" else [
+            {"type": "user", "userId": uid} for uid in record["user_ids"]]
+        if not 1 <= len(targets) <= 20:
+            raise ReminderError("提醒超出 LINE 標註人數限制。")
+        substitutions = {"m" + str(i): {"type": "mention", "mentionee": target}
+                         for i, target in enumerate(targets)}
+        messages.append({"type": "textV2", "text": "⏰ 提醒 / Pengingat\n" +
+                         " ".join("{" + key + "}" for key in substitutions), "substitution": substitutions})
+    messages.append(scheduled_reminder_message(record))
+    return messages
+
+
 class DeliveryError(Exception):
     def __init__(self, message, retryable=True):
         super().__init__(message)
@@ -349,7 +377,7 @@ def send_line_reminder(record):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         raise DeliveryError("未設定 LINE 存取權杖。", False)
-    payload = {"to": record["group_id"], "messages": [build_line_message(record)],
+    payload = {"to": record["group_id"], "messages": build_line_messages(record),
                "notificationDisabled": False}
     req = urllib.request.Request("https://api.line.me/v2/bot/message/push", method="POST",
                                  data=_encode(payload).encode("utf-8"), headers={
@@ -457,6 +485,9 @@ class ReminderService:
                            lease_until=now + LEASE_SECONDS, updated_at=now,
                            revision=previous["revision"] + 1, attempts=previous["attempts"] + 1,
                            first_attempt_at=previous["first_attempt_at"] or now)
+            # Payload and claim commit together before external I/O. Updates
+            # to card styling must never change a possibly accepted retry.
+            claimed["delivery_messages"] = build_line_messages(previous)
             if not self.store.compare_swap(previous, claimed):
                 continue
             current = dict(claimed, lease_token="", lease_until=0, revision=claimed["revision"] + 1)
