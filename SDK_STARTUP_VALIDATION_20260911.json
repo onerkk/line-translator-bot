@@ -1,0 +1,116 @@
+{
+  "release": "2026-09-11-translation-sdk-startup",
+  "baseline_repository": "onerkk/line-translator-bot",
+  "baseline_commit": "bbe95eaf4eeabc28d0f053ce734a39f4c4cef98c",
+  "baseline_files": 473,
+  "production_evidence": {
+    "origin": "user-supplied Render logs",
+    "trace": "5c9b10c2401a",
+    "sdk_ms": 2470,
+    "provider_dispatch_ms": 6976,
+    "outside_sdk_derived_ms": 4506,
+    "event_to_line_acceptance_ms": 10061,
+    "other_event_handling_derived_ms": 3085,
+    "line_reply_ms": 197.22,
+    "api_attempts": 1,
+    "model": "gpt-5.6-luna",
+    "cache_write_tokens": 3163,
+    "cached_input_tokens": 0,
+    "full_cause_of_4506_ms_proven": false
+  },
+  "local_setup_benchmark": {
+    "before": {
+      "mode": "before",
+      "external_network": "blocked",
+      "live_ai_calls": 0,
+      "live_line_messages": 0,
+      "preexisting_resource_import": false,
+      "resources_loaded_before_first_request": false,
+      "startup_preparation_ms": 0.0,
+      "first_request_client_ms": 19.403,
+      "first_request_options_ms": 0.055,
+      "first_request_resource_ms": 473.435,
+      "first_request_local_setup_ms": 492.894,
+      "preparation": [],
+      "scope": "real installed SDK, import/client/resource setup only; method resolved but not called; no production latency claim"
+    },
+    "after": {
+      "mode": "after",
+      "external_network": "blocked",
+      "live_ai_calls": 0,
+      "live_line_messages": 0,
+      "preexisting_resource_import": false,
+      "resources_loaded_before_first_request": true,
+      "startup_preparation_ms": 477.668,
+      "first_request_client_ms": 20.434,
+      "first_request_options_ms": 0.054,
+      "first_request_resource_ms": 0.023,
+      "first_request_local_setup_ms": 20.511,
+      "preparation": [
+        {
+          "sdk": "openai",
+          "status": "loaded",
+          "http_requests": 0,
+          "imports_ms": 477.6
+        }
+      ],
+      "scope": "real installed SDK, import/client/resource setup only; method resolved but not called; no production latency claim"
+    },
+    "limitation": "One run per fresh process, local SDK setup only. Necessary resource loading moved to startup, not eliminated. This does not measure production end-to-end improvement."
+  },
+  "verification": {
+    "network": "external network blocked; dummy credentials; isolated temporary state",
+    "final_full_suite": {
+      "command": "python run_translation_offline_checks.py",
+      "passed": 2948,
+      "subtests_passed": 443,
+      "seconds": 84.89
+    },
+    "focused_existing_regressions": {
+      "passed": 107,
+      "seconds": 6.26
+    },
+    "new_regressions": {
+      "passed": 11,
+      "seconds": 3.11
+    },
+    "live_ai_calls": 0,
+    "live_line_messages": 0,
+    "production_deployed": false
+  },
+  "preserved": {
+    "translation_rules_and_prompts": true,
+    "provider_order_and_credentials": true,
+    "normal_generation_call_count": true,
+    "retry_deadline_and_attempt_budget": true,
+    "durable_delivery_and_deduplication": true,
+    "startup_preparation_creates_http_clients": false,
+    "startup_preparation_sends_http_requests": false
+  },
+  "files": [
+    {
+      "path": "app.py",
+      "before_sha256": "b0fc23a597bf69e6fda730affe7acf93b4b08fb19cad4719677902ee8429ff76",
+      "sha256": "76d8bf266c975705bcc4d9c4ccc1efe703e3bb63deced6acc93861b90c47b1d5",
+      "bytes": 2210636
+    },
+    {
+      "path": "ai_provider.py",
+      "before_sha256": "ffafa84fc322f2f39a883344628562b33c39f2f8ffa059134cc269ab2db19570",
+      "sha256": "a2761280652ba23be1667003d9a59ea9ab6ef09a719cccc6c8d17ee403de537c",
+      "bytes": 191846
+    },
+    {
+      "path": "test_provider_sdk_readiness.py",
+      "before_sha256": null,
+      "sha256": "0236a16b873c6e1b9f314bb1e6eded48e5ed4bc4ea170d1d79e9bb54fb9adaaa",
+      "bytes": 7705
+    },
+    {
+      "path": "UPDATE_SDK_STARTUP_20260911.md",
+      "before_sha256": null,
+      "sha256": "9ad30f188c57e61c0d9079aef49957b072aa371faa911488d34d276744e62c13",
+      "bytes": 4572
+    }
+  ]
+}

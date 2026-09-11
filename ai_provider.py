@@ -109,6 +109,8 @@ import sys
 import time
 import threading
 import logging
+import importlib
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 
@@ -171,13 +173,66 @@ def _bounded_provider_transport(function):
         deadline = time.monotonic() + seconds
         if budget is not None and budget.get("deadline") is not None:
             deadline = min(deadline, budget["deadline"])
-        token = _TRANSPORT_SCOPE.set({"deadline": deadline, "calls": 0,
-                                      "provider": function.__name__.rsplit("_", 1)[-1]})
+        scope = {"deadline": deadline, "calls": 0, "phases_ms": {},
+                 "provider": function.__name__.rsplit("_", 1)[-1]}
+        token = _TRANSPORT_SCOPE.set(scope)
+        started = time.monotonic()
         try:
             return function(*args, **kwargs)
         finally:
+            _log_provider_timing(scope, time.monotonic() - started)
             _TRANSPORT_SCOPE.reset(token)
     return wrapped
+
+
+@contextmanager
+def _provider_stage(name):
+    scope = _TRANSPORT_SCOPE.get()
+    if scope is None:
+        yield
+        return
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        phases = scope.setdefault("phases_ms", {})
+        phases[name] = phases.get(name, 0.0) + max(0.0, time.monotonic() - started) * 1000
+
+
+def _provider_timed_stage(name):
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            with _provider_stage(name):
+                return function(*args, **kwargs)
+        return run
+    return decorate
+
+
+def _log_provider_timing(scope, seconds):
+    try:
+        import webhook_runtime
+        total_ms = max(0.0, seconds) * 1000
+        phases = scope.get("phases_ms", {})
+        record = {"trace": webhook_runtime.trace_id(), "provider": scope["provider"],
+                  "total_ms": round(total_ms, 2), "sdk_calls": scope["calls"],
+                  **{key + "_ms": round(phases.get(key, 0.0), 2)
+                     for key in ("client_setup", "request_options", "resource_setup", "sdk", "sdk_logging")},
+                  "other_ms": round(max(0.0, total_ms - sum(phases.values())), 2),
+                  "outside_sdk_ms": round(max(0.0, total_ms - phases.get("sdk", 0.0)), 2)}
+        logging.getLogger("app").info("[AIProviderPerf] %s", json.dumps(record, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        pass  # Diagnostics cannot mask a translation result or its real error.
+
+
+@_provider_timed_stage("resource_setup")
+def _translation_create_method(client, provider):
+    """Measure SDK lazy resource imports BEFORE the timed network call.
+
+    Evaluating client.chat.completions.create used to happen before _sdk_create
+    entered, hiding the first-request resource/schema loading in the API gap.
+    """
+    return client.messages.create if provider == "anthropic" else client.chat.completions.create
 
 
 def _sdk_create(create, call_kwargs):
@@ -205,7 +260,12 @@ def _sdk_create(create, call_kwargs):
     finally:
         # Usage is observed once by the coordinator for billing. This log only
         # measures the actual SDK call, including compatibility attempts.
-        _log_sdk_request(kwargs, response, failure, time.monotonic() - started, scope)
+        elapsed = max(0.0, time.monotonic() - started)
+        if scope is not None:
+            phases = scope.setdefault("phases_ms", {})
+            phases["sdk"] = phases.get("sdk", 0.0) + elapsed * 1000
+        with _provider_stage("sdk_logging"):
+            _log_sdk_request(kwargs, response, failure, elapsed, scope)
 
 
 def _log_sdk_request(kwargs, response, failure, seconds, scope):
@@ -757,6 +817,7 @@ def _ensure_initialized():
 # ═══════════════════════════════════════════════════════════════════
 # Clients
 # ═══════════════════════════════════════════════════════════════════
+@_provider_timed_stage("client_setup")
 def _get_openai_client():
     global _openai_client
     _ensure_initialized()
@@ -776,6 +837,7 @@ def _get_openai_client():
             return None
 
 
+@_provider_timed_stage("client_setup")
 def _get_anthropic_client():
     global _anthropic_client
     _ensure_initialized()
@@ -805,6 +867,7 @@ def _get_anthropic_client():
             return None
 
 
+@_provider_timed_stage("client_setup")
 def _get_gemini_client():
     """v3.21: Gemini 走官方 OpenAI 相容端點 — 重用 OpenAI SDK,零新依賴。
     https://ai.google.dev/gemini-api/docs/openai
@@ -832,6 +895,7 @@ def _get_gemini_client():
             return None
 
 
+@_provider_timed_stage("request_options")
 def _client_with_limits(client, timeout):
     """建立單次呼叫 client，關閉 SDK 隱藏重試並套用本協調層分配的期限。"""
     try:
@@ -840,6 +904,42 @@ def _client_with_limits(client, timeout):
         # 測試替身或舊 SDK 沒有 with_options 時仍可運作；呼叫參數中的 timeout
         # 會保留為第二道限制。
         return client
+
+
+_sdk_prepare_lock = threading.Lock()
+_prepared_translation_sdks = set()
+
+
+def prepare_translation_sdk_resources():
+    """Load configured translation SDK classes during application startup.
+
+    Imports only: no clients, sockets, API requests, credentials in logs or
+    background threads. Modules can safely be shared by a preloaded Gunicorn
+    parent; live HTTP clients still belong to their normal request process.
+    OpenAI and Gemini use the same SDK resources and need one import only.
+    """
+    families = list(dict.fromkeys("anthropic" if provider == "anthropic" else "openai"
+                                 for provider in get_available_providers("chat")))
+    rows = []
+    for family in families:
+        with _sdk_prepare_lock:
+            if family in _prepared_translation_sdks:
+                continue
+            started = time.monotonic()
+            module = "anthropic.resources.messages" if family == "anthropic" else "openai.resources.chat"
+            try:
+                importlib.import_module(module)
+                _prepared_translation_sdks.add(family)
+                row = {"sdk": family, "status": "loaded", "http_requests": 0,
+                       "imports_ms": round((time.monotonic() - started) * 1000, 2)}
+            except Exception as exc:
+                # A missing/unsupported optional SDK must not stop the server
+                # or disable another configured provider's existing failover.
+                row = {"sdk": family, "status": "unavailable", "http_requests": 0,
+                       "error_type": type(exc).__name__}
+            rows.append(row)
+            logging.getLogger("app").info("[SDKPrepared] %s", json.dumps(row, sort_keys=True))
+    return rows
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2079,6 +2179,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
 
     request_client = _client_with_limits(client, timeout)
     g_model = _resolve_gemini_model(model)
+    _create_translation = _translation_create_method(request_client, "gemini")
     features = _current_config.get("gemini_features", {}) if _current_config else {}
     structured_schema = kwargs.pop("structured_schema", None)
     structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
@@ -2119,7 +2220,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
         g_kwargs["reasoning_effort"] = _effort
 
     try:
-        return _sdk_create(request_client.chat.completions.create, g_kwargs)
+        return _sdk_create(_create_translation, g_kwargs)
     except Exception as e:
         # 相容端點對參數支援可能隨版本變動：minimal 不接受時先退 low，
         # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
@@ -2129,7 +2230,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
             g_kwargs["reasoning_effort"] = "low"
             try:
                 print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
-                return _sdk_create(request_client.chat.completions.create, g_kwargs)
+                return _sdk_create(_create_translation, g_kwargs)
             except Exception as e2:
                 e = e2
                 _msg = str(e2).lower()
@@ -2140,7 +2241,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
                 retried = True
         if retried:
             print(f"[ai_provider] Gemini 參數退階重試: {str(e)[:120]}", flush=True)
-            return _sdk_create(request_client.chat.completions.create, g_kwargs)
+            return _sdk_create(_create_translation, g_kwargs)
         raise
 
 
@@ -2877,6 +2978,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     timeout = kwargs.get("timeout", 90)
     request_client = _client_with_limits(client, timeout)
     call_kwargs = {"model": model, "messages": messages}
+    _create_translation = _translation_create_method(request_client, "openai")
     for k, v in kwargs.items():
         if v is None:
             continue
@@ -2927,7 +3029,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     _cache_original_extra = call_kwargs.get("extra_body")
     _explicit_cache_used = _configure_openai_translation_cache(call_kwargs)
     try:
-        resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
+        resp = _sdk_create(_create_translation, call_kwargs)
     except Exception as _fe:
         if _explicit_cache_used and _is_feature_parameter_error(
                 _fe, "prompt_cache_options", "prompt_cache_breakpoint"):
@@ -2942,17 +3044,17 @@ def _chat_complete_openai(model, messages, **kwargs):
                 call_kwargs.pop("extra_body", None)
             else:
                 call_kwargs["extra_body"] = _cache_original_extra
-            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         elif structured_schema and _is_feature_parameter_error(
                 _fe, "response_format", "json_schema", "structured output"):
             # Older compatibility endpoints may not implement strict JSON schema.
             # The audit prompt still requires JSON, so retry once without the
             # transport-level constraint rather than dropping the audit.
             call_kwargs.pop("response_format", None)
-            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         elif _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
             call_kwargs.pop("service_tier", None)
-            resp = _sdk_create(request_client.chat.completions.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         else:
             raise
 
@@ -2996,6 +3098,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
 
     _ensure_initialized()
     features = dict(_current_config.get("claude_features", {}))
+    _create_translation = _translation_create_method(request_client, "anthropic")
     structured_name = str(structured_name or "structured_response")
     # Native structured outputs cannot be combined with citation blocks, XML
     # output wrappers or stop sequences that may truncate JSON.
@@ -3281,7 +3384,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
 
     # ─── Step 4: 呼叫 ───
     try:
-        resp = _sdk_create(request_client.messages.create, call_kwargs)
+        resp = _sdk_create(_create_translation, call_kwargs)
     except Exception as e:
         err_msg = str(e).lower()
         # v3.2.7 根治: 所有 thinking 相關錯誤都 fallback,不再只抓特定關鍵字。
@@ -3297,7 +3400,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                 call_kwargs["output_config"] = output_config
             else:
                 call_kwargs.pop("output_config", None)
-            resp = _sdk_create(request_client.messages.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         elif thinking_applied and _is_feature_parameter_error(
                 e, "thinking", "adaptive", "budget_tokens", "effort", "display"):
             print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
@@ -3321,7 +3424,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                     call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
                     thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
                 try:
-                    resp = _sdk_create(request_client.messages.create, call_kwargs)
+                    resp = _sdk_create(_create_translation, call_kwargs)
                 except Exception as e2:
                     print(f"[ai_provider] legacy fallback 也失敗: {e2}", flush=True)
                     # Fallback B: legacy → 完全關掉 thinking
@@ -3335,7 +3438,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                         thinking_mode_used = "none(all_thinking_failed)"
                     call_kwargs["max_tokens"] = int(max_tokens or 1024)
                     thinking_applied = False
-                    resp = _sdk_create(request_client.messages.create, call_kwargs)
+                    resp = _sdk_create(_create_translation, call_kwargs)
             else:
                 # enabled mode 失敗 → 關掉 thinking
                 if is_sonnet5:
@@ -3348,7 +3451,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                     thinking_mode_used = "none(thinking_failed)"
                 call_kwargs["max_tokens"] = int(max_tokens or 1024)
                 thinking_applied = False
-                resp = _sdk_create(request_client.messages.create, call_kwargs)
+                resp = _sdk_create(_create_translation, call_kwargs)
         # 非 thinking 錯誤:grounding/citation/cache/stop 的 fallback
         elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
             print(f"[ai_provider] grounding/citation 失敗,fallback: {e}", flush=True)
@@ -3362,18 +3465,18 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                             merged[i]["content"] = text_only
             call_kwargs["messages"] = merged
             grounding_used = False
-            resp = _sdk_create(request_client.messages.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         elif use_cache_1h and ("extended-cache" in err_msg or "beta" in err_msg or "ttl" in err_msg):
             print(f"[ai_provider] 1h cache fallback to 5min: {e}", flush=True)
             if isinstance(call_kwargs.get("system"), list):
                 for blk in call_kwargs["system"]:
                     if isinstance(blk, dict) and "cache_control" in blk:
                         blk["cache_control"] = {"type": "ephemeral"}
-            resp = _sdk_create(request_client.messages.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         elif use_stop and ("stop_sequence" in err_msg or "too many" in err_msg):
             print(f"[ai_provider] stop_sequences fallback: {e}", flush=True)
             call_kwargs.pop("stop_sequences", None)
-            resp = _sdk_create(request_client.messages.create, call_kwargs)
+            resp = _sdk_create(_create_translation, call_kwargs)
         else:
             raise
 

@@ -30450,6 +30450,14 @@ except Exception as e:
     logger.error("Startup settings load failed (non-fatal): %s", e)
 
 
+# Finish local SDK schema/resource loading before the server accepts LINE work.
+# This performs imports only, so --preload shares code without inheriting HTTP
+# connections, and the first translation does not spend its API deadline here.
+try:
+    ai_provider.prepare_translation_sdk_resources()
+except Exception as e:
+    logger.warning("[SDKPrepared] local preparation unavailable (%s)", type(e).__name__)
+
 
 
 def check_admin_key():
