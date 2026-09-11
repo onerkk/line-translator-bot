@@ -6,9 +6,9 @@ The loop deliberately separates *evidence* from *truth*:
 * every correction is checked by the same local integrity/semantic boundary;
 * approved revisions become exact verified TM plus a provider-free semantic
   casebook, while older revisions remain recoverable;
-* validation failures are learned only as review-risk patterns. They can make a
-  similar future sentence receive an independent source review, but they can
-  never provide a target sentence by themselves;
+* validated repairs teach bounded first-pass error-prevention rules. Unknown
+  failures can request review, but neither a risk score nor a learned rule
+  provides a target sentence by itself;
 * all transitions and quality interventions are auditable in SQLite.
 
 This gives useful online learning without unsupervised model training or the
@@ -28,13 +28,15 @@ import threading
 import time
 import unicodedata
 from translation_source_identity import canonical_source_key
+import translation_learning_policy as learning_policy
+from translation_request_cache import reuse as _request_reuse
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_LEARNING_API_VERSION = 2
-ACTIVE_LEARNING_BUILD_ID = "2026-09-08.2-objective-review-risk"
+ACTIVE_LEARNING_BUILD_ID = "2026-09-11.1-first-pass-learned-policy"
 VALID_STATUSES = frozenset({
     "pending", "approved", "rejected", "superseded", "quarantined",
 })
@@ -74,10 +76,18 @@ def _resolve_db_path() -> str:
     return "active_learning.db"
 
 
-def _connect() -> sqlite3.Connection:
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
+def _connect(timeout: float = 10.0) -> sqlite3.Connection:
     if not AL_DB_PATH:
         raise RuntimeError("active_learning database path is not initialized")
-    conn = sqlite3.connect(AL_DB_PATH, timeout=10.0)
+    conn = sqlite3.connect(AL_DB_PATH, timeout=timeout, factory=_ClosingConnection)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -266,6 +276,7 @@ def init() -> None:
                     ON risk_patterns(src_lang,tgt_lang,group_id,last_seen DESC);
                 """
             )
+            learning_policy.init_schema(conn)
         _init_done = True
         logger.info("[AL] safe continuous-learning init OK, db=%s", AL_DB_PATH)
     except Exception as exc:
@@ -1034,8 +1045,9 @@ def record_translation_outcome(
 ) -> Dict[str, Any]:
     """Persist meaningful outcomes and aggregate safe future-review risk.
 
-    No generated target is ever promoted to verified memory here. The aggregate
-    can only request a future independent review.
+    No generated target is promoted to human-approved memory. Successful repairs
+    may teach bounded first-pass rules only after replaying both targets against
+    current local validators. The rule stores error classes, not target text.
     """
     if not _init_done:
         init()
@@ -1061,8 +1073,17 @@ def record_translation_outcome(
         issues=cleaned_issues, path=str(path or ""), candidate=candidate,
         final=final, reviewed=bool(reviewed), cacheable=bool(cacheable),
     ) if update_risk else 0.0
+    lessons = []
     try:
-        with _connect() as conn:
+        lessons = learning_policy.derive(
+            source, candidate, final, source_lang, target_lang,
+            reviewed=bool(reviewed), cacheable=bool(cacheable),
+            validator=validate_correction,
+        )
+    except Exception as exc:
+        logger.warning('[AL] rule derivation skipped: %s', exc)
+    try:
+        with _connect(timeout=0.05) as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO learning_events
@@ -1080,6 +1101,11 @@ def record_translation_outcome(
                 ),
             )
             event_id = int(cursor.lastrowid)
+            learning_policy.store(
+                conn, lessons, source=source, src=source_lang, tgt=target_lang,
+                group=str(group_id or ''), policy=_validator_fingerprint(),
+                event_id=event_id, correction_id=correction_id,
+            )
             if weight >= 0.55:
                 conn.execute(
                     """
@@ -1111,7 +1137,8 @@ def record_translation_outcome(
                 )
         with _lock:
             _stats["learning_events"] += 1
-        return {"recorded": True, "event_id": event_id, "risk_updated": weight >= 0.55}
+        return {"recorded": True, "event_id": event_id, "risk_updated": weight >= 0.55,
+                "learned_rules": len(lessons)}
     except Exception as exc:
         logger.warning("[AL] learning outcome persistence failed: %s", exc)
         with _lock:
@@ -1139,7 +1166,7 @@ def assess_review_risk(
     scope = str(group_id or "")
     recovered_issues = {}
     try:
-        with _connect() as conn:
+        with _connect(timeout=0.05) as conn:
             if scope:
                 rows = conn.execute(
                     """
@@ -1250,6 +1277,68 @@ def build_review_context(risk: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def prepare_translation(source, src, tgt, group_id=None):
+    """One bounded read per request; no embedding, generation or target reuse."""
+    if (_lang(src), _lang(tgt)) not in _SUPPORTED_DIRECTIONS:
+        return {'rules': [], 'build': learning_policy.BUILD_ID}
+    def read():
+        if not _init_done:
+            init()
+        try:
+            with _connect(timeout=0.05) as conn:
+                return learning_policy.select(conn, source, _lang(src), _lang(tgt),
+                                              str(group_id or ''), _validator_fingerprint())
+        except Exception as exc:
+            logger.warning('[AL] first-pass policy unavailable: %s', exc)
+            return {'rules': [], 'build': learning_policy.BUILD_ID}
+    return _request_reuse('learned-first-pass-policy',
+                          (AL_DB_PATH, source, src, tgt, str(group_id or '')), read)
+
+
+def replay_learning_history(limit=100):
+    """Incrementally revalidate existing audit events under the current policy.
+
+    Called in the existing background pool after startup, never in the user's
+    translation path. Checkpoints survive restarts; declined human corrections
+    cannot be resurrected. This makes existing history useful without resubmits.
+    """
+    if not _init_done:
+        init()
+    policy = _validator_fingerprint()
+    limit = max(1, min(200, int(limit)))
+    try:
+        with _connect(timeout=0.05) as conn:
+            checkpoint = conn.execute('SELECT last_event_id FROM translation_learning_replay '
+                                      'WHERE policy_fingerprint=?', (policy,)).fetchone()
+            after = int(checkpoint[0]) if checkpoint else 0
+            rows = conn.execute('''
+                SELECT e.*,c.status AS correction_status,c.validation_state AS correction_validation
+                FROM learning_events e LEFT JOIN corrections c ON c.id=e.correction_id
+                WHERE e.id>? ORDER BY e.id LIMIT ?
+            ''', (after, limit)).fetchall()
+        learned = 0
+        for row in rows:
+            eligible = (row['correction_id'] is None or
+                        (row['correction_status'] == 'approved' and row['correction_validation'] == 'passed'))
+            lessons = learning_policy.derive(
+                row['src_text'], row['candidate_text'], row['final_text'],
+                row['src_lang'], row['tgt_lang'], reviewed=bool(row['reviewed'] and eligible),
+                cacheable=bool(row['cacheable']), validator=validate_correction)
+            with _connect(timeout=0.05) as conn:
+                learning_policy.store(conn, lessons, source=row['src_text'], src=row['src_lang'],
+                    tgt=row['tgt_lang'], group=str(row['group_id'] or ''), policy=policy,
+                    event_id=row['id'], correction_id=row['correction_id'])
+                conn.execute('INSERT INTO translation_learning_replay VALUES (?,?) '
+                             'ON CONFLICT(policy_fingerprint) DO UPDATE SET '
+                             'last_event_id=MAX(last_event_id,excluded.last_event_id)', (policy, row['id']))
+            learned += len(lessons)
+        return {'ok': True, 'processed': len(rows), 'learned': learned,
+                'has_more': len(rows) == limit}
+    except Exception as exc:
+        logger.warning('[AL] history replay paused: %s', exc)
+        return {'ok': False, 'has_more': False}
+
+
 def audit_approved_corrections(*, quarantine: bool = False, limit: int = 2000) -> Dict[str, Any]:
     """Revalidate active corrections after policy upgrades.
 
@@ -1318,6 +1407,14 @@ def al_stats() -> Dict[str, Any]:
             stats["active_risk_patterns"] = conn.execute(
                 "SELECT COUNT(*) FROM risk_patterns"
             ).fetchone()[0]
+            rule_counts = conn.execute(
+                "SELECT r.category,COUNT(DISTINCT r.source_key) FROM translation_learned_rules r "
+                "LEFT JOIN corrections c ON c.id=r.correction_id WHERE r.policy_fingerprint=? "
+                "AND (r.correction_id IS NULL OR (c.status='approved' AND c.validation_state='passed')) "
+                "GROUP BY r.category", (_validator_fingerprint(),)
+            ).fetchall()
+            stats['learned_rule_categories'] = {str(r[0]): int(r[1]) for r in rule_counts}
+            stats['learned_rule_evidence'] = sum(int(r[1]) for r in rule_counts)
             top_correctors = conn.execute(
                 "SELECT corrected_by,COUNT(*) AS c FROM corrections "
                 "WHERE corrected_by IS NOT NULL GROUP BY corrected_by ORDER BY c DESC LIMIT 5"
@@ -1332,6 +1429,8 @@ def al_stats() -> Dict[str, Any]:
     stats["validator_policy_fingerprint"] = _validator_fingerprint()
     stats["api_version"] = ACTIVE_LEARNING_API_VERSION
     stats["build_id"] = ACTIVE_LEARNING_BUILD_ID
+    stats['learning_mode'] = 'validated_error_policy_and_approved_casebook'
+    stats['learning_api_calls'] = 0
     return stats
 
 

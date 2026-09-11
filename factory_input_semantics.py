@@ -11,7 +11,7 @@ import unicodedata
 
 from translation_request_cache import memoize
 
-BUILD_ID = "2026-09-10.10-data-entry-method-and-permission"
+BUILD_ID = "2026-09-11.1-inventory-record-and-verification-order"
 _MANUAL_ZH = r"手打|手動(?:輸入|输入|填寫|填写|鍵入|键入)|人工(?:輸入|输入|填寫|填写)"
 _MANUAL_ID = r"(?:diinput|input|menginput|memasukkan|dimasukkan|mengetik|diketik|ketik|mengisi|diisi)(?:\s+[a-z-]+){0,5}?\s+(?:manual|tangan)"
 _SCALE_ZH = r"(?:磅秤|電子秤|电子秤|秤重設備|称重设备)(?:自動|自动)?(?:收集|取值|取得|讀取|读取|擷取|撷取|采集|採集)"
@@ -24,6 +24,102 @@ _ORIGIN_ID = re.compile(r"\b(?:dari|melalui|lewat|menggunakan)\s+(?:(?:hasil\s+)
 
 def _norm(text):
     return unicodedata.normalize("NFKC", str(text or ""))
+
+
+# Field nouns and UI operations establish a record operation. Warehouse words
+# alone do not: a forklift moving rods into a warehouse remains physical work.
+_FIELDS = {
+    'zh': r'支數|支数|數量|数量|重量|資料|资料|數據|数据',
+    'id': r'\b(?:jumlah\s+batang|jumlah|berat|data|nilai)\b',
+}
+_ENTRY = {
+    'zh': r'入庫|入库|登錄|登录|登記|登记|輸入|输入|存入|儲存|储存|按(?:下)?|點擊|点击',
+    'id': r'\b(?:input|diinput|menginput|pencatatan|mencatat|dicatat|catat|memasukkan|dimasukkan|masukkan|menyimpan|disimpan|simpan|menekan|tekan|klik|diketik|mengetik|ketik)(?:nya)?\b',
+}
+_CHECK = {
+    'zh': r'檢查|检查|確認|确认|核對|核对|查核',
+    'id': r'\b(?:periksa|diperiksa|memeriksa|pemeriksaan|cek|dicek|mengecek|pastikan|memastikan|verifikasi|diverifikasi)\b',
+}
+
+
+def inventory_entry(text, lang):
+    """Recognize linked data-entry actions, never a warehouse keyword alone."""
+    text = _norm(text)
+    for clause in re.split(r'[。;；.!?！？\n]', text):
+        if not re.search(_FIELDS[lang], clause, re.I):
+            continue
+        if lang == 'zh':
+            # Explicit physical handling wins over a nearby check of quantity.
+            if re.search(r'吊|搬|運送|运送|堆高機|叉車|叉车', clause) and not re.search(
+                    r'資料|资料|數據|数据|按|點擊|点击|輸入|输入|登錄|登录', clause):
+                continue
+            if re.search(r'(?:材料|棒材|物料|成品).{0,6}(?:入庫|入库)', clause) and not re.search(
+                    r'資料|资料|數據|数据|按|點擊|点击|輸入|输入|登錄|登录', clause):
+                continue
+            linked = (re.search(r'(?:' + _FIELDS[lang] + r').{0,8}(?:入庫|入库|存入|儲存|储存|輸入|输入|登錄|登录)', clause)
+                      or re.search(r'(?:輸入|输入|登錄|登录|記錄|记录|儲存|储存).{0,12}(?:' + _FIELDS[lang] + r')', clause))
+            ui = re.search(r'按|點擊|点击|按鈕|按钮', clause) and re.search(r'入庫|入库|存入|儲存|储存', clause)
+            if linked or ui:
+                return True
+        elif re.search(_ENTRY[lang], clause, re.I):
+            # "memasukkan jumlah ... ke gudang" is an underspecified/literal
+            # rendering, not proof that the candidate retained record semantics.
+            if re.search(r'\b(?:input|diinput|menginput|catat|mencatat|dicatat|pencatatan|sistem|komputer|kolom|data|diketik|mengetik|ketik)(?:nya)?\b', clause, re.I):
+                return True
+    return False
+
+
+def verification_order(text, lang):
+    """Return an explicit check/entry order, or None for unresolved scope.
+
+    Temporal connectives, not textual word order, define the relationship.
+    Questions, negated checks and conflicting relations stay with the model.
+    """
+    text = _norm(text)
+    if re.search(r'[?？]|是否|是不是|\bapakah\b', text, re.I):
+        return None
+    orders = set()
+    for sentence in re.split(r'[。;；.!！？\n]', text):
+        checks = list(re.finditer(_CHECK[lang], sentence, re.I))
+        entries = list(re.finditer(_ENTRY[lang], sentence, re.I))
+        if not checks or not entries:
+            continue
+        for check in checks:
+            prefix = re.split(r'[,，]', sentence[:check.start()])[-1]
+            neg = (r'不必|不用|不需|不要|別|别|禁止|尚未|未曾' if lang == 'zh'
+                   else r'\b(?:jangan|dilarang|tidak\s+perlu|tanpa|belum)\b')
+            if re.search(neg, prefix, re.I):
+                # Prohibiting ENTRY until verification means verification is a
+                # prerequisite; prohibiting verification itself does not.
+                if lang == 'id' and re.search(r'\bjangan\b', prefix, re.I):
+                    for entry in entries:
+                        if entry.start() < check.start() and re.search(
+                                r'\bsebelum\b[^,，]*$', sentence[entry.end():check.start()], re.I):
+                            orders.add('before')
+                continue
+            for entry in entries:
+                if entry.start() < check.start():
+                    between = sentence[entry.end():check.start()]
+                    before = sentence[:entry.start()]
+                    if lang == 'zh':
+                        # The field may follow the verb: 輸入數量後檢查.
+                        temporal = re.match(r'\s*(?:(?:' + _FIELDS['zh'] + r')\s*)?(?:之)?(前|後|后|完)', between)
+                        if temporal: orders.add('before' if temporal[1] == '前' else 'after')
+                    else:
+                        # Indonesian can put the subordinate entry clause first:
+                        # Sebelum input ..., periksa ... / Setelah input ..., cek.
+                        cue = re.search(r'\b(sebelum|setelah|sesudah)\b[^,，]*$', before, re.I)
+                        if cue: orders.add('before' if cue[1].lower() == 'sebelum' else 'after')
+                        elif re.search(r'\b(?:lalu|kemudian|baru)\b', between, re.I): orders.add('after')
+                else:
+                    between = sentence[check.end():entry.start()]
+                    if lang == 'zh':
+                        if re.search(r'再|才|然後|然后|之後|之后', between): orders.add('before')
+                    else:
+                        cue = re.search(r'\b(sebelum|setelah|sesudah)\b[^,，]*$', between, re.I)
+                        if cue: orders.add('before' if cue[1].lower() == 'sebelum' else 'after')
+                        elif re.search(r'\b(?:lalu|kemudian|baru)\b', between, re.I): orders.add('before')
+    return next(iter(orders)) if len(orders) == 1 else None
 
 
 def _scale_source(sentence):
@@ -91,11 +187,16 @@ def build_frame(source, src_lang, tgt_lang):
              "field_unlocked": False, "manual_weight_error": False, "build": BUILD_ID}
     if (src, tgt) not in {("zh", "id"), ("id", "zh")}:
         return frame
+    frame['inventory_entry'] = inventory_entry(source, src)
+    frame['verification_order'] = verification_order(source, src) if frame['inventory_entry'] else None
+    frame['soft_check_request'] = bool(src == 'zh' and re.search(
+        r'(?:稍微|稍稍).{0,4}(?:' + _CHECK['zh'] + r')|(?:' + _CHECK['zh'] + r')一下', source))
     # Restrict the domain to actual data entry. 手打 may otherwise describe
     # hammering/food, and manual alone can be a document or physical operation.
-    domain = (r"重量|數據|数据|資料|资料|系統|系统|欄位|栏位|磅秤|電子秤|电子秤"
-              if src == "zh" else r"\b(?:berat|data|sistem|kolom|timbangan)\b")
+    domain = (r"支數|支数|數量|数量|重量|數據|数据|資料|资料|系統|系统|欄位|栏位|磅秤|電子秤|电子秤"
+              if src == "zh" else r"\b(?:jumlah|berat|data|sistem|kolom|timbangan)\b")
     if not re.search(domain, source, re.I):
+        frame['active'] = frame['soft_check_request']
         return frame
     frame["manual"] = _manual_states(source, src)
     frame["manual_weight_error"] = _manual_weight_error(source, src)
@@ -123,7 +224,8 @@ def build_frame(source, src_lang, tgt_lang):
             frame["scale_required"] = any(re.search(r"\b(?:harus|wajib)\b", s, re.I) for s in scale_sentences)
         frame["field_unlocked"] = bool(re.search(
             r"\b(?:kolom|field)\b.{0,35}\b(?:belum|tidak)\s+(?:di)?kunci\b", source, re.I))
-    frame["active"] = bool(frame["manual"] or frame["scale_data"] or frame['manual_weight_error'])
+    frame["active"] = bool(frame["manual"] or frame["scale_data"] or frame['manual_weight_error']
+                           or frame['inventory_entry'] or frame['soft_check_request'])
     return frame
 
 
@@ -133,6 +235,12 @@ def validate_translation(frame, candidate):
         return True, []
     text = _norm(candidate)
     issues = []
+    if frame.get('inventory_entry'):
+        if not inventory_entry(text, frame['tgt']):
+            issues.append('factory_input_semantics:inventory_entry_record_missing')
+        expected_order = frame.get('verification_order')
+        if expected_order and verification_order(text, frame['tgt']) != expected_order:
+            issues.append('factory_input_semantics:verification_' + expected_order + '_entry_missing')
     states = _manual_states(text, frame['tgt'])
     for state in set(frame['manual']):
         if states.count(state) < frame['manual'].count(state):
@@ -166,6 +274,18 @@ def build_prompt(frame):
     lines = ['<factory_input_relations>',
              'Keep data-entry method, permission, UI state and causal weight errors attached to their own actions. '
              'Use natural grammar; never infer permission from an editable field.']
+    if frame.get('inventory_entry'):
+        lines.append('The linked quantity/weight/data operation is SYSTEM RECORD ENTRY, not moving a number into a physical warehouse. '
+                     'Express 入庫/存入 as recording/saving the stated values in the inventory system '
+                     '(mencatat/menyimpan jumlah atau data dalam sistem); preserve any actual button action. '
+                     'Do not invent a button label or physical handling step.')
+    if frame.get('verification_order'):
+        lines.append('Source explicitly places VERIFICATION ' + frame['verification_order'].upper()
+                     + ' RECORD ENTRY / button submission. Preserve that temporal relationship even if clauses are reordered.')
+    if frame.get('soft_check_request'):
+        lines.append('稍微/一下 with 檢查/確認 softens a request (tolong/mohon dicek/diperiksa); '
+                     'it does not authorize careless inspection or impose an exact short duration. '
+                     'For an omitted object, preserve what is known without inventing a bundle, customer or defect.')
     if frame['manual']:
         lines.append('Manual DATA ENTRY / 手動輸入: ' + ', '.join(frame['manual'])
                      + '. 手打 in this context means mengetik/menginput secara manual, not hitting by hand.')

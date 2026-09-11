@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-09-10.10-contextual-quantity-prompts"
+PROMPT_OPTIMIZER_VERSION = "2026-09-11.1-bounded-learned-policy"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -491,7 +491,7 @@ def compile_translation_prompt(
         required_blocks = []
         for name in ("implicit_quantity_units", "factory_acceptance_boundary", "source_bound_context",
                      "source_terminology", "factory_terminology", "factory_organization_terms",
-                     "translation_reference_context"):
+                     "translation_reference_context", "learned_translation_policy"):
             content = _tag(original, name)
             if content and ("<" + name) not in semantic_block and not any(
                 ("<" + name) in block for block in required_blocks

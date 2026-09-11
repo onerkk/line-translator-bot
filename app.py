@@ -320,7 +320,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-10.2-notice-duration-integrity"
+_EXPECTED_QG_BUILD_ID = "2026-09-11.1-inventory-verification-integrity"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -473,7 +473,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-10.10-contextual-quantity-prompts"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-11.1-bounded-learned-policy"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -773,7 +773,7 @@ logger.info(
 import batch_translation as batch_module      # Phase K: Batch API (50% off)
 import active_learning as al_module           # Phase L: Human-in-the-loop feedback
 _EXPECTED_ACTIVE_LEARNING_API_VERSION = 2
-_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-09-08.2-objective-review-risk"
+_EXPECTED_ACTIVE_LEARNING_BUILD_ID = "2026-09-11.1-first-pass-learned-policy"
 if (getattr(al_module, "ACTIVE_LEARNING_API_VERSION", None)
         != _EXPECTED_ACTIVE_LEARNING_API_VERSION
         or getattr(al_module, "ACTIVE_LEARNING_BUILD_ID", None)
@@ -1987,6 +1987,7 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
                 require_paragraph_fidelity=False,
             )
             if qg.hard_issues:
+                _remember_translation_rejection(source, text, qg.hard_issues)
                 return False, f"{provider} integrity reject: {qg.hard_issues[0]}"
         except Exception as exc:
             logger.warning("[CPRouter] local candidate validation skipped: %s", exc)
@@ -2000,12 +2001,27 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
             if contract and contract.get("has_risk"):
                 ok, reason = translation_satisfies_semantic_contract(contract, text)
                 if not ok:
+                    _remember_translation_rejection(source, text, [reason])
                     return False, f"{provider} semantic reject: {reason}"
         except Exception as exc:
             logger.warning("[CPRouter] semantic candidate validation skipped: %s", exc)
         return True, "ok"
 
     return _validate
+
+
+def _remember_translation_rejection(source, candidate, issues):
+    """Keep actual failed generations until this request's learning audit.
+
+    Failover used to discard them before the audit. Limit to two candidates;
+    local replay still decides whether the recovered result can teach a rule.
+    """
+    rows = list(getattr(_tl, 'learning_rejections', ()) or ())
+    if len(rows) < 2 and candidate and len(source) <= 12000 and len(candidate) <= 12000:
+        item = {'source': source, 'candidate': candidate, 'issues': list(issues)[:20]}
+        if item not in rows:
+            rows.append(item)
+            _tl.learning_rejections = rows
 
 # v3.2-0426d: New translation parameters (admin-controllable)
 translation_temperature = 0.0     # 0.0 = deterministic, 0.3 = slight variety. Translation should be 0~0.3.
@@ -9301,6 +9317,10 @@ def build_translation_semantic_contract(text, src, tgt):
         contract.update(context_bound=True, tm_bypass_allowed=False,
                         vector_bypass_allowed=False, nmt_allowed=False, requires_llm=True)
         contract["conversation_fingerprint"] = _context_module.fingerprint(_snapshot)
+    _learning = globals().get('al_module')
+    if _learning is not None:
+        contract['learned_policy'] = _learning.prepare_translation(
+            text, src, tgt, getattr(globals().get('_tl'), 'group_id', '') or '')
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -9320,8 +9340,12 @@ def build_translation_semantic_contract_prompt(contract):
                         if _casebook_module is not None else "")
     reference_block = ("<translation_reference_context>" + reference_prompt
                        + "</translation_reference_context>") if reference_prompt else ""
+    _learning = globals().get('al_module')
+    learned_block = (_learning.learning_policy.build_prompt(contract.get('learned_policy'))
+                     if _learning is not None else '')
+    supplemental = '\n'.join(block for block in (learned_block, reference_block) if block)
     if not contract.get("has_risk"):
-        return reference_block
+        return supplemental
     lines = ["<semantic_contract>"]
     lines.append("This block is generated by deterministic pre-translation semantic analysis. It overrides TM/NMT/examples/general dictionary meanings.")
     for risk in contract.get("risks", []):
@@ -9407,7 +9431,7 @@ def build_translation_semantic_contract_prompt(contract):
         elif risk.get("sense") == "factory_reason_action_semantics":
             lines.extend(_build_factory_reason_contract_lines(risk))
     lines.append("</semantic_contract>")
-    return " ".join(lines) + ("\n" + reference_block if reference_block else "")
+    return " ".join(lines) + ("\n" + supplemental if supplemental else "")
 
 def translation_satisfies_semantic_contract(contract, translation):
     if not contract or not contract.get("has_risk"):
@@ -14447,6 +14471,7 @@ def translate(text, src, tgt):
         "quality_gate_pending", "delivery_degraded", "delivery_degraded_issues",
         "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
         "context_result_cacheable",
+        "learning_rejections",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -15855,7 +15880,9 @@ def _translate_core(text, src, tgt):
                     quality_critical=_quality_critical,
                     semantic_contract=_semantic_contract,
                     learned_risk=bool(
-                        _continuous_learning_risk.get("requires_review")
+                        al_module.learning_policy.needs_extra_review(
+                            _continuous_learning_risk,
+                            _semantic_contract.get('learned_policy'), text, src, tgt)
                     ),
                 )
             )
@@ -16095,13 +16122,21 @@ def _translate_core(text, src, tgt):
         _quality_cacheable or _quality_cacheable_for_context
     ))
 
-    # Persist only meaningful interventions. These records never become target
-    # translations by themselves; they teach the adaptive policy that a similar
-    # future source deserves an independent review. Clean single-pass messages
-    # are intentionally not written, keeping the database compact.
+    # Preserve measured interventions, including provider failover recovery.
+    # Replayed local validation can teach first-pass rules; generated targets
+    # never become human approvals. Clean single-pass messages need no write.
     try:
         _learning_gate = locals().get("_gate")
         if isinstance(_learning_gate, dict):
+            for _rejection in list(getattr(_tl, 'learning_rejections', ()) or ()):
+                if (not _context_bound_translation and result and _quality_cacheable
+                        and al_module.canonical_source_key(_rejection['source']) == al_module.canonical_source_key(text)):
+                    al_module.record_translation_outcome(
+                        source_text=text, candidate_text=_rejection['candidate'],
+                        final_text=result, src_lang=src, tgt_lang=tgt, group_id=_gid_for_tm,
+                        issues=_rejection['issues'], path='provider_rejection_recovered',
+                        reviewed=True, cacheable=True,
+                    )
             al_module.record_translation_outcome(
                 source_text=text,
                 candidate_text=str(locals().get("_pre_gate_result") or ""),
@@ -16114,7 +16149,7 @@ def _translate_core(text, src, tgt):
                     + list(_learning_gate.get("issues") or ())
                 )),
                 path=str(_learning_gate.get("path") or ""),
-                reviewed=bool(_learning_gate.get("reviewed")),
+                reviewed=bool(_learning_gate.get("reviewed") or locals().get('_review_already_attempted')),
                 cacheable=bool(result and _quality_cacheable),
             )
     except Exception as _learning_event_exc:
@@ -25729,6 +25764,9 @@ async function dashLoadStats(){
       'pending: '+(al.pending_corrections||0)+' | approved: '+(al.approved_corrections||0)+' | rejected: '+(al.rejected_corrections||0)+'<br>'+
       'tm_updated: '+(al.tm_updated||0)+' | vec_tm_updated: '+(al.vec_tm_updated||0)+'<br>'+
       'vector sync: '+(al.vector_sync_enabled?'on':'off（省成本）')+'<br>'+
+      '自動學習規則類別: '+Object.keys(al.learned_rule_categories||{}).length+
+      ' | 規則證據筆數: '+(al.learned_rule_evidence||0)+'<br>'+
+      '規則學習不新增 AI／向量 API 請求；不等於模型訓練或正確率。<br>'+
       'total_corrections in DB: '+(al.total_corrections||0)+'<br>'+
       'top correctors: '+topCorr;
     
@@ -38167,6 +38205,19 @@ try:
     db_snapshot.start_autosnapshot()
 except Exception as _snap_e2:
     logging.getLogger("app").warning("[snap] start_autosnapshot failed (continuing): %s", _snap_e2)
+
+
+def _bootstrap_translation_learning():
+    # Reuse the existing bounded worker pool. Resume in small checkpointed
+    # pages; no external AI calls and no work added to the LINE reply path.
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        page = al_module.replay_learning_history(limit=100)
+        if not page.get('ok') or not page.get('has_more'):
+            break
+
+
+_BG_POST_EXECUTOR.submit(_bootstrap_translation_learning)
 
 
 if __name__ == "__main__":
