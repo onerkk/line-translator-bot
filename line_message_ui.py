@@ -4,6 +4,42 @@ from datetime import datetime, timedelta, timezone
 from line_command_catalog import txt
 
 
+def stopped_message(record, stopped_at):
+    """A small, bilingual tracking receipt; no AI, image or profile request."""
+    token = short(str(record.get("token") or "")[:6], 6)
+    stopped = datetime.fromtimestamp(stopped_at, timezone(timedelta(hours=8)))
+    return {
+        "type": "flex",
+        "altText": "已停止作業追蹤｜Pemantauan dihentikan #" + token,
+        "contents": {
+            "type": "bubble", "size": "kilo",
+            "body": {
+                "type": "box", "layout": "vertical", "paddingAll": "18px",
+                "backgroundColor": "#102F42", "contents": [
+                    txt("作業確認 / KONFIRMASI", "10px", "#DBBE85", weight="bold"),
+                    {"type": "box", "layout": "horizontal", "alignItems": "center",
+                     "spacing": "md", "margin": "md", "contents": [
+                         {"type": "box", "layout": "vertical", "width": "32px", "height": "32px",
+                          "cornerRadius": "10px", "backgroundColor": "#294352",
+                          "justifyContent": "center", "alignItems": "center", "contents": [
+                              {"type": "box", "layout": "vertical", "width": "10px", "height": "10px",
+                               "cornerRadius": "2px", "backgroundColor": "#DBBE85", "contents": []}]},
+                         {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+                             txt("已停止作業追蹤", "md", "#FFFFFF", weight="bold"),
+                             txt("Pemantauan dihentikan", "10px", "#C1D2DC", margin="xs")]}]},
+                    {"type": "separator", "color": "#355264", "margin": "lg"},
+                    txt("本次追蹤提前結束，不再提醒。", "xs", "#F0F4F6", margin="md"),
+                    txt("Pemantauan konfirmasi diakhiri lebih awal. Tidak ada pengingat lanjutan.",
+                        "11px", "#C1D2DC", margin="sm"),
+                    txt("確認紀錄保留 · Catatan tetap tersimpan", "10px", "#DBBE85", margin="md"),
+                    txt("#" + token + "  ·  " + stopped.strftime("%m/%d %H:%M") + "  UTC+8",
+                        "10px", "#A6BDCA", margin="sm"),
+                ],
+            },
+        },
+    }
+
+
 def completion_message(record, recipient_count, completed_at):
     """A compact, image-free completion receipt; input is a committed snapshot.
 

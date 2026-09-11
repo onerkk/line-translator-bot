@@ -18,10 +18,10 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from line_factory_store import mark_delivery
+from line_factory_store import StoreError, mark_delivery
 
 LEASE_SECONDS = 120
-BUILD_ID = "2026-09-10.9-all-confirmed-card"
+BUILD_ID = "2026-09-11.2-early-stop-card"
 RETRY_WINDOW = 23 * 3600
 USER_ID = re.compile(r"U[0-9a-f]{32}\Z")
 
@@ -407,7 +407,15 @@ class NoticeService:
             if time.monotonic() - started > budget_seconds:
                 break
             key = "notice:" + row["group_id"] + ":" + row["token"]
-            if row.get("translation_pending") and submit_preparation is not None:
+            if row.get("stop_notification", {}).get("state") in {"pending", "sending"}:
+                # The stop notice shares this worker/index, not the reminder
+                # lease. Retrying its card must never restart reminders.
+                import line_ack_stopped
+                try:
+                    line_ack_stopped.send_pending(self.hub, row, clock=self.clock)
+                except StoreError:
+                    self.hub.app.logger.warning("[FactoryStop] notification checkpoint pending token=%s", row["token"][:6])
+            elif row.get("translation_pending") and submit_preparation is not None:
                 submit_preparation(key)
             else:
                 self.process(key)

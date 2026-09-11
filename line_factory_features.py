@@ -32,11 +32,12 @@ import line_command_catalog
 import line_ack_reminders
 import line_ack_receipts
 import line_ack_completion
+import line_ack_stopped
 import line_translation_delivery as delivery
 from line_factory_store import FeatureStore, configured_store, StoreError, encode, measure_storage, mark_delivery
 import translation_retry_queue as queue
 
-BUILD_ID = "2026-09-10.9-all-confirmed-card"
+BUILD_ID = "2026-09-11.2-early-stop-card"
 _EVENT = ContextVar("factory_line_event", default=None)
 _STATION = ContextVar("factory_selected_station", default=None)
 _CONTROL_REPLY = ContextVar("factory_control_reply", default=False)
@@ -1037,7 +1038,8 @@ class FactoryHub:
         raise ValueError("未知的工廠工具操作。")
 
     def stop_notice(self, group, token, actor, *, admin=False, recipient_only=False, postback=False):
-        if not self.get_notice(token, group):
+        notice = self.get_notice(token, group)
+        if not notice:
             raise ValueError("通知不存在或已過期。")
         def stop(row):
             if not row:
@@ -1048,10 +1050,29 @@ class FactoryHub:
                 return row
             if not postback and not admin and (not actor or actor != row.get("sender_id")):
                 raise PermissionError("只有發起人或管理員可以停止提醒。")
-            return dict(row, reminder_stopped_at=row.get("reminder_stopped_at") or time.time(),
-                        stopped_by=actor, reminder_state="stopped", wake_at=None,
-                        pending_batch=None, lease_id="", next_reminder_at=None)
-        return self.store.update("notice:" + group + ":" + token, stop)
+            if row.get("reminder_stopped_at"):
+                return row  # Preserve the original actor, time and frozen card.
+            now = time.time()
+            stopped = dict(row, reminder_stopped_at=now, stopped_by=actor,
+                           reminder_state="stopped", wake_at=None,
+                           pending_batch=None, lease_id="", next_reminder_at=None)
+            if postback and not row.get("translation_pending"):
+                # Like an understood tap, a signed stop tap proves that LINE
+                # showed the card even if its delivery checkpoint was lost.
+                stopped.update(delivery_state="delivered", delivered_at=row.get("delivered_at") or now)
+            line_ack_stopped.prepare(stopped, now)
+            return stopped
+        row = self.store.update("notice:" + group + ":" + token, stop,
+                                max(1, int(notice["expires_at"] - time.time())))
+        # Only committed stops can announce success. The due index already
+        # owns retries, including admin requests that have no webhook to replay.
+        if (row and (not postback or self._notice_manager(row, actor))
+                and (not recipient_only or self._notice_recipient(row, actor))):
+            try:
+                line_ack_stopped.send_pending(self, row)
+            except StoreError:
+                self.app.logger.warning("[FactoryStop] stopped; notification checkpoint pending token=%s", token[:6])
+        return row
 
     @staticmethod
     def _notice_recipient(row, uid, departed=None):

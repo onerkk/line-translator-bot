@@ -51,7 +51,11 @@ _SCHEDULE = """
 local function schedule(key, value)
   local prefix = string.match(key, '^(.*}:)notice:')
   if not prefix then return end
-  local due = value and cjson.decode(value).wake_at or nil
+  local row = value and cjson.decode(value) or {}
+  local due = row.wake_at
+  if type(due) ~= 'number' and type(row.stop_notification) == 'table' then
+    due = row.stop_notification.next_attempt_at
+  end
   if type(due) == 'number' then
     redis.call('ZADD', prefix .. 'notice-due', due, key)
   else
@@ -165,6 +169,9 @@ class FeatureStore:
         db.execute("CREATE INDEX IF NOT EXISTS factory_expiry ON factory_state(bucket, expires)")
         db.execute("CREATE INDEX IF NOT EXISTS factory_notice_due ON factory_state "
                    "(json_extract(value,'$.wake_at')) WHERE key LIKE 'notice:%'")
+        db.execute("CREATE INDEX IF NOT EXISTS factory_notice_delivery_due ON factory_state "
+                   "(COALESCE(json_extract(value,'$.wake_at'), "
+                   "json_extract(value,'$.stop_notification.next_attempt_at'))) WHERE key LIKE 'notice:%'")
         return db
 
     def command(self, args):
@@ -407,7 +414,10 @@ return result
         try:
             return [json.loads(row[0]) for row in db.execute(
                 "SELECT value FROM factory_state WHERE key LIKE 'notice:%' AND expires>? "
-                "AND json_extract(value,'$.wake_at')<=? ORDER BY json_extract(value,'$.wake_at') LIMIT ?",
+                "AND COALESCE(json_extract(value,'$.wake_at'), "
+                "json_extract(value,'$.stop_notification.next_attempt_at'))<=? "
+                "ORDER BY COALESCE(json_extract(value,'$.wake_at'), "
+                "json_extract(value,'$.stop_notification.next_attempt_at')) LIMIT ?",
                 (now, now, limit))]
         finally:
             db.close()
