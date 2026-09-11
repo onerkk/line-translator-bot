@@ -1,5 +1,6 @@
 """Run the real DOM checks against an isolated local fake LINE/AI fixture."""
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -175,6 +176,19 @@ def main():
                 raise RuntimeError("UI fixture did not start")
             for filename in ("factory_ui_lifecycle.cjs", "member_ui_lifecycle.cjs", "factory_ui_smoke.cjs", "unified_menu_ui_smoke.cjs"):
                 result = subprocess.run(["node", str(root / filename)], timeout=45, env=env)
+                if result.returncode:
+                    return result.returncode
+            # Run with the DOM runtime installed in the existing UI gate,
+            # using the actual admin form instead of a duplicated test form.
+            tree = ast.parse((root.parent / "app.py").read_text())
+            definition = next(node for node in tree.body if isinstance(node, ast.Assign)
+                              and any(isinstance(target, ast.Name) and target.id == "ADMIN_HTML"
+                                      for target in node.targets))
+            with tempfile.TemporaryDirectory(prefix="custom-reminder-ui-") as folder:
+                html = Path(folder) / "admin.html"
+                html.write_text(ast.literal_eval(definition.value))
+                result = subprocess.run(["node", str(root / "custom_reminder_card_ui.cjs"), str(html)],
+                                        timeout=45, env=env)
                 if result.returncode:
                     return result.returncode
             return 0
