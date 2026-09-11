@@ -1,0 +1,51 @@
+{
+  "build": "2026-09-11.4-provider-specific-quota-recovery",
+  "mode": "offline_with_external_network_blocked",
+  "live_ai_requests": 0,
+  "live_line_messages": 0,
+  "production_deployed": false,
+  "production_incident_cause_confirmed": false,
+  "before_initial_regressions": {
+    "failed": 10,
+    "passed": 18,
+    "log_sha256": "bc24b699aace27cb98187f28fbeda84fac089a5a9fd439cddcbaf8ada1f62cb8"
+  },
+  "after_focused": {
+    "passed": 85,
+    "log_sha256": "50a76c73d9b36949dc248e96119f12260f40c2d61a3be19b691ed5718ad91656"
+  },
+  "after_full_suite": {
+    "passed": 2871,
+    "subtests_passed": 443,
+    "seconds": 74.59,
+    "log_sha256": "801b45a21ecd074b34dee7999bac7456924243a362768ec9337d8b9def3d1101"
+  },
+  "test_command": "python run_translation_offline_checks.py",
+  "runtime_files_changed": [
+    "ai_provider.py"
+  ],
+  "unchanged_contracts": [
+    "translation quality gates",
+    "prompt and model selection",
+    "normal translation generation count",
+    "shared generation and attempt caps",
+    "LINE send deduplication"
+  ],
+  "files": [
+    {
+      "path": "ai_provider.py",
+      "before_sha256": "f19fe3aac51ec2684560f07782b56a0dd0542d51456c3eb4ecc15a1c2a1e583b",
+      "sha256": "c9da0ece805157d933585769db63d86b34c4237fd3e8a39c591d4d6c6c431458"
+    },
+    {
+      "path": "test_translation_quota_recovery.py",
+      "before_sha256": null,
+      "sha256": "bf4468bc596c5fc9a8760d3cbaf5cd3f6f8fe06ac3eaae12994ba3da9ed5aad7"
+    },
+    {
+      "path": "UPDATE_20260911_QUOTA_RECOVERY.md",
+      "before_sha256": null,
+      "sha256": "9c1a1bbe8b4108d98763f5cd18f004e8771eccbb046950d9a7419270f2a10bd8"
+    }
+  ]
+}

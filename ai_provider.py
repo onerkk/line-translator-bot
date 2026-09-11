@@ -526,6 +526,7 @@ DEFAULT_CONFIG = {
 _config_lock = threading.RLock()
 _current_config = None
 _last_config_mtime = 0  # 修跨 worker 同步 — 記錄上次讀 config 時磁碟檔 mtime
+ERROR_POLICY_BUILD_ID = "2026-09-11.4-provider-specific-quota-recovery"
 _openai_client = None
 _anthropic_client = None
 _gemini_client = None   # v3.21
@@ -593,6 +594,14 @@ def _migrate_config_models(cfg):
     policy["adaptive_backup_order"] = False
     if not isinstance(cfg.get("quota_exhausted_providers"), dict):
         cfg["quota_exhausted_providers"] = {}
+    # Old versions applied OpenAI's human-readable quota message to Gemini.
+    # A recoverable request/token limit then survived restarts as an empty
+    # credit balance. Reclassify only records with affirmative rate-limit
+    # evidence. Keep genuine/unknown billing blocks and the selected primary.
+    blocked = cfg["quota_exhausted_providers"]
+    for provider, record in list(blocked.items()):
+        if _legacy_temporary_quota_block(provider, record):
+            blocked.pop(provider)
     if not isinstance(cfg.get("auto_switch_state"), dict):
         cfg["auto_switch_state"] = {}
     return cfg
@@ -931,6 +940,7 @@ def get_provider_diagnostics(capability="chat"):
                      "environment_matches": bool(key and env_key and key == env_key),
                      "environment_configured": bool(env_key)})
     return {"active_provider": get_active_provider(), "providers": rows,
+            "error_policy_build": ERROR_POLICY_BUILD_ID,
             "available": get_available_providers(capability), "capability": capability}
 
 
@@ -2092,30 +2102,71 @@ def _notify_admin(msg):
         print(f"[ai_provider] notify failed: {_ne}", flush=True)
 
 
-def _is_quota_exhausted_error(e):
-    """Detect explicit *billing/credit* exhaustion, not ordinary rate limiting.
+def _quota_error_evidence(error):
+    """Read SDK error fields without transport, logging or SDK dependencies."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    body = body if isinstance(body, dict) else {}
+    codes = {str(value).casefold() for value in (
+        body.get("code"), body.get("type"), body.get("status"),
+        getattr(error, "code", None), getattr(error, "type", None),
+    ) if isinstance(value, str)}
+    message = body.get("message")
+    return codes, str(message if isinstance(message, str) else error).casefold()
 
-    Permanent switching is intentionally conservative.  Generic 429,
-    RESOURCE_EXHAUSTED and "quota exceeded" can mean per-minute/token limits;
-    those still fail over for the current request but must not permanently mark
-    a paid provider as empty.
+
+def _has_temporary_quota_evidence(message):
+    return bool(re.search(
+        r"resource_exhausted|rate_limit_exceeded|too_many_requests|"
+        r"rate[ -]limit|quota_exceeded|quota exceeded for (?:metric|quota)|"
+        r"(?:requests?|tokens?)[ _-]*per[ _-]*(?:minute|second|day)|"
+        r"(?:requests?|tokens?)per(?:minute|second|day)", message))
+
+
+def _is_quota_exhausted_error(e, provider=None):
+    """Only explicit credit exhaustion can persistently disable a provider.
+
+    Structured SDK codes outrank ambiguous prose. Gemini uses the phrase
+    'exceeded your current quota' for resetting usage limits too; it is not
+    portable billing evidence. Unknown limits remain recoverable via the
+    existing bounded failover/outbox rather than becoming a permanent lock.
     """
-    m = str(e).lower()
-    return any(t in m for t in (
-        # OpenAI billing exhaustion
+    codes, message = _quota_error_evidence(e)
+    if codes & {"insufficient_quota", "billing_hard_limit_reached", "payment_required"}:
+        return True
+    if codes & {"rate_limit_exceeded", "too_many_requests", "quota_exceeded"}:
+        return False
+    explicit = any(term in message for term in (
         "insufficient_quota",
-        "exceeded your current quota",
         "billing_hard_limit_reached",
         "billing hard limit",
-        # Anthropic prepaid credit exhaustion
         "credit balance is too low",
         "insufficient credits",
         "no credits remaining",
         "purchase credits",
-        # Cross-provider explicit payment states
         "payment required",
         "billing balance exhausted",
     ))
+    if explicit:
+        return True
+    if "resource_exhausted" in codes or _has_temporary_quota_evidence(message):
+        return False
+    # Preserve OpenAI's documented billing error for old SDKs that expose only
+    # text; never apply that provider-specific wording to a Google endpoint.
+    return provider == "openai" and "exceeded your current quota" in message
+
+
+def _legacy_temporary_quota_block(provider, record):
+    if not isinstance(record, dict) or record.get("kind") == "billing_exhausted":
+        return False
+    message = record.get("error")
+    if not isinstance(message, str) or not message:
+        return False
+    if _is_quota_exhausted_error(message):
+        return False
+    return (_has_temporary_quota_evidence(message.casefold()) or (
+        provider == "gemini" and "exceeded your current quota" in message.casefold()))
 
 
 def _bump_quota_counter(provider):
@@ -2146,6 +2197,9 @@ def _auto_switch_on_exhaust(dead_provider, err):
         return None
     if dead_provider not in ("anthropic", "openai", "gemini"):
         return None
+    # Enforce the invariant at the persistence boundary as well as the router.
+    if not _is_quota_exhausted_error(err, provider=dead_provider):
+        return None
 
     now = _t.time()
     with _config_lock:
@@ -2153,6 +2207,7 @@ def _auto_switch_on_exhaust(dead_provider, err):
         blocked[dead_provider] = {
             "at": int(now),
             "error": str(err)[:240],
+            "kind": "billing_exhausted",
         }
 
         policy_order = list(((_current_config or {}).get("failover_policy", {})
@@ -2544,7 +2599,8 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 return response
             except Exception as err:
                 last_error = err
-                transient = _is_availability_error(err) and not _is_quota_exhausted_error(err)
+                billing_exhausted = _is_quota_exhausted_error(err, provider=provider)
+                transient = _is_availability_error(err) and not billing_exhausted
                 can_retry_same = (
                     single_provider_retry
                     and provider_attempt == 0
@@ -2562,7 +2618,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                 # Only explicit credit/quota exhaustion permanently changes the
                 # active provider. Generic 429 means temporary rate limiting and
                 # is handled by this request's failover + circuit cooldown.
-                if _is_quota_exhausted_error(err) and diagnostic_probe is None:
+                if billing_exhausted and diagnostic_probe is None:
                     _auto_switch_on_exhaust(provider, err)
 
                 if can_retry_same:
