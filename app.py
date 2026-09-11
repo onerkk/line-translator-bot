@@ -339,7 +339,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-08.1-prerequisite-and-report-relations"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-11.3-lossless-claim-definitions"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -473,7 +473,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-11.1-bounded-learned-policy"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-11.3-authoritative-prompt-plan"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -2159,8 +2159,12 @@ def _persist_last_translate_debug():
         if folder:
             os.makedirs(folder, exist_ok=True)
         tmp = "%s.%s.%s.tmp" % (path, os.getpid(), threading.get_ident())
+        # One compact serialization/write avoids thousands of tiny writes for
+        # a long notice's nested semantic frame. The admin consumes JSON data,
+        # and does not depend on whitespace. Keep atomic replacement on disk.
+        encoded = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), default=str)
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False, indent=2, default=str)
+            f.write(encoded)
         os.replace(tmp, path)
         return True
     except Exception as exc:
@@ -10838,6 +10842,8 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "do not override explicit source facts or infer new actions): " + str(_scene)[:1200]
             + "</source_bound_context>"
         ) if _scene else ""
+        _prompt_contract = (getattr(_tl, 'semantic_contract', None)
+                            or build_translation_semantic_contract(text, src, tgt))
         sys_prompt = (
             target_override +
             # v3.9.37: 分區 XML 結構,符合 Anthropic 官方 use-xml-tags 規範
@@ -10881,7 +10887,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             + factory_translation_policy_module.build_prompt(text, src, tgt) + " "
             + factory_translation_guard_module.build_prompt(text, src, tgt) + " "
             + _media_context_note + " "
-            + (build_translation_semantic_contract_prompt(getattr(_tl, 'semantic_contract', None) or build_translation_semantic_contract(text, src, tgt)) + " ")
+            + (build_translation_semantic_contract_prompt(_prompt_contract) + " ")
             + " <source_terminology>"
             + inject_glossary_hint(text, src, tgt)
             
@@ -11324,6 +11330,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             tgt,
             tone_instruction=tone_instruction,
             variant=_translation_variant,
+            authoritative_terms=prompt_opt_module.authoritative_terms(_prompt_contract, _locked_pairs),
         )
         logger.info(
             "[PromptCompiler] %d→%d chars saved=%.1f%% vocab=%d context=%d incidents=%d fallback=%s",
@@ -11335,7 +11342,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _prompt_stats.historical_rules,
             _prompt_stats.fallback_used,
         )
-        _locked_note = tqg_module.visible_glossary_instruction(_locked_pairs)
+        _locked_note = tqg_module.visible_glossary_instruction(
+            prompt_opt_module.uncovered_glossary_pairs(sys_prompt, _locked_pairs)
+        )
         sys_prompt += line_factory_features.station_prompt()
         if _locked_note:
             # Dynamic terminology mapping belongs after the stable prefix so

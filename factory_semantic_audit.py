@@ -20,7 +20,7 @@ import factory_instruction_semantics as instruction_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-08.1-prerequisite-and-report-relations"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-11.3-lossless-claim-definitions"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -1353,7 +1353,24 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
         return ""
     lines = ["<source_semantic_frame>"]
     lines.append("This frame was derived from the current Chinese source. Preserve every claim relation, not merely the keywords.")
-    for claim in frame.get("claims", []) or []:
+    claims = frame.get("claims", []) or []
+    # Repeated definitions belong to one concept; claim IDs and source scopes
+    # remain separate. This is lossless factoring, never a summary of actions.
+    definitions = {}
+    counts = {}
+    for claim in claims:
+        key = (claim["meaning_zh"], claim["required_target_meaning_id"])
+        counts[key] = counts.get(key, 0) + 1
+    for key, count in counts.items():
+        if count > 1:
+            name = "D" + str(len(definitions) + 1)
+            definitions[key] = name
+            lines.append(f"Definition {name}: meaning={key[0]}; target concept={key[1]}.")
+    for claim in claims:
+        definition = definitions.get((claim["meaning_zh"], claim["required_target_meaning_id"]))
+        if definition:
+            lines.append("Claim {claim_id}: source={source_evidence}; apply ".format(**claim) + definition + ".")
+            continue
         lines.append(
             "Claim {claim_id}: source={source_evidence}; meaning={meaning_zh}; target concept={required_target_meaning_id}.".format(**claim)
         )

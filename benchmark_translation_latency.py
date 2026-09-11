@@ -95,7 +95,7 @@ def test_latency_probe(runtime, monkeypatch):
     for name,source,target in SAMPLES:
         current[0]=target
         for mode in ('miss','hit'):
-            times=[];runs=[];miss_generations=None
+            times=[];cpu_times=[];runs=[];miss_generations=None
             for i in range(9):
                 if mode=='miss':app.translation_cache.clear()
                 app._tl.__dict__.clear()
@@ -103,22 +103,28 @@ def test_latency_probe(runtime, monkeypatch):
                 e=event(source);e.message.id=f'{name}-{mode}-{i}'
                 profiler=cProfile.Profile() if i==8 else None
                 start=time.perf_counter()
+                cpu_start=time.thread_time()
                 if profiler:
                     with profiler:app.handle_message(e)
                 else:app.handle_message(e)
                 elapsed=(time.perf_counter()-start)*1000
+                cpu_elapsed=(time.thread_time()-cpu_start)*1000
                 result=delivered_text(runtime)
                 assert runtime.sends and target in result, (name,mode,'expected translation missing')
                 if mode=='miss':
                     if miss_generations is None:miss_generations=len(calls)
                     assert len(calls)==miss_generations, (name,'cache leaked into miss benchmark',i,len(calls))
-                runs.append({'ms':round(elapsed,3),'calls':list(calls),'text':result})
-                if 1<=i<=7:times.append(elapsed)
+                runs.append({'ms':round(elapsed,3),'caller_cpu_ms':round(cpu_elapsed,3),'calls':list(calls),'text':result})
+                if 1<=i<=7:
+                    times.append(elapsed)
+                    cpu_times.append(cpu_elapsed)
                 if profiler:profiler.dump_stats(str(base)+f'-{name}-{mode}.pstats')
-            rows.append({'sample':name,'mode':mode,'median_ms':round(statistics.median(times),3),'runs':runs})
+            rows.append({'sample':name,'mode':mode,'median_ms':round(statistics.median(times),3),
+                'median_caller_cpu_ms':round(statistics.median(cpu_times),3),'runs':runs})
     Path(str(base)+'.json').write_text(json.dumps({'mode':'offline','network':'blocked','live_ai_calls':0,
         'line_messages_sent':0,'scope':'isolated-source handle_message; conversation disabled; mocked AI and LINE transport; asynchronous postprocessing excluded',
         'repo':str(Path(app.__file__).resolve().parent),
+        'clock_scope':'ms is wall time; caller_cpu_ms excludes scheduling/I/O wait and other threads; neither includes real provider or LINE latency',
         'app_sha256':hashlib.sha256(Path(app.__file__).read_bytes()).hexdigest(),
         'implementation_sha256':{name:hashlib.sha256(Path(app.__file__).with_name(name).read_bytes()).hexdigest()
             for name in ('app.py','translation_quality_gate.py','factory_record_contract.py',

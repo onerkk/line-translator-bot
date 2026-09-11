@@ -15,6 +15,44 @@ import threading
 _STATE = ContextVar('translation_local_analysis', default=None)
 _MAX_ENTRIES = 256
 _MAX_TEXT = 32768
+_ATOMIC_TYPES = frozenset((type(None), bool, int, float, complex, str, bytes))
+
+
+def _detach(value, memo=None):
+    """Copy plain analysis data without deepcopy's per-scalar dispatch cost.
+
+    Preserve aliases/cycles and delegate custom types to their deepcopy protocol.
+    Never return a mutable cached object to a validator or another caller.
+    """
+    kind = type(value)
+    if kind in _ATOMIC_TYPES:
+        return value
+    if memo is None:
+        memo = {}
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if kind is list:
+        result = []
+        memo[identity] = result
+        result.extend(_detach(item, memo) for item in value)
+        return result
+    if kind is dict:
+        result = {}
+        memo[identity] = result
+        for key, item in value.items():
+            result[_detach(key, memo)] = _detach(item, memo)
+        return result
+    if kind is tuple:
+        items = [_detach(item, memo) for item in value]
+        # A tuple -> list -> tuple cycle may have completed this tuple while
+        # copying its children. Match deepcopy's cycle/identity semantics.
+        if identity in memo:
+            return memo[identity]
+        result = value if all(a is b for a, b in zip(value, items)) else tuple(items)
+        memo[identity] = result
+        return result
+    return copy.deepcopy(value, memo)
 
 
 def _freeze(value):
@@ -61,13 +99,13 @@ def reuse(namespace, inputs, compute):
         key = (namespace, _freeze(inputs))
         values = state['values']
         if key in values:
-            return copy.deepcopy(values[key])
+            return _detach(values[key])
     except (TypeError, ValueError, RecursionError):
         return compute()
     # Exceptions are never cached. Repairs/fallbacks can retry a failed check.
     result = compute()
     try:
-        detached = copy.deepcopy(result)
+        detached = _detach(result)
     except (TypeError, ValueError, RecursionError):
         return result
     if len(values) >= _MAX_ENTRIES:
