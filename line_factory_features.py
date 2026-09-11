@@ -219,15 +219,17 @@ def measure_delivery(kind):
             import webhook_runtime
             with measure_storage() as stats, webhook_runtime.timing_scope():
                 timing = webhook_runtime.event_timing(args[0] if args else None)
+                from flask import current_app, has_app_context
+                if has_app_context():
+                    logger = current_app.logger
+                else:
+                    import logging
+                    logger = logging.getLogger("app")
+                logger.info("[TranslationStart] kind=%s trace=%s ingress_ms=%s queue_ms=%s uptime_ms=%s",
+                            kind, timing["trace"], timing["ingress_ms"], timing["queue_ms"], timing["uptime_ms"])
                 try:
                     return fn(*args, **kwargs)
                 finally:
-                    from flask import current_app, has_app_context
-                    if has_app_context():
-                        logger = current_app.logger
-                    else:
-                        import logging
-                        logger = logging.getLogger("app")
                     ai_ms, attempts = webhook_runtime.ai_timing()
                     sent = stats["delivered_ms"]
                     event_sent = (timing["event_age_ms"] + round(sent)
@@ -239,6 +241,9 @@ def measure_delivery(kind):
                                 stats["milliseconds"], stats["requests"], stats["skipped"],
                                 timing["trace"], timing["ingress_ms"], timing["queue_ms"], event_sent,
                                 timing["uptime_ms"], ai_ms, attempts)
+                    logger.info("[TranslationStages] trace=%s inclusive_ms=%s",
+                                timing["trace"], json.dumps(webhook_runtime.stage_snapshot(),
+                                                         sort_keys=True, separators=(",", ":")))
         return run
     return decorate
 

@@ -1,0 +1,445 @@
+{
+  "release": "2026-09-11-reusable-factory-prefix",
+  "baseline_repository": "onerkk/line-translator-bot",
+  "baseline_commit": "3ff0c9de90a9bb6386c671f7f9f94cbab449124a",
+  "baseline_verified_files": 470,
+  "verification": {
+    "mode": "offline; external network blocked; dummy credentials; isolated temporary state",
+    "final_full_suite": {
+      "command": "python run_translation_offline_checks.py",
+      "passed": 2937,
+      "subtests_passed": 443,
+      "seconds": 87.82
+    },
+    "new_regressions": 23,
+    "focused_followup": {
+      "passed": 119,
+      "seconds": 3.76
+    },
+    "prefix_comparison": {
+      "passed": 1,
+      "seconds": 2.34
+    },
+    "local_performance_probe": {
+      "passed": 1,
+      "seconds": 7.35,
+      "runs": 90,
+      "measured_runs_per_sample": 7
+    },
+    "actual_openai_sdk_mock_http_verified": true,
+    "full_line_pipeline_mock_transports_verified": true,
+    "live_ai_requests": 0,
+    "live_line_messages": 0,
+    "production_deployed": false,
+    "real_network_latency_measured": false,
+    "real_cache_hit_rate_measured": false,
+    "billable_tokens_measured": false
+  },
+  "preserved": {
+    "all_four_tone_presets_exactly_unchanged": true,
+    "model_and_provider_policy_unchanged": true,
+    "semantic_and_quality_guard_files_unchanged": true,
+    "request_budget_and_retry_policy_unchanged": true,
+    "durable_outbox_and_ack_policy_unchanged": true,
+    "new_warmup_or_racing_api_calls": false,
+    "source_and_custom_tone_excluded_from_shared_prefix": true,
+    "optional_term_budget_preserved": true
+  },
+  "prefix_comparison": {
+    "scope": "offline full text handler, comparing old and new compiler on identical input; AI and LINE transports replaced",
+    "live_api_calls": 0,
+    "live_line_messages": 0,
+    "billable_tokens_measured": false,
+    "rows": [
+      {
+        "source": "幫忙今日點檢",
+        "before": {
+          "compiled_chars": 7186,
+          "prefix_chars": 1649,
+          "heuristic_prefix_tokens": 824,
+          "eligible_breakpoint": false
+        },
+        "after": {
+          "compiled_chars": 7227,
+          "prefix_chars": 6553,
+          "heuristic_prefix_tokens": 3276,
+          "eligible_breakpoint": true
+        },
+        "factory_rules_preserved": true,
+        "dynamic_source_in_prefix": false
+      },
+      {
+        "source": "等等要開會",
+        "before": {
+          "compiled_chars": 7186,
+          "prefix_chars": 1649,
+          "heuristic_prefix_tokens": 824,
+          "eligible_breakpoint": false
+        },
+        "after": {
+          "compiled_chars": 7227,
+          "prefix_chars": 6553,
+          "heuristic_prefix_tokens": 3276,
+          "eligible_breakpoint": true
+        },
+        "factory_rules_preserved": true,
+        "dynamic_source_in_prefix": false
+      }
+    ]
+  },
+  "offline_local_benchmark": {
+    "scope": "isolated-source handle_message; conversation disabled; mocked AI and LINE transport; asynchronous postprocessing excluded",
+    "limitation": "AI and LINE transport replaced. These local times do not measure provider prompt-cache latency benefit. Runs were taken at different times; the observed few-millisecond variation is not proof of live acceleration or regression.",
+    "corpus_sha256": "bf8242b5b3c3923db1ea2443cb08307ebdffde448db1fde19fb5c0c0b81f758b",
+    "rows": [
+      {
+        "sample": "routine",
+        "mode": "miss",
+        "before_local_median_ms": 52.298,
+        "after_local_median_ms": 55.381,
+        "before_local_median_caller_cpu_ms": 52.007,
+        "after_local_median_caller_cpu_ms": 55.101,
+        "before_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "after_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "sample": "routine",
+        "mode": "hit",
+        "before_local_median_ms": 35.314,
+        "after_local_median_ms": 38.91,
+        "before_local_median_caller_cpu_ms": 35.021,
+        "after_local_median_caller_cpu_ms": 38.592,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sample": "collar",
+        "mode": "miss",
+        "before_local_median_ms": 46.443,
+        "after_local_median_ms": 52.189,
+        "before_local_median_caller_cpu_ms": 46.131,
+        "after_local_median_caller_cpu_ms": 51.376,
+        "before_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "after_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "sample": "collar",
+        "mode": "hit",
+        "before_local_median_ms": 36.505,
+        "after_local_median_ms": 38.133,
+        "before_local_median_caller_cpu_ms": 36.332,
+        "after_local_median_caller_cpu_ms": 37.865,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sample": "notice",
+        "mode": "miss",
+        "before_local_median_ms": 70.164,
+        "after_local_median_ms": 75.9,
+        "before_local_median_caller_cpu_ms": 69.833,
+        "after_local_median_caller_cpu_ms": 75.374,
+        "before_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "after_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "sample": "notice",
+        "mode": "hit",
+        "before_local_median_ms": 48.416,
+        "after_local_median_ms": 47.875,
+        "before_local_median_caller_cpu_ms": 48.031,
+        "after_local_median_caller_cpu_ms": 47.348,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sample": "record-fields",
+        "mode": "miss",
+        "before_local_median_ms": 25.34,
+        "after_local_median_ms": 27.971,
+        "before_local_median_caller_cpu_ms": 25.046,
+        "after_local_median_caller_cpu_ms": 27.825,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sample": "record-fields",
+        "mode": "hit",
+        "before_local_median_ms": 25.252,
+        "after_local_median_ms": 29.889,
+        "before_local_median_caller_cpu_ms": 25.06,
+        "after_local_median_caller_cpu_ms": 29.606,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "sample": "record-question",
+        "mode": "miss",
+        "before_local_median_ms": 49.351,
+        "after_local_median_ms": 56.365,
+        "before_local_median_caller_cpu_ms": 49.079,
+        "after_local_median_caller_cpu_ms": 56.148,
+        "before_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "after_mock_generation_calls": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "sample": "record-question",
+        "mode": "hit",
+        "before_local_median_ms": 36.751,
+        "after_local_median_ms": 44.614,
+        "before_local_median_caller_cpu_ms": 36.394,
+        "after_local_median_caller_cpu_ms": 43.816,
+        "before_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "after_mock_generation_calls": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "official_references": [
+    "https://developers.openai.com/api/docs/guides/prompt-caching",
+    "https://developers.openai.com/api/docs/guides/latency-optimization"
+  ],
+  "files": [
+    {
+      "path": "app.py",
+      "bytes": 2210228,
+      "before_sha256": "bf6e7c8e495857819f3ccf2ef157612bb255006b09641f1a70007411aef14c70",
+      "sha256": "b0fc23a597bf69e6fda730affe7acf93b4b08fb19cad4719677902ee8429ff76"
+    },
+    {
+      "path": "ai_provider.py",
+      "bytes": 187600,
+      "before_sha256": "af80087e6a71f75caaafe6aa5c8d27357fd7a3747927b0117ae2788c5a65e107",
+      "sha256": "ffafa84fc322f2f39a883344628562b33c39f2f8ffa059134cc269ab2db19570"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "bytes": 34405,
+      "before_sha256": "fefe2dacaf0f964ac2c696af5147d96c4e7a185f36844d18861d9935bd51c878",
+      "sha256": "7b10b0cae296b7dff2c939d11ade04d9f8318f2998adb3e3481b08ee077855f6"
+    },
+    {
+      "path": "webhook_runtime.py",
+      "bytes": 9128,
+      "before_sha256": "0a5b8f96fca9c6432f31961bd8ee66dc059f0d675b0156c456b8929e0c593497",
+      "sha256": "6ddcf026f1302915f119ecedc933b5132a642c86f509569d8567c858e0287a52"
+    },
+    {
+      "path": "line_factory_features.py",
+      "bytes": 97130,
+      "before_sha256": "033d6a483fa783b8b05a3610b07082e4a68e926422aa1d001c6fe5a208898d6d",
+      "sha256": "f73aa00ffb154553461ed6d138bdbcbf72a3e1277f72cacf27ff621ba278e8d0"
+    },
+    {
+      "path": "test_translation_cache_latency.py",
+      "bytes": 17051,
+      "before_sha256": null,
+      "sha256": "93480191e76d3c9893565470d0ba4b677ce5eea60eec19bad98369d68796b49c"
+    },
+    {
+      "path": "UPDATE_TRANSLATION_LATENCY_20260911.md",
+      "bytes": 4924,
+      "before_sha256": null,
+      "sha256": "5e2fcf8a268bb1fec265a7b286e0ce3d9591419764fd50337f4e794694db6071"
+    }
+  ]
+}

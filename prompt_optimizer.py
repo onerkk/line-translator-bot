@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-PROMPT_OPTIMIZER_VERSION = "2026-09-11.3-authoritative-prompt-plan"
+PROMPT_OPTIMIZER_VERSION = "2026-09-11.4-reusable-factory-prefix"
 
 _TAG_RE_TEMPLATE = r"<{tag}>(.*?)</{tag}>"
 _HAN_RE = re.compile(r"[\u3400-\u9fff]+")
@@ -475,8 +475,37 @@ def _direction_principles(src: str, tgt: str) -> str:
     return "\n".join(rules)
 
 
-def _core_principles(src: str, tgt: str, tone_instruction: str, variant: str) -> str:
+def split_cache_prefix(prompt: str) -> Tuple[str, str]:
+    """Split a compiled prompt without altering a single character.
+
+    Only compiler-owned principles and an immediately adjacent configured
+    preset are reusable. Never scan past message-specific style/context to
+    collect a later block, even if it happens to use the same tag name.
+    """
+    if not isinstance(prompt, str) or "<translation_principles>" not in prompt:
+        return "", prompt
+    boundary = prompt.find("</translation_principles>")
+    if boundary < 0:
+        return "", prompt
+    end = boundary + len("</translation_principles>")
+    preset = re.match(r"\s*<translation_preset>.*?</translation_preset>", prompt[end:], re.S)
+    if preset:
+        end += preset.end()
+    return prompt[:end], prompt[end:]
+
+
+def _core_principles(src: str, tgt: str, tone_instruction: str, variant: str,
+                     configured_style: str = "") -> str:
     tone = (tone_instruction or "Match the source tone.").strip()
+    preset_block = ""
+    # The caller supplies only its constant preset, never a source-derived tone
+    # or user customization. Factor an exact leading match; keep every rule and
+    # its order. A mismatch safely retains the original dynamic style in full.
+    if (configured_style and tone_instruction.startswith(configured_style)
+            and "</translation_preset>" not in configured_style
+            and "</translation_principles>" not in configured_style):
+        preset_block = f"<translation_preset>Tone: {configured_style}</translation_preset>\n"
+        tone = tone_instruction[len(configured_style):].strip()
     directional = _direction_principles(src, tgt)
     return (
         "<translation_principles>\n"
@@ -490,9 +519,10 @@ def _core_principles(src: str, tgt: str, tone_instruction: str, variant: str) ->
         "Do not leak source-language ordinary words.\n"
         + (directional + "\n" if directional else "")
         + "</translation_principles>\n"
+        + preset_block
         # Per-message tone and user-selected variants must follow the reusable
         # principle prefix, even when no glossary or semantic facts are present.
-        + f"<translation_style>Tone: {tone}\n"
+        + "<translation_style>" + (f"Tone: {tone}\n" if tone else "")
         + f"Variant: {_variant_instruction(variant, tgt)}</translation_style>"
     )
 
@@ -504,6 +534,7 @@ def compile_translation_prompt(
     tgt_lang: str,
     *,
     tone_instruction: str = "",
+    configured_style: str = "",
     variant: str = "default",
     max_chars: int | None = None,
     authoritative_terms: Sequence[str] = (),
@@ -539,7 +570,11 @@ def compile_translation_prompt(
         role_block = (
             "<role>Professional translator for a Taiwan stainless-steel factory LINE chat: operationally clear, culturally natural language.</role>"
         )
-        core_block = _core_principles(src_lang, tgt_lang, tone_instruction, variant)
+        core_block = _core_principles(src_lang, tgt_lang, tone_instruction, variant, configured_style)
+        # The extra cache-boundary markup must not evict a relevant vocabulary
+        # or failure rule that fitted the existing optional-content budget.
+        cache_markup_chars = (max(0, len(core_block) - len(_core_principles(
+            src_lang, tgt_lang, tone_instruction, variant))) if configured_style else 0)
         semantic_block = ("<semantic_contract>" + semantic_contract + "</semantic_contract>") if semantic_contract else ""
         required_blocks = []
         for name in ("implicit_quantity_units", "factory_acceptance_boundary", "source_bound_context",
@@ -585,7 +620,7 @@ def compile_translation_prompt(
         sections.extend(required_blocks)
         for block in optional_blocks:
             candidate = "\n".join(sections + [block, output_block]).strip()
-            if len(candidate) <= cap:
+            if len(candidate) - cache_markup_chars <= cap:
                 sections.append(block)
         sections.append(output_block)
         compiled = "\n".join(section for section in sections if section).strip()

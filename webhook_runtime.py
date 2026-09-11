@@ -6,6 +6,7 @@ recovery uses SQLite leases and the translation outbox's existing send receipts.
 """
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
+from functools import wraps
 import hashlib
 import json
 import time
@@ -64,6 +65,7 @@ def timing_scope(received_at=None):
     token = _CURRENT.set({"received_at": float(received_at if received_at is not None else
                                              parent.get("received_at", time.time())),
                           "started_at": time.time(), "ai_ms": 0, "ai_attempts": 0,
+                          "stages": {}, "trace": parent.get("trace", ""),
                           "lock": threading.Lock()})
     try:
         yield
@@ -84,6 +86,47 @@ def ai_timing():
     return current.get("ai_ms", 0), current.get("ai_attempts", 0)
 
 
+def trace_id():
+    return (_CURRENT.get() or {}).get("trace", "")
+
+
+@contextmanager
+def measure_stage(name):
+    """Inclusive wall time; independent per event, with no I/O or new threads."""
+    current = _CURRENT.get()
+    if current is None:
+        yield
+        return
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        elapsed = max(0.0, (time.monotonic() - started) * 1000)
+        with current["lock"]:
+            row = current["stages"].setdefault(name, {"ms": 0.0, "calls": 0})
+            row["ms"] += elapsed
+            row["calls"] += 1
+
+
+def timed_stage(name):
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            with measure_stage(name):
+                return function(*args, **kwargs)
+        return run
+    return decorate
+
+
+def stage_snapshot():
+    current = _CURRENT.get()
+    if current is None:
+        return {}
+    with current["lock"]:
+        return {name: {"ms": round(row["ms"], 2), "calls": row["calls"]}
+                for name, row in current["stages"].items()}
+
+
 def received_at():
     """Original HTTP receipt time, preserved through durable worker dispatch."""
     return (_CURRENT.get() or {}).get("received_at", time.time())
@@ -93,13 +136,15 @@ def event_timing(event=None):
     now = time.time()
     current = _CURRENT.get() or {"received_at": now, "started_at": now}
     timestamp = float(getattr(event, "timestamp", 0) or 0) / 1000
+    trace = hashlib.sha256(str(getattr(event, "webhook_event_id", "") or
+                              getattr(getattr(event, "message", None), "id", "") or "").encode()).hexdigest()[:12]
+    current["trace"] = trace
     return {
         "queue_ms": max(0, round((now - current["received_at"]) * 1000)),
         "ingress_ms": max(0, round((current["received_at"] - timestamp) * 1000)) if timestamp else None,
         "event_age_ms": max(0, round((now - timestamp) * 1000)) if timestamp else None,
         "uptime_ms": round((time.monotonic() - PROCESS_STARTED) * 1000),
-        "trace": hashlib.sha256(str(getattr(event, "webhook_event_id", "") or
-                                    getattr(getattr(event, "message", None), "id", "") or "").encode()).hexdigest()[:12],
+        "trace": trace,
     }
 
 

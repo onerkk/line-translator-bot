@@ -474,7 +474,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-11.3-authoritative-prompt-plan"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-09-11.4-reusable-factory-prefix"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -2057,14 +2057,19 @@ prompt_cache_key_enabled = True
 openai_24h_cache_enabled = True
 
 
-def _build_cache_key(group_id="", src="", tgt="", kind="trans"):
-    """v3.8: Stable per-stream cache routing key.
-    Same group + same direction + same kind always yields the same key,
-    so OpenAI routes those requests to the same backend with warm KV cache.
-    Falls back to a generic key if group_id is missing.
+def _build_cache_key(group_id="", src="", tgt="", kind="trans", *, prompt=""):
+    """Route identical compiled instruction prefixes together.
+
+    This is provider KV-cache routing, not translation-result reuse. Each
+    request still sends its own source, context and custom instructions.
+    Legacy/auxiliary prompts retain their existing per-stream routing.
     """
     if not prompt_cache_key_enabled:
         return None
+    stable, _ = prompt_opt_module.split_cache_prefix(prompt)
+    if stable:
+        digest = hashlib.sha256(stable.encode("utf-8")).hexdigest()[:32]
+        return f"{kind}:{src}-{tgt}:prefix:{digest}"
     gid = (group_id or "default")[-20:]  # last 20 chars enough for uniqueness
     return f"{kind}:{src}-{tgt}:{gid}"
 
@@ -11330,6 +11335,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             src,
             tgt,
             tone_instruction=tone_instruction,
+            configured_style=_preset_text,
             variant=_translation_variant,
             authoritative_terms=prompt_opt_module.authoritative_terms(_prompt_contract, _locked_pairs),
         )
@@ -11591,7 +11597,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # Prompt cache key (sticky routing)
         if model_supports(_model, "prompt_cache_key"):
             try:
-                _ck = _build_cache_key(getattr(_tl, 'group_id', ''), src, tgt, "trans")
+                _ck = _build_cache_key(getattr(_tl, 'group_id', ''), src, tgt, "trans", prompt=sys_prompt)
                 if _ck:
                     _kwargs["prompt_cache_key"] = _ck
             except Exception:
@@ -13590,6 +13596,7 @@ def _prepare_translation_delivery(job_key, payload, text, delivered_targets=None
     return plan
 
 
+@webhook_runtime.timed_stage("line_push")
 def _push_translation_batch(target_id, messages, stable_key, *, notification_disabled=False, mentions=None):
     """Retry only expired quote metadata; an acknowledged duplicate is success."""
     with line_api_transport.client(ApiClient, configuration) as api_client:
@@ -13646,7 +13653,8 @@ def _try_reply_translation_plan(job_key, payload, plan, reply_token):
             req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
             if payload.get("notification_disabled"):
                 req.notification_disabled = True
-            response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
+            with webhook_runtime.measure_stage("line_reply"):
+                response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
     except translation_retry_queue_module.LeaseLostError:
         raise
     except Exception as exc:
@@ -13659,6 +13667,7 @@ def _try_reply_translation_plan(job_key, payload, plan, reply_token):
     return True, response
 
 
+@webhook_runtime.timed_stage("delivery")
 def _send_reply_with_push_fallback(
     *, reply_token, target_id, message_obj, fallback_text, retry_key=None,
     notification_disabled=False, append_messages=None, job_key=None, delivered_targets=None,
@@ -14486,6 +14495,7 @@ def _conversation_translation_scope(function):
     return run
 
 
+@webhook_runtime.timed_stage("translation")
 @ai_provider.translation_request_budget
 @translation_request_cache.scoped
 @_conversation_translation_scope
@@ -18699,6 +18709,7 @@ def _track_group_later(group_id):
             _group_title_pending.discard(group_id)
 
 
+@webhook_runtime.timed_stage("profile")
 def record_user_name(group_id, user_id):
     """Record user display name and avatar (best effort)."""
     if not group_id or not user_id:

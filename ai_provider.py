@@ -108,11 +108,13 @@ import re
 import sys
 import time
 import threading
+import logging
 from contextvars import ContextVar
 from functools import wraps
 
 import glossary_policy as gp_module
 import translation_privacy as privacy_module
+import prompt_optimizer
 
 _TRANSLATION_REQUEST = ContextVar("translation_request_budget", default=None)
 _TRANSPORT_SCOPE = ContextVar("provider_transport_scope", default=None)
@@ -169,7 +171,8 @@ def _bounded_provider_transport(function):
         deadline = time.monotonic() + seconds
         if budget is not None and budget.get("deadline") is not None:
             deadline = min(deadline, budget["deadline"])
-        token = _TRANSPORT_SCOPE.set({"deadline": deadline, "calls": 0})
+        token = _TRANSPORT_SCOPE.set({"deadline": deadline, "calls": 0,
+                                      "provider": function.__name__.rsplit("_", 1)[-1]})
         try:
             return function(*args, **kwargs)
         finally:
@@ -191,7 +194,64 @@ def _sdk_create(create, call_kwargs):
             budget["attempts"] += 1
         scope["calls"] += 1
         kwargs["timeout"] = min(float(kwargs.get("timeout") or remaining), remaining)
-    return create(**kwargs)
+    started = time.monotonic()
+    response, failure = None, None
+    try:
+        response = create(**kwargs)
+        return response
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        # Usage is observed once by the coordinator for billing. This log only
+        # measures the actual SDK call, including compatibility attempts.
+        _log_sdk_request(kwargs, response, failure, time.monotonic() - started, scope)
+
+
+def _log_sdk_request(kwargs, response, failure, seconds, scope):
+    """Whitelist transport/usage metadata; never log source text or credentials."""
+    try:
+        import webhook_runtime
+
+        def field(obj, key, default=None):
+            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+        def count(value):
+            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+        def label(value):
+            return re.sub(r"[^A-Za-z0-9_.:/-]", "_", str(value or ""))[:96]
+
+        usage = field(response, "usage")
+        details = field(usage, "prompt_tokens_details")
+        output_details = field(usage, "completion_tokens_details")
+        policy = kwargs.get("prompt_cache_options") or (kwargs.get("extra_body") or {}).get("prompt_cache_options") or {}
+        messages = kwargs.get("messages") or []
+        first = messages[0].get("content") if messages and isinstance(messages[0], dict) else None
+        record = {
+            "trace": webhook_runtime.trace_id(),
+            "provider": label((scope or {}).get("provider")),
+            "model": label(field(response, "model") or kwargs.get("model")),
+            "status": "error" if failure is not None else "ok",
+            "error_type": type(failure).__name__ if failure is not None else None,
+            "http_status": count(getattr(failure, "status_code", None)),
+            "sdk_ms": round(max(0.0, seconds) * 1000),
+            "transport_attempt": (scope or {}).get("calls", 1),
+            "input_tokens": count(field(usage, "prompt_tokens", field(usage, "input_tokens"))),
+            "output_tokens": count(field(usage, "completion_tokens", field(usage, "output_tokens"))),
+            "cached_input_tokens": count(field(details, "cached_tokens", field(usage, "cache_read_input_tokens"))),
+            "cache_write_tokens": count(field(details, "cache_write_tokens", field(usage, "cache_creation_input_tokens"))),
+            "reasoning_tokens": count(field(output_details, "reasoning_tokens")),
+            "reasoning_effort": label(kwargs.get("reasoning_effort")),
+            "service_tier": label(field(response, "service_tier") or kwargs.get("service_tier") or "default"),
+            "cache_mode": label(field(policy, "mode") or "default"),
+            "cache_breakpoint": isinstance(first, list) and any(
+                isinstance(part, dict) and "prompt_cache_breakpoint" in part for part in first),
+        }
+        logging.getLogger("app").info("[AIRequest] %s", json.dumps(record, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        # Metrics must not alter a successful response or mask the real error.
+        pass
 
 # ═══════════════════════════════════════════════════════════════════
 # 設定檔路徑
@@ -2735,11 +2795,9 @@ def _configure_openai_translation_cache(call_kwargs):
     content = messages[0].get("content")
     if not isinstance(content, str) or "<translation_principles>" not in content:
         return False
-    boundary = content.find("</translation_principles>")
-    if boundary < 0:
+    stable, dynamic = prompt_optimizer.split_cache_prefix(content)
+    if not stable:
         return False
-    end = boundary + len("</translation_principles>")
-    stable = content[:end]
     extra = dict(call_kwargs.get("extra_body") or {})
     # An explicit caller-supplied policy remains authoritative.
     if "prompt_cache_options" in call_kwargs or "prompt_cache_options" in extra:
@@ -2749,8 +2807,8 @@ def _configure_openai_translation_cache(call_kwargs):
     if _estimate_tokens_from_text(stable) >= 1024:
         parts = [{"type": "text", "text": stable,
                   "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        if content[end:]:
-            parts.append({"type": "text", "text": content[end:]})
+        if dynamic:
+            parts.append({"type": "text", "text": dynamic})
         call_kwargs["messages"] = [{**messages[0], "content": parts}, *messages[1:]]
     return True
 
