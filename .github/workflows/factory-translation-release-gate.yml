@@ -67,7 +67,7 @@ jobs:
         run: python validate_factory_translation_assets.py --json
       - name: Install runtime and test dependencies
         run: python -m pip install -r requirements.txt -r requirements-test.txt
-      - name: Run all translation regression tests without API credentials
+      - name: Run all translation regressions with external network blocked
         env:
           LINE_CHANNEL_SECRET: offline-ci-secret
           LINE_CHANNEL_ACCESS_TOKEN: offline-ci-token
@@ -82,7 +82,10 @@ jobs:
           PHASE_CONFIG_PATH: ${{ runner.temp }}/phase-config.json
           LAST_TRANSLATE_DEBUG_FILE: ${{ runner.temp }}/last-translate.json
           TRANSLATION_LOG_FILE: ${{ runner.temp }}/translation-log.json
-        run: python -m pytest -q test_*.py
+        # Dummy credentials alone do not stop accidental LINE/API traffic.
+        # The repository runner blocks external HTTP, DNS and sockets while
+        # allowing the SDK connection-reuse test's local loopback server.
+        run: python run_translation_offline_checks.py
 
       - uses: actions/setup-node@v4
         with:
