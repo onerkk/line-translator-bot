@@ -55,7 +55,7 @@ def test_sdk_reuses_http_connection_and_rotates_credentials():
         worker.join(timeout=2)
 
 
-def test_client_lifecycle_isolated_by_thread_and_process(monkeypatch):
+def test_client_lifecycle_excludes_simultaneous_use_and_parent_process(monkeypatch):
     created = []
     class Client:
         def __init__(self, config):
@@ -70,16 +70,13 @@ def test_client_lifecycle_isolated_by_thread_and_process(monkeypatch):
     config = SimpleNamespace(access_token='offline', host='https://line.invalid')
     barrier = threading.Barrier(2)
     def run():
-        try:
-            with pool.client(Client, config) as first:
-                barrier.wait(timeout=2)
-            with pool.client(Client, config) as again:
-                assert again is first
-                return id(again)
-        finally:
-            pool.close()
+        with pool.client(Client, config) as first:
+            barrier.wait(timeout=2)
+            assert first.closed == 0
+            return id(first)
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert len(set(executor.map(lambda _: run(), range(2)))) == 2
+    pool.close()
     assert all(c.closed == c.cleared == 1 for c in created)
     with pool.client(Client, config) as original:
         pass

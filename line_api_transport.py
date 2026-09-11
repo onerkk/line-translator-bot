@@ -1,13 +1,14 @@
-"""Reuse synchronous LINE SDK connections within one worker thread.
+"""Reuse synchronous LINE SDK connections across worker-thread lifetimes.
 
 The generated SDK creates a fresh urllib3 pool for every ApiClient. Keeping
-one entered client per thread lets replies, push retries and profile lookups
-reuse established connections. Credentials, configuration, factory or process
-changes replace the client. No request, timeout or retry policy is changed.
+an exclusively leased client lets replies, push retries and profile lookups
+reuse connections even when the next webhook runs on a different/new thread.
+Concurrent calls never share mutable SDK state. Credentials, configuration,
+factory or process changes retire old clients. Request/retry policy is unchanged.
 """
 from contextlib import contextmanager
 import os
-import threading
+from reusable_transport_pool import TransportPool
 
 
 class _ClientSlot:
@@ -38,27 +39,18 @@ class _ClientSlot:
 
 class ClientPool:
     def __init__(self):
-        self.local = threading.local()
+        self.pool = TransportPool()
 
     @contextmanager
     def client(self, factory, configuration):
         key = (os.getpid(), factory, id(configuration),
                getattr(configuration, "host", None),
                getattr(configuration, "access_token", None))
-        slot = getattr(self.local, "slot", None)
-        if slot is None or slot.key != key:
-            if slot is not None:
-                slot.close()
-                del self.local.slot
-            slot = _ClientSlot(key, factory, configuration)
-            self.local.slot = slot
-        yield slot.client
+        with self.pool.borrow(key, lambda: _ClientSlot(key, factory, configuration)) as slot:
+            yield slot.client
 
     def close(self):
-        slot = getattr(self.local, "slot", None)
-        if slot is not None:
-            del self.local.slot
-            slot.close()
+        self.pool.close()
 
 
 _pool = ClientPool()

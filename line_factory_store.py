@@ -18,6 +18,8 @@ import threading
 import time
 import requests
 
+from reusable_transport_pool import TransportPool
+
 
 class StoreError(RuntimeError):
     pass
@@ -154,7 +156,7 @@ class FeatureStore:
         self.kind = "sqlite" if self.path else "upstash"
         self.prefix = "factory:{" + hashlib.sha256(namespace.encode()).hexdigest()[:20] + "}:"
         self._override = command
-        self._http = threading.local()
+        self._http = TransportPool()
         self._health_lock = threading.Lock()
         self._unavailable_until = 0.0
         if not self.path and not command and (not self.url.startswith("https://") or not self.token):
@@ -188,21 +190,22 @@ class FeatureStore:
         try:
             if self._override:
                 return self._override(args)
-            # Per-thread sessions reuse TLS/HTTP connections without sharing
-            # mutable session state across Flask worker threads. No SDK retries.
-            session = getattr(self._http, "session", None)
-            if session is None:
-                session = self._http.session = requests.Session()
-            with session.post(self.url, data=encode(args).encode(), stream=True,
-                              allow_redirects=False, timeout=(2, 3), headers={
-                                  "Authorization": "Bearer " + self.token,
-                                  "Content-Type": "application/json"}) as response:
-                if response.status_code != 200:
-                    raise ValueError("invalid storage status")
-                raw = response.raw.read(2_000_001, decode_content=True)
-                if len(raw) > 2_000_000:
-                    raise ValueError("storage response too large")
-                result = json.loads(raw)
+            # A session is exclusive until the streamed body has been consumed
+            # and closed. Return it to a bounded process-local pool, so a new
+            # webhook thread can reuse the same HTTP/TLS connection. No extra
+            # request, retry or background write is introduced.
+            url, token = self.url, self.token
+            with self._http.borrow((url, token, requests.Session), requests.Session) as session:
+                with session.post(url, data=encode(args).encode(), stream=True,
+                                  allow_redirects=False, timeout=(2, 3), headers={
+                                      "Authorization": "Bearer " + token,
+                                      "Content-Type": "application/json"}) as response:
+                    if response.status_code != 200:
+                        raise ValueError("invalid storage status")
+                    raw = response.raw.read(2_000_001, decode_content=True)
+                    if len(raw) > 2_000_000:
+                        raise ValueError("storage response too large")
+                    result = json.loads(raw)
             if "error" in result or "result" not in result:
                 raise ValueError("invalid storage response")
             return result["result"]

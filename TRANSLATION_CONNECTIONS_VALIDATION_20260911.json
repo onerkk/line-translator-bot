@@ -1,0 +1,109 @@
+{
+  "build": "2026-09-11.1-cross-worker-connections",
+  "scope": "LINE and Upstash transport lifecycle only; no semantic/model/UI changes",
+  "full_offline_suite": {
+    "passed": 2879,
+    "subtests_passed": 443,
+    "seconds": 80.02,
+    "external_network": "blocked; local loopback permitted",
+    "command": "python run_translation_offline_checks.py",
+    "log_sha256": "e584ad98b67b6da710f9756f42c7d417ba7135a345c7521d9116d7eab4d71fb3"
+  },
+  "baseline_regression": {
+    "expected_failure": "12 TCP connections instead of 2",
+    "exit_code": 1,
+    "log_sha256": "4925fb2429fb1d87b3c770c604b36a156a9fcb6cfaf3b6c625eb3d9fc20a723b"
+  },
+  "paired_loopback_check": {
+    "before": {
+      "mode": "offline-loopback-http",
+      "live_ai_calls": 0,
+      "live_line_sends": 0,
+      "implementation": "baseline",
+      "synthetic_connection_setup_ms": 150,
+      "messages": 6,
+      "fake_translation_generations": 6,
+      "translation_request_sequence": [
+        "revision_EVAL",
+        "context_EVAL",
+        "LINE_reply"
+      ],
+      "unique_tcp_connections": 12,
+      "per_message_ms": [
+        427.854,
+        365.095,
+        377.733,
+        365.879,
+        531.819,
+        363.322
+      ],
+      "translation_http_requests": 18,
+      "control_lookup_probes_included_in_latency": false,
+      "warm_median_ms": 365.879,
+      "scope": "real handler/SQLite/Redis Lua/SDK over local HTTP; fake AI; synthetic setup delay; async postprocessing excluded",
+      "production_end_to_end_latency_measured": false
+    },
+    "after": {
+      "mode": "offline-loopback-http",
+      "live_ai_calls": 0,
+      "live_line_sends": 0,
+      "implementation": "updated",
+      "synthetic_connection_setup_ms": 150,
+      "messages": 6,
+      "fake_translation_generations": 6,
+      "translation_request_sequence": [
+        "revision_EVAL",
+        "context_EVAL",
+        "LINE_reply"
+      ],
+      "unique_tcp_connections": 2,
+      "per_message_ms": [
+        437.564,
+        63.798,
+        69.774,
+        60.501,
+        219.532,
+        62.256
+      ],
+      "translation_http_requests": 18,
+      "control_lookup_probes_included_in_latency": false,
+      "warm_median_ms": 63.798,
+      "scope": "real handler/SQLite/Redis Lua/SDK over local HTTP; fake AI; synthetic setup delay; async postprocessing excluded",
+      "production_end_to_end_latency_measured": false
+    },
+    "synthetic_warm_median_saved_ms": 302.081,
+    "live_latency_claim": false
+  },
+  "baseline_github_commit": "f7ceefc979c9a8d8796b7ed1edbd8045ec2512c5",
+  "baseline_runtime_sha256": {
+    "line_api_transport.py": "46df8ee3b6e5b6bcebccee5e69433603e44c8084cb6a80500cf57d659a136bfe",
+    "line_factory_store.py": "81570a602531d6ba6d9aa2aacdefd2e13b9d38c8e157d7f246e9c8d1c7b6323d"
+  },
+  "runtime_sha256": {
+    "reusable_transport_pool.py": "92c80b28064528b9fd5081e8e617441bc89c4012da03135260b9062d808a805f",
+    "line_api_transport.py": "be9af5812ba838d34d0e8bfe22967907cec7d47a1f08b8546d0cd866275147df",
+    "line_factory_store.py": "69676865a22b637adabe17f2f4588fe9643c9e75927615ba3fd4995afc4f4095"
+  },
+  "tests_and_notes_sha256": {
+    "test_line_connection_reuse.py": "68c5f38188897ac22d7256779670adb727b854d0e589636240b89ce8fc90117f",
+    "test_translation_transport_pool.py": "d772b7401a80022d3deb4c9440b1c183ccf3a4575f43aa470514ede4e8bcc78a",
+    "UPDATE_20260911_TRANSLATION_CONNECTIONS.md": "8df7f0e415c5f791a24fcb12fdd88e94c2526846d460beefdfc19e2e41581f3d"
+  },
+  "unchanged_sha256": {
+    "app.py": "3e7d4154af1a4b41fcf170b198b81a8caba6d83b050578af240e6619c92fcc7f",
+    "ai_provider.py": "c9da0ece805157d933585769db63d86b34c4237fd3e8a39c591d4d6c6c431458",
+    "prompt_optimizer.py": "fefe2dacaf0f964ac2c696af5147d96c4e7a185f36844d18861d9935bd51c878",
+    "translation_quality_gate.py": "c2827fecfc04138ea209389a13249b59d1c514431c929fb91c4845aa7a1b1144",
+    "factory_knowledge.json": "00e2dd6c9c2459d5f8f5100d49181dd39a8735f459cc3e6127a0a0026563599c",
+    "line_factory_features.py": "033d6a483fa783b8b05a3610b07082e4a68e926422aa1d001c6fe5a208898d6d"
+  },
+  "deployed_to_production": false,
+  "production_five_second_request_measured": false,
+  "live_ai_calls": 0,
+  "live_line_messages": 0,
+  "limits": [
+    "AI, actual TLS, LINE transit, cold start and production end-to-end latency are not measured.",
+    "Already-warm same-thread connections may see little change.",
+    "Cold or server-closed connections still require establishment."
+  ]
+}
