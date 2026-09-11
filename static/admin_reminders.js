@@ -51,9 +51,44 @@
   }
   function preview() {
     var mention = el('mode').value === 'all' ? '@所有人' : el('mode').value === 'users' ? selectedNames().join(' ') : '';
-    el('preview').textContent = '⏰ 自訂提醒\n' + (el('date').value || '日期') + ' ' +
-      (el('time').value || '時間') + '（台灣時間）\n' + (mention ? mention + '\n' : '') +
-      (el('content').value.trim() || '你的提醒內容會顯示在這裡');
+    var box = el('preview'); box.replaceChildren();
+    function node(tag, cls, text) {
+      var item = document.createElement(tag); item.className = cls;
+      if (text !== undefined) item.textContent = text;
+      return item;
+    }
+    if (mention) box.append(node('div','reminder-preview-mention','⏰ 提醒 / Pengingat\n'+mention));
+    var card = node('article','reminder-preview-card');
+    var head = node('div','reminder-preview-head');
+    var title = node('div','reminder-preview-title');
+    title.append(node('strong','','自訂提醒'),node('span','','PENGINGAT'));
+    var schedule = node('div','reminder-preview-schedule');
+    var dateBox = node('div','reminder-preview-date');
+    var dateValue = el('date').value;
+    var date = dateValue ? new Date(dateValue+'T00:00:00+08:00') : null;
+    var weekday = date && !Number.isNaN(date.getTime()) ? date.getUTCDay() : null;
+    // Taiwan midnight falls on the previous UTC date. Add eight hours before
+    // deriving the weekday, independent of the administrator's device zone.
+    if (weekday !== null) weekday = new Date(date.getTime()+8*3600000).getUTCDay();
+    var dayText = weekday === null ? '星期 / Hari' :
+      ['週日','週一','週二','週三','週四','週五','週六'][weekday]+' / '+
+      ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][weekday];
+    dateBox.append(node('strong','',dateValue ? dateValue.replace(/-/g,'.') : '日期 / Tanggal'),node('span','',dayText));
+    schedule.append(node('strong','reminder-preview-time',el('time').value || '--:--'),dateBox);
+    head.append(title,schedule,node('div','reminder-preview-zone','台灣時間 / Waktu Taiwan · UTC+8'));
+    var body = node('div','reminder-preview-body');
+    body.append(node('div','reminder-preview-label','提醒內容 / Pesan'),
+      node('div','reminder-preview-content',el('content').value.trim() || '你的提醒內容會顯示在這裡'));
+    var audience = el('mode').value === 'all' ? '全體成員 / Semua anggota' : el('mode').value === 'users' ?
+      '指定 '+selected.size+' 位 / '+selected.size+' anggota terpilih' : '不標註 / Tanpa mention';
+    var footer = node('div','reminder-preview-footer');
+    var groupName = group() ? group().name : '群組 / Grup';
+    if (groupName.length > 64) {
+      groupName = groupName.slice(0,63).replace(/[\uD800-\uDBFF]$/,'')+'…';
+    }
+    footer.append(node('strong','',audience),node('div','reminder-preview-group',groupName+
+      (editing ? ' · #'+editing.id.slice(0,6) : '')));
+    card.append(head,body,footer); box.append(card);
     el('count').textContent = el('content').value.length + ' / 1500 字元';
     el('selected-count').textContent = '已選 ' + selected.size + ' / 20 位';
   }
