@@ -154,6 +154,7 @@ import line_translation_delivery as line_delivery_module
 import line_factory_features
 import line_quick_reply
 import line_api_transport
+import line_reply_window
 import webhook_runtime
 from durable_workers import WorkerPool
 from contextvars import copy_context
@@ -13541,6 +13542,9 @@ def _durable_translation_event(kind):
                         _ensure_translation_retry_worker()
                         return
                 with _translation_job_scope():
+                    if kind == "text":
+                        _translation_delivery_state.reply_window = line_reply_window.capture(
+                            event, webhook_runtime.received_at())
                     try:
                         # Also discover authors of commands and non-text media.
                         # Profile failures must never prevent message delivery.
@@ -13624,6 +13628,37 @@ def _push_translation_batch(target_id, messages, stable_key, *, notification_dis
                 raise
 
 
+def _try_reply_translation_plan(job_key, payload, plan, reply_token):
+    """One committed send attempt; transport failure alone may fall back.
+
+    Checkpoint/notification errors AFTER LINE accepts are deliberately outside
+    the transport exception handler, so they cannot immediately duplicate the
+    accepted reply with a push.
+    """
+    _delivery_owner(job_key)
+    if factory_hub:
+        factory_hub.assert_current(payload)
+    plan["attempted"] = True
+    _delivery_checkpoint(job_key, {"delivery": plan})
+    try:
+        messages = line_delivery_module.restore_messages(plan["messages"])
+        with line_api_transport.client(ApiClient, configuration) as api_client:
+            req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
+            if payload.get("notification_disabled"):
+                req.notification_disabled = True
+            response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
+    except translation_retry_queue_module.LeaseLostError:
+        raise
+    except Exception as exc:
+        logger.warning("LINE reply failed; using durable push: %s", type(exc).__name__)
+        return False, None
+    plan["next_batch"] = len(line_delivery_module.message_batches(plan["messages"]))
+    _delivery_checkpoint(job_key, {"delivery": plan})
+    if factory_hub:
+        factory_hub.delivery_accepted(payload, plan)
+    return True, response
+
+
 def _send_reply_with_push_fallback(
     *, reply_token, target_id, message_obj, fallback_text, retry_key=None,
     notification_disabled=False, append_messages=None, job_key=None, delivered_targets=None,
@@ -13655,28 +13690,10 @@ def _send_reply_with_push_fallback(
         plan["factory_event"] = payload.get("factory_event")
         plan["factory_notice_token"] = payload.get("factory_notice_token")
         _delivery_checkpoint(job_key, {"delivery": plan, "factory_event": payload.get("factory_event")})
-    messages = line_delivery_module.restore_messages(plan["messages"])
-    if reply_token and len(messages) <= 5 and not plan.get("next_batch"):
-        plan["attempted"] = True
-        _delivery_checkpoint(job_key, {"delivery": plan})
-        try:
-            _delivery_owner(job_key)
-            if factory_hub:
-                factory_hub.assert_current(payload)
-            with line_api_transport.client(ApiClient, configuration) as api_client:
-                req = ReplyMessageRequest(reply_token=reply_token, messages=messages)
-                if notification_disabled:
-                    req.notification_disabled = True
-                response = MessagingApi(api_client).reply_message(req, _request_timeout=(5, 15))
-            plan["next_batch"] = len(line_delivery_module.message_batches(plan["messages"]))
-            _delivery_checkpoint(job_key, {"delivery": plan})
-            if factory_hub:
-                factory_hub.delivery_accepted(payload, plan)
+    if reply_token and len(plan["messages"]) <= 5 and not plan.get("next_batch"):
+        accepted, response = _try_reply_translation_plan(job_key, payload, plan, reply_token)
+        if accepted:
             return response, "reply"
-        except translation_retry_queue_module.LeaseLostError:
-            raise
-        except Exception as exc:
-            logger.warning("LINE reply failed; using durable push: %s", str(exc)[:200])
     response = _translation_retry_push_chunks(
         job_key or retry_key or uuid.uuid4().hex, payload, plan["text"],
         prepared_plan=plan, persist_key=job_key,
@@ -13708,6 +13725,11 @@ def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5,
         plan["factory_notice_token"] = payload.get("factory_notice_token")
         _delivery_checkpoint(checkpoint_key, {"delivery": plan})
     batches = line_delivery_module.message_batches(plan["messages"], max_messages)
+    reply_token = line_reply_window.available(payload, plan)
+    if reply_token and len(batches) == 1:
+        accepted, response = _try_reply_translation_plan(checkpoint_key, payload, plan, reply_token)
+        if accepted:
+            return response
     response = None
     round_key = str(job_key) + (":round:" + str(plan["round"]) if plan["round"] else "")
     for index in range(int(plan["next_batch"]), len(batches)):
@@ -14137,6 +14159,8 @@ def _schedule_text_translation_retry(
         "quote_token": ctx.get("quote_token"),
         "source_text": source_text,
         "src_lang": str(src_lang),
+        "reply_window": (getattr(_translation_delivery_state, "reply_window", None)
+                         if not from_image_ocr and not from_file else None),
         "target_langs": targets,
         "line_mentions": list(line_mentions or []),
         "quoted_context_source": str(quoted_context_source or ""),
@@ -34691,8 +34715,10 @@ def health():
         "status": "ok",
         "version": VERSION,
         "webhook_runtime_build": webhook_runtime.BUILD_ID,
+        "provider_error_policy_build": ai_provider.ERROR_POLICY_BUILD_ID,
+        "reply_recovery_build": line_reply_window.BUILD_ID,
         "quantity_semantics_build": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
-        "glossary_policy_build": gp_module.BUILD_ID,
+        "glossary_policy_build": f"policy-v{gp_module.POLICY_VERSION}",
         "http_server": app.config.get("TRANSLATION_SERVER_CONFIG", {"build": "unreported"}),
         "quality_gate_build": _ACTUAL_QG_BUILD_ID,
         "quality_gate_selftest": bool(_QG_BOOT_SELFTEST_OK),
@@ -34915,7 +34941,7 @@ def admin_health_check():
     runtime_state = {
         "build": webhook_runtime.BUILD_ID,
         "quantity_semantics_build": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
-        "glossary_policy_build": gp_module.BUILD_ID,
+        "glossary_policy_build": f"policy-v{gp_module.POLICY_VERSION}",
         "asynchronous_ingress": webhook_runtime.asynchronous_ingress(),
         "persistent_outbox": webhook_runtime.persistent_outbox(),
         "http_server": app.config.get("TRANSLATION_SERVER_CONFIG", {"build": "unreported"}),

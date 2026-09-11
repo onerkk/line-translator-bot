@@ -84,6 +84,11 @@ def ai_timing():
     return current.get("ai_ms", 0), current.get("ai_attempts", 0)
 
 
+def received_at():
+    """Original HTTP receipt time, preserved through durable worker dispatch."""
+    return (_CURRENT.get() or {}).get("received_at", time.time())
+
+
 def event_timing(event=None):
     now = time.time()
     current = _CURRENT.get() or {"received_at": now, "started_at": now}

@@ -103,7 +103,9 @@ ai_provider.py — 統一 AI Provider 介面層 (v3.2.6 / 2026-05-28)
 
 import os
 import json
+import errno
 import re
+import sys
 import time
 import threading
 from contextvars import ContextVar
@@ -526,7 +528,7 @@ DEFAULT_CONFIG = {
 _config_lock = threading.RLock()
 _current_config = None
 _last_config_mtime = 0  # 修跨 worker 同步 — 記錄上次讀 config 時磁碟檔 mtime
-ERROR_POLICY_BUILD_ID = "2026-09-11.4-provider-specific-quota-recovery"
+ERROR_POLICY_BUILD_ID = "2026-09-11.5-typed-transport-recovery"
 _openai_client = None
 _anthropic_client = None
 _gemini_client = None   # v3.21
@@ -2275,6 +2277,38 @@ def _auto_switch_on_exhaust(dead_provider, err):
     return None
 
 
+def _is_transport_error(error):
+    """Recognize transport failures even when their message is empty.
+
+    The SDK's own deadline guard raises TimeoutError with 'deadline exhausted',
+    and HTTP clients may emit empty ReadTimeout/ReadError messages. Matching
+    English error text alone silently disabled failover in both cases. Look up
+    classes only in already-loaded adapters; this adds no SDK import or I/O to
+    successful requests. Local protocol, disk and programming faults stay out.
+    """
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    if isinstance(error, OSError) and error.errno in {
+        errno.ECONNRESET, errno.ECONNREFUSED, errno.ECONNABORTED, errno.ETIMEDOUT,
+        errno.EHOSTUNREACH, errno.ENETUNREACH, errno.ENETDOWN, errno.EPIPE,
+    }:
+        return True
+    for module_name, names in (
+        ("httpx", ("TimeoutException", "NetworkError", "RemoteProtocolError")),
+        ("httpx2", ("TimeoutException", "NetworkError", "RemoteProtocolError")),
+        ("requests.exceptions", ("Timeout", "ConnectionError")),
+        ("urllib3.exceptions", ("TimeoutError", "NewConnectionError", "ProtocolError")),
+        ("openai", ("APIConnectionError",)),
+        ("anthropic", ("APIConnectionError",)),
+    ):
+        module = sys.modules.get(module_name)
+        classes = tuple(cls for name in names
+                        if isinstance(cls := getattr(module, name, None), type))
+        if classes and isinstance(error, classes):
+            return True
+    return False
+
+
 def _is_availability_error(e):
     """v3.26: 判斷是否為「provider 暫時不可用」類錯誤(才值得容錯移轉)。
     包含:連線/逾時、429 限流、5xx/529 過載。
@@ -2284,6 +2318,8 @@ def _is_availability_error(e):
         return True
     if code in (400, 401, 403, 404, 422):
         return False
+    if _is_transport_error(e):
+        return True
     m = str(e).lower()
     return any(t in m for t in ("connection", "timed out", "timeout",
                                 "overloaded", "unavailable", "rate limit",
@@ -2294,6 +2330,8 @@ def _is_provider_failover_error(e):
     """只判斷「換一家可能成功」的錯誤，避免內容政策/資料格式錯誤白打三家。"""
     code = getattr(e, "status_code", None)
     if code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504, 529):
+        return True
+    if _is_transport_error(e):
         return True
     m = str(e).lower()
     provider_specific = (

@@ -1,0 +1,93 @@
+{
+  "build": "2026-09-11-translation-delivery-recovery",
+  "baseline_github_commit": "be8f21c6399220bcef71f98020d151852506e91e",
+  "github_latest_upload_verified": true,
+  "reported_source": "幫忙今日點檢",
+  "reported_source_normal_pipeline": {
+    "accepted_indonesian_variants": 3,
+    "normal_provider_generations": 1,
+    "local_delivery_passed": true,
+    "live_model_quality_measured": false
+  },
+  "reproductions_before_changes": [
+    {
+      "case": "typed transport failures stop failover despite a configured healthy backup",
+      "failed": 8,
+      "passed": 5,
+      "log_sha256": "5c6e3becc9af302f97c96fe459e54a5f7eec7ed276f63deb5b20418e5ab3bb76"
+    },
+    {
+      "case": "AI recovery loses unused reply capability when push unavailable",
+      "failed": 1,
+      "passed": 8,
+      "log_sha256": "9b1b7e20a14308ee9740ca284078ebbffaceecdbf087ab7a36bdae11cbd02743"
+    },
+    {
+      "case": "unmodified baseline public and authorized admin health return 500",
+      "failed": 2,
+      "passed": 1,
+      "deselected": 19,
+      "log_sha256": "e129837f569467907345dd82683ec1cbef845b66a1be0a207c2c4e86a3976c64"
+    }
+  ],
+  "full_offline_suite": {
+    "passed": 2914,
+    "subtests_passed": 443,
+    "seconds": 81.22,
+    "log_sha256": "7108636b4ec6f4f1085668fd41fda3efd4b679a7f6025bb333264f9c0d9d68b6",
+    "command": "python run_translation_offline_checks.py",
+    "external_network": "blocked; local loopback permitted"
+  },
+  "new_regression_tests": 35,
+  "validated_behavior": [
+    "exception type recognition; preserve active provider, quota state and request-wide budgets",
+    "single-provider transport retry remains bounded",
+    "fresh unused reply retained across AI recovery; one actual delivery with push unavailable",
+    "expired reply, old event and clock reversal use existing push recovery",
+    "no new generation for a completed translation after LINE delivery failure",
+    "real SDK signed webhook and background worker; non-2xx while volatile pending; redelivery does not duplicate work",
+    "post-accept followup write error does not duplicate the accepted message",
+    "public and authorized admin health return 200; unauthorized admin health returns 403"
+  ],
+  "normal_extra_ai_requests": 0,
+  "live_ai_calls": 0,
+  "live_line_messages": 0,
+  "deployed_to_production": false,
+  "production_incident_1606_root_cause_confirmed": false,
+  "production_latency_measured": false,
+  "remaining_evidence_needed": "Render logs for 2026-09-11 16:05-16:08 Asia/Taipei, including webhook/provider/delivery errors; configured Health Check Path.",
+  "baseline_runtime_sha256": {
+    "app.py": "3e7d4154af1a4b41fcf170b198b81a8caba6d83b050578af240e6619c92fcc7f",
+    "ai_provider.py": "c9da0ece805157d933585769db63d86b34c4237fd3e8a39c591d4d6c6c431458",
+    "webhook_runtime.py": "76d3345cba1acbb6024f68056ddde91ec7c9577df331205e6919a5b91310ac88",
+    "line_reply_window.py": null
+  },
+  "runtime_sha256": {
+    "app.py": "bf6e7c8e495857819f3ccf2ef157612bb255006b09641f1a70007411aef14c70",
+    "ai_provider.py": "af80087e6a71f75caaafe6aa5c8d27357fd7a3747927b0117ae2788c5a65e107",
+    "webhook_runtime.py": "0a5b8f96fca9c6432f31961bd8ee66dc059f0d675b0156c456b8929e0c593497",
+    "line_reply_window.py": "2460587565eeef4d5e4616798bcee9a2d4f8d0a014247a9cf50b398a91dda076"
+  },
+  "tests_and_notes_sha256": {
+    "test_translation_inspection_delivery.py": "30d5ac4dfb61d40692dbd420a71a66289e7b28879e2db29b2b2417082e0cd2e0",
+    "test_provider_transport_classification.py": "768728665ab45dab085c7697edb92d13ac6cb3b8adfec11f20a6d862b25f31d5",
+    "UPDATE_20260911_DELIVERY_RECOVERY.md": "beb47b59f1156f592afa16c8de61687eada631f868e488e588225808634fae69"
+  },
+  "unchanged_sha256": {
+    "line_api_transport.py": "be9af5812ba838d34d0e8bfe22967907cec7d47a1f08b8546d0cd866275147df",
+    "line_factory_store.py": "69676865a22b637adabe17f2f4588fe9643c9e75927615ba3fd4995afc4f4095",
+    "reusable_transport_pool.py": "92c80b28064528b9fd5081e8e617441bc89c4012da03135260b9062d808a805f",
+    "translation_quality_gate.py": "c2827fecfc04138ea209389a13249b59d1c514431c929fb91c4845aa7a1b1144",
+    "factory_knowledge.json": "00e2dd6c9c2459d5f8f5100d49181dd39a8735f459cc3e6127a0a0026563599c",
+    "prompt_optimizer.py": "fefe2dacaf0f964ac2c696af5147d96c4e7a185f36844d18861d9935bd51c878",
+    "line_factory_features.py": "033d6a483fa783b8b05a3610b07082e4a68e926422aa1d001c6fe5a208898d6d",
+    "glossary_policy.py": "acfbe35122bf88b2cb14406a87b747ca5cee7de3b9f841e76100503bde627068"
+  },
+  "limitations": [
+    "No formal AI, LINE or deployment credentials used; offline candidate translations do not measure live-model accuracy.",
+    "Runtime public health request was unavailable in this work environment; not evidence of production server status.",
+    "Reply window is conservative local eligibility, not a guarantee of LINE acceptance.",
+    "Existing push fallback still depends on LINE availability and account limits.",
+    "The existing outbox persistence boundary and hosting sleep policy are unchanged."
+  ]
+}
