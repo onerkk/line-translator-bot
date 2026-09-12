@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "17adba59dbd90010b0f82ea10eee02c9ce510a75a57f05a4b344c2cd6732c4b2",
-    "updated_at_iso": "2026-09-10T04:55:09.323856+00:00",
-    "updated_at_unix": 1789016109.3238564
+    "state_hash": "1632e39e6b26ca56e3aa6e51800f6c908c70a708a0fae60afba59eb6ec76670d",
+    "updated_at_iso": "2026-09-12T04:12:50.368211+00:00",
+    "updated_at_unix": 1789186370.3682108
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-10 04:03:19",
+    "last_updated": "2026-09-11 10:53:19",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 16,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 21164,
-    "oai_cached": 9088,
-    "oai_cost_usd": 0.4055523999999999,
-    "oai_input": 356971,
-    "oai_output": 4368,
+    "oai_cache_write": 30653,
+    "oai_cached": 12251,
+    "oai_cost_usd": 0.41839886,
+    "oai_input": 371553,
+    "oai_output": 4540,
     "oai_reasoning": 0,
-    "text_translations": 277,
-    "tokens_completion": 21824,
-    "tokens_prompt": 4591742,
+    "text_translations": 281,
+    "tokens_completion": 21996,
+    "tokens_prompt": 4606324,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -334,7 +334,8 @@
       "佑晟",
       "奇沃",
       "華新麗華",
-      "ORISTAR"
+      "ORISTAR",
+      "阿堂"
     ]
   },
   "factory_line_settings": {
@@ -392,14 +393,14 @@
   "gemini_model_upgrade": "gemini-2.5-flash",
   "group_api_usage": {
     "C6c708f629dd38d6864669ecacf7712f4": {
-      "cache_read": 0,
-      "cache_write": 15633,
-      "cost_usd": 0.4044167499999999,
+      "cache_read": 3163,
+      "cache_write": 18796,
+      "cost_usd": 0.4155189099999999,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2615,
-      "tokens_prompt": 287911
+      "tokens_completion": 2745,
+      "tokens_prompt": 295605
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cache_read": 0,
@@ -420,13 +421,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
-      "cache_write": 5531,
-      "cost_usd": 2.0542437000000002,
-      "model": "gpt-5.6-terra",
+      "cache_write": 11857,
+      "cost_usd": 2.055988,
+      "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 8798,
-      "tokens_prompt": 2014818
+      "tokens_completion": 8840,
+      "tokens_prompt": 2021706
     },
     "__dm__": {
       "tokens_completion": 42,
