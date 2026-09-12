@@ -19,6 +19,20 @@ POLICY_VERSION = 1
 # They repair corrupted canonical entries wherever the glossary is consumed:
 # prompt grounding, TM seeding, forward enforcement and reverse lookup.
 _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
+    "粗拋": {
+        "canonical_idn": "poles kasar",
+        # An action may inflect (dipoles / memoles / pemolesan), so do not
+        # require a literal substring as if this were an equipment label.
+        "translation_mode": "soft",
+        "reverse_safe": False,
+        "aliases_zh": ["粗抛", "粗拋光", "粗抛光"],
+        "aliases_id": ["dipoles kasar", "memoles kasar", "pemolesan kasar"],
+        "category": "production_process",
+        "priority": 210,
+        "ocr_hint": True,
+        "note_zh": "粗拋製程使用現場印尼文 poles kasar；依語法可用 dipoles kasar、memoles kasar、pemolesan kasar。不得省略粗加工層級，也不能改成精拋或研磨。",
+        "note_id": "Gunakan poles kasar untuk tindakan; dipoles kasar, memoles kasar, atau pemolesan kasar sesuai tata bahasa. Pertahankan pelaku, negasi, pengulangan, dan objek dari sumber.",
+    },
     "標籤": {
         "canonical_idn": "label produk",
         "translation_mode": "hard",

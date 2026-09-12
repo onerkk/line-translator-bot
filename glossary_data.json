@@ -1183,7 +1183,10 @@
     "idn": "Cincin Pelindung",
     "note_zh": "套環",
     "note_id": "Cincin Pelindung",
-    "aliases_zh": ["套環", "套环"]
+    "aliases_zh": [
+      "套環",
+      "套环"
+    ]
   },
   "工單訂單資訊「顏色」": {
     "idn": "Warna",
@@ -2399,5 +2402,27 @@
     ],
     "note_zh": "客戶識別名稱，翻譯時原樣保留，不音譯、不意譯。",
     "note_id": "Nama pelanggan; pertahankan persis sebagai 峰作金屬, tanpa transliterasi atau terjemahan."
+  },
+  "粗拋": {
+    "idn": "poles kasar",
+    "canonical_idn": "poles kasar",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "aliases_zh": [
+      "粗抛",
+      "粗拋光",
+      "粗抛光"
+    ],
+    "aliases_id": [
+      "dipoles kasar",
+      "memoles kasar",
+      "pemolesan kasar"
+    ],
+    "category": "production_process",
+    "priority": 210,
+    "ocr_hint": true,
+    "note_zh": "粗拋製程使用現場印尼文 poles kasar；依語法可用 dipoles kasar、memoles kasar、pemolesan kasar。不得省略粗加工層級，也不能改成精拋或研磨。",
+    "note_id": "Gunakan poles kasar untuk tindakan; dipoles kasar, memoles kasar, atau pemolesan kasar sesuai tata bahasa. Pertahankan pelaku, negasi, pengulangan, dan objek dari sumber.",
+    "policy_migrated": true
   }
 }

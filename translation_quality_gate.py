@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-11.1-inventory-verification-integrity"
+QUALITY_GATE_BUILD_ID = "2026-09-12.1-factory-process-terminology"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1729,6 +1729,7 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
 def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     """Normalize unambiguous source-bound terms without a model call."""
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
+    result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
         result = fsa_module.instruction_semantics.rework_semantics.canonicalize_noun_phrase(source, result)
@@ -1830,6 +1831,8 @@ def _validate_normalized_translation(
     issues = []
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
+
+    issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)
             and re.search(r"計算機|计算机", candidate)):

@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-07.1-taiwan-computer-terminology"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-12.1-shop-floor-process-language"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -41,6 +41,84 @@ def canonicalize_computer_translation(source, candidate, src_lang, tgt_lang):
     if computer_term_is_unambiguous(source, src_lang, tgt_lang):
         return str(candidate or "").replace("計算機", "電腦").replace("计算机", "電腦")
     return candidate
+
+
+# A process action is not an immutable English station/equipment label.
+# Match terminology, not whole messages, and allow Indonesian inflection.
+_ROUGH_POLISH_ZH_RE = re.compile(r"粗[ \t]*(?:拋|抛)(?:[ \t]*光)?")
+_ROUGH_POLISH_ID_RE = re.compile(
+    r"(?<![\w])(?:poles|di[- \t]*poles|memoles|pemolesan)"
+    r"[ \t]+(?:secara[ \t]+)?kasar(?![\w])", re.I,
+)
+_ROUGH_POLISH_EN_RE = re.compile(
+    r"(?<![\w])(?P<action>(?:melakukan|dilakukan|lakukan)[ \t]+)?"
+    r"(?P<passive>di[- \t]*)?"
+    r"(?:rough|coarse)[- \t]+polish(?:ing)?(?![\w])", re.I,
+)
+
+
+def canonicalize_process_translation(source, candidate, src_lang, tgt_lang):
+    """Localize known English action leakage without rewriting the sentence.
+
+    Never infer a missing process or replace another grade/process. An English
+    phrase explicitly present in the source can be a quoted label: leave that
+    mixed case to normal translation and immutable-literal validation.
+    """
+    if (str(src_lang).startswith("zh") and str(tgt_lang).startswith("id")
+            and _ROUGH_POLISH_ZH_RE.search(source or "")
+            and not _ROUGH_POLISH_EN_RE.search(source or "")):
+        def localize(match):
+            action = (match.group("action") or "").strip()
+            # English nominal polishing often follows lakukan. Indonesian
+            # poles is already a verb: keep its imperative/active/passive form
+            # instead of producing the awkward double verb "lakukan poles".
+            if action.lower() == "melakukan":
+                replacement = "memoles kasar"
+            elif action.lower() == "dilakukan":
+                replacement = "dilakukan pemolesan kasar"
+            else:
+                replacement = "dipoles kasar" if match.group("passive") else "poles kasar"
+            if action[:1].isupper():
+                replacement = replacement[:1].upper() + replacement[1:]
+            return replacement
+        return _ROUGH_POLISH_EN_RE.sub(localize, candidate or "")
+    return candidate
+
+
+def process_translation_issues(source, candidate, src_lang, tgt_lang):
+    """Use the same process contract for generation, delivery and old memory."""
+    src, tgt = str(src_lang), str(tgt_lang)
+    if (src.startswith("zh") and tgt.startswith("id")
+            and _ROUGH_POLISH_ZH_RE.search(source or "")):
+        issues = []
+        if not _ROUGH_POLISH_ID_RE.search(candidate or ""):
+            issues.append("factory_process:rough_polish_missing")
+        if (_ROUGH_POLISH_EN_RE.search(candidate or "")
+                and not _ROUGH_POLISH_EN_RE.search(source or "")):
+            issues.append("factory_process:rough_polish_english_leak")
+        return issues
+    if (src.startswith("id") and tgt.startswith("zh")
+            and _ROUGH_POLISH_ID_RE.search(source or "")
+            and not _ROUGH_POLISH_ZH_RE.search(candidate or "")):
+        return ["factory_process:rough_polish_missing"]
+    return []
+
+
+def build_process_prompt(source, src_lang, tgt_lang):
+    src, tgt = str(src_lang), str(tgt_lang)
+    if not ((src.startswith("zh") and tgt.startswith("id")
+             and _ROUGH_POLISH_ZH_RE.search(source or ""))
+            or (src.startswith("id") and tgt.startswith("zh")
+                and _ROUGH_POLISH_ID_RE.search(source or ""))):
+        return ""
+    return (
+        "<factory_process_terms>粗拋/粗抛/粗拋光 = poles kasar; "
+        "allow dipoles kasar, memoles kasar, pemolesan kasar as grammar requires. "
+        "For Indonesian output, use Indonesian for this action; preserve the coarse "
+        "process grade, negation, repetition and material object in either direction. "
+        "Do not rename equipment/station labels such as Polishing."
+        "</factory_process_terms>"
+    )
 
 _ZH_NUMERAL_VALUES = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
@@ -587,6 +665,10 @@ def build_translation_prompt(
     src = (src_lang or "").lower()
     tgt = (tgt_lang or "").lower()
     lines: List[str] = []
+
+    process_hint = build_process_prompt(src_text, src, tgt)
+    if process_hint:
+        lines.append(process_hint)
 
     org_matches = collect_organization_matches(src_text, src, tgt, glossary)
     if org_matches:
