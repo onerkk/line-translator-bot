@@ -7,10 +7,21 @@ import logging
 import os
 import threading
 import uuid
+import weakref
 
 import translation_retry_queue as queue
 
 logger = logging.getLogger("app")
+_POOLS = weakref.WeakSet()
+
+
+def _after_fork():
+    for pool in list(_POOLS):
+        pool._reset_process()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
 
 
 class WorkerPool:
@@ -20,6 +31,12 @@ class WorkerPool:
         self.workers = max(1, min(int(workers), 12))
         self.filters = dict(include_kinds=include_kinds, exclude_kinds=exclude_kinds)
         self.backoff = backoff or (lambda attempt: min(60, 2 ** min(attempt, 6)))
+        self._reset_process()
+        _POOLS.add(self)
+
+    def _reset_process(self):
+        # Only durable leases cross a process boundary. Inherited threads and
+        # their condition lock cannot serve or wake jobs in the child.
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.threads = set()

@@ -34742,6 +34742,7 @@ def health():
         "status": "ok",
         "version": VERSION,
         "webhook_runtime_build": webhook_runtime.BUILD_ID,
+        "worker_startup_build": _WORKER_STARTUP_BUILD,
         "provider_error_policy_build": ai_provider.ERROR_POLICY_BUILD_ID,
         "reply_recovery_build": line_reply_window.BUILD_ID,
         "quantity_semantics_build": factory_quantity_semantics_module.FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
@@ -38241,32 +38242,10 @@ def _authorize_reminders():
 
 quick_reply_menu.register(app)
 factory_hub = line_factory_features.install(app, globals())
-factory_hub.reminder_worker.start()
 
 _start_reminders = reminders_web.register_reminders(
     app, authorize=_authorize_reminders, catalog=_reminder_catalog,
 )
-_start_reminders()
-
-
-# Resume translations that were pending when the process last stopped.  This
-# runs after all handlers/helpers are defined so the worker can call the normal
-# translation and LINE delivery pipeline.
-try:
-    logger.info("[TranslationRuntime] build=%s async_ingress=%s webhook_workers=%s text_retry_workers=2 media_retry_workers=1",
-                webhook_runtime.BUILD_ID, webhook_runtime.asynchronous_ingress(), _WEBHOOK_INBOX.pool.workers)
-    _resume_persisted_translation_retries()
-    _WEBHOOK_INBOX.pool.ensure_started()
-except Exception as _retry_boot_exc:
-    logging.getLogger("app").warning(
-        "[TranslationRetry] startup resume failed (continuing): %s", _retry_boot_exc
-    )
-
-# ── 啟動 DB 快照背景同步(模組已就緒;沒設 Upstash env 時此函式自動 no-op) ──
-try:
-    db_snapshot.start_autosnapshot()
-except Exception as _snap_e2:
-    logging.getLogger("app").warning("[snap] start_autosnapshot failed (continuing): %s", _snap_e2)
 
 
 def _bootstrap_translation_learning():
@@ -38279,7 +38258,81 @@ def _bootstrap_translation_learning():
             break
 
 
-_BG_POST_EXECUTOR.submit(_bootstrap_translation_learning)
+_WORKER_STARTUP_BUILD = "2026-09-12.2-serving-process-startup"
+_background_services_lock = threading.Lock()
+_background_services_pid = None
+_background_services_thread = None
+
+
+def _reset_serving_process():
+    global _background_services_lock, _background_services_pid, _background_services_thread
+    global _EVENT_LOG_EXECUTOR, _BG_POST_EXECUTOR, _MULTI_TGT_EXECUTOR
+    global _PARAGRAPH_EXECUTOR, _VEC_LOOKUP_EXECUTOR
+    global _TRANSLATION_RETRY_LOCK, _TRANSLATION_RETRY_INFLIGHT, _TRANSLATION_RETRY_WAKE
+    _background_services_lock = threading.Lock()
+    _background_services_pid = _background_services_thread = None
+    # Executors can otherwise retain vanished parent workers and accept work
+    # that will never run. Persistent outbox rows/leases remain untouched.
+    _EVENT_LOG_EXECUTOR = _TPE_v313(max_workers=1, thread_name_prefix="evlog")
+    _BG_POST_EXECUTOR = _TPE_v313(max_workers=2, thread_name_prefix="bgpost")
+    _MULTI_TGT_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="mtgt")
+    _PARAGRAPH_EXECUTOR = _TPE_v313(max_workers=4, thread_name_prefix="para")
+    _VEC_LOOKUP_EXECUTOR = _TPE_v313(max_workers=3, thread_name_prefix="veclk")
+    _TRANSLATION_RETRY_LOCK = threading.RLock()
+    _TRANSLATION_RETRY_INFLIGHT = set()
+    _TRANSLATION_RETRY_WAKE = threading.Event()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_serving_process)
+
+
+def _start_worker_services():
+    logger.info("[TranslationRuntime] build=%s startup_build=%s pid=%s parent_pid=%s "
+                "async_ingress=%s webhook_workers=%s text_retry_workers=2 media_retry_workers=1",
+                webhook_runtime.BUILD_ID, _WORKER_STARTUP_BUILD, os.getpid(), os.getppid(),
+                webhook_runtime.asynchronous_ingress(), _WEBHOOK_INBOX.pool.workers)
+    for name, start in (
+        ("translation-recovery", _resume_persisted_translation_retries),
+        ("webhook-recovery", _WEBHOOK_INBOX.pool.ensure_started),
+        ("factory-reminders", factory_hub.reminder_worker.start),
+        ("scheduled-reminders", _start_reminders),
+        ("learning", lambda: _BG_POST_EXECUTOR.submit(_bootstrap_translation_learning)),
+        ("snapshots", db_snapshot.start_autosnapshot),
+    ):
+        try:
+            start()
+        except Exception:
+            logger.exception("[WorkerStartup] service=%s failed; other services continue", name)
+    logger.info("[WorkerStartup] ready build=%s pid=%s", _WORKER_STARTUP_BUILD, os.getpid())
+
+
+def start_background_services():
+    """Start once in a serving process, never while importing a preloaded app.
+
+    Gunicorn calls this after worker initialization. The request hook also
+    covers custom Gunicorn configs, Flask and other WSGI servers. Startup I/O
+    runs outside HTTP threads so snapshots cannot stall the admin/first webhook.
+    """
+    global _background_services_pid, _background_services_thread
+    with _background_services_lock:
+        if _background_services_pid == os.getpid():
+            return False
+        thread = threading.Thread(target=_start_worker_services, name="worker-startup", daemon=True)
+        _background_services_pid = os.getpid()
+        _background_services_thread = thread
+        try:
+            thread.start()
+        except Exception:
+            _background_services_pid = _background_services_thread = None
+            logger.exception("[WorkerStartup] cannot start; will retry on next request")
+            return False
+        return True
+
+
+@app.before_request
+def _ensure_serving_process_started():
+    start_background_services()
 
 
 if __name__ == "__main__":

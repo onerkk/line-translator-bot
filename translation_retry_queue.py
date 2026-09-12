@@ -29,6 +29,17 @@ _LOCK = threading.RLock()
 _SCHEMA_VERSION = 2
 
 
+def _after_fork():
+    # The database/leases are shared; the Python mutex is process-local.
+    # A parent thread owning this mutex does not survive Gunicorn's fork.
+    global _LOCK
+    _LOCK = threading.RLock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
+
+
 def _default_db_path() -> str:
     configured = str(os.environ.get("TRANSLATION_RETRY_DB_PATH", "") or "").strip()
     if configured:

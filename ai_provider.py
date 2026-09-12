@@ -908,6 +908,24 @@ def _client_with_limits(client, timeout):
 
 _sdk_prepare_lock = threading.Lock()
 _prepared_translation_sdks = set()
+_inherited_parent_clients = ()
+
+
+def _after_worker_fork():
+    global _config_lock, _provider_health_lock, _sdk_prepare_lock
+    global _openai_client, _anthropic_client, _gemini_client, _inherited_parent_clients
+    _config_lock = threading.RLock()
+    _provider_health_lock = threading.RLock()
+    _sdk_prepare_lock = threading.Lock()
+    # Do not call SDK cleanup in the fork callback: it may take a mutex held
+    # by a vanished parent thread. Keep references, but never reuse its clients.
+    _inherited_parent_clients = (*_inherited_parent_clients,
+                                _openai_client, _anthropic_client, _gemini_client)
+    _openai_client = _anthropic_client = _gemini_client = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_worker_fork)
 
 
 def prepare_translation_sdk_resources():
