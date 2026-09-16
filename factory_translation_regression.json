@@ -861,7 +861,7 @@
       "id": "month_end_staffing_target_bare_value",
       "direction": "zh-id",
       "source": "月底前有確認請假的再提前告知，上面要統計月底生產人力。\n本月目標3800，目前進度比上個月還落後，月底前應該都是開三站追量，麻煩盡量一天請假不超過2員。",
-      "verified_target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
+      "verified_target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun packing akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
       "required_target_any_groups": [
         [
           "cuti sebelum akhir bulan"

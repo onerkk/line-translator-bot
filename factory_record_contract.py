@@ -15,7 +15,7 @@ from collections import defaultdict
 from translation_request_cache import memoize
 import factory_input_semantics
 
-BUILD_ID = "2026-09-10.10-field-values-and-input-method"
+BUILD_ID = "2026-09-16.4-recorded-field-assertions"
 
 _LABELS = {
     "zh": {
@@ -145,8 +145,15 @@ def build_frame(source, src_lang, tgt_lang):
     for row in reversed(frame["fields"]):
         residue = residue[:row["start"]] + residue[row["end"]:]
     # Consume the ENTIRE source. No partial translation can replace a message.
+    # "TAG tercatat 936" describes a recorded field; it is fully represented
+    # by that field assertion. An actual entry method/order/permission still
+    # prevents the field-only renderer from dropping an instruction.
+    extra_input_action = any(frame['input_workflow'].get(key) for key in (
+        'manual', 'scale_data', 'automatic', 'scale_required', 'field_unlocked',
+        'manual_weight_error', 'verification_order', 'soft_check_request',
+    ))
     frame["complete_fields"] = bool(len(frame["fields"]) >= 2 and not frame["question"]
-                                    and not frame['input_workflow']['active']
+                                    and not extra_input_action
                                     and not any(row.get("coordinated") for row in frame["fields"])
                                     and not re.sub(r"[\s,，;；。.]", "", residue))
     return frame

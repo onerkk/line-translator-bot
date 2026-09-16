@@ -11,7 +11,7 @@ import unicodedata
 
 from translation_request_cache import memoize
 
-BUILD_ID = "2026-09-11.1-inventory-record-and-verification-order"
+BUILD_ID = "2026-09-16.4-recorded-intake-forms"
 _MANUAL_ZH = r"手打|手動(?:輸入|输入|填寫|填写|鍵入|键入)|人工(?:輸入|输入|填寫|填写)"
 _MANUAL_ID = r"(?:diinput|input|menginput|memasukkan|dimasukkan|mengetik|diketik|ketik|mengisi|diisi)(?:\s+[a-z-]+){0,5}?\s+(?:manual|tangan)"
 _SCALE_ZH = r"(?:磅秤|電子秤|电子秤|秤重設備|称重设备)(?:自動|自动)?(?:收集|取值|取得|讀取|读取|擷取|撷取|采集|採集)"
@@ -29,12 +29,12 @@ def _norm(text):
 # Field nouns and UI operations establish a record operation. Warehouse words
 # alone do not: a forklift moving rods into a warehouse remains physical work.
 _FIELDS = {
-    'zh': r'支數|支数|數量|数量|重量|資料|资料|數據|数据',
-    'id': r'\b(?:jumlah\s+batang|jumlah|berat|data|nilai)\b',
+    'zh': r'支數|支数|數量|数量|重量|資料|资料|數據|数据|(?:登錄|登录|記錄|记录|輸入|输入)(?:的)?值',
+    'id': r'\b(?:jumlah\s+batang|jumlah|berat|data|nilai)(?:nya)?\b',
 }
 _ENTRY = {
     'zh': r'入庫|入库|登錄|登录|登記|登记|輸入|输入|存入|儲存|储存|按(?:下)?|點擊|点击',
-    'id': r'\b(?:input|diinput|menginput|pencatatan|mencatat|dicatat|catat|memasukkan|dimasukkan|masukkan|menyimpan|disimpan|simpan|menekan|tekan|klik|diketik|mengetik|ketik)(?:nya)?\b',
+    'id': r'\b(?:input|diinput|menginput|pencatatan|mencatat|dicatat|tercatat|catat|memasukkan|dimasukkan|masukkan|menyimpan|disimpan|simpan|menekan|tekan|klik|diketik|mengetik|ketik)(?:nya)?\b',
 }
 _CHECK = {
     'zh': r'檢查|检查|確認|确认|核對|核对|查核',
@@ -59,12 +59,15 @@ def inventory_entry(text, lang):
             linked = (re.search(r'(?:' + _FIELDS[lang] + r').{0,8}(?:入庫|入库|存入|儲存|储存|輸入|输入|登錄|登录)', clause)
                       or re.search(r'(?:輸入|输入|登錄|登录|記錄|记录|儲存|储存).{0,12}(?:' + _FIELDS[lang] + r')', clause))
             ui = re.search(r'按|點擊|点击|按鈕|按钮', clause) and re.search(r'入庫|入库|存入|儲存|储存', clause)
-            if linked or ui:
+            # A nominal recorded value (e.g. TAG登錄值936) is still a data
+            # record. Reverse translations need not invent another entry verb.
+            recorded_value = re.search(r'(?:登錄|登录|記錄|记录|輸入|输入)(?:的)?值', clause)
+            if linked or ui or recorded_value:
                 return True
         elif re.search(_ENTRY[lang], clause, re.I):
             # "memasukkan jumlah ... ke gudang" is an underspecified/literal
             # rendering, not proof that the candidate retained record semantics.
-            if re.search(r'\b(?:input|diinput|menginput|catat|mencatat|dicatat|pencatatan|sistem|komputer|kolom|data|diketik|mengetik|ketik)(?:nya)?\b', clause, re.I):
+            if re.search(r'\b(?:input|diinput|menginput|catat|mencatat|dicatat|tercatat|pencatatan|sistem|komputer|kolom|data|diketik|mengetik|ketik)(?:nya)?\b', clause, re.I):
                 return True
     return False
 

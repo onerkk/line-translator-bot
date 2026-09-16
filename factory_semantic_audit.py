@@ -22,7 +22,7 @@ import factory_workflow_semantics as workflow_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.2-workflow-senses"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.4-confirmed-factory-senses"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -549,7 +549,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         r"(?:目前|現在|现在)?(?:進度|进度).{0,10}(?:落後|落后).{0,8}(?:上個月|上个月)",
     ))
     station_count_match = re.search(
-        rf"(?:開|开|運轉|运转|啟用|启用)(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:個|个)?站",
+        rf"(?:開|开|運轉|运转|啟用|启用)(?P<count>{_PACKAGE_NUMBER_TOKEN})(?:個|个)?(?:包裝|包装)?站",
         compact,
         flags=re.I,
     )
@@ -1057,11 +1057,14 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         )
     if flags["multi_station_catchup"]:
         station_count = frame["counts"].get("operating_station_count")
+        packing = any(r.get("kind") == "packing_station_operation" and r.get("count") == station_count
+                      for r in frame.get("workflow_relations", []))
+        station_zh, station_id = ("包裝站", "stasiun packing") if packing else ("生產站", "stasiun")
         add(
             "multi_station_output_catchup",
             frame["quantity_tokens"].get("operating_station_count", "開多站追量"),
-            f"月底前預計持續開 {station_count} 個生產站以追趕產量／目標",
-            f"mengoperasikan {station_count} stasiun hingga akhir bulan untuk mengejar target",
+            f"月底前預計持續開 {station_count} 個{station_zh}以追趕產量／目標",
+            f"mengoperasikan {station_count} {station_id} hingga akhir bulan untuk mengejar target",
         )
     if flags["daily_leave_cap"]:
         leave_cap = frame["counts"].get("daily_leave_cap")
@@ -1777,11 +1780,15 @@ def _staffing_target_rebuild(frame: Mapping[str, Any]) -> str:
         "公斤": " kg", "kg": " kg",
     }
     target += unit_map.get(str(units.get("monthly_production_target") or ""), "")
+    packing = any(r.get("kind") == "packing_station_operation"
+                  and r.get("count") == counts.get("operating_station_count")
+                  for r in frame.get("workflow_relations", []))
+    station_term = "stasiun packing" if packing else "stasiun"
     return (
         "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. "
         "Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. "
         f"Target bulan ini adalah {target}. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. "
-        f"Hingga akhir bulan, kemungkinan {stations} stasiun akan terus dioperasikan untuk mengejar target. "
+        f"Hingga akhir bulan, kemungkinan {stations} {station_term} akan terus dioperasikan untuk mengejar target. "
         f"Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari {leave_cap} orang per hari."
     )
 

@@ -30,7 +30,7 @@ STAFFING_TARGET = (
     "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. "
     "Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. "
     "Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. "
-    "Hingga akhir bulan, kemungkinan tiga stasiun akan terus dioperasikan untuk mengejar target. "
+    "Hingga akhir bulan, kemungkinan tiga stasiun packing akan terus dioperasikan untuk mengejar target. "
     "Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari."
 )
 QIWO_SOURCE = (

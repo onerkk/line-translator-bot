@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-BUILD_ID = "2026-09-16.2-storage-packing-senses"
+BUILD_ID = "2026-09-16.4-confirmed-factory-senses"
 _CJK = r"\u3400-\u9fff"
 _ZONE = r"(?:儲區|储区|儲位|储位)"
 _SYSTEM = r"存檔|存档|保存|資料|数据|欄位|字段|預設|默认|系統|系统|驗證|验证"
@@ -20,12 +20,40 @@ _ID_NUMBERS = ("nol", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "
 _MEANINGS = {
     "record_save": ("包裝／入庫存檔是儲存作業資料，不是檔案保管。", "menyimpan data pengemasan / pencatatan masuk gudang, not penyimpanan arsip"),
     "storage_field": ("缺少的是儲区資訊／欄位值，不是實體倉庫空間。", "informasi/kolom lokasi penyimpanan kosong/tidak muncul; not a lack of warehouse space"),
+    "printed_storage": ("使用者確認：存檔入庫都沒儲區是 TAG 首次列印沒印出儲區，不代表系統欄位空白或倉庫沒有空間。", "lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak; distinguish printed information from the system field"),
     "storage_update": ("此處維護是手動填寫或更新已知的儲區資料，保留知道儲區才操作的條件。", "mengisi/memperbarui data lokasi penyimpanan secara manual, not mechanical maintenance; preserve the source condition"),
-    "pending_crate_packing": ("待裝木箱是等待裝入木箱的包裝工作，不是安裝木箱本身。", "material yang menunggu dikemas ke dalam peti kayu, not peti kayu yang menunggu dipasang"),
+    "pending_crate_packing": ("使用者確認：待裝木箱是成品等待裝入木箱，不是木箱等待安裝；若原文明說原料或其他物件則保留該物件。", "produk jadi yang menunggu dikemas ke dalam peti kayu, not peti kayu yang menunggu dipasang; preserve an explicitly different source object"),
     "station_operation": ("人力安排開幾站指運轉現有工作站，不是設立新站。", "mengoperasikan/menjalankan the stated number of stasiun; keep the staffing, priority and period"),
-    "intake_quantity": ("同段入庫計畫中的入幾噸是入庫量，不是單獨輸入一個數字。", "pemasukan gudang in ton; keep the quantity and do not invent a station or storage code"),
+    "packing_station_operation": ("使用者確認：開三站是開動圓型、異型、削皮三個包裝站；不是站號3，也不是削皮加工站。", "mengoperasikan tiga stasiun packing: packing batang bulat, packing barang bentuk khusus, packing peeling; no need to expand all names if the source only states the count"),
+    "intake_quantity": ("使用者確認：資料進入801就算入庫；同段入庫計畫的入幾噸是登錄該噸數成品入庫，不是資料筆數或另外要求實體搬運。原文沒寫801時不增加站號。", "record the stated tonnage of goods as warehouse intake in the system: catat pemasukan gudang ... ton dalam sistem; preserve goods weight, not a count of records; no invented station IDs"),
     "storage_destination": ("使用者確認：此包裝簡語指定本次成品實體吊入的儲區，無論 TAG 印哪個儲區都依當次指定；不是支援機台或永久更改客戶預設。", "angkat dan pindahkan produk jadi ke area penyimpanan specified in THIS source, regardless of the storage location printed on TAG; customer owns the material"),
 }
+
+_PRINT_SHORTHAND = r"存[檔档][、，,]?入[庫库](?:都|也)?(?:沒|没|沒有|没有)(?:有)?(?:儲區|储区|儲位|储位)"
+_OTHER_STATION = r"研磨站|拋光站|抛光站|檢驗站|检验站|削皮加工站|捷運|地鐵|地铁|鐵路|铁路|新[設设建開开]|擴建|扩建|開幕|开幕"
+
+
+def _printed_storage_binding(source):
+    # Only the complete, confirmed shorthand may be rendered as a whole.
+    # A longer message can use the same first-pass fact without losing clauses.
+    return bool(re.fullmatch(r"\s*" + _PRINT_SHORTHAND + r"\s*[。.!！]?\s*", str(source or "")))
+
+
+def _printed_storage_wrong(source, target):
+    if not _printed_storage_binding(source) or not target:
+        return False
+    if re.search(r"\b(?:TAG|label|etiket)\b|\b(?:cetak|dicetak|tercetak|tercetaknya|pencetakan)\b", target, re.I):
+        return False
+    # Evidence of the reported wrong object, rather than a target vocabulary
+    # allowlist. Natural synonyms about a printed label remain untouched.
+    return bool(re.search(r"penyimpanan\s+arsip|(?:belum|tidak)\s+memiliki\s+(?:area|lokasi)\s+penyimpanan|"
+                          r"kolom\s+lokasi\s+penyimpanan\s+kosong|"
+                          r"(?:informasi\s+)?lokasi\s+penyimpanan\w*\s+(?:tidak|belum)\s+(?:muncul|ada|terisi)", target, re.I))
+
+
+def _printed_storage_translation():
+    return ("Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan "
+            "tidak tercantum pada TAG yang pertama kali dicetak.")
 
 
 def destination_override(source):
@@ -71,21 +99,28 @@ def build_relations(source):
         if re.search(r"存[檔档]|保存", sentence) and re.search(r"包[裝装]|入[庫库]|" + _ZONE, sentence):
             if not re.search(r"檔案|档案|文獻|文献|紙本|纸本", sentence):
                 kinds.append("record_save")
+        printed_storage = bool(re.search(_PRINT_SHORTHAND, sentence))
+        if printed_storage:
+            kinds.append("printed_storage")
         if system_zone and not re.search(_PHYSICAL, sentence):
             if re.search(r"(?:沒|没|無|无).{0,3}" + _ZONE + "|" + _ZONE + r".{0,8}(?:不見|不见|空白|消失|沒顯示|没显示|未顯示|未显示)", sentence):
-                kinds.append("storage_field")
+                if not printed_storage:
+                    kinds.append("storage_field")
             # Do not use a nearby storage field to reinterpret machine upkeep.
             if (re.search(r"手[動动](?:填寫|填写|更新|維護|维护)", sentence)
                     and not re.search(r"(?:機台|机台|設備|设备|電機|电机).{0,8}(?:維護|维护)", sentence)):
                 kinds.append("storage_update")
         if re.search(r"(?:待|等待|等著|等着)(?:裝|装)(?:入)?木箱", sentence) and not re.search(_ASSEMBLY, sentence):
             kinds.append("pending_crate_packing")
-        if (re.search(r"人力|人員|人员|排班|優先|优先|生產|生产", sentence)
+        three_packing = (re.search(r"(?:開|开|運轉|运转)(?:三|3)(?:個|个)?(?:包裝|包装)?站", sentence)
+                         and not re.search(_OTHER_STATION, sentence))
+        if ((three_packing or re.search(r"人力|人員|人员|排班|優先|优先|生產|生产", sentence))
                 and not re.search(r"新[設设建開开]|擴建|扩建|開幕|开幕", sentence)):
-            for match in re.finditer(r"(?:開|开|運轉|运转)(" + _COUNT + r")(?:個|个)?站", sentence):
+            for match in re.finditer(r"(?:開|开|運轉|运转)(" + _COUNT + r")(?:個|个)?(?:包裝|包装)?站", sentence):
                 count = match.group(1)
-                relations.append(_relation("station_operation", sentence,
-                                           count=int(count) if count.isdigit() else _NUMBERS[count]))
+                number = int(count) if count.isdigit() else _NUMBERS[count]
+                kind = "packing_station_operation" if three_packing and number == 3 else "station_operation"
+                relations.append(_relation(kind, sentence, count=number))
         relations.extend(_relation(kind, sentence) for kind in kinds)
     if re.search(r"入[庫库].{0,6}(?:目標|目标|計[劃画]量|計[畫划])", str(source or "")):
         for match in re.finditer(r"(?:幫忙|帮忙|協助|协助)入\s*(\d+(?:[.,]\d+)?)\s*[噸吨]", str(source)):
@@ -124,16 +159,26 @@ def _edits(source, target):
                       lambda m: ("memperbarui" if m.group().lower().startswith(("melakukan", "melaksanakan")) else "perbarui") + " data lokasi penyimpanan secara manual"))
         specs.append(("storage_update", r"\bpemeliharaan\s+(?:secara\s+)?manual\b", "pembaruan data lokasi penyimpanan secara manual"))
     if "pending_crate_packing" in kinds:
+        packing_object = "material" if re.search(r"原料|材料|半成品", str(source)) else "produk jadi"
         specs.append(("pending_crate_packing", r"\bpeti\s+kayu\s+yang\s+(?:masih\s+)?menunggu\s+(?:untuk\s+)?dipasang\b",
-                      "material yang masih menunggu dikemas ke dalam peti kayu"))
+                      packing_object + " yang masih menunggu dikemas ke dalam peti kayu"))
     for relation in relations:
-        if relation["kind"] == "station_operation":
+        if relation["kind"] in {"station_operation", "packing_station_operation"}:
+            if relation["kind"] == "packing_station_operation":
+                specs.append(("packing_station_operation",
+                              r"\b(?P<verb>membuka|dibuka|buka|mengoperasikan|dioperasikan|operasikan|menjalankan|dijalankan|beroperasi)\s+(?P<object>(?:3|tiga)\s+stasiun)\b(?=\s*(?:[,.;!?]|$)|\s+(?:sampai|hingga|setiap|secara|lebih)\b)",
+                              lambda m: {"membuka": "mengoperasikan", "dibuka": "dioperasikan", "buka": "operasikan"}.get(m.group("verb").lower(), m.group("verb")) + " " + m.group("object") + " packing"))
+                specs.append(("packing_station_operation",
+                              r"\b(?:3|tiga)\s+stasiun\b(?=\s+(?:akan\s+)?(?:terus\s+)?(?:dioperasikan|beroperasi|dijalankan)\b)",
+                              lambda m: m.group() + " packing"))
             specs.append(("station_operation", r"\b(?P<verb>membuka|dibuka|buka)\s+(?P<object>(?:" + _count_pattern(relation["count"]) + r")\s+stasiun)\b",
                           lambda m: {"membuka": "mengoperasikan", "dibuka": "dioperasikan", "buka": "operasikan"}[m.group("verb").lower()] + " " + m.group("object")))
         elif relation["kind"] == "intake_quantity":
             quantity = re.escape(relation["quantity"]).replace(r"\.", "[.,]")
-            specs.append(("intake_quantity", r"\binput\s+(?P<amount>" + quantity + r"\s+ton)\b(?!\s+(?:ke|di|dalam|sebagai)\b)",
-                          lambda m: "proses pemasukan " + m.group("amount") + " ke gudang"))
+            specs.append(("intake_quantity", r"\b(?P<verb>input|menginput|masukkan|memasukkan)\s+(?:(?:ke|di)\s+gudang\s+)?(?P<amount>" + quantity + r"\s+ton)\b(?:\s+(?:ke|di)\s+gudang\b)?(?!\s+(?:ke|di|dalam|sebagai|pada)\b)",
+                          lambda m: ("mencatat" if m.group("verb").lower().startswith("me") else "catat") + " pemasukan gudang sebanyak " + m.group("amount") + " dalam sistem"))
+            specs.append(("intake_quantity", r"\bproses\s+pemasukan\s+(?P<amount>" + quantity + r"\s+ton)\s+ke\s+gudang\b",
+                          lambda m: "pencatatan masuk gudang untuk " + m.group("amount") + " dalam sistem"))
     edits = []
     for kind, pattern, replacement in specs:
         matches = list(re.finditer(pattern, target, re.I))
@@ -153,6 +198,8 @@ def _edits(source, target):
 
 def canonicalize(source, candidate):
     result = str(candidate or "")
+    if _printed_storage_wrong(source, result):
+        return _printed_storage_translation()
     destination = destination_override(source)
     if result and destination and _destination_wrong(destination, result):
         # Only a fully parsed instruction can be rendered from its bound fields;
@@ -168,6 +215,8 @@ def issues(source, candidate):
     # merely because they are absent from a phrase allowlist.
     found = ["factory_workflow:" + kind + ":wrong_sense"
              for _, _, _, kind in _edits(source, str(candidate or ""))]
+    if _printed_storage_wrong(source, str(candidate or "")):
+        found.append("factory_workflow:printed_storage:wrong_sense")
     destination = destination_override(source)
     if destination and _destination_wrong(destination, str(candidate or "")):
         found.append("factory_workflow:storage_destination:wrong_sense")

@@ -15,10 +15,10 @@ from test_translation_notice_availability import (
 SOURCE = ("中班幫忙入19噸，今日計劃量破130噸。\n\n"
           "本月入庫目標提高到3600，明天開始到月底前平均一天143噸，"
           "月底前人力會優先開三站，入庫時間注意平均一點。")
-TARGET = ("Shift tengah, tolong masukkan 19 ton ke gudang agar rencana hari ini tembus 130 ton.\n\n"
+TARGET = ("Shift tengah, tolong catat pemasukan gudang sebanyak 19 ton dalam sistem agar rencana hari ini tembus 130 ton.\n\n"
           "Target pemasukan gudang bulan ini dinaikkan menjadi 3.600 ton. "
           "Mulai besok sampai akhir bulan, rata-rata 143 ton per hari. "
-          "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk mengoperasikan tiga stasiun. "
+          "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk mengoperasikan tiga stasiun packing. "
           "Atur waktu pencatatan masuk gudang agar lebih merata.")
 
 

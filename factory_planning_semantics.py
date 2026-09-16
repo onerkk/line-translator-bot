@@ -39,7 +39,7 @@ def month_end_relations(source):
         if not match:
             continue
         daily = re.search(r"(?:平均)?(?:每[日天]|一天)(\d+(?:[.,]\d+)?)\s*(?:噸|吨)", clause)
-        station = re.search(r"(?:開|开|運轉|运转|啟用|启用)([一二兩两三四五六七八九十]|\d+)(?:個|个)?站", clause)
+        station = re.search(r"(?:開|开|運轉|运转|啟用|启用)([一二兩两三四五六七八九十]|\d+)(?:個|个)?(?:包裝|包装)?站", clause)
         # These are continuing plans; completion/arrival/leave deadlines retain
         # the strict BEFORE meaning. A bare mention of 月底 is not a deadline.
         period = bool(daily or station or re.search(r"持續|持续|維持|维持|每天|每日", clause))

@@ -16,18 +16,20 @@ import time
 import factory_source_understanding as understanding
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-16.2-workflow-learning'
+BUILD_ID = '2026-09-16.4-confirmed-factory-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
 _ADVICE = {
     'record': 'Distinguish a system record/field from physical material. Keep each value attached to its stated field and storage operation; never move a number into a physical warehouse.',
+    'printed_storage': 'For the confirmed shorthand 存檔入庫都沒儲區, the storage location is missing from the first TAG print, not necessarily from the system field. 補印才有 inherits that object only from linked original context; never assume every reprint concerns storage.',
+    'intake_record': 'In this plant intake plan, goods count as inventoried when their data is recorded. Preserve the stated goods weight in ton and distinguish it from a record count or a physical lifting instruction. Spread system entry times when requested; never add an unstated station ID.',
     'sequence': 'Resolve before/after from the current source, not clause order. Keep inspection, submission and production in the stated order, including negated or conditional prerequisites.',
     'quantity': 'Bind every number, unit, comparison and identifier to its own object or field. Preserve exact values and unspecified units; never borrow a quantity from another clause.',
     'permission': 'Keep permission, prohibition, obligation and completion attached to the correct action. An unlocked field or an available machine does not itself grant permission.',
     'storage_destination': 'For the plant packaging shorthand 不論哪一站都幫忙 plus a storage code, finished material must be physically lifted/moved to THIS explicitly assigned area regardless of the area printed on TAG. Keep the current customer/time/code. This is a temporary instruction, not machine support, data transfer or a change to the customer default.',
-    'packing': 'In a packaging task, 待裝木箱 means material/jobs awaiting packing into wooden crates (peti kayu), not installing crates. Resolve the pending action from CURRENT source; explicit crate assembly remains assembly.',
-    'operation': 'In staffing/production plans, 開幾站 means operating that number of existing stations. Preserve priority, count and time period; explicit new-station construction remains construction.',
+    'packing': 'In this plant, 待裝木箱 means finished products awaiting packing into wooden crates (produk jadi yang menunggu dikemas ke dalam peti kayu), not installing crates. Preserve an explicitly different source object; explicit crate assembly remains assembly.',
+    'operation': 'In staffing/production plans, 開幾站 means operating existing stations. The confirmed 開三站 shorthand means three PACKING stations (round, special-shape, peeling packing), not peeling processing. Do not infer which two for 開兩站; explicit other station types and new construction remain as stated. Preserve priority/count/time.',
     'actor': 'Reconstruct who performs which action, on what object, for which recipient. Keep organization roles and data ownership distinct; do not invent the omitted actor.',
     'coverage': 'Translate every source instruction and qualification. Preserve paragraph scope, names and identifiers; do not omit a clause or add an explanation.',
     'meaning': 'Resolve factory terms from the linked object and operation in this source. Preserve the current status, cause and consequence, rather than a past message\'s wording.',
@@ -43,6 +45,8 @@ def category(issue):
         return None
     if re.search(r'verification_(?:before|after)|sequence|temporal|before_after', code): return 'sequence'
     if re.search(r'permission|prohibit|manual_entry|negation|polarity', code): return 'permission'
+    if 'printed_storage' in code: return 'printed_storage'
+    if 'intake_quantity' in code: return 'intake_record'
     if re.search(r'inventory_entry|record_category|record_transfer|record_save|storage_field|storage_update', code): return 'record'
     if 'storage_destination' in code: return 'storage_destination'
     if 'pending_crate_packing' in code: return 'packing'

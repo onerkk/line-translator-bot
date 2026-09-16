@@ -38,9 +38,9 @@ ZONE_GOOD = ("@All Untuk material 大成 yang dikemas malam ini, setelah selesai
 
 
 @pytest.mark.parametrize("source,bad,required", [
-    (FIELD_SOURCE, FIELD_BAD, ["Penyimpanan data", "informasi lokasi penyimpanan"]),
+    (FIELD_SOURCE, FIELD_BAD, ["menyimpan data", "lokasi penyimpanan", "TAG yang pertama kali dicetak"]),
     (MANUAL_SOURCE, MANUAL_BAD, ["Jika kalian", "perbarui data lokasi penyimpanan secara manual", "Besok saya"]),
-    (CRATE_SOURCE, CRATE_BAD, ["Jika ada", "Jika tidak ada", "material yang masih menunggu dikemas ke dalam peti kayu"]),
+    (CRATE_SOURCE, CRATE_BAD, ["Jika ada", "Jika tidak ada", "produk jadi yang masih menunggu dikemas ke dalam peti kayu"]),
     ("月底前人力會優先開三站。", "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk membuka tiga stasiun.", ["mengoperasikan tiga stasiun", "Sampai akhir bulan"]),
     (ZONE_SOURCE, ZONE_BAD, ["Untuk material 大成", "malam ini", "angkat dan pindahkan", "EC51", "tercetak pada TAG"]),
 ])
@@ -73,7 +73,7 @@ def test_different_or_mixed_senses_are_never_silently_rewritten(source, bad):
 
 
 @pytest.mark.parametrize("source,target", [
-    (FIELD_SOURCE, "Saat data disimpan maupun dicatat masuk gudang, kolom lokasi penyimpanan kosong."),
+    (FIELD_SOURCE, "Saat data disimpan maupun dicatat masuk gudang, lokasi penyimpanan tidak tercetak pada label pertama."),
     (MANUAL_SOURCE, "Jika ada kesalahan validasi saat menyimpan data pengemasan, cek apakah lokasi penyimpanan default hilang. Jika tahu pasti lokasi pelanggan, isi data itu secara manual dahulu. Besok saya laporkan ke bagian pergudangan dan transportasi."),
     (CRATE_SOURCE, "@All Jika mesin menunggu material, saya akan mengatur bantuan pekerjaan di luar lini. Jika tidak, personel di luar lini hari itu perlu memperhatikan material yang menunggu dimasukkan ke peti kayu."),
 ])
@@ -147,8 +147,8 @@ def test_daily_intake_notice_keeps_all_numbers_periods_and_paragraphs():
                  "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk membuka tiga stasiun. "
                  "Harap atur waktu input gudang lebih merata.")
     result = quality.canonicalize_source_terms(SOURCE, candidate, "zh", "id")
-    assert "proses pemasukan 19 ton ke gudang" in result
-    assert "mengoperasikan tiga stasiun" in result
+    assert "catat pemasukan gudang sebanyak 19 ton dalam sistem" in result
+    assert "mengoperasikan tiga stasiun packing" in result
     assert all(token in result for token in ["130 ton", "3600 ton", "143 ton per hari", "Mulai besok sampai akhir bulan", "\n\n"])
     assert learning.validate_correction(SOURCE, result, "zh", "id")["ok"]
 

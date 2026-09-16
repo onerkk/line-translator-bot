@@ -20,7 +20,7 @@ from pathlib import Path
 
 from translation_mentions import extract_mentions
 
-BUILD_ID = "2026-09-16.2-elliptical-workflow-context"
+BUILD_ID = "2026-09-16.4-confirmed-tag-context"
 TTL = 3600
 MAX_ROWS = 40
 MAX_SELECTED = 4
@@ -262,7 +262,10 @@ PROMPT_RULES = (
     "wins over history. If several actions remain plausible, preserve the ambiguity; do not invent a fact. "
     "For terse replies such as 要補印才有 or 過來取, inherit the missing object only from a clearly "
     "linked original turn (e.g. a missing printed field or a sample). Without that evidence keep the "
-    "object implicit. A customer before 包/包裝 can own the material, not be the addressee. "
+    "object implicit. In the confirmed plant shorthand 存檔入庫都沒儲區, the storage location is "
+    "missing from the first TAG print; a linked 補印才有 means it appears after reprinting. "
+    "This does not assert an empty system field and does not apply to a different printed object. "
+    "A customer before 包/包裝 can own the material, not be the addressee. "
     "An alphanumeric code alone does not prove a location, machine, person or ERP transaction. "
     "Use an explicitly stated role in the linked original if present; otherwise preserve the code "
     "without inventing its type. Never substitute a default storage mapping for a current instruction."

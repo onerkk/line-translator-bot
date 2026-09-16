@@ -2424,5 +2424,23 @@
     "note_zh": "粗拋製程使用現場印尼文 poles kasar；依語法可用 dipoles kasar、memoles kasar、pemolesan kasar。不得省略粗加工層級，也不能改成精拋或研磨。",
     "note_id": "Gunakan poles kasar untuk tindakan; dipoles kasar, memoles kasar, atau pemolesan kasar sesuai tata bahasa. Pertahankan pelaku, negasi, pengulangan, dan objek dari sumber.",
     "policy_migrated": true
+  },
+  "圓型包裝站": {
+    "idn": "Stasiun packing batang bulat",
+    "canonical_idn": "Stasiun packing batang bulat",
+    "translation_mode": "soft",
+    "reverse_safe": true,
+    "category": "station",
+    "priority": 170,
+    "note_zh": "圓型材料的包裝站；是使用者確認的三個包裝站之一。"
+  },
+  "削皮包裝站": {
+    "idn": "Stasiun packing peeling",
+    "canonical_idn": "Stasiun packing peeling",
+    "translation_mode": "soft",
+    "reverse_safe": true,
+    "category": "station",
+    "priority": 170,
+    "note_zh": "削皮材料的包裝站；是使用者確認的三個包裝站之一，不是削皮加工站。"
   }
 }

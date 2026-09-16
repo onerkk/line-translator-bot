@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-16.2-storage-packing-screenshot-learning",
+  "build_id": "2026-09-16.4-user-confirmed-intake-tag-crates",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -819,11 +819,11 @@
       },
       "context": [
         "這裡的『入庫/入帳/過帳時間』是生產系統中每一把已包裝棒材資料的登錄或站別移轉時間，不是實體貨物進倉時間。",
-        "490 是包裝作業資料所在站，801 是下一個暫存站；『移完』是資料全部移轉完成，不是把實體棒材搬完。",
+        "使用者確認：資料進入801即算入庫；490是包裝作業資料所在站，801是資料進入的入庫站別。「移完」在此資料語境是完成系統登錄／過帳，不是搬完成品。",
         "『平均一點』是要求資料依實際作業節奏較均勻地過帳，避免某時段一次出現太多筆、其他時段完全沒有入帳紀錄；不是計算數學平均值。",
         "『太早移完，開會很難解釋』表示若紀錄集中過早完成，後續時段沒有入帳，看起來像人員沒有持續工作，生產檢討會議時難以說明。",
         "不得暗示偽造時間；譯文要表達依實際作業時間逐筆或分散登錄。",
-        "只約束本句入庫／入帳時間的分布，不得把同一公告的入庫噸數改成資料移轉。可使用 catat/dicatat/tercatat/pencatatan 等詞形；原文未列站號時不可補 490、801。"
+        "同一公告的入庫噸數是已登錄入庫的成品重量，時間平均是分散系統登錄／過帳時間。重量、時間各自保留，不能把噸數改成資料筆數或增添實體搬运指令；原文未列站號時不可補490、801。"
       ],
       "preferred_target_phrases": [
         "waktu pencatatan data setiap bundel",
@@ -881,7 +881,7 @@
       "examples": [
         {
           "source": "入庫時間再平均一點，太早移完開會很難解釋",
-          "target": "Tolong atur waktu pemindahan data setiap bundel dari stasiun 490 ke stasiun 801 agar lebih merata sesuai waktu pengerjaan. Jangan pindahkan semua data sekaligus terlalu awal, karena jeda tanpa pencatatan akan sulit dijelaskan saat rapat."
+          "target": "Tolong atur waktu pencatatan masuk gudang agar lebih merata. Jika semua data selesai dipindahkan terlalu awal, akan sulit dijelaskan saat rapat."
         },
         {
           "source": "490的資料不要一次全移到801，入帳時間分散一點",
@@ -1491,16 +1491,17 @@
         ]
       },
       "context": [
-        "此規則只適用原文明示的入庫數量、目標或噸數預估。原文的入庫時間、入帳時間或非本月暫存屬於另一個概念，不得套用數量義。若同一公告同時談數量與時間，兩個概念都必須保留。",
+        "使用者確認本廠的入庫定義：資料進入801就算入庫；入庫噸數、目標與每日平均是登錄入庫的成品重量。噸數不是資料筆數，也不能自行改成吊運／收貨指令。若同時談入庫時間，另保留分散系統登錄時間的要求。",
         "中文常只在其中一個數字寫「噸」，後續同一入庫／產量指標省略單位；印尼文必須在每個目標、每日平均、範圍與月底預估數值後明確寫出 ton。",
         "「入庫量」宜用 jumlah pemasukan gudang；「能入到 X」宜表達 total pemasukan gudang bisa mencapai X ton。",
-        "入庫計畫同段中的「幫忙入幾噸」指入庫作業量，宜用 proses pemasukan ... ton ke gudang，避免只有 input ... ton 讓人以為只是輸入數字。"
+        "入庫計畫同段中的「幫忙入幾噸」指將該噸數成品登錄入庫，用 catat pemasukan gudang sebanyak ... ton dalam sistem。不要只說搬貨進倉或只輸入數字；原文沒寫801時不自行補站號。"
       ],
       "preferred_target_phrases": [
         "target pemasukan gudang",
         "jumlah pemasukan gudang",
         "ton per hari",
-        "total pemasukan gudang bisa mencapai"
+        "total pemasukan gudang bisa mencapai",
+        "pencatatan masuk gudang"
       ],
       "forbidden_target_phrases": [],
       "forbidden_target_rules": [
@@ -1513,21 +1514,6 @@
               "(?:入庫|進倉|入帳|過帳|登錄|記錄)(?:時間|時刻|日期)"
             ],
             "min_score": 3
-          }
-        },
-        {
-          "phrases": [
-            "posting data"
-          ],
-          "unless_source": {
-            "any_terms": [
-              "入帳",
-              "過帳",
-              "登錄",
-              "資料",
-              "入庫時間"
-            ],
-            "min_score": 1
           }
         },
         {
@@ -1567,7 +1553,7 @@
       "examples": [
         {
           "source": "本月入庫目標3750，到月底平均一天需147噸。",
-          "target": "Target pemasukan gudang bulan ini adalah 3.750 ton. Sampai akhir bulan, rata-rata yang dibutuhkan adalah 147 ton per hari."
+          "target": "Target pencatatan pemasukan gudang bulan ini adalah 3.750 ton. Sampai akhir bulan, rata-rata yang dibutuhkan adalah 147 ton per hari."
         }
       ],
       "semantic_validator": "warehouse_intake"
@@ -3752,7 +3738,7 @@
       "examples": [
         {
           "source": "月底前有確認請假的再提前告知，上面要統計月底生產人力。\n本月目標3800，目前進度比上個月還落後，月底前應該都是開三站追量，麻煩盡量一天請假不超過2員。",
-          "target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
+          "target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun packing akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
           "bad_target": "Target bulan ini 3800 ton. Saat ini progres masih lebih lambat dibandingkan bulan lalu.",
           "reason": "來源沒有 ton，且不能漏掉開站追量與每日請假人數上限。"
         }
@@ -4093,7 +4079,7 @@
       },
       "context": [
         "包裝／入庫畫面中的存檔是儲存作業資料（menyimpan data），不是檔案保管（penyimpanan arsip）。",
-        "「存檔入庫都沒儲區」表示兩個操作中的儲區資訊缺漏／沒顯示，不是實體倉庫沒有儲存空間。",
+        "使用者確認「存檔入庫都沒儲區」談的是TAG第一次列印沒有儲區、補印才顯示。不可據此宣稱系統欄位空白或實體倉庫沒有空間。原文另明說儲區預設不見、欄位空白時，才照該資料問題翻譯。",
         "儲區資料的手動維護是填寫／更新欄位：mengisi atau memperbarui data lokasi penyimpanan secara manual；不是設備維修。原文明確說機台維護時仍譯為維護機台。",
         "保留「若明確知道客戶儲區才先手動處理」的條件；不可猜測儲區值或從其他客戶複製。",
         "儲運是負責倉儲與運輸的部門（bagian pergudangan dan transportasi）；保留由誰在何時回報。"
@@ -4101,8 +4087,8 @@
       "examples": [
         {
           "source": "存檔入庫都沒儲區",
-          "target": "Saat menyimpan data maupun mencatat pemasukan gudang, informasi lokasi penyimpanannya tidak muncul.",
-          "reason": "儲區欄位缺漏，不是倉庫缺乏空間。"
+          "target": "Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak.",
+          "reason": "使用者確認缺少的是TAG首次列印的儲區資訊；未自行添加本句未說的補印指令。"
         },
         {
           "source": "包裝存檔如果跳驗證有誤，先檢查是不是儲區預設不見了，如果你明確知道這間客戶的儲區，先手動維護，我明天跟儲運反應一下。",
@@ -4137,7 +4123,7 @@
         "require_any": true
       },
       "context": [
-        "待裝木箱指待裝入木箱的材料／包裝作業（material yang menunggu dikemas ke dalam peti kayu），不是安裝木箱（memasang peti kayu）。",
+        "使用者明確確認：「待裝木箱」指成品等待裝進木箱（produk jadi yang menunggu dikemas ke dalam peti kayu），不是木箱等待組裝或安裝。原文明確說原料／材料時仍保留該物件。",
         "設備待料是設備等待材料；拉人分擔線外工作是安排人力支援產線外作業，勿增添故障、停機命令或強制人數。",
         "如果有待料設備才安排支援；如果沒有，才由當天線外人員留意待裝箱作業。保留兩個分支。",
         "原文明確提木箱製作、組裝、釘箱或安裝時，應照該動作翻譯，不可改成包裝材料。"
@@ -4145,8 +4131,8 @@
       "examples": [
         {
           "source": "@All 有設備待料我會拉人安排分擔線外工作，如果沒有再麻煩當天線外人員要注意一下待裝木箱。",
-          "target": "@All Jika ada mesin yang sedang menunggu material, saya akan menugaskan sebagian personel untuk membantu pekerjaan di luar lini produksi. Jika tidak ada, mohon personel yang bertugas di luar lini hari itu memperhatikan material yang masih menunggu dikemas ke dalam peti kayu.",
-          "reason": "待裝的是材料；兩個人力安排條件不變。"
+          "target": "@All Jika ada mesin yang sedang menunggu material, saya akan menugaskan sebagian personel untuk membantu pekerjaan di luar lini produksi. Jika tidak ada, mohon personel yang bertugas di luar lini hari itu memperhatikan produk jadi yang masih menunggu dikemas ke dalam peti kayu.",
+          "reason": "使用者確認待裝的是成品；保留有設備待料與沒有設備待料的兩個人力安排分支。"
         },
         {
           "source": "線外人員先注意等待裝入木箱的材料。",
@@ -4194,13 +4180,14 @@
       "context": [
         "排班／生產計畫的開幾站是運轉現有工作站，用 mengoperasikan / menjalankan，不用表示開設新據點的字義。",
         "數量、人力優先安排、起訖時間都維持原文；期間「到月底前」可以自然用 sampai/hingga akhir bulan。",
-        "明確說新建、新設工作站則保留新建的意思。"
+        "明確說新建、新設工作站則保留新建的意思。",
+        "使用者已確認：包裝入庫人力計畫的「開三站」具體是圓型、異型、削皮三個包裝站，寫成 mengoperasikan tiga stasiun packing；其他明確站別仍依原文。"
       ],
       "examples": [
         {
           "source": "月底前人力會優先開三站。",
-          "target": "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk mengoperasikan tiga stasiun.",
-          "reason": "開站是運轉，不是新建。"
+          "target": "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk mengoperasikan tiga stasiun packing.",
+          "reason": "使用者確認三站是圓型、異型、削皮三個包裝站；保留月底期間與人力優先安排。"
         },
         {
           "source": "明天人力優先開兩站。",
@@ -4286,7 +4273,8 @@
       },
       "context": [
         "「要補印才有」是補印這項必要條件；baru muncul / baru ada setelah dicetak ulang。",
-        "只有已提供且明確相關的原始前文，才能判斷出現的是儲區資訊、條碼或其他項目。沒有前文時保留省略，不要一律增添儲區。"
+        "只有已提供且明確相關的原始前文，才能判斷出現的是儲區資訊、條碼或其他項目。沒有前文時保留省略，不要一律增添儲區。",
+        "本次已確認的原始對話：前文「存檔入庫都沒儲區」說TAG首印沒有儲區；緊接「要補印才有」指TAG補印後儲區資訊才出現。只有實際連結這段前文時，才翻出此省略對象，不套到無關的補印對話。"
       ],
       "examples": [
         {
@@ -4323,13 +4311,15 @@
             "儲區",
             "储区",
             "儲位",
-            "储位"
+            "储位",
+            "入庫",
+            "入库"
           ]
         ],
         "require_all_groups": true
       },
       "context": [
-        "使用者確認的工廠流程：客戶材料包裝完成，資料進入801後，成品要吊入該客戶對應的實體儲區。801是資料所到站別，儲區碼是成品實際目的位置。",
+        "使用者確認的工廠流程：客戶材料包裝完成，資料進入801就算入庫；之後成品實際吊入對應儲區。入庫計畫的噸數是系統登錄入庫的成品重量，801不是實體儲區碼。",
         "句中的「資料進801」和「成品吊入儲區」是不同物件的動作，不可都譯成資料轉移，也不可把801譯成物理儲區。",
         "如果本次指令指定另一儲區，按本次指令放置，不受TAG列印的預設儲區限制；不得永久修改客戶儲區對照。",
         "只翻譯當前原文寫出或明確省略承接的動作，不自行增加801站、額外完工條件、其他客戶或機台。"
@@ -4339,6 +4329,121 @@
           "source": "包裝完成資料進801後，成品吊入指定儲區EC51。",
           "target": "Setelah pengemasan selesai dan datanya masuk ke stasiun 801, angkat dan pindahkan produk jadi ke area penyimpanan EC51 yang ditentukan.",
           "reason": "資料進站與實體成品吊放分別綁定正確物件，所有代碼照原文。"
+        },
+        {
+          "source": "包裝成品資料進入801就算入庫，入庫時間要分散。",
+          "target": "Produk jadi yang telah dikemas dianggap sudah tercatat masuk gudang begitu datanya masuk ke stasiun 801. Atur waktu pencatatan masuk gudang agar tersebar.",
+          "reason": "系統入庫完成條件與分散登錄時間均由使用者確認；只有原文明示才寫801。"
+        }
+      ]
+    },
+    {
+      "id": "three_packing_stations_staffing",
+      "enabled": true,
+      "priority": 220,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "使用者確認：開三站是圓型、異型、削皮三個包裝站",
+      "match": {
+        "regex_any": [
+          "(?:開|开|運轉|运转)\\s*(?:三|3)\\s*(?:個|个)?\\s*(?:包裝|包装)?站",
+          "圓型包裝站[、，,與和及\\s]*異型包裝站[、，,與和及\\s]*削皮包裝站"
+        ],
+        "required_regex_any": [
+          "(?:開|开|運轉|运转)\\s*(?:三|3)\\s*(?:個|个)?\\s*(?:包裝|包装)?站",
+          "圓型包裝站[、，,與和及\\s]*異型包裝站[、，,與和及\\s]*削皮包裝站"
+        ],
+        "none_terms": [
+          "捷運",
+          "地鐵",
+          "铁路",
+          "鐵路",
+          "新建",
+          "新設",
+          "新设",
+          "研磨站",
+          "拋光站",
+          "抛光站",
+          "檢驗站",
+          "检验站",
+          "新開",
+          "新开",
+          "擴建",
+          "扩建",
+          "開幕",
+          "开幕",
+          "地铁",
+          "削皮加工站"
+        ]
+      },
+      "context": [
+        "經使用者明確確認：本廠包裝／成品入庫人力安排中的「開三站」「開3站」，是開動三個包裝站：圓型包裝站、異型包裝站、削皮包裝站。",
+        "譯文應明確說 mengoperasikan tiga stasiun packing；不能只剩沒有作業類別的 tiga stasiun，也不是站號3或新建三站。",
+        "圓型包裝站可表達為 Stasiun packing batang bulat；異型包裝站沿用既有 Stasiun packing barang bentuk khusus；削皮包裝站是 Stasiun packing peeling，不能省略 packing 誤作削皮加工站。",
+        "原文省略三站名稱時，正文可自然寫「三個包裝站」，不強制把整段背景名稱全部加進譯文。",
+        "人力優先安排、站數、日期和起訖期間都取自當前原文；不要自行加每班都開、24小時不停或固定人數。",
+        "只在包裝／入庫人力語境套用這個現場簡稱；原文明確指定其他站別時，以原文為準。開兩站不推測是哪兩站。"
+      ],
+      "examples": [
+        {
+          "source": "包裝人力優先開三站。",
+          "target": "Tenaga kerja untuk packing diprioritaskan untuk mengoperasikan tiga stasiun packing.",
+          "reason": "三站是圓型、異型、削皮三個包裝站，正文保持原句簡潔。"
+        },
+        {
+          "source": "圓型包裝站、異型包裝站、削皮包裝站。",
+          "target": "Stasiun packing batang bulat, Stasiun packing barang bentuk khusus, dan Stasiun packing peeling.",
+          "reason": "三個包裝站的完整名稱，不推定系統站號或设备编号。"
+        }
+      ]
+    },
+    {
+      "id": "tag_first_print_missing_storage",
+      "enabled": true,
+      "priority": 215,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "使用者確認：TAG首印沒有儲區，補印才出現",
+      "match": {
+        "all_groups": [
+          [
+            "儲區",
+            "儲位",
+            "储区",
+            "储位"
+          ],
+          [
+            "TAG",
+            "tag",
+            "標籤",
+            "标签",
+            "存檔入庫",
+            "存档入库"
+          ]
+        ],
+        "require_all_groups": true,
+        "required_regex_any": [
+          "存[檔档]入[庫库].{0,4}(?:沒|没).{0,3}(?:儲區|储区|儲位|储位)",
+          "首印|首次|第一次|補印|补印|重印"
+        ]
+      },
+      "context": [
+        "使用者確認這次故障：TAG第一次列印沒有儲區，補印後才出現。缺的是標籤列印結果，不是物理空間，也不能斷言系統儲區欄位沒有值。",
+        "「存檔入庫都沒儲區」是描述存檔／入庫時TAG首印缺少儲區。若只翻這一句，不擅自附加「請補印」指令；後續「要補印才有」才表達補印的必要條件。",
+        "原文說條碼、批號、其他列印欄位時按當前物件翻譯；不要將所有列印故障都說成缺儲區。這是此次已確認的現象，不代表所有TAG永遠都需補印。"
+      ],
+      "examples": [
+        {
+          "source": "TAG第一次列印沒有儲區，補印才出現。",
+          "target": "Lokasi penyimpanan tidak tercantum pada TAG saat pertama kali dicetak; informasinya baru muncul setelah TAG dicetak ulang.",
+          "reason": "首印與補印的不同結果、同一儲區資訊。"
+        },
+        {
+          "source": "存檔入庫都沒儲區，要補印才有。",
+          "target": "Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak. Informasinya baru muncul setelah TAG dicetak ulang.",
+          "reason": "同一原文明確包含首印問題與補印才出現的條件。"
         }
       ]
     }
