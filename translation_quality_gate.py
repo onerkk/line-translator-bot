@@ -5,8 +5,8 @@ Design goals
 1. Protect data values and locked terminology before the single model call.
 2. Restore literals and canonical terms deterministically after generation.
 3. Validate completeness, language purity and structure locally.
-4. High-risk factory notices may receive one independent source-grounded review call.
-5. Provider failover remains operational; semantic review prefers a different configured provider when available.
+4. Local diagnostics improve first-pass advice and future learning, never veto delivery.
+5. Quality checks never request another provider generation.
 6. No sentence-specific translation replacements live in this module.
 
 The module is intentionally provider-neutral and works with the project's
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-16.1-planning-delivery"
+QUALITY_GATE_BUILD_ID = "2026-09-16.2-workflow-delivery"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1731,6 +1731,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
+        result = fsa_module.workflow_semantics.canonicalize(source, result)
         result = fsa_module.planning_semantics.canonicalize_record_timing(source, result)
         result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
         result = fsa_module.instruction_semantics.rework_semantics.canonicalize_noun_phrase(source, result)

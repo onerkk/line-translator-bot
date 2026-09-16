@@ -16,7 +16,7 @@ import time
 import factory_source_understanding as understanding
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-16.1-local-correction-learning'
+BUILD_ID = '2026-09-16.2-workflow-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
@@ -25,6 +25,9 @@ _ADVICE = {
     'sequence': 'Resolve before/after from the current source, not clause order. Keep inspection, submission and production in the stated order, including negated or conditional prerequisites.',
     'quantity': 'Bind every number, unit, comparison and identifier to its own object or field. Preserve exact values and unspecified units; never borrow a quantity from another clause.',
     'permission': 'Keep permission, prohibition, obligation and completion attached to the correct action. An unlocked field or an available machine does not itself grant permission.',
+    'storage_destination': 'For the plant packaging shorthand 不論哪一站都幫忙 plus a storage code, finished material must be physically lifted/moved to THIS explicitly assigned area regardless of the area printed on TAG. Keep the current customer/time/code. This is a temporary instruction, not machine support, data transfer or a change to the customer default.',
+    'packing': 'In a packaging task, 待裝木箱 means material/jobs awaiting packing into wooden crates (peti kayu), not installing crates. Resolve the pending action from CURRENT source; explicit crate assembly remains assembly.',
+    'operation': 'In staffing/production plans, 開幾站 means operating that number of existing stations. Preserve priority, count and time period; explicit new-station construction remains construction.',
     'actor': 'Reconstruct who performs which action, on what object, for which recipient. Keep organization roles and data ownership distinct; do not invent the omitted actor.',
     'coverage': 'Translate every source instruction and qualification. Preserve paragraph scope, names and identifiers; do not omit a clause or add an explanation.',
     'meaning': 'Resolve factory terms from the linked object and operation in this source. Preserve the current status, cause and consequence, rather than a past message\'s wording.',
@@ -40,7 +43,10 @@ def category(issue):
         return None
     if re.search(r'verification_(?:before|after)|sequence|temporal|before_after', code): return 'sequence'
     if re.search(r'permission|prohibit|manual_entry|negation|polarity', code): return 'permission'
-    if re.search(r'inventory_entry|record_category|record_transfer', code): return 'record'
+    if re.search(r'inventory_entry|record_category|record_transfer|record_save|storage_field|storage_update', code): return 'record'
+    if 'storage_destination' in code: return 'storage_destination'
+    if 'pending_crate_packing' in code: return 'packing'
+    if 'station_operation' in code: return 'operation'
     if re.search(r'quantity|number|record_field|invented_unit|measurement|immutable|structured_', code): return 'quantity'
     if re.search(r'actor|recipient|ownership|organization|title|role', code): return 'actor'
     if re.search(r'missing|coverage|untranslated|paragraph', code): return 'coverage'
@@ -54,8 +60,12 @@ def _features(source, lang):
                         r'(?<![a-z0-9])(?=[a-z0-9_/.-]*\d)[a-z0-9]+(?:[_/.-][a-z0-9]+)*(?![a-z0-9])',
                         ' ', normalized)
     concepts = {'c:' + value for value in understanding.concepts(normalized)}
-    if re.search(r'入庫|登錄|登記|存入|輸入|系統|\b(?:input|diinput|menginput|mencatat|dicatat|pencatatan|sistem)\b', normalized):
+    if re.search(r'入庫|登錄|登記|存入|輸入|系統|存檔|儲區|\b(?:input|diinput|menginput|mencatat|dicatat|pencatatan|sistem)\b', normalized):
         concepts.add('c:record_entry')
+    if re.search(r'包(?:裝的|装的|的).*(?:不論|不论|不管).*站.*(?:幫忙|帮忙)', normalized):
+        concepts.update({'c:pack', 'c:storage_destination'})
+    if re.search(r'(?:開|开)(?:[一二兩两三四五六七八九十]|\d+)(?:個|个)?站', normalized):
+        concepts.add('c:station_operation')
     if re.search(r'支數|數量|\bjumlah\b', normalized):
         concepts.add('c:field_quantity')
     if lang == 'zh':

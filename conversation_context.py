@@ -20,7 +20,7 @@ from pathlib import Path
 
 from translation_mentions import extract_mentions
 
-BUILD_ID = "2026-09-08.2-original-conversation-snapshot"
+BUILD_ID = "2026-09-16.2-elliptical-workflow-context"
 TTL = 3600
 MAX_ROWS = 40
 MAX_SELECTED = 4
@@ -259,7 +259,13 @@ PROMPT_RULES = (
     "Use speaker/recipient links and the quoted or most recent relevant turn to resolve omitted "
     "actions and objects across languages. Keep current negation, question, tense and completion state. "
     "Do not copy old requests, quantities, deadlines or emotions into the reply. Explicit current wording "
-    "wins over history. If several actions remain plausible, preserve the ambiguity; do not invent a fact."
+    "wins over history. If several actions remain plausible, preserve the ambiguity; do not invent a fact. "
+    "For terse replies such as 要補印才有 or 過來取, inherit the missing object only from a clearly "
+    "linked original turn (e.g. a missing printed field or a sample). Without that evidence keep the "
+    "object implicit. A customer before 包/包裝 can own the material, not be the addressee. "
+    "An alphanumeric code alone does not prove a location, machine, person or ERP transaction. "
+    "Use an explicitly stated role in the linked original if present; otherwise preserve the code "
+    "without inventing its type. Never substitute a default storage mapping for a current instruction."
 )
 
 

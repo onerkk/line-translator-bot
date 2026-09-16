@@ -18,10 +18,11 @@ from translation_request_cache import memoize
 import unicodedata
 import factory_instruction_semantics as instruction_semantics
 import factory_planning_semantics as planning_semantics
+import factory_workflow_semantics as workflow_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.1-clause-bound-planning"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.2-workflow-senses"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -376,6 +377,16 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     }
     if frame["src_lang"] != "zh" or frame["tgt_lang"] != "id" or not src.strip():
         return frame
+    workflow = workflow_semantics.build_relations(src)
+    frame["workflow_source"] = src
+    frame["workflow_relations"] = workflow
+    for i, relation in enumerate(workflow):
+        frame["claims"].append({
+            "claim_id": f"workflow_{i}_{relation['kind']}",
+            "source_evidence": relation["source_evidence"],
+            "meaning_zh": relation["meaning_zh"],
+            "required_target_meaning_id": relation["required_target_meaning_id"],
+        })
     relations = instruction_semantics.build_relations(src)
     frame["instruction_relations"] = relations
     for i, relation in enumerate(relations):
@@ -386,7 +397,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             "required_target_meaning_id": relation["required_target_meaning_id"],
         })
     package_quantity_cue = bool(re.search(_PACKAGE_QUANTITY_PHRASE, compact))
-    if not relations and not any(cue in compact for cue in _FACTORY_CUES) and not package_quantity_cue:
+    if not (relations or workflow) and not any(cue in compact for cue in _FACTORY_CUES) and not package_quantity_cue:
         return frame
 
     flags = frame["flags"]
@@ -1342,7 +1353,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         or flags.get("checkbox_after_pickup")
         or any(r.get("daily_tons") or r.get("stations") for r in frame["month_end_relations"])
     )
-    frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive or relations))
+    frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive or relations or workflow))
     return frame
 
 
@@ -1882,6 +1893,7 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     issues: List[str] = []
     if not low:
         return False, ["factory_semantic_audit:empty_translation"]
+    issues.extend(workflow_semantics.issues(frame.get("workflow_source", ""), translation))
     issues.extend(instruction_semantics.validate_relations(
         frame.get("instruction_relations") or [], translation,
     ))

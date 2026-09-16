@@ -321,7 +321,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-16.1-planning-delivery"
+_EXPECTED_QG_BUILD_ID = "2026-09-16.2-workflow-delivery"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -340,7 +340,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.1-clause-bound-planning"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.2-workflow-senses"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -1940,12 +1940,9 @@ def _translation_response_text(response):
 
 
 def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=None):
-    """Validate each provider candidate before accepting it.
+    """Record local quality diagnostics for correction and learning.
 
-    The first attempt uses the low-cost provider.  Only objective integrity or
-    retrieved factory-context failures trigger the next provider, so ordinary
-    messages stay single-call while demonstrably wrong candidates are not
-    accepted merely because the API returned HTTP 200.
+    Diagnostics never trigger another paid generation or veto delivery.
     """
     source = str(source_text or "")
     source_compact = re.sub(r"\s+", "", source)
@@ -1974,7 +1971,7 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         raw_candidate = text
         text = tqg_module.canonicalize_source_terms(source, text, src_lang, tgt_lang)
         # Apply the same source-grounded title correction as the final pipeline
-        # BEFORE rejecting a provider and paying for another generation.
+        # before measuring quality; this does not request another generation.
         _terminology = globals().get("factory_terminology_module")
         if _terminology is not None:
             text = _terminology.canonicalize_organization_translation(
@@ -1993,10 +1990,8 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         except Exception as exc:
             logger.warning("[CPRouter] local candidate validation skipped: %s", exc)
 
-        # Retrieved plant knowledge is deterministic and request-specific.  A
-        # violation here is strong evidence that the cheap candidate used the
-        # wrong factory sense, so move to the next provider instead of accepting
-        # it and paying for a separate repair call afterwards.
+        # Retrieved plant knowledge adds request-specific learning diagnostics.
+        # The provider keeps its first response even when this reports an issue.
         try:
             contract = getattr(_tl, "semantic_contract", None)
             if contract and contract.get("has_risk"):
@@ -10703,7 +10698,7 @@ def restore_customers(text, cust_ph):
                 result = result.replace(v, name)
     # Safety: if any customer name placeholder pattern remains, try regex
     result = re.sub(r'__CUST_(\d+)__', lambda m: cust_ph.get(f"__CUST_{m.group(1)}__", m.group(0)), result)
-    return result
+    return factory_semantic_audit_module.workflow_semantics.separate_name_boundaries(result, cust_ph.values())
 
 
 def post_fix_translation(text):
@@ -11397,7 +11392,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             sys_prompt = (
                 sys_prompt
                 + "\n<protected_names>\n"
-                + "Keep these names/customer names exactly as written. Do not translate, transliterate, delete, or replace them:\n"
+                + "Keep these names/customer names exactly as written. Separate complete names from surrounding Indonesian words with spaces; never change a name internally. Do not translate, transliterate, delete, or replace them:\n"
                 + "\n".join("- " + name for name in _visible_protected_names[:80])
                 + "\n</protected_names>"
             )
@@ -12663,7 +12658,7 @@ def restore_names(text, name_map):
         result,
         flags=re.I,
     )
-    return result
+    return factory_semantic_audit_module.workflow_semantics.separate_name_boundaries(result, name_map.values())
 
 
 def _is_translation_failure_sentinel(text):
@@ -13104,6 +13099,10 @@ def _final_delivery_guard(source_text, candidate, src, tgt):
     original = candidate.strip()
     try:
         normalized = tqg_module.canonicalize_source_terms(source_text, original, src, tgt) or original
+        if str(tgt).lower().startswith("id"):
+            normalized = factory_semantic_audit_module.workflow_semantics.separate_name_boundaries(
+                normalized, collect_visible_protected_names(source_text)
+            )
         issues = _delivery_validation_issues(source_text, normalized, src, tgt)
         if issues:
             return _best_effort_factory_delivery(

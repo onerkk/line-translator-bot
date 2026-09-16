@@ -16,7 +16,7 @@ from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-07.5-negated-completion-scope"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-16.2-workflow-concepts"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -58,7 +58,11 @@ _CONCEPTS = {
     "repair": ("維修", "修理", "perbaikan", "diperbaiki", "memperbaiki"),
     "oil": ("漏油", "潤滑油", "oli", "pelumas", "bocor", "kebocoran"),
     "guard": ("護罩", "防護罩", "護蓋", "pelindung", "pengaman", "cover"),
-    "warehouse": ("倉庫", "入庫", "gudang", "penyimpanan"),
+    "warehouse": ("倉庫", "入庫", "儲區", "儲位", "gudang", "penyimpanan"),
+    "record": ("存檔", "欄位", "預設", "登錄", "data", "kolom", "default", "pencatatan"),
+    "crate_packing": ("待裝木箱", "裝箱", "peti kayu"),
+    "staffing": ("人力", "人員", "線外", "tenaga kerja", "personel"),
+    "station_operation": ("運轉", "工作站", "stasiun", "mengoperasikan"),
     "loading": ("上料", "memasukkan", "masuk"),
     "unloading": ("下料", "mengeluarkan", "keluar"),
 }
