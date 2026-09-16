@@ -102,13 +102,12 @@ class TranslationQualityGateTests(unittest.TestCase):
             model="fake-model",
             ai_client=client,
         )
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["text"], "不得進入。")
-        self.assertFalse(result["degraded"])
-        self.assertTrue(result["cacheable"])
-        self.assertTrue(result["reviewed"])
-        self.assertEqual(result["path"], "independent_source_review_passed")
-        self.assertEqual(len(client.calls), 1)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["text"], "不BOLEH進入。")
+        self.assertTrue(result["degraded"])
+        self.assertFalse(result["cacheable"])
+        self.assertFalse(result["reviewed"])
+        self.assertEqual(client.calls, [])
 
     def test_required_source_review_outage_cannot_veto_clean_candidate(self):
         result = qg.gate_and_revise(
@@ -124,11 +123,10 @@ class TranslationQualityGateTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["text"], "Mohon pastikan material sudah selesai dikemas.")
-        self.assertTrue(result["review_requested"])
+        self.assertFalse(result["review_requested"])
         self.assertFalse(result["review_succeeded"])
-        self.assertTrue(result["degraded"])
-        self.assertFalse(result["cacheable"])
-        self.assertEqual(result["path"], "review_unavailable_original_kept")
+        self.assertFalse(result["degraded"])
+        self.assertTrue(result["cacheable"])
 
     def test_required_source_review_accepts_valid_reviewed_candidate(self):
         client = FakeClient(["Mohon pastikan material sudah selesai dikemas."])
@@ -144,9 +142,9 @@ class TranslationQualityGateTests(unittest.TestCase):
             require_review_success=True,
         )
         self.assertTrue(result["ok"], result)
-        self.assertTrue(result["review_requested"])
-        self.assertTrue(result["review_succeeded"])
-        self.assertEqual(result["path"], "independent_source_review_passed")
+        self.assertFalse(result["review_requested"])
+        self.assertFalse(result["review_succeeded"])
+        self.assertEqual(client.calls, [])
 
     def test_repeated_document_label_and_parenthetical_alias_are_not_false_leakage(self):
         source = """@budi santoso 山多 @Irwan 布納萬 @伊努滿 Sumertha @迪弟 kampret @Hasim

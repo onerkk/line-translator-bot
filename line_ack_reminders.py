@@ -447,6 +447,16 @@ class NoticeService:
                 return
             initial = row.get("delivery_state") != "delivered"
             if initial and row.get("translation_pending"):
+                if row.get("translation_attempted_at") or row.get("attempts", 0):
+                    self._finish(key, lease, reminder_state="failed",
+                                 last_error="翻譯已嘗試，本通知不再重複呼叫 API。")
+                    return
+                # Commit before the paid call. A crash or failed result save
+                # must not cause a second generation after the lease expires.
+                row = self._update(key, lease, lambda current: dict(
+                    current, translation_attempted_at=now))
+                if not row or row.get("lease_id") != lease:
+                    return
                 stage = "translation"
                 prepared = self.hub.prepare_notice_translation(row)
                 stage = "storage"
@@ -530,19 +540,17 @@ class NoticeService:
                                      "initial" if batch["initial"] else "users",
                                      len(batch["ids"]))
         except Exception as exc:
-            retryable = (not isinstance(exc, SendError) or exc.retryable) and not isinstance(exc, NoticeInputError)
             def failed(current):
                 attempts = current.get("attempts", 0) + 1
-                pending_translation = bool(current.get("translation_pending"))
-                delay = min(60, 2 * 2 ** min(attempts - 1, 5)) if pending_translation else min(300, 15 * 2 ** min(attempts - 1, 5))
                 current.update(lease_id="", attempts=attempts,
-                               reminder_state=("translation_retry" if pending_translation else "retrying") if retryable else "failed",
+                               reminder_state="failed",
                                last_error=(str(exc) if isinstance(exc, (SendError, NoticeInputError)) else
-                                           "通知翻譯尚未完成，已保留待辦自動重試。" if stage == "translation" else
-                                           "通知狀態儲存尚未確認，將自動重試。" if stage == "storage" else
-                                           "LINE 派送尚未確認，將自動重試。"),
+                                           "通知翻譯未回傳內容，本次嘗試已結束。" if stage == "translation" else
+                                           "通知狀態儲存尚未確認，本次嘗試已結束。" if stage == "storage" else
+                                           "LINE 派送尚未確認，本次嘗試已結束。"),
                                last_error_stage=stage,
-                               wake_at=self.clock() + delay if retryable else None)
+                               last_error_kind="input" if isinstance(exc, NoticeInputError) else "operational",
+                               wake_at=None)
                 return finish_if_no_pending(current, departed, now=self.clock())
             self._update(key, lease, failed)
             self.hub.app.logger.warning("[FactoryAck] unconfirmed stage=%s token=%s error=%s", stage,

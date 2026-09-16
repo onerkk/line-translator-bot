@@ -46,7 +46,7 @@ def test_parameter_fallback_cannot_exceed_actual_attempt_budget(transport, monke
             ai.chat_complete(model="offline", messages=[{"role": "user", "content": "terima kasih"}])
         return ai.translation_budget_snapshot()
     budget = run()
-    assert len(calls) == budget["attempts"] == 2
+    assert len(calls) == budget["attempts"] == 1
 
 
 def test_optional_parameter_fallback_uses_remaining_time(transport, monkeypatch):
@@ -64,8 +64,9 @@ def test_optional_parameter_fallback_uses_remaining_time(transport, monkeypatch)
     def run():
         return ai.chat_complete(model="offline", messages=[{"role": "user", "content": "terima kasih"}],
             timeout=5, failover_total_timeout=5, failover_per_provider_timeout=5)
-    assert run().choices[0].message.content == "Terima kasih."
-    assert calls[0]["timeout"] == 5 and 0 < calls[1]["timeout"] <= 1
+    with pytest.raises(ValueError, match="unsupported reasoning_effort"):
+        run()
+    assert len(calls) == 1 and calls[0]["timeout"] == 5
 
 
 def test_unrelated_400_does_not_remove_all_optional_features(transport):
@@ -81,9 +82,10 @@ def test_unrelated_400_does_not_remove_all_optional_features(transport):
 
 def test_context_window_truncation_is_never_kept_as_degraded_text(transport, monkeypatch):
     transport(lambda **_k: response("Periksa PMI.", "model_context_window_exceeded"))
-    with pytest.raises(Exception):
-        ai.chat_complete(model="offline", messages=[{"role": "user", "content": "source"}],
+    result = ai.chat_complete(model="offline", messages=[{"role": "user", "content": "source"}],
             translation_max_generations=1, response_validator=lambda *_a: (False, "truncated"))
+    assert result.choices[0].message.content == "Periksa PMI."
+    assert result._jy_quality_degraded
 
 
 def test_empty_second_response_cannot_erase_nonempty_first_candidate(transport):
@@ -101,9 +103,10 @@ def test_refusal_is_counted_before_failover_and_never_delivered(transport, monke
     transport(lambda **_k: response("I cannot do this.", "refusal"))
     @ai.translation_request_budget
     def run():
-        with pytest.raises(Exception):
-            ai.chat_complete(model="offline", messages=[{"role": "user", "content": "source"}],
+        result = ai.chat_complete(model="offline", messages=[{"role": "user", "content": "source"}],
                 translation_max_generations=1)
+        assert result.choices[0].message.content == "I cannot do this."
+        assert result._jy_quality_degraded
         assert ai.translation_budget_snapshot()["generations"] == 1
     run()
     assert len(usage_seen) == 1

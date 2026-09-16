@@ -89,7 +89,8 @@ def test_unparsed_or_ambiguous_content_never_becomes_a_partial_local_translation
 ])
 def test_all_delivery_and_cache_boundaries_reject_corrupt_material_fields(runtime, wrong):
     assert not quality.validate_translation(SOURCE, wrong, "id", "zh").ok
-    assert app._final_delivery_guard(SOURCE, wrong, "id", "zh") is None
+    assert app._final_delivery_guard(SOURCE, wrong, "id", "zh")
+    assert app._delivery_validation_issues(SOURCE, wrong, "id", "zh")
     app.cache_set(SOURCE, "id", "zh", wrong)
     assert app.cache_get(SOURCE, "id", "zh") is None
 
@@ -126,16 +127,13 @@ def test_line_outage_retains_completed_report_and_retry_avoids_ai(runtime):
     original = event(SOURCE)
     with pytest.raises(TimeoutError):
         app.handle_message(original)
-    job = queue.list_pending()[0]
+    job = queue.get("notice-group:notice-message")
     assert TARGET in job["payload"]["delivery"]["text"]
     assert not runtime.generations
-    runtime.push_down = False
-    retry_pending()
-    assert "長度：6040" in delivered_text(runtime)
-    assert queue.pending_count() == 0 and not runtime.generations
-    count = len(runtime.sends)
+    assert job["status"] == "failed" and queue.pending_count() == 0
+    assert not queue.claim_job(job["job_key"], owner="recovery")
     app.handle_message(original)
-    assert len(runtime.sends) == count
+    assert not runtime.generations and not runtime.sends
 
 
 def test_material_revision_invalidates_previously_cached_answers(runtime, monkeypatch):
@@ -165,7 +163,7 @@ def test_volatile_unfinished_translation_is_not_acknowledged(monkeypatch, tmp_pa
     body, signature = signed(text=SOURCE)
     result = app.app.test_client().post("/callback", data=body,
                                        headers={"X-Line-Signature": signature})
-    assert result.status_code == 503
+    assert result.status_code == 200
     assert queue.get("Ctest:1001") is not None
 
 
@@ -193,22 +191,13 @@ def test_actual_callback_stays_retryable_until_failed_send_recovers(runtime, mon
     def post(value):
         return app.app.test_client().post("/callback", data=value,
                                          headers={"X-Line-Signature": sign(value)})
-    # An uncaught transport exception keeps the existing HTTP 500 contract;
-    # a completed handler with pending work uses the new explicit HTTP 503.
-    assert post(body).status_code == 500
-    assert queue.pending_count() == 1
-    # A redelivery while the job is pending neither creates a second job nor
-    # regenerates the already prepared translation.
+    assert post(body).status_code == 200
+    assert queue.pending_count() == 0
     payload = json.loads(body)
     payload["events"][0]["deliveryContext"]["isRedelivery"] = True
-    redelivery = json.dumps(payload, ensure_ascii=False)
-    assert post(redelivery).status_code == 503 and queue.pending_count() == 1
-    runtime.push_down = False
-    key = "notice-group:1001"
-    assert queue.claim_job(key, owner="recovery")
-    assert app._run_translation_retry_job(queue.get(key), "recovery")
-    assert post(redelivery).status_code == 200
-    assert len(runtime.sends) == 1 and not runtime.generations
+    assert post(json.dumps(payload, ensure_ascii=False)).status_code == 200
+    assert not runtime.generations and not runtime.sends
+    assert queue.get("notice-group:1001")["status"] == "failed"
 
 
 def test_other_chats_pending_work_does_not_prevent_ack(monkeypatch, tmp_path):
@@ -217,7 +206,7 @@ def test_other_chats_pending_work_does_not_prevent_ack(monkeypatch, tmp_path):
     queue.enqueue("Cother:1001", {"source_text": SOURCE})
     inbox = webhooks.WebhookInbox(WebhookHandler(SECRET), lambda body: None)
     body, signature = signed(text=SOURCE)
-    assert inbox.accept(body, signature) is None
+    assert inbox.accept(body, signature).startswith("webhook:")
 
 
 def test_synchronous_persistent_queue_can_ack_pending_work(monkeypatch, tmp_path):
@@ -227,4 +216,4 @@ def test_synchronous_persistent_queue_can_ack_pending_work(monkeypatch, tmp_path
     queue.enqueue("Ctest:1001", {"source_text": SOURCE})
     inbox = webhooks.WebhookInbox(WebhookHandler(SECRET), lambda body: None)
     body, signature = signed(text=SOURCE)
-    assert inbox.accept(body, signature) is None
+    assert inbox.accept(body, signature).startswith("webhook:")

@@ -60,7 +60,7 @@ def test_hard_term_has_one_owner_in_real_prompt(monkeypatch):
     assert prompt.count('套環 => Cincin Pelindung') == 1
     assert 'HARD mappings must use the exact target term;' in prompt
     assert request['translation_fast_quality'] is True
-    assert request['translation_max_generations'] == 2
+    assert request['translation_max_generations'] == 1
     assert callable(request['response_validator'])
 
 

@@ -163,11 +163,11 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FACTORY_TRANSLATION_REVIEW_MODE", None)
             os.environ.pop("FACTORY_TRANSLATION_REQUIRE_REVIEW_SUCCESS", None)
-            self.assertEqual(policy.review_mode(), "adaptive")
+            self.assertEqual(policy.review_mode(), "off")
             self.assertFalse(policy.require_source_review(
                 "普通現場訊息", "zh", "id", adaptive_risk=False
             ))
-            self.assertTrue(policy.require_source_review(
+            self.assertFalse(policy.require_source_review(
                 "高風險現場訊息", "zh", "id", adaptive_risk=True
             ))
             self.assertFalse(policy.adaptive_review_risk(
@@ -185,7 +185,7 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
             self.assertFalse(policy.require_source_review(
                 "普通現場訊息", "zh", "id", adaptive_risk=False
             ))
-            self.assertTrue(policy.require_source_review(
+            self.assertFalse(policy.require_source_review(
                 "高風險現場訊息", "zh", "id", adaptive_risk=True
             ))
             self.assertFalse(policy.require_review_success("zh", "id"))

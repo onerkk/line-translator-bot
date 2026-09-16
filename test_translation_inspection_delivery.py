@@ -61,17 +61,13 @@ def test_recovery_can_use_unspent_reply_when_push_is_unavailable(runtime, offlin
     runtime.push_down = True
     app.handle_message(message)
     assert runtime.sends == []
-    job = queue.list_pending()[0]
-    assert job["payload"]["source_text"] == message.message.text
-    assert queue.reschedule(job["job_key"], delay_seconds=0)
-    assert queue.claim_job(job["job_key"], owner="recovered-worker")
-    recovering[0] = True
-    assert app._run_translation_retry_job(queue.get(job["job_key"]), "recovered-worker")
-    assert len(runtime.sends) == 1 and runtime.sends[0][0] == "reply"
-    assert runtime.sends[0][1].reply_token == message.reply_token
-    assert target in delivered_text(runtime)
-    assert queue.was_delivered(job["job_key"])
-    assert len(calls) == 4  # three failed transports, one completed generation
+    key = "notice-group:notice-message"
+    assert queue.get(key)["payload"]["source_text"] == message.message.text
+    assert queue.get(key)["status"] == "failed"
+    assert not queue.claim_job(key, owner="recovery")
+    assert len(calls) == 1
+    app.handle_message(message)
+    assert len(calls) == 1 and runtime.sends == []
 
 
 def run_pending(key):
@@ -97,10 +93,10 @@ def test_worker_time_does_not_renew_reply_window(runtime, age, event_age, expect
         app.handle_message(message)
     key = "notice-group:notice-message"
     assert queue.get(key)["payload"]["reply_window"]["received_at"] == now - age
-    runtime.provider_down = False
-    runtime.provider_result = "Tolong bantu lakukan pemeriksaan hari ini."
-    assert run_pending(key)
-    assert len(runtime.sends) == 1 and runtime.sends[0][0] == expected
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
+    assert queue.pending_count() == 0
 
 
 def test_failed_reply_is_not_replayed_and_translation_is_not_regenerated(runtime, monkeypatch):
@@ -112,10 +108,10 @@ def test_failed_reply_is_not_replayed_and_translation_is_not_regenerated(runtime
         app.handle_message(message)
     key = "notice-group:notice-message"
     assert queue.get(key)["payload"]["delivery"]["attempted"]
-    runtime.reply_down = runtime.push_down = False
-    assert run_pending(key)
-    assert len(runtime.sends) == 1 and runtime.sends[0][0] == "push"
-    assert len(runtime.generations) == 1
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
+    assert queue.pending_count() == 0
 
 
 def test_reply_rejected_during_recovery_falls_back_and_does_not_consume_ai_again(runtime):
@@ -123,19 +119,10 @@ def test_reply_rejected_during_recovery_falls_back_and_does_not_consume_ai_again
     message.timestamp = int(time.time() * 1000)
     runtime.provider_down = True
     app.handle_message(message)
-    runtime.provider_down = False
-    runtime.provider_result = "Tolong bantu lakukan pemeriksaan hari ini."
-    runtime.reply_down = runtime.push_down = True
-    key = "notice-group:notice-message"
-    with pytest.raises(TimeoutError):
-        run_pending(key)
-    assert queue.get(key)["payload"]["delivery"]["attempted"]
-    assert queue.reschedule(key, owner="recovered-worker", delay_seconds=0)
-    generated = len(runtime.generations)
-    runtime.reply_down = runtime.push_down = False
-    assert run_pending(key)
-    assert len(runtime.generations) == generated
-    assert len(runtime.sends) == 1 and runtime.sends[0][0] == "push"
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
+    assert queue.pending_count() == 0
 
 
 def test_accepted_reply_survives_followup_write_error_without_duplicate_push(runtime, monkeypatch):
@@ -146,9 +133,10 @@ def test_accepted_reply_survives_followup_write_error_without_duplicate_push(run
     with pytest.raises(RuntimeError):
         app.handle_message(event())
     assert len(runtime.sends) == 1 and runtime.sends[0][0] == "reply"
-    monkeypatch.setattr(app.factory_hub, "delivery_accepted", original)
-    assert run_pending("notice-group:notice-message")
-    assert len(runtime.sends) == 1 and len(runtime.generations) == 1
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
+    assert queue.pending_count() == 0
 
 
 def test_signed_webhook_outage_redelivery_and_worker_recovery(runtime, offline_transport, monkeypatch):
@@ -179,28 +167,13 @@ def test_signed_webhook_outage_redelivery_and_worker_recovery(runtime, offline_t
     client = app.app.test_client()
     body, signature = signed("1234", "幫忙今日點檢")
     first = client.post("/callback", data=body, headers={"X-Line-Signature": signature})
-    assert first.status_code == 503 and runtime.sends == []
-    # LINE redelivery must not create a new generation/job while one is pending.
+    assert first.status_code == 200 and runtime.sends == []
     body, signature = signed("1234", "幫忙今日點檢", redelivery=True)
     again = client.post("/callback", data=body, headers={"X-Line-Signature": signature})
-    assert again.status_code == 503
-    assert calls == ["anthropic", "openai", "gemini"]
-    jobs = queue.list_pending()
-    assert len(jobs) == 1 and jobs[0]["payload"]["source_text"] == "幫忙今日點檢"
-    key = jobs[0]["job_key"]
-    assert queue.reschedule(key, delay_seconds=0)
-    recovering[0] = True
-    pool = WorkerPool("recovered-text", app._run_scheduled_translation, workers=2, include_kinds=("text",))
-    try:
-        pool.ensure_started()
-        wait_until(lambda: queue.was_delivered(key))
-    finally:
-        pool.stop()
-    assert target in delivered_text(runtime)
-    assert len(runtime.sends) == 1 and runtime.sends[0][0] == "reply"
-    assert calls == ["anthropic", "openai", "gemini", "anthropic"]
-    completed = client.post("/callback", data=body, headers={"X-Line-Signature": signature})
-    assert completed.status_code == 200 and len(runtime.sends) == 1 and len(calls) == 4
+    assert again.status_code == 200
+    assert calls == ["anthropic"]
+    assert queue.get("Ctest:1234")["status"] == "failed"
+    assert queue.pending_count() == 0
 
 
 def test_public_health_identifies_recovery_code_without_live_provider_probe(runtime):

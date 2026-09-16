@@ -109,7 +109,8 @@ def test_pmi_state_reaches_real_provider_and_delivery_validation(source, good, b
     assert check(response(good), "offline")[0]
     assert not check(response(bad), "offline")[0]
     assert app._final_delivery_guard(source, good, "zh", "id") == good
-    assert app._final_delivery_guard(source, bad, "zh", "id") is None
+    assert app._final_delivery_guard(source, bad, "zh", "id")
+    assert app._delivery_validation_issues(source, bad, "zh", "id")
     assert app.pick_model(source) == ai_provider.DEFAULT_OPENAI_MODEL
 
 
@@ -157,7 +158,7 @@ def test_less_prompt_bulk_does_not_drop_actual_contract_or_source(monkeypatch):
     assert source in prompt
     assert "runtime semantic contract" in prompt and "Preserve @mentions" in prompt
     assert "3800" not in prompt and "BF2" not in prompt
-    assert sent[0]["translation_max_generations"] == 2
+    assert sent[0]["translation_max_generations"] == 1
 
 
 @pytest.mark.parametrize("src,tgt,source,good,bad", [
@@ -175,7 +176,8 @@ def test_less_prompt_bulk_does_not_drop_actual_contract_or_source(monkeypatch):
 ])
 def test_explicit_safety_action_and_negation_reversals_reach_delivery_guard(src, tgt, source, good, bad):
     assert app._final_delivery_guard(source, good, src, tgt) == good
-    assert app._final_delivery_guard(source, bad, src, tgt) is None
+    assert app._final_delivery_guard(source, bad, src, tgt)
+    assert app._delivery_validation_issues(source, bad, src, tgt)
 
 
 def test_instructions_for_different_machines_and_non_machine_stops_are_distinct():

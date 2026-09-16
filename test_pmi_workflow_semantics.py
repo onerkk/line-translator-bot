@@ -80,7 +80,8 @@ def test_actual_final_delivery_boundary_accepts_good_and_blocks_bad(src, tgt, so
     app._tl.__dict__.clear()
     try:
         assert app._final_delivery_guard(source, good, src, tgt) == good
-        assert app._final_delivery_guard(source, bad, src, tgt) is None
+        assert app._final_delivery_guard(source, bad, src, tgt)
+        assert app._delivery_validation_issues(source, bad, src, tgt)
     finally:
         app._tl.__dict__.clear()
         app._tl.__dict__.update(previous)

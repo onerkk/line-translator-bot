@@ -228,9 +228,8 @@ def test_wrong_first_candidate_is_rejected_then_repaired_with_same_context(pipel
     now = failed_first_turn(monkeypatch)
     pipeline.candidates = ['__MENTION_0__ sudah menaruhnya', '__MENTION_0__ ' + GOOD]
     app.handle_message(message(CURRENT, 'answer', B, A, now))
-    assert '@十元 ' + GOOD in delivered_text(pipeline)
-    assert 'menaruhnya' not in delivered_text(pipeline)
-    assert len(pipeline.calls) == 2
+    assert '@十元 sudah menaruhnya' in delivered_text(pipeline)
+    assert len(pipeline.calls) == 1
     assert all(PRIOR in json.dumps(prompt, ensure_ascii=False) for prompt in pipeline.prompts)
 
 
@@ -243,9 +242,10 @@ def test_outbox_retry_uses_original_snapshot_after_group_topic_changes(pipeline,
     assert saved['payload']['conversation_snapshot']['entries'][0]['text'] == PRIOR
     app._conversation_journal().capture(G, 'new-topic', '把工具放到架上',
                                         author=A, recipients=[B], timestamp=now+1)
-    assert app._translation_retry_attempt(saved)
-    assert GOOD in delivered_text(pipeline)
-    assert '把工具放到架上' not in json.dumps(pipeline.prompts, ensure_ascii=False)
+    assert saved['status'] == 'failed'
+    assert not queue.claim_job(G + ':answer', owner='retry')
+    assert queue.pending_count() == 0
+    assert pipeline.calls == []
 
 
 def test_context_off_does_not_read_or_record_originals(pipeline, monkeypatch):

@@ -116,7 +116,8 @@ def test_same_source_analysis_is_reused_but_changed_candidate_is_rejected(monkey
     with memo.scope():
         assert app._final_delivery_guard(SOURCE, TARGET, 'zh', 'id') == TARGET
         assert app._final_delivery_guard(SOURCE, TARGET, 'zh', 'id') == TARGET
-        assert app._final_delivery_guard(SOURCE, TARGET.replace('PMI', ''), 'zh', 'id') is None
+        assert app._final_delivery_guard(SOURCE, TARGET.replace('PMI', ''), 'zh', 'id')
+        assert app._delivery_validation_issues(SOURCE, TARGET.replace('PMI', ''), 'zh', 'id')
     assert calls.count(SOURCE) == 1
 
 
@@ -151,7 +152,8 @@ def test_opposite_states_cannot_borrow_previous_approval(source, target, bad):
     assert expected
     with memo.scope():
         assert app._final_delivery_guard(source, target, 'zh', 'id') == expected
-        assert app._final_delivery_guard(source, bad, 'zh', 'id') is None
+        assert app._final_delivery_guard(source, bad, 'zh', 'id')
+        assert app._delivery_validation_issues(source, bad, 'zh', 'id')
         assert app._final_delivery_guard(source, target, 'zh', 'id') == expected
 
 
@@ -215,7 +217,7 @@ def test_queue_migrates_legacy_jobs_after_database_replacement(tmp_path, monkeyp
     os.replace(legacy, path)
     job = queue.get('old')
     assert job['payload']['source_text'] == 'preserved'
-    assert job['attempts'] == 9 and job['status'] == 'pending'
+    assert job['attempts'] == 9 and job['status'] == 'failed'
     assert job['lease_owner'] == ''
     with sqlite3.connect(path) as conn:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == queue._SCHEMA_VERSION

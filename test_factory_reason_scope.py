@@ -72,14 +72,17 @@ def test_unrelated_provider_result_cannot_reach_line(runtime):
     runtime.provider_result = WRONG
     app.handle_message(event(SOURCE))
     assert runtime.generations
-    assert WRONG not in delivered_text(runtime)
+    assert WRONG in delivered_text(runtime)
+    assert len(runtime.generations) == 1
+    assert app._delivery_validation_issues(SOURCE, WRONG, "zh", "id")
 
 
 def test_collar_uses_existing_glossary_sense_and_blocks_unrelated_weight_output(runtime):
     prompt = app.inject_glossary_hint(SOURCE, "zh", "id")
     assert "套環" in prompt and "Cincin Pelindung" in prompt
     assert app._final_delivery_guard(SOURCE, TARGET, "zh", "id") == TARGET
-    assert app._final_delivery_guard(SOURCE, WRONG, "zh", "id") is None
+    assert app._final_delivery_guard(SOURCE, WRONG, "zh", "id")
+    assert app._delivery_validation_issues(SOURCE, WRONG, "zh", "id")
 
 
 @pytest.mark.parametrize("source,target", [

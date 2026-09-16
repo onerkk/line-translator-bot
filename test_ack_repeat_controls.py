@@ -183,12 +183,11 @@ def test_repeating_personal_mentions_use_new_round_keys_and_same_unchanged_retry
     hub.reminders.sender = uncertain
     tick(hub, due)
     saved = stored(hub, row)
-    assert saved["reminder_state"] == "retrying"
+    assert saved["reminder_state"] == "failed" and saved["wake_at"] is None
     assert sends[-1][2] != first_key
-    hub.reminders.sender = lambda *args: sends.append(copy.deepcopy(args))
-    tick(hub, saved["wake_at"])
-    assert sends[-1] == sends[-2]
-    assert stored(hub, row)["reminder_count"] == 2
+    count = len(sends)
+    hub.reminders.run_due()
+    assert len(sends) == count
 
 
 def test_repeating_notice_still_expires(hub):

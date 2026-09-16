@@ -122,9 +122,6 @@ def test_pending_mentioned_request_recovers_after_provider_returns(runtime):
     pending = queue.get('notice-group:notice-message')
     assert pending['payload']['source_text'] == source
     assert pending['payload']['src_lang'] == 'id'
-    runtime.provider_down = False
-    runtime.provider_result = '__MENTION_0__ ' + TRANSLATION
-    assert retry_pending()
-    assert '中間那台電腦' in delivered_text(runtime)
-    assert '@小麥（研磨股班長）' in delivered_text(runtime)
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
     assert queue.pending_count() == 0

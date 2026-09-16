@@ -36,7 +36,6 @@ def test_quoted_release_survives_provider_outage_and_recovers(runtime):
     assert job["payload"]["source_text"] == SOURCE
     assert job["payload"]["quoted_context_message_id"] == "yesterday-message"
     assert not runtime.sends
-    runtime.provider_down = False
-    assert retry_pending()
-    assert TARGET in delivered_text(runtime)
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
     assert queue.pending_count() == 0

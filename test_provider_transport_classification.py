@@ -31,11 +31,11 @@ def test_transport_error_reaches_next_provider(offline_transport, monkeypatch, e
     monkeypatch.setattr(ai_provider, "_dispatch_provider", dispatch)
     @ai_provider.translation_request_budget
     def run():
-        result = ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "幫忙今日點檢"}])
-        assert result.choices[0].message.content == "Tolong bantu lakukan pemeriksaan hari ini."
-        assert ai_provider.translation_budget_snapshot()["attempts"] == 2
+        with pytest.raises(type(error)):
+            ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "幫忙今日點檢"}])
+        assert ai_provider.translation_budget_snapshot()["attempts"] == 1
     run()
-    assert calls == ["anthropic", "openai"]
+    assert calls == ["anthropic"]
     assert offline_transport["active_provider"] == "anthropic"
     assert offline_transport["quota_exhausted_providers"] == {}
 
@@ -50,9 +50,9 @@ def test_single_provider_read_timeout_gets_only_one_bounded_retry(offline_transp
         return response("ok")
     monkeypatch.setattr(ai_provider, "_dispatch_provider", dispatch)
     monkeypatch.setattr(ai_provider.time, "sleep", lambda _seconds: None)
-    result = ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "text"}])
-    assert result.choices[0].message.content == "ok"
-    assert calls == ["anthropic", "anthropic"]
+    with pytest.raises(httpx.ReadTimeout):
+        ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "text"}])
+    assert calls == ["anthropic"]
 
 
 @pytest.mark.parametrize("error", [

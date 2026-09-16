@@ -69,7 +69,8 @@ def test_mandatory_inspection_cannot_become_optional_printed_or_a_status(target)
     source = "PMI一定要檢測。"
     app._tl.semantic_contract = app.build_translation_semantic_contract(source, "zh", "id")
     assert not app._build_translation_response_validator(source, "zh", "id")(response(target), "offline")[0]
-    assert app._final_delivery_guard(source, target, "zh", "id") is None
+    assert app._final_delivery_guard(source, target, "zh", "id")
+    assert app._delivery_validation_issues(source, target, "zh", "id")
 
 
 @pytest.mark.parametrize("source,target", [
@@ -185,8 +186,6 @@ def test_corrected_pmi_candidate_recovers_an_already_pending_notice(runtime):
     runtime.provider_down = True
     app.handle_message(event(NOTICE))
     assert not runtime.sends
-    runtime.provider_down = False
-    runtime.provider_result = TRANSLATION.replace("Pemeriksaan PMI wajib dilakukan", "PMI wajib dites")
-    assert retry_pending()
-    assert runtime.provider_result in delivered_text(runtime)
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
     assert queue.pending_count() == 0

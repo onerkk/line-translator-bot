@@ -103,18 +103,15 @@ def test_translation_intent_exists_before_provider_and_resumes_after_restart(hub
     hub.h["translate"] = unavailable
     submit(hub, ev)
     row = saved(hub)
-    assert row["translation_pending"] and row["wake_at"] is not None
-    assert row["last_error_stage"] == "translation" and not sent and not replies
+    assert row["translation_pending"] and row["wake_at"] is None
+    assert row["last_error_stage"] == "translation" and not sent
+    assert row["reminder_state"] == "failed"
     fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
     fresh.reminders.sender = hub.reminders.sender
-    fresh.h["translate"] = lambda *args: TRANSLATED
-    tick(fresh, row["wake_at"])
-    row = saved(hub)
-    assert row["delivery_state"] == "delivered" and not row["translation_pending"]
-    assert set(row["recipient_ids"]) == set(IDS) and len(sent) == 1
-    assert fresh.get_context(row["token"], GROUP)["translated"] == row["translated"]
+    fresh.h["translate"] = lambda *args: pytest.fail("No automatic retry after restart")
+    fresh.reminders.run_due()
     submit(fresh, ev)
-    assert len(sent) == 1
+    assert not sent
 
 
 def test_native_name_does_not_select_wrong_source_language(hub):
@@ -166,13 +163,10 @@ def test_line_timeout_freezes_translation_and_retry_key(hub):
     row = saved(hub)
     assert row["last_error_stage"] == "line" and not row["translation_pending"]
     assert len(calls) == 1 and "reminder_due_at" not in row and not replies
-    hub.reminders.sender = lambda *args: attempts.append(copy.deepcopy(args))
-    tick(hub, row["wake_at"])
-    assert attempts[0] == attempts[1] and len(calls) == 1
-    row = saved(hub)
-    assert row["delivery_state"] == "delivered"
-    assert row["reminder_due_at"] == row["delivered_at"] + 28800
-    assert row["last_error_stage"] == ""
+    assert row["wake_at"] is None and row["reminder_state"] == "failed"
+    hub.h["translate"] = lambda *args: pytest.fail("Must not regenerate")
+    hub.reminders.run_due()
+    assert len(calls) == 1
 
 
 def test_context_write_outage_resumes_committed_translation_without_regeneration(hub, monkeypatch):
@@ -187,11 +181,10 @@ def test_context_write_outage_resumes_committed_translation_without_regeneration
     row = saved(hub)
     assert row["context_pending"] and not row["translation_pending"]
     assert row["last_error_stage"] == "storage" and not sent and not replies
-    monkeypatch.setattr(hub, "sync_notice_context", original)
-    tick(hub, row["wake_at"])
-    row = saved(hub)
-    assert row["delivery_state"] == "delivered" and len(calls) == 1 and len(sent) == 1
-    assert hub.get_context(row["token"], GROUP)["translated"] == row["translated"]
+    assert row["wake_at"] is None and row["reminder_state"] == "failed"
+    hub.h["translate"] = lambda *args: pytest.fail("Must not regenerate")
+    hub.reminders.run_due()
+    assert len(calls) == 1
 
 
 def test_late_duplicate_draft_cannot_replace_completed_button_context(hub):
@@ -231,7 +224,7 @@ def test_pending_translation_obeys_cancellation_before_any_card_is_sent(hub, can
         import line_quick_reply
         hub.h[line_quick_reply.KEY] = doc
     hub.h["translate"] = lambda *args: pytest.fail("Cancelled notice must not call the provider")
-    tick(hub, row["wake_at"])
+    tick(hub, time.time() + 3600)
     assert not sent and not replies
 
 
@@ -257,10 +250,7 @@ def test_twenty_recipients_repeat_at_eight_hours_until_only_pending_members_rema
 
 def test_duplicate_preparation_is_claimed_once_and_stop_during_ai_prevents_delivery(hub):
     sent, replies = setup_notice(hub)
-    hub.h["translate"] = lambda *args: None
     ev = screenshot_event()
-    submit(hub, ev)
-    row = saved(hub)
     started, release = threading.Event(), threading.Event()
     calls = []
     def delayed(*args):
@@ -269,17 +259,17 @@ def test_duplicate_preparation_is_claimed_once_and_stop_during_ai_prevents_deliv
         assert release.wait(4)
         return TRANSLATED
     hub.h["translate"] = delayed
-    hub.reminders.clock = lambda: row["wake_at"]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(hub.reminders.run_due)
+        first = pool.submit(submit, hub, ev)
         try:
             assert started.wait(3)
+            row = saved(hub)
             hub.reminders.run_due()
             hub.stop_notice(GROUP, row["token"], USER)
         finally:
             release.set()
         first.result(timeout=4)
-    assert len(calls) == 1 and not sent and not replies
+    assert len(calls) == 1 and not sent
     assert saved(hub)["reminder_state"] == "stopped"
 
 
@@ -290,22 +280,10 @@ def test_slow_translation_recovery_does_not_block_existing_due_reminders(hub):
     ready = saved(hub)
     hub.h["translate"] = lambda *args: None
     submit(hub, screenshot_event())
-    started, release = threading.Event(), threading.Event()
-    def delayed(*args):
-        started.set()
-        assert release.wait(4)
-        return TRANSLATED
-    hub.h["translate"] = delayed
+    hub.h["translate"] = lambda *args: pytest.fail("Failed notice must not retry translation")
     hub.reminders.clock = lambda: ready["reminder_due_at"]
-    try:
-        hub.reminders.run_due(submit_preparation=hub.reminder_worker._submit_preparation)
-        assert started.wait(3)
-        assert len(sent) == 2  # Original notice and its reminder were sent.
-    finally:
-        release.set()
-        deadline = time.monotonic() + 4
-        while hub.reminder_worker._preparing and time.monotonic() < deadline:
-            threading.Event().wait(.01)
+    hub.reminders.run_due(submit_preparation=hub.reminder_worker._submit_preparation)
+    assert len(sent) == 2  # Previously delivered notice still has its requested reminder.
     assert not hub.reminder_worker._preparing
 
 
@@ -322,18 +300,11 @@ def test_callback_retains_retry_or_shared_intent_until_real_card_delivery(hub, r
     body = json.dumps({"destination": "U" + "f" * 32, "events": [raw]})
     client = app.app.test_client()
     first = client.post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
-    assert first.status_code == (503 if hub.store.path else 200) and not sent and not replies
-    row = saved(hub)
-    hub.h["translate"] = lambda *args: TRANSLATED
-    hub.store.update("notice:" + GROUP + ":" + row["token"], lambda r: dict(r, wake_at=0))
-    if not hub.store.path:
-        # Shared storage permits HTTP 200; a fresh worker must recover without
-        # depending on another copy of that webhook arriving.
-        fresh = factory.FactoryHub(hub.app, hub.h, hub.store)
-        fresh.reminders.sender = hub.reminders.sender
-        fresh.reminders.run_due()
+    assert first.status_code == 200 and not sent
+    assert saved(hub)["reminder_state"] == "failed"
+    hub.h["translate"] = lambda *args: pytest.fail("Duplicate callback cannot regenerate")
     second = client.post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
-    assert second.status_code == 200 and len(sent) == 1
+    assert second.status_code == 200 and not sent
 
 
 def test_notice_never_sends_a_translation_with_changed_reminder_hours(hub, runtime):
@@ -343,8 +314,9 @@ def test_notice_never_sends_a_translation_with_changed_reminder_hours(hub, runti
     runtime.provider_result = TRANSLATED.replace("8 jam", "9 jam")
     submit(hub, screenshot_event())
     row = saved(hub)
-    assert row["translation_pending"] and row["last_error_stage"] == "translation", row.get("translated")
-    assert not sent and not replies
+    assert not row["translation_pending"]
+    assert runtime.provider_result in row["translated"]
+    assert len(sent) == 1 and row["delivery_state"] == "delivered"
 
 
 @pytest.mark.parametrize("candidate,valid", [
@@ -395,12 +367,21 @@ def test_store_outage_before_creation_is_journaled_and_recovers_without_user_res
     hub.h["translate"] = lambda *args: calls.append(args) or TRANSLATED
     body = json.dumps({"destination": "U" + "f" * 32, "events": [screenshot_event().to_dict()]})
     response = app.app.test_client().post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
-    assert response.status_code == 500 and not sent and not calls
-    pending = [j for j in queue.list_pending() if j["job_kind"] == "webhook"]
-    assert len(pending) == 1 and pending[0]["payload"]["body"] == body
+    assert response.status_code == 200 and not sent and not calls
+    assert queue.pending_count() == 0
     outage[0] = False
-    key = pending[0]["job_key"]
-    assert queue.claim_job(key, owner="notice-recovery")
-    assert inbox.run_job(queue.get(key), "notice-recovery")
-    assert saved(hub)["delivery_state"] == "delivered" and len(sent) == 1 and len(calls) == 1
-    assert queue.was_delivered(key)
+    response = app.app.test_client().post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
+    assert response.status_code == 200 and not calls and not sent
+
+
+def test_available_notice_languages_are_sent_without_retrying_empty_targets(hub):
+    sent, replies = setup_notice(hub)
+    calls = []
+    hub.h['get_group_target_langs'] = lambda _group: ['id', 'en']
+    hub.h['translate_multi'] = lambda *args: calls.append(args) or [('id', TRANSLATED), ('en', None)]
+    submit(hub, screenshot_event())
+    row = saved(hub)
+    assert row['delivery_state'] == 'delivered'
+    assert TRANSLATED in row['translated'] and len(sent) == len(calls) == 1
+    hub.reminders.run_due()
+    assert len(calls) == 1

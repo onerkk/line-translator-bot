@@ -579,7 +579,7 @@ def compile_translation_prompt(
         required_blocks = []
         for name in ("implicit_quantity_units", "factory_acceptance_boundary", "source_bound_context",
                      "source_terminology", "factory_terminology", "factory_organization_terms",
-                     "translation_reference_context", "learned_translation_policy"):
+                     "translation_reference_context", "learned_translation_policy", "continuous_learning_risk"):
             content = _tag(original, name)
             if name == "source_terminology":
                 # This source-grounded table owns exact hard terms; SOFT notes

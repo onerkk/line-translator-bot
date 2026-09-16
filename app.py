@@ -321,7 +321,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-12.1-factory-process-terminology"
+_EXPECTED_QG_BUILD_ID = "2026-09-16.1-planning-delivery"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -340,7 +340,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-11.3-lossless-claim-definitions"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.1-clause-bound-planning"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -390,7 +390,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-08.2-conversation-review-budget"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-16.1-nonblocking-single-attempt"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -1971,6 +1971,7 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         if len(source_compact) >= 6 and re.sub(r"\s+", "", text).casefold() == source_compact.casefold():
             return False, f"{provider} echoed the source instead of translating"
 
+        raw_candidate = text
         text = tqg_module.canonicalize_source_terms(source, text, src_lang, tgt_lang)
         # Apply the same source-grounded title correction as the final pipeline
         # BEFORE rejecting a provider and paying for another generation.
@@ -1980,16 +1981,15 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
                 source, text, src_lang, tgt_lang
             )
 
-        # Objective local checks are cheap and provider-neutral.  Warning-only
-        # style diagnostics do not trigger another paid call.
+        # Collect diagnostics for learning eligibility, never another generation.
+        defects = []
         try:
             qg = tqg_module.validate_translation(
                 source, text, src_lang or "", tgt_lang or "",
                 require_paragraph_fidelity=False,
             )
             if qg.hard_issues:
-                _remember_translation_rejection(source, text, qg.hard_issues)
-                return False, f"{provider} integrity reject: {qg.hard_issues[0]}"
+                defects.extend(qg.hard_issues)
         except Exception as exc:
             logger.warning("[CPRouter] local candidate validation skipped: %s", exc)
 
@@ -2000,12 +2000,26 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         try:
             contract = getattr(_tl, "semantic_contract", None)
             if contract and contract.get("has_risk"):
+                cards = _factory_knowledge_cards_from_contract(contract)
+                _, knowledge_issues = factory_knowledge_module.validate_translation(cards, source, text)
+                defects.extend(knowledge_issues)
                 ok, reason = translation_satisfies_semantic_contract(contract, text)
                 if not ok:
-                    _remember_translation_rejection(source, text, [reason])
-                    return False, f"{provider} semantic reject: {reason}"
+                    defects.append(reason)
         except Exception as exc:
             logger.warning("[CPRouter] semantic candidate validation skipped: %s", exc)
+        defects = list(dict.fromkeys(str(issue) for issue in defects if issue))
+        if raw_candidate != text:
+            try:
+                raw_issues = _delivery_validation_issues(source, raw_candidate, src_lang, tgt_lang)
+                if raw_issues:
+                    _remember_translation_rejection(source, raw_candidate, raw_issues)
+            except Exception:
+                pass  # Learning is advisory; keep the paid response available.
+        if defects:
+            _remember_translation_rejection(source, text, defects)
+            hints = factory_semantic_audit_module.planning_semantics.repair_hints(source, defects)
+            return False, f"{provider} quality advisory: " + "; ".join(defects)[:650] + (". " + hints if hints else "")
         return True, "ok"
 
     return _validate
@@ -9338,6 +9352,14 @@ def build_translation_semantic_contract(text, src, tgt):
     if _learning is not None:
         contract['learned_policy'] = _learning.prepare_translation(
             text, src, tgt, getattr(globals().get('_tl'), 'group_id', '') or '')
+        # Past diagnostics improve the first generation; they never request a
+        # second model call. Only bounded issue codes enter this advisory block.
+        try:
+            contract['learning_risk_prompt'] = _learning.build_review_context(
+                _learning.assess_review_risk(text, src, tgt,
+                    group_id=getattr(globals().get('_tl'), 'group_id', '') or ''))
+        except Exception as exc:
+            logger.warning('[ContinuousLearning] first-pass risk unavailable: %s', exc)
     return contract
 
 def semantic_contract_requires_llm(contract):
@@ -9360,7 +9382,8 @@ def build_translation_semantic_contract_prompt(contract):
     _learning = globals().get('al_module')
     learned_block = (_learning.learning_policy.build_prompt(contract.get('learned_policy'))
                      if _learning is not None else '')
-    supplemental = '\n'.join(block for block in (learned_block, reference_block) if block)
+    supplemental = '\n'.join(block for block in (
+        learned_block, contract.get('learning_risk_prompt', ''), reference_block) if block)
     if not contract.get("has_risk"):
         return supplemental
     lines = ["<semantic_contract>"]
@@ -10700,6 +10723,7 @@ def post_fix_translation(text):
 
 
 def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=False, bad_result=None):
+    generated_this_call = None
     # 函式名稱為歷史相容名稱；實際文字翻譯統一經 _AIProxy 路由到
     # OpenAI / Claude / Gemini。不可再用原生 OpenAI client 是否存在作為前置條件，
     # 否則只設定 Claude 或 Gemini Key 時會在送出前就被錯誤攔截。
@@ -11506,7 +11530,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # v3.18: 三 provider 共用的低延遲翻譯模式。
             # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
             "translation_fast_quality": True,
-            "translation_max_generations": 2,
+            "translation_max_generations": 1,
             "translation_repair_model": _translation_cp_tier_models()[1],
         }
         # Sampling parameters
@@ -11837,13 +11861,17 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             )
             if not _privacy_ok:
                 logger.error(
-                    "[Privacy] provider omitted protected values; rejecting candidate: %s",
+                    "[Privacy] provider omitted protected values; retaining available translation: %s",
                     _privacy_missing[:3],
                 )
-                return None
+                _tl.delivery_degraded = True
+                _tl.cacheable = False
             result = translation_privacy_module.restore_sensitive_text(
                 result, _privacy_envelope
             )
+        if result:
+            generated_this_call = str(result)
+            _tl.generated_candidate = (generated_this_call, src, tgt)
         # Outer translate() may already have converted LINE mentions to
         # __MENTION_n__.  Recover provider-dropped tokens before any local
         # integrity validator can reject an otherwise complete translation.
@@ -11938,6 +11966,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             )
         except Exception:
             pass
+        if generated_this_call:
+            _tl.cacheable = False
+            return generated_this_call
         return None
 
 
@@ -11981,7 +12012,8 @@ def translate_google(text, src, tgt):
                     "Google translate omitted privacy placeholders: %s",
                     privacy_missing[:3],
                 )
-                return None
+                _tl.delivery_degraded = True
+                _tl.cacheable = False
             result = translation_privacy_module.restore_sensitive_text(
                 result, privacy_envelope
             )
@@ -12303,7 +12335,7 @@ def cache_set(text, src, tgt, result, force=False):
 
 
 def translate_with_retry(func, text, src, tgt, max_retries=2):
-    """Single-entry compatibility wrapper; provider failover belongs in ai_provider."""
+    """Compatibility wrapper: execute once, regardless of legacy retry settings."""
     return func(text, src, tgt)
 
 
@@ -12934,13 +12966,13 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
         if not raw or not isinstance(raw, str):
             continue
         value = raw.strip()
-        if not value or _is_translation_failure_sentinel(value):
+        if not value:
             continue
         try:
             value = (_strip_thinking_tags(value) or value).strip()
         except Exception:
             pass
-        if not value or _is_translation_failure_sentinel(value) or _is_meta_commentary_leak(value):
+        if not value:
             continue
         if value not in candidates:
             candidates.append(value)
@@ -12987,18 +13019,7 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     ranked.sort(key=lambda item: item[0])
     _score, best, objective, advisory = ranked[0]
     degraded_issues = list(dict.fromkeys(issue_list + objective + advisory))
-    if objective:
-        logger.error(
-            "[Availability] objective corruption withheld for provider fallback: %s",
-            objective[:20],
-        )
-        _update_last_translate_debug(
-            pipeline_status="objective_translation_corruption_withheld",
-            factory_guard_issues=degraded_issues[:30],
-            final_candidate="",
-            cacheable=False,
-        )
-        return None
+    # Quality alerts affect learning only. No provider fallback or retry here.
     try:
         _tl.delivery_degraded = bool(degraded_issues)
         _tl.delivery_degraded_issues = degraded_issues[:30]
@@ -13016,38 +13037,36 @@ def _best_effort_factory_delivery(source_text, candidate, src, tgt, *, issues=No
     )
     if degraded_issues:
         logger.error(
-            "[Availability] delivered best non-cacheable translation; validation alerts=%s",
+            "[DeliveryQuality] translation retained; learning disabled; alerts=%s",
             degraded_issues[:20],
         )
     return best
 
 def _emergency_translation_fallback(source_text, src, tgt, mention_placeholders=None):
-    """Try independent NMT routes after empty or objectively corrupt output.
+    """After an empty response, use local data and at most one NMT route.
 
-    Each provider candidate is validated separately.  An invalid first NMT
-    result no longer prevents the next fallback from running.  Successful output
-    remains non-cacheable; if every route is empty or objectively unsafe, the
-    LINE handler schedules detached retries instead of displaying a terminal
-    "cannot translate" message.
+    Never retranslate a quality warning or repeat an already attempted route.
     """
     if not source_text or not isinstance(source_text, str):
         return None
     if not factory_translation_policy_module.allow_emergency_nmt_fallback(src, tgt):
         return None
 
-    providers = (
-        # A provisioned local route is independent of public provider outages.
-        ("local_offline", lambda: offline_translation_module.translate(source_text, src, tgt)),
-        ("configured_nmt", lambda: nmt_module.nmt_translate(source_text, src, tgt)),
-        ("public_google", lambda: translate_google(source_text, src, tgt)),
-    )
+    providers = [("local_offline", lambda: offline_translation_module.translate(source_text, src, tgt))]
+    if not getattr(_tl, "nmt_attempted", False):
+        if nmt_module.nmt_stats().get("api_key_available"):
+            providers.append(("configured_nmt", lambda: nmt_module.nmt_translate(source_text, src, tgt)))
+        else:
+            providers.append(("public_google", lambda: translate_google(source_text, src, tgt)))
     for provider_name, call in providers:
         try:
+            if provider_name != "local_offline":
+                _tl.nmt_attempted = True
             candidate = call()
         except Exception as exc:
             logger.warning("[Availability] emergency %s failed: %s", provider_name, exc)
             continue
-        if not candidate or _is_translation_failure_sentinel(candidate):
+        if not candidate:
             continue
         # Some NMT engines return the actual visible mention. Normalize that
         # already-present identity back to its known token before validation;
@@ -13064,7 +13083,7 @@ def _emergency_translation_fallback(source_text, src, tgt, mention_placeholders=
         )
         if not result:
             logger.warning(
-                "[Availability] emergency %s returned an objectively invalid candidate; trying next route",
+                "[Availability] emergency %s returned no translation",
                 provider_name,
             )
             continue
@@ -13079,108 +13098,24 @@ def _emergency_translation_fallback(source_text, src, tgt, mention_placeholders=
 
 
 def _final_delivery_guard(source_text, candidate, src, tgt):
-    """Final delivery boundary with strict learning and resilient availability.
-
-    A non-empty provider translation is validated before it may enter cache/TM.
-    Validation disagreement first tries an exact verified correction and local
-    immutable repair.  If no authoritative correction exists, the provider text
-    is delivered as degraded and non-cacheable instead of being replaced by a
-    generic failure notice.  Only empty output, legacy failure payloads and pure
-    model meta-commentary are undeliverable.
-    """
-    if not candidate or not isinstance(candidate, str):
+    """Improve locally and report quality; never veto a non-empty translation."""
+    if not isinstance(candidate, str) or not candidate.strip():
         return None
-    if _is_translation_failure_sentinel(candidate):
-        return None
-    candidate = tqg_module.canonicalize_source_terms(source_text, candidate, src, tgt)
     original = candidate.strip()
-    if not original:
-        return None
-    if _is_meta_commentary_leak(original):
-        logger.error("[FinalDeliveryGuard] pure meta commentary is not deliverable")
-        return None
-
     try:
-        pairs = ge_module.collect_applicable_pairs(
-            source_text,
-            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-            src, tgt,
-        )
-        issues = []
-        leaked_label = ge_module.find_reverse_glossary_ui_leak(
-            source_text, original,
-            GLOSSARY_LOOKUP if 'GLOSSARY_LOOKUP' in globals() else {},
-            src, tgt,
-        )
-        if leaked_label:
-            issues.append("reverse_glossary_ui_label_leak:" + str(leaked_label))
-        direct_report = tqg_module.validate_translation(
-            source_text, original, src, tgt,
-            immutable_literals=tqg_module.inspect_immutable_spans(source_text).mapping.values(),
-            glossary_pairs=pairs,
-            require_paragraph_fidelity=False,
-        )
-        if not direct_report.ok:
-            issues.extend(str(item) for item in direct_report.hard_issues)
-        factory_report = _factory_guard_report(source_text, original, src, tgt)
-        if not factory_report.ok:
-            issues.extend(factory_report.hard_issues)
-        issues.extend(_measurement_semantic_issues(source_text, original, src, tgt))
-        issues = list(dict.fromkeys(item for item in issues if item))
-
+        normalized = tqg_module.canonicalize_source_terms(source_text, original, src, tgt) or original
+        issues = _delivery_validation_issues(source_text, normalized, src, tgt)
         if issues:
-            fallback = _best_effort_factory_delivery(
-                source_text, original, src, tgt, issues=issues
-            )
-            if fallback:
-                return fallback
-            objective, advisory = _partition_delivery_issues(issues)
-            if objective:
-                logger.error(
-                    "[FinalDeliveryGuard] objective integrity rejection; provider fallback/retry required issues=%s",
-                    objective[:20],
-                )
-                return None
-            if _factory_route_is_strict(source_text, src, tgt):
-                logger.error(
-                    "[FinalDeliveryGuard] emergency delivery-block switch rejected advisory candidate issues=%s",
-                    advisory[:20],
-                )
-                return None
-            return original
-
-        checked = tqg_module.ensure_delivery_safe_translation(
-            source_text, original, src, tgt,
-            model=_active_upgrade_model(),
-            glossary_pairs=pairs,
-            ai_client=None,
-            fallback_translate=None,
-        )
-        if checked.get("ok") and checked.get("text"):
-            safe = str(checked["text"]).strip()
-            if safe and not _is_meta_commentary_leak(safe):
-                post_report = _factory_guard_report(source_text, safe, src, tgt)
-                if post_report.ok:
-                    return safe
-                return _best_effort_factory_delivery(
-                    source_text, safe, src, tgt,
-                    issues=post_report.issues,
-                    prior_candidate=original,
-                )
-
-        return _best_effort_factory_delivery(
-            source_text, original, src, tgt,
-            issues=checked.get("issues", []) or ["local_safe_check_empty"],
-        )
+            return _best_effort_factory_delivery(
+                source_text, normalized, src, tgt, issues=issues, prior_candidate=original
+            ) or normalized
+        return normalized
     except Exception as exc:
-        logger.exception(
-            "[FinalDeliveryGuard] validation exception; delivering non-cacheable provider text: %s",
-            exc,
-        )
-        return _best_effort_factory_delivery(
-            source_text, original, src, tgt,
-            issues=["validation_exception:" + type(exc).__name__],
-        )
+        _tl.delivery_degraded = True
+        _tl.cacheable = False
+        _tl.delivery_degraded_issues = ["validation_exception:" + type(exc).__name__]
+        logger.warning("[DeliveryQuality] diagnostic unavailable; retaining translation: %s", type(exc).__name__)
+        return original
 
 
 def _post_restore_mentions_guard(candidate, mention_placeholders):
@@ -13193,8 +13128,6 @@ def _post_restore_mentions_guard(candidate, mention_placeholders):
     can actually change here: placeholder residue and missing original mentions.
     """
     if not candidate or not isinstance(candidate, str):
-        return None
-    if _is_translation_failure_sentinel(candidate):
         return None
     expected_counts = {}
     for mention in (mention_placeholders or {}).values():
@@ -13454,9 +13387,11 @@ def _translation_job_scope():
     finally:
         for key, (owner, _check) in leases.items():
             try:
-                translation_retry_queue_module.reschedule(
-                    key, owner=owner, delay_seconds=2, error="foreground_work_pending"
+                translation_retry_queue_module.mark_failed(
+                    key, owner=owner, error="foreground_attempt_finished_without_delivery"
                 )
+                with _TRANSLATION_RETRY_LOCK:
+                    _TRANSLATION_RETRY_INFLIGHT.discard(key)
             except Exception as exc:
                 logger.warning("[TranslationOutbox] release failed: %s", exc)
         _translation_delivery_state.__dict__.clear()
@@ -13769,31 +13704,13 @@ def _translation_retry_push_chunks(job_key, payload, text, *, max_messages=5,
 
 
 def _translation_retry_delays():
-    """Return the initial retry delays, defaulting to 2s/8s/20s."""
-    raw = str(os.environ.get("TRANSLATION_RETRY_DELAYS", "2,8,20") or "2,8,20")
-    delays = []
-    for part in raw.split(","):
-        try:
-            value = max(1, min(300, int(float(part.strip()))))
-        except Exception:
-            continue
-        if value not in delays:
-            delays.append(value)
-    return tuple(delays[:8] or (2, 8, 20))
+    """Compatibility: no automatic retry schedule, regardless of legacy env."""
+    return ()
 
 
 def _translation_retry_backoff(completed_attempts):
-    """Delay after a failed attempt; retries continue until delivery succeeds."""
-    initial = _translation_retry_delays()
-    completed = max(1, int(completed_attempts or 1))
-    if completed < len(initial):
-        return initial[completed]
-    try:
-        cap = max(60, min(3600, int(os.environ.get("TRANSLATION_RETRY_MAX_DELAY", "300"))))
-    except Exception:
-        cap = 300
-    exponent = max(0, completed - len(initial))
-    return min(cap, 60 * (2 ** min(exponent, 6)))
+    """Unused compatibility hook: failed attempts are terminal."""
+    return 0
 
 
 def _translation_retry_key(ctx, source_text, src_lang, target_langs):
@@ -13880,7 +13797,7 @@ def _translation_retry_attempt(job, lease_owner=None):
                 reply_text = None
             delivered_map = {primary_target: translated} if translated else {}
 
-        if not reply_text or _is_translation_failure_sentinel(reply_text):
+        if not reply_text:
             if _translation_was_intentionally_skipped():
                 return _complete_durable_text_job(job_key, lease_owner=lease_owner)
             return False
@@ -14097,6 +14014,9 @@ def _run_scheduled_translation(job, owner):
         with _TRANSLATION_RETRY_LOCK:
             _TRANSLATION_RETRY_INFLIGHT.discard(job["job_key"])
         return True
+    finally:
+        with _TRANSLATION_RETRY_LOCK:
+            _TRANSLATION_RETRY_INFLIGHT.discard(job["job_key"])
 
 
 # Two text recovery slots remain available while media extraction is slow.
@@ -14153,12 +14073,9 @@ def _schedule_text_translation_retry(
     file_name="",
     delay_seconds=None,
 ):
-    """Persist an empty translation and retry until it is delivered.
-
-    Unlike the previous three-attempt in-memory timer, this queue survives
-    restarts and has no terminal exhausted state.  The user is not asked to
-    resend and no status-only message is posted into the conversation.
-    """
+    """Persist the initial foreground intent; empty-result retries are retired."""
+    if delay_seconds is None:
+        return False  # retired empty-result retry entry point
     ctx = dict(ctx or {})
     target_id = ctx.get("group_id") or ctx.get("user_id")
     source_text = str(source_text or "").strip()
@@ -14244,8 +14161,8 @@ def _complete_durable_text_job(job_key, lease_owner=None):
                     "delivery_round": int(plan.get("round") or 0) + 1,
                 }, owner=owner):
                     return False
-                translation_retry_queue_module.reschedule(key, delay_seconds=2, owner=owner,
-                                                          error="remaining_target_languages")
+                translation_retry_queue_module.mark_failed(key, owner=owner,
+                                                           error="remaining_target_languages_no_retry")
                 _wake_translation_retry_workers()
                 return True
         completed = translation_retry_queue_module.mark_delivered(key, owner=owner)
@@ -14389,9 +14306,8 @@ def _complete_durable_media_job(job_key):
 def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
     """Persist an image OCR/translation intent before transient processing.
 
-    The LINE message ID is sufficient to re-download the media while LINE keeps
-    it available.  Jobs survive deploys and are retried by the same lease-based
-    worker as text jobs.  No operational warning is posted to the conversation.
+    The LINE message ID identifies one initial background attempt. Completed
+    or failed attempts are never requeued after a restart.
     """
     ctx = dict(ctx or {})
     target_id = ctx.get("group_id") or ctx.get("user_id")
@@ -14522,7 +14438,7 @@ def translate(text, src, tgt):
         "quality_gate_pending", "delivery_degraded", "delivery_degraded_issues",
         "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
         "context_result_cacheable",
-        "learning_rejections",
+        "learning_rejections", "generated_candidate", "nmt_attempted",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -14953,6 +14869,14 @@ def translate(text, src, tgt):
         else:
             with serialize_request(_request_key):
                 result = _translate_core(protected_text, src, tgt)
+    except Exception as exc:
+        retained = getattr(_tl, "generated_candidate", None)
+        if not retained or retained[1:] != (src, tgt):
+            raise
+        result = retained[0]
+        _tl.delivery_degraded = True
+        _tl.cacheable = False
+        logger.warning("[DeliveryQuality] postprocessing failed; retaining generated text: %s", type(exc).__name__)
     finally:
         # 還原 thread-local 狀態,避免污染同 thread 後續無保護名的翻譯
         try:
@@ -14975,9 +14899,6 @@ def translate(text, src, tgt):
     if not result and not _translation_was_intentionally_skipped():
         _emergency_attempted = True
         result = _emergency_translation_fallback(protected_text, src, tgt, mention_placeholders=_mention_map)
-    if _is_translation_failure_sentinel(result):
-        logger.warning("[LegacyFailurePurge] blocked failure payload at public translate boundary")
-        result = None
     if result and isinstance(result, str):
         if _mention_map:
             result = restore_mentions(result, _mention_map)
@@ -14989,24 +14910,6 @@ def translate(text, src, tgt):
             canonical_text, result, src, tgt
         )
         result = _final_delivery_guard(canonical_text, result, src, tgt)
-        if (
-            not result
-            and not _emergency_attempted
-            and not _translation_was_intentionally_skipped()
-        ):
-            # The primary provider returned text, but objective integrity checks
-            # rejected it.  Try independent NMT routes immediately before
-            # falling back to the detached retry worker.
-            _emergency_attempted = True
-            result = _emergency_translation_fallback(protected_text, src, tgt, mention_placeholders=_mention_map)
-            if result and _mention_map:
-                result = restore_mentions(result, _mention_map)
-                result = _post_restore_mentions_guard(result, _mention_map)
-            if result:
-                result = _normalize_factory_operation_question(
-                    canonical_text, result, src, tgt
-                )
-                result = _final_delivery_guard(canonical_text, result, src, tgt)
         # Absolute last boundary: if the source is an ERP reason table/label,
         # deterministic factory semantics outrank any reviewer/cache/model output.
         if src == "zh" and tgt == "id":
@@ -15087,13 +14990,15 @@ def translate(text, src, tgt):
         # boundary after it so no optional formatting step can bypass factory
         # facts, identities, quantities or terminology.
         if result != _validated_before_expression:
-            _checked_expression = _final_delivery_guard(canonical_text, result, src, tgt)
-            # Decoration is optional. If it changes meaning or introduces an
-            # unsupported symbol, keep the translation that already passed all
-            # guards instead of losing a valid message or paying for a retry.
-            result = _checked_expression or _validated_before_expression
-    if _is_translation_failure_sentinel(result):
-        result = None
+            try:
+                prior_issues = set(_delivery_validation_issues(
+                    canonical_text, _validated_before_expression, src, tgt))
+                added_issues = set(_delivery_validation_issues(
+                    canonical_text, result, src, tgt)) - prior_issues
+                result = (_validated_before_expression if not result or added_issues
+                          else _final_delivery_guard(canonical_text, result, src, tgt))
+            except Exception:
+                result = _validated_before_expression
     if result:
         _set_translation_outcome("delivered")
     elif not _translation_was_intentionally_skipped():
@@ -15716,11 +15621,13 @@ def _translate_core(text, src, tgt):
     
     if _use_nmt:
         try:
+            _tl.nmt_attempted = True
             nmt_result = nmt_module.nmt_translate(text, src, tgt)
             if nmt_result:
                 # NMT 成功後只做本地品質檢查，不再呼叫 QE/APE 模型
                 logger.info("[Pipeline] NMT route success: %d chars", len(text))
                 result = nmt_result
+                _tl.generated_candidate = (str(result), src, tgt)
                 # 跳過 LLM 全翻,直接進後處理
                 _skip_to_post = True
             else:
@@ -15753,6 +15660,8 @@ def _translate_core(text, src, tgt):
             if _quality_critical:
                 _tl.force_model = _active_upgrade_model()
             result = _translate_inner(text, src, tgt)
+            if result:
+                _tl.generated_candidate = (str(result), src, tgt)
         finally:
             try:
                 if _prev_qg is None:
@@ -15807,7 +15716,8 @@ def _translate_core(text, src, tgt):
                                 len(_ge_result.get("violations", [])))
                     result = _ge_result["final_text"]
                 elif _ge_result.get("action_taken") == "blocked":
-                    result = _ge_result["final_text"]
+                    _tl.ge_violations = _ge_result.get("violations", [])
+                    _tl.cacheable = False
                 elif _ge_result.get("action_taken") == "warned" and _ge_result.get("violations"):
                     # 把 violations 存 thread-local,供 QE 參考
                     try:
@@ -15876,11 +15786,8 @@ def _translate_core(text, src, tgt):
     _quality_cacheable_for_context = False
 
     # ─── 主路徑收尾 2.5:同步品質閘門 ───
-    # Newly generated high-risk factory translations may receive one
-    # source-grounded review. Exact verified corrections have already returned
-    # above. Review is an additional quality signal, not a single point of
-    # failure: a locally valid first candidate remains deliverable as degraded
-    # and non-cacheable when the reviewer is unavailable or returns bad text.
+    # Local checks improve wording and determine learning/cache eligibility.
+    # Every non-empty provider candidate remains deliverable; no second AI call.
     if result and isinstance(result, str):
         _pre_gate_result = result
         try:
@@ -15896,15 +15803,7 @@ def _translate_core(text, src, tgt):
             _review_already_attempted = bool(
                 getattr(_tl, "source_review_already_attempted", False)
             )
-            _review_budget = ai_provider.translation_budget_snapshot()
-            _review_can_call = not _review_already_attempted and (
-                not _review_budget or (
-                    _review_budget["generations"] < _review_budget["max_generations"]
-                    and _review_budget["attempts"] < _review_budget["max_attempts"]
-                    and (_review_budget["deadline"] is None
-                         or time.monotonic() < _review_budget["deadline"])
-                )
-            )
+            _review_can_call = False
             try:
                 _continuous_learning_risk = al_module.assess_review_risk(
                     text,
@@ -16005,17 +15904,8 @@ def _translate_core(text, src, tgt):
                 model=_active_upgrade_model(),
                 immutable_literals=_immutable_literals,
                 glossary_pairs=_safe_pairs,
-                # At most one extra source-grounded call.  If the dedicated
-                # factory-knowledge repair already ran, keep this gate local so
-                # a single message can never cascade into three provider calls.
-                ai_client=(
-                    None
-                    if (
-                        not _review_can_call
-                        or factory_translation_policy_module.review_mode() == "off"
-                    )
-                    else ai_provider
-                ),
+                # Quality assessment is always local, including learned risks.
+                ai_client=None,
                 force_review=_force_source_review,
                 used_provider=getattr(_tl, "last_provider_used", None),
                 review_context=_review_context,
@@ -16068,10 +15958,10 @@ def _translate_core(text, src, tgt):
                     # may disable cache/TM admission, but it must never erase the
                     # only translation and manufacture a service outage.
                     logger.warning(
-                        "[QualityGate] review disagreement; preserving first candidate for final boundary issues=%s",
+                        "[QualityGate] advisory issues; retaining translation without retry: %s",
                         _gate.get("issues"),
                     )
-                    result = _pre_gate_result
+                    result = _gate.get("text") or _pre_gate_result
                     _quality_cacheable = False
                 try:
                     last_translate_debug["final_pipeline_status"] = (
@@ -16173,7 +16063,7 @@ def _translate_core(text, src, tgt):
         _quality_cacheable or _quality_cacheable_for_context
     ))
 
-    # Preserve measured interventions, including provider failover recovery.
+    # Preserve local interventions and diagnostics for future first-pass prompts.
     # Replayed local validation can teach first-pass rules; generated targets
     # never become human approvals. Clean single-pass messages need no write.
     try:
@@ -16185,7 +16075,7 @@ def _translate_core(text, src, tgt):
                     al_module.record_translation_outcome(
                         source_text=text, candidate_text=_rejection['candidate'],
                         final_text=result, src_lang=src, tgt_lang=tgt, group_id=_gid_for_tm,
-                        issues=_rejection['issues'], path='provider_rejection_recovered',
+                        issues=_rejection['issues'], path='source_grounded_local_repair',
                         reviewed=True, cacheable=True,
                     )
             al_module.record_translation_outcome(
@@ -16549,7 +16439,7 @@ def _translate_inner(text, src, tgt):
             conversation_context.register_source_form(text, normalized)
             text = normalized
         # 進階:nano 模型語意級規範化(成本高)
-        if id_preprocessing_nano:
+        if False:  # Retired: extra AI preprocessing before the primary translation.
             text_nano = normalize_indonesian_text_with_nano(text)
             if text_nano and text_nano != text:
                 text = text_nano
@@ -16689,48 +16579,13 @@ def _translate_inner(text, src, tgt):
     # 三家 provider 的接力、總期限與熔斷均由 ai_provider 統一處理。
     # 這裡只發出一次主翻譯，避免外層 retry 再把整條 provider chain 重跑。
     result = translate_openai(text, src, tgt)
-    if _is_translation_failure_sentinel(result):
-        logger.warning("[LegacyFailurePurge] provider returned a legacy failure payload; treating as empty")
-        result = None
-    if not result:
-        # Generic consumer NMT is intentionally disabled for the unified factory
-        # route: a fluent but wrong accounting/process/equipment instruction is
-        # unsafe. Operators may opt in only with FACTORY_ALLOW_GENERIC_NMT_FALLBACK=1.
-        if factory_translation_policy_module.allow_generic_nmt_fallback(src, tgt):
-            try:
-                result = translate_google(text, src, tgt)
-            except Exception as _nmt_fallback_exc:
-                logger.warning("[FreeNMTFallback] exception: %s", _nmt_fallback_exc)
-                result = None
-            if result and not _is_translation_failure_sentinel(result):
-                logger.warning("[FreeNMTFallback] delivered Google fallback after empty paid response")
-                _update_last_translate_debug(
-                    fallback_used="google_gtx",
-                    fallback_status="success",
-                    final_candidate=str(result)[:2000],
-                    pipeline_status="free_nmt_fallback_success",
-                )
-            else:
-                result = None
-                _update_last_translate_debug(
-                    fallback_used="google_gtx",
-                    fallback_status="empty",
-                    pipeline_status="all_translation_results_empty",
-                )
-        else:
-            logger.error("[FactoryPolicy] generic NMT fallback blocked after empty provider response")
-            result = None
-            _update_last_translate_debug(
-                fallback_used="disabled_by_factory_policy",
-                fallback_status="blocked",
-                pipeline_status="factory_translation_provider_empty",
-            )
-    
+    if result:
+        _tl.generated_candidate = (str(result), src, tgt)
     # ★ v3.4:雙翻 ensemble - 比較 pivot 和直譯,選較完整的
     if pivot_result and result:
         result = select_better_translation(result, pivot_result, text)
 
-    # v3.32.6: no quality repair request.  The first pass is accepted or blocked locally.
+    # Quality findings never request another generation or erase the first pass.
 
     if result:
         result = finalize_factory_translation(text, result, src, tgt)
@@ -16742,7 +16597,7 @@ def _translate_inner(text, src, tgt):
         #
         # Keep diagnostics and cache discipline here, but always pass the candidate
         # to the one authoritative whole-document gate.  Semantic/factory defects
-        # can still be repaired by review or rejected at the final boundary.
+        # are logged and locally improved without blocking delivery.
         try:
             if is_translation_acceptable(text, result, src, tgt):
                 cache_set(text, src, tgt, result)
@@ -16871,7 +16726,7 @@ def _vision_call(messages, max_tokens, cache_key=None,
         "messages": messages,
         "timeout": 24,
         "required_capability": "vision",
-        "translation_max_generations": 2,
+        "translation_max_generations": 1,
         "provider_preference": preference,
         "latency_profile": "vision",
         "translation_fast_quality": True,
@@ -18084,7 +17939,7 @@ def transcribe_audio_openai(audio_bytes, suffix=".m4a"):
         suffix = ".m4a"
     primary = STT_MODEL
     last_err = None
-    for attempt_model in dict.fromkeys((primary, STT_FALLBACK_MODEL)):
+    for attempt_model in (primary,):  # one transcription request; no automatic retry
         try:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
                 tmp.write(audio_bytes)
@@ -19609,10 +19464,6 @@ def callback():
     except InvalidSignatureError:
         _event_log_write("webhook_invalid_sig", {})
         abort(400)
-    except webhook_runtime.PendingWebhookWork:
-        logger.warning("[callback] processing or delivery pending; keeping webhook retry eligible")
-        _event_log_write("webhook_pending_delivery", {"build": webhook_runtime.BUILD_ID})
-        return "RETRY", 503
     except Exception as exc:
         # No success ACK unless durable persistence succeeded. LINE can retry;
         # the inbox key and the existing translation receipts suppress duplicates.
@@ -20037,7 +19888,7 @@ def handle_message(event):
         track_group_usage("__dm__", _bp, _bc, _bcost)
         if not result:
             logger.warning(
-                "[DM] immediate translation empty; scheduling retry lang=%s tgt=%s text=%r",
+                "[DM] translation provider returned no text; no automatic retry lang=%s tgt=%s text=%r",
                 lang, tgt, text_clean[:60],
             )
             _dm_retry_ctx = {
@@ -20057,7 +19908,7 @@ def handle_message(event):
                 _send_background_failure_notice(
                     _dm_retry_ctx,
                     kind="translation_retry",
-                    detail="dm_immediate_providers_empty_auto_retry",
+                    detail="dm_provider_empty_no_retry",
                 )
             return
         reply = LANG_FLAGS.get(tgt, "") + " " + result
@@ -20411,17 +20262,6 @@ def handle_message(event):
             _tts_lang, _tts_text = "zh", result
     track_group_usage(group_id, _bp, _bc, _bcost)
 
-    if reply is not None and _is_translation_failure_sentinel(reply):
-        logger.error("[LegacyFailurePurge] blocked legacy failure payload at LINE send boundary")
-        try:
-            _event_log_write("legacy_failure_payload_blocked", {
-                "group_id": group_id or "",
-                "lang": lang,
-                "payload": str(reply)[:240],
-            })
-        except Exception:
-            pass
-        return
 
     if reply is None:
         if _translation_was_intentionally_skipped():
@@ -20448,7 +20288,7 @@ def handle_message(event):
         # Reaching this branch now means every immediate provider path was empty.
         # Schedule detached retries and tell the group that no resend is needed;
         # never emit the old "cannot translate safely" terminal state.
-        logger.warning("[group %s] immediate translation empty; scheduling retry lang=%s text=%r",
+        logger.warning("[group %s] translation provider returned no text; no automatic retry lang=%s text=%r",
                        group_id, lang, (text_to_translate or "")[:80])
         _retry_targets = list(_targets) if lang == "zh" else ["zh"]
         _retry_ctx = {
@@ -20468,7 +20308,7 @@ def handle_message(event):
             quoted_context_message_id=getattr(_tl, "quoted_context_message_id", ""),
         )
         try:
-            _event_log_write("translate_empty_retry_scheduled", {
+            _event_log_write("translation_empty_no_retry", {
                 "group_id": group_id or "",
                 "lang": lang,
                 "targets": _retry_targets,
@@ -20852,8 +20692,7 @@ def handle_image(event):
     except Exception as _pending_ctx_exc:
         logger.warning("[media_ctx] pending image marker failed: %s", _pending_ctx_exc)
 
-    # If no vision route is currently healthy, persist the media intent and
-    # retry after configuration/provider recovery.  Do not post a failure text.
+    # If no vision route is healthy, queue one initial background attempt.
     if not _has_ai_capability("vision"):
         _event_log_write("image_deferred", {"reason": "no_vision_provider"})
         _schedule_image_translation_retry({
@@ -35843,9 +35682,6 @@ def translate_multi(text_to_translate, src, targets, mention_placeholders=None):
                 _set_translation_outcome(
                     "failed", "translate_multi_exception", target=tgt_lang
                 )
-            if _is_translation_failure_sentinel(res):
-                logger.warning("[LegacyFailurePurge] translate_multi dropped legacy failure payload")
-                res = None
             if res and mention_placeholders:
                 res = restore_mentions(res, mention_placeholders)
                 res = _post_restore_mentions_guard(res, mention_placeholders)
@@ -35930,7 +35766,7 @@ def format_multi_reply(translations):
         return None
     lines = []
     for tgt_lang, res in translations:
-        if not res or _is_translation_failure_sentinel(res):
+        if not res:
             continue
         flag = LANG_FLAGS.get(tgt_lang, "")
         lines.append(("%s %s" % (flag, res)).strip())

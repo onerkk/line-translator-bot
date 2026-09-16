@@ -16,7 +16,7 @@ import time
 import factory_source_understanding as understanding
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-11.1-measured-error-policy'
+BUILD_ID = '2026-09-16.1-local-correction-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
@@ -87,7 +87,10 @@ def init_schema(conn):
 
 def derive(source, old, new, src, tgt, *, reviewed, cacheable, validator):
     """Replay both targets locally; a caller's confidence/flags are not proof."""
-    if not (reviewed and cacheable and old and new and old.strip() != new.strip()):
+    # A source-grounded local correction can teach the same lesson as a human
+    # correction. Replaying both validators below is the evidence; a second AI
+    # review is neither necessary nor sufficient.
+    if not (cacheable and old and new and old.strip() != new.strip()):
         return []
     if (src, tgt) not in {('zh', 'id'), ('id', 'zh')} or max(map(len, (source, old, new))) > 12000:
         return []

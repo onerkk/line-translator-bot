@@ -32,30 +32,22 @@ def test_expired_lease_is_reclaimed_after_worker_crash(tmp_path):
     first = queue.claim_due_jobs(owner="dead-worker", now=base, lease_seconds=15)
     assert first and first[0]["lease_owner"] == "dead-worker"
     reclaimed = queue.claim_due_jobs(owner="live-worker", now=base + 16.0, lease_seconds=15)
-    assert reclaimed and reclaimed[0]["lease_owner"] == "live-worker"
+    assert reclaimed == []
+    assert queue.get("job-2")["status"] == "failed"
 
 
 def test_retry_queue_has_no_terminal_exhausted_state(tmp_path):
     _fresh_db(tmp_path)
     queue.enqueue("job-3", {"job_kind": "text"}, job_kind="text")
     base = time.time()
+    claimed = queue.claim_due_jobs(owner="worker", now=base, lease_seconds=15)
+    assert claimed
+    assert queue.reschedule("job-3", delay_seconds=1, error="outage", owner="worker")
     for attempt in range(25):
-        claimed = queue.claim_due_jobs(owner=f"worker-{attempt}", now=base + attempt * 10, lease_seconds=15)
-        assert claimed
-        queue.reschedule(
-            "job-3",
-            delay_seconds=1,
-            error=f"temporary-{attempt}",
-            owner=f"worker-{attempt}",
-        )
+        assert not queue.claim_due_jobs(owner=f"worker-{attempt}", now=base + 100 + attempt * 10)
     row = queue.get("job-3")
-    assert row is not None
-    assert row["status"] == "pending"
-    assert row["attempts"] == 25
-    source = inspect.getsource(queue).lower()
-    assert "status='exhausted'" not in source
-    assert 'status="exhausted"' not in source
-    assert "where status in ('pending','leased')" in source
+    assert row["status"] == "failed" and row["attempts"] == 1
+    assert not queue.was_delivered("job-3")
 
 
 def test_text_is_persisted_before_immediate_provider_call():

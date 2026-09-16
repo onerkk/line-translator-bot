@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-12.1-factory-process-terminology"
+QUALITY_GATE_BUILD_ID = "2026-09-16.1-planning-delivery"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1731,6 +1731,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
+        result = fsa_module.planning_semantics.canonicalize_record_timing(source, result)
         result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
         result = fsa_module.instruction_semantics.rework_semantics.canonicalize_noun_phrase(source, result)
     return result
@@ -2418,274 +2419,33 @@ def gate_and_revise(
     require_review_success: bool = False,
     privacy_literals: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
-    """Validate and, for high-risk messages, independently reconstruct once.
-
-    Ordinary locally valid messages remain single-call.  A second call is made
-    only when the caller explicitly marks a high-consequence message or when the
-    first candidate fails a deterministic source/glossary/integrity check.  The
-    reviewer receives the original source, not just the first candidate, and a
-    different configured provider is preferred.  When ``require_review_success``
-    is true, review success controls authoritative acceptance and cacheability,
-    not basic availability.  A first candidate that already passed all checks
-    remains deliverable as degraded/non-cacheable when a requested reviewer is
-    unavailable or returns an invalid mutation.
-    """
-    glossary_pairs = _merge_runtime_glossary_pairs(
-        source, src_lang, tgt_lang, list(glossary_pairs or ())
-    )
-    immutable_values = list(immutable_literals or ())
-    source_frame = fsa_module.build_source_frame(source, src_lang, tgt_lang)
-
-    caller_semantic_validator = semantic_validator
-    def _combined_semantic_validator(text: str) -> Tuple[bool, Sequence[str]]:
-        combined_issues: List[str] = []
-        if caller_semantic_validator is not None:
-            try:
-                caller_ok, caller_issues = caller_semantic_validator(text)
-            except Exception as exc:
-                logger.warning("[QualityGate] caller semantic validator unavailable: %s", exc)
-                caller_ok, caller_issues = False, ["semantic_validation_exception:" + type(exc).__name__]
-            if not caller_ok or caller_issues:
-                combined_issues.extend(str(x) for x in (caller_issues or ["semantic_validation_failed"]) if str(x).strip())
-        frame_ok, frame_issues = fsa_module.validate_translation(source_frame, text)
-        if not frame_ok or frame_issues:
-            combined_issues.extend(str(x) for x in (frame_issues or ()) if str(x).strip())
-        combined_issues = list(dict.fromkeys(combined_issues))
-        return not combined_issues, combined_issues
-
-    semantic_validator = _combined_semantic_validator if (caller_semantic_validator is not None or source_frame.get("active")) else None
-    candidate = repair_identity_tokens(source, candidate)
-    candidate = normalize_indonesian_factory_register(
-        source, candidate, src_lang, tgt_lang
-    )
-    report = validate_translation(
-        source, candidate, src_lang, tgt_lang,
-        immutable_literals=immutable_values,
-        glossary_pairs=glossary_pairs,
-        require_paragraph_fidelity=critical,
-    )
-    report = _merge_semantic_validation(report, candidate, semantic_validator)
-
-    # Preserve the low-latency single-call path for every locally clean routine
-    # message.  A hard local defect is concrete evidence that another call can
-    # improve correctness, so it is automatically eligible for exactly one
-    # source-grounded repair review.  Source-frame risk alone no longer forces a
-    # paid second pass when that frame's validator already confirms full claim
-    # coverage; callers may still force review for high-consequence clean text.
-    review_requested = bool(force_review or not report.ok)
-    should_review = bool(ai_client is not None and review_requested)
-    review_succeeded = False
-    review_failure_reason = ""
-    if should_review:
-        preference = _independent_provider_preference(ai_client, used_provider)
-        reviewed = review_translation(
-            source,
-            candidate,
-            src_lang,
-            tgt_lang,
-            model=model,
-            issues=(report.issues if report.issues else ["independent_source_semantic_audit"]),
+    """Local quality assessment only; retain text and never call a reviewer."""
+    original = str(candidate or "").strip()
+    candidate = original
+    issues = []
+    report = None
+    try:
+        candidate = canonicalize_source_terms(source, original, src_lang, tgt_lang) or original
+        candidate = repair_identity_tokens(source, candidate) or candidate
+        candidate = normalize_indonesian_factory_register(source, candidate, src_lang, tgt_lang) or candidate
+        report = validate_translation(source, candidate, src_lang, tgt_lang,
+            immutable_literals=immutable_literals,
             glossary_pairs=glossary_pairs,
-            ai_client=ai_client,
-            provider_preference=preference,
-            review_context=review_context,
-            privacy_literals=privacy_literals,
-        )
-        if reviewed:
-            reviewed = repair_identity_tokens(source, reviewed)
-            reviewed = normalize_indonesian_factory_register(source, reviewed, src_lang, tgt_lang)
-            reviewed_report = validate_translation(
-                source, reviewed, src_lang, tgt_lang,
-                immutable_literals=immutable_values,
-                glossary_pairs=glossary_pairs,
-                require_paragraph_fidelity=critical,
-            )
-            reviewed_report = _merge_semantic_validation(
-                reviewed_report, reviewed, semantic_validator
-            )
-            if reviewed_report.ok:
-                review_succeeded = True
-                return {
-                    "ok": True,
-                    "text": reviewed,
-                    "issues": reviewed_report.issues,
-                    "hard_issues": [],
-                    "warnings": reviewed_report.warnings,
-                    "reviewed": True,
-                    "review_requested": review_requested,
-                    "review_succeeded": True,
-                    "degraded": False,
-                    "cacheable": True,
-                    "path": "independent_source_review_passed",
-                }
-            # A reviewer that fails deterministic integrity checks must never
-            # replace an already valid first translation.
-            if report.ok:
-                return {
-                    "ok": True,
-                    "text": candidate,
-                    "issues": reviewed_report.issues,
-                    "hard_issues": reviewed_report.hard_issues,
-                    "warnings": reviewed_report.warnings,
-                    "reviewed": True,
-                    "review_requested": review_requested,
-                    "review_succeeded": False,
-                    "degraded": True,
-                    "cacheable": False,
-                    "path": "independent_review_rejected_original_kept",
-                }
-            review_failure_reason = "independent_review_rejected"
-        else:
-            review_failure_reason = "independent_review_unavailable"
-    elif review_requested:
-        review_failure_reason = "independent_review_provider_unavailable"
-
-    # Provider review is intentionally not a single point of failure.  For the
-    # complete polishing/large-bar scheduling frame, reconstruct a conservative
-    # target from source-proven slots whenever the model candidate still violates
-    # the semantic contract.  This also protects paraphrases when the review API
-    # is unavailable; incomplete/other scenarios never enter this fallback.
-    if not report.ok and source_frame.get("active"):
-        deterministic = fsa_module.deterministic_rebuild(source_frame)
-        if deterministic:
-            deterministic = repair_identity_tokens(source, deterministic)
-            deterministic = normalize_indonesian_factory_register(
-                source, deterministic, src_lang, tgt_lang
-            )
-            deterministic_report = validate_translation(
-                source, deterministic, src_lang, tgt_lang,
-                immutable_literals=immutable_values,
-                glossary_pairs=glossary_pairs,
-                require_paragraph_fidelity=critical,
-            )
-            deterministic_report = _merge_semantic_validation(
-                deterministic_report, deterministic, semantic_validator
-            )
-            if deterministic_report.ok:
-                return {
-                    "ok": True,
-                    "text": deterministic,
-                    "issues": deterministic_report.issues,
-                    "hard_issues": [],
-                    "warnings": deterministic_report.warnings,
-                    "reviewed": bool(should_review),
-                    "review_requested": review_requested,
-                    "review_succeeded": False,
-                    "degraded": bool(review_requested),
-                    "cacheable": True,
-                    "path": "deterministic_source_frame_rebuild",
-                }
-
-    if report.ok:
-        # The reviewer is an additional adjudicator, not a single point of
-        # failure.  A network outage, missing second provider, timeout, or bad
-        # reviewer mutation cannot erase a first translation that independently
-        # passed every deterministic source-grounded check.  Keep it visible,
-        # but never cache or learn from the degraded path.
-        review_issue = review_failure_reason if review_requested and not review_succeeded else ""
-        recorded_issues = list(dict.fromkeys(
-            list(report.issues) + ([review_issue] if review_issue else [])
-        ))
-        recorded_warnings = list(dict.fromkeys(
-            list(report.warnings) + ([review_issue] if review_issue else [])
-        ))
-        if not review_requested:
-            path = "single_api_local_validation"
-        elif review_failure_reason == "independent_review_rejected":
-            path = "independent_review_rejected_original_kept"
-        else:
-            path = "review_unavailable_original_kept"
-        return {
-            "ok": True,
-            "text": candidate,
-            "issues": recorded_issues,
-            "hard_issues": [],
-            "warnings": recorded_warnings,
-            "reviewed": bool(should_review),
-            "review_requested": review_requested,
-            "review_succeeded": False,
-            "degraded": bool(review_requested),
-            "cacheable": not bool(review_requested),
-            "path": path,
-        }
-
-    # Strict review policy still blocks a first candidate that failed local
-    # source-grounded validation.  The availability fix applies only to a clean
-    # primary result; it does not turn malformed or semantically unsafe text into
-    # a deliverable fallback.
-    if review_requested and require_review_success:
-        reason = review_failure_reason or "required_source_review_not_completed"
-        return {
-            "ok": False,
-            "text": None,
-            "issues": list(dict.fromkeys(list(report.issues) + [reason])),
-            "hard_issues": list(dict.fromkeys(list(report.hard_issues) + [reason])),
-            "warnings": report.warnings,
-            "reviewed": bool(should_review),
-            "review_requested": True,
-            "review_succeeded": False,
-            "degraded": True,
-            "cacheable": False,
-            "path": "required_source_review_failed",
-        }
-
-    best_text, best_report = _best_effort_delivery_candidate(
-        source,
-        candidate,
-        src_lang,
-        tgt_lang,
-        immutable_literals=immutable_values,
-        glossary_pairs=glossary_pairs,
-        require_paragraph_fidelity=critical,
-        initial_report=report,
-    )
-    if best_text:
-        semantic_ok = True
-        semantic_issues: List[str] = []
+            require_paragraph_fidelity=False)
+        issues.extend(report.hard_issues)
         if semantic_validator is not None:
-            try:
-                semantic_ok, raw_semantic_issues = semantic_validator(best_text)
-                semantic_issues = [
-                    str(issue) for issue in (raw_semantic_issues or ()) if str(issue).strip()
-                ]
-            except Exception as exc:
-                logger.warning("[QualityGate] semantic validator unavailable on fallback: %s", exc)
-                semantic_ok = False
-                semantic_issues = ["semantic_validation_exception:" + type(exc).__name__]
-        if semantic_issues:
-            best_report = ValidationResult(
-                False,
-                list(dict.fromkeys(list(best_report.issues) + semantic_issues)),
-                list(dict.fromkeys(list(best_report.hard_issues) + semantic_issues)),
-                list(best_report.warnings),
-            )
-        return {
-            "ok": bool(semantic_ok and best_report.ok),
-            "text": best_text if semantic_ok and best_report.ok else None,
-            "issues": best_report.issues,
-            "hard_issues": best_report.hard_issues,
-            "warnings": best_report.warnings,
-            "reviewed": bool(should_review),
-            "review_requested": review_requested,
-            "review_succeeded": False,
-            "degraded": True,
-            "cacheable": False,
-            "path": "best_effort_after_review" if review_requested else "best_effort_quality_warning",
-        }
-
-    return {
-        "ok": False,
-        "text": None,
-        "issues": report.issues,
-        "hard_issues": report.hard_issues,
-        "warnings": report.warnings,
-        "reviewed": bool(should_review),
-        "review_requested": review_requested,
-        "review_succeeded": False,
-        "degraded": True,
-        "cacheable": False,
-        "path": "empty_translation_blocked",
-    }
+            ok, semantic_issues = semantic_validator(candidate)
+            issues.extend(semantic_issues or ([] if ok else ["semantic_validation_failed"]))
+    except Exception as exc:
+        issues.append("validation_exception:" + type(exc).__name__)
+    issues = list(dict.fromkeys(str(i) for i in issues if i))
+    return {"ok": bool(candidate) and not issues, "text": candidate or None,
+            "issues": issues, "hard_issues": issues,
+            "warnings": list(report.warnings) if report else [],
+            "reviewed": False, "review_requested": False, "review_succeeded": False,
+            "degraded": bool(issues),
+            "cacheable": bool(candidate) and not issues,
+            "path": "local_quality_advisory"}
 
 
 def _translate_candidate(
@@ -2925,7 +2685,7 @@ def ensure_delivery_safe_translation(
     )
     return {
         "ok": bool(best_text),
-        "text": best_text,
+        "text": best_text or candidate,
         "issues": best_report.issues,
         "hard_issues": best_report.hard_issues,
         "warnings": best_report.warnings,

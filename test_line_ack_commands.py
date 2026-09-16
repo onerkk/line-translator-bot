@@ -81,7 +81,8 @@ def test_translation_failure_preserves_thread_context_and_queues_without_sending
     sends = []
     hub.reminders.sender = lambda *args: sends.append(args)
     row = command(hub)
-    assert row["translation_pending"] and row["wake_at"] is not None
+    assert row["translation_pending"] and row["wake_at"] is None
+    assert row["reminder_state"] == "failed"
     assert row["delivery_state"] != "delivered" and "initial_messages" not in row
     assert row["last_error_stage"] == "translation" and sends == []
     assert hub.h["_tl"].__dict__ == old

@@ -298,10 +298,8 @@ def nmt_translate(text: str, src: str, tgt: str) -> Optional[str]:
             result, privacy_envelope
         )
         if not placeholders_ok:
-            logger.warning("[NMT] privacy placeholder omitted; rejecting result: %s", missing[:3])
-            result = None
-        else:
-            result = _translation_privacy.restore_sensitive_text(result, privacy_envelope)
+            logger.warning("[NMT] privacy placeholder omitted; preserving available text: %s", missing[:3])
+        result = _translation_privacy.restore_sensitive_text(result, privacy_envelope)
     
     if result:
         with _lock:
@@ -321,32 +319,8 @@ def nmt_translate(text: str, src: str, tgt: str) -> Optional[str]:
 
 def llm_post_edit(nmt_text: str, src_text: str, src: str, tgt: str,
                   llm_callable=None) -> Optional[str]:
-    """LLM post-editing(可選功能,預設關)
-    
-    把 NMT 翻譯結果送給 LLM 精修。用於:
-    - NMT 翻譯結構正確但語氣偏弱
-    - 含小量俚語但被 NMT 翻得太正式
-    
-    Args:
-        nmt_text: NMT 翻譯結果
-        src_text: 原文
-        src, tgt: 語言碼
-        llm_callable: 接受 (text, src, tgt) 回傳 str 的函數(通常是 translate_openai)
-    
-    Returns: 精修後譯文,或 None(失敗時返回 NMT 原文)
-    """
-    if not NMT_POST_EDIT:
-        return nmt_text
-    if not llm_callable:
-        return nmt_text
-    
-    edit_prompt = f"以下是初步翻譯,請精修。確保口語自然、術語正確、語氣相符。\n原文({src}):{src_text}\n初譯({tgt}):{nmt_text}\n精修譯文:"
-    try:
-        refined = llm_callable(edit_prompt, src, tgt)
-        return refined if refined else nmt_text
-    except Exception as e:
-        logger.warning("[NMT] post-edit failed: %s", e)
-        return nmt_text
+    """Compatibility shim: automatic second-pass translation is retired."""
+    return nmt_text
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -362,13 +362,7 @@ def test_signed_webhook_recovery_finishes_completion_without_another_tap(hub, cl
     hub.h["_factory_completion_sender"] = timeout
     clock.now = time.time() + 1
     response = app.app.test_client().post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
-    assert response.status_code == 500
-    jobs = [j for j in queue.list_pending() if j["job_kind"] == "webhook"]
-    assert len(jobs) == 1 and jobs[0]["payload"]["body"] == body
-    clock.now = item(hub, row)["next_attempt_at"] + 1
-    hub.h["_factory_completion_sender"] = lambda *args: sent.append(copy.deepcopy(args))
-    key = jobs[0]["job_key"]
-    assert queue.claim_job(key, owner="completion-recovery")
-    assert inbox.run_job(queue.get(key), "completion-recovery")
-    assert queue.was_delivered(key) and item(hub, row)["state"] == "accepted"
-    assert sent[0] == sent[1] and len(sent) == 2
+    assert response.status_code == 200
+    assert queue.pending_count() == 0
+    response = app.app.test_client().post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
+    assert response.status_code == 200 and len(sent) == 1

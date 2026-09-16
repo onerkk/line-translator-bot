@@ -104,12 +104,9 @@ def test_departure_retires_an_uncertain_retry_and_next_send_only_mentions_remain
     retry = stored(hub, row)
     hub.member_presence(GROUP, COLLEAGUE, left=True)
     hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
-    tick(hub, retry["wake_at"])
-    saved = stored(hub, row)
-    assert len(sent) == 2 and saved["pending_batch"] is None
-    tick(hub, saved["next_reminder_at"])
-    assert recipients(sent[-1]) == [THIRD]
-    assert sent[-1][2] != sent[-2][2]
+    assert retry["wake_at"] is None and retry["reminder_state"] == "failed"
+    hub.reminders.run_due()
+    assert len(sent) == 2
 
 
 @pytest.mark.parametrize("fallback_flag", [False, True])

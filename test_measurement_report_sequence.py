@@ -51,7 +51,8 @@ def test_natural_roundness_sequences_pass_without_rewriting(target):
 def test_wrong_metric_department_order_or_invented_approval_is_rejected(target):
     app._tl.semantic_contract = app.build_translation_semantic_contract(SOURCE, "zh", "id")
     assert not app._build_translation_response_validator(SOURCE, "zh", "id")(response(PREFIX + target), "test")[0]
-    assert app._final_delivery_guard(SOURCE, PREFIX + target, "zh", "id") is None
+    assert app._final_delivery_guard(SOURCE, PREFIX + target, "zh", "id")
+    assert app._delivery_validation_issues(SOURCE, PREFIX + target, "zh", "id")
 
 
 @pytest.mark.parametrize("source,metric,department", [
@@ -92,7 +93,8 @@ def test_report_question_accepts_natural_wording(target):
 def test_report_date_process_medium_and_question_cannot_be_changed(target):
     app._tl.semantic_contract = app.build_translation_semantic_contract(REPORT, "zh", "id")
     assert not app._build_translation_response_validator(REPORT, "zh", "id")(response(target), "test")[0]
-    assert app._final_delivery_guard(REPORT, target, "zh", "id") is None
+    assert app._final_delivery_guard(REPORT, target, "zh", "id")
+    assert app._delivery_validation_issues(REPORT, target, "zh", "id")
 
 
 def test_new_relation_is_in_generation_prompt_not_only_posthoc_checks():

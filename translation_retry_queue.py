@@ -5,7 +5,7 @@ The queue is the availability boundary for text and media translation jobs:
 * jobs survive process restarts;
 * multiple Gunicorn workers cannot process the same job concurrently;
 * leases expire automatically after a worker crash;
-* retries have no terminal exhausted state;
+* every job is attempted once; failures are terminal;
 * extracted source and prepared deliveries survive transport failures.
 
 The public API keeps the v1 helpers used by older application code while adding
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 _LOCK = threading.RLock()
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _after_fork():
@@ -118,7 +118,11 @@ def _initialize_connection(conn) -> None:
                 conn.execute(sql)
         conn.execute(
             "UPDATE translation_retry_jobs SET status='pending', lease_owner='', lease_until=0 "
-            "WHERE status NOT IN ('pending','leased') OR status IS NULL"
+            "WHERE status NOT IN ('pending','leased','failed') OR status IS NULL"
+        )
+        conn.execute(
+            "UPDATE translation_retry_jobs SET status='failed',lease_owner='',lease_until=0, "
+            "last_error='legacy_retry_retired' WHERE attempts>0 OR status='leased'"
         )
         conn.execute(
             "UPDATE translation_retry_jobs SET schema_version=? WHERE schema_version < ?",
@@ -195,6 +199,9 @@ def enqueue(
                 )
             else:
                 status = str(row["status"] or "pending")
+                if status == "failed":
+                    conn.execute("COMMIT")
+                    return False
                 current_due = float(row["next_attempt_at"] or due)
                 conn.execute(
                     """
@@ -294,7 +301,7 @@ def claim_due_jobs(
 ) -> List[Dict[str, Any]]:
     """Atomically lease due jobs to one worker.
 
-    Expired leases are reclaimable.  This is the key difference from the old
+    Expired leases are terminal; they cannot cause a second generation.  This is the key difference from the old
     in-memory worker and prevents duplicate provider calls across Gunicorn
     processes while guaranteeing crash recovery.
     """
@@ -306,28 +313,29 @@ def claim_due_jobs(
     with _LOCK, _ready_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            conn.execute(
+                "UPDATE translation_retry_jobs SET status='failed',lease_owner='',lease_until=0, "
+                "last_error='attempt_interrupted_no_retry' WHERE status='leased' AND lease_until<=?", (ts,))
             rows = conn.execute(
                 """
                 SELECT job_key FROM translation_retry_jobs
-                 WHERE ((status='pending' AND next_attempt_at<=?)
-                    OR (status='leased' AND lease_until<=?))
+                 WHERE status='pending' AND attempts=0 AND next_attempt_at<=?
                 """ + kind_sql + """
                  ORDER BY next_attempt_at ASC, created_at ASC
                  LIMIT ?
                 """,
-                (ts, ts, *kind_args, lim),
+                (ts, *kind_args, lim),
             ).fetchall()
             keys = [str(row["job_key"]) for row in rows]
             for key in keys:
                 conn.execute(
                     """
                     UPDATE translation_retry_jobs
-                       SET status='leased', lease_owner=?, lease_until=?, updated_at=?
+                       SET status='leased', attempts=attempts+1, lease_owner=?, lease_until=?, updated_at=?
                      WHERE job_key=?
-                       AND ((status='pending' AND next_attempt_at<=?)
-                         OR (status='leased' AND lease_until<=?))
+                       AND status='pending' AND attempts=0 AND next_attempt_at<=?
                     """,
-                    (worker, lease_until, ts, key, ts, ts),
+                    (worker, lease_until, ts, key, ts),
                 )
             claimed = []
             if keys:
@@ -395,9 +403,9 @@ def claim_job(job_key: str, *, owner: str, lease_seconds: float = 240.0) -> bool
     now = time.time()
     with _LOCK, _ready_connection() as conn:
         cur = conn.execute(
-            "UPDATE translation_retry_jobs SET status='leased',lease_owner=?,lease_until=?,updated_at=? "
-            "WHERE job_key=? AND (status='pending' OR (status='leased' AND lease_until<=?))",
-            (str(owner), now + max(15.0, lease_seconds), now, str(job_key), now),
+            "UPDATE translation_retry_jobs SET status='leased',attempts=attempts+1,lease_owner=?,lease_until=?,updated_at=? "
+            "WHERE job_key=? AND status='pending' AND attempts=0",
+            (str(owner), now + max(15.0, lease_seconds), now, str(job_key)),
         )
     return bool(cur.rowcount)
 
@@ -433,28 +441,21 @@ def maintain_lease(job_key: str, *, owner: str, lease_seconds: float = 240.0):
 
 
 def reschedule(job_key: str, *, delay_seconds: float, error: str = "", owner: Optional[str] = None) -> bool:
-    """Release a job back to pending and increment attempt count."""
+    """Retired compatibility entry point: never put attempted work back on queue."""
+    return mark_failed(job_key, error=error or "automatic_retry_disabled", owner=owner)
+
+
+def mark_failed(job_key: str, *, error: str = "", owner: Optional[str] = None) -> bool:
+    """Retain the failure as a terminal deduplication record, not as delivered."""
     now = time.time()
-    params: list[Any] = [
-        now + max(1.0, float(delay_seconds or 1.0)),
-        now,
-        str(error or "")[:2000],
-        str(job_key),
-    ]
-    owner_clause = " AND status='pending'"
-    if owner:
-        owner_clause = " AND status='leased' AND lease_owner=? AND lease_until>?"
-        params.extend((str(owner), now))
+    suffix = " AND status='pending'" if owner is None else " AND status='leased' AND lease_owner=? AND lease_until>?"
+    values = [now, str(error or "")[:2000], str(job_key)]
+    if owner is not None:
+        values.extend((str(owner), now))
     with _LOCK, _ready_connection() as conn:
-        cur = conn.execute(
-            """
-            UPDATE translation_retry_jobs
-               SET attempts=attempts+1, next_attempt_at=?, updated_at=?,
-                   last_error=?, status='pending', lease_owner='', lease_until=0
-             WHERE job_key=?
-            """ + owner_clause,
-            tuple(params),
-        )
+        cur = conn.execute("UPDATE translation_retry_jobs SET status='failed', updated_at=?, "
+                           "last_error=?, lease_owner='', lease_until=0 WHERE job_key=?" + suffix, values)
+        conn.execute("DELETE FROM translation_retry_jobs WHERE status='failed' AND updated_at<?", (now - 7 * 86400,))
     return bool(cur.rowcount)
 
 

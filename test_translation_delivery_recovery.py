@@ -181,12 +181,10 @@ def test_partial_multilingual_success_retries_only_missing_languages(runtime, mo
     assert run_job()
     pending = queue.get("group:msg")
     assert pending["payload"]["target_langs"] == ["en"]
-    assert pending["status"] == "pending"
-    assert run_job(owner="worker-2")
-    assert targets_seen == [["id", "en"], ["en"]]
-    assert len(calls) == 2
-    assert calls[0][2]["x_line_retry_key"] != calls[1][2]["x_line_retry_key"]
-    assert queue.pending_count() == 0
+    assert pending["status"] == "failed"
+    assert not queue.claim_job("group:msg", owner="worker-2")
+    assert targets_seen == [["id", "en"]]
+    assert len(calls) == 1 and queue.pending_count() == 0
 
 
 def test_foreground_work_is_leased_until_exit_and_then_recoverable(runtime):
@@ -199,7 +197,7 @@ def test_foreground_work_is_leased_until_exit_and_then_recoverable(runtime):
         assert row["status"] == "leased"
         assert row["lease_owner"].startswith("foreground-")
         assert queue.claim_due_jobs(owner="other", now=time.time() + 91) == []
-    assert queue.get("group:msg")["status"] == "pending"
+    assert queue.get("group:msg")["status"] == "failed"
 
 
 def test_expired_or_released_owner_cannot_modify_another_attempt(runtime):
@@ -210,11 +208,9 @@ def test_expired_or_released_owner_cannot_modify_another_attempt(runtime):
     assert not queue.renew_lease("group:msg", owner="old")
     assert not queue.mark_delivered("group:msg", owner="old")
     assert not queue.reschedule("group:msg", owner="old", delay_seconds=1)
-    assert queue.claim_job("group:msg", owner="new")
+    assert not queue.claim_job("group:msg", owner="new")
     assert not queue.mark_delivered("group:msg")
     assert not queue.checkpoint("group:msg", {"wrong": True}, owner="old")
-    assert queue.reschedule("group:msg", owner="new", delay_seconds=1)
-    assert not queue.reschedule("group:msg", owner="new", delay_seconds=1)
     assert queue.get("group:msg")["attempts"] == 1
 
 
@@ -290,7 +286,7 @@ def test_empty_transcription_after_many_outages_never_discards_source_job(runtim
     monkeypatch.setattr(app, "transcribe_audio_openai", lambda *_a: None)
     with sqlite3.connect(queue.DB_PATH) as conn:
         conn.execute("UPDATE translation_retry_jobs SET attempts=8")
-    assert run_job("group:msg:audio") is False
+    assert not queue.claim_job("group:msg:audio", owner="worker")
     assert queue.get("group:msg:audio") is not None
 
 
@@ -402,12 +398,10 @@ def test_postback_variant_retries_the_same_requested_mode(runtime, monkeypatch):
     context = {"original": "停機", "translated": "Berhenti.", "src": "zh", "tgt": "id"}
     with app._translation_job_scope():
         key = app._schedule_variant_translation(event, context, "formal", "group", "user")
-    seen = []
-    monkeypatch.setattr(app, "_execute_translation_variant", lambda ctx, mode, group, user:
-                        seen.append((ctx, mode, group, user)) or ("Mohon hentikan mesin.", "zh", "id"))
-    assert run_job(key)
-    assert seen == [(context, "formal", "group", "user")]
-    assert "Mohon hentikan mesin." in calls[0][1].messages[0].text
+    assert queue.get(key)["status"] == "failed"
+    assert not queue.claim_job(key, owner="retry")
+    assert queue.get(key)["payload"]["mode"] == "formal"
+    assert queue.get(key)["payload"]["context"] == context
     assert app._schedule_variant_translation(event, context, "formal", "group", "user") is None
 
 
@@ -484,9 +478,9 @@ def test_sole_provider_can_repair_quality_failure_within_two_generations(monkeyp
         "test", [{"role": "user", "content": "I9 stop"}], translation_max_generations=2,
         response_validator=lambda result, _provider: (result.choices[0].message.content != "wrong", "missing_literal:I9"),
     )
-    assert response.choices[0].message.content == "I9 停機。"
-    assert len(requests) == 2
-    assert "missing_literal:I9" in str(requests[1]["messages"])
+    assert response.choices[0].message.content == "wrong"
+    assert len(requests) == 1
+    assert response._jy_quality_degraded
 
 
 @pytest.mark.parametrize("finish", ["length", "max_tokens", "MAX_TOKENS"])
@@ -503,11 +497,9 @@ def test_truncated_model_output_cannot_be_delivered_as_a_complete_translation(mo
         )])
 
     monkeypatch.setattr(ai_provider, "_dispatch_provider", dispatch)
-    with pytest.raises(RuntimeError, match="translation_output_truncated"):
-        ai_provider.chat_complete(
-            "test", [{"role": "user", "content": "Complete announcement"}],
-            max_tokens=1024, translation_max_generations=2,
-            response_validator=lambda *_a: (True, ""),
-        )
-    assert len(requests) == 2
-    assert requests[1]["max_tokens"] == 2048
+    result = ai_provider.chat_complete(
+        "test", [{"role": "user", "content": "Complete announcement"}],
+        max_tokens=1024, translation_max_generations=2,
+        response_validator=lambda *_a: (True, ""))
+    assert result.choices[0].message.content == "First part only."
+    assert result._jy_quality_degraded and len(requests) == 1

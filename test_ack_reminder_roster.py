@@ -119,21 +119,12 @@ def test_incomplete_roster_retry_retires_old_targets_when_a_response_arrives(hub
         raise TimeoutError("response lost after possible LINE acceptance")
     hub.reminders.sender = uncertain
     saved = due(hub, row)
-    assert saved["reminder_state"] == "retrying"
+    assert saved["reminder_state"] == "failed" and saved["wake_at"] is None
     hub.postback(event(uid=COLLEAGUE), {"action": "factory_ack", "token": row["token"]})
-    hub.h["_factory_member_ids"] = lambda group: [USER, COLLEAGUE, THIRD]
-    hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
-    hub.reminders.clock = lambda: saved["wake_at"] + 1
     hub.reminders.run_due()
-    assert len(sent) == 2  # Initial card plus the uncertain original reminder.
+    assert len(sent) == 2
     updated = hub.store.get("notice:" + GROUP + ":" + row["token"])
     assert COLLEAGUE in updated["responses"]
-    assert updated["reminder_state"] == "pending" and updated["pending_batch"] is None
-    hub.reminders.clock = lambda: updated["wake_at"]
-    hub.reminders.run_due()
-    assert len(sent) == 3 and sent[-1][2] != sent[-2][2]
-    assert mentionees(sent) == [{"type": "user", "userId": THIRD}]
-    assert hub.store.get("notice:" + GROUP + ":" + row["token"])["reminder_state"] == "sent"
 
 
 def test_scheduler_sends_without_another_webhook_or_admin_refresh(hub, monkeypatch):

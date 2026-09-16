@@ -903,7 +903,8 @@ class FactoryHub:
             self.reminders.process(key)
             self.reminder_worker.start()
             row = self.store.get(key)
-            if row and row.get("reminder_state") == "failed" and row.get("last_error"):
+            if (row and row.get("reminder_state") == "failed" and row.get("last_error")
+                    and row.get("last_error_kind") == "input"):
                 self._reply(event, row["last_error"], retry_suffix=":ack-preparation-error")
             if row and row.get("delivery_state") != "delivered" and row.get("wake_at") is not None:
                 import webhook_runtime
@@ -973,12 +974,11 @@ class FactoryHub:
                 result = self.h["translate_multi"](body, src, targets)
             else:
                 result = [(target, self.h["translate"](body, src, target)) for target in targets]
-            valid = {lang: value for lang, value in result if value and not self.h.get(
-                "_is_translation_failure_sentinel", lambda _: False)(value)}
-            if any(target not in valid for target in targets):
-                raise line_ack_reminders.NoticeTranslationError("通知翻譯尚未完成，已保留待辦自動重試。")
+            valid = {lang: value for lang, value in result if value}
+            if not valid:
+                raise line_ack_reminders.NoticeTranslationError("翻譯服務未回傳內容，本次嘗試已結束。")
             return src, "\n\n".join("[" + target + "] " + (header + "\n" if header else "") +
-                                    literal_prefix + valid[target] for target in targets)
+                                    literal_prefix + valid[target] for target in targets if target in valid)
         finally:
             if local is not None:
                 local.__dict__.clear()
@@ -1658,7 +1658,7 @@ class FactoryHub:
                         result = self.h["translate"](text, src, tgt)
                 finally:
                     _STATION.reset(marker)
-                if not result or self.h["_is_translation_failure_sentinel"](result):
+                if not result:
                     return jsonify(ok=False, message="未取得完整翻譯，請稍後重試。 / Terjemahan belum tersedia."), 503
                 response = {"original": text, "translated": result, "src": src, "tgt": tgt}
                 self.store.put(key, response, 600)

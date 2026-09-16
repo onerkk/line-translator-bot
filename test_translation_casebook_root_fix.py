@@ -147,10 +147,10 @@ class TranslationCasebookRootFixTests(unittest.TestCase):
             review_context=casebook.build_prompt(cases),
             semantic_validator=lambda candidate: casebook.validate_translation_cases(cases, candidate),
         )
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["path"], "independent_source_review_passed")
-        self.assertEqual(result["text"], self.correct)
-        self.assertEqual(client.calls[0]["provider_preference"][0], "anthropic")
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["text"], self.old)
+        self.assertFalse(result["cacheable"])
+        self.assertEqual(client.calls, [])
 
     def test_every_factory_example_retrieves_its_own_card_and_validates(self):
         store = factory_knowledge.FactoryKnowledgeStore(ROOT / "factory_knowledge.json")

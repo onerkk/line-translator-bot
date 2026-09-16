@@ -150,7 +150,7 @@ def test_actual_app_deterministic_rules_cover_both_reported_messages_without_inv
 
 def test_app_persists_empty_quote_translation_without_status_only_reply_or_flex_quote():
     source = Path("app.py").read_text(encoding="utf-8")
-    assert 'translate_empty_retry_scheduled' in source
+    assert 'foreground_attempt_finished_without_delivery' in source
     assert '_schedule_text_translation_retry(' in source
     assert 'translation_retry_queue_module.enqueue' in source
     assert '_resume_persisted_translation_retries()' in source

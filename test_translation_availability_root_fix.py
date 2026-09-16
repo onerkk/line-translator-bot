@@ -104,7 +104,7 @@ def test_policy_prompt_forbids_model_generated_failure_notices():
     prompt = policy.build_prompt("請注意研磨人員", "zh", "id")
     assert "Never output an apology" in prompt
     assert "translation-failure notice" in prompt
-    assert "must not be described to the user" in prompt
+    assert "never cancel a non-empty translation" in prompt
 
 
 def test_durable_retry_pushes_translation_without_status_or_resend(monkeypatch, tmp_path):
@@ -170,15 +170,8 @@ def test_durable_retry_pushes_translation_without_status_or_resend(monkeypatch, 
         line_mentions=[],
     )
 
-    assert scheduled is True
-    key = "group-1:message-1"
-    assert app.translation_retry_queue_module.claim_job(key, owner="test")
-    assert app._run_translation_retry_job(app.translation_retry_queue_module.get(key), "test")
-    assert len(pushed) == 1
-    assert pushed[0].to == "group-1"
-    assert "請研磨人員注意" in pushed[0].messages[0].text
-    assert "重傳" not in pushed[0].messages[0].text
-    assert app._TRANSLATION_RETRY_INFLIGHT == set()
+    assert scheduled is False
+    assert pushed == []
     assert app.translation_retry_queue_module.pending_count() == 0
 
 
@@ -197,12 +190,14 @@ def test_emergency_fallback_skips_invalid_first_nmt_and_uses_next_provider(monke
     monkeypatch.setattr(app, "translate_google", public)
     monkeypatch.setattr(app, "_factory_exact_fallback", lambda *_a, **_k: None)
 
+    monkeypatch.setattr(app._tl, "nmt_attempted", False, raising=False)
+    monkeypatch.setattr(app.nmt_module, "nmt_stats", lambda: {"api_key_available": True})
     actual = app._emergency_translation_fallback(
         "Jangan masuk.", "id", "zh"
     )
 
-    assert actual == "禁止進入。"
-    assert calls == ["configured", "public"]
+    assert actual == "禁止 masuk。"
+    assert calls == ["configured"]
 
 
 def test_objective_primary_corruption_uses_emergency_route_before_returning_empty(monkeypatch):
@@ -214,8 +209,8 @@ def test_objective_primary_corruption_uses_emergency_route_before_returning_empt
 
     actual = app.translate("Jangan masuk.", "id", "zh")
 
-    assert actual == "禁止進入。"
-    assert "masuk" not in actual
+    assert actual == "禁止 masuk。"
+    assert app._delivery_validation_issues("Jangan masuk.", actual, "id", "zh")
     assert app._get_translation_outcome()["status"] == "delivered"
 
 

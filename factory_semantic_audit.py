@@ -17,10 +17,11 @@ import re
 from translation_request_cache import memoize
 import unicodedata
 import factory_instruction_semantics as instruction_semantics
+import factory_planning_semantics as planning_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-11.3-lossless-claim-definitions"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.1-clause-bound-planning"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -390,6 +391,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
 
     flags = frame["flags"]
     flags["deadline_month_end"] = _contains_any(compact, ("月底前", "本月底前", "月末前"))
+    frame["month_end_relations"] = planning_semantics.month_end_relations(src)
     flags["current_month_scope"] = _contains_any(compact, ("本月份", "本月", "這個月", "这个月"))
     flags["large_size"] = _contains_any(compact, ("大尺寸", "大規格", "大规格", "大徑", "大径"))
     flags["small_size"] = _contains_any(compact, ("小尺寸", "小規格", "小规格", "小徑", "小径"))
@@ -856,7 +858,14 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         })
 
     if flags["deadline_month_end"]:
-        add("deadline_month_end", "月底前/月末前", "到料或作業時點在月底以前", "sebelum akhir bulan")
+        add("deadline_month_end", "月底前/月末前",
+            "逐子句區分：完成／到料期限在月底以前；每日平均或人力開站計畫是持續到月底",
+            "deadlines: sebelum akhir bulan; ongoing plans: sampai/hingga akhir bulan")
+    for index, relation in enumerate(frame["month_end_relations"]):
+        add(f"month_end_scope_{index}", relation["source_evidence"],
+            "保留本子句的月底期間、起始日與每日噸數／開站數，不可借用別句的期限",
+            ("sampai/hingga akhir bulan" if relation["period"] else "sebelum akhir bulan")
+            + ("; mulai besok" if relation["tomorrow"] else ""))
     if flags["arrival"]:
         arrival_evidence = "/".join(arrival_profile.get("evidence") or ["到料", "到貨", "進料"])
         detail = "材料抵達／進入現場"
@@ -1331,6 +1340,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         )
         or flags.get("monthly_production_target")
         or flags.get("checkbox_after_pickup")
+        or any(r.get("daily_tons") or r.get("stations") for r in frame["month_end_relations"])
     )
     frame["active"] = bool(frame["claims"] and (frame["risk_score"] >= 3 or decisive or relations))
     return frame
@@ -2404,10 +2414,7 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         if _norm(machine_id) not in low:
             issues.append("factory_semantic_audit:missing_machine_id:" + str(machine_id))
 
-    if flags.get("deadline_month_end") and not _has_any_target(low, (
-        "sebelum akhir bulan", "sebelum bulan ini berakhir", "sebelum penghujung bulan", "hingga sebelum akhir bulan",
-    )):
-        issues.append("factory_semantic_audit:missing_month_end_deadline")
+    issues.extend(planning_semantics.validate_month_end(frame.get("month_end_relations") or [], translation))
 
     if flags.get("bar_material") and not _has_any_target(low, ("material batang", "batang", "bahan batang")):
         issues.append("factory_semantic_audit:missing_bar_material")

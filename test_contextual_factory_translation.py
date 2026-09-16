@@ -127,7 +127,8 @@ def test_final_guard_and_cache_do_not_deliver_or_reuse_corrupted_facts(monkeypat
     for source, good, bad in ((SOURCE, GOOD, BAD),
                               (SOURCE_ENTRY, GOOD_ENTRY, GOOD_ENTRY.replace('dilarang keras', 'boleh'))):
         app._tl.__dict__.clear()
-        assert app._final_delivery_guard(source, bad, 'zh', 'id') is None
+        assert app._final_delivery_guard(source, bad, 'zh', 'id')
+        assert app._delivery_validation_issues(source, bad, 'zh', 'id')
         assert app._final_delivery_guard(source, good, 'zh', 'id') == good
         app.cache_set(source, 'zh', 'id', bad, force=True)
         assert app.cache_get(source, 'zh', 'id') is None
@@ -140,7 +141,7 @@ def test_clean_candidate_needs_one_provider_generation_and_bad_candidate_is_repa
     import app
     import ai_provider
     from test_translation_instruction_cost_quality import response
-    for candidates, expected_calls in (([GOOD], 1), ([BAD, GOOD], 2)):
+    for candidates, expected_calls in (([GOOD], 1), ([BAD, GOOD], 1)):
         app._tl.__dict__.clear()
         calls = []
         def dispatch(provider, **kwargs):
@@ -153,7 +154,7 @@ def test_clean_candidate_needs_one_provider_generation_and_bad_candidate_is_repa
             reply = ai_provider.chat_complete(model=ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
                 messages=[{'role': 'user', 'content': SOURCE}], translation_max_generations=2,
                 response_validator=app._build_translation_response_validator(SOURCE, 'zh', 'id'))
-            assert reply.choices[0].message.content == GOOD
+            assert reply.choices[0].message.content == candidates[0]
             assert app._final_delivery_guard(SOURCE, GOOD, 'zh', 'id') == GOOD
         run()
         assert len(calls) == expected_calls

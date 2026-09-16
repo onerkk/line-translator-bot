@@ -97,12 +97,10 @@ class WorkerPool:
                         logger.exception("[DurableWorker] lane=%s attempt=%s failed",
                                          self.name, int(job.get("attempts") or 0) + 1)
                     try:
-                        queue.reschedule(job["job_key"], owner=owner,
-                                         delay_seconds=self.backoff(int(job.get("attempts") or 0) + 1),
-                                         error=reason)
+                        queue.mark_failed(job["job_key"], owner=owner, error=reason)
                     except Exception:
                         # Its lease will expire; keep workers alive for recovery.
-                        logger.exception("[DurableWorker] lane=%s cannot reschedule yet", self.name)
+                        logger.exception("[DurableWorker] lane=%s cannot persist terminal attempt", self.name)
                         with self.condition:
                             self.condition.wait(5.0)
                     continue

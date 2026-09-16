@@ -93,8 +93,8 @@ class NoticeTests(unittest.TestCase):
         self.now += 16
         self.service.sender = self.send
         self.service.run_due()
-        self.assertEqual(self.sent[0], self.sent[1])
-        self.assertEqual(self.store.get(key)["reminder_state"], "sent")
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.store.get(key)["reminder_state"], "failed")
 
     def test_multiple_workers_claim_once_while_receipt_arrives(self):
         key = self.create()
@@ -183,7 +183,7 @@ class NoticeTests(unittest.TestCase):
         self.now += RETRY_WINDOW
         self.service.run_due()
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.store.get(key)["reminder_state"], "uncertain")
+        self.assertEqual(self.store.get(key)["reminder_state"], "failed")
 
     def test_atomic_creation_and_global_index_not_limited_by_history(self):
         due = self.create(token="old-due")

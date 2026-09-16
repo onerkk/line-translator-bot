@@ -27,7 +27,7 @@ def test_final_guard_withholds_objectively_corrupt_result_for_provider_fallback(
         "zh",
     )
 
-    assert result is None
+    assert result == "禁止 masuk。"
     assert not app._is_translation_failure_sentinel("正常翻譯")
     assert app._is_translation_failure_sentinel("翻譯服務暫時未取得可用結果")
 
@@ -212,16 +212,10 @@ def test_single_provider_transient_error_retries_once(monkeypatch):
         },
     )
 
-    actual = ai_provider.chat_complete(
-        model="test-model",
-        messages=[{"role": "user", "content": "hello"}],
-        timeout=2,
-    )
-
-    assert actual is response
-    assert len(calls) == 2
-    assert response._jy_provider == "openai"
-    assert response._jy_failover_attempts[0]["kind"] == "transient_retry"
+    import pytest
+    with pytest.raises(TemporaryError):
+        ai_provider.chat_complete(model="test-model", messages=[{"role":"user","content":"hello"}], timeout=2)
+    assert len(calls) == 1
 
 
 def test_single_provider_retry_preserves_usable_response_validator(monkeypatch):

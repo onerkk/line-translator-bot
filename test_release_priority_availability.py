@@ -120,7 +120,8 @@ def test_reported_message_reaches_line_with_one_generation(real_pipeline, native
 def test_opposites_and_priority_on_another_action_still_rejected(bad):
     target = MENTION + ' ' + bad
     assert not semantics.validate_translation(semantics.build_frame(SOURCE, 'zh', 'id'), target)[0]
-    assert app._final_delivery_guard(SOURCE, target, 'zh', 'id') is None
+    assert app._final_delivery_guard(SOURCE, target, 'zh', 'id')
+    assert app._delivery_validation_issues(SOURCE, target, 'zh', 'id')
 
 
 @pytest.mark.parametrize('source, mode, good, bad', [
@@ -157,23 +158,21 @@ def test_failed_line_delivery_retries_saved_translation_without_generating_again
     state.reply_down = state.push_down = True
     with pytest.raises(TimeoutError):
         app.handle_message(release_event())
-    assert len(state.calls) == 1 and queue.pending_count() == 1
-    state.push_down = False
-    assert retry_pending()
-    assert MENTION + ' ' + GOOD in delivered_text(state)
     assert len(state.calls) == 1 and queue.pending_count() == 0
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
+    app.handle_message(release_event())
+    assert len(state.calls) == 1 and not state.sends
 
 
 def test_bad_provider_output_stays_queued_and_recovery_delivers_the_correct_translation(real_pipeline):
     state = real_pipeline
     state.candidate = 'Tolong prioritaskan meletakkan material di rak.'
     app.handle_message(release_event())
-    assert not state.sends and queue.pending_count() == 1
-    assert len(state.calls) == 2  # existing total generation budget
-    state.candidate = GOOD
-    assert retry_pending()
-    assert MENTION + ' ' + GOOD in delivered_text(state)
+    assert state.candidate in delivered_text(state)
+    assert len(state.calls) == 1 and len(state.sends) == 1
     assert queue.pending_count() == 0
+    app.handle_message(release_event())
+    assert len(state.calls) == 1 and len(state.sends) == 1
 
 
 @pytest.mark.parametrize('image_on', [False, True])

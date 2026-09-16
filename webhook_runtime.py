@@ -12,13 +12,15 @@ import json
 import time
 import threading
 import os
+import copy
+import inspect
 from pathlib import Path
 
 import translation_retry_queue as queue
 from line_factory_store import StoreError
 from durable_workers import WorkerPool
 
-BUILD_ID = "2026-09-10.2-ack-storage-recovery"
+BUILD_ID = "2026-09-16.1-single-attempt-ingress"
 PROCESS_STARTED = time.monotonic()
 _CURRENT = ContextVar("line_webhook_timing", default=None)
 
@@ -165,34 +167,16 @@ class WebhookInbox:
         if not events:
             return None  # LINE verification request
         if not asynchronous_ingress():
-            # No newly introduced ACK-before-processing window on ephemeral
-            # Render disks. Existing translation outbox retries still apply.
-            with self.context() if self.context else nullcontext():
-                with timing_scope(received_at):
-                    try:
-                        self.handler.handle(body, signature)
-                        # Some handlers retain empty AI output or failed LINE
-                        # sends in the outbox without raising. Waiting for the
-                        # handler alone therefore did NOT ensure delivery.
-                        # Keep LINE redelivery eligible until these jobs finish
-                        # when the local outbox can disappear on Render sleep.
-                        if not persistent_outbox() and _pending_message_work(events):
-                            raise PendingWebhookWork("translation delivery is still pending")
-                    except StoreError:
-                        self.release_claims(body)
-                        # The primary interaction store may be unavailable
-                        # before a notice intent can be committed. Keep the
-                        # signed webhook in the existing local recovery queue
-                        # as well as returning non-2xx for LINE redelivery.
-                        self._enqueue(body, signature, payload, received_at)
-                        raise
-                    except Exception:
-                        self.release_claims(body)
-                        raise
-            return None
+            # Record and claim the signed event once even on volatile Render
+            # storage. A completed attempt never asks LINE to resend translation.
+            key = self._enqueue(body, signature, payload, received_at, start=False)
+            owner = "webhook-sync-" + str(os.getpid()) + "-" + str(threading.get_ident())
+            if queue.claim_job(key, owner=owner):
+                self.run_job(queue.get(key), owner)
+            return key
         return self._enqueue(body, signature, payload, received_at)
 
-    def _enqueue(self, body, signature, payload, received_at=None):
+    def _enqueue(self, body, signature, payload, received_at=None, *, start=True):
         # Redelivery changes only deliveryContext; it must not create a second
         # queued generation. Preserve the original body/signature for dispatch.
         identity = {"destination": payload.get("destination"), "events": [
@@ -204,7 +188,8 @@ class WebhookInbox:
         queue.enqueue(key, {"body": body, "signature": signature,
                             "received_at": time.time() if received_at is None else received_at},
                       job_kind="webhook")
-        self.pool.ensure_started()
+        if start:
+            self.pool.ensure_started()
         return key
 
     def run_job(self, job, owner):
@@ -214,9 +199,58 @@ class WebhookInbox:
             with self.context() if self.context else nullcontext():
                 with timing_scope(payload.get("received_at") or job["created_at"]):
                     try:
-                        self.handler.handle(payload["body"], payload["signature"])
-                    except Exception:
-                        self.release_claims(payload["body"])
-                        raise
+                        failures = self._handle_all(payload["body"], payload["signature"])
+                        if failures:
+                            queue.mark_failed(job["job_key"], owner=owner,
+                                              error=";".join(failures))
+                            return True
+                    except Exception as exc:
+                        # Terminal attempt, not a success receipt or a requeue.
+                        import logging
+                        logging.getLogger("app").exception("[Webhook] attempt ended; automatic retry disabled")
+                        queue.mark_failed(job["job_key"], owner=owner, error=type(exc).__name__)
+                        return True
             check()
             return queue.mark_delivered(job["job_key"], owner=owner)
+
+    def _handle_all(self, body, signature):
+        """Keep SDK authentication/routing while isolating event failures.
+
+        A terminal failed event must not erase the unprocessed events later in
+        the same signed webhook. Use a per-dispatch copy, never mutate handlers
+        shared by concurrent HTTP/background workers.
+        """
+        if not hasattr(self.handler, "_handlers"):
+            self.handler.handle(body, signature)
+            return []
+        failures = []
+        def protect(func):
+            if func is None:
+                return None
+            spec = inspect.getfullargspec(func)
+            def invoke(args):
+                try:
+                    return func(*args)
+                except Exception as exc:
+                    import logging
+                    failures.append(type(exc).__name__)
+                    logging.getLogger("app").exception(
+                        "[Webhook] event attempt ended; continuing remaining events without retry")
+            # Match the SDK's argument convention, including destination-aware
+            # and default handlers, so registration behavior stays intact.
+            if spec.varargs is not None or len(spec.args) == 2:
+                def two(event, destination):
+                    return invoke((event, destination))
+                return two
+            if len(spec.args) == 1:
+                def one(event):
+                    return invoke((event,))
+                return one
+            def zero():
+                return invoke(())
+            return zero
+        dispatch = copy.copy(self.handler)
+        dispatch._handlers = {key: protect(func) for key, func in self.handler._handlers.items()}
+        dispatch._default = protect(getattr(self.handler, "_default", None))
+        dispatch.handle(body, signature)
+        return failures

@@ -70,7 +70,8 @@ def test_natural_inflections_are_accepted_and_not_rewritten(target):
 ])
 def test_wrong_object_action_state_or_added_instructions_do_not_pass(target):
     assert instructions.validate_relations(instructions.build_relations(SOURCE), target)
-    assert app._final_delivery_guard(SOURCE, target, 'zh', 'id') is None
+    assert app._final_delivery_guard(SOURCE, target, 'zh', 'id')
+    assert app._delivery_validation_issues(SOURCE, target, 'zh', 'id')
 
 
 @pytest.mark.parametrize('source,target', [

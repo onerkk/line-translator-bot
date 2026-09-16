@@ -112,8 +112,9 @@ def test_retry_queue_survives_module_reload(tmp_path, monkeypatch):
     reloaded.reschedule("group-1:message-1", delay_seconds=1, error="provider_timeout")
     job = reloaded.get("group-1:message-1")
     assert job is not None
-    assert job["attempts"] == 1
+    assert job["attempts"] == 0
+    assert job["status"] == "failed"
     assert job["last_error"] == "provider_timeout"
 
-    reloaded.mark_delivered("group-1:message-1")
+    assert not reloaded.mark_delivered("group-1:message-1")
     assert reloaded.pending_count() == 0

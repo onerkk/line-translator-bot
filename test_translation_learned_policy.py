@@ -135,7 +135,7 @@ def test_successful_repair_teaches_rule_without_manual_example_or_api(database):
 
 
 @pytest.mark.parametrize('changes', [
-    {'reviewed': False}, {'cacheable': False}, {'good': BAD},
+    {'cacheable': False}, {'good': BAD},
     {'bad': GOOD, 'good': GOOD.replace('periksa sekali lagi', 'periksa kembali')},
     {'good': 'Jumlah batang: 999 batang.'},
     {'good': 'Terima kasih.'},
@@ -288,19 +288,22 @@ def test_real_public_flow_learns_from_failover_then_uses_one_call_for_unseen_wor
     second_good = GOOD.replace('jumlah batang', 'jumlah')
     def dispatch(provider, **kwargs):
         calls.append(kwargs)
-        text = BAD if len(calls) == 1 else GOOD if len(calls) == 2 else second_good
+        text = BAD if len(calls) == 1 else second_good
         return response(text)
     monkeypatch.setattr(ai_provider, '_dispatch_provider', dispatch)
-    assert app.translate(SOURCE, 'zh', 'id') == GOOD
-    assert len(calls) == 2
+    assert app.translate(SOURCE, 'zh', 'id') == BAD
+    assert len(calls) == 1
+    assert learning.assess_review_risk(SOURCE, 'zh', 'id', group_id='G1')['requires_review']
+    # A validated local/human repair teaches the next request without a review API.
+    assert observe(reviewed=False, path='source_grounded_local_repair')['learned_rules']
     assert learning.prepare_translation(second_source, 'zh', 'id', 'G1')['rules']
     assert app.translate(second_source, 'zh', 'id') == second_good
-    assert len(calls) == 3  # one new generation, not a mandatory second review
+    assert len(calls) == 2  # one new generation, not a mandatory second review
     actual_prompt = '\n'.join(str(m['content']) for m in calls[-1]['messages'])
     assert actual_prompt.count('<learned_translation_policy>') == 1
     assert BAD not in actual_prompt
     assert app.translate(second_source, 'zh', 'id') == second_good
-    assert len(calls) == 3  # same validated source uses the existing exact cache
+    assert len(calls) == 2  # same validated source uses the existing exact cache
 
 
 def test_real_public_flow_does_not_teach_failed_recovery(public_pipeline, monkeypatch):
@@ -354,3 +357,18 @@ def test_short_polite_check_keeps_one_call_and_receives_pragmatic_guidance(publi
     assert public_pipeline.translate('支數少的稍微確認一下', 'zh', 'id') == target
     assert len(calls) == 1
     assert 'softens a request' in '\n'.join(str(m['content']) for m in calls[0]['messages'])
+
+
+def test_unresolved_diagnostics_improve_first_prompt_without_an_extra_api(public_pipeline, monkeypatch):
+    app, calls = public_pipeline, []
+    import ai_provider
+    observe(good=BAD, reviewed=False, cacheable=False, path='local_quality_advisory')
+    assert not learning.prepare_translation(SOURCE, 'zh', 'id', 'G1')['rules']
+    monkeypatch.setattr(ai_provider, '_dispatch_provider',
+                        lambda _provider, **kw: calls.append(kw) or response(GOOD))
+    assert app.translate(SOURCE, 'zh', 'id') == GOOD
+    assert len(calls) == 1
+    prompt = '\n'.join(str(m['content']) for m in calls[0]['messages'])
+    assert prompt.count('<continuous_learning_risk>') == 1
+    assert 'inventory_entry_record_missing' in prompt
+    assert BAD not in prompt

@@ -125,7 +125,6 @@ def test_line_recovery_reuses_the_finished_translation(runtime):
     generations_before_retry = len(runtime.generations)
     assert generations_before_retry <= 1
     assert queue.get("notice-group:notice-message") is not None
-    runtime.push_down = False
-    assert retry_pending()
-    assert len(runtime.generations) == generations_before_retry
-    assert "480" in delivered_text(runtime)
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
+    assert queue.pending_count() == 0

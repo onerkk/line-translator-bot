@@ -207,10 +207,11 @@ class KnowledgeAndStructuredAuditTests(unittest.TestCase):
             ai_client=fake,
             force_review=False,
         )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["text"], GOOD)
-        self.assertTrue(result["reviewed"])
-        self.assertEqual(result["path"], "independent_source_review_passed")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["text"], BAD)
+        self.assertFalse(result["cacheable"])
+        self.assertFalse(result["reviewed"])
+        self.assertTrue(result["issues"])
 
     def test_gate_rebuilds_safely_when_review_provider_is_unavailable(self):
         result = tqg.gate_and_revise(
@@ -223,9 +224,11 @@ class KnowledgeAndStructuredAuditTests(unittest.TestCase):
             ai_client=None,
             force_review=False,
         )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["text"], GOOD)
-        self.assertEqual(result["path"], "deterministic_source_frame_rebuild")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["text"], BAD)
+        self.assertFalse(result["cacheable"])
+        self.assertFalse(result["reviewed"])
+        self.assertTrue(result["issues"])
 
 
 if __name__ == "__main__":

@@ -84,8 +84,8 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
         self.assertIn("verified_exact_factory_case", core)
         self.assertLess(core.index("verified_exact_factory_case"), core.index("tm_module.tm_lookup"))
         inner = source[inner_start:]
-        self.assertIn("allow_generic_nmt_fallback", inner)
-        self.assertIn("generic NMT fallback blocked", inner)
+        self.assertNotIn("allow_generic_nmt_fallback", inner)
+        self.assertNotIn("generic NMT fallback blocked", inner)
         self.assertIn("_force_factory", inner)
         self.assertIn("cached = cache_get(text, src, tgt)", inner)
         self.assertIn("Versioned verified cache", inner)

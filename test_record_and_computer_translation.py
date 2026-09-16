@@ -129,7 +129,8 @@ def test_wrong_polarity_direction_or_borrowed_record_words_are_rejected(source, 
     GOOD.replace('bukan bulan ini', 'bulan lalu'),
 ])
 def test_normalization_does_not_excuse_wrong_quantity_prohibition_or_period(candidate):
-    assert app._final_delivery_guard(SOURCE, candidate, 'zh', 'id') is None
+    assert app._final_delivery_guard(SOURCE, candidate, 'zh', 'id')
+    assert app._delivery_validation_issues(SOURCE, candidate, 'zh', 'id')
 
 
 def test_numbered_shipping_item_does_not_borrow_accounting_scope():
@@ -239,7 +240,8 @@ def test_status_marker_describes_notation_and_preserves_all_numbers():
 ])
 def test_status_marker_normalization_cannot_hide_different_facts(change):
     bad = MARKER_REPORTED.replace(*change)
-    assert app._final_delivery_guard(MARKER_SOURCE, bad, 'zh', 'id') is None
+    assert app._final_delivery_guard(MARKER_SOURCE, bad, 'zh', 'id')
+    assert app._delivery_validation_issues(MARKER_SOURCE, bad, 'zh', 'id')
 
 
 @pytest.mark.parametrize('source', [

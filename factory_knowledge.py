@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import factory_message_semantics as message_semantics
+import factory_planning_semantics as planning_semantics
 
 FACTORY_KNOWLEDGE_API_VERSION = 1
 DEFAULT_FILENAME = "factory_knowledge.json"
@@ -80,9 +81,9 @@ def validate_document(document: Dict[str, Any]) -> Dict[str, Any]:
         match = entry.get("match") or {}
         if not isinstance(match, dict):
             raise KnowledgeError(f"entries[{index}].match must be an object")
-        if match.get("semantic_relation") not in (None, "erp_data_release"):
+        if match.get("semantic_relation") not in (None, "erp_data_release", "inventory_record_timing"):
             raise KnowledgeError(f"entries[{index}].match has an unknown semantic relation")
-        if entry.get("semantic_validator") not in (None, "erp_data_release", "spray_painting"):
+        if entry.get("semantic_validator") not in (None, "erp_data_release", "spray_painting", "inventory_record_timing", "warehouse_intake"):
             raise KnowledgeError(f"entries[{index}] has an unknown semantic validator")
         has_positive = any(match.get(key) for key in ("strong_phrases", "any_terms", "all_groups", "regex_any"))
         if not has_positive:
@@ -341,6 +342,12 @@ class FactoryKnowledgeStore:
                 from factory_rework_semantics import painting_present
                 if not painting_present(translation):
                     issues.append(f"factory_knowledge:{entry_id}:missing_spray_painting_semantics")
+            elif card.get("semantic_validator") == "inventory_record_timing":
+                issues.extend(f"factory_knowledge:{entry_id}:{issue}" for issue in
+                              planning_semantics.validate_record_timing(source_text, translation))
+            elif card.get("semantic_validator") == "warehouse_intake":
+                if not planning_semantics.warehouse_intake_present(translation):
+                    issues.append(f"factory_knowledge:{entry_id}:missing_warehouse_intake_semantics")
             for phrase in applicable_forbidden_phrases(card, source_text):
                 if _contains(tgt_norm, phrase):
                     issues.append(f"factory_knowledge:{entry_id}:forbidden:{phrase}")
@@ -410,8 +417,11 @@ class FactoryKnowledgeStore:
 
 def _required_source_scope(normalized_text: str, match: Dict[str, Any]) -> bool:
     relation = match.get("semantic_relation")
-    if relation and (relation != "erp_data_release"
-                     or not message_semantics.build_data_release_frame(normalized_text).get("active")):
+    if relation == "erp_data_release" and not message_semantics.build_data_release_frame(normalized_text).get("active"):
+        return False
+    if relation == "inventory_record_timing" and not planning_semantics.record_timing_clauses(normalized_text):
+        return False
+    if relation not in (None, "erp_data_release", "inventory_record_timing"):
         return False
     if any(_contains(normalized_text, term) for term in match.get("none_terms", []) or []):
         return False

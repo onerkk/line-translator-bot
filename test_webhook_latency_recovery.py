@@ -138,12 +138,12 @@ def test_failed_dispatch_releases_claims_and_can_be_recovered(state, monkeypatch
     body, sig = signed()
     key = inbox.accept(body, sig)
     assert queue.claim_job(key, owner="first")
-    with pytest.raises(TimeoutError):
-        inbox.run_job(queue.get(key), "first")
-    assert released == [body] and not queue.was_delivered(key)
-    queue.reschedule(key, owner="first", delay_seconds=0)
-    assert queue.claim_job(key, owner="second")
-    assert inbox.run_job(queue.get(key), "second") and queue.was_delivered(key)
+    assert inbox.run_job(queue.get(key), "first")
+    assert released == [] and not queue.was_delivered(key)
+    assert queue.get(key)["status"] == "failed"
+    assert not queue.claim_job(key, owner="second")
+    inbox.accept(body, sig)
+    assert len(calls) == 1
 
 
 def test_media_wait_cannot_block_text_recovery_and_busy_slots_do_not_preclaim(state):
@@ -180,9 +180,9 @@ def test_lane_filter_covers_expired_leases_and_does_not_steal_other_lanes(state)
         queue.enqueue(kind, {}, job_kind=kind)
         assert queue.claim_job(kind, owner="crashed")
     future = time.time() + 300
-    assert [j["job_key"] for j in queue.claim_due_jobs(owner="text", now=future, include_kinds=("text",))] == ["text"]
-    assert [j["job_key"] for j in queue.claim_due_jobs(owner="media", now=future, exclude_kinds=("text", "webhook"))] == ["image"]
-    assert queue.get("webhook")["lease_owner"] == "crashed"
+    assert queue.claim_due_jobs(owner="text", now=future, include_kinds=("text",)) == []
+    assert queue.claim_due_jobs(owner="media", now=future, exclude_kinds=("text", "webhook")) == []
+    assert all(queue.get(kind)["status"] == "failed" for kind in ("text", "image", "webhook"))
     assert queue.claim_due_jobs(now=future, include_kinds=[]) == []
 
 

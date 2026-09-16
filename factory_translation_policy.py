@@ -1,22 +1,8 @@
-"""Unified routing, delivery and learning policy for factory Chinese↔Indonesian.
+"""Translation accuracy and availability have independent outcomes.
 
-The bot serves a production environment, so translation quality and service
-availability must be controlled separately:
-
-* Chinese↔Indonesian requests use the factory semantic route by default.
-* stale lexical/vector TM and generic NMT cannot bypass the current contract.
-* verified exact corrections remain eligible after deterministic validation.
-* validator uncertainty makes a candidate non-cacheable/non-learnable but does
-  not turn a complete translation into a generic user-visible failure.
-* objective corruption (missing names/codes/numbers, source-language leakage,
-  unresolved placeholders, severe omission) triggers another provider or an
-  automatic detached retry; it is never displayed as a translation.
-* empty output, legacy failure payloads and pure model meta-commentary are also
-  undeliverable. Provider outages may use an emergency NMT route.
-
-This separation is deliberate: a heuristic quality rule must never become a
-single point of availability failure, while unverified text must never pollute
-cache/TM and repeat indefinitely.
+The first generated translation is delivered after local improvements. Quality
+findings control cache/learning admission only. Automatic model review,
+quality-triggered regeneration and background retries are retired.
 """
 from __future__ import annotations
 
@@ -25,7 +11,7 @@ import re
 from typing import Any, Dict
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-08.2-conversation-review-budget"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-16.1-nonblocking-single-attempt"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -75,11 +61,8 @@ def block_unverified_delivery(src: Any, tgt: Any) -> bool:
     """Never let a quality heuristic suppress a non-empty translation.
 
     Delivery blocking was previously configurable, which allowed a stale Render
-    environment variable to revive the old generic failure state after the code
-    had been fixed.  Objective corruption is still rejected by the authoritative
-    final boundary and retried through another provider; advisory disagreement
-    affects only cache/TM admission.  The switch is therefore intentionally
-    retired and always returns False.
+    environment variable to revive the old generic failure state. All quality
+    findings now affect cache/TM admission only; the switch stays retired.
     """
     return False
 
@@ -97,25 +80,8 @@ def require_verified_for_cache(src: Any, tgt: Any) -> bool:
 
 
 def review_mode() -> str:
-    """Return source-review policy: ``always``, ``adaptive`` or ``off``."""
-    # A clean primary translation has already passed immutable-data, glossary,
-    # language-purity and source-relation validation.  Reviewing every such
-    # sentence doubles both latency and model spend without adding a concrete
-    # quality signal, so production defaults to adaptive review.  Some older
-    # deployments still carry ``FACTORY_TRANSLATION_REVIEW_MODE=always`` from a
-    # retired README.  Requiring a second explicit opt-in prevents that stale
-    # variable from silently doubling every request while preserving a genuine
-    # quality-first override when deliberately requested.
-    value = str(os.environ.get("FACTORY_TRANSLATION_REVIEW_MODE", "adaptive") or "adaptive").strip().lower()
-    aliases = {
-        "on": "always", "required": "always", "strict": "always", "all": "always",
-        "smart": "adaptive", "auto": "adaptive",
-        "none": "off", "disabled": "off", "0": "off",
-    }
-    value = aliases.get(value, value)
-    if value == "always" and not _boolean_env("FACTORY_ALLOW_ALWAYS_REVIEW", False):
-        return "adaptive"
-    return value if value in {"always", "adaptive", "off"} else "adaptive"
+    """Automatic second-pass model review is retired, including old env flags."""
+    return "off"
 
 
 _SERIOUS_REVIEW_RE = re.compile(
@@ -157,14 +123,7 @@ def adaptive_review_risk(
     semantic_contract: Any = None,
     learned_risk: bool = False,
 ) -> bool:
-    """Return whether a *locally clean* candidate merits a second source audit.
-
-    Local validation failure is handled independently by the quality gate and
-    always remains eligible for one repair review.  This classifier is only for
-    the smaller set of messages where consequences justify reviewing even a
-    clean first result: safety incidents, irreversible quality/accountability
-    actions, conflicting instructions, or media-resolved missing context.
-    """
+    """Classify consequential context for local diagnostics and learning only."""
     if not supports_direction(src, tgt):
         return False
 
@@ -278,7 +237,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "Do not translate a Chinese customer name into an ordinary Indonesian adjective or noun.\n"
         "Output only one complete target-language translation. Never output an apology, safety-status message, "
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
-        "objective integrity defects trigger automatic provider fallback or retry and must not be described to the user.\n"
+        "local quality findings never cancel a non-empty translation or trigger another generation.\n"
         "</unified_factory_translation_policy>"
     )
 

@@ -144,8 +144,8 @@ def translation_request_budget(function):
         budget = dict(
             deadline=None, attempts=0, generations=0,
             seconds=setting("TRANSLATION_TOTAL_API_SECONDS", 35, 5, 90),
-            max_attempts=int(setting("TRANSLATION_TOTAL_API_ATTEMPTS", 3, 1, 6)),
-            max_generations=int(setting("TRANSLATION_TOTAL_GENERATIONS", 2, 1, 4)),
+            max_attempts=1,
+            max_generations=1,
         )
         token = _TRANSLATION_REQUEST.set(budget)
         try:
@@ -243,10 +243,8 @@ def _sdk_create(create, call_kwargs):
         if remaining <= 0:
             raise TimeoutError("Provider transport deadline exhausted")
         budget = _TRANSLATION_REQUEST.get()
-        if scope["calls"] and budget is not None:
-            if budget["attempts"] >= budget["max_attempts"]:
-                raise TimeoutError("Translation transport attempt budget exhausted")
-            budget["attempts"] += 1
+        if scope["calls"]:
+            raise RuntimeError("Provider already attempted; parameter/transport retries disabled")
         scope["calls"] += 1
         kwargs["timeout"] = min(float(kwargs.get("timeout") or remaining), remaining)
     started = time.monotonic()
@@ -2237,30 +2235,7 @@ def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
     if _effort in ("none", "minimal", "low", "medium", "high"):
         g_kwargs["reasoning_effort"] = _effort
 
-    try:
-        return _sdk_create(_create_translation, g_kwargs)
-    except Exception as e:
-        # 相容端點對參數支援可能隨版本變動：minimal 不接受時先退 low，
-        # 再不接受才移除可選參數。這比直接回 dynamic thinking 更穩定、也更低延遲。
-        _msg = str(e).lower()
-        _param_error = _is_feature_parameter_error(e, "reasoning_effort")
-        if g_kwargs.get("reasoning_effort") in ("none", "minimal") and _param_error:
-            g_kwargs["reasoning_effort"] = "low"
-            try:
-                print(f"[ai_provider] Gemini minimal 不相容，退到 low: {str(e)[:120]}", flush=True)
-                return _sdk_create(_create_translation, g_kwargs)
-            except Exception as e2:
-                e = e2
-                _msg = str(e2).lower()
-        retried = False
-        for _opt in ("response_format", "reasoning_effort", "stop"):
-            if _opt in g_kwargs and _is_feature_parameter_error(e, _opt):
-                g_kwargs.pop(_opt, None)
-                retried = True
-        if retried:
-            print(f"[ai_provider] Gemini 參數退階重試: {str(e)[:120]}", flush=True)
-            return _sdk_create(_create_translation, g_kwargs)
-        raise
+    return _sdk_create(_create_translation, g_kwargs)
 
 
 # ═══ v3.28: 額度耗盡自動切換 + LINE 通知 ═══
@@ -2617,274 +2592,93 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
                   temperature=None, timeout=90, prompt_cache_key=None,
                   reasoning_effort=None, verbosity=None, logprobs=False,
                   top_logprobs=None, logit_bias=None, stop=None, **kwargs):
-    """跨三家 AI 的唯一協調層。
-
-    所有嘗試共用一個總期限與生成預算；單一供應商最多兩次嘗試。
-    provider SDK 內建重試另行關閉。
-    required_capability / provider_preference / failover_* 為本層內部參數，不會送給 API。
-    """
+    """One provider request. Quality findings are diagnostic, never a retry."""
     _ensure_initialized()
     required_capability = str(kwargs.pop("required_capability", "chat") or "chat")
-    provider_preference = kwargs.pop("provider_preference", None)
-    diagnostic_probe = kwargs.pop("diagnostic_probe", None)
-    latency_profile = str(kwargs.pop("latency_profile", "") or "").strip()
-    response_validator = kwargs.pop("response_validator", None)
-    # Translation callers cap completed candidate generations independently of
-    # transport failover. Other chat/vision features retain their existing policy.
-    generation_limit = max(0, int(kwargs.pop("translation_max_generations", 0) or 0))
-    repair_model = kwargs.pop("translation_repair_model", None)
-    completed_generations = 0
+    preference = kwargs.pop("provider_preference", None)
+    probe = kwargs.pop("diagnostic_probe", None)
+    profile = str(kwargs.pop("latency_profile", "") or "")
+    validator = kwargs.pop("response_validator", None)
+    kwargs.pop("translation_max_generations", None)
+    kwargs.pop("translation_repair_model", None)
     privacy_literals = kwargs.pop("privacy_literals", ()) or ()
-    messages, privacy_envelope = _prepare_provider_privacy(
-        messages, extra_literals=privacy_literals
-    )
+    messages, envelope = _prepare_provider_privacy(messages, extra_literals=privacy_literals)
     policy = (_current_config or {}).get("failover_policy", {})
-    profile_cfg = (policy.get("latency_profiles", {}) or {}).get(latency_profile, {})
-    requested_total = kwargs.pop("failover_total_timeout", None)
-    requested_per_provider = kwargs.pop("failover_per_provider_timeout", None)
-    total_timeout = max(1.0, float(
-        requested_total or profile_cfg.get("total") or policy.get("total_timeout_seconds", 60) or 60))
-    per_provider_timeout = max(
-        1.0, float(requested_per_provider or profile_cfg.get("per_provider")
-                   or policy.get("per_provider_timeout_seconds", 24) or 24))
-    requested_timeout = max(1.0, float(timeout or per_provider_timeout))
-    failover_enabled = bool((_current_config or {}).get("provider_failover", True))
-
-    providers = get_available_providers(required_capability, preference=provider_preference)
-    if diagnostic_probe is not None:
-        if diagnostic_probe not in ("openai", "anthropic", "gemini") or not _provider_supports(diagnostic_probe, required_capability):
+    limits = (policy.get("latency_profiles", {}) or {}).get(profile, {})
+    total = float(kwargs.pop("failover_total_timeout", None) or limits.get("total") or policy.get("total_timeout_seconds", 60) or 60)
+    per_provider = float(kwargs.pop("failover_per_provider_timeout", None) or limits.get("per_provider") or policy.get("per_provider_timeout_seconds", 24) or 24)
+    providers = get_available_providers(required_capability, preference=preference)
+    if probe is not None:
+        if probe not in ("openai", "anthropic", "gemini") or not _provider_supports(probe, required_capability):
             raise ValueError("不支援的測試提供者。")
-        if not _provider_has_key(diagnostic_probe):
-            raise RuntimeError(diagnostic_probe + " 尚未設定 API 金鑰。")
-        providers = [diagnostic_probe]
+        if not _provider_has_key(probe):
+            raise RuntimeError(probe + " 尚未設定 API 金鑰。")
+        providers = [probe]
     if not providers:
-        diagnostic = get_provider_diagnostics(required_capability)
-        reasons = "; ".join(row["provider"] + ":" + row["reason"] for row in diagnostic["providers"])
-        raise RuntimeError("沒有可用的 " + required_capability + " AI 提供者（" + reasons + "）。請在 AI 頁檢查金鑰並測試呼叫。")
-    if not failover_enabled and diagnostic_probe is None:
+        raise RuntimeError("沒有可用的 " + required_capability + " AI 提供者。請檢查 API 金鑰。")
+    if not (_current_config or {}).get("provider_failover", True) and probe is None:
         active = get_active_provider()
         providers = [active] if active in providers else providers[:1]
-
-    deadline = time.monotonic() + total_timeout
-    request_budget = _TRANSLATION_REQUEST.get()
-    if request_budget is not None:
-        if request_budget["deadline"] is None:
-            request_budget["deadline"] = time.monotonic() + request_budget["seconds"]
-        deadline = min(deadline, request_budget["deadline"])
-    def shared_budget_exhausted():
-        return bool(request_budget is not None and (
-            request_budget["attempts"] >= request_budget["max_attempts"]
-            or request_budget["generations"] >= request_budget["max_generations"]
-        ))
-    attempts = []
-    last_error = None
-    last_quality_error = None
-    # Availability-first safety net: retain the latest non-empty provider
-    # response even when the local response validator asks for failover.  If all
-    # later providers fail or are also rejected, return this candidate marked as
-    # degraded instead of raising a fake "no usable translation" outage.
-    best_rejected_response = None
-    best_rejected_provider = None
-    best_rejected_reason = None
-    best_rejected_elapsed = None
-    _all_kwargs = dict(
-        model=model, messages=messages, max_tokens=max_tokens,
-        max_completion_tokens=max_completion_tokens, temperature=temperature,
-        prompt_cache_key=prompt_cache_key, reasoning_effort=reasoning_effort,
-        verbosity=verbosity, logprobs=logprobs, top_logprobs=top_logprobs,
-        logit_bias=logit_bias, stop=stop, **kwargs,
-    )
-
-    # When only one provider is configured, a single transient network/5xx/429
-    # error used to become an immediate visible translation failure.  Retry that
-    # same provider exactly once, only for availability errors and only while the
-    # shared request deadline still has room.  Multi-provider deployments still
-    # fail over immediately to preserve latency.
-    single_provider_retry = (
-        len(providers) == 1
-        and bool(policy.get("single_provider_retry", True))
-    )
-
-    for index, provider in enumerate(providers):
-        if shared_budget_exhausted():
-            break
-        if generation_limit and completed_generations >= generation_limit:
-            break
-        # A sole configured provider also needs a bounded opportunity to repair
-        # a rejected translation using the actual defect feedback. Transport
-        # retry and completed-generation limits remain independent.
-        provider_attempts = 2 if single_provider_retry or (len(providers) == 1 and generation_limit > 1) else 1
-        for provider_attempt in range(provider_attempts):
-            if shared_budget_exhausted():
-                break
-            if generation_limit and completed_generations >= generation_limit:
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            attempt_timeout = max(0.1, min(requested_timeout, per_provider_timeout, remaining))
-            started = time.monotonic()
-            try:
-                if index and provider_attempt == 0:
-                    print(f"[ai_provider] 容錯接力 → {provider} (剩餘 {remaining:.1f}s)", flush=True)
-                elif provider_attempt:
-                    print(f"[ai_provider] {provider} 使用剩餘預算重試一次", flush=True)
-                if request_budget is not None:
-                    request_budget["attempts"] += 1
-                try:
-                    response = _dispatch_provider(provider, timeout=attempt_timeout, **_all_kwargs)
-                finally:
-                    import webhook_runtime
-                    webhook_runtime.note_ai_attempt(time.monotonic() - started)
-                completed_generations += 1
-                if request_budget is not None:
-                    request_budget["generations"] += 1
-                try:
-                    response._jy_provider = provider
-                    if _USAGE_OBSERVER is not None:
-                        _USAGE_OBSERVER(response)
-                except Exception as usage_error:
-                    print(f"[ai_provider] usage observer failed: {type(usage_error).__name__}", flush=True)
-                response = _restore_provider_privacy(response, privacy_envelope)
-                elapsed = time.monotonic() - started
-                choices = getattr(response, "choices", None) or []
-                finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
-                truncated = finish in {"length", "max_tokens", "model_context_window_exceeded"}
-                refused = finish in {"refusal", "content_filter"}
-                content = getattr(getattr(choices[0], "message", None), "content", "") if choices else ""
-                if callable(response_validator) or (generation_limit and truncated) or refused:
-                    verdict = ((False, "provider_refusal:" + finish) if refused else
-                               (False, "translation_output_truncated:" + finish) if truncated
-                               else response_validator(response, provider))
-                    if isinstance(verdict, tuple):
-                        usable = bool(verdict[0])
-                        reason = str(verdict[1]) if len(verdict) > 1 else "quality validator rejected response"
-                    else:
-                        usable = bool(verdict)
-                        reason = "quality validator rejected response"
-                    if not usable:
-                        last_quality_error = RuntimeError(reason)
-                        if repair_model:
-                            _all_kwargs["model"] = repair_model
-                        # A token-limited prefix is never a complete candidate,
-                        # even if its surviving sentences pass semantic checks.
-                        if not truncated and not refused and str(content or "").strip():
-                            best_rejected_response = response
-                            best_rejected_provider = provider
-                            best_rejected_reason = reason
-                            best_rejected_elapsed = elapsed
-                        elif generation_limit and truncated:
-                            budget_key = "max_completion_tokens" if _all_kwargs.get("max_completion_tokens") else "max_tokens"
-                            budget = int(_all_kwargs.get(budget_key) or 1024)
-                            _all_kwargs[budget_key] = max(budget, min(16384, budget * 2))
-                        attempts.append({
-                            "provider": provider,
-                            "error": reason[:300],
-                            "kind": "quality_reject",
-                            "latency_seconds": round(elapsed, 3),
-                        })
-                        # Quality rejection is deterministic for this candidate;
-                        # do not retry the same provider with the same request.
-                        if generation_limit:
-                            # Give the remaining attempt the actual defect list,
-                            # without resending the rejected translation itself.
-                            _all_kwargs["messages"] = list(messages)
-                            _all_kwargs["messages"].insert(1, {
-                                "role": "system",
-                                "content": (
-                                    "Local validation of a prior candidate found: " + reason[:1200]
-                                    + ". Reconstruct from the original source and fix these defects. "
-                                    "Output only the complete translation; do not mention the validation."
-                                ),
-                            })
-                        print(f"[ai_provider] {provider} 品質拒收: {reason[:160]}", flush=True)
-                        if (len(providers) == 1 and generation_limit
-                                and completed_generations < generation_limit
-                                and provider_attempt + 1 < provider_attempts
-                                and deadline - time.monotonic() > 1.0):
-                            continue
-                        break
-                last_error = None
-                _record_provider_success(provider, elapsed)
-                try:
-                    response._jy_provider = provider
-                    response._jy_failover_attempts = list(attempts)
-                    response._jy_latency_seconds = elapsed
-                    response._jy_latency_profile = latency_profile or "default"
-                except Exception:
-                    pass
-                return response
-            except Exception as err:
-                last_error = err
-                billing_exhausted = _is_quota_exhausted_error(err, provider=provider)
-                transient = _is_availability_error(err) and not billing_exhausted
-                can_retry_same = (
-                    single_provider_retry
-                    and provider_attempt == 0
-                    and transient
-                    and (deadline - time.monotonic()) > 1.25
-                )
-                attempts.append({
-                    "provider": provider,
-                    "error": str(err)[:300],
-                    "kind": "transient_retry" if can_retry_same else "provider_error",
-                    "attempt": provider_attempt + 1,
-                })
-                print(f"[ai_provider] {provider} 失敗: {type(err).__name__}: {str(err)[:160]}", flush=True)
-
-                # Only explicit credit/quota exhaustion permanently changes the
-                # active provider. Generic 429 means temporary rate limiting and
-                # is handled by this request's failover + circuit cooldown.
-                if billing_exhausted and diagnostic_probe is None:
-                    _auto_switch_on_exhaust(provider, err)
-
-                if can_retry_same:
-                    time.sleep(min(0.20, max(0.0, (deadline - time.monotonic()) / 10.0)))
-                    continue
-
-                if _is_provider_failover_error(err):
-                    _record_provider_failure(provider, err)
-                if not failover_enabled or not _is_provider_failover_error(err):
-                    raise
-                break
-
-    if best_rejected_response is not None:
-        # A provider did return a translation.  Local validation may still mark
-        # it non-cacheable or trigger repair downstream, but it must not be
-        # discarded after every provider has been tried.
+    provider = providers[0]
+    seconds = max(0.1, min(float(timeout or 90), total, per_provider))
+    budget = _TRANSLATION_REQUEST.get()
+    if budget is not None:
+        if budget["attempts"] >= 1 or budget["generations"] >= 1:
+            raise RuntimeError("Translation request already attempted; automatic retry disabled")
+        if budget["deadline"] is None:
+            budget["deadline"] = time.monotonic() + budget["seconds"]
+        seconds = min(seconds, budget["deadline"] - time.monotonic())
+        if seconds <= 0:
+            raise TimeoutError("Translation request deadline exhausted")
+        budget["attempts"] += 1
+    started = time.monotonic()
+    try:
+        response = _dispatch_provider(provider, timeout=seconds, model=model, messages=messages,
+            max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
+            temperature=temperature, prompt_cache_key=prompt_cache_key,
+            reasoning_effort=reasoning_effort, verbosity=verbosity, logprobs=logprobs,
+            top_logprobs=top_logprobs, logit_bias=logit_bias, stop=stop, **kwargs)
+    except Exception as exc:
+        if _is_quota_exhausted_error(exc, provider=provider) and probe is None:
+            _auto_switch_on_exhaust(provider, exc)  # selects a route for future messages only
+        if _is_provider_failover_error(exc):
+            _record_provider_failure(provider, exc)
+        raise
+    finally:
+        import webhook_runtime
+        webhook_runtime.note_ai_attempt(time.monotonic() - started)
+    elapsed = time.monotonic() - started
+    if budget is not None:
+        budget["generations"] += 1
+    response._jy_provider = provider
+    if _USAGE_OBSERVER is not None:
         try:
-            _record_provider_success(best_rejected_provider, best_rejected_elapsed or 0.0)
-        except Exception:
-            pass
+            _USAGE_OBSERVER(response)
+        except Exception as exc:
+            logging.getLogger("app").warning("AI usage observer failed: %s", type(exc).__name__)
+    response = _restore_provider_privacy(response, envelope)
+    issues = []
+    choices = getattr(response, "choices", None) or []
+    finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
+    if finish in {"length", "max_tokens", "model_context_window_exceeded", "refusal", "content_filter"}:
+        issues.append("provider_finish:" + finish)
+    if callable(validator):
         try:
-            best_rejected_response._jy_provider = best_rejected_provider
-            best_rejected_response._jy_failover_attempts = list(attempts)
-            best_rejected_response._jy_latency_seconds = best_rejected_elapsed or 0.0
-            best_rejected_response._jy_latency_profile = latency_profile or "default"
-            best_rejected_response._jy_quality_degraded = True
-            best_rejected_response._jy_quality_reject_reason = best_rejected_reason or "quality validator rejected response"
-        except Exception:
-            pass
-        print(
-            f"[ai_provider] 所有候選皆被本地品管拒收，改送最後一份非空譯文: "
-            f"{best_rejected_provider} ({str(best_rejected_reason or '')[:120]})",
-            flush=True,
-        )
-        return best_rejected_response
-
-    if last_error is not None:
-        try:
-            setattr(last_error, "_jy_failover_attempts", attempts)
-        except Exception:
-            pass
-        raise last_error
-    if last_quality_error is not None:
-        try:
-            setattr(last_quality_error, "_jy_failover_attempts", attempts)
-        except Exception:
-            pass
-        raise last_quality_error
-    raise TimeoutError(f"AI 翻譯超過總期限 {total_timeout:.0f} 秒")
+            verdict = validator(response, provider)
+            ok = bool(verdict[0]) if isinstance(verdict, tuple) else bool(verdict)
+            if not ok:
+                issues.append(str(verdict[1]) if isinstance(verdict, tuple) and len(verdict) > 1 else "quality_warning")
+        except Exception as exc:
+            issues.append("validation_exception:" + type(exc).__name__)
+    response._jy_failover_attempts = []
+    response._jy_latency_seconds = elapsed
+    response._jy_latency_profile = profile or "default"
+    response._jy_quality_degraded = bool(issues)
+    response._jy_quality_reject_reason = "; ".join(issues)
+    if issues:
+        logging.getLogger("app").warning("[AIQuality] retaining first response without retry: %s", issues)
+    _record_provider_success(provider, elapsed)
+    return response
 
 
 _openai_cache_unsupported_until = {}
@@ -3048,33 +2842,12 @@ def _chat_complete_openai(model, messages, **kwargs):
     _explicit_cache_used = _configure_openai_translation_cache(call_kwargs)
     try:
         resp = _sdk_create(_create_translation, call_kwargs)
-    except Exception as _fe:
-        if _explicit_cache_used and _is_feature_parameter_error(
-                _fe, "prompt_cache_options", "prompt_cache_breakpoint"):
-            # A compatibility rejection is one bounded transport attempt. Avoid
-            # repeating rejected requests while the endpoint lacks this feature.
-            with _provider_health_lock:
-                if len(_openai_cache_unsupported_until) >= 64:
-                    _openai_cache_unsupported_until.clear()
-                _openai_cache_unsupported_until[model] = time.monotonic() + 300
-            call_kwargs["messages"] = _cache_original_messages
-            if _cache_original_extra is None:
-                call_kwargs.pop("extra_body", None)
-            else:
-                call_kwargs["extra_body"] = _cache_original_extra
-            resp = _sdk_create(_create_translation, call_kwargs)
-        elif structured_schema and _is_feature_parameter_error(
-                _fe, "response_format", "json_schema", "structured output"):
-            # Older compatibility endpoints may not implement strict JSON schema.
-            # The audit prompt still requires JSON, so retry once without the
-            # transport-level constraint rather than dropping the audit.
-            call_kwargs.pop("response_format", None)
-            resp = _sdk_create(_create_translation, call_kwargs)
-        elif _flex_used and _is_feature_parameter_error(_fe, "service_tier", "flex"):
-            call_kwargs.pop("service_tier", None)
-            resp = _sdk_create(_create_translation, call_kwargs)
-        else:
-            raise
+    except Exception as exc:
+        # Remember compatibility for future messages; never repeat this paid
+        # request just to remove an optional cache parameter.
+        if _explicit_cache_used and _is_feature_parameter_error(exc, "prompt_cache_options"):
+            _openai_cache_unsupported_until[model] = time.monotonic() + 3600
+        raise
 
     # v3.2.6: response 抽 <translation> tag(對稱 Anthropic line 1567-1574)
     # 容錯:若 LLM 沒乖乖包 tag,保留原 content 不動(向後相容)
@@ -3401,102 +3174,7 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         call_kwargs["output_config"] = output_config
 
     # ─── Step 4: 呼叫 ───
-    try:
-        resp = _sdk_create(_create_translation, call_kwargs)
-    except Exception as e:
-        err_msg = str(e).lower()
-        # v3.2.7 根治: 所有 thinking 相關錯誤都 fallback,不再只抓特定關鍵字。
-        # 原因:Sonnet 4.6 + adaptive thinking 失敗時,若錯誤訊息不含
-        # "adaptive"/"effort"/"display" 等字,原本直接 raise → 翻譯無聲消失。
-        # 新邏輯:只要 thinking_applied=True 且 API 呼叫失敗,一律 fallback。
-        if structured_schema and _is_feature_parameter_error(
-                e, "output_config", "json_schema", "format", "structured output"):
-            print(f"[ai_provider] Anthropic structured output 不相容，退回 JSON prompt: {str(e)[:160]}", flush=True)
-            output_config = dict(call_kwargs.get("output_config") or {})
-            output_config.pop("format", None)
-            if output_config:
-                call_kwargs["output_config"] = output_config
-            else:
-                call_kwargs.pop("output_config", None)
-            resp = _sdk_create(_create_translation, call_kwargs)
-        elif thinking_applied and _is_feature_parameter_error(
-                e, "thinking", "adaptive", "budget_tokens", "effort", "display"):
-            print(f"[ai_provider] thinking 呼叫失敗,嘗試 fallback: {type(e).__name__}: {str(e)[:200]}", flush=True)
-            # Fallback A: adaptive → legacy
-            if (isinstance(call_kwargs.get("thinking"), dict)
-                and call_kwargs["thinking"].get("type") == "adaptive"):
-                if _model_requires_adaptive(anthropic_model):
-                    # Opus 4.7 / Sonnet 5 不支援 legacy budget thinking。
-                    if is_sonnet5:
-                        call_kwargs["thinking"] = {"type": "disabled"}
-                        call_kwargs["output_config"] = {"effort": "low"}
-                        thinking_mode_used = "disabled_low(fallback)"
-                    else:
-                        call_kwargs.pop("thinking", None)
-                        call_kwargs.pop("output_config", None)
-                        thinking_mode_used = "none(opus47_fallback)"
-                    thinking_applied = False
-                else:
-                    legacy_budget = int(features.get("thinking_budget", 2000))
-                    call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": legacy_budget}
-                    call_kwargs["max_tokens"] = max(int(max_tokens or 1024), legacy_budget + 1024)
-                    thinking_mode_used = f"legacy_{legacy_budget}(fallback)"
-                try:
-                    resp = _sdk_create(_create_translation, call_kwargs)
-                except Exception as e2:
-                    print(f"[ai_provider] legacy fallback 也失敗: {e2}", flush=True)
-                    # Fallback B: legacy → 完全關掉 thinking
-                    if is_sonnet5:
-                        call_kwargs["thinking"] = {"type": "disabled"}
-                        call_kwargs["output_config"] = {"effort": "low"}
-                        thinking_mode_used = "disabled_low(all_thinking_failed)"
-                    else:
-                        call_kwargs.pop("thinking", None)
-                        call_kwargs.pop("output_config", None)
-                        thinking_mode_used = "none(all_thinking_failed)"
-                    call_kwargs["max_tokens"] = int(max_tokens or 1024)
-                    thinking_applied = False
-                    resp = _sdk_create(_create_translation, call_kwargs)
-            else:
-                # enabled mode 失敗 → 關掉 thinking
-                if is_sonnet5:
-                    call_kwargs["thinking"] = {"type": "disabled"}
-                    call_kwargs["output_config"] = {"effort": "low"}
-                    thinking_mode_used = "disabled_low(thinking_failed)"
-                else:
-                    call_kwargs.pop("thinking", None)
-                    call_kwargs.pop("output_config", None)
-                    thinking_mode_used = "none(thinking_failed)"
-                call_kwargs["max_tokens"] = int(max_tokens or 1024)
-                thinking_applied = False
-                resp = _sdk_create(_create_translation, call_kwargs)
-        # 非 thinking 錯誤:grounding/citation/cache/stop 的 fallback
-        elif grounding_used and ("search_result" in err_msg or "citation" in err_msg or "content block" in err_msg):
-            print(f"[ai_provider] grounding/citation 失敗,fallback: {e}", flush=True)
-            for i, m in enumerate(merged):
-                if m["role"] == "user" and isinstance(m["content"], list):
-                    text_only = [b for b in m["content"] if not (isinstance(b, dict) and b.get("type") == "search_result")]
-                    if text_only:
-                        if len(text_only) == 1 and text_only[0].get("type") == "text":
-                            merged[i]["content"] = text_only[0]["text"]
-                        else:
-                            merged[i]["content"] = text_only
-            call_kwargs["messages"] = merged
-            grounding_used = False
-            resp = _sdk_create(_create_translation, call_kwargs)
-        elif use_cache_1h and ("extended-cache" in err_msg or "beta" in err_msg or "ttl" in err_msg):
-            print(f"[ai_provider] 1h cache fallback to 5min: {e}", flush=True)
-            if isinstance(call_kwargs.get("system"), list):
-                for blk in call_kwargs["system"]:
-                    if isinstance(blk, dict) and "cache_control" in blk:
-                        blk["cache_control"] = {"type": "ephemeral"}
-            resp = _sdk_create(_create_translation, call_kwargs)
-        elif use_stop and ("stop_sequence" in err_msg or "too many" in err_msg):
-            print(f"[ai_provider] stop_sequences fallback: {e}", flush=True)
-            call_kwargs.pop("stop_sequences", None)
-            resp = _sdk_create(_create_translation, call_kwargs)
-        else:
-            raise
+    resp = _sdk_create(_create_translation, call_kwargs)
 
     # Preserve usage even for HTTP-200 refusal responses. The coordinator must
     # count the generation and its cost before rejecting it and failing over.

@@ -410,19 +410,9 @@ def test_signed_webhook_failure_is_recovered_without_requesting_another_user_tap
     hub.h["_factory_receipt_sender"] = timeout
     client = app.app.test_client()
     response = client.post("/callback", data=body, headers={"X-Line-Signature": sign(body)})
-    assert response.status_code == 500
+    assert response.status_code == 200
     first = stored(hub, row)["responses"]
     assert first[COLLEAGUE]["status"] == "understood" and len(private.sent) == 1
-    jobs = [j for j in queue.list_pending() if j["job_kind"] == "webhook"]
-    assert len(jobs) == 1 and jobs[0]["payload"]["body"] == body
-    private.now = notification(hub, row)["next_attempt_at"] + 1
-    hub.h["_factory_receipt_sender"] = lambda *args: private.sent.append(copy.deepcopy(args))
-    key = jobs[0]["job_key"]
-    assert queue.claim_job(key, owner="private-ack-recovery")
-    assert inbox.run_job(queue.get(key), "private-ack-recovery")
-    assert queue.was_delivered(key) and notification(hub, row)["state"] == "accepted"
-    assert stored(hub, row)["responses"] == first and private.sent[0] == private.sent[1]
-    raw["webhookEventId"] = "a-second-physical-tap"
-    body = json.dumps({"destination": "U" + "f" * 32, "events": [raw]})
+    assert queue.pending_count() == 0
     assert client.post("/callback", data=body, headers={"X-Line-Signature": sign(body)}).status_code == 200
-    assert len(private.sent) == 2 and len(group_sends) == 1 and replies == []
+    assert stored(hub, row)["responses"] == first and len(private.sent) == 1

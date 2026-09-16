@@ -64,7 +64,7 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FACTORY_TRANSLATION_REVIEW_MODE", None)
             os.environ.pop("FACTORY_REVIEW_CLEAN_HIGH_CONSEQUENCE", None)
-            self.assertEqual(policy.review_mode(), "adaptive")
+            self.assertEqual(policy.review_mode(), "off")
             self.assertFalse(
                 policy.adaptive_review_risk(
                     "請確認材料已包裝完成。",
@@ -94,7 +94,7 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
             force_review=False,
         )
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["path"], "single_api_local_validation")
+        self.assertEqual(result["path"], "local_quality_advisory")
         self.assertFalse(result["review_requested"])
         self.assertEqual(client.calls, [])
 
@@ -103,11 +103,11 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
             "FACTORY_TRANSLATION_REVIEW_MODE": "always",
             "FACTORY_ALLOW_ALWAYS_REVIEW": "0",
         }):
-            self.assertEqual(policy.review_mode(), "adaptive")
+            self.assertEqual(policy.review_mode(), "off")
             self.assertFalse(policy.require_source_review(
                 "請確認材料已包裝完成。", "zh", "id", adaptive_risk=False
             ))
-            self.assertTrue(policy.require_source_review(
+            self.assertFalse(policy.require_source_review(
                 "發生混料，請立即停線。", "zh", "id", adaptive_risk=True
             ))
 
@@ -115,8 +115,8 @@ class TranslationCpValueRootFixTests(unittest.TestCase):
             "FACTORY_TRANSLATION_REVIEW_MODE": "always",
             "FACTORY_ALLOW_ALWAYS_REVIEW": "1",
         }):
-            self.assertEqual(policy.review_mode(), "always")
-            self.assertTrue(policy.require_source_review(
+            self.assertEqual(policy.review_mode(), "off")
+            self.assertFalse(policy.require_source_review(
                 "請確認材料已包裝完成。", "zh", "id", adaptive_risk=False
             ))
 

@@ -90,12 +90,12 @@ def test_last_reply_cancels_a_frozen_uncertain_personal_retry(hub):
     hub.reminders.sender = timeout
     tick(hub, row["reminder_due_at"])
     retry = stored(hub, row)
-    assert retry["reminder_state"] == "retrying"
+    assert retry["reminder_state"] == "failed"
     assert retry["pending_batch"]["ids"] == [COLLEAGUE]
     assert not retry["pending_batch"]["all_fallback"]
     answer(hub, row)
     assert_finished(hub, row)
-    tick(hub, retry["wake_at"] + 3600)
+    tick(hub, time.time() + 3600)
     assert len(sent) == 2
     assert stored(hub, row)["last_error"] == ""
 
@@ -187,10 +187,7 @@ def test_initial_card_with_empty_known_roster_retries_before_stopping(hub):
     hub.reminders.sender = uncertain
     hub.h["_send_reply_with_push_fallback"] = lambda **kw: None
     row = command(hub)
-    assert row["delivery_state"] != "delivered" and row["reminder_state"] == "retrying"
-    hub.reminders.sender = lambda *args: sent.append(copy.deepcopy(args))
-    tick(hub, row["wake_at"])
-    assert sent[0] == sent[1]
-    assert assert_finished(hub, row)["delivery_state"] == "delivered"
-    tick(hub, row["wake_at"] + 3600)
-    assert len(sent) == 2
+    assert row["delivery_state"] != "delivered" and row["reminder_state"] == "failed"
+    assert row["wake_at"] is None
+    tick(hub, time.time() + 3600)
+    assert len(sent) == 1

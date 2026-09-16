@@ -176,7 +176,8 @@ def test_unrelated_modifiers_do_not_invent_inspection_schedule(source):
     TARGET.replace("secara acak", "sesuai jadwal tetap"),
 ])
 def test_complete_notice_gate_still_rejects_lost_points_codes_or_changed_facts(candidate):
-    assert app._final_delivery_guard(SOURCE, candidate, "zh", "id") is None
+    assert app._final_delivery_guard(SOURCE, candidate, "zh", "id")
+    assert app._delivery_validation_issues(SOURCE, candidate, "zh", "id")
 
 
 def test_validator_exception_does_not_discard_an_available_translation(monkeypatch):
@@ -344,9 +345,9 @@ def test_translation_outage_retains_whole_source_and_recovers_without_resend(run
     pending = queue.get("notice-group:notice-message")
     assert pending["payload"]["source_text"] == SOURCE
     assert pending["payload"]["target_langs"] == ["id"]
-    runtime.provider_down = False
-    assert retry_pending()
-    assert TARGET in delivered_text(runtime)
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
     assert queue.pending_count() == 0
 
 
@@ -360,10 +361,9 @@ def test_line_outage_reuses_completed_notice_without_paying_for_translation_agai
     assert not runtime.sends
     pending = queue.get("notice-group:notice-message")
     assert TARGET in pending["payload"]["delivery"]["text"]
-    runtime.push_down = False
-    assert retry_pending()
-    assert len(runtime.generations) == 1
-    assert TARGET in delivered_text(runtime)
+    # Failed work is retained for diagnostics, never regenerated automatically.
+    assert queue.get('notice-group:notice-message')["status"] == "failed"
+    assert not queue.claim_job('notice-group:notice-message', owner="recovery")
     assert queue.pending_count() == 0
 
 

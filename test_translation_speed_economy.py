@@ -307,10 +307,13 @@ def test_cache_parameter_rejection_is_bounded_and_remembered(offline_transport, 
     monkeypatch.setattr(ai_provider, '_client_with_limits', lambda c, t: c)
     content = '<role>x</role><translation_principles>Preserve facts.</translation_principles>'
     messages = [{'role': 'system', 'content': content}, {'role': 'user', 'content': 'text'}]
-    for _ in range(2):
+    monkeypatch.setattr(ai_provider, '_openai_cache_unsupported_until', {})
+    with pytest.raises(ValueError, match='unsupported prompt_cache_options'):
         ai_provider._chat_complete_openai('gpt-5.6-luna', messages, max_completion_tokens=512)
-    assert len(calls) == 3
-    assert 'extra_body' not in calls[1] and 'extra_body' not in calls[2]
+    assert len(calls) == 1
+    # Only the next distinct request uses the remembered compatibility setting.
+    ai_provider._chat_complete_openai('gpt-5.6-luna', messages, max_completion_tokens=512)
+    assert len(calls) == 2 and 'extra_body' not in calls[1]
 
 
 def outcome(**extra):

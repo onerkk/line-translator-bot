@@ -83,6 +83,7 @@ def test_two_depleted_providers_can_advance_to_gemini_in_same_minute():
 
 
 def test_chat_complete_request_order_is_claude_openai_gemini_and_switch_is_durable():
+    import pytest
     cfg = _cfg()
     calls = []
 
@@ -101,7 +102,8 @@ def test_chat_complete_request_order_is_claude_openai_gemini_and_switch_is_durab
          patch.object(ai_provider, "_dispatch_provider", side_effect=dispatch), \
          patch.object(ai_provider, "_circuit_is_open", return_value=False):
         ai_provider._last_auto_switch_by_provider = {}
-        result = ai_provider.chat_complete(
+        with pytest.raises(RuntimeError, match="credit balance"):
+            ai_provider.chat_complete(
             model=ai_provider.DEFAULT_OPENAI_MODEL,
             messages=[{"role": "user", "content": "你好"}],
             provider_preference=["anthropic", "openai", "gemini"],
@@ -109,10 +111,9 @@ def test_chat_complete_request_order_is_claude_openai_gemini_and_switch_is_durab
             failover_per_provider_timeout=5,
         )
 
-    assert calls == ["anthropic", "openai", "gemini"]
-    assert getattr(result, "_jy_provider") == "gemini"
-    assert cfg["active_provider"] == "gemini"
-    assert set(cfg["quota_exhausted_providers"]) == {"anthropic", "openai"}
+    assert calls == ["anthropic"]
+    assert cfg["active_provider"] == "openai"
+    assert set(cfg["quota_exhausted_providers"]) == {"anthropic"}
 
 
 def test_stale_settings_restore_cannot_undo_auto_billing_switch_but_manual_switch_can():

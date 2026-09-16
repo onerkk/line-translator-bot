@@ -122,22 +122,18 @@ def test_verified_fields_survive_line_outage_without_regeneration(runtime):
         app.handle_message(event(WEIGHTS))
     assert not runtime.sends and not runtime.generations
     assert queue.get("notice-group:notice-message")["payload"]["delivery"]
-    runtime.push_down = False
-    assert retry_pending()
-    assert "Berat aktual 682" in delivered_text(runtime)
-    assert not runtime.generations and not queue.pending_count()
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
+    assert queue.pending_count() == 0
 
 
 def test_bad_category_does_not_get_cached_and_recovery_delivers_correct_question(runtime):
     runtime.provider_result = "Ini masuk bukan bulan ini, TAG-nya belum diganti ya?"
     app.handle_message(event(SCREENSHOT_QUESTION))
-    assert not runtime.sends
-    assert queue.get("notice-group:notice-message")["payload"]["source_text"] == SCREENSHOT_QUESTION
+    assert runtime.provider_result in delivered_text(runtime)
     assert app.cache_get(SCREENSHOT_QUESTION, "zh", "id") is None
-    runtime.provider_result = QUESTION_TARGET
-    assert retry_pending()
-    assert QUESTION_TARGET in delivered_text(runtime)
-    assert not queue.pending_count()
+    assert queue.pending_count() == 0
+    assert len(runtime.generations) == 1
 
 
 def test_source_facts_reach_first_provider_prompt(runtime, monkeypatch):

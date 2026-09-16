@@ -64,7 +64,8 @@ def test_reported_bad_meanings_rejected_by_provider_and_final_boundary(old, new)
     app._tl.semantic_contract = app.build_translation_semantic_contract(SOURCE, "zh", "id")
     validate = app._build_translation_response_validator(SOURCE, "zh", "id")
     assert not validate(response(bad), "offline")[0]
-    assert app._final_delivery_guard(SOURCE, bad, "zh", "id") is None
+    assert app._final_delivery_guard(SOURCE, bad, "zh", "id")
+    assert app._delivery_validation_issues(SOURCE, bad, "zh", "id")
 
 
 def test_user_reviewed_meaning_is_accepted_without_a_whole_sentence_shortcut():
@@ -154,14 +155,13 @@ def test_primary_repair_and_review_share_two_generations(offline_transport, monk
         first = ai_provider.chat_complete(model=ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
             messages=[{"role": "user", "content": SOURCE}], translation_max_generations=2,
             response_validator=app._build_translation_response_validator(SOURCE, "zh", "id"))
-        assert first.choices[0].message.content == CORRECT_NOTICE
-        with pytest.raises(TimeoutError):
+        assert first.choices[0].message.content == TARGET.replace(*BAD_MUTATIONS[0])
+        with pytest.raises(RuntimeError, match="already attempted"):
             ai_provider.chat_complete(model=ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
                 messages=[{"role": "user", "content": "review"}])
-        assert ai_provider.translation_budget_snapshot()["generations"] == 2
+        assert ai_provider.translation_budget_snapshot()["generations"] == 1
     run()
-    assert len(calls) == 2
-    assert any("inventory_change" in str(m) for m in calls[1][1]["messages"])
+    assert len(calls) == 1
     assert ai_provider.translation_budget_snapshot() == {}
 
 
@@ -176,10 +176,12 @@ def test_budget_deadline_does_not_reset_for_review(offline_transport, monkeypatc
     monkeypatch.setattr(ai_provider, "_dispatch_provider", dispatch)
     @ai_provider.translation_request_budget
     def run():
-        for _ in range(2):
-            ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "text"}], failover_total_timeout=90)
+        ai_provider.chat_complete(model="test", messages=[{"role":"user","content":"text"}])
+        with pytest.raises(RuntimeError, match="already attempted"):
+            ai_provider.chat_complete(model="test", messages=[{"role":"user","content":"review"}])
+        assert ai_provider.translation_budget_snapshot()["attempts"] == 1
     run()
-    assert calls[1] <= 3
+    assert len(calls) == 1
 
 
 def test_transport_failures_also_have_a_shared_limit(offline_transport, monkeypatch):
@@ -190,11 +192,12 @@ def test_transport_failures_also_have_a_shared_limit(offline_transport, monkeypa
     monkeypatch.setattr(ai_provider, "_dispatch_provider", dispatch)
     @ai_provider.translation_request_budget
     def run():
-        for _ in range(3):
-            with pytest.raises(TimeoutError):
-                ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "text"}])
+        with pytest.raises(TimeoutError):
+            ai_provider.chat_complete(model="test", messages=[{"role":"user","content":"text"}])
+        with pytest.raises(RuntimeError, match="already attempted"):
+            ai_provider.chat_complete(model="test", messages=[{"role":"user","content":"text"}])
     run()
-    assert len(calls) == 3
+    assert len(calls) == 1
 
 
 def test_concurrent_requests_and_exceptions_do_not_share_budgets(offline_transport, monkeypatch):
@@ -254,8 +257,8 @@ def test_rejected_routine_candidate_upgrades_within_the_same_budget(offline_tran
             translation_max_generations=2,
             translation_repair_model=ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL,
             response_validator=lambda result, _: (result.choices[0].message.content == "ok", "wrong action"))
-    assert run().choices[0].message.content == "ok"
-    assert models == [ai_provider.DEFAULT_OPENAI_MODEL, ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL]
+    assert run().choices[0].message.content == "bad"
+    assert models == [ai_provider.DEFAULT_OPENAI_MODEL]
 
 
 def test_public_pipeline_repairs_notice_in_two_generations_and_keeps_it_cacheable(offline_transport, monkeypatch):
@@ -274,9 +277,9 @@ def test_public_pipeline_repairs_notice_in_two_generations_and_keeps_it_cacheabl
     app._tl.disable_tone_emoji = True
     app._tl.group_id = "cost-quality-offline"
     result = app.translate(SOURCE, "zh", "id")
-    assert result == CORRECT_NOTICE
-    assert len(calls) == 2
-    assert any(CORRECT_NOTICE in row for row in cached)
+    assert result == TARGET.replace(*BAD_MUTATIONS[0])
+    assert len(calls) == 1
+    assert cached == []
     primary_prompt = "\n".join(str(m["content"]) for m in calls[0]["messages"])
     assert "庫存" in primary_prompt and "jangan sampai stok sulit berkurang" in primary_prompt
     assert "班別不是學校班級" in primary_prompt
@@ -290,8 +293,8 @@ def test_usage_observes_rejected_generations_and_review_once(offline_transport, 
     ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "a"}],
         translation_max_generations=2, response_validator=lambda *_a: (False, "wrong action"))
     ai_provider.chat_complete(model="test", messages=[{"role": "user", "content": "review"}])
-    assert len(records) == 3
-    assert len({id(r) for r in records}) == 3
+    assert len(records) == 2
+    assert len({id(r) for r in records}) == 2
     monkeypatch.setattr(app, "bot_stats", {})
     item = response("ok")
     item.model = "gpt-5.6-luna"
@@ -314,7 +317,8 @@ def test_clean_notice_stays_one_generation_with_full_semantic_validation(offline
     assert app.translate(SOURCE, "zh", "id") == CORRECT_NOTICE
     assert len(calls) == 1
     assert calls[0]["model"] == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
-    assert app._final_delivery_guard(SOURCE, TARGET.replace(*BAD_MUTATIONS[0]), "zh", "id") is None
+    assert app._final_delivery_guard(SOURCE, TARGET.replace(*BAD_MUTATIONS[0]), "zh", "id")
+    assert app._delivery_validation_issues(SOURCE, TARGET.replace(*BAD_MUTATIONS[0]), "zh", "id")
 
 
 def test_incidents_and_learned_errors_still_receive_review():

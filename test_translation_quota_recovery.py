@@ -101,13 +101,9 @@ def test_rate_limit_then_recovery_delivers_saved_source_without_admin_reset(pipe
     pending = queue.get('notice-group:notice-message')
     assert pending['payload']['source_text'] == source
     assert len(state.calls) <= 3  # foreground request keeps its shared attempt cap
-    state.provider_down = False
-    calls_before = len(state.calls)
-    assert retry_pending(), (cfg['quota_exhausted_providers'], state.calls)
-    assert target.replace('__MENTION_0__', '@阿堂') in delivered_text(state)
-    assert len(state.calls) == calls_before + 1
-    assert len(state.sends) == 1 and queue.pending_count() == 0
-    assert cfg['quota_exhausted_providers'] == {}
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
+    assert not queue.claim_job("notice-group:notice-message", owner="recovery")
+    assert queue.pending_count() == 0
 
 
 @pytest.mark.parametrize('code', ['RESOURCE_EXHAUSTED', 'rate_limit_exceeded', 'quota_exceeded', 'too_many_requests'])
@@ -213,4 +209,5 @@ def test_transport_outage_never_becomes_a_cached_translation(pipeline):
     app.handle_message(event('不要套環'))
     assert not state.sends
     assert not app.translation_cache
-    assert queue.pending_count() == 1
+    assert queue.pending_count() == 0
+    assert queue.get("notice-group:notice-message")["status"] == "failed"
