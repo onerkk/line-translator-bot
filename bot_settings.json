@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "998e7c9b24363dbc9fb7206960156970c784617bbe5cc14babb83781d80e4ada",
-    "updated_at_iso": "2026-09-17T00:09:29.359007+00:00",
-    "updated_at_unix": 1789603769.3590066
+    "state_hash": "4185d04adf5bf8f1b7310aae415889b1a2a1d4cd9f8ad6f93ec81c3617342fcc",
+    "updated_at_iso": "2026-09-17T19:12:12.147964+00:00",
+    "updated_at_unix": 1789672332.1479638
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -189,18 +189,18 @@
     "ant_cost_usd": 2.813750450000001,
     "ant_input": 242459,
     "ant_output": 12283,
-    "commands": 16,
+    "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 40118,
-    "oai_cached": 12251,
-    "oai_cost_usd": 0.42971346,
-    "oai_input": 382220,
-    "oai_output": 4657,
+    "oai_cache_write": 46444,
+    "oai_cached": 15414,
+    "oai_cost_usd": 0.43179241999999995,
+    "oai_input": 393064,
+    "oai_output": 4793,
     "oai_reasoning": 0,
-    "text_translations": 284,
-    "tokens_completion": 22113,
-    "tokens_prompt": 4616991,
+    "text_translations": 287,
+    "tokens_completion": 22249,
+    "tokens_prompt": 4627835,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -420,14 +420,14 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cache_read": 0,
-      "cache_write": 21322,
-      "cost_usd": 2.0673026000000005,
+      "cache_read": 3163,
+      "cache_write": 27648,
+      "cost_usd": 2.0693815600000005,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 8957,
-      "tokens_prompt": 2032373
+      "tokens_completion": 9093,
+      "tokens_prompt": 2043217
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -558,7 +558,8 @@
     "C28bb7127640539f3c1bc743ecdf61a24": {
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
-      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha"
+      "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
