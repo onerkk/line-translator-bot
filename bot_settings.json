@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "1632e39e6b26ca56e3aa6e51800f6c908c70a708a0fae60afba59eb6ec76670d",
-    "updated_at_iso": "2026-09-12T04:12:50.368211+00:00",
-    "updated_at_unix": 1789186370.3682108
+    "state_hash": "998e7c9b24363dbc9fb7206960156970c784617bbe5cc14babb83781d80e4ada",
+    "updated_at_iso": "2026-09-17T00:09:29.359007+00:00",
+    "updated_at_unix": 1789603769.3590066
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-11 10:53:19",
+    "last_updated": "2026-09-16 17:53:41",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 16,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 30653,
+    "oai_cache_write": 40118,
     "oai_cached": 12251,
-    "oai_cost_usd": 0.41839886,
-    "oai_input": 371553,
-    "oai_output": 4540,
+    "oai_cost_usd": 0.42971346,
+    "oai_input": 382220,
+    "oai_output": 4657,
     "oai_reasoning": 0,
-    "text_translations": 281,
-    "tokens_completion": 21996,
-    "tokens_prompt": 4606324,
+    "text_translations": 284,
+    "tokens_completion": 22113,
+    "tokens_prompt": 4616991,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -279,7 +279,7 @@
       "label_zh": "💡 提案",
       "name_id": "Sistem Saran",
       "name_zh": "提案系統",
-      "url": "https://app-walsin-crm-improvement.azurewebsites.net/improvePropose/personalList"
+      "url": "https://wap-prd.walsin.com/ssa/#/ssaImprovementProposal"
     }
   },
   "extra_customers": {
@@ -421,13 +421,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 0,
-      "cache_write": 11857,
-      "cost_usd": 2.055988,
+      "cache_write": 21322,
+      "cost_usd": 2.0673026000000005,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 8840,
-      "tokens_prompt": 2021706
+      "tokens_completion": 8957,
+      "tokens_prompt": 2032373
     },
     "__dm__": {
       "tokens_completion": 42,
