@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-19.1-source-identity-and-handoff"
+QUALITY_GATE_BUILD_ID = "2026-09-19.2-semantic-identifier-inventory"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1739,16 +1739,42 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     return result
 
 
-def _invented_identifier_issues(source, candidate, glossary_pairs):
+def _invented_identifier_issues(source, candidate, src_lang, tgt_lang):
     """Reject *new* equipment/record IDs at every cache and learning boundary.
 
-    Glossary hints may contain more specific equipment than the source. They
-    cannot license an invented code. Names/URLs with IDs already in the source
-    remain unchanged; measurements such as 15 cm are not identifiers.
+    Use the same source inventory as the missing-literal check: G8G9 directly
+    modifying 台車 contains two unit identifiers, while a product named G8G9
+    remains opaque. Glossary pairs cannot grant arbitrary equipment identities.
+    K3 is also the established Indonesian term for 安衛/工安, so only its
+    source-supported occupational-safety usage is exempted from code matching.
     """
     expected = gp_module.identity_codes(_PIPELINE_TOKEN_RE.sub(" ", source))
-    actual = gp_module.identity_codes(_PIPELINE_TOKEN_RE.sub(" ", candidate))
-    return ["invented_identifier:" + code for code in sorted(actual - expected)]
+    inventory = inspect_immutable_spans(source)
+    for literal in inventory.mapping.values():
+        expected.update(gp_module.identity_codes(literal))
+
+    checked_candidate = _PIPELINE_TOKEN_RE.sub(" ", candidate)
+    if str(src_lang).lower().startswith("zh") and str(tgt_lang).lower().startswith("id"):
+        # Mask mentions, URLs and identity placeholders before deciding whether
+        # 安衛 is prose. An unrelated person's name cannot license a new code.
+        prose = _PIPELINE_TOKEN_RE.sub(" ", protect_immutable_spans(source).protected)
+        prose = re.sub(r"https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]+", " ", prose)
+        if re.search(r"安[衛卫]|工安|職業安全(?:與|及|和)?衛生|职业安全(?:与|及|和)?卫生", prose):
+            checked_candidate = re.sub(
+                r"\b(?:bagian|departemen|tim|petugas|personel|staf|bidang|seksi)\s+K3"
+                r"(?![A-Za-z0-9_]|[-/._][A-Za-z0-9])",
+                " ", checked_candidate, flags=re.I,
+            )
+            # A standalone lexical translation 安衛 -> K3 is also valid.
+            if re.fullmatch(r"\s*(?:安[衛卫]|工安)\s*[。.!！]?\s*", prose):
+                checked_candidate = re.sub(r"^\s*K3\s*[.。!！]?\s*$", " ", checked_candidate, flags=re.I)
+
+    actual = gp_module.identity_codes(checked_candidate)
+    # Slash-delimited lists can spell already-inventoried atoms together.
+    # Never split an opaque product identifier such as G8G9 into new atoms.
+    additions = {code for code in actual - expected
+                 if not ("/" in code and all(part in expected for part in code.split("/")))}
+    return ["invented_identifier:" + code for code in sorted(additions)]
 
 
 def _duration_integrity_issues(source, candidate, src_lang, tgt_lang):
@@ -1848,7 +1874,7 @@ def _validate_normalized_translation(
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
     issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
-    issues.extend(_invented_identifier_issues(source, candidate, glossary_pairs))
+    issues.extend(_invented_identifier_issues(source, candidate, src_lang, tgt_lang))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)
             and re.search(r"計算機|计算机", candidate)):

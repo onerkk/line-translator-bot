@@ -86,6 +86,49 @@ def test_glossary_pair_cannot_authorize_an_invented_id():
     assert "invented_identifier:e824" in report.issues
 
 
+@pytest.mark.parametrize("source,target", [
+    ("安衛", "K3"),
+    ("工安。", "K3."),
+    ("安衛入廠抽查。", "Bagian K3 melakukan pemeriksaan acak di pabrik."),
+    ("安卫入厂抽查。", "Tim K3 melakukan pemeriksaan acak di pabrik."),
+    ("職業安全衛生人員入廠檢查。", "Petugas K3 melakukan pemeriksaan di pabrik."),
+])
+def test_source_supported_occupational_safety_is_not_an_invented_machine(source, target):
+    report = quality.validate_translation(source, target, "zh", "id")
+    assert not any(issue.startswith("invented_identifier:") for issue in report.issues)
+
+
+@pytest.mark.parametrize("source,target,code", [
+    ("請檢查設備。", "Bagian K3, tolong periksa mesin.", "k3"),
+    ("@安衛 請檢查設備。", "@安衛 Tolong periksa mesin K3.", "k3"),
+    ("安衛入廠檢查設備。", "Bagian K3 memeriksa mesin K3 di pabrik.", "k3"),
+    ("安衛入廠檢查設備。", "Bagian K3-1 memeriksa mesin di pabrik.", "k3-1"),
+    ("安衛入廠檢查設備。", "Bagian K3/2 memeriksa mesin di pabrik.", "k3/2"),
+    ("安衛入廠檢查設備。", "Bagian K3A memeriksa mesin di pabrik.", "k3a"),
+    ("安衛入廠檢查設備。", "Bagian K3 memeriksa mesin E824 di pabrik.", "e824"),
+])
+def test_safety_term_does_not_whitelist_unrelated_or_extended_identifiers(source, target, code):
+    report = quality.validate_translation(source, target, "zh", "id")
+    assert "invented_identifier:" + code in report.issues
+
+
+@pytest.mark.parametrize("units", ["G8G9", "G8、G9", "G8/G9", "G8 G9"])
+def test_trolley_unit_identifiers_follow_the_existing_source_inventory(units):
+    source = "削皮需要" + units + "台車 麻煩一下"
+    target = "Bagian Peeling membutuhkan troli dari unit G8 dan G9. Mohon bantuannya."
+    report = quality.validate_translation(source, target, "zh", "id")
+    assert report.ok, report.issues
+    bad = quality.validate_translation(source, target.replace("G9", "G10"), "zh", "id")
+    assert "invented_identifier:g10" in bad.issues
+
+
+def test_compact_product_code_cannot_be_split_into_trolley_units():
+    report = quality.validate_translation(
+        "產品代碼G8G9請保留", "Harap pertahankan kode produk G8 dan G9.", "zh", "id"
+    )
+    assert {"invented_identifier:g8", "invented_identifier:g9"}.issubset(report.issues)
+
+
 @pytest.mark.parametrize("station", ["452", "453", "480"])
 def test_data_handoff_is_a_question_and_uses_current_station(station):
     source = HANDOFF.replace("452", station)
