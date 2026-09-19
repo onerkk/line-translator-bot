@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-19.2-semantic-identifier-inventory"
+QUALITY_GATE_BUILD_ID = "2026-09-19.3-material-spatial-relations"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1070,6 +1070,11 @@ def _target_zh_language_purity_issues(
     material = structured_report.parse_material_report(source, src_lang)
     if material:
         allowed.update(unit.upper() for _role, _value, unit in material.rows if unit)
+    # A source-grounded dimension is still a technical unit when an entire
+    # shop-floor message is uppercase (55 MM); it is not untranslated prose.
+    allowed.update(fact["size"]["unit"].upper()
+                   for fact in fsu_module.material_relations.build_facts(source, src_lang)
+                   if fact.get("size"))
     if material and any(role == "r_marker" for role, _value, _unit in material.rows):
         # R before an explicit numeric field is an opaque source marker. The
         # field contract below verifies its value and presence. A Chinese colon
@@ -1731,6 +1736,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
     result = terminology_module.canonicalize_equipment_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
+    result = fsu_module.material_relations.canonicalize(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.workflow_semantics.canonicalize(source, result)
         result = fsa_module.planning_semantics.canonicalize_record_timing(source, result)

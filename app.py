@@ -321,7 +321,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-19.2-semantic-identifier-inventory"
+_EXPECTED_QG_BUILD_ID = "2026-09-19.3-material-spatial-relations"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -5751,8 +5751,6 @@ FACTORY_DOMAIN_KEYWORDS_ID = {
 FACTORY_ZH_LITERAL_RISK = {
     "物品": "料件",
     "東西": "料件",
-    "從後面": "後端",
-    "從前面": "前端",
     "後面損壞": "後端損傷",
     "前面損壞": "前端損傷",
     "後面壞了": "後端損傷",
@@ -5772,6 +5770,12 @@ FACTORY_BAD_ZH_PATTERNS = [
     r"材料從(後面|前面)(損壞|壞了|壞掉)",
     r"棒材從(後面|前面)(損壞|壞了|壞掉)",
 ]
+
+
+def _material_nonpart_relations(source):
+    """A material's origin/location must not enter legacy part/end rules."""
+    return [fact for fact in source_understanding_module.material_relations.build_facts(source, "id")
+            if fact["role"] in {"origin", "location"}]
 
 
 # ─── v3.9.38: 設備故障 vs 料件缺陷 上下文判斷 ──────────────────────────
@@ -6557,6 +6561,9 @@ def factory_semantic_translate_pre_operation_issue_id_zh(text):
     class of errors where Chinese merges time and direction into one phrase.
     """
     raw = text or ""
+    _spatial_fn = globals().get("_material_nonpart_relations")
+    if callable(_spatial_fn) and _spatial_fn(raw):
+        return None
     t = _clean_factory_id(raw)
     if not t:
         return None
@@ -6669,6 +6676,9 @@ def factory_semantic_translate_id_zh(text):
       - 拼接結果若 < 原文 1/4 視為災難性壓縮,放棄
     """
     raw = text or ""
+    _spatial_fn = globals().get("_material_nonpart_relations")
+    if callable(_spatial_fn) and _spatial_fn(raw):
+        return None
     t = _clean_factory_id(raw)
     if not t:
         return None
@@ -6982,6 +6992,10 @@ def build_factory_context_hint(text, src, tgt):
     for source, zh in {**FACTORY_ID_ZH_OBJECTS, **FACTORY_ID_ZH_DEFECTS,
                        **FACTORY_ID_ZH_POSITIONS, **FACTORY_ID_ZH_TIME,
                        **FACTORY_ID_ZH_EQUIPMENT}.items():
+        # Bare directions and dari phrases are not hard part terminology.
+        # The source relation frame decides origin vs location vs material end.
+        if source in {"dari belakang", "dari depan", "belakang", "depan"}:
+            continue
         if re.search(r"(?<![a-z])" + re.escape(source) + r"(?![a-z])", t):
             terms.append(f"{source}={zh}")
     
@@ -7062,7 +7076,8 @@ def build_factory_context_hint(text, src, tgt):
             "【印尼→繁中工廠語義提示】這是台灣不鏽鋼棒材工廠的現場異常簡訊，"
             "barang 在工廠品質語境=料件/材料，不要翻物品；"
             + rusak_hint +
-            "belakang/depan 描述料件方向=後端/前端，不要翻從後面/前面；"
+            "bagian/ujung belakang/depan 指材料後端/前端；"
+            "dari 修飾材料來源時保留從後面/前面來的，di 表示所在位置，不能一律改成端部；"
             "輸出繁體中文現場用語，短句保持短句。"
         )
         if terms:
@@ -7096,6 +7111,9 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
     if not domain["is_factory"]:
         return result
 
+    _spatial_fn = globals().get("_material_nonpart_relations")
+    spatial_relations = _spatial_fn(src_text) if callable(_spatial_fn) else []
+
     high_risk = {
         "物品從後面損壞": "料件後端損傷",
         "物品從後面壞了": "料件後端損傷",
@@ -7110,7 +7128,8 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
         "棒材從前面損壞": "棒材前端損傷",
     }
     for wrong, correct in sorted(high_risk.items(), key=lambda x: -len(x[0])):
-        result = result.replace(wrong, correct)
+        if not spatial_relations:
+            result = result.replace(wrong, correct)
 
     # v3.9.38: 設備語境下「損壞/壞掉/壞了」是合法設備故障詞,不應被改成「損傷」
     # (料件用「損傷」、設備用「損壞/故障」是工廠術語慣例)
@@ -7135,6 +7154,8 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
     equipment_safe_terms = {"損壞", "壞掉", "壞了"} if is_equipment or not _surface_defect else set()
     for wrong, correct in sorted(FACTORY_ZH_LITERAL_RISK.items(), key=lambda x: -len(x[0])):
         if wrong in equipment_safe_terms:
+            continue
+        if spatial_relations and ("後面" in wrong or "前面" in wrong):
             continue
         result = result.replace(wrong, correct)
 
@@ -7229,6 +7250,13 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
     if not domain.get("is_factory"):
         return False, "", domains
 
+    _spatial_fn = globals().get("_material_nonpart_relations")
+    spatial_relations = _spatial_fn(src_text) if callable(_spatial_fn) else []
+    if spatial_relations:
+        relation_issues = source_understanding_module.material_relations.validate(spatial_relations, zh_text, tgt)
+        if relation_issues:
+            return True, relation_issues[0], domains
+
     # Measurement shorthand has its own source-derived frame.  Validate it here
     # as well as in the runtime semantic contract so provider output, TM output
     # and final-delivery checks share the same rejection rule.
@@ -7263,7 +7291,7 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
 
     # Hard invalid patterns in quality/material direction context.
     for pat in FACTORY_BAD_ZH_PATTERNS:
-        if re.search(pat, zh_text):
+        if not spatial_relations and re.search(pat, zh_text):
             return True, "factory_literal_direction_error", domains
 
     if quality_context:
@@ -7276,11 +7304,13 @@ def detect_factory_semantic_error(src_text, zh_text, src="id", tgt="zh"):
             "壞了": "factory_defect_literal",
         }
         for bad, reason in bad_terms.items():
+            if spatial_relations and reason == "factory_direction_literal":
+                continue
             if bad in zh_text:
                 return True, reason + ":" + bad, domains
 
     # Direction words in source should usually appear as 前端/後端/尾端/側邊 in target.
-    if quality_context and has_pos:
+    if quality_context and has_pos and not spatial_relations:
         if ("belakang" in t or "ujung belakang" in t) and ("後端" not in zh_text and "尾端" not in zh_text):
             return True, "missing_factory_back_end_direction", domains
         if ("depan" in t or "ujung depan" in t) and "前端" not in zh_text:
@@ -9085,6 +9115,9 @@ def build_translation_semantic_contract(text, src, tgt):
                     or any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", t_id) for k in FACTORY_ID_ZH_DEFECTS.keys())
                 )
             )
+            _spatial_fn = globals().get("_material_nonpart_relations")
+            if callable(_spatial_fn) and _spatial_fn(text):
+                preop_direction = False
             if preop_direction:
                 contract["has_risk"] = True
                 contract["risks"].append({

@@ -16,11 +16,12 @@ import time
 import factory_source_understanding as understanding
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-19.1-identity-and-handoff-learning'
+BUILD_ID = '2026-09-19.2-material-relation-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
 _ADVICE = {
+    'material_relation': 'Keep material origin (dari/from), location (di/at), and part (bagian/ujung) distinct. Bind dimensions to the material, not a distance from its end. Many bent pieces is a count statement, not bend severity. A direction never identifies an unstated process or station; use only current-source values.',
     'identity': 'Generic equipment words do not identify a specific machine or area. Preserve only identifiers present in the CURRENT source. Never copy equipment codes from a glossary label or historical example.',
     'handoff': 'Distinguish ERP data release from physical placement or general approval. A station code is not a quantity. Keep alternative causes as a question, and do not turn inspection not occurring into inability or refusal without source evidence.',
     'record': 'Distinguish a system record/field from physical material. Keep each value attached to its stated field and storage operation; never move a number into a physical warehouse.',
@@ -47,6 +48,7 @@ def category(issue):
         return None
     if 'ambiguous_packing_location_or_repeat' in code: return None
     if 'invented_identifier' in code: return 'identity'
+    if 'factory_material_relation:' in code: return 'material_relation'
     if re.search(r'handoff|erp_release_as_general_approval|inspection_station_as_quantity|inspection_ability_or_intent', code): return 'handoff'
     if re.search(r'verification_(?:before|after)|sequence|temporal|before_after', code): return 'sequence'
     if re.search(r'permission|prohibit|manual_entry|negation|polarity', code): return 'permission'
@@ -69,6 +71,8 @@ def _features(source, lang):
                         r'(?<![a-z0-9])(?=[a-z0-9_/.-]*\d)[a-z0-9]+(?:[_/.-][a-z0-9]+)*(?![a-z0-9])',
                         ' ', normalized)
     concepts = {'c:' + value for value in understanding.concepts(normalized)}
+    if understanding.material_relations.build_facts(source, lang):
+        concepts.add('c:material_relation')
     if re.search(r'入庫|登錄|登記|存入|輸入|系統|存檔|儲區|\b(?:input|diinput|menginput|mencatat|dicatat|pencatatan|sistem)\b', normalized):
         concepts.add('c:record_entry')
     if re.search(r'包(?:裝的|装的|的).*(?:不論|不论|不管).*站.*(?:幫忙|帮忙)', normalized):

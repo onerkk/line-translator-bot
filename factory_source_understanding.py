@@ -15,8 +15,9 @@ from translation_request_cache import memoize
 from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
+import factory_material_relations as material_relations
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-16.2-workflow-concepts"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-19.1-material-spatial-relations"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -215,8 +216,12 @@ def reference_fact_changes(query, reference, lang):
         modes = sorted({mode for mode, pattern in patterns.items() if re.search(pattern, value, re.I)})
         numbers = re.findall(r"[A-Za-z]*\d+(?:[.,]\d+)?(?:[-/][A-Za-z0-9]+)*", value)
         directions = re.findall(r"前端|後端|尾端|往|回|移入|移出|\b(?:depan|belakang|keluar|masuk|kembali)\b", value, re.I)
+        material_facts = sorted((fact["role"], fact["direction"],
+                                 tuple(sorted((fact.get("size") or {}).items())), fact.get("quantifier") or "")
+                                for fact in material_relations.build_facts(value, lang))
         return {"states": states, "modality": modes, "codes_and_numbers": sorted(numbers),
-                "direction": sorted(directions), "question": bool(re.search(r"[?？]|^\s*(?:是否|有沒有|apakah\b)", value, re.I))}
+                "direction": sorted(directions), "material_relations": material_facts,
+                "question": bool(re.search(r"[?？]|^\s*(?:是否|有沒有|apakah\b)", value, re.I))}
     before, after = facts(reference), facts(query)
     return {key: {"reference": before[key], "current": after[key]}
             for key in before if before[key] != after[key]}
@@ -572,6 +577,7 @@ def _ol_mode(clause, lang):
 @memoize
 def factory_term_facts(text, lang, *, protected_names=()):
     """Resolve contextual terms with source evidence; retain separate clauses."""
+    lang = str(lang).lower().replace("_", "-").split("-")[0]
     if lang not in {"zh", "id"}:
         return []
     source = str(text or "")
@@ -600,15 +606,18 @@ def factory_term_facts(text, lang, *, protected_names=()):
             if _SHIFT_ROLE.search(source) and not _SCHOOL.search(source):
                 facts.append({"sense": "shift_leader", "evidence": _SHIFT_ROLE.search(source).group(), "meaning": "這裡是工廠班長，不是學校班級或課長／股長。保留工號使用者及工號所有者。"})
     facts.extend(pmi_semantics.build_facts(source, lang))
+    facts.extend(material_relations.build_facts(source, lang))
     return facts
 
 
 def validate_factory_terms(analysis, target, src, tgt):
+    src, tgt = (str(value).lower().replace("_", "-").split("-")[0] for value in (src, tgt))
     if (src, tgt) not in {("id", "zh"), ("zh", "id")}:
         return True, []
     text = str(target or "")
     facts = analysis.get("factory_terms") or []
     issues = pmi_semantics.validate(facts, target, tgt)
+    issues.extend(material_relations.validate(facts, target, tgt))
     for fact in facts:
         sense = fact["sense"]
         if sense == "erp_ol":
