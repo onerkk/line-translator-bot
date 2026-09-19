@@ -139,6 +139,10 @@ def build_safe_reverse_index(glossary: Dict[str, Any]) -> Dict[str, Dict[str, st
         if reverse_flag is True:
             reverse_surfaces.extend(ft_module.target_aliases(row))
         for surface in reverse_surfaces:
+            # Equipment scope is evidence, not a preference. Even explicit
+            # reverse_safe metadata cannot turn "mesin polishing" into E824.
+            if not gp_module.reverse_preserves_identity(str(zh_term), surface):
+                continue
             norm = _normalize_reverse_term(surface)
             if len(norm) < GE_MIN_TERM_LEN:
                 continue
@@ -193,7 +197,8 @@ def build_unsafe_reverse_ui_targets(glossary: Dict[str, Any]) -> set[str]:
         target = _extract_target_term(row)
         if not zh_term or not target:
             continue
-        if _looks_like_ui_label(str(zh_term)) and str(zh_term) not in safe_targets:
+        if (_looks_like_ui_label(str(zh_term))
+                or not gp_module.reverse_preserves_identity(str(zh_term), target)) and str(zh_term) not in safe_targets:
             unsafe.add(str(zh_term))
     return unsafe
 

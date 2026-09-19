@@ -16,11 +16,13 @@ import time
 import factory_source_understanding as understanding
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-16.4-confirmed-factory-learning'
+BUILD_ID = '2026-09-19.1-identity-and-handoff-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
 _ADVICE = {
+    'identity': 'Generic equipment words do not identify a specific machine or area. Preserve only identifiers present in the CURRENT source. Never copy equipment codes from a glossary label or historical example.',
+    'handoff': 'Distinguish ERP data release from physical placement or general approval. A station code is not a quantity. Keep alternative causes as a question, and do not turn inspection not occurring into inability or refusal without source evidence.',
     'record': 'Distinguish a system record/field from physical material. Keep each value attached to its stated field and storage operation; never move a number into a physical warehouse.',
     'printed_storage': 'For the confirmed shorthand 存檔入庫都沒儲區, the storage location is missing from the first TAG print, not necessarily from the system field. 補印才有 inherits that object only from linked original context; never assume every reprint concerns storage.',
     'intake_record': 'In this plant intake plan, goods count as inventoried when their data is recorded. Preserve the stated goods weight in ton and distinguish it from a record count or a physical lifting instruction. Spread system entry times when requested; never add an unstated station ID.',
@@ -43,6 +45,9 @@ def category(issue):
         return None
     if re.search(r'unavailable|exception|timeout|network|provider', code):
         return None
+    if 'ambiguous_packing_location_or_repeat' in code: return None
+    if 'invented_identifier' in code: return 'identity'
+    if re.search(r'handoff|erp_release_as_general_approval|inspection_station_as_quantity|inspection_ability_or_intent', code): return 'handoff'
     if re.search(r'verification_(?:before|after)|sequence|temporal|before_after', code): return 'sequence'
     if re.search(r'permission|prohibit|manual_entry|negation|polarity', code): return 'permission'
     if 'printed_storage' in code: return 'printed_storage'

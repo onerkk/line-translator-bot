@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-16.4-confirmed-factory-delivery"
+QUALITY_GATE_BUILD_ID = "2026-09-19.1-source-identity-and-handoff"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -88,7 +88,7 @@ _QUOTED_CONTROL_WORDS = frozenset({
 _KNOWN_TECH_ACRONYMS = frozenset({
     "AC", "AI", "API", "CNC", "ERP", "HMI", "ID", "LINE", "MES", "OCR", "OL",
     "PLC", "QA", "QC", "RPM", "SOP", "TAG", "TIG", "UI", "UPS", "URL", "WIP", "WO",
-    "PMI", "PPE", "LOTO", "MSDS", "SDS", "OEE", "JSA", "EHS",
+    "PMI", "PPE", "LOTO", "MSDS", "SDS", "OEE", "JSA", "EHS", "KYT", "CG",
 })
 _KNOWN_TECH_ACRONYM_PATTERN = "|".join(
     sorted((re.escape(value) for value in _KNOWN_TECH_ACRONYMS), key=len, reverse=True)
@@ -1729,6 +1729,7 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
 def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     """Normalize unambiguous source-bound terms without a model call."""
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
+    result = terminology_module.canonicalize_equipment_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.workflow_semantics.canonicalize(source, result)
@@ -1736,6 +1737,18 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
         result = fsa_module.instruction_semantics.canonicalize_record_terms(source, result)
         result = fsa_module.instruction_semantics.rework_semantics.canonicalize_noun_phrase(source, result)
     return result
+
+
+def _invented_identifier_issues(source, candidate, glossary_pairs):
+    """Reject *new* equipment/record IDs at every cache and learning boundary.
+
+    Glossary hints may contain more specific equipment than the source. They
+    cannot license an invented code. Names/URLs with IDs already in the source
+    remain unchanged; measurements such as 15 cm are not identifiers.
+    """
+    expected = gp_module.identity_codes(_PIPELINE_TOKEN_RE.sub(" ", source))
+    actual = gp_module.identity_codes(_PIPELINE_TOKEN_RE.sub(" ", candidate))
+    return ["invented_identifier:" + code for code in sorted(actual - expected)]
 
 
 def _duration_integrity_issues(source, candidate, src_lang, tgt_lang):
@@ -1835,6 +1848,7 @@ def _validate_normalized_translation(
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
     issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
+    issues.extend(_invented_identifier_issues(source, candidate, glossary_pairs))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)
             and re.search(r"計算機|计算机", candidate)):

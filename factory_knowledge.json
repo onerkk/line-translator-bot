@@ -1,8 +1,49 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-16.4-user-confirmed-intake-tag-crates",
+  "build_id": "2026-09-19.1-equipment-and-data-handoff",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
+    {
+      "id": "grinding_quality_equipment_scope",
+      "enabled": true,
+      "priority": 250,
+      "directions": ["id-zh"],
+      "title": "研磨品質公告的設備範圍與尺寸位置",
+      "match": {
+        "all_groups": [["mesin polishing"], ["grinding", "permukaan", "diameter", "gerinda"]],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "mesin Polishing 泛稱拋光機；未出現設備編號時，不可從詞庫補入 E824、I5、I15 或其他代碼。CG 依原文標示保留。",
+        "diameter terlalu kecil dari ukuran yang diminta pelanggan 表示直徑小於客戶要求，不是棒材長度太短。",
+        "sekitar 15 cm dari ujung batang 表示距棒材端部約15公分的位置；數值取當前原文，不能當成直徑或整支棒材長度。",
+        "menggunakan gerinda 指使用砂輪／研磨工具進行手動修整，不是操作員徒手摩擦；原文未指定手工具型號或產線設備編號時不能添加。",
+        "條件、禁止直接送下站、先修整再送後製程均依原文保留。截斷或折疊畫面不可依常見公告補寫未顯示的結尾。"
+      ],
+      "requirements": [],
+      "examples": []
+    },
+    {
+      "id": "station_data_handoff_question",
+      "enabled": true,
+      "priority": 310,
+      "directions": ["zh-id"],
+      "title": "資料卡站與放行檢驗語意",
+      "match": {
+        "regex_any": ["(?:資料|资料|數據|数据).{0,8}(?:卡在|卡|停在)\\s*\\d{3}", "(?:未|沒|没有|沒有)放行[，,。\\s]+\\d{3}(?:站)?(?:都)?不(?:檢驗|检验|驗|验)"],
+        "min_score": 3
+      },
+      "context": [
+        "資料卡在三位站號，是 ERP 生產資料停在該站；數字是站號，不是件數。保留當前原文的站號。",
+        "放不過來／忘記放在此語境指資料放行到下站：tidak bisa di-release／lupa di-release，不是搬動材料或 lupa menaruhnya。",
+        "『是…還是…』詢問兩個可能原因，使用 apakah…atau…；不可改成已確認無法放行或忘記放行。",
+        "『沒有放行，某站不驗』的放行是資料流程，不是一般批准。站號是執行檢驗的站別；不驗本身尚未明說無法、不願或只是未完成，不得擅自增加能力或意願判斷。",
+        "『料在包裝』是材料位置；『料再包裝』可能是重包，也可能是在／再錯字，未經確認不能加入固定替換或當作已確認的學習案例。"
+      ],
+      "requirements": [],
+      "examples": []
+    },
     {
       "id": "polishing_large_bar_month_end_priority",
       "enabled": true,

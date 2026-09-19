@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-BUILD_ID = "2026-09-16.4-confirmed-factory-senses"
+BUILD_ID = "2026-09-19.1-station-handoff-scope"
 _CJK = r"\u3400-\u9fff"
 _ZONE = r"(?:儲區|储区|儲位|储位)"
 _SYSTEM = r"存檔|存档|保存|資料|数据|欄位|字段|預設|默认|系統|系统|驗證|验证"
@@ -31,6 +31,78 @@ _MEANINGS = {
 
 _PRINT_SHORTHAND = r"存[檔档][、，,]?入[庫库](?:都|也)?(?:沒|没|沒有|没有)(?:有)?(?:儲區|储区|儲位|储位)"
 _OTHER_STATION = r"研磨站|拋光站|抛光站|檢驗站|检验站|削皮加工站|捷運|地鐵|地铁|鐵路|铁路|新[設设建開开]|擴建|扩建|開幕|开幕"
+
+# These grammars consume the complete operational statement. A station value
+# is bound from THIS source; neither 452 nor 480 is a replacement constant.
+_HANDOFF_QUESTION = re.compile(
+    r"(?:^|\n)[ \t]*(?P<statement>(?:資料|资料|數據|数据)"
+    r"(?P<all>都|全部|全)?(?:卡在|卡|停在|留在)\s*(?P<station>\d{3})\s*(?:站)?"
+    r"[，,\s]*(?:是)?(?:放不過來|放不过来|放不過去|放不过去|無法放行|无法放行|不能放行)"
+    r"[，,\s]*(?:還是|还是|或是)(?:忘記|忘记|忘了|忘)(?:放行|放)(?:了)?[?？。.\s]*)\Z"
+)
+_PENDING_INSPECTION = re.compile(
+    r"\s*(?:資料|资料|數據|数据)?(?:尚未|還沒(?:有)?|还没(?:有)?|沒有|没有|未)放行"
+    r"[，,。\s]+(?P<station>\d{3})(?:站)?(?:都)?不(?:檢驗|检验|驗|验)[。.!！\s]*\Z"
+)
+
+
+def handoff_question(source):
+    match = _HANDOFF_QUESTION.search(str(source or ""))
+    return dict(match.groupdict(), start=match.start("statement")) if match else None
+
+
+def unresolved_source_ambiguities(source):
+    """No automatic 再→在 migration and no unsupervised learning of a guess."""
+    binding = handoff_question(source)
+    if binding and re.fullmatch(r"\s*(?:材料|料)再包[裝装][，,。\s]*", str(source)[:binding["start"]]):
+        return ["factory_workflow:ambiguous_packing_location_or_repeat"]
+    return []
+
+
+def _handoff_issues(source, target):
+    found = []
+    binding = handoff_question(source)
+    if binding:
+        if not re.search(r"\b(?:apa(?:kah)?|bisa(?:kah)?)\b|[?？]", target, re.I) or not re.search(r"\batau\b", target, re.I):
+            found.append("handoff_alternatives_not_a_question")
+        if re.search(r"\blupa\s+(?:meletakkan|menaruh|menempatkan)(?:nya)?\b", target, re.I):
+            found.append("erp_handoff_as_placement")
+        if not re.search(r"\b(?:release|rilis|dirilis|merilis)\b", target, re.I):
+            found.append("erp_handoff_release_missing")
+        if not re.search(r"(?<!\d)" + binding["station"] + r"(?!\d)", target):
+            found.append("handoff_station_missing")
+    pending = _PENDING_INSPECTION.fullmatch(str(source or ""))
+    if pending:
+        if re.search(r"\bdisetujui\b", target, re.I):
+            found.append("erp_release_as_general_approval")
+        if re.search(r"\b" + pending["station"] + r"\s+(?:semuanya|buah|batang|bundel)\b", target, re.I):
+            found.append("inspection_station_as_quantity")
+        if re.search(r"\b(?:tidak|belum)\s+(?:bisa|dapat|mau)\s+(?:di)?(?:periksa|memeriksa|melakukan)\b", target, re.I):
+            found.append("inspection_ability_or_intent_added")
+    return ["factory_workflow:" + item for item in found]
+
+
+def _canonicalize_handoff(source, target):
+    findings = _handoff_issues(source, target)
+    pending = _PENDING_INSPECTION.fullmatch(str(source or ""))
+    if pending and findings:
+        # 不驗 alone does not identify inability, refusal, or a causal rule.
+        return ("Data belum di-release ke stasiun berikutnya.\n"
+                f"Stasiun {pending['station']} tidak melakukan pemeriksaan.")
+    binding = handoff_question(source)
+    if not binding or not findings:
+        return target
+    prefix = str(source)[:binding["start"]]
+    if prefix.strip() and not re.fullmatch(r"\s*(?:材料|料)[在再]包[裝装](?:站)?[，,。\s]*", prefix):
+        return target  # More source clauses require model interpretation.
+    data_tail = re.search(r"(?<!\w)Data(?:nya)?\b[^\n]*\b(?:tertahan|macet|terhenti|tersangkut)\b[^\n]*"
+                          + r"\b" + binding["station"] + r"\b[^\n]*[?.]?\s*\Z", target, re.I)
+    if not data_tail:
+        return target
+    quantifier = " semuanya" if binding["all"] else ""
+    fixed = (f"Data{quantifier} masih tertahan di stasiun {binding['station']}. "
+             "Apakah datanya tidak bisa di-release ke stasiun berikutnya, atau lupa di-release?")
+    return target[:data_tail.start()] + fixed
 
 
 def _printed_storage_binding(source):
@@ -87,6 +159,20 @@ def _destination_translation(binding):
 def build_relations(source):
     """Use sentence scopes and explicit objects, never a historical target."""
     relations = []
+    handoff = handoff_question(source)
+    if handoff:
+        relations.append(dict(kind="erp_handoff_question", source_evidence=handoff["statement"],
+            meaning_zh="資料仍停留在原文指定站別；詢問無法放行或忘記放行兩種可能，不是實體搬料或已確定原因。",
+            required_target_meaning_id="Data tertahan di stasiun " + handoff["station"] +
+                "; apakah tidak bisa di-release atau lupa di-release? Preserve alternatives as a question."))
+    if _PENDING_INSPECTION.fullmatch(str(source or "")):
+        relations.append(dict(kind="pending_release_inspection", source_evidence=str(source),
+            meaning_zh="放行指上站生產資料放行；三位站號是檢驗站的主詞，不是數量。不驗未明說不能或不肯，不能補成拒絕或無法。",
+            required_target_meaning_id="Data belum di-release. Stasiun [source code] tidak melakukan pemeriksaan; no invented inability or refusal."))
+    if unresolved_source_ambiguities(source):
+        relations.append(dict(kind="unresolved_packing_spelling", source_evidence=str(source).splitlines()[0],
+            meaning_zh="料再包裝可能是重新包裝，也可能是料在包裝站的錯字，使用者尚未確認；不可當成已確認術語或固定再→在規則。",
+            required_target_meaning_id="The packing location versus repeat action is unresolved. Do not silently establish a permanent correction or invent a rework instruction."))
     destination = destination_override(source)
     if destination:
         relations.append(_relation("storage_destination", str(source), **destination))
@@ -198,6 +284,8 @@ def _edits(source, target):
 
 def canonicalize(source, candidate):
     result = str(candidate or "")
+    if result:
+        result = _canonicalize_handoff(source, result)
     if _printed_storage_wrong(source, result):
         return _printed_storage_translation()
     destination = destination_override(source)
@@ -215,6 +303,8 @@ def issues(source, candidate):
     # merely because they are absent from a phrase allowlist.
     found = ["factory_workflow:" + kind + ":wrong_sense"
              for _, _, _, kind in _edits(source, str(candidate or ""))]
+    found.extend(_handoff_issues(source, str(candidate or "")))
+    found.extend(unresolved_source_ambiguities(source))
     if _printed_storage_wrong(source, str(candidate or "")):
         found.append("factory_workflow:printed_storage:wrong_sense")
     destination = destination_override(source)

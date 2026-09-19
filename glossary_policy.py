@@ -13,12 +13,20 @@ import copy
 import re
 from typing import Any, Dict, Iterator, Mapping, Tuple
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 
 # Corrections are glossary data migrations, not sentence-specific replacements.
 # They repair corrupted canonical entries wherever the glossary is consumed:
 # prompt grounding, TM seeding, forward enforcement and reverse lookup.
 _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
+    "E824拋光設備區": {
+        "canonical_idn": "area mesin polishing E824",
+        "translation_mode": "hard",
+        "reverse_safe": False,
+        "reverse_generic_source": "mesin polishing",
+        "reverse_generic_zh": "拋光機",
+        "note_zh": "E824 是特定設備區代碼。泛稱 mesin polishing 只表示拋光機，原文未寫 E824 時不可推定為此設備區。",
+    },
     "粗拋": {
         "canonical_idn": "poles kasar",
         # An action may inflect (dipoles / memoles / pemolesan), so do not
@@ -176,6 +184,28 @@ def _as_mapping(value: Any) -> Dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {"idn": str(value or "")}
+
+
+_IDENTITY_CODE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z]{1,8}[-/]?\d[A-Za-z0-9]*(?:[-/._][A-Za-z0-9]+)*)(?![A-Za-z0-9_])"
+)
+
+
+def identity_codes(text: Any) -> set[str]:
+    """Equipment/record identifiers, not ordinary words or measurement units."""
+    return {m.group().casefold() for m in _IDENTITY_CODE_RE.finditer(str(text or ""))}
+
+
+def reverse_preserves_identity(zh_term: str, source_surface: str) -> bool:
+    """A generic word cannot imply an equipment code, even if marked safe."""
+    return identity_codes(zh_term).issubset(identity_codes(source_surface))
+
+
+def reverse_scope_repairs():
+    """Known bad labels from legacy glossary rows; never sentence translations."""
+    for label, row in _CORE_MIGRATIONS.items():
+        if row.get("reverse_generic_source") and row.get("reverse_generic_zh"):
+            yield label, row["reverse_generic_source"], row["reverse_generic_zh"]
 
 
 def _clean_target(value: Any) -> str:

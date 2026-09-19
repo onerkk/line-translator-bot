@@ -931,10 +931,22 @@
     "note_zh": "操作前需確認物料已被取出，按下 輸送帶彎槽已清空，系統確認彎槽內無物料，可以安全開始下一步操作",
     "note_id": "Tombol ini akan memastikan alur conveyor kosong sehingga aman untuk memulai langkah berikutnya."
   },
+  "拋光機": {
+    "idn": "mesin polishing",
+    "canonical_idn": "mesin polishing",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "aliases_zh": ["抛光机"],
+    "category": "equipment",
+    "note_zh": "泛稱拋光機，不包含任何特定設備編號或設備區。"
+  },
   "E824拋光設備區": {
-    "idn": "Mesin Polishing",
-    "note_zh": "在 E824 拋光設備區，操作員將工件放入拋光機，設備運行後，工件表面會變得光滑平整。",
-    "note_id": "Operator menaruh bendanya ke dalam mesin polishing, setelah mesin berjalan permukaan benda akan mengkilap, halus dan menjadi rata."
+    "idn": "area mesin polishing E824",
+    "canonical_idn": "area mesin polishing E824",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "note_zh": "E824 是特定設備區代碼；泛稱 mesin polishing 只表示拋光機，不可推定為 E824。",
+    "note_id": "Pertahankan kode E824 hanya jika tertulis dalam sumber; mesin polishing secara umum tidak berarti area E824."
   },
   "E824拋光設備區 旁按鈕「停用煞車」": {
     "idn": "nonaktifkan rem",

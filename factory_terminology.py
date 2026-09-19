@@ -21,11 +21,29 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-12.1-shop-floor-process-language"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-19.1-source-equipment-identity"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
 _TRIE_END = object()
+
+
+def canonicalize_equipment_translation(source, candidate, src_lang, tgt_lang):
+    """Remove a known leaked equipment scope only when the source is generic.
+
+    Never delete arbitrary codes to make a validator pass. These replacements
+    are narrow glossary migrations and preserve every other target clause.
+    """
+    result = str(candidate or "")
+    if (src_lang, tgt_lang) != ("id", "zh") or not result:
+        return candidate
+    source_codes = gp_module.identity_codes(source)
+    for label, surface, generic in gp_module.reverse_scope_repairs():
+        pattern = r"(?<![A-Za-z0-9_])" + r"[\s_-]+".join(map(re.escape, surface.split())) + r"(?![A-Za-z0-9_])"
+        if (label in result and not gp_module.identity_codes(label).intersection(source_codes)
+                and re.search(pattern, str(source or ""), re.I)):
+            result = result.replace(label, generic)
+    return result
 
 
 def computer_term_is_unambiguous(source, src_lang, tgt_lang):

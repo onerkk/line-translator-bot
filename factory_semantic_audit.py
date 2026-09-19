@@ -22,7 +22,7 @@ import factory_workflow_semantics as workflow_semantics
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.4-confirmed-factory-senses"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-19.1-station-handoff-scope"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")

@@ -321,7 +321,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-16.4-confirmed-factory-delivery"
+_EXPECTED_QG_BUILD_ID = "2026-09-19.1-source-identity-and-handoff"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -340,7 +340,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-16.4-confirmed-factory-senses"
+_EXPECTED_FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-19.1-station-handoff-scope"
 if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION", None)
         != _EXPECTED_FACTORY_SEMANTIC_AUDIT_API_VERSION
         or getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_BUILD_ID", None)
@@ -10183,7 +10183,7 @@ GLOSSARY_LOOKUP = gp_module.normalize_glossary(GLOSSARY_LOOKUP)
 ge_module.invalidate_glossary_cache()
 _FACTORY_TERMINOLOGY_HEALTH = factory_terminology_module.get_engine(GLOSSARY_LOOKUP).health()
 if (_FACTORY_TERMINOLOGY_HEALTH.get("api_version") != 1
-        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-09-12.1-shop-floor-process-language"
+        or _FACTORY_TERMINOLOGY_HEALTH.get("build_id") != "2026-09-19.1-source-equipment-identity"
         or _FACTORY_TERMINOLOGY_HEALTH.get("glossary_entries", 0) < 1):
     raise RuntimeError("factory terminology deployment mismatch: " + repr(_FACTORY_TERMINOLOGY_HEALTH))
 logger.info("[FactoryTerminology] verified %s", _FACTORY_TERMINOLOGY_HEALTH)
