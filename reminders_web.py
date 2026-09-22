@@ -11,7 +11,7 @@ import time
 from flask import jsonify, request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
-from scheduled_reminders import ReminderError, ReminderService, ReminderWorker, StoreUnavailable, configured_store
+from scheduled_reminders import ReminderError, ReminderService, ReminderWorker, StoreUnavailable, configured_store, validate_content
 
 
 def issue_manager_token(user_id, secret):
@@ -33,7 +33,7 @@ def _public(record):
             if key not in {"retry_key", "lease_token", "lease_until", "created_by", "delivery_messages"}}
 
 
-def register_reminders(flask_app, *, authorize, catalog):
+def register_reminders(flask_app, *, authorize, catalog, translator=None):
     cached_service = []
     service_lock = threading.Lock()
     service_pid = os.getpid()
@@ -71,6 +71,31 @@ def register_reminders(flask_app, *, authorize, catalog):
                 flask_app.logger.exception("[Reminders] storage operation failed")
                 return jsonify(ok=False, message="提醒資料無法讀寫，請重新整理確認；本次操作尚未確認成功。"), 503
         return wrapped
+
+    @flask_app.route("/api/admin/reminders/translate", methods=["POST"])
+    @protected
+    def translate_reminder(actor):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ReminderError("請提供翻譯內容。")
+        gid, src, tgt = data.get("group_id"), data.get("source"), data.get("target")
+        if not isinstance(gid, str) or gid not in catalog():
+            raise ReminderError("請先選擇提醒群組。")
+        if (src, tgt) not in (("zh", "id"), ("id", "zh")):
+            raise ReminderError("提醒翻譯只支援中文與印尼文互譯。")
+        content = validate_content(data.get("content"))
+        if translator is None:
+            raise ReminderError("目前無法自動翻譯，請直接填寫另一種語言。", 503)
+        try:
+            result = translator(content, src, tgt, gid, actor)
+        except Exception:
+            flask_app.logger.exception("[Reminders] translation failed")
+            raise ReminderError("翻譯未完成，內容已保留。請重試或直接填寫另一種語言。", 502)
+        try:
+            result = validate_content(result, "譯文")
+        except ReminderError as exc:
+            raise ReminderError(str(exc) + " 請調整內容後再儲存。", 422) from exc
+        return jsonify(ok=True, source=src, target=tgt, content=result)
 
     @flask_app.route("/api/admin/reminders", methods=["GET", "POST"])
     @protected

@@ -34,11 +34,13 @@ def test_card_preserves_custom_text_and_native_mention_scope(mode, users):
     assert FlexMessage.from_dict(flex).to_dict() == flex
     assert PushMessageRequest(to=GID, messages=[Message.from_dict(m) for m in messages]).to_dict()["messages"] == messages
     assert content in list(texts(flex))
-    assert "2026.09.20" in list(texts(flex)) and "週日 / Minggu" in list(texts(flex))
-    assert "08:00" in list(texts(flex)) and "台灣時間 / Waktu Taiwan · UTC+8" in list(texts(flex))
+    footer_text = "\n".join(texts(flex["contents"]["footer"]))
+    assert "2026.09.20" in footer_text and "週日 / Minggu" in footer_text
+    assert "08:00" in footer_text and "台灣時間 / Waktu Taiwan · UTC+8" in footer_text
+    assert "08:00" not in "\n".join(texts(flex["contents"]["header"]))
     if mode == "none":
         assert len(messages) == 1 and not any("substitution" in m for m in messages)
-        assert "不標註 / Tanpa mention" in list(texts(flex))
+        assert "Semua anggota" not in footer_text
     else:
         assert len(messages) == 2 and messages[0]["type"] == "textV2"
         targets = [s["mentionee"] for s in messages[0]["substitution"].values()]
@@ -150,4 +152,3 @@ def test_admin_api_does_not_expose_frozen_transport_payload(api_client):
     row = data["reminders"][0]
     assert row["status"] == "sent" and "delivery_messages" not in row and "retry_key" not in row
     assert instance.store.get(row["id"])["delivery_messages"]
-

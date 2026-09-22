@@ -23816,8 +23816,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .dm-section{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:12px;padding:16px;margin-bottom:12px}
 .dm-toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 </style>
-<link rel="stylesheet" href="/static/admin_reminders.css?v=20260911-card1">
-<script src="/static/admin_reminders.js?v=20260911-card1" defer></script>
+<link rel="stylesheet" href="/static/admin_reminders.css?v=20260922-bilingual2">
+<script src="/static/admin_reminders.js?v=20260922-bilingual2" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
 <script src="/static/admin_factory.js?v=20260910-owner-only-controls" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
@@ -23972,11 +23972,29 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="reminder-notice" class="reminder-notice" role="status" aria-live="polite" hidden></div>
 <form id="reminder-form" class="card">
 <h3 id="reminder-form-title" style="margin:0 0 16px">新增提醒</h3>
+<div class="reminder-compose-grid">
+<div class="reminder-editor">
 <label for="reminder-group">提醒群組</label>
 <select id="reminder-group" class="input-field" required><option value="">請選擇群組</option></select>
+<label for="reminder-language">發送語言</label>
+<select id="reminder-language" class="input-field"><option value="bilingual">中文＋印尼文（分區呈現）</option><option value="zh">僅中文</option><option value="id">僅印尼文 / Bahasa Indonesia</option></select>
+<div id="reminder-content-wrap">
+<label for="reminder-content">中文內容</label><textarea id="reminder-content" class="input-field" maxlength="1500" lang="zh-Hant" placeholder="例如：明天班股會議，早上 07:50 在會議室集合。（台灣同仁即可）"></textarea>
+<div id="reminder-count" class="reminder-count">0 / 1500 字元</div>
+</div>
+<div id="reminder-content-id-wrap">
+<label for="reminder-content-id">印尼文內容 / Bahasa Indonesia</label><textarea id="reminder-content-id" class="input-field" maxlength="1500" lang="id" placeholder="Isi pesan dalam Bahasa Indonesia"></textarea>
+<div id="reminder-count-id" class="reminder-count">0 / 1500 字元</div>
+</div>
+<div id="reminder-translation-tools" class="reminder-translation-tools">
+<button id="reminder-translate" class="btn btn-sm" type="button">補齊另一種語言</button>
+<p id="reminder-translation-note" class="reminder-hint" role="status">填寫一種語言即可補翻，譯文可直接修改；儲存時也會自動補齊空白的語言。</p>
+</div>
+<div class="reminder-schedule-settings">
+<div class="reminder-section-title">何時發送這則提醒？</div>
 <div class="reminder-grid">
-<div><label for="reminder-date">日期（台灣）</label><input id="reminder-date" class="input-field" type="date" max="2099-12-31" required></div>
-<div><label for="reminder-time">時間（台灣）</label><input id="reminder-time" class="input-field" type="time" step="60" required></div>
+<div><label for="reminder-date">發送日期（台灣）</label><input id="reminder-date" class="input-field" type="date" max="2099-12-31" required></div>
+<div><label for="reminder-time">發送時間（台灣）</label><input id="reminder-time" class="input-field" type="time" step="60" required></div>
 </div>
 <label for="reminder-mode">標註對象</label>
 <select id="reminder-mode" class="input-field"><option value="none">不標註</option><option value="all">所有人（@All）</option><option value="users">指定成員</option></select>
@@ -23985,12 +24003,17 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="reminder-members" class="reminder-members"></div><div id="reminder-selected-count" class="reminder-hint">已選 0 / 20 位</div>
 <p class="reminder-hint">名單來自曾在群組互動的成員。未列出者請先在群組發言，再重新整理。派送時指定成員仍須在群組內。</p>
 </div>
-<label for="reminder-content">提醒內容</label><textarea id="reminder-content" class="input-field" maxlength="1500" placeholder="例如：要開班股會議" required></textarea>
-<div id="reminder-count" class="reminder-hint">0 / 1500 字元</div>
-<label>訊息預覽</label><div id="reminder-preview" class="reminder-preview"></div>
+</div>
+</div>
+<aside class="reminder-preview-column" aria-label="提醒卡片預覽">
+<div class="reminder-preview-heading">LINE 訊息預覽</div>
+<p class="reminder-hint">內容置頂，依選擇的語言分區顯示。</p>
+<div id="reminder-preview" class="reminder-preview"></div>
+</aside>
+</div>
 <div class="reminder-actions"><button id="reminder-save" class="btn btn-primary" type="submit" disabled>儲存提醒</button><button id="reminder-stop-edit" class="btn" type="button" hidden>結束修改</button><button id="reminder-reset" class="btn" type="button">清空／新增</button></div>
 <details><summary>提醒如何派送？</summary>
-提醒內容會照原文發送，不使用 AI 翻譯。這是單次提醒，可在開始派送前修改或取消。<br>
+中文與印尼文分別儲存，依選擇的語言發送。雙語模式會在儲存前補翻空白欄位；到點派送使用已儲存的內容。舊提醒會保留原文，可在修改時補齊雙語。這是單次提醒，可在開始派送前修改或取消。<br>
 主機正常運作時每 30 秒檢查排程；關閉後台頁面也會繼續執行。主機停機時無法準時發送，恢復後會補送。使用會休眠的主機，需搭配外部排程喚醒或持續運作的服務。<br>
 「LINE 已接受」表示 LINE API 已接受訊息，不代表每位成員已讀；推播用量依 LINE 帳號方案計算。
 </details>
@@ -38117,11 +38140,33 @@ def _authorize_reminders():
     return None
 
 
+def _translate_custom_reminder(content, src, tgt, group_id, actor):
+    """Use normal factory terminology, isolated from a previous chat request."""
+    previous_tl = dict(_tl.__dict__)
+    try:
+        _tl.__dict__.clear()
+        _tl.group_id = group_id
+        _tl.user_id = actor
+        _tl.quality_gate_critical = True
+        _tl.translation_variant = "natural"
+        _tl.tone = "formal"
+        _tl.tone_custom = ""
+        translated = translate(content, src, tgt)
+        if translated:
+            translated = _final_delivery_guard(content, translated, src, tgt)
+        if not translated or not tqg_module.validate_translation(content, translated, src, tgt).ok:
+            raise scheduled_reminders.ReminderError("翻譯內容未通過檢查，請重新翻譯或自行填寫。", 502)
+        return translated
+    finally:
+        _tl.__dict__.clear()
+        _tl.__dict__.update(previous_tl)
+
+
 quick_reply_menu.register(app)
 factory_hub = line_factory_features.install(app, globals())
 
 _start_reminders = reminders_web.register_reminders(
-    app, authorize=_authorize_reminders, catalog=_reminder_catalog,
+    app, authorize=_authorize_reminders, catalog=_reminder_catalog, translator=_translate_custom_reminder,
 )
 
 

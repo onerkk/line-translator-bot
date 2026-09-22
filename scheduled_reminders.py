@@ -275,6 +275,47 @@ def configured_store():
     raise StoreUnavailable("尚未設定提醒儲存：請設定 Upstash，或將 REMINDERS_DB_PATH 指向持久磁碟。")
 
 
+def validate_content(value, label="提醒內容"):
+    """Validate each stored language independently without truncating it."""
+    if not isinstance(value, str) or not value.strip():
+        raise ReminderError("請輸入" + label + "。")
+    value = value.strip()
+    if utf16_units(value) > MAX_CONTENT_UNITS:
+        raise ReminderError(label + "最多 1500 字元；部分表情符號佔 2 字元。")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ReminderError("提醒含有無效字元，請重新輸入。") from exc
+    if any(ord(c) < 32 and c not in "\n\r\t" for c in value):
+        raise ReminderError("提醒含有無法傳送的控制字元。")
+    return value
+
+
+def content_fields(data):
+    """Old records remain verbatim; new records carry explicit language slots.
+
+    Translation is completed in the editor, before saving. Scheduled dispatch
+    never calls a model or silently changes the saved wording.
+    """
+    mode = data.get("language_mode", "original")
+    if mode not in ("original", "bilingual", "zh", "id"):
+        raise ReminderError("請選擇雙語、中文或印尼文。")
+    if mode == "original":
+        if data.get("content_zh") or data.get("content_id"):
+            raise ReminderError("請指定提醒內容的語言模式。")
+        return dict(language_mode=mode, content=validate_content(data.get("content")),
+                    content_zh="", content_id="")
+    values = {}
+    for lang, label in (("zh", "中文內容"), ("id", "印尼文內容")):
+        if mode in ("bilingual", lang):
+            values["content_" + lang] = validate_content(data.get("content_" + lang), label)
+        else:
+            if data.get("content_" + lang):
+                raise ReminderError("提醒內容與選擇的語言模式不符。")
+            values["content_" + lang] = ""
+    return dict(values, language_mode=mode, content=values["content_zh"] or values["content_id"])
+
+
 def validate_spec(data, groups, now):
     if not isinstance(data, dict):
         raise ReminderError("請提供提醒資料。")
@@ -291,18 +332,7 @@ def validate_spec(data, groups, now):
         raise ReminderError("日期或時間無效。") from exc
     if dt.year > 2099 or due_at <= now:
         raise ReminderError("提醒時間必須晚於現在，且年份不得超過 2099 年（台灣時間）。")
-    content = data.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise ReminderError("請輸入提醒內容。")
-    content = content.strip()
-    if utf16_units(content) > MAX_CONTENT_UNITS:
-        raise ReminderError("提醒內容最多 1500 字元；部分表情符號佔 2 字元。")
-    try:
-        content.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ReminderError("提醒含有無效字元，請重新輸入。") from exc
-    if any(ord(c) < 32 and c not in "\n\r\t" for c in content):
-        raise ReminderError("提醒含有無法傳送的控制字元。")
+    languages = content_fields(data)
     mode = data.get("mention_mode", "none")
     if mode not in ("none", "all", "users"):
         raise ReminderError("請選擇正確的標註方式。")
@@ -320,7 +350,7 @@ def validate_spec(data, groups, now):
         raise ReminderError("只有指定成員模式可以附上成員名單。")
     return {"group_id": gid, "group_name": str(groups[gid].get("name") or gid),
             "local_time": local_time, "due_at": due_at, "timezone": "Asia/Taipei",
-            "content": content, "mention_mode": mode, "user_ids": users,
+            **languages, "mention_mode": mode, "user_ids": users,
             "user_names": {uid: str(known[uid]) for uid in users}}
 
 
@@ -429,7 +459,7 @@ class ReminderService:
             if isinstance(ids, list) and all(isinstance(uid, str) for uid in ids):
                 data["user_ids"] = list(dict.fromkeys(ids))
             if (all(previous.get(k) == data.get(k, [] if k == "user_ids" else "none" if k == "mention_mode" else None)
-                    for k in fields) and previous["content"] == str(data.get("content", "")).strip()):
+                    for k in fields) and content_fields(previous) == content_fields(data)):
                 return previous
             raise ReminderError("此儲存識別碼已使用，請重新整理清單後再操作。", 409)
         now = self.clock()

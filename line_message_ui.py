@@ -4,48 +4,65 @@ from datetime import datetime, timedelta, timezone
 from line_command_catalog import txt
 
 
+def reminder_sections(record):
+    """Explicit language slots; legacy mixed text is never guessed or split."""
+    mode = record.get("language_mode", "original")
+    if mode == "original":
+        return [("original", "原文 / Teks asli", record["content"])]
+    return [(lang, label, record["content_" + lang])
+            for lang, label in (("zh", "繁體中文"), ("id", "BAHASA INDONESIA"))
+            if mode in ("bilingual", lang) and record.get("content_" + lang)]
+
+
 def scheduled_reminder_message(record):
-    """One readable reminder card; custom text is preserved without AI calls."""
+    """Content leads; delivery time is quiet metadata, never the event time."""
     scheduled = datetime.strptime(record["local_time"], "%Y-%m-%dT%H:%M")
     weekdays_zh = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
     weekdays_id = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
     mode = record["mention_mode"]
     audience = ("全體成員 / Semua anggota" if mode == "all" else
                 "指定 " + str(len(record["user_ids"])) + " 位 / " + str(len(record["user_ids"])) + " anggota terpilih"
-                if mode == "users" else "不標註 / Tanpa mention")
-    reference = short(str(record.get("id") or "")[:6], 6)
+                if mode == "users" else "")
     group = short(record.get("group_name") or "群組 / Grup", 64)
-    content = record["content"]
+    sections = reminder_sections(record)
+    body = []
+    for index, (lang, label, content) in enumerate(sections):
+        if index:
+            body.append({"type": "separator", "margin": "xl", "color": "#E4EBEE"})
+        label_color = "#087F78" if lang != "id" else "#946A2E"
+        section = {"type": "box", "layout": "vertical", "contents": [
+            {"type": "box", "layout": "horizontal", "alignItems": "center", "spacing": "sm", "contents": [
+                {"type": "box", "layout": "vertical", "width": "3px", "height": "12px",
+                 "cornerRadius": "1px", "backgroundColor": label_color, "contents": []},
+                txt(label, "10px", label_color, weight="bold", flex=1)]},
+            txt(content, "18px", "#173448", weight="bold" if lang != "id" else "regular",
+                margin="sm", lineSpacing="6px"),
+        ]}
+        if index:
+            section["margin"] = "lg"
+        body.append(section)
+    footer = [
+        txt("排程發送 / Jadwal kirim", "10px", "#657888", weight="bold"),
+        txt(scheduled.strftime("%Y.%m.%d  %H:%M") + " · " + weekdays_zh[scheduled.weekday()] +
+            " / " + weekdays_id[scheduled.weekday()], "11px", "#526577", margin="xs"),
+        txt("台灣時間 / Waktu Taiwan · UTC+8", "10px", "#657888", margin="xs"),
+        txt(group + (" · " + audience if audience else ""), "10px", "#657888", margin="sm"),
+    ]
     return {
         "type": "flex",
-        "altText": short("自訂提醒 / Pengingat · " + scheduled.strftime("%m/%d %H:%M") +
-                         " · " + " ".join(content.split()), 350),
+        "altText": short("提醒 / Pengingat｜" + " / ".join(" ".join(content.split())
+                         for _, _, content in sections), 350),
         "contents": {
             "type": "bubble", "size": "mega",
-            "header": {"type": "box", "layout": "vertical", "paddingAll": "18px",
-                       "backgroundColor": "#102F42", "contents": [
-                {"type": "box", "layout": "horizontal", "alignItems": "center", "contents": [
-                    txt("自訂提醒", "lg", "#FFFFFF", weight="bold", flex=1),
-                    txt("PENGINGAT", "10px", "#DBBE85", weight="bold", align="end", flex=1)]},
-                {"type": "box", "layout": "horizontal", "alignItems": "center", "spacing": "md",
-                 "margin": "md", "contents": [
-                    txt(scheduled.strftime("%H:%M"), "34px", "#FFFFFF", weight="bold", flex=4),
-                    {"type": "box", "layout": "vertical", "flex": 5, "contents": [
-                        txt(scheduled.strftime("%Y.%m.%d"), "sm", "#DBBE85", weight="bold", align="end"),
-                        txt(weekdays_zh[scheduled.weekday()] + " / " + weekdays_id[scheduled.weekday()],
-                            "11px", "#C1D2DC", margin="xs", align="end")]}]},
-                txt("台灣時間 / Waktu Taiwan · UTC+8", "10px", "#A6BDCA", margin="xs"),
+            "header": {"type": "box", "layout": "horizontal", "alignItems": "center",
+                       "paddingAll": "16px", "backgroundColor": "#102F42", "contents": [
+                txt("提醒通知", "14px", "#FFFFFF", weight="bold", flex=1),
+                txt("PENGINGAT", "10px", "#A9DBD2", weight="bold", align="end", flex=1),
             ]},
-            "body": {"type": "box", "layout": "vertical", "paddingAll": "18px",
-                     "backgroundColor": "#FFFFFF", "contents": [
-                txt("提醒內容 / Pesan", "11px", "#087F78", weight="bold"),
-                txt(content, "md", "#173448", margin="md"),
-            ]},
+            "body": {"type": "box", "layout": "vertical", "paddingAll": "20px",
+                     "backgroundColor": "#FFFFFF", "contents": body},
             "footer": {"type": "box", "layout": "vertical", "paddingAll": "14px",
-                       "backgroundColor": "#F0F6F6", "contents": [
-                txt(audience, "xs", "#087F78", weight="bold"),
-                txt(group + (" · #" + reference if reference else ""), "11px", "#657888", margin="sm"),
-            ]},
+                       "backgroundColor": "#F2F6F7", "contents": footer},
         },
     }
 
