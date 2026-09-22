@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "4185d04adf5bf8f1b7310aae415889b1a2a1d4cd9f8ad6f93ec81c3617342fcc",
-    "updated_at_iso": "2026-09-17T19:12:12.147964+00:00",
-    "updated_at_unix": 1789672332.1479638
+    "state_hash": "c332d4f84693a1d5b8fe9b3322539db4a0ad5cfc98a4b731a990cf0ed64ee2d4",
+    "updated_at_iso": "2026-09-22T00:41:02.173782+00:00",
+    "updated_at_unix": 1790037662.1737823
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-16 17:53:41",
+    "last_updated": "2026-09-19 22:52:45",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 46444,
-    "oai_cached": 15414,
-    "oai_cost_usd": 0.43179241999999995,
-    "oai_input": 393064,
-    "oai_output": 4793,
+    "oai_cache_write": 62211,
+    "oai_cached": 18577,
+    "oai_cost_usd": 0.44580337999999997,
+    "oai_input": 415928,
+    "oai_output": 5084,
     "oai_reasoning": 0,
-    "text_translations": 287,
-    "tokens_completion": 22249,
-    "tokens_prompt": 4627835,
+    "text_translations": 293,
+    "tokens_completion": 22540,
+    "tokens_prompt": 4650699,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -403,14 +403,14 @@
       "tokens_prompt": 295605
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cache_read": 0,
-      "cache_write": 0,
-      "cost_usd": 0.6275604000000009,
-      "model": "gpt-5.6-terra",
+      "cache_read": 3163,
+      "cache_write": 15767,
+      "cost_usd": 0.6415713600000009,
+      "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 2714,
-      "tokens_prompt": 487155
+      "tokens_completion": 3005,
+      "tokens_prompt": 510019
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -565,6 +565,7 @@
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
+      "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
       "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
       "U54c702066e93a5d54e2e12ea5bc258c6": "許凱銘",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
