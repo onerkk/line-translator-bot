@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
+QUALITY_GATE_BUILD_ID = "2026-09-22.2-material-category-receipt"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1753,6 +1753,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_packaging_translation(source, result, src_lang, tgt_lang)
     result = fsu_module.material_relations.canonicalize(source, result, src_lang, tgt_lang)
+    result = fsu_module.material_category.canonicalize(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.workflow_semantics.canonicalize(source, result)
         result = fsa_module.planning_semantics.canonicalize_record_timing(source, result)

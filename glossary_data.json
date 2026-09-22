@@ -2453,6 +2453,19 @@
     "priority": 170,
     "note_zh": "圓型材料的包裝站；是使用者確認的三個包裝站之一。"
   },
+  "轉用料": {
+    "idn": "material alih guna",
+    "canonical_idn": "material alih guna",
+    "translation_mode": "soft",
+    "reverse_safe": false,
+    "aliases_zh": ["转用料", "轉用材料", "转用材料", "轉用物料", "转用物料"],
+    "aliases_id": ["barang alih guna", "bahan alih guna"],
+    "category": "material_category",
+    "priority": 220,
+    "ocr_hint": true,
+    "note_zh": "使用者確認：因品質異常等原因無法正常出貨的材料類別。庫存回報中作為主詞的『轉用』可省略『料』，例如『轉用全入庫了』表示轉用料已全部入庫；不是另有已轉用、轉給其他訂單、報廢或重工的動作。定義只供辨義，不替本批補出特定原因。明確表示轉用動作的句子仍依原文翻譯。",
+    "note_id": "Kategori material yang tidak dapat dikirim secara normal karena masalah kualitas atau alasan lain. Material alih guna adalah frasa nomina; pertahankan jumlah dan status penerimaan stok. Jangan menambahkan tindakan pengalihan, tujuan order lain, pengerjaan ulang, pembuangan, atau penyebab tertentu yang tidak disebut sumber."
+  },
   "削皮包裝站": {
     "idn": "Stasiun packing peeling",
     "canonical_idn": "Stasiun packing peeling",

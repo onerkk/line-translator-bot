@@ -16,8 +16,9 @@ from typing import Mapping
 import unicodedata
 import factory_pmi_semantics as pmi_semantics
 import factory_material_relations as material_relations
+import factory_material_category as material_category
 
-SOURCE_UNDERSTANDING_VERSION = "2026-09-19.1-material-spatial-relations"
+SOURCE_UNDERSTANDING_VERSION = "2026-09-22.1-material-category-receipt"
 
 # These keep meaning, including negation/aspect. Broader near-synonyms below
 # only contribute retrieval features; they do not rewrite the source.
@@ -607,6 +608,12 @@ def factory_term_facts(text, lang, *, protected_names=()):
                 facts.append({"sense": "shift_leader", "evidence": _SHIFT_ROLE.search(source).group(), "meaning": "這裡是工廠班長，不是學校班級或課長／股長。保留工號使用者及工號所有者。"})
     facts.extend(pmi_semantics.build_facts(source, lang))
     facts.extend(material_relations.build_facts(source, lang))
+    # Use original mention boundaries: the stripped view above can remove only
+    # a placeholder prefix and must not turn a display name into category data.
+    category_source = str(text or "")
+    for name in sorted((str(n) for n in protected_names if str(n)), key=len, reverse=True):
+        category_source = re.sub(re.escape(name), " " * len(name), category_source, flags=re.I)
+    facts.extend(material_category.build_facts(category_source, lang))
     return facts
 
 
@@ -618,6 +625,7 @@ def validate_factory_terms(analysis, target, src, tgt):
     facts = analysis.get("factory_terms") or []
     issues = pmi_semantics.validate(facts, target, tgt)
     issues.extend(material_relations.validate(facts, target, tgt))
+    issues.extend(material_category.validate(facts, target, tgt))
     for fact in facts:
         sense = fact["sense"]
         if sense == "erp_ol":
