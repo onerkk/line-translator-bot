@@ -2,6 +2,7 @@
   'use strict';
   var groups = [], rows = [], editing = null, requestId = null, busy = false, ready = false;
   var selected = new Set(), nextOffset = null, timer = null, loadSequence = 0;
+  var generated = null;
   var labels = {pending:'等待提醒', sending:'派送中', retrying:'等待重試', sent:'LINE 已接受',
     failed:'派送失敗', uncertain:'需要確認收件', cancelled:'已取消'};
   function el(id) { return document.getElementById('reminder-' + id); }
@@ -14,8 +15,9 @@
     busy = value;
     el('form').querySelectorAll('input,select,textarea,button').forEach(function (input) { input.disabled=value; });
     el('save').disabled = value || !ready;
+    if (!value) syncLanguage();
   }
-  async function call(path, method, body) {
+  async function call(path, method, body, timeoutMs) {
     var headers = {'Content-Type':'application/json'};
     var key = window._ADMIN_KEY || (typeof KEY !== 'undefined' ? KEY : '');
     if (key) headers['X-Admin-Key'] = key;
@@ -25,9 +27,9 @@
     if (body) options.body = JSON.stringify(body);
     var response, controller = new AbortController();
     options.signal = controller.signal;
-    var timeout = setTimeout(function () { controller.abort(); },20000);
+    var timeout = setTimeout(function () { controller.abort(); },timeoutMs || 20000);
     try { response = await fetch('/api/admin/reminders' + path, options); }
-    catch (_) { throw new Error('連線中斷，請重新整理清單確認是否已儲存，再重試。'); }
+    catch (_) { throw new Error(path === '/translate' ? '翻譯連線未完成，內容已保留。請重試或自行填寫譯文。' : '連線中斷，請重新整理清單確認是否已儲存，再重試。'); }
     finally { clearTimeout(timeout); }
     var data;
     try { data = await response.json(); }
@@ -49,7 +51,46 @@
     return (g ? g.members : []).filter(function (u) { return selected.has(u.user_id); })
       .map(function (u) { return '@' + u.name; });
   }
+  function syncLanguage() {
+    var mode = el('language').value;
+    el('content-wrap').hidden = mode === 'id';
+    el('content-id-wrap').hidden = mode === 'zh';
+    el('content').required = mode === 'zh';
+    el('content-id').required = mode === 'id';
+    el('translation-tools').hidden = mode !== 'bilingual';
+    el('translate').disabled = busy || (!!el('content').value.trim() && !!el('content-id').value.trim());
+  }
+  function languageContent(row) {
+    if (!row.language_mode || row.language_mode === 'original') {
+      return [['original', '原文 / Teks asli', row.content]];
+    }
+    return [['zh','繁體中文',row.content_zh],['id','BAHASA INDONESIA',row.content_id]]
+      .filter(function (part) { return (row.language_mode === 'bilingual' || row.language_mode === part[0]) && part[2]; });
+  }
+  async function fillTranslation() {
+    var zh = el('content').value.trim(), id = el('content-id').value.trim();
+    if (zh && id) return;
+    if (!zh && !id) throw new Error('請先填寫中文或印尼文內容。');
+    if (!group()) throw new Error('請先選擇提醒群組。');
+    var source = zh ? 'zh' : 'id', target = zh ? 'id' : 'zh', content = zh || id;
+    el('translation-note').textContent = '正在補齊' + (target === 'id' ? '印尼文' : '中文') + '…';
+    var response;
+    try {
+      response = await call('/translate','POST',{group_id:el('group').value, source:source, target:target, content:content},65000);
+      if (response.target !== target || typeof response.content !== 'string' || !response.content.trim() || response.content.length > 1500) {
+        throw new Error('譯文未完成或過長，請重試或自行填寫。');
+      }
+    } catch (error) {
+      el('translation-note').textContent = error.message;
+      throw error;
+    }
+    el(target === 'id' ? 'content-id' : 'content').value = response.content;
+    generated = {source:source, target:target, sourceText:content, targetText:response.content};
+    el('translation-note').textContent = '雙語已補齊，可直接調整譯文並查看預覽。';
+    preview();
+  }
   function preview() {
+    syncLanguage();
     var mention = el('mode').value === 'all' ? '@所有人' : el('mode').value === 'users' ? selectedNames().join(' ') : '';
     var box = el('preview'); box.replaceChildren();
     function node(tag, cls, text) {
@@ -61,35 +102,39 @@
     var card = node('article','reminder-preview-card');
     var head = node('div','reminder-preview-head');
     var title = node('div','reminder-preview-title');
-    title.append(node('strong','','自訂提醒'),node('span','','PENGINGAT'));
-    var schedule = node('div','reminder-preview-schedule');
-    var dateBox = node('div','reminder-preview-date');
+    title.append(node('strong','','提醒通知'),node('span','','PENGINGAT')); head.append(title);
+    var body = node('div','reminder-preview-body');
+    var mode = el('language').value;
+    [['zh','繁體中文','content','填寫中文提醒內容'],['id','BAHASA INDONESIA','content-id','Isi pesan pengingat di sini']].forEach(function (part) {
+      if (mode !== 'bilingual' && mode !== part[0]) return;
+      var section = node('section','reminder-preview-language'); section.dataset.language = part[0];
+      section.append(node('div','reminder-preview-label',part[1]));
+      var value = el(part[2]).value.trim();
+      var text = node('div','reminder-preview-content',value || part[3]); text.lang = part[0] === 'zh' ? 'zh-Hant' : 'id';
+      if (!value) text.classList.add('reminder-preview-placeholder');
+      section.append(text); body.append(section);
+    });
     var dateValue = el('date').value;
     var date = dateValue ? new Date(dateValue+'T00:00:00+08:00') : null;
-    var weekday = date && !Number.isNaN(date.getTime()) ? date.getUTCDay() : null;
-    // Taiwan midnight falls on the previous UTC date. Add eight hours before
-    // deriving the weekday, independent of the administrator's device zone.
-    if (weekday !== null) weekday = new Date(date.getTime()+8*3600000).getUTCDay();
+    var weekday = date && !Number.isNaN(date.getTime()) ? new Date(date.getTime()+8*3600000).getUTCDay() : null;
     var dayText = weekday === null ? '星期 / Hari' :
       ['週日','週一','週二','週三','週四','週五','週六'][weekday]+' / '+
       ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'][weekday];
-    dateBox.append(node('strong','',dateValue ? dateValue.replace(/-/g,'.') : '日期 / Tanggal'),node('span','',dayText));
-    schedule.append(node('strong','reminder-preview-time',el('time').value || '--:--'),dateBox);
-    head.append(title,schedule,node('div','reminder-preview-zone','台灣時間 / Waktu Taiwan · UTC+8'));
-    var body = node('div','reminder-preview-body');
-    body.append(node('div','reminder-preview-label','提醒內容 / Pesan'),
-      node('div','reminder-preview-content',el('content').value.trim() || '你的提醒內容會顯示在這裡'));
+    var schedule = node('div','reminder-preview-schedule');
+    schedule.append(node('span','reminder-preview-date',dateValue ? dateValue.replace(/-/g,'.') : '日期 / Tanggal'),
+      document.createTextNode('  '),node('span','reminder-preview-time',el('time').value || '--:--'),
+      document.createTextNode(' · '),node('span','reminder-preview-weekday',dayText));
     var audience = el('mode').value === 'all' ? '全體成員 / Semua anggota' : el('mode').value === 'users' ?
-      '指定 '+selected.size+' 位 / '+selected.size+' anggota terpilih' : '不標註 / Tanpa mention';
-    var footer = node('div','reminder-preview-footer');
+      '指定 '+selected.size+' 位 / '+selected.size+' anggota terpilih' : '';
     var groupName = group() ? group().name : '群組 / Grup';
-    if (groupName.length > 64) {
-      groupName = groupName.slice(0,63).replace(/[\uD800-\uDBFF]$/,'')+'…';
-    }
-    footer.append(node('strong','',audience),node('div','reminder-preview-group',groupName+
-      (editing ? ' · #'+editing.id.slice(0,6) : '')));
+    if (groupName.length > 64) groupName = groupName.slice(0,63).replace(/[\uD800-\uDBFF]$/,'')+'…';
+    var footer = node('div','reminder-preview-footer');
+    footer.append(node('div','reminder-preview-meta-label','排程發送 / Jadwal kirim'),schedule,
+      node('div','reminder-preview-zone','台灣時間 / Waktu Taiwan · UTC+8'),
+      node('div','reminder-preview-group',groupName+(audience ? ' · '+audience : '')));
     card.append(head,body,footer); box.append(card);
     el('count').textContent = el('content').value.length + ' / 1500 字元';
+    el('count-id').textContent = el('content-id').value.length + ' / 1500 字元';
     el('selected-count').textContent = '已選 ' + selected.size + ' / 20 位';
   }
   function renderMembers() {
@@ -111,20 +156,26 @@
     preview();
   }
   function reset() {
-    editing = null; requestId = uuid(); selected.clear();
+    editing = null; requestId = uuid(); selected.clear(); generated = null;
     el('form').reset();
     el('date').value = new Date(Date.now() + 32 * 3600000).toISOString().slice(0,10);
     el('date').min = localNow().slice(0,10);
     el('time').value = '08:00';
     el('form-title').textContent = '新增提醒'; el('save').textContent = '儲存提醒';
     el('stop-edit').hidden = true; el('member-wrap').hidden = true;
+    el('translation-note').textContent = '填寫一種語言即可補翻，譯文可直接修改；儲存時也會自動補齊空白的語言。';
     renderMembers(); notice('', false);
   }
   function edit(row) {
-    editing = row; selected = new Set(row.user_ids);
+    editing = row; selected = new Set(row.user_ids); generated = null;
     el('group').value = row.group_id;
     el('date').value = row.local_time.slice(0,10); el('time').value = row.local_time.slice(11);
-    el('mode').value = row.mention_mode; el('content').value = row.content; el('search').value = '';
+    el('mode').value = row.mention_mode; el('search').value = '';
+    var legacy = !row.language_mode || row.language_mode === 'original';
+    el('language').value = legacy ? 'bilingual' : row.language_mode;
+    el('content').value = legacy ? (/[\u3400-\u9fff]/.test(row.content) ? row.content : '') : row.content_zh || '';
+    el('content-id').value = legacy ? (/[\u3400-\u9fff]/.test(row.content) ? '' : row.content) : row.content_id || '';
+    el('translation-note').textContent = legacy ? '這筆舊提醒只有原文，儲存時會補齊雙語；也可選擇僅發送一種語言。' : '中文與印尼文分開儲存；修改內容時請同步確認另一種語言。';
     el('member-wrap').hidden = row.mention_mode !== 'users';
     el('form-title').textContent = '修改提醒'; el('save').textContent = '儲存修改';
     el('stop-edit').hidden = false; renderMembers(); notice('', false);
@@ -142,8 +193,13 @@
       var meta = document.createElement('div'); meta.className = 'reminder-meta';
       var names = row.mention_mode === 'all' ? '@所有人' : row.mention_mode === 'users' ? row.user_ids.map(function (uid) { return '@'+(row.user_names[uid] || '指定成員'); }).join(' ') : '不標註';
       meta.textContent = row.group_name + ' · ' + names;
-      var content = document.createElement('div'); content.className = 'reminder-body'; content.textContent = row.content;
-      card.append(head, meta, content);
+      card.append(head, meta);
+      languageContent(row).forEach(function (part) {
+        var content = document.createElement('div'); content.className = 'reminder-body';
+        var language = document.createElement('div'); language.className = 'reminder-history-language'; language.textContent = part[1];
+        var text = document.createElement('div'); text.textContent = part[2];
+        content.append(language, text); card.append(content);
+      });
       if (row.last_error) { var error = document.createElement('p'); error.className='reminder-meta reminder-error'; error.textContent=row.last_error; card.append(error); }
       if (row.sent_at) { var sent = document.createElement('div'); sent.className='reminder-meta'; sent.textContent='LINE 接受時間：'+new Date(row.sent_at*1000).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}); card.append(sent); }
       var actions = document.createElement('div'); actions.className = 'reminder-actions';
@@ -199,20 +255,48 @@
     el('group').addEventListener('change',function () { selected.clear(); el('search').value=''; renderMembers(); });
     el('mode').addEventListener('change',function () { el('member-wrap').hidden=el('mode').value!=='users'; preview(); });
     el('search').addEventListener('input',renderMembers);
-    ['date','time','content'].forEach(function (id) { el(id).addEventListener('input',preview); });
+    ['date','time'].forEach(function (id) { el(id).addEventListener('input',preview); });
+    el('language').addEventListener('change',preview);
+    [['zh','content'],['id','content-id']].forEach(function (part) {
+      el(part[1]).addEventListener('input',function () {
+        if (generated && part[0] === generated.source && el(part[1]).value.trim() !== generated.sourceText) {
+          var target = el(generated.target === 'id' ? 'content-id' : 'content');
+          if (target.value === generated.targetText) {
+            target.value = '';
+            el('translation-note').textContent = '原文已修改，儲存時會重新補翻另一種語言。';
+          }
+          generated = null;
+        } else if (generated && part[0] === generated.target) {
+          generated = null;
+        } else if (el('content').value.trim() && el('content-id').value.trim()) {
+          el('translation-note').textContent = '內容已修改，請同步確認另一種語言。';
+        }
+        preview();
+      });
+    });
+    el('translate').addEventListener('click',async function () {
+      if (busy) return;
+      setBusy(true);
+      try { await fillTranslation(); notice('雙語內容已補齊，可在預覽中查看。',false); }
+      catch (error) { notice(error.message,true); }
+      finally { setBusy(false); }
+    });
     el('stop-edit').addEventListener('click',reset);
     el('reset').addEventListener('click',reset);
     el('refresh').addEventListener('click',function () { load(false); });
     el('more').addEventListener('click',function () { load(true); });
     el('form').addEventListener('submit',async function (event) {
       event.preventDefault(); if (busy || !ready) return;
-      var data = {group_id:el('group').value, local_time:el('date').value+'T'+el('time').value,
-        content:el('content').value.trim(), mention_mode:el('mode').value,
-        user_ids:el('mode').value==='users' ? Array.from(selected) : []};
-      if (data.mention_mode==='users' && !data.user_ids.length) { notice('請至少勾選 1 位成員。',true); return; }
+      if (el('mode').value==='users' && !selected.size) { notice('請至少勾選 1 位成員。',true); return; }
       setBusy(true);
       var wasEdit=!!editing;
       try {
+        if (el('language').value === 'bilingual') await fillTranslation();
+        var language = el('language').value;
+        var data = {group_id:el('group').value, local_time:el('date').value+'T'+el('time').value,
+          language_mode:language, content_zh:language === 'id' ? '' : el('content').value.trim(),
+          content_id:language === 'zh' ? '' : el('content-id').value.trim(), mention_mode:el('mode').value,
+          user_ids:el('mode').value==='users' ? Array.from(selected) : []};
         if (editing) { data.revision=editing.revision; await call('/'+editing.id,'PUT',data); }
         else { data.request_id=requestId; await call('','POST',data); }
         reset(); await load(false); notice(wasEdit ? '提醒已更新。' : '提醒已儲存，到設定時間後派送。',false);
