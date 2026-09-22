@@ -19,6 +19,13 @@ POLICY_VERSION = 2
 # They repair corrupted canonical entries wherever the glossary is consumed:
 # prompt grounding, TM seeding, forward enforcement and reverse lookup.
 _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
+    "工單訂單資訊「套環」": {
+        "canonical_idn": "Cincin Pelindung",
+        "translation_mode": "hard",
+        "aliases_zh": ["套環", "套环", "保護環", "保护环"],
+        "note_zh": "工單的套環／保護環是環狀保護配件，不是套罩或保險套。",
+        "note_id": "Cincin Pelindung; bukan selubung pelindung atau kondom.",
+    },
     "E824拋光設備區": {
         "canonical_idn": "area mesin polishing E824",
         "translation_mode": "hard",

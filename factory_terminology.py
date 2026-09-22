@@ -21,11 +21,154 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-19.1-source-equipment-identity"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
 _TRIE_END = object()
+
+
+# A sleeve and a protective ring are separate work-order accessories. The
+# shop-floor use of "kondom" is contextual; it must never become an ordinary
+# reverse-glossary entry that rewrites personal/health conversations.
+_PACKAGING_CONTEXT_RE = re.compile(
+    r"工[單单]|包[裝装]|棒材|(?:研磨|[拋抛]光)棒|"
+    r"\b(?:work\s*order|book\s*order|lembar\s+kerja|packing|pengemasan|"
+    r"batang|bundel|grinding|polishing)\b", re.I,
+)
+_OTHER_PROTECTION_SENSE_RE = re.compile(
+    r"避孕|保[險险]套|安全套|性行[為为]|性[愛爱]|[陰阴]莖|手機|手机|平板|"
+    r"\b(?:kontrasepsi|seks(?:ual)?|hubungan\s+intim|kesehatan|hamil|kehamilan|"
+    r"penis|HIV|HPV|sifilis|ponsel|handphone|smartphone|"
+    r"(?:pabrik|produksi|memproduksi)\s+kondom)\b", re.I,
+)
+_RING_ZH_RE = re.compile(r"保[護护][環环]|套[環环]")
+_SLEEVE_ZH_RE = re.compile(r"保[護护]套|套罩")
+_SEXUAL_ZH_RE = re.compile(r"保[險险]套|安全套|避孕套")
+_RING_ID_RE = re.compile(r"\bcincin[\s-]+pelindung\b", re.I)
+_SLEEVE_ID_RE = re.compile(r"\b(?:selubung|sarung)[\s-]+pelindung\b", re.I)
+_KONDOM_RE = re.compile(r"\bkondom(?:\s+pelindung)?\b", re.I)
+_TERM_IDENTITY_RE = re.compile(
+    r"https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]+|"
+    r"@[^\s,，。;；]+|__[A-Za-z0-9_]+__", re.I,
+)
+_TERM_QUOTE_RE = re.compile(
+    r'''"[^"\n]+"|'[^'\n]+'|“[^”\n]+”|‘[^’\n]+’|「[^」\n]+」|『[^』\n]+』|＂[^＂\n]+＂|\x60[^\x60\n]+\x60'''
+)
+
+
+def _packaging_prose(text, source=None):
+    """Mask identities and source-owned quoted literals, retaining offsets."""
+    text = str(text or "")
+    def quoted(match):
+        content = match.group(0)[1:-1]
+        # Only control labels are masked in the source. In the target, an
+        # actual source quote is immutable even when its surrounding quote
+        # style changes. Newly mistranslated quoted nouns remain repairable.
+        control = bool(re.fullmatch(r"(?:NO\s+Kondom|[NY-])", content, re.I))
+        preserve = control if source is None else content in str(source)
+        return " " * len(match.group(0)) if preserve else match.group(0)
+    text = _TERM_QUOTE_RE.sub(quoted, text)
+    return _TERM_IDENTITY_RE.sub(lambda m: " " * len(m.group(0)), text)
+
+
+def packaging_term_senses(source, src_lang):
+    """Read accessory senses from this source, never from a previous message."""
+    prose = _packaging_prose(source)
+    if _OTHER_PROTECTION_SENSE_RE.search(prose):
+        return set()
+    lang = str(src_lang).lower()
+    senses = set()
+    if lang.startswith("zh"):
+        if _RING_ZH_RE.search(prose):
+            senses.add("ring")
+        if _PACKAGING_CONTEXT_RE.search(prose) and _SLEEVE_ZH_RE.search(prose):
+            senses.add("sleeve")
+    elif lang.startswith("id"):
+        if _RING_ID_RE.search(prose):
+            senses.add("ring")
+        if (_PACKAGING_CONTEXT_RE.search(prose)
+                and (_KONDOM_RE.search(prose) or _SLEEVE_ID_RE.search(prose))):
+            senses.add("sleeve")
+    return senses
+
+
+def _packaging_replace(source, candidate, pattern, replacement):
+    # Spans come from the masked view, but edits apply to the original bytes.
+    # Nothing else (negation, flags, sizes, exceptions, names) is rewritten.
+    result = str(candidate)
+    for match in reversed(list(pattern.finditer(_packaging_prose(result, source)))):
+        result = result[:match.start()] + replacement + result[match.end():]
+    return result
+
+
+def canonicalize_packaging_translation(source, candidate, src_lang, tgt_lang):
+    if not candidate:
+        return candidate
+    src, tgt = str(src_lang).lower(), str(tgt_lang).lower()
+    if not ((src.startswith("zh") and tgt.startswith("id"))
+            or (src.startswith("id") and tgt.startswith("zh"))):
+        return candidate
+    senses = packaging_term_senses(source, src)
+    # With two different accessories, global noun substitution cannot recover
+    # their clause alignment. Guide generation and diagnose; never swap both.
+    if len(senses) != 1:
+        return candidate
+    sense = next(iter(senses))
+    result = str(candidate)
+    if tgt.startswith("zh"):
+        wrong = _SEXUAL_ZH_RE
+        replacement = "保護環" if sense == "ring" else "保護套"
+        result = _packaging_replace(source, result, wrong, replacement)
+        wrong_object = _SLEEVE_ZH_RE if sense == "ring" else _RING_ZH_RE
+        result = _packaging_replace(source, result, wrong_object, replacement)
+        if re.search(r"\b(?:work\s*order|book\s*order|lembar\s+kerja)\b", _packaging_prose(source), re.I):
+            result = _packaging_replace(source, result, re.compile(r"工作[單单]"), "工單")
+    else:
+        replacement = "Cincin Pelindung" if sense == "ring" else "selubung pelindung"
+        result = _packaging_replace(source, result, _KONDOM_RE, replacement)
+        wrong_object = _SLEEVE_ID_RE if sense == "ring" else _RING_ID_RE
+        result = _packaging_replace(source, result, wrong_object, replacement)
+    return result
+
+
+def packaging_translation_issues(source, candidate, src_lang, tgt_lang):
+    src, tgt = str(src_lang).lower(), str(tgt_lang).lower()
+    if not ((src.startswith("zh") and tgt.startswith("id"))
+            or (src.startswith("id") and tgt.startswith("zh"))):
+        return []
+    senses = packaging_term_senses(source, src)
+    if not senses:
+        return []
+    prose = _packaging_prose(candidate, source)
+    patterns = ({"ring": _RING_ZH_RE, "sleeve": _SLEEVE_ZH_RE}
+                if tgt.startswith("zh") else {"ring": _RING_ID_RE, "sleeve": _SLEEVE_ID_RE})
+    issues = ["factory_packaging:" + sense + "_missing_or_confused"
+              for sense in sorted(senses) if not patterns[sense].search(prose)]
+    if (_SEXUAL_ZH_RE if tgt.startswith("zh") else _KONDOM_RE).search(prose):
+        issues.append("factory_packaging:sexual_sense")
+    return issues
+
+
+def build_packaging_prompt(source, src_lang, tgt_lang):
+    if not ((str(src_lang).startswith("zh") and str(tgt_lang).startswith("id"))
+            or (str(src_lang).startswith("id") and str(tgt_lang).startswith("zh"))):
+        return ""
+    senses = packaging_term_senses(source, src_lang)
+    if not senses:
+        return ""
+    lines = ["<factory_packaging_terms>"]
+    if "ring" in senses:
+        lines.append("保護環/套環 = Cincin Pelindung (protective ring), not a sleeve or condom.")
+    if "sleeve" in senses:
+        lines.append("In this work-order/material-packaging source, kondom means 保護套/套罩 "
+                     "(protective sleeve); use selubung pelindung in Indonesian, not 保險套 or 保護環.")
+    lines.append("Keep source labels such as N, Y and quoted NO Kondom verbatim. "
+                 "Preserve the source's must/must-not, size conditions and exceptions; "
+                 "never infer a label's instruction from N/Y alone. "
+                 "Apply no packaging sense to health/personal text.")
+    lines.append("</factory_packaging_terms>")
+    return "\n".join(lines)
 
 
 def canonicalize_equipment_translation(source, candidate, src_lang, tgt_lang):
@@ -687,6 +830,9 @@ def build_translation_prompt(
     process_hint = build_process_prompt(src_text, src, tgt)
     if process_hint:
         lines.append(process_hint)
+    packaging_hint = build_packaging_prompt(src_text, src, tgt)
+    if packaging_hint:
+        lines.append(packaging_hint)
 
     org_matches = collect_organization_matches(src_text, src, tgt, glossary)
     if org_matches:

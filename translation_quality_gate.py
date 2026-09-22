@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-19.3-material-spatial-relations"
+QUALITY_GATE_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -71,6 +71,14 @@ _QUOTED_DATA_RE = re.compile(
 # parenthetical explanations remain fully translatable.
 _PARENTHESIZED_FLAG_RE = re.compile(
     r'(?P<open>[（(])\s*(?P<value>[A-Z])\s*(?P<close>[）)])'
+)
+# Work-order flags are also written without quotes: "bertanda Y" / "標示 N".
+# The field/marker phrase supplies the evidence; a bare N/Y elsewhere is not
+# an immutable code and must not become a global language-purity exemption.
+_BARE_CONTROL_FLAG_RE = re.compile(
+    r'(?P<prefix>(?:(?i:\b(?:bertanda|tanda|ditandai|tertulis|bernilai))\s+|'
+    r'(?:標[示記]|标[示记]|顯示|显示)\s*)[:：]?\s*)'
+    r'(?P<value>[NY])(?![A-Za-z0-9_])'
 )
 
 _QUOTED_CODELIKE_RE = re.compile(r'(?:[-–—]|[A-Z0-9][A-Z0-9._/+:%×x-]{0,31})\Z')
@@ -563,6 +571,12 @@ def _protect_quoted_values(text: str, mapping: Dict[str, str]) -> str:
     return _QUOTED_DATA_RE.sub(repl, text)
 
 
+def _protect_bare_control_flags(text: str, mapping: Dict[str, str]) -> str:
+    return _BARE_CONTROL_FLAG_RE.sub(
+        lambda match: match.group("prefix") + _new_placeholder(mapping, match.group("value")), text
+    )
+
+
 def _protect_factory_unit_runs(text: str, mapping: Dict[str, str]) -> str:
     """Protect every G-number unit that directly modifies 台車 separately.
 
@@ -685,6 +699,7 @@ def protect_immutable_spans(text: str) -> ProtectedText:
     protected = _protect_parenthesized_flags(protected, mapping)
     protected = _protect_factory_unit_runs(protected, mapping)
     protected = _replace_matches(protected, _TECH_TOKEN_RE, mapping)
+    protected = _protect_bare_control_flags(protected, mapping)
     protected = _protect_quoted_values(protected, mapping)
     return ProtectedText(text, protected, mapping)
 
@@ -1736,6 +1751,7 @@ def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
     result = terminology_module.canonicalize_equipment_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
+    result = terminology_module.canonicalize_packaging_translation(source, result, src_lang, tgt_lang)
     result = fsu_module.material_relations.canonicalize(source, result, src_lang, tgt_lang)
     if src_lang == "zh" and tgt_lang == "id" and result:
         result = fsa_module.workflow_semantics.canonicalize(source, result)
@@ -1880,6 +1896,7 @@ def _validate_normalized_translation(
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
     issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
+    issues.extend(terminology_module.packaging_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(_invented_identifier_issues(source, candidate, src_lang, tgt_lang))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)

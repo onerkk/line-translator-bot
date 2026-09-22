@@ -25,9 +25,10 @@ import factory_knowledge
 import factory_source_understanding as source_understanding
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
+import factory_terminology as terminology_module
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-06.1-source-term-integrity"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -390,6 +391,7 @@ class FactoryTranslationGuard:
         matched_ids = tuple(str(card.get("id") or "") for card in cards if card.get("id"))
         _ok, knowledge_issues = self._knowledge.validate_translation(cards, source_text, target_text)
         issues: List[str] = list(knowledge_issues or [])
+        issues.extend(terminology_module.packaging_translation_issues(source_text, target_text, _lang(src), _lang(tgt)))
         exact = self.exact_case(source_text, src, tgt)
         if exact:
             issues.extend(self._validate_regression_case(exact, target_text))
