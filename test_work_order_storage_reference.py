@@ -58,7 +58,24 @@ def test_verifiably_stale_operator_corrected_without_overriding_admin_remap():
                      [">4200", "EH72"]]}
     assert effective_work_order_storage_lookup(custom, reference)["方鉦"] == custom["方鉦"]
     explicit_absence = {"方鉦": []}
-    assert effective_work_order_storage_lookup(explicit_absence, reference)["方鉦"] == []
+    assert effective_work_order_storage_lookup(explicit_absence, reference)["方鉦"] == reference["方鉦"]
+
+
+def test_empty_live_customer_row_recovers_storage_for_reported_customer_and_length(monkeypatch):
+    live = {"方鉦": []}
+    monkeypatch.setattr(app, "STORAGE_LOOKUP", live)
+    monkeypatch.setattr(app, "translate", lambda source, *args, **kwargs: source)
+
+    result = extract_work_order_info(PHOTO_5, app._work_order_storage_lookup(), {})
+    assert result["customer"] == "方鉦"
+    assert result["length"] == (Decimal(2500), Decimal(2550))
+    assert result["storage"] == {"status": "ok", "area": "EH79", "customer": "方鉦"}
+
+    card = app.format_work_order_cards(PHOTO_5)
+    rendered = _visible(card["messages"])
+    assert "儲區  /  Gudang EH79" in rendered
+    assert "儲區待確認" not in rendered
+    assert live == {"方鉦": []}
 
 
 def test_live_letter_bands_normalize_without_changing_admin_area_or_input():

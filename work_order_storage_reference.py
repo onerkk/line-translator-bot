@@ -35,9 +35,10 @@ STORAGE_REFERENCE = load_storage_reference()
 def effective_work_order_storage_lookup(live, reference=None):
     """Prefer current admin rows; repair only exact verified legacy mistakes.
 
-    A blank or custom row for an existing customer remains a deliberate admin
-    setting.  Missing customer names in a partial upload are filled from the
-    reference without changing the live mapping or its persisted JSON.
+    Nonempty custom rows for existing customers remain authoritative. Missing
+    customers and empty customer rows in a partial/incomplete admin upload are
+    filled from the verified reference for work-order lookup, without changing
+    the live mapping or its persisted JSON.
     """
     reference = STORAGE_REFERENCE if reference is None else reference
     # A persisted admin table may still contain the source spreadsheet's
@@ -64,7 +65,16 @@ def effective_work_order_storage_lookup(live, reference=None):
         current = source.get(live_name)
         if not isinstance(current, list) or not isinstance(baseline, list):
             continue
-        if not current or not baseline or len(current) != len(baseline):
+        if not baseline:
+            continue
+        # Admin uploads can retain a known customer key while losing all of
+        # that customer's band rows. Treat that as incomplete data and recover
+        # from the independent reference; otherwise a known customer + valid
+        # length incorrectly renders "storage needs review".
+        if not current:
+            merged[live_name] = baseline
+            continue
+        if len(current) != len(baseline):
             continue
         # The old exported JSON used >=3200 for some A rows, including the
         # second A row in five customers with repeated A/B/C groups.  Repair
