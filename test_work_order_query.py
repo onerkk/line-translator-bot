@@ -51,7 +51,7 @@ def test_photo_five_query_uses_live_tables_and_never_misreads_paint_color():
     info = extract_work_order_info(PHOTO_5, STORAGE, PACKAGING)
     assert info["is_work_order"]
     assert info["customer"] == "方鉦"
-    assert info["storage"]["status"] == "unmapped_length"  # >=3200 in source table
+    assert info["storage"] == {"status": "ok", "area": "EH79", "customer": "方鉦"}
     assert info["packaging"]["code"] == "9G"
     assert info["packaging"]["old_code"] == "C"
     assert info["packaging"]["detail"] == PACKAGING["9G"]["詳細包裝方式說明(冷精棒-設計)"]
@@ -64,8 +64,7 @@ def test_photo_five_query_uses_live_tables_and_never_misreads_paint_color():
     assert "Masukkan bundel kecil" in reply
     assert "Packaging method: Wooden crate and plastic wrapping film for small bundles" in reply
     assert "Packaging details: Place small bundles" in reply
-    assert "儲區資料的長度條件未涵蓋" in reply
-    assert "EH79" not in reply
+    assert "儲區 / Area penyimpanan：EH79" in reply
 
 
 def test_every_current_package_has_an_indonesian_short_method_without_ai():
@@ -130,7 +129,7 @@ def test_explicit_special_note_overrides_polishing_38mm_and_crop_stays_unknown()
     assert info["packaging"]["status"] == "missing"
     assert info["paint"]["status"] == "unknown"
     reply = build_work_order_reply(PHOTO_4_CROP, STORAGE, PACKAGING)
-    assert "不套環（特殊備註）" in reply
+    assert "不套環（工單備註）" in reply
     assert "包裝 / Pengemasan：代碼待確認" in reply
     assert "噴漆 / Pengecatan semprot：位置待確認" in reply
     assert "Protective ring: Not required (explicit order note)" in reply
@@ -153,6 +152,27 @@ def test_dimension_straddling_threshold_and_bad_ocr_never_auto_choose():
     assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
     body = body.replace("成品尺寸MAX：16.01", "成品尺寸MAX：?")
     assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
+
+
+def test_decimal_comma_size_does_not_become_a_hundredfold_larger_ring_size():
+    text = PHOTO_5.replace("成品尺寸MIN：3.97", "成品尺寸MIN：3,97")
+    text = text.replace("成品尺寸MAX：4", "成品尺寸MAX：4,00")
+    info = extract_work_order_info(text.replace("CHRAPDAEJL", "CHRAPD"), STORAGE, PACKAGING)
+    assert tuple(str(value) for value in info["diameter"]) == ("3.97", "4.00")
+    assert info["ring"]["status"] == "no"
+
+
+def test_ambiguous_grouping_punctuation_does_not_select_the_wrong_storage_or_ring():
+    text = PHOTO_5.replace("長度MIN：2500", "長度MIN：4.200")
+    text = text.replace("長度MAX：2550", "長度MAX：4.250")
+    info = extract_work_order_info(text, STORAGE, PACKAGING)
+    assert info["length"] is None
+    assert info["storage"]["status"] == "unknown_length"
+    assert "儲區 / Area penyimpanan：EH79" not in build_work_order_reply(text, STORAGE, PACKAGING)
+    polishing = PHOTO_5.replace("CHRAPDAEJL", "CHRAPD")
+    polishing = polishing.replace("成品尺寸MIN：3.97", "成品尺寸MIN：20.000")
+    polishing = polishing.replace("成品尺寸MAX：4", "成品尺寸MAX：20.001")
+    assert extract_work_order_info(polishing, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
 
 
 def test_storage_uses_length_interval_and_rejects_boundary_crossing():
@@ -276,6 +296,39 @@ CHRAPDAEJL | 不噴 | 9G
     assert info["ring"]["status"] == "no"
     assert info["paint"]["status"] == "no"
     assert info["packaging"]["code"] == "9G"
+
+
+@pytest.mark.parametrize("header", [
+    "長度MIN Panjang MIN | MAX",
+    "長度MIN Panjang MIN | MAX | 計劃量",
+])
+def test_adjacent_bilingual_length_headers_keep_min_and_max_in_their_cells(header):
+    text = PHOTO_5.replace("長度MIN：2500\n長度MAX：2550\n", "")
+    values = "2500 | 2550" + (" | 506.00" if "計劃量" in header else "")
+    text += header + "\n" + values + "\n短尺 MIN | 2000\n"
+    info = extract_work_order_info(text, STORAGE, PACKAGING)
+    assert info["fields"]["length_min"] == "2500"
+    assert info["fields"]["length_max"] == "2550"
+    assert str(info["length"][0]) == "2500"
+    assert str(info["length"][1]) == "2550"
+
+
+def test_isolated_max_without_an_adjacent_length_header_does_not_become_length():
+    text = PHOTO_5.replace("長度MIN：2500\n長度MAX：2550\n", "")
+    text += "成品尺寸MIN | MAX | 短邊MIN | MAX\n3.97 | 4 | 2000 | 2500\n"
+    info = extract_work_order_info(text, STORAGE, PACKAGING)
+    assert info["fields"]["length_min"] is None
+    assert info["fields"]["length_max"] is None
+    assert info["length"] is None
+
+
+def test_unreadable_length_max_preserves_the_read_min_without_resolving_storage():
+    text = PHOTO_5.replace("長度MAX：2550", "長度MAX：?")
+    info = extract_work_order_info(text, STORAGE, PACKAGING)
+    assert info["fields"]["length_min"] == "2500"
+    assert info["fields"]["length_max"] is None
+    assert info["length"] is None
+    assert info["storage"]["status"] == "unknown_length"
 
 
 def test_special_note_next_line_and_form_n_does_not_override_size_rule():

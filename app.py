@@ -13948,10 +13948,24 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             "factory_reason_image_expected_rows": int(getattr(_tl, "factory_reason_image_expected_rows", 0) or 0),
         }, owner=lease_owner)
         if image_mode == "work_order":
-            reply = format_work_order_query(extracted, group_id, user_id)
+            try:
+                card = format_work_order_cards(extracted, group_id, user_id)
+            except translation_retry_queue_module.LeaseLostError:
+                raise
+            except Exception as exc:
+                logger.warning("Work-order card build failed, using text: %s", exc)
+                card = {"messages": [], "fallback_text": format_work_order_query(extracted, group_id, user_id)}
+            reply = card["fallback_text"]
             if not reply:
                 return False
-            _translation_retry_push(job_key, payload, reply)
+            if card["messages"]:
+                plan = _prepare_translation_delivery(job_key, payload, reply)
+                if not plan.get("messages"):
+                    plan["messages"] = card["messages"]
+                    _delivery_checkpoint(job_key, {"delivery": plan})
+                _translation_retry_push_chunks(job_key, payload, reply, prepared_plan=plan)
+            else:
+                _translation_retry_push(job_key, payload, reply)
             _stats_inc("work_order_detections")
             return _complete_durable_text_job(job_key, lease_owner=lease_owner)
         work_order = analyze_work_order(extracted)
@@ -16731,6 +16745,27 @@ def format_work_order_query(ocr_text, group_id=None, user_id=None):
     )
 
 
+def format_work_order_cards(ocr_text, group_id=None, user_id=None):
+    """A compact main card plus a separate, translated packaging detail card."""
+    from work_order_card import build_work_order_cards
+
+    def translate_packaging(source, target):
+        before = getattr(_tl, "from_image_ocr", False)
+        try:
+            _tl.group_id = group_id or ""
+            _tl.user_id = user_id or ""
+            _tl.from_image_ocr = False
+            return translate(source, "zh", target)
+        finally:
+            _tl.from_image_ocr = before
+
+    return build_work_order_cards(
+        ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP,
+        translate_zh_to_id=lambda source: translate_packaging(source, "id"),
+        translate_zh_to_en=lambda source: translate_packaging(source, "en"),
+    )
+
+
 def detect_work_order(ocr_text):
     """Backward-compatible customer extractor for a detected work order."""
     analysis = analyze_work_order(ocr_text)
@@ -17506,6 +17541,8 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             "最前面先抄文件標題；每個欄位只有確實看見標題及對應值時才輸出。"
             "標題看得見但值遮擋或辨識不清時填 ?；照片裁切掉的欄位整行省略。"
             "成品尺寸、長度的 MIN/MAX 要分開，不可混進短邊、厚度或母材尺寸。"
+            "若長度欄標示『長度MIN Panjang MIN』且右鄰為『MAX』，請逐欄抄成長度MIN與長度MAX；"
+            "右鄰短尺MIN、計劃量、重量都不是長度MAX，不能代填或推算。"
             "『訂單流程』逐字保留實際字母，若末尾是 L、D 或 GL 也不得更改；"
             "『特殊備註』若原文有否定詞或 NO KONDOM 才逐字保留，沒有就絕不能自行加上。"
             "不能將交期或訂單備註移到特殊備註。"
@@ -20972,8 +21009,10 @@ def _handle_image_background(ctx):
             pass
 
         if image_mode == "work_order":
+            additional_messages = []
             if extracted == "":
                 reply = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap.\nNo work order was detected. Upload a clear, complete photo."
+                msg_obj = TextMessage(text=_clip_line_text(reply))
             elif not extracted:
                 # OCR provider failure is retried by the durable image queue.
                 return
@@ -20981,21 +21020,33 @@ def _handle_image_background(ctx):
                 _image_key = ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image"
                 _delivery_checkpoint(_image_key, {"ocr_text": str(extracted)})
                 try:
-                    reply = format_work_order_query(extracted, group_id, user_id)
+                    card = format_work_order_cards(extracted, group_id, user_id)
+                    reply = card["fallback_text"]
+                    flex_messages = [FlexMessage.from_dict(data) for data in card["messages"]]
+                    if flex_messages:
+                        msg_obj, additional_messages = flex_messages[0], flex_messages[1:]
+                    else:
+                        msg_obj = TextMessage(text=_clip_line_text(reply))
                 except Exception as exc:
-                    logger.exception("Work-order query failed: %s", exc)
-                    return
+                    logger.exception("Work-order card failed; using text: %s", exc)
+                    try:
+                        reply = format_work_order_query(extracted, group_id, user_id)
+                        msg_obj = TextMessage(text=_clip_line_text(reply))
+                    except Exception:
+                        logger.exception("Work-order query failed")
+                        return
                 if not reply:
                     return
                 if analyze_work_order(extracted).get("is_work_order"):
                     store_work_order_media_context(group_id, user_id, message_id)
                     _stats_inc("work_order_detections")
-            msg_obj = TextMessage(text=_clip_line_text(reply))
-            if ctx.get("quote_token"):
+            # Flex messages do not support quote tokens in the LINE SDK.
+            if ctx.get("quote_token") and hasattr(msg_obj, "quote_token"):
                 msg_obj.quote_token = ctx["quote_token"]
             _send_reply_with_push_fallback(
                 reply_token=ctx.get("reply_token"), target_id=group_id,
                 message_obj=msg_obj, fallback_text=reply,
+                append_messages=additional_messages,
                 job_key=ctx.get("durable_job_key"),
             )
             track_group_usage(group_id, _bp, _bc, _bcost)

@@ -25,8 +25,10 @@ _LABELS = {
     "flow": ("訂單流程", "订单流程", "Alur Pemasangan", "FINAL流程"),
     "diameter_min": ("成品尺寸MIN", "成品尺寸 MIN", "Ukuran MIN produk jadi", "成品尺寸1MIN", "尺寸1MIN"),
     "diameter_max": ("成品尺寸MAX", "成品尺寸 MAX", "Ukuran MAX produk jadi", "成品尺寸1MAX", "尺寸1MAX"),
-    "length_min": ("長度MIN", "长度MIN", "長度 MIN", "Panjang MIN"),
-    "length_max": ("長度MAX", "长度MAX", "長度 MAX", "Panjang MAX"),
+    "length_min": ("長度MIN", "长度MIN", "長度 MIN", "Panjang MIN",
+                   "長度MIN Panjang MIN", "长度MIN Panjang MIN"),
+    "length_max": ("長度MAX", "长度MAX", "長度 MAX", "Panjang MAX",
+                   "長度MAX Panjang MAX", "长度MAX Panjang MAX"),
     "paint": ("噴漆位置", "喷漆位置", "Posisi semprot cat", "噴漆", "喷漆"),
     "color": ("顏色", "颜色", "Warna", "噴漆顏色", "喷漆颜色"),
     "packaging": ("包裝代碼", "包装代码", "包裝碼", "包装码", "Kode kemasan"),
@@ -160,6 +162,16 @@ def _cells(raw):
     return [raw]
 
 
+def _header_fields(cells):
+    """Pair a standalone MAX with its adjacent, identified length MIN cell."""
+    headers = [_field_of(cell) for cell in cells]
+    for column, field in enumerate(headers[:-1]):
+        if field == "length_min" and headers[column + 1] is None:
+            if _label_key(cells[column + 1]) == "max":
+                headers[column + 1] = "length_max"
+    return headers
+
+
 def _read_fields(ocr_text):
     """Read explicit key/value OCR and adjacent header/value table rows.
 
@@ -182,10 +194,15 @@ def _read_fields(ocr_text):
                             value = _value(following[0])
                     found[field].append(value)
                     continue
-        if len(cells) == 2 and _field_of(cells[0]):
+        # "長度MIN Panjang MIN | MAX" is a pair of column headers, not
+        # "length MIN = MAX".  Only the data row below contains values.
+        if (len(cells) == 2 and _field_of(cells[0])
+                and not _field_of(cells[1])
+                and not (_field_of(cells[0]) == "length_min"
+                         and _label_key(cells[1]) == "max")):
             found[_field_of(cells[0])].append(_value(cells[1]))
             continue
-        headers = [_field_of(cell) for cell in cells]
+        headers = _header_fields(cells)
         if len(cells) < 2 or not any(headers):
             continue
         # A work order has many short bilingual header rows.  The next row
@@ -212,7 +229,20 @@ def _read_fields(ocr_text):
 def _decimal(raw):
     if raw is None:
         return None
-    raw = raw.replace(",", "")
+    raw = raw.strip()
+    # Work orders mix Chinese and Indonesian number styles.  A bare 4.200
+    # could mean 4.2 or 4200, and 3,970 could mean 3.970 or 3970.  Neither
+    # is safe for a storage or protective-ring decision without confirmation.
+    if re.fullmatch(r"\d+\.\d{3}", raw) or re.fullmatch(r"\d{1,3},\d{3}", raw):
+        return None
+    if re.fullmatch(r"\d+,\d{1,2}", raw):
+        raw = raw.replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d{1,2}", raw):
+        raw = raw.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(?:,\d{3})+\.\d+", raw) or re.fullmatch(r"\d{1,3}(?:,\d{3}){2,}", raw):
+        raw = raw.replace(",", "")
+    elif "," in raw:
+        return None
     if not _NUM.fullmatch(raw):
         return None
     try:
@@ -477,7 +507,7 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
 
     ring = info["ring"]
     if ring["status"] == "no" and ring["reason"] == "explicit_note":
-        ring_text = "不套環（特殊備註）/ Tanpa cincin pelindung (catatan khusus)"
+        ring_text = "不套環（工單備註）/ Tanpa cincin pelindung (catatan pada work order)"
     elif ring["status"] == "yes":
         ring_text = "需要套環 / Wajib memakai cincin pelindung"
     elif ring["status"] == "no":

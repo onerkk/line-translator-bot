@@ -107,7 +107,7 @@ def test_partial_or_ambiguous_source_cannot_trigger_complete_destination_renderi
 def test_zone_instruction_does_not_mutate_customer_defaults():
     before = json.loads((Path(__file__).parent / "storage_data.json").read_text())
     assert workflow.canonicalize(ZONE_SOURCE, ZONE_BAD) == ZONE_GOOD
-    assert before["大成"] == [[">=3200", "EH32"], [">3200<=4200", "EH32"], [">4200", "EH32"]]
+    assert before["大成"] == [["<=3200", "EH32"], [">3200<=4200", "EH32"], [">4200", "EH32"]]
     assert json.loads((Path(__file__).parent / "storage_data.json").read_text()) == before
 
 

@@ -37,11 +37,18 @@ def test_work_order_mode_reads_fields_and_does_not_translate_whole_photo(monkeyp
     app._handle_image_background.__wrapped__(ctx)
     assert len(sent) == 1
     text = sent[0]["fallback_text"]
-    assert "客戶 / Pelanggan：方鉦" in text
-    assert "包裝代碼 / Kode kemasan：9G" in text
-    assert "不噴 / Tidak perlu dicat" in text
-    assert "不需套環 / Tidak perlu memakai cincin pelindung" in text
-    assert "EH79" not in text  # length does not match the current storage data
+    assert "Y1223801-012 · 方鉦" in text
+    assert "MIN 2500 · MAX 2550 mm" in text
+    assert "儲區 / Gudang / Storage：EH79" in text
+    assert "包裝 / Kemasan / Packaging：9G" in text
+    assert "不需套環 / Tidak perlu cincin / No ring required" in text
+    assert sent[0]["message_obj"].type == "flex"
+    assert len(sent[0]["append_messages"]) == 1
+    assert sent[0]["append_messages"][0].type == "flex"
+    card_text = str(sent[0]["message_obj"].to_dict())
+    assert "不噴 / Tidak dicat / No spray paint" in card_text
+    assert "EH79" in card_text
+    assert "MAX" in card_text and "2550" in card_text
 
 
 def test_translate_mode_translates_even_when_photo_is_work_order(monkeypatch):
@@ -64,12 +71,16 @@ def test_durable_retry_preserves_work_order_mode(monkeypatch):
     ctx, _sent = _background(monkeypatch, mode="work_order", ocr=PHOTO_5)
     pushed = []
     monkeypatch.setattr(app.translation_retry_queue_module, "checkpoint", lambda *_a, **_kw: None)
-    monkeypatch.setattr(app, "_translation_retry_push", lambda *_a: pushed.append(_a[-1]))
+    monkeypatch.setattr(app, "_translation_retry_push", lambda *_a: (_ for _ in ()).throw(AssertionError("unexpected plain-text delivery")))
+    monkeypatch.setattr(app, "_translation_retry_push_chunks",
+                        lambda *_a, **kw: pushed.append((kw["prepared_plan"]["messages"], _a[-1])))
     monkeypatch.setattr(app, "_complete_durable_text_job", lambda *_a, **_kw: True)
     monkeypatch.setattr(app, "translate", lambda text, src, tgt: "Peti kayu dan plastik pembungkus")
     job = {"job_key": "test-job", "payload": {"message_id": ctx["message_id"],
            "group_id": ctx["group_id"], "user_id": ctx["user_id"], "image_mode": "work_order"}}
     assert app._translation_retry_image_attempt(job)
     assert len(pushed) == 1
-    assert "客戶 / Pelanggan：方鉦" in pushed[0]
-    assert "包裝代碼 / Kode kemasan：9G" in pushed[0]
+    messages, fallback = pushed[0]
+    assert [message["type"] for message in messages] == ["flex", "flex"]
+    assert "MIN 2500 · MAX 2550 mm" in fallback
+    assert "儲區 / Gudang / Storage：EH79" in fallback
