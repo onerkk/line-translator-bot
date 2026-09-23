@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "00dbe401ec5e9d0a7d0c96587629fb8cc0ddd17846f03f66dfaee20b25ce491c",
-    "updated_at_iso": "2026-09-23T03:35:21.580635+00:00",
-    "updated_at_unix": 1790134521.5806353
+    "state_hash": "036d919f585d0848276fcf06e16428946e3b94a0af2560e0dc0cf2ac307cab4f",
+    "updated_at_iso": "2026-09-23T11:22:54.064541+00:00",
+    "updated_at_unix": 1790162574.0645413
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-23 03:32:41",
+    "last_updated": "2026-09-23 10:49:53",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -194,17 +194,17 @@
     "image_translations": 4,
     "oai_cache_write": 68513,
     "oai_cached": 28066,
-    "oai_cost_usd": 0.4483680599999999,
-    "oai_input": 434600,
-    "oai_output": 5270,
+    "oai_cost_usd": 0.4714200599999999,
+    "oai_input": 443084,
+    "oai_output": 5777,
     "oai_reasoning": 0,
     "text_translations": 298,
-    "tokens_completion": 22726,
-    "tokens_prompt": 4669371,
+    "tokens_completion": 23233,
+    "tokens_prompt": 4677855,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
-    "work_order_detections": 0
+    "work_order_detections": 3
   },
   "camera_qr_enabled": false,
   "camera_roll_qr_enabled": false,
@@ -510,7 +510,7 @@
   "group_img_ask_settings": {},
   "group_img_settings": {
     "C28bb7127640539f3c1bc743ecdf61a24": false,
-    "C6c708f629dd38d6864669ecacf7712f4": false,
+    "C6c708f629dd38d6864669ecacf7712f4": true,
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
@@ -614,9 +614,7 @@
     "Cd188e1adc7792e407c90f3fa78850316": false,
     "Cf5e2ea027bb3db193677e7ef3b51adea": false
   },
-  "group_work_order_lookup_settings": {
-    "C6c708f629dd38d6864669ecacf7712f4": true
-  },
+  "group_work_order_lookup_settings": {},
   "id_preprocessing_enabled": true,
   "id_preprocessing_nano": false,
   "id_zh_cod_enabled": true,
