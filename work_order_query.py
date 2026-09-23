@@ -451,7 +451,9 @@ def _paint_reference(raw, lookup):
         if isinstance(entry, dict)
         and re.fullmatch(r"[A-Z0-9]{1,12}", normalize_code(code))
         and _value(entry.get("zh")) and _value(entry.get("id"))
-        and re.sub(r"\s+", "", _text(entry["zh"])) == name
+        and any(re.sub(r"\s+", "", _text(label)) == name
+                for label in [_value(entry.get("zh"))]
+                + (entry.get("aliases_zh", []) if isinstance(entry.get("aliases_zh", []), list) else []))
     } if isinstance(lookup, dict) else set()
     return (next(iter(matches)) if len(matches) == 1 else None), value
 

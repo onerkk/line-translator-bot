@@ -299,13 +299,15 @@ def test_verified_paint_codes_match_all_supplied_cans():
     assert {code: entry["zh"] for code, entry in _PAINT_CODES.items()} == {
         "46": "土藍", "101": "紅", "102": "白", "108": "黃",
         "109": "黑", "113": "桃紅", "115": "橘紅", "116": "青",
-        "137": "軍綠", "144": "茶霧面", "169": "黃綠",
+        "137": "葉綠", "144": "紫羅蘭", "169": "黃綠",
     }
     assert all(entry.get("id") and entry.get("en") for entry in _PAINT_CODES.values())
     # The can says 青; its appearance does not verify blue or green.
     assert _PAINT_CODES["116"]["id"] == _PAINT_CODES["116"]["en"] == "qing (青)"
-    assert "tea" in _PAINT_CODES["144"]["en"]
-    assert "matte" in _PAINT_CODES["144"]["en"]
+    assert _PAINT_CODES["137"]["id"] == "hijau daun"
+    assert _PAINT_CODES["137"]["en"] == "leaf green"
+    assert _PAINT_CODES["144"]["id"] == "ungu violet"
+    assert _PAINT_CODES["144"]["en"] == "violet"
 
 
 def test_printed_paint_name_uses_unique_verified_rack_code_not_the_name_as_code():
@@ -337,6 +339,11 @@ def test_paint_name_reverse_lookup_does_not_guess_unknown_or_duplicate_code():
         "status": "one", "color_code": None, "color_name": "土藍"}
     assert extract_work_order_info(painted.replace("土藍", "土青"), STORAGE, PACKAGING)["paint"] == {
         "status": "one", "color_code": None, "color_name": "土青"}
+    # 藍 is an explicitly listed alias of the verified 土藍=46 entry.
+    assert extract_work_order_info(painted.replace("土藍", "藍"), STORAGE, PACKAGING)["paint"] == {
+        "status": "one", "color_code": "46", "color_name": "藍"}
+    reply = build_work_order_reply(painted.replace("土藍", "藍"), STORAGE, PACKAGING)
+    assert "顏色代碼 / Kode warna：46" in reply
 
 
 @pytest.mark.parametrize(("side", "indonesian", "english"), [

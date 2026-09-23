@@ -1,5 +1,5 @@
 {
-  "46": {"zh": "土藍", "id": "biru bernuansa tanah (土藍)", "en": "earthy blue (土藍)"},
+  "46": {"zh": "土藍", "aliases_zh": ["藍"], "id": "biru bernuansa tanah (土藍)", "en": "earthy blue (土藍)"},
   "101": {"zh": "紅", "id": "merah", "en": "red"},
   "102": {"zh": "白", "id": "putih", "en": "white"},
   "108": {"zh": "黃", "id": "kuning", "en": "yellow"},
@@ -7,7 +7,7 @@
   "113": {"zh": "桃紅", "id": "merah muda seperti bunga persik", "en": "peach blossom pink"},
   "115": {"zh": "橘紅", "id": "merah jingga", "en": "orange-red"},
   "116": {"zh": "青", "id": "qing (青)", "en": "qing (青)"},
-  "137": {"zh": "軍綠", "id": "hijau tentara", "en": "army green"},
-  "144": {"zh": "茶霧面", "id": "warna teh doff", "en": "matte tea color"},
+  "137": {"zh": "葉綠", "id": "hijau daun", "en": "leaf green"},
+  "144": {"zh": "紫羅蘭", "id": "ungu violet", "en": "violet"},
   "169": {"zh": "黃綠", "id": "hijau kekuningan", "en": "yellow-green"}
 }

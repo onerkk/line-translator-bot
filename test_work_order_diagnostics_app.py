@@ -45,6 +45,9 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
     monkeypatch.setattr(app, "_vision_call", fake_vision)
     result = app.ocr_work_order_fields("fake-image")
     assert len(calls) == 2
+    first_prompt = calls[0][0][0]["content"]
+    assert "看見『土藍』就保留『土藍』" in first_prompt
+    assert "完整色名或明確列出的別名查詢" in first_prompt
     assert "訂單流程：CHRAPL" in result
     assert "成品尺寸MIN：20" in result
     assert "成品尺寸MAX：20" in result
