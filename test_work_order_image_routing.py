@@ -43,8 +43,7 @@ def test_work_order_mode_reads_fields_and_does_not_translate_whole_photo(monkeyp
     assert "不需套環 / Tidak perlu cincin pelindung" in text
     assert "Y1223801-012" not in text and "2500" not in text and "3.97" not in text
     assert sent[0]["message_obj"].type == "flex"
-    assert len(sent[0]["append_messages"]) == 1
-    assert sent[0]["append_messages"][0].type == "flex"
+    assert sent[0]["append_messages"] == []
     card_text = str(sent[0]["message_obj"].to_dict())
     assert "不噴 / Tidak dicat" in card_text
     assert "EH79" in card_text
@@ -81,7 +80,7 @@ def test_durable_retry_preserves_work_order_mode(monkeypatch):
     assert app._translation_retry_image_attempt(job)
     assert len(pushed) == 1
     messages, fallback = pushed[0]
-    assert [message["type"] for message in messages] == ["flex", "flex"]
+    assert [message["type"] for message in messages] == ["flex"]
     assert "客戶 / Pelanggan:方鉦" in fallback
     assert "儲區 / Gudang:EH79" in fallback
     assert "MIN" not in fallback and "MAX" not in fallback

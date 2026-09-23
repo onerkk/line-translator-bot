@@ -70,17 +70,16 @@ def _assert_only_requested_fields(result, source_order):
 
 def test_photo_five_card_has_five_answers_and_full_bilingual_packaging_method():
     result = build_work_order_cards(PHOTO_5, STORAGE, PACKAGING)
-    assert len(result["messages"]) == 2
-    main, detail = result["messages"]
-    main_text, detail_text = _body_text(main), _body_text(detail)
+    assert len(result["messages"]) == 1
+    main_text = _body_text(result["messages"][0])
     for expected in ("方鉦", "EH79", "9G", "木箱+膠膜(小捆)",
                      "Peti kayu + plastik pembungkus untuk ikatan kecil",
                      "不噴 / Tidak dicat", "不需套環 / Tidak perlu cincin pelindung"):
         assert expected in main_text
-    assert "Masukkan bundel kecil" not in main_text
-    assert "木箱+小捆膠膜" in detail_text
-    assert "Masukkan bundel kecil" in detail_text
-    assert "Place small bundles" not in detail_text
+    assert "包裝明細 / Rincian pengemasan" in main_text
+    assert "木箱+小捆膠膜" in main_text
+    assert "Masukkan bundel kecil" in main_text
+    assert "Place small bundles" not in main_text
     assert "2500" not in _all_visible_text(result)
     assert "2550" not in _all_visible_text(result)
     assert "3.97" not in _all_visible_text(result)
@@ -89,8 +88,8 @@ def test_photo_five_card_has_five_answers_and_full_bilingual_packaging_method():
 
 def test_sunge_photo_partial_customer_uses_canonical_storage_and_warns_on_1d_source_conflict():
     result = build_work_order_cards(PHOTO_SUNGE, STORAGE, PACKAGING)
-    assert len(result["messages"]) == 2
-    summary, details = [_body_text(message) for message in result["messages"]]
+    assert len(result["messages"]) == 1
+    summary = _body_text(result["messages"][0])
     assert "SUNGEUN" in summary and "EG33" in summary
     assert "1D" in summary
     assert "原表簡稱與明細不一致，請核對" in summary
@@ -98,8 +97,8 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_warns_on_1d_sou
     assert "不噴 / Tidak dicat" in summary
     assert "色碼 109" not in summary
     assert "不需套環 / Tidak perlu cincin pelindung" in summary
-    assert "頭中尾內舖PC布墊" in details
-    assert "Bahasa Indonesia" in details
+    assert "頭中尾內舖PC布墊" in summary
+    assert "Letakkan bantalan kain PC" in summary
     for term in ("6000", "6050", "31.938", "CHRＡIPD", "CHRAIPD"):
         assert term not in _all_visible_text(result)
     _assert_only_requested_fields(result, "Y1224051-023")
@@ -164,26 +163,27 @@ def test_new_admin_method_translates_only_into_indonesian():
                                     translate_zh_to_id=translate_id,
                                     translate_zh_to_en=translate_en)
     assert called == [("id", "新包裝"), ("id", detail)]
-    assert "Metode " + detail in _body_text(result["messages"][1])
+    assert len(result["messages"]) == 1
+    assert "Metode " + detail in _body_text(result["messages"][0])
     assert "Method " not in _all_visible_text(result)
-    assert "翻譯待核對" in _body_text(build_work_order_cards(image, STORAGE, custom)["messages"][1])
+    assert "翻譯待核對" in _body_text(build_work_order_cards(image, STORAGE, custom)["messages"][0])
 
 
-def test_long_untrusted_detail_bounded_and_detail_failure_keeps_summary(monkeypatch):
+def test_long_untrusted_detail_bounded_and_detail_failure_keeps_one_card(monkeypatch):
     very_long = "進箱\u202e\x00" + "甲" * 12000
     custom = {"ZZ": {"品保設計(新版)": "ZZ", "簡稱": "新包裝",
                      "詳細包裝方式說明(冷精棒-設計)": very_long}}
     image = PHOTO_5.replace("包裝代碼：9G", "包裝代碼：ZZ")
     result = build_work_order_cards(image, STORAGE, custom)
-    assert len(result["messages"]) == 2
+    assert len(result["messages"]) == 1
     assert "\u202e" not in _all_visible_text(result) and "\x00" not in _all_visible_text(result)
-    assert _body_text(result["messages"][1]).count("甲") <= 1350
+    assert _body_text(result["messages"][0]).count("甲") <= 1350
     _assert_only_requested_fields(result, "Y1223801-012")
 
     def broken_detail(*_args, **_kwargs):
         raise RuntimeError("corrupt admin description")
 
-    monkeypatch.setattr(work_order_card, "_detail_message", broken_detail)
+    monkeypatch.setattr(work_order_card, "_package_detail_rows", broken_detail)
     result = build_work_order_cards(PHOTO_5, STORAGE, PACKAGING)
     assert len(result["messages"]) == 1
     assert "方鉦" in _body_text(result["messages"][0])

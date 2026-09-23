@@ -172,6 +172,19 @@ def _header_fields(cells):
     return headers
 
 
+_LENGTH_INLINE_MAX = re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?\s*(?:mm|毫米|公厘)?)\s*"
+    r"(?:[;；,，]\s*)?MAX\s*[:：]?\s*"
+    r"(\d+(?:[.,]\d+)?\s*(?:mm|毫米|公厘)?)\s*$", re.I,
+)
+
+
+def _length_min_max_pair(minimum, maximum):
+    """Accept two explicit values only when their numeric order is valid."""
+    low, high = _decimal(minimum), _decimal(maximum)
+    return low is not None and high is not None and 0 <= low <= high
+
+
 def _read_fields(ocr_text):
     """Read explicit key/value OCR and adjacent header/value table rows.
 
@@ -188,6 +201,21 @@ def _read_fields(ocr_text):
                 field = _field_of(match.group(1))
                 if field:
                     value = _value(match.group(2))
+                    if field == "length_min" and value:
+                        # OCR often places the form's adjacent MAX column on
+                        # the same line, or on the next line as a bare MAX.
+                        # Restrict this to an explicitly labelled length MIN;
+                        # generic MAX columns also describe finished size.
+                        paired = _LENGTH_INLINE_MAX.fullmatch(value)
+                        if paired and _length_min_max_pair(*paired.groups()):
+                            value = paired.group(1)
+                            found["length_max"].append(_value(paired.group(2)))
+                        elif index + 1 < len(rows) and len(rows[index + 1]) == 1:
+                            adjacent = re.fullmatch(
+                                r"\s*MAX\s*[:：]\s*(.*?)\s*", rows[index + 1][0], re.I,
+                            )
+                            if adjacent and _length_min_max_pair(value, adjacent.group(1)):
+                                found["length_max"].append(_value(adjacent.group(1)))
                     if field in {"special", "order_note"} and value is None and index + 1 < len(rows):
                         following = rows[index + 1]
                         if len(following) == 1 and not re.match(r"[^:：]{1,55}[:：]", following[0]):
@@ -229,7 +257,11 @@ def _read_fields(ocr_text):
 def _decimal(raw):
     if raw is None:
         return None
-    raw = raw.strip()
+    raw = _text(raw)
+    # A vision transcription may repeat the mm printed in the length/size
+    # heading.  Strip only an exact unit suffix; never accept trailing notes
+    # or a partially transcribed range as a confirmed number.
+    raw = re.sub(r"\s*(?:mm|毫米|公厘)$", "", raw, flags=re.I).strip()
     # Work orders mix Chinese and Indonesian number styles.  A bare 4.200
     # could mean 4.2 or 4200, and 3,970 could mean 3.970 or 3970.  Neither
     # is safe for a storage or protective-ring decision without confirmation.
@@ -369,7 +401,7 @@ def _ring_size_candidates(raw):
     """Retain both readings of three-digit separators for ring decisions only."""
     if raw is None:
         return ()
-    raw = raw.strip()
+    raw = re.sub(r"\s*(?:mm|毫米|公厘)$", "", _text(raw), flags=re.I).strip()
     if re.fullmatch(r"\d+\.\d{3}", raw) or re.fullmatch(r"\d{1,3},\d{3}", raw):
         return tuple({Decimal(raw.replace(",", ".")),
                       Decimal(raw.replace(",", "").replace(".", ""))})

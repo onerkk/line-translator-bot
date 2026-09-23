@@ -13934,7 +13934,7 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             return False
         if not extracted or not str(extracted).strip():
             if image_mode == "work_order" and getattr(_tl, "ocr_extraction_state", "") == "empty":
-                notice = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap.\nNo work order was detected. Upload a clear, complete photo."
+                notice = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap."
                 _translation_retry_push(job_key, payload, notice)
                 return _complete_durable_text_job(job_key, lease_owner=lease_owner)
             # Empty output can also be a provider timeout. It is not evidence
@@ -17549,6 +17549,36 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
         if result.upper() == "NO_WORK_ORDER":
             _tl.ocr_extraction_state = "empty"
             return ""
+        if result:
+            try:
+                from work_order_length_recovery import needs_length_retry, merge_confirmed_length
+                if needs_length_retry(result, STORAGE_LOOKUP):
+                    # A single focused reread may recover missing finished
+                    # length.  It cannot replace a conflicting original value.
+                    length_messages = [
+                        {"role": "system", "content": (
+                            "你是工單 OCR，只讀本張照片的『成品長度』MIN 與右鄰 MAX 兩個數值。"
+                            "不可讀成成品尺寸、短邊 MIN、厚度、母材尺寸、計劃量或其他欄位。"
+                            "即使右鄰只有 MAX 標題，也須確認它緊鄰『長度 MIN / Panjang MIN』。"
+                            "只輸出兩行『長度MIN：實際數值』與『長度MAX：實際數值』。"
+                            "若該格看不清楚就輸出 ?；不得推算、加上單位或附註。"
+                        )},
+                        {"role": "user", "content": [
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}},
+                            {"type": "text", "text": "請只抄成品長度的 MIN、MAX；不能由其他數字推測。"},
+                        ]},
+                    ]
+                    reread = _vision_call(
+                        length_messages, max_tokens=110,
+                        cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_length"),
+                        task_type="ocr",
+                    )
+                    track_tokens(reread)
+                    retry_text = (reread.choices[0].message.content or "").strip()
+                    result = merge_confirmed_length(result, retry_text, STORAGE_LOOKUP)
+            except Exception as retry_exc:
+                logger.warning("Work-order length reread failed: %s", retry_exc)
         return result or None
     except Exception as exc:
         logger.warning("Work-order field OCR failed: %s", exc)
@@ -20994,7 +21024,7 @@ def _handle_image_background(ctx):
         if image_mode == "work_order":
             additional_messages = []
             if extracted == "":
-                reply = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap.\nNo work order was detected. Upload a clear, complete photo."
+                reply = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap."
                 msg_obj = TextMessage(text=_clip_line_text(reply))
             elif not extracted:
                 # OCR provider failure is retried by the durable image queue.

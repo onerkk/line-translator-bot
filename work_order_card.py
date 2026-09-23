@@ -1,8 +1,8 @@
-"""Readable Chinese/Indonesian LINE cards for a photographed work order.
+"""Readable Chinese/Indonesian LINE card for a photographed work order.
 
 Work-order extraction and rule decisions live in ``work_order_query``.  This
-module shows only the five operational answers requested by the user.  A long
-packaging instruction gets its own card, so the decisions remain easy to scan.
+module shows only the five operational answers requested by the user, including
+the complete matching packaging method in the packaging section of one card.
 """
 
 from __future__ import annotations
@@ -180,41 +180,29 @@ def _ring_text(ring):
     return "套環待確認 / Perlu memeriksa cincin pelindung", AMBER
 
 
-def _detail_message(info, translate_zh_to_id, translate_zh_to_en=None):
-    """Show original packaging instructions and Indonesian only.
+def _package_detail_rows(package, translate_zh_to_id):
+    """Show original packaging instructions and Indonesian in the same card.
 
-    The unused English callback remains in the signature for compatibility
-    with previous integrations, but must never be called.
+    Each language stays in one bounded text element so LINE can wrap the
+    complete method naturally without another chat bubble.
     """
-    package = info["packaging"]
     if package["status"] != "ok":
-        return None
+        return []
     detail = package.get("detail") or ""
     if not detail or detail == package.get("short"):
-        return None
+        return []
     detail_id = _translate(detail, _PACKAGING_DETAIL_ID, translate_zh_to_id)
-    code = _clean(package["code"], 24)
-    content = [
-        _text("中文原文", size="sm", color=TEAL, weight="bold"),
-        _text(_clean(detail, 1350, multiline=True), margin="sm"),
-        _divider(),
-        _text("印尼文 / Bahasa Indonesia", size="sm", color=TEAL,
+    return [
+        _text("包裝明細 / Rincian pengemasan", size="sm", color=TEAL,
               weight="bold", margin="lg"),
+        _text(_clean(detail, 1350, multiline=True), margin="sm"),
         _text(detail_id or "翻譯待核對 / Terjemahan perlu diperiksa",
-              margin="sm", color=INK if detail_id else AMBER),
+              margin="md", color=MUTED if detail_id else AMBER),
     ]
-    bubble = {"type": "bubble", "size": "mega",
-              "header": _box([_text("包裝方式 / Cara pengemasan", color="#C5EEE8",
-                                    weight="bold"),
-                              _text(code, size="lg", weight="bold", margin="sm")],
-                             backgroundColor="#195365", paddingAll="16px"),
-              "body": _box(content, backgroundColor=BODY_BG, paddingAll="16px")}
-    return {"type": "flex", "altText": _clean(f"📦 包裝方式 {code} / Cara pengemasan", 180),
-            "contents": bubble}
 
 
 def _fallback_from_info(info, paint_codes, *, package_rows=None,
-                        paint_rows=None, detail_message=None):
+                        paint_rows=None, detail_rows=None):
     """Give LINE a safe five-item text message even if Flex construction fails."""
     if not info["is_work_order"]:
         return "⚠️ 無法確認是工單 / Tidak dapat memastikan ini perintah kerja."
@@ -235,10 +223,8 @@ def _fallback_from_info(info, paint_codes, *, package_rows=None,
         f"套環 / Cincin pelindung：{ring}",
     ]
     if package["status"] == "ok" and package.get("detail") and package.get("detail") != package.get("short"):
-        if detail_message:
-            detail_text = [row["text"] for row in detail_message["contents"]["body"]["contents"]
-                           if row.get("type") == "text"]
-            lines.extend(detail_text)
+        if detail_rows:
+            lines.extend(row["text"] for row in detail_rows)
         else:
             detail = package["detail"]
             detail_id = _translate(detail, _PACKAGING_DETAIL_ID, None)
@@ -254,8 +240,9 @@ def build_work_order_fallback(ocr_text, storage_lookup=None, packaging_lookup=No
     info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes)
     codes = _PAINT_CODES if paint_codes is None else paint_codes
     try:
-        detail = _detail_message(info, None) if info["is_work_order"] else None
-        return _fallback_from_info(info, codes, detail_message=detail)
+        details = (_package_detail_rows(info["packaging"], None)
+                   if info["is_work_order"] else [])
+        return _fallback_from_info(info, codes, detail_rows=details)
     except Exception:
         return _fallback_from_info(info, codes)
 
@@ -284,6 +271,13 @@ def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
     package_rows = _package_rows(package, translate_zh_to_id)
     paint_rows = _spray_rows(info, codes)
     ring, ring_color = _ring_text(info["ring"])
+    # Keep the bilingual method immediately below its code and short method.
+    # A broken admin translation must still leave the important decisions
+    # visible and must not trigger a second LINE message.
+    try:
+        detail_rows = _package_detail_rows(package, translate_zh_to_id)
+    except Exception:
+        detail_rows = []
     content = [
         _section("客戶", "Pelanggan",
                  [_text(customer, size="lg", weight="bold", margin="sm")], margin=None),
@@ -291,7 +285,8 @@ def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
                  [_text(area, size="lg" if storage["status"] == "ok" else "sm",
                         color=area_color, weight="bold", margin="sm")]),
         _divider(),
-        _section("包裝碼與方式", "Kode dan cara pengemasan", package_rows),
+        _section("包裝碼與方式", "Kode dan cara pengemasan",
+                 package_rows + detail_rows),
         _divider(),
         _section("噴漆", "Cat semprot", paint_rows),
         _divider(),
@@ -308,19 +303,8 @@ def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
     primary = {"type": "flex",
                "altText": _clean(f"📋 工單重點 / Ringkasan perintah kerja：{customer} · {area} · 包裝 {code}", 200),
                "contents": bubble}
-    messages = [primary]
-    detail = None
-    # A corrupted admin description must never suppress the operational card.
-    try:
-        detail = _detail_message(info, translate_zh_to_id)
-        if detail and len(json.dumps(detail["contents"], ensure_ascii=False).encode("utf-8")) < 30000:
-            messages.append(detail)
-        else:
-            detail = None
-    except Exception:
-        pass
     fallback = _fallback_from_info(info, codes, package_rows=package_rows,
-                                   paint_rows=paint_rows, detail_message=detail)
+                                   paint_rows=paint_rows, detail_rows=detail_rows)
     if len(json.dumps(primary["contents"], ensure_ascii=False).encode("utf-8")) >= 30000:
         return {"messages": [], "fallback_text": fallback}
-    return {"messages": messages, "fallback_text": fallback}
+    return {"messages": [primary], "fallback_text": fallback}
