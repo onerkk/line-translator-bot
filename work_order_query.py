@@ -26,9 +26,11 @@ _LABELS = {
     "diameter_min": ("成品尺寸MIN", "成品尺寸 MIN", "Ukuran MIN produk jadi", "成品尺寸1MIN", "尺寸1MIN"),
     "diameter_max": ("成品尺寸MAX", "成品尺寸 MAX", "Ukuran MAX produk jadi", "成品尺寸1MAX", "尺寸1MAX"),
     "length_min": ("長度MIN", "长度MIN", "長度 MIN", "Panjang MIN",
-                   "長度MIN Panjang MIN", "长度MIN Panjang MIN"),
+                   "長度MIN Panjang MIN", "长度MIN Panjang MIN",
+                   "成品長度MIN", "成品长度MIN", "成品長度 MIN", "成品长度 MIN"),
     "length_max": ("長度MAX", "长度MAX", "長度 MAX", "Panjang MAX",
-                   "長度MAX Panjang MAX", "长度MAX Panjang MAX"),
+                   "長度MAX Panjang MAX", "长度MAX Panjang MAX",
+                   "成品長度MAX", "成品长度MAX", "成品長度 MAX", "成品长度 MAX"),
     "paint": ("噴漆位置", "喷漆位置", "Posisi semprot cat", "噴漆", "喷漆"),
     "color": ("顏色", "颜色", "Warna", "噴漆顏色", "喷漆颜色"),
     "packaging": ("包裝代碼", "包装代码", "包裝碼", "包装码", "Kode kemasan"),
@@ -174,15 +176,15 @@ def _header_fields(cells):
 
 _LENGTH_INLINE_MAX = re.compile(
     r"^\s*(\d+(?:[.,]\d+)?\s*(?:mm|毫米|公厘)?)\s*"
-    r"(?:[;；,，]\s*)?MAX\s*[:：]?\s*"
+    r"(?:[;；,，/／]\s*)?MAX\s*[:：]?\s*"
     r"(\d+(?:[.,]\d+)?\s*(?:mm|毫米|公厘)?)\s*$", re.I,
 )
 
 
 def _length_min_max_pair(minimum, maximum):
     """Accept two explicit values only when their numeric order is valid."""
-    low, high = _decimal(minimum), _decimal(maximum)
-    return low is not None and high is not None and 0 <= low <= high
+    lows, highs = _number_candidates(minimum), _number_candidates(maximum)
+    return any(0 <= low <= high for low in lows for high in highs)
 
 
 def _read_fields(ocr_text):
@@ -194,6 +196,17 @@ def _read_fields(ocr_text):
     rows = [_cells(line) for line in ocr_text.splitlines() if line.strip()]
     found = {field: [] for field in _LABELS}
     for index, cells in enumerate(rows):
+        # Some OCR providers keep two explicit length cells on one row.  Both
+        # labels are required; a standalone MAX could belong to another field.
+        if len(cells) == 2:
+            labeled = [re.fullmatch(r"\s*([^:：]{1,55})\s*[:：]\s*(.*?)\s*", cell)
+                       for cell in cells]
+            if all(labeled):
+                first, second = (_field_of(match.group(1)) for match in labeled)
+                if {first, second} == {"length_min", "length_max"}:
+                    for match, field in zip(labeled, (first, second)):
+                        found[field].append(_value(match.group(2)))
+                    continue
         if len(cells) == 1:
             line = cells[0]
             match = re.match(r"^\s*([^:：]{1,55})\s*[:：]\s*(.*)$", line)
@@ -297,6 +310,18 @@ def _range(fields, field):
     return low, high
 
 
+def _length_candidates(fields):
+    """Enumerate plausible MIN/MAX readings when OCR uses 3-digit separators.
+
+    A value like ``2.500`` could mean 2.5 or 2500.  Both remain candidates;
+    the storage answer is released only if *every* valid interpretation yields
+    the same unique area.  No ambiguous number is exported as a known length.
+    """
+    lows = _number_candidates(fields.get("length_min"))
+    highs = _number_candidates(fields.get("length_max"))
+    return tuple((low, high) for low in lows for high in highs if 0 <= low <= high)
+
+
 def _parse_storage_rule(rule):
     rule = _text(rule).replace("≤", "<=").replace("≥", ">=")
     pieces = re.findall(r"(<=|>=|<|>)(\d+(?:\.\d+)?)", rule)
@@ -345,6 +370,21 @@ def _resolve_storage(customer, length, lookup):
     if len(set(areas)) != 1:
         return {"status": "ambiguous_mapping", "area": None, "customer": canonical}
     return {"status": "ok", "area": areas[0], "customer": canonical}
+
+
+def _storage_for_fields(customer, fields, lookup):
+    length = _range(fields, "length")
+    if length is not None:
+        return _resolve_storage(customer, length, lookup)
+    candidates = _length_candidates(fields)
+    if not candidates:
+        return _resolve_storage(customer, None, lookup)
+    results = [_resolve_storage(customer, bounds, lookup) for bounds in candidates]
+    if all(row["status"] == "ok" and row["area"] == results[0]["area"] for row in results):
+        return results[0]
+    # Keep the original unresolved answer when even one possible reading maps
+    # differently, has a table gap, or refers to an unknown customer.
+    return _resolve_storage(customer, None, lookup)
 
 
 def _packaging(code, lookup):
@@ -397,14 +437,14 @@ def _verified_paint_color(code, lookup):
 _NO_RING = re.compile(r"不要\s*(?:黑色)?\s*套[環环]|不\s*套[環环]|(?:無需|无需|免)\s*套[環环]|\bNO\s+KONDOM\b", re.I)
 
 
-def _ring_size_candidates(raw):
-    """Retain both readings of three-digit separators for ring decisions only."""
+def _number_candidates(raw):
+    """Retain both readings of three-digit separators for rule decisions."""
     if raw is None:
         return ()
     raw = re.sub(r"\s*(?:mm|毫米|公厘)$", "", _text(raw), flags=re.I).strip()
     if re.fullmatch(r"\d+\.\d{3}", raw) or re.fullmatch(r"\d{1,3},\d{3}", raw):
-        return tuple({Decimal(raw.replace(",", ".")),
-                      Decimal(raw.replace(",", "").replace(".", ""))})
+        return tuple(sorted({Decimal(raw.replace(",", ".")),
+                             Decimal(raw.replace(",", "").replace(".", ""))}))
     number = _decimal(raw)
     return (number,) if number is not None else ()
 
@@ -427,8 +467,8 @@ def _ring(fields):
         process, cutoff = "polishing", Decimal(20)
     else:
         return {"status": "unknown", "reason": "flow", "process": None}
-    lows = _ring_size_candidates(fields.get("diameter_min"))
-    highs = _ring_size_candidates(fields.get("diameter_max"))
+    lows = _number_candidates(fields.get("diameter_min"))
+    highs = _number_candidates(fields.get("diameter_max"))
     if not lows or not highs:
         return {"status": "unknown", "reason": "diameter", "process": process}
     possible = [(low, high) for low in lows for high in highs if 0 <= low <= high]
@@ -457,7 +497,7 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
         "customer": customer,
         "length": _range(fields, "length"),
         "diameter": _range(fields, "diameter"),
-        "storage": _resolve_storage(customer, _range(fields, "length"), storage_lookup or {}),
+        "storage": _storage_for_fields(customer, fields, storage_lookup or {}),
         "packaging": _packaging(fields.get("packaging"), packaging_lookup),
         "paint": _paint(fields),
         "ring": _ring(fields),

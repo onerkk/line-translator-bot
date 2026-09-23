@@ -17499,6 +17499,39 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
+def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accepted=None):
+    """Log why storage remains pending without persisting order or customer IDs."""
+    try:
+        from work_order_query import extract_work_order_info
+
+        info = extract_work_order_info(ocr_text, STORAGE_LOOKUP, {})
+        fields = info.get("fields") or {}
+        storage = info.get("storage") or {}
+        canonical = storage.get("customer")
+        rows = STORAGE_LOOKUP.get(canonical) if canonical else None
+
+        def numeric_cell(value):
+            value = str(value or "").strip()
+            if not value:
+                return "missing_or_unreadable"
+            return value[:24] if re.fullmatch(r"[0-9., ]{1,20}(?:mm|毫米|公厘)?", value, re.I) else "unreadable"
+
+        _event_log_write("work_order_storage_ocr_diagnostic", {
+            "phase": phase,
+            "is_work_order": bool(info.get("is_work_order")),
+            "storage_status": storage.get("status") or "not_detected",
+            "length_min": numeric_cell(fields.get("length_min")),
+            "length_max": numeric_cell(fields.get("length_max")),
+            "valid_length_pair": bool(info.get("length")),
+            "customer_in_live_table": isinstance(rows, list) and bool(rows),
+            "live_rule_count": len(rows) if isinstance(rows, list) else 0,
+            "crop_attached": bool(cropped),
+            "reread_accepted": accepted,
+        })
+    except Exception as exc:
+        logger.debug("Work-order OCR diagnostic unavailable: %s", type(exc).__name__)
+
+
 def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
     """Transcribe the actual cells of a photographed work order for rule-based lookup.
 
@@ -17550,35 +17583,49 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             _tl.ocr_extraction_state = "empty"
             return ""
         if result:
+            _work_order_storage_ocr_diagnostic("initial", result)
             try:
-                from work_order_length_recovery import needs_length_retry, merge_confirmed_length
+                from work_order_length_recovery import (focused_length_crop,
+                                                        merge_confirmed_length,
+                                                        needs_length_retry)
                 if needs_length_retry(result, STORAGE_LOOKUP):
-                    # A single focused reread may recover missing finished
-                    # length.  It cannot replace a conflicting original value.
+                    # One reread uses the full sheet for context and, when
+                    # available, a magnified crop of the printed length row.
+                    # It never replaces an already conflicting OCR number.
+                    cropped = focused_length_crop(image_base64)
+                    length_images = [{"type": "image_url", "image_url": {
+                        "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}}]
+                    if cropped:
+                        length_images.append({"type": "image_url", "image_url": {
+                            "url": "data:image/jpeg;base64," + cropped, "detail": "high"}})
                     length_messages = [
                         {"role": "system", "content": (
                             "你是工單 OCR，只讀本張照片的『成品長度』MIN 與右鄰 MAX 兩個數值。"
+                            "第一張是原始照片；如有第二張則是同一照片的上半部表格放大圖。"
+                            "必須確認標題是『長度 MIN / Panjang MIN』，且 MAX 是緊鄰它的下一欄，"
+                            "兩個數字來自標題正下方同一水平資料列。"
                             "不可讀成成品尺寸、短邊 MIN、厚度、母材尺寸、計劃量或其他欄位。"
-                            "即使右鄰只有 MAX 標題，也須確認它緊鄰『長度 MIN / Panjang MIN』。"
                             "只輸出兩行『長度MIN：實際數值』與『長度MAX：實際數值』。"
-                            "若該格看不清楚就輸出 ?；不得推算、加上單位或附註。"
+                            "若任一格看不清楚就輸出 ?；不得推算、加上單位或附註。"
                         )},
-                        {"role": "user", "content": [
-                            {"type": "image_url", "image_url": {
-                                "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}},
+                        {"role": "user", "content": length_images + [
                             {"type": "text", "text": "請只抄成品長度的 MIN、MAX；不能由其他數字推測。"},
                         ]},
                     ]
                     reread = _vision_call(
-                        length_messages, max_tokens=110,
+                        length_messages, max_tokens=150,
                         cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_length"),
                         task_type="ocr",
                     )
                     track_tokens(reread)
                     retry_text = (reread.choices[0].message.content or "").strip()
+                    original = result
                     result = merge_confirmed_length(result, retry_text, STORAGE_LOOKUP)
+                    _work_order_storage_ocr_diagnostic(
+                        "reread", result, cropped=bool(cropped), accepted=result != original)
             except Exception as retry_exc:
                 logger.warning("Work-order length reread failed: %s", retry_exc)
+                _work_order_storage_ocr_diagnostic("reread_error", result)
         return result or None
     except Exception as exc:
         logger.warning("Work-order field OCR failed: %s", exc)

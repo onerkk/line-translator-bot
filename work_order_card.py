@@ -69,10 +69,19 @@ def _section(zh, idn, values, *, margin="lg"):
 def _storage_text(storage):
     if storage.get("status") == "ok":
         return _clean(storage.get("area"), 40), INK
-    # An unrecognised customer, missing measurement or conflicting table rule
-    # must not silently become an invented area.  The measurement itself is
-    # intentionally omitted from this compact presentation.
-    return "儲區待確認 / Gudang perlu diperiksa", AMBER
+    # Show why the area is uncertain within the one requested storage field.
+    # Keep numeric thresholds and physical dimensions entirely out of LINE.
+    reasons = {
+        "unknown_length": "工單資料未讀全 / Data pada surat kerja belum terbaca lengkap",
+        "unknown_customer": "客戶儲區資料待核對 / Data gudang pelanggan perlu diperiksa",
+        "no_mapping": "客戶儲區資料待核對 / Data gudang pelanggan perlu diperiksa",
+        "invalid_mapping": "儲區規則待核對 / Aturan gudang perlu diperiksa",
+        "ambiguous_mapping": "儲區規則待核對 / Aturan gudang perlu diperiksa",
+        "unmapped_length": "儲區規則待核對 / Aturan gudang perlu diperiksa",
+    }
+    reason = reasons.get(storage.get("status"))
+    label = "儲區待確認 / Gudang perlu diperiksa"
+    return (label + "\n" + reason if reason else label), AMBER
 
 
 def _translate(source, bundled, callback):

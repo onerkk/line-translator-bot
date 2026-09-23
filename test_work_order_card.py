@@ -114,8 +114,38 @@ def test_storage_without_confirmed_area_stays_unconfirmed_without_showing_length
     result = build_work_order_cards(PHOTO_5, mapping, PACKAGING)
     visible = _all_visible_text(result)
     assert "儲區待確認 / Gudang perlu diperiksa" in visible
+    assert "儲區規則待核對 / Aturan gudang perlu diperiksa" in visible
     assert "EH79" not in visible
     assert "2500" not in visible and "長度" not in visible
+
+
+def test_storage_pending_reason_is_specific_in_single_card_and_fallback():
+    missing_read = PHOTO_5.replace("長度MIN：2500\n長度MAX：2550\n", "")
+    scenarios = [
+        ("unknown_length", missing_read, STORAGE,
+         "工單資料未讀全 / Data pada surat kerja belum terbaca lengkap"),
+        ("unknown_customer", PHOTO_5.replace("方鉦", "不存在客戶"), STORAGE,
+         "客戶儲區資料待核對 / Data gudang pelanggan perlu diperiksa"),
+        ("no_mapping", PHOTO_5, {"方鉦": []},
+         "客戶儲區資料待核對 / Data gudang pelanggan perlu diperiksa"),
+        ("invalid_mapping", PHOTO_5, {"方鉦": [["錯誤規則", "EH79"]]},
+         "儲區規則待核對 / Aturan gudang perlu diperiksa"),
+        ("ambiguous_mapping", PHOTO_5,
+         {"方鉦": [["<=3200", "EH79"], ["<=3200", "EH80"]]},
+         "儲區規則待核對 / Aturan gudang perlu diperiksa"),
+    ]
+    for status, image, mapping, reason in scenarios:
+        assert work_order_card.extract_work_order_info(image, mapping, PACKAGING)["storage"]["status"] == status
+        result = build_work_order_cards(image, mapping, PACKAGING)
+        assert len(result["messages"]) == 1
+        card = _body_text(result["messages"][0])
+        assert "儲區待確認 / Gudang perlu diperiksa" in card
+        assert reason in card
+        assert reason in result["fallback_text"]
+        assert "EH79" not in _all_visible_text(result)
+        assert "長度" not in _all_visible_text(result) and "尺寸" not in _all_visible_text(result)
+        assert "2500" not in _all_visible_text(result)
+        _assert_only_requested_fields(result, "Y1223801-012")
 
 
 def test_paint_color_only_when_paint_location_requires_it():

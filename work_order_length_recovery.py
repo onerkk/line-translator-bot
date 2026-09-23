@@ -7,6 +7,8 @@ other and the current customer table maps the full interval to one area.
 
 from __future__ import annotations
 
+import base64
+import io
 import re
 
 from work_order_query import _decimal, _read_fields, extract_work_order_info
@@ -18,6 +20,47 @@ _SOURCE_LINE = re.compile(
     re.I,
 )
 _UNKNOWN = re.compile(r"^(?:[?？�\-—]|未辨識|未辨识|無法辨識|无法辨识|看不清|unreadable|unknown)$", re.I)
+
+
+def focused_length_crop(image_base64):
+    """Magnify the printed finished-length row for the single vision reread.
+
+    This crop only supplies source pixels.  It never generates length numbers;
+    merge_confirmed_length verifies both OCR readings against the live table.
+    Return None for malformed images so the original photo can still be read.
+    """
+    try:
+        from PIL import Image, ImageEnhance, ImageOps
+
+        binary = base64.b64decode(image_base64, validate=True)
+        with Image.open(io.BytesIO(binary)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            width, height = image.size
+            if min(width, height) < 300:
+                return None
+            # The finished-length MIN and adjacent MAX occupy the upper
+            # middle of the same bilingual production form.  Include the
+            # preceding cells and the following row so the vision model can
+            # verify column identity instead of choosing a nearby number.
+            bounds = ((0.24, 0.26, 0.93, 0.55) if width > height * 1.15
+                      else (0.06, 0.13, 0.96, 0.61))
+            x0, y0, x1, y1 = bounds
+            image = image.crop((int(x0 * width), int(y0 * height),
+                                int(x1 * width), int(y1 * height)))
+            if image.width < 180 or image.height < 80:
+                return None
+            image = ImageOps.autocontrast(image, cutoff=0.5)
+            scale = min(3.0, 2300 / image.width, 1050 / image.height)
+            if scale > 1:
+                image = image.resize((int(image.width * scale),
+                                      int(image.height * scale)),
+                                     Image.Resampling.LANCZOS)
+            image = ImageEnhance.Sharpness(image).enhance(1.25)
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=90, optimize=True)
+            return base64.b64encode(buffer.getvalue()).decode("ascii")
+    except (OSError, ValueError, TypeError, ImportError, base64.binascii.Error):
+        return None
 
 
 def needs_length_retry(ocr_text, storage_lookup):
