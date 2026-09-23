@@ -393,6 +393,21 @@ def _packaging(code, lookup):
     if not code or not re.fullmatch(r"[A-Z0-9]{1,12}", normalize_code(code)):
         return {"status": "missing", "code": code}
     matches = find_packaging_matches(code, lookup or {})
+    # The printed new code 1O (letter O) is easily read as 10 (digit zero) in
+    # work-order photos.  Only repair this single observed OCR confusion when
+    # the active packaging table contains exactly one verified 1O method and
+    # no exact 10 method.  Never collapse O/0 in the general /pkg lookup: a
+    # future administrator could define a different, legitimate 10 method.
+    if not matches and normalize_code(code) == "10":
+        alternatives = find_packaging_matches("1O", lookup or {})
+        if len(alternatives) == 1:
+            alternative_key, alternative = alternatives[0]
+            if (isinstance(alternative, dict)
+                    and (normalize_code(alternative_key) == "1O"
+                         or normalize_code(alternative.get("品保設計(新版)")) == "1O")
+                    and (not alternative.get("品保設計(新版)")
+                         or normalize_code(alternative["品保設計(新版)"]) == "1O")):
+                matches = alternatives
     if len(matches) > 1:
         return {"status": "ambiguous", "code": code,
                 "candidates": [str(key) for key, _entry in matches]}
@@ -489,10 +504,16 @@ def _ring(fields):
     note = "\n".join(filter(None, (fields.get("special"), fields.get("order_note"))))
     if _NO_RING.search(note):
         return {"status": "no", "reason": "explicit_note", "process": None}
-    flow = fields.get("flow")
-    if not flow or not re.fullmatch(r"[A-Z]+", flow.upper()):
+
+    # The printed ring Y/N is intentionally ignored: this factory's ring
+    # requirement comes from the special note, process suffix and diameter.
+    flow = _text(fields.get("flow")).upper()
+    # OCR can put spaces between letters within one printed process cell.
+    # Accept only letters and inter-letter whitespace; never repair an OCR
+    # digit or a missing G into the GL grinding suffix.
+    if not re.fullmatch(r"[A-Z]+(?:\s+[A-Z]+)*", flow):
         return {"status": "unknown", "reason": "flow", "process": None}
-    flow = flow.upper()
+    flow = re.sub(r"\s+", "", flow)
     # A trailing D marks packaging material, not a polishing bar.  The ring
     # decision therefore does not depend on the finished diameter.
     if flow.endswith("D"):
@@ -509,7 +530,7 @@ def _ring(fields):
         return {"status": "unknown", "reason": "diameter", "process": process}
     possible = [(low, high) for low in lows for high in highs if 0 <= low <= high]
     if not possible:
-        return {"status": "unknown", "reason": "diameter", "process": process}
+        return {"status": "unknown", "reason": "invalid_diameter", "process": process}
     if all(low >= cutoff for low, _high in possible):
         return {"status": "yes", "reason": "size_rule", "process": process, "threshold": int(cutoff)}
     if all(high < cutoff for _low, high in possible):

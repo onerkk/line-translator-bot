@@ -46,7 +46,6 @@ PHOTO_4_CROP = """冷精棒製造指示書 Petunjuk produksi Cold Finished Bar
 特殊備註：不要黑色套環（NO KONDOM）
 """
 
-
 def test_photo_five_query_uses_live_tables_and_never_misreads_paint_color():
     info = extract_work_order_info(PHOTO_5, STORAGE, PACKAGING)
     assert info["is_work_order"]
@@ -94,6 +93,48 @@ def test_1d_and_g_legacy_work_order_formatter_use_same_verified_method(code):
     assert "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun" in reply
     assert "原表說明：" + PACKAGING["1D"]["詳細包裝方式說明(冷精棒-設計)"] in reply
     assert "3P袋+PE布" not in reply
+
+
+@pytest.mark.parametrize("read_code", ["1O", "10", "１Ｏ", "１0"])
+def test_photo_dacapo_ocr_zero_or_letter_o_resolves_unique_verified_1o(read_code):
+    image = PHOTO_5.replace("包裝代碼：9G", "包裝代碼：" + read_code)
+    info = extract_work_order_info(image, STORAGE, PACKAGING)
+    package = info["packaging"]
+    assert package["status"] == "ok"
+    assert package["code"] == "1O"
+    assert package["old_code"] == "7"
+    assert package["short"] == PACKAGING["1O"]["簡稱"]
+    assert package["detail"] == PACKAGING["1O"]["詳細包裝方式說明(冷精棒-設計)"]
+    reply = build_work_order_reply(image, STORAGE, PACKAGING)
+    assert "包裝代碼 / Kode kemasan：1O（舊碼 / kode lama 7）" in reply
+    assert "查無包裝資料" not in reply
+
+
+def test_photo_packaging_ocr_correction_preserves_exact_10_and_missing_or_conflicting_source():
+    image = PHOTO_5.replace("包裝代碼：9G", "包裝代碼：10")
+    exact = dict(PACKAGING)
+    exact["10"] = {"品保設計(新版)": "10", "簡稱": "另一種獨立包裝"}
+    result = extract_work_order_info(image, STORAGE, exact)["packaging"]
+    assert result["status"] == "ok"
+    assert result["code"] == "10"
+    assert result["short"] == "另一種獨立包裝"
+
+    no_reference = dict(PACKAGING)
+    del no_reference["1O"]
+    assert extract_work_order_info(image, STORAGE, no_reference)["packaging"]["status"] == "not_found"
+
+    conflict = dict(PACKAGING)
+    conflict["OTHER"] = {"品保設計(新版)": "1O", "簡稱": "不同包裝"}
+    assert extract_work_order_info(image, STORAGE, conflict)["packaging"]["status"] == "not_found"
+
+    mislabeled = dict(PACKAGING)
+    mislabeled["1O"] = {"品保設計(新版)": "1Q", "簡稱": "資料表欄位不一致"}
+    assert extract_work_order_info(image, STORAGE, mislabeled)["packaging"]["status"] == "not_found"
+
+    # A hand-entered /pkg 10 remains an exact query; only photographed work
+    # orders receive this verified, narrowly scoped OCR correction.
+    from packaging_lookup import find_packaging_matches
+    assert find_packaging_matches("10", PACKAGING) == []
 
 
 def test_exact_offline_packaging_translation_precedes_ai_callbacks():
@@ -393,11 +434,12 @@ def test_unreadable_length_max_preserves_the_read_min_without_resolving_storage(
     assert info["storage"]["status"] == "unknown_length"
 
 
-def test_special_note_next_line_and_form_n_does_not_override_size_rule():
+def test_special_note_next_line_and_printed_n_does_not_override_size_rule():
     note = PHOTO_4_CROP.replace("特殊備註：不要黑色套環（NO KONDOM）", "特殊備註：\n不要黑色套環（NO KONDOM）")
     assert extract_work_order_info(note, STORAGE, PACKAGING)["ring"]["reason"] == "explicit_note"
     body = PHOTO_5.replace("CHRAPDAEJL", "CHRAPGL").replace("3.97", "25").replace("成品尺寸MAX：4", "成品尺寸MAX：25")
-    assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"]["status"] == "yes"
+    assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"] == {
+        "status": "yes", "reason": "size_rule", "process": "grinding", "threshold": 16}
     order_note = body.replace("特殊備註：", "訂單備註：NO KONDOM")
     assert extract_work_order_info(order_note, STORAGE, PACKAGING)["ring"]["reason"] == "explicit_note"
 
