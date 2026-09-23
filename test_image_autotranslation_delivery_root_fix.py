@@ -165,6 +165,7 @@ def _run_image_background(
     *,
     work_order_enabled,
     storage_reply,
+    image_mode="translate",
 ):
     group_id = "group-image-route"
     message_id = "image-current"
@@ -190,6 +191,8 @@ def _run_image_background(
     monkeypatch.setattr(app, "download_line_image", lambda _mid: ("base64", b"\xff\xd8image"))
     monkeypatch.setattr(app, "detect_image_mime", lambda _raw: "image/jpeg")
     monkeypatch.setattr(app, "ocr_image_openai", lambda *_a, **_k: OCR_TEXT)
+    monkeypatch.setattr(app, "ocr_work_order_fields", lambda *_a, **_k: OCR_TEXT)
+    monkeypatch.setattr(app, "format_work_order_query", lambda *_a, **_k: storage_reply or "⚠️ 工單欄位待確認")
     monkeypatch.setattr(app, "analyze_work_order", lambda _text: {
         "is_work_order": True,
         "customer": "測試客戶",
@@ -242,6 +245,7 @@ def _run_image_background(
         "tgt": "id",
         "tone_info": ("natural", ""),
         "wo_setting": work_order_enabled,
+        "image_mode": image_mode,
         "mark_read_setting": False,
         "is_dm_img": False,
         "durable_job_key": "durable-image-key",
@@ -264,7 +268,7 @@ def test_disabled_work_order_feature_falls_through_to_ocr_translation(monkeypatc
     assert len(completed) == 1
 
 
-def test_missing_work_order_lookup_falls_through_to_ocr_translation(monkeypatch):
+def test_legacy_storage_flag_does_not_override_translate_mode(monkeypatch):
     messages, translated, completed = _run_image_background(
         monkeypatch,
         work_order_enabled=True,
@@ -281,6 +285,7 @@ def test_delivered_work_order_reply_is_the_only_valid_translation_bypass(monkeyp
         monkeypatch,
         work_order_enabled=True,
         storage_reply="📋 工單偵測結果",
+        image_mode="work_order",
     )
 
     assert translated == []
@@ -318,6 +323,8 @@ def test_retry_does_not_replace_failed_work_order_delivery_with_generic_translat
     monkeypatch.setattr(app, "download_line_image", lambda _mid: ("base64", b"\xff\xd8image"))
     monkeypatch.setattr(app, "detect_image_mime", lambda _raw: "image/jpeg")
     monkeypatch.setattr(app, "ocr_image_openai", lambda *_a, **_k: OCR_TEXT)
+    monkeypatch.setattr(app, "ocr_work_order_fields", lambda *_a, **_k: OCR_TEXT)
+    monkeypatch.setattr(app, "format_work_order_query", lambda *_a, **_k: "📋 工單偵測結果")
     monkeypatch.setattr(app, "_is_factory_reason_ocr_failure_text", lambda _text: False)
     monkeypatch.setattr(app, "get_group_tone", lambda *_a, **_k: ("natural", ""))
     monkeypatch.setattr(app, "analyze_work_order", lambda _text: {
@@ -349,6 +356,7 @@ def test_retry_does_not_replace_failed_work_order_delivery_with_generic_translat
                 "user_id": "user-retry",
                 "tgt": "id",
                 "wo_setting": True,
+                "image_mode": "work_order",
             },
         }, lease_owner="worker-1")
 

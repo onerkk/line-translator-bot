@@ -854,6 +854,9 @@ group_settings = {}
 group_target_lang = {}
 # Image translation toggle per group, default True
 group_img_settings = {}
+# Dedicated work-order lookup is opt-in.  It owns the image event exclusively
+# while active; existing groups continue with their current image translation.
+group_work_order_lookup_settings = {}
 
 # v3.17: These containers MUST exist before the first load_settings() call.
 # Older code declared them near the end of app.py, so startup loaded the main
@@ -1073,6 +1076,22 @@ def _event_log_write_sync(event_type, data):
 #       group_img_settings=False AND group_img_ask_settings=False → 完全不翻
 #       group_img_settings=True → 自動翻譯(原本行為)
 group_img_ask_settings = {}
+
+
+def get_group_image_mode(group_id):
+    """Return the single active image handling mode for a group.
+
+    Work-order lookup takes precedence even if older settings contain a
+    conflicting image flag.  The admin endpoint and load migration also clear
+    conflicting flags so persisted settings agree with this runtime decision.
+    """
+    if group_work_order_lookup_settings.get(group_id, False):
+        return "work_order"
+    if group_img_settings.get(group_id, True):
+        return "translate"
+    if group_img_ask_settings.get(group_id, False):
+        return "ask"
+    return "off"
 # v3.9.13: pending image 跨 worker 共享 — 寫到本地檔案(避免 gunicorn 多 worker 看不到彼此)
 # 1 分鐘自動清掉沒按的(短 TTL 避免誤觸,需要翻譯會立刻按)
 _PENDING_IMG_TTL = 60
@@ -13891,6 +13910,7 @@ def _translation_retry_image_attempt(job, lease_owner=None):
     try:
         group_id = payload.get("group_id")
         user_id = payload.get("user_id")
+        image_mode = str(payload.get("image_mode") or get_group_image_mode(group_id))
         _tl.group_id = group_id or "__dm_image_retry__"
         _tl.user_id = str(user_id or "")
         _tl.from_image_ocr = True
@@ -13907,10 +13927,16 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             if not img_base64 or not img_raw:
                 return False
             mime = detect_image_mime(img_raw)
-            extracted = ocr_image_openai(img_base64, mime_type=mime)
-        if _is_factory_reason_ocr_failure_text(extracted):
+            extracted = (ocr_work_order_fields(img_base64, mime_type=mime)
+                         if image_mode == "work_order" else
+                         ocr_image_openai(img_base64, mime_type=mime))
+        if image_mode != "work_order" and _is_factory_reason_ocr_failure_text(extracted):
             return False
         if not extracted or not str(extracted).strip():
+            if image_mode == "work_order" and getattr(_tl, "ocr_extraction_state", "") == "empty":
+                notice = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap.\nNo work order was detected. Upload a clear, complete photo."
+                _translation_retry_push(job_key, payload, notice)
+                return _complete_durable_text_job(job_key, lease_owner=lease_owner)
             # Empty output can also be a provider timeout. It is not evidence
             # of a blank image and must never silently complete a pending job.
             if getattr(_tl, "ocr_extraction_state", "unknown") == "empty":
@@ -13921,18 +13947,16 @@ def _translation_retry_image_attempt(job, lease_owner=None):
             "ocr_text": extracted,
             "factory_reason_image_expected_rows": int(getattr(_tl, "factory_reason_image_expected_rows", 0) or 0),
         }, owner=lease_owner)
+        if image_mode == "work_order":
+            reply = format_work_order_query(extracted, group_id, user_id)
+            if not reply:
+                return False
+            _translation_retry_push(job_key, payload, reply)
+            _stats_inc("work_order_detections")
+            return _complete_durable_text_job(job_key, lease_owner=lease_owner)
         work_order = analyze_work_order(extracted)
         if work_order.get("is_work_order"):
             store_work_order_media_context(group_id, user_id, message_id)
-        wo_on = bool(payload.get("wo_setting", group_wo_settings.get(group_id, True)))
-        wo_customer = work_order.get("customer") if work_order.get("is_work_order") else None
-        wo_reply = format_storage_for_work_order(wo_customer) if wo_on and wo_customer else None
-        if wo_reply:
-            _translation_retry_push(job_key, payload, wo_reply)
-            translation_retry_queue_module.mark_delivered(job_key, owner=lease_owner)
-            with _TRANSLATION_RETRY_LOCK:
-                _TRANSLATION_RETRY_INFLIGHT.discard(job_key)
-            return True
 
         lang = detect_language(extracted) or ("zh" if has_chinese(extracted) else "auto")
         preferred = str(payload.get("tgt") or group_target_lang.get(group_id, "id") or "id")
@@ -14360,6 +14384,7 @@ def _schedule_image_translation_retry(ctx, *, delay_seconds=75):
         "job_kind": "image",
         "factory_event": factory_hub.payload_metadata() if factory_hub else None,
         "wo_setting": bool(ctx.get("wo_setting", group_wo_settings.get(ctx.get("group_id"), True))),
+        "image_mode": str(ctx.get("image_mode") or get_group_image_mode(ctx.get("group_id"))),
         "group_id": ctx.get("group_id"),
         "user_id": ctx.get("user_id"),
         "message_id": message_id,
@@ -16683,6 +16708,29 @@ def analyze_work_order(ocr_text):
     return analysis
 
 
+def format_work_order_query(ocr_text, group_id=None, user_id=None):
+    """Render a trilingual query with decisions grounded in work-order fields."""
+    from work_order_query import build_work_order_reply
+
+    def translate_packaging(source, target):
+        # Only unseen administrator-uploaded packaging descriptions need AI.
+        # The 24 existing methods use exact offline bilingual references.
+        before = getattr(_tl, "from_image_ocr", False)
+        try:
+            _tl.group_id = group_id or ""
+            _tl.user_id = user_id or ""
+            _tl.from_image_ocr = False
+            return translate(source, "zh", target)
+        finally:
+            _tl.from_image_ocr = before
+
+    return build_work_order_reply(
+        ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP,
+        translate_zh_to_id=lambda source: translate_packaging(source, "id"),
+        translate_zh_to_en=lambda source: translate_packaging(source, "en"),
+    )
+
+
 def detect_work_order(ocr_text):
     """Backward-compatible customer extractor for a detected work order."""
     analysis = analyze_work_order(ocr_text)
@@ -17433,6 +17481,60 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
+def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
+    """Transcribe the actual cells of a photographed work order for rule-based lookup.
+
+    The vision provider reads characters only. All operational decisions are
+    made afterwards by work_order_query from source fields and local tables.
+    """
+    _tl.ocr_extraction_state = "unknown"
+    if not _has_ai_capability("vision"):
+        return None
+    if mime_type == "image/heic":
+        mime_type = "image/jpeg"
+    fields = (
+        "文件標題, 訂單編號, 客戶名稱, 收貨人, 成品尺寸MIN, 成品尺寸MAX, "
+        "長度MIN, 長度MAX, 訂單流程, 成品MC, 噴漆位置, 顏色, 包裝代碼, "
+        "特殊備註, 訂單備註"
+    )
+    messages = [
+        {"role": "system", "content": (
+            "你是工廠製造指示書的逐格 OCR。只抄照片實際可見的值，不翻譯、不推算、不用工廠常識補缺格。"
+            "同一水平資料列要對應同一欄的標題，絕不能把『收貨人』當『客戶名稱』，"
+            "也不能把『套環 N』當作特殊備註。"
+            "請將可見的欄位各輸出一行『欄位名稱：原文值』，欄名限用：" + fields + "。"
+            "最前面先抄文件標題；每個欄位只有確實看見標題及對應值時才輸出。"
+            "標題看得見但值遮擋或辨識不清時填 ?；照片裁切掉的欄位整行省略。"
+            "成品尺寸、長度的 MIN/MAX 要分開，不可混進短邊、厚度或母材尺寸。"
+            "『訂單流程』逐字保留實際字母，若末尾是 L、D 或 GL 也不得更改；"
+            "『特殊備註』若原文有否定詞或 NO KONDOM 才逐字保留，沒有就絕不能自行加上。"
+            "不能將交期或訂單備註移到特殊備註。"
+            "噴漆位置、顏色、包裝代碼是三個不同欄位；不噴時也照抄顏色原值，不做判斷。"
+            "看不到確定的工單文字就輸出 NO_WORK_ORDER。不要附加說明。"
+        )},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {
+                "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}},
+            {"type": "text", "text": "請逐格抄錄工單上可辨識的指定欄位，未知值標 ?；不要翻譯或推論。"},
+        ]},
+    ]
+    try:
+        response = _vision_call(
+            messages, max_tokens=1400,
+            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query"),
+            task_type="ocr",
+        )
+        track_tokens(response)
+        result = (response.choices[0].message.content or "").strip()
+        if result.upper() == "NO_WORK_ORDER":
+            _tl.ocr_extraction_state = "empty"
+            return ""
+        return result or None
+    except Exception as exc:
+        logger.warning("Work-order field OCR failed: %s", exc)
+        return None
+
+
 def ocr_image_openai(image_base64, mime_type="image/jpeg"):
     """Use OpenAI Vision to extract text from image. v3.8: model upgraded.
     
@@ -18054,7 +18156,7 @@ def get_help_text(group_id):
     lines.append("/on ・ /off 翻譯")
     lines.append("/img on・off 圖片")
     lines.append("/voice on・off 語音")
-    lines.append("/wo on・off 拍工單查儲區")
+    lines.append("/wo on・off 工單資訊查詢（與圖片翻譯互斥）")
     lines.append("【個人】")
     lines.append("/skip 不翻譯我")
     lines.append("/unskip 恢復翻譯")
@@ -18070,7 +18172,7 @@ def get_help_text(group_id):
     lines.append("/pw2 儲運密碼")
     lines.append("/scrap 廢料顏色")
     lines.append("/status 查看狀態")
-    lines.append("\U0001f4f7 拍工單→自動查儲區")
+    lines.append("\U0001f4f7 工單模式開啟後，拍工單→自動查資訊")
     lines.append(sep)
     lines.append("中文 ⇄ 🇮🇩 印尼文 即時互譯")
     return "\n".join(lines)
@@ -19307,17 +19409,20 @@ def handle_command(text, group_id, user_id=None):
     elif cmd == "/img on":
         group_img_settings[group_id] = True
         group_img_ask_settings.pop(group_id, None)  # 清掉 ask 旗標
+        group_work_order_lookup_settings.pop(group_id, None)
         save_settings()
         return "\u2705 \u5716\u7247\u7ffb\u8b6f\u5df2\u958b\u555f(\u81ea\u52d5\u7ffb\u8b6f) / Terjemahan gambar otomatis"
     elif cmd == "/img off":
         group_img_settings[group_id] = False
         group_img_ask_settings.pop(group_id, None)  # 清掉 ask 旗標
+        group_work_order_lookup_settings.pop(group_id, None)
         save_settings()
         return "\u274c \u5716\u7247\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan gambar nonaktif"
     elif cmd == "/img ask":
         # v3.9.10: 詢問模式 — 收到圖片不自動翻,先問使用者按按鈕才翻
         group_img_settings[group_id] = False
         group_img_ask_settings[group_id] = True
+        group_work_order_lookup_settings.pop(group_id, None)
         save_settings()
         return "\u2753 \u5716\u7247\u7ffb\u8b6f: \u8a62\u554f\u6a21\u5f0f\n\u6536\u5230\u5716\u7247\u6703\u51fa\u73fe\u300c\u7ffb\u8b6f\u9019\u5f35 / \u4e0d\u7528\u300d\u6309\u9215\nMode tanya: pesan gambar akan menanyakan dulu"
     elif cmd == "/voice on":
@@ -19330,12 +19435,16 @@ def handle_command(text, group_id, user_id=None):
         return "\u274c \u8a9e\u97f3\u7ffb\u8b6f\u5df2\u95dc\u9589 / Terjemahan suara nonaktif"
     elif cmd == "/wo on":
         group_wo_settings[group_id] = True
+        group_work_order_lookup_settings[group_id] = True
+        group_img_settings[group_id] = False
+        group_img_ask_settings.pop(group_id, None)
         save_settings()
-        return "✅ 拍工單查儲區已開啟 / Foto WO cek gudang aktif"
+        return "✅ 工單資訊查詢已開啟（圖片翻譯已關閉） / Pencarian informasi work order aktif (terjemahan gambar nonaktif)"
     elif cmd == "/wo off":
         group_wo_settings[group_id] = False
+        group_work_order_lookup_settings[group_id] = False
         save_settings()
-        return "❌ 拍工單查儲區已關閉 / Foto WO cek gudang nonaktif"
+        return "❌ 工單資訊查詢已關閉 / Pencarian informasi work order nonaktif"
     elif cmd == "/skip":
         if not user_id:
             return "⚠️ 無法識別你的身分 / Tidak bisa mengenali identitas Anda"
@@ -19423,14 +19532,15 @@ def handle_command(text, group_id, user_id=None):
         mode = factory_hub.options(group_id)["translation_mode"] if factory_hub else "all"
         modes = {"all": "全部文字 / Semua teks", "mentioned": "只翻譯 @ 機器人 / Saat bot disebut"}
         state = lambda enabled: "開啟 / Aktif" if enabled else "關閉 / Nonaktif"
-        img_status = ("詢問後翻譯 / Tanya dahulu" if group_img_ask_settings.get(group_id, False)
-                      else state(group_img_settings.get(group_id, True)))
+        image_mode = get_group_image_mode(group_id)
+        img_status = ("詢問後翻譯 / Tanya dahulu" if image_mode == "ask"
+                      else state(image_mode == "translate"))
         targets = get_group_target_langs(group_id)
         return ("翻譯狀態 / Status terjemahan\n" + "總開關：" + state(is_on) +
                 "\n中文 ⇄ " + "、".join(_language_name_bilingual(code) for code in targets) +
                 "\n文字模式：" + modes.get(mode, mode) +
                 "\n圖片：" + img_status + "\n語音：" + state(group_audio_settings.get(group_id, True)) +
-                "\n工單查儲區：" + state(group_wo_settings.get(group_id, True)))
+                "\n工單資訊查詢：" + state(image_mode == "work_order"))
     elif cmd == "/clearcache":
         # v3.9.3: clear translation cache (e.g. after fixing a bad translation
         # that got cached, or after switching to a new model). Anyone in the
@@ -20642,9 +20752,10 @@ def handle_image(event):
     if group_id and user_id and not is_dm_img:
         record_user_name(group_id, user_id)
 
-    # Check if translation is on
-    is_on = group_settings.get(group_id, True)
-    if not is_on:
+    # Work-order lookup is a separate group feature. Disabling ordinary
+    # translation must not silently disable a lookup explicitly enabled here.
+    image_mode = get_group_image_mode(group_id)
+    if not group_settings.get(group_id, True) and image_mode != "work_order":
         _event_log_write("image_skipped", {"reason": "translation_off", "group_id": group_id or ""})
         return
 
@@ -20660,20 +20771,15 @@ def handle_image(event):
             _event_log_write("image_skipped", {"reason": "dm_disabled"})
             return
 
-    # v3.9.10: 三種圖片處理模式
-    # 1. group_img_settings=True → 自動翻譯(原本行為)
-    # 2. group_img_settings=False AND group_img_ask_settings=True → 詢問模式
-    # 3. group_img_settings=False AND group_img_ask_settings=False → 完全不處理
-    img_on = group_img_settings.get(group_id, True)
-    img_ask = group_img_ask_settings.get(group_id, False)
+    # The panel selects one and only one photo workflow for this group.
     _event_log_write("image_mode_check", {
         "group_id": group_id or "",
-        "img_on": img_on,
-        "img_ask": img_ask,
-        "decision": "auto_translate" if img_on else ("ask_mode" if img_ask else "fully_off")
+        "img_on": image_mode == "translate",
+        "img_ask": image_mode == "ask",
+        "decision": image_mode,
     })
-    if not img_on:
-        if img_ask:
+    if image_mode in ("off", "ask"):
+        if image_mode == "ask":
             # === 詢問模式 ===
             # v3.9.13: 用磁碟版 pending(_pending_img_set)跨 worker 共享
             _now = int(time.time())
@@ -20742,6 +20848,7 @@ def handle_image(event):
             "group_id": group_id,
             "user_id": user_id,
             "tgt": group_target_lang.get(group_id, "id"),
+            "image_mode": image_mode,
         }, delay_seconds=5)
         return
 
@@ -20761,6 +20868,7 @@ def handle_image(event):
         "tgt": group_target_lang.get(group_id, "id"),
         "tone_info": get_group_tone(group_id),
         "wo_setting": group_wo_settings.get(group_id, True),
+        "image_mode": image_mode,
         "mark_read_setting": get_group_feature(group_id, 'mark_read'),
         "is_dm_img": is_dm_img,
     }
@@ -20789,6 +20897,7 @@ def _handle_image_background(ctx):
         user_id = ctx["user_id"]
         message_id = ctx["message_id"]
         is_dm_img = ctx["is_dm_img"]
+        image_mode = str(ctx.get("image_mode") or get_group_image_mode(group_id))
         
         # v3.9.26: 確認 thread 真的開始跑
         _event_log_write("bg_thread_started", {
@@ -20839,7 +20948,9 @@ def _handle_image_background(ctx):
         _bcost = bot_stats.get("ant_cost_usd", 0.0) + bot_stats.get("oai_cost_usd", 0.0)
         _event_log_write("image_step", {"step": "before_ocr"})
         try:
-            extracted = ocr_image_openai(img_base64, mime_type=img_mime)
+            extracted = (ocr_work_order_fields(img_base64, mime_type=img_mime)
+                         if image_mode == "work_order" else
+                         ocr_image_openai(img_base64, mime_type=img_mime))
         except Exception as _oe:
             _event_log_write("image_step_error", {"step": "ocr", "err": str(_oe)[:500]})
             logger.exception("OCR exception: %s", _oe)
@@ -20859,6 +20970,37 @@ def _handle_image_background(ctx):
                 _entry["ts"] = time.time()
         except Exception:
             pass
+
+        if image_mode == "work_order":
+            if extracted == "":
+                reply = "📋 未辨識到工單，請上傳清晰、完整的工單照片。\nTidak ditemukan work order. Unggah foto yang jelas dan lengkap.\nNo work order was detected. Upload a clear, complete photo."
+            elif not extracted:
+                # OCR provider failure is retried by the durable image queue.
+                return
+            else:
+                _image_key = ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image"
+                _delivery_checkpoint(_image_key, {"ocr_text": str(extracted)})
+                try:
+                    reply = format_work_order_query(extracted, group_id, user_id)
+                except Exception as exc:
+                    logger.exception("Work-order query failed: %s", exc)
+                    return
+                if not reply:
+                    return
+                if analyze_work_order(extracted).get("is_work_order"):
+                    store_work_order_media_context(group_id, user_id, message_id)
+                    _stats_inc("work_order_detections")
+            msg_obj = TextMessage(text=_clip_line_text(reply))
+            if ctx.get("quote_token"):
+                msg_obj.quote_token = ctx["quote_token"]
+            _send_reply_with_push_fallback(
+                reply_token=ctx.get("reply_token"), target_id=group_id,
+                message_obj=msg_obj, fallback_text=reply,
+                job_key=ctx.get("durable_job_key"),
+            )
+            track_group_usage(group_id, _bp, _bc, _bcost)
+            _complete_durable_image_job(ctx)
+            return
 
         if extracted and not _is_factory_reason_ocr_failure_text(extracted):
             _image_key = ctx.get("durable_job_key") or f"{group_id or user_id}:{message_id}:image"
@@ -20915,25 +21057,6 @@ def _handle_image_background(ctx):
             _event_log_write("image_deferred", {"reason": "factory_reason_ocr_alignment", "payload": extracted[:120]})
             # Keep the durable image job pending for a fresh OCR attempt.  Never
             # place an OCR/translation warning into the translated conversation.
-            return
-
-        # Work-order lookup is optional. OCR text still goes through normal
-        # translation when disabled or when no storage result exists.
-        wo_customer = (_work_order_analysis.get("customer")
-                       if _work_order_analysis.get("is_work_order") else None)
-        wo_on = bool(ctx.get("wo_setting", group_wo_settings.get(group_id, True)))
-        wo_reply = format_storage_for_work_order(wo_customer) if wo_customer and wo_on else None
-        if wo_reply:
-            msg_obj = TextMessage(text=_clip_line_text(wo_reply))
-            if ctx.get("quote_token"):
-                msg_obj.quote_token = ctx["quote_token"]
-            _send_reply_with_push_fallback(
-                reply_token=ctx.get("reply_token"), target_id=group_id,
-                message_obj=msg_obj, fallback_text=wo_reply, job_key=ctx.get("durable_job_key"),
-            )
-            _stats_inc("work_order_detections")
-            track_group_usage(group_id, _bp, _bc, _bcost)
-            _complete_durable_image_job(ctx)
             return
 
         _event_log_write("image_step", {"step": "before_lang_detect"})
@@ -21046,6 +21169,11 @@ def _process_pending_image_translate(event, message_id):
     info = _load_pending_imgs().get(message_id)
     if not _pending_img_allowed(event, info):
         return
+    # A button sent before an administrator changed the image workflow must
+    # never start translation once work-order lookup has become active.
+    if get_group_image_mode(info.get("group_id")) not in ("ask", "translate"):
+        _pending_img_pop(message_id, event=event)
+        return
     try:
         return _process_pending_image_translate_inner(event, message_id)
     except Exception as exc:
@@ -21059,6 +21187,7 @@ def _process_pending_image_translate(event, message_id):
             "group_id": group_id,
             "user_id": user_id,
             "tgt": group_target_lang.get(group_id, "id"),
+            "image_mode": "translate",
         }, delay_seconds=2)
         if not job:
             _pending_img_set(message_id, info)
@@ -21078,6 +21207,7 @@ def _process_pending_image_translate_inner(event, message_id):
         "tgt": group_target_lang.get(group_id, "id"),
         "tone_info": get_group_tone(group_id),
         "wo_setting": group_wo_settings.get(group_id, True),
+        "image_mode": "translate",
         "mark_read_setting": False, "is_dm_img": False,
     }
     ctx["durable_job_key"] = _schedule_image_translation_retry(ctx, delay_seconds=75)
@@ -21807,6 +21937,7 @@ if BotLeaveEvent:
             group_target_lang.pop(group_id, None)
             group_img_settings.pop(group_id, None)
             group_img_ask_settings.pop(group_id, None)
+            group_work_order_lookup_settings.pop(group_id, None)
             group_audio_settings.pop(group_id, None)
             group_wo_settings.pop(group_id, None)
             group_skip_users.pop(group_id, None)
@@ -25587,7 +25718,7 @@ function doLogin(){
 }
 </script>
 <script>
-var FEAT_KEYS=['translation_on','image_on','voice_on','work_order_on'];
+var FEAT_KEYS=['translation_on','image_on','voice_on'];
 
 var TAB_KEYS=['overview','reminders','groups','skip','users','names','storage','glossary','packaging','passwords','scrap','extlinks','quickreply','insight','examples','forms','aiprovider','factory','settings'];
 
@@ -26761,12 +26892,13 @@ async function loadGroups(){
       '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
         '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
-      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
+      '<span class="feat-badge '+(g.work_order_lookup_on?'on':'off')+'" style="cursor:pointer" onclick="toggleWorkOrderLookup('+i+')" title="工單資訊查詢與圖片翻譯只能啟用一種">📋 '+(g.work_order_lookup_on?'工單查詢開':'工單查詢關')+'</span>'+
       // v3.10: TTS 開關
       '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span>'+
       // v3.10: 上下文記憶開關 (純翻譯邏輯,跟 Flex 無關)
       '<span class="feat-badge '+(g.conv_ctx!==false?'on':'off')+'" style="cursor:pointer" onclick="toggleConvCtx('+i+')" title="AI 看得懂接話/省略主詞,有 prompt cache 成本低">🧠 '+(g.conv_ctx!==false?'上下文開':'上下文關')+'</span></div>'+
       buildCmdBadges(g, i)+
+      '<div class="card-sub" style="margin-top:8px">📷 圖片翻譯與工單資訊查詢只能開啟一種。啟用工單查詢會關閉圖片翻譯。</div>'+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
       '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
@@ -26858,10 +26990,11 @@ function loadGroupsLocal(){
       '<span class="feat-badge '+(g.image_on?'on':(g.image_ask_mode?'ask':'off'))+'" style="cursor:pointer" onclick="cycleImageMode('+i+')" title="點按循環:開→詢問→關">'+
         '🖼️ '+(g.image_on?'圖片自動翻':(g.image_ask_mode?'圖片詢問':'圖片關'))+'</span>'+
       '<span class="feat-badge '+(g.voice_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',2)">🎤 '+(g.voice_on?'語音開':'語音關')+'</span>'+
-      '<span class="feat-badge '+(g.work_order_on?'on':'off')+'" style="cursor:pointer" onclick="toggleFeat('+i+',3)">📋 '+(g.work_order_on?'工單開':'工單關')+'</span>'+
+      '<span class="feat-badge '+(g.work_order_lookup_on?'on':'off')+'" style="cursor:pointer" onclick="toggleWorkOrderLookup('+i+')" title="工單資訊查詢與圖片翻譯只能啟用一種">📋 '+(g.work_order_lookup_on?'工單查詢開':'工單查詢關')+'</span>'+
       '<span class="feat-badge '+(ttsOn?'on':'off')+'" style="cursor:pointer" onclick="toggleTts('+i+')" title="翻譯完成後額外送語音(成本+)">🔊 '+(ttsOn?'TTS開':'TTS關')+'</span>'+
       '<span class="feat-badge '+(g.conv_ctx!==false?'on':'off')+'" style="cursor:pointer" onclick="toggleConvCtx('+i+')" title="AI 看得懂接話/省略主詞,有 prompt cache 成本低">🧠 '+(g.conv_ctx!==false?'上下文開':'上下文關')+'</span></div>'+
       buildCmdBadges(g, i)+
+      '<div class="card-sub" style="margin-top:8px">📷 圖片翻譯與工單資訊查詢只能開啟一種。啟用工單查詢會關閉圖片翻譯。</div>'+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;padding:10px 12px;background:rgba(124,111,239,.08);border-radius:8px;border:1px solid rgba(124,111,239,.2)">'+
       '<div><span style="font-size:12px;color:#8a8a9a">累計花費</span><br><span style="font-size:18px;font-weight:700;color:#7c6fef">NT$'+(g.cost_twd||0).toFixed(1)+'</span></div>'+
       '<button class="btn btn-dark btn-sm" style="font-size:12px" onclick="resetCost('+i+')">歸零</button></div>'+
@@ -27001,6 +27134,7 @@ function cycleImageMode(idx){
   // 記錄舊狀態給 rollback
   var prev_on=g.image_on;
   var prev_ask=g.image_ask_mode;
+  var prev_lookup=g.work_order_lookup_on;
   // 計算下一段狀態
   var body={group_id:g.id};
   var newOn, newAsk;
@@ -27021,6 +27155,7 @@ function cycleImageMode(idx){
   // 樂觀更新
   g.image_on=newOn;
   g.image_ask_mode=newAsk;
+  if(newOn||newAsk) g.work_order_lookup_on=false;
   loadGroupsLocal();
   api('/groups/settings','POST',body).then(function(d){
     if(d){
@@ -27029,6 +27164,26 @@ function cycleImageMode(idx){
       // rollback
       g.image_on=prev_on;
       g.image_ask_mode=prev_ask;
+      g.work_order_lookup_on=prev_lookup;
+      loadGroupsLocal();
+      toast('❌ 設定失敗');
+    }
+  });
+}
+function toggleWorkOrderLookup(idx){
+  var g=_groupList[idx];if(!g)return;
+  var old={lookup:g.work_order_lookup_on, image:g.image_on, ask:g.image_ask_mode};
+  var enabled=!old.lookup;
+  g.work_order_lookup_on=enabled;
+  if(enabled){g.image_on=false;g.image_ask_mode=false;}
+  loadGroupsLocal();
+  api('/groups/settings','POST',{group_id:g.id,work_order_lookup_on:enabled}).then(function(d){
+    if(d){
+      toast(enabled?'工單資訊查詢已開啟；圖片翻譯已關閉':'工單資訊查詢已關閉');
+    }else{
+      g.work_order_lookup_on=old.lookup;
+      g.image_on=old.image;
+      g.image_ask_mode=old.ask;
       loadGroupsLocal();
       toast('❌ 設定失敗');
     }
@@ -29612,6 +29767,7 @@ def _do_save_impl():
             "group_target_lang": group_target_lang,
             "group_img_settings": group_img_settings,
             "group_img_ask_settings": group_img_ask_settings,
+            "group_work_order_lookup_settings": group_work_order_lookup_settings,
             "group_audio_settings": group_audio_settings,
             "group_wo_settings": group_wo_settings,
             "group_cmd_enabled": group_cmd_enabled,
@@ -29868,6 +30024,12 @@ def load_settings():
         group_target_lang.update(data.get("group_target_lang", {}))
         group_img_settings.update(data.get("group_img_settings", {}))
         group_img_ask_settings.update(data.get("group_img_ask_settings", {}))
+        group_work_order_lookup_settings.update(data.get("group_work_order_lookup_settings", {}))
+        # Normalize incompatible settings from older clients or snapshots.
+        for _gid, _enabled in group_work_order_lookup_settings.items():
+            if _enabled:
+                group_img_settings[_gid] = False
+                group_img_ask_settings.pop(_gid, None)
         group_audio_settings.update(data.get("group_audio_settings", {}))
         group_wo_settings.update(data.get("group_wo_settings", {}))
         group_cmd_enabled.update(data.get("group_cmd_enabled", {}))
@@ -32034,7 +32196,8 @@ def api_admin_groups():
         return jsonify({"error": "forbidden"}), 403
     groups = []
     # Merge from group_tracking + group_settings
-    all_gids = set(group_tracking.keys()) | set(group_settings.keys()) | set(group_target_lang.keys())
+    all_gids = (set(group_tracking.keys()) | set(group_settings.keys()) |
+                set(group_target_lang.keys()) | set(group_work_order_lookup_settings.keys()))
     for gid in all_gids:
         info = group_tracking.get(gid, {})
         skip_count = len(group_skip_users.get(gid, set()))
@@ -32045,6 +32208,8 @@ def api_admin_groups():
             "target_lang": group_target_lang.get(gid, "id"),
             "image_on": group_img_settings.get(gid, True),
             "image_ask_mode": group_img_ask_settings.get(gid, False),
+            "work_order_lookup_on": bool(group_work_order_lookup_settings.get(gid, False)),
+            "image_mode": get_group_image_mode(gid),
             "voice_on": group_audio_settings.get(gid, True),
             "work_order_on": group_wo_settings.get(gid, True),
             "cmd_enabled": {k: is_cmd_enabled(gid, k) for k, _, _, _ in CMD_DEFS},
@@ -32099,6 +32264,8 @@ def api_admin_leave_group():
     group_settings.pop(gid, None)
     group_target_lang.pop(gid, None)
     group_img_settings.pop(gid, None)
+    group_img_ask_settings.pop(gid, None)
+    group_work_order_lookup_settings.pop(gid, None)
     group_audio_settings.pop(gid, None)
     group_wo_settings.pop(gid, None)
     group_skip_users.pop(gid, None)
@@ -33012,6 +33179,10 @@ def api_admin_group_settings():
     gid = data.get("group_id", "")
     if not gid:
         return jsonify({"error": "missing group_id"}), 400
+    if data.get("work_order_lookup_on") is True and (
+        data.get("image_on") is True or data.get("image_ask_mode") is True
+    ):
+        return jsonify({"error": "工單資訊查詢與圖片翻譯只能啟用一種"}), 400
     if "target_lang" in data:
         group_target_lang[gid] = data["target_lang"]
         # v3.10: 後台改單一目標語言時,清掉 group_target_langs 讓單一語言生效
@@ -33027,12 +33198,19 @@ def api_admin_group_settings():
         # 開了自動翻譯就清掉 ask 旗標
         if bool(data["image_on"]):
             group_img_ask_settings.pop(gid, None)
+            group_work_order_lookup_settings.pop(gid, None)
     if "image_ask_mode" in data:
         # 詢問模式 = image_on=False AND image_ask_mode=True
         if bool(data["image_ask_mode"]):
             group_img_settings[gid] = False
             group_img_ask_settings[gid] = True
+            group_work_order_lookup_settings.pop(gid, None)
         else:
+            group_img_ask_settings.pop(gid, None)
+    if "work_order_lookup_on" in data:
+        group_work_order_lookup_settings[gid] = bool(data["work_order_lookup_on"])
+        if group_work_order_lookup_settings[gid]:
+            group_img_settings[gid] = False
             group_img_ask_settings.pop(gid, None)
     if "voice_on" in data:
         group_audio_settings[gid] = bool(data["voice_on"])

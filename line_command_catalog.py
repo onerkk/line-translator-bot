@@ -26,7 +26,7 @@ CATEGORIES = {
 
 GUIDES = {
     "media": [
-        ("圖片翻譯", "Terjemahan gambar", "直接傳送照片。圖片模式為「詢問」時，按「翻譯這張」才開始；工單查儲區依群組工單開關處理。", "Kirim foto. Dalam mode ask, tekan tombol terjemahkan. Pencarian gudang dari WO mengikuti pengaturan grup."),
+        ("圖片翻譯", "Terjemahan gambar", "直接傳送照片。圖片模式為「詢問」時，按「翻譯這張」才開始；工單資訊查詢與圖片翻譯只能啟用一種。", "Kirim foto. Dalam mode ask, tekan tombol terjemahkan. Pencarian informasi work order dan terjemahan gambar hanya dapat diaktifkan satu per satu."),
         ("語音與朗讀", "Suara & pembacaan", "傳送 LINE 語音即可轉文字並翻譯，須開啟語音翻譯。朗讀譯文是獨立開關，可在群組設定啟用。", "Kirim pesan suara untuk transkripsi dan terjemahan jika aktif. Pembacaan hasil memiliki pengaturan terpisah."),
         ("文件與影片", "Dokumen & video", "直接傳送支援的文件或影片，依群組設定擷取內容翻譯。文字過長會分段；工廠工具可複製完整原文與譯文。", "Kirim dokumen atau video yang didukung; konten diterjemahkan sesuai pengaturan grup. Teks panjang dibagi, dan teks lengkap dapat disalin melalui alat pabrik."),
     ],
@@ -63,7 +63,7 @@ COMMANDS = [
     entry("off", "關閉翻譯", "settings", "關閉此群組自動翻譯；管理與查詢指令仍可使用。", "Nonaktifkan terjemahan otomatis grup; perintah tetap tersedia.", "/關閉翻譯", admin=True, scope="group"),
     entry("img", "圖片", "settings", "on／開啟：自動翻譯；off／關閉：停用；ask／詢問：按按鈕才翻譯。", "on: otomatis; off: nonaktif; ask: terjemahkan setelah tombol ditekan.", "/圖片 詢問", admin=True, scope="group", usage="on｜off｜ask"),
     entry("voice", "語音", "settings", "on／開啟、off／關閉：控制收到語音訊息時的翻譯。", "on atau off: atur terjemahan pesan suara masuk.", "/語音 開啟", admin=True, scope="group", usage="on｜off"),
-    entry("wo", "工單", "settings", "on／開啟、off／關閉：控制拍工單自動查儲區。", "on atau off: atur pencarian gudang dari foto WO.", "/工單 開啟", admin=True, scope="group", usage="on｜off"),
+    entry("wo", "工單", "settings", "on／開啟、off／關閉：控制照片工單資訊查詢；開啟時會關閉圖片翻譯。", "on atau off: atur pencarian informasi work order dari foto; saat aktif, terjemahan gambar dinonaktifkan.", "/工單 開啟", admin=True, scope="group", usage="on｜off"),
     entry("panel", "設定", "settings", "開啟群組語言面板；修改語言須管理員。", "Buka panel bahasa grup; perubahan memerlukan admin.", "/設定", aliases=("setting", "settings"), scope="group"),
     entry("lang", "語言", "settings", "無參數：語言面板；接語言代碼：更改群組目標語言，以逗號分隔。", "Tanpa parameter: panel; tambahkan kode bahasa dipisah koma untuk mengubah bahasa grup.", "/語言 id,vi", admin=True, scope="group", usage="[id,vi,th,en,ja,ko,hi,tl]"),
     entry("liff", "群組設定", "settings", "開啟手機設定頁，調整語言、翻譯、朗讀與保留詞。", "Buka setelan seluler untuk bahasa, terjemahan, audio dan kata khusus.", "/群組設定", admin=True, scope="group"),

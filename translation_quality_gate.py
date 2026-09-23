@@ -36,6 +36,7 @@ import factory_record_contract as record_contract
 import factory_structured_report as structured_report
 import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
+import factory_chat_notice_semantics as chat_notice_semantics
 
 logger = logging.getLogger(__name__)
 
@@ -1748,7 +1749,8 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
 
 def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     """Normalize unambiguous source-bound terms without a model call."""
-    result = terminology_module.canonicalize_computer_translation(source, candidate, src_lang, tgt_lang)
+    result = chat_notice_semantics.canonicalize(source, candidate, src_lang, tgt_lang)
+    result = terminology_module.canonicalize_computer_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_equipment_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_packaging_translation(source, result, src_lang, tgt_lang)
@@ -1898,6 +1900,7 @@ def _validate_normalized_translation(
 
     issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(terminology_module.packaging_translation_issues(source, candidate, src_lang, tgt_lang))
+    issues.extend(chat_notice_semantics.translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(_invented_identifier_issues(source, candidate, src_lang, tgt_lang))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)

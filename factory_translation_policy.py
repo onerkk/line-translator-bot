@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any, Dict
+import factory_chat_notice_semantics as chat_notice_semantics
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
 FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-16.1-nonblocking-single-attempt"
@@ -239,6 +240,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
         "local quality findings never cancel a non-empty translation or trigger another generation.\n"
         "</unified_factory_translation_policy>"
+        + "\n" + chat_notice_semantics.build_prompt(text, src, tgt)
     )
 
 
