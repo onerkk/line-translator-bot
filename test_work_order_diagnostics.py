@@ -60,7 +60,7 @@ def test_photo_decision_traces_source_rows_and_ignores_unapproved_text(monkeypat
     assert record["storage_reason"] == "unique_area"
     assert record["storage_area"] == "EH31"
     assert record["ring_status"] == "yes"
-    assert record["ring_reason"] == "size_rule"
+    assert record["ring_reason"] == "form_y"
     assert record["ring_retry_triggered"] is True
     assert len(record["ocr_sha256"]) == 64
     assert len(record["storage_table_sha256"]) == 64

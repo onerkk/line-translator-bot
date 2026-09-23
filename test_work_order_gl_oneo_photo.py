@@ -63,29 +63,37 @@ def test_dacapo_photo_displays_verified_storage_packaging_color_and_gl_ring_in_o
         assert hidden not in card and hidden not in fallback
 
 
-@pytest.mark.parametrize("printed_ring", ["Y", "N", "?", None])
-def test_gl_18_ring_is_required_regardless_of_unreliable_printed_ring(monkeypatch, printed_ring):
+@pytest.mark.parametrize(("printed_ring", "expected"), [
+    ("Y", "需要套環 / Wajib pakai cincin pelindung"),
+    ("N", "不需套環 / Tidak perlu cincin pelindung"),
+    ("?", "工單套環欄位待確認"), (None, "工單套環欄位待確認"),
+])
+def test_gl_18_ring_uses_the_printed_ring_cell(monkeypatch, printed_ring, expected):
     text = DACAPO_PHOTO_OCR.replace(
         "套環：Y\n", "套環：" + printed_ring + "\n" if printed_ring is not None else "")
     card, fallback = _card(monkeypatch, text)
-    assert "需要套環 / Wajib pakai cincin pelindung" in card
-    assert "需要套環 / Wajib pakai cincin pelindung" in fallback
+    assert expected in card
+    assert expected in fallback
 
 
-@pytest.mark.parametrize("printed_ring", ["Y", "N", "?", None])
-def test_gl_below_16_does_not_need_ring_even_if_printed_ring_is_y(monkeypatch, printed_ring):
+@pytest.mark.parametrize(("printed_ring", "expected"), [
+    ("Y", "需要套環 / Wajib pakai cincin pelindung"),
+    ("N", "不需套環 / Tidak perlu cincin pelindung"),
+    ("?", "工單套環欄位待確認"), (None, "工單套環欄位待確認"),
+])
+def test_regular_customer_form_is_not_overridden_by_a_small_size(monkeypatch, printed_ring, expected):
     text = (DACAPO_PHOTO_OCR.replace("成品尺寸MIN：17.957", "成品尺寸MIN：15.8")
             .replace("成品尺寸MAX：18", "成品尺寸MAX：15.9")
             .replace("套環：Y\n", "套環：" + printed_ring + "\n" if printed_ring is not None else ""))
     card, fallback = _card(monkeypatch, text)
-    assert "不需套環 / Tidak perlu cincin pelindung" in card
-    assert "不需套環 / Tidak perlu cincin pelindung" in fallback
+    assert expected in card
+    assert expected in fallback
 
 
-def test_printed_d_never_needs_ring_and_no_kondom_overrides_gl_18(monkeypatch):
+def test_form_y_applies_even_for_printed_d_and_no_kondom_overrides_it(monkeypatch):
     packaged = DACAPO_PHOTO_OCR.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD")
     card, _ = _card(monkeypatch, packaged)
-    assert "不需套環 / Tidak perlu cincin pelindung" in card
+    assert "需要套環 / Wajib pakai cincin pelindung" in card
 
     no_kondom = DACAPO_PHOTO_OCR.replace("特殊備註：", "特殊備註：不要黑色套環（NO KONDOM）")
     card, _ = _card(monkeypatch, no_kondom)
@@ -93,12 +101,12 @@ def test_printed_d_never_needs_ring_and_no_kondom_overrides_gl_18(monkeypatch):
 
 
 @pytest.mark.parametrize("paint_position", ["N", "不噴"])
-def test_dacapo_no_spray_position_ignores_the_printed_soil_blue_color(monkeypatch, paint_position):
+def test_dacapo_color_overrides_no_spray_position(monkeypatch, paint_position):
     ocr = DACAPO_PHOTO_OCR.replace("噴漆位置：雙邊", "噴漆位置：" + paint_position)
     card, fallback = _card(monkeypatch, ocr)
     for visible in (card, fallback):
-        assert "不噴 / Tidak dicat" in visible
-        assert "色碼 46" not in visible and "土藍" not in visible
+        assert "要噴漆" in visible and "位置待確認" in visible
+        assert "色碼 46 · 土藍 / biru bernuansa tanah" in visible
         assert "雙邊 / Kedua sisi" not in visible
 
 
@@ -108,8 +116,8 @@ def test_dacapo_table_n_and_soil_blue_still_returns_unsprayed_single_card(monkey
         "噴漆位置：雙邊\n套環：Y\n顏色：土藍\n包裝代碼：10\n", table)
     card, fallback = _card(monkeypatch, ocr)
     for visible in (card, fallback):
-        assert "不噴 / Tidak dicat" in visible
-        assert "色碼 46" not in visible and "土藍" not in visible
+        assert "要噴漆" in visible and "位置待確認" in visible
+        assert "色碼 46 · 土藍 / biru bernuansa tanah" in visible
         assert "需要套環 / Wajib pakai cincin pelindung" in visible
         assert "1O" in visible and "舊碼 7" in visible
 

@@ -193,44 +193,68 @@ def test_explicit_special_note_overrides_polishing_38mm_and_crop_stays_unknown()
     assert "Spray paint: Confirm position" in reply
 
 
-@pytest.mark.parametrize(("flow", "size", "expected"), [
-    ("CHRAPD", "19.99", "no"), ("CHRAPD", "20", "no"),
-    ("CHRAPD", "99", "no"), ("CHRAPGD", "30", "no"),
-    ("CHRAPL", "20", "yes"), ("CHRAPGL", "15.99", "no"),
-    ("CHRAPGL", "16", "yes"), ("CHRAPL", "19.99", "no"),
-    ("CHRAZ", "30", "unknown"), ("L", "30", "unknown"),
-    ("D", "30", "no"),
+@pytest.mark.parametrize(("ring_form", "expected", "reason"), [
+    ("Y", "yes", "form_y"), ("N", "no", "form_n"),
+    ("?", "unknown", "ring_field"), ("", "unknown", "ring_field"),
 ])
-def test_workflow_suffix_and_inclusive_thresholds(flow, size, expected):
-    text = PHOTO_5.replace("CHRAPDAEJL", flow).replace("3.97", size).replace("成品尺寸MAX：4", "成品尺寸MAX：" + size)
-    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["status"] == expected
-
-
-def test_packaging_material_suffix_d_never_needs_ring_even_without_a_size():
-    text = PHOTO_5.replace("CHRAPDAEJL", "CHRAPGD").replace("成品尺寸MIN：3.97", "成品尺寸MIN：?").replace("成品尺寸MAX：4", "成品尺寸MAX：?")
+def test_regular_customer_ring_column_controls_the_answer(ring_form, expected, reason):
+    text = PHOTO_5.replace("套環：N", "套環：" + ring_form)
+    # Process suffix and size do not override a regular customer's ring cell.
+    text = text.replace("CHRAPDAEJL", "CHRAPGL").replace("3.97", "31.938").replace(
+        "成品尺寸MAX：4", "成品尺寸MAX：32")
     assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"] == {
-        "status": "no", "reason": "packaging_material", "process": "packaging"}
+        "status": expected, "reason": reason, "process": None}
 
 
-@pytest.mark.parametrize("flow", ("CHRAPL", "CHRAPGL"))
-def test_unusual_three_decimal_size_can_still_resolve_ring_safely(flow):
-    text = PHOTO_5.replace("CHRAPDAEJL", flow).replace("成品尺寸MIN：3.97", "成品尺寸MIN：31.938").replace("成品尺寸MAX：4", "成品尺寸MAX：32")
-    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["status"] == "yes"
+def _jiadong(text):
+    return text.replace("客戶名稱：方鉦", "客戶名稱：佳東").replace("收貨人：方鉦", "收貨人：佳東")
 
 
-def test_dimension_straddling_threshold_and_bad_ocr_never_auto_choose():
-    body = PHOTO_5.replace("CHRAPDAEJL", "CHRAPGL").replace("3.97", "15.99").replace("成品尺寸MAX：4", "成品尺寸MAX：16.01")
-    assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
-    body = body.replace("成品尺寸MAX：16.01", "成品尺寸MAX：?")
-    assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
+@pytest.mark.parametrize("ring_form", ["Y", "N", "?"])
+def test_jiadong_polishing_20mm_or_above_requires_ring_regardless_of_form(ring_form):
+    text = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
+    text = text.replace("成品尺寸MIN：3.97", "成品尺寸MIN：20").replace(
+        "成品尺寸MAX：4", "成品尺寸MAX：20")
+    text = text.replace("套環：N", "套環：" + ring_form)
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"] == {
+        "status": "yes", "reason": "jiadong_polishing_20mm",
+        "process": "polishing", "threshold": 20}
 
 
-def test_decimal_comma_size_does_not_become_a_hundredfold_larger_ring_size():
-    text = PHOTO_5.replace("成品尺寸MIN：3.97", "成品尺寸MIN：3,97")
-    text = text.replace("成品尺寸MAX：4", "成品尺寸MAX：4,00")
-    info = extract_work_order_info(text.replace("CHRAPDAEJL", "CHRAPL"), STORAGE, PACKAGING)
-    assert tuple(str(value) for value in info["diameter"]) == ("3.97", "4.00")
-    assert info["ring"]["status"] == "no"
+def test_jiadong_exception_only_applies_to_polishing_and_20mm_or_above():
+    small = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
+    small = small.replace("成品尺寸MIN：3.97", "成品尺寸MIN：19.99").replace(
+        "成品尺寸MAX：4", "成品尺寸MAX：19.99")
+    assert extract_work_order_info(small, STORAGE, PACKAGING)["ring"]["reason"] == "form_n"
+    grinding = small.replace("CHRAPL", "CHRAPGL").replace("成品尺寸MIN：19.99", "成品尺寸MIN：25")
+    grinding = grinding.replace("成品尺寸MAX：19.99", "成品尺寸MAX：25")
+    assert extract_work_order_info(grinding, STORAGE, PACKAGING)["ring"]["reason"] == "form_n"
+
+
+def test_jiadong_threshold_crossing_or_unreadable_size_stays_unresolved():
+    text = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
+    text = text.replace("成品尺寸MIN：3.97", "成品尺寸MIN：19.9").replace(
+        "成品尺寸MAX：4", "成品尺寸MAX：20.1")
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["reason"] == "threshold_crossing"
+    text = text.replace("成品尺寸MAX：20.1", "成品尺寸MAX：?")
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["reason"] == "diameter"
+
+
+def test_explicit_no_ring_note_overrides_form_y_and_jiadong_exception():
+    text = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
+    text = text.replace("成品尺寸MIN：3.97", "成品尺寸MIN：20").replace(
+        "成品尺寸MAX：4", "成品尺寸MAX：20").replace("套環：N", "套環：Y")
+    text = text.replace("特殊備註：", "特殊備註：不要黑色套環")
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["reason"] == "explicit_note"
+
+
+def test_decimal_comma_size_is_not_misread_for_jiadong_threshold():
+    text = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
+    text = text.replace("成品尺寸MIN：3.97", "成品尺寸MIN：19,99")
+    text = text.replace("成品尺寸MAX：4", "成品尺寸MAX：20,00")
+    info = extract_work_order_info(text, STORAGE, PACKAGING)
+    assert tuple(str(value) for value in info["diameter"]) == ("19.99", "20.00")
+    assert info["ring"]["reason"] == "threshold_crossing"
 
 
 def test_ambiguous_grouping_punctuation_does_not_select_the_wrong_storage_or_ring():
@@ -240,7 +264,7 @@ def test_ambiguous_grouping_punctuation_does_not_select_the_wrong_storage_or_rin
     assert info["length"] is None
     assert info["storage"]["status"] == "unknown_length"
     assert "儲區 / Area penyimpanan：EH79" not in build_work_order_reply(text, STORAGE, PACKAGING)
-    polishing = PHOTO_5.replace("CHRAPDAEJL", "CHRAPL")
+    polishing = _jiadong(PHOTO_5).replace("CHRAPDAEJL", "CHRAPL")
     polishing = polishing.replace("成品尺寸MIN：3.97", "成品尺寸MIN：20.000")
     polishing = polishing.replace("成品尺寸MAX：4", "成品尺寸MAX：20.001")
     assert extract_work_order_info(polishing, STORAGE, PACKAGING)["ring"]["status"] == "yes"
@@ -294,8 +318,10 @@ def test_printed_paint_name_uses_unique_verified_rack_code_not_the_name_as_code(
     assert "顏色代碼 / Kode warna：土藍" not in reply
     no_spray = painted.replace("噴漆位置：雙邊", "噴漆位置：不噴")
     assert extract_work_order_info(no_spray, STORAGE, PACKAGING)["paint"] == {
-        "status": "no", "color_code": None}
-    assert "顏色代碼 / Kode warna：" not in build_work_order_reply(no_spray, STORAGE, PACKAGING)
+        "status": "color_only", "color_code": "46", "color_name": "土藍"}
+    reply = build_work_order_reply(no_spray, STORAGE, PACKAGING)
+    assert "要噴漆（位置待確認）" in reply
+    assert "顏色代碼 / Kode warna：46" in reply
 
 
 def test_paint_name_reverse_lookup_does_not_guess_unknown_or_duplicate_code():
@@ -327,14 +353,14 @@ def test_known_code_from_final_photo_translates_only_when_painted(side, indonesi
     assert "Color code: 109" in reply and "Color: black" in reply
 
 
-def test_no_spray_disregards_a_known_color_code_and_an_unknown_code_stays_raw():
+def test_color_overrides_n_position_and_unknown_color_stays_raw():
     no_spray = PHOTO_5.replace("顏色：N", "顏色：109")
     reply = build_work_order_reply(no_spray, STORAGE, PACKAGING)
-    assert "噴漆 / Pengecatan semprot：不噴 / Tidak perlu dicat" in reply
-    assert "Spray paint: None" in reply
-    assert "顏色代碼 / Kode warna：" not in reply
-    assert "顏色 / Warna：" not in reply
-    assert "Color code:" not in reply and "Color:" not in reply
+    assert "要噴漆（位置待確認）" in reply
+    assert "Spray paint: Yes; confirm position" in reply
+    assert "顏色代碼 / Kode warna：109" in reply
+    assert "顏色 / Warna：黑 / hitam" in reply
+    assert "Color code: 109" in reply and "Color: black" in reply
     unknown = no_spray.replace("噴漆位置：不噴", "噴漆位置：單邊").replace("顏色：109", "顏色：109 黑色")
     reply = build_work_order_reply(unknown, STORAGE, PACKAGING)
     assert "顏色代碼 / Kode warna：待確認" in reply
@@ -396,7 +422,7 @@ CHRAPDAEJL | 不噴 | 9G
 """
     info = extract_work_order_info(text, STORAGE, PACKAGING)
     assert info["fields"]["flow"] == "CHRAPDAEJL"
-    assert info["ring"]["status"] == "no"
+    assert info["ring"]["status"] == "unknown"
     assert info["paint"]["status"] == "no"
     assert info["packaging"]["code"] == "9G"
 
@@ -434,12 +460,12 @@ def test_unreadable_length_max_preserves_the_read_min_without_resolving_storage(
     assert info["storage"]["status"] == "unknown_length"
 
 
-def test_special_note_next_line_and_printed_n_does_not_override_size_rule():
+def test_special_note_overrides_form_and_regular_customer_n_is_not_size_overridden():
     note = PHOTO_4_CROP.replace("特殊備註：不要黑色套環（NO KONDOM）", "特殊備註：\n不要黑色套環（NO KONDOM）")
     assert extract_work_order_info(note, STORAGE, PACKAGING)["ring"]["reason"] == "explicit_note"
     body = PHOTO_5.replace("CHRAPDAEJL", "CHRAPGL").replace("3.97", "25").replace("成品尺寸MAX：4", "成品尺寸MAX：25")
     assert extract_work_order_info(body, STORAGE, PACKAGING)["ring"] == {
-        "status": "yes", "reason": "size_rule", "process": "grinding", "threshold": 16}
+        "status": "no", "reason": "form_n", "process": None}
     order_note = body.replace("特殊備註：", "訂單備註：NO KONDOM")
     assert extract_work_order_info(order_note, STORAGE, PACKAGING)["ring"]["reason"] == "explicit_note"
 

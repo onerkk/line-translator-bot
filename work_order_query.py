@@ -457,19 +457,32 @@ def _paint_reference(raw, lookup):
 
 
 def _paint(fields, lookup):
-    raw = fields.get("paint")
-    if not raw:
-        return {"status": "unknown", "color_code": None}
-    normalized = _text(raw).upper().replace(" ", "")
-    if normalized in {"不噴", "不喷", "不噴漆", "不喷漆", "N", "NO", "NONE", "TIDAKDISEMPROTCAT", "TIDAKDICAT"}:
-        return {"status": "no", "color_code": None}
+    raw = _value(fields.get("paint"))
+    normalized = re.sub(r"\s+", "", _text(raw)).upper() if raw else ""
+    no_values = {
+        "不噴", "不喷", "不噴漆", "不喷漆", "N", "NO", "NONE", "NA",
+        "TIDAKDISEMPROTCAT", "TIDAKDICAT", "TIDAKADA", "無", "无",
+    }
+    color_value = _value(fields.get("color"))
+    color_key = re.sub(r"[\s._-]+", "", _text(color_value)).upper()
+    has_color = bool(color_value and color_key not in no_values)
+
+    # The color cell is the source of truth for whether painting is required.
+    # The position cell can specify one/both sides, but N, blank, or unreadable
+    # position must not cancel a real color written in the color column.
     if normalized in {"雙邊", "双边", "兩邊", "两边", "雙側", "双侧", "兩端", "两端", "DUASISI", "KEDUAUJUNG"}:
         status = "both"
-    elif normalized in {"單邊", "单边", "單側", "单侧", "一端", "SATU SISI", "SATUSISI", "SATUUJUNG"}:
+    elif normalized in {"單邊", "单边", "單側", "单侧", "一端", "SATUSISI", "SATUUJUNG"}:
         status = "one"
+    elif has_color:
+        status = "color_only"
+    elif normalized in no_values:
+        return {"status": "no", "color_code": None}
     else:
-        return {"status": "unknown", "color_code": None, "raw_position": raw}
-    code, name = _paint_reference(fields.get("color"), lookup)
+        return {"status": "unknown", "color_code": None,
+                **({"raw_position": raw} if raw else {})}
+
+    code, name = _paint_reference(color_value, lookup) if has_color else (None, None)
     paint = {"status": status, "color_code": code}
     if name:
         paint["color_name"] = name
@@ -487,7 +500,7 @@ def _verified_paint_color(code, lookup):
     return labels if all(labels.values()) else None
 
 
-_NO_RING = re.compile(r"不要\s*(?:黑色)?\s*套[環环]|不\s*套[環环]|(?:無需|无需|免)\s*套[環环]|\bNO\s+KONDOM\b", re.I)
+_NO_RING = re.compile(r"不要\s*(?:黑色|黑人)?\s*套[環环]|不\s*套[環环]|(?:無需|无需|免)\s*套[環环]|\bNO\s+KONDOM\b", re.I)
 
 
 def _number_candidates(raw):
@@ -502,42 +515,80 @@ def _number_candidates(raw):
     return (number,) if number is not None else ()
 
 
-def _ring(fields):
+def _ring_flow_process(raw):
+    flow = _text(raw).upper()
+    if not re.fullmatch(r"[A-Z]+(?:\s+[A-Z]+)*", flow):
+        return None
+    flow = re.sub(r"\s+", "", flow)
+    if flow.endswith("D"):
+        return "packaging"
+    if flow.endswith("GL"):
+        return "grinding"
+    if len(flow) >= 2 and flow.endswith("L") and flow[-2] != "G":
+        return "polishing"
+    return None
+
+
+def _ring_size_status(fields, cutoff):
+    lows = _number_candidates(fields.get("diameter_min"))
+    highs = _number_candidates(fields.get("diameter_max"))
+    if not lows or not highs:
+        return "unknown", "diameter"
+    possible = [(low, high) for low in lows for high in highs if 0 <= low <= high]
+    if not possible:
+        return "unknown", "invalid_diameter"
+    if all(low >= cutoff for low, _high in possible):
+        return "yes", "jiadong_polishing_20mm"
+    if all(high < cutoff for _low, high in possible):
+        return "no", "form_n"
+    return "unknown", "threshold_crossing"
+
+
+def _is_jiadong(customer):
+    if not customer:
+        return False
+    value = _text(customer).casefold()
+    if "佳東" in value or "佳东" in value:
+        return True
+    latin = re.sub(r"[^a-z0-9]", "", value)
+    return latin == "jiadong"
+
+
+def _ring(fields, customer=None):
     note = "\n".join(filter(None, (fields.get("special"), fields.get("order_note"))))
     if _NO_RING.search(note):
         return {"status": "no", "reason": "explicit_note", "process": None}
 
-    # The printed ring Y/N is intentionally ignored: this factory's ring
-    # requirement comes from the special note, process suffix and diameter.
-    flow = _text(fields.get("flow")).upper()
-    # OCR can put spaces between letters within one printed process cell.
-    # Accept only letters and inter-letter whitespace; never repair an OCR
-    # digit or a missing G into the GL grinding suffix.
-    if not re.fullmatch(r"[A-Z]+(?:\s+[A-Z]+)*", flow):
-        return {"status": "unknown", "reason": "flow", "process": None}
-    flow = re.sub(r"\s+", "", flow)
-    # A trailing D marks packaging material, not a polishing bar.  The ring
-    # decision therefore does not depend on the finished diameter.
-    if flow.endswith("D"):
-        return {"status": "no", "reason": "packaging_material", "process": "packaging"}
-    if flow.endswith("GL"):
-        process, cutoff = "grinding", Decimal(16)
-    elif len(flow) >= 2 and flow.endswith("L") and flow[-2] != "G":
-        process, cutoff = "polishing", Decimal(20)
-    else:
-        return {"status": "unknown", "reason": "flow", "process": None}
-    lows = _number_candidates(fields.get("diameter_min"))
-    highs = _number_candidates(fields.get("diameter_max"))
-    if not lows or not highs:
-        return {"status": "unknown", "reason": "diameter", "process": process}
-    possible = [(low, high) for low in lows for high in highs if 0 <= low <= high]
-    if not possible:
-        return {"status": "unknown", "reason": "invalid_diameter", "process": process}
-    if all(low >= cutoff for low, _high in possible):
-        return {"status": "yes", "reason": "size_rule", "process": process, "threshold": int(cutoff)}
-    if all(high < cutoff for _low, high in possible):
-        return {"status": "no", "reason": "size_rule", "process": process, "threshold": int(cutoff)}
-    return {"status": "unknown", "reason": "threshold_crossing", "process": process}
+    ring_form = _text(fields.get("ring_on_form")).upper()
+    # Jia Dong is the sole customer exception: polishing bars at 20 mm or
+    # above always need a ring, even when the form says N.  For all other
+    # orders the printed ring cell controls the answer.
+    if _is_jiadong(customer):
+        process = _ring_flow_process(fields.get("flow"))
+        if process == "polishing":
+            status, reason = _ring_size_status(fields, Decimal(20))
+            if status == "yes":
+                return {"status": "yes", "reason": reason, "process": process,
+                        "threshold": 20}
+            if status == "unknown":
+                if ring_form in {"Y", "YES"}:
+                    return {"status": "yes", "reason": "form_y", "process": None}
+                return {"status": status, "reason": reason, "process": process}
+            # Below 20 mm, the Jia Dong exception does not replace the form.
+        elif process is None:
+            # An N value is only overridden if this is confirmed to be a 20+
+            # polishing bar; an unrecognized flow cannot rule out that exception.
+            if ring_form in {"Y", "YES"}:
+                return {"status": "yes", "reason": "form_y", "process": None}
+            return {"status": "unknown", "reason": "flow", "process": None}
+
+    if ring_form in {"Y", "YES"}:
+        return {"status": "yes", "reason": "form_y", "process": None}
+
+    if ring_form in {"N", "NO"}:
+        process = _ring_flow_process(fields.get("flow")) if _is_jiadong(customer) else None
+        return {"status": "no", "reason": "form_n", "process": process}
+    return {"status": "unknown", "reason": "ring_field", "process": None}
 
 
 def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None, paint_codes=None):
@@ -562,7 +613,7 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
                     _storage_for_fields(customer, fields, storage_lookup or {})),
         "packaging": _packaging(fields.get("packaging"), packaging_lookup),
         "paint": _paint(fields, _PAINT_CODES if paint_codes is None else paint_codes),
-        "ring": _ring(fields),
+        "ring": _ring(fields, customer),
     }
 
 
@@ -603,13 +654,19 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
 
     paint = info["paint"]
     color = (_verified_paint_color(paint["color_code"], paint_codes)
-             if paint["status"] in ("one", "both") else None)
+             if paint["status"] in ("one", "both", "color_only") else None)
     if paint["status"] == "no":
         lines.append("噴漆 / Pengecatan semprot：不噴 / Tidak perlu dicat")
     elif paint["status"] in ("one", "both"):
         text = ("單邊 / Satu sisi" if paint["status"] == "one"
                 else "雙邊 / Kedua sisi")
         lines.append("噴漆 / Pengecatan semprot：" + text)
+        raw_code = paint["color_code"]
+        lines.append("顏色代碼 / Kode warna：" + (raw_code or "待確認 / Perlu diperiksa"))
+        if color:
+            lines.append("顏色 / Warna：" + color["zh"] + " / " + color["id"])
+    elif paint["status"] == "color_only":
+        lines.append("噴漆 / Pengecatan semprot：要噴漆（位置待確認） / Wajib dilakukan pengecatan semprot; posisi perlu dikonfirmasi")
         raw_code = paint["color_code"]
         lines.append("顏色代碼 / Kode warna：" + (raw_code or "待確認 / Perlu diperiksa"))
         if color:
@@ -665,8 +722,12 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
         ring_text = "需要套環 / Wajib memakai cincin pelindung"
     elif ring["status"] == "no":
         ring_text = "不需套環 / Tidak perlu memakai cincin pelindung"
+    elif ring["reason"] == "ring_field":
+        ring_text = "工單套環欄位待確認 / Kolom cincin pelindung pada work order perlu diperiksa"
+    elif ring["reason"] in {"flow", "diameter", "invalid_diameter", "threshold_crossing"}:
+        ring_text = "佳東客戶拋光棒20mm規則待確認 / Periksa aturan batang polishing Jia Dong ukuran 20 mm"
     else:
-        ring_text = "待確認流程及成品尺寸 / Periksa alur proses dan ukuran jadi"
+        ring_text = "工單套環資訊待確認 / Informasi cincin pelindung pada work order perlu diperiksa"
     lines.append("套環 / Cincin pelindung：" + ring_text)
 
     lines.extend(["", "🇬🇧 English summary",
@@ -689,6 +750,11 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
         lines.append("Spray paint: None")  # Color is irrelevant in this case.
     elif paint["status"] in ("one", "both"):
         lines.append("Spray paint: " + ("One side" if paint["status"] == "one" else "Both sides"))
+        lines.append("Color code: " + (paint.get("color_code") or "To confirm"))
+        if color:
+            lines.append("Color: " + color["en"])
+    elif paint["status"] == "color_only":
+        lines.append("Spray paint: Yes; confirm position")
         lines.append("Color code: " + (paint.get("color_code") or "To confirm"))
         if color:
             lines.append("Color: " + color["en"])
@@ -723,7 +789,11 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
         ring_en = "Not required (explicit order note)"
     elif ring["status"] == "no":
         ring_en = "Not required"
+    elif ring["reason"] == "ring_field":
+        ring_en = "Confirm the ring field on the work order"
+    elif ring["reason"] in {"flow", "diameter", "invalid_diameter", "threshold_crossing"}:
+        ring_en = "Confirm Jia Dong polishing process and finished size"
     else:
-        ring_en = "Confirm process code and finished size"
+        ring_en = "Confirm the work-order ring information"
     lines.append("Protective ring: " + ring_en)
     return "\n".join(lines)

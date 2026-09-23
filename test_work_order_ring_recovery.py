@@ -1,7 +1,7 @@
-"""A magnified second reading repairs only genuinely missing ring inputs.
+"""A magnified second reading repairs missing inputs for the Jia Dong exception.
 
-The photo transcription below was checked manually against the user's DACAPO
-work order.  The tests exercise local merge rules, not a vision service.
+The photo-derived fields are adapted to exercise Jia Dong's polishing rule.
+The tests exercise local merge rules, not a vision service.
 """
 
 import base64
@@ -13,22 +13,30 @@ import app
 from PIL import Image
 import pytest
 
-from test_work_order_ring_photo import PHOTO_DACAPO
+from test_work_order_ring_photo import PHOTO_DACAPO as _PHOTO_DACAPO
 from work_order_query import extract_work_order_info
 from work_order_ring_recovery import (focused_ring_crop,
                                       merge_confirmed_ring_fields,
                                       needs_ring_retry)
 
 
+PHOTO_DACAPO = (_PHOTO_DACAPO.replace("客戶名稱：DACAPO", "客戶名稱：佳東")
+                .replace("收貨人：DACAPO", "收貨人：佳東")
+                .replace("套環：Y", "套環：N"))
 FOCUSED = "訂單流程：CHRAPDGL\n成品尺寸MIN：17.957\n成品尺寸MAX：18"
 
 
 @pytest.mark.parametrize("printed", ["Y", "N", "?", ""])
-def test_missing_flow_and_size_are_recovered_without_using_form_y_n(printed):
+def test_missing_flow_and_size_retry_only_when_form_and_jiadong_exception_need_it(printed):
     original = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：?")
                 .replace("成品尺寸MIN：17.957", "成品尺寸MIN：?")
                 .replace("成品尺寸MAX：18", "成品尺寸MAX：?")
-                .replace("套環：Y", f"套環：{printed}"))
+                .replace("套環：N", f"套環：{printed}"))
+    if printed == "Y":
+        assert not needs_ring_retry(original)
+        assert merge_confirmed_ring_fields(original, FOCUSED) == original
+        assert extract_work_order_info(original, {}, {})["ring"]["reason"] == "form_y"
+        return
     assert needs_ring_retry(original)
     result = merge_confirmed_ring_fields(original, FOCUSED)
     assert result != original
@@ -36,8 +44,10 @@ def test_missing_flow_and_size_are_recovered_without_using_form_y_n(printed):
     assert info["fields"]["flow"] == "CHRAPDGL"
     assert info["fields"]["diameter_min"] == "17.957"
     assert info["fields"]["diameter_max"] == "18"
-    assert info["ring"] == {"status": "yes", "reason": "size_rule",
-                            "process": "grinding", "threshold": 16}
+    expected_ring = ({"status": "no", "reason": "form_n", "process": "grinding"}
+                     if printed == "N" else
+                     {"status": "unknown", "reason": "ring_field", "process": None})
+    assert info["ring"] == expected_ring
     assert info["fields"]["ring_on_form"] == (printed if printed in {"Y", "N"} else None)
 
 
@@ -47,19 +57,21 @@ def test_known_gl_and_size_never_spends_another_vision_call():
 
 
 def test_missing_one_size_preserves_known_flow_and_other_size():
-    original = PHOTO_DACAPO.replace("成品尺寸MAX：18", "成品尺寸MAX：?")
-    result = merge_confirmed_ring_fields(original, FOCUSED)
+    original = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+                .replace("成品尺寸MAX：18", "成品尺寸MAX：?"))
+    reread = FOCUSED.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+    result = merge_confirmed_ring_fields(original, reread)
     assert result != original
-    assert result.count("訂單流程：CHRAPDGL") == 1
+    assert result.count("訂單流程：CHRAPDL") == 1
     assert result.count("成品尺寸MIN：17.957") == 1
-    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "no"
 
 
 def test_missing_flow_but_complete_diameter_is_recoverable():
     original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL\n", "")
     assert needs_ring_retry(original)
     assert extract_work_order_info(merge_confirmed_ring_fields(original, FOCUSED), {}, {})[
-        "ring"]["status"] == "yes"
+        "ring"]["status"] == "no"
 
 
 def test_ocr_digit_in_complete_gl_flow_is_reread_and_repaired():
@@ -69,12 +81,12 @@ def test_ocr_digit_in_complete_gl_flow_is_reread_and_repaired():
     fixed = merge_confirmed_ring_fields(original, FOCUSED)
     assert "訂單流程：CHRAPD6L" not in fixed
     assert fixed.count("訂單流程：CHRAPDGL") == 1
-    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "no"
 
 
 @pytest.mark.parametrize(("bad_flow", "correct_flow", "expected_status", "expected_process"), [
-    ("CHRAPD?L", "CHRAPDGL", "yes", "grinding"),
-    ("CHRAPDG?", "CHRAPDGL", "yes", "grinding"),
+    ("CHRAPD?L", "CHRAPDGL", "no", "grinding"),
+    ("CHRAPDG?", "CHRAPDGL", "no", "grinding"),
     ("CHRAPD?", "CHRAPDL", "no", "polishing"),
     ("CHRAP?", "CHRAPD", "no", "packaging"),
 ])
@@ -92,12 +104,14 @@ def test_partial_unreadable_process_suffix_is_reread_then_repaired_from_same_cel
 
 @pytest.mark.parametrize("bad_size", ["17.95?", "17.9?7", "17.95�"])
 def test_partial_unreadable_finished_size_is_reread_and_repaired_safely(bad_size):
-    original = PHOTO_DACAPO.replace("成品尺寸MIN：17.957", "成品尺寸MIN：" + bad_size)
+    original = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+                .replace("成品尺寸MIN：17.957", "成品尺寸MIN：" + bad_size))
+    reread = FOCUSED.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
     assert needs_ring_retry(original)
-    fixed = merge_confirmed_ring_fields(original, FOCUSED)
+    fixed = merge_confirmed_ring_fields(original, reread)
     assert fixed != original
     assert "成品尺寸MIN：17.957" in fixed
-    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "no"
 
 
 def test_multiple_unknown_flow_suffix_characters_still_fail_closed():
@@ -111,7 +125,7 @@ def test_last_letter_l_read_as_digit_one_triggers_safe_reread():
     assert needs_ring_retry(original)
     fixed = merge_confirmed_ring_fields(original, FOCUSED)
     assert fixed.count("訂單流程：CHRAPDGL") == 1
-    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "no"
 
 
 def test_invalid_prefix_may_not_be_promoted_to_wrong_polishing_suffix():
@@ -123,14 +137,15 @@ def test_invalid_prefix_may_not_be_promoted_to_wrong_polishing_suffix():
 
 
 def test_unparseable_finished_size_is_reread_without_changing_flow():
-    original = PHOTO_DACAPO.replace("成品尺寸MAX：18", "成品尺寸MAX：1B")
-    reread = FOCUSED.replace("成品尺寸MAX：18", "成品尺寸MAX：18")
+    original = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+                .replace("成品尺寸MAX：18", "成品尺寸MAX：1B"))
+    reread = FOCUSED.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
     assert needs_ring_retry(original)
     fixed = merge_confirmed_ring_fields(original, reread)
     assert "成品尺寸MAX：1B" not in fixed
     assert fixed.count("成品尺寸MAX：18") == 1
-    assert fixed.count("訂單流程：CHRAPDGL") == 1
-    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+    assert fixed.count("訂單流程：CHRAPDL") == 1
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "no"
 
 
 def test_valid_polishing_l_18_is_not_changed_even_if_reread_says_gl():
@@ -141,7 +156,8 @@ def test_valid_polishing_l_18_is_not_changed_even_if_reread_says_gl():
 
 
 def test_valid_numeric_conflict_and_duplicate_flow_cannot_be_repaired():
-    contradictory = PHOTO_DACAPO.replace("成品尺寸MIN：17.957", "成品尺寸MIN：19")
+    contradictory = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+                     .replace("成品尺寸MIN：17.957", "成品尺寸MIN：19"))
     assert extract_work_order_info(contradictory, {}, {})["ring"]["reason"] == "invalid_diameter"
     assert not needs_ring_retry(contradictory)
     assert merge_confirmed_ring_fields(contradictory, FOCUSED) == contradictory
@@ -218,7 +234,7 @@ def test_actual_photo_crop_is_a_valid_magnified_jpeg_and_invalid_images_are_safe
     assert focused_ring_crop("wrong-base64") is None
 
 
-def test_app_retries_missing_photo_cells_once_and_rule_not_printed_y_decides(monkeypatch):
+def test_app_retries_missing_jiadong_exception_inputs_once(monkeypatch):
     monkeypatch.setattr(app, "_has_ai_capability", lambda *_args: True)
     monkeypatch.setattr(app, "track_tokens", lambda *_args: None)
     original = (PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：?")
@@ -240,13 +256,12 @@ def test_app_retries_missing_photo_cells_once_and_rule_not_printed_y_decides(mon
     result = app.ocr_work_order_fields(base64.b64encode(photo.read_bytes()).decode("ascii"))
     assert len(calls) == 2
     assert "訂單流程" in calls[1][0][0]["content"]
-    assert "Y／N 不可靠" in calls[1][0][0]["content"]
+    assert "Y／N 只當作原欄位內容" in calls[1][0][0]["content"]
     assert len([part for part in calls[1][0][1]["content"]
                 if part["type"] == "image_url"]) == 2
     info = extract_work_order_info(result, {}, {})
     assert info["fields"]["ring_on_form"] == "N"
-    assert info["ring"] == {"status": "yes", "reason": "size_rule",
-                            "process": "grinding", "threshold": 16}
+    assert info["ring"] == {"status": "no", "reason": "form_n", "process": "grinding"}
 
 
 def test_app_rereads_nonempty_but_invalid_flow_with_original_and_crop(monkeypatch):
@@ -269,7 +284,7 @@ def test_app_rereads_nonempty_but_invalid_flow_with_original_and_crop(monkeypatc
     assert len(calls) == 2
     assert len([part for part in calls[1][0][1]["content"]
                 if part["type"] == "image_url"]) == 2
-    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "no"
 
 
 @pytest.mark.parametrize(("field", "bad_value"), [
@@ -280,11 +295,15 @@ def test_app_retries_partial_unknown_character_in_ring_inputs(monkeypatch, field
     monkeypatch.setattr(app, "_has_ai_capability", lambda *_args: True)
     monkeypatch.setattr(app, "track_tokens", lambda *_args: None)
     first = PHOTO_DACAPO.replace(field, bad_value)
+    reread = FOCUSED
+    if field.startswith("成品尺寸"):
+        first = first.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+        reread = reread.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
     calls = []
 
     def vision(messages, **options):
         calls.append((messages, options))
-        response = first if len(calls) == 1 else FOCUSED
+        response = first if len(calls) == 1 else reread
         return SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content=response))])
 
@@ -294,7 +313,7 @@ def test_app_retries_partial_unknown_character_in_ring_inputs(monkeypatch, field
         photo = Path(__file__).resolve().parent / "tests" / "fixtures" / "work_order_20260906.jpg"
     result = app.ocr_work_order_fields(base64.b64encode(photo.read_bytes()).decode("ascii"))
     assert len(calls) == 2
-    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
+    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "no"
 
 
 @pytest.mark.parametrize("original", [

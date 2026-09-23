@@ -195,14 +195,17 @@ def _paint_color(code, lookup):
 def _spray_rows(info, paint_codes):
     paint = info["paint"]
     if paint["status"] == "no":
-        # The order's color cell is irrelevant when the position says no spray.
         return [_text("不噴 / Tidak dicat", weight="bold", margin="sm")]
-    if paint["status"] not in ("one", "both"):
+    if paint["status"] == "unknown":
         return [_text("噴漆位置待確認 / Posisi cat perlu diperiksa",
                       color=AMBER, margin="sm")]
-    side = ("單邊 / Satu sisi" if paint["status"] == "one"
-            else "雙邊 / Kedua sisi")
-    rows = [_text(side, weight="bold", margin="sm")]
+    if paint["status"] == "color_only":
+        rows = [_text("要噴漆（位置待確認） / Wajib dilakukan pengecatan semprot; posisi perlu dikonfirmasi",
+                      weight="bold", color=AMBER, margin="sm")]
+    else:
+        side = ("單邊 / Satu sisi" if paint["status"] == "one"
+                else "雙邊 / Kedua sisi")
+        rows = [_text(side, weight="bold", margin="sm")]
     code = _clean(paint.get("color_code"), 32)
     if not code:
         name = _clean(paint.get("color_name"), 30)
@@ -225,6 +228,7 @@ def _ring_text(ring):
     if ring["status"] == "no":
         return "不需套環 / Tidak perlu cincin pelindung", INK
     reason = {
+        "ring_field": "工單套環欄位待確認 / Kolom cincin pelindung pada work order perlu diperiksa",
         "flow": "套環待確認（流程碼未辨識） / Perlu konfirmasi (kode alur belum terbaca)",
         "diameter": "套環待確認（成品規格未辨識） / Perlu konfirmasi (ukuran produk belum terbaca)",
         "invalid_diameter": "套環待確認（成品規格無效） / Perlu konfirmasi (ukuran produk tidak valid)",

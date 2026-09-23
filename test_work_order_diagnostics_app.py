@@ -10,18 +10,19 @@ from work_order_diagnostics import load_diagnostics
 
 INITIAL_OCR = """冷精棒製造指示書
 訂單編號：Y1223786-008
-客戶名稱：DACAPO
+客戶名稱：佳東
 成品尺寸MIN：?
 成品尺寸MAX：?
 長度MIN：6000
 長度MAX：6050
 訂單流程：?
 噴漆位置：雙邊
+套環：N
 顏色：土藍
 包裝代碼：1O
 特殊備註：
 """
-REREAD = "訂單流程：CHRAPDGL\n成品尺寸MIN：17.957\n成品尺寸MAX：18"
+REREAD = "訂單流程：CHRAPL\n成品尺寸MIN：20\n成品尺寸MAX：20"
 
 
 def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
@@ -44,9 +45,9 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
     monkeypatch.setattr(app, "_vision_call", fake_vision)
     result = app.ocr_work_order_fields("fake-image")
     assert len(calls) == 2
-    assert "訂單流程：CHRAPDGL" in result
-    assert "成品尺寸MIN：17.957" in result
-    assert "成品尺寸MAX：18" in result
+    assert "訂單流程：CHRAPL" in result
+    assert "成品尺寸MIN：20" in result
+    assert "成品尺寸MAX：20" in result
     assert app.format_work_order_cards(result)["messages"][0]["type"] == "flex"
 
     # The stages let an operator distinguish failed transcription from a
@@ -61,9 +62,9 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
     assert records[3]["ring_retry_triggered"] is True
     assert records[3]["ring_retry_accepted"] is True
     assert records[-1]["ring_status"] == "yes"
-    assert records[-1]["flow_ocr"] == "CHRAPDGL"
+    assert records[-1]["flow_ocr"] == "CHRAPL"
     assert records[0]["timestamp_utc"].endswith("Z")
-    assert records[-1]["storage_area"] == "EH31"
+    assert records[-1]["storage_area"] == "EH70"
     assert all(record["message_id"] == "line_msg_123" for record in records)
     assert len(records[-1]["ocr_sha256"]) == 64
     assert load_diagnostics(msg_id="another_message") == []

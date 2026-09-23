@@ -1,16 +1,28 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-19.1-equipment-and-data-handoff",
+  "build_id": "2026-09-23.1-work-order-tag-color-ring-notice",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
       "id": "grinding_quality_equipment_scope",
       "enabled": true,
       "priority": 250,
-      "directions": ["id-zh"],
+      "directions": [
+        "id-zh"
+      ],
       "title": "研磨品質公告的設備範圍與尺寸位置",
       "match": {
-        "all_groups": [["mesin polishing"], ["grinding", "permukaan", "diameter", "gerinda"]],
+        "all_groups": [
+          [
+            "mesin polishing"
+          ],
+          [
+            "grinding",
+            "permukaan",
+            "diameter",
+            "gerinda"
+          ]
+        ],
         "require_all_groups": true,
         "min_score": 8
       },
@@ -28,10 +40,15 @@
       "id": "station_data_handoff_question",
       "enabled": true,
       "priority": 310,
-      "directions": ["zh-id"],
+      "directions": [
+        "zh-id"
+      ],
       "title": "資料卡站與放行檢驗語意",
       "match": {
-        "regex_any": ["(?:資料|资料|數據|数据).{0,8}(?:卡在|卡|停在)\\s*\\d{3}", "(?:未|沒|没有|沒有)放行[，,。\\s]+\\d{3}(?:站)?(?:都)?不(?:檢驗|检验|驗|验)"],
+        "regex_any": [
+          "(?:資料|资料|數據|数据).{0,8}(?:卡在|卡|停在)\\s*\\d{3}",
+          "(?:未|沒|没有|沒有)放行[，,。\\s]+\\d{3}(?:站)?(?:都)?不(?:檢驗|检验|驗|验)"
+        ],
         "min_score": 3
       },
       "context": [
@@ -4485,6 +4502,150 @@
           "source": "存檔入庫都沒儲區，要補印才有。",
           "target": "Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak. Informasinya baru muncul setelah TAG dicetak ulang.",
           "reason": "同一原文明確包含首印問題與補印才出現的條件。"
+        }
+      ]
+    },
+    {
+      "id": "work_order_tag_color_and_ring_notice_20260923",
+      "enabled": true,
+      "priority": 280,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "9/23工單 TAG、顏色噴漆與佳東 G 製程套環公告",
+      "match": {
+        "strong_phrases": [
+          "工單資料如果跟掛牌不同",
+          "#佳東 #G製程的研磨棒要套環"
+        ],
+        "all_groups": [
+          [
+            "工單"
+          ],
+          [
+            "掛牌",
+            "TAG"
+          ],
+          [
+            "噴漆",
+            "顏色"
+          ],
+          [
+            "套環"
+          ],
+          [
+            "佳東"
+          ],
+          [
+            "G製程",
+            "#G"
+          ]
+        ],
+        "require_all_groups": true,
+        "min_score": 22
+      },
+      "context": [
+        "此公告中的掛牌是材料上的實體識別 TAG，印尼文保留為 TAG；不可譯成 papan gantung。",
+        "工單資料與 TAG 不同時以工單資料為準；噴漆位置記為 N 但顏色欄有顏色時，仍依顏色噴漆。逐字保留 N、顏色及動作。",
+        "「#佳東 #G製程」是客戶佳東與 G 製程標籤；句意是佳東 G 製程的研磨棒要套環，不是把佳東當成製程名稱。保留 #佳東 與 #G，並清楚表達 G 製程。",
+        "這是原公告內容的翻譯參考。工單查詢實際噴漆與套環判斷以當前程式規則為準。"
+      ],
+      "preferred_target_phrases": [
+        "TAG",
+        "pengecatan semprot sesuai warna",
+        "proses G",
+        "Cincin Pelindung"
+      ],
+      "forbidden_target_phrases": [
+        "papan gantung",
+        "proses 佳東 dan G",
+        "proses “佳東” dan G"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "掛牌"
+          ],
+          "target_any": [
+            "TAG"
+          ],
+          "issue": "tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "顏色"
+          ],
+          "target_any": [
+            "warna"
+          ],
+          "issue": "color_field_meaning_missing"
+        },
+        {
+          "source_any": [
+            "噴漆"
+          ],
+          "target_any": [
+            "pengecatan semprot",
+            "cat semprot"
+          ],
+          "issue": "spray_painting_missing"
+        },
+        {
+          "source_any": [
+            "套環"
+          ],
+          "target_any": [
+            "cincin pelindung"
+          ],
+          "issue": "protective_ring_missing"
+        },
+        {
+          "source_any": [
+            "佳東"
+          ],
+          "target_any": [
+            "#佳東"
+          ],
+          "issue": "customer_tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "#G",
+            "G製程"
+          ],
+          "target_any": [
+            "#G"
+          ],
+          "issue": "process_tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "G製程"
+          ],
+          "target_any": [
+            "proses G"
+          ],
+          "issue": "process_g_relationship_missing"
+        },
+        {
+          "source_any": [
+            "研磨棒"
+          ],
+          "target_any": [
+            "batang grinding"
+          ],
+          "issue": "grinding_rod_missing"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?<![A-Za-z])N(?![A-Za-z])"
+      ],
+      "examples": [
+        {
+          "source": "重新宣導一次，以9/23今天的最新資訊為主。\n工單資料如果跟掛牌不同，以工單資料為主。\n工單上噴漆位置\"N\"但是旁邊欄位有註記顏色，一律按照上面顏色噴漆。\n拋光人員注意：\n工單上套環欄位是N就不要套了。\n#佳東 #G製程的研磨棒要套環，如果另外有客戶溝通要套環我們後續再新增。",
+          "target": "Disampaikan kembali: gunakan informasi terbaru per hari ini, 9/23, sebagai acuan.\nJika informasi pada work order berbeda dengan TAG, gunakan informasi pada work order sebagai acuan.\nJika posisi pengecatan semprot pada work order tertulis \"N\", tetapi kolom di sebelahnya mencantumkan warna, tetap lakukan pengecatan semprot sesuai warna yang tertera.\nPerhatian bagi petugas polishing:\nJika kolom Cincin Pelindung pada work order tertulis N, jangan dipasang.\n#佳東 #G: Batang grinding pada proses G wajib dipasangi Cincin Pelindung. Jika ada komunikasi tambahan dari pelanggan bahwa Cincin Pelindung perlu dipasang, ketentuan itu akan kami tambahkan kemudian.",
+          "bad_target": "papan gantung",
+          "reason": "已校正掛牌為 TAG，並明確保留佳東客戶、G製程、研磨棒及套環的修飾關係。"
         }
       ]
     }

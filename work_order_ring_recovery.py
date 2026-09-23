@@ -1,8 +1,8 @@
-"""Source-bound second OCR reading for an incomplete work-order ring decision.
+"""Focused OCR for missing fields needed by Jia Dong's ring exception.
 
-The printed ring Y/N is never used.  A focused reading can fill a missing
-process or finished-size cell when missing or illegible, without replacing
-readable valid cells; the normal work-order rules then decide the ring.
+A second reading can fill missing process/size cells without replacing
+readable valid cells.  It never invents a ring value or changes the source
+ring cell; normal work-order rules decide the result afterward.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def focused_ring_crop(image_base64):
 
 
 def needs_ring_retry(ocr_text):
-    """Retry only when missing or invalid OCR prevents the ring rule."""
+    """Retry only when missing OCR prevents checking Jia Dong's size exception."""
     if not isinstance(ocr_text, str) or not ocr_text.strip():
         return False
     info = extract_work_order_info(ocr_text, {}, {})
@@ -244,9 +244,9 @@ def _safe_original(ocr_text, retry):
 def merge_confirmed_ring_fields(ocr_text, retry_text):
     """Merge a complete nonconflicting reread and let normal rules decide.
 
-    This function does not inspect or use the printed Y/N and does not invent
-    characters that either reading failed to see.  If safety checks fail it
-    returns the first OCR verbatim, leaving the card at 待確認.
+    It preserves the printed Y/N and does not invent characters that either
+    reading failed to see.  If safety checks fail it returns the first OCR
+    verbatim, leaving the card at 待確認.
     """
     if not needs_ring_retry(ocr_text):
         return ocr_text
@@ -264,8 +264,11 @@ def merge_confirmed_ring_fields(ocr_text, retry_text):
             lines.append(f"{_LABELS[field]}：{retry[field]}")
     candidate = "\n".join(lines)
     after = extract_work_order_info(candidate, {}, {})
-    if (after.get("ring", {}).get("status") not in {"yes", "no"}
-            or after.get("is_work_order") is not True):
+    after_ring = after.get("ring", {})
+    resolved = (after_ring.get("status") in {"yes", "no"}
+                or (after_ring.get("status") == "unknown"
+                    and after_ring.get("reason") == "ring_field"))
+    if not resolved or after.get("is_work_order") is not True:
         return ocr_text
     for key in original_fields:
         if key not in _FIELDS and after.get("fields", {}).get(key) != original_fields[key]:

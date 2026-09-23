@@ -96,8 +96,9 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_1d_legacy_g_met
     assert "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun" in summary
     assert "原表簡稱與明細不一致" not in summary
     assert "3P袋+PE布" not in summary
-    assert "不噴 / Tidak dicat" in summary
-    assert "色碼 109" not in summary
+    assert "要噴漆（位置待確認）" in summary
+    assert "色碼 109 · 黑 / hitam" in summary
+    assert "色碼 109 · 黑 / hitam" in summary
     assert "不需套環 / Tidak perlu cincin pelindung" in summary
     assert "頭中尾內舖PC布墊" in summary
     assert "Letakkan bantalan kain PC" in summary
@@ -114,6 +115,7 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_1d_legacy_g_met
 
 def test_unresolved_ring_summary_names_the_missing_rule_input_without_using_form_yn():
     cases = {
+        "ring_field": "工單套環欄位待確認",
         "flow": "流程碼未辨識",
         "diameter": "成品規格未辨識",
         "invalid_diameter": "成品規格無效",
@@ -121,9 +123,9 @@ def test_unresolved_ring_summary_names_the_missing_rule_input_without_using_form
     }
     for reason, expected in cases.items():
         text, color = _ring_text({"status": "unknown", "reason": reason})
-        assert "套環待確認" in text
+        assert ("工單套環欄位待確認" if reason == "ring_field" else "套環待確認") in text
         assert expected in text
-        assert "Perlu konfirmasi" in text
+        assert ("perlu diperiksa" if reason == "ring_field" else "Perlu konfirmasi") in text
         assert color
 
 
@@ -191,7 +193,8 @@ def test_paint_color_only_when_paint_location_requires_it():
     no_paint = PHOTO_5.replace("顏色：N", "顏色：109")
     result = build_work_order_cards(no_paint, STORAGE, PACKAGING)
     main = _body_text(result["messages"][0])
-    assert "色碼" not in main and "hitam" not in main
+    assert "要噴漆（位置待確認）" in main
+    assert "色碼 109 · 黑 / hitam" in main
     painted = no_paint.replace("噴漆位置：不噴", "噴漆位置：雙邊")
     main = _body_text(build_work_order_cards(painted, STORAGE, PACKAGING)["messages"][0])
     assert "雙邊 / Kedua sisi" in main

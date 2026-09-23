@@ -8517,9 +8517,9 @@ _FACTORY_DOMAIN_TERM_RULES_ZH_ID = [
         "key": "grinding_rod",
         "source_terms": ("研磨棒",),
         "preferred_id": "grinding rod",
-        "required_groups": (("grinding rod", "batang hasil proses grinding", "batang yang diproses di bagian grinding"),),
+        "required_groups": (("grinding rod", "batang grinding", "batang hasil proses grinding", "batang yang diproses di bagian grinding"),),
         "forbidden_id_terms": ("batang gerinda",),
-        "note": "研磨製程中的棒材/產品，現場固定稱 grinding rod；不是研磨工具。",
+        "note": "研磨製程中的棒材/產品，現場使用 grinding rod，也接受常用說法 batang grinding；不是研磨工具。",
     },
     {
         "key": "short_material_handling",
@@ -17627,7 +17627,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
         mime_type = "image/jpeg"
     fields = (
         "文件標題, 訂單編號, 客戶名稱, 收貨人, 成品尺寸MIN, 成品尺寸MAX, "
-        "長度MIN, 長度MAX, 訂單流程, 成品MC, 噴漆位置, 顏色, 包裝代碼, "
+        "長度MIN, 長度MAX, 訂單流程, 成品MC, 噴漆位置, 套環, 顏色, 包裝代碼, "
         "特殊備註, 訂單備註"
     )
     messages = [
@@ -17635,6 +17635,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             "你是工廠製造指示書的逐格 OCR。只抄照片實際可見的值，不翻譯、不推算、不用工廠常識補缺格。"
             "同一水平資料列要對應同一欄的標題，絕不能把『收貨人』當『客戶名稱』，"
             "也不能把『套環 Y／N』當作特殊備註。"
+            "『套環』是獨立欄位；標題與值看得見時必須逐字抄錄 Y 或 N，不可省略，也不可由尺寸或製程推算。"
             "請將可見的欄位各輸出一行『欄位名稱：原文值』，欄名限用：" + fields + "。"
             "最前面先抄文件標題；每個欄位只有確實看見標題及對應值時才輸出。"
             "標題看得見但值遮擋或辨識不清時填 ?；照片裁切掉的欄位整行省略。"
@@ -17644,7 +17645,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             "『訂單流程』逐字保留實際字母，若末尾是 L、D 或 GL 也不得更改；"
             "『特殊備註』若原文有否定詞或 NO KONDOM 才逐字保留，沒有就絕不能自行加上。"
             "不能將交期或訂單備註移到特殊備註。"
-            "噴漆位置、顏色、包裝代碼是三個不同欄位；不噴時也照抄顏色原值，不做判斷。"
+            "噴漆位置、套環、顏色、包裝代碼是四個不同欄位；不噴時也照抄顏色原值，不做判斷。"
             "包裝代碼的英文字母 O 和數字 0 要逐字照抄；辨不清就填 ?，不可猜成另一碼。"
             "看不到確定的工單文字就輸出 NO_WORK_ORDER。不要附加說明。"
         )},
@@ -17657,7 +17658,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
     try:
         response = _vision_call(
             messages, max_tokens=1400,
-            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query"),
+            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_ring_cell_v2"),
             task_type="ocr",
         )
         track_tokens(response)
@@ -17803,7 +17804,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                             "只輸出三行：『訂單流程：原文』『成品尺寸MIN：數值』『成品尺寸MAX：數值』。"
                             "訂單流程要逐字抄錄，特別區分尾碼 GL、L、D；不清楚填 ?，不能猜。"
                             "尺寸只能取成品尺寸，不可取母材尺寸、短邊、厚度或長度。"
-                            "套環欄 Y／N 不可靠，不可用來推論流程或尺寸；不得自行判斷是否套環。"
+                            "套環欄 Y／N 只當作原欄位內容，不可用來推論流程或尺寸；這次不要自行回答是否套環。"
                         )},
                         {"role": "user", "content": ring_images + [
                             {"type": "text", "text": "請只抄工單實際印刷的訂單流程與成品尺寸 MIN、MAX 三格。"},

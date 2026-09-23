@@ -45,7 +45,10 @@ _STORAGE_REASON = _STORAGE_STATUS | {
 }
 _RING_STATUS = {"yes", "no", "unknown", "not_work_order"}
 _RING_REASON = {
-    "explicit_note", "packaging_material", "size_rule", "flow", "diameter",
+    # Keep the historical values readable while accepting the current form
+    # field and Jia Dong exception decisions emitted by work_order_query.
+    "explicit_note", "packaging_material", "size_rule", "form_y", "form_n",
+    "ring_field", "jiadong_polishing_20mm", "flow", "diameter",
     "invalid_diameter", "threshold_crossing", "not_work_order",
 }
 _RETRY_KEYS = (
