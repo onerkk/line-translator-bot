@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from work_order_query import (_PACKAGING_DETAIL_EN, _PACKAGING_DETAIL_ID,
+                              _PAINT_CODES,
                               _PACKAGING_SHORT_EN, _PACKAGING_SHORT_ID,
                               build_work_order_reply, extract_work_order_info)
 
@@ -168,11 +169,68 @@ def test_paint_single_or_both_needs_visible_color_code_and_never_infers_meaning(
     info = extract_work_order_info(text, STORAGE, PACKAGING)
     assert info["paint"] == {"status": "both", "color_code": "B12"}
     reply = build_work_order_reply(text, STORAGE, PACKAGING)
-    assert "雙邊 / Kedua ujung" in reply and "顏色代碼 / Kode warna：B12" in reply
+    assert "雙邊 / Kedua sisi" in reply and "顏色代碼 / Kode warna：B12" in reply
     assert "顏色 / Warna：" not in reply
     text = text.replace("雙邊", "單邊").replace("顏色：B12", "顏色：?")
     reply = build_work_order_reply(text, STORAGE, PACKAGING)
-    assert "單邊 / Satu ujung" in reply and "顏色代碼 / Kode warna：待確認" in reply
+    assert "單邊 / Satu sisi" in reply and "顏色代碼 / Kode warna：待確認" in reply
+
+
+def test_verified_paint_codes_match_all_supplied_cans():
+    # Expected original names and numbers are read from the user's photos.
+    assert {code: entry["zh"] for code, entry in _PAINT_CODES.items()} == {
+        "46": "土藍", "101": "紅", "102": "白", "108": "黃",
+        "109": "黑", "113": "桃紅", "115": "橘紅", "116": "青",
+        "137": "軍綠", "144": "茶霧面", "169": "黃綠",
+    }
+    assert all(entry.get("id") and entry.get("en") for entry in _PAINT_CODES.values())
+    # The can says 青; its appearance does not verify blue or green.
+    assert _PAINT_CODES["116"]["id"] == _PAINT_CODES["116"]["en"] == "qing (青)"
+    assert "tea" in _PAINT_CODES["144"]["en"]
+    assert "matte" in _PAINT_CODES["144"]["en"]
+
+
+@pytest.mark.parametrize(("side", "indonesian", "english"), [
+    ("單邊", "Satu sisi", "One side"),
+    ("雙邊", "Kedua sisi", "Both sides"),
+])
+def test_known_code_from_final_photo_translates_only_when_painted(side, indonesian, english):
+    text = PHOTO_5.replace("噴漆位置：不噴", "噴漆位置：" + side).replace("顏色：N", "顏色：１０９")
+    reply = build_work_order_reply(text, STORAGE, PACKAGING)  # No explicit mapping from the LINE app.
+    assert f"噴漆 / Pengecatan semprot：{side} / {indonesian}" in reply
+    assert "顏色代碼 / Kode warna：109" in reply
+    assert "顏色 / Warna：黑 / hitam" in reply
+    assert f"Spray paint: {english}" in reply
+    assert "Color code: 109" in reply and "Color: black" in reply
+
+
+def test_no_spray_disregards_a_known_color_code_and_an_unknown_code_stays_raw():
+    no_spray = PHOTO_5.replace("顏色：N", "顏色：109")
+    reply = build_work_order_reply(no_spray, STORAGE, PACKAGING)
+    assert "噴漆 / Pengecatan semprot：不噴 / Tidak perlu dicat" in reply
+    assert "Spray paint: None" in reply
+    assert "顏色代碼 / Kode warna：" not in reply
+    assert "顏色 / Warna：" not in reply
+    assert "Color code:" not in reply and "Color:" not in reply
+    unknown = no_spray.replace("噴漆位置：不噴", "噴漆位置：單邊").replace("顏色：109", "顏色：109 黑色")
+    reply = build_work_order_reply(unknown, STORAGE, PACKAGING)
+    assert "顏色代碼 / Kode warna：109 黑色" in reply
+    assert "顏色 / Warna：" not in reply and "Color:" not in reply
+
+
+def test_table_cells_and_explicit_override_keep_paint_lookup_source_bound():
+    table = """冷精棒製造指示書
+訂單編號 / No.Pesan | 客戶名稱 / Nama Pelanggan | 收貨人 / Penerima Barang
+Y1223801-012 | 方鉦 | 方鉦
+噴漆位置 | 套環 | 顏色 | 包裝代碼
+雙邊 | N | 109 | 9G
+訂單流程 | 成品尺寸MIN | 成品尺寸MAX
+CHRAPDAEJL | 3.97 | 4
+"""
+    info = extract_work_order_info(table, STORAGE, PACKAGING)
+    assert info["paint"] == {"status": "both", "color_code": "109"}
+    assert "顏色 / Warna：黑 / hitam" in build_work_order_reply(table, STORAGE, PACKAGING)
+    assert "顏色 / Warna：" not in build_work_order_reply(table, STORAGE, PACKAGING, paint_codes={})
 
 
 def test_legacy_code_with_multiple_methods_asks_for_new_code():

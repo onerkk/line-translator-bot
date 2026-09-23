@@ -97,18 +97,21 @@ _PACKAGING_SHORT_EN = {
 }
 
 
-def _load_packaging_detail(filename):
+def _load_bundled_lookup(filename):
     try:
         path = Path(__file__).with_name(filename)
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        # Do not block work orders when an optional translation file is absent.
+        # An absent or damaged lookup must leave its values unconfirmed.
         return {}
 
 
-_PACKAGING_DETAIL_ID = _load_packaging_detail("packaging_detail_id.json")
-_PACKAGING_DETAIL_EN = _load_packaging_detail("packaging_detail_en.json")
+_PACKAGING_DETAIL_ID = _load_bundled_lookup("packaging_detail_id.json")
+_PACKAGING_DETAIL_EN = _load_bundled_lookup("packaging_detail_en.json")
+# These codes were read from the user's paint cans and checked against the
+# numbered rack.  Unknown OCR codes must remain unknown.
+_PAINT_CODES = _load_bundled_lookup("paint_codes_data.json")
 
 
 def _text(raw):
@@ -318,6 +321,17 @@ def _paint(fields):
     return {"status": "unknown", "color_code": None, "raw_position": raw}
 
 
+def _verified_paint_color(code, lookup):
+    """Resolve a complete, exact code match without guessing OCR fragments."""
+    if not code or not isinstance(lookup, dict):
+        return None
+    entry = lookup.get(normalize_code(code))
+    if not isinstance(entry, dict):
+        return None
+    labels = {lang: _value(entry.get(lang)) for lang in ("zh", "id", "en")}
+    return labels if all(labels.values()) else None
+
+
 _NO_RING = re.compile(r"不要\s*(?:黑色)?\s*套[環环]|不\s*套[環环]|(?:無需|无需|免)\s*套[環环]|\bNO\s+KONDOM\b", re.I)
 
 
@@ -382,6 +396,9 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     Translator callbacks are only for new, unrecognized admin descriptions;
     the model never decides work-order rules or storage/code lookups.
     """
+    # The LINE app supplies no explicit paint table; use the reviewed cans by
+    # default.  An explicit mapping, including {}, is a deliberate override.
+    paint_codes = _PAINT_CODES if paint_codes is None else paint_codes
     info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes)
     if not info["is_work_order"]:
         return "⚠️ 未確認為工單 / Belum dapat dipastikan sebagai work order / Work order not confirmed."
@@ -402,20 +419,18 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     lines.append("長度 / Panjang：" + _show_range(info["length"]) + (" mm" if info["length"] else ""))
 
     paint = info["paint"]
+    color = (_verified_paint_color(paint["color_code"], paint_codes)
+             if paint["status"] in ("one", "both") else None)
     if paint["status"] == "no":
         lines.append("噴漆 / Pengecatan semprot：不噴 / Tidak perlu dicat")
     elif paint["status"] in ("one", "both"):
-        text = ("單邊 / Satu ujung" if paint["status"] == "one"
-                else "雙邊 / Kedua ujung")
+        text = ("單邊 / Satu sisi" if paint["status"] == "one"
+                else "雙邊 / Kedua sisi")
         lines.append("噴漆 / Pengecatan semprot：" + text)
         raw_code = paint["color_code"]
         lines.append("顏色代碼 / Kode warna：" + (raw_code or "待確認 / Perlu diperiksa"))
-        # The caller may provide verified paint codes later; never infer code
-        # meanings from the color of another order or unknown image samples.
-        if raw_code and isinstance(paint_codes, dict):
-            mapped = paint_codes.get(normalize_code(raw_code))
-            if isinstance(mapped, dict) and mapped.get("zh") and mapped.get("id"):
-                lines.append("顏色 / Warna：" + str(mapped["zh"]) + " / " + str(mapped["id"]))
+        if color:
+            lines.append("顏色 / Warna：" + color["zh"] + " / " + color["id"])
     else:
         lines.append("噴漆 / Pengecatan semprot：位置待確認 / Posisi perlu diperiksa")
 
@@ -490,12 +505,10 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     if paint["status"] == "no":
         lines.append("Spray paint: None")  # Color is irrelevant in this case.
     elif paint["status"] in ("one", "both"):
-        lines.append("Spray paint: " + ("One end" if paint["status"] == "one" else "Both ends"))
+        lines.append("Spray paint: " + ("One side" if paint["status"] == "one" else "Both sides"))
         lines.append("Color code: " + (paint.get("color_code") or "To confirm"))
-        if paint.get("color_code") and isinstance(paint_codes, dict):
-            mapped = paint_codes.get(normalize_code(paint["color_code"]))
-            if isinstance(mapped, dict) and mapped.get("en"):
-                lines.append("Color: " + str(mapped["en"]))
+        if color:
+            lines.append("Color: " + color["en"])
     else:
         lines.append("Spray paint: Confirm position")
     if package["status"] == "ok":
