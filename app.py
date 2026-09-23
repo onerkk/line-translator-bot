@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from line_quote_context import get_quote_token, get_quoted_message_id, resolve_quote_context
 import translation_retry_queue as translation_retry_queue_module
 import offline_translation as offline_translation_module
-from flask import Flask, request, abort, jsonify, g, has_request_context
+from flask import Flask, request, abort, jsonify, g, has_request_context, render_template
+from werkzeug.exceptions import RequestEntityTooLarge
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, MessagingApiBlob,
@@ -142,6 +143,7 @@ import uuid
 import zipfile
 from io import BytesIO
 import threading
+import zip_update_manager as zip_update_module
 import contextlib
 import translation_request_cache
 import factory_record_contract
@@ -234,6 +236,8 @@ app = Flask(__name__)
 # 沒設的話 Flask default 沒限,惡意/誤傳大檔會吃光 Render 256-512MB RAM
 # Storage Excel 通常 <2MB,Rich Menu image 1040x1040 PNG 通常 <1MB,給 8MB 緩衝
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB
+_ZIP_UPDATE_VAULT = zip_update_module.UploadVault()
+_ZIP_UPDATE_LOCK = threading.Lock()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -794,6 +798,7 @@ import language_detection as ld_module        # Phase O: Language auto-detect
 import confidence_scoring as cs_module        # Phase Q: Translation confidence
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "onerkk/line-translator-bot").strip() or "onerkk/line-translator-bot"
+GITHUB_DEPLOY_BRANCH = os.environ.get("GITHUB_DEPLOY_BRANCH", "main").strip() or "main"
 LIFF_ID = os.environ.get("LIFF_ID", "")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
@@ -32254,6 +32259,12 @@ def admin_page():
         "__GOOGLE_CLIENT_ID_JSON__",
         _json_for_inline_script(GOOGLE_CLIENT_ID),
     )
+    header = '<div class="header"><h1>🤖 翻譯Bot 管理後台 <span class="platform">LINE</span></h1></div>'
+    header_with_zip_link = (
+        '<div class="header"><h1>🤖 翻譯Bot 管理後台 <span class="platform">LINE</span></h1>'
+        '<a href="/admin/zip-update" style="display:inline-block;margin-top:8px;color:#d0fff4;font-size:12px;text-decoration:none">📦 手機 ZIP 更新與部署 →</a></div>'
+    )
+    html = html.replace(header, header_with_zip_link)
     resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -32374,6 +32385,278 @@ def admin_icon():
 
 
 # ─── Admin API ──────────────────────────────────────────
+
+def _zip_update_authorize():
+    """Restrict source-code writes to an explicitly configured super-admin key."""
+    configured_key = os.environ.get("ADMIN_KEY", "").strip()
+    if not configured_key or configured_key.casefold() == "changeme":
+        return jsonify({
+            "ok": False,
+            "code": "admin_key_unconfigured",
+            "error": "請先在伺服器設定非預設的 ADMIN_KEY，再啟用 ZIP 更新。",
+        }), 503
+    if not check_admin_key():
+        return jsonify({"ok": False, "code": "forbidden", "error": "需要超級管理員密碼。"}), 403
+    return None
+
+
+def _zip_update_client():
+    return zip_update_module.GitHubClient(
+        GITHUB_TOKEN,
+        GITHUB_REPO,
+        GITHUB_DEPLOY_BRANCH,
+        timeout=20,
+    )
+
+
+def _zip_update_error_response(exc):
+    if isinstance(exc, RequestEntityTooLarge):
+        return jsonify({
+            "ok": False,
+            "code": "archive_too_large",
+            "error": f"ZIP 超過 {zip_update_module.MAX_ARCHIVE_BYTES // (1024 * 1024)} MiB 上限。",
+        }), 413
+    if isinstance(exc, zip_update_module.ZipUpdateError):
+        return jsonify({"ok": False, "code": exc.code, "error": exc.message}), exc.status_code
+    logger.exception("Unexpected mobile ZIP update failure")
+    return jsonify({"ok": False, "code": "internal_error", "error": "ZIP 更新失敗，請稍後重試。"}), 500
+
+
+def _zip_archive_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        while True:
+            chunk = source.read(zip_update_module.CHUNK_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _trigger_render_deploy():
+    """Trigger an optional Render Deploy Hook without ever returning its URL."""
+    hook = os.environ.get("RENDER_DEPLOY_HOOK_URL", "").strip()
+    if not hook:
+        return {"configured": False, "triggered": False, "deploy_id": None}
+    try:
+        parsed = urllib.parse.urlsplit(hook)
+        query_keys = set(urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.render.com"
+            or not parsed.path.startswith("/deploy/")
+            or "key" not in query_keys
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            return {"configured": True, "triggered": False, "deploy_id": None}
+        http_request = urllib.request.Request(
+            hook,
+            data=b"",
+            method="POST",
+            headers={"User-Agent": "line-translator-mobile-zip-updater"},
+        )
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                return None
+
+        deploy_opener = urllib.request.build_opener(_NoRedirect)
+        with deploy_opener.open(http_request, timeout=10) as response:
+            raw = response.read(256 * 1024)
+        result = {}
+        if raw:
+            try:
+                result = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                result = {}
+        nested = result.get("deploy") if isinstance(result, dict) else None
+        deploy_id = (result.get("id") if isinstance(result, dict) else None)
+        if not deploy_id and isinstance(nested, dict):
+            deploy_id = nested.get("id")
+        if not isinstance(deploy_id, str) or len(deploy_id) > 128:
+            deploy_id = None
+        return {"configured": True, "triggered": True, "deploy_id": deploy_id}
+    except Exception as exc:
+        # The GitHub commit has already succeeded. Keep that success visible and
+        # let the connected Render auto-deploy continue if it is enabled.
+        logger.warning("Render deploy hook failed after ZIP commit (%s)", type(exc).__name__)
+        return {"configured": True, "triggered": False, "deploy_id": None}
+
+
+def _zip_deployment_status(target_sha):
+    live_sha = os.environ.get("RENDER_GIT_COMMIT", "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", live_sha):
+        live_sha = ""
+    if live_sha == target_sha:
+        state = "live"
+    elif live_sha:
+        state = "pending"
+    else:
+        state = "unknown"
+    return {
+        "ok": True,
+        "state": state,
+        "deployed": state == "live",
+        "target_commit": target_sha,
+        "live_commit": live_sha or None,
+        "live_commit_short": live_sha[:7] if live_sha else None,
+    }
+
+
+@app.route("/admin/zip-update")
+def mobile_zip_update_page():
+    resp = app.response_class(
+        render_template("admin_zip_update.html"),
+        mimetype="text/html",
+    )
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.route("/api/admin/zip-update/config", methods=["GET"])
+def api_admin_zip_update_config():
+    denied = _zip_update_authorize()
+    if denied:
+        return denied
+    try:
+        client = _zip_update_client()
+        head = client.get_branch_head()
+        return jsonify({
+            "ok": True,
+            "repo": client.repo,
+            "branch": client.branch,
+            "github_connected": True,
+            "branch_commit": head,
+            "branch_commit_short": head[:7],
+            "render_hook_configured": bool(os.environ.get("RENDER_DEPLOY_HOOK_URL", "").strip()),
+            "max_upload_bytes": zip_update_module.MAX_ARCHIVE_BYTES,
+        })
+    except Exception as exc:
+        return _zip_update_error_response(exc)
+
+
+@app.route("/api/admin/zip-update/inspect", methods=["POST"])
+def api_admin_zip_update_inspect():
+    denied = _zip_update_authorize()
+    if denied:
+        return denied
+    try:
+        client = _zip_update_client()
+        # Keep the existing 8 MiB limit for every other endpoint. Flask 3.1
+        # supports a per-request limit so the mobile ZIP route can accept up to
+        # 139 MiB without raising the application's global memory exposure.
+        request.max_content_length = zip_update_module.MAX_REQUEST_BYTES
+        uploaded = request.files.get("file")
+        if uploaded is None or not uploaded.filename:
+            raise zip_update_module.ZipUpdateError("missing_file", "請選擇 ZIP 檔案。", 400)
+        filename = uploaded.filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if not filename.casefold().endswith(".zip"):
+            raise zip_update_module.ZipUpdateError("not_zip", "請選擇副檔名為 .zip 的更新包。", 400)
+        upload_id, archive_sha, archive_size = _ZIP_UPDATE_VAULT.store(uploaded.stream)
+        archive_path = _ZIP_UPDATE_VAULT.path_for(upload_id)
+        if not _ZIP_UPDATE_LOCK.acquire(blocking=False):
+            _ZIP_UPDATE_VAULT.remove(upload_id)
+            return jsonify({"ok": False, "code": "update_busy", "error": "目前有另一個 ZIP 更新正在檢查或提交，請稍後再試。"}), 409
+        try:
+            base_sha, tree = client.get_branch_snapshot()
+            plan, summary = zip_update_module.inspect_zip_path(archive_path, tree, client.repo)
+        finally:
+            _ZIP_UPDATE_LOCK.release()
+        ticket = zip_update_module.issue_preview_ticket({
+            "upload_id": upload_id,
+            "archive_sha256": archive_sha,
+            "archive_bytes": archive_size,
+            "repo": client.repo,
+            "branch": client.branch,
+            "base_sha": base_sha,
+            "plan_sha256": summary["plan_sha256"],
+            "expires_at": int(time.time()) + zip_update_module.PREVIEW_TTL_SECONDS,
+        }, ADMIN_KEY)
+        summary.pop("plan_sha256", None)
+        return jsonify({
+            "ok": True,
+            "preview_token": ticket,
+            "repo": client.repo,
+            "branch": client.branch,
+            "base_commit": base_sha,
+            "base_commit_short": base_sha[:7],
+            "archive_bytes": archive_size,
+            "expires_in_seconds": zip_update_module.PREVIEW_TTL_SECONDS,
+            "summary": summary,
+        })
+    except Exception as exc:
+        if "upload_id" in locals():
+            _ZIP_UPDATE_VAULT.remove(upload_id)
+        return _zip_update_error_response(exc)
+
+
+@app.route("/api/admin/zip-update/apply", methods=["POST"])
+def api_admin_zip_update_apply():
+    denied = _zip_update_authorize()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    try:
+        ticket = zip_update_module.verify_preview_ticket(data.get("preview_token", ""), ADMIN_KEY)
+        client = _zip_update_client()
+        if ticket.get("repo") != client.repo or ticket.get("branch") != client.branch:
+            raise zip_update_module.ZipUpdateError("preview_target_changed", "更新目標已變更，請重新檢查 ZIP。", 409)
+        upload_id = ticket["upload_id"]
+        archive_path = _ZIP_UPDATE_VAULT.path_for(upload_id)
+        if not archive_path.is_file() or _zip_archive_sha256(archive_path) != ticket.get("archive_sha256"):
+            _ZIP_UPDATE_VAULT.remove(upload_id)
+            raise zip_update_module.ZipUpdateError("preview_expired", "找不到原始 ZIP 預覽檔，請重新選擇並檢查。", 410)
+        if not _ZIP_UPDATE_LOCK.acquire(blocking=False):
+            return jsonify({"ok": False, "code": "update_busy", "error": "目前有另一個 ZIP 更新正在檢查或提交，請稍後再試。"}), 409
+        try:
+            current_sha, tree = client.get_branch_snapshot()
+            if current_sha != ticket.get("base_sha"):
+                raise zip_update_module.ZipUpdateError(
+                    "branch_changed",
+                    "GitHub 分支在預覽後已有新提交；為避免蓋掉別人的更新，請重新檢查 ZIP。",
+                    409,
+                )
+            plan, summary = zip_update_module.inspect_zip_path(archive_path, tree, client.repo)
+            if summary.get("plan_sha256") != ticket.get("plan_sha256"):
+                raise zip_update_module.ZipUpdateError("preview_changed", "ZIP 預覽內容已改變，請重新檢查。", 409)
+            result = zip_update_module.apply_plan(
+                archive_path,
+                plan,
+                client,
+                current_sha,
+                zip_update_module.sanitize_commit_message(data.get("commit_message")),
+            )
+        finally:
+            _ZIP_UPDATE_LOCK.release()
+        if not result["changed"]:
+            _ZIP_UPDATE_VAULT.remove(upload_id)
+            return jsonify({"ok": True, "changed": False, "message": "ZIP 內容與 GitHub 完全相同，沒有需要提交的變更。"})
+        deploy = _trigger_render_deploy()
+        _ZIP_UPDATE_VAULT.remove(upload_id)
+        return jsonify({
+            "ok": True,
+            **result,
+            "deploy": deploy,
+            "deployment_status_url": "/api/admin/zip-update/status/" + result["commit_sha"],
+        })
+    except Exception as exc:
+        return _zip_update_error_response(exc)
+
+
+@app.route("/api/admin/zip-update/status/<commit_sha>", methods=["GET"])
+def api_admin_zip_update_status(commit_sha):
+    denied = _zip_update_authorize()
+    if denied:
+        return denied
+    commit_sha = str(commit_sha or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        return jsonify({"ok": False, "code": "invalid_commit", "error": "提交版本格式無效。"}), 400
+    return jsonify(_zip_deployment_status(commit_sha))
 
 @app.route("/api/admin/status")
 def api_admin_status():
@@ -35251,6 +35534,7 @@ def health():
     return {
         "status": "ok",
         "version": VERSION,
+        "deployment_commit": os.environ.get("RENDER_GIT_COMMIT", "") or None,
         "webhook_runtime_build": webhook_runtime.BUILD_ID,
         "worker_startup_build": _WORKER_STARTUP_BUILD,
         "provider_error_policy_build": ai_provider.ERROR_POLICY_BUILD_ID,
