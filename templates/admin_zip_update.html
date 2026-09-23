@@ -62,13 +62,14 @@
 
   <div class="stages" aria-label="更新步驟"><div class="stage active" id="stage1"><b>檢查檔案</b>比對 ZIP 與部署分支</div><div class="stage" id="stage2"><b>提交更新</b>建立單一版本提交</div><div class="stage" id="stage3"><b>確認部署</b>等待線上版本更新</div></div>
   <div class="status" id="deploymentStatus" role="status"></div>
+  <button class="button secondary small" id="retryDeployment" type="button" hidden style="margin-top:10px">重新查詢部署狀態</button>
   <p class="footer">更新只在確認提交後寫入 GitHub。若 GitHub 分支在檢查期間改變，系統會要求重新檢查，避免覆蓋較新的版本。</p>
 </main>
 <script>
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = { connected:false, file:null, token:null, summary:null, busy:false };
+  const state = { connected:false, file:null, token:null, summary:null, busy:false, deploymentStatusUrl:null };
   const keyInput = $('adminKey');
   let savedKey=''; try{savedKey=localStorage.getItem('bot_admin_key') || '';}catch(_e){}
   if (savedKey) keyInput.value = savedKey;
@@ -87,7 +88,7 @@
     $('apply').disabled=value || !state.token || !(state.summary && state.summary.changed_files>0);
   }
   function resetPreview() {
-    state.token=null; state.summary=null; $('preview').classList.remove('show'); hide('inspectStatus'); hide('applyStatus'); hide('deploymentStatus');
+    state.token=null; state.summary=null; state.deploymentStatusUrl=null; $('retryDeployment').hidden=true; $('preview').classList.remove('show'); hide('inspectStatus'); hide('applyStatus'); hide('deploymentStatus');
     $('stage1').className='stage active'; $('stage2').className='stage'; $('stage3').className='stage';
     setBusy(false);
   }
@@ -99,7 +100,12 @@
   }
   async function parseResponse(response) {
     let data={}; try{data=await response.json()}catch(_e){}
-    if(!response.ok || !data.ok) throw new Error(data.error || ('HTTP '+response.status));
+    if(!response.ok || !data.ok) {
+      const error=new Error(data.error || ('HTTP '+response.status));
+      error.status=response.status;
+      error.code=data.code || '';
+      throw error;
+    }
     return data;
   }
   async function connect() {
@@ -153,6 +159,7 @@
   });
 
   async function pollStatus(url,attempt=0) {
+    $('retryDeployment').hidden=true;
     try {
       const response=await fetch(url,{headers:authHeaders(),cache:'no-store'}); const data=await parseResponse(response);
       if(data.state==='live') {
@@ -163,9 +170,22 @@
         show('deploymentStatus','GitHub 已收到更新，但目前執行環境沒有回報 Render commit ID，無法自動核對線上版本。提交版本：'+data.target_commit,'warn'); return;
       }
       show('deploymentStatus','更新已提交，Render 正在部署。現在線上版本：'+(data.live_commit_short || '等待回報')+'；目標版本：'+data.target_commit.slice(0,7)+'。','info');
-      if(attempt<59){setTimeout(()=>pollStatus(url,attempt+1),5000);}else{show('deploymentStatus','已提交更新，但 5 分鐘內尚未確認完成。請稍後重新整理或查看 Render 部署紀錄。提交版本：'+data.target_commit,'warn');}
-    } catch(error) { show('deploymentStatus','更新已提交；部署狀態查詢失敗：'+error.message,'warn'); }
+      if(attempt<59){setTimeout(()=>pollStatus(url,attempt+1),5000);}else{$('retryDeployment').hidden=false;show('deploymentStatus','已提交更新，但 5 分鐘內尚未確認完成。可重新查詢，或查看 Render 部署紀錄。提交版本：'+data.target_commit,'warn');}
+    } catch(error) {
+      const status=Number(error.status || 0);
+      const retryable=!status || status===408 || status===429 || status>=500;
+      if(retryable && attempt<59) {
+        show('deploymentStatus','更新已提交；部署期間連線暫時中斷（'+error.message+'），5 秒後自動重試（'+(attempt+1)+'/60）。','info');
+        setTimeout(()=>pollStatus(url,attempt+1),5000);
+      } else {
+        $('retryDeployment').hidden=false;
+        show('deploymentStatus','更新已提交；部署狀態查詢失敗：'+error.message+'。可重新查詢，或查看 Render 部署紀錄。','warn');
+      }
+    }
   }
+  $('retryDeployment').addEventListener('click',()=>{
+    if(state.deploymentStatusUrl) pollStatus(state.deploymentStatusUrl);
+  });
   $('apply').addEventListener('click',async()=>{
     if(!state.token)return;
     if(!window.confirm('確認把這 '+state.summary.changed_files+' 個變更提交到部署分支並開始部署？'))return;
@@ -178,7 +198,10 @@
       const method=data.deploy && data.deploy.triggered ? 'Render 部署已觸發' : (data.deploy && data.deploy.configured ? 'GitHub 已提交，但 Deploy Hook 未能啟動；請查看 Render 部署紀錄' : '已提交 GitHub，等待 Render 自動部署');
       const id=data.deploy && data.deploy.deploy_id ? '（部署編號 '+data.deploy.deploy_id+'）' : '';
       show('applyStatus','更新提交完成：新增 '+data.added+' 個、修改 '+data.modified+' 個檔案。\n提交版本：'+data.commit_sha+'\n'+method+id,'good');
-      if(data.deployment_status_url) pollStatus(data.deployment_status_url);
+      if(data.deployment_status_url) {
+        state.deploymentStatusUrl=data.deployment_status_url;
+        pollStatus(state.deploymentStatusUrl);
+      }
     } catch(error) { show('applyStatus',error.message,'error'); }
     finally { setBusy(false); }
   });
