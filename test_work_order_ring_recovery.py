@@ -72,6 +72,40 @@ def test_ocr_digit_in_complete_gl_flow_is_reread_and_repaired():
     assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
 
 
+@pytest.mark.parametrize(("bad_flow", "correct_flow", "expected_status", "expected_process"), [
+    ("CHRAPD?L", "CHRAPDGL", "yes", "grinding"),
+    ("CHRAPDG?", "CHRAPDGL", "yes", "grinding"),
+    ("CHRAPD?", "CHRAPDL", "no", "polishing"),
+    ("CHRAP?", "CHRAPD", "no", "packaging"),
+])
+def test_partial_unreadable_process_suffix_is_reread_then_repaired_from_same_cell(
+        bad_flow, correct_flow, expected_status, expected_process):
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：" + bad_flow)
+    retry = FOCUSED.replace("訂單流程：CHRAPDGL", "訂單流程：" + correct_flow)
+    assert needs_ring_retry(original)
+    fixed = merge_confirmed_ring_fields(original, retry)
+    assert fixed != original
+    ring = extract_work_order_info(fixed, {}, {})["ring"]
+    assert ring["status"] == expected_status
+    assert ring["process"] == expected_process
+
+
+@pytest.mark.parametrize("bad_size", ["17.95?", "17.9?7", "17.95�"])
+def test_partial_unreadable_finished_size_is_reread_and_repaired_safely(bad_size):
+    original = PHOTO_DACAPO.replace("成品尺寸MIN：17.957", "成品尺寸MIN：" + bad_size)
+    assert needs_ring_retry(original)
+    fixed = merge_confirmed_ring_fields(original, FOCUSED)
+    assert fixed != original
+    assert "成品尺寸MIN：17.957" in fixed
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+
+
+def test_multiple_unknown_flow_suffix_characters_still_fail_closed():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD??")
+    assert needs_ring_retry(original)
+    assert merge_confirmed_ring_fields(original, FOCUSED) == original
+
+
 def test_last_letter_l_read_as_digit_one_triggers_safe_reread():
     original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDG1")
     assert needs_ring_retry(original)
@@ -152,8 +186,6 @@ def test_conflicting_duplicate_first_reading_is_not_silently_replaced():
                 .replace("成品尺寸MAX：18", "成品尺寸MAX：?"))
     assert needs_ring_retry(conflict)
     assert merge_confirmed_ring_fields(conflict, FOCUSED) == conflict
-    partial = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD?L")
-    assert merge_confirmed_ring_fields(partial, FOCUSED) == partial
     known_and_unknown = PHOTO_DACAPO.replace(
         "訂單流程：CHRAPDGL", "訂單流程：CHRAPDGL\n訂單流程：?")
     assert merge_confirmed_ring_fields(known_and_unknown, FOCUSED) == known_and_unknown
@@ -237,6 +269,31 @@ def test_app_rereads_nonempty_but_invalid_flow_with_original_and_crop(monkeypatc
     assert len(calls) == 2
     assert len([part for part in calls[1][0][1]["content"]
                 if part["type"] == "image_url"]) == 2
+    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
+
+
+@pytest.mark.parametrize(("field", "bad_value"), [
+    ("訂單流程：CHRAPDGL", "訂單流程：CHRAPD?L"),
+    ("成品尺寸MIN：17.957", "成品尺寸MIN：17.95?"),
+])
+def test_app_retries_partial_unknown_character_in_ring_inputs(monkeypatch, field, bad_value):
+    monkeypatch.setattr(app, "_has_ai_capability", lambda *_args: True)
+    monkeypatch.setattr(app, "track_tokens", lambda *_args: None)
+    first = PHOTO_DACAPO.replace(field, bad_value)
+    calls = []
+
+    def vision(messages, **options):
+        calls.append((messages, options))
+        response = first if len(calls) == 1 else FOCUSED
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=response))])
+
+    monkeypatch.setattr(app, "_vision_call", vision)
+    photo = (Path(__file__).resolve().parent.parent.parent / "upload" / "02-235509.jpg")
+    if not photo.exists():
+        photo = Path(__file__).resolve().parent / "tests" / "fixtures" / "work_order_20260906.jpg"
+    result = app.ocr_work_order_fields(base64.b64encode(photo.read_bytes()).decode("ascii"))
+    assert len(calls) == 2
     assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
 
 

@@ -22,14 +22,22 @@ _UNKNOWN = re.compile(
     r"^(?:[?？�\-—]|未辨識|未辨识|無法辨識|无法辨识|看不清|unreadable|unknown)$",
     re.I,
 )
+_OCR_UNCERTAIN_CHARS = frozenset("?？�")
 _PROCESS = re.compile(r"[A-Za-z]+(?: +[A-Za-z]+)*")
 
 
 def _invalid_flow(raw):
-    """An OCR digit in an otherwise complete process is not a valid suffix."""
+    """Recognize OCR damage in the process suffix without guessing its value."""
     if not raw or _UNKNOWN.fullmatch(raw):
         return False
     compact = re.sub(r"\s+", "", raw).upper()
+    if not re.fullmatch(r"[A-Z0-9?？�]{3,}", compact):
+        return False
+    # A single unreadable character beside the terminal process suffix is a
+    # recoverable OCR defect (e.g. CHRAPD?L or CHRAPDG?).  It is not itself a
+    # production code and must be reread before the normal rule can decide.
+    if any(character in _OCR_UNCERTAIN_CHARS for character in compact[-2:]):
+        return True
     return bool(re.fullmatch(r"[A-Z0-9]{3,}", compact)
                 and any(c.isdigit() for c in compact)
                 and (compact.endswith(("L", "D")) or compact[-1].isdigit()))
@@ -42,6 +50,10 @@ def _invalid_size(raw):
     if _number_candidates(raw):
         return False
     value = re.sub(r"\s*(?:mm|毫米|公厘)$", "", raw, flags=re.I).strip()
+    if (any(character in _OCR_UNCERTAIN_CHARS for character in value)
+            and re.fullmatch(r"[0-9.,\s?？�]+", value)
+            and any(character.isdigit() for character in value)):
+        return True
     return bool(re.fullmatch(r"[0-9][0-9., ]*[A-Za-z][0-9., ]*", value))
 
 
@@ -61,11 +73,20 @@ def _replaceable_invalid(field, old, new):
         # a malformed OCR reading.  A guess such as 6 -> B would silently
         # change an 18 mm grinding bar into a polishing bar.
         return ((index == len(original) - 2 and original.endswith("L")
-                 and old_char.isdigit() and new_char == "G"
+                 and (old_char.isdigit() or old_char in _OCR_UNCERTAIN_CHARS)
+                 and new_char == "G"
                  and candidate.endswith("GL"))
                 or (index == len(original) - 1 and old_char == "1"
                     and new_char == "L" and original[-2] == "G"
-                    and candidate.endswith("GL")))
+                    and candidate.endswith("GL"))
+                or (index == len(original) - 1
+                    and old_char in _OCR_UNCERTAIN_CHARS
+                    and new_char == "L"
+                    and ((original[-2] == "G" and candidate.endswith("GL"))
+                         or (original[-2] != "G" and candidate.endswith("L"))))
+                or (index == len(original) - 1
+                    and old_char in _OCR_UNCERTAIN_CHARS
+                    and new_char == "D" and candidate.endswith("D")))
     if not _invalid_size(old):
         return False
     original = re.sub(r"\s*(?:mm|毫米|公厘)$", "", old, flags=re.I).strip().upper()
@@ -73,7 +94,9 @@ def _replaceable_invalid(field, old, new):
     changes = [(left, right) for left, right in zip(original, candidate)
                if left != right]
     return (len(original) == len(candidate) and len(changes) == 1
-            and changes[0][0].isalpha() and changes[0][1].isdigit())
+            and (changes[0][0].isalpha()
+                 or changes[0][0] in _OCR_UNCERTAIN_CHARS)
+            and changes[0][1].isdigit())
 
 
 def focused_ring_crop(image_base64):

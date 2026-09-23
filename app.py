@@ -17512,7 +17512,7 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
-_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.2-work-order-trace"
+_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.3-ring-ocr-recovery"
 
 
 def _record_work_order_diagnostic(stage, ocr_text, **retry_flags):
@@ -27762,7 +27762,10 @@ async function loadWorkOrderDiagnostics(){
     summary.push('最近判讀（台灣時間）：');
     (d.records||[]).forEach(function(v){
       var taiwan=v.timestamp_utc?new Date(v.timestamp_utc).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'時間未記錄';
-      summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+')');
+      var flow=v.flow_ocr||'流程碼未辨識';
+      var min=v.diameter_min||'未辨識',max=v.diameter_max||'未辨識';
+      var retry=v.ring_retry_triggered===true?'；已重讀'+(v.ring_retry_accepted?'且已採用':'但未採用'):'';
+      summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 流程碼 '+flow+' | 規格 '+min+'～'+max+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+retry+')');
     });
     if(!(d.records||[]).length)summary.push('目前沒有新工單記錄，請重新上傳照片。');
     output.textContent=summary.join('\n')+'\n\n判讀明細：\n'+JSON.stringify(d,null,2);

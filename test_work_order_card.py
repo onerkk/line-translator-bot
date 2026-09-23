@@ -7,7 +7,7 @@ from linebot.v3.messaging import Message
 
 from test_work_order_query import PHOTO_5
 import work_order_card
-from work_order_card import build_work_order_cards, build_work_order_fallback
+from work_order_card import _ring_text, build_work_order_cards, build_work_order_fallback
 
 
 BASE = Path(__file__).resolve().parent
@@ -110,6 +110,21 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_1d_legacy_g_met
     assert "原表簡稱與明細不一致" not in fallback
     assert "3P袋+PE布" not in fallback
     assert fallback == result["fallback_text"]
+
+
+def test_unresolved_ring_summary_names_the_missing_rule_input_without_using_form_yn():
+    cases = {
+        "flow": "流程碼未辨識",
+        "diameter": "成品規格未辨識",
+        "invalid_diameter": "成品規格無效",
+        "threshold_crossing": "規格範圍跨門檻",
+    }
+    for reason, expected in cases.items():
+        text, color = _ring_text({"status": "unknown", "reason": reason})
+        assert "套環待確認" in text
+        assert expected in text
+        assert "Perlu konfirmasi" in text
+        assert color
 
 
 def test_legacy_g_photo_resolves_to_same_1d_packaging_without_unsupported_bags():

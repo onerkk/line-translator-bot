@@ -224,7 +224,14 @@ def _ring_text(ring):
         return "需要套環 / Wajib pakai cincin pelindung", TEAL
     if ring["status"] == "no":
         return "不需套環 / Tidak perlu cincin pelindung", INK
-    return "套環待確認 / Perlu memeriksa cincin pelindung", AMBER
+    reason = {
+        "flow": "套環待確認（流程碼未辨識） / Perlu konfirmasi (kode alur belum terbaca)",
+        "diameter": "套環待確認（成品規格未辨識） / Perlu konfirmasi (ukuran produk belum terbaca)",
+        "invalid_diameter": "套環待確認（成品規格無效） / Perlu konfirmasi (ukuran produk tidak valid)",
+        "threshold_crossing": "套環待確認（規格範圍跨門檻） / Perlu konfirmasi (rentang ukuran melewati ambang)",
+    }
+    return reason.get(ring.get("reason"),
+                      "套環待確認（判讀資料不完整） / Perlu konfirmasi (data belum lengkap)"), AMBER
 
 
 def _package_detail_rows(package, translate_zh_to_id):
