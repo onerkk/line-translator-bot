@@ -6,11 +6,13 @@ import pytest
 from openpyxl import Workbook
 
 import app
+import work_order_storage_reference
 
 
 @pytest.fixture
 def isolated_protected_names(monkeypatch):
     # Storage-only scenarios must not inherit profiles learned by other tests.
+    monkeypatch.setattr(work_order_storage_reference, "STORAGE_REFERENCE", {})
     monkeypatch.setattr(app, "group_user_names", {})
     monkeypatch.setattr(app, "dm_known_users", {})
     original_storage = copy.deepcopy(app.STORAGE_LOOKUP)

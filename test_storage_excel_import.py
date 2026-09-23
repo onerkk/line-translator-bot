@@ -9,6 +9,7 @@ import openpyxl
 import pytest
 
 import app
+import work_order_storage_reference
 from storage_import import normalize_storage_lookup, parse_storage_ag_grid_rows
 from work_order_query import _resolve_storage
 
@@ -79,9 +80,14 @@ def test_old_in_memory_table_works_for_work_order_and_qry(monkeypatch):
     assert live["方鉦"][0][0] == "A"
 
 
-def _post_storage_rows(monkeypatch, rows):
+def _post_storage_rows(monkeypatch, rows, reference=None):
     """Exercise the upload route without keeping a generated Excel artifact."""
     committed = []
+    monkeypatch.setattr(
+        work_order_storage_reference,
+        "STORAGE_REFERENCE",
+        {} if reference is None else reference,
+    )
     monkeypatch.setattr(app, "STORAGE_LOOKUP", {"原客戶": [["<=3200", "OLD"]]})
     monkeypatch.setattr(app, "check_manager_access", lambda *_: True)
     monkeypatch.setattr(app, "protected_name_inventory", lambda: {
@@ -112,6 +118,19 @@ def test_admin_upload_accepts_ag_grid_and_persists_numeric_conditions(monkeypatc
     assert app.STORAGE_LOOKUP["SUNGEUN"] == [[">3200<=4200", "EG14、EH15"]]
     assert _resolve_storage("方鉦", (Decimal(3200), Decimal(3200)),
                             app._work_order_storage_lookup())["area"] == "EH79"
+
+
+def test_admin_upload_restores_omitted_verified_customer_before_persisting(monkeypatch):
+    reference = {
+        "方鉦": [["<=3200", "EH79"], [">3200<=4200", "EH72"], [">4200", "EH72"]],
+    }
+    rows = [HEADERS, ["新客戶", "A", "NEW01", None, None, None]]
+    response, committed = _post_storage_rows(monkeypatch, rows, reference)
+
+    assert response.status_code == 200
+    assert response.get_json()["count"] == 2
+    assert app.STORAGE_LOOKUP["方鉦"] == reference["方鉦"]
+    assert committed[0]["方鉦"] == reference["方鉦"]
 
 
 def test_admin_upload_rejects_unrecognized_letter_before_mutation(monkeypatch):

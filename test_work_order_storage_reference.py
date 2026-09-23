@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import app
 import pytest
 from test_work_order_query import PHOTO_5
+import work_order_storage_reference as storage_reference_module
 from work_order_detection import _key, resolve_storage_customer
 from work_order_query import extract_work_order_info, _resolve_storage
 from work_order_storage_reference import STORAGE_REFERENCE, effective_work_order_storage_lookup
@@ -76,6 +77,25 @@ def test_empty_live_customer_row_recovers_storage_for_reported_customer_and_leng
     assert "儲區  /  Gudang EH79" in rendered
     assert "儲區待確認" not in rendered
     assert live == {"方鉦": []}
+
+
+def test_backend_table_and_admin_json_materialize_empty_customer_from_reference(monkeypatch):
+    reference = {"方鉦": [["<=3200", "EH79"], [">3200<=4200", "EH72"],
+                         [">4200", "EH72"]]}
+    monkeypatch.setattr(storage_reference_module, "STORAGE_REFERENCE", reference)
+    live = {"方鉦": [], "自訂客戶": [[">4200", "CUSTOM"]]}
+
+    reconciled = app.reconcile_storage_lookup_with_reference(live)
+    assert reconciled["方鉦"] == reference["方鉦"]
+    assert reconciled["自訂客戶"] == live["自訂客戶"]
+    assert live["方鉦"] == []
+
+    monkeypatch.setattr(app, "STORAGE_LOOKUP", reconciled)
+    monkeypatch.setattr(app, "check_manager_access", lambda *_: True)
+    assert "EH79" in app.handle_qry_command("/qry 方鉦")
+    response = app.app.test_client().get("/api/admin/storage/json")
+    assert response.status_code == 200
+    assert response.get_json()["方鉦"] == reference["方鉦"]
 
 
 def test_live_letter_bands_normalize_without_changing_admin_area_or_input():

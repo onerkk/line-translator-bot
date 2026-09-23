@@ -10202,6 +10202,36 @@ if os.path.exists(_storage_json_path):
             logger.info("Loaded storage data from storage_data.json: %d customers", len(STORAGE_LOOKUP))
     except Exception as _e:
         logger.warning("Failed to load storage_data.json, using embedded: %s", _e)
+
+
+def reconcile_storage_lookup_with_reference(live):
+    """Restore missing/empty live customer rows from the verified source table.
+
+    The same effective mapping must back admin JSON, /qry, protected customer
+    names, and work-order lookups.  Keeping this at query time alone leaves the
+    admin/runtime table empty and lets an incomplete upload erase known rows.
+    Nonempty admin rows remain authoritative.
+    """
+    from work_order_storage_reference import effective_work_order_storage_lookup
+
+    return effective_work_order_storage_lookup(live)
+
+
+# Reconcile the actual process-wide table as it loads, so admin APIs and all
+# lookup paths see the same recovered customers instead of a query-only shadow.
+_storage_before_reconcile = STORAGE_LOOKUP
+STORAGE_LOOKUP = reconcile_storage_lookup_with_reference(STORAGE_LOOKUP)
+_storage_recovered_count = sum(
+    1 for customer, rows in STORAGE_LOOKUP.items()
+    if customer not in _storage_before_reconcile or
+    (not _storage_before_reconcile.get(customer) and rows)
+)
+if _storage_recovered_count:
+    logger.warning(
+        "Restored %d missing/empty storage customer rows from verified reference",
+        _storage_recovered_count,
+    )
+
 # Try loading packaging_data.json
 _packaging_json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packaging_data.json")
 if os.path.exists(_packaging_json_path):
@@ -17516,7 +17546,7 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
-_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.4-storage-customer-recovery"
+_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.5-storage-table-reconcile"
 
 
 def _record_work_order_diagnostic(stage, ocr_text, **retry_flags):
@@ -33944,6 +33974,10 @@ def api_admin_storage_upload():
         new_data = normalize_storage_lookup(new_data)
         if not new_data:
             return jsonify({"error": "無法解析 Excel，請確認格式：\n欄A=客戶 欄B=<=3200 欄C=>3200<=4200 欄D=>4200"}), 400
+        # The uploaded sheet can be partial or contain an empty customer row.
+        # Restore verified source rows before replacing the process-wide table
+        # and before persisting JSON, so every backend view sees the same data.
+        new_data = reconcile_storage_lookup_with_reference(new_data)
         # Update in-memory.  The admin protected-name view is a live union of
         # manual names and storage customer keys, so changing STORAGE_LOOKUP is
         # also the authoritative automatic no-translation-list update.
