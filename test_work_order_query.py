@@ -137,14 +137,28 @@ def test_explicit_special_note_overrides_polishing_38mm_and_crop_stays_unknown()
 
 
 @pytest.mark.parametrize(("flow", "size", "expected"), [
-    ("CHRAPD", "19.99", "no"), ("CHRAPD", "20", "yes"),
+    ("CHRAPD", "19.99", "no"), ("CHRAPD", "20", "no"),
+    ("CHRAPD", "99", "no"), ("CHRAPGD", "30", "no"),
     ("CHRAPL", "20", "yes"), ("CHRAPGL", "15.99", "no"),
-    ("CHRAPGL", "16", "yes"), ("CHRAPGD", "30", "unknown"),
+    ("CHRAPGL", "16", "yes"), ("CHRAPL", "19.99", "no"),
     ("CHRAZ", "30", "unknown"), ("L", "30", "unknown"),
+    ("D", "30", "no"),
 ])
 def test_workflow_suffix_and_inclusive_thresholds(flow, size, expected):
     text = PHOTO_5.replace("CHRAPDAEJL", flow).replace("3.97", size).replace("成品尺寸MAX：4", "成品尺寸MAX：" + size)
     assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["status"] == expected
+
+
+def test_packaging_material_suffix_d_never_needs_ring_even_without_a_size():
+    text = PHOTO_5.replace("CHRAPDAEJL", "CHRAPGD").replace("成品尺寸MIN：3.97", "成品尺寸MIN：?").replace("成品尺寸MAX：4", "成品尺寸MAX：?")
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"] == {
+        "status": "no", "reason": "packaging_material", "process": "packaging"}
+
+
+@pytest.mark.parametrize("flow", ("CHRAPL", "CHRAPGL"))
+def test_unusual_three_decimal_size_can_still_resolve_ring_safely(flow):
+    text = PHOTO_5.replace("CHRAPDAEJL", flow).replace("成品尺寸MIN：3.97", "成品尺寸MIN：31.938").replace("成品尺寸MAX：4", "成品尺寸MAX：32")
+    assert extract_work_order_info(text, STORAGE, PACKAGING)["ring"]["status"] == "yes"
 
 
 def test_dimension_straddling_threshold_and_bad_ocr_never_auto_choose():
@@ -157,7 +171,7 @@ def test_dimension_straddling_threshold_and_bad_ocr_never_auto_choose():
 def test_decimal_comma_size_does_not_become_a_hundredfold_larger_ring_size():
     text = PHOTO_5.replace("成品尺寸MIN：3.97", "成品尺寸MIN：3,97")
     text = text.replace("成品尺寸MAX：4", "成品尺寸MAX：4,00")
-    info = extract_work_order_info(text.replace("CHRAPDAEJL", "CHRAPD"), STORAGE, PACKAGING)
+    info = extract_work_order_info(text.replace("CHRAPDAEJL", "CHRAPL"), STORAGE, PACKAGING)
     assert tuple(str(value) for value in info["diameter"]) == ("3.97", "4.00")
     assert info["ring"]["status"] == "no"
 
@@ -169,10 +183,13 @@ def test_ambiguous_grouping_punctuation_does_not_select_the_wrong_storage_or_rin
     assert info["length"] is None
     assert info["storage"]["status"] == "unknown_length"
     assert "儲區 / Area penyimpanan：EH79" not in build_work_order_reply(text, STORAGE, PACKAGING)
-    polishing = PHOTO_5.replace("CHRAPDAEJL", "CHRAPD")
+    polishing = PHOTO_5.replace("CHRAPDAEJL", "CHRAPL")
     polishing = polishing.replace("成品尺寸MIN：3.97", "成品尺寸MIN：20.000")
     polishing = polishing.replace("成品尺寸MAX：4", "成品尺寸MAX：20.001")
-    assert extract_work_order_info(polishing, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
+    assert extract_work_order_info(polishing, STORAGE, PACKAGING)["ring"]["status"] == "yes"
+    # One possible reading lies below the threshold and another above it.
+    near_threshold = polishing.replace("20.000", "19.999").replace("20.001", "20.001")
+    assert extract_work_order_info(near_threshold, STORAGE, PACKAGING)["ring"]["status"] == "unknown"
 
 
 def test_storage_uses_length_interval_and_rejects_boundary_crossing():

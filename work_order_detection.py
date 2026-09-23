@@ -32,13 +32,28 @@ def _key(value: str) -> str:
 
 
 def resolve_storage_customer(value: str | None, names: Iterable[str]) -> str | None:
-    """Require one complete customer name, never a substring of another name."""
+    """Resolve a complete name or an unambiguous, sufficiently long prefix.
+
+    Work orders sometimes print only the start of a customer name.  A prefix
+    can determine the full customer only when exactly one storage-table name
+    begins with it; a short fragment or a substring cannot determine a bin.
+    """
     if not isinstance(value, str) or not value.strip():
         return None
     names = [name for name in names if isinstance(name, str) and name.strip()]
     if value in names:
         return value
-    matches = {name for name in names if _key(name) == _key(value)}
+    query = _key(value)
+    matches = {name for name in names if _key(name) == query}
+    if matches:
+        return next(iter(matches)) if len(matches) == 1 else None
+    # Single initials and one-character Chinese names are too easy to confuse
+    # with an unrelated customer; preserve those as unconfirmed customer text.
+    letters = sum(char.isascii() and char.isalnum() for char in query)
+    cjk = sum("\u3400" <= char <= "\u9fff" for char in query)
+    if not (letters >= 4 or cjk >= 2):
+        return None
+    matches = {name for name in names if _key(name).startswith(query)}
     return next(iter(matches)) if len(matches) == 1 else None
 
 

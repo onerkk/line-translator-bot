@@ -1,9 +1,8 @@
-"""Compact LINE Flex cards for an OCR work order.
+"""Readable Chinese/Indonesian LINE cards for a photographed work order.
 
-The work-order query module alone interprets the source fields.  Rendering
-never turns a missing area, paint color or packaging translation into a guess.
-Return plain dictionaries so the caller can persist the exact LINE messages
-before replying and restore them during a durable retry.
+Work-order extraction and rule decisions live in ``work_order_query``.  This
+module shows only the five operational answers requested by the user.  A long
+packaging instruction gets its own card, so the decisions remain easy to scan.
 """
 
 from __future__ import annotations
@@ -12,10 +11,10 @@ import json
 import re
 import unicodedata
 
+from packaging_lookup import normalize_code
 from work_order_query import (
-    _PACKAGING_DETAIL_EN, _PACKAGING_DETAIL_ID,
-    _PACKAGING_SHORT_EN, _PACKAGING_SHORT_ID, _PAINT_CODES,
-    _decimal, _verified_paint_color, extract_work_order_info,
+    _PACKAGING_DETAIL_ID, _PACKAGING_SHORT_ID, _PAINT_CODES,
+    extract_work_order_info,
 )
 
 
@@ -28,7 +27,7 @@ PANEL_BG = "#1B3949"
 
 
 def _clean(value, limit=180, *, multiline=False):
-    """Keep untrusted OCR/table text readable and inside the LINE JSON limit."""
+    """Limit OCR/table content and remove control characters from LINE JSON."""
     raw = unicodedata.normalize("NFKC", str(value or ""))
     raw = re.sub(r"[\u202a-\u202e\u2066-\u2069\u200b-\u200f]", "", raw)
     raw = re.sub(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]", " ", raw)
@@ -42,19 +41,16 @@ def _clean(value, limit=180, *, multiline=False):
     return raw
 
 
-def _text(value, *, size="sm", color=INK, weight="regular", margin=None,
-          max_lines=None):
+def _text(value, *, size="sm", color=INK, weight="regular", margin=None):
     out = {"type": "text", "text": value, "size": size, "color": color,
            "weight": weight, "wrap": True}
     if margin:
         out["margin"] = margin
-    if max_lines:
-        out["maxLines"] = max_lines
     return out
 
 
-def _box(contents, *, layout="vertical", margin=None, **styles):
-    out = {"type": "box", "layout": layout, "contents": contents}
+def _box(contents, *, margin=None, **styles):
+    out = {"type": "box", "layout": "vertical", "contents": contents}
     if margin:
         out["margin"] = margin
     out.update(styles)
@@ -65,257 +61,266 @@ def _divider():
     return {"type": "separator", "margin": "lg", "color": "#355264"}
 
 
-def _label(zh, idn, en):
-    return _text(f"{zh}  ·  {idn} / {en}", color=MUTED, size="sm")
-
-
-def _section(zh, idn, en, values, *, margin="lg"):
-    return _box([_label(zh, idn, en)] + values, margin=margin)
-
-
-def _observed_number(fields, key):
-    raw = fields.get(key)
-    number = _decimal(raw)
-    return _clean(str(number), 16) if number is not None and number >= 0 else None
-
-
-def _shown_number(fields, key):
-    """Keep the OCR text visible if its numeric punctuation is ambiguous."""
-    verified = _observed_number(fields, key)
-    if verified:
-        return verified
-    raw = _clean(fields.get(key), 16)
-    return raw + " (待核對)" if raw else "?"
-
-
-def _dimension_panel(info, kind):
-    length = kind == "length"
-    fields = info["fields"]
-    low = _observed_number(fields, kind + "_min")
-    high = _observed_number(fields, kind + "_max")
-    conflict = low is not None and high is not None and info[kind] is None
-    labels = (("長度", "Panjang", "Length") if length
-              else ("成品尺寸", "Ukuran jadi", "Finished size"))
-
-    def cell(side, number):
-        source = _clean(fields.get(kind + "_" + side), 16)
-        contents = [
-            _text("MIN" if side == "min" else "MAX", size="sm",
-                  color=("#CBF6EE" if length else MUTED), weight="bold"),
-            _text(number or source or "待確認", size="xl" if length else "lg",
-                  color=(INK if number else AMBER), weight="bold", margin="sm"),
-        ]
-        if number:
-            contents.append(_text("mm", color=MUTED, size="sm"))
-        else:
-            contents.append(_text("格式待核對 / Check number" if source
-                                  else "Periksa / Verify", color=AMBER, size="sm"))
-        return _box(contents, flex=1)
-
-    contents = [_label(*labels),
-                _box([cell("min", low), cell("max", high)], layout="horizontal",
-                     spacing="md", margin="md")]
-    if conflict:
-        contents.append(_text("最小值大於最大值，請核對 / MIN > MAX; periksa / Verify",
-                              size="sm", color=AMBER, margin="md"))
-    return _box(contents, backgroundColor=("#195365" if length else PANEL_BG),
-                cornerRadius="14px", paddingAll="14px", margin="lg")
+def _section(zh, idn, values, *, margin="lg"):
+    return _box([_text(f"{zh}  /  {idn}", color=MUTED, size="sm")] + values,
+                margin=margin)
 
 
 def _storage_text(storage):
-    status = storage["status"]
-    if status == "ok":
-        return _clean(storage.get("area"), 40), False
-    messages = {
-        "unknown_customer": "客戶未確認 / Pelanggan belum pasti / Confirm customer",
-        "no_mapping": "儲區未設定 / Area belum terdaftar / Area not configured",
-        "unknown_length": "長度待確認 / Panjang belum jelas / Confirm length",
-        "unmapped_length": "此長度無儲區 / Panjang belum terdaftar / Length not mapped",
-        "ambiguous_mapping": "儲區規則衝突 / Aturan area bertentangan / Conflicting rules",
-        "invalid_mapping": "儲區規則待核對 / Periksa aturan area / Check area rules",
-    }
-    return messages.get(status, "儲區待核對 / Periksa area / Check area"), True
+    if storage.get("status") == "ok":
+        return _clean(storage.get("area"), 40), INK
+    # An unrecognised customer, missing measurement or conflicting table rule
+    # must not silently become an invented area.  The measurement itself is
+    # intentionally omitted from this compact presentation.
+    return "儲區待確認 / Gudang perlu diperiksa", AMBER
 
 
-def _translate_known_or_new(source, bundled, callback):
+def _translate(source, bundled, callback):
     if not source:
         return None
     translated = bundled.get(source)
     if translated:
         return _clean(translated, 1350, multiline=True)
-    if not callable(callback):
-        return None
-    try:
-        return _clean(callback(source), 1350, multiline=True) or None
-    except Exception:
-        return None
+    if callable(callback):
+        try:
+            return _clean(callback(source), 1350, multiline=True) or None
+        except Exception:
+            pass
+    return None
 
 
-def _package_text(package, translate_zh_to_id, translate_zh_to_en):
-    if package["status"] == "ok":
+def _inconsistent_package(package):
+    """The present 1D record names 3P bags but its detailed method does not.
+
+    Restrict this alert to the actual, observed contradiction.  A new admin
+    record can resolve it by updating either method; other codes stay intact.
+    """
+    return (package.get("status") == "ok"
+            and normalize_code(package.get("code")) == "1D"
+            and "3P袋" in (package.get("short") or "")
+            and "3P袋" not in (package.get("detail") or ""))
+
+
+def _package_rows(package, translate_zh_to_id):
+    status = package["status"]
+    if status == "ok":
+        code = _clean(package.get("code"), 24)
+        rows = [_text(code, size="xl", weight="bold", color=TEAL, margin="sm")]
+        if _inconsistent_package(package):
+            rows.append(_text("原表簡稱與明細不一致，請核對", color=AMBER,
+                              weight="bold", margin="sm"))
+            rows.append(_text("Nama singkat dan rincian pada tabel tidak cocok; periksa kembali",
+                              color=AMBER, margin="sm"))
+            return rows
         short = package.get("short") or ""
-        code = _clean(package.get("code"), 24)
-        old = _clean(package.get("old_code"), 24)
-        short_id = _translate_known_or_new(short, _PACKAGING_SHORT_ID, translate_zh_to_id)
-        short_en = _translate_known_or_new(short, _PACKAGING_SHORT_EN, translate_zh_to_en)
-        rows = [_text(code + ("  ·  舊碼 " + old if old else ""), size="xl",
-                      color=TEAL, weight="bold", margin="sm")]
         if short:
-            rows.append(_text(_clean(short, 110), margin="sm", weight="bold"))
-            if short_id:
-                rows.append(_text(_clean(short_id, 145), color=MUTED, margin="sm"))
-            if short_en:
-                rows.append(_text(_clean(short_en, 145), color=MUTED, margin="sm"))
-            if not short_id or not short_en:
-                rows.append(_text("譯名待核對 / Periksa terjemahan / Verify translation",
-                                  size="sm", color=AMBER, margin="sm"))
+            rows.append(_text(_clean(short, 110), weight="bold", margin="sm"))
+            short_id = _translate(short, _PACKAGING_SHORT_ID, translate_zh_to_id)
+            rows.append(_text(_clean(short_id, 145) if short_id else
+                              "印尼文待核對 / Terjemahan perlu diperiksa",
+                              color=MUTED if short_id else AMBER, margin="sm"))
+        else:
+            rows.append(_text("包裝方式待確認 / Cara pengemasan perlu diperiksa",
+                              color=AMBER, margin="sm"))
         return rows
-    if package["status"] == "ambiguous":
+    if status == "ambiguous":
         code = _clean(package.get("code"), 24)
-        choices = ", ".join(_clean(s, 20) for s in package.get("candidates", [])[:4])
-        return [_text(f"{code} · 新碼待確認 / Pastikan kode baru / Verify new code",
-                      color=AMBER, weight="bold", margin="sm"),
-                _text(choices, color=MUTED, margin="sm") if choices else _text("—")]
-    if package["status"] == "not_found":
-        return [_text(_clean(package.get("code"), 24) + " · 資料表無此碼 / Kode tak ditemukan / Code not found",
+        return [_text(f"{code} · 對應新碼待確認 / Kode baru perlu diperiksa",
+                      color=AMBER, weight="bold", margin="sm")]
+    if status == "not_found":
+        return [_text(_clean(package.get("code"), 24) +
+                      " · 查無包裝資料 / Kode kemasan tidak ditemukan",
                       color=AMBER, margin="sm")]
-    return [_text("代碼待確認 / Periksa kode / Confirm code", color=AMBER, margin="sm")]
+    return [_text("包裝碼待確認 / Kode kemasan perlu diperiksa",
+                  color=AMBER, margin="sm")]
 
 
-def _spray_text(info, paint_codes):
+def _paint_color(code, lookup):
+    """Use only a whole verified code with both requested language labels."""
+    key = normalize_code(code)
+    if not re.fullmatch(r"[A-Z0-9]{1,12}", key) or not isinstance(lookup, dict):
+        return None
+    item = lookup.get(key)
+    if not isinstance(item, dict):
+        return None
+    zh, idn = _clean(item.get("zh"), 30), _clean(item.get("id"), 42)
+    return (zh, idn) if zh and idn else None
+
+
+def _spray_rows(info, paint_codes):
     paint = info["paint"]
     if paint["status"] == "no":
-        return [_text("不噴 / Tidak dicat / No spray paint", weight="bold", margin="sm")]
+        # The order's color cell is irrelevant when the position says no spray.
+        return [_text("不噴 / Tidak dicat", weight="bold", margin="sm")]
     if paint["status"] not in ("one", "both"):
-        return [_text("位置待確認 / Periksa posisi / Confirm position", color=AMBER, margin="sm")]
-    side = (("單邊 / Satu sisi / One side") if paint["status"] == "one"
-            else ("雙邊 / Kedua sisi / Both sides"))
+        return [_text("噴漆位置待確認 / Posisi cat perlu diperiksa",
+                      color=AMBER, margin="sm")]
+    side = ("單邊 / Satu sisi" if paint["status"] == "one"
+            else "雙邊 / Kedua sisi")
     rows = [_text(side, weight="bold", margin="sm")]
     code = _clean(paint.get("color_code"), 32)
     if not code:
-        rows.append(_text("色碼待確認 / Kode warna belum jelas / Confirm color code",
+        rows.append(_text("色碼待確認 / Kode warna perlu diperiksa",
                           color=AMBER, margin="sm"))
-    else:
-        color = _verified_paint_color(code, paint_codes)
-        translated = (f"  ·  {_clean(color['zh'], 30)} / {_clean(color['id'], 42)} / {_clean(color['en'], 42)}"
-                      if color else "  ·  顏色待核對 / Periksa warna / Verify color")
-        rows.append(_text("色碼 / Kode / Code  " + code + translated,
-                          color=(INK if color else AMBER), margin="sm"))
+        return rows
+    color = _paint_color(code, paint_codes)
+    label = (f"色碼 {code} · {color[0]} / {color[1]}" if color else
+             f"色碼 {code} · 顏色待核對 / Warna perlu diperiksa")
+    rows.append(_text(label, color=INK if color else AMBER, margin="sm"))
     return rows
 
 
 def _ring_text(ring):
     if ring["reason"] == "explicit_note":
-        return "依工單備註不套環 / Tanpa cincin sesuai catatan / No ring per note", INK
+        return "依備註不套環 / Tanpa cincin sesuai catatan", INK
     if ring["status"] == "yes":
-        return "需要套環 / Wajib pakai cincin / Ring required", TEAL
+        return "需要套環 / Wajib pakai cincin pelindung", TEAL
     if ring["status"] == "no":
-        return "不需套環 / Tidak perlu cincin / No ring required", INK
-    return "套環待確認 / Periksa cincin / Confirm ring", AMBER
+        return "不需套環 / Tidak perlu cincin pelindung", INK
+    return "套環待確認 / Perlu memeriksa cincin pelindung", AMBER
 
 
-def _detail_message(info, translate_zh_to_id, translate_zh_to_en):
+def _detail_message(info, translate_zh_to_id, translate_zh_to_en=None):
+    """Show original packaging instructions and Indonesian only.
+
+    The unused English callback remains in the signature for compatibility
+    with previous integrations, but must never be called.
+    """
     package = info["packaging"]
     if package["status"] != "ok":
         return None
     detail = package.get("detail") or ""
     if not detail or detail == package.get("short"):
         return None
-    detail_id = _translate_known_or_new(detail, _PACKAGING_DETAIL_ID, translate_zh_to_id)
-    detail_en = _translate_known_or_new(detail, _PACKAGING_DETAIL_EN, translate_zh_to_en)
+    detail_id = _translate(detail, _PACKAGING_DETAIL_ID, translate_zh_to_id)
     code = _clean(package["code"], 24)
-    sections = [
-        ("中文原文", _clean(detail, 1350, multiline=True)),
-        ("BAHASA INDONESIA", detail_id or "翻譯待核對 / Terjemahan perlu diperiksa"),
-        ("ENGLISH", detail_en or "Translation needs verification"),
+    content = [
+        _text("中文原文", size="sm", color=TEAL, weight="bold"),
+        _text(_clean(detail, 1350, multiline=True), margin="sm"),
+        _divider(),
+        _text("印尼文 / Bahasa Indonesia", size="sm", color=TEAL,
+              weight="bold", margin="lg"),
+        _text(detail_id or "翻譯待核對 / Terjemahan perlu diperiksa",
+              margin="sm", color=INK if detail_id else AMBER),
     ]
-    content = []
-    for index, (name, value) in enumerate(sections):
-        if index:
-            content.append(_divider())
-        content.extend([_text(name, size="sm", color=TEAL, weight="bold",
-                              margin="lg" if index else None),
-                        _text(value, size="sm", color=INK, margin="sm")])
     bubble = {"type": "bubble", "size": "mega",
-              "header": _box([_text("包裝明細  /  PACKAGING", size="sm", color="#C5EEE8", weight="bold"),
-                              _text(code, size="xl", weight="bold", margin="sm")],
-                             backgroundColor="#195365", paddingAll="18px"),
-              "body": _box(content, backgroundColor=BODY_BG, paddingAll="18px")}
-    return {"type": "flex",
-            "altText": _clean("📦 包裝 " + code + " / Rincian pengemasan / Packaging details", 180),
+              "header": _box([_text("包裝方式 / Cara pengemasan", color="#C5EEE8",
+                                    weight="bold"),
+                              _text(code, size="lg", weight="bold", margin="sm")],
+                             backgroundColor="#195365", paddingAll="16px"),
+              "body": _box(content, backgroundColor=BODY_BG, paddingAll="16px")}
+    return {"type": "flex", "altText": _clean(f"📦 包裝方式 {code} / Cara pengemasan", 180),
             "contents": bubble}
+
+
+def _fallback_from_info(info, paint_codes, *, package_rows=None,
+                        paint_rows=None, detail_message=None):
+    """Give LINE a safe five-item text message even if Flex construction fails."""
+    if not info["is_work_order"]:
+        return "⚠️ 無法確認是工單 / Tidak dapat memastikan ini perintah kerja."
+    storage = info["storage"]
+    customer = _clean(storage.get("customer") or info.get("customer"), 75)
+    customer = customer or "客戶待確認 / Pelanggan perlu diperiksa"
+    area, _ = _storage_text(storage)
+    package = info["packaging"]
+    package_rows = package_rows if package_rows is not None else _package_rows(package, None)
+    paint_rows = paint_rows if paint_rows is not None else _spray_rows(info, paint_codes)
+    ring, _ = _ring_text(info["ring"])
+    lines = [
+        "📋 工單重點 / Ringkasan perintah kerja",
+        f"客戶 / Pelanggan：{customer}",
+        f"儲區 / Gudang：{area}",
+        "包裝碼與方式 / Kode dan cara pengemasan：" + "；".join(row["text"] for row in package_rows),
+        "噴漆 / Cat semprot：" + "；".join(row["text"] for row in paint_rows),
+        f"套環 / Cincin pelindung：{ring}",
+    ]
+    if package["status"] == "ok" and package.get("detail") and package.get("detail") != package.get("short"):
+        if detail_message:
+            detail_text = [row["text"] for row in detail_message["contents"]["body"]["contents"]
+                           if row.get("type") == "text"]
+            lines.extend(detail_text)
+        else:
+            detail = package["detail"]
+            detail_id = _translate(detail, _PACKAGING_DETAIL_ID, None)
+            lines.extend(["包裝明細 / Rincian pengemasan：" + _clean(detail, 1350, multiline=True),
+                          "印尼文 / Bahasa Indonesia：" +
+                          (detail_id or "翻譯待核對 / Terjemahan perlu diperiksa")])
+    return _clean("\n".join(lines), 4900, multiline=True)
+
+
+def build_work_order_fallback(ocr_text, storage_lookup=None, packaging_lookup=None,
+                              paint_codes=None):
+    """Independent Chinese/Indonesian text fallback for malformed Flex cards."""
+    info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes)
+    codes = _PAINT_CODES if paint_codes is None else paint_codes
+    try:
+        detail = _detail_message(info, None) if info["is_work_order"] else None
+        return _fallback_from_info(info, codes, detail_message=detail)
+    except Exception:
+        return _fallback_from_info(info, codes)
 
 
 def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
                            paint_codes=None, translate_zh_to_id=None,
                            translate_zh_to_en=None):
-    """Build one summary Flex and, when available, a separate detail Flex.
+    """Return the five answers and the matched Chinese/Indonesian method.
 
-    The returned messages are LINE API dictionaries.  The short fallback text
-    is useful for audit, notifications and a readable plain-text contingency.
-    For the full original wording callers can keep build_work_order_reply.
+    Preserve the English callback parameter for old callers; this formatter
+    never invokes it or includes an English translation in any LINE message.
     """
     info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup,
                                    paint_codes)
     if not info["is_work_order"]:
-        return {"messages": [], "fallback_text": "⚠️ 未確認為工單 / Bukan work order yang jelas / Work order not confirmed."}
-    paint_codes = _PAINT_CODES if paint_codes is None else paint_codes
-    order = _clean(info.get("order"), 52) or "訂單號待確認 / Confirm order"
-    customer = _clean(info.get("customer"), 75) or "客戶待確認 / Pelanggan belum jelas / Confirm customer"
-    storage, storage_warn = _storage_text(info["storage"])
+        return {"messages": [], "fallback_text":
+                "⚠️ 無法確認是工單 / Tidak dapat memastikan ini perintah kerja."}
+    codes = _PAINT_CODES if paint_codes is None else paint_codes
+    storage = info["storage"]
+    # When storage lookup resolves a partial customer name to a unique exact
+    # admin entry, show that canonical name next to its actual storage area.
+    customer = _clean(storage.get("customer") or info.get("customer"), 75)
+    customer = customer or "客戶待確認 / Pelanggan perlu diperiksa"
+    area, area_color = _storage_text(storage)
+    package = info["packaging"]
+    package_rows = _package_rows(package, translate_zh_to_id)
+    paint_rows = _spray_rows(info, codes)
     ring, ring_color = _ring_text(info["ring"])
-
     content = [
-        _section("客戶", "Pelanggan", "Customer",
+        _section("客戶", "Pelanggan",
                  [_text(customer, size="lg", weight="bold", margin="sm")], margin=None),
-        _section("儲區", "Gudang", "Storage",
-                 [_text(storage, size="md" if storage_warn else "lg",
-                        color=AMBER if storage_warn else TEAL,
-                        weight="bold", margin="sm")]),
-        _dimension_panel(info, "length"),
-        _dimension_panel(info, "diameter"),
+        _section("儲區", "Gudang",
+                 [_text(area, size="lg" if storage["status"] == "ok" else "sm",
+                        color=area_color, weight="bold", margin="sm")]),
         _divider(),
-        _section("噴漆", "Cat semprot", "Spray paint", _spray_text(info, paint_codes)),
+        _section("包裝碼與方式", "Kode dan cara pengemasan", package_rows),
         _divider(),
-        _section("包裝", "Kemasan", "Packaging",
-                 _package_text(info["packaging"], translate_zh_to_id, translate_zh_to_en)),
+        _section("噴漆", "Cat semprot", paint_rows),
         _divider(),
-        _section("套環", "Cincin pelindung", "Protective ring",
+        _section("套環", "Cincin pelindung",
                  [_text(ring, color=ring_color, weight="bold", margin="sm")]),
     ]
     bubble = {"type": "bubble", "size": "mega",
-              "header": _box([_text("工單資訊  ·  INFORMASI ORDER", size="sm", color="#C5EEE8", weight="bold"),
-                              _text(order, size="xl", weight="bold", margin="sm")],
-                             backgroundColor="#195365", paddingAll="18px"),
-              "body": _box(content, backgroundColor=BODY_BG, paddingAll="18px")}
-    minimum = _shown_number(info["fields"], "length_min")
-    maximum = _shown_number(info["fields"], "length_max")
-    diameter_min = _shown_number(info["fields"], "diameter_min")
-    diameter_max = _shown_number(info["fields"], "diameter_max")
-    spray = "；".join(row["text"] for row in _spray_text(info, paint_codes))
-    package = info["packaging"]
-    pack_code = (_clean(package.get("code"), 24) if package["status"] != "missing"
-                 else "?")
-    fallback = (f"📋 {order} · {customer}\n"
-                f"長度 / Panjang / Length：MIN {minimum} · MAX {maximum} mm\n"
-                f"成品尺寸 / Ukuran / Size：MIN {diameter_min} · MAX {diameter_max} mm\n"
-                f"儲區 / Gudang / Storage：{storage}\n"
-                f"噴漆 / Cat / Spray paint：{spray}\n"
-                f"包裝 / Kemasan / Packaging：{pack_code}\n"
-                f"套環 / Cincin / Ring：{ring}")
+              "header": _box([_text("工單重點 / Ringkasan perintah kerja",
+                                    color="#C5EEE8", weight="bold")],
+                             backgroundColor="#195365", paddingAll="16px"),
+              "body": _box(content, backgroundColor=BODY_BG, paddingAll="16px")}
+    code = (_clean(package.get("code"), 24)
+            if package["status"] != "missing" else "待確認")
     primary = {"type": "flex",
-               "altText": _clean(f"📋 工單 {order}｜長度 MIN {minimum} / MAX {maximum} mm｜{customer}", 200),
+               "altText": _clean(f"📋 工單重點 / Ringkasan perintah kerja：{customer} · {area} · 包裝 {code}", 200),
                "contents": bubble}
     messages = [primary]
-    # A malformed admin description must never hide the confirmed work order.
+    detail = None
+    # A corrupted admin description must never suppress the operational card.
     try:
-        detail = _detail_message(info, translate_zh_to_id, translate_zh_to_en)
+        detail = _detail_message(info, translate_zh_to_id)
         if detail and len(json.dumps(detail["contents"], ensure_ascii=False).encode("utf-8")) < 30000:
             messages.append(detail)
+        else:
+            detail = None
     except Exception:
         pass
-    # LINE caps each bubble at 30 KB. This path is only a last resort for
-    # pathological source input; the field limits normally keep it far below.
+    fallback = _fallback_from_info(info, codes, package_rows=package_rows,
+                                   paint_rows=paint_rows, detail_message=detail)
     if len(json.dumps(primary["contents"], ensure_ascii=False).encode("utf-8")) >= 30000:
         return {"messages": [], "fallback_text": fallback}
     return {"messages": messages, "fallback_text": fallback}

@@ -16723,46 +16723,29 @@ def analyze_work_order(ocr_text):
 
 
 def format_work_order_query(ocr_text, group_id=None, user_id=None):
-    """Render a trilingual query with decisions grounded in work-order fields."""
-    from work_order_query import build_work_order_reply
+    """Concise Chinese/Indonesian text backup when LINE Flex is unavailable."""
+    from work_order_card import build_work_order_fallback
 
-    def translate_packaging(source, target):
-        # Only unseen administrator-uploaded packaging descriptions need AI.
-        # The 24 existing methods use exact offline bilingual references.
-        before = getattr(_tl, "from_image_ocr", False)
-        try:
-            _tl.group_id = group_id or ""
-            _tl.user_id = user_id or ""
-            _tl.from_image_ocr = False
-            return translate(source, "zh", target)
-        finally:
-            _tl.from_image_ocr = before
-
-    return build_work_order_reply(
-        ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP,
-        translate_zh_to_id=lambda source: translate_packaging(source, "id"),
-        translate_zh_to_en=lambda source: translate_packaging(source, "en"),
-    )
+    return build_work_order_fallback(ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP)
 
 
 def format_work_order_cards(ocr_text, group_id=None, user_id=None):
-    """A compact main card plus a separate, translated packaging detail card."""
+    """Render the five requested work-order facts and Indonesian method."""
     from work_order_card import build_work_order_cards
 
-    def translate_packaging(source, target):
+    def translate_packaging(source):
         before = getattr(_tl, "from_image_ocr", False)
         try:
             _tl.group_id = group_id or ""
             _tl.user_id = user_id or ""
             _tl.from_image_ocr = False
-            return translate(source, "zh", target)
+            return translate(source, "zh", "id")
         finally:
             _tl.from_image_ocr = before
 
     return build_work_order_cards(
         ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP,
-        translate_zh_to_id=lambda source: translate_packaging(source, "id"),
-        translate_zh_to_en=lambda source: translate_packaging(source, "en"),
+        translate_zh_to_id=translate_packaging,
     )
 
 

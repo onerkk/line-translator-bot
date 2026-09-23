@@ -118,9 +118,13 @@ def test_unknown_customer_does_not_fall_back_to_recipient(monkeypatch):
     assert app.format_storage_for_work_order(analysis["customer"]) is None
 
 
-@pytest.mark.parametrize("query", [None, "", "ALCONIX", "大成新客戶", "B", "HAKUD0"])
-def test_automatic_lookup_never_uses_partial_or_fuzzy_customer_match(query):
+@pytest.mark.parametrize("query", [None, "", "大成新客戶", "B", "HAKUD0"])
+def test_automatic_lookup_never_uses_unsafe_partial_or_fuzzy_customer_match(query):
     assert resolve_storage_customer(query, NAMES) is None
+
+
+def test_unique_customer_prefix_resolves_to_full_table_name():
+    assert resolve_storage_customer("ALCONIX", NAMES) == "ALCONIX JP"
 
 
 def test_normalized_collision_is_not_selected_arbitrarily():

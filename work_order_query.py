@@ -365,6 +365,18 @@ def _verified_paint_color(code, lookup):
 _NO_RING = re.compile(r"不要\s*(?:黑色)?\s*套[環环]|不\s*套[環环]|(?:無需|无需|免)\s*套[環环]|\bNO\s+KONDOM\b", re.I)
 
 
+def _ring_size_candidates(raw):
+    """Retain both readings of three-digit separators for ring decisions only."""
+    if raw is None:
+        return ()
+    raw = raw.strip()
+    if re.fullmatch(r"\d+\.\d{3}", raw) or re.fullmatch(r"\d{1,3},\d{3}", raw):
+        return tuple({Decimal(raw.replace(",", ".")),
+                      Decimal(raw.replace(",", "").replace(".", ""))})
+    number = _decimal(raw)
+    return (number,) if number is not None else ()
+
+
 def _ring(fields):
     note = "\n".join(filter(None, (fields.get("special"), fields.get("order_note"))))
     if _NO_RING.search(note):
@@ -373,19 +385,26 @@ def _ring(fields):
     if not flow or not re.fullmatch(r"[A-Z]+", flow.upper()):
         return {"status": "unknown", "reason": "flow", "process": None}
     flow = flow.upper()
+    # A trailing D marks packaging material, not a polishing bar.  The ring
+    # decision therefore does not depend on the finished diameter.
+    if flow.endswith("D"):
+        return {"status": "no", "reason": "packaging_material", "process": "packaging"}
     if flow.endswith("GL"):
         process, cutoff = "grinding", Decimal(16)
-    elif len(flow) >= 2 and flow.endswith(("L", "D")) and flow[-2] != "G":
+    elif len(flow) >= 2 and flow.endswith("L") and flow[-2] != "G":
         process, cutoff = "polishing", Decimal(20)
     else:
         return {"status": "unknown", "reason": "flow", "process": None}
-    diameter = _range(fields, "diameter")
-    if not diameter:
+    lows = _ring_size_candidates(fields.get("diameter_min"))
+    highs = _ring_size_candidates(fields.get("diameter_max"))
+    if not lows or not highs:
         return {"status": "unknown", "reason": "diameter", "process": process}
-    low, high = diameter
-    if low >= cutoff:
+    possible = [(low, high) for low in lows for high in highs if 0 <= low <= high]
+    if not possible:
+        return {"status": "unknown", "reason": "diameter", "process": process}
+    if all(low >= cutoff for low, _high in possible):
         return {"status": "yes", "reason": "size_rule", "process": process, "threshold": int(cutoff)}
-    if high < cutoff:
+    if all(high < cutoff for _low, high in possible):
         return {"status": "no", "reason": "size_rule", "process": process, "threshold": int(cutoff)}
     return {"status": "unknown", "reason": "threshold_crossing", "process": process}
 
