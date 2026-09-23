@@ -62,6 +62,67 @@ def test_missing_flow_but_complete_diameter_is_recoverable():
         "ring"]["status"] == "yes"
 
 
+def test_ocr_digit_in_complete_gl_flow_is_reread_and_repaired():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD6L")
+    assert extract_work_order_info(original, {}, {})["ring"]["reason"] == "flow"
+    assert needs_ring_retry(original)
+    fixed = merge_confirmed_ring_fields(original, FOCUSED)
+    assert "訂單流程：CHRAPD6L" not in fixed
+    assert fixed.count("訂單流程：CHRAPDGL") == 1
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+
+
+def test_last_letter_l_read_as_digit_one_triggers_safe_reread():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDG1")
+    assert needs_ring_retry(original)
+    fixed = merge_confirmed_ring_fields(original, FOCUSED)
+    assert fixed.count("訂單流程：CHRAPDGL") == 1
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+
+
+def test_invalid_prefix_may_not_be_promoted_to_wrong_polishing_suffix():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD6L")
+    guessed = FOCUSED.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDBL")
+    assert needs_ring_retry(original)
+    assert merge_confirmed_ring_fields(original, guessed) == original
+    assert extract_work_order_info(original, {}, {})["ring"]["status"] == "unknown"
+
+
+def test_unparseable_finished_size_is_reread_without_changing_flow():
+    original = PHOTO_DACAPO.replace("成品尺寸MAX：18", "成品尺寸MAX：1B")
+    reread = FOCUSED.replace("成品尺寸MAX：18", "成品尺寸MAX：18")
+    assert needs_ring_retry(original)
+    fixed = merge_confirmed_ring_fields(original, reread)
+    assert "成品尺寸MAX：1B" not in fixed
+    assert fixed.count("成品尺寸MAX：18") == 1
+    assert fixed.count("訂單流程：CHRAPDGL") == 1
+    assert extract_work_order_info(fixed, {}, {})["ring"]["status"] == "yes"
+
+
+def test_valid_polishing_l_18_is_not_changed_even_if_reread_says_gl():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPDL")
+    assert extract_work_order_info(original, {}, {})["ring"]["status"] == "no"
+    assert not needs_ring_retry(original)
+    assert merge_confirmed_ring_fields(original, FOCUSED) == original
+
+
+def test_valid_numeric_conflict_and_duplicate_flow_cannot_be_repaired():
+    contradictory = PHOTO_DACAPO.replace("成品尺寸MIN：17.957", "成品尺寸MIN：19")
+    assert extract_work_order_info(contradictory, {}, {})["ring"]["reason"] == "invalid_diameter"
+    assert not needs_ring_retry(contradictory)
+    assert merge_confirmed_ring_fields(contradictory, FOCUSED) == contradictory
+    duplicate = PHOTO_DACAPO.replace(
+        "訂單流程：CHRAPDGL", "訂單流程：CHRAPD6L\n訂單流程：CHRAPDL")
+    assert needs_ring_retry(duplicate)
+    assert merge_confirmed_ring_fields(duplicate, FOCUSED) == duplicate
+
+
+def test_multiple_unreadable_characters_do_not_receive_guessed_flow():
+    original = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAP66L")
+    assert needs_ring_retry(original)
+    assert merge_confirmed_ring_fields(original, FOCUSED) == original
+
+
 @pytest.mark.parametrize("retry", [
     "訂單流程：CHRAPDGL\n成品尺寸MIN：17.957\n成品尺寸MAX：?",
     "訂單流程：CHRAPDGL\n成品尺寸MIN：17.957\n成品尺寸MAX：18\n套環：Y",
@@ -154,6 +215,29 @@ def test_app_retries_missing_photo_cells_once_and_rule_not_printed_y_decides(mon
     assert info["fields"]["ring_on_form"] == "N"
     assert info["ring"] == {"status": "yes", "reason": "size_rule",
                             "process": "grinding", "threshold": 16}
+
+
+def test_app_rereads_nonempty_but_invalid_flow_with_original_and_crop(monkeypatch):
+    monkeypatch.setattr(app, "_has_ai_capability", lambda *_args: True)
+    monkeypatch.setattr(app, "track_tokens", lambda *_args: None)
+    first = PHOTO_DACAPO.replace("訂單流程：CHRAPDGL", "訂單流程：CHRAPD6L")
+    calls = []
+
+    def vision(messages, **options):
+        calls.append((messages, options))
+        response = first if len(calls) == 1 else FOCUSED
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=response))])
+
+    monkeypatch.setattr(app, "_vision_call", vision)
+    photo = (Path(__file__).resolve().parent.parent.parent / "upload" / "02-235509.jpg")
+    if not photo.exists():
+        photo = Path(__file__).resolve().parent / "tests" / "fixtures" / "work_order_20260906.jpg"
+    result = app.ocr_work_order_fields(base64.b64encode(photo.read_bytes()).decode("ascii"))
+    assert len(calls) == 2
+    assert len([part for part in calls[1][0][1]["content"]
+                if part["type"] == "image_url"]) == 2
+    assert extract_work_order_info(result, {}, {})["ring"]["status"] == "yes"
 
 
 @pytest.mark.parametrize("original", [

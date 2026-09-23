@@ -1,8 +1,8 @@
 """Source-bound second OCR reading for an incomplete work-order ring decision.
 
 The printed ring Y/N is never used.  A focused reading can fill a missing
-process or finished-size cell only when the existing transcription is not
-contradicted; the normal work-order rules then decide whether a ring is needed.
+process or finished-size cell when missing or illegible, without replacing
+readable valid cells; the normal work-order rules then decide the ring.
 """
 
 from __future__ import annotations
@@ -23,6 +23,57 @@ _UNKNOWN = re.compile(
     re.I,
 )
 _PROCESS = re.compile(r"[A-Za-z]+(?: +[A-Za-z]+)*")
+
+
+def _invalid_flow(raw):
+    """An OCR digit in an otherwise complete process is not a valid suffix."""
+    if not raw or _UNKNOWN.fullmatch(raw):
+        return False
+    compact = re.sub(r"\s+", "", raw).upper()
+    return bool(re.fullmatch(r"[A-Z0-9]{3,}", compact)
+                and any(c.isdigit() for c in compact)
+                and (compact.endswith(("L", "D")) or compact[-1].isdigit()))
+
+
+def _invalid_size(raw):
+    """A numeric-looking cell may contain a letter mistaken for a digit."""
+    if not raw or _UNKNOWN.fullmatch(raw):
+        return False
+    if _number_candidates(raw):
+        return False
+    value = re.sub(r"\s*(?:mm|毫米|公厘)$", "", raw, flags=re.I).strip()
+    return bool(re.fullmatch(r"[0-9][0-9., ]*[A-Za-z][0-9., ]*", value))
+
+
+def _replaceable_invalid(field, old, new):
+    """Require exactly one OCR character to be repaired by the full reread."""
+    if field == "flow":
+        if not _invalid_flow(old):
+            return False
+        original = re.sub(r"\s+", "", old).upper()
+        candidate = re.sub(r"\s+", "", new).upper()
+        changes = [(index, left, right) for index, (left, right) in
+                   enumerate(zip(original, candidate)) if left != right]
+        if len(original) != len(candidate) or len(changes) != 1:
+            return False
+        index, old_char, new_char = changes[0]
+        # Only the two characters deciding GL versus L may be promoted from
+        # a malformed OCR reading.  A guess such as 6 -> B would silently
+        # change an 18 mm grinding bar into a polishing bar.
+        return ((index == len(original) - 2 and original.endswith("L")
+                 and old_char.isdigit() and new_char == "G"
+                 and candidate.endswith("GL"))
+                or (index == len(original) - 1 and old_char == "1"
+                    and new_char == "L" and original[-2] == "G"
+                    and candidate.endswith("GL")))
+    if not _invalid_size(old):
+        return False
+    original = re.sub(r"\s*(?:mm|毫米|公厘)$", "", old, flags=re.I).strip().upper()
+    candidate = re.sub(r"\s*(?:mm|毫米|公厘)$", "", new, flags=re.I).strip().upper()
+    changes = [(left, right) for left, right in zip(original, candidate)
+               if left != right]
+    return (len(original) == len(candidate) and len(changes) == 1
+            and changes[0][0].isalpha() and changes[0][1].isdigit())
 
 
 def focused_ring_crop(image_base64):
@@ -62,7 +113,7 @@ def focused_ring_crop(image_base64):
 
 
 def needs_ring_retry(ocr_text):
-    """Retry only when missing OCR can prevent the process/size rule."""
+    """Retry only when missing or invalid OCR prevents the ring rule."""
     if not isinstance(ocr_text, str) or not ocr_text.strip():
         return False
     info = extract_work_order_info(ocr_text, {}, {})
@@ -74,8 +125,10 @@ def needs_ring_retry(ocr_text):
     fields = info.get("fields", {})
     if ring["reason"] == "diameter":
         return any(not fields.get(field) or _UNKNOWN.fullmatch(fields[field])
+                   or _invalid_size(fields[field])
                    for field in ("diameter_min", "diameter_max"))
-    return not fields.get("flow") or bool(_UNKNOWN.fullmatch(fields["flow"]))
+    return (not fields.get("flow") or bool(_UNKNOWN.fullmatch(fields["flow"]))
+            or _invalid_flow(fields["flow"]))
 
 
 def _focused_fields(retry_text):
@@ -121,13 +174,14 @@ def _equal(field, old, new):
 
 
 def _safe_original(ocr_text, retry):
-    """Keep known values; replace just standalone unknown key/value lines.
+    """Keep valid values; replace unique, explicitly malformed source lines.
 
     The parser treats conflicting duplicate cells as missing.  Check each raw
     line so a retry cannot accidentally overwrite that conflict.
     """
     fields = _read_fields(ocr_text)
     remove = set()
+    replacements = set()
     seen = {field: [] for field in _FIELDS}
     for index, line in enumerate(ocr_text.splitlines()):
         match = _SOURCE_LINE.fullmatch(line.strip())
@@ -140,7 +194,10 @@ def _safe_original(ocr_text, retry):
             if not old or _UNKNOWN.fullmatch(old):
                 remove.add(index)
             elif not _equal(field, old, retry[field]):
-                return None
+                if not _replaceable_invalid(field, old, retry[field]):
+                    return None
+                remove.add(index)
+                replacements.add(field)
         elif len(_cells(line)) > 1:
             # A tabular OCR cell may contain an unparsed conflicting value.
             # Preserve the whole original response rather than adding a new
@@ -149,14 +206,16 @@ def _safe_original(ocr_text, retry):
                 return None
     for field in _FIELDS:
         old = fields.get(field)
-        if old is not None and not _equal(field, old, retry[field]):
+        if old is not None and not _equal(field, old, retry[field]) and field not in replacements:
             return None
         if old is None and seen[field]:
             # A second occurrence of a missing field could denote a duplicate
             # or conflicting form; a single explicit '?' can be repaired.
             if len(seen[field]) != 1 or seen[field][0] not in remove:
                 return None
-    return remove, fields
+        if field in replacements and (len(seen[field]) != 1 or seen[field][0] not in remove):
+            return None
+    return remove, fields, replacements
 
 
 def merge_confirmed_ring_fields(ocr_text, retry_text):
@@ -174,11 +233,11 @@ def merge_confirmed_ring_fields(ocr_text, retry_text):
     safe = _safe_original(ocr_text, retry)
     if safe is None:
         return ocr_text
-    remove, original_fields = safe
+    remove, original_fields, replacements = safe
     before = extract_work_order_info(ocr_text, {}, {})
     lines = [line for index, line in enumerate(ocr_text.splitlines()) if index not in remove]
     for field in _FIELDS:
-        if not original_fields.get(field):
+        if not original_fields.get(field) or field in replacements:
             lines.append(f"{_LABELS[field]}：{retry[field]}")
     candidate = "\n".join(lines)
     after = extract_work_order_info(candidate, {}, {})

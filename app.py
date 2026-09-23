@@ -16753,10 +16753,12 @@ def format_work_order_cards(ocr_text, group_id=None, user_id=None):
         finally:
             _tl.from_image_ocr = before
 
-    return build_work_order_cards(
+    card = build_work_order_cards(
         ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
         translate_zh_to_id=translate_packaging,
     )
+    _record_work_order_diagnostic("card_rendered", ocr_text)
+    return card
 
 
 def detect_work_order(ocr_text):
@@ -17510,6 +17512,28 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
+_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.2-work-order-trace"
+
+
+def _record_work_order_diagnostic(stage, ocr_text, **retry_flags):
+    """Keep a bounded admin-only trail of the exact work-order decision inputs."""
+    message_id = str(getattr(_tl, "work_order_message_id", "") or "")
+    if not message_id:
+        return
+    try:
+        from work_order_diagnostics import append_diagnostic, make_diagnostic
+
+        row = make_diagnostic(
+            ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
+            message_id, stage, _WORK_ORDER_DIAGNOSTIC_BUILD, extra=retry_flags,
+        )
+        if row is not None:
+            if not append_diagnostic(row):
+                logger.warning("Work-order diagnostics write failed at stage=%s", stage)
+    except Exception as exc:
+        logger.warning("Work-order diagnostics unavailable: %s", type(exc).__name__)
+
+
 def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accepted=None):
     """Log why storage remains pending without persisting order or customer IDs."""
     try:
@@ -17597,12 +17621,18 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             _tl.ocr_extraction_state = "empty"
             return ""
         if result:
+            length_retry_triggered = False
+            length_retry_accepted = None
+            ring_retry_triggered = False
+            ring_retry_accepted = None
             _work_order_storage_ocr_diagnostic("initial", result)
+            _record_work_order_diagnostic("initial", result)
             try:
                 from work_order_length_recovery import (focused_length_crop,
                                                         merge_confirmed_length,
                                                         needs_length_retry)
                 if needs_length_retry(result, storage_lookup):
+                    length_retry_triggered = True
                     # One reread uses the full sheet for context and, when
                     # available, a magnified crop of the printed length row.
                     # It never replaces an already conflicting OCR number.
@@ -17633,18 +17663,29 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                     )
                     track_tokens(reread)
                     retry_text = (reread.choices[0].message.content or "").strip()
+                    _record_work_order_diagnostic(
+                        "length_retry_candidate", retry_text,
+                        length_retry_triggered=True)
                     original = result
                     result = merge_confirmed_length(result, retry_text, storage_lookup)
+                    length_retry_accepted = result != original
                     _work_order_storage_ocr_diagnostic(
-                        "reread", result, cropped=bool(cropped), accepted=result != original)
+                        "reread", result, cropped=bool(cropped), accepted=length_retry_accepted)
+                    _record_work_order_diagnostic(
+                        "length_retry_result", result,
+                        length_retry_triggered=True,
+                        length_retry_accepted=length_retry_accepted)
             except Exception as retry_exc:
                 logger.warning("Work-order length reread failed: %s", retry_exc)
                 _work_order_storage_ocr_diagnostic("reread_error", result)
+                _record_work_order_diagnostic("length_retry_error", result,
+                                              length_retry_triggered=length_retry_triggered)
             try:
                 from work_order_ring_recovery import (
                     focused_ring_crop, merge_confirmed_ring_fields, needs_ring_retry,
                 )
                 if needs_ring_retry(result):
+                    ring_retry_triggered = True
                     crop = focused_ring_crop(image_base64)
                     ring_images = [{"type": "image_url", "image_url": {
                         "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}}]
@@ -17673,9 +17714,26 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                     )
                     track_tokens(reread)
                     retry_text = (reread.choices[0].message.content or "").strip()
+                    _record_work_order_diagnostic(
+                        "ring_retry_candidate", retry_text,
+                        ring_retry_triggered=True)
+                    original = result
                     result = merge_confirmed_ring_fields(result, retry_text)
+                    ring_retry_accepted = result != original
+                    _record_work_order_diagnostic(
+                        "ring_retry_result", result,
+                        ring_retry_triggered=True,
+                        ring_retry_accepted=ring_retry_accepted)
             except Exception as retry_exc:
                 logger.warning("Work-order ring field reread failed: %s", retry_exc)
+                _record_work_order_diagnostic("ring_retry_error", result,
+                                              ring_retry_triggered=ring_retry_triggered)
+            _record_work_order_diagnostic(
+                "final_ocr", result,
+                length_retry_triggered=length_retry_triggered,
+                length_retry_accepted=length_retry_accepted,
+                ring_retry_triggered=ring_retry_triggered,
+                ring_retry_accepted=ring_retry_accepted)
         return result or None
     except Exception as exc:
         logger.warning("Work-order field OCR failed: %s", exc)
@@ -21046,6 +21104,7 @@ def _handle_image_background(ctx):
         message_id = ctx["message_id"]
         is_dm_img = ctx["is_dm_img"]
         image_mode = str(ctx.get("image_mode") or get_group_image_mode(group_id))
+        _tl.work_order_message_id = str(message_id) if image_mode == "work_order" else ""
         
         # v3.9.26: 確認 thread 真的開始跑
         _event_log_write("bg_thread_started", {
@@ -24445,6 +24504,15 @@ document.getElementById('pwInput').addEventListener('keydown',function(e){
 <div id="storageStats" style="font-size:14px;margin-bottom:14px">載入中...</div>
 <button class="btn btn-dark btn-sm" onclick="downloadJson()">下載 JSON</button>
 </div>
+<div class="card" style="margin-top:12px">
+<div style="font-weight:700;font-size:15px;margin-bottom:6px">🔎 工單判讀記錄</div>
+<div class="card-sub" style="margin-bottom:12px">查看實際辨識欄位、套環與儲區判定、資料版本及重讀結果；最多保留 500 個處理階段，不存照片、完整 OCR 或工單號碼欄。更新後需重新上傳工單才會產生記錄。</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+<input id="workOrderTraceCustomer" type="text" placeholder="客戶名稱（選填，例如方鉦）" style="flex:1;min-width:160px;padding:9px;border-radius:8px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0">
+<button class="btn btn-secondary btn-sm" onclick="loadWorkOrderDiagnostics()">查看最近記錄</button>
+</div>
+<pre id="workOrderTraceOutput" style="white-space:pre-wrap;word-break:break-word;max-height:460px;overflow:auto;font-size:12px;line-height:1.5;margin:0"></pre>
+</div>
 </div>
 
 <!-- Glossary Panel (v3.9.31: 印尼文範例詞庫) -->
@@ -27675,6 +27743,30 @@ async function downloadJson(){
     URL.revokeObjectURL(url);
     toast('JSON 已下載');
   }catch(e){toast('下載失敗')}
+}
+
+async function loadWorkOrderDiagnostics(){
+  var output=document.getElementById('workOrderTraceOutput');
+  if(!output)return;
+  output.textContent='正在讀取...';
+  var customer=(document.getElementById('workOrderTraceCustomer').value||'').trim();
+  try{
+    var url=API+'/work-order-diagnostics?limit=30';
+    if(customer)url+='&customer='+encodeURIComponent(customer);
+    var r=await fetch(url,{headers:adminHeaders(false)});
+    var d=await r.json().catch(function(){return {error:'無法解析伺服器回覆'}});
+    if(!r.ok){output.textContent=d.error||'讀取失敗（HTTP '+r.status+'）';return}
+    var summary=['程式版本：'+d.build,'記錄寫入：'+(d.diagnostics_writable?'可寫入':'不可寫入，請檢查伺服器儲存設定')];
+    if(!d.persistent_disk)summary.push('記錄位於暫存磁碟，伺服器重新啟動後可能消失。');
+    if(d.storage)summary.push('儲區資料：'+d.storage.source+'；'+JSON.stringify(d.storage.effective_rows||[]));
+    summary.push('最近判讀（台灣時間）：');
+    (d.records||[]).forEach(function(v){
+      var taiwan=v.timestamp_utc?new Date(v.timestamp_utc).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'時間未記錄';
+      summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+')');
+    });
+    if(!(d.records||[]).length)summary.push('目前沒有新工單記錄，請重新上傳照片。');
+    output.textContent=summary.join('\n')+'\n\n判讀明細：\n'+JSON.stringify(d,null,2);
+  }catch(e){output.textContent='讀取失敗：'+e.message}
 }
 
 // ─── Glossary (印尼詞庫,v3.9.31) ───
@@ -33825,6 +33917,69 @@ def api_admin_storage_json():
     json_str = json.dumps(STORAGE_LOOKUP, ensure_ascii=False, indent=2)
     return app.response_class(json_str, mimetype="application/json",
                               headers={"Content-Disposition": "attachment; filename=storage_data.json"})
+
+
+@app.route("/api/admin/work-order-diagnostics")
+def api_admin_work_order_diagnostics():
+    """Inspect live lookup and recent source fields using normal admin headers."""
+    if not check_manager_access("storage"):
+        return jsonify({"error": "forbidden"}), 403
+    import hashlib
+    from pathlib import Path
+    from work_order_detection import resolve_storage_customer
+    from work_order_diagnostics import diagnostics_health, load_diagnostics
+    from work_order_storage_reference import STORAGE_REFERENCE
+
+    customer = request.args.get("customer", "").strip()
+    if len(customer) > 100:
+        return jsonify({"error": "customer too long"}), 400
+    live = normalize_storage_lookup(STORAGE_LOOKUP)
+    effective = _work_order_storage_lookup()
+    snapshot = None
+    if customer:
+        live_name = resolve_storage_customer(customer, live)
+        effective_name = resolve_storage_customer(customer, effective)
+        reference_name = resolve_storage_customer(customer, STORAGE_REFERENCE)
+        live_rows = live.get(live_name) if live_name else None
+        effective_rows = effective.get(effective_name) if effective_name else None
+        reference_rows = STORAGE_REFERENCE.get(reference_name) if reference_name else None
+        snapshot = {
+            "requested": customer,
+            "live_customer": live_name,
+            "live_rows": live_rows,
+            "reference_customer": reference_name,
+            "reference_rows": reference_rows,
+            "effective_customer": effective_name,
+            "effective_rows": effective_rows,
+            "source": ("live_empty" if live_name and not live_rows else
+                       "live" if live_name else
+                       "reference" if effective_name else "absent"),
+        }
+    project_dir = Path(__file__).resolve().parent
+    filenames = ("app.py", "work_order_query.py", "work_order_ring_recovery.py",
+                 "work_order_diagnostics.py", "storage_data.json", "storage_reference.json")
+    fingerprints = {}
+    for filename in filenames:
+        try:
+            fingerprints[filename] = hashlib.sha256(
+                (project_dir / filename).read_bytes()).hexdigest()[:16]
+        except OSError:
+            fingerprints[filename] = None
+    limit = _safe_int(request.args.get("limit", "30"), default=30, min_val=1, max_val=100)
+    records = load_diagnostics(limit=limit, msg_id=request.args.get("message_id") or None)
+    health = diagnostics_health()
+    response = jsonify({
+        "ok": True,
+        "build": _WORK_ORDER_DIAGNOSTIC_BUILD,
+        "fingerprints": fingerprints,
+        "storage": snapshot,
+        "records": records,
+        "retention": health["retention"],
+        "persistent_disk": health["persistent_disk"],
+        "diagnostics_writable": health["writable"],
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ─── Glossary API (v3.9.31: 印尼文範例詞庫) ─────────────
