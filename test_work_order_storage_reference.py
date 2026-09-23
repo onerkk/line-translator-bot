@@ -61,6 +61,54 @@ def test_verifiably_stale_operator_corrected_without_overriding_admin_remap():
     assert effective_work_order_storage_lookup(explicit_absence, reference)["方鉦"] == []
 
 
+def test_live_letter_bands_normalize_without_changing_admin_area_or_input():
+    live = {"方鉦": [[" a ", "CUSTOM-A"], ["b", "CUSTOM-B"],
+                   ["Ｃ", "CUSTOM-C"]]}
+    lookup = effective_work_order_storage_lookup(live)
+    assert lookup["方鉦"] == [["<=3200", "CUSTOM-A"],
+                              [">3200<=4200", "CUSTOM-B"], [">4200", "CUSTOM-C"]]
+    assert live["方鉦"] == [[" a ", "CUSTOM-A"], ["b", "CUSTOM-B"],
+                           ["Ｃ", "CUSTOM-C"]]
+    for value, area in ((3200, "CUSTOM-A"), (3201, "CUSTOM-B"),
+                        (4200, "CUSTOM-B"), (4201, "CUSTOM-C")):
+        result = _resolve_storage("方鉦", (Decimal(value), Decimal(value)), lookup)
+        assert result["status"] == "ok" and result["area"] == area
+
+
+def test_live_malformed_rows_cannot_trigger_reference_repair():
+    reference = {"客戶": [["<=3200", "E01"], [">3200<=4200", "E02"],
+                           [">4200", "E03"]]}
+    for rows in (
+        [[">=3200", "E01"], ["B"], ["C", "E03"]],
+        [[">=3200", "E01"], ["B", "ADMIN-CUSTOM"], ["C", "E03"]],
+        [[">=3200", "E01"], ["B", "E02"], ["C", "E03"], ["C", "E04"]],
+    ):
+        live = {"客戶": rows}
+        merged = effective_work_order_storage_lookup(live, reference)
+        assert merged["客戶"][0] == [">=3200", "E01"]
+        assert live["客戶"] == rows
+    assert effective_work_order_storage_lookup(
+        {"客戶": [["A", "ADMIN-A"], ["bad-rule", "ADMIN-B"]]},
+        {},
+    )["客戶"] == [["<=3200", "ADMIN-A"], ["bad-rule", "ADMIN-B"]]
+
+
+@pytest.mark.parametrize("customer", ("開滋二廠", "開滋三廠", "開滋一廠", "TSM", "常州眾山"))
+def test_repeated_old_a_band_corrected_only_with_identical_source_rows(customer):
+    baseline = STORAGE_REFERENCE[customer]
+    assert len(baseline) == 6 and baseline[0][0] == baseline[3][0] == "<=3200"
+    stale_rows = [list(row) for row in baseline]
+    stale_rows[3][0] = ">=3200"
+    live = {customer: stale_rows}
+    merged = effective_work_order_storage_lookup(live)
+    assert merged[customer] == baseline
+    assert live[customer][3][0] == ">=3200"
+
+    custom = [list(row) for row in stale_rows]
+    custom[1][1] = "NEW01"
+    assert effective_work_order_storage_lookup({customer: custom})[customer] == custom
+
+
 @pytest.mark.parametrize("live_name", ("sungeun", "SUN GEUN", "ＳＵＮＧＥＵＮ"))
 def test_existing_live_customer_case_or_width_variant_overrides_reference(live_name):
     # Reference SUNGEUN maps >4200 to EG33, while the admin has updated it.

@@ -28,7 +28,7 @@ Y1224051-023 | SUNGE | 不同收貨人
     info = extract_work_order_info(ocr, STORAGE)
     assert info["is_work_order"] is True
     assert info["customer"] == "SUNGEUN"
-    assert info["storage"] == {"status": "ok", "area": "EG33", "customer": "SUNGEUN"}
+    assert info["storage"] == {"status": "ok", "area": "EG33、EG32", "customer": "SUNGEUN"}
 
 
 def test_partial_customer_never_comes_from_recipient_column():
