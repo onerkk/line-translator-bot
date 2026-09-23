@@ -34431,20 +34431,20 @@ def api_admin_packaging_upload():
         return jsonify({"error": "沒有檔案"}), 400
     try:
         import openpyxl
-        from packaging_lookup import packaging_from_rows
+        from packaging_lookup import packaging_from_workbook
 
         wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
         try:
-            new_data, header = packaging_from_rows(wb.active.iter_rows(values_only=True))
+            new_data, header, sheet_name = packaging_from_workbook(wb)
         finally:
             wb.close()
         PACKAGING_LOOKUP = new_data
-        logger.info("Packaging updated via admin: %d codes, columns: %s",
-                     len(new_data), header)
+        logger.info("Packaging updated via admin: %d codes from sheet %s, columns: %s",
+                     len(new_data), sheet_name, header)
         json_str = json.dumps(new_data, ensure_ascii=False, indent=2)
         gh_ok = commit_packaging_to_github(json_str)
         cols_info = "、".join(h for h in header if h)
-        msg = "已更新 " + str(len(new_data)) + " 筆包裝碼（欄位：" + cols_info + "）"
+        msg = "已從「" + sheet_name + "」更新 " + str(len(new_data)) + " 筆包裝碼（欄位：" + cols_info + "）"
         if gh_ok:
             msg += "\n已自動推送 GitHub，永久生效"
         else:

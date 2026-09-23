@@ -21,6 +21,10 @@ _DISPLAY_FIELDS = (
     ("固定繩", ("固定繩", "固定绳")),
     ("原表待確認", ("原表待確認", "原表待确认")),
 )
+_COMPONENT_CODE_FIELDS = (
+    ("內包裝代碼", ("內包裝代碼",)),
+    ("外包裝代碼", ("外包裝代碼",)),
+)
 
 
 def _text(value):
@@ -57,6 +61,30 @@ def _has_packaging_content(entry):
         for header, value in entry.items()
         for _label, words in _DISPLAY_FIELDS[:-1]
     )
+
+
+def _canonical_headers(headers):
+    """Disambiguate paired inner/outer component-code columns in Excel."""
+    result = list(headers)
+    for index, field in enumerate(result):
+        if _code_kind(field) != "generic" or index == 0:
+            continue
+        previous = _header(result[index - 1])
+        if previous in {"內包裝", "内包装"}:
+            result[index] = "內包裝代碼"
+        elif previous in {"外包裝", "外包装"}:
+            result[index] = "外包裝代碼"
+    return result
+
+
+def _row_code_value(row, columns, kind, row_number):
+    """Read duplicated same-purpose headers only when their values agree."""
+    values = [_text(row[col]) for col in columns if col < len(row) and _text(row[col])]
+    identities = {normalize_code(value) for value in values}
+    if len(identities) > 1:
+        label = {"old": "原包裝碼", "new": "新版包裝碼", "generic": "包裝碼"}.get(kind, kind)
+        raise ValueError("第 " + str(row_number) + " 列重複的" + label + "欄位內容不同，未更新資料")
+    return values[0] if values else ""
 
 
 def _codes(key, entry):
@@ -96,7 +124,7 @@ def _format_entry(key, entry):
     if isinstance(entry, str):
         lines.append(entry)
         return lines
-    for label, words in _DISPLAY_FIELDS:
+    for label, words in (*_DISPLAY_FIELDS, *_COMPONENT_CODE_FIELDS):
         for field, value in entry.items():
             if _text(value) and any(word in field for word in words):
                 lines.append(label + "：" + _text(value))
@@ -142,15 +170,29 @@ def packaging_from_rows(rows):
     start = 0
     for index, row in enumerate(rows[:10]):
         candidate = [_text(cell) for cell in row]
-        kinds = {}
+        kinds = {"old": [], "new": [], "generic": []}
         for col, field in enumerate(candidate):
             kind = _code_kind(field)
             if kind:
-                if kind in kinds:
+                kinds[kind].append(col)
+        if any(kinds.values()) and _has_packaging_content({field: "header" for field in candidate}):
+            explicit = kinds["old"] or kinds["new"]
+            if explicit:
+                # In the current quality-definition sheet, "內包裝" and
+                # "外包裝" each have an adjacent generic "代碼" column.
+                # Those are component codes, not additional package codes.
+                code_cols = {kind: columns for kind, columns in kinds.items()
+                             if kind in {"old", "new"} and columns}
+                canonical = _canonical_headers(candidate)
+                for col, field in enumerate(canonical):
+                    if field in {"內包裝代碼", "外包裝代碼"}:
+                        code_cols.setdefault("component", []).append(col)
+            else:
+                if len(kinds["generic"]) != 1:
                     raise ValueError("包裝碼欄位重複，請確認 Excel 標題")
-                kinds[kind] = col
-        if kinds and _has_packaging_content({field: "header" for field in candidate}):
-            header, code_cols, start = candidate, kinds, index + 1
+                code_cols = {"generic": kinds["generic"]}
+                canonical = candidate
+            header, start = canonical, index + 1
             break
     if header is None:
         raise ValueError("請上傳包裝方式表，需含原包裝碼／品保設計(新版)或包裝碼，以及簡稱或包裝方式；儲區表不能匯入此處")
@@ -159,14 +201,22 @@ def packaging_from_rows(rows):
     for row_number, row in enumerate(rows[start:], start=start + 1):
         if not any(_text(cell) for cell in row):
             continue
-        code_values = {kind: _text(row[col]) if col < len(row) else "" for kind, col in code_cols.items()}
+        code_values = {
+            kind: _row_code_value(row, columns, kind, row_number)
+            for kind, columns in code_cols.items() if kind != "component"
+        }
         canonical = code_values.get("new") or code_values.get("generic") or code_values.get("old")
         if not canonical:
             raise ValueError("第 " + str(row_number) + " 列缺少包裝碼，未更新資料")
         if any(value and not re.fullmatch(r"[A-Z0-9]{1,12}", normalize_code(value)) for value in code_values.values()):
             raise ValueError("第 " + str(row_number) + " 列包裝碼格式錯誤，未更新資料")
+        selected_code_cols = {
+            col for kind, columns in code_cols.items() if kind != "component"
+            for col in columns
+        }
         entry = {field: _text(row[col]) for col, field in enumerate(header)
-                 if field and col < len(row) and _text(row[col]) and _code_kind(field) is None}
+                 if field and col < len(row) and _text(row[col])
+                 and col not in selected_code_cols and _header(field) != "ba設計"}
         if not _has_packaging_content(entry):
             raise ValueError("第 " + str(row_number) + " 列缺少包裝方式，未更新資料")
         if code_values.get("old"):
@@ -184,3 +234,44 @@ def packaging_from_rows(rows):
     if not lookup:
         raise ValueError("Excel 沒有可用的包裝方式")
     return lookup, header
+
+
+def packaging_from_workbook(workbook):
+    """Choose the canonical packaging-definition sheet, then parse it once.
+
+    Workbooks often put an overview or historical table on the active tab.
+    Prefer the explicitly named quality-definition sheet when present; otherwise
+    honor the selected tab and only auto-detect when exactly one other sheet is
+    a valid packaging table.
+    """
+    sheets = list(getattr(workbook, "worksheets", ()))
+    if not sheets:
+        raise ValueError("Excel 沒有工作表")
+    canonical_names = {"品保定義", "包裝定義", "包裝方式", "包裝碼"}
+    canonical = [sheet for sheet in sheets
+                 if _header(getattr(sheet, "title", "")) in canonical_names]
+    if canonical:
+        sheet = canonical[0]
+        data, header = packaging_from_rows(sheet.iter_rows(values_only=True))
+        return data, header, sheet.title
+
+    active = getattr(workbook, "active", sheets[0])
+    try:
+        data, header = packaging_from_rows(active.iter_rows(values_only=True))
+        return data, header, active.title
+    except ValueError as active_error:
+        valid = []
+        for sheet in sheets:
+            if sheet is active:
+                continue
+            try:
+                data, header = packaging_from_rows(sheet.iter_rows(values_only=True))
+                valid.append((sheet, data, header))
+            except ValueError:
+                continue
+        if len(valid) == 1:
+            sheet, data, header = valid[0]
+            return data, header, sheet.title
+        if len(valid) > 1:
+            raise ValueError("Excel 有多張包裝資料表，請將要匯入的工作表設為作用中工作表")
+        raise active_error

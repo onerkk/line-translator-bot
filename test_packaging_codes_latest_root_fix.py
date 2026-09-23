@@ -8,7 +8,8 @@ import openpyxl
 import pytest
 
 import app
-from packaging_lookup import find_packaging_matches, format_packaging_reply, packaging_from_rows
+from packaging_lookup import (find_packaging_matches, format_packaging_reply,
+                              packaging_from_rows, packaging_from_workbook)
 
 
 DATA = json.loads(Path(__file__).with_name("packaging_data.json").read_text(encoding="utf-8"))
@@ -100,15 +101,17 @@ def test_known_sling_changes_and_unreadable_photo_details_are_not_invented():
     assert "forYIEH" in app.handle_pkg_command("/pkg 8I")
 
 
-def test_matching_legacy_methods_supply_explicit_inner_outer_and_tie_fields():
+def test_current_quality_sheet_supplies_inner_outer_component_codes():
     for code, entry in DATA.items():
-        if code == "8G":
-            continue  # Legacy H describes the flat box, not this ordinary box.
-        reference = LEGACY[entry["原包裝碼"]]
-        for field in ("內包裝", "外包裝", "固定繩"):
-            assert entry[field] == reference[field], (code, field)
-            assert field + "：" + reference[field] in app.handle_pkg_command("/pkg " + code)
+        assert entry["內包裝代碼"]
+        assert entry["外包裝代碼"]
         assert "BA設計" not in entry
+        reply = app.handle_pkg_command("/pkg " + code)
+        assert "內包裝代碼：" + entry["內包裝代碼"] in reply
+        assert "外包裝代碼：" + entry["外包裝代碼"] in reply
+    assert DATA["1M"]["外包裝"] == "PE布+膠膜+2條歐規吊帶"
+    assert DATA["1O"]["外包裝"] == "PE布+膠膜+木條+2條歐規吊帶"
+    assert DATA["8I"]["外包裝代碼"] == "I"
 
 
 def test_legacy_source_resolves_the_reported_missing_details():
@@ -150,6 +153,47 @@ def test_excel_import_indexes_both_columns_and_retains_duplicate_legacy_code():
     assert find_packaging_matches("1", imported)[0][0] == "2B"
 
 
+def test_quality_definition_sheet_supports_duplicate_old_headers_and_component_codes():
+    headers = (
+        "BA設計", "原包裝碼", "原包裝碼", "品保設計", "簡稱",
+        "詳細包裝方式說明 (冷精棒-設計)", "", "內包裝", "代碼", "外包裝", "代碼",
+    )
+    rows = [headers,
+            ("58", "U", "U", "1A", "3P袋+瓦楞", "頭中尾內舖PC布墊", "",
+             "PC布墊+鋼帶", "1", "瓦楞板+鋼帶+膠膜", "A"),
+            ("8D", "H", "H", "8G", "木箱+膠膜", "木箱+膠膜", "",
+             "膠膜", "8", "木箱", "G"),
+            ("8G", "H", "H", "8I", "扁箱+膠膜", "特殊扁箱forYIEH", "",
+             "膠膜", "8", "木箱(扁)", "I")]
+    imported, _header = packaging_from_rows(rows)
+    assert list(imported) == ["1A", "8G", "8I"]
+    assert imported["1A"]["原包裝碼"] == "U"
+    assert imported["1A"]["內包裝代碼"] == "1"
+    assert imported["1A"]["外包裝代碼"] == "A"
+    assert [key for key, _entry in find_packaging_matches("H", imported)] == ["8G", "8I"]
+    assert "外包裝代碼：I" in format_packaging_reply("/pkg 8I", imported)
+    conflicting = [headers, ("58", "U", "V", "1A", "3P袋+瓦楞", "方式", "",
+                             "PC布墊+鋼帶", "1", "瓦楞板", "A")]
+    with pytest.raises(ValueError, match="重複的原包裝碼"):
+        packaging_from_rows(conflicting)
+
+
+def test_workbook_upload_prefers_named_quality_sheet_over_active_overview():
+    wb = openpyxl.Workbook()
+    overview = wb.active
+    overview.title = "總彙整"
+    overview.append(("客戶名稱", "儲區1"))
+    overview.append(("DACAPO", "H31"))
+    quality = wb.create_sheet("品保定義")
+    quality.append(("原包裝碼", "品保設計", "簡稱", "詳細包裝方式說明"))
+    quality.append(("H", "8G", "木箱+膠膜", "木箱+膠膜"))
+    quality.append(("H", "8I", "扁箱+膠膜", "特殊扁箱forYIEH"))
+    imported, _header, sheet = packaging_from_workbook(wb)
+    assert sheet == "品保定義"
+    assert list(imported) == ["8G", "8I"]
+    wb.close()
+
+
 def test_excel_reimport_of_all_current_rows_preserves_aliases():
     headers = list(dict.fromkeys(field for entry in DATA.values() for field in entry))
     rows = [headers] + [[entry.get(field) for field in headers] for entry in DATA.values()]
@@ -181,6 +225,13 @@ def _xlsx(rows):
     return data
 
 
+def _xlsx_workbook(wb):
+    data = BytesIO()
+    wb.save(data)
+    data.seek(0)
+    return data
+
+
 def test_admin_upload_rejects_storage_sheet_without_mutation_or_commit(monkeypatch):
     monkeypatch.setattr(app, "check_manager_access", lambda *_a: True)
     commits = []
@@ -207,4 +258,39 @@ def test_admin_upload_and_export_keep_both_h_rows(monkeypatch):
     assert list(commits[0]) == ["8G", "8I"]
     exported = client.get("/api/admin/packaging/json").get_json()
     assert exported == commits[0]
+    assert "2 種" in app.handle_pkg_command("/pkg H")
+
+
+def test_admin_upload_uses_quality_definition_sheet_and_component_code_columns(monkeypatch):
+    monkeypatch.setattr(app, "check_manager_access", lambda *_a: True)
+    commits = []
+    monkeypatch.setattr(app, "commit_packaging_to_github",
+                        lambda data: commits.append(json.loads(data)) or True)
+    wb = openpyxl.Workbook()
+    overview = wb.active
+    overview.title = "總彙整"
+    overview.append(("客戶名稱", "儲區1"))
+    overview.append(("DACAPO", "H31"))
+    quality = wb.create_sheet("品保定義")
+    for row in [
+        ("BA設計", "原包裝碼", "原包裝碼", "品保設計", "簡稱",
+         "詳細包裝方式說明", "", "內包裝", "代碼", "外包裝", "代碼"),
+        ("58", "U", "U", "1A", "3P袋+瓦楞", "PC布墊", "",
+         "PC布墊+鋼帶", "1", "瓦楞板+鋼帶+膠膜", "A"),
+        ("8D", "H", "H", "8G", "木箱+膠膜", "木箱+膠膜", "",
+         "膠膜", "8", "木箱", "G"),
+        ("8G", "H", "H", "8I", "扁箱+膠膜", "特殊扁箱forYIEH", "",
+         "膠膜", "8", "木箱(扁)", "I"),
+    ]:
+        quality.append(row)
+    response = app.app.test_client().post("/api/admin/packaging/upload", data={
+        "file": (_xlsx_workbook(wb), "包裝碼00.xlsx")
+    })
+    wb.close()
+    assert response.status_code == 200
+    assert response.get_json()["count"] == 3
+    assert "品保定義" in response.get_json()["message"]
+    assert list(commits[0]) == ["1A", "8G", "8I"]
+    assert commits[0]["1A"]["內包裝代碼"] == "1"
+    assert commits[0]["1A"]["外包裝代碼"] == "A"
     assert "2 種" in app.handle_pkg_command("/pkg H")
