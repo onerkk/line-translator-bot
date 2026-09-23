@@ -49,6 +49,7 @@ _RING_REASON = {
     "invalid_diameter", "threshold_crossing", "not_work_order",
 }
 _RETRY_KEYS = (
+    "customer_retry_triggered", "customer_retry_accepted",
     "length_retry_triggered", "length_retry_accepted",
     "ring_retry_triggered", "ring_retry_accepted",
 )
@@ -161,6 +162,9 @@ def _sanitize_record(record):
         "storage_table_sha256": _safe(record.get("storage_table_sha256"), _DIGEST),
         "packaging_table_sha256": _safe(record.get("packaging_table_sha256"), _DIGEST),
         "customer_ocr": _safe_ocr_field(record.get("customer_ocr"), _CUSTOMER, customer=True),
+        "recipient_ocr": _safe_ocr_field(record.get("recipient_ocr"), _CUSTOMER, customer=True),
+        "customer_conflict": (record.get("customer_conflict")
+                              if isinstance(record.get("customer_conflict"), bool) else None),
         "customer_canonical": _safe(record.get("customer_canonical"), _CUSTOMER),
         "flow_ocr": _safe_ocr_field(record.get("flow_ocr"), _FLOW),
         "diameter_min": _safe_ocr_number(record.get("diameter_min")),
@@ -189,7 +193,7 @@ def make_diagnostic(ocr_text, storage_lookup, packaging_lookup, msg_id,
     the exact canonical key in the active storage lookup, never from examples.
     """
     try:
-        from work_order_detection import _extract_customer
+        from work_order_detection import _extract_customer, _extract_recipient
         from work_order_query import _read_fields, extract_work_order_info
 
         ocr_text = ocr_text if isinstance(ocr_text, str) else ""
@@ -199,6 +203,11 @@ def make_diagnostic(ocr_text, storage_lookup, packaging_lookup, msg_id,
         info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes={})
         is_order = bool(info.get("is_work_order"))
         storage = info.get("storage") or {}
+        customer_conflict = bool(info.get("customer_conflict"))
+        if customer_conflict:
+            # A plausible but cross-column-conflicting OCR name is not a
+            # confirmed storage lookup and must not be logged as a good match.
+            storage = {"status": "unknown_customer"}
         ring = info.get("ring") or {}
         canonical = storage.get("customer") if is_order else None
         if canonical not in storage_lookup:
@@ -208,7 +217,8 @@ def make_diagnostic(ocr_text, storage_lookup, packaging_lookup, msg_id,
         if status == "ok":
             reason = "unique_area"
         elif status == "unknown_customer":
-            reason = ("customer_not_in_live_table_or_ambiguous_prefix"
+            reason = ("unresolved_customer" if customer_conflict else
+                      "customer_not_in_live_table_or_ambiguous_prefix"
                       if _extract_customer(ocr_text, ()) else "unresolved_customer")
         elif status == "unknown_length":
             reason = ("missing_or_unreadable_length"
@@ -223,6 +233,8 @@ def make_diagnostic(ocr_text, storage_lookup, packaging_lookup, msg_id,
             "storage_table_sha256": _digest(storage_lookup),
             "packaging_table_sha256": _digest(packaging_lookup),
             "customer_ocr": _extract_customer(ocr_text, ()),
+            "recipient_ocr": _extract_recipient(ocr_text, ()),
+            "customer_conflict": customer_conflict,
             "customer_canonical": canonical,
             "flow_ocr": fields.get("flow"),
             "diameter_min": fields.get("diameter_min"),

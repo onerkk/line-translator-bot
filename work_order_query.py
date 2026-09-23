@@ -22,6 +22,8 @@ _UNCLEAR = re.compile(r"[?？�]|無法辨識|无法辨识|看不清|不清楚|
 _NUM = re.compile(r"^(?:\d+(?:\.\d+)?|\.\d+)$")
 _LABELS = {
     "order": ("訂單編號", "订单编号", "No.Pesan", "Nomor Pesanan"),
+    "customer": ("客戶名稱", "客户名称", "Nama Pelanggan", "Customer Name"),
+    "recipient": ("收貨人", "收货人", "Penerima Barang", "Consignee"),
     "flow": ("訂單流程", "订单流程", "Alur Pemasangan", "FINAL流程"),
     "diameter_min": ("成品尺寸MIN", "成品尺寸 MIN", "Ukuran MIN produk jadi", "成品尺寸1MIN", "尺寸1MIN"),
     "diameter_max": ("成品尺寸MAX", "成品尺寸 MAX", "Ukuran MAX produk jadi", "成品尺寸1MAX", "尺寸1MAX"),
@@ -544,17 +546,20 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
     if not analysis["is_work_order"]:
         return {"is_work_order": False}
     fields = _read_fields(ocr_text)
-    # The existing customer parser checks the actual customer column against
-    # the recipient column and refuses conflicting/unreadable customer cells.
+    # The customer column is authoritative; the separately parsed recipient
+    # is exposed only as an OCR alignment cross-check and is never substituted.
     customer = analysis["customer"]
     return {
         "is_work_order": True,
         "fields": fields,
         "order": fields.get("order"),
         "customer": customer,
+        "recipient": analysis.get("recipient"),
+        "customer_conflict": analysis.get("customer_conflict", False),
         "length": _range(fields, "length"),
         "diameter": _range(fields, "diameter"),
-        "storage": _storage_for_fields(customer, fields, storage_lookup or {}),
+        "storage": ({"status": "unknown_customer"} if analysis.get("customer_conflict") else
+                    _storage_for_fields(customer, fields, storage_lookup or {})),
         "packaging": _packaging(fields.get("packaging"), packaging_lookup),
         "paint": _paint(fields, _PAINT_CODES if paint_codes is None else paint_codes),
         "ring": _ring(fields),

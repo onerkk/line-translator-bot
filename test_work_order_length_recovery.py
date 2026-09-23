@@ -91,8 +91,10 @@ def test_ocr_integration_retries_once_only_for_verified_customer_and_missing_len
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=unknown_customer))])
 
     monkeypatch.setattr(app, "_vision_call", customer_unmapped)
-    assert app.ocr_work_order_fields("fake-image") == unknown_customer.strip()
-    assert len(calls) == 1
+    result = app.ocr_work_order_fields("fake-image")
+    assert len(calls) == 2
+    assert "客戶名稱：?" in result
+    assert extract_work_order_info(result, app._work_order_storage_lookup(), {})["storage"]["status"] == "unknown_customer"
 
 
 def test_focus_crop_and_one_reread_uses_it(monkeypatch):

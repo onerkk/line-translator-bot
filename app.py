@@ -16734,13 +16734,16 @@ def analyze_work_order(ocr_text):
 
 def format_work_order_query(ocr_text, group_id=None, user_id=None):
     """Concise Chinese/Indonesian text backup when LINE Flex is unavailable."""
+    from work_order_customer_recovery import withhold_conflicting_customer
     from work_order_card import build_work_order_fallback
 
+    ocr_text = withhold_conflicting_customer(ocr_text, _work_order_storage_lookup())
     return build_work_order_fallback(ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP)
 
 
 def format_work_order_cards(ocr_text, group_id=None, user_id=None):
     """Render the five requested work-order facts and Indonesian method."""
+    from work_order_customer_recovery import withhold_conflicting_customer
     from work_order_card import build_work_order_cards
 
     def translate_packaging(source):
@@ -16753,6 +16756,7 @@ def format_work_order_cards(ocr_text, group_id=None, user_id=None):
         finally:
             _tl.from_image_ocr = before
 
+    ocr_text = withhold_conflicting_customer(ocr_text, _work_order_storage_lookup())
     card = build_work_order_cards(
         ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
         translate_zh_to_id=translate_packaging,
@@ -17512,7 +17516,7 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
-_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.3-ring-ocr-recovery"
+_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.4-storage-customer-recovery"
 
 
 def _record_work_order_diagnostic(stage, ocr_text, **retry_flags):
@@ -17543,6 +17547,7 @@ def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accept
         fields = info.get("fields") or {}
         storage = info.get("storage") or {}
         canonical = storage.get("customer")
+        customer_conflict = bool(info.get("customer_conflict"))
         rows = STORAGE_LOOKUP.get(canonical) if canonical else None
 
         def numeric_cell(value):
@@ -17554,13 +17559,18 @@ def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accept
         _event_log_write("work_order_storage_ocr_diagnostic", {
             "phase": phase,
             "is_work_order": bool(info.get("is_work_order")),
-            "storage_status": storage.get("status") or "not_detected",
+            "storage_status": ("unknown_customer" if customer_conflict
+                               else storage.get("status") or "not_detected"),
+            "customer_conflict": customer_conflict,
             "length_min": numeric_cell(fields.get("length_min")),
             "length_max": numeric_cell(fields.get("length_max")),
             "valid_length_pair": bool(info.get("length")),
-            "customer_in_live_table": isinstance(rows, list) and bool(rows),
-            "reference_customer_used": storage.get("status") == "ok" and not rows,
-            "live_rule_count": len(rows) if isinstance(rows, list) else 0,
+            "customer_in_live_table": (not customer_conflict and isinstance(rows, list)
+                                       and bool(rows)),
+            "reference_customer_used": (not customer_conflict
+                                        and storage.get("status") == "ok" and not rows),
+            "live_rule_count": (len(rows) if isinstance(rows, list) and not customer_conflict
+                                else 0),
             "crop_attached": bool(cropped),
             "reread_accepted": accepted,
         })
@@ -17627,6 +17637,64 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             ring_retry_accepted = None
             _work_order_storage_ocr_diagnostic("initial", result)
             _record_work_order_diagnostic("initial", result)
+            customer_retry_triggered = False
+            customer_retry_accepted = None
+            try:
+                from work_order_customer_recovery import (
+                    focused_customer_crop, merge_confirmed_customer,
+                    needs_customer_retry,
+                )
+                if needs_customer_retry(result, storage_lookup):
+                    customer_retry_triggered = True
+                    crop = focused_customer_crop(image_base64)
+                    customer_images = [{"type": "image_url", "image_url": {
+                        "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}}]
+                    if crop:
+                        customer_images.append({"type": "image_url", "image_url": {
+                            "url": "data:image/jpeg;base64," + crop, "detail": "high"}})
+                    customer_messages = [
+                        {"role": "system", "content": (
+                            "你是工單表格 OCR。第一張是完整原圖，第二張若有則是同一照片中"
+                            "『客戶名稱 / Nama Pelanggan』與『收貨人 / Penerima Barang』欄位的放大圖。"
+                            "請依欄位標題正下方的格線，分別抄錄這兩格；不可互相代填、不可從客戶資料或"
+                            "儲區規則猜測。只輸出兩行：『客戶名稱：原文』與『收貨人：原文』。"
+                            "若任一格看不清、被裁切或不確定，該格填 ?；不可附加解釋。"
+                        )},
+                        {"role": "user", "content": customer_images + [
+                            {"type": "text", "text": "只讀客戶名稱與收貨人這兩格，不讀其他欄位。"},
+                        ]},
+                    ]
+                    reread = _vision_call(
+                        customer_messages, max_tokens=100,
+                        cache_key=_build_cache_key(
+                            getattr(_tl, "group_id", ""), "img", "txt",
+                            "ocr_work_order_customer_fields"),
+                        task_type="ocr",
+                    )
+                    track_tokens(reread)
+                    retry_text = (reread.choices[0].message.content or "").strip()
+                    _record_work_order_diagnostic(
+                        "customer_retry_candidate", retry_text,
+                        customer_retry_triggered=True)
+                    original = result
+                    result = merge_confirmed_customer(result, retry_text, storage_lookup)
+                    customer_retry_accepted = result != original
+                    if not customer_retry_accepted:
+                        from work_order_customer_recovery import withhold_conflicting_customer
+                        result = withhold_conflicting_customer(result, storage_lookup)
+                    _work_order_storage_ocr_diagnostic(
+                        "customer_reread", result, cropped=bool(crop),
+                        accepted=customer_retry_accepted)
+                    _record_work_order_diagnostic(
+                        "customer_retry_result", result,
+                        customer_retry_triggered=True,
+                        customer_retry_accepted=customer_retry_accepted)
+            except Exception as retry_exc:
+                logger.warning("Work-order customer reread failed: %s", retry_exc)
+                _work_order_storage_ocr_diagnostic("customer_reread_error", result)
+                _record_work_order_diagnostic(
+                    "customer_retry_error", result,
+                    customer_retry_triggered=customer_retry_triggered)
             try:
                 from work_order_length_recovery import (focused_length_crop,
                                                         merge_confirmed_length,
@@ -17730,6 +17798,8 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                                               ring_retry_triggered=ring_retry_triggered)
             _record_work_order_diagnostic(
                 "final_ocr", result,
+                customer_retry_triggered=customer_retry_triggered,
+                customer_retry_accepted=customer_retry_accepted,
                 length_retry_triggered=length_retry_triggered,
                 length_retry_accepted=length_retry_accepted,
                 ring_retry_triggered=ring_retry_triggered,
@@ -27764,8 +27834,9 @@ async function loadWorkOrderDiagnostics(){
       var taiwan=v.timestamp_utc?new Date(v.timestamp_utc).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'時間未記錄';
       var flow=v.flow_ocr||'流程碼未辨識';
       var min=v.diameter_min||'未辨識',max=v.diameter_max||'未辨識';
-      var retry=v.ring_retry_triggered===true?'；已重讀'+(v.ring_retry_accepted?'且已採用':'但未採用'):'';
-      summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 流程碼 '+flow+' | 規格 '+min+'～'+max+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+retry+')');
+      var retry=v.customer_retry_triggered===true?'；客戶欄重讀'+(v.customer_retry_accepted?'且已採用':'但未採用'):'';
+      if(v.ring_retry_triggered===true)retry+='；套環欄重讀'+(v.ring_retry_accepted?'且已採用':'但未採用');
+      summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 收貨人 '+(v.recipient_ocr||'未辨識')+(v.customer_conflict?'（欄位不一致）':'')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 流程碼 '+flow+' | 規格 '+min+'～'+max+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+retry+')');
     });
     if(!(d.records||[]).length)summary.push('目前沒有新工單記錄，請重新上傳照片。');
     output.textContent=summary.join('\n')+'\n\n判讀明細：\n'+JSON.stringify(d,null,2);
@@ -33959,7 +34030,8 @@ def api_admin_work_order_diagnostics():
                        "reference" if effective_name else "absent"),
         }
     project_dir = Path(__file__).resolve().parent
-    filenames = ("app.py", "work_order_query.py", "work_order_ring_recovery.py",
+    filenames = ("app.py", "work_order_query.py", "work_order_detection.py",
+                 "work_order_customer_recovery.py", "work_order_ring_recovery.py",
                  "work_order_diagnostics.py", "storage_data.json", "storage_reference.json")
     fingerprints = {}
     for filename in filenames:

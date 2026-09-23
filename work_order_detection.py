@@ -84,6 +84,9 @@ _CUSTOMER_LABEL = re.compile(
     r"客\s*[戶户]\s*(?:名\s*[稱称])?"
     r"|\bnama\s*p[ec]langgan\b|\bcustomer\s*(?:name)?\b", re.I
 )
+_RECIPIENT_LABEL = re.compile(
+    r"收\s*[貨货]\s*人|\bpenerima(?:\s*barang)?\b|\bconsignee\b", re.I
+)
 _OTHER_LABEL = re.compile(
     r"收\s*[貨货]\s*人|\bpenerima\b|\bconsignee\b"
     r"|訂\s*單\s*(?:編\s*號|流程|資訊)|订\s*单\s*(?:编\s*号|流程|信息)"
@@ -112,6 +115,15 @@ def _header_only(value: str) -> bool:
     return not re.sub(r"[\s/:：*`_\-()]+", "", _HEADER_FRAGMENTS.sub("", value))
 
 
+def _header_only_field(value: str, label_pattern: re.Pattern) -> bool:
+    if label_pattern is _CUSTOMER_LABEL:
+        return _header_only(value)
+    rest = label_pattern.sub("", value, count=1)
+    rest = _HEADER_FRAGMENTS.sub("", rest)
+    rest = _RECIPIENT_LABEL.sub("", rest)
+    return not re.sub(r"[\s/:：*`_\-()]+", "", rest)
+
+
 def _value(value: str, names: Iterable[str]) -> str | None:
     value = _plain(value).strip(" :/\"'*")
     if not value or _UNCERTAIN.search(value) or _header_only(value):
@@ -136,7 +148,7 @@ def _inline_value(cell: str, label: re.Match, names: Iterable[str]) -> str | Non
         if resolve_storage_customer(tail, names):
             return _value(tail, names)
         header_tail = tail.lstrip("( ")
-        fragment = _HEADER_FRAGMENTS.match(header_tail)
+        fragment = _HEADER_FRAGMENTS.match(header_tail) or _RECIPIENT_LABEL.match(header_tail)
         if not fragment:
             break
         tail = header_tail[fragment.end():].lstrip(" :/)\"'*")
@@ -160,8 +172,8 @@ def _cells(line: str) -> list[str]:
     return [line]
 
 
-def _table_customer(rows: list[list[str]], row_no: int, col: int,
-                    names: Iterable[str]) -> str | None:
+def _table_field(rows: list[list[str]], row_no: int, col: int,
+                 names: Iterable[str]) -> str | None:
     header = rows[row_no]
     for row in rows[row_no + 1:row_no + 11]:
         if all(not cell or re.fullmatch(r"[:\-\s]+", cell) for cell in row):
@@ -178,29 +190,30 @@ def _table_customer(rows: list[list[str]], row_no: int, col: int,
     return None
 
 
-def _extract_customer(text: str, names: Iterable[str]) -> str | None:
+def _extract_labeled_field(text: str, label_pattern: re.Pattern,
+                           names: Iterable[str]) -> str | None:
     rows = [_cells(line) for line in text.splitlines() if line.strip()]
     candidates = set()
     unresolved = False
     for row_no, row in enumerate(rows):
         for col, cell in enumerate(row):
-            label = _CUSTOMER_LABEL.match(cell)
+            label = label_pattern.match(cell)
             if not label:
                 continue
             candidate = _inline_value(cell, label, names)
-            if candidate is None and _header_only(cell):
+            if candidate is None and _header_only_field(cell, label_pattern):
                 if len(row) > 1:
                     # Also support a two-column key/value OCR table.
                     if len(row) == 2 and col == 0 and not _OTHER_LABEL.search(row[1]):
                         candidate = _value(row[1], names)
                     else:
-                        candidate = _table_customer(rows, row_no, col, names)
+                        candidate = _table_field(rows, row_no, col, names)
                 else:
                     for following in rows[row_no + 1:row_no + 6]:
                         if len(following) != 1:
                             break
                         next_cell = following[0]
-                        if _header_only(next_cell):
+                        if _header_only_field(next_cell, label_pattern):
                             continue
                         candidate = _value(next_cell, names)
                         break
@@ -215,6 +228,16 @@ def _extract_customer(text: str, names: Iterable[str]) -> str | None:
     return next(iter(candidates))
 
 
+def _extract_customer(text: str, names: Iterable[str]) -> str | None:
+    """Read only the printed customer-name column, never its recipient."""
+    return _extract_labeled_field(text, _CUSTOMER_LABEL, names)
+
+
+def _extract_recipient(text: str, names: Iterable[str]) -> str | None:
+    """Read the recipient independently so it can cross-check OCR alignment."""
+    return _extract_labeled_field(text, _RECIPIENT_LABEL, names)
+
+
 def analyze_work_order_text(ocr_text: str | None,
                             customer_names: Iterable[str] = ()) -> dict:
     if not isinstance(ocr_text, str) or not ocr_text.strip():
@@ -226,8 +249,17 @@ def analyze_work_order_text(ocr_text: str | None,
         ("title" in fields and len(fields) >= 2)
         or (len(fields) >= 3 and bool(fields & {"order", "material", "product_mc"}))
     )
+    customer = _extract_customer(ocr_text, tuple(customer_names)) if is_work_order else None
+    recipient = _extract_recipient(ocr_text, tuple(customer_names)) if is_work_order else None
+    conflict = bool(customer and recipient and _key(customer) != _key(recipient))
     return {
         "is_work_order": is_work_order,
-        "customer": _extract_customer(ocr_text, tuple(customer_names)) if is_work_order else None,
+        # A real customer and consignee can differ.  Preserve the actual
+        # customer-column reading here; the image OCR pipeline uses the conflict
+        # as a focused-reread signal and fails closed if it cannot verify it.
+        "customer": customer,
+        "customer_candidate": customer,
+        "recipient": recipient,
+        "customer_conflict": conflict,
         "keyword_count": len(fields),
     }
