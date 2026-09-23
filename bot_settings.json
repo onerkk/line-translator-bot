@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "c332d4f84693a1d5b8fe9b3322539db4a0ad5cfc98a4b731a990cf0ed64ee2d4",
-    "updated_at_iso": "2026-09-22T00:41:02.173782+00:00",
-    "updated_at_unix": 1790037662.1737823
+    "state_hash": "646478aa292ed18d177c0d5e9a86797d78806d7893fc3f35e6fcfe45c4a93fec",
+    "updated_at_iso": "2026-09-23T01:56:48.614997+00:00",
+    "updated_at_unix": 1790128608.6149974
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-19 22:52:45",
+    "last_updated": "2026-09-22 10:57:09",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 62211,
-    "oai_cached": 18577,
-    "oai_cost_usd": 0.44580337999999997,
-    "oai_input": 415928,
-    "oai_output": 5084,
+    "oai_cache_write": 68513,
+    "oai_cached": 28066,
+    "oai_cost_usd": 0.4483680599999999,
+    "oai_input": 434600,
+    "oai_output": 5270,
     "oai_reasoning": 0,
-    "text_translations": 293,
-    "tokens_completion": 22540,
-    "tokens_prompt": 4650699,
+    "text_translations": 298,
+    "tokens_completion": 22726,
+    "tokens_prompt": 4669371,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -403,14 +403,14 @@
       "tokens_prompt": 295605
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
-      "cache_read": 3163,
-      "cache_write": 15767,
-      "cost_usd": 0.6415713600000009,
+      "cache_read": 6326,
+      "cache_write": 22069,
+      "cost_usd": 0.643723520000001,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 3005,
-      "tokens_prompt": 510019
+      "tokens_completion": 3113,
+      "tokens_prompt": 521403
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -420,14 +420,14 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cache_read": 3163,
+      "cache_read": 9489,
       "cache_write": 27648,
-      "cost_usd": 2.0693815600000005,
+      "cost_usd": 2.0697940800000008,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 9093,
-      "tokens_prompt": 2043217
+      "tokens_completion": 9171,
+      "tokens_prompt": 2050505
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -566,6 +566,7 @@
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
+      "U1cc03ad546ab53d14a2c5c42137aceb0": "franky alboy",
       "U272fe699db752d78eb7dcf7ae03fbcc3": "Hasim",
       "U54c702066e93a5d54e2e12ea5bc258c6": "許凱銘",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
@@ -3256,6 +3257,7 @@
   "user_pictures": {
     "U1447d16f768aad47c0efaf2409505f97": "https://sprofile.line-scdn.net/0hMJ3_oIdzEmUeJjtNhPtsGm52EQ89V0t3O0UPC35xSQYlEAA1MkRdCikvGAIkRgE1ZUlcAC9zHAUSNWUDAHDuURkWT1QiHlA6NUNagA",
     "U1642dcf04bf6a3e29e966c9ce0b0017f": "https://sprofile.line-scdn.net/0hIWUl7wTBFnh4FQoD-XBoRghFFRJbZE9qXCENGh4THR9EdQMmBHdbHR4VSkpDLFZ9UCQMTEhASEhaZ01FOgobGwlTMC0sfTpVCS8ebTpcTzgRdgt6DxcdHEVmMko4Iyl6FCMxQkxgNDgyQlFNVBgdaT1oKwowcRp6N0J6Ln0nePsXF2EtVXJRG0QSS0_G",
+    "U1cc03ad546ab53d14a2c5c42137aceb0": "https://sprofile.line-scdn.net/0ho8FqllqtMBdrCC-oQ-9OKRtYM31IeWkFQTwoJgpdaSIDOHVFQm16dV0Ob3cBOSBIFzl4I1sPbydJRxkUIwU8cV4OOU8yeC82Pw0NJjZaDnMdOAcEF3ItFid-PS9eQB49Bw8FDxV1LC8hRAkHHQ8NEx1NFF5QTA4pEV9cQW46XpQECkdCRm93dFcPbSDV",
     "U23dcb7e4d994d56ca3a6726b62ea0ba2": "https://sprofile.line-scdn.net/0hx5WcKBBWJxp6Gjkrbd9ZJApKJHBZa34IVHhhe0kbK31FKTAZBHRtf0cbfylCLTNIVC5oLkwcfCxYQQcsUCEMIQ9pA0MvUD1OVRwACjUZJ3RCLhkwJnQNGxRlF31ATSgUAikffR9IEXgbXwY_FT4aKxNTJEESaDsIJE1LTH8oSZkVGFBPV31geUYdei3E",
     "U272fe699db752d78eb7dcf7ae03fbcc3": "https://sprofile.line-scdn.net/0ht1p9CJSmKx5dQDSyNdVVYS0QKHR-MXIMdCJiK2FDcyZhJWVMeXZtcD8UfHlicz4fdCdsLG5CJXlRU1x4QxbXKlpwdi9heGlBdiVj-w",
     "U54c702066e93a5d54e2e12ea5bc258c6": "https://sprofile.line-scdn.net/0hSUQKdtM_DHp8MiY7Ok1yBQxiDxBfQ1VoWFFKGUoyBRkWVkp_UQQWSE9mAB9HBUJ_BFRGGkA2Bh1wIXscYmTwTnsCUUtACk4lV1dEnw",
