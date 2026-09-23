@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b131c">
+  <title>手機 ZIP 更新部署</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b131c;--card:#122331;--line:#263c4b;--muted:#9cb0bc;--mint:#75ddc9;--blue:#29a4c2;--amber:#f3c37b;--red:#ff9292}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 92% 1%,#193243 0,transparent 25rem),var(--bg);color:#e4eef2;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;min-height:100vh;padding:0 14px calc(28px + env(safe-area-inset-bottom))}
+    .wrap{max-width:720px;margin:auto}
+    header{padding:20px 2px 17px;border-bottom:1px solid #273843;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .brand{font-size:13px;letter-spacing:.12em;color:#d9e7eb}.brand small{display:block;color:#81959f;font-size:10px;margin-top:4px;letter-spacing:.2em}
+    a{color:var(--mint)}.back{font-size:12px;text-decoration:none;border:1px solid var(--line);border-radius:20px;padding:9px 12px;white-space:nowrap}
+    .hero{padding:28px 2px 20px}.eyebrow{font-size:11px;letter-spacing:.2em;color:#b7a774}.hero h1{font-size:26px;line-height:1.45;font-weight:650;margin:8px 0}.hero p{font-size:13px;line-height:1.8;color:var(--muted);margin:0}
+    .repo{display:flex;align-items:center;gap:8px;background:#101f2a;border:1px solid var(--line);border-radius:12px;padding:13px 14px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.dot{width:8px;height:8px;background:#778792;border-radius:50%;flex:none}.dot.ok{background:#76dfbf;box-shadow:0 0 9px #76dfbf88}.dot.bad{background:#ff8f8f}
+    .card{background:linear-gradient(145deg,#172938,#11212d);border:1px solid var(--line);border-radius:19px;padding:18px;margin:16px 0;box-shadow:0 12px 30px #0003}
+    .title{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:650;margin-bottom:16px}.num{width:27px;height:27px;display:grid;place-items:center;border:1px solid #58707c;border-radius:50%;font-size:11px;color:#e9d397;flex:none}
+    label{display:block;color:#b8c7ce;font-size:13px;margin:12px 0 7px}.input,.button,textarea{width:100%;min-height:50px;border-radius:12px;border:1px solid #38505f;background:#0c1b25;color:#eff8fb;padding:13px 14px;font:inherit;font-size:15px;outline:none}.input:focus,textarea:focus{border-color:var(--mint);box-shadow:0 0 0 3px #75ddc922}
+    .row{display:flex;gap:9px;align-items:center}.row .input{min-width:0}.row .button{width:auto;min-width:82px;padding-inline:12px}
+    .hint{font-size:12px;line-height:1.7;color:var(--muted);margin:9px 0}.note{border-left:3px solid #47788a;padding:8px 11px;background:#0d1c26;border-radius:0 8px 8px 0;font-size:12px;line-height:1.65;color:#adbec7;margin-top:13px}
+    .button{cursor:pointer;font-weight:650;background:#203a49;border-color:#3d5968;color:#e7f4f7;transition:transform .08s,opacity .15s}.button:active{transform:scale(.985)}.button.primary{background:linear-gradient(110deg,#197f9e,#287c8d);border-color:#4294a5}.button.confirm{background:linear-gradient(110deg,#157f75,#187667);border-color:#55b8a8}.button.secondary{background:#192b37}.button.small{min-height:44px;font-size:13px}.button:disabled{opacity:.43;cursor:not-allowed}
+    .filebox{padding:14px;border:1px dashed #57717e;border-radius:14px;background:#0d1c26}.filebox input{position:absolute;inline-size:1px;block-size:1px;opacity:0}.filepick{display:inline-flex;align-items:center;justify-content:center;min-height:44px;background:#233c4a;border:1px solid #466170;border-radius:9px;padding:8px 14px;font-size:13px;cursor:pointer}.filename{font-size:12px;color:var(--muted);margin-top:9px;overflow-wrap:anywhere}
+    .status{display:none;padding:12px 13px;border:1px solid var(--line);border-radius:11px;background:#0b1b25;margin-top:13px;font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.status.show{display:block}.status.good{border-color:#39796f;color:#b8f0df}.status.warn{border-color:#786044;color:#f3d6a0}.status.error{border-color:#754953;color:#ffb9b9}.status.info{color:#bfd2db}
+    .preview{display:none;margin-top:16px}.preview.show{display:block}.counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.count{padding:11px 8px;border-radius:11px;background:#0c1d27;border:1px solid var(--line);text-align:center}.count b{display:block;font-size:22px;color:var(--mint)}.count span{font-size:11px;color:var(--muted)}
+    .filelist{margin:12px 0 0;padding:0;list-style:none;max-height:260px;overflow:auto;border-top:1px solid var(--line)}.filelist li{padding:9px 3px;border-bottom:1px solid #263a47;font-size:12px;display:grid;grid-template-columns:64px 1fr;gap:9px;overflow-wrap:anywhere}.tag{color:var(--mint)}.tag.modified{color:var(--amber)}.tag.unchanged{color:#91a6b0}
+    .stages{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:28px 4px 8px}.stage{border-top:2px solid #293d49;padding-top:10px;color:#82949d;font-size:11px;line-height:1.6}.stage b{display:block;color:#c0cfd5;font-size:12px;margin-bottom:4px}.stage.active{border-color:var(--amber);color:#d5c493}.stage.done{border-color:var(--mint);color:#aee9d9}
+    .commit{font-size:12px;line-height:1.7;color:#a9bdc7;word-break:break-all}.footer{font-size:10px;color:#6f838d;line-height:1.6;text-align:center;margin-top:22px}
+    @media(min-width:600px){body{padding-inline:22px}.card{padding:22px}.hero h1{font-size:30px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <header><div class="brand">靜月之光<small>JINGYUE · STUDIO</small></div><a class="back" href="/admin">← 管理後台</a></header>
+  <section class="hero"><div class="eyebrow">WEBSITE UPDATE ROOM</div><h1>把更新包送上線</h1><p>手機選擇 ZIP，先比對檔案，再提交到部署分支。上線狀態會在這裡確認。</p></section>
+  <div class="repo" id="repoLine"><span class="dot" id="repoDot"></span><span id="repoText">正在連線檢查…</span></div>
+
+  <section class="card">
+    <div class="title"><span class="num">01</span>連接你的網站</div>
+    <label for="adminKey">後台管理密碼</label>
+    <div class="row"><input class="input" id="adminKey" type="password" autocomplete="current-password" placeholder="輸入超級管理員密碼"><button class="button secondary small" id="clearKey" type="button">清除</button></div>
+    <p class="hint">GitHub 權限由伺服器安全保管，不需在手機貼 GitHub Token。管理密碼只會送到你目前開啟的網站。</p>
+    <button class="button secondary small" id="connect" type="button">測試 GitHub 連線</button>
+    <div class="status" id="connectionStatus" role="status"></div>
+  </section>
+
+  <section class="card">
+    <div class="title"><span class="num">02</span>選擇這次更新</div>
+    <div class="filebox"><label for="zipFile">完整包或變更檔 ZIP 都可以</label><p class="hint">ZIP 最大 139 MiB；單一檔案最大 20 MiB。可直接選手機檔案，不用先解壓縮。</p><label class="filepick" for="zipFile">選擇 ZIP 檔案</label><input id="zipFile" type="file" accept=".zip,application/zip"><div class="filename" id="fileName">尚未選擇檔案</div></div>
+    <div class="note">檢查會列出新增、修改與未變更檔案。確認後只會提交 ZIP 中有變動的檔案，不會刪除 ZIP 沒有包含的檔案。</div>
+    <button class="button primary" id="inspect" type="button" disabled style="margin-top:14px">檢查更新包</button>
+    <div class="status" id="inspectStatus" role="status"></div>
+    <div class="preview" id="preview">
+      <div class="counts"><div class="count"><b id="addedCount">0</b><span>新增</span></div><div class="count"><b id="modifiedCount">0</b><span>修改</span></div><div class="count"><b id="unchangedCount">0</b><span>未變更</span></div></div>
+      <ul class="filelist" id="fileList"></ul>
+      <label for="commitMessage">提交說明（可修改）</label><input class="input" id="commitMessage" maxlength="140" value="手機 ZIP 更新">
+      <button class="button confirm" id="apply" type="button" disabled style="margin-top:14px">提交更新並部署</button>
+    </div>
+    <div class="status" id="applyStatus" role="status"></div>
+  </section>
+
+  <div class="stages" aria-label="更新步驟"><div class="stage active" id="stage1"><b>檢查檔案</b>比對 ZIP 與部署分支</div><div class="stage" id="stage2"><b>提交更新</b>建立單一版本提交</div><div class="stage" id="stage3"><b>確認部署</b>等待線上版本更新</div></div>
+  <div class="status" id="deploymentStatus" role="status"></div>
+  <p class="footer">更新只在確認提交後寫入 GitHub。若 GitHub 分支在檢查期間改變，系統會要求重新檢查，避免覆蓋較新的版本。</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const state = { connected:false, file:null, token:null, summary:null, busy:false };
+  const keyInput = $('adminKey');
+  let savedKey=''; try{savedKey=localStorage.getItem('bot_admin_key') || '';}catch(_e){}
+  if (savedKey) keyInput.value = savedKey;
+
+  function show(id, text, kind='info') {
+    const el=$(id); el.textContent=text; el.className='status show '+kind;
+  }
+  function hide(id) { $(id).className='status'; $(id).textContent=''; }
+  function authHeaders(extra={}) { return Object.assign({'X-Admin-Key':keyInput.value.trim()},extra); }
+  function setBusy(value) {
+    state.busy=value;
+    $('connect').disabled=value;
+    $('clearKey').disabled=value;
+    $('zipFile').disabled=value;
+    $('inspect').disabled=value || !state.connected || !state.file;
+    $('apply').disabled=value || !state.token || !(state.summary && state.summary.changed_files>0);
+  }
+  function resetPreview() {
+    state.token=null; state.summary=null; $('preview').classList.remove('show'); hide('inspectStatus'); hide('applyStatus'); hide('deploymentStatus');
+    $('stage1').className='stage active'; $('stage2').className='stage'; $('stage3').className='stage';
+    setBusy(false);
+  }
+  function humanSize(n) {
+    if(!Number.isFinite(n)) return '—';
+    if(n<1024) return n+' B';
+    if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+    return (n/1024/1024).toFixed(1)+' MiB';
+  }
+  async function parseResponse(response) {
+    let data={}; try{data=await response.json()}catch(_e){}
+    if(!response.ok || !data.ok) throw new Error(data.error || ('HTTP '+response.status));
+    return data;
+  }
+  async function connect() {
+    if(!keyInput.value.trim()){show('connectionStatus','請輸入超級管理員密碼。','warn');return;}
+    setBusy(true); show('connectionStatus','正在檢查 GitHub 連線與部署分支…','info');
+    try {
+      const response=await fetch('/api/admin/zip-update/config',{headers:authHeaders(),cache:'no-store'});
+      const data=await parseResponse(response);
+      state.connected=true; try{localStorage.setItem('bot_admin_key',keyInput.value.trim());}catch(_e){}
+      $('repoDot').className='dot ok'; $('repoText').textContent=data.repo+' · '+data.branch+' · '+data.branch_commit_short;
+      show('connectionStatus','GitHub 連線正常。伺服器已連到 '+data.repo+' 的 '+data.branch+' 分支。'+(data.render_hook_configured?' Render Deploy Hook 已設定。':' Render 依目前的 GitHub Auto-Deploy 設定部署。'),'good');
+    } catch(error) {
+      state.connected=false; $('repoDot').className='dot bad'; $('repoText').textContent='尚未連線';
+      show('connectionStatus',error.message,'error');
+    } finally { setBusy(false); }
+  }
+  $('connect').addEventListener('click',connect);
+  $('clearKey').addEventListener('click',()=>{keyInput.value='';try{localStorage.removeItem('bot_admin_key');}catch(_e){}state.connected=false;$('repoDot').className='dot';$('repoText').textContent='尚未連線';hide('connectionStatus');resetPreview();});
+  keyInput.addEventListener('input',()=>{state.connected=false;resetPreview();});
+  $('zipFile').addEventListener('change',event=>{
+    const file=event.target.files && event.target.files[0];
+    state.file=file || null; resetPreview();
+    $('fileName').textContent=file ? (file.name+' · '+humanSize(file.size)) : '尚未選擇檔案';
+    $('inspect').disabled=!state.connected || !state.file || state.busy;
+  });
+
+  $('inspect').addEventListener('click',async()=>{
+    if(!state.file)return;
+    resetPreview(); setBusy(true); $('stage1').className='stage active'; show('inspectStatus','上傳並掃描 ZIP，正在和 GitHub 檔案逐一比對…','info');
+    const form=new FormData(); form.append('file',state.file,state.file.name);
+    try {
+      const response=await fetch('/api/admin/zip-update/inspect',{method:'POST',headers:authHeaders(),body:form,cache:'no-store'});
+      const data=await parseResponse(response); state.token=data.preview_token; state.summary=data.summary;
+      $('addedCount').textContent=data.summary.added.length;
+      $('modifiedCount').textContent=data.summary.modified.length;
+      $('unchangedCount').textContent=data.summary.unchanged.length;
+      const rows=[...data.summary.added.map(x=>({...x,change:'新增'})),...data.summary.modified.map(x=>({...x,change:'修改'})),...data.summary.unchanged.map(x=>({...x,change:'未變更'}))];
+      const list=$('fileList'); list.textContent='';
+      rows.slice(0,300).forEach(item=>{
+        const row=document.createElement('li'); const tag=document.createElement('span'); const path=document.createElement('span');
+        tag.className='tag '+(item.change==='修改'?'modified':item.change==='未變更'?'unchanged':''); tag.textContent=item.change;
+        path.textContent=item.path+' · '+humanSize(item.size); row.append(tag,path); list.appendChild(row);
+      });
+      if(rows.length>300){const row=document.createElement('li');row.textContent='另有 '+(rows.length-300)+' 個檔案未展開顯示';list.appendChild(row);}
+      $('preview').classList.add('show');
+      $('stage1').className='stage done';
+      show('inspectStatus','比對完成：'+data.summary.changed_files+' 個檔案有變更，'+data.summary.unchanged.length+' 個檔案相同。預覽有效 15 分鐘。','good');
+      if(data.summary.changed_files===0) show('applyStatus','這個 ZIP 與 GitHub 內容相同，沒有需要提交或部署的變更。','warn');
+    } catch(error) { show('inspectStatus',error.message,'error'); }
+    finally { setBusy(false); }
+  });
+
+  async function pollStatus(url,attempt=0) {
+    try {
+      const response=await fetch(url,{headers:authHeaders(),cache:'no-store'}); const data=await parseResponse(response);
+      if(data.state==='live') {
+        $('stage3').className='stage done';
+        show('deploymentStatus','部署完成。線上版本 '+(data.live_commit_short || '')+' 已與這次更新一致。','good'); return;
+      }
+      if(data.state==='unknown') {
+        show('deploymentStatus','GitHub 已收到更新，但目前執行環境沒有回報 Render commit ID，無法自動核對線上版本。提交版本：'+data.target_commit,'warn'); return;
+      }
+      show('deploymentStatus','更新已提交，Render 正在部署。現在線上版本：'+(data.live_commit_short || '等待回報')+'；目標版本：'+data.target_commit.slice(0,7)+'。','info');
+      if(attempt<59){setTimeout(()=>pollStatus(url,attempt+1),5000);}else{show('deploymentStatus','已提交更新，但 5 分鐘內尚未確認完成。請稍後重新整理或查看 Render 部署紀錄。提交版本：'+data.target_commit,'warn');}
+    } catch(error) { show('deploymentStatus','更新已提交；部署狀態查詢失敗：'+error.message,'warn'); }
+  }
+  $('apply').addEventListener('click',async()=>{
+    if(!state.token)return;
+    if(!window.confirm('確認把這 '+state.summary.changed_files+' 個變更提交到部署分支並開始部署？'))return;
+    setBusy(true); $('stage2').className='stage active'; hide('applyStatus'); show('deploymentStatus','正在建立更新提交…','info');
+    try {
+      const response=await fetch('/api/admin/zip-update/apply',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({preview_token:state.token,commit_message:$('commitMessage').value}),cache:'no-store'});
+      const data=await parseResponse(response);
+      if(!data.changed){$('stage2').className='stage done';show('applyStatus',data.message,'warn');return;}
+      state.token=null; $('stage2').className='stage done'; $('stage3').className='stage active';
+      const method=data.deploy && data.deploy.triggered ? 'Render 部署已觸發' : (data.deploy && data.deploy.configured ? 'GitHub 已提交，但 Deploy Hook 未能啟動；請查看 Render 部署紀錄' : '已提交 GitHub，等待 Render 自動部署');
+      const id=data.deploy && data.deploy.deploy_id ? '（部署編號 '+data.deploy.deploy_id+'）' : '';
+      show('applyStatus','更新提交完成：新增 '+data.added+' 個、修改 '+data.modified+' 個檔案。\n提交版本：'+data.commit_sha+'\n'+method+id,'good');
+      if(data.deployment_status_url) pollStatus(data.deployment_status_url);
+    } catch(error) { show('applyStatus',error.message,'error'); }
+    finally { setBusy(false); }
+  });
+
+  if(keyInput.value.trim()) connect();
+})();
+</script>
+</body>
+</html>
