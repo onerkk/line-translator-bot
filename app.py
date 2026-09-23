@@ -16771,15 +16771,20 @@ def format_work_order_query(ocr_text, group_id=None, user_id=None):
     """Concise Chinese/Indonesian text backup when LINE Flex is unavailable."""
     from work_order_customer_recovery import withhold_conflicting_customer
     from work_order_card import build_work_order_fallback
+    from work_order_settings import get_judgment_mode
 
     ocr_text = withhold_conflicting_customer(ocr_text, _work_order_storage_lookup())
-    return build_work_order_fallback(ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP)
+    return build_work_order_fallback(
+        ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
+        judgment_mode=get_judgment_mode(),
+    )
 
 
 def format_work_order_cards(ocr_text, group_id=None, user_id=None):
     """Render the five requested work-order facts and Indonesian method."""
     from work_order_customer_recovery import withhold_conflicting_customer
     from work_order_card import build_work_order_cards
+    from work_order_settings import get_judgment_mode
 
     def translate_packaging(source):
         before = getattr(_tl, "from_image_ocr", False)
@@ -16795,6 +16800,7 @@ def format_work_order_cards(ocr_text, group_id=None, user_id=None):
     card = build_work_order_cards(
         ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
         translate_zh_to_id=translate_packaging,
+        judgment_mode=get_judgment_mode(),
     )
     _record_work_order_diagnostic("card_rendered", ocr_text)
     return card
@@ -17551,7 +17557,7 @@ def ocr_factory_reason_table_openai(image_base64, mime_type="image/jpeg"):
         return None
 
 
-_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.5-storage-table-reconcile"
+_WORK_ORDER_DIAGNOSTIC_BUILD = "20260923.6-mode-toggle-rotated-cell-retry"
 
 
 def _record_work_order_diagnostic(stage, ocr_text, **retry_flags):
@@ -17625,6 +17631,11 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
         return None
     if mime_type == "image/heic":
         mime_type = "image/jpeg"
+    try:
+        from work_order_cell_recovery import orientation_candidates
+        initial_views = orientation_candidates(image_base64)
+    except Exception:
+        initial_views = []
     fields = (
         "文件標題, 訂單編號, 客戶名稱, 收貨人, 成品尺寸MIN, 成品尺寸MAX, "
         "長度MIN, 長度MAX, 訂單流程, 成品MC, 噴漆位置, 套環, 顏色, 包裝代碼, "
@@ -17633,12 +17644,13 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
     messages = [
         {"role": "system", "content": (
             "你是工廠製造指示書的逐格 OCR。只抄照片實際可見的值，不翻譯、不推算、不用工廠常識補缺格。"
+            "使用者可能附上同一照片的正向或旋轉候選版本；這些不是不同工單，請選擇表格文字正向、欄位格線最清楚的版本辨讀。"
             "同一水平資料列要對應同一欄的標題，絕不能把『收貨人』當『客戶名稱』，"
             "也不能把『套環 Y／N』當作特殊備註。"
             "『套環』是獨立欄位；標題與值看得見時必須逐字抄錄 Y 或 N，不可省略，也不可由尺寸或製程推算。"
             "請將可見的欄位各輸出一行『欄位名稱：原文值』，欄名限用：" + fields + "。"
             "最前面先抄文件標題；每個欄位只有確實看見標題及對應值時才輸出。"
-            "標題看得見但值遮擋或辨識不清時填 ?；照片裁切掉的欄位整行省略。"
+            "標題看得見且儲存格明確未填時填（空白）；值遮擋或辨識不清時填 ?；照片裁切掉的欄位整行省略。"
             "成品尺寸、長度的 MIN/MAX 要分開，不可混進短邊、厚度或母材尺寸。"
             "若長度欄標示『長度MIN Panjang MIN』且右鄰為『MAX』，請逐欄抄成長度MIN與長度MAX；"
             "右鄰短尺MIN、計劃量、重量都不是長度MAX，不能代填或推算。"
@@ -17654,13 +17666,16 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
         {"role": "user", "content": [
             {"type": "image_url", "image_url": {
                 "url": f"data:{mime_type};base64," + image_base64, "detail": "high"}},
-            {"type": "text", "text": "請逐格抄錄工單上可辨識的指定欄位，未知值標 ?；不要翻譯或推論。"},
+            *[{"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + candidate["base64"],
+                "detail": "high"}} for candidate in initial_views],
+            {"type": "text", "text": "請逐格抄錄工單上可辨識的指定欄位，未知值標 ?；確定空白填（空白）。不要翻譯或推論，同一照片的旋轉版本只能當作對照。"},
         ]},
     ]
     try:
         response = _vision_call(
             messages, max_tokens=1400,
-            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_ring_cell_v2"),
+            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_rotated_views_v1"),
             task_type="ocr",
         )
         track_tokens(response)
@@ -17673,6 +17688,8 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
             length_retry_accepted = None
             ring_retry_triggered = False
             ring_retry_accepted = None
+            cell_retry_triggered = False
+            cell_retry_accepted = None
             _work_order_storage_ocr_diagnostic("initial", result)
             _record_work_order_diagnostic("initial", result)
             customer_retry_triggered = False
@@ -17834,6 +17851,65 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                 logger.warning("Work-order ring field reread failed: %s", retry_exc)
                 _record_work_order_diagnostic("ring_retry_error", result,
                                               ring_retry_triggered=ring_retry_triggered)
+            try:
+                from work_order_cell_recovery import (
+                    merge_confirmed_cells, needs_cell_retry,
+                    orientation_candidates,
+                )
+                if needs_cell_retry(result, PACKAGING_LOOKUP):
+                    cell_retry_triggered = True
+                    retry_images = [{"type": "image_url", "image_url": {
+                        "url": f"data:{mime_type};base64," + image_base64,
+                        "detail": "high"}}]
+                    for candidate in orientation_candidates(image_base64):
+                        retry_images.append({"type": "image_url", "image_url": {
+                            "url": "data:image/jpeg;base64," + candidate["base64"],
+                            "detail": "high"}})
+                    cell_messages = [
+                        {"role": "system", "content": (
+                            "你是工單關鍵欄位逐格 OCR。第一張是原始照片；後續圖片是同一照片"
+                            "分別旋轉 90 度與 270 度、增強對比的版本。只採用表格文字正向且格線"
+                            "對齊的版本，不要把不同方向圖片當成不同資料。只讀三個標題正下方"
+                            "同一工單資料列的『噴漆位置』、『套環』和『包裝代碼』。"
+                            "噴漆位置只抄 N、單邊、雙邊或實際可見原文；套環只抄 Y 或 N；"
+                            "包裝代碼逐字區分 0/O、1/I/L，不能按常見代碼猜。"
+                            "若某個儲存格可確認沒有填任何內容，該格輸出（空白）；無法看清才輸出 ?。"
+                            "不得從顏色推測噴漆位置、從客戶/尺寸推測套環，或從對照表推測包裝碼。"
+                            "只輸出三行『噴漆位置：值』『套環：值』『包裝代碼：值』；"
+                            "某格看不清就填 ?，不得附加說明。"
+                        )},
+                        {"role": "user", "content": retry_images + [
+                            {"type": "text", "text": (
+                                "請逐一對照欄位標題及其正下方的格線，只重讀噴漆位置、套環、包裝代碼。"
+                                "方向不同的照片是同一張工單。"
+                            )},
+                        ]},
+                    ]
+                    reread = _vision_call(
+                        cell_messages, max_tokens=160,
+                        cache_key=_build_cache_key(
+                            getattr(_tl, "group_id", ""), "img", "txt",
+                            "ocr_work_order_paint_ring_packaging_cells_v1"),
+                        task_type="ocr",
+                    )
+                    track_tokens(reread)
+                    retry_text = (reread.choices[0].message.content or "").strip()
+                    _record_work_order_diagnostic(
+                        "cell_retry_candidate", retry_text,
+                        cell_retry_triggered=True)
+                    original = result
+                    result = merge_confirmed_cells(result, retry_text, PACKAGING_LOOKUP)
+                    cell_retry_accepted = result != original
+                    _record_work_order_diagnostic(
+                        "cell_retry_result", result,
+                        cell_retry_triggered=True,
+                        cell_retry_accepted=cell_retry_accepted)
+            except Exception as retry_exc:
+                logger.warning("Work-order critical-cell reread failed: %s",
+                               type(retry_exc).__name__)
+                _record_work_order_diagnostic(
+                    "cell_retry_error", result,
+                    cell_retry_triggered=cell_retry_triggered)
             _record_work_order_diagnostic(
                 "final_ocr", result,
                 customer_retry_triggered=customer_retry_triggered,
@@ -17841,7 +17917,9 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                 length_retry_triggered=length_retry_triggered,
                 length_retry_accepted=length_retry_accepted,
                 ring_retry_triggered=ring_retry_triggered,
-                ring_retry_accepted=ring_retry_accepted)
+                ring_retry_accepted=ring_retry_accepted,
+                cell_retry_triggered=cell_retry_triggered,
+                cell_retry_accepted=cell_retry_accepted)
         return result or None
     except Exception as exc:
         logger.warning("Work-order field OCR failed: %s", exc)
@@ -24279,7 +24357,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <link rel="stylesheet" href="/static/admin_reminders.css?v=20260922-bilingual2">
 <script src="/static/admin_reminders.js?v=20260922-bilingual2" defer></script>
 <link rel="stylesheet" href="/static/line_factory.css?v=20260909-ui104">
-<script src="/static/admin_factory.js?v=20260910-owner-only-controls" defer></script>
+<script src="/static/admin_factory.js?v=20260923-work-order-judgment-mode" defer></script>
 <link rel="stylesheet" href="/static/admin_quick_reply.css?v=20260907-menu1">
 <script src="/static/admin_quick_reply.js?v=20260909-ack108" defer></script>
 <link rel="stylesheet" href="/static/interface_theme.css?v=20260909-ui104">
@@ -27874,6 +27952,7 @@ async function loadWorkOrderDiagnostics(){
       var min=v.diameter_min||'未辨識',max=v.diameter_max||'未辨識';
       var retry=v.customer_retry_triggered===true?'；客戶欄重讀'+(v.customer_retry_accepted?'且已採用':'但未採用'):'';
       if(v.ring_retry_triggered===true)retry+='；套環欄重讀'+(v.ring_retry_accepted?'且已採用':'但未採用');
+      if(v.cell_retry_triggered===true)retry+='；噴漆位置／套環／包裝碼重讀'+(v.cell_retry_accepted?'且已採用':'但未採用');
       summary.push(taiwan+' | 圖片尾碼 '+String(v.message_id||'').slice(-6)+' | '+v.stage+' | 客戶 '+(v.customer_ocr||'未辨識')+' | 收貨人 '+(v.recipient_ocr||'未辨識')+(v.customer_conflict?'（欄位不一致）':'')+' | 儲區 '+(v.storage_area||v.storage_status||'未知')+' | 流程碼 '+flow+' | 規格 '+min+'～'+max+' | 套環 '+(v.ring_status||'未知')+' ('+(v.ring_reason||'無原因')+retry+')');
     });
     if(!(d.records||[]).length)summary.push('目前沒有新工單記錄，請重新上傳照片。');
@@ -34191,7 +34270,7 @@ def api_admin_names():
 
 @app.route("/api/admin/storage/stats")
 def api_admin_storage_stats():
-    if not check_manager_access("storage"):
+    if not check_manager_access("factory"):
         return jsonify({"error": "forbidden"}), 403
     return jsonify({"count": len(STORAGE_LOOKUP)})
 
@@ -34313,6 +34392,43 @@ def api_admin_storage_json():
                               headers={"Content-Disposition": "attachment; filename=storage_data.json"})
 
 
+@app.route("/api/admin/work-order-judgment", methods=["GET", "POST"])
+def api_admin_work_order_judgment():
+    """Read or persist the work-order special/normal interpretation mode."""
+    if not check_manager_access("factory"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    from work_order_settings import (
+        DEFAULT_JUDGMENT_MODE, VALID_JUDGMENT_MODES,
+        get_judgment_mode, save_judgment_mode,
+    )
+
+    if request.method == "GET":
+        response = jsonify({
+            "ok": True,
+            "judgment_mode": get_judgment_mode(),
+            "default": DEFAULT_JUDGMENT_MODE,
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get("judgment_mode")
+    if not isinstance(mode, str) or mode not in VALID_JUDGMENT_MODES:
+        return jsonify({"ok": False, "error": "invalid_judgment_mode"}), 400
+    try:
+        saved = save_judgment_mode(mode)
+    except Exception as exc:
+        logger.exception("work-order judgment setting update failed: %s", type(exc).__name__)
+        return jsonify({"ok": False, "error": "save_failed",
+                        "message": "設定儲存失敗，請稍後重試。"}), 503
+    if not saved:
+        return jsonify({"ok": False, "error": "persistence_unconfirmed",
+                        "message": "持久儲存尚未確認成功，設定未回報完成。"}), 503
+    response = jsonify({"ok": True, "judgment_mode": mode})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.route("/api/admin/work-order-diagnostics")
 def api_admin_work_order_diagnostics():
     """Inspect live lookup and recent source fields using normal admin headers."""
@@ -34352,6 +34468,7 @@ def api_admin_work_order_diagnostics():
     project_dir = Path(__file__).resolve().parent
     filenames = ("app.py", "work_order_query.py", "work_order_detection.py",
                  "work_order_customer_recovery.py", "work_order_ring_recovery.py",
+                 "work_order_cell_recovery.py", "work_order_settings.py",
                  "work_order_diagnostics.py", "storage_data.json", "storage_reference.json")
     fingerprints = {}
     for filename in filenames:

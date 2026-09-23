@@ -194,24 +194,38 @@ def _paint_color(code, lookup):
 
 def _spray_rows(info, paint_codes):
     paint = info["paint"]
+    raw_position = _clean(info.get("fields", {}).get("paint"), 30)
     if paint["status"] == "no":
-        return [_text("不噴 / Tidak dicat", weight="bold", margin="sm")]
-    if paint["status"] == "unknown":
-        return [_text("噴漆位置待確認 / Posisi cat perlu diperiksa",
-                      color=AMBER, margin="sm")]
+        rows = [_text("不噴 / Tidak dicat", weight="bold", margin="sm")]
+    elif paint["status"] == "unknown":
+        if raw_position == "（空白）":
+            label = "工單噴漆位置欄確認空白 / Kolom posisi cat pada work order dipastikan kosong"
+        elif raw_position:
+            label = (f"工單噴漆位置：{raw_position}（待確認） / "
+                     f"Posisi cat pada work order: {raw_position} (perlu diperiksa)")
+        else:
+            label = "工單噴漆位置尚未讀到（無法確認是否空白） / Posisi cat belum terbaca; tidak dapat dipastikan kosong"
+        rows = [_text(label, color=AMBER, margin="sm")]
     if paint["status"] == "color_only":
-        rows = [_text("要噴漆（位置待確認） / Wajib dilakukan pengecatan semprot; posisi perlu dikonfirmasi",
-                      weight="bold", color=AMBER, margin="sm")]
-    else:
+        if raw_position == "（空白）":
+            label = "要噴漆（顏色欄有值；工單位置欄確認空白） / Wajib dicat karena kolom warna terisi; kolom posisi pada work order dipastikan kosong"
+        elif raw_position.upper() in {"N", "NO"}:
+            label = "要噴漆（顏色欄有值；工單噴漆位置：N） / Wajib dicat karena kolom warna terisi; posisi pada work order: N"
+        elif raw_position:
+            label = f"要噴漆（顏色欄有值；工單位置：{raw_position}） / Wajib dicat karena kolom warna terisi; posisi pada work order: {raw_position}"
+        else:
+            label = "要噴漆（顏色欄有值；工單噴漆位置尚未讀到） / Wajib dicat karena kolom warna terisi; posisi pada work order belum terbaca"
+        rows = [_text(label, weight="bold", color=AMBER, margin="sm")]
+    elif paint["status"] in {"one", "both"}:
         side = ("單邊 / Satu sisi" if paint["status"] == "one"
                 else "雙邊 / Kedua sisi")
         rows = [_text(side, weight="bold", margin="sm")]
     code = _clean(paint.get("color_code"), 32)
     if not code:
         name = _clean(paint.get("color_name"), 30)
-        label = (f"顏色 {name} · 色碼待確認 / Kode warna perlu diperiksa" if name else
-                 "色碼待確認 / Kode warna perlu diperiksa")
-        rows.append(_text(label, color=AMBER, margin="sm"))
+        if name:
+            rows.append(_text(f"顏色 {name} · 色碼待確認 / Kode warna perlu diperiksa",
+                              color=AMBER, margin="sm"))
         return rows
     color = _paint_color(code, paint_codes)
     label = (f"色碼 {code} · {color[0]} / {color[1]}" if color else
@@ -221,6 +235,17 @@ def _spray_rows(info, paint_codes):
 
 
 def _ring_text(ring):
+    if ring.get("judgment_mode") == "normal":
+        raw = _clean(ring.get("form_value"), 24)
+        if ring["status"] == "yes":
+            return f"工單套環欄位：{raw or 'Y'} → 需要套環 / Kolom cincin pada work order: {raw or 'Y'} → wajib pakai cincin pelindung", TEAL
+        if ring["status"] == "no":
+            return f"工單套環欄位：{raw or 'N'} → 不需套環 / Kolom cincin pada work order: {raw or 'N'} → tidak perlu cincin pelindung", INK
+        if raw == "（空白）":
+            return "工單套環欄確認空白 / Kolom cincin pada work order dipastikan kosong", AMBER
+        if raw:
+            return f"工單套環原值：{raw}（待確認） / Nilai kolom cincin pada work order: {raw} (perlu diperiksa)", AMBER
+        return "工單套環欄尚未讀到（無法確認是否空白） / Kolom cincin pada work order belum terbaca; tidak dapat dipastikan kosong", AMBER
     if ring["reason"] == "explicit_note":
         return "依備註不套環 / Tanpa cincin sesuai catatan", INK
     if ring["status"] == "yes":
@@ -293,9 +318,10 @@ def _fallback_from_info(info, paint_codes, *, package_rows=None,
 
 
 def build_work_order_fallback(ocr_text, storage_lookup=None, packaging_lookup=None,
-                              paint_codes=None):
+                              paint_codes=None, judgment_mode="special"):
     """Independent Chinese/Indonesian text fallback for malformed Flex cards."""
-    info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes)
+    info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup,
+                                   paint_codes, judgment_mode)
     codes = _PAINT_CODES if paint_codes is None else paint_codes
     try:
         details = (_package_detail_rows(info["packaging"], None)
@@ -307,14 +333,14 @@ def build_work_order_fallback(ocr_text, storage_lookup=None, packaging_lookup=No
 
 def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
                            paint_codes=None, translate_zh_to_id=None,
-                           translate_zh_to_en=None):
+                           translate_zh_to_en=None, judgment_mode="special"):
     """Return the five answers and the matched Chinese/Indonesian method.
 
     Preserve the English callback parameter for old callers; this formatter
     never invokes it or includes an English translation in any LINE message.
     """
     info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup,
-                                   paint_codes)
+                                   paint_codes, judgment_mode)
     if not info["is_work_order"]:
         return {"messages": [], "fallback_text":
                 "⚠️ 無法確認是工單 / Tidak dapat memastikan ini perintah kerja."}

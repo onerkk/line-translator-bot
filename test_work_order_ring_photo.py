@@ -153,5 +153,9 @@ def test_paint_color_controls_when_position_is_no_or_blank(position):
     info = extract_work_order_info(text, STORAGE, PACKAGING)
     assert info["paint"]["status"] == "color_only"
     card = build_work_order_cards(text, STORAGE, PACKAGING)
-    assert "要噴漆" in card["fallback_text"] and "位置待確認" in card["fallback_text"]
+    assert "要噴漆" in card["fallback_text"]
+    expected_position = ("工單噴漆位置尚未讀到" if not position else
+                         "工單噴漆位置:" + position if position == "N" else
+                         "工單位置:" + position)
+    assert expected_position in card["fallback_text"]
     assert "色碼 46 · 土藍 / biru bernuansa tanah" in card["fallback_text"]

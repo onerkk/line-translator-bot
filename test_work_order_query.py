@@ -188,9 +188,57 @@ def test_explicit_special_note_overrides_polishing_38mm_and_crop_stays_unknown()
     reply = build_work_order_reply(PHOTO_4_CROP, STORAGE, PACKAGING)
     assert "不套環（工單備註）" in reply
     assert "包裝 / Pengemasan：代碼待確認" in reply
-    assert "噴漆 / Pengecatan semprot：位置待確認" in reply
+    assert "噴漆 / Pengecatan semprot：工單噴漆位置尚未讀到" in reply
     assert "Protective ring: Not required (explicit order note)" in reply
-    assert "Spray paint: Confirm position" in reply
+    assert "Spray paint: cell was not read; cannot confirm if blank" in reply
+
+
+def test_normal_mode_uses_printed_paint_position_and_ring_cell_without_special_rules():
+    source = (PHOTO_5.replace("客戶名稱：方鉦", "客戶名稱：佳東")
+              .replace("收貨人：方鉦", "收貨人：佳東")
+              .replace("成品尺寸MIN：3.97", "成品尺寸MIN：20")
+              .replace("成品尺寸MAX：4", "成品尺寸MAX：21")
+              .replace("訂單流程：CHRAPDAEJL", "訂單流程：CHRAPL")
+              .replace("噴漆位置：不噴", "噴漆位置：N")
+              .replace("顏色：N", "顏色：102"))
+
+    special = extract_work_order_info(source, STORAGE, PACKAGING)
+    normal = extract_work_order_info(source, STORAGE, PACKAGING,
+                                     judgment_mode="normal")
+
+    assert special["judgment_mode"] == "special"
+    assert special["paint"]["status"] == "color_only"
+    assert special["fields"]["paint"] == "N"
+    assert special["ring"]["status"] == "yes"
+    assert normal["judgment_mode"] == "normal"
+    assert normal["paint"]["status"] == "no"
+    assert normal["paint"]["raw_position"] == "N"
+    assert normal["paint"]["color_code"] == "102"
+    assert normal["ring"] == {"status": "no", "reason": "form_n", "process": None,
+                               "judgment_mode": "normal", "form_value": "N"}
+    reply = build_work_order_reply(source, STORAGE, PACKAGING, judgment_mode="normal")
+    assert "噴漆 / Pengecatan semprot：不噴" in reply
+    assert "顏色代碼 / Kode warna：102" in reply
+    assert "Protective ring: Work order form N → Not required" in reply
+
+
+def test_normal_ring_mode_uses_y_even_when_special_note_says_no_ring():
+    source = PHOTO_5.replace("套環：N", "套環：Y").replace(
+        "特殊備註：", "特殊備註：不要黑色套環\n備註：")
+    special = extract_work_order_info(source, STORAGE, PACKAGING)
+    normal = extract_work_order_info(source, STORAGE, PACKAGING,
+                                     judgment_mode="normal")
+    assert special["ring"]["reason"] == "explicit_note"
+    assert normal["ring"]["status"] == "yes"
+    assert normal["ring"]["form_value"] == "Y"
+
+
+def test_normal_mode_keeps_blank_paint_position_unresolved_even_with_color():
+    source = PHOTO_5.replace("噴漆位置：不噴", "噴漆位置：?").replace("顏色：N", "顏色：113")
+    normal = extract_work_order_info(source, STORAGE, PACKAGING,
+                                     judgment_mode="normal")
+    assert normal["paint"]["status"] == "unknown"
+    assert normal["paint"]["color_code"] == "113"
 
 
 @pytest.mark.parametrize(("ring_form", "expected", "reason"), [
@@ -322,7 +370,7 @@ def test_printed_paint_name_uses_unique_verified_rack_code_not_the_name_as_code(
     assert extract_work_order_info(no_spray, STORAGE, PACKAGING)["paint"] == {
         "status": "color_only", "color_code": "46", "color_name": "土藍"}
     reply = build_work_order_reply(no_spray, STORAGE, PACKAGING)
-    assert "要噴漆（位置待確認）" in reply
+    assert "要噴漆（顏色欄有值；工單位置：不噴）" in reply
     assert "顏色代碼 / Kode warna：46" in reply
 
 
@@ -363,14 +411,14 @@ def test_known_code_from_final_photo_translates_only_when_painted(side, indonesi
 def test_color_overrides_n_position_and_unknown_color_stays_raw():
     no_spray = PHOTO_5.replace("顏色：N", "顏色：109")
     reply = build_work_order_reply(no_spray, STORAGE, PACKAGING)
-    assert "要噴漆（位置待確認）" in reply
-    assert "Spray paint: Yes; confirm position" in reply
+    assert "要噴漆（顏色欄有值；工單位置：不噴）" in reply
+    assert "Spray paint: Yes; printed position: 不噴" in reply
     assert "顏色代碼 / Kode warna：109" in reply
     assert "顏色 / Warna：黑 / hitam" in reply
     assert "Color code: 109" in reply and "Color: black" in reply
     unknown = no_spray.replace("噴漆位置：不噴", "噴漆位置：單邊").replace("顏色：109", "顏色：109 黑色")
     reply = build_work_order_reply(unknown, STORAGE, PACKAGING)
-    assert "顏色代碼 / Kode warna：待確認" in reply
+    assert "顏色代碼 / Kode warna：109 黑色 · 待確認" in reply
     assert "顏色 / Warna：" not in reply and "Color:" not in reply
 
 

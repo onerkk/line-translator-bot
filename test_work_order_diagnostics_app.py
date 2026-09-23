@@ -1,10 +1,13 @@
 """Exercise the live OCR-to-card trace and the admin troubleshooting endpoint."""
 
+import base64
+import io
 import json
 import re
 from types import SimpleNamespace
 
 import app
+from PIL import Image
 from work_order_diagnostics import load_diagnostics
 
 
@@ -16,13 +19,14 @@ INITIAL_OCR = """冷精棒製造指示書
 長度MIN：6000
 長度MAX：6050
 訂單流程：?
-噴漆位置：雙邊
+噴漆位置：?
 套環：N
 顏色：土藍
 包裝代碼：1O
 特殊備註：
 """
 REREAD = "訂單流程：CHRAPL\n成品尺寸MIN：20\n成品尺寸MAX：20"
+CELL_REREAD = "噴漆位置：雙邊\n套環：N\n包裝代碼：1O"
 
 
 def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
@@ -38,19 +42,25 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
 
     def fake_vision(messages, **options):
         calls.append((messages, options))
-        content = INITIAL_OCR if len(calls) == 1 else REREAD
+        content = {1: INITIAL_OCR, 2: REREAD, 3: CELL_REREAD}[len(calls)]
         return SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content=content))])
 
     monkeypatch.setattr(app, "_vision_call", fake_vision)
-    result = app.ocr_work_order_fields("fake-image")
-    assert len(calls) == 2
+    image = Image.new("RGB", (400, 900), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    image_base64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+    result = app.ocr_work_order_fields(image_base64)
+    assert len(calls) == 3
     first_prompt = calls[0][0][0]["content"]
     assert "看見『土藍』就保留『土藍』" in first_prompt
     assert "完整色名或明確列出的別名查詢" in first_prompt
+    assert sum(item["type"] == "image_url" for item in calls[0][0][1]["content"]) == 3
     assert "訂單流程：CHRAPL" in result
     assert "成品尺寸MIN：20" in result
     assert "成品尺寸MAX：20" in result
+    assert "噴漆位置：雙邊" in result
     assert app.format_work_order_cards(result)["messages"][0]["type"] == "flex"
 
     # The stages let an operator distinguish failed transcription from a
@@ -58,12 +68,15 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
     records = list(reversed(load_diagnostics(limit=20, msg_id="line_msg_123")))
     assert [record["stage"] for record in records] == [
         "initial", "ring_retry_candidate", "ring_retry_result",
+        "cell_retry_candidate", "cell_retry_result",
         "final_ocr", "card_rendered",
     ]
     assert records[0]["ring_status"] == "unknown"
     assert records[2]["ring_status"] == "yes"
-    assert records[3]["ring_retry_triggered"] is True
-    assert records[3]["ring_retry_accepted"] is True
+    assert records[5]["ring_retry_triggered"] is True
+    assert records[5]["ring_retry_accepted"] is True
+    assert records[5]["cell_retry_triggered"] is True
+    assert records[5]["cell_retry_accepted"] is True
     assert records[-1]["ring_status"] == "yes"
     assert records[-1]["flow_ocr"] == "CHRAPL"
     assert records[0]["timestamp_utc"].endswith("Z")

@@ -55,6 +55,7 @@ _RETRY_KEYS = (
     "customer_retry_triggered", "customer_retry_accepted",
     "length_retry_triggered", "length_retry_accepted",
     "ring_retry_triggered", "ring_retry_accepted",
+    "cell_retry_triggered", "cell_retry_accepted",
 )
 
 
@@ -191,7 +192,7 @@ def make_diagnostic(ocr_text, storage_lookup, packaging_lookup, msg_id,
                     stage, build_tag, extra=None):
     """Build a redacted record from the actual OCR decisions and live lookups.
 
-    ``extra`` accepts only four retry booleans; arbitrary extras cannot enter
+    ``extra`` accepts only retry booleans; arbitrary extras cannot enter
     the returned record or its persistent file. The customer rows are read from
     the exact canonical key in the active storage lookup, never from examples.
     """

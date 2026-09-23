@@ -96,7 +96,7 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_1d_legacy_g_met
     assert "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun" in summary
     assert "原表簡稱與明細不一致" not in summary
     assert "3P袋+PE布" not in summary
-    assert "要噴漆（位置待確認）" in summary
+    assert "要噴漆（顏色欄有值；工單位置：不噴）" in summary
     assert "色碼 109 · 黑 / hitam" in summary
     assert "色碼 109 · 黑 / hitam" in summary
     assert "不需套環 / Tidak perlu cincin pelindung" in summary
@@ -193,7 +193,7 @@ def test_paint_color_only_when_paint_location_requires_it():
     no_paint = PHOTO_5.replace("顏色：N", "顏色：109")
     result = build_work_order_cards(no_paint, STORAGE, PACKAGING)
     main = _body_text(result["messages"][0])
-    assert "要噴漆（位置待確認）" in main
+    assert "要噴漆（顏色欄有值；工單位置：不噴）" in main
     assert "色碼 109 · 黑 / hitam" in main
     painted = no_paint.replace("噴漆位置：不噴", "噴漆位置：雙邊")
     main = _body_text(build_work_order_cards(painted, STORAGE, PACKAGING)["messages"][0])
@@ -218,7 +218,22 @@ def test_printed_chinese_paint_name_displays_verified_rack_code_or_unknown_name(
     assert "色碼 46" in build_work_order_fallback(painted, STORAGE, PACKAGING)
     unknown = build_work_order_cards(painted, STORAGE, PACKAGING, paint_codes={})
     assert "顏色 土藍 · 色碼待確認" in _all_visible_text(unknown)
-    assert "色碼 土藍" not in _all_visible_text(unknown)
+
+
+def test_normal_mode_card_reports_form_cells_without_special_overrides():
+    source = (PHOTO_5.replace("客戶名稱：方鉦", "客戶名稱：佳東")
+              .replace("收貨人：方鉦", "收貨人：佳東")
+              .replace("成品尺寸MIN：3.97", "成品尺寸MIN：20")
+              .replace("成品尺寸MAX：4", "成品尺寸MAX：21")
+              .replace("噴漆位置：不噴", "噴漆位置：N")
+              .replace("顏色：N", "顏色：102"))
+    result = build_work_order_cards(source, STORAGE, PACKAGING,
+                                    judgment_mode="normal")
+    visible = _all_visible_text(result)
+    assert "不噴 / Tidak dicat" in visible
+    assert "色碼 102 · 白 / putih" in visible
+    assert "工單套環欄位：N → 不需套環 / Kolom cincin pada work order: N" in visible
+    assert "要噴漆" not in visible
 
 
 def test_special_note_no_ring_and_unknown_packaging_without_fabrication():

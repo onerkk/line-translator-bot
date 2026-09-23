@@ -1,4 +1,4 @@
-// FACTORY_ADMIN_BUILD: 2026-09-10.8-understood-only
+// FACTORY_ADMIN_BUILD: 2026-09-23.9-work-order-judgment-mode
 // FACTORY_ADMIN_LIFECYCLE_API: 1
 // FACTORY_ADMIN_RECIPIENT_SCOPE_API: 1
 (function(){
@@ -22,6 +22,7 @@
     finally{clearTimeout(timer);requests.delete(controller);}
   }
   async function call(path='',method='GET',body){return request('/api/admin/factory'+path,{method,headers:headers(),body:body?JSON.stringify(body):undefined,cache:'no-store'},async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'操作失敗，請重新登入。');return data;});}
+  async function callWorkOrderJudgment(method='GET',body){return request('/api/admin/work-order-judgment',{method,headers:headers(),body:body?JSON.stringify(body):undefined,cache:'no-store'},async response=>{const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'工單判斷設定儲存失敗。');return data;});}
   function guard(button,operation){return async event=>{event?.preventDefault();if(!active()||button.disabled)return;button.disabled=true;try{await operation();}catch(e){report(e);}finally{button.disabled=false;}};}
   function startPolling(){if(pollTimer===null&&active())pollTimer=window.setInterval(refreshVisibleReceipts,20000);}
   window.addEventListener('pagehide',()=>{
@@ -54,9 +55,10 @@
     if(ready)return;ready=true;
     const root=document.getElementById('factory-admin-root');
     root.innerHTML=`<div class="factory-header"><span class="factory-eyebrow">LINE · 工廠協作</span><h1>工廠工具</h1><p>翻譯模式、設備資料、公告確認與選單數據</p></div>
-<nav class="factory-nav" aria-label="工廠工具導覽"><a href="#fa-group-section">翻譯與提醒</a><a href="#fa-receipts-section">作業確認紀錄</a><a href="#fa-station-section">設備與作業說明</a></nav>
+<nav class="factory-nav" aria-label="工廠工具導覽"><a href="#fa-work-order-judgment-section">工單判斷</a><a href="#fa-group-section">翻譯與提醒</a><a href="#fa-receipts-section">作業確認紀錄</a><a href="#fa-station-section">設備與作業說明</a></nav>
 <div id="fa-notice" class="factory-notice" role="status" aria-live="polite" hidden></div>
 <section class="factory-card"><h2>連線與功能狀態</h2><div id="fa-health"></div><div class="factory-row"><button type="button" id="fa-refresh" class="factory-secondary">重新整理</button></div><p class="factory-hint">在 LINE 群組傳送 <strong>/factory</strong>，即可開啟掃碼與站別翻譯。掃碼、分享需先在 LINE Developers 啟用 LIFF 的 Scan QR 與分享選擇器，畫面大小設為 Full。</p></section>
+<section class="factory-card" id="fa-work-order-judgment-section"><h2>工單特殊規格判斷</h2><p class="factory-hint">預設使用目前的特殊規格規則，例如顏色欄判定噴漆、佳東拋光棒尺寸例外。切換為「正常判斷」時，噴漆與套環依工單欄位原值顯示，不套用這些特例。</p><form id="fa-work-order-judgment-form"><label>判斷方式<select id="fa-work-order-judgment-mode"><option value="special">特殊規格判斷（預設）</option><option value="normal">正常判斷（依工單欄位）</option></select></label><button id="fa-save-work-order-judgment" type="submit">儲存工單判斷方式</button><p id="fa-work-order-judgment-status" class="factory-hint" role="status" aria-live="polite"></p></form></section>
 <section class="factory-card" id="fa-group-section"><h2>群組翻譯與互動</h2><label>群組<select id="fa-group"></select></label><form id="fa-options-form">
 <label>文字翻譯模式<select id="fa-mode"><option value="all">自動翻譯所有文字</option><option value="mentioned">只有 @ 機器人時翻譯文字</option></select></label><p class="factory-hint">圖片、語音、文件維持各自的既有開關；管理指令仍可操作。</p>
 <label><input type="checkbox" id="fa-edit">原文修改後補發更正翻譯</label><label><input type="checkbox" id="fa-mentions">譯文保留真正的 LINE @ 點名</label>
@@ -77,6 +79,12 @@
     $('group').addEventListener('change',()=>changeGroup(group()));
     $('receipt-group').addEventListener('change',()=>changeGroup($('receipt-group').value));
     $('refresh').addEventListener('click',guard($('refresh'),load));
+    $('work-order-judgment-form').addEventListener('submit',guard($('save-work-order-judgment'),async()=>{
+      const data=await callWorkOrderJudgment('POST',{judgment_mode:$('work-order-judgment-mode').value});
+      $('work-order-judgment-mode').value=data.judgment_mode;
+      $('work-order-judgment-status').textContent='已儲存；新工單查詢會依此方式判斷。';
+      notice('工單判斷方式已儲存。');
+    }));
     $('options-form').addEventListener('submit',guard($('save-options'),async()=>{
       const data=await call('','PUT',{group_id:group(),expected_version:state.settings_version,expected_ack_version:state.ack_settings_version,options:{translation_mode:$('mode').value,edit_translation:$('edit').checked,native_mentions:$('mentions').checked,ack_reminder_enabled:$('ack-reminder').checked,ack_reminder_minutes:Number($('ack-minutes').value),ack_reminder_repeat:$('ack-repeat').checked}});
       state=data;notice('群組設定已儲存。');
@@ -112,7 +120,7 @@
     $('health').append(node('p','作業確認排程：'+(health.ack_worker_enabled===false?'未啟用，需啟用排程服務':health.ack_last_check_at?'最近檢查 '+new Date(health.ack_last_check_at*1000).toLocaleString('zh-TW',{hour12:false}):'已啟用，等待首次檢查')));
     if(health.ack_worker_error)$('health').append(node('p',health.ack_worker_error,'factory-error'));
     (health.provider?.providers||[]).forEach(p=>$('health').append(node('span',p.provider+' · '+(reasons[p.reason]||p.reason),'factory-pill')));
-    fillOptions();await Promise.all([loadStations(),loadReceipts(),loadMembers()]);if(seq===sequence)notice('');
+    fillOptions();await Promise.all([loadStations(),loadReceipts(),loadMembers(),loadWorkOrderJudgment()]);if(seq===sequence)notice('');
     }finally{if(active()&&seq===sequence)root.setAttribute('aria-busy','false');}
   }
   function fillOptions(){
@@ -121,6 +129,15 @@
     $('ack-reminder').checked=settings.ack_reminder_enabled;$('ack-minutes').value=settings.ack_reminder_minutes;
     $('ack-repeat').checked=settings.ack_reminder_repeat;
     $('save-options').disabled=!group();$('load-receipts').disabled=!group();
+  }
+  async function loadWorkOrderJudgment(){
+    try{
+      const data=await callWorkOrderJudgment();if(!active())return;
+      $('work-order-judgment-mode').value=data.judgment_mode||'special';
+      $('work-order-judgment-status').textContent='目前生效：'+($('work-order-judgment-mode').value==='normal'?'正常判斷（依工單欄位）':'特殊規格判斷');
+    }catch(error){
+      if(active())$('work-order-judgment-status').textContent='工單判斷設定讀取失敗：'+error.message;
+    }
   }
   function resetStation(){editing=null;$('station-form').reset();$('editor-title').textContent='新增設備對照';}
   async function loadMembers(){

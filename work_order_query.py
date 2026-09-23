@@ -458,7 +458,7 @@ def _paint_reference(raw, lookup):
     return (next(iter(matches)) if len(matches) == 1 else None), value
 
 
-def _paint(fields, lookup):
+def _paint(fields, lookup, judgment_mode="special"):
     raw = _value(fields.get("paint"))
     normalized = re.sub(r"\s+", "", _text(raw)).upper() if raw else ""
     no_values = {
@@ -468,6 +468,24 @@ def _paint(fields, lookup):
     color_value = _value(fields.get("color"))
     color_key = re.sub(r"[\s._-]+", "", _text(color_value)).upper()
     has_color = bool(color_value and color_key not in no_values)
+    code, name = _paint_reference(color_value, lookup) if has_color else (None, None)
+
+    # Normal mode reports the form's position cell literally.  A color in a
+    # separate cell does not change an N or blank position into a paint order.
+    if judgment_mode == "normal":
+        if normalized in {"雙邊", "双边", "兩邊", "两边", "雙側", "双侧", "兩端", "两端", "DUASISI", "KEDUAUJUNG"}:
+            status = "both"
+        elif normalized in {"單邊", "单边", "單側", "单侧", "一端", "SATUSISI", "SATUUJUNG"}:
+            status = "one"
+        elif normalized in no_values:
+            status = "no"
+        else:
+            status = "unknown"
+        paint = {"status": status, "color_code": code,
+                 "raw_position": raw}
+        if name:
+            paint["color_name"] = name
+        return paint
 
     # The color cell is the source of truth for whether painting is required.
     # The position cell can specify one/both sides, but N, blank, or unreadable
@@ -479,12 +497,14 @@ def _paint(fields, lookup):
     elif has_color:
         status = "color_only"
     elif normalized in no_values:
-        return {"status": "no", "color_code": None}
+        paint = {"status": "no", "color_code": code}
+        if name:
+            paint["color_name"] = name
+        return paint
     else:
         return {"status": "unknown", "color_code": None,
                 **({"raw_position": raw} if raw else {})}
 
-    code, name = _paint_reference(color_value, lookup) if has_color else (None, None)
     paint = {"status": status, "color_code": code}
     if name:
         paint["color_name"] = name
@@ -556,12 +576,22 @@ def _is_jiadong(customer):
     return latin == "jiadong"
 
 
-def _ring(fields, customer=None):
+def _ring(fields, customer=None, judgment_mode="special"):
     note = "\n".join(filter(None, (fields.get("special"), fields.get("order_note"))))
-    if _NO_RING.search(note):
+    if judgment_mode != "normal" and _NO_RING.search(note):
         return {"status": "no", "reason": "explicit_note", "process": None}
 
     ring_form = _text(fields.get("ring_on_form")).upper()
+    if judgment_mode == "normal":
+        form_value = fields.get("ring_on_form")
+        if ring_form in {"Y", "YES"}:
+            return {"status": "yes", "reason": "form_y", "process": None,
+                    "judgment_mode": judgment_mode, "form_value": form_value}
+        if ring_form in {"N", "NO"}:
+            return {"status": "no", "reason": "form_n", "process": None,
+                    "judgment_mode": judgment_mode, "form_value": form_value}
+        return {"status": "unknown", "reason": "ring_field", "process": None,
+                "judgment_mode": judgment_mode, "form_value": form_value}
     # Jia Dong is the sole customer exception: polishing bars at 20 mm or
     # above always need a ring, even when the form says N.  For all other
     # orders the printed ring cell controls the answer.
@@ -593,8 +623,10 @@ def _ring(fields, customer=None):
     return {"status": "unknown", "reason": "ring_field", "process": None}
 
 
-def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None, paint_codes=None):
+def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None,
+                            paint_codes=None, judgment_mode="special"):
     """Return operational facts; use current admin maps, never OCR example data."""
+    judgment_mode = "normal" if judgment_mode == "normal" else "special"
     analysis = analyze_work_order_text(ocr_text, storage_lookup or {})
     if not analysis["is_work_order"]:
         return {"is_work_order": False}
@@ -604,6 +636,7 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
     customer = analysis["customer"]
     return {
         "is_work_order": True,
+        "judgment_mode": judgment_mode,
         "fields": fields,
         "order": fields.get("order"),
         "customer": customer,
@@ -614,8 +647,9 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
         "storage": ({"status": "unknown_customer"} if analysis.get("customer_conflict") else
                     _storage_for_fields(customer, fields, storage_lookup or {})),
         "packaging": _packaging(fields.get("packaging"), packaging_lookup),
-        "paint": _paint(fields, _PAINT_CODES if paint_codes is None else paint_codes),
-        "ring": _ring(fields, customer),
+        "paint": _paint(fields, _PAINT_CODES if paint_codes is None else paint_codes,
+                        judgment_mode),
+        "ring": _ring(fields, customer, judgment_mode),
     }
 
 
@@ -625,7 +659,7 @@ def _show_range(bounds):
 
 def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
                            paint_codes=None, translate_zh_to_id=None,
-                           translate_zh_to_en=None):
+                           translate_zh_to_en=None, judgment_mode="special"):
     """Compose a LINE text response in Chinese, Indonesian and English.
 
     Exact source-to-translation records cover all bundled methods offline.
@@ -635,7 +669,8 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     # The LINE app supplies no explicit paint table; use the reviewed cans by
     # default.  An explicit mapping, including {}, is a deliberate override.
     paint_codes = _PAINT_CODES if paint_codes is None else paint_codes
-    info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup, paint_codes)
+    info = extract_work_order_info(ocr_text, storage_lookup, packaging_lookup,
+                                   paint_codes, judgment_mode)
     if not info["is_work_order"]:
         return "⚠️ 未確認為工單 / Belum dapat dipastikan sebagai work order / Work order not confirmed."
     lines = ["📋 工單資訊 / Informasi work order"]
@@ -655,26 +690,38 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     lines.append("長度 / Panjang：" + _show_range(info["length"]) + (" mm" if info["length"] else ""))
 
     paint = info["paint"]
-    color = (_verified_paint_color(paint["color_code"], paint_codes)
-             if paint["status"] in ("one", "both", "color_only") else None)
+    raw_position = _value(info.get("fields", {}).get("paint"))
+    color = _verified_paint_color(paint["color_code"], paint_codes) if paint.get("color_code") else None
     if paint["status"] == "no":
         lines.append("噴漆 / Pengecatan semprot：不噴 / Tidak perlu dicat")
     elif paint["status"] in ("one", "both"):
         text = ("單邊 / Satu sisi" if paint["status"] == "one"
                 else "雙邊 / Kedua sisi")
         lines.append("噴漆 / Pengecatan semprot：" + text)
-        raw_code = paint["color_code"]
-        lines.append("顏色代碼 / Kode warna：" + (raw_code or "待確認 / Perlu diperiksa"))
-        if color:
-            lines.append("顏色 / Warna：" + color["zh"] + " / " + color["id"])
     elif paint["status"] == "color_only":
-        lines.append("噴漆 / Pengecatan semprot：要噴漆（位置待確認） / Wajib dilakukan pengecatan semprot; posisi perlu dikonfirmasi")
-        raw_code = paint["color_code"]
-        lines.append("顏色代碼 / Kode warna：" + (raw_code or "待確認 / Perlu diperiksa"))
+        if raw_position == "（空白）":
+            status_text = "要噴漆（顏色欄有值；工單位置欄確認空白） / Wajib dicat karena kolom warna terisi; kolom posisi pada work order dipastikan kosong"
+        elif raw_position and raw_position.upper() in {"N", "NO"}:
+            status_text = "要噴漆（顏色欄有值；工單噴漆位置：N） / Wajib dicat karena kolom warna terisi; posisi pada work order: N"
+        elif raw_position:
+            status_text = f"要噴漆（顏色欄有值；工單位置：{raw_position}） / Wajib dicat karena kolom warna terisi; posisi pada work order: {raw_position}"
+        else:
+            status_text = "要噴漆（顏色欄有值；工單噴漆位置尚未讀到） / Wajib dicat karena kolom warna terisi; posisi pada work order belum terbaca"
+        lines.append("噴漆 / Pengecatan semprot：" + status_text)
+    else:
+        position_text = ("工單噴漆位置欄確認空白 / Kolom posisi cat pada work order dipastikan kosong"
+                         if raw_position == "（空白）" else
+                         f"工單噴漆位置：{raw_position}（待確認） / Posisi pada work order: {raw_position} (perlu diperiksa)"
+                         if raw_position else
+                         "工單噴漆位置尚未讀到（無法確認是否空白） / Posisi cat belum terbaca; tidak dapat dipastikan kosong")
+        lines.append("噴漆 / Pengecatan semprot：" + position_text)
+    if paint.get("color_code") or paint.get("color_name") or paint["status"] in {"one", "both", "color_only"}:
+        code_text = paint.get("color_code") or "待確認 / Perlu diperiksa"
+        if not paint.get("color_code") and paint.get("color_name"):
+            code_text = paint["color_name"] + " · 待確認 / Perlu diperiksa"
+        lines.append("顏色代碼 / Kode warna：" + code_text)
         if color:
             lines.append("顏色 / Warna：" + color["zh"] + " / " + color["id"])
-    else:
-        lines.append("噴漆 / Pengecatan semprot：位置待確認 / Posisi perlu diperiksa")
 
     package = info["packaging"]
     detail_en = None
@@ -718,7 +765,17 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
         lines.append("包裝 / Pengemasan：代碼待確認 / Kode perlu diperiksa")
 
     ring = info["ring"]
-    if ring["status"] == "no" and ring["reason"] == "explicit_note":
+    if ring.get("judgment_mode") == "normal" and ring["status"] in {"yes", "no"}:
+        form_value = ring.get("form_value") or ("Y" if ring["status"] == "yes" else "N")
+        decision = "需要套環 / Wajib memakai cincin pelindung" if ring["status"] == "yes" else "不需套環 / Tidak perlu memakai cincin pelindung"
+        ring_text = f"工單套環欄位：{form_value} → {decision}"
+    elif ring.get("judgment_mode") == "normal" and ring.get("form_value") == "（空白）":
+        ring_text = "工單套環欄確認空白 / Kolom cincin pada work order dipastikan kosong"
+    elif ring.get("judgment_mode") == "normal" and ring.get("form_value"):
+        ring_text = f"工單套環原值：{ring['form_value']}（待確認） / Nilai kolom cincin pada work order: {ring['form_value']} (perlu diperiksa)"
+    elif ring.get("judgment_mode") == "normal":
+        ring_text = "工單套環欄尚未讀到（無法確認是否空白） / Kolom cincin pada work order belum terbaca; tidak dapat dipastikan kosong"
+    elif ring["status"] == "no" and ring["reason"] == "explicit_note":
         ring_text = "不套環（工單備註）/ Tanpa cincin pelindung (catatan pada work order)"
     elif ring["status"] == "yes":
         ring_text = "需要套環 / Wajib memakai cincin pelindung"
@@ -749,19 +806,27 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
     lines.append("Length: " + (str(info["length"][0]) + "–" + str(info["length"][1]) + " mm"
                                if info["length"] else "To confirm"))
     if paint["status"] == "no":
-        lines.append("Spray paint: None")  # Color is irrelevant in this case.
+        lines.append("Spray paint: None")
     elif paint["status"] in ("one", "both"):
         lines.append("Spray paint: " + ("One side" if paint["status"] == "one" else "Both sides"))
-        lines.append("Color code: " + (paint.get("color_code") or "To confirm"))
-        if color:
-            lines.append("Color: " + color["en"])
     elif paint["status"] == "color_only":
-        lines.append("Spray paint: Yes; confirm position")
+        if raw_position == "（空白）":
+            lines.append("Spray paint: Yes; position cell confirmed blank")
+        elif raw_position and raw_position.upper() in {"N", "NO"}:
+            lines.append("Spray paint: Yes; printed position: N")
+        elif raw_position:
+            lines.append("Spray paint: Yes; printed position: " + raw_position)
+        else:
+            lines.append("Spray paint: Yes; position cell was not read")
+    else:
+        position_en = ("cell confirmed blank" if raw_position == "（空白）" else
+                       "".join(["printed position ", raw_position, "; confirm"])
+                       if raw_position else "cell was not read; cannot confirm if blank")
+        lines.append("Spray paint: " + position_en)
+    if paint.get("color_code") or paint.get("color_name") or paint["status"] in {"one", "both", "color_only"}:
         lines.append("Color code: " + (paint.get("color_code") or "To confirm"))
         if color:
             lines.append("Color: " + color["en"])
-    else:
-        lines.append("Spray paint: Confirm position")
     if package["status"] == "ok":
         code_en = package["code"]
         if package.get("old_code"):
@@ -785,7 +850,14 @@ def build_work_order_reply(ocr_text, storage_lookup=None, packaging_lookup=None,
         lines.append("Packaging: Code " + package["code"] + " is not in the table; confirm it")
     else:
         lines.append("Packaging: Confirm the code")
-    if ring["status"] == "yes":
+    if ring.get("judgment_mode") == "normal" and ring["status"] in {"yes", "no"}:
+        form_value = ring.get("form_value") or ("Y" if ring["status"] == "yes" else "N")
+        ring_en = "Work order form " + form_value + " → " + ("Required" if ring["status"] == "yes" else "Not required")
+    elif ring.get("judgment_mode") == "normal" and ring.get("form_value") == "（空白）":
+        ring_en = "Work order ring field confirmed blank"
+    elif ring.get("judgment_mode") == "normal":
+        ring_en = "Work order ring field was not read; blank cannot be confirmed"
+    elif ring["status"] == "yes":
         ring_en = "Required"
     elif ring["reason"] == "explicit_note":
         ring_en = "Not required (explicit order note)"

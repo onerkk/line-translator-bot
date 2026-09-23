@@ -5,6 +5,8 @@ injects the observed OCR confusion ``10`` (zero) for the printed ``1O``
 (letter O); it does not make an assertion about a live vision provider.
 """
 
+import unicodedata
+
 import pytest
 
 import app
@@ -105,7 +107,10 @@ def test_dacapo_color_overrides_no_spray_position(monkeypatch, paint_position):
     ocr = DACAPO_PHOTO_OCR.replace("噴漆位置：雙邊", "噴漆位置：" + paint_position)
     card, fallback = _card(monkeypatch, ocr)
     for visible in (card, fallback):
-        assert "要噴漆" in visible and "位置待確認" in visible
+        expected_position = ("工單噴漆位置：N" if paint_position == "N"
+                             else "工單位置：不噴")
+        assert "要噴漆" in visible
+        assert unicodedata.normalize("NFKC", expected_position) in unicodedata.normalize("NFKC", visible)
         assert "色碼 46 · 土藍 / biru bernuansa tanah" in visible
         assert "雙邊 / Kedua sisi" not in visible
 
@@ -116,7 +121,8 @@ def test_dacapo_table_n_and_soil_blue_still_returns_unsprayed_single_card(monkey
         "噴漆位置：雙邊\n套環：Y\n顏色：土藍\n包裝代碼：10\n", table)
     card, fallback = _card(monkeypatch, ocr)
     for visible in (card, fallback):
-        assert "要噴漆" in visible and "位置待確認" in visible
+        assert "要噴漆" in visible
+        assert "工單噴漆位置:N" in unicodedata.normalize("NFKC", visible)
         assert "色碼 46 · 土藍 / biru bernuansa tanah" in visible
         assert "需要套環 / Wajib pakai cincin pelindung" in visible
         assert "1O" in visible and "舊碼 7" in visible

@@ -110,10 +110,11 @@ def test_app_uses_one_focused_customer_retry_then_emits_the_reference_area(monke
 
     monkeypatch.setattr(app, "_vision_call", vision)
     result = app.ocr_work_order_fields("not-a-real-photo")
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert "客戶名稱：DACAPO" in result
     assert "客戶名稱：方鉦" not in result
     assert "客戶名稱" in calls[1][0]["content"]
+    assert "包裝代碼" in calls[2][0]["content"]
     info = extract_work_order_info(result, app._work_order_storage_lookup(), {})
     assert info["storage"]["area"] == "EH31"
     card = app.format_work_order_cards(result)
