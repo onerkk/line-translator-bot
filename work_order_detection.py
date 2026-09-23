@@ -31,6 +31,11 @@ def _key(value: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)).casefold()
 
 
+# Explicitly verified name on the user-provided form.  Do not use general
+# lookalike matching: similar Chinese characters can name different firms.
+_VERIFIED_CUSTOMER_ALIASES = {"方钲": "方鉦"}
+
+
 def resolve_storage_customer(value: str | None, names: Iterable[str]) -> str | None:
     """Resolve a complete name or an unambiguous, sufficiently long prefix.
 
@@ -43,6 +48,9 @@ def resolve_storage_customer(value: str | None, names: Iterable[str]) -> str | N
     names = [name for name in names if isinstance(name, str) and name.strip()]
     if value in names:
         return value
+    alias = _VERIFIED_CUSTOMER_ALIASES.get(_key(value))
+    if alias in names:
+        return alias
     query = _key(value)
     matches = {name for name in names if _key(name) == query}
     if matches:

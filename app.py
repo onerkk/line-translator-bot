@@ -16710,11 +16710,18 @@ def _translate_inner(text, src, tgt):
 
     return None
 
+def _work_order_storage_lookup():
+    """Use live admin rows first, adding verified missing work-order customers."""
+    from work_order_storage_reference import effective_work_order_storage_lookup
+
+    return effective_work_order_storage_lookup(globals().get("STORAGE_LOOKUP", {}))
+
+
 def analyze_work_order(ocr_text):
     """Classify the old/new bilingual form, then read its customer field only."""
     from work_order_detection import analyze_work_order_text
 
-    analysis = analyze_work_order_text(ocr_text, globals().get("STORAGE_LOOKUP", {}))
+    analysis = analyze_work_order_text(ocr_text, _work_order_storage_lookup())
     logger.info(
         "Work order detection: %d field families, confirmed=%s, customer=%s",
         analysis["keyword_count"], analysis["is_work_order"], analysis["customer"],
@@ -16726,7 +16733,7 @@ def format_work_order_query(ocr_text, group_id=None, user_id=None):
     """Concise Chinese/Indonesian text backup when LINE Flex is unavailable."""
     from work_order_card import build_work_order_fallback
 
-    return build_work_order_fallback(ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP)
+    return build_work_order_fallback(ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP)
 
 
 def format_work_order_cards(ocr_text, group_id=None, user_id=None):
@@ -16744,7 +16751,7 @@ def format_work_order_cards(ocr_text, group_id=None, user_id=None):
             _tl.from_image_ocr = before
 
     return build_work_order_cards(
-        ocr_text, STORAGE_LOOKUP, PACKAGING_LOOKUP,
+        ocr_text, _work_order_storage_lookup(), PACKAGING_LOOKUP,
         translate_zh_to_id=translate_packaging,
     )
 
@@ -16774,10 +16781,11 @@ def format_storage_for_work_order(customer_name):
     """Format storage lookup for work order image detection."""
     from work_order_detection import resolve_storage_customer
 
-    customer_name = resolve_storage_customer(customer_name, STORAGE_LOOKUP)
+    lookup = _work_order_storage_lookup()
+    customer_name = resolve_storage_customer(customer_name, lookup)
     if not customer_name:
         return None
-    entries = STORAGE_LOOKUP.get(customer_name)
+    entries = lookup.get(customer_name)
     if not entries:
         return None
     lines = []
@@ -17504,7 +17512,7 @@ def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accept
     try:
         from work_order_query import extract_work_order_info
 
-        info = extract_work_order_info(ocr_text, STORAGE_LOOKUP, {})
+        info = extract_work_order_info(ocr_text, _work_order_storage_lookup(), {})
         fields = info.get("fields") or {}
         storage = info.get("storage") or {}
         canonical = storage.get("customer")
@@ -17524,6 +17532,7 @@ def _work_order_storage_ocr_diagnostic(phase, ocr_text, *, cropped=False, accept
             "length_max": numeric_cell(fields.get("length_max")),
             "valid_length_pair": bool(info.get("length")),
             "customer_in_live_table": isinstance(rows, list) and bool(rows),
+            "reference_customer_used": storage.get("status") == "ok" and not rows,
             "live_rule_count": len(rows) if isinstance(rows, list) else 0,
             "crop_attached": bool(cropped),
             "reread_accepted": accepted,
@@ -17538,6 +17547,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
     The vision provider reads characters only. All operational decisions are
     made afterwards by work_order_query from source fields and local tables.
     """
+    storage_lookup = _work_order_storage_lookup()
     _tl.ocr_extraction_state = "unknown"
     if not _has_ai_capability("vision"):
         return None
@@ -17588,7 +17598,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                 from work_order_length_recovery import (focused_length_crop,
                                                         merge_confirmed_length,
                                                         needs_length_retry)
-                if needs_length_retry(result, STORAGE_LOOKUP):
+                if needs_length_retry(result, storage_lookup):
                     # One reread uses the full sheet for context and, when
                     # available, a magnified crop of the printed length row.
                     # It never replaces an already conflicting OCR number.
@@ -17620,7 +17630,7 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
                     track_tokens(reread)
                     retry_text = (reread.choices[0].message.content or "").strip()
                     original = result
-                    result = merge_confirmed_length(result, retry_text, STORAGE_LOOKUP)
+                    result = merge_confirmed_length(result, retry_text, storage_lookup)
                     _work_order_storage_ocr_diagnostic(
                         "reread", result, cropped=bool(cropped), accepted=result != original)
             except Exception as retry_exc:

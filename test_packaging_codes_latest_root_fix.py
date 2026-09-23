@@ -57,6 +57,15 @@ def test_u_and_1a_show_identical_real_packaging_instructions():
     assert "包裝碼資料尚未上傳" not in by_old
 
 
+def test_corrected_1d_and_legacy_g_share_one_sourced_method_in_pkg_lookup():
+    old = app.handle_pkg_command("/pkg G")
+    assert old == app.handle_pkg_command("/pkg 1D")
+    assert "舊碼：G｜新版：1D" in old
+    assert "簡稱：PC布墊+鋼帶+PE布+膠膜兩層+2條棉繩" in old
+    assert "詳細包裝方式：頭中尾內舖PC布墊並紮鋼帶+外加PE布後捆膠膜固定，再捆一層膠膜後於適當位置綁兩條棉繩" in old
+    assert "3P袋+PE布" not in old
+
+
 def test_duplicate_h_preserves_both_methods_and_requires_new_code_selection():
     reply = app.handle_pkg_command("/pkg H")
     assert "/pkg 8G" in reply and "/pkg 8I" in reply

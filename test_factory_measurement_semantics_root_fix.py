@@ -189,6 +189,7 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
                 "re": __import__("re"),
                 "logger": types.SimpleNamespace(info=lambda *a, **k: None),
                 "CUSTOMER_NAMES": [],
+                "_work_order_storage_lookup": lambda: {},
             },
         )
         ocr = "冷精棒製造指示書\n訂單編號:12345\n成品尺寸MIN 10.00 MAX 10.02"

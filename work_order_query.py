@@ -52,6 +52,7 @@ _PACKAGING_SHORT_ID = {
     "3P袋+木箱+瓦楞+小包裝": "Kantong 3P + peti kayu + lembaran bergelombang + kemasan kecil",
     "3P袋+木箱+瓦楞+網套": "Kantong 3P + peti kayu + lembaran bergelombang + selongsong jaring",
     "3P袋+PE布": "Kantong 3P + kain PE",
+    "PC布墊+鋼帶+PE布+膠膜兩層+2條棉繩": "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun",
     "PC布墊(五處)+鋼帶": "Alas kain PC pada lima bagian + pita baja",
     "3P袋+PE布+紙管": "Kantong 3P + kain PE + tabung kertas",
     "3P袋+PE布+棉繩改EN1492-1吊帶": "Kantong 3P + kain PE; tali katun diganti sling EN 1492-1",
@@ -81,6 +82,7 @@ _PACKAGING_SHORT_EN = {
     "3P袋+木箱+瓦楞+小包裝": "3P bags, wooden crate, corrugated sheet and small bundles",
     "3P袋+木箱+瓦楞+網套": "3P bags, wooden crate, corrugated sheet and mesh sleeves",
     "3P袋+PE布": "3P bags and PE fabric",
+    "PC布墊+鋼帶+PE布+膠膜兩層+2條棉繩": "PC fabric pads, steel strapping, PE fabric, two layers of wrapping film, and two cotton ropes",
     "PC布墊(五處)+鋼帶": "PC fabric pads at five points and steel strapping",
     "3P袋+PE布+紙管": "3P bags, PE fabric and paper tubes",
     "3P袋+PE布+棉繩改EN1492-1吊帶": "3P bags and PE fabric; replace cotton ropes with EN 1492-1 lifting slings",
@@ -406,10 +408,38 @@ def _packaging(code, lookup):
                   if field in ("簡稱", "简称")), "")
     return {"status": "ok", "code": str(key), "requested_code": code,
             "old_code": _value(entry.get("原包裝碼")), "short": short,
-            "detail": detail or short}
+            "detail": detail or short,
+            "inner": _value(entry.get("內包裝")),
+            "outer": _value(entry.get("外包裝")),
+            "cord": _value(entry.get("固定繩"))}
 
 
-def _paint(fields):
+def _paint_reference(raw, lookup):
+    """Resolve an exact printed color name only when it has one verified code.
+
+    Forms may print either a rack number or a Chinese color name.  A name is
+    never itself a color code, and ambiguous names cannot pick an arbitrary
+    entry from an administrator's updated paint table.
+    """
+    value = _value(raw)
+    if not value:
+        return None, None
+    normalized = normalize_code(value)
+    if re.fullmatch(r"[A-Z0-9]{1,12}", normalized):
+        return normalized, None
+    name = re.sub(r"\s+", "", _text(value))
+    matches = {
+        normalize_code(code)
+        for code, entry in (lookup or {}).items()
+        if isinstance(entry, dict)
+        and re.fullmatch(r"[A-Z0-9]{1,12}", normalize_code(code))
+        and _value(entry.get("zh")) and _value(entry.get("id"))
+        and re.sub(r"\s+", "", _text(entry["zh"])) == name
+    } if isinstance(lookup, dict) else set()
+    return (next(iter(matches)) if len(matches) == 1 else None), value
+
+
+def _paint(fields, lookup):
     raw = fields.get("paint")
     if not raw:
         return {"status": "unknown", "color_code": None}
@@ -417,10 +447,16 @@ def _paint(fields):
     if normalized in {"不噴", "不喷", "不噴漆", "不喷漆", "N", "NO", "NONE", "TIDAKDISEMPROTCAT", "TIDAKDICAT"}:
         return {"status": "no", "color_code": None}
     if normalized in {"雙邊", "双边", "兩邊", "两边", "雙側", "双侧", "兩端", "两端", "DUASISI", "KEDUAUJUNG"}:
-        return {"status": "both", "color_code": fields.get("color")}
-    if normalized in {"單邊", "单边", "單側", "单侧", "一端", "SATU SISI", "SATUSISI", "SATUUJUNG"}:
-        return {"status": "one", "color_code": fields.get("color")}
-    return {"status": "unknown", "color_code": None, "raw_position": raw}
+        status = "both"
+    elif normalized in {"單邊", "单边", "單側", "单侧", "一端", "SATU SISI", "SATUSISI", "SATUUJUNG"}:
+        status = "one"
+    else:
+        return {"status": "unknown", "color_code": None, "raw_position": raw}
+    code, name = _paint_reference(fields.get("color"), lookup)
+    paint = {"status": status, "color_code": code}
+    if name:
+        paint["color_name"] = name
+    return paint
 
 
 def _verified_paint_color(code, lookup):
@@ -499,7 +535,7 @@ def extract_work_order_info(ocr_text, storage_lookup=None, packaging_lookup=None
         "diameter": _range(fields, "diameter"),
         "storage": _storage_for_fields(customer, fields, storage_lookup or {}),
         "packaging": _packaging(fields.get("packaging"), packaging_lookup),
-        "paint": _paint(fields),
+        "paint": _paint(fields, _PAINT_CODES if paint_codes is None else paint_codes),
         "ring": _ring(fields),
     }
 

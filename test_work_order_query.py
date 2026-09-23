@@ -80,6 +80,22 @@ def test_every_current_package_has_an_indonesian_short_method_without_ai():
     assert "Rincian dalam bahasa Mandarin perlu diperiksa" not in reply
 
 
+@pytest.mark.parametrize("code", ["1D", "G"])
+def test_1d_and_g_legacy_work_order_formatter_use_same_verified_method(code):
+    image = PHOTO_5.replace("包裝代碼：9G", "包裝代碼：" + code)
+    info = extract_work_order_info(image, STORAGE, PACKAGING)
+    assert info["packaging"]["code"] == "1D"
+    assert info["packaging"]["old_code"] == "G"
+    concise = "PC布墊+鋼帶+PE布+膠膜兩層+2條棉繩"
+    assert info["packaging"]["short"] == concise
+    reply = build_work_order_reply(image, STORAGE, PACKAGING)
+    assert "包裝代碼 / Kode kemasan：1D（舊碼 / kode lama G）" in reply
+    assert "包裝方式 / Ringkasan pengemasan：" + concise in reply
+    assert "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun" in reply
+    assert "原表說明：" + PACKAGING["1D"]["詳細包裝方式說明(冷精棒-設計)"] in reply
+    assert "3P袋+PE布" not in reply
+
+
 def test_exact_offline_packaging_translation_precedes_ai_callbacks():
     calls = []
     def fail_if_called(text):
@@ -227,6 +243,35 @@ def test_verified_paint_codes_match_all_supplied_cans():
     assert "matte" in _PAINT_CODES["144"]["en"]
 
 
+def test_printed_paint_name_uses_unique_verified_rack_code_not_the_name_as_code():
+    painted = PHOTO_5.replace("噴漆位置：不噴", "噴漆位置：雙邊")
+    painted = painted.replace("顏色：N", "顏色：土藍")
+    assert extract_work_order_info(painted, STORAGE, PACKAGING)["paint"] == {
+        "status": "both", "color_code": "46", "color_name": "土藍"}
+    reply = build_work_order_reply(painted, STORAGE, PACKAGING)
+    assert "顏色代碼 / Kode warna：46" in reply
+    assert "顏色代碼 / Kode warna：土藍" not in reply
+    no_spray = painted.replace("噴漆位置：雙邊", "噴漆位置：不噴")
+    assert extract_work_order_info(no_spray, STORAGE, PACKAGING)["paint"] == {
+        "status": "no", "color_code": None}
+    assert "顏色代碼 / Kode warna：" not in build_work_order_reply(no_spray, STORAGE, PACKAGING)
+
+
+def test_paint_name_reverse_lookup_does_not_guess_unknown_or_duplicate_code():
+    painted = PHOTO_5.replace("噴漆位置：不噴", "噴漆位置：單邊")
+    painted = painted.replace("顏色：N", "顏色：土藍")
+    assert extract_work_order_info(painted, STORAGE, PACKAGING, paint_codes={})["paint"] == {
+        "status": "one", "color_code": None, "color_name": "土藍"}
+    duplicate = {
+        "46": {"zh": "土藍", "id": "biru tanah"},
+        "47": {"zh": "土藍", "id": "biru tanah"},
+    }
+    assert extract_work_order_info(painted, STORAGE, PACKAGING, paint_codes=duplicate)["paint"] == {
+        "status": "one", "color_code": None, "color_name": "土藍"}
+    assert extract_work_order_info(painted.replace("土藍", "土青"), STORAGE, PACKAGING)["paint"] == {
+        "status": "one", "color_code": None, "color_name": "土青"}
+
+
 @pytest.mark.parametrize(("side", "indonesian", "english"), [
     ("單邊", "Satu sisi", "One side"),
     ("雙邊", "Kedua sisi", "Both sides"),
@@ -251,7 +296,7 @@ def test_no_spray_disregards_a_known_color_code_and_an_unknown_code_stays_raw():
     assert "Color code:" not in reply and "Color:" not in reply
     unknown = no_spray.replace("噴漆位置：不噴", "噴漆位置：單邊").replace("顏色：109", "顏色：109 黑色")
     reply = build_work_order_reply(unknown, STORAGE, PACKAGING)
-    assert "顏色代碼 / Kode warna：109 黑色" in reply
+    assert "顏色代碼 / Kode warna：待確認" in reply
     assert "顏色 / Warna：" not in reply and "Color:" not in reply
 
 

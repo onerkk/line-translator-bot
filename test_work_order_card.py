@@ -86,13 +86,15 @@ def test_photo_five_card_has_five_answers_and_full_bilingual_packaging_method():
     _assert_only_requested_fields(result, "Y1223801-012")
 
 
-def test_sunge_photo_partial_customer_uses_canonical_storage_and_warns_on_1d_source_conflict():
+def test_sunge_photo_partial_customer_uses_canonical_storage_and_1d_legacy_g_method():
     result = build_work_order_cards(PHOTO_SUNGE, STORAGE, PACKAGING)
     assert len(result["messages"]) == 1
     summary = _body_text(result["messages"][0])
     assert "SUNGEUN" in summary and "EG33" in summary
-    assert "1D" in summary
-    assert "原表簡稱與明細不一致，請核對" in summary
+    assert "1D（舊碼 G / kode lama G）" in summary
+    assert "PC布墊 + 鋼帶 + PE布 + 膠膜兩層 + 2條棉繩" in summary
+    assert "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun" in summary
+    assert "原表簡稱與明細不一致" not in summary
     assert "3P袋+PE布" not in summary
     assert "不噴 / Tidak dicat" in summary
     assert "色碼 109" not in summary
@@ -104,9 +106,31 @@ def test_sunge_photo_partial_customer_uses_canonical_storage_and_warns_on_1d_sou
     _assert_only_requested_fields(result, "Y1224051-023")
     fallback = build_work_order_fallback(PHOTO_SUNGE, STORAGE, PACKAGING)
     assert "SUNGEUN" in fallback and "EG33" in fallback
-    assert "原表簡稱與明細不一致" in fallback
+    assert "1D(舊碼 G / kode lama G)" in fallback
+    assert "原表簡稱與明細不一致" not in fallback
     assert "3P袋+PE布" not in fallback
     assert fallback == result["fallback_text"]
+
+
+def test_legacy_g_photo_resolves_to_same_1d_packaging_without_unsupported_bags():
+    alias = PHOTO_SUNGE.replace("包裝代碼：1D", "包裝代碼：G")
+    current = build_work_order_cards(PHOTO_SUNGE, STORAGE, PACKAGING)
+    legacy = build_work_order_cards(alias, STORAGE, PACKAGING)
+    assert _body_text(current["messages"][0]) == _body_text(legacy["messages"][0])
+    assert legacy["fallback_text"] == current["fallback_text"]
+    assert "1D（舊碼 G / kode lama G）" in _all_visible_text(legacy)
+
+
+def test_1d_summary_requires_source_to_confirm_second_film_layer():
+    changed = json.loads(json.dumps(PACKAGING, ensure_ascii=False))
+    changed["1D"]["詳細包裝方式說明(冷精棒-設計)"] = changed["1D"][
+        "詳細包裝方式說明(冷精棒-設計)"].replace("再捆一層膠膜後", "")
+    result = build_work_order_cards(PHOTO_SUNGE, STORAGE, changed)
+    visible = _all_visible_text(result)
+    assert "膠膜兩層" not in visible
+    assert "dua lapis film plastik" not in visible
+    assert "3P袋+PE布" not in visible
+    assert "包裝方式以原表明細為準" in visible
 
 
 def test_storage_without_confirmed_area_stays_unconfirmed_without_showing_length():
@@ -162,6 +186,21 @@ def test_paint_color_only_when_paint_location_requires_it():
     main = _body_text(build_work_order_cards(unknown, STORAGE, PACKAGING)["messages"][0])
     assert "X9 · 顏色待核對" in main
     assert "hitam" not in main
+
+
+def test_printed_chinese_paint_name_displays_verified_rack_code_or_unknown_name():
+    painted = PHOTO_5.replace("噴漆位置：不噴", "噴漆位置：雙邊")
+    painted = painted.replace("顏色：N", "顏色：土藍")
+    result = build_work_order_cards(painted, STORAGE, PACKAGING)
+    assert len(result["messages"]) == 1
+    visible = _all_visible_text(result)
+    assert "色碼 46 · 土藍 / biru bernuansa tanah" in visible
+    assert "色碼 土藍" not in visible
+    assert "顏色待核對" not in visible
+    assert "色碼 46" in build_work_order_fallback(painted, STORAGE, PACKAGING)
+    unknown = build_work_order_cards(painted, STORAGE, PACKAGING, paint_codes={})
+    assert "顏色 土藍 · 色碼待確認" in _all_visible_text(unknown)
+    assert "色碼 土藍" not in _all_visible_text(unknown)
 
 
 def test_special_note_no_ring_and_unknown_packaging_without_fabrication():

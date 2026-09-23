@@ -98,28 +98,64 @@ def _translate(source, bundled, callback):
     return None
 
 
-def _inconsistent_package(package):
-    """The present 1D record names 3P bags but its detailed method does not.
+_CORRECTED_1D_SHORT = "PC布墊+鋼帶+PE布+膠膜兩層+2條棉繩"
 
-    Restrict this alert to the actual, observed contradiction.  A new admin
-    record can resolve it by updating either method; other codes stay intact.
+
+def _needs_1d_method_verification(package):
+    """Check the 1D concise method against the separately supplied details.
+
+    The original 1D short label contained unsupported 3P bags.  Also verify
+    the corrected built-in summary if an admin has changed its detailed row.
     """
     return (package.get("status") == "ok"
             and normalize_code(package.get("code")) == "1D"
-            and "3P袋" in (package.get("short") or "")
-            and "3P袋" not in (package.get("detail") or ""))
+            and normalize_code(package.get("old_code")) == "G"
+            and (package.get("short") or "") in ("3P袋+PE布", _CORRECTED_1D_SHORT))
+
+
+def _verified_1d_method(package):
+    """Summarize the actual 1D/G steps using the table's matching detail.
+
+    The bundled row's short label says 3P bags, while its detailed method and
+    component columns describe PC fabric pads, steel straps, PE fabric, film,
+    and two cotton ropes.  Only use the concise bilingual summary when all
+    these exact components are corroborated by the detailed instructions.
+    """
+    if not _needs_1d_method_verification(package):
+        return None
+    if (package.get("inner"), package.get("outer"), package.get("cord")) != (
+            "PC布墊+鋼帶", "PE布+膠膜", "2條棉繩"):
+        return None
+    detail = package.get("detail") or ""
+    if "3P袋" in detail:
+        return None
+    if not all(token in detail for token in (
+            "PC布墊", "鋼帶", "PE布", "膠膜", "再捆一層膠膜", "棉繩")):
+        return None
+    if "兩條棉繩" not in detail and "2條棉繩" not in detail:
+        return None
+    return ("PC布墊 + 鋼帶 + PE布 + 膠膜兩層 + 2條棉繩",
+            "Bantalan kain PC + pita baja + kain PE + dua lapis film plastik + dua tali katun")
 
 
 def _package_rows(package, translate_zh_to_id):
     status = package["status"]
     if status == "ok":
         code = _clean(package.get("code"), 24)
+        old_code = _clean(package.get("old_code"), 24)
+        if old_code and normalize_code(old_code) != normalize_code(code):
+            code += f"（舊碼 {old_code} / kode lama {old_code}）"
         rows = [_text(code, size="xl", weight="bold", color=TEAL, margin="sm")]
-        if _inconsistent_package(package):
-            rows.append(_text("原表簡稱與明細不一致，請核對", color=AMBER,
-                              weight="bold", margin="sm"))
-            rows.append(_text("Nama singkat dan rincian pada tabel tidak cocok; periksa kembali",
-                              color=AMBER, margin="sm"))
+        if _needs_1d_method_verification(package):
+            verified = _verified_1d_method(package)
+            if verified:
+                rows.append(_text(verified[0], weight="bold", margin="sm"))
+                rows.append(_text(verified[1], color=MUTED, margin="sm"))
+            else:
+                # A changed admin row cannot inherit the bundled summary.
+                # The detailed instructions remain visible below this row.
+                rows.append(_text("包裝方式以原表明細為準 / Ikuti rincian pengemasan pada tabel",
+                                  color=AMBER, margin="sm"))
             return rows
         short = package.get("short") or ""
         if short:
@@ -169,8 +205,10 @@ def _spray_rows(info, paint_codes):
     rows = [_text(side, weight="bold", margin="sm")]
     code = _clean(paint.get("color_code"), 32)
     if not code:
-        rows.append(_text("色碼待確認 / Kode warna perlu diperiksa",
-                          color=AMBER, margin="sm"))
+        name = _clean(paint.get("color_name"), 30)
+        label = (f"顏色 {name} · 色碼待確認 / Kode warna perlu diperiksa" if name else
+                 "色碼待確認 / Kode warna perlu diperiksa")
+        rows.append(_text(label, color=AMBER, margin="sm"))
         return rows
     color = _paint_color(code, paint_codes)
     label = (f"色碼 {code} · {color[0]} / {color[1]}" if color else
@@ -307,7 +345,8 @@ def build_work_order_cards(ocr_text, storage_lookup=None, packaging_lookup=None,
                                     color="#C5EEE8", weight="bold")],
                              backgroundColor="#195365", paddingAll="16px"),
               "body": _box(content, backgroundColor=BODY_BG, paddingAll="16px")}
-    code = (_clean(package.get("code"), 24)
+    code = (package_rows[0]["text"] if package["status"] == "ok"
+            else _clean(package.get("code"), 24)
             if package["status"] != "missing" else "待確認")
     primary = {"type": "flex",
                "altText": _clean(f"📋 工單重點 / Ringkasan perintah kerja：{customer} · {area} · 包裝 {code}", 200),

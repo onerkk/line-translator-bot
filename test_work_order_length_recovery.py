@@ -140,6 +140,7 @@ def test_ocr_diagnostic_distinguishes_missing_live_customer_rule(monkeypatch):
     monkeypatch.setattr(app, "_event_log_write", lambda name, data: events.append((name, data)))
     app._work_order_storage_ocr_diagnostic("initial", PHOTO_5)
     data = events[-1][1]
-    assert data["storage_status"] == "unknown_customer"
+    assert data["storage_status"] == "ok"
     assert data["customer_in_live_table"] is False
+    assert data["reference_customer_used"] is True
     assert data["live_rule_count"] == 0
