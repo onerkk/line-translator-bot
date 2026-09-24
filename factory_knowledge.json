@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-23.1-work-order-tag-color-ring-notice",
+  "build_id": "2026-09-24.2-clamp-support-and-short-bar-data-maintenance",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -4646,6 +4646,302 @@
           "target": "Disampaikan kembali: gunakan informasi terbaru per hari ini, 9/23, sebagai acuan.\nJika informasi pada work order berbeda dengan TAG, gunakan informasi pada work order sebagai acuan.\nJika posisi pengecatan semprot pada work order tertulis \"N\", tetapi kolom di sebelahnya mencantumkan warna, tetap lakukan pengecatan semprot sesuai warna yang tertera.\nPerhatian bagi petugas polishing:\nJika kolom Cincin Pelindung pada work order tertulis N, jangan dipasang.\n#佳東 #G: Batang grinding pada proses G wajib dipasangi Cincin Pelindung. Jika ada komunikasi tambahan dari pelanggan bahwa Cincin Pelindung perlu dipasang, ketentuan itu akan kami tambahkan kemudian.",
           "bad_target": "papan gantung",
           "reason": "已校正掛牌為 TAG，並明確保留佳東客戶、G製程、研磨棒及套環的修飾關係。"
+        }
+      ]
+    },
+    {
+      "id": "factory_clamp_support_component",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "棒材設備夾靠部件名稱與缺料對象",
+      "match": {
+        "strong_phrases": [
+          "夾靠",
+          "夹靠",
+          "dudukan penjepit batang"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "依本次設備照片語境，「夾靠」指棒材加工設備上用來夾持、支承並定位棒材的部件；印尼文採用 dudukan penjepit batang。",
+        "「缺夾靠／夾靠不足」的缺少對象是夾靠部件，不是棒材材料；印尼文必須保留 dudukan penjepit batang，不可只譯成 ada kurang。",
+        "只保留原文已明示的短缺和處理請求；不要推定機台編號、缺少數量、故障原因、維修或補製方式。",
+        "印尼文的 dudukan penjepit batang 指回中文「夾靠」；保留詞義，不要改成夾輪、夾具操作或棒材短缺。"
+      ],
+      "preferred_target_phrases": [
+        "dudukan penjepit batang"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "target_any": [
+            "dudukan penjepit batang"
+          ],
+          "issue": "clamp_support_component_missing"
+        },
+        {
+          "source_any": [
+            "dudukan penjepit batang"
+          ],
+          "target_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "issue": "clamp_support_component_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "target_missing_any": [
+            "dudukan penjepit batang"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\bada\\s+kurang\\b",
+              "replacement": "dudukan penjepit batang kurang"
+            },
+            {
+              "pattern": "\\bada\\s+kekurangan\\b",
+              "replacement": "ada kekurangan dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\btidak\\s+ada\\b",
+              "replacement": "tidak ada dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bbelum\\s+ada\\b",
+              "replacement": "belum ada dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bkekurangan\\b",
+              "replacement": "kekurangan dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\btidak\\s+(?:cukup|mencukupi)\\b",
+              "replacement": "tidak cukup dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bkurang\\b",
+              "replacement": "kekurangan dudukan penjepit batang"
+            }
+          ]
+        },
+        {
+          "direction": "id-zh",
+          "source_any": [
+            "dudukan penjepit batang"
+          ],
+          "target_missing_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "東西\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "零件\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "部件\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "缺少(?:這個)?(?:部件|零件|東西|物品)",
+              "replacement": "缺少夾靠"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "factory_short_bar_specification_data_maintenance",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "短尺圖的系統規格資料維護",
+      "match": {
+        "strong_phrases": [
+          "短尺圖維護",
+          "短尺图维护",
+          "pemeliharaan data spesifikasi material pendek"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "依本次 ERP 畫面照片語境，「短尺圖維護」是系統內維護短尺材料規格／圖表資料的功能名稱；印尼文採用 pemeliharaan data spesifikasi material pendek。",
+        "這個畫面名稱指系統資料維護，不是現場處理短尺材料；短尺材料處理流程「短尺維護」仍用 penanganan material pendek。",
+        "「維護」在此是管理／更新系統資料，不能改成 tidak teratur（不規則）；不可補寫畫面未顯示的欄位、規格值或操作步驟。"
+      ],
+      "preferred_target_phrases": [
+        "pemeliharaan data spesifikasi material pendek"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "target_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "issue": "short_bar_specification_data_maintenance_missing"
+        },
+        {
+          "source_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "target_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "issue": "short_bar_specification_data_maintenance_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "target_missing_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\b(?:pemeliharaan|perawatan)\\s+(?:data\\s+)?ukuran\\s+pendek(?:\\s+tidak\\s+teratur)?\\b",
+              "replacement": "pemeliharaan data spesifikasi material pendek"
+            },
+            {
+              "pattern": "\\bdata\\s+ukuran\\s+pendek\\s+tidak\\s+teratur\\b",
+              "replacement": "data spesifikasi material pendek"
+            }
+          ]
+        },
+        {
+          "direction": "id-zh",
+          "source_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "target_missing_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "短尺(?:材料)?(?:規格|规格)?(?:資料|资料|圖|图)\\s*(?:不規則|不规则)?維護",
+              "replacement": "短尺圖維護"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "factory_repeat_defect_photo_warning",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "重複缺失與再犯拍照警告",
+      "match": {
+        "strong_phrases": [
+          "重複缺失",
+          "重复缺失",
+          "累犯被拍照",
+          "pelanggaran terulang",
+          "temuan yang sama terus berulang"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "「重複缺失」是相同缺失反覆出現；可譯為 temuan/kekurangan yang sama terus berulang，不是缺點本身永遠存在。",
+        "「不要累犯被拍照」是在提醒不要再犯，若重犯會再被拍照留證。印尼文必須保留『重犯時會再拍照』的條件關係，例如 jangan mengulangi pelanggaran; jika terulang, akan difoto lagi。",
+        "這是正式的現場管理警告，依原文保留警告力度；沒有表情符號的原文不得新增笑臉、祈禱手勢或其他 emoji。"
+      ],
+      "preferred_target_phrases": [
+        "temuan yang sama terus berulang",
+        "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "重複缺失",
+            "重复缺失"
+          ],
+          "target_any": [
+            "kekurangannya selalu berulang",
+            "kekurangan yang sama terus berulang",
+            "temuan yang sama terus berulang",
+            "temuan yang sama berulang",
+            "temuan berulang"
+          ],
+          "issue": "repeated_defect_relation_missing"
+        },
+        {
+          "source_any": [
+            "累犯被拍照",
+            "累犯",
+            "再犯被拍照",
+            "再犯會被拍照",
+            "再犯会被拍照"
+          ],
+          "target_any": [
+            "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi",
+            "jika pelanggaran terulang, akan difoto lagi",
+            "jika mengulangi pelanggaran, akan difoto lagi",
+            "agar tidak difoto lagi",
+            "supaya tidak difoto lagi"
+          ],
+          "issue": "repeat_violation_photo_consequence_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "累犯被拍照",
+            "累犯",
+            "再犯被拍照",
+            "再犯會被拍照",
+            "再犯会被拍照"
+          ],
+          "target_missing_any": [
+            "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi",
+            "jika pelanggaran terulang, akan difoto lagi",
+            "jika mengulangi pelanggaran, akan difoto lagi",
+            "agar tidak difoto lagi",
+            "supaya tidak difoto lagi"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\b(?:agar\\s+)?tidak\\s+mengulangi\\s+pelanggaran\\s+dan\\s+(?:akan\\s+)?difoto\\s+lagi\\b",
+              "replacement": "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+            },
+            {
+              "pattern": "\\bjangan\\s+mengulangi\\s+pelanggaran\\s+dan\\s+(?:akan\\s+)?difoto\\s+lagi\\b",
+              "replacement": "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+            }
+          ]
         }
       ]
     }

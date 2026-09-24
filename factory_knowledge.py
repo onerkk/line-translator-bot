@@ -111,6 +111,39 @@ def validate_document(document: Dict[str, Any]) -> Dict[str, Any]:
         for req_index, req in enumerate(requirements):
             if not isinstance(req, dict) or not _safe_list(req.get("target_any"), "target_any"):
                 raise KnowledgeError(f"entries[{index}].requirements[{req_index}] is invalid")
+        repairs = _safe_list(entry.get("repair_rules", []), f"entries[{index}].repair_rules")
+        for repair_index, repair in enumerate(repairs):
+            if not isinstance(repair, dict):
+                raise KnowledgeError(f"entries[{index}].repair_rules[{repair_index}] is invalid")
+            direction = str(repair.get("direction") or "").lower()
+            if direction not in directions:
+                raise KnowledgeError(
+                    f"entries[{index}].repair_rules[{repair_index}] has an unsupported direction"
+                )
+            for field in ("source_any", "target_missing_any"):
+                if not _safe_list(repair.get(field), f"repair_rules.{field}"):
+                    raise KnowledgeError(
+                        f"entries[{index}].repair_rules[{repair_index}].{field} is empty"
+                    )
+            rewrites = _safe_list(
+                repair.get("candidate_rewrites"),
+                f"entries[{index}].repair_rules[{repair_index}].candidate_rewrites",
+            )
+            if not rewrites:
+                raise KnowledgeError(
+                    f"entries[{index}].repair_rules[{repair_index}].candidate_rewrites is empty"
+                )
+            for rewrite_index, rewrite in enumerate(rewrites):
+                if not isinstance(rewrite, dict) or not str(rewrite.get("replacement") or "").strip():
+                    raise KnowledgeError(
+                        f"entries[{index}].repair_rules[{repair_index}].candidate_rewrites[{rewrite_index}] is invalid"
+                    )
+                try:
+                    re.compile(str(rewrite.get("pattern") or ""), re.I)
+                except re.error as exc:
+                    raise KnowledgeError(
+                        f"entries[{index}].repair_rules[{repair_index}] has invalid rewrite regex"
+                    ) from exc
         entry["id"] = entry_id
         entry["enabled"] = bool(entry.get("enabled", True))
         entry["priority"] = int(entry.get("priority", 50) or 50)
@@ -498,3 +531,62 @@ def build_prompt(cards: Sequence[Dict[str, Any]], *, include_examples: bool = Tr
 
 def validate_translation(cards: Sequence[Dict[str, Any]], source_text: str, translation: str) -> Tuple[bool, List[str]]:
     return get_store().validate_translation(cards, source_text, translation)
+
+
+def repair_translation(cards: Sequence[Dict[str, Any]], source_text: str,
+                       translation: str, src: str, tgt: str) -> str:
+    """Apply a card's narrowly-scoped, source-grounded rewrite if it restores a required concept.
+
+    Repair rules are data-driven and run only when the current source activates
+    the owning card and the target omits a required concept. A rewritten
+    candidate is returned only after the same card validator accepts it.
+    """
+    original = str(translation or "").strip()
+    if not original:
+        return original
+    direction = _direction_key(src, tgt)
+    source_norm = _normalize(source_text)
+    target_norm = _normalize(original)
+    for card in cards or ():
+        if not isinstance(card, dict):
+            continue
+        if direction not in [str(value).lower() for value in card.get("directions", []) or []]:
+            continue
+        match = card.get("match") or {}
+        if match and not match_source(source_text, match)[0]:
+            continue
+        for rule in card.get("repair_rules", []) or []:
+            if str(rule.get("direction") or "").lower() != direction:
+                continue
+            if not any(_contains(source_norm, term) for term in rule.get("source_any", []) or []):
+                continue
+            required_targets = [str(term) for term in rule.get("target_missing_any", []) or []]
+            if not required_targets or any(_contains(target_norm, term) for term in required_targets):
+                continue
+            for rewrite in rule.get("candidate_rewrites", []) or []:
+                replacement = str(rewrite.get("replacement") or "")
+
+                def _preserve_initial_case(match):
+                    first_alpha = next(
+                        (char for char in match.group(0) if char.isalpha()), ""
+                    )
+                    if first_alpha and first_alpha.isupper() and replacement:
+                        return replacement[:1].upper() + replacement[1:]
+                    return replacement
+
+                try:
+                    repaired, count = re.subn(
+                        str(rewrite.get("pattern") or ""),
+                        _preserve_initial_case,
+                        original,
+                        count=1,
+                        flags=re.I,
+                    )
+                except (re.error, TypeError, ValueError):
+                    continue
+                if not count or repaired.strip() == original:
+                    continue
+                valid, _issues = validate_translation([card], source_text, repaired)
+                if valid:
+                    return repaired.strip()
+    return original

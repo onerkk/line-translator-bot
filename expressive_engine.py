@@ -12,8 +12,10 @@ from dataclasses import dataclass
 import expressive_assets
 import translation_extras
 import factory_order_semantics
+import factory_knowledge
+import factory_message_semantics
 
-EXPRESSIVE_ENGINE_VERSION = "2026-09-10.9-order-request-fidelity"
+EXPRESSIVE_ENGINE_VERSION = "2026-09-24.1-factory-knowledge-context"
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,39 @@ class ExpressiveResult:
 _MODE_ALIASES = {"visual": "image", "balanced": "natural"}
 _VALID_MODES = {"off", "tone_only", "emoji", "image", "card", "smart"}
 _VALID_INTENSITY = {"subtle", "natural", "lively"}
+
+
+def _has_factory_knowledge_context(source: str, source_language: str | None) -> bool:
+    """Treat any source covered by shared plant knowledge as workplace output."""
+    language = str(source_language or "").strip().lower()
+    if language.startswith("zh"):
+        src, tgt = "zh", "id"
+    elif language.startswith("id"):
+        src, tgt = "id", "zh"
+    else:
+        return False
+    try:
+        return bool(factory_knowledge.retrieve(source, src, tgt, limit=1))
+    except Exception:
+        # Optional expression policy must not block or break translation.
+        return False
+
+
+def _remove_ungrounded_workplace_emoji(source: str, target: str) -> str:
+    """Keep only emoji already present in the source of formal work messages."""
+    allowed: dict[str, int] = {}
+    seen: dict[str, int] = {}
+    for token in factory_message_semantics._extract_emoji_tokens(source):
+        allowed[token] = allowed.get(token, 0) + 1
+
+    def keep_source_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        seen[token] = seen.get(token, 0) + 1
+        return token if seen[token] <= allowed.get(token, 0) else ""
+
+    result = factory_message_semantics._EMOJI_CLUSTER_RE.sub(keep_source_token, target)
+    result = re.sub(r"[ \t]{2,}", " ", result)
+    return result.strip()
 
 
 def normalise_mode(value: str | None) -> str:
@@ -106,15 +141,10 @@ def enhance_translation(
     mode = normalise_mode(cfg.display_mode)
     intensity = normalise_intensity(cfg.intensity)
     analysis = translation_extras.analyze_message_tone(source, source_language)
-    base = ExpressiveResult(translated, analysis.primary, analysis.visual_mood, 0, None)
-    if not cfg.enabled or mode == "off" or not translated.strip():
-        return base
-    if from_image_ocr and not cfg.ocr_enabled:
-        return base
-
     context = expressive_assets.classify_context(source)
     operational_workplace = bool(
         context in {"factory", "workplace"}
+        or _has_factory_knowledge_context(source, source_language)
         or factory_order_semantics.is_order_message(source)
         or re.search(
             r"削皮|包裝|TAG|重量(?:異常|不正常)|客訴|懲處|工單|料號|機台|設備|"
@@ -124,6 +154,14 @@ def enhance_translation(
             re.I,
         )
     )
+    if cfg.formal_safety_enabled and operational_workplace:
+        translated = _remove_ungrounded_workplace_emoji(source, translated)
+    base = ExpressiveResult(translated, analysis.primary, analysis.visual_mood, 0, None)
+    if not cfg.enabled or mode == "off" or not translated.strip():
+        return base
+    if from_image_ocr and not cfg.ocr_enabled:
+        return base
+
     effective_intensity = intensity
     # Dense factory data should remain precise. Ordinary workplace prose still
     # receives sentence-level semantic emoji under natural/lively modes.

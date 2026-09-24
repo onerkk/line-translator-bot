@@ -1507,6 +1507,19 @@
     "reverse_safe": true,
     "policy_migrated": true
   },
+  "短尺圖維護": {
+    "idn": "pemeliharaan data spesifikasi material pendek",
+    "canonical_idn": "pemeliharaan data spesifikasi material pendek",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "work_order_data_maintenance",
+    "priority": 225,
+    "aliases_zh": [
+      "短尺图维护"
+    ],
+    "note_zh": "此處是系統畫面中的短尺材料規格／圖表資料維護功能，不是現場處理短尺材料的作業。圖表資料中的「維護」不可誤譯成「不規則」。",
+    "note_id": "Pemeliharaan data spesifikasi material pendek pada layar sistem; bukan penanganan fisik material pendek. Jangan menerjemahkan pemeliharaan sebagai tidak teratur."
+  },
   "短尺維護": {
     "idn": "penanganan material pendek",
     "note_zh": "短尺材料/短尺料的處理與維護，不是尺規或量尺。",
@@ -2496,5 +2509,16 @@
     ],
     "note_zh": "機械加工中工件或棒材末端的端面，指末端表面，不是端部長度。",
     "note_id": "Permukaan pada ujung benda kerja atau batang (end face), bukan panjang bagian ujung."
+  },
+  "夾靠": {
+    "idn": "dudukan penjepit batang",
+    "canonical_idn": "dudukan penjepit batang",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "machine_component",
+    "priority": 220,
+    "ocr_hint": true,
+    "note_zh": "依本次棒材設備照片語境，「夾靠」指用來夾持、支承並定位棒材的機台部件。缺夾靠是該部件不足，不是棒材本身缺料；不得補寫機台編號、數量、故障原因或修理方式。",
+    "note_id": "Komponen mesin untuk menjepit, menopang, dan memosisikan batang; gunakan istilah dudukan penjepit batang. Kekurangannya merujuk pada komponen ini, bukan batang material. Jangan menambahkan nomor mesin, jumlah, penyebab kerusakan, atau cara perbaikan yang tidak disebutkan."
   }
 }
