@@ -5566,17 +5566,43 @@ def is_translation_valid(result, src, tgt):
 
 
 def _hard_glossary_issues(src_text, result, src, tgt):
-    """Apply hard glossary mappings at every shared acceptance boundary.
+    """Enforce the confirmed end-face correction at every acceptance boundary.
 
-    Prompt-only terminology and the post-translation GE action can be disabled
-    or miss a stale TM/cache row. Hard entries therefore remain source-grounded
-    acceptance rules for provider output, historical translations and delivery.
+    A glossary's ``hard`` mode is useful for prompting and terminology repair,
+    but requiring every canonical phrase as a literal substring rejects valid
+    inflections and approved paraphrases (and can turn Indonesian field labels
+    into Chinese UI paths in reverse material reports). Keep this final hard
+    gate scoped to the confirmed end-face ambiguity that motivated it; normal
+    glossary handling and semantic checks continue to cover other terms.
     """
     if not result or not globals().get("GLOSSARY_LOOKUP"):
         return []
+    if not (str(src or "").lower().startswith("zh") and
+            str(tgt or "").lower().startswith("id")):
+        return []
     try:
+        pairs = ge_module.collect_applicable_pairs(
+            src_text, GLOSSARY_LOOKUP, src, tgt
+        )
+        end_face_pairs = [
+            (source_term, expected_tgt)
+            for source_term, expected_tgt in pairs
+            if source_term == "端面"
+        ]
+        if not end_face_pairs:
+            return []
+        row = GLOSSARY_LOOKUP.get("端面", {})
+        allowed_targets = [expected for _, expected in end_face_pairs]
+        allowed_targets.extend(factory_terminology_module.target_aliases(row))
+        result_folded = re.sub(r"\s+", " ", str(result)).casefold()
+        if any(
+            re.sub(r"\s+", " ", str(target)).strip().casefold() in result_folded
+            for target in allowed_targets if str(target).strip()
+        ):
+            return []
+        # Retain one common formatter/classifier for the precise source term.
         compliant, violations = ge_module.check_glossary_compliance(
-            src_text, result, GLOSSARY_LOOKUP, src, tgt
+            src_text, result, {"端面": row}, src, tgt
         )
         if compliant:
             return []

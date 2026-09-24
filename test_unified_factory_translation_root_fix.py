@@ -86,7 +86,7 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
         self.assertFalse(compliant)
         self.assertEqual(violations[0]["expected_tgt"], "permukaan ujung")
 
-    def test_hard_glossary_checks_cover_delivery_and_translation_memory_boundaries(self):
+    def test_confirmed_end_face_gate_covers_delivery_and_translation_memory_boundaries(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
 
         def function_body(name):
@@ -94,7 +94,12 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
             end = source.find("\ndef ", start + 1)
             return source[start:] if end < 0 else source[start:end]
 
-        self.assertIn("check_glossary_compliance", function_body("_hard_glossary_issues"))
+        helper = function_body("_hard_glossary_issues")
+        self.assertIn("check_glossary_compliance", helper)
+        self.assertIn('source_term == "端面"', helper)
+        self.assertIn('startswith("zh")', helper)
+        self.assertIn('startswith("id")', helper)
+        self.assertIn("target_aliases", helper)
         self.assertIn("_hard_glossary_issues", function_body("is_translation_acceptable"))
         self.assertIn("_hard_glossary_issues", function_body("_delivery_validation_issues"))
         self.assertIn("_hard_glossary_issues", function_body("_tm_bypass_integrity_ok"))
