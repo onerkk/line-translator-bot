@@ -279,7 +279,7 @@ class ShopfloorAgentRolesRootFixTests(unittest.TestCase):
         )
 
     def test_deployment_build_id_and_behavioral_health_are_synchronized(self):
-        expected = "2026-09-10.9-order-urgency-and-request-state"
+        expected = "2026-09-24.1-id-deictic-order"
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
 
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)
