@@ -295,6 +295,44 @@ def test_upstash_failures_show_safe_actionable_reason_without_secrets(monkeypatc
     assert "example.invalid" not in str(raised.value)
 
 
+def test_upstash_http_400_surfaces_sanitized_server_reason(monkeypatch):
+    store = r.RedisReminderStore("https://example.invalid", "secret-token")
+    body = json.dumps({"error":"ERR syntax error at https://private.example/path Bearer secret-token"}).encode()
+    failure = urllib.error.HTTPError("https://example.invalid", 400, "Bad Request", {}, io.BytesIO(body))
+    monkeypatch.setattr(r.urllib.request, "urlopen",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(failure))
+    with pytest.raises(r.StoreUnavailable) as raised:
+        store.get("reminder-id")
+    message = str(raised.value)
+    assert "ERR syntax error" in message
+    assert "[網址已遮蔽]" in message
+    assert "secret-token" not in message
+    assert "private.example" not in message
+
+
+def test_upstash_readonly_permission_error_identifies_token_requirement(monkeypatch):
+    store = r.RedisReminderStore("https://example.invalid", "secret-token")
+    body = json.dumps({"error":"NOPERM this token is read only"}).encode()
+    failure = urllib.error.HTTPError("https://example.invalid", 400, "Bad Request", {}, io.BytesIO(body))
+    monkeypatch.setattr(r.urllib.request, "urlopen",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(failure))
+    with pytest.raises(r.StoreUnavailable) as raised:
+        store.get("reminder-id")
+    assert "唯讀權杖" in str(raised.value)
+    assert "Standard Token" in str(raised.value)
+
+
+def test_upstash_error_payload_surfaces_sanitized_command_reason(monkeypatch):
+    store = r.RedisReminderStore("https://example.invalid", "secret-token")
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return b'{"error":"NOPERM this token is read only"}'
+    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(r.StoreUnavailable, match="NOPERM this token is read only"):
+        store.get("reminder-id")
+
+
 @pytest.fixture
 def api_client(monkeypatch, tmp_path):
     monkeypatch.setattr(r.ReminderWorker, "start", lambda *a, **k: None)
@@ -428,7 +466,7 @@ def test_reminder_ui_assets_and_tab_permission_match():
     assert "'overview','reminders','groups'" in bot.ADMIN_HTML
     assert 'id="reminder-content"' in bot.ADMIN_HTML
     assert 'type="date"' in bot.ADMIN_HTML and 'type="time"' in bot.ADMIN_HTML
-    assert '/static/admin_reminders.js?v=20260924-savefeedback1' in bot.ADMIN_HTML
+    assert '/static/admin_reminders.js?v=20260924-upstasherror2' in bot.ADMIN_HTML
     js = Path(__file__).with_name("static").joinpath("admin_reminders.js")
     result = subprocess.run(["node","--check",str(js)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

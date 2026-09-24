@@ -52,7 +52,20 @@ class StoreUnavailable(ReminderError):
         super().__init__(message, 503)
 
 
-def _safe_store_failure(exc):
+def _safe_upstash_error_text(value, secret=""):
+    """Keep Upstash's actionable error while stripping credentials and URLs."""
+    if not isinstance(value, str):
+        return ""
+    message = value
+    if secret:
+        message = message.replace(secret, "[已遮蔽]")
+    message = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [已遮蔽]", message)
+    message = re.sub(r"https?://\S+", "[網址已遮蔽]", message)
+    message = re.sub(r"[\x00-\x1f\x7f]+", " ", message)
+    return re.sub(r"\s+", " ", message).strip()[:180]
+
+
+def _safe_store_failure(exc, secret=""):
     """Describe remote-store failures without exposing URLs, tokens or bodies."""
     if isinstance(exc, urllib.error.HTTPError):
         code = int(exc.code)
@@ -60,6 +73,21 @@ def _safe_store_failure(exc):
             detail = "驗證遭拒，請確認 Upstash REST Token 與資料庫網址配對"
         elif code == 404:
             detail = "端點不存在，請確認 Upstash REST URL"
+        elif code == 400:
+            try:
+                payload = json.loads(exc.read(4096).decode("utf-8", errors="replace"))
+                redis_error = _safe_upstash_error_text(payload.get("error"), secret)
+            except Exception:
+                redis_error = ""
+            if re.search(r"(?i)\b(?:NOPERM|READONLY|read[ -]?only|permission denied)\b", redis_error):
+                detail = "權限不足（可能設定了唯讀權杖）；提醒功能需要可寫入且允許 EVAL 的 Standard Token"
+                if redis_error:
+                    detail += "；Upstash 回覆：" + redis_error
+            else:
+                detail = ("Upstash 回報：" + redis_error if redis_error else
+                          "Upstash 拒絕命令；可能是命令格式、權限或執行錯誤")
+        elif code == 405:
+            detail = "HTTP 方法遭拒，請確認 REST API 設定"
         elif code == 429:
             detail = "服務暫時限制請求，稍後會自動重試"
         elif code >= 500:
@@ -269,12 +297,21 @@ class RedisReminderStore:
         try:
             with urllib.request.urlopen(req, timeout=8) as response:
                 payload = json.loads(response.read())
-            if "error" in payload or "result" not in payload:
-                raise ValueError("Redis command failed")
+            if not isinstance(payload, dict):
+                raise ValueError("Unexpected Redis response")
+            if "error" in payload:
+                detail = _safe_upstash_error_text(payload.get("error"), self.token)
+                if not detail:
+                    detail = "Upstash 拒絕命令，未提供可顯示的錯誤摘要"
+                raise StoreUnavailable("提醒儲存命令遭 Upstash 拒絕（" + detail + "）。")
+            if "result" not in payload:
+                raise ValueError("Unexpected Redis response")
             return payload["result"]
+        except StoreUnavailable:
+            raise
         except Exception as exc:
-            # Do not expose a connection URL, token, or exception response body.
-            raise StoreUnavailable("提醒儲存連線失敗（" + _safe_store_failure(exc) + "）。") from exc
+            # Do not expose the connection URL, token, or raw exception details.
+            raise StoreUnavailable("提醒儲存連線失敗（" + _safe_store_failure(exc, self.token) + "）。") from exc
 
     def get(self, key):
         value = self._command(["HGET", self.keys[0], key])
