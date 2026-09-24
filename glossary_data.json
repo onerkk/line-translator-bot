@@ -2458,8 +2458,17 @@
     "canonical_idn": "material alih guna",
     "translation_mode": "soft",
     "reverse_safe": false,
-    "aliases_zh": ["转用料", "轉用材料", "转用材料", "轉用物料", "转用物料"],
-    "aliases_id": ["barang alih guna", "bahan alih guna"],
+    "aliases_zh": [
+      "转用料",
+      "轉用材料",
+      "转用材料",
+      "轉用物料",
+      "转用物料"
+    ],
+    "aliases_id": [
+      "barang alih guna",
+      "bahan alih guna"
+    ],
     "category": "material_category",
     "priority": 220,
     "ocr_hint": true,
@@ -2474,5 +2483,18 @@
     "category": "station",
     "priority": 170,
     "note_zh": "削皮材料的包裝站；是使用者確認的三個包裝站之一，不是削皮加工站。"
+  },
+  "端面": {
+    "idn": "permukaan ujung",
+    "canonical_idn": "permukaan ujung",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "machining_surface",
+    "priority": 210,
+    "aliases_id": [
+      "muka ujung"
+    ],
+    "note_zh": "機械加工中工件或棒材末端的端面，指末端表面，不是端部長度。",
+    "note_id": "Permukaan pada ujung benda kerja atau batang (end face), bukan panjang bagian ujung."
   }
 }

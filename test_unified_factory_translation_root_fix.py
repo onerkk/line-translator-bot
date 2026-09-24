@@ -8,6 +8,8 @@ from unittest.mock import patch
 import factory_knowledge
 import factory_translation_policy as policy
 import factory_translation_guard as guard
+import factory_terminology
+import glossary_enforcement
 import glossary_policy
 import translation_casebook
 
@@ -57,12 +59,46 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
             "陸續到料": ("material akan tiba secara bertahap", "soft"),
             "電子系統": ("sistem elektronik", "hard"),
             "自然拉動": ("tarikan alami/pasif", "soft"),
+            "端面": ("permukaan ujung", "hard"),
         }
         for source, (target, mode) in expected.items():
             with self.subTest(source=source):
                 row = glossary_policy.normalize_entry(source, self.glossary[source])
                 self.assertEqual(row["canonical_idn"], target)
                 self.assertEqual(row["translation_mode"], mode)
+
+    def test_end_face_term_is_prompted_and_legacy_semantic_error_is_rejected(self):
+        source = "端面超過20公分了"
+        approved = "Permukaan ujungnya sudah lebih dari 20 cm."
+        legacy_error = "Panjang bagian ujung sudah melebihi 20 cm."
+        glossary = glossary_policy.normalize_glossary(self.glossary)
+        pairs = glossary_enforcement.collect_applicable_pairs(source, glossary, "zh", "id")
+
+        self.assertIn(("端面", "permukaan ujung"), pairs)
+        prompt = factory_terminology.build_translation_prompt(source, glossary, "zh", "id")
+        self.assertIn("[HARD] 端面 => permukaan ujung", prompt)
+        self.assertTrue(glossary_enforcement.check_glossary_compliance(
+            source, approved, glossary, "zh", "id"
+        )[0])
+        compliant, violations = glossary_enforcement.check_glossary_compliance(
+            source, legacy_error, glossary, "zh", "id"
+        )
+        self.assertFalse(compliant)
+        self.assertEqual(violations[0]["expected_tgt"], "permukaan ujung")
+
+    def test_hard_glossary_checks_cover_delivery_and_translation_memory_boundaries(self):
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+        def function_body(name):
+            start = source.index(f"def {name}(")
+            end = source.find("\ndef ", start + 1)
+            return source[start:] if end < 0 else source[start:end]
+
+        self.assertIn("check_glossary_compliance", function_body("_hard_glossary_issues"))
+        self.assertIn("_hard_glossary_issues", function_body("is_translation_acceptable"))
+        self.assertIn("_hard_glossary_issues", function_body("_delivery_validation_issues"))
+        self.assertIn("_hard_glossary_issues", function_body("_tm_bypass_integrity_ok"))
+        self.assertIn('"glossary": globals().get("GLOSSARY_LOOKUP", {})', function_body("_translation_cache_asset_fingerprint"))
 
     def test_embedded_glossary_is_byte_semantically_equal_to_external_file(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
