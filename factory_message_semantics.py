@@ -29,7 +29,7 @@ from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-10.9-order-urgency-and-request-state"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-24.1-id-deictic-order"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -41,6 +41,18 @@ _MENTION_RE = re.compile(
     r"|@[^\s,，。!?！？:：;；]{1,48}"
     r"|__MENTION_\d+__"
     r")",
+    re.I,
+)
+_INDONESIAN_ID_DEICTIC_RE = re.compile(
+    r"(?<![A-Za-z0-9])ID\s+(?P<deictic>ini|itu)(?![A-Za-z0-9])",
+    re.I,
+)
+_CHINESE_ID_DEICTIC_RE = re.compile(
+    r"(?:(?<![A-Za-z0-9])ID\s*[,，:：]?\s*"
+    r"(?:這|这|那|該|该|此)(?:個|个|支|把|批|張|张|份|條|条|根|枝|件|本|台|臺)?"
+    r"|(?<![A-Za-z0-9])"
+    r"(?:這|这|那|該|该|此)(?:個|个|支|把|批|張|张|份|條|条|根|枝|件|本|台|臺)?\s*"
+    r"ID(?![A-Za-z0-9]))",
     re.I,
 )
 
@@ -764,6 +776,32 @@ def _norm(value: Any) -> str:
     text = re.sub(r"(?<!\d)[。．.,，]|[。．.,，](?!\d)", " ", text)
     text = re.sub(r"[!！?？:：;；()（）\[\]{}]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def canonicalize_indonesian_id_deictic_order(
+    source: Any, translation: Any, src_lang: Any, tgt_lang: Any,
+) -> str:
+    """Place Indonesian post-nominal ID deixis in natural Chinese order.
+
+    Indonesian says ``ID ini/itu`` (ID this/that); Chinese places the
+    demonstrative before the identifier. Some otherwise correct translations
+    preserve Indonesian word order as ``ID 這支``. Correct only that linked
+    demonstrative+ID phrase, preserving all surrounding text, codes and facts.
+    """
+    target = str(translation or "")
+    if not target or _lang_family(src_lang) != "id" or _lang_family(tgt_lang) != "zh":
+        return target
+    source_match = _INDONESIAN_ID_DEICTIC_RE.search(str(source or ""))
+    if not source_match:
+        return target
+    chinese_deictic = "這個" if source_match.group("deictic").casefold() == "ini" else "那個"
+
+    def reorder(match: re.Match[str]) -> str:
+        following = target[match.end():match.end() + 1]
+        spacer = " " if following and "\u3400" <= following <= "\u9fff" else ""
+        return chinese_deictic + " ID" + spacer
+
+    return _CHINESE_ID_DEICTIC_RE.sub(reorder, target, count=1)
 
 
 def normalize_indonesian_factory_colloquialisms(source: Any) -> tuple[str, int]:
@@ -5691,6 +5729,12 @@ def health() -> dict:
         build_frame("系統問題明天再討論", "zh", "id"),
     )
     checks = [
+        canonicalize_indonesian_id_deictic_order(
+            "ID ini belum dicuci tapi sudah diteruskan ke stasiun 452 🤔",
+            "ID 這支還沒清洗，卻已經送到 452 站了🤔",
+            "id",
+            "zh",
+        ) == "這個 ID 還沒清洗，卻已經送到 452 站了🤔",
         equipment_failure.get("active") is True
         and equipment_failure.get("complete") is True,
         translate_source_directly("i15 rusak", "id", "zh") == "I15 機台故障",

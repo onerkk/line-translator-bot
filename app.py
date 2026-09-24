@@ -359,7 +359,7 @@ if (getattr(factory_semantic_audit_module, "FACTORY_SEMANTIC_AUDIT_API_VERSION",
     )
 
 _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-10.9-order-urgency-and-request-state"
+_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-24.1-id-deictic-order"
 if (getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MESSAGE_SEMANTICS_API_VERSION
         or getattr(factory_message_semantics_module, "FACTORY_MESSAGE_SEMANTICS_BUILD_ID", None)
@@ -7424,6 +7424,9 @@ def finalize_factory_translation(src_text, result, src, tgt):
     # through translate_openai's response parser.
     result = _repair_pipeline_mention_placeholders(src_text, result)
     result = tqg_module.canonicalize_source_terms(src_text, result, src, tgt)
+    result = factory_message_semantics_module.canonicalize_indonesian_id_deictic_order(
+        src_text, result, src, tgt
+    )
     if src == "id" and tgt == "zh":
         result = post_fix_factory_id_to_zh(src_text, result)
         result = factory_terminology_module.canonicalize_organization_translation(
