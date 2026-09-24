@@ -279,6 +279,22 @@ def test_missing_or_broken_cloud_never_falls_back_to_temporary_file(monkeypatch,
     assert not (tmp_path / "must-not-create.db").exists()
 
 
+@pytest.mark.parametrize("status,expected", [
+    (401, "HTTP 401"), (403, "HTTP 403"), (404, "HTTP 404"),
+    (429, "HTTP 429"), (503, "HTTP 503"),
+])
+def test_upstash_failures_show_safe_actionable_reason_without_secrets(monkeypatch, status, expected):
+    store = r.RedisReminderStore("https://example.invalid", "secret-token")
+    failure = urllib.error.HTTPError("https://example.invalid", status, "private response", {}, None)
+    monkeypatch.setattr(r.urllib.request, "urlopen",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(failure))
+    with pytest.raises(r.StoreUnavailable) as raised:
+        store.get("reminder-id")
+    assert expected in str(raised.value)
+    assert "secret-token" not in str(raised.value)
+    assert "example.invalid" not in str(raised.value)
+
+
 @pytest.fixture
 def api_client(monkeypatch, tmp_path):
     monkeypatch.setattr(r.ReminderWorker, "start", lambda *a, **k: None)
@@ -412,6 +428,7 @@ def test_reminder_ui_assets_and_tab_permission_match():
     assert "'overview','reminders','groups'" in bot.ADMIN_HTML
     assert 'id="reminder-content"' in bot.ADMIN_HTML
     assert 'type="date"' in bot.ADMIN_HTML and 'type="time"' in bot.ADMIN_HTML
+    assert '/static/admin_reminders.js?v=20260924-savefeedback1' in bot.ADMIN_HTML
     js = Path(__file__).with_name("static").joinpath("admin_reminders.js")
     result = subprocess.run(["node","--check",str(js)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

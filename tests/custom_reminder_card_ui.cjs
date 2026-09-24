@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const {JSDOM,VirtualConsole} = require(process.env.JSDOM_PATH || 'jsdom');
 const root=path.resolve(__dirname,'..'), errors=[], requests=[], saves=[], translations=[], rows=[];
-let failTranslation=false, failSave=false, translationText;
+let failTranslation=false, failSave=false, translationText, noticeScrolls=0;
 const sink=new VirtualConsole(); sink.on('jsdomError',e=>errors.push(e.message));
 const dom=new JSDOM(fs.readFileSync(process.argv[2],'utf8'),{
   url:'https://example.invalid/admin',runScripts:'outside-only',virtualConsole:sink
@@ -18,7 +18,7 @@ const zh='明天班股會議，早上0750會議室集合\n（台灣同仁就好�
 const idn='Besok ada rapat regu dan bagian. Berkumpul di ruang rapat pukul 07.50 pagi.\nKhusus rekan kerja Taiwan.';
 translationText=idn;
 w.AbortController=AbortController; w._ADMIN_KEY='offline';
-w.HTMLElement.prototype.scrollIntoView=function(){};
+w.HTMLElement.prototype.scrollIntoView=function(){if(this.id==='reminder-notice')noticeScrolls++;};
 w.fetch=async(url,options)=>{
   requests.push([url,options]);
   assert.equal(options.headers['X-Admin-Key'],'offline');
@@ -96,6 +96,8 @@ async function save(){assert(get('form').checkValidity());emit('form','submit');
   const saveCount=saves.length;
   await save();assert.equal(saves.length,saveCount);assert.equal(get('content').value,zh);assert.equal(get('content-id').value,'');
   failTranslation=false;failSave=true;await save();
+  assert(noticeScrolls>0,'save failures must bring the error into view on mobile');
+  assert(get('notice').textContent.includes('儲存未確認'));
   const retryId=saves.at(-1).request_id, translatedCount=translations.length;
   failSave=false;await save();assert.equal(saves.at(-1).request_id,retryId);assert.equal(translations.length,translatedCount);
   reset();select('language','zh');input('content',zh);schedule();

@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import socket
+import ssl
 import threading
 import time
 import urllib.error
@@ -48,6 +50,43 @@ class ReminderError(Exception):
 class StoreUnavailable(ReminderError):
     def __init__(self, message="提醒儲存服務暫時無法使用，請稍後重新整理確認。"):
         super().__init__(message, 503)
+
+
+def _safe_store_failure(exc):
+    """Describe remote-store failures without exposing URLs, tokens or bodies."""
+    if isinstance(exc, urllib.error.HTTPError):
+        code = int(exc.code)
+        if code in (401, 403):
+            detail = "驗證遭拒，請確認 Upstash REST Token 與資料庫網址配對"
+        elif code == 404:
+            detail = "端點不存在，請確認 Upstash REST URL"
+        elif code == 429:
+            detail = "服務暫時限制請求，稍後會自動重試"
+        elif code >= 500:
+            detail = "Upstash 服務暫時故障，稍後會自動重試"
+        else:
+            detail = "Upstash 拒絕請求，請檢查資料庫端點設定"
+        return "HTTP " + str(code) + "：" + detail
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return "連線逾時，請檢查主機至 Upstash 的網路連線"
+        if isinstance(reason, ssl.SSLError):
+            return "TLS 安全連線失敗，請檢查主機憑證與網路設定"
+        if isinstance(reason, socket.gaierror):
+            return "DNS 查詢失敗，請確認 Upstash REST URL 與主機網路"
+        return "網路連線失敗，請檢查 Upstash 服務與主機網路"
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "連線逾時，請檢查主機至 Upstash 的網路連線"
+    if isinstance(exc, ssl.SSLError):
+        return "TLS 安全連線失敗，請檢查主機憑證與網路設定"
+    if isinstance(exc, socket.gaierror):
+        return "DNS 查詢失敗，請確認 Upstash REST URL 與主機網路"
+    if isinstance(exc, json.JSONDecodeError):
+        return "Upstash 回應格式錯誤，請檢查服務狀態"
+    if isinstance(exc, (ValueError, TypeError)):
+        return "Upstash 拒絕命令或回應格式異常，請檢查儲存服務狀態"
+    return "無法連線至 Upstash，請檢查資料庫設定與主機網路"
 
 
 def _encode(value):
@@ -235,7 +274,7 @@ class RedisReminderStore:
             return payload["result"]
         except Exception as exc:
             # Do not expose a connection URL, token, or exception response body.
-            raise StoreUnavailable() from exc
+            raise StoreUnavailable("提醒儲存連線失敗（" + _safe_store_failure(exc) + "）。") from exc
 
     def get(self, key):
         value = self._command(["HGET", self.keys[0], key])
@@ -568,6 +607,9 @@ class ReminderWorker:
             try:
                 self.service_factory().run_due()
                 self.last_check_at, self.last_error = time.time(), ""
+            except StoreUnavailable as exc:
+                self.last_error = str(exc)
+                self.logger.warning("[Reminders] polling failed: StoreUnavailable")
             except Exception as exc:
                 self.last_error = "提醒排程檢查未完成，稍後重試。"
                 self.logger.warning("[Reminders] polling failed: %s", type(exc).__name__)

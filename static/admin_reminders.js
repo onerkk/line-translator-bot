@@ -300,7 +300,10 @@
         if (editing) { data.revision=editing.revision; await call('/'+editing.id,'PUT',data); }
         else { data.request_id=requestId; await call('','POST',data); }
         reset(); await load(false); notice(wasEdit ? '提醒已更新。' : '提醒已儲存，到設定時間後派送。',false);
-      } catch (e) { notice(e.message,true); }
+      } catch (e) {
+        notice(e.message,true);
+        el('notice').scrollIntoView({behavior:'smooth',block:'center'});
+      }
       finally { setBusy(false); }
     });
     reset();
