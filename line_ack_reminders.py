@@ -610,10 +610,12 @@ class NoticeWorker:
 
     def _loop(self):
         while not self._stop.is_set():
+            delay = self.interval
             try:
                 self.service.run_due(submit_preparation=self._submit_preparation)
                 self.last_check_at, self.last_error = time.time(), ""
             except Exception as exc:
                 self.last_error = "作業確認排程尚未完成檢查。"
+                delay = max(delay, getattr(exc, "retry_after", 0))
                 self.logger.warning("[FactoryAck] polling failed: %s", type(exc).__name__)
-            self._stop.wait(self.interval)
+            self._stop.wait(delay)

@@ -66,7 +66,8 @@ def register_reminders(flask_app, *, authorize, catalog, translator=None):
                     raise ReminderError("提醒資料過大。", 413)
                 return func(actor, *args, **kwargs)
             except ReminderError as exc:
-                return jsonify(ok=False, message=str(exc)), exc.status
+                return jsonify(ok=False, message=str(exc), code=getattr(exc, "code", "reminder_error"),
+                               retry_after=getattr(exc, "retry_after", 0)), exc.status
             except (sqlite3.Error, OSError, ValueError, TypeError):
                 flask_app.logger.exception("[Reminders] storage operation failed")
                 return jsonify(ok=False, message="提醒資料無法讀寫，請重新整理確認；本次操作尚未確認成功。"), 503
@@ -113,6 +114,7 @@ def register_reminders(flask_app, *, authorize, catalog, translator=None):
         groups = catalog()
         status = {"timezone": "Asia/Taipei", "server_time": time.time(),
                   "history_retention_days": 7,
+                  "records_available": False, "retry_after": 0, "code": "",
                   "worker_enabled": os.environ.get("REMINDERS_WORKER_ENABLED", "1") != "0",
                   "cron_configured": len(os.environ.get("REMINDERS_CRON_SECRET", "")) >= 32,
                   "last_check_at": worker.last_check_at, "last_error": worker.last_error}
@@ -120,10 +122,15 @@ def register_reminders(flask_app, *, authorize, catalog, translator=None):
             instance = service()
             rows = instance.list(offset, 101)
             status.update(ready=bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")), storage=instance.store.kind,
+                          records_available=True,
                           message="" if os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") else "尚未設定 LINE 存取權杖。")
+            # A successful storage read supersedes a cached worker storage error.
+            if status["last_error"] == getattr(worker, "storage_error", ""):
+                status["last_error"] = ""
         except StoreUnavailable as exc:
             rows = []
-            status.update(ready=False, storage="unavailable", message=str(exc))
+            status.update(ready=False, storage="unavailable", message=str(exc),
+                          code=exc.code, retry_after=exc.retry_after, last_error="")
         return jsonify(ok=True, reminders=[_public(row) for row in rows[:100]],
                        next_offset=offset + 100 if len(rows) > 100 else None, status=status,
                        groups=[dict(id=gid, name=data["name"], members=[

@@ -466,7 +466,7 @@ def test_reminder_ui_assets_and_tab_permission_match():
     assert "'overview','reminders','groups'" in bot.ADMIN_HTML
     assert 'id="reminder-content"' in bot.ADMIN_HTML
     assert 'type="date"' in bot.ADMIN_HTML and 'type="time"' in bot.ADMIN_HTML
-    assert '/static/admin_reminders.js?v=20260924-upstasherror2' in bot.ADMIN_HTML
+    assert '/static/admin_reminders.js?v=20260924-upstashquota1' in bot.ADMIN_HTML
     js = Path(__file__).with_name("static").joinpath("admin_reminders.js")
     result = subprocess.run(["node","--check",str(js)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

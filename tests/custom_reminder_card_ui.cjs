@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const {JSDOM,VirtualConsole} = require(process.env.JSDOM_PATH || 'jsdom');
 const root=path.resolve(__dirname,'..'), errors=[], requests=[], saves=[], translations=[], rows=[];
-let failTranslation=false, failSave=false, translationText, noticeScrolls=0;
+let failTranslation=false, failSave=false, quotaSave=false, failLoad=false, storageStatus=null, translationText, noticeScrolls=0;
+const quotaMessage='Upstash 本月請求額度已用完（已用 500,000／上限 500,000）。';
+const delayed=[];
 const sink=new VirtualConsole(); sink.on('jsdomError',e=>errors.push(e.message));
 const dom=new JSDOM(fs.readFileSync(process.argv[2],'utf8'),{
   url:'https://example.invalid/admin',runScripts:'outside-only',virtualConsole:sink
@@ -18,6 +20,8 @@ const zh='明天班股會議，早上0750會議室集合\n（台灣同仁就好�
 const idn='Besok ada rapat regu dan bagian. Berkumpul di ruang rapat pukul 07.50 pagi.\nKhusus rekan kerja Taiwan.';
 translationText=idn;
 w.AbortController=AbortController; w._ADMIN_KEY='offline';
+const nativeTimeout=w.setTimeout.bind(w);
+w.setTimeout=(callback,delay,...args)=>{delayed.push(delay);return nativeTimeout(callback,delay,...args);};
 w.HTMLElement.prototype.scrollIntoView=function(){if(this.id==='reminder-notice')noticeScrolls++;};
 w.fetch=async(url,options)=>{
   requests.push([url,options]);
@@ -31,14 +35,16 @@ w.fetch=async(url,options)=>{
   }
   if(options.method==='POST'||options.method==='PUT'){
     saves.push(body);
+    if(quotaSave)return response({ok:false,message:quotaMessage,code:'upstash_monthly_quota',retry_after:900},503);
     if(failSave)return response({ok:false,message:'儲存未確認，請重試。'},503);
     const row={...rows[0],...body,id:body.request_id||(rows[0]||{}).id,revision:((rows[0]||{}).revision||0)+1,
       group_name:'研磨C班',user_names:{[uid]:'Irwan'},status:'pending',attempts:0,content:body.content_zh||body.content_id};
     rows.splice(0,rows.length,row);return response({ok:true,reminder:row},options.method==='POST'?201:200);
   }
-  return response({ok:true,reminders:rows,next_offset:null,
+  if(failLoad)throw new Error('offline');
+  return response({ok:true,reminders:storageStatus?[]:rows,next_offset:null,
     groups:[{id:gid,name:'研磨C班',members:[{user_id:uid,name:'<img src=x onerror=alert(1)>'}]}],
-    status:{ready:true,storage:'upstash',worker_enabled:true,last_error:''}});
+    status:storageStatus||{ready:true,storage:'upstash',records_available:true,worker_enabled:true,last_error:''}});
 };
 const style=d.createElement('style');style.textContent=fs.readFileSync(path.join(root,'static/admin_reminders.css'),'utf8');d.head.append(style);
 w.eval(fs.readFileSync(path.join(root,'static/admin_reminders.js'),'utf8'));
@@ -51,7 +57,17 @@ const reset=()=>{get('reset').click();select('group',gid);};
 async function save(){assert(get('form').checkValidity());emit('form','submit');await settle();}
 (async()=>{
   if(d.readyState==='loading')await new Promise(resolve=>d.addEventListener('DOMContentLoaded',resolve,{once:true}));
+  storageStatus={ready:false,storage:'unavailable',records_available:false,worker_enabled:true,
+    message:quotaMessage,last_error:quotaMessage,code:'upstash_monthly_quota',retry_after:900};
   await w.loadReminders();
+  assert.equal(get('health').textContent,quotaMessage,'same error must appear once');
+  assert(get('save').disabled);
+  assert(get('list').textContent.includes('無法讀取'));
+  assert(!get('list').textContent.includes('尚無提醒'));
+  assert.equal(delayed.at(-1),900000,'quota must slow down browser polling');
+  storageStatus=null;
+  await w.loadReminders();
+  assert.equal(delayed.at(-1),30000);
   assert.equal(get('language').value,'bilingual');
   input('date','2026-09-22');input('time','18:00');input('content',zh);
   get('translate').click();await settle();
@@ -118,6 +134,25 @@ async function save(){assert(get('form').checkValidity());emit('form','submit');
   const count=requests.length;input('content','🙂'.repeat(750));
   assert.equal(d.querySelector('[data-language=zh] .reminder-preview-content').textContent,'🙂'.repeat(750));
   assert.equal(get('count').textContent,'1500 / 1500 字元');assert.equal(requests.length,count);
+  reset();schedule();input('content',zh);input('content-id',idn);
+  quotaSave=true;emit('form','submit');
+  for(let n=0;n<10;n++)await new Promise(resolve=>setImmediate(resolve));
+  assert(get('save').disabled,'quota must disable another unconfirmed save');
+  assert.equal(get('content').value,zh);assert.equal(get('content-id').value,idn);
+  assert.equal(get('health').textContent,quotaMessage);
+  assert(get('list').textContent.includes('上次載入'));
+  const quotaRetryId=saves.at(-1).request_id;
+  quotaSave=false;await w.loadReminders();await save();
+  assert.equal(saves.at(-1).request_id,quotaRetryId,'recovery must preserve the idempotency key');
+  reset();input('content','草稿不可遺失');
+  failLoad=true;await w.loadReminders();
+  assert(get('save').disabled);
+  assert.equal(get('content').value,'草稿不可遺失');
+  assert(get('list').textContent.includes('上次載入'));
+  assert(Array.from(get('list').querySelectorAll('button')).every(button=>button.disabled));
+  failLoad=false;await w.loadReminders();
+  assert(!get('save').disabled);assert.equal(get('content').value,'草稿不可遺失');
+  assert(!get('list').textContent.includes('上次載入'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: actual bilingual form, content-first style, preview, both directions, single languages, stale translations, save retries, literal input and native mentions');
+  console.log('PASS: actual bilingual form, previews, save retries, native mentions, quota cooldown/recovery, preserved drafts and stale history');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>w.close());

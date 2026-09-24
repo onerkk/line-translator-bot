@@ -2,6 +2,7 @@
   'use strict';
   var groups = [], rows = [], editing = null, requestId = null, busy = false, ready = false;
   var selected = new Set(), nextOffset = null, timer = null, loadSequence = 0;
+  var recordsAvailable = false, refreshDelay = 30000;
   var generated = null;
   var labels = {pending:'等待提醒', sending:'派送中', retrying:'等待重試', sent:'LINE 已接受',
     failed:'派送失敗', uncertain:'需要確認收件', cancelled:'已取消'};
@@ -34,7 +35,11 @@
     var data;
     try { data = await response.json(); }
     catch (_) { throw new Error('伺服器未回傳確認結果，請重新整理清單後再操作。'); }
-    if (!response.ok || !data.ok) throw new Error(data.message || '操作失敗，請重新登入後再試。');
+    if (!response.ok || !data.ok) {
+      var error = new Error(data.message || '操作失敗，請重新登入後再試。');
+      error.code = data.code; error.retryAfter = data.retry_after;
+      throw error;
+    }
     return data;
   }
   function uuid() {
@@ -183,7 +188,13 @@
   }
   function renderRows() {
     var box = el('list'); box.replaceChildren();
-    if (!rows.length) { var empty = document.createElement('p'); empty.className='empty'; empty.textContent='尚無提醒。'; box.append(empty); }
+    if (!recordsAvailable || !rows.length) {
+      var empty = document.createElement('p'); empty.className='empty';
+      empty.textContent = recordsAvailable ? '尚無提醒。' : (rows.length ?
+        '無法取得最新提醒紀錄；以下為上次載入的資料，請恢復連線後重新整理。' :
+        '目前無法讀取提醒紀錄，請先恢復儲存服務後再重新整理。');
+      box.append(empty);
+    }
     rows.forEach(function (row) {
       var card = document.createElement('article'); card.className = 'card';
       var head = document.createElement('div'); head.className = 'reminder-item-head';
@@ -205,22 +216,45 @@
       var actions = document.createElement('div'); actions.className = 'reminder-actions';
       if (row.status === 'pending' && row.attempts === 0) {
         var modify = document.createElement('button'); modify.type='button'; modify.className='btn btn-primary btn-sm'; modify.textContent='修改';
-        modify.addEventListener('click', function () { if (!busy) edit(row); }); actions.append(modify);
+        modify.disabled = !ready;
+        modify.addEventListener('click', function () { if (!busy && ready) edit(row); }); actions.append(modify);
       }
       if (row.status === 'pending' || row.status === 'retrying') {
         var cancel = document.createElement('button'); cancel.type='button'; cancel.className='btn btn-red btn-sm'; cancel.textContent='取消提醒';
+        cancel.disabled = !ready;
         cancel.addEventListener('click', async function () {
-          if (busy) return;
+          if (busy || !ready) return;
           if (!window.confirm('取消這筆提醒？'+(row.attempts ? '\n已送達的訊息不會收回，請另確認群組。' : ''))) return;
           cancel.disabled = true; setBusy(true);
           try { await call('/'+row.id+'/cancel','POST',{revision:row.revision}); if (editing && editing.id===row.id) reset(); await load(false); notice('提醒已取消。',false); }
-          catch (e) { notice(e.message,true); cancel.disabled=false; }
+          catch (e) {
+            if (e.code === 'upstash_monthly_quota') storageFailure(e.message, e.retryAfter);
+            else cancel.disabled=false;
+            notice(e.message,true);
+          }
           finally { setBusy(false); }
         }); actions.append(cancel);
       }
       card.append(actions); box.append(card);
     });
     el('more').hidden = nextOffset === null;
+  }
+  function storageFailure(message, retryAfter) {
+    loadSequence += 1; // A prior in-flight read cannot undo this newer failure.
+    ready = false; recordsAvailable = false; nextOffset = null;
+    refreshDelay = Math.max(30000, (Number(retryAfter) || 0) * 1000);
+    el('save').disabled = true;
+    el('health').textContent = message;
+    el('health').className = 'reminder-notice reminder-error';
+    renderRows();
+    scheduleRefresh();
+  }
+  function scheduleRefresh() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () {
+      var panel=document.getElementById('panel-reminders');
+      if (panel.classList.contains('active') && !document.hidden && !busy) load(false);
+    },refreshDelay);
   }
   async function load(append) {
     var sequence = ++loadSequence;
@@ -235,19 +269,22 @@
       if (!old && groups.length === 1) el('group').value = groups[0].id;
       if (old && !group()) selected.clear();
       ready = data.status.ready;
+      recordsAvailable = data.status.records_available !== false && data.status.storage !== 'unavailable';
+      refreshDelay = Math.max(30000, (Number(data.status.retry_after) || 0) * 1000);
       el('save').disabled = busy || !ready;
       el('health').textContent = ready ? (data.status.storage === 'upstash' ? '提醒已連接雲端儲存。' : '提醒使用本機資料庫，請確認主機有持久磁碟。') : data.status.message;
       if (!data.status.worker_enabled && !data.status.cron_configured) el('health').textContent += '\n排程執行未啟用，請檢查主機設定。';
-      if (data.status.last_error) el('health').textContent += '\n'+data.status.last_error;
+      if (data.status.last_error && data.status.last_error !== data.status.message) el('health').textContent += '\n'+data.status.last_error;
       el('health').className = 'reminder-notice' + (ready ? '' : ' reminder-error');
-      rows = append ? rows.concat(data.reminders.filter(function (r) { return !rows.some(function (oldRow) { return oldRow.id===r.id; }); })) : data.reminders;
-      nextOffset = data.next_offset; renderRows(); renderMembers();
-    } catch (e) { notice(e.message,true); }
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(function () {
-      var panel=document.getElementById('panel-reminders');
-      if (panel.classList.contains('active') && !document.hidden && !busy) load(false);
-    },30000);
+      if (recordsAvailable) {
+        rows = append ? rows.concat(data.reminders.filter(function (r) { return !rows.some(function (oldRow) { return oldRow.id===r.id; }); })) : data.reminders;
+      }
+      nextOffset = recordsAvailable ? data.next_offset : null; renderRows(); renderMembers();
+    } catch (e) {
+      if (sequence !== loadSequence) return;
+      storageFailure(e.message, e.retryAfter);
+    }
+    scheduleRefresh();
   }
   window.loadReminders = function () { return load(false); };
   document.addEventListener('DOMContentLoaded', function () {
@@ -299,8 +336,11 @@
           user_ids:el('mode').value==='users' ? Array.from(selected) : []};
         if (editing) { data.revision=editing.revision; await call('/'+editing.id,'PUT',data); }
         else { data.request_id=requestId; await call('','POST',data); }
-        reset(); await load(false); notice(wasEdit ? '提醒已更新。' : '提醒已儲存，到設定時間後派送。',false);
+        reset(); await load(false);
+        notice(ready ? (wasEdit ? '提醒已更新。' : '提醒已儲存，到設定時間後派送。') :
+          '提醒已儲存；' + el('health').textContent, !ready);
       } catch (e) {
+        if (e.code === 'upstash_monthly_quota') storageFailure(e.message, e.retryAfter);
         notice(e.message,true);
         el('notice').scrollIntoView({behavior:'smooth',block:'center'});
       }

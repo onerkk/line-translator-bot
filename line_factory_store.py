@@ -19,6 +19,7 @@ import time
 import requests
 
 from reusable_transport_pool import TransportPool
+from upstash_quota import QuotaExceeded, check_quota_error, quota_guard
 
 
 class StoreError(RuntimeError):
@@ -185,30 +186,44 @@ class FeatureStore:
                 stats["skipped"] += 1
             raise StoreError("工廠工具儲存正在恢復連線，操作尚未確認成功。")
         started = time.monotonic()
-        if stats is not None:
-            stats["requests"] += 1
+        attempted = False
         try:
             if self._override:
+                attempted = True
+                if stats is not None:
+                    stats["requests"] += 1
                 return self._override(args)
             # A session is exclusive until the streamed body has been consumed
             # and closed. Return it to a bounded process-local pool, so a new
             # webhook thread can reuse the same HTTP/TLS connection. No extra
             # request, retry or background write is introduced.
             url, token = self.url, self.token
-            with self._http.borrow((url, token, requests.Session), requests.Session) as session:
-                with session.post(url, data=encode(args).encode(), stream=True,
-                                  allow_redirects=False, timeout=(2, 3), headers={
-                                      "Authorization": "Bearer " + token,
-                                      "Content-Type": "application/json"}) as response:
-                    if response.status_code != 200:
-                        raise ValueError("invalid storage status")
-                    raw = response.raw.read(2_000_001, decode_content=True)
-                    if len(raw) > 2_000_000:
-                        raise ValueError("storage response too large")
-                    result = json.loads(raw)
-            if "error" in result or "result" not in result:
-                raise ValueError("invalid storage response")
-            return result["result"]
+            with quota_guard(url, token):
+                attempted = True
+                if stats is not None:
+                    stats["requests"] += 1
+                with self._http.borrow((url, token, requests.Session), requests.Session) as session:
+                    with session.post(url, data=encode(args).encode(), stream=True,
+                                      allow_redirects=False, timeout=(2, 3), headers={
+                                          "Authorization": "Bearer " + token,
+                                          "Content-Type": "application/json"}) as response:
+                        raw = response.raw.read(2_000_001, decode_content=True)
+                        if len(raw) > 2_000_000:
+                            raise ValueError("storage response too large")
+                        result = json.loads(raw)
+                        if isinstance(result, dict):
+                            check_quota_error(result.get("error"))
+                        if response.status_code != 200:
+                            raise ValueError("invalid storage status")
+                if not isinstance(result, dict) or "error" in result or "result" not in result:
+                    raise ValueError("invalid storage response")
+                return result["result"]
+        except QuotaExceeded as exc:
+            if stats is not None and not attempted:
+                stats["skipped"] += 1
+            error = StoreError(str(exc))
+            error.code, error.retry_after = exc.code, exc.retry_after
+            raise error from exc
         except Exception as exc:
             # One outage must not cost another full timeout at every button /
             # revision stage in this request and every subsequent message.
@@ -402,6 +417,10 @@ class FeatureStore:
         """Global due index; independent of per-group history display limits."""
         limit = max(1, min(100, int(limit)))
         if not self.path:
+            # Avoid paying for both EVAL and its internal read on every idle
+            # tick. A nonempty queue still uses the same atomic read/cleanup.
+            if not self.command(["ZRANGEBYSCORE", self.prefix + "notice-due", "-inf", now, "LIMIT", 0, 1]):
+                return []
             script = """
 local keys = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
 local result = {}

@@ -24,6 +24,7 @@ import threading
 import atexit
 import urllib.request
 import logging
+from upstash_quota import redis_command
 
 logger = logging.getLogger("db_snapshot")
 
@@ -60,14 +61,7 @@ def enabled():
 
 # ---- Upstash REST(與 app.py 已驗證可用的格式相同) ----
 def _cmd(args, timeout=25):
-    body = json.dumps(args).encode("utf-8")
-    req = urllib.request.Request(
-        _URL, data=body,
-        headers={"Authorization": "Bearer " + _TOK, "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8")).get("result")
+    return redis_command(_URL, _TOK, args, timeout=timeout)
 
 
 def _kv_get(k):

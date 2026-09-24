@@ -25,12 +25,14 @@ from zoneinfo import ZoneInfo
 
 from line_translation_delivery import utf16_units
 from line_message_ui import scheduled_reminder_message
+from upstash_quota import QuotaExceeded, RedisCommandError, redis_command
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 ACTIVE = {"pending", "retrying", "sending"}
 TERMINAL = {"sent", "failed", "uncertain", "cancelled"}
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 HISTORY_CLEANUP_BATCH = 500
+HISTORY_CLEANUP_INTERVAL = 3600
 # Terminal records cannot be edited; updated_at is their final transition time.
 _TERMINAL_SQL = "('sent','failed','uncertain','cancelled')"
 LEASE_SECONDS = 120
@@ -48,8 +50,9 @@ class ReminderError(Exception):
 
 
 class StoreUnavailable(ReminderError):
-    def __init__(self, message="提醒儲存服務暫時無法使用，請稍後重新整理確認。"):
+    def __init__(self, message="提醒儲存服務暫時無法使用，請稍後重新整理確認。", *, code="storage_unavailable", retry_after=0):
         super().__init__(message, 503)
+        self.code, self.retry_after = code, retry_after
 
 
 def _safe_upstash_error_text(value, secret=""):
@@ -75,8 +78,12 @@ def _safe_store_failure(exc, secret=""):
             detail = "端點不存在，請確認 Upstash REST URL"
         elif code == 400:
             try:
-                payload = json.loads(exc.read(4096).decode("utf-8", errors="replace"))
-                redis_error = _safe_upstash_error_text(payload.get("error"), secret)
+                if hasattr(exc, "upstash_error"):
+                    reason = exc.upstash_error
+                else:
+                    payload = json.loads(exc.read(4096).decode("utf-8", errors="replace"))
+                    reason = payload.get("error")
+                redis_error = _safe_upstash_error_text(reason, secret)
             except Exception:
                 redis_error = ""
             if re.search(r"(?i)\b(?:NOPERM|READONLY|read[ -]?only|permission denied)\b", redis_error):
@@ -291,24 +298,13 @@ class RedisReminderStore:
         self._cleanup_lock = threading.Lock()
 
     def _command(self, args):
-        req = urllib.request.Request(self.url, data=_encode(args).encode("utf-8"), method="POST",
-                                     headers={"Authorization": "Bearer " + self.token,
-                                              "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=8) as response:
-                payload = json.loads(response.read())
-            if not isinstance(payload, dict):
-                raise ValueError("Unexpected Redis response")
-            if "error" in payload:
-                detail = _safe_upstash_error_text(payload.get("error"), self.token)
-                if not detail:
-                    detail = "Upstash 拒絕命令，未提供可顯示的錯誤摘要"
-                raise StoreUnavailable("提醒儲存命令遭 Upstash 拒絕（" + detail + "）。")
-            if "result" not in payload:
-                raise ValueError("Unexpected Redis response")
-            return payload["result"]
-        except StoreUnavailable:
-            raise
+            return redis_command(self.url, self.token, args, timeout=8)
+        except QuotaExceeded as exc:
+            raise StoreUnavailable(str(exc), code=exc.code, retry_after=exc.retry_after) from exc
+        except RedisCommandError as exc:
+            detail = _safe_upstash_error_text(exc.detail, self.token)
+            raise StoreUnavailable("提醒儲存命令遭 Upstash 拒絕（" + detail + "）。") from exc
         except Exception as exc:
             # Do not expose the connection URL, token, or raw exception details.
             raise StoreUnavailable("提醒儲存連線失敗（" + _safe_store_failure(exc, self.token) + "）。") from exc
@@ -330,6 +326,11 @@ class RedisReminderStore:
             return int(removed)
 
     def due(self, now, limit=10):
+        # EVAL and its internal commands all consume Upstash quota. The empty
+        # queue needs one ordinary read; nonempty queues retain the atomic read
+        # and the existing compare-and-swap claim immediately before delivery.
+        if not self._command(["ZRANGEBYSCORE", self.keys[1], "-inf", now, "LIMIT", 0, 1]):
+            return []
         values = self._command(["EVAL", _READ_LUA, 3, *self.keys, "due", now, limit])
         return [json.loads(value) for value in values]
 
@@ -513,10 +514,22 @@ def send_line_reminder(record):
 class ReminderService:
     def __init__(self, store, catalog, sender=send_line_reminder, clock=time.time):
         self.store, self.catalog, self.sender, self.clock = store, catalog, sender, clock
+        self._maintenance_lock = threading.Lock()
+        self._next_cleanup = 0.0
+
+    def prune_history(self, *, force=False):
+        # Share maintenance scheduling between admin refreshes and the poller.
+        # list(now=...) still filters at the exact seven-day boundary.
+        with self._maintenance_lock:
+            if not force and time.monotonic() < self._next_cleanup:
+                return 0
+            removed = self.store.prune_history(self.clock())
+            self._next_cleanup = time.monotonic() + HISTORY_CLEANUP_INTERVAL
+            return removed
 
     def list(self, offset=0, limit=100):
         now = self.clock()
-        self.store.prune_history(now)
+        self.prune_history()
         return self.store.list(offset, limit, now=now)
 
     def create(self, data, actor, _races=0):
@@ -572,7 +585,7 @@ class ReminderService:
             raise ReminderError("提醒狀態已改變，請重新整理後再操作。", 409)
         return current
 
-    def run_due(self, limit=10, budget_seconds=20):
+    def run_due(self, limit=10, budget_seconds=20, *, force_cleanup=True):
         result = {"sent": 0, "retrying": 0, "failed": 0, "uncertain": 0}
         started = time.monotonic()
         for previous in self.store.due(self.clock(), limit):
@@ -609,9 +622,9 @@ class ReminderService:
             # If this write fails, the lease expires and the SAME push is retried.
             if self.store.compare_swap(claimed, current):
                 result[current["status"]] += 1
-        # Runs even without due jobs, from the background worker and cron wake.
-        # Existing records use their persisted terminal updated_at automatically.
-        result["purged"] = self.store.prune_history(self.clock())
+        # Explicit maintenance can force cleanup; periodic callers share the
+        # hourly schedule instead of issuing a second REST request every tick.
+        result["purged"] = self.prune_history(force=force_cleanup)
         return result
 
 
@@ -625,6 +638,7 @@ class ReminderWorker:
         self._wake = threading.Event()
         self.last_check_at = None
         self.last_error = ""
+        self.storage_error = ""
 
     def start(self, force=False):
         if not force and os.environ.get("REMINDERS_WORKER_ENABLED", "1") == "0":
@@ -641,14 +655,18 @@ class ReminderWorker:
 
     def _loop(self):
         while True:
+            delay = self.interval
             try:
-                self.service_factory().run_due()
+                self.service_factory().run_due(force_cleanup=False)
                 self.last_check_at, self.last_error = time.time(), ""
+                self.storage_error = ""
             except StoreUnavailable as exc:
-                self.last_error = str(exc)
+                self.last_error = self.storage_error = str(exc)
+                delay = max(delay, exc.retry_after)
                 self.logger.warning("[Reminders] polling failed: StoreUnavailable")
             except Exception as exc:
                 self.last_error = "提醒排程檢查未完成，稍後重試。"
+                self.storage_error = ""
                 self.logger.warning("[Reminders] polling failed: %s", type(exc).__name__)
-            self._wake.wait(self.interval)
+            self._wake.wait(delay)
             self._wake.clear()

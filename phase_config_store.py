@@ -124,17 +124,8 @@ def _kv_command(args, timeout: int = 8):
     if not _kv_enabled():
         return None
     try:
-        request = urllib.request.Request(
-            _UPSTASH_URL,
-            data=json.dumps(args).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer " + _UPSTASH_TOKEN,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8")).get("result")
+        from upstash_quota import redis_command
+        return redis_command(_UPSTASH_URL, _UPSTASH_TOKEN, args, timeout=timeout)
     except Exception as exc:
         logger.warning("[PhaseCfg] Upstash %s failed: %s", args[0] if args else "?", exc)
         return None
