@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
     "schema_version": 8,
-    "state_hash": "ad7fcb9445d81986178e54fa29c126e297a6757a6386892176582c5ed1eb009a",
-    "updated_at_iso": "2026-09-25T03:53:12.791017+00:00",
-    "updated_at_unix": 1790308392.7910168
+    "state_hash": "6ae1faea3e1a61840f35b67c77ff99ecec892ce31d13ad94c450b034574f79e1",
+    "updated_at_iso": "2026-09-28T17:31:57.035518+00:00",
+    "updated_at_unix": 1790616717.0355182
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -154,7 +154,7 @@
       "gpt-5.6-sol": "gemini-2.5-flash",
       "gpt-5.6-terra": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-24 08:00:03",
+    "last_updated": "2026-09-28 13:47:33",
     "model_mapping": {
       "gpt-4.1": "claude-sonnet-5",
       "gpt-4.1-mini": "claude-haiku-4-5-20251001",
@@ -192,15 +192,15 @@
     "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 81165,
+    "oai_cache_write": 84328,
     "oai_cached": 28066,
-    "oai_cost_usd": 0.48384981,
-    "oai_input": 457744,
-    "oai_output": 5908,
+    "oai_cost_usd": 0.48493136,
+    "oai_input": 461953,
+    "oai_output": 5976,
     "oai_reasoning": 0,
-    "text_translations": 302,
-    "tokens_completion": 23364,
-    "tokens_prompt": 4692515,
+    "text_translations": 303,
+    "tokens_completion": 23432,
+    "tokens_prompt": 4696724,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -422,13 +422,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 9489,
-      "cache_write": 40300,
-      "cost_usd": 2.0822238300000007,
+      "cache_write": 43463,
+      "cost_usd": 2.0833053800000005,
       "model": "gpt-5.6-luna",
       "provider": "openai",
       "reasoning": 0,
-      "tokens_completion": 9302,
-      "tokens_prompt": 2065165
+      "tokens_completion": 9370,
+      "tokens_prompt": 2069374
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -560,7 +560,8 @@
       "U1642dcf04bf6a3e29e966c9ce0b0017f": "Irwan 布納萬",
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
-      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret"
+      "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
