@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-22.2-material-category-receipt"
+QUALITY_GATE_BUILD_ID = "2026-09-28.1-injury-fact-specificity"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1619,6 +1619,58 @@ def _factory_incident_reporting_issues(source: str, candidate: str) -> List[str]
     return _dedupe(issues)
 
 
+_INJURY_CONTEXT_ZH_RE = re.compile(
+    r"工傷|工伤|職災|职灾|受傷|受伤|夾傷|夹伤|壓傷|压伤|割傷|割伤|燙傷|烫伤|撞傷|撞伤|擦傷|擦伤|傷勢|伤势"
+)
+_INJURY_BODY_PARTS_ZH = {
+    "hand": re.compile(
+        r"手指|手掌|手腕|手臂|胳膊|手肘|手背|手部|"
+        r"(?:手|手部)(?:被|遭|有|受|受到)?(?:夾傷|夹伤|夾到|夹到|壓傷|压伤|割傷|割伤|燙傷|烫伤|受傷|受伤)|"
+        r"(?:夾傷|夹伤|夾到|夹到|壓傷|压伤|割傷|割伤|燙傷|烫伤)(?:到|在)?手(?:部)?"
+    ),
+    "finger": re.compile(r"手指|指頭|指头"),
+    "arm": re.compile(r"手臂|胳膊|手肘|上臂|前臂"),
+    "leg": re.compile(r"大腿|小腿|膝蓋|膝盖|腿部|腿|腳|脚|足部|腳踝|脚踝|腳趾|脚趾"),
+    "head": re.compile(r"頭部|头部|頭|头"),
+    "eye": re.compile(r"眼睛|眼部"),
+    "neck": re.compile(r"頸部|颈部|脖子"),
+    "back": re.compile(r"背部|背"),
+    "shoulder": re.compile(r"肩膀|肩部"),
+    "torso": re.compile(r"胸部|胸口|腹部|肚子|腰部|腰"),
+}
+_INJURY_BODY_PARTS_ID = {
+    "hand": re.compile(r"\btangan\b", re.I),
+    "finger": re.compile(r"\bjari(?:-jari)?\b", re.I),
+    "arm": re.compile(r"\blengan\b|\bsiku\b", re.I),
+    "leg": re.compile(r"\bkaki\b|\blutut\b", re.I),
+    "head": re.compile(r"\bkepala\b", re.I),
+    "eye": re.compile(r"\bmat[ae]\b", re.I),
+    "neck": re.compile(r"\bleher\b", re.I),
+    "back": re.compile(r"\bpunggung\b", re.I),
+    "shoulder": re.compile(r"\bbahu\b", re.I),
+    "torso": re.compile(r"\bdada\b|\bperut\b|\bpinggang\b", re.I),
+}
+
+
+def _unsupported_injury_body_part_issues(source: str, candidate: str) -> List[str]:
+    """Flag an anatomical detail added to an injury report without source evidence.
+
+    This checks a general fact boundary, not a preferred sentence: Chinese
+    夾傷 states an injury mechanism but does not identify a hand or any other
+    body part. Specific anatomy is accepted only when the source names it.
+    """
+    src = str(source or "")
+    tgt = str(candidate or "")
+    if not _INJURY_CONTEXT_ZH_RE.search(src):
+        return []
+    unsupported = [
+        part for part, target_pattern in _INJURY_BODY_PARTS_ID.items()
+        if target_pattern.search(tgt)
+        and not _INJURY_BODY_PARTS_ZH[part].search(src)
+    ]
+    return ["semantic:unsupported_injury_body_part:" + ",".join(unsupported)] if unsupported else []
+
+
 def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -> List[str]:
     """Reject structurally valid but operationally unreadable Indonesian.
 
@@ -1633,6 +1685,7 @@ def _indonesian_readability_issues(source: str, candidate: str, src_lang: str) -
 
     if str(src_lang or "").lower().startswith("zh"):
         issues.extend(_factory_incident_reporting_issues(source, candidate))
+        issues.extend(_unsupported_injury_body_part_issues(source, candidate))
 
     if "@@" not in source and re.search(r"(?<!@)@@+", candidate):
         issues.append("duplicated_mention_marker")

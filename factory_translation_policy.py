@@ -12,7 +12,7 @@ from typing import Any, Dict
 import factory_chat_notice_semantics as chat_notice_semantics
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-16.1-nonblocking-single-attempt"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-28.1-source-alignment-reasoning"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -227,15 +227,21 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "quality, maintenance, safety, personnel, or accounting communication unless the source explicitly says otherwise.\n"
         "Use the retrieved plant glossary, factory knowledge and verified correction cases as the authoritative terminology system. "
         "Do not fall back to everyday dictionary meanings when a plant meaning is available.\n"
+        "Translate by meaning and relationships, not by replacing isolated words. Read the whole message, group each clause into its claims, and identify which modifiers apply to which item. "
+        "Keep scope attached to the source item: words meaning each/all/from every/only/except must not drift to the nearest noun or a different coordinated item. "
+        "When the source coordinates multiple items, preserve their grouping explicitly in natural target-language word order; do not let a translated phrase imply a relationship the source never states.\n"
         "Before output, silently reconstruct and verify speaker/actor, action, object, recipient, role, ID ownership, "
         "machine/station, instrument, material, movement, direction, destination, process state, time, quantity, unit, "
         "which reading belongs to which device, comparison/difference, negation, modality, priority, purpose, cause and consequence against the source.\n"
-        "Never invent an operator, machine, crane, manual operation, automatic operation, data check, accounting action, "
+        "Separate explicit facts from grammatical inference. Resolve omitted subjects only when the current message or approved plant knowledge supports them. "
+        "Never infer an injured body part, injured person, machine, crane, manual/automatic operation, data check, accounting action, "
         "cause, deadline, measurement or workflow step that is not stated or entailed by approved plant knowledge.\n"
         "Preserve customer names, employee names, codes, work-order IDs, station IDs, numbers and units exactly as written. "
         "For Work Order/ERP/label text, preserve every quoted control label (for example \"NO Kondom\") and every single-letter flag such as (Y)/(N) exactly; translate only the surrounding explanation. "
         "When two instructions conflict, preserve the conflict, the prohibition against acting immediately, and the required escalation/checking step; never silently choose or harmonize one instruction. "
         "Do not translate a Chinese customer name into an ordinary Indonesian adjective or noun.\n"
+        "Before finalizing, silently back-translate each target clause and compare its actor, object, modifier scope and operational relationships with the matching source clause. "
+        "If a modifier could attach to the wrong item, rewrite the target clause so its scope is unambiguous. "
         "Output only one complete target-language translation. Never output an apology, safety-status message, "
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
         "local quality findings never cancel a non-empty translation or trigger another generation.\n"

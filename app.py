@@ -325,7 +325,7 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
 _EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-22.2-material-category-receipt"
+_EXPECTED_QG_BUILD_ID = "2026-09-28.1-injury-fact-specificity"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -394,7 +394,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-16.1-nonblocking-single-attempt"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-28.1-source-alignment-reasoning"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -11626,6 +11626,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # ordinary LINE sentence while retaining cross-provider failover.
         _provider_preference = _translation_provider_preference(text, src, tgt)
 
+        # Factory translation currently disables model reasoning in the shared
+        # fast-quality path. That made the detailed plant glossary and semantic
+        # checks compete with a zero-reasoning request. Keep the same one-call
+        # route, but allow a low reasoning budget for Chinese↔Indonesian factory
+        # work so the model can resolve clause scope and relationships itself.
+        _factory_cognitive_route = factory_translation_policy_module.should_force_factory_pipeline(
+            text, src, tgt, heuristic_match=_is_factory_context(text)
+        )
+
         # v3.9.5: snapshot what we are about to send to OpenAI so /admin/debug/last-translate can show it.
         # This is the single most useful diagnostic when custom examples aren't taking effect.
         try:
@@ -11684,9 +11693,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 _provider_source_text, src, tgt
             ),
             "provider_preference": _provider_preference,
-            # v3.18: 三 provider 共用的低延遲翻譯模式。
-            # 只關閉不必要的模型思考，不改模型、prompt、術語或後處理品質。
-            "translation_fast_quality": True,
+            # Non-factory translations retain the fast path. Factory messages
+            # receive the model's lowest reasoning tier supported by the active
+            # provider, without adding another provider request.
+            "translation_fast_quality": not _factory_cognitive_route,
             "translation_max_generations": 1,
             "translation_repair_model": _translation_cp_tier_models()[1],
         }
@@ -11709,7 +11719,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # tokenizer/language-expansion margin; add a small buffer only when the
         # selected legacy family cannot run with reasoning=none.
         _output_budget = max(384, int(_src_len * 3.2) + 256)
-        _translation_effort = optimal_reasoning_for_translation(_model)
+        _translation_effort = (
+            "low" if _factory_cognitive_route and model_supports(_model, "reasoning_effort")
+            else optimal_reasoning_for_translation(_model)
+        )
         if _translation_effort not in (None, "none"):
             _output_budget += 768
         _output_budget = min(_output_budget, 8192)
@@ -11717,15 +11730,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _kwargs["max_completion_tokens"] = _output_budget
         elif model_supports(_model, "max_tokens"):
             _kwargs["max_tokens"] = min(max(384, int(_src_len * 3.2) + 256), 4096)
-        # v3.9.8 (2026-05): Translation-optimal reasoning_effort.
-        # OpenAI's official guide: "gpt-4.1: gpt-5.2 with `none` reasoning"
-        # Translation is a lightweight, instruction-following task. Higher
-        # reasoning_effort HURTS instruction adherence (arxiv 2505.14810).
-        # We auto-select the LOWEST viable effort for the model family,
-        # ignoring the admin's stored 'reasoning_effort' setting because
-        # that was tuned for o-series and is wrong for gpt-5 series.
+        # Factory translation uses low reasoning effort for GPT reasoning
+        # models; routine non-factory translation retains its existing fastest
+        # setting. The selected effort is included in the token budget above.
         if model_supports(_model, "reasoning_effort"):
-            _optimal_effort = optimal_reasoning_for_translation(_model)
+            _optimal_effort = _translation_effort
             if _optimal_effort:
                 _kwargs["reasoning_effort"] = _optimal_effort
             elif reasoning_effort in ("low", "medium", "high"):

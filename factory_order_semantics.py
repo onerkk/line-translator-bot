@@ -12,7 +12,7 @@ import unicodedata
 import conversation_context
 from translation_request_cache import memoize
 
-BUILD_ID = '2026-09-10.9-order-urgency-and-request-state'
+BUILD_ID = '2026-09-28.10-order-urgency-modifier-scope'
 _ZH_ORDER = re.compile(r'(?:不急|不緊急|不紧急)(?:的)?(?:工[單单]|訂單|订单|單子|单子)|'
                        r'(?:普通|一般|正常)(?:工[單单]|訂單|订单)|'
                        r'(?:工[單单]|訂單|订单)(?:很|非常|相當|相当|十分|是|並不|并不|不|並非|并非){0,3}'
@@ -22,7 +22,12 @@ _ZH_NEG = re.compile(r'(?:不是|並非|并非|不屬於|不属于|不算是?|�
 _ORDER_ID = r'(?:work\s*order|order(?:\s+kerja)?|pesanan)'
 _QUALIFIER_ID = r'(?:mendesak|urgen|urgent|biasa|reguler|normal|harus\s+segera\s+(?:diproses|ditangani|dikerjakan))'
 _ORDER_CODE_TEXT = r'[A-Za-z]{1,6}[-/]\d{2,}[A-Za-z0-9/-]*'
-_GAP_ID = r'(?:(?:yang|ini|itu|tersebut|sangat|benar-benar|tidak|bukan|lagi|masih|paling|' + _ORDER_CODE_TEXT + r')\s+){0,5}'
+# Indonesian may place the order's workflow/material descriptor between the
+# order noun and its urgency qualifier. These modifiers remain inside the same
+# noun phrase (work order pengiriman mendesak), so urgency still attaches to
+# the order instead of a neighboring action.
+_ID_ORDER_MODIFIER = r'(?:pengiriman|produksi|material|barang|packing|kemasan)'
+_GAP_ID = r'(?:(?:yang|ini|itu|tersebut|sangat|benar-benar|tidak|bukan|lagi|masih|paling|' + _ID_ORDER_MODIFIER + r'|' + _ORDER_CODE_TEXT + r')\s+){0,5}'
 _ID_ORDER = re.compile(r'\b(?:' + _ORDER_ID + r'\s+' + _GAP_ID + _QUALIFIER_ID
                        + r'|' + r'(?:urgent|urgen)\s+' + _ORDER_ID + r')\b', re.I)
 _ITEM = re.compile(r'(?m)^\s*(\d+)[.)、．]\s*(?!\d)')

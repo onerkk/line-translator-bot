@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-24.2-clamp-support-and-short-bar-data-maintenance",
+  "build_id": "2026-09-28.1-source-alignment-terms",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -4942,6 +4942,122 @@
               "replacement": "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "customer_name_dacheng_identity",
+      "enabled": true,
+      "priority": 300,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "大成是客戶識別名稱",
+      "match": {
+        "any_terms": [
+          "大成"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "在本廠客戶、材料、工單與包裝語境中，大成是客戶識別名稱，譯文必須原樣保留「大成」。",
+        "不要翻成印尼文普通形容詞 besar，也不要自行拼成 Da Cheng。只有明確不是客戶名稱的上下文才可依其字面義處理。"
+      ],
+      "preferred_target_phrases": [
+        "大成"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_identity_not_preserved"
+        }
+      ],
+      "preserve_source_regex": [
+        "大成"
+      ]
+    },
+    {
+      "id": "product_term_special_profile_bar",
+      "enabled": true,
+      "priority": 290,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "異型棒是特殊斷面棒材",
+      "match": {
+        "any_terms": [
+          "異型棒",
+          "异型棒"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "異型棒指特殊斷面／特殊型材的棒材，是產品或材料類別，不是包裝站名稱。",
+        "一般可譯為 batang profil khusus；不可與異型包裝站混為一談，也不可把異型棒拆成互不相關的項目。"
+      ],
+      "preferred_target_phrases": [
+        "batang profil khusus"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "異型棒",
+            "异型棒"
+          ],
+          "target_any": [
+            "batang profil khusus",
+            "batang dengan profil khusus",
+            "batang berbentuk khusus"
+          ],
+          "issue": "special_profile_bar_term_missing"
+        }
+      ]
+    },
+    {
+      "id": "term_furnace_heat_number",
+      "enabled": true,
+      "priority": 285,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "爐號是鋼材冶煉批次識別碼",
+      "match": {
+        "any_terms": [
+          "爐號",
+          "炉号",
+          "爐次號",
+          "炉次号"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "鋼材生產與標籤語境中的爐號／爐次號是 heat 的批次識別號；欄位名稱可用印尼文 nomor heat 或 nomor peleburan。",
+        "翻譯欄位名稱，不要改寫或翻譯實際爐號值；標籤與列印 ID 的爐號必須維持各自來源並表達兩者是否相同。"
+      ],
+      "preferred_target_phrases": [
+        "nomor heat"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "爐號",
+            "炉号",
+            "爐次號",
+            "炉次号"
+          ],
+          "target_any": [
+            "nomor heat",
+            "nomor peleburan"
+          ],
+          "issue": "heat_number_field_term_missing"
         }
       ]
     }
