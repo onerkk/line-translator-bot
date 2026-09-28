@@ -234,7 +234,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "machine/station, instrument, material, movement, direction, destination, process state, time, quantity, unit, "
         "which reading belongs to which device, comparison/difference, negation, modality, priority, purpose, cause and consequence against the source.\n"
         "Separate explicit facts from grammatical inference. Resolve omitted subjects only when the current message or approved plant knowledge supports them. "
-        "Never infer an injured body part, injured person, machine, crane, manual/automatic operation, data check, accounting action, "
+        "Never infer an injured body part, injured person, machine, crane, manual operation or automatic operation, data check, accounting action, "
         "cause, deadline, measurement or workflow step that is not stated or entailed by approved plant knowledge.\n"
         "Preserve customer names, employee names, codes, work-order IDs, station IDs, numbers and units exactly as written. "
         "For Work Order/ERP/label text, preserve every quoted control label (for example \"NO Kondom\") and every single-letter flag such as (Y)/(N) exactly; translate only the surrounding explanation. "

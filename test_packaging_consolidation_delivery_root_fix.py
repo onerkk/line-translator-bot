@@ -75,6 +75,7 @@ def test_future_bulk_arrival_remains_strict():
 def test_generalized_packaging_workflow_knowledge_is_retrieved_and_validated():
     cards = factory_knowledge.retrieve(SOURCE, "zh", "id", limit=5)
     assert [card["id"] for card in cards] == [
+        "customer_name_dacheng_identity",
         "packaging_consolidation_threshold_decision"
     ]
     assert factory_knowledge.validate_translation(cards, SOURCE, GOOD) == (True, [])

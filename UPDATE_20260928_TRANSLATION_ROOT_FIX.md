@@ -12,4 +12,4 @@ Replace the matching files in the existing project root with the files in this a
 
 ## Validation
 
-The factory translation asset release validator passed. Updated Python files passed `py_compile`. Direct semantic checks covered terminology, urgency modifier scope, and injury anatomy inference. The complete pytest suite was not run because pytest and Flask are unavailable in the local runtime.
+The factory translation asset release validator passed. Updated Python files passed `py_compile`. Direct semantic checks covered terminology, urgency modifier scope, and injury anatomy inference; all 11 tests in `test_unified_factory_translation_root_fix.py` passed. Two existing release-gate assertions were updated to account for the new customer-name knowledge card and explicit wording in the general prompt. The complete offline release-gate runner could not start in the local runtime because `requests`, pytest, and Flask are unavailable.
