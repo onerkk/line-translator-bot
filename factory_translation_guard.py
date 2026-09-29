@@ -26,9 +26,10 @@ import factory_source_understanding as source_understanding
 import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 import factory_terminology as terminology_module
+import factory_reported_event_semantics as reported_event_semantics
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -322,6 +323,9 @@ class FactoryTranslationGuard:
             "Do not output a fluent approximation that violates a required concept or uses a known forbidden translation; "
             "regenerate a source-complete translation before delivery."
         )
+        event_prompt = reported_event_semantics.build_prompt(source, src, tgt)
+        if event_prompt:
+            lines.append(event_prompt)
         lines.append("</factory_acceptance_boundary>")
         return "\n".join(lines)
 
@@ -416,6 +420,11 @@ class FactoryTranslationGuard:
         )
         if not relation_ok or relation_issues:
             issues.extend("factory_guard:" + issue for issue in relation_issues)
+        event_frame = reported_event_semantics.build_frame(source_text, src, tgt)
+        issues.extend(
+            "factory_guard:" + issue
+            for issue in reported_event_semantics.validate_translation(event_frame, target_text)
+        )
         issues = _dedupe(issues)
         return GuardReport(
             ok=not issues,

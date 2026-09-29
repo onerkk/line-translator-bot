@@ -324,8 +324,8 @@ if (getattr(tm_module, "TRANSLATION_MEMORY_API_VERSION", None)
 # archive was extracted into a nested directory. Running with a stale quality
 # gate is worse than an explicit deployment failure because invalid mixed-
 # language output could otherwise still be delivered to LINE.
-_EXPECTED_QG_API_VERSION = 26
-_EXPECTED_QG_BUILD_ID = "2026-09-28.1-injury-fact-specificity"
+_EXPECTED_QG_API_VERSION = 27
+_EXPECTED_QG_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
 _ACTUAL_QG_API_VERSION = getattr(tqg_module, "QUALITY_GATE_API_VERSION", None)
 _ACTUAL_QG_BUILD_ID = getattr(tqg_module, "QUALITY_GATE_BUILD_ID", None)
 if (_ACTUAL_QG_API_VERSION != _EXPECTED_QG_API_VERSION
@@ -394,7 +394,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.1-operational-state-and-record-scope"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.2-reported-finding-agents"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -410,7 +410,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
 _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
+_EXPECTED_FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
 if (getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_GUARD_API_VERSION
         or getattr(factory_translation_guard_module, "FACTORY_TRANSLATION_GUARD_BUILD_ID", None)

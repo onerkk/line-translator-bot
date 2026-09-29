@@ -37,12 +37,13 @@ import factory_structured_report as structured_report
 import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
 import factory_chat_notice_semantics as chat_notice_semantics
+import factory_reported_event_semantics as reported_event_semantics
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 26
-QUALITY_GATE_BUILD_ID = "2026-09-28.1-injury-fact-specificity"
+QUALITY_GATE_API_VERSION = 27
+QUALITY_GATE_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -2065,6 +2066,8 @@ def _validate_normalized_translation(
     )
     issues.extend(record_issues)
     issues.extend(structured_report.validate_material_report(source, candidate, src, tgt))
+    reported_event_frame = reported_event_semantics.build_frame(source, src, tgt)
+    issues.extend(reported_event_semantics.validate_translation(reported_event_frame, candidate))
 
     relation_frame = fmr_module.build_frame(source, src, tgt)
     relation_ok, relation_issues = fmr_module.validate_translation(

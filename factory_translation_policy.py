@@ -10,9 +10,10 @@ import os
 import re
 from typing import Any, Dict
 import factory_chat_notice_semantics as chat_notice_semantics
+import factory_reported_event_semantics as reported_event_semantics
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.1-operational-state-and-record-scope"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.2-reported-finding-agents"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -235,6 +236,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "which reading belongs to which device, comparison/difference, negation, modality, priority, purpose, cause and consequence against the source.\n"
         "For every operational clause, keep the actor, action, object, current state, required state and destination together. In a multi-step message, preserve which work is pending, already completed, being checked, prioritized next, and assigned to each named person; do not merge adjacent steps. "
         "A source verb meaning check, confirm, verify or cross-check refers to inspecting an existing status/result unless the source explicitly orders the underlying process. Keep that inspection distinct from a neighboring statement that the process is complete.\n"
+        "For reported findings, preserve the reporting person and the actor of the reported event as distinct roles. When Chinese omits the subject of a discovery and the named reporter remains the topic with no other finder stated, keep that person explicit as the discoverer; do not turn the event into an agentless passive. If another finder is named, preserve that person instead.\n"
         "Resolve warehouse wording from its evidence: system, interval, registration, posting or data-entry cues mean recording stock intake in the system; physical verbs such as move, lift, return or place with a storage location mean handling the material. Do not convert a system restriction into a physical movement or a physical return into a data-entry action. Preserve any interval, temporary unlock, sequence and original/destination location.\n"
         "Preserve explicit lot/batch scope even without a number: references such as this batch of material cannot be reduced to only 'this material'. Keep bundle, box and other material units attached to the same item.\n"
         "Separate explicit facts from grammatical inference. Resolve omitted subjects only when the current message or approved plant knowledge supports them. "
@@ -250,6 +252,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
         "local quality findings never cancel a non-empty translation or trigger another generation.\n"
         "</unified_factory_translation_policy>"
+        + "\n" + reported_event_semantics.build_prompt(text, src, tgt)
         + "\n" + chat_notice_semantics.build_prompt(text, src, tgt)
     )
 
