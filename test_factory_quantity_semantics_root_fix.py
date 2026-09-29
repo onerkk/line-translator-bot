@@ -117,6 +117,41 @@ class FactoryQuantitySemanticsRootFixTests(unittest.TestCase):
         self.assertIn("addition", prompt)
         self.assertNotIn("Sebelum pulang kerja", prompt)
 
+    def test_non_numeric_material_batch_scope_is_prompted_and_validated(self):
+        source = "為了處理這批料，系統卡五分鐘入庫間隔有先解開"
+        frame = fqs.build_frame(source, "zh", "id")
+        self.assertTrue(frame["active"])
+        self.assertEqual(frame["lot_references"][0]["source_text"], "這批料")
+        prompt = fqs.build_prompt(frame)
+        self.assertIn("explicit material lot/batch", prompt)
+        self.assertIn("'material ini' alone loses this scope", prompt)
+
+        omitted = "Untuk menangani material ini, pembatasan jeda 5 menit pada pencatatan masuk gudang di sistem sudah dibuka sementara."
+        complete = "Untuk menangani batch material ini, pembatasan jeda 5 menit pada pencatatan masuk gudang di sistem sudah dibuka sementara."
+        ok, issues = fqs.validate_translation(frame, omitted)
+        self.assertFalse(ok)
+        self.assertIn("quantity_semantics:material_lot_scope_missing", issues)
+        self.assertTrue(fqs.validate_translation(frame, complete)[0])
+        quality_omitted = tqg.validate_translation(source, omitted, "zh", "id")
+        self.assertFalse(quality_omitted.ok)
+        self.assertIn("quantity_semantics:material_lot_scope_missing", quality_omitted.hard_issues)
+        self.assertTrue(tqg.validate_translation(source, complete, "zh", "id").ok)
+        self.assertTrue(fqs.build_frame("為了處理這一批材料", "zh", "id")["active"])
+        self.assertFalse(fqs.build_frame("請處理這份材料", "zh", "id")["active"])
+
+    def test_factory_prompt_distinguishes_checking_status_from_doing_the_process(self):
+        import factory_translation_policy as policy
+        prompt = policy.build_prompt(
+            "晚上有150多捆要退庫確認倒角的，從二股那邊倒角完成的幫我優先包裝，"
+            "東西再由 @辰 @Dato潘 @祥 負責分車放回原儲位。",
+            "zh", "id"
+        )
+        self.assertIn("inspecting an existing status/result", prompt)
+        self.assertIn("system restriction", prompt)
+        self.assertIn("system", prompt)
+        self.assertIn("physical verbs", prompt)
+        self.assertIn("each named person", prompt)
+
     def test_app_deployment_contract_and_runtime_wiring_are_present(self):
         source = pathlib.Path("app.py").read_text(encoding="utf-8")
         self.assertIn("factory_quantity_semantics as factory_quantity_semantics_module", source)

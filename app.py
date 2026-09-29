@@ -394,7 +394,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-28.1-source-alignment-reasoning"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.1-operational-state-and-record-scope"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -429,9 +429,9 @@ if not ((_FACTORY_TRANSLATION_GUARD_BOOT_HEALTH.get("self_test") or {}).get("ok"
     raise RuntimeError("factory translation guard behavioral self-test failed")
 logger.info("[FactoryGuard] deployment verified %s", _FACTORY_TRANSLATION_GUARD_BOOT_HEALTH)
 
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION = 2
 # This version binds abstract/record classifiers to their source referents.
-_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.10-referent-bound-quantities"
+_EXPECTED_FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-29.1-explicit-material-lot-scope"
 if (getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_QUANTITY_SEMANTICS_API_VERSION
         or getattr(factory_quantity_semantics_module, "FACTORY_QUANTITY_SEMANTICS_BUILD_ID", None)

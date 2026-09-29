@@ -15,8 +15,8 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
-FACTORY_QUANTITY_SEMANTICS_API_VERSION = 1
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-10.10-referent-bound-quantities"
+FACTORY_QUANTITY_SEMANTICS_API_VERSION = 2
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-29.1-explicit-material-lot-scope"
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,11 @@ _QUANTITY_RE = re.compile(
     rf"(?P<half_prefix>半)(?P<half_cls>{_CLASSIFIER_PATTERN})"
     rf"|(?P<number>{_NUMBER_TOKEN})(?P<classifier>{_CLASSIFIER_PATTERN})(?P<half_suffix>半)?"
 )
+_MATERIAL_LOT_SCOPE_RE = re.compile(
+    r"(?P<source>(?P<determiner>這|这|本|此|該|该|那|每|各)(?:一)?(?:批次|批)(?:的)?"
+    r"(?P<noun>材料|物料|資料|资料|數據|数据|棒材|鋼材|钢材|成品|產品|产品|工件|工單|工单|料)?)"
+)
+_INDONESIAN_LOT_SCOPE_RE = re.compile(r"\b(?:batch|lot|kelompok)\b", re.I)
 
 _DISTRIBUTIVE_RE = re.compile(r"(?:每人|每位|每個人|每个人|各人|各位|一人(?=[一二兩两俩三四五六七八九十半\d]))")
 _ADDITION_RE = re.compile(r"(?:又|另加|另外加|外加|再加|加上|追加|多加)")
@@ -212,6 +217,16 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
     if not str(src_lang or "").lower().startswith("zh") or not str(tgt_lang or "").lower().startswith("id"):
         return {"active": False, "atoms": [], "relations": [], "distributive": False}
     text = _normalise_source(source)
+    # A deictic lot reference such as 這批料 is an explicit material scope,
+    # not an omitted classifier just because the source has no numeral.
+    lot_references = [
+        {
+            "source_text": match.group("source"),
+            "determiner": match.group("determiner"),
+            "noun": match.group("noun") or "",
+        }
+        for match in _MATERIAL_LOT_SCOPE_RE.finditer(text)
+    ]
     atoms: List[QuantityAtom] = []
     occupied: List[Tuple[int, int]] = []
 
@@ -247,6 +262,12 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
             quantifier = "cardinal"
             if value is not None and match.group("half_suffix"):
                 value += Decimal("0.5")
+            # In 這一批料, 一批 identifies the deictic lot rather than a
+            # count of one lot. The lot-scope frame below preserves that unit.
+            if (classifier == "批" and value == Decimal("1")
+                    and re.search(r"(?:這|这|本|此|該|该|那)$", text[:start])):
+                occupied.append((start, end))
+                continue
             if (value is not None and value == value.to_integral_value()
                     and start > 0 and text[start - 1] == "第"):
                 quantifier = "ordinal"
@@ -315,13 +336,14 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
 
     distributive = bool(_DISTRIBUTIVE_RE.search(text))
     structurally_specific = any(a.category not in {"generic_count", "item_count", "machine_count"} for a in atoms)
-    active = bool(atoms and (structurally_specific or distributive or relations))
+    active = bool(lot_references or (atoms and (structurally_specific or distributive or relations)))
     return {
         "active": active,
         "source": text,
         "atoms": [asdict(atom) for atom in atoms],
         "relations": [asdict(relation) for relation in relations],
         "distributive": distributive,
+        "lot_references": lot_references,
         "version": FACTORY_QUANTITY_SEMANTICS_BUILD_ID,
     }
 
@@ -505,6 +527,8 @@ def validate_translation(frame: Mapping[str, Any], candidate: Any) -> Tuple[bool
     if frame.get("distributive"):
         if not re.search(r"\b(?:setiap\s+orang|masing-masing|per\s+orang|satu\s+orang)\b", low):
             issues.append("quantity_semantics:distributive_person_missing")
+    if frame.get("lot_references") and not _INDONESIAN_LOT_SCOPE_RE.search(low):
+        issues.append("quantity_semantics:material_lot_scope_missing")
 
     issues = list(dict.fromkeys(issues))
     return not issues, issues
@@ -545,6 +569,11 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
             )
     if frame.get("distributive"):
         lines.append("The quantity is distributed per person; preserve this with 'setiap orang', 'masing-masing', or an equivalent explicit per-person construction.")
+    for reference in frame.get("lot_references", []) or []:
+        lines.append(
+            f"Source reference {reference.get('source_text')!r} identifies an explicit material lot/batch. "
+            "Preserve the lot scope with a natural Indonesian batch/lot expression; 'material ini' alone loses this scope."
+        )
     if any(atom.get("category") == "package" for atom in frame.get("atoms", []) or []):
         lines.append("Classifier 包 after a number means a counted package: use 'bungkus'. Never use 'bundel' for 包; 'bundel' is reserved for 把/捆 material bundles.")
     lines.append("</factory_quantity_semantics>")
