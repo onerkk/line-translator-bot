@@ -181,6 +181,47 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         self.assertFalse(conflict["complete"])
         self.assertIsNone(measurement.deterministic_translation(conflict))
 
+    def test_explicit_measurement_object_stays_attached_to_its_size_reading(self):
+        cases = (
+            ("Barang bf3 micro besar", "item", "BF3料件的尺寸量測值偏大"),
+            ("Produk BF3 mikrometer kecil", "product", "BF3產品的尺寸量測值偏小"),
+            ("Material BF3 hasil ukur terlalu besar", "material", "BF3材料的尺寸量測值偏大"),
+            ("Batang BF3 pengukuran kecil", "bar", "BF3棒材的尺寸量測值偏小"),
+        )
+        for source, subject, expected in cases:
+            with self.subTest(source=source):
+                frame = measurement.build_frame(source, equipment_codes=["BF3"])
+                self.assertTrue(frame["active"])
+                self.assertTrue(frame["complete"])
+                self.assertEqual(frame["explicit_measurement_subject"], subject)
+                self.assertEqual(frame["work_order_context"], False)
+                self.assertEqual(measurement.deterministic_translation(frame), expected)
+                self.assertTrue(measurement.validate_translation(frame, expected)[0])
+
+        item_frame = measurement.build_frame(
+            "Barang BF3 mikro besar", equipment_codes=["BF3"], work_order_context=True
+        )
+        self.assertFalse(item_frame["work_order_context"])
+        self.assertTrue(
+            measurement.validate_translation(
+                item_frame, "BF3料件經分厘卡量測後尺寸偏大"
+            )[0]
+        )
+        ok, issues = measurement.validate_translation(
+            item_frame, "BF3料件分厘卡本身偏大"
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any(issue.startswith("measurement_literal_tool_scale:") for issue in issues))
+
+    def test_conflicting_explicit_object_categories_do_not_get_collapsed(self):
+        frame = measurement.build_frame(
+            "Barang material BF3 mikro besar", equipment_codes=["BF3"]
+        )
+        self.assertTrue(frame["active"])
+        self.assertTrue(frame["measurement_subject_ambiguous"])
+        self.assertFalse(frame["complete"])
+        self.assertIsNone(measurement.deterministic_translation(frame))
+
     def test_work_order_classifier_does_not_depend_on_customer_name(self):
         ns = _extract_app_namespace(
             assigns=("WORK_ORDER_OCR_KEYWORDS",),
@@ -206,7 +247,7 @@ class FactoryMeasurementSemanticsRootFixTests(unittest.TestCase):
         self.assertIn("if _context_bound_translation:", APP_SOURCE)
         self.assertIn("_quality_cacheable = False", APP_SOURCE)
         self.assertIn(
-            '_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"',
+            '_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-10-02.1-explicit-measurement-subject"',
             APP_SOURCE,
         )
 

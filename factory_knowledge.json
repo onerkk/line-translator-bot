@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-09-28.1-source-alignment-terms",
+  "build_id": "2026-10-02.1-housekeeping-and-generic-floor-object",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -607,7 +607,8 @@
         "『沒檢驗 PMI 就包了』表示包裝前未執行 PMI 檢驗便直接包裝，必須保留先後關係、缺失行為與包裝責任。",
         "『嫌麻煩』是未執行檢驗的原因，可用 merasa pemeriksaan tersebut merepotkan／karena merasa repot；不可改成設備故障、沒時間或不知道規定。",
         "『出貨這把』是已出貨的這一捆材料，使用 bundel yang sudah dikirim；不是一般出貨批次，也不可漏掉這一捆的指涉。",
-        "A班／B班／C班固定用 shift A／shift B／shift C。異型站在明確站別語境中沿用正式站名 Stasiun packing barang bentuk khusus。"
+        "A班／B班／C班固定用 shift A／shift B／shift C。異型站在明確站別語境中沿用正式站名 Stasiun packing barang bentuk khusus。",
+        "「工單報表確實填寫供查核」表示 work order report 必須正確填寫，供後續資料核對／稽核；印尼文可用 laporan work order harus diisi dengan benar untuk keperluan verifikasi/audit。查核對象是紀錄，不可誤解成再做一次實體 PMI 檢驗。"
       ],
       "preferred_target_phrases": [
         "grade baja setiap bundel wajib diperiksa dengan PMI",
@@ -5058,6 +5059,146 @@
             "nomor peleburan"
           ],
           "issue": "heat_number_field_term_missing"
+        }
+      ]
+    },
+    {
+      "id": "factory_housekeeping_management_emphasis",
+      "enabled": true,
+      "priority": 165,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "作業環境整潔、一般掉落物與主管管理語氣",
+      "match": {
+        "all_groups": [
+          [
+            "作業環境",
+            "工作環境",
+            "廠區環境",
+            "環境整潔",
+            "環境衛生",
+            "作業區",
+            "工作區",
+            "地面",
+            "地板",
+            "整潔",
+            "掉落物",
+            "油水",
+            "掃地",
+            "掃除",
+            "清掃",
+            "拖地",
+            "kebersihan area",
+            "kebersihan lingkungan",
+            "kerapian area",
+            "lingkungan kerja",
+            "area kerja",
+            "lantai",
+            "sapu",
+            "menyapu",
+            "pel lantai",
+            "oli",
+            "benda yang jatuh",
+            "barang yang jatuh",
+            "tercecer",
+            "工作場所",
+            "作業場所",
+            "現場整潔",
+            "地上",
+            "雜物",
+            "掉落的雜物",
+            "地板上的雜物",
+            "清理",
+            "整理",
+            "打掃",
+            "清潔環境",
+            "廠區整潔"
+          ],
+          [
+            "總經理",
+            "經理",
+            "主管",
+            "外賓",
+            "訪客",
+            "重視",
+            "嚴格",
+            "監督",
+            "盯",
+            "釘",
+            "General Manager",
+            "manajer",
+            "atasan",
+            "tamu",
+            "memperhatikan",
+            "menekankan",
+            "mengawasi",
+            "pengawasan",
+            "tegas",
+            "ketat"
+          ]
+        ],
+        "require_all_groups": false,
+        "min_score": 4
+      },
+      "context": [
+        "在工廠作業區語境中，掃地、拖地、擦拭油水和維持整潔指一般現場整理；用 kebersihan/kerapian area kerja 或 lingkungan kerja，不翻成生態保護，也不要和棒材清洗製程混淆。",
+        "主管／總經理把注意力放在一項現場目標上時，中文口語「盯／釘」表示密切關注、嚴格要求或監督；保留原文的開始時間和程度，但不可自行加上稽核、懲處或新的工作命令。",
+        "「掉落物、地面雜物、掉在地上的東西」沒有指定材料種類時，印尼文應保留一般物件類別，例如 benda/barang yang jatuh atau tercecer；不得自行窄化成原料、棒材或產品。",
+        "環境整潔、地面物品、油水和訪客等線索要合併判讀整段；不要把「環境」孤立翻成環境保護，也不要把非特定物品改成材料。"
+      ],
+      "preferred_target_phrases": [
+        "kebersihan area kerja",
+        "kerapian lingkungan kerja",
+        "lebih serius menekankan kebersihan",
+        "mengawasi dengan ketat",
+        "benda/barang yang jatuh atau tercecer"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "掉落物",
+            "掉落的物品",
+            "地面雜物",
+            "地上的東西",
+            "落在地上的物品",
+            "掉落的雜物",
+            "地板上的雜物",
+            "地面上掉落的雜物"
+          ],
+          "target_any": [
+            "benda",
+            "barang"
+          ],
+          "issue": "generic_dropped_object_narrowed_or_omitted"
+        },
+        {
+          "source_any": [
+            "benda yang jatuh",
+            "barang yang jatuh",
+            "benda yang terjatuh",
+            "barang yang terjatuh",
+            "benda yang tercecer",
+            "barang yang tercecer"
+          ],
+          "target_any": [
+            "掉落物",
+            "地面上的物品",
+            "地上掉落的東西",
+            "落在地上的物品"
+          ],
+          "issue": "generic_dropped_object_narrowed_or_omitted"
+        }
+      ],
+      "examples": [
+        {
+          "source": "外賓來訪期間，請保持工作區整潔，地面掉落物要掃除，主管會嚴格盯現場。",
+          "target": "Selama kunjungan tamu, harap jaga kebersihan area kerja dan sapu benda-benda yang jatuh di lantai. Atasan akan mengawasi kondisi area dengan ketat."
+        },
+        {
+          "source": "General Manager semakin ketat memperhatikan kerapian area kerja; barang yang terjatuh di lantai mohon disapu.",
+          "target": "總經理越來越嚴格地重視作業區整潔；請把地面掉落物掃乾淨。"
         }
       ]
     }

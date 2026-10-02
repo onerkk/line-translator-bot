@@ -48,6 +48,21 @@ class UnifiedFactoryTranslationRootFixTests(unittest.TestCase):
         self.assertIn("Preserve customer names", prompt)
         self.assertIn("ordinary Indonesian adjective", prompt)
 
+    def test_policy_prompt_preserves_colloquial_intent_and_object_specificity(self):
+        prompt = policy.build_prompt(
+            "月初設備沒料要加強一下環境，作業區地面掉落物要掃，總經理開始在釘環境了",
+            "zh",
+            "id",
+        )
+        self.assertIn("strict emphasis", prompt)
+        self.assertIn("do not invent a formal audit", prompt)
+        self.assertIn("掉落物", prompt)
+        self.assertIn("do not narrow it to raw material or product", prompt)
+        self.assertIn("workplace housekeeping", prompt)
+        self.assertIn("material-washing production process", prompt)
+        self.assertIn("later verification/audit", prompt)
+        self.assertIn("not another physical inspection", prompt)
+
     def test_external_glossary_has_corrected_factory_canonicals(self):
         expected = {
             "木箱": ("peti kayu", "hard"),

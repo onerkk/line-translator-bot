@@ -13,7 +13,7 @@ import factory_chat_notice_semantics as chat_notice_semantics
 import factory_reported_event_semantics as reported_event_semantics
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.2-reported-finding-agents"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-10-02.1-contextual-housekeeping-scope"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -228,6 +228,11 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "quality, maintenance, safety, personnel, or accounting communication unless the source explicitly says otherwise.\n"
         "Use the retrieved plant glossary, factory knowledge and verified correction cases as the authoritative terminology system. "
         "Do not fall back to everyday dictionary meanings when a plant meaning is available.\n"
+        "Interpret colloquial shop-floor wording from the full clause and its operational context, not by replacing one word at a time. "
+        "For example, when a manager is said to '盯/釘' an operational goal such as workplace cleanliness, preserve the sense of close attention or strict emphasis and the stated change in timing; do not invent a formal audit, punishment, or order that is not stated.\n"
+        "Preserve the source's level of specificity for objects. A general term such as '掉落物' means unspecified things that have fallen and must stay general in Indonesian (for example, benda/barang yang jatuh); do not narrow it to raw material or product unless the source identifies that category. Apply the same rule in reverse.\n"
+        "In this plant, floor sweeping, mopping, wiping oil/water and cleanliness of the work area indicate workplace housekeeping. Translate that as kebersihan/kerapian area kerja or lingkungan kerja; distinguish it from environmental protection and from the material-washing production process.\n"
+        "When a report, work order or record is completed 'for checking/audit' (供查核/供稽核/備查), keep the purpose attached to the document: it is retained or provided for later verification/audit, not another physical inspection of the material or machine.\n"
         "Translate by meaning and relationships, not by replacing isolated words. Read the whole message, group each clause into its claims, and identify which modifiers apply to which item. "
         "Keep scope attached to the source item: words meaning each/all/from every/only/except must not drift to the nearest noun or a different coordinated item. "
         "When the source coordinates multiple items, preserve their grouping explicitly in natural target-language word order; do not let a translated phrase imply a relationship the source never states.\n"

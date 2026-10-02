@@ -394,7 +394,7 @@ if (getattr(translation_casebook_module, "TRANSLATION_CASEBOOK_API_VERSION", Non
     )
 
 _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-09-29.2-reported-finding-agents"
+_EXPECTED_FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-10-02.1-contextual-housekeeping-scope"
 if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_VERSION", None)
         != _EXPECTED_FACTORY_TRANSLATION_POLICY_API_VERSION
         or getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_BUILD_ID", None)
@@ -451,7 +451,7 @@ logger.info(
 )
 
 _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"
+_EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-10-02.1-explicit-measurement-subject"
 if (getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_API_VERSION", None)
         != _EXPECTED_FACTORY_MEASUREMENT_SEMANTICS_API_VERSION
         or getattr(factory_measurement_semantics_module, "FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID", None)
@@ -587,6 +587,10 @@ _fk_washing = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
     "zh", "id", limit=5
 )
+_fk_housekeeping = _FACTORY_KNOWLEDGE_STORE.retrieve(
+    "外賓來訪期間，作業區地面掉落物要掃，總經理嚴格重視環境整潔。",
+    "zh", "id", limit=8
+)
 _fk_pmi_grade = _FACTORY_KNOWLEDGE_STORE.retrieve(
     "再宣導一下，每一把都一定要打鋼種，出貨這把是A班異型站包裝時嫌麻煩沒檢驗PMI就包了",
     "zh", "id", limit=5
@@ -613,6 +617,10 @@ if not any(card.get("id") == "equipment_output_production_semantics" for card in
     raise RuntimeError("factory knowledge self-test failed: equipment output semantics were not retrieved")
 if not any(card.get("id") == "material_washing_support_semantics" for card in _fk_washing):
     raise RuntimeError("factory knowledge self-test failed: material washing support semantics were not retrieved")
+if not any(card.get("id") == "factory_housekeeping_management_emphasis" for card in _fk_housekeeping):
+    raise RuntimeError("factory knowledge self-test failed: housekeeping context was not retrieved")
+if any(card.get("id") == "factory_housekeeping_management_emphasis" for card in _fk_washing):
+    raise RuntimeError("factory knowledge self-test failed: housekeeping semantics matched material washing")
 if not any(card.get("id") == "pmi_grade_verification_bundle_packaging" for card in _fk_pmi_grade):
     raise RuntimeError("factory knowledge self-test failed: PMI grade-verification semantics were not retrieved")
 if not any(card.get("id") == "loading_unloading_weighing_audit" for card in _fk_loading_weighing_audit):

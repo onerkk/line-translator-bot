@@ -17,13 +17,14 @@ import re
 from typing import Iterable, Mapping, Sequence
 
 FACTORY_MEASUREMENT_SEMANTICS_API_VERSION = 1
-FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-08-08.3-id-zh-work-order-material-dimension"
+FACTORY_MEASUREMENT_SEMANTICS_BUILD_ID = "2026-10-02.1-explicit-measurement-subject"
 
-# Strong measurement cues.  ``mikro`` is plant shorthand for a dimensional
-# micrometer/measurement reading in this message shape; it is not an adjective
-# meaning a miniature machine.
+# Strong measurement cues.  ``mikro``/``micro`` are plant shorthand for a
+# dimensional micrometer/measurement reading in this message shape; they are
+# not adjectives meaning a miniature machine.
 _MEASUREMENT_CUES = {
     "mikro": "micrometer",
+    "micro": "micrometer",
     "mikrometer": "micrometer",
     "micrometer": "micrometer",
     "pengukuran": "measurement",
@@ -54,6 +55,33 @@ _STATE_ZH = {
     "undersize": "尺寸偏小",
     "oversize": "尺寸偏大",
     "in_tolerance": "尺寸在公差內",
+}
+
+# Explicit object words describe what was measured; they are not disposable
+# filler.  Keeping the object's category in the semantic frame prevents an AI
+# or deterministic renderer from replacing an explicitly named part with an
+# inferred machine output or work order.
+_MEASUREMENT_SUBJECT_CUES = {
+    "barang": "item",
+    "benda": "item",
+    "produk": "product",
+    "material": "material",
+    "bahan": "material",
+    "batang": "bar",
+}
+
+_MEASUREMENT_SUBJECT_ZH = {
+    "item": "料件",
+    "product": "產品",
+    "material": "材料",
+    "bar": "棒材",
+}
+
+_MEASUREMENT_SUBJECT_TARGETS = {
+    "item": ("料件", "工件"),
+    "product": ("產品",),
+    "material": ("材料", "來料", "棒材"),
+    "bar": ("棒材",),
 }
 
 # These are only accepted as structural filler in a complete terse shorthand.
@@ -91,6 +119,13 @@ _BAD_MACHINE_SIZE_ZH = (
 _BAD_MACHINE_SCALE_PATTERNS = (
     re.compile(r"(?:機台|設備|機器)(?:本身)?(?:很|太|較|比較|偏|過於)小(?:型)?"),
     re.compile(r"(?:機台|設備|機器)(?:本身)?(?:很|太|較|比較|偏|過於)大(?:型)?"),
+)
+
+_BAD_MEASURING_TOOL_SCALE_PATTERNS = (
+    re.compile(
+        r"(?:分厘卡|千分尺|游標卡尺|卡尺|量具)(?:本身)?(?:的)?"
+        r"(?:尺寸|大小|很|太|較|比較|偏|過於)?(?:偏大|偏小|過大|過小|大|小)"
+    ),
 )
 
 
@@ -156,6 +191,14 @@ def build_frame(
 
     strong_phrase, measurement_kind = _first_phrase(normalized, _MEASUREMENT_CUES)
     dimension_phrase, dimension_kind = _first_phrase(normalized, _DIMENSION_CUES)
+    subject_phrases = [
+        (phrase, subject)
+        for phrase, subject in _MEASUREMENT_SUBJECT_CUES.items()
+        if _has_phrase(normalized, phrase)
+    ]
+    subject_kinds = list(dict.fromkeys(subject for _phrase, subject in subject_phrases))
+    subject_ambiguous = len(subject_kinds) > 1
+    explicit_subject = subject_kinds[0] if len(subject_kinds) == 1 else ""
 
     # Resolve the dimensional state compositionally and detect contradictory
     # shorthand instead of silently taking whichever keyword happens to sort
@@ -176,14 +219,14 @@ def build_frame(
     elif present_state_phrases:
         state_phrase = max((phrase for phrase, _state_name in present_state_phrases), key=len)
 
-    # ``mikro`` by itself is lexically ambiguous in ordinary Indonesian.  The
+    # ``mikro``/``micro`` by themselves are lexically ambiguous in ordinary Indonesian. The
     # plant-specific measurement reading is activated only when it is anchored
     # to a canonical equipment code from the existing STATION_CODES asset.
     # Explicit measurement words such as ``mikrometer`` / ``hasil ukur`` remain
     # usable without a code.  This generalizes across every known equipment code
     # without globally redefining the common word ``mikro``.
     if state in {"undersize", "oversize"} or state_ambiguous:
-        if strong_phrase == "mikro":
+        if strong_phrase in {"mikro", "micro"}:
             measurement_evidence = bool(codes)
         else:
             measurement_evidence = bool(strong_phrase)
@@ -208,7 +251,10 @@ def build_frame(
             flags=re.IGNORECASE,
         )
     for phrase in sorted(
-        set(_MEASUREMENT_CUES) | set(_DIMENSION_CUES) | set(_STATE_CUES),
+        set(_MEASUREMENT_CUES)
+        | set(_DIMENSION_CUES)
+        | set(_STATE_CUES)
+        | set(_MEASUREMENT_SUBJECT_CUES),
         key=len,
         reverse=True,
     ):
@@ -220,8 +266,16 @@ def build_frame(
     # Deterministic rendering is deliberately narrower than frame activation.
     # A known equipment code plus one unambiguous state and only supported
     # shorthand slots is sufficient.
-    complete = bool(codes and state is not None and not state_ambiguous and not substantive_tokens)
-    effective_work_order_context = bool(work_order_context and codes)
+    complete = bool(
+        codes
+        and state is not None
+        and not state_ambiguous
+        and not subject_ambiguous
+        and not substantive_tokens
+    )
+    # An explicitly named item already supplies the measured object. Do not
+    # override that source evidence with an inferred order from nearby media.
+    effective_work_order_context = bool(work_order_context and codes and not explicit_subject)
 
     # When a confirmed recent work-order photo is available, the terse factory
     # shorthand is deictic: the equipment code identifies the machine currently
@@ -236,6 +290,8 @@ def build_frame(
         "complete": complete,
         "normalized": normalized,
         "equipment_codes": codes,
+        "explicit_measurement_subject": explicit_subject,
+        "measurement_subject_ambiguous": bool(subject_ambiguous),
         "measurement_cue": strong_phrase or dimension_phrase or "",
         "measurement_kind": measurement_kind or dimension_kind or "measurement",
         "dimension_cue": dimension_phrase or "",
@@ -259,6 +315,19 @@ def deterministic_translation(frame: Mapping) -> str | None:
     if not codes or not state_zh:
         return None
     machine = "、".join(codes)
+    explicit_subject = str(frame.get("explicit_measurement_subject") or "")
+    if explicit_subject:
+        noun = _MEASUREMENT_SUBJECT_ZH.get(explicit_subject)
+        if not noun:
+            return None
+        state_phrase = {
+            "尺寸偏小": "偏小",
+            "尺寸偏大": "偏大",
+            "尺寸在公差內": "在公差內",
+        }.get(state_zh)
+        if not state_phrase:
+            return None
+        return f"{machine}{noun}的尺寸量測值{state_phrase}"
     if frame.get("work_order_context"):
         # The photographed work order is the omitted object.  The machine code
         # tells which equipment is producing it; the size judgement belongs to
@@ -282,14 +351,17 @@ def build_prompt(frame: Mapping) -> str:
     codes = "、".join(str(c) for c in frame.get("equipment_codes") or ()) or "（未指定）"
     state_zh = frame.get("state_zh") or "尺寸量測狀態"
     work_order = "是" if frame.get("work_order_context") else "否"
+    explicit_subject = str(frame.get("explicit_measurement_subject") or "")
+    subject_label = _MEASUREMENT_SUBJECT_ZH.get(explicit_subject, "（原文未明說）")
     return (
         "<id_zh_measurement_shorthand>"
-        f"設備代碼={codes}; 量測判定={state_zh}; 最近工單照片上下文={work_order}。"
+        f"設備代碼={codes}; 量測判定={state_zh}; 原文明示量測對象={subject_label}; 最近工單照片上下文={work_order}。"
         "此類現場短句的 mikro/mikrometer 是分厘卡或尺寸量測語意；"
         "與 kecil/kekecilan 搭配表示尺寸偏小，與 besar/kebesaran 搭配表示尺寸偏大，"
         "masuk 表示尺寸在公差內。"
         "mesin + 已知設備代碼是在指定機台，不可把 mikro/kecil 合併成『微型/小型/迷你機台』。"
-        "語義角色必須分開：設備代碼是生產設備；尺寸判定的主體是材料，不是設備本體。"
+        "語義角色必須分開：設備代碼是生產設備；尺寸判定的主體是原文明示的料件/產品/材料/棒材，若未明示則依工廠脈絡理解為該設備加工中的材料；絕不是設備本體。"
+        "若原文已明說 barang/produk/material/bahan/batang，必須保留該對象類別，譯為該料件/產品/材料/棒材的尺寸量測值偏小/偏大；不可改成推定的生產工單或只說分厘卡本身偏大。"
         "若最近工單照片上下文=是，這是承接剛才照片的省略句：設備代碼表示該機台現在正在生產/加工照片中的這個訂單，"
         "mikro + 尺寸狀態表示這個訂單的來料尺寸狀態。應理解成『I5 現在生產的這個訂單，來料尺寸偏小/偏大/在公差內』這類關係；"
         "禁止翻成『I5 這台設備的工單尺寸偏小』、禁止說設備本身尺寸偏小，也不要把量測動作錯掛在設備本體。"
@@ -316,10 +388,15 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
         if match:
             issues.append("measurement_literal_machine_scale:" + match.group(0))
             break
+    for pattern in _BAD_MEASURING_TOOL_SCALE_PATTERNS:
+        match = pattern.search(target)
+        if match:
+            issues.append("measurement_literal_tool_scale:" + match.group(0))
+            break
 
     # A standalone 「微型」 is also suspicious when the source uses the strong
     # ``mikro`` cue; this catches variants such as 「I5 微型的小機台」.
-    if frame.get("measurement_cue") in {"mikro", "mikrometer", "micrometer"}:
+    if frame.get("measurement_cue") in {"mikro", "micro", "mikrometer", "micrometer"}:
         if "微型" in target or "迷你" in target:
             issues.append("measurement_mikro_misread_as_machine_scale")
 
@@ -328,15 +405,20 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
             issues.append("measurement_equipment_code_missing:" + str(code))
 
     state = frame.get("state")
-    if state == "undersize" and not any(x in target for x in ("尺寸偏小", "量測偏小", "尺寸過小", "低於下限")):
+    if state == "undersize" and not any(x in target for x in ("尺寸偏小", "尺寸量測值偏小", "量測尺寸偏小", "量測偏小", "尺寸過小", "低於下限")):
         issues.append("measurement_undersize_missing")
-    elif state == "oversize" and not any(x in target for x in ("尺寸偏大", "量測偏大", "尺寸過大", "超出上限")):
+    elif state == "oversize" and not any(x in target for x in ("尺寸偏大", "尺寸量測值偏大", "量測尺寸偏大", "量測偏大", "尺寸過大", "超出上限")):
         issues.append("measurement_oversize_missing")
     elif state == "in_tolerance" and not any(x in target for x in ("公差內", "進公差", "尺寸合格", "量測合格")):
         issues.append("measurement_in_tolerance_missing")
 
     if frame.get("complete"):
-        if not any(x in target for x in ("材料尺寸", "料尺寸", "來料尺寸", "棒材尺寸", "產品尺寸")):
+        explicit_subject = str(frame.get("explicit_measurement_subject") or "")
+        explicit_targets = _MEASUREMENT_SUBJECT_TARGETS.get(explicit_subject, ())
+        has_explicit_subject = any(x in target for x in explicit_targets)
+        if explicit_subject and not has_explicit_subject:
+            issues.append("measurement_explicit_subject_missing:" + explicit_subject)
+        if not explicit_subject and not any(x in target for x in ("材料尺寸", "材料的尺寸", "料尺寸", "來料尺寸", "棒材尺寸", "產品尺寸")):
             issues.append("measurement_material_object_missing")
         if re.search(r"(?:這台)?設備(?:本身)?(?:量測|測量|測得|量到).{0,6}尺寸偏[大小]", target):
             issues.append("measurement_state_attached_to_machine_measurement")
@@ -362,9 +444,11 @@ def health() -> dict:
         "Mesin I5 mikro kecil", equipment_codes=["I5"], work_order_context=True
     )
     oversize = build_frame("Mesin BF3 mikro besar", equipment_codes=["BF3"])
+    explicit_item_oversize = build_frame("Barang BF3 micro besar", equipment_codes=["BF3"])
     conflict = build_frame("Mesin I15 mikro kecil besar", equipment_codes=["I15"])
     bare_small = build_frame("mesin kecil", equipment_codes=[])
     generic_micro = build_frame("produk mikro kecil", equipment_codes=[])
+    generic_micro_spelling = build_frame("produk micro kecil", equipment_codes=[])
 
     checks = [
         undersize.get("active") is True,
@@ -372,10 +456,18 @@ def health() -> dict:
         deterministic_translation(undersize) == "I5 生產中的材料尺寸偏小",
         deterministic_translation(order_undersize) == "I5 現在生產的這個訂單，來料尺寸偏小",
         deterministic_translation(oversize) == "BF3 生產中的材料尺寸偏大",
+        explicit_item_oversize.get("complete") is True,
+        explicit_item_oversize.get("explicit_measurement_subject") == "item",
+        deterministic_translation(explicit_item_oversize) == "BF3料件的尺寸量測值偏大",
+        validate_translation(
+            explicit_item_oversize, "BF3料件的尺寸量測值偏大"
+        )[0] is True,
+        validate_translation(explicit_item_oversize, "BF3料件分厘卡偏大")[0] is False,
         conflict.get("active") is True and conflict.get("complete") is False,
         deterministic_translation(conflict) is None,
         bare_small.get("active") is False,
         generic_micro.get("active") is False,
+        generic_micro_spelling.get("active") is False,
         validate_translation(undersize, "I5 微型小機台")[0] is False,
         validate_translation(undersize, "I5 這台設備很小")[0] is False,
         validate_translation(undersize, "I5 這台設備量測尺寸偏小")[0] is False,
