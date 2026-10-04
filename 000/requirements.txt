@@ -1,0 +1,15 @@
+Flask>=3.1,<4
+line-bot-sdk>=3.25.0,<4
+requests>=2.32,<3
+openai
+gunicorn
+openpyxl
+anthropic>=1.0,<2
+rapidfuzz>=3.5.0
+imageio-ffmpeg
+Pillow>=10,<12
+qrcode>=8,<9
+pypdf>=4,<6
+# The release gate also supports installing only requirements.txt + pytest.
+# Keep Lua enabled: reminder tests execute the real Redis atomic scripts.
+fakeredis[lua]==2.37.1
