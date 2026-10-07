@@ -24,12 +24,13 @@ import re
 from translation_request_cache import memoize
 import conversation_context
 import factory_order_semantics as order_semantics
+import factory_terminology as terminology
 import unicodedata
 from typing import Any, Iterable, Mapping
 
 
 FACTORY_MESSAGE_SEMANTICS_API_VERSION = 3
-FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-09-24.1-id-deictic-order"
+FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "2026-10-07.1-release-domain-ownership"
 
 _NUMBER = r"\d+(?:[.,]\d+)?"
 _MENTION_RE = re.compile(
@@ -558,7 +559,7 @@ _ZH_BUNDLE_TO_PROCESS_RE = re.compile(
 _ZH_PROCESS_LOCATION_ID = {
     "包裝": "bagian packaging", "包装": "bagian packaging",
     "拋光": "bagian polishing", "抛光": "bagian polishing",
-    "研磨": "bagian grinding", "削皮": "Bagian Peeling",
+    "研磨": "bagian grinding",
     "冷抽": "bagian cold drawing",
     "矯直": "bagian straightening", "矫直": "bagian straightening",
     "酸洗": "bagian pickling",
@@ -1388,9 +1389,14 @@ def _build_zh_id_factory_unit_trolley_frame(source: str, frame: dict) -> dict:
     )
 
     frame["kind"] = "zh_id_factory_unit_trolley_request"
+    receiver_id = "Bagian Peeling"
+    for term in terminology.get_engine(terminology.approved_glossary()).match_zh(visible):
+        if term.start == receiver_match.start() and term.category == "station":
+            receiver_id = term.target_term
+            break
     frame["slots"].update({
         "receiver_source": receiver_match.group(0),
-        "receiver_id": "Bagian Peeling",
+        "receiver_id": receiver_id,
         "need_source": need_match.group(0),
         "owner_unit_expression": trolley_match.group("unit_expr"),
         "owner_unit_codes": codes,
@@ -1404,8 +1410,8 @@ def _build_zh_id_factory_unit_trolley_frame(source: str, frame: dict) -> dict:
         frame,
         "trolley_receiving_section",
         receiver_match.group(0),
-        "削皮在需要台車的主詞位置，是削皮單位／部門，不是剝除表皮的動作",
-        "Bagian Peeling",
+        "保留經現場確認的接收單位／站別：簡稱削皮為包裝站，明示削皮股為部門",
+        receiver_id,
     )
     _claim(
         frame,
@@ -1418,8 +1424,8 @@ def _build_zh_id_factory_unit_trolley_frame(source: str, frame: dict) -> dict:
         frame,
         "trolley_need_relation",
         need_match.group(0),
-        "削皮單位需要台車",
-        "Bagian Peeling membutuhkan troli",
+        "指定單位／站別需要台車",
+        receiver_id + " membutuhkan troli",
     )
     if request:
         _claim(
@@ -1645,6 +1651,8 @@ def _release_source_relations(visible: str) -> list[dict]:
         # data or next-station evidence disambiguates a nearby QC mention.
         data_context = bool(re.search(r"資料|资料|數據|数据|ERP|下(?:一)?站(?:別|别)?", clause, re.I))
         if not data_context and _ZH_RELEASE_QC_RE.search(clause):
+            continue
+        if not data_context and terminology.quality_release_context(clause):
             continue
         if _ZH_RELEASE_PHYSICAL_RE.search(clause) or "放假" in clause or "放料" in clause:
             continue
@@ -2739,6 +2747,15 @@ def _build_zh_id_deferred_material_flow_frame(source: str, frame: dict) -> dict:
     destination_count = _parse_zh_release_count(destination_count_raw)
     current_process = current.group("process")
     destination_process = destination.group("process")
+    location_terms = terminology.get_engine(terminology.approved_glossary()).match_zh(visible)
+    def location_id(match):
+        start, end = match.span("process")
+        for term in location_terms:
+            if term.start <= start and end <= term.end and term.category == "station":
+                return term.target_term
+        return _ZH_PROCESS_LOCATION_ID.get(match.group("process"), "")
+    current_process_id = location_id(current)
+    destination_process_id = location_id(destination)
     evidence = [
         match.group("evidence")
         for match in (urgent, deferred, request, current, destination)
@@ -2756,11 +2773,11 @@ def _build_zh_id_deferred_material_flow_frame(source: str, frame: dict) -> dict:
         "current_count_raw": current_count_raw,
         "current_count": current_count,
         "current_process_source": current_process,
-        "current_process_id": _ZH_PROCESS_LOCATION_ID.get(current_process, ""),
+        "current_process_id": current_process_id,
         "destination_count_raw": destination_count_raw,
         "destination_count": destination_count,
         "destination_process_source": destination_process,
-        "destination_process_id": _ZH_PROCESS_LOCATION_ID.get(destination_process, ""),
+        "destination_process_id": destination_process_id,
         "gradual_movement": True,
     })
     frame["unparsed"] = unparsed
@@ -2783,7 +2800,7 @@ def _build_zh_id_deferred_material_flow_frame(source: str, frame: dict) -> dict:
         frame, "bundles_at_current_process", current.group("evidence"),
         "指定捆數目前位於該製程", (
             _format_id_release_count(current_count, current_count_raw)
-            + " bundel berada di " + _ZH_PROCESS_LOCATION_ID.get(current_process, "")
+            + " bundel berada di " + current_process_id
         ),
     )
     _claim(
@@ -2792,15 +2809,15 @@ def _build_zh_id_deferred_material_flow_frame(source: str, frame: dict) -> dict:
         (
             _format_id_release_count(destination_count, destination_count_raw)
             + " bundel akan dikirim secara bertahap ke "
-            + _ZH_PROCESS_LOCATION_ID.get(destination_process, "")
+            + destination_process_id
         ),
     )
     frame["active"] = True
     frame["complete"] = bool(
         urgent and request and current_count is not None
         and destination_count is not None
-        and _ZH_PROCESS_LOCATION_ID.get(current_process)
-        and _ZH_PROCESS_LOCATION_ID.get(destination_process)
+        and current_process_id
+        and destination_process_id
         and not unparsed
     )
     return frame
@@ -4091,7 +4108,7 @@ def validate_translation(frame: Mapping, translation: str) -> tuple[bool, list[s
 
     elif frame.get("kind") == "zh_id_factory_unit_trolley_request":
         low = _norm(target)
-        if not _has_phrase(low, ("bagian peeling",)):
+        if not _has_phrase(low, (str(slots.get("receiver_id") or "Bagian Peeling"),)):
             issues.append(
                 "factory_message_semantics:trolley_receiving_section_missing"
             )
@@ -5329,7 +5346,7 @@ def build_prompt(frame: Mapping) -> str:
     elif frame.get("kind") == "zh_id_factory_unit_trolley_request":
         lines.append(
             "This is a factory-unit trolley request. In the subject position before 需要, "
-            "削皮 means the receiving organization Bagian Peeling, not the action proses "
+            "削皮 means the confirmed receiving packing station; 削皮股 explicitly names Bagian Peeling. Neither means the action proses "
             "pengupasan/kupas kulit. Compact G-number spellings such as G8G9, G8/G9 and "
             "G8、G9 denote separate factory-unit abbreviations. Preserve every code and "
             "express the omitted ownership/source relation explicitly as 'troli dari unit "
@@ -5512,7 +5529,7 @@ def health() -> dict:
     movement = build_frame("我過去了了解看看", "zh", "id")
     unit_trolley_source = "@法比恩 Fabian 削皮需要G8G9台車 麻煩一下"
     unit_trolley_target = (
-        "@法比恩 Fabian Bagian Peeling membutuhkan troli dari unit G8 dan G9. "
+        "@法比恩 Fabian Stasiun packing peeling membutuhkan troli dari unit G8 dan G9. "
         "Mohon bantuannya."
     )
     unit_trolley = build_frame(unit_trolley_source, "zh", "id")

@@ -10,7 +10,7 @@ import translation_quality_gate as quality_gate
 ROOT = Path(__file__).resolve().parent
 SOURCE = "削皮需要G8G9台車 麻煩一下"
 TARGET = (
-    "Bagian Peeling membutuhkan troli dari unit G8 dan G9. "
+    "Stasiun packing peeling membutuhkan troli dari unit G8 dan G9. "
     "Mohon bantuannya."
 )
 SCREENSHOT_BAD_TARGET = (
@@ -25,7 +25,7 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
         self.assertTrue(frame["active"])
         self.assertTrue(frame["complete"])
         self.assertEqual(frame["kind"], "zh_id_factory_unit_trolley_request")
-        self.assertEqual(frame["slots"]["receiver_id"], "Bagian Peeling")
+        self.assertEqual(frame["slots"]["receiver_id"], "Stasiun packing peeling")
         self.assertEqual(frame["slots"]["owner_unit_codes"], ["G8", "G9"])
         self.assertEqual(
             semantics.translate_source_directly(SOURCE, "zh", "id"), TARGET
@@ -38,12 +38,12 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
             ("削皮需要 G8 G9 台車，麻煩一下", TARGET),
             (
                 "削皮那邊目前還需要 G8/9 台車，請幫忙",
-                "Saat ini, Bagian Peeling masih membutuhkan troli dari unit "
+                "Saat ini, Stasiun packing peeling masih membutuhkan troli dari unit "
                 "G8 dan G9. Mohon bantuannya.",
             ),
             (
                 "@法比恩 Fabian 削皮站要借 G8G9 台車",
-                "@法比恩 Fabian Bagian Peeling membutuhkan troli dari unit "
+                "@法比恩 Fabian Stasiun packing peeling membutuhkan troli dari unit "
                 "G8 dan G9.",
             ),
         )
@@ -83,7 +83,7 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
 
     def test_codes_must_be_separate_units_not_one_trolley_label(self):
         frame = semantics.build_frame(SOURCE, "zh", "id")
-        glued = "Bagian Peeling membutuhkan troli G8G9. Mohon bantuannya."
+        glued = "Stasiun packing peeling membutuhkan troli G8G9. Mohon bantuannya."
         ok, issues = semantics.validate_translation(frame, glued)
         self.assertFalse(ok)
         self.assertIn(
@@ -172,7 +172,7 @@ class UnitTrolleyOwnershipRootFixTests(unittest.TestCase):
 
     def test_deployment_revision_and_builtin_examples_are_consistent(self):
         app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-        expected = "2026-09-24.1-id-deictic-order"
+        expected = "2026-10-07.1-release-domain-ownership"
         self.assertEqual(semantics.FACTORY_MESSAGE_SEMANTICS_BUILD_ID, expected)
         self.assertIn(
             f'_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = "{expected}"',

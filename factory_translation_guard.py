@@ -27,9 +27,10 @@ import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 import factory_terminology as terminology_module
 import factory_reported_event_semantics as reported_event_semantics
+import translation_alignment
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-10-07.1-source-relation-alignment"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -219,6 +220,7 @@ class FactoryTranslationGuard:
             "source_understanding_build": source_understanding.SOURCE_UNDERSTANDING_VERSION,
             "message_semantics_build": fmr_module.FACTORY_MESSAGE_SEMANTICS_BUILD_ID,
             "order_semantics_build": fmr_module.order_semantics.BUILD_ID,
+            "source_alignment_build": translation_alignment.BUILD_ID,
             "regression": regression,
             "knowledge": knowledge_doc,
         }
@@ -396,6 +398,8 @@ class FactoryTranslationGuard:
         matched_ids = tuple(str(card.get("id") or "") for card in cards if card.get("id"))
         _ok, knowledge_issues = self._knowledge.validate_translation(cards, source_text, target_text)
         issues: List[str] = list(knowledge_issues or [])
+        modifier_contract = translation_alignment.build_contract(source_text, src, tgt)
+        issues.extend(translation_alignment.translation_issues(modifier_contract, target_text))
         issues.extend(terminology_module.packaging_translation_issues(source_text, target_text, _lang(src), _lang(tgt)))
         exact = self.exact_case(source_text, src, tgt)
         if exact:

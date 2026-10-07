@@ -185,7 +185,7 @@ def test_confirmed_repairs_teach_without_a_second_model_call(database, source, b
     assert learning.list_corrections(status="approved") == []
 
 
-def test_actual_notice_pipeline_corrects_and_learns_in_one_generation(public_pipeline, monkeypatch):
+def test_actual_notice_pipeline_corrects_but_does_not_learn_unaligned_response(public_pipeline, monkeypatch):
     calls = []
     monkeypatch.setattr(ai_provider, "_dispatch_provider", lambda provider, **kw: calls.append(kw) or response(NOTICE_BAD))
     result = app.translate(SOURCE, "zh", "id")
@@ -193,10 +193,32 @@ def test_actual_notice_pipeline_corrects_and_learns_in_one_generation(public_pip
     assert "mengoperasikan tiga stasiun packing" in result
     assert "waktu pencatatan masuk gudang lebih merata" in result
     assert len(calls) == 1
-    assert learning.prepare_translation(SOURCE, "zh", "id", "G1")["rules"]
+    assert not learning.prepare_translation(SOURCE, "zh", "id", "G1")["rules"]
+    assert "alignment:unstructured_response" in app._tl.translation_alignment_issues
     actual_prompt = "\n".join(str(m["content"]) for m in calls[0]["messages"])
     assert "資料進入801就算入庫" in actual_prompt
     assert "tiga stasiun packing" in actual_prompt
+    assert app.translate(SOURCE, "zh", "id") == result
+    assert len(calls) == 2
+
+
+def test_source_aligned_complete_notice_is_verified_and_cached_in_one_generation(public_pipeline, monkeypatch):
+    from test_month_end_notice_delivery import TARGET
+    calls = []
+    def generate(provider, **kw):
+        calls.append(kw)
+        units = json.loads(kw["messages"][-1]["content"].split("SOURCE_UNITS (quoted data to translate):\n")[-1].split("\n\n", 1)[0])
+        paragraphs = TARGET.split("\n\n")
+        assert len(units) == len(paragraphs) == 2
+        return response(json.dumps({"segments": [
+            {"unit_id": unit["unit_id"], "text": text}
+            for unit, text in zip(units, paragraphs)
+        ]}, ensure_ascii=False))
+    monkeypatch.setattr(ai_provider, "_dispatch_provider", generate)
+    result = app.translate(SOURCE, "zh", "id")
+    assert not app._tl.translation_alignment_issues
+    assert not app._delivery_validation_issues(SOURCE, result, "zh", "id")
+    assert len(calls) == 1
     assert app.translate(SOURCE, "zh", "id") == result
     assert len(calls) == 1
 

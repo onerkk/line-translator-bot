@@ -13,7 +13,7 @@ import factory_chat_notice_semantics as chat_notice_semantics
 import factory_reported_event_semantics as reported_event_semantics
 
 FACTORY_TRANSLATION_POLICY_API_VERSION = 8
-FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-10-02.1-contextual-housekeeping-scope"
+FACTORY_TRANSLATION_POLICY_BUILD_ID = "2026-10-07.1-contextual-release-senses"
 
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _TRUE = {"1", "true", "yes", "on", "enabled"}
@@ -253,7 +253,7 @@ def build_prompt(text: Any, src: Any, tgt: Any) -> str:
         "Do not translate a Chinese customer name into an ordinary Indonesian adjective or noun.\n"
         "Before finalizing, silently back-translate each target clause and compare its actor, object, modifier scope and operational relationships with the matching source clause. "
         "If a modifier could attach to the wrong item, rewrite the target clause so its scope is unambiguous. "
-        "Output only one complete target-language translation. Never output an apology, safety-status message, "
+        "Preserve assistance qualifiers: 幫忙多少包一些 asks for whatever packing can be assisted, not an increase relative to prior output. A physical window viewpoint never implies CCTV. Classify quality clearance, ERP data release and physical work-order removal separately from their clause evidence. Follow a SOURCE_UNITS structured response contract when supplied. Output only one complete target-language translation. Never output an apology, safety-status message, "
         "translation-failure notice, explanation, or request to resend. Local validation controls cache/learning admission; "
         "local quality findings never cancel a non-empty translation or trigger another generation.\n"
         "</unified_factory_translation_policy>"

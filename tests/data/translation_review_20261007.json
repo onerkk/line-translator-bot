@@ -1,0 +1,91 @@
+{
+  "review_date": "2026-10-07",
+  "basis": "附件截圖及使用者確認；target 是人工核對的回歸測試候選，不是正式 AI API 實測結果。",
+  "confirmed_meanings": {
+    "削皮／剝皮站別簡稱": "削皮包裝站；部門與加工語境另外辨識",
+    "放這2把": "系統資料放行",
+    "窗戶看": "實體窗戶觀看現場",
+    "多少包一些": "能幫忙包多少就包多少",
+    "異常澄清後放行": "品質確認後准予後續處理",
+    "工單不可取下": "不可從下一捆材料取下紙本工單"
+  },
+  "cases": [
+    {
+      "id": "safety_notice",
+      "src": "zh",
+      "tgt": "id",
+      "source": "以上宣導務必注意，生產前未確認溝槽內是否有殘料，這是造成混料的高風險行為。\n\n出料床上前一捆未吊離前，下一捆待生產的料的工單不可取下。\n\n再發現這種應注意未注意的缺失會扣罰績效獎金。",
+      "target": "Harap perhatikan sungguh-sungguh pengarahan di atas. Tidak memastikan apakah masih ada sisa material di dalam alur sebelum produksi berisiko tinggi menyebabkan material tercampur.\n\nSebelum bundel sebelumnya di meja output diangkat, lembar work order pada material bundel berikutnya yang akan diproduksi tidak boleh dilepas.\n\nJika kelalaian seperti ini kembali terjadi, bonus kinerja akan dipotong."
+    },
+    {
+      "id": "peeling_release",
+      "src": "zh",
+      "tgt": "id",
+      "source": "請剝皮先放這2把",
+      "target": "Tolong pihak Stasiun packing peeling release data untuk 2 bundel ini terlebih dahulu."
+    },
+    {
+      "id": "window_observation",
+      "src": "zh",
+      "tgt": "id",
+      "source": "小趙在窗戶看",
+      "target": "小趙 sedang melihat dari jendela."
+    },
+    {
+      "id": "issued_record",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@budi santoso 山多 I5已發料成功",
+      "target": "@budi santoso 山多 I5 sudah berhasil mengubah status data menjadi OL."
+    },
+    {
+      "id": "supervisor_warning",
+      "src": "zh",
+      "tgt": "id",
+      "source": "處長不高興唸了一下，下次有人提醒主管還沒離開不要太鬆懈😤",
+      "target": "Kepala divisi tidak senang dan menegur sebentar. Lain kali, kalau ada yang mengingatkan bahwa atasan belum pergi, jangan terlalu lengah 😤"
+    },
+    {
+      "id": "apology",
+      "src": "id",
+      "tgt": "zh",
+      "source": "Maafkan saya,🙏",
+      "target": "請原諒我，🙏"
+    },
+    {
+      "id": "phone_incident",
+      "src": "zh",
+      "tgt": "id",
+      "source": "剛剛研磨機那邊誰被處長抓滑手機",
+      "target": "Tadi di area mesin grinding, siapa yang ketahuan main ponsel oleh kepala divisi?"
+    },
+    {
+      "id": "supervisor_visit",
+      "src": "zh",
+      "tgt": "id",
+      "source": "處長下來巡視",
+      "target": "Kepala divisi turun untuk meninjau keadaan."
+    },
+    {
+      "id": "cleared_packing_assistance",
+      "src": "zh",
+      "tgt": "id",
+      "source": "等等一批異型棒異常澄清後放行的，幫忙多少包一些",
+      "target": "Nanti, setelah abnormalitas pada satu batch batang profil khusus diklarifikasi dan batch tersebut disetujui untuk diproses lebih lanjut, tolong bantu mengemas sebagian semampunya."
+    },
+    {
+      "id": "walk_to_packing_station",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@All 小趙走去削皮",
+      "target": "@All 小趙 berjalan ke Stasiun packing peeling."
+    },
+    {
+      "id": "kyt_photo",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@All 來拍KYT吧",
+      "target": "@All ayo foto KYT."
+    }
+  ]
+}

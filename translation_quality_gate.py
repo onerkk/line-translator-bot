@@ -38,12 +38,13 @@ import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
 import factory_chat_notice_semantics as chat_notice_semantics
 import factory_reported_event_semantics as reported_event_semantics
+import translation_alignment
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
 QUALITY_GATE_API_VERSION = 27
-QUALITY_GATE_BUILD_ID = "2026-09-29.1-reported-event-actor-alignment"
+QUALITY_GATE_BUILD_ID = "2026-10-07.1-source-relation-alignment"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -1132,6 +1133,35 @@ def _target_zh_language_purity_issues(
     return _dedupe(issues)
 
 
+def _target_id_language_purity_issues(source, candidate, immutable_literals, glossary_pairs):
+    """Reject untranslated plant terms while retaining source-owned names.
+
+    A copied name/label is allowed; a translatable glossary term is not. This
+    avoids the blanket Han-character ban that would damage Chinese names.
+    """
+    if not _HAN_RE.search(candidate):
+        return []
+    view = str(candidate)
+    allowed = [str(value) for value in immutable_literals if _HAN_RE.search(str(value))]
+    allowed.extend(str(target) for _, target in glossary_pairs if _HAN_RE.search(str(target)))
+    glossary = terminology_module.approved_glossary()
+    for term, row in glossary.items():
+        target = gp_module.canonical_target(row)
+        if term in source and target == term:
+            allowed.append(term)
+    for literal in sorted(set(allowed), key=len, reverse=True):
+        view = view.replace(literal, " ")
+    issues = []
+    engine = terminology_module.get_engine(glossary)
+    for run in re.findall(r"[\u3400-\u9fff]+", view):
+        for match in engine.match_zh(run):
+            if match.target_term != match.matched_text:
+                issues.append("untranslated_source_word:" + match.matched_text)
+        if run not in source:
+            issues.append("ungrounded_mixed_language:" + run)
+    return _dedupe(issues)
+
+
 def infer_inline_bilingual_terms(source: str, src_lang: str, tgt_lang: str) -> List[Tuple[str, str]]:
     """Infer repeated source-phrase → Chinese-annotation terminology pairs.
 
@@ -1956,6 +1986,8 @@ def _validate_normalized_translation(
     issues.extend(terminology_module.packaging_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(chat_notice_semantics.translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(_invented_identifier_issues(source, candidate, src_lang, tgt_lang))
+    modifier_contract = translation_alignment.build_contract(source, src_lang, tgt_lang)
+    issues.extend(translation_alignment.translation_issues(modifier_contract, candidate))
 
     if (terminology_module.computer_term_is_unambiguous(source, src_lang, tgt_lang)
             and re.search(r"計算機|计算机", candidate)):
@@ -2040,6 +2072,9 @@ def _validate_normalized_translation(
             issues.append("catastrophic_omission")
 
     elif tgt.startswith("id"):
+        issues.extend(_target_id_language_purity_issues(
+            source, candidate, immutable_literals, glossary_pairs,
+        ))
         source_han = len(_HAN_RE.findall(source))
         latin_words = len(re.findall(r'\b[A-Za-zÀ-ÖØ-öø-ÿ]{2,}\b', candidate))
         if source_han >= 8 and latin_words < 3:

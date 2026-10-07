@@ -2495,7 +2495,62 @@
     "reverse_safe": true,
     "category": "station",
     "priority": 170,
-    "note_zh": "削皮材料的包裝站；是使用者確認的三個包裝站之一，不是削皮加工站。"
+    "note_zh": "使用者於2026-10-07確認：在去／到／在某站、請某站放行資料等位置或站方動作語境，「削皮」「剝皮」是削皮包裝站的簡稱，不是削皮加工站。削皮股仍是部門；明示削皮加工／削皮機／棒材削皮仍依製程意思，不作全域替換。",
+    "aliases_zh": [
+      "剝皮包裝站",
+      "削皮包装站",
+      "剥皮包装站"
+    ],
+    "aliases_id": [
+      "stasiun pengemasan peeling",
+      "stasiun pengepakan peeling"
+    ],
+    "validated_targets_id": [
+      "Stasiun packing peeling",
+      "stasiun pengemasan peeling",
+      "stasiun pengepakan peeling",
+      "tempat pengemasan peeling",
+      "stasiun peeling untuk packing"
+    ],
+    "ocr_hint": true,
+    "note_id": "Dalam konteks lokasi atau tindakan pihak stasiun, singkatan 削皮/剝皮 berarti Stasiun packing peeling. Bedakan stasiun packing, Bagian Peeling, dan proses/mesin peeling. Jangan menambahkan lokasi material atau tujuan data yang tidak disebutkan.",
+    "contextual_aliases_zh": [
+      {
+        "text": "削皮",
+        "before_regex": "(?:^|(?:走|送|搬|移|拿|帶|带)?(?:去|到)|前往|請|请|麻煩|麻烦|通知|叫|在|從|从|讓|让)\\s*$",
+        "after_regex": "^\\s*(?:$|(?:送|移)?[過过]去|那[邊边]|這[邊边]|[站區区]|(?:目前|現在|现在|今天|已經|已经|已|還|还|先|優先|优先|幫忙|帮忙|請|请|麻煩|麻烦|再)*\\s*(?:放行|放(?:這|这|那|一下|\\d|[一二兩两三])|需要|要借))",
+        "exclude_after_regex": "^\\s*(?:股|部門|部门|加工|機|机|製程|制程|棒|工序|作業|作业)",
+        "exclude_context_regex": "水果|蘋果|苹果|香蕉|馬鈴薯|马铃薯|果皮|蔬菜"
+      },
+      {
+        "text": "剝皮",
+        "before_regex": "(?:^|(?:走|送|搬|移|拿|帶|带)?(?:去|到)|前往|請|请|麻煩|麻烦|通知|叫|在|從|从|讓|让)\\s*$",
+        "after_regex": "^\\s*(?:$|(?:送|移)?[過过]去|那[邊边]|這[邊边]|[站區区]|(?:目前|現在|现在|今天|已經|已经|已|還|还|先|優先|优先|幫忙|帮忙|請|请|麻煩|麻烦|再)*\\s*(?:放行|放(?:這|这|那|一下|\\d|[一二兩两三])|需要|要借))",
+        "exclude_after_regex": "^\\s*(?:股|部門|部门|加工|機|机|製程|制程|棒|工序|作業|作业)",
+        "exclude_context_regex": "水果|蘋果|苹果|香蕉|馬鈴薯|马铃薯|果皮|蔬菜"
+      },
+      {
+        "text": "剥皮",
+        "before_regex": "(?:^|(?:走|送|搬|移|拿|帶|带)?(?:去|到)|前往|請|请|麻煩|麻烦|通知|叫|在|從|从|讓|让)\\s*$",
+        "after_regex": "^\\s*(?:$|(?:送|移)?[過过]去|那[邊边]|這[邊边]|[站區区]|(?:目前|現在|现在|今天|已經|已经|已|還|还|先|優先|优先|幫忙|帮忙|請|请|麻煩|麻烦|再)*\\s*(?:放行|放(?:這|这|那|一下|\\d|[一二兩两三])|需要|要借))",
+        "exclude_after_regex": "^\\s*(?:股|部門|部门|加工|機|机|製程|制程|棒|工序|作業|作业)",
+        "exclude_context_regex": "水果|蘋果|苹果|香蕉|馬鈴薯|马铃薯|果皮|蔬菜"
+      },
+      {
+        "text": "削皮站",
+        "before_regex": "(?:^|(?:走|送|搬|移|拿|帶|带)?(?:去|到)|前往|請|请|麻煩|麻烦|通知|叫|在|從|从|讓|让)\\s*$",
+        "after_regex": "^\\s*(?:$|(?:送|移)?[過过]去|那[邊边]|這[邊边]|[站區区]|(?:目前|現在|现在|今天|已經|已经|已|還|还|先|優先|优先|幫忙|帮忙|請|请|麻煩|麻烦|再)*\\s*(?:放行|放(?:這|这|那|一下|\\d|[一二兩两三])|需要|要借))",
+        "exclude_after_regex": "^\\s*(?:股|部門|部门|加工|機|机|製程|制程|棒|工序|作業|作业)",
+        "exclude_context_regex": "水果|蘋果|苹果|香蕉|馬鈴薯|马铃薯|果皮|蔬菜"
+      },
+      {
+        "text": "剝皮站",
+        "before_regex": "(?:^|(?:走|送|搬|移|拿|帶|带)?(?:去|到)|前往|請|请|麻煩|麻烦|通知|叫|在|從|从|讓|让)\\s*$",
+        "after_regex": "^\\s*(?:$|(?:送|移)?[過过]去|那[邊边]|這[邊边]|[站區区]|(?:目前|現在|现在|今天|已經|已经|已|還|还|先|優先|优先|幫忙|帮忙|請|请|麻煩|麻烦|再)*\\s*(?:放行|放(?:這|这|那|一下|\\d|[一二兩两三])|需要|要借))",
+        "exclude_after_regex": "^\\s*(?:股|部門|部门|加工|機|机|製程|制程|棒|工序|作業|作业)",
+        "exclude_context_regex": "水果|蘋果|苹果|香蕉|馬鈴薯|马铃薯|果皮|蔬菜"
+      }
+    ]
   },
   "端面": {
     "idn": "permukaan ujung",

@@ -67,7 +67,7 @@ class FactoryIdDeicticOrderRootFixTests(unittest.TestCase):
             "canonicalize_indonesian_id_deictic_order", finalizer
         )
         self.assertIn(
-            '"2026-09-24.1-id-deictic-order"',
+            '"2026-10-07.1-release-domain-ownership"',
             app_source,
         )
 

@@ -115,7 +115,7 @@ def test_safety_term_does_not_whitelist_unrelated_or_extended_identifiers(source
 @pytest.mark.parametrize("units", ["G8G9", "G8、G9", "G8/G9", "G8 G9"])
 def test_trolley_unit_identifiers_follow_the_existing_source_inventory(units):
     source = "削皮需要" + units + "台車 麻煩一下"
-    target = "Bagian Peeling membutuhkan troli dari unit G8 dan G9. Mohon bantuannya."
+    target = "Stasiun packing peeling membutuhkan troli dari unit G8 dan G9. Mohon bantuannya."
     report = quality.validate_translation(source, target, "zh", "id")
     assert report.ok, report.issues
     bad = quality.validate_translation(source, target.replace("G9", "G10"), "zh", "id")

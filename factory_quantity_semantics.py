@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_QUANTITY_SEMANTICS_API_VERSION = 2
-FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-09-29.1-explicit-material-lot-scope"
+FACTORY_QUANTITY_SEMANTICS_BUILD_ID = "2026-10-07.1-relative-object-order"
 
 
 @dataclass(frozen=True)
@@ -271,6 +271,12 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
             if (value is not None and value == value.to_integral_value()
                     and start > 0 and text[start - 1] == "第"):
                 quantifier = "ordinal"
+            elif (value == 1 and start > 0 and text[start - 1] in "前上後后下"
+                  and not re.search(r"(?:放|剩|卸|拿|取|吊|搬|移|拉|推|拆|記|记|寫|写|撕|切|送|裝|装|掛|挂)[上下]$|落[後后]$|提[前]$", text[:start])):
+                # 前一捆/下一捆 refer to neighboring items in a sequence.
+                # Indonesian bundel sebelumnya/berikutnya needs no numeric 1.
+                quantifier = "relative_previous" if text[start - 1] in "前上" else "relative_next"
+                start -= 1
         spec = _CLASSIFIERS.get(str(classifier or ""))
         if not spec or value is None:
             continue
@@ -336,7 +342,8 @@ def build_frame(source: Any, src_lang: str = "zh", tgt_lang: str = "id") -> Dict
 
     distributive = bool(_DISTRIBUTIVE_RE.search(text))
     structurally_specific = any(a.category not in {"generic_count", "item_count", "machine_count"} for a in atoms)
-    active = bool(lot_references or (atoms and (structurally_specific or distributive or relations)))
+    relative_items = any(a.quantifier.startswith("relative_") for a in atoms)
+    active = bool(lot_references or (atoms and (structurally_specific or relative_items or distributive or relations)))
     return {
         "active": active,
         "source": text,
@@ -388,6 +395,9 @@ def _atom_patterns(atom: Mapping[str, Any]) -> List[re.Pattern[str]]:
     unit_terms = [str(x) for x in atom.get("accepted_id", ()) if str(x)]
     unit_pattern = "(?:" + "|".join(re.escape(x) for x in unit_terms) + ")"
     determiner = atom.get("quantifier")
+    if determiner in {"relative_previous", "relative_next"}:
+        order = r"sebelumnya|terdahulu" if determiner == "relative_previous" else r"berikutnya|selanjutnya"
+        return [re.compile(rf"\b{unit_pattern}\s+(?:yang\s+)?(?:{order})\b", re.I)]
     if determiner in {"other", "same", "indefinite"}:
         suffix = {"other": r"\s+(?:(?:yang|sama\s+sekali)\s+)?(?:lain(?:nya)?|berbeda|terpisah)",
                   "same": r"\s+(?:yang\s+)?sama", "indefinite": ""}[determiner]
@@ -543,6 +553,10 @@ def build_prompt(frame: Mapping[str, Any]) -> str:
         "This is a compositional quantity frame. Keep counts attached to their nouns; never move a count to another clause or invent a data count from 一下 or an indefinite article.",
     ]
     for atom in frame.get("atoms", []) or []:
+        if atom.get("quantifier") in {"relative_previous", "relative_next"}:
+            order = "sebelumnya" if atom["quantifier"] == "relative_previous" else "berikutnya/selanjutnya"
+            lines.append(f"Atom {atom['atom_id']}: source={atom['source_text']}; neighboring sequence item, nouns={'/'.join(atom['accepted_id'])}; use {order}, not an extra cardinal count or the opposite sequence item.")
+            continue
         if atom.get("referent"):
             lines.append(f"Atom {atom['atom_id']}: source={atom['source_text']}; referent={atom['referent']}; "
                          f"quantifier={atom['quantifier']}; value={atom['value']}; nouns={'/'.join(atom['accepted_id'])}. "

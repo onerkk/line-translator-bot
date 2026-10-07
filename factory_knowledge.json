@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-10-02.1-housekeeping-and-generic-floor-object",
+  "build_id": "2026-10-04.1-housekeeping-object-scope",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -5140,6 +5140,9 @@
           ]
         ],
         "require_all_groups": false,
+        "required_regex_any": [
+          "環境|整潔|卫生|衛生|作業區|工作區|作業場所|工作場所|地面|地板|地上|掉落.{0,5}(?:物|東西)|雜物|油水|掃地|掃除|清掃|拖地|打掃|廠區整潔|\\b(?:kebersihan|kerapian|lingkungan|lantai|menyapu|disapu|tercecer|terjatuh)\\b"
+        ],
         "min_score": 4
       },
       "context": [

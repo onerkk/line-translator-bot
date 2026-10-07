@@ -2575,14 +2575,32 @@ def _prepare_provider_privacy(messages, extra_literals=()):
     return privacy_module.mask_messages(messages or [], envelope), envelope
 
 
-def _restore_provider_privacy(response, envelope):
+def _restore_provider_privacy(response, envelope, *, structured=False):
     if not envelope.mapping or not getattr(response, "choices", None):
         return response
     try:
         message = response.choices[0].message
         content = getattr(message, "content", None)
         if isinstance(content, str):
-            message.content = privacy_module.restore_sensitive_text(content, envelope)
+            if structured:
+                # Restore string VALUES after parsing JSON. A protected name
+                # containing a quote, backslash or newline must not break the
+                # provider's schema or change unit IDs/property names.
+                try:
+                    payload = json.loads(content)
+                except (TypeError, ValueError):
+                    return response  # Let the shared decoder reject malformed JSON.
+                def restore_values(value):
+                    if isinstance(value, str):
+                        return privacy_module.restore_sensitive_text(value, envelope)
+                    if isinstance(value, list):
+                        return [restore_values(item) for item in value]
+                    if isinstance(value, dict):
+                        return {key: restore_values(item) for key, item in value.items()}
+                    return value
+                message.content = json.dumps(restore_values(payload), ensure_ascii=False)
+            else:
+                message.content = privacy_module.restore_sensitive_text(content, envelope)
     except Exception as exc:
         print(f"[ai_provider] privacy restore failed: {type(exc).__name__}", flush=True)
     return response
@@ -2656,7 +2674,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
             _USAGE_OBSERVER(response)
         except Exception as exc:
             logging.getLogger("app").warning("AI usage observer failed: %s", type(exc).__name__)
-    response = _restore_provider_privacy(response, envelope)
+    response = _restore_provider_privacy(response, envelope, structured=bool(kwargs.get("structured_schema")))
     issues = []
     choices = getattr(response, "choices", None) or []
     finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""

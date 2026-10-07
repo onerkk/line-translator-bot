@@ -143,7 +143,7 @@ def test_process_names_are_locations_when_directional_complement_is_present():
         "Setelah work order mendesak sore ini hampir selesai, mohon atur "
         "penanganan material tertunda yang tercantum di atas. Dua bundel "
         "berada di bagian grinding. Lima bundel akan dikirim secara bertahap "
-        "ke Bagian Peeling."
+        "ke Stasiun packing peeling."
     )
     frame = semantics.build_frame(source, "zh", "id")
 
@@ -151,7 +151,7 @@ def test_process_names_are_locations_when_directional_complement_is_present():
     assert frame["slots"]["current_count"] == 2
     assert frame["slots"]["destination_count"] == 5
     assert frame["slots"]["current_process_id"] == "bagian grinding"
-    assert frame["slots"]["destination_process_id"] == "Bagian Peeling"
+    assert frame["slots"]["destination_process_id"] == "Stasiun packing peeling"
     assert semantics.translate_source_directly(source, "zh", "id") == expected
     assert semantics.validate_translation(frame, expected) == (True, [])
 

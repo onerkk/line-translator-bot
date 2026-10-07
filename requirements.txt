@@ -1,10 +1,10 @@
 Flask>=3.1,<4
 line-bot-sdk>=3.25.0,<4
 requests>=2.32,<3
-openai
+openai>=3.26,<4
 gunicorn
 openpyxl
-anthropic>=0.40.0
+anthropic>=1.11,<2
 rapidfuzz>=3.5.0
 imageio-ffmpeg
 Pillow>=10,<12

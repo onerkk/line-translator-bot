@@ -19,6 +19,7 @@ import unicodedata
 import factory_instruction_semantics as instruction_semantics
 import factory_planning_semantics as planning_semantics
 import factory_workflow_semantics as workflow_semantics
+import factory_terminology as terminology
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
@@ -1160,8 +1161,14 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
             )
 
     if flags["no_more_search"] and flags["peeling_location"]:
+        station_targets = []
+        glossary = terminology.approved_glossary()
+        for term in terminology.get_engine(glossary).match_zh(src):
+            if term.category == "station":
+                station_targets.extend(glossary[term.source_term].get("validated_targets_id") or [term.target_term])
+        flags["peeling_location_terms"] = station_targets or ["stasiun peeling", "bagian peeling", "area peeling", "tempat peeling"]
         add("stop_searching", "不用／不必再找", "停止尋找目前在找的材料或物件", "tidak usah/perlu dicari lagi")
-        add("peeling_station_location", "在削皮／削皮區", "該材料目前位於削皮站或削皮區，不是正在執行削皮動作", "barangnya ada/berada di stasiun atau bagian peeling")
+        add("peeling_station_location", "在削皮／削皮區", "保留經詞庫確認的站別與物件位置，不是正在執行削皮動作", "barangnya ada/berada di " + flags["peeling_location_terms"][0])
         frame["ambiguities"].append({
             "source_term": "在削皮",
             "resolved_meaning_zh": "在『不用找了』的回覆中表示物件位於削皮站／區域",
@@ -2218,7 +2225,7 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         ))
         location_ok = _same_clause_has(low, (
             ("ada", "berada", "terletak"),
-            ("stasiun peeling", "bagian peeling", "area peeling", "tempat peeling"),
+            tuple(flags.get("peeling_location_terms") or ("stasiun peeling", "bagian peeling", "area peeling", "tempat peeling")),
         ))
         if not no_search_ok:
             issues.append("factory_semantic_audit:missing_stop_searching")

@@ -31,9 +31,9 @@ class FactoryOperationalClaimFrameRootFixTests(unittest.TestCase):
             "別找了，東西在削皮站。",
         )
         good_targets = (
-            "Tidak usah dicari lagi, barangnya ada di stasiun peeling.",
-            "Tidak perlu dicari lagi; materialnya berada di bagian peeling.",
-            "Jangan dicari lagi. Barangnya terletak di area peeling.",
+            "Tidak usah dicari lagi, barangnya ada di Stasiun packing peeling.",
+            "Tidak perlu dicari lagi; materialnya berada di stasiun pengemasan peeling.",
+            "Jangan dicari lagi. Barangnya terletak di tempat pengemasan peeling.",
         )
         for source, target in zip(sources, good_targets):
             frame = audit.build_source_frame(source, "zh", "id")

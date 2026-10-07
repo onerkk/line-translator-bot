@@ -16,16 +16,75 @@ import re
 import threading
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
+import json
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import glossary_policy as gp_module
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-09-22.1-packaging-protection-senses"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-07.1-contextual-station-senses"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
 _TRIE_END = object()
+
+
+@lru_cache(maxsize=2)
+def _read_glossary_snapshot(path: str, stamp: int, size: int) -> Dict[str, Any]:
+    with open(path, encoding="utf-8") as handle:
+        return gp_module.normalize_glossary(json.load(handle))
+
+
+def approved_glossary() -> Mapping[str, Any]:
+    """Use the current editable asset; refresh when an admin saves it."""
+    path = Path(__file__).with_name("glossary_data.json")
+    stat = path.stat()
+    return _read_glossary_snapshot(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def quality_release_context(text: str, lang: str = "zh") -> bool:
+    """Quality disposition is distinct from ERP data handoff, per clause.
+
+    A defect plus clarification/inspection licenses quality approval without
+    inventing a QC actor. Explicit release of data remains an ERP operation.
+    """
+    value = str(text or "")
+    if str(lang).lower().startswith("zh"):
+        for clause in re.split(r"[，,。！!；;\n]", value):
+            if re.search(r"(?:放行|放).{0,8}(?:資料|资料|數據|数据)|(?:資料|资料|數據|数据|ERP).{0,12}放行", clause, re.I):
+                continue
+            if re.search(r"(?:異常|异常|品質|质量|缺陷|不良).{0,32}"
+                         r"(?:澄清|釐清|厘清|檢驗|检验|確認|确认|處理|处理).{0,16}放行", clause):
+                return True
+        return False
+    return bool(re.search(r"\b(?:abnormalitas|ketidaksesuaian|cacat|masalah\s+kualitas)\b", value, re.I)
+                and re.search(r"\b(?:klarifikasi|diperiksa|pemeriksaan|diselesaikan)\b", value, re.I)
+                and re.search(r"\b(?:disetujui|diizinkan|dinyatakan\s+lolos|lolos|release|dirilis|dilepas)\b", value, re.I)
+                and not re.search(r"\b(?:data|record|ERP)\b", value, re.I))
+
+
+def _alias_context_matches(source: str, start: int, end: int, rule: Mapping) -> bool:
+    """Evaluate an alias in its clause, never in a neighboring instruction."""
+    # Names, mentions, URLs and quoted control values are not terminology.
+    for pattern in (_TERM_IDENTITY_RE, _TERM_QUOTE_RE):
+        if any(start < m.end() and end > m.start() for m in pattern.finditer(source)):
+            return False
+    boundaries = list(re.finditer(r"[，,。！？!?；;\n]", source))
+    left = max((m.end() for m in boundaries if m.end() <= start), default=0)
+    right = min((m.start() for m in boundaries if m.start() >= end), default=len(source))
+    before, after = source[left:start], source[end:right]
+    if rule.get("exclude_after_regex") and re.search(rule["exclude_after_regex"], after):
+        return False
+    if rule.get("exclude_context_regex") and re.search(rule["exclude_context_regex"], source[left:right]):
+        return False
+    tests = []
+    if rule.get("before_regex"):
+        tests.append(bool(re.search(rule["before_regex"], before)))
+    if rule.get("after_regex"):
+        tests.append(bool(re.search(rule["after_regex"], after)))
+    return bool(tests and any(tests))
 
 
 # A sleeve and a protective ring are separate work-order accessories. The
@@ -414,6 +473,15 @@ def _id_role_keys(text: str, group: str) -> set[str]:
     }
 
 
+def organization_role_key(text: str, lang: str) -> str:
+    """Shared, unambiguous role identity for qualifier and hierarchy checks."""
+    keys = set()
+    for group in ("executive", "plant_hierarchy"):
+        keys.update(_zh_role_keys(text, group) if str(lang).lower().startswith("zh")
+                    else _id_role_keys(text, group))
+    return next(iter(keys)) if len(keys) == 1 else ""
+
+
 def _replace_id_role(text: str, role_key: str, replacement: str) -> str:
     result = text
     for pattern in _ORGANIZATION_ID_PATTERNS[role_key]:
@@ -644,6 +712,16 @@ class FactoryTerminologyEngine:
                     continue
                 seen_surface.add(surface)
                 self._insert_surface(surface, source_term, row)
+            for alias in row.get("contextual_aliases_zh", ()):
+                if not isinstance(alias, Mapping) or not alias.get("text"):
+                    raise ValueError("contextual alias must have text: " + source_term)
+                for field in ("before_regex", "after_regex", "exclude_after_regex", "exclude_context_regex"):
+                    if alias.get(field):
+                        re.compile(str(alias[field]))
+                surface = _normalize_text(alias["text"]).strip()
+                contextual_row = {**row, "_alias_context": dict(alias)}
+                self._insert_surface(surface, source_term, contextual_row)
+                ocr_candidates.append((int(row.get("priority", 50) or 50) + 100, surface))
             score = int(row.get("priority", 50) or 50)
             category = str(row.get("category") or row.get("domain") or "")
             if row.get("ocr_hint") is True:
@@ -699,6 +777,9 @@ class FactoryTerminologyEngine:
                 reverse=True,
             )
             for end, surface, canonical_source, row in candidates:
+                context_rule = row.get("_alias_context")
+                if context_rule and not _alias_context_matches(source, position, end, context_rule):
+                    continue
                 canonical_target = gp_module.canonical_target(row)
                 mode = gp_module.translation_mode(row)
                 if not canonical_target or mode == "disabled":
@@ -767,7 +848,10 @@ def get_engine(glossary: Mapping[str, Any] | None) -> FactoryTerminologyEngine:
         engine = _ENGINE_CACHE.get(key)
         if engine is None:
             engine = FactoryTerminologyEngine(glossary)
-            _ENGINE_CACHE.clear()  # only the current glossary is useful in production
+            # The live app glossary and the current on-disk guard snapshot are
+            # both valid. Do not rebuild the trie on every alternating check.
+            if len(_ENGINE_CACHE) >= 4:
+                _ENGINE_CACHE.pop(next(iter(_ENGINE_CACHE)))
             _ENGINE_CACHE[key] = engine
         return engine
 
