@@ -1,0 +1,20 @@
+{
+  "mode": "manual-fixtures-not-live-model-scores",
+  "cases": [
+    {
+      "id": "qa_hold_inspection",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@EggEgg @阿堂 這把品保HOLD待會驗的 已經放我們這三個多禮拜，等等有空把它吊到品保架上。",
+      "target": "@EggEgg @阿堂 Bundel ini di-HOLD oleh QA untuk menunggu pemeriksaan. Sudah lebih dari tiga minggu diletakkan di area kita. Kalau ada waktu nanti, angkat dengan crane ke rak QA."
+    },
+    {
+      "id": "profile_bar_daily_packing",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@All 每日線外人員進行入儲分流時幫忙注意異型棒出料狀況，地上有2～3把檢驗完成就可以上車過來包裝。\n\n每天要回報三次異型棒的入庫進度，各站有分流到異型棒幫忙優先包裝，不然蔣總工跟處長還要問一堆怎麼安排跟工作內容",
+      "target": "@All Saat personel di luar lini melakukan pemilahan untuk masuk ke area penyimpanan setiap hari, bantu perhatikan kondisi hasil produksi mesin batang profil khusus. Jika di lantai sudah ada 2～3 bundel yang selesai diperiksa, bundel tersebut bisa dinaikkan ke troli dan dibawa ke sini untuk dikemas.\n\nSetiap hari wajib melaporkan progres masuk gudang batang profil khusus sebanyak tiga kali. Setiap stasiun yang menerima batang profil khusus melalui pemilahan harus membantu memprioritaskan pengemasannya. Kalau tidak, Insinyur Kepala 蔣 dan kepala divisi masih akan menanyakan banyak hal tentang pengaturan dan isi pekerjaan.",
+      "bad_target": "@All Saat personel di luar lini melakukan pemilahan untuk masuk ke area penyimpanan setiap hari, bantu perhatikan kondisi hasil produksi mesin batang profil khusus. Jika di lantai sudah ada 2～3 bundel yang selesai diperiksa, segera naikkan ke troli dan bawa untuk dikemas.\n\nSetiap hari wajib melaporkan progres masuk gudang batang profil khusus sebanyak tiga kali. Setiap stasiun yang menerima batang profil khusus melalui pemilahan harus membantu memprioritaskan pengemasannya. Kalau tidak, Kepala Teknisi Jiang dan kepala divisi masih akan menanyakan banyak hal tentang pengaturan dan isi pekerjaan."
+    }
+  ]
+}
