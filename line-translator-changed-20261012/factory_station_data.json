@@ -1,0 +1,780 @@
+{
+  "schema_version": 1,
+  "source": "既有 app.py 工廠 ERP 對照表，來源為 2026-05-26 使用者提供並確認的五張 ERP 截圖；口語站名沿用既有確認規則。",
+  "catalog_version": "2026-10-12.1",
+  "process_names": [
+    "研磨",
+    "削皮",
+    "拋光",
+    "倒角",
+    "酸洗",
+    "壓光",
+    "切斷",
+    "噴砂",
+    "口付"
+  ],
+  "departments": {
+    "削皮股": "Bagian Peeling",
+    "冷抽一股": "Bagian Cold Drawing 1",
+    "冷抽二股": "Bagian Cold Drawing 2",
+    "研磨股": "Bagian Grinding",
+    "品質管理課": "Bagian QC",
+    "一股": "Bagian Cold Drawing 1",
+    "二股": "Bagian Cold Drawing 2"
+  },
+  "names": {
+    "直棒連續退火爐": {
+      "no": 401,
+      "dept": "削皮股",
+      "id": "Tungku annealing kontinu batang lurus"
+    },
+    "直棒批次退火爐": {
+      "no": 401,
+      "dept": "削皮股",
+      "id": "Tungku annealing batch batang lurus"
+    },
+    "電阻爐": {
+      "no": 411,
+      "dept": "削皮股",
+      "id": "Tungku resistansi"
+    },
+    "矯直機": {
+      "no": 402,
+      "dept": "削皮股",
+      "id": "Mesin pelurus"
+    },
+    "粗矯機": {
+      "no": 402,
+      "dept": "削皮股",
+      "id": "Mesin pelurus kasar"
+    },
+    "解捲機": {
+      "no": 403,
+      "dept": "削皮股",
+      "id": "Mesin uncoiling"
+    },
+    "削皮機": {
+      "no": 404,
+      "dept": "削皮股",
+      "id": "Mesin peeling"
+    },
+    "削皮": {
+      "no": 404,
+      "dept": "削皮股",
+      "id": "Stasiun peeling"
+    },
+    "削皮站": {
+      "no": 404,
+      "dept": "削皮股",
+      "id": "Stasiun peeling"
+    },
+    "切斷機": {
+      "no": 450,
+      "dept": "削皮股",
+      "id": "Mesin pemotong"
+    },
+    "圓鋸機": {
+      "no": 450,
+      "dept": "削皮股",
+      "id": "Mesin gergaji bulat"
+    },
+    "切斷": {
+      "no": 450,
+      "dept": "削皮股",
+      "id": "Stasiun pemotongan"
+    },
+    "切斷站": {
+      "no": 450,
+      "dept": "削皮股",
+      "id": "Stasiun pemotongan"
+    },
+    "軋光機": {
+      "no": 451,
+      "dept": "削皮股",
+      "id": "Mesin pressing/polish"
+    },
+    "壓光": {
+      "no": 451,
+      "dept": "削皮股",
+      "id": "Stasiun press polish"
+    },
+    "壓光站": {
+      "no": 451,
+      "dept": "削皮股",
+      "id": "Stasiun press polish"
+    },
+    "酸洗站": {
+      "no": 334,
+      "dept": "冷抽一股",
+      "id": "Stasiun pickling"
+    },
+    "酸洗": {
+      "no": 334,
+      "dept": "冷抽一股",
+      "id": "Stasiun pickling"
+    },
+    "口付機": {
+      "no": 405,
+      "dept": "冷抽一股",
+      "id": "Mesin pointing(口付)"
+    },
+    "口付": {
+      "no": 405,
+      "dept": "冷抽一股",
+      "id": "Stasiun pointing"
+    },
+    "口付站": {
+      "no": 405,
+      "dept": "冷抽一股",
+      "id": "Stasiun pointing"
+    },
+    "噴砂機": {
+      "no": 406,
+      "dept": "冷抽一股",
+      "id": "Mesin sandblasting"
+    },
+    "噴砂": {
+      "no": 406,
+      "dept": "冷抽一股",
+      "id": "Stasiun sandblasting"
+    },
+    "噴砂站": {
+      "no": 406,
+      "dept": "冷抽一股",
+      "id": "Stasiun sandblasting"
+    },
+    "冷抽機": {
+      "no": 410,
+      "dept": "冷抽一股",
+      "id": "Mesin cold drawing"
+    },
+    "冷抽": {
+      "no": 410,
+      "dept": "冷抽一股",
+      "id": "Stasiun cold drawing"
+    },
+    "直棒清洗槽站": {
+      "no": 422,
+      "dept": "冷抽一股",
+      "id": "Tangki pencucian batang lurus"
+    },
+    "異型矯直機": {
+      "no": 460,
+      "dept": "冷抽一股",
+      "id": "Mesin pelurus profil khusus"
+    },
+    "異型拋光機": {
+      "no": 461,
+      "dept": "冷抽一股",
+      "id": "Mesin polishing profil khusus"
+    },
+    "盤元修磨站": {
+      "no": 407,
+      "dept": "冷抽二股",
+      "id": "Stasiun repair grinding wire rod"
+    },
+    "盤元修磨": {
+      "no": 407,
+      "dept": "冷抽二股",
+      "id": "Stasiun repair grinding wire rod"
+    },
+    "倒角機": {
+      "no": 421,
+      "dept": "冷抽二股",
+      "id": "Mesin chamfer"
+    },
+    "倒角": {
+      "no": 421,
+      "dept": "冷抽二股",
+      "id": "Stasiun chamfer"
+    },
+    "倒角站": {
+      "no": 421,
+      "dept": "冷抽二股",
+      "id": "Stasiun chamfer"
+    },
+    "手動倒角": {
+      "no": 421,
+      "dept": "冷抽二股",
+      "id": "Chamfer manual"
+    },
+    "直線式冷抽機": {
+      "no": 430,
+      "dept": "冷抽二股",
+      "id": "Mesin cold drawing linear"
+    },
+    "倒立式冷抽機": {
+      "no": 430,
+      "dept": "冷抽二股",
+      "id": "Mesin cold drawing inverted"
+    },
+    "細線光輝退火爐": {
+      "no": 431,
+      "dept": "冷抽二股",
+      "id": "Tungku bright annealing kawat halus"
+    },
+    "光輝退火": {
+      "no": 431,
+      "dept": "冷抽二股",
+      "id": "Stasiun bright annealing"
+    },
+    "清洗槽站": {
+      "no": 422,
+      "dept": "研磨股",
+      "id": "Stasiun tangki pencucian"
+    },
+    "矯直切斷機": {
+      "no": 433,
+      "dept": "研磨股",
+      "id": "Mesin pelurus pemotong"
+    },
+    "矯直切斷": {
+      "no": 433,
+      "dept": "研磨股",
+      "id": "Stasiun pelurus pemotong"
+    },
+    "圓棒拋光機": {
+      "no": 452,
+      "dept": "研磨股",
+      "id": "Mesin polishing batang bulat"
+    },
+    "圓棒拋光": {
+      "no": 452,
+      "dept": "研磨股",
+      "id": "Stasiun polishing batang bulat"
+    },
+    "拋光": {
+      "no": 452,
+      "dept": "研磨股",
+      "id": "Stasiun polishing"
+    },
+    "拋光站": {
+      "no": 452,
+      "dept": "研磨股",
+      "id": "Stasiun polishing"
+    },
+    "研磨機": {
+      "no": 453,
+      "dept": "研磨股",
+      "id": "Mesin grinding"
+    },
+    "研磨": {
+      "no": 453,
+      "dept": "研磨股",
+      "id": "Stasiun grinding"
+    },
+    "研磨站": {
+      "no": 453,
+      "dept": "研磨股",
+      "id": "Stasiun grinding"
+    },
+    "秤重站": {
+      "no": 490,
+      "dept": "研磨股",
+      "id": "Stasiun penimbangan"
+    },
+    "秤重": {
+      "no": 490,
+      "dept": "研磨股",
+      "id": "Stasiun penimbangan"
+    },
+    "包裝站": {
+      "no": 490,
+      "dept": "包裝",
+      "id": "Stasiun packing"
+    },
+    "包裝過帳站": {
+      "no": 490,
+      "dept": "包裝",
+      "id": "Stasiun packing / pencatatan"
+    },
+    "801暫存站": {
+      "no": 801,
+      "dept": "包裝",
+      "id": "Stasiun sementara 801"
+    },
+    "暫存801站": {
+      "no": 801,
+      "dept": "包裝",
+      "id": "Stasiun sementara 801"
+    },
+    "委外": {
+      "no": 490,
+      "dept": "研磨股",
+      "id": "Outsource"
+    },
+    "圓型包裝站": {
+      "no": null,
+      "dept": "包裝",
+      "id": "Stasiun packing batang bulat"
+    },
+    "異型包裝站": {
+      "no": null,
+      "dept": "包裝",
+      "id": "Stasiun packing barang bentuk khusus"
+    },
+    "異型包裝": {
+      "no": null,
+      "dept": "包裝",
+      "id": "Stasiun packing barang bentuk khusus"
+    },
+    "削皮包裝站": {
+      "no": null,
+      "dept": "包裝",
+      "id": "Stasiun packing peeling"
+    },
+    "過電流": {
+      "no": 470,
+      "dept": "品質管理課",
+      "id": "Eddy Current(ET)"
+    },
+    "超音波": {
+      "no": 470,
+      "dept": "品質管理課",
+      "id": "Ultrasonic(UT)"
+    },
+    "檢驗站": {
+      "no": 480,
+      "dept": "品質管理課",
+      "id": "Stasiun inspeksi"
+    }
+  },
+  "equipment": {
+    "TC": {
+      "station": 401,
+      "zh": "直棒連續退火爐 TC",
+      "id": "Tungku annealing kontinu TC"
+    },
+    "BA1": {
+      "station": 401,
+      "zh": "直棒批次退火爐 BA1",
+      "id": "Tungku annealing batch BA1"
+    },
+    "RF": {
+      "station": 411,
+      "zh": "電阻爐 RF",
+      "id": "Tungku resistansi RF"
+    },
+    "KVS": {
+      "station": 402,
+      "zh": "矯直機 KVS",
+      "id": "Mesin pelurus KVS"
+    },
+    "SM80": {
+      "station": 402,
+      "zh": "矯直機 SM80",
+      "id": "Mesin pelurus SM80"
+    },
+    "SM165": {
+      "station": 402,
+      "zh": "粗矯機 SM165",
+      "id": "Mesin pelurus kasar SM165"
+    },
+    "NAV": {
+      "station": 403,
+      "zh": "解捲機 NAV",
+      "id": "Mesin uncoiling NAV"
+    },
+    "BTH60": {
+      "station": 404,
+      "zh": "削皮機 BTH60",
+      "id": "Mesin peeling BTH60"
+    },
+    "S80": {
+      "station": 404,
+      "zh": "削皮機 S80",
+      "id": "Mesin peeling S80"
+    },
+    "PM160": {
+      "station": 404,
+      "zh": "削皮機 PM160",
+      "id": "Mesin peeling PM160"
+    },
+    "H11": {
+      "station": 450,
+      "zh": "切斷機 H11",
+      "id": "Mesin pemotong H11"
+    },
+    "H12": {
+      "station": 450,
+      "zh": "圓鋸機 H12",
+      "id": "Mesin gergaji bulat H12"
+    },
+    "K4": {
+      "station": 451,
+      "zh": "軋光機 K4",
+      "id": "Mesin press polish K4"
+    },
+    "K5": {
+      "station": 451,
+      "zh": "軋光機 K5",
+      "id": "Mesin press polish K5"
+    },
+    "K8": {
+      "station": 451,
+      "zh": "軋光機 K8",
+      "id": "Mesin press polish K8"
+    },
+    "PB1": {
+      "station": 334,
+      "zh": "酸洗站 PB1",
+      "id": "Stasiun pickling PB1"
+    },
+    "A4": {
+      "station": 405,
+      "zh": "口付機 A4",
+      "id": "Mesin pointing A4"
+    },
+    "A6": {
+      "station": 405,
+      "zh": "口付機 A6",
+      "id": "Mesin pointing A6"
+    },
+    "A8": {
+      "station": 405,
+      "zh": "口付機 A8",
+      "id": "Mesin pointing A8"
+    },
+    "CF0": {
+      "station": 405,
+      "zh": "口付機 CF0",
+      "id": "Mesin pointing CF0"
+    },
+    "C2": {
+      "station": 405,
+      "zh": "矯直機 C2",
+      "id": "Mesin pelurus C2"
+    },
+    "C3-R": {
+      "station": 405,
+      "zh": "矯直機 C3-R",
+      "id": "Mesin pelurus C3-R"
+    },
+    "CB0": {
+      "station": 406,
+      "zh": "噴砂機 CB0",
+      "id": "Mesin sandblasting CB0"
+    },
+    "CB1": {
+      "station": 406,
+      "zh": "噴砂機 CB1",
+      "id": "Mesin sandblasting CB1"
+    },
+    "D2": {
+      "station": 410,
+      "zh": "冷抽機 D2",
+      "id": "Mesin cold drawing D2"
+    },
+    "D5": {
+      "station": 410,
+      "zh": "冷抽機 D5",
+      "id": "Mesin cold drawing D5"
+    },
+    "D6": {
+      "station": 410,
+      "zh": "冷抽機 D6",
+      "id": "Mesin cold drawing D6"
+    },
+    "DB": {
+      "station": 422,
+      "zh": "直棒清洗槽站 DB",
+      "id": "Tangki pencucian batang lurus DB"
+    },
+    "H9": {
+      "station": 450,
+      "zh": "切斷機 H9",
+      "id": "Mesin pemotong H9"
+    },
+    "H10": {
+      "station": 450,
+      "zh": "切斷機 H10",
+      "id": "Mesin pemotong H10"
+    },
+    "C1": {
+      "station": 460,
+      "zh": "異型矯直機 C1",
+      "id": "Mesin pelurus profil C1"
+    },
+    "C3-F": {
+      "station": 460,
+      "zh": "異型矯直機 C3-F",
+      "id": "Mesin pelurus profil C3-F"
+    },
+    "C6": {
+      "station": 460,
+      "zh": "異型矯直機 C6",
+      "id": "Mesin pelurus profil C6"
+    },
+    "C7": {
+      "station": 460,
+      "zh": "異型矯直機 C7",
+      "id": "Mesin pelurus profil C7"
+    },
+    "BF0": {
+      "station": 461,
+      "zh": "異型拋光機 BF0",
+      "id": "Mesin polishing profil BF0"
+    },
+    "BF1": {
+      "station": 461,
+      "zh": "異型拋光機 BF1",
+      "id": "Mesin polishing profil BF1"
+    },
+    "BF4": {
+      "station": 461,
+      "zh": "異型拋光機 BF4",
+      "id": "Mesin polishing profil BF4"
+    },
+    "BG": {
+      "station": 407,
+      "zh": "盤元修磨站 BG",
+      "id": "Stasiun repair grinding wire rod BG"
+    },
+    "E1": {
+      "station": 420,
+      "zh": "冷抽機 E1",
+      "id": "Mesin cold drawing E1"
+    },
+    "E2": {
+      "station": 420,
+      "zh": "冷抽機 E2",
+      "id": "Mesin cold drawing E2"
+    },
+    "E3": {
+      "station": 420,
+      "zh": "冷抽機 E3",
+      "id": "Mesin cold drawing E3"
+    },
+    "E4": {
+      "station": 420,
+      "zh": "冷抽機 E4",
+      "id": "Mesin cold drawing E4"
+    },
+    "E5": {
+      "station": 420,
+      "zh": "冷抽機 E5",
+      "id": "Mesin cold drawing E5"
+    },
+    "E6": {
+      "station": 420,
+      "zh": "冷抽機 E6",
+      "id": "Mesin cold drawing E6"
+    },
+    "E7": {
+      "station": 420,
+      "zh": "冷抽機 E7",
+      "id": "Mesin cold drawing E7"
+    },
+    "CH0": {
+      "station": 421,
+      "zh": "倒角機 CH0",
+      "id": "Mesin chamfer CH0"
+    },
+    "CHS": {
+      "station": 421,
+      "zh": "倒角機 CHS",
+      "id": "Mesin chamfer CHS"
+    },
+    "E1-1": {
+      "station": 421,
+      "zh": "E1倒角機",
+      "id": "Mesin chamfer E1-1"
+    },
+    "E2-1": {
+      "station": 421,
+      "zh": "E2倒角機",
+      "id": "Mesin chamfer E2-1"
+    },
+    "E3-1": {
+      "station": 421,
+      "zh": "E3倒角機",
+      "id": "Mesin chamfer E3-1"
+    },
+    "E5-1": {
+      "station": 421,
+      "zh": "E5倒角機",
+      "id": "Mesin chamfer E5-1"
+    },
+    "E6-1": {
+      "station": 421,
+      "zh": "E6倒角機",
+      "id": "Mesin chamfer E6-1"
+    },
+    "E7-1": {
+      "station": 421,
+      "zh": "E7倒角機",
+      "id": "Mesin chamfer E7-1"
+    },
+    "E10": {
+      "station": 430,
+      "zh": "直線式冷抽機 E10",
+      "id": "Mesin cold drawing linear E10"
+    },
+    "E11": {
+      "station": 430,
+      "zh": "倒立式冷抽機 E11",
+      "id": "Mesin cold drawing inverted E11"
+    },
+    "B1": {
+      "station": 431,
+      "zh": "細線光輝退火爐 B1",
+      "id": "Tungku bright annealing kawat halus B1"
+    },
+    "B1B": {
+      "station": 431,
+      "zh": "細線光輝退火爐 B1B",
+      "id": "Tungku bright annealing kawat halus B1B"
+    },
+    "EC": {
+      "station": 422,
+      "zh": "清洗槽站 EC",
+      "id": "Stasiun tangki pencucian EC"
+    },
+    "CYA": {
+      "station": 433,
+      "zh": "矯直切斷機 CYA",
+      "id": "Mesin pelurus pemotong CYA"
+    },
+    "CYB": {
+      "station": 433,
+      "zh": "矯直切斷機 CYB",
+      "id": "Mesin pelurus pemotong CYB"
+    },
+    "BF2": {
+      "station": 452,
+      "zh": "圓棒拋光機 BF2",
+      "id": "Mesin polishing batang bulat BF2"
+    },
+    "BF3": {
+      "station": 452,
+      "zh": "圓棒拋光機 BF3",
+      "id": "Mesin polishing batang bulat BF3"
+    },
+    "BF5": {
+      "station": 452,
+      "zh": "圓棒拋光機 BF5",
+      "id": "Mesin polishing batang bulat BF5"
+    },
+    "I15": {
+      "station": 452,
+      "zh": "圓棒拋光機 I15",
+      "id": "Mesin polishing batang bulat I15"
+    },
+    "I16": {
+      "station": 452,
+      "zh": "圓棒拋光機 I16",
+      "id": "Mesin polishing batang bulat I16"
+    },
+    "I5": {
+      "station": 452,
+      "zh": "圓棒拋光機 I5",
+      "id": "Mesin polishing batang bulat I5"
+    },
+    "B6-P": {
+      "station": 452,
+      "zh": "E6拋光機 B6-P",
+      "id": "Mesin polishing E6 (B6-P)"
+    },
+    "B7-P": {
+      "station": 452,
+      "zh": "E7拋光機 B7-P",
+      "id": "Mesin polishing E7 (B7-P)"
+    },
+    "I01": {
+      "station": 453,
+      "zh": "研磨機 I01",
+      "id": "Mesin grinding I01"
+    },
+    "I02": {
+      "station": 453,
+      "zh": "研磨機 I02",
+      "id": "Mesin grinding I02"
+    },
+    "I6": {
+      "station": 453,
+      "zh": "研磨機 I6",
+      "id": "Mesin grinding I6"
+    },
+    "I9": {
+      "station": 453,
+      "zh": "研磨機 I9",
+      "id": "Mesin grinding I9"
+    },
+    "I13": {
+      "station": 453,
+      "zh": "研磨機 I13",
+      "id": "Mesin grinding I13"
+    },
+    "I17": {
+      "station": 453,
+      "zh": "研磨機 I17",
+      "id": "Mesin grinding I17"
+    },
+    "I18": {
+      "station": 453,
+      "zh": "研磨機 I18",
+      "id": "Mesin grinding I18"
+    },
+    "I19": {
+      "station": 453,
+      "zh": "研磨機 I19",
+      "id": "Mesin grinding I19"
+    },
+    "I20": {
+      "station": 453,
+      "zh": "研磨機 I20",
+      "id": "Mesin grinding I20"
+    },
+    "I21": {
+      "station": 453,
+      "zh": "研磨機 I21",
+      "id": "Mesin grinding I21"
+    },
+    "ET-R": {
+      "station": 470,
+      "zh": "過電流 ET-R",
+      "id": "Eddy Current ET-R"
+    },
+    "UT手": {
+      "station": 470,
+      "zh": "超音波 UT手",
+      "id": "Ultrasonic UT manual"
+    },
+    "UT自": {
+      "station": 470,
+      "zh": "超音波 UT自",
+      "id": "Ultrasonic UT otomatis"
+    },
+    "ETUT": {
+      "station": 470,
+      "zh": "過電流+超音波 ETUT",
+      "id": "Eddy Current + Ultrasonic ETUT"
+    }
+  },
+  "aliases": [
+    {
+      "canonical_zh": "異型包裝站",
+      "canonical_id": "Stasiun packing barang bentuk khusus",
+      "patterns": [
+        "異型\\s*(?:包裝\\s*)?(?:那|這)?\\s*(?:一)?\\s*(?:站|邊|區)",
+        "異型\\s*(?=(?:支援|幫忙|協助|缺人|有人|沒人))"
+      ]
+    }
+  ],
+  "equipment_ambiguities": {
+    "I5": {
+      "stations": [
+        452,
+        453
+      ],
+      "source": "沿用既有 line_factory_features.py 對相同設備代碼跨拋光／研磨製程的明確註記；單看代碼不可選定製程。"
+    },
+    "I15": {
+      "stations": [
+        452,
+        453
+      ],
+      "source": "沿用既有 line_factory_features.py 對相同設備代碼跨拋光／研磨製程的明確註記；單看代碼不可選定製程。"
+    }
+  }
+}

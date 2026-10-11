@@ -1,0 +1,207 @@
+{
+  "release": "2026-10-11 typed factory entities",
+  "baseline_archive": "line-translator-bot-main(20261010-135348).zip",
+  "baseline_sha256": "ba9548c1d35450a205916d4dde4722bd9c736da34510764b8b489866aaece5d7",
+  "package_mode": "cumulative changed files against original upload; previous update included",
+  "full_regression": {
+    "command": "python run_translation_offline_checks.py",
+    "passed": 3828,
+    "subtests_passed": 450,
+    "warnings": 2,
+    "seconds": 106.64,
+    "failures": 0
+  },
+  "original_baseline_with_updates": {
+    "passed": 122,
+    "seconds": 4.05,
+    "asset_gate_ok": true,
+    "tested_files": [
+      "test_translation_review_20261011.py",
+      "test_translation_review_20261010.py",
+      "test_translation_alignment.py"
+    ]
+  },
+  "factory_asset_validation": {
+    "errors": [],
+    "guard": {
+      "api_version": 1,
+      "asset_fingerprint": "d1d667a1e269841cb91397d5ecd01b255274da4773a4eb4b06c129d88ad5f67a",
+      "build_id": "2026-10-07.1-source-relation-alignment",
+      "exact_case_count": 75,
+      "knowledge": {
+        "api_version": 1,
+        "build_id": "2026-10-10.1-source-sense-retrieval",
+        "enabled_count": 50,
+        "entry_count": 50,
+        "path": "/workspace/scratch/ec9978ebed83/recovery-20261011/work/line-translator-bot-main/factory_knowledge.json",
+        "schema_version": 1,
+        "sha256": "b34ccefe1a03449f1808aa6f3272adfe2646d7bd2e039192f65540f5638eeea8"
+      },
+      "regression_path": "/workspace/scratch/ec9978ebed83/recovery-20261011/work/line-translator-bot-main/factory_translation_regression.json",
+      "self_test": {
+        "approved_examples_validated": 65,
+        "known_bad_examples_rejected": 19,
+        "ok": true,
+        "regression_cases": 30
+      }
+    },
+    "measurement_semantics": {
+      "api_version": 1,
+      "build_id": "2026-10-02.1-explicit-measurement-subject",
+      "self_test": {
+        "checks": 22,
+        "ok": true
+      }
+    },
+    "message_semantics": {
+      "api_version": 3,
+      "build_id": "2026-10-07.1-release-domain-ownership",
+      "self_test": {
+        "checks": 106,
+        "ok": true
+      }
+    },
+    "ok": true,
+    "policy": {
+      "always_review_opt_in": false,
+      "api_version": 8,
+      "block_unverified_delivery": false,
+      "build_id": "2026-10-07.1-contextual-release-senses",
+      "emergency_nmt_fallback": true,
+      "fail_closed": false,
+      "generic_nmt_fallback": false,
+      "mode": "always",
+      "review_mode": "off",
+      "review_success_required": false,
+      "verified_cache_required": true
+    },
+    "regression": {
+      "case_count": 30,
+      "forbidden_probes_rejected": 29,
+      "verified_targets_accepted": 30
+    },
+    "warnings": [
+      "review_mode_override:off"
+    ]
+  },
+  "new_screenshot": {
+    "baseline_bad_candidate_accepted": true,
+    "updated_bad_candidate_accepted": false,
+    "typed_terms": [
+      "異型棒",
+      "鹽水廠",
+      "台中廠"
+    ],
+    "fixture_file": "tests/data/translation_review_20261011.json"
+  },
+  "provider_request_fixture_checks": {
+    "text_first_generation_requests": 1,
+    "text_verified_repeat_requests": 0,
+    "ocr_first_generation_requests": 1,
+    "ocr_verified_repeat_requests": 0
+  },
+  "scope": {
+    "external_AI_requests": 0,
+    "LINE_messages_sent": 0,
+    "deployed": false,
+    "real_provider_latency_and_billing_measured": false
+  },
+  "file_manifest": [
+    {
+      "path": "TRANSLATION_VALIDATION_20261010.json",
+      "bytes": 2734,
+      "sha256": "e12b8f2f8245cfe16710e60c57d565e10ca5934e73929225aa34d18034287bb6"
+    },
+    {
+      "path": "UPDATE_20261010_TRANSLATION_CORE.md",
+      "bytes": 4014,
+      "sha256": "cdc86ff1979d05c425ef9bc203c867e93b6b79498033e1acf635f3ea368455e1"
+    },
+    {
+      "path": "UPDATE_20261011_FACTORY_ENTITIES.md",
+      "bytes": 3953,
+      "sha256": "99d544aff73b55cb0eeb364e7b69e960a3ec6dd311f3de279758fe57af0b9897"
+    },
+    {
+      "path": "app.py",
+      "bytes": 2286297,
+      "sha256": "31c374fe954bdcbed9ab4e9b05ae4f2c9426c638d32241fe79e7b875f581309b"
+    },
+    {
+      "path": "factory_knowledge.json",
+      "bytes": 174786,
+      "sha256": "72e7e8f52679cf2d65e1a5214bc1006d438d7f6b3246b42a032f29ad540afb93"
+    },
+    {
+      "path": "factory_terminology.py",
+      "bytes": 58053,
+      "sha256": "acf5e12b2d9477ce644b7a76eb74ec93b5b4c900233d53d2a91925ac5366ef04"
+    },
+    {
+      "path": "glossary_data.json",
+      "bytes": 114034,
+      "sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "bytes": 34554,
+      "sha256": "ad526433a182a7e057fbd5f2d158a117f0b8415864ef103203397c68b0b97ce5"
+    },
+    {
+      "path": "test_translation_alignment.py",
+      "bytes": 14877,
+      "sha256": "0bc2b1ffa82f17decd9558953a65df5d557f8d6d723cc64a31c906ab9a128d02"
+    },
+    {
+      "path": "test_translation_review_20261010.py",
+      "bytes": 13687,
+      "sha256": "3cfa60fe138e557cd8a41eee1fe0e2be235647c1e8d5cc4a69b20714dd38ae62"
+    },
+    {
+      "path": "test_translation_review_20261011.py",
+      "bytes": 12030,
+      "sha256": "cede0161bc323375142fb93675790b5ca51ab3bb8be2d9fde691e4dbef11bd99"
+    },
+    {
+      "path": "test_translation_runtime_efficiency.py",
+      "bytes": 9963,
+      "sha256": "fbd0a57ac4d456afc131e8adced5acacca8230d921d97ec500c8a4b028d9f1e4"
+    },
+    {
+      "path": "tests/data/translation_review_20261010.json",
+      "bytes": 2188,
+      "sha256": "534671ac30f131a4bbf4224cfa9e7fc0cef97f740fe12f5edb09d6df2da4ddad"
+    },
+    {
+      "path": "tests/data/translation_review_20261011.json",
+      "bytes": 2311,
+      "sha256": "8fe10aa75d8a2410e76c9d2407dd5f317451aa47745dc59a6815c133886c240f"
+    },
+    {
+      "path": "translation_alignment.py",
+      "bytes": 29331,
+      "sha256": "39458159f1d4efbad7f24643166099982b4a13e08a1ba9a385ce950b199bb48b"
+    },
+    {
+      "path": "translation_casebook.py",
+      "bytes": 41563,
+      "sha256": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70"
+    },
+    {
+      "path": "translation_learning_policy.py",
+      "bytes": 17006,
+      "sha256": "68885eb10a6a0a41302a75a637fbe626aad55f3c142c1db5db4bb493e087783a"
+    },
+    {
+      "path": "translation_privacy.py",
+      "bytes": 9599,
+      "sha256": "1cafb6ec353c0c3966eeed04a7b90230517a4b6ff7dd268409287b14073f1fb7"
+    },
+    {
+      "path": "translation_quality_gate.py",
+      "bytes": 129346,
+      "sha256": "5d9e5326c17db950dcd48fd2844cbd471c6e77fc68cc88cbb3f6a938addc6e85"
+    }
+  ],
+  "manifest_note": "The validation report itself is excluded from its own hash manifest."
+}

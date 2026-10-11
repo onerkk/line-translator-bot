@@ -1,0 +1,147 @@
+{
+  "release": "2026-10-12.1",
+  "baseline": "line-translator-bot-main(20261010-135348).zip",
+  "baseline_mode": "Cumulative changed/new files only; previous release archives need not be applied first.",
+  "deployment_performed": false,
+  "live_translation_api_calls": 0,
+  "line_messages_sent": 0,
+  "root_cause_reproduced": {
+    "source": "Bayak barang yang di tolak 480",
+    "invalid_translation": "有很多料件被拒收，數量為480",
+    "previous_validator_accepted_invalid": true,
+    "previous_compiled_prompt_lacked_station_480": true,
+    "verified_definition": {
+      "no": 480,
+      "dept": "品質管理課",
+      "id": "Stasiun inspeksi"
+    }
+  },
+  "migration": {
+    "all_original_rows_and_aliases_equal": true,
+    "departments": 7,
+    "station_names": 63,
+    "equipment_codes": 82,
+    "equipment_only_station_number_supported": 420,
+    "ambiguous_equipment_codes": {
+      "I5": {
+        "stations": [
+          452,
+          453
+        ],
+        "source": "沿用既有 line_factory_features.py 對相同設備代碼跨拋光／研磨製程的明確註記；單看代碼不可選定製程。"
+      },
+      "I15": {
+        "stations": [
+          452,
+          453
+        ],
+        "source": "沿用既有 line_factory_features.py 對相同設備代碼跨拋光／研磨製程的明確註記；單看代碼不可選定製程。"
+      }
+    }
+  },
+  "offline_full_regression": {
+    "command": "python run_translation_offline_checks.py",
+    "passed": 3984,
+    "warnings": 2,
+    "subtests_passed": 450,
+    "seconds": 110.13,
+    "warning_summary": "Existing multiprocessing fork warnings in the two-worker diagnostics test."
+  },
+  "offline_text_ocr_request_checks": {
+    "provider_outputs": "Fixed offline fixtures through actual app.translate entry",
+    "first_generation_requests_per_entry": 1,
+    "verified_repeat_generation_requests_per_entry": 0,
+    "additional_model_review_requests": 0,
+    "does_not_measure": "Live model accuracy, production latency or actual API billing"
+  },
+  "asset_validation": {
+    "command": "python validate_factory_translation_assets.py",
+    "ok": true,
+    "errors": [],
+    "station_catalog": {
+      "ambiguous_equipment_count": 2,
+      "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
+      "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+      "department_count": 7,
+      "equipment_count": 82,
+      "station_name_count": 63
+    },
+    "regression": {
+      "case_count": 30,
+      "forbidden_probes_rejected": 29,
+      "verified_targets_accepted": 30
+    }
+  },
+  "changed_file_count": 29,
+  "changed_files": [
+    "TRANSLATION_VALIDATION_20261010.json",
+    "TRANSLATION_VALIDATION_20261011.json",
+    "TRANSLATION_VALIDATION_20261012.json",
+    "UPDATE_20261010_TRANSLATION_CORE.md",
+    "UPDATE_20261011_FACTORY_ENTITIES.md",
+    "UPDATE_20261012_ERP_CATALOG.md",
+    "app.py",
+    "factory_knowledge.json",
+    "factory_station_catalog.py",
+    "factory_station_data.json",
+    "factory_terminology.py",
+    "factory_translation_guard.py",
+    "glossary_data.json",
+    "prompt_optimizer.py",
+    "test_factory_measurement_semantics_root_fix.py",
+    "test_station_alias_root_fix.py",
+    "test_translation_alignment.py",
+    "test_translation_review_20261010.py",
+    "test_translation_review_20261011.py",
+    "test_translation_runtime_efficiency.py",
+    "test_translation_station_catalog_20261012.py",
+    "tests/data/translation_review_20261010.json",
+    "tests/data/translation_review_20261011.json",
+    "translation_alignment.py",
+    "translation_casebook.py",
+    "translation_learning_policy.py",
+    "translation_privacy.py",
+    "translation_quality_gate.py",
+    "validate_factory_translation_assets.py"
+  ],
+  "sha256_excluding_this_report": {
+    "TRANSLATION_VALIDATION_20261010.json": "e12b8f2f8245cfe16710e60c57d565e10ca5934e73929225aa34d18034287bb6",
+    "TRANSLATION_VALIDATION_20261011.json": "f581d46412f9083c577627c0c93514400e2d587b79a3e8f9e5f4feee6d917de1",
+    "UPDATE_20261010_TRANSLATION_CORE.md": "cdc86ff1979d05c425ef9bc203c867e93b6b79498033e1acf635f3ea368455e1",
+    "UPDATE_20261011_FACTORY_ENTITIES.md": "99d544aff73b55cb0eeb364e7b69e960a3ec6dd311f3de279758fe57af0b9897",
+    "UPDATE_20261012_ERP_CATALOG.md": "1bfd9aa4abc023fdff8d84c22aaf0b04f7c2f197edfd627f2de8a893cef6bda9",
+    "app.py": "e9bb856ca783e499eb08b87be49d1bdd26f6f58b72dc83311e4fc414f7d5955a",
+    "factory_knowledge.json": "72e7e8f52679cf2d65e1a5214bc1006d438d7f6b3246b42a032f29ad540afb93",
+    "factory_station_catalog.py": "2709c1244a25fcd63bdbb6aa0116163420f70a1c2fdc294dda6696ee7bdcdb8d",
+    "factory_station_data.json": "b1be733a55cbb209af2d5f5925ffc3442ff7040b27cb1999187bcd4a9247cf7f",
+    "factory_terminology.py": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e",
+    "factory_translation_guard.py": "620a50748238f24ad953419967a35e928cae62365a08f911f51e04ee2d8b5988",
+    "glossary_data.json": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a",
+    "prompt_optimizer.py": "446900c9248d2a24d83c2cd621073c0448f7e9a95b51879c273ca679d2a2447c",
+    "test_factory_measurement_semantics_root_fix.py": "8cb3dc5dc5cb8b19ab7319a97cf5757518008232686210334fa083aa0eda6325",
+    "test_station_alias_root_fix.py": "9cf40974a6a685326945a8cbe5f80b035097de5e0997959c701b40be9f83debc",
+    "test_translation_alignment.py": "0bc2b1ffa82f17decd9558953a65df5d557f8d6d723cc64a31c906ab9a128d02",
+    "test_translation_review_20261010.py": "3cfa60fe138e557cd8a41eee1fe0e2be235647c1e8d5cc4a69b20714dd38ae62",
+    "test_translation_review_20261011.py": "cede0161bc323375142fb93675790b5ca51ab3bb8be2d9fde691e4dbef11bd99",
+    "test_translation_runtime_efficiency.py": "fbd0a57ac4d456afc131e8adced5acacca8230d921d97ec500c8a4b028d9f1e4",
+    "test_translation_station_catalog_20261012.py": "0091294a8085e35e421efb3bc423e1df28541a98f154d2ee047c31923181641a",
+    "tests/data/translation_review_20261010.json": "534671ac30f131a4bbf4224cfa9e7fc0cef97f740fe12f5edb09d6df2da4ddad",
+    "tests/data/translation_review_20261011.json": "8fe10aa75d8a2410e76c9d2407dd5f317451aa47745dc59a6815c133886c240f",
+    "translation_alignment.py": "1d4e8c8ee89e4fbdabb5d1f9b90fab36714a63f509674892affd7182072a6c12",
+    "translation_casebook.py": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70",
+    "translation_learning_policy.py": "148a0b679a666eb9bf37a89f44f29a8ec5d5cfdbe5087c42a3ea38b46a79438e",
+    "translation_privacy.py": "1cafb6ec353c0c3966eeed04a7b90230517a4b6ff7dd268409287b14073f1fb7",
+    "translation_quality_gate.py": "ff8167a73d5c9c927fc899cebb3f12623ed46674461daf85dbab7ce956955c57",
+    "validate_factory_translation_assets.py": "4967a8948ab355b12ade57c8c74d4d4bd404b4d4995f44c2fe2b7fc81bbe0b21"
+  },
+  "package_apply_verification": {
+    "status": "passed",
+    "applied_to": "Fresh extraction of the original baseline plus this ZIP",
+    "tests_passed": 279,
+    "subtests_passed": 187,
+    "seconds": 7.9,
+    "assets_ok": true,
+    "updated_file_bytes_equal_to_working_source": true
+  },
+  "engine_policy_has_no_screenshot_specific_station_or_sentence_literal": true
+}
