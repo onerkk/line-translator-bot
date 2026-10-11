@@ -1,0 +1,87 @@
+{
+  "date": "2026-10-10",
+  "timezone": "Asia/Taipei",
+  "mode": "offline-fixed-provider-replies",
+  "external_network": "blocked by offline test runner",
+  "live_ai_requests": 0,
+  "line_messages_sent": 0,
+  "source_archive_sha256": "ba9548c1d35450a205916d4dde4722bd9c736da34510764b8b489866aaece5d7",
+  "verification": {
+    "final_full_regression": {
+      "passed": 3794,
+      "failed": 0,
+      "warnings": 2,
+      "subtests_passed": 450,
+      "seconds": 233.26,
+      "command": "python run_translation_offline_checks.py"
+    },
+    "new_review_tests_passed": 50,
+    "factory_assets": {
+      "status": "PASS",
+      "errors": [],
+      "guard_self_test": {
+        "approved_examples_validated": 65,
+        "known_bad_examples_rejected": 19,
+        "ok": true,
+        "regression_cases": 30
+      }
+    },
+    "checked_entries": [
+      "text",
+      "OCR-derived text"
+    ],
+    "verified_repeat_mocked_generation_calls": [
+      1,
+      0
+    ],
+    "mocked_professional_role_local_repair_generation_calls": 1
+  },
+  "prompt_measurement": {
+    "metric": "Unicode message-content characters at the same offline SDK request boundary",
+    "samples": [
+      {
+        "sample": "qa_hold",
+        "before_prompt_text_characters": 4746,
+        "after_prompt_text_characters": 4746,
+        "character_reduction_percent": 0.0
+      },
+      {
+        "sample": "packing_notice",
+        "before_prompt_text_characters": 9468,
+        "after_prompt_text_characters": 8816,
+        "character_reduction_percent": 6.89
+      },
+      {
+        "sample": "chief_short",
+        "before_prompt_text_characters": 3649,
+        "after_prompt_text_characters": 4873,
+        "character_reduction_percent": -33.54
+      }
+    ],
+    "limits": "Characters are not billed tokens or cost. No live model-quality score or API latency measured. Short role messages can require more prompt text to preserve meaning."
+  },
+  "learning": {
+    "method": "source-grounded semantic taxonomy and replay-validated memory/prompt rules",
+    "model_weights_updated": false,
+    "generated_results_promoted_to_human_approval": false,
+    "requires_old_candidate_fail_and_final_pass": true
+  },
+  "modified_existing_files": [
+    "app.py",
+    "factory_knowledge.json",
+    "factory_terminology.py",
+    "glossary_data.json",
+    "test_translation_runtime_efficiency.py",
+    "translation_alignment.py",
+    "translation_casebook.py",
+    "translation_learning_policy.py",
+    "translation_privacy.py",
+    "translation_quality_gate.py"
+  ],
+  "new_files": [
+    "test_translation_review_20261010.py",
+    "tests/data/translation_review_20261010.json",
+    "UPDATE_20261010_TRANSLATION_CORE.md",
+    "TRANSLATION_VALIDATION_20261010.json"
+  ]
+}

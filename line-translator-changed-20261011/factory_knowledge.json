@@ -1,0 +1,5221 @@
+{
+  "schema_version": 1,
+  "build_id": "2026-10-10.1-source-sense-retrieval",
+  "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
+  "entries": [
+    {
+      "id": "grinding_quality_equipment_scope",
+      "enabled": true,
+      "priority": 250,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "研磨品質公告的設備範圍與尺寸位置",
+      "match": {
+        "all_groups": [
+          [
+            "mesin polishing"
+          ],
+          [
+            "grinding",
+            "permukaan",
+            "diameter",
+            "gerinda"
+          ]
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "mesin Polishing 泛稱拋光機；未出現設備編號時，不可從詞庫補入 E824、I5、I15 或其他代碼。CG 依原文標示保留。",
+        "diameter terlalu kecil dari ukuran yang diminta pelanggan 表示直徑小於客戶要求，不是棒材長度太短。",
+        "sekitar 15 cm dari ujung batang 表示距棒材端部約15公分的位置；數值取當前原文，不能當成直徑或整支棒材長度。",
+        "menggunakan gerinda 指使用砂輪／研磨工具進行手動修整，不是操作員徒手摩擦；原文未指定手工具型號或產線設備編號時不能添加。",
+        "條件、禁止直接送下站、先修整再送後製程均依原文保留。截斷或折疊畫面不可依常見公告補寫未顯示的結尾。"
+      ],
+      "requirements": [],
+      "examples": []
+    },
+    {
+      "id": "station_data_handoff_question",
+      "enabled": true,
+      "priority": 310,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "資料卡站與放行檢驗語意",
+      "match": {
+        "regex_any": [
+          "(?:資料|资料|數據|数据).{0,8}(?:卡在|卡|停在)\\s*\\d{3}",
+          "(?:未|沒|没有|沒有)放行[，,。\\s]+\\d{3}(?:站)?(?:都)?不(?:檢驗|检验|驗|验)"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "資料卡在三位站號，是 ERP 生產資料停在該站；數字是站號，不是件數。保留當前原文的站號。",
+        "放不過來／忘記放在此語境指資料放行到下站：tidak bisa di-release／lupa di-release，不是搬動材料或 lupa menaruhnya。",
+        "『是…還是…』詢問兩個可能原因，使用 apakah…atau…；不可改成已確認無法放行或忘記放行。",
+        "『沒有放行，某站不驗』的放行是資料流程，不是一般批准。站號是執行檢驗的站別；不驗本身尚未明說無法、不願或只是未完成，不得擅自增加能力或意願判斷。",
+        "『料在包裝』是材料位置；『料再包裝』可能是重包，也可能是在／再錯字，未經確認不能加入固定替換或當作已確認的學習案例。"
+      ],
+      "requirements": [],
+      "examples": []
+    },
+    {
+      "id": "polishing_large_bar_month_end_priority",
+      "enabled": true,
+      "priority": 210,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月底大尺寸拋光棒材集中到料與機台優先生產",
+      "match": {
+        "strong_phrases": [
+          "拋光機大尺寸棒材會集中大量到料",
+          "不可以吊小尺寸慢慢跑",
+          "大尺寸優先生產"
+        ],
+        "all_groups": [
+          [
+            "拋光機",
+            "拋光",
+            "抛光机",
+            "抛光"
+          ],
+          [
+            "大尺寸",
+            "大規格",
+            "大规格",
+            "大徑",
+            "大径"
+          ],
+          [
+            "到料",
+            "到貨",
+            "到货",
+            "進料",
+            "进料",
+            "來料",
+            "来料"
+          ],
+          [
+            "優先生產",
+            "优先生产",
+            "先做",
+            "先跑",
+            "優先",
+            "优先"
+          ],
+          [
+            "小尺寸",
+            "小規格",
+            "小规格",
+            "小徑",
+            "小径"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "月底前",
+          "本月份",
+          "本月",
+          "集中",
+          "大量",
+          "I5",
+          "I15",
+          "吊",
+          "慢慢跑",
+          "慢跑"
+        ],
+        "none_terms": [
+          "天車維修",
+          "天车维修",
+          "吊車維修",
+          "吊车维修"
+        ],
+        "min_score": 20
+      },
+      "context": [
+        "「集中大量到料」同時包含兩個資訊：到貨量大，而且到貨時間集中／相近；不能只保留其中一項。",
+        "「本月份的大尺寸」表示本月排程或本月範圍內的大尺寸棒材／訂單，印尼文要讓 bulan ini 修飾材料或排程範圍，不能寫成 produksi ukuran besar dari bulan ini。",
+        "「I5、I15要先…優先生產」是指定機台的生產優先順序，宜用 mendahulukan 或 memprioritaskan produksi。",
+        "「吊小尺寸慢慢跑」在此是生產排程與產出效率語意：不要把小尺寸棒材吊／送上機後慢慢占用設備。原文只寫『吊』時，不可自行補成 crane、derek 或 overhead crane。",
+        "「慢慢跑」沒有提到轉速或 RPM 時，不可翻成低轉速、降低機速等設備設定。"
+      ],
+      "preferred_target_phrases": [
+        "batang berukuran besar",
+        "akan tiba dalam jumlah besar dalam waktu yang berdekatan",
+        "mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini",
+        "jangan mengangkat dan memasukkan batang berukuran kecil ke mesin lalu menjalankan produksinya secara lambat"
+      ],
+      "forbidden_target_phrases": [
+        "produksi ukuran besar dari bulan ini",
+        "produksi berukuran besar dari bulan ini"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "月底前",
+            "月末前"
+          ],
+          "target_any": [
+            "sebelum akhir bulan",
+            "sebelum bulan ini berakhir",
+            "sebelum penghujung bulan"
+          ],
+          "issue": "missing_month_end_deadline"
+        },
+        {
+          "target_any": [
+            "material batang berukuran besar",
+            "batang berukuran besar",
+            "batang ukuran besar"
+          ],
+          "issue": "missing_large_bar_material"
+        },
+        {
+          "target_any": [
+            "dalam jumlah besar",
+            "dalam jumlah banyak",
+            "volume besar"
+          ],
+          "issue": "missing_bulk_arrival"
+        },
+        {
+          "target_any": [
+            "dalam waktu yang berdekatan",
+            "secara bersamaan",
+            "secara terkonsentrasi",
+            "dalam periode yang sama"
+          ],
+          "issue": "missing_concentrated_arrival"
+        },
+        {
+          "target_any": [
+            "mendahulukan",
+            "memprioritaskan",
+            "diprioritaskan",
+            "prioritas"
+          ],
+          "issue": "missing_production_priority"
+        },
+        {
+          "source_any": [
+            "本月份",
+            "本月"
+          ],
+          "target_any": [
+            "bulan ini"
+          ],
+          "issue": "missing_current_month_scope"
+        },
+        {
+          "target_any": [
+            "tidak boleh",
+            "jangan",
+            "dilarang"
+          ],
+          "issue": "missing_prohibition"
+        },
+        {
+          "target_any": [
+            "batang berukuran kecil",
+            "material berukuran kecil",
+            "material ukuran kecil",
+            "batang ukuran kecil"
+          ],
+          "issue": "missing_small_size_material"
+        },
+        {
+          "source_any": [
+            "吊"
+          ],
+          "target_any": [
+            "mengangkat",
+            "memasukkan",
+            "memuat",
+            "menaikkan"
+          ],
+          "issue": "missing_hoist_or_load_action"
+        },
+        {
+          "source_any": [
+            "慢慢跑",
+            "慢跑"
+          ],
+          "target_any": [
+            "secara lambat",
+            "secara perlahan",
+            "berjalan lambat",
+            "produksi lambat"
+          ],
+          "issue": "missing_slow_production_semantics"
+        }
+      ],
+      "preserve_source_regex": [
+        "\\b(?:I5|I15)\\b"
+      ],
+      "examples": [
+        {
+          "source": "月底前拋光機大尺寸棒材會集中大量到料，I5、I15要先從本月份的大尺寸優先生產，不可以吊小尺寸慢慢跑。",
+          "target": "Sebelum akhir bulan, batang berukuran besar untuk mesin polishing akan tiba dalam jumlah besar dalam waktu yang berdekatan. I5 dan I15 harus mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini. Jangan mengangkat dan memasukkan batang berukuran kecil ke mesin lalu menjalankan produksinya secara lambat.",
+          "bad_target": "Sebelum akhir bulan, material batang ukuran besar untuk mesin polishing akan datang dalam jumlah besar secara bersamaan. I5 dan I15 harus terlebih dahulu memprioritaskan produksi ukuran besar dari bulan ini. Jangan mengangkat material ukuran kecil lalu memprosesnya secara perlahan.",
+          "reason": "舊譯文讓『本月份』錯誤修飾抽象的 ukuran besar，且未把最後一句放回機台排程／產出效率語境。"
+        },
+        {
+          "source": "月底前大尺寸拋光棒材會密集大量進料，I5、I15本月先跑大尺寸，禁止先吊小尺寸占機慢跑。",
+          "target": "Sebelum akhir bulan, batang berukuran besar untuk proses polishing akan masuk dalam jumlah besar dalam waktu yang berdekatan. I5 dan I15 harus mendahulukan produksi batang berukuran besar yang dijadwalkan untuk bulan ini. Dilarang mengangkat dan memasukkan batang berukuran kecil ke mesin sehingga mesin dipakai untuk produksi yang berjalan lambat.",
+          "reason": "同類排程語意的改寫，用於防止只記住完全相同句子。"
+        }
+      ]
+    },
+    {
+      "id": "loading_unloading_weighing_audit",
+      "enabled": true,
+      "priority": 195,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "上下料秤重落實性抽查",
+      "match": {
+        "strong_phrases": [
+          "上下料秤重",
+          "上料秤重",
+          "下料秤重"
+        ],
+        "all_groups": [
+          [
+            "上下料",
+            "上、下料",
+            "上料",
+            "下料"
+          ],
+          [
+            "秤重",
+            "稱重"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "今日起",
+          "從今天起",
+          "抽查",
+          "落實性",
+          "各班要求",
+          "各班別",
+          "每班"
+        ],
+        "regex_any": [
+          "(?:上料|下料|上下料|上、下料).{0,10}(?:秤重|稱重)"
+        ],
+        "require_any": true,
+        "min_score": 8,
+        "none_terms": [
+          "貨車",
+          "卡車",
+          "司機",
+          "卸貨",
+          "裝貨",
+          "倉庫",
+          "月台",
+          "碼頭"
+        ]
+      },
+      "context": [
+        "本訊息中的『上下料』是材料進入機台與從機台取出的作業，不是貨車裝卸、一般搬運或只把材料放上／拿下某處。",
+        "『抽查上下料秤重作業落實性』是抽查人員是否確實執行秤重程序，不是檢查磅秤設備本身是否正常。",
+        "『請各班要求』是省略受詞的主管指示，意思是各班必須要求並確保操作員落實此程序；不可弱化成 hanya menegaskan/menekankan hal ini（只強調此事）。",
+        "只有來源同時具備上下料與秤重語意時，才可套用本知識；一般出勤、維修、清掃或監視器公告不得套用。"
+      ],
+      "preferred_target_phrases": [
+        "pemeriksaan acak untuk memastikan pelaksanaan penimbangan",
+        "pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin",
+        "setiap shift memastikan operator menjalankan prosedur ini dengan benar"
+      ],
+      "forbidden_target_phrases": [
+        "menegaskan hal ini",
+        "menekankan hal ini",
+        "saat memasukkan dan mengeluarkan material",
+        "bongkar muat material",
+        "pemeriksaan timbangan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "抽查"
+          ],
+          "target_any": [
+            "pemeriksaan acak",
+            "pemeriksaan secara acak",
+            "pengecekan acak",
+            "audit acak"
+          ],
+          "issue": "missing_random_audit_semantics"
+        },
+        {
+          "source_any": [
+            "上下料",
+            "上料"
+          ],
+          "target_any": [
+            "dimasukkan ke mesin",
+            "masuk ke mesin",
+            "memasukkan material ke mesin",
+            "proses memasukkan material ke mesin"
+          ],
+          "issue": "missing_material_loading_into_machine_semantics"
+        },
+        {
+          "source_any": [
+            "上下料",
+            "下料"
+          ],
+          "target_any": [
+            "dikeluarkan dari mesin",
+            "keluar dari mesin",
+            "mengeluarkan material dari mesin",
+            "proses mengeluarkan material dari mesin",
+            "mengeluarkannya dari mesin",
+            "material dikeluarkan dari mesin"
+          ],
+          "issue": "missing_material_unloading_from_machine_semantics"
+        },
+        {
+          "source_any": [
+            "秤重",
+            "稱重"
+          ],
+          "target_any": [
+            "penimbangan",
+            "ditimbang",
+            "menimbang"
+          ],
+          "issue": "missing_weighing_operation_semantics"
+        },
+        {
+          "source_any": [
+            "落實性",
+            "落實"
+          ],
+          "target_any": [
+            "pelaksanaan",
+            "dilaksanakan",
+            "menjalankan",
+            "mematuhi",
+            "kepatuhan",
+            "dipatuhi",
+            "memastikan kepatuhan"
+          ],
+          "issue": "missing_implementation_compliance_semantics"
+        },
+        {
+          "source_any": [
+            "各班"
+          ],
+          "target_any": [
+            "setiap shift",
+            "masing-masing shift",
+            "tiap shift"
+          ],
+          "issue": "missing_each_shift_scope"
+        },
+        {
+          "source_any": [
+            "各班要求",
+            "請各班要求"
+          ],
+          "target_any": [
+            "memastikan operator",
+            "menginstruksikan operator",
+            "mewajibkan operator",
+            "memastikan pelaksanaan",
+            "memastikan prosedur",
+            "memastikan ketentuan"
+          ],
+          "issue": "missing_shift_enforcement_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "今日起會抽查上下料秤重作業落實性，請各班要求。",
+          "target": "Mulai hari ini, akan dilakukan pemeriksaan acak untuk memastikan pelaksanaan penimbangan pada saat material dimasukkan ke mesin maupun dikeluarkan dari mesin. Mohon setiap shift memastikan operator menjalankan prosedur ini dengan benar.",
+          "bad_target": "Mulai hari ini akan dilakukan pemeriksaan acak terhadap pelaksanaan penimbangan saat memasukkan dan mengeluarkan material. Mohon setiap shift menegaskan hal ini.",
+          "reason": "上下料必須明確為材料進入機台與從機台取出；請各班要求是要求各班確保操作員落實，不可弱化成只強調此事。"
+        }
+      ]
+    },
+    {
+      "id": "audit_cctv_field_observation_methods",
+      "enabled": true,
+      "priority": 190,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "監視器監看與現場觀察雙重查核方式",
+      "match": {
+        "strong_phrases": [
+          "監視器監看方式及現場觀察",
+          "監視器監看及現場觀察",
+          "CCTV監控及現場觀察"
+        ],
+        "all_groups": [
+          [
+            "監視器",
+            "CCTV",
+            "攝影機",
+            "攝像頭"
+          ],
+          [
+            "現場觀察",
+            "現場查看",
+            "現場查核",
+            "現場檢查"
+          ],
+          [
+            "查核",
+            "檢查",
+            "稽核",
+            "核查"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "監看方式",
+          "監控方式",
+          "查核作業"
+        ],
+        "regex_any": [
+          "(?:監視器|CCTV).{0,20}(?:現場觀察|現場查看|現場查核|現場檢查)"
+        ],
+        "require_any": true,
+        "min_score": 12
+      },
+      "context": [
+        "來源明列兩種查核方式：監視器／CCTV監看，以及人員在現場直接觀察；翻譯必須同時保留兩者。",
+        "『查核作業』是 pemeriksaan/audit，不可自行增加處罰、違規認定或設備故障原因。",
+        "只有來源同時出現監視器與現場觀察的查核語意時才套用；單純監視器故障、設備維修或現場清掃不得套用。"
+      ],
+      "preferred_target_phrases": [
+        "pemantauan CCTV",
+        "observasi langsung di lapangan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "監視器",
+            "CCTV"
+          ],
+          "target_any": [
+            "CCTV",
+            "kamera pengawas"
+          ],
+          "issue": "missing_cctv_monitoring_semantics"
+        },
+        {
+          "source_any": [
+            "現場觀察",
+            "現場查看",
+            "現場查核",
+            "現場檢查"
+          ],
+          "target_any": [
+            "observasi langsung di lapangan",
+            "pengamatan langsung di lapangan",
+            "observasi langsung di area kerja",
+            "pengamatan langsung di area kerja"
+          ],
+          "issue": "missing_direct_field_observation_semantics"
+        },
+        {
+          "source_any": [
+            "查核",
+            "檢查",
+            "稽核",
+            "核查"
+          ],
+          "target_any": [
+            "pemeriksaan",
+            "audit",
+            "pengecekan"
+          ],
+          "issue": "missing_audit_action_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "會以監視器監看方式及現場觀察進行查核作業。",
+          "target": "Pemeriksaan akan dilakukan melalui pemantauan CCTV dan observasi langsung di lapangan."
+        }
+      ]
+    },
+    {
+      "id": "pmi_grade_verification_bundle_packaging",
+      "enabled": true,
+      "priority": 190,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "每把材料的 PMI 鋼種檢驗與包裝責任",
+      "match": {
+        "strong_phrases": [
+          "打鋼種",
+          "驗鋼種",
+          "檢驗鋼種",
+          "打材質",
+          "驗材質",
+          "檢驗材質",
+          "做PMI",
+          "做 PMI",
+          "打PMI",
+          "打 PMI",
+          "PMI檢驗",
+          "PMI檢查",
+          "PMI檢測"
+        ],
+        "any_terms": [
+          "每一把",
+          "每把",
+          "各把",
+          "每一捆",
+          "每捆",
+          "出貨這把",
+          "這把出貨",
+          "包裝",
+          "出貨",
+          "A班",
+          "B班",
+          "C班",
+          "異型站",
+          "異型包裝站",
+          "嫌麻煩",
+          "覺得麻煩",
+          "沒檢驗",
+          "未檢驗",
+          "沒有檢驗"
+        ],
+        "regex_any": [
+          "(?:每一?把|各把|每一?捆).{0,12}(?:打|驗|檢驗|確認)(?:鋼種|材質)",
+          "(?:沒|未|沒有)(?:做|進行|檢驗|檢查|測試)?\\s*PMI.{0,12}(?:包|包裝)"
+        ],
+        "require_any": true,
+        "min_score": 8
+      },
+      "context": [
+        "本廠現場用語『打鋼種／打材質』是用 PMI 分光儀檢驗、確認材料鋼種（material grade），不是在材料上打印、刻印、噴印或貼鋼種標示。",
+        "『每一把／每把／各把』中的『把』是棒材捆數，印尼文使用 setiap bundel；不可把『把』當成中文處置介詞或省略掉逐捆要求。",
+        "『每一把都一定要』是強制品質要求，譯文必須保留 wajib／harus 等同等強度，不可弱化成建議或偶爾抽驗。",
+        "『沒檢驗 PMI 就包了』表示包裝前未執行 PMI 檢驗便直接包裝，必須保留先後關係、缺失行為與包裝責任。",
+        "『嫌麻煩』是未執行檢驗的原因，可用 merasa pemeriksaan tersebut merepotkan／karena merasa repot；不可改成設備故障、沒時間或不知道規定。",
+        "『出貨這把』是已出貨的這一捆材料，使用 bundel yang sudah dikirim；不是一般出貨批次，也不可漏掉這一捆的指涉。",
+        "A班／B班／C班固定用 shift A／shift B／shift C。異型站在明確站別語境中沿用正式站名 Stasiun packing barang bentuk khusus。",
+        "「工單報表確實填寫供查核」表示 work order report 必須正確填寫，供後續資料核對／稽核；印尼文可用 laporan work order harus diisi dengan benar untuk keperluan verifikasi/audit。查核對象是紀錄，不可誤解成再做一次實體 PMI 檢驗。"
+      ],
+      "preferred_target_phrases": [
+        "grade baja setiap bundel wajib diperiksa dengan PMI",
+        "setiap bundel wajib diperiksa grade bajanya dengan PMI",
+        "pemeriksaan PMI",
+        "bundel yang sudah dikirim",
+        "dikemas tanpa pemeriksaan PMI",
+        "shift A",
+        "Stasiun packing barang bentuk khusus",
+        "karena merasa pemeriksaan tersebut merepotkan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "打鋼種",
+            "驗鋼種",
+            "檢驗鋼種",
+            "打材質",
+            "驗材質",
+            "檢驗材質",
+            "做PMI",
+            "做 PMI",
+            "打PMI",
+            "打 PMI",
+            "PMI檢驗",
+            "PMI檢查",
+            "PMI檢測"
+          ],
+          "target_any": [
+            "PMI"
+          ],
+          "issue": "missing_pmi_grade_verification_method"
+        },
+        {
+          "source_any": [
+            "打鋼種",
+            "驗鋼種",
+            "檢驗鋼種",
+            "打材質",
+            "驗材質",
+            "檢驗材質"
+          ],
+          "target_any": [
+            "grade baja",
+            "grade material",
+            "material grade"
+          ],
+          "issue": "missing_material_grade_semantics"
+        },
+        {
+          "source_any": [
+            "每一把",
+            "每把",
+            "各把",
+            "每一捆",
+            "每捆"
+          ],
+          "target_any": [
+            "setiap bundel",
+            "semua bundel",
+            "tiap bundel"
+          ],
+          "issue": "missing_every_bundle_scope"
+        },
+        {
+          "source_any": [
+            "一定要",
+            "務必",
+            "必須",
+            "不得不驗",
+            "都要"
+          ],
+          "target_any": [
+            "wajib",
+            "harus"
+          ],
+          "issue": "missing_mandatory_strength"
+        },
+        {
+          "source_any": [
+            "沒檢驗PMI就包了",
+            "沒檢驗 PMI 就包了",
+            "未檢驗PMI就包",
+            "未檢驗 PMI 就包",
+            "沒有檢驗PMI就包",
+            "沒有檢驗 PMI 就包",
+            "沒做PMI就包",
+            "沒做 PMI 就包"
+          ],
+          "target_any": [
+            "tanpa pemeriksaan PMI",
+            "tanpa melakukan pemeriksaan PMI",
+            "tidak melakukan pemeriksaan PMI",
+            "tidak diperiksa dengan PMI",
+            "belum diperiksa dengan PMI"
+          ],
+          "issue": "missing_packaged_without_pmi_semantics"
+        },
+        {
+          "source_any": [
+            "嫌麻煩",
+            "覺得麻煩",
+            "認為麻煩"
+          ],
+          "target_any": [
+            "merepotkan",
+            "merasa repot",
+            "dianggap repot"
+          ],
+          "issue": "missing_inconvenience_cause"
+        },
+        {
+          "source_any": [
+            "出貨這把",
+            "這把出貨",
+            "出貨的這把",
+            "這把已出貨"
+          ],
+          "target_any": [
+            "bundel yang sudah dikirim",
+            "bundel yang dikirim",
+            "bundel ini sudah dikirim"
+          ],
+          "issue": "missing_shipped_bundle_reference"
+        },
+        {
+          "source_any": [
+            "A班"
+          ],
+          "target_any": [
+            "shift A"
+          ],
+          "issue": "missing_shift_a_actor"
+        },
+        {
+          "source_any": [
+            "B班"
+          ],
+          "target_any": [
+            "shift B"
+          ],
+          "issue": "missing_shift_b_actor"
+        },
+        {
+          "source_any": [
+            "C班"
+          ],
+          "target_any": [
+            "shift C"
+          ],
+          "issue": "missing_shift_c_actor"
+        },
+        {
+          "source_any": [
+            "異型站",
+            "異型那站",
+            "異型那邊",
+            "異型包裝站"
+          ],
+          "target_any": [
+            "Stasiun packing barang bentuk khusus"
+          ],
+          "issue": "missing_special_shape_packaging_station"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?<![A-Za-z0-9])PMI(?![A-Za-z0-9])"
+      ],
+      "examples": [
+        {
+          "source": "再宣導一下，每一把都一定要打鋼種，出貨這把是A班異型站包裝時嫌麻煩沒檢驗PMI就包了",
+          "target": "Saya ingatkan sekali lagi, grade baja setiap bundel wajib diperiksa dengan PMI. Bundel yang sudah dikirim ini dikemas oleh shift A di Stasiun packing barang bentuk khusus tanpa pemeriksaan PMI karena mereka merasa pemeriksaan tersebut merepotkan."
+        },
+        {
+          "source": "每把包裝前都要驗鋼種，沒有做 PMI 不可以包裝。",
+          "target": "Grade baja setiap bundel harus diperiksa dengan PMI sebelum dikemas. Bundel yang belum diperiksa dengan PMI tidak boleh dikemas."
+        }
+      ],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "diberi tanda grade baja",
+            "memberi tanda grade baja",
+            "menandai grade baja",
+            "mencetak grade baja",
+            "mencetak jenis baja",
+            "memberi label grade baja",
+            "diberi label grade baja",
+            "menulis grade baja",
+            "mengukir grade baja",
+            "ditandai grade baja",
+            "diberi tanda jenis baja",
+            "menandai jenis baja",
+            "memberi label jenis baja",
+            "diberi label jenis baja",
+            "ditulis grade baja"
+          ],
+          "unless_source": {
+            "strong_phrases": [
+              "打印鋼種",
+              "列印鋼種",
+              "噴印鋼種",
+              "鋼種標籤",
+              "鋼種標示"
+            ],
+            "min_score": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "erp_station_record_transfer_timing",
+      "enabled": true,
+      "priority": 100,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "包裝站 490 到暫存站 801 的資料過帳時間分布",
+      "match": {
+        "strong_phrases": [
+          "入庫時間再平均一點",
+          "入庫時間平均一點",
+          "入帳時間平均一點",
+          "過帳時間平均一點"
+        ],
+        "all_groups": [
+          [
+            "入庫時間",
+            "入帳時間",
+            "過帳時間",
+            "登錄時間",
+            "登入時間",
+            "紀錄時間",
+            "記錄時間",
+            "資料時間"
+          ],
+          [
+            "平均",
+            "均勻",
+            "分散",
+            "不要集中",
+            "別集中",
+            "分批",
+            "間隔"
+          ]
+        ],
+        "any_terms": [
+          "移完",
+          "入完",
+          "全部移",
+          "一次移",
+          "一次入",
+          "490",
+          "801",
+          "開會",
+          "會議",
+          "檢討",
+          "報表",
+          "稽核",
+          "沒入帳",
+          "無紀錄"
+        ],
+        "none_terms": [],
+        "require_all_groups": true,
+        "min_score": 8,
+        "semantic_relation": "inventory_record_timing"
+      },
+      "context": [
+        "這裡的『入庫/入帳/過帳時間』是生產系統中每一把已包裝棒材資料的登錄或站別移轉時間，不是實體貨物進倉時間。",
+        "使用者確認：資料進入801即算入庫；490是包裝作業資料所在站，801是資料進入的入庫站別。「移完」在此資料語境是完成系統登錄／過帳，不是搬完成品。",
+        "『平均一點』是要求資料依實際作業節奏較均勻地過帳，避免某時段一次出現太多筆、其他時段完全沒有入帳紀錄；不是計算數學平均值。",
+        "『太早移完，開會很難解釋』表示若紀錄集中過早完成，後續時段沒有入帳，看起來像人員沒有持續工作，生產檢討會議時難以說明。",
+        "不得暗示偽造時間；譯文要表達依實際作業時間逐筆或分散登錄。",
+        "同一公告的入庫噸數是已登錄入庫的成品重量，時間平均是分散系統登錄／過帳時間。重量、時間各自保留，不能把噸數改成資料筆數或增添實體搬运指令；原文未列站號時不可補490、801。"
+      ],
+      "preferred_target_phrases": [
+        "waktu pencatatan data setiap bundel",
+        "pemindahan data dari stasiun 490 ke stasiun 801",
+        "lebih merata sesuai waktu pengerjaan",
+        "jangan dipindahkan sekaligus terlalu awal",
+        "jeda tanpa pencatatan sulit dijelaskan saat rapat"
+      ],
+      "forbidden_target_phrases": [
+        "rata-rata sedikit",
+        "semua barang selesai dipindahkan",
+        "barang selesai dipindahkan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "太早",
+            "過早",
+            "提早",
+            "太快",
+            "移完",
+            "入完"
+          ],
+          "target_any": [
+            "terlalu awal",
+            "terlalu cepat",
+            "lebih awal",
+            "sekaligus"
+          ],
+          "issue": "missing_early_or_batch_completion_semantics"
+        },
+        {
+          "source_any": [
+            "開會",
+            "會議",
+            "檢討",
+            "報表",
+            "稽核",
+            "解釋"
+          ],
+          "target_any": [
+            "rapat",
+            "meeting",
+            "evaluasi",
+            "review",
+            "dijelaskan",
+            "menjelaskan"
+          ],
+          "issue": "missing_review_consequence"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?<!\\d)(490|801)(?!\\d)"
+      ],
+      "examples": [
+        {
+          "source": "入庫時間再平均一點，太早移完開會很難解釋",
+          "target": "Tolong atur waktu pencatatan masuk gudang agar lebih merata. Jika semua data selesai dipindahkan terlalu awal, akan sulit dijelaskan saat rapat."
+        },
+        {
+          "source": "490的資料不要一次全移到801，入帳時間分散一點",
+          "target": "Data dari stasiun 490 jangan dipindahkan sekaligus ke stasiun 801. Atur waktu pencatatannya agar lebih merata sesuai proses kerja."
+        }
+      ],
+      "semantic_validator": "inventory_record_timing"
+    },
+    {
+      "id": "physical_warehouse_receiving",
+      "enabled": true,
+      "priority": 110,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "實體貨物入庫／收貨",
+      "match": {
+        "all_groups": [
+          [
+            "入庫",
+            "進倉",
+            "收貨",
+            "到貨"
+          ],
+          [
+            "貨車",
+            "卡車",
+            "司機",
+            "卸貨",
+            "倉庫",
+            "月台",
+            "送貨",
+            "貨物"
+          ]
+        ],
+        "any_terms": [
+          "時間",
+          "安排",
+          "平均",
+          "排隊"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "這是實體貨物到廠、卸貨、收貨或進倉，不是 ERP 資料過帳。",
+        "可使用 barang masuk gudang、penerimaan barang、bongkar muat 等實體物流詞。"
+      ],
+      "preferred_target_phrases": [
+        "barang masuk gudang",
+        "penerimaan barang",
+        "bongkar muat"
+      ],
+      "forbidden_target_phrases": [
+        "pemindahan data dari stasiun 490 ke stasiun 801"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "gudang",
+            "penerimaan barang",
+            "bongkar",
+            "muat",
+            "truk",
+            "sopir"
+          ],
+          "issue": "missing_physical_logistics_semantics"
+        }
+      ]
+    },
+    {
+      "id": "incident_voluntary_self_report",
+      "enabled": true,
+      "priority": 100,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "設備事故主動承認與回報",
+      "match": {
+        "all_groups": [
+          [
+            "自首",
+            "主動承認",
+            "自己承認",
+            "主動回報",
+            "自己回報"
+          ],
+          [
+            "設備",
+            "機台",
+            "撞壞",
+            "摔壞",
+            "損壞",
+            "提報",
+            "通報"
+          ]
+        ],
+        "any_terms": [
+          "無罪",
+          "不追究",
+          "讓我知道",
+          "其他單位",
+          "比較嚴重",
+          "先提報"
+        ],
+        "none_terms": [
+          "警方",
+          "法院",
+          "刑法",
+          "犯罪",
+          "投案",
+          "檢察官"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "工廠紀律與安全語境中的『自首無罪』是主動承認並回報後不會被追究或刁難，不是宗教上的無罪，也不是刑事法律宣告。",
+        "撞壞與摔壞是兩種事故原因，應保留；設備受損後要立即向說話者回報。",
+        "若由其他部門先通報，通常表示事情已延誤並變得更嚴重。"
+      ],
+      "preferred_target_phrases": [
+        "mengaku dan melaporkannya sendiri tidak akan dipermasalahkan",
+        "rusak karena tertabrak atau terjatuh",
+        "segera laporkan kepada saya",
+        "departemen lain yang lebih dulu melaporkan"
+      ],
+      "forbidden_target_phrases": [
+        "tidak ada dosa",
+        "tidak berdosa",
+        "tidak bersalah"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "tidak akan dipermasalahkan",
+            "tidak akan dipersoalkan",
+            "tidak akan ditindak"
+          ],
+          "issue": "missing_nonpunitive_self_report_semantics"
+        },
+        {
+          "source_any": [
+            "撞壞"
+          ],
+          "target_any": [
+            "tertabrak",
+            "terbentur",
+            "terkena benturan"
+          ],
+          "issue": "missing_collision_mechanism"
+        },
+        {
+          "source_any": [
+            "摔壞"
+          ],
+          "target_any": [
+            "terjatuh",
+            "jatuh hingga rusak"
+          ],
+          "issue": "missing_fall_mechanism"
+        },
+        {
+          "source_any": [
+            "其他單位",
+            "其他部門"
+          ],
+          "target_any": [
+            "departemen lain",
+            "bagian lain",
+            "unit lain"
+          ],
+          "issue": "missing_other_department_reporter"
+        }
+      ],
+      "examples": [
+        {
+          "source": "自首無罪，設備有撞壞還是摔壞一定要讓我知道，等其他單位提報了都是比較嚴重了。",
+          "target": "Jika mengaku dan melaporkannya sendiri, hal itu tidak akan dipermasalahkan. Jika ada peralatan yang rusak karena tertabrak atau terjatuh, segera laporkan kepada saya. Jangan sampai departemen lain yang lebih dulu melaporkannya, karena kalau sudah begitu biasanya masalahnya sudah menjadi lebih serius."
+        }
+      ]
+    },
+    {
+      "id": "spray_painting_operation",
+      "enabled": true,
+      "priority": 70,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "噴漆作業",
+      "match": {
+        "strong_phrases": [
+          "噴漆"
+        ],
+        "any_terms": [
+          "作業",
+          "施工",
+          "執行",
+          "沒有噴",
+          "未噴",
+          "漆"
+        ],
+        "require_any": false,
+        "min_score": 8
+      },
+      "context": [
+        "『噴漆』可依語法使用名詞 pengecatan semprot、動詞 mengecat dengan semprotan 或被動 dicat semprot/disemprot cat。術語指引不是要求逐字嵌入固定名詞。",
+        "『噴漆錯誤的』描述被噴錯的材料，使用 yang salah dicat semprot 或 yang pengecatan semprotnya salah；不要拼接成 yang salah pengecatan semprot。材料的把／捆不可漏譯為只有 Yang。",
+        "重洗是再次進行清洗，保留 cuci ulang/dicuci ulang；除非原文明示，不得自行增加重新噴漆、改顏色、退漆藥劑或原因。"
+      ],
+      "preferred_target_phrases": [
+        "pengecatan semprot",
+        "dicat semprot",
+        "disemprot cat",
+        "mengecat dengan semprotan"
+      ],
+      "forbidden_target_phrases": [
+        "spray cat"
+      ],
+      "requirements": [],
+      "semantic_validator": "spray_painting"
+    },
+    {
+      "id": "management_shift_smoking_area_notice",
+      "enabled": true,
+      "priority": 90,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "主管巡視、班別與吸菸區人數管理",
+      "match": {
+        "all_groups": [
+          [
+            "主管",
+            "處長",
+            "課長",
+            "經理",
+            "高層",
+            "班長"
+          ],
+          [
+            "上下班",
+            "巡視",
+            "下樓",
+            "小夜班",
+            "夜班",
+            "吸菸區",
+            "抽菸區",
+            "聚集",
+            "分散開來"
+          ]
+        ],
+        "any_terms": [
+          "樓上",
+          "研磨部門",
+          "規定人數",
+          "超過人數",
+          "被看到",
+          "開會",
+          "檢討"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "『樓上主管』是位於樓上辦公或巡視的主管，印尼文應表達 atasan di lantai atas，不是生硬的 atasan yang di atas。",
+        "『主管上下班時間』是主管的上班與下班時段，使用 jam masuk dan pulang kerja；不是一般到達和離開的字面描述。",
+        "『小夜班』是與大夜班不同的早段夜班／晚班。預設可用 shift sore；若原文另有公司正式班名，應保留正式班名，不可簡化成一般 shift malam。",
+        "『處長』在此為部門主管，預設使用 kepala divisi 或 kepala departemen，不可擅自升格成公司董事。",
+        "『研磨部門』使用 bagian grinding 或 departemen grinding；『吸菸區』使用 area merokok。",
+        "『立刻分散開來』是人員立即分開、不要集中，使用 segera berpencar；避免同義詞重複或加入原文沒有的懲處。"
+      ],
+      "preferred_target_phrases": [
+        "atasan di lantai atas",
+        "jam masuk dan pulang kerja",
+        "shift sore",
+        "kepala divisi",
+        "bagian grinding",
+        "area merokok",
+        "segera berpencar"
+      ],
+      "forbidden_target_phrases": [
+        "atasan yang di atas",
+        "jam datang dan pulang",
+        "shift malam awal",
+        "bubar dan menyebar",
+        "berkumpul bersama"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "樓上主管"
+          ],
+          "target_any": [
+            "atasan di lantai atas",
+            "pimpinan di lantai atas"
+          ],
+          "issue": "missing_upstairs_supervisor_semantics"
+        },
+        {
+          "source_any": [
+            "上下班"
+          ],
+          "target_any": [
+            "jam masuk dan pulang kerja",
+            "waktu masuk dan pulang kerja"
+          ],
+          "issue": "missing_work_start_end_time_semantics"
+        },
+        {
+          "source_any": [
+            "處長"
+          ],
+          "target_any": [
+            "kepala divisi",
+            "kepala departemen"
+          ],
+          "issue": "missing_department_head_role"
+        },
+        {
+          "source_any": [
+            "研磨部門"
+          ],
+          "target_any": [
+            "bagian grinding",
+            "departemen grinding",
+            "bagian penggerindaan",
+            "departemen penggerindaan"
+          ],
+          "issue": "missing_grinding_department"
+        },
+        {
+          "source_any": [
+            "吸菸區",
+            "抽菸區"
+          ],
+          "target_any": [
+            "area merokok",
+            "tempat merokok"
+          ],
+          "issue": "missing_smoking_area"
+        },
+        {
+          "source_any": [
+            "分散開來",
+            "分散",
+            "散開"
+          ],
+          "target_any": [
+            "berpencar",
+            "menyebar"
+          ],
+          "issue": "missing_disperse_action"
+        }
+      ]
+    },
+    {
+      "id": "organization_unit_discipline_notice",
+      "enabled": true,
+      "priority": 125,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "一課／一股主管與紀律提醒",
+      "match": {
+        "strong_phrases": [
+          "一股股長",
+          "一課最近被釘很緊",
+          "什麼都會跟處長講"
+        ],
+        "all_groups": [
+          [
+            "一課",
+            "第一課",
+            "一股",
+            "第一股",
+            "股長"
+          ],
+          [
+            "處長",
+            "控制室",
+            "基本紀律",
+            "公司派",
+            "被釘很緊",
+            "盯很緊",
+            "跟處長講"
+          ]
+        ],
+        "any_terms": [
+          "休息",
+          "吹冷氣",
+          "樓上",
+          "抓到",
+          "注意一下",
+          "什麼都會講",
+          "回報"
+        ],
+        "require_all_groups": false,
+        "min_score": 8,
+        "required_regex_any": [
+          "一課|第一課|一股|第一股|股長|基本紀律|控制室|公司派|吹冷氣|被[釘盯]|盯很緊"
+        ]
+      },
+      "context": [
+        "「一課」是工廠正式組織單位 Seksi 1，不是一般的 Departemen 1。",
+        "本廠「一股」是「冷抽一股」的口語簡稱，依 ERP 股別表固定為 Bagian Cold Drawing 1；「一股股長」是 kepala bagian Cold Drawing 1。",
+        "「股」是生產部門／工段，不是班組；不得翻成 Regu、Subseksi，也不得音譯成 Yigu。Regu 僅用於班／工作小組。",
+        "「被釘很緊」是台灣職場口語，表示近期受到嚴格監督，使用 diawasi dengan ketat。",
+        "「公司派」表示立場偏向公司；「蠻公司派」宜用 cukup/cenderung berpihak kepada perusahaan，不可無故加重成 sangat。",
+        "「樓上是一股股長」是提醒樓上有冷抽一股股長在場，不是說樓上屬於一個叫 Yigu 的人。",
+        "「什麼都會跟處長講」表示會把事情告知 kepala divisi；保留警告語氣，但不要新增懲處或法律後果。"
+      ],
+      "preferred_target_phrases": [
+        "Seksi 1",
+        "kepala bagian Cold Drawing 1",
+        "diawasi dengan ketat",
+        "ruang kontrol",
+        "disiplin dasar",
+        "cukup berpihak kepada perusahaan",
+        "kepala divisi"
+      ],
+      "forbidden_target_phrases": [
+        "Yigu",
+        "Kepala Bagian Yigu",
+        "Departemen 1",
+        "Regu 1",
+        "kepala regu 1",
+        "Subseksi 1",
+        "kepala subseksi 1",
+        "sangat berpihak kepada perusahaan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "一課",
+            "第一課"
+          ],
+          "target_any": [
+            "Seksi 1",
+            "seksi 1"
+          ],
+          "issue": "missing_section_1_unit"
+        },
+        {
+          "source_any": [
+            "一股股長",
+            "第一股股長"
+          ],
+          "target_any": [
+            "kepala bagian Cold Drawing 1",
+            "Kepala Bagian Cold Drawing 1"
+          ],
+          "issue": "missing_cold_drawing_1_head_role"
+        },
+        {
+          "source_any": [
+            "被釘很緊",
+            "盯很緊"
+          ],
+          "target_any": [
+            "diawasi dengan ketat",
+            "pengawasan sangat ketat",
+            "diawasi sangat ketat",
+            "diawasi dengan sangat ketat"
+          ],
+          "issue": "missing_strict_supervision_semantics"
+        },
+        {
+          "source_any": [
+            "處長"
+          ],
+          "target_any": [
+            "kepala divisi",
+            "kepala departemen"
+          ],
+          "issue": "missing_division_head_role"
+        },
+        {
+          "source_any": [
+            "控制室"
+          ],
+          "target_any": [
+            "ruang kontrol"
+          ],
+          "issue": "missing_control_room_term"
+        },
+        {
+          "source_any": [
+            "基本紀律"
+          ],
+          "target_any": [
+            "disiplin dasar"
+          ],
+          "issue": "missing_basic_discipline_term"
+        }
+      ],
+      "examples": [
+        {
+          "source": "一課最近被釘很緊，上週還被處長抓到一堆人在控制室休息吹冷氣。\n\n樓上是一股股長，基本紀律注意一下，他蠻公司派的，什麼都會跟處長講。",
+          "target": "Akhir-akhir ini Seksi 1 diawasi dengan sangat ketat. Minggu lalu, kepala divisi bahkan memergoki banyak orang sedang beristirahat sambil menikmati AC di ruang kontrol.\n\nDi lantai atas ada kepala bagian Cold Drawing 1. Tolong perhatikan disiplin dasar. Dia cukup berpihak kepada perusahaan dan akan menyampaikan semuanya kepada kepala divisi."
+        }
+      ]
+    },
+    {
+      "id": "equipment_output_production_semantics",
+      "enabled": true,
+      "priority": 170,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "設備出料／產出狀況不是材料移出動作",
+      "match": {
+        "strong_phrases": [
+          "出料狀況",
+          "出料量",
+          "設備產出",
+          "機台產出",
+          "產線產出"
+        ],
+        "regex_any": [
+          "出料(?:狀況|情況|量|效率|速度)",
+          "(?:設備|機台|產線).{0,8}(?:出料|產出)"
+        ],
+        "none_terms": [
+          "出料口",
+          "夾輪出料",
+          "導軌出料",
+          "出料按鈕"
+        ],
+        "min_score": 6
+      },
+      "context": [
+        "在產量、每日噸數、月底預估或入庫目標語境中，「出料」指設備／產線實際產出的產品量與產出狀況。",
+        "此語義應使用 hasil produksi mesin、output produksi 或 kondisi hasil produksi mesin。",
+        "只有出料口、夾輪出料、材料退出等機械動作才使用 keluarkan/pengeluaran material；本條禁止 material keluar 或 pengeluaran material。"
+      ],
+      "preferred_target_phrases": [
+        "kondisi hasil produksi mesin",
+        "hasil produksi mesin",
+        "output produksi"
+      ],
+      "forbidden_target_phrases": [
+        "kondisi material keluar",
+        "material keluar saat ini",
+        "pengeluaran material saat ini"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "hasil produksi",
+            "output produksi"
+          ],
+          "issue": "missing_machine_production_output_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "目前出料狀況平均維持每日130噸。",
+          "target": "Saat ini, rata-rata hasil produksi mesin tetap sekitar 130 ton per hari."
+        },
+        {
+          "source": "依照設備出料量估計月底入庫。",
+          "target": "Perkirakan pemasukan gudang sampai akhir bulan berdasarkan jumlah hasil produksi mesin."
+        }
+      ]
+    },
+    {
+      "id": "warehouse_intake_target_and_forecast",
+      "enabled": true,
+      "priority": 165,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月入庫目標、每日平均與月底預估",
+      "match": {
+        "all_groups": [
+          [
+            "入庫",
+            "進倉"
+          ],
+          [
+            "目標",
+            "入庫量",
+            "平均",
+            "每日",
+            "一天",
+            "月底",
+            "本月",
+            "入到"
+          ]
+        ],
+        "any_terms": [
+          "噸",
+          "吨",
+          "達到",
+          "維持",
+          "預估",
+          "估計",
+          "不可能",
+          "3600",
+          "3750"
+        ],
+        "require_all_groups": true,
+        "min_score": 8,
+        "required_regex_any": [
+          "(?:入庫|進倉)(?:量|目標|預估|估計)",
+          "(?:入庫|進倉|入到)[^。！？!?；;，,]{0,12}\\d+(?:[.,]\\d+)?\\s*(?:噸|吨|ton)",
+          "\\d+(?:[.,]\\d+)?\\s*(?:噸|吨)[^。！？!?；;，,]{0,10}(?:入庫|進倉)",
+          "(?:預估|估計|目標|總計)[^。！？!?；;，,]{0,10}(?:入庫|進倉|入到)[^。！？!?；;，,]{0,8}\\d+"
+        ]
+      },
+      "context": [
+        "使用者確認本廠的入庫定義：資料進入801就算入庫；入庫噸數、目標與每日平均是登錄入庫的成品重量。噸數不是資料筆數，也不能自行改成吊運／收貨指令。若同時談入庫時間，另保留分散系統登錄時間的要求。",
+        "中文常只在其中一個數字寫「噸」，後續同一入庫／產量指標省略單位；印尼文必須在每個目標、每日平均、範圍與月底預估數值後明確寫出 ton。",
+        "「入庫量」宜用 jumlah pemasukan gudang；「能入到 X」宜表達 total pemasukan gudang bisa mencapai X ton。",
+        "入庫計畫同段中的「幫忙入幾噸」指將該噸數成品登錄入庫，用 catat pemasukan gudang sebanyak ... ton dalam sistem。不要只說搬貨進倉或只輸入數字；原文沒寫801時不自行補站號。"
+      ],
+      "preferred_target_phrases": [
+        "target pemasukan gudang",
+        "jumlah pemasukan gudang",
+        "ton per hari",
+        "total pemasukan gudang bisa mencapai",
+        "pencatatan masuk gudang"
+      ],
+      "forbidden_target_phrases": [],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "waktu masuk gudang"
+          ],
+          "unless_source": {
+            "regex_any": [
+              "(?:入庫|進倉|入帳|過帳|登錄|記錄)(?:時間|時刻|日期)"
+            ],
+            "min_score": 3
+          }
+        },
+        {
+          "phrases": [
+            "pemindahan data dari stasiun 490 ke stasiun 801"
+          ],
+          "unless_source": {
+            "all_groups": [
+              [
+                "490"
+              ],
+              [
+                "801"
+              ],
+              [
+                "移",
+                "轉",
+                "過帳"
+              ]
+            ],
+            "min_score": 12
+          }
+        }
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "噸",
+            "吨"
+          ],
+          "target_any": [
+            "ton"
+          ],
+          "issue": "missing_mass_unit"
+        }
+      ],
+      "examples": [
+        {
+          "source": "本月入庫目標3750，到月底平均一天需147噸。",
+          "target": "Target pencatatan pemasukan gudang bulan ini adalah 3.750 ton. Sampai akhir bulan, rata-rata yang dibutuhkan adalah 147 ton per hari."
+        }
+      ],
+      "semantic_validator": "warehouse_intake"
+    },
+    {
+      "id": "operational_priority_runtime_inventory_accountability",
+      "enabled": true,
+      "priority": 168,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "急單優先、設備持續運轉、庫存控制與上級可交代性",
+      "match": {
+        "all_groups": [
+          [
+            "急單",
+            "急件",
+            "趕單"
+          ],
+          [
+            "設備",
+            "機台",
+            "停機",
+            "庫存"
+          ]
+        ],
+        "any_terms": [
+          "優先",
+          "該趕",
+          "該開",
+          "隨便停機",
+          "暴增",
+          "沒話可說",
+          "無話可說"
+        ],
+        "require_all_groups": true,
+        "min_score": 9
+      },
+      "context": [
+        "主管語氣中的「該趕的急單優先處理」是明確作業要求，使用 harus/prioritaskan，並將急單表達為 work order mendesak。",
+        "「該開的設備不要隨便停機」表示依生產安排應運轉的機台不可任意停止，不是說所有設備永遠不得停。",
+        "「庫存不要暴增」是要求控制 WIP／庫存不要短時間大幅上升。",
+        "「這樣上面也沒話可說」不是字面上的上級少說話，而是做到上述要求後，上級沒有理由挑毛病或追究，宜用 pihak atasan tidak punya alasan untuk mempermasalahkannya。"
+      ],
+      "preferred_target_phrases": [
+        "harus memprioritaskan work order mendesak",
+        "mesin yang seharusnya beroperasi",
+        "jangan dihentikan sembarangan",
+        "stok tidak meningkat drastis",
+        "pihak atasan tidak punya alasan untuk mempermasalahkannya"
+      ],
+      "forbidden_target_phrases": [
+        "atasan tidak akan banyak bicara",
+        "atasan tidak banyak bicara",
+        "atasan akan diam",
+        "order urgent yang harus dikejar"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "急單",
+            "急件",
+            "趕單"
+          ],
+          "target_any": [
+            "work order mendesak",
+            "urgent work order"
+          ],
+          "issue": "missing_urgent_work_order_semantics"
+        },
+        {
+          "source_any": [
+            "優先",
+            "該趕"
+          ],
+          "target_any": [
+            "harus",
+            "wajib",
+            "prioritaskan",
+            "perlu"
+          ],
+          "issue": "missing_operational_obligation"
+        },
+        {
+          "source_any": [
+            "停機",
+            "不要隨便停機",
+            "不可隨便停機"
+          ],
+          "target_any": [
+            "jangan dihentikan",
+            "jangan menghentikan",
+            "tidak boleh dihentikan"
+          ],
+          "issue": "missing_no_arbitrary_shutdown"
+        },
+        {
+          "source_any": [
+            "庫存暴增",
+            "庫存爆增",
+            "庫存不要暴增"
+          ],
+          "target_any": [
+            "stok tidak meningkat drastis",
+            "stok tidak melonjak drastis",
+            "agar stok tidak meningkat drastis"
+          ],
+          "issue": "missing_inventory_spike_control"
+        },
+        {
+          "source_any": [
+            "上面也沒話可說",
+            "上面沒話可說",
+            "主管也沒話可說",
+            "上級也沒話可說"
+          ],
+          "target_any": [
+            "tidak punya alasan",
+            "tidak mempunyai alasan",
+            "tidak ada alasan"
+          ],
+          "issue": "missing_no_ground_for_management_complaint"
+        }
+      ],
+      "examples": [
+        {
+          "source": "急單優先處理，該開的設備不要隨便停機，庫存不要暴增，這樣上面也沒話可說。",
+          "target": "Prioritaskan work order mendesak. Mesin yang seharusnya beroperasi jangan dihentikan sembarangan, dan pastikan stok tidak meningkat drastis. Dengan begitu, pihak atasan juga tidak punya alasan untuk mempermasalahkannya."
+        }
+      ]
+    },
+    {
+      "id": "material_washing_support_semantics",
+      "enabled": true,
+      "priority": 172,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "待洗庫存與異型棒支援冷抽一股清洗",
+      "match": {
+        "strong_phrases": [
+          "協助一股清洗",
+          "支援一股清洗",
+          "S、H異型棒",
+          "H、S異型棒"
+        ],
+        "all_groups": [
+          [
+            "待洗",
+            "待清洗",
+            "等待清洗"
+          ],
+          [
+            "清洗",
+            "協助",
+            "支援"
+          ]
+        ],
+        "any_terms": [
+          "庫存",
+          "庫存量",
+          "一股",
+          "異型棒",
+          "40噸",
+          "40吨"
+        ],
+        "require_all_groups": true,
+        "min_score": 8
+      },
+      "context": [
+        "「待洗庫存量」是尚未進入棒材清洗製程的庫存，使用 stok material yang menunggu proses pencucian。",
+        "材料／棒材的「清洗」是 proses pencucian 或 dicuci；pembersihan 用於一般清潔或環境打掃，不適合本製程。",
+        "「一股」依 ERP 固定為 Bagian Cold Drawing 1。",
+        "S、H 直接修飾「異型棒」時，表示 S 型與 H 型的特殊斷面棒材，使用 batang profil khusus berbentuk S dan H；不是 H、S、異型棒三個獨立品項。",
+        "「協助一股清洗」表示支援該部門的清洗製程，可用 membantu proses pencucian di Bagian Cold Drawing 1。"
+      ],
+      "preferred_target_phrases": [
+        "stok material yang menunggu proses pencucian",
+        "batang profil khusus berbentuk S dan H",
+        "membantu proses pencucian di Bagian Cold Drawing 1"
+      ],
+      "forbidden_target_phrases": [
+        "untuk pembersihan",
+        "H, S, batang bentuk khusus",
+        "S, H, batang bentuk khusus"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "proses pencucian",
+            "menunggu dicuci",
+            "dicuci"
+          ],
+          "issue": "missing_material_washing_process"
+        },
+        {
+          "source_any": [
+            "一股"
+          ],
+          "target_any": [
+            "Bagian Cold Drawing 1"
+          ],
+          "issue": "missing_cold_drawing_1_section"
+        },
+        {
+          "source_any": [
+            "S、H異型棒",
+            "H、S異型棒"
+          ],
+          "target_any": [
+            "S dan H",
+            "H dan S"
+          ],
+          "issue": "missing_s_h_profile_shapes"
+        },
+        {
+          "source_any": [
+            "異型棒"
+          ],
+          "target_any": [
+            "profil khusus",
+            "bentuk khusus"
+          ],
+          "issue": "missing_special_profile_bar_semantics"
+        }
+      ],
+      "examples": [
+        {
+          "source": "422待洗庫存量低於40噸時，S、H異型棒要協助一股清洗。",
+          "target": "Jika jumlah stok material 422 yang menunggu proses pencucian kurang dari 40 ton, batang profil khusus berbentuk S dan H harus membantu proses pencucian di Bagian Cold Drawing 1."
+        }
+      ]
+    },
+    {
+      "id": "customer_account_close_arrival_packaging_priority",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "客戶會計結帳、分批到料與包裝優先順序",
+      "match": {
+        "strong_phrases": [
+          "抓帳",
+          "週一抓帳",
+          "结账前优先包装",
+          "結帳前優先包裝"
+        ],
+        "all_groups": [
+          [
+            "抓帳",
+            "抓账",
+            "會計結帳",
+            "会计结账",
+            "關帳",
+            "关账"
+          ],
+          [
+            "到料",
+            "來料",
+            "来料",
+            "到貨",
+            "到货"
+          ],
+          [
+            "包裝",
+            "包装",
+            "裝箱",
+            "装箱"
+          ],
+          [
+            "優先",
+            "优先",
+            "先安排",
+            "先包",
+            "先排"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "大成",
+          "週一",
+          "周一",
+          "星期一",
+          "陸續",
+          "陆续",
+          "分批",
+          "噸",
+          "吨",
+          "關帳",
+          "关账"
+        ],
+        "regex_any": [
+          "(?:抓帳|抓账|結帳|结账|關帳|关账).{0,40}(?:到料|來料|来料|到貨|到货).{0,50}(?:優先|优先).{0,15}(?:包裝|包装|裝箱|装箱)"
+        ],
+        "min_score": 16,
+        "required_regex_any": [
+          "抓[帳账]|結[帳账]|结[帳账]|關[帳账]|关[帳账]|會計|会计|\\b(?:tutup\\s+buku|penutupan\\s+(?:buku|akun)|closing)\\b"
+        ]
+      },
+      "context": [
+        "「抓帳」在此是會計結帳／關帳，印尼文用 tutup buku；不是 cek data、periksa data 或 rekap data。",
+        "客戶名稱是不可翻譯的識別資料。來源寫「大成」就保留「大成」，不得翻成普通形容詞 Besar，也不得自行羅馬拼音。",
+        "「還有160噸會陸續到料」是未來仍有160噸材料分批抵達，必須同時保留剩餘量、未來性與分批到貨。",
+        "「有看到大成」是現場一看到／收到大成材料時的條件；後續動作是把該材料的包裝排程列為優先。",
+        "「優先安排包裝」是實際排定包裝作業優先順序，不可弱化成只注意或只提醒。"
+      ],
+      "preferred_target_phrases": [
+        "akan melakukan tutup buku",
+        "masih ada 160 ton material yang akan tiba secara bertahap",
+        "jika melihat material 大成",
+        "mohon prioritaskan pengaturan proses pengemasannya"
+      ],
+      "forbidden_target_phrases": [
+        "cek data",
+        "periksa data",
+        "rekap data",
+        "Besar pada hari Senin",
+        "material Besar",
+        "data akan tiba"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "抓帳",
+            "抓账",
+            "會計結帳",
+            "会计结账",
+            "關帳",
+            "关账"
+          ],
+          "target_any": [
+            "tutup buku",
+            "penutupan buku",
+            "penutupan pembukuan"
+          ],
+          "issue": "missing_accounting_close_semantics"
+        },
+        {
+          "source_any": [
+            "160噸",
+            "160吨"
+          ],
+          "target_any": [
+            "160 ton"
+          ],
+          "issue": "missing_160_ton_quantity"
+        },
+        {
+          "source_any": [
+            "陸續",
+            "陆续",
+            "分批"
+          ],
+          "target_any": [
+            "secara bertahap",
+            "bertahap",
+            "dalam beberapa tahap",
+            "berangsur-angsur"
+          ],
+          "issue": "missing_staged_arrival_semantics"
+        },
+        {
+          "source_any": [
+            "到料",
+            "來料",
+            "来料",
+            "到貨",
+            "到货"
+          ],
+          "target_any": [
+            "material akan tiba",
+            "material akan datang",
+            "bahan akan tiba",
+            "bahan akan datang",
+            "kedatangan material",
+            "material yang akan tiba",
+            "material yang akan datang",
+            "bahan yang akan tiba",
+            "bahan yang akan datang"
+          ],
+          "issue": "missing_future_material_arrival"
+        },
+        {
+          "source_any": [
+            "優先",
+            "优先"
+          ],
+          "target_any": [
+            "prioritaskan",
+            "memprioritaskan",
+            "diprioritaskan",
+            "prioritas"
+          ],
+          "issue": "missing_packaging_priority"
+        },
+        {
+          "source_any": [
+            "包裝",
+            "包装",
+            "裝箱",
+            "装箱"
+          ],
+          "target_any": [
+            "pengemasan",
+            "dikemas",
+            "mengemas",
+            "packing"
+          ],
+          "issue": "missing_packaging_action"
+        },
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_name_not_preserved"
+        }
+      ],
+      "examples": [
+        {
+          "source": "大成週一抓帳，還有160噸會陸續到料，有看到大成麻煩優先安排包裝。",
+          "target": "大成 akan melakukan tutup buku pada hari Senin. Masih ada 160 ton material yang akan tiba secara bertahap. Jika melihat material 大成, mohon prioritaskan pengaturan proses pengemasannya.",
+          "bad_target": "Besar pada hari Senin akan cek data. Masih ada 160 ton material yang akan tiba bertahap. Jika melihat material 大成, mohon prioritaskan pengaturan pengemasannya.",
+          "reason": "大成是客戶名不可譯成 Besar；抓帳是會計結帳 tutup buku；陸續到料需保留未來分批抵達。"
+        },
+        {
+          "source": "客戶週五要關帳，後面還有80噸分批到貨，看到該客戶的料先排包裝。",
+          "target": "Pelanggan akan melakukan tutup buku pada hari Jumat. Setelah itu masih ada 80 ton material yang akan tiba dalam beberapa tahap. Jika material pelanggan tersebut sudah terlihat atau diterima, prioritaskan jadwal pengemasannya.",
+          "reason": "同一會計結帳＋分批到料＋包裝優先流程的改寫。"
+        }
+      ]
+    },
+    {
+      "id": "packaging_consolidation_threshold_decision",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "待併包、後續料況與重量門檻的獨立包裝判斷",
+      "match": {
+        "strong_phrases": [
+          "待併包",
+          "待併的料",
+          "獨立包起來",
+          "獨立包裝",
+          "後面無料"
+        ],
+        "all_groups": [
+          [
+            "待併包",
+            "待併",
+            "待并包",
+            "待并"
+          ],
+          [
+            "獨立包",
+            "独立包",
+            "分開包",
+            "分开包",
+            "單獨包",
+            "单独包"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "出貨量不足",
+          "出货量不足",
+          "無料",
+          "後面無料",
+          "后面无料",
+          "公斤",
+          "大於",
+          "大于",
+          "很遠",
+          "很远"
+        ],
+        "regex_any": [
+          "(?:大於|大于|超過|超过).{0,8}(?:公斤|kg).{0,80}(?:無料|无料|待併|待并).{0,40}(?:獨立包|独立包|分開包|分开包|單獨包|单独包)"
+        ],
+        "min_score": 12
+      },
+      "context": [
+        "「待併包」是材料正在等待與後續材料合併成同一包／同一包裝單位的作業狀態，不是已經完成包裝，也不是一般的等待包裹。",
+        "「後面無料」在此表示後續沒有可供合併包裝的材料，不是免費材料；印尼文應表達 tidak ada material berikutnya。",
+        "「待併的料還很遠」描述後續材料到達或可併包的時點還要很久，不是材料之間的物理距離很遠。",
+        "重量門檻修飾目前客戶／批次的來料數量；例如「來料大於250公斤」不是『材料將到貨』的未來事件。",
+        "「獨立包起來」是不要再等併包，改成另外單獨包裝；使用 kemas secara terpisah／packing terpisah，不可翻成操作員自己包裝。",
+        "「出貨量不足」是可供出貨的材料數量不足，需與待併包內的材料一起檢視。"
+      ],
+      "preferred_target_phrases": [
+        "menunggu untuk digabung dalam satu kemasan",
+        "tidak ada material berikutnya",
+        "material berikutnya masih lama tibanya",
+        "melebihi 250 kg",
+        "kemas secara terpisah"
+      ],
+      "forbidden_target_phrases": [
+        "material gratis",
+        "bahan gratis",
+        "jaraknya masih jauh",
+        "kemas sendiri",
+        "bungkus sendiri"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "待併包",
+            "待併",
+            "待并包",
+            "待并"
+          ],
+          "target_any": [
+            "menunggu untuk digabung",
+            "menunggu digabung",
+            "menunggu penggabungan",
+            "daftar tunggu penggabungan",
+            "akan digabung dalam satu kemasan"
+          ],
+          "issue": "missing_pending_packaging_consolidation"
+        },
+        {
+          "source_any": [
+            "出貨量不足",
+            "出货量不足"
+          ],
+          "target_any": [
+            "jumlah material untuk pengiriman",
+            "jumlah material yang siap dikirim",
+            "jumlah pengiriman",
+            "kuantitas pengiriman"
+          ],
+          "issue": "missing_shipping_quantity_scope"
+        },
+        {
+          "source_any": [
+            "出貨量不足",
+            "出货量不足"
+          ],
+          "target_any": [
+            "tidak mencukupi",
+            "tidak cukup",
+            "kurang"
+          ],
+          "issue": "missing_insufficient_shipping_quantity"
+        },
+        {
+          "source_any": [
+            "無料",
+            "无料"
+          ],
+          "target_any": [
+            "tidak ada material berikutnya",
+            "tidak ada bahan berikutnya",
+            "material berikutnya tidak ada",
+            "bahan berikutnya tidak ada"
+          ],
+          "issue": "missing_no_following_material"
+        },
+        {
+          "source_any": [
+            "很遠",
+            "很远"
+          ],
+          "target_any": [
+            "masih lama",
+            "masih jauh waktunya",
+            "jadwalnya masih jauh",
+            "kedatangannya masih lama"
+          ],
+          "issue": "missing_late_following_material_timing"
+        },
+        {
+          "source_any": [
+            "大於250公斤",
+            "大于250公斤",
+            "超過250公斤",
+            "超过250公斤"
+          ],
+          "target_any": [
+            "lebih dari 250 kg",
+            "melebihi 250 kg",
+            "di atas 250 kg"
+          ],
+          "issue": "missing_250kg_threshold_relation"
+        },
+        {
+          "source_any": [
+            "獨立包",
+            "独立包",
+            "分開包",
+            "分开包",
+            "單獨包",
+            "单独包"
+          ],
+          "target_any": [
+            "kemas secara terpisah",
+            "dikemas secara terpisah",
+            "packing terpisah",
+            "pengemasan terpisah"
+          ],
+          "issue": "missing_separate_packaging_action"
+        }
+      ],
+      "examples": [
+        {
+          "source": "待併包的材料若超過300公斤，而後續材料還要很久才到，就改成獨立包裝。",
+          "target": "Jika material yang menunggu untuk digabung melebihi 300 kg, sedangkan material berikutnya masih lama tibanya, kemas secara terpisah.",
+          "reason": "保留重量門檻、後續料況的時間條件，以及不再等待併包而改為獨立包裝的因果關係。"
+        }
+      ]
+    },
+    {
+      "id": "industrial_wooden_crate_packaging",
+      "enabled": true,
+      "priority": 225,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "工業木製運輸箱與裝箱作業",
+      "match": {
+        "strong_phrases": [
+          "木箱",
+          "木箱交貨",
+          "暫不裝箱",
+          "木箱包"
+        ],
+        "all_groups": [
+          [
+            "木箱",
+            "木製箱",
+            "木制箱",
+            "木箱包"
+          ],
+          [
+            "裝箱",
+            "装箱",
+            "包裝",
+            "包装",
+            "交貨",
+            "交货",
+            "出貨",
+            "出货"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "本月份",
+          "本月",
+          "非本月",
+          "來不及",
+          "来不及",
+          "暫不",
+          "暂不",
+          "DACAPO",
+          "ABE",
+          "支援"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本工廠「木箱」是裝載不鏽鋼材料的工業木製運輸箱／板條箱，統一用 peti kayu；kotak kayu 容易被理解為一般小木盒，禁止使用。",
+        "「裝箱」是把產品或材料放入 peti kayu，可依語法寫成 memasukkan material ke dalam peti kayu、dimasukkan ke dalam peti kayu 或 pengemasan ke dalam peti kayu。",
+        "若來源寫「暫不裝箱」，必須保留暫時性與禁止／延後裝入木箱的動作；不能只泛泛寫 jangan dikemas 而遺失木箱範圍。",
+        "月份、客戶例外與交貨時程必須保持原來的修飾範圍，不得把「非本月」錯套到木箱本身或其他客戶。"
+      ],
+      "preferred_target_phrases": [
+        "peti kayu",
+        "dimasukkan ke dalam peti kayu",
+        "sementara jangan dimasukkan ke dalam peti kayu"
+      ],
+      "forbidden_target_phrases": [
+        "kotak kayu",
+        "packing kotak kayu",
+        "jangan dikemas saja"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "木箱"
+          ],
+          "target_any": [
+            "peti kayu"
+          ],
+          "issue": "wooden_crate_not_peti_kayu"
+        },
+        {
+          "source_any": [
+            "裝箱",
+            "装箱"
+          ],
+          "target_any": [
+            "ke dalam peti kayu",
+            "pengemasan dengan peti kayu",
+            "pengemasan ke dalam peti kayu"
+          ],
+          "issue": "missing_crating_scope"
+        },
+        {
+          "source_any": [
+            "暫不",
+            "暂不"
+          ],
+          "target_any": [
+            "sementara",
+            "untuk sementara",
+            "terlebih dahulu"
+          ],
+          "issue": "missing_temporary_hold"
+        },
+        {
+          "source_any": [
+            "來不及",
+            "来不及"
+          ],
+          "target_any": [
+            "tidak sempat",
+            "tidak akan sempat",
+            "terlambat",
+            "tidak dapat tepat waktu"
+          ],
+          "issue": "missing_deadline_shortfall"
+        }
+      ],
+      "examples": [
+        {
+          "source": "本月份木箱交貨來不及，除了DACAPO、ABE以外，其餘非本月的木箱暫不裝箱。",
+          "target": "Pengiriman peti kayu untuk bulan ini tidak akan sempat diselesaikan tepat waktu. Selain DACAPO dan ABE, material lain yang bukan untuk pengiriman bulan ini sementara jangan dimasukkan ke dalam peti kayu terlebih dahulu.",
+          "bad_target": "Pengiriman kotak kayu bulan ini tidak sempat. Selain DACAPO dan ABE, kotak kayu yang bukan untuk bulan ini untuk sementara jangan dikemas.",
+          "reason": "木箱是 peti kayu；非本月修飾待出貨材料，不是木箱；暫不裝箱必須明確是不放進木箱。"
+        },
+        {
+          "source": "異型包裝站今天支援裝箱，先處理2700大的木箱。",
+          "target": "Hari ini Stasiun packing barang bentuk khusus membantu proses pengemasan ke dalam peti kayu. Dahulukan peti kayu besar berukuran 2700 mm.",
+          "reason": "站名、支援作業及工業木箱用語同時保留。"
+        }
+      ]
+    },
+    {
+      "id": "automatic_electronic_to_natural_passive_pull",
+      "enabled": true,
+      "priority": 220,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "移除自動電子控制後改為自然／被動牽引",
+      "match": {
+        "strong_phrases": [
+          "拔除電子系統",
+          "改自然拉動",
+          "自動運轉沒比較好",
+          "自然拉動"
+        ],
+        "all_groups": [
+          [
+            "自動",
+            "自动"
+          ],
+          [
+            "電子系統",
+            "电子系统",
+            "電子控制",
+            "电子控制"
+          ],
+          [
+            "拔除",
+            "拆除",
+            "移除",
+            "取消",
+            "拆掉",
+            "移掉"
+          ],
+          [
+            "自然拉動",
+            "自然拉动",
+            "被動拉動",
+            "被动拉动",
+            "自然牽引",
+            "自然牵引"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "以前",
+          "原本",
+          "運轉",
+          "运转",
+          "沒比較好",
+          "没有比较好",
+          "改成"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "來源描述設備原先有自動／電子控制，因效果沒有比較好而移除電子系統，之後改用設備本身的自然或被動機械牽引。",
+        "「自然拉動」不等於「手動拉動」。來源沒有寫手動、人工或由操作員拉時，禁止自行補成 manual、ditarik secara manual 或 operator menarik。",
+        "必須保留因果順序：原本自動 → 效果未改善 → 移除電子系統 → 改成自然／被動牽引。"
+      ],
+      "preferred_target_phrases": [
+        "sebelumnya sistem ini berjalan otomatis",
+        "sistem elektroniknya dilepas",
+        "menggunakan tarikan alami atau pasif"
+      ],
+      "forbidden_target_phrases": [
+        "ditarik secara manual",
+        "sistem tarik manual",
+        "pengoperasian manual",
+        "operator menarik"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "自動",
+            "自动"
+          ],
+          "target_any": [
+            "otomatis"
+          ],
+          "issue": "missing_original_automatic_mode"
+        },
+        {
+          "source_any": [
+            "沒比較好",
+            "没有比较好"
+          ],
+          "target_any": [
+            "tidak lebih baik",
+            "tidak memberikan hasil yang lebih baik",
+            "tidak ada perbaikan"
+          ],
+          "issue": "missing_no_improvement_reason"
+        },
+        {
+          "source_any": [
+            "拔除",
+            "拆除",
+            "移除"
+          ],
+          "target_any": [
+            "dilepas",
+            "dicabut",
+            "dibongkar",
+            "dihilangkan"
+          ],
+          "issue": "missing_electronic_system_removal"
+        },
+        {
+          "source_any": [
+            "電子系統",
+            "电子系统"
+          ],
+          "target_any": [
+            "sistem elektronik",
+            "kontrol elektronik"
+          ],
+          "issue": "missing_electronic_system"
+        },
+        {
+          "source_any": [
+            "自然拉動",
+            "自然拉动",
+            "被動拉動",
+            "被动拉动"
+          ],
+          "target_any": [
+            "tarikan alami",
+            "tarikan pasif",
+            "ditarik secara alami",
+            "mekanisme tarik pasif"
+          ],
+          "issue": "missing_natural_passive_pull"
+        }
+      ],
+      "examples": [
+        {
+          "source": "以前這是自動的，但自動運轉沒比較好，所以拔除電子系統，改自然拉動。",
+          "target": "Sebelumnya sistem ini berjalan secara otomatis. Namun, pengoperasian otomatis tidak memberikan hasil yang lebih baik, sehingga sistem elektroniknya dilepas dan mekanismenya diubah menggunakan tarikan alami atau pasif.",
+          "bad_target": "Dulu ini otomatis, tetapi hasilnya tidak lebih baik. Jadi sistem elektroniknya dilepas dan sekarang ditarik secara manual.",
+          "reason": "「自然拉動」不是手動；舊譯文憑空增加 manual，改變設備運作方式。"
+        },
+        {
+          "source": "原本靠電子控制自動拉料，效果沒有改善，後來拆掉控制系統改成被動自然牽引。",
+          "target": "Awalnya material ditarik otomatis dengan kontrol elektronik. Karena hasilnya tidak membaik, sistem kontrol kemudian dibongkar dan diganti dengan mekanisme tarikan pasif secara alami.",
+          "reason": "同一設備改造語意的改寫，避免只記住原句。"
+        }
+      ]
+    },
+    {
+      "id": "erp_colloquial_data_release_to_next_station",
+      "enabled": true,
+      "priority": 305,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "把／批／工單資料的口語放行",
+      "match": {
+        "strong_phrases": [
+          "資料放行",
+          "放這把",
+          "放這批",
+          "放這單",
+          "這把麻煩他們放一下",
+          "這批幫忙放一下",
+          "兩把都放了"
+        ],
+        "all_groups": [
+          [
+            "這把",
+            "这把",
+            "一把",
+            "兩把",
+            "两把",
+            "三把",
+            "2把",
+            "3把",
+            "這捆",
+            "这捆",
+            "一捆",
+            "兩捆",
+            "两捆",
+            "這批",
+            "这批",
+            "這一批",
+            "这一批",
+            "這單",
+            "这单",
+            "工單",
+            "工单",
+            "資料",
+            "资料",
+            "數據",
+            "数据"
+          ],
+          [
+            "放一下",
+            "幫放",
+            "帮放",
+            "幫忙放",
+            "帮忙放",
+            "放行",
+            "先放",
+            "放了",
+            "已放",
+            "放完",
+            "放好"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "麻煩",
+          "麻烦",
+          "請",
+          "请",
+          "他們",
+          "他们",
+          "優先",
+          "优先",
+          "下一站"
+        ],
+        "none_terms": [],
+        "regex_any": [
+          "(?:這|这|那|該|该)?(?:[零〇一二兩两三四五六七八九十\\d]+)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据).{0,16}(?:麻煩|麻烦|請|请|幫|帮|叫|讓|让)?.{0,12}放(?:行|一下|了|好|完)?",
+          "(?:麻煩|麻烦|請|请|幫|帮).{0,16}放(?:行|一下)?.{0,10}(?:這|这|那|該|该)?(?:把|捆|批|單|单|工單|工单|資料|资料|數據|数据)"
+        ],
+        "min_score": 8,
+        "semantic_relation": "erp_data_release"
+      },
+      "context": [
+        "本廠生產流程語境中，把／捆／批／工單／資料參照搭配『放、放一下、放了、先放』時，是『放行』的口語省略：把對應 ERP 生產資料放行到下一站，不是搬動或擺放實體物品。",
+        "逐句判斷資料放行、品保檢驗放行及實體擺放；其他子句提到檢驗、吊出、拆包或位置，不得抹除本句的資料放行語意。",
+        "保留原文狀態及語氣：未／還沒=belum，無法／不能=tidak bisa/dapat，不要=jangan，已完成=sudah/telah，疑問保留 apakah／問號。只有確實請求放行才要求 tolong，不能把狀態通知強制改成命令。",
+        "放行動作、資料對象、下站關係以同一個語意驗證器檢查；接受主動、被動及 datanya 的文法，不要求固定相鄰字序。"
+      ],
+      "preferred_target_phrases": [
+        "release data ke stasiun berikutnya",
+        "release data untuk bundel ini ke stasiun berikutnya",
+        "data untuk bundel ini sudah di-release ke stasiun berikutnya"
+      ],
+      "forbidden_target_phrases": [],
+      "requirements": [],
+      "examples": [
+        {
+          "source": "這把麻煩他們放一下。",
+          "target": "Tolong minta mereka release data untuk bundel ini ke stasiun berikutnya.",
+          "bad_target": "Tolong minta mereka meletakkan bundel ini.",
+          "reason": "沒有實體位置或容量語意；這把是對應生產資料的參照，放一下是資料放行。"
+        },
+        {
+          "source": "這兩把都放了。",
+          "target": "Data untuk dua bundel ini sudah di-release ke stasiun berikutnya.",
+          "reason": "同一語義的完成式與複數改寫，不依賴單一原句。"
+        },
+        {
+          "source": "麻煩先放這張工單。",
+          "target": "Tolong release data untuk work order ini ke stasiun berikutnya terlebih dahulu.",
+          "reason": "工單是資料放行對象，先的優先時序必須保留。"
+        }
+      ],
+      "semantic_validator": "erp_data_release"
+    },
+    {
+      "id": "customer_storage_slot_photo_overflow_placement",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "客戶儲格容量不足時改放照片標示位置",
+      "match": {
+        "strong_phrases": [
+          "儲格能放就放",
+          "放不下再放照片",
+          "照片裡這些位置",
+          "照片里这些位置"
+        ],
+        "all_groups": [
+          [
+            "儲格",
+            "储格",
+            "儲位",
+            "储位"
+          ],
+          [
+            "放不下",
+            "放不進",
+            "放不进",
+            "不夠放",
+            "不够放",
+            "能放就放",
+            "沒空間",
+            "没有空间",
+            "沒有空間",
+            "還放得下",
+            "还放得下"
+          ],
+          [
+            "照片",
+            "圖片",
+            "图片"
+          ],
+          [
+            "位置",
+            "地方"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "大成",
+          "週末",
+          "周末",
+          "能放就放",
+          "再放",
+          "這些位置",
+          "这些位置",
+          "沒空間",
+          "沒有空間",
+          "还放得下",
+          "還放得下"
+        ],
+        "regex_any": [
+          "(?:儲格|储格|儲位|储位).{0,20}(?:能放就放|放不下|放不進|放不进).{0,30}(?:照片|圖片|图片).{0,10}(?:位置|地方)"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "這是實體材料的儲放指示。『放』是把材料放入儲格或替代位置，不是 ERP 資料放行；禁止翻成 release data。",
+        "『儲格』是工廠內劃分出的材料儲放格／儲位，統一使用 slot penyimpanan；不是資料儲存格。",
+        "『能放就放』是有容量就放入該儲格；『放不下』是容量不足或材料不合適而 tidak muat。",
+        "『再放照片裡這些位置』是改放到照片所標示的多個實體位置，必須保留替代條件與照片指示。",
+        "大成是客戶識別名稱，必須原樣保留為大成，不得翻成 Besar，也不得自行拼成 Da Cheng。",
+        "LINE 引用回覆中的被引用內容只用來補足省略的材料／客戶脈絡；輸出只能翻譯目前這一則回覆，不可把引用原文重複翻出。"
+      ],
+      "preferred_target_phrases": [
+        "slot penyimpanan 大成",
+        "masih dapat menampung material",
+        "jika tidak muat",
+        "lokasi-lokasi yang ditunjukkan pada foto-foto ini"
+      ],
+      "forbidden_target_phrases": [
+        "Besar",
+        "material Besar",
+        "release data",
+        "di-release",
+        "simpan data",
+        "unggah foto",
+        "foto dimasukkan"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "儲格",
+            "储格"
+          ],
+          "target_any": [
+            "slot penyimpanan",
+            "petak penyimpanan"
+          ],
+          "issue": "missing_storage_slot_semantics"
+        },
+        {
+          "source_any": [
+            "放不下",
+            "放不進",
+            "放不进",
+            "不夠放",
+            "不够放"
+          ],
+          "target_any": [
+            "tidak muat",
+            "tidak dapat menampung",
+            "tidak cukup ruang"
+          ],
+          "issue": "missing_not_fit_capacity_semantics"
+        },
+        {
+          "source_any": [
+            "照片",
+            "圖片",
+            "图片"
+          ],
+          "target_any": [
+            "foto",
+            "gambar"
+          ],
+          "issue": "missing_photo_reference"
+        },
+        {
+          "source_any": [
+            "位置",
+            "地方"
+          ],
+          "target_any": [
+            "lokasi",
+            "tempat"
+          ],
+          "issue": "missing_alternative_location"
+        },
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_name_not_preserved"
+        }
+      ],
+      "examples": [
+        {
+          "source": "週末大成儲格能放就放，放不下再放照片裡這些位置。",
+          "target": "Pada akhir pekan, jika slot penyimpanan 大成 masih dapat menampung material, letakkan material di sana. Jika tidak muat, letakkan material di lokasi-lokasi yang ditunjukkan pada foto-foto ini.",
+          "bad_target": "Pada akhir pekan, jika data Besar bisa dirilis maka rilis; jika tidak, masukkan fotonya ke lokasi ini.",
+          "reason": "大成是客戶名；儲格與放不下是實體容量語意；照片中的位置是替代儲放地點，不是 ERP 放行或上傳照片。"
+        },
+        {
+          "source": "大成的儲格如果還放得下就先放，沒空間就移到照片標示的位置。",
+          "target": "Jika slot penyimpanan 大成 masih memiliki ruang, letakkan material di sana terlebih dahulu. Jika ruangnya tidak cukup, pindahkan material ke lokasi yang ditunjukkan pada foto.",
+          "reason": "同一儲格容量與替代位置流程的改寫。"
+        }
+      ]
+    },
+    {
+      "id": "customer_eh33_concentrated_storage_slot",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "EH33 峰作金屬入儲時集中放指定儲格",
+      "match": {
+        "strong_phrases": [
+          "入儲時EH33峰作金屬集中放這格",
+          "峰作金屬集中放這格"
+        ],
+        "all_groups": [
+          [
+            "入儲",
+            "入库",
+            "入庫",
+            "進儲",
+            "进储"
+          ],
+          [
+            "EH33"
+          ],
+          [
+            "峰作金屬"
+          ],
+          [
+            "集中放",
+            "統一放",
+            "统一放",
+            "放這格",
+            "放这格"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "這格",
+          "这格",
+          "儲格",
+          "储格",
+          "集中"
+        ],
+        "regex_any": [
+          "(?:入儲|入庫|入库).{0,12}EH33.{0,12}峰作金屬.{0,12}(?:集中放|放這格|放这格)"
+        ],
+        "min_score": 14
+      },
+      "context": [
+        "這是材料入儲與儲格配置指示：入儲是材料進入儲存區，不是登入、輸入資料或一般進入倉庫的敘述。",
+        "「集中放這格」表示同一客戶、同一鋼種的材料全部集中放在指定實體儲格，應譯為 ditempatkan bersama di slot ini。",
+        "峰作金屬是客戶識別名稱，必須原樣保留為峰作金屬；不得音譯為 Peng Zuo Metal、Feng Zuo Metal 或翻成一般金屬名詞。",
+        "EH33 是儲位／材料識別代碼，必須原樣保留。",
+        "本卡只解釋材料與儲格術語，不得把原文「不要／不能／還沒」改成肯定的放置指令；主動式 tempatkan ... bersama 與被動式 ditempatkan bersama 都可表達集中放置。"
+      ],
+      "preferred_target_phrases": [
+        "masuk ke area penyimpanan",
+        "semua material EH33 milik 峰作金屬",
+        "ditempatkan bersama di slot ini"
+      ],
+      "forbidden_target_phrases": [
+        "Peng Zuo Metal",
+        "Feng Zuo Metal",
+        "Puncak Logam",
+        "masuk data",
+        "input data",
+        "login",
+        "dikumpulkan taruh",
+        "punya Peng Zuo"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "入儲",
+            "入庫",
+            "入库"
+          ],
+          "target_any": [
+            "masuk ke area penyimpanan",
+            "dimasukkan ke area penyimpanan",
+            "masuk penyimpanan",
+            "masuk ke penyimpanan",
+            "masuk area penyimpanan",
+            "dimasukkan ke penyimpanan",
+            "masuk ke gudang",
+            "dimasukkan ke gudang"
+          ],
+          "issue": "missing_storage_entry_semantics"
+        },
+        {
+          "source_any": [
+            "EH33"
+          ],
+          "target_any": [
+            "EH33"
+          ],
+          "issue": "storage_code_not_preserved"
+        },
+        {
+          "source_any": [
+            "峰作金屬"
+          ],
+          "target_any": [
+            "峰作金屬"
+          ],
+          "issue": "customer_name_not_preserved"
+        },
+        {
+          "source_any": [
+            "集中放",
+            "放這格",
+            "放这格"
+          ],
+          "target_any": [
+            "ditempatkan bersama",
+            "letakkan semuanya",
+            "ditempatkan di slot ini",
+            "tempatkan",
+            "meletakkan",
+            "menempatkan",
+            "letakkan bersama"
+          ],
+          "issue": "missing_concentrated_slot_placement"
+        },
+        {
+          "source_any": [
+            "集中放",
+            "統一放",
+            "统一放"
+          ],
+          "target_any": [
+            "bersama",
+            "semuanya",
+            "semua material",
+            "terpusat",
+            "dikumpulkan"
+          ],
+          "issue": "missing_concentrated_placement_scope"
+        }
+      ],
+      "examples": [
+        {
+          "source": "入儲時EH33峰作金屬集中放這格",
+          "target": "Saat material masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 ditempatkan bersama di slot ini.",
+          "bad_target": "Saat masuk gudang, EH33 punya Peng Zuo Metal dikumpulkan taruh di lokasi ini.",
+          "reason": "峰作金屬必須保留；入儲是進入儲存區；集中放這格要用自然且明確的實體儲格配置語句。"
+        },
+        {
+          "source": "EH33峰作金屬入庫後統一放這格。",
+          "target": "Setelah masuk ke area penyimpanan, semua material EH33 milik 峰作金屬 ditempatkan bersama di slot ini.",
+          "reason": "同義改寫，保留代碼、客戶名稱與集中放置的作業要求。"
+        }
+      ]
+    },
+    {
+      "id": "shift_handover_production_problem_reporting",
+      "enabled": true,
+      "priority": 245,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "交接班生產問題回報期限與班長異常後續",
+      "match": {
+        "strong_phrases": [
+          "交接班時遇到任何生產問題",
+          "一個小時內反應給班長",
+          "班長比較好做異常反應",
+          "交接班"
+        ],
+        "all_groups": [
+          [
+            "交接班",
+            "交班",
+            "換班",
+            "换班",
+            "班次交接"
+          ],
+          [
+            "生產問題",
+            "生产问题",
+            "生產異常",
+            "生产异常",
+            "製程問題",
+            "制程问题"
+          ],
+          [
+            "反應",
+            "反应",
+            "反映",
+            "回報",
+            "回报",
+            "報告",
+            "报告",
+            "通報",
+            "通报"
+          ],
+          [
+            "班長"
+          ],
+          [
+            "小時內",
+            "小时内",
+            "分鐘內",
+            "分钟内",
+            "最晚",
+            "不超過",
+            "不超过"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "任何",
+          "所有",
+          "全部",
+          "一個小時",
+          "一个小时",
+          "異常反應",
+          "异常反应",
+          "比較好",
+          "方便",
+          "容易"
+        ],
+        "regex_any": [
+          "(?:交接班|交班|換班|换班).{0,30}(?:任何|所有|全部).{0,12}(?:生產|生产|製程|制程).{0,8}(?:問題|问题|異常|异常).{0,40}(?:反應|反应|反映|回報|回报|報告|报告|通報|通报).{0,12}班長"
+        ],
+        "min_score": 20
+      },
+      "context": [
+        "「反應給班長」在工廠公告中是向班長回報／通報問題，印尼文使用 laporkan atau melaporkan kepada kepala regu；不是 bereaksi。",
+        "「任何生產問題」是完整範圍，必須保留 apa pun、setiap 或 semua，不可縮成泛指的一個問題。",
+        "一小時或其他明示時限必須同時連到回報動作與班長，不可只在譯文其他位置留下孤立數字。",
+        "「班長比較好做異常反應」表示回報後班長能更妥善或更容易進行異常後續；來源沒有寫更快時，不得自行改成 lebih cepat menindaklanjuti。",
+        "班長依本廠正式詞庫固定使用 kepala regu；ketua shift 只作來源別稱辨識，不得輸出斜線替代詞或夾帶中文職稱。"
+      ],
+      "preferred_target_phrases": [
+        "saat pergantian shift",
+        "masalah produksi apa pun",
+        "dilaporkan kepada kepala regu dalam waktu satu jam",
+        "menindaklanjuti kondisi abnormal dengan lebih baik"
+      ],
+      "forbidden_target_phrases": [
+        "lebih cepat menindaklanjuti",
+        "lebih cepat menangani",
+        "supaya kepala regu bisa lebih cepat",
+        "bereaksi kepada kepala regu",
+        "kepala regu / 班長",
+        "ketua shift / kepala regu"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "交接班",
+            "交班",
+            "換班",
+            "换班",
+            "班次交接"
+          ],
+          "target_any": [
+            "saat pergantian shift",
+            "ketika pergantian shift",
+            "saat serah terima shift",
+            "ketika serah terima shift"
+          ],
+          "issue": "missing_shift_handover_context"
+        },
+        {
+          "source_any": [
+            "任何生產問題",
+            "任何生产问题",
+            "任何生產異常",
+            "任何生产异常",
+            "所有生產問題",
+            "所有生产问题"
+          ],
+          "target_any": [
+            "masalah produksi apa pun",
+            "setiap masalah produksi",
+            "semua masalah produksi",
+            "segala masalah produksi"
+          ],
+          "issue": "missing_any_production_problem_scope"
+        },
+        {
+          "source_any": [
+            "反應給班長",
+            "反应给班长",
+            "反映給班長",
+            "回報給班長",
+            "回报给班长",
+            "向班長回報",
+            "向班长回报"
+          ],
+          "target_any": [
+            "laporkan kepada kepala regu",
+            "melaporkan kepada kepala regu",
+            "dilaporkan kepada kepala regu",
+            "disampaikan kepada kepala regu"
+          ],
+          "issue": "missing_report_to_shift_leader_relation"
+        },
+        {
+          "source_any": [
+            "班長"
+          ],
+          "target_any": [
+            "kepala regu"
+          ],
+          "issue": "missing_canonical_shift_leader_role"
+        },
+        {
+          "source_any": [
+            "一個小時內",
+            "一个小时内",
+            "一小時內",
+            "一小时内",
+            "1小時內",
+            "1小时内"
+          ],
+          "target_any": [
+            "dalam waktu satu jam",
+            "dalam waktu 1 jam",
+            "paling lambat satu jam",
+            "paling lambat 1 jam"
+          ],
+          "issue": "missing_one_hour_reporting_deadline"
+        },
+        {
+          "source_any": [
+            "班長比較好做異常反應",
+            "班长比较好做异常反应",
+            "方便班長做異常處理",
+            "方便班长做异常处理",
+            "班長更容易做異常處理",
+            "班长更容易做异常处理"
+          ],
+          "target_any": [
+            "menindaklanjuti kondisi abnormal dengan lebih baik",
+            "menangani kondisi abnormal dengan lebih baik",
+            "lebih mudah menindaklanjuti kondisi abnormal",
+            "lebih mudah menangani kondisi abnormal",
+            "menindaklanjuti kondisi abnormal dengan lebih efektif"
+          ],
+          "issue": "missing_better_abnormal_followup_purpose"
+        }
+      ],
+      "examples": [
+        {
+          "source": "@All 在交接班時遇到任何生產問題 需要在一個小時內反應給班長 班長比較好做異常反應",
+          "target": "@All Jika menemukan masalah produksi apa pun saat pergantian shift, masalah tersebut harus dilaporkan kepada kepala regu dalam waktu satu jam agar kepala regu dapat menindaklanjuti kondisi abnormal dengan lebih baik.",
+          "bad_target": "@All Kalau saat pergantian shift menemukan masalah produksi apa pun, harus dilaporkan ke kepala regu dalam waktu 1 jam, supaya kepala regu bisa lebih cepat menindaklanjuti kondisi yang tidak normal.",
+          "reason": "舊譯大意可懂，但把『比較好做異常反應』擅自加速成『更快處理』；正式譯文保留所有問題範圍、期限、回報對象及較妥善後續的目的。"
+        },
+        {
+          "source": "交班期間若發現任何生產異常，最晚30分鐘內向班長回報，方便班長做後續異常處理。",
+          "target": "Jika menemukan masalah produksi apa pun saat pergantian shift, laporkan kepada kepala regu paling lambat 30 menit agar kepala regu lebih mudah menindaklanjuti kondisi abnormal.",
+          "reason": "同一語意框架的改寫；期限數值來自當次來源，不固定套用一小時。"
+        }
+      ]
+    },
+    {
+      "id": "monitor_overhead_crane_scale_weight_relation",
+      "enabled": true,
+      "priority": 250,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "螢幕與天車電子磅秤讀值、差值及班長 ID 回報關係",
+      "match": {
+        "strong_phrases": [
+          "layar monitor",
+          "timbangan gantung elektronik",
+          "timbangan katrol",
+          "timbangan gantung",
+          "selisih"
+        ],
+        "all_groups": [
+          [
+            "layar monitor",
+            "monitor"
+          ],
+          [
+            "timbangan katrol",
+            "timbangan gantung elektronik",
+            "timbangan elektronik pada crane",
+            "timbangan elektronik crane",
+            "timbangan gantung",
+            "timbangan crane",
+            "timbangan derek",
+            "timbangan tian che",
+            "timbangan hoist"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "kg",
+          "kilogram",
+          "selisih",
+          "sedangkan",
+          "lapor",
+          "laporan",
+          "ketu kelas",
+          "ketua kelas",
+          "ketua shift",
+          "ketua regu",
+          "kepala shift",
+          "kepala regu"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本廠 timbangan katrol／timbangan gantung／timbangan crane 指安裝於天車的電子磅秤，中文固定用『天車電子磅秤』，不可照字面翻成『滑輪秤』。",
+        "螢幕讀值與天車電子磅秤讀值必須分別連到正確設備；selisih 是兩者差值，不可只保留孤立數字。",
+        "在重量異常回報語境中，Ketu kelas／ketua kelas 是現場人員對班長的錯拼或非正式稱呼；與 ID、lapor 同句時翻成『班長』，不可殘留印尼文。",
+        "來源只有 laporan／lapor 而沒有 sudah／telah 時，不得自行添加已完成時態；有明示完成詞才可翻成『已回報』。"
+      ],
+      "preferred_target_phrases": [
+        "螢幕顯示",
+        "天車電子磅秤",
+        "相差",
+        "用班長的 ID 回報"
+      ],
+      "forbidden_target_phrases": [
+        "滑輪秤",
+        "滑車秤",
+        "Ketu kelas",
+        "Ketua kelas",
+        "ketua shift",
+        "ketua regu",
+        "kepala shift",
+        "kepala regu"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "layar monitor",
+            "monitor"
+          ],
+          "target_any": [
+            "螢幕顯示",
+            "螢幕的讀值",
+            "螢幕讀值"
+          ],
+          "issue": "missing_monitor_display_relation"
+        },
+        {
+          "source_any": [
+            "timbangan katrol",
+            "timbangan gantung elektronik",
+            "timbangan elektronik pada crane",
+            "timbangan elektronik crane",
+            "timbangan gantung",
+            "timbangan crane",
+            "timbangan derek",
+            "timbangan tian che",
+            "timbangan hoist"
+          ],
+          "target_any": [
+            "天車電子磅秤"
+          ],
+          "issue": "missing_overhead_crane_electronic_scale"
+        },
+        {
+          "source_any": [
+            "selisih",
+            "beda",
+            "berbeda"
+          ],
+          "target_any": [
+            "相差",
+            "差距",
+            "差異"
+          ],
+          "issue": "missing_weight_difference_relation"
+        },
+        {
+          "source_any": [
+            "lapor",
+            "laporan",
+            "melapor",
+            "melaporkan"
+          ],
+          "target_any": [
+            "回報",
+            "報告",
+            "通報"
+          ],
+          "issue": "missing_report_action"
+        },
+        {
+          "source_any": [
+            "ketu kelas",
+            "ketua kelas",
+            "ketua shift",
+            "ketua regu",
+            "kepala shift",
+            "kepala regu"
+          ],
+          "target_any": [
+            "班長"
+          ],
+          "issue": "missing_shift_leader_role"
+        }
+      ],
+      "examples": [
+        {
+          "source": "Kg di layar monitor dengan di timbangan katrol selisih 6 kg. Saya laporan dengan id Ketu kelas",
+          "target": "螢幕顯示的重量與天車電子磅秤相差 6 公斤。我用班長的 ID 回報。",
+          "bad_target": "螢幕上的公斤數與滑輪秤相差 6 kg。我已用 Ketu kelas 的 ID 回報。",
+          "reason": "保留重量差值、兩個設備的正確關係與回報角色；不把天車電子磅秤直譯成滑輪秤，也不殘留錯拼職稱。"
+        },
+        {
+          "source": "Di layar monitor 995 kg sedangkan di timbangan katrol 989 kg",
+          "target": "螢幕顯示 995 公斤，而天車電子磅秤顯示 989 公斤。",
+          "bad_target": "螢幕上是 995 kg，但滑輪秤上是 989 kg。",
+          "reason": "兩個重量讀值各自綁定來源設備，並使用本廠正式設備名稱。"
+        }
+      ]
+    },
+    {
+      "id": "movement_then_on_site_inspection_relation",
+      "enabled": true,
+      "priority": 248,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "移動到現場後查看情況的動作與目的關係",
+      "match": {
+        "strong_phrases": [
+          "我過去了了解看看",
+          "我過去了解看看",
+          "我過去看看",
+          "到現場確認",
+          "去那邊看看"
+        ],
+        "all_groups": [
+          [
+            "過去",
+            "过去",
+            "去那邊",
+            "去那边",
+            "到現場",
+            "到现场",
+            "去現場",
+            "去现场",
+            "去那裡",
+            "去那里",
+            "到那邊",
+            "到那边",
+            "到那裡",
+            "到那里"
+          ],
+          [
+            "了解看看",
+            "了解一下",
+            "看看",
+            "看一下",
+            "確認一下",
+            "确认一下",
+            "檢查一下",
+            "检查一下",
+            "查看"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "我",
+          "先",
+          "情況",
+          "狀況",
+          "機台",
+          "設備",
+          "材料"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "『過去／去那邊／到現場』是明示的空間移動，印尼文必須保留 ke sana／ke lokasi 等移動與目的地，不可只翻『看看情況』。",
+        "『了解看看／確認一下／檢查一下』是移動後的目的，應使用 untuk mengecek／memeriksa 等目的結構。",
+        "若來源明示機台、設備或材料，檢查對象也必須保留；不可一律泛化成 situasi。"
+      ],
+      "preferred_target_phrases": [
+        "Saya ke sana dulu untuk mengecek situasinya",
+        "Saya ke lokasi dulu untuk memeriksa kondisi mesin"
+      ],
+      "forbidden_target_phrases": [],
+      "requirements": [
+        {
+          "source_any": [
+            "過去",
+            "过去",
+            "去那邊",
+            "去那边",
+            "到現場",
+            "到现场",
+            "去現場",
+            "去现场",
+            "去那裡",
+            "去那里",
+            "到那邊",
+            "到那边",
+            "到那裡",
+            "到那里"
+          ],
+          "target_any": [
+            "ke sana",
+            "pergi ke sana",
+            "ke lokasi",
+            "pergi ke lokasi",
+            "menuju lokasi",
+            "ke lapangan"
+          ],
+          "issue": "missing_movement_and_destination"
+        },
+        {
+          "source_any": [
+            "了解看看",
+            "了解一下",
+            "看看",
+            "看一下",
+            "確認一下",
+            "确认一下",
+            "檢查一下",
+            "检查一下",
+            "查看一下",
+            "查看",
+            "確認",
+            "确认",
+            "檢查",
+            "检查",
+            "了解",
+            "瞭解"
+          ],
+          "target_any": [
+            "mengecek",
+            "memeriksa",
+            "meninjau",
+            "melihat",
+            "mencari tahu"
+          ],
+          "issue": "missing_inspection_purpose"
+        },
+        {
+          "source_any": [
+            "機台",
+            "机台",
+            "設備",
+            "设备",
+            "機器",
+            "机器"
+          ],
+          "target_any": [
+            "mesin",
+            "peralatan"
+          ],
+          "issue": "missing_machine_inspection_object"
+        },
+        {
+          "source_any": [
+            "材料",
+            "料件",
+            "棒材"
+          ],
+          "target_any": [
+            "material",
+            "bahan"
+          ],
+          "issue": "missing_material_inspection_object"
+        }
+      ],
+      "examples": [
+        {
+          "source": "我過去了了解看看",
+          "target": "Saya ke sana dulu untuk mengecek situasinya.",
+          "bad_target": "Saya lihat dulu situasinya.",
+          "reason": "來源同時包含移動與查看目的；舊譯只保留查看，漏掉『過去那裡』。"
+        },
+        {
+          "source": "我先到現場確認一下機台狀況",
+          "target": "Saya ke lokasi dulu untuk memeriksa kondisi mesin.",
+          "bad_target": "Saya periksa dulu situasinya.",
+          "reason": "保留到現場的移動、檢查目的及機台對象。"
+        }
+      ]
+    },
+    {
+      "id": "erp_release_data_to_ol_status",
+      "enabled": true,
+      "priority": 300,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "發料是 ERP 生產資料轉為 OL 狀態",
+      "match": {
+        "strong_phrases": [
+          "發料",
+          "发料"
+        ],
+        "any_terms": [
+          "成功",
+          "已經",
+          "已经",
+          "完成",
+          "請",
+          "请",
+          "資料",
+          "数据",
+          "OL"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "本廠『發料』是不可拆開理解的 ERP／資料系統動作：把該筆生產資料的狀態設為或呈現為 OL，表示該筆資料正在生產。",
+        "它不是發放、領取、出庫或移動實體材料；來源中的人物、成功／完成狀態或請求語氣必須保留。"
+      ],
+      "preferred_target_phrases": [
+        "mengubah status data menjadi OL",
+        "status data diubah menjadi OL"
+      ],
+      "forbidden_target_phrases": [
+        "mengeluarkan material",
+        "mengambil material",
+        "membagikan material",
+        "memindahkan material",
+        "material keluar"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "data",
+            "record"
+          ],
+          "issue": "missing_erp_data_object"
+        },
+        {
+          "target_any": [
+            "OL"
+          ],
+          "issue": "missing_ol_status"
+        },
+        {
+          "target_any": [
+            "mengubah status",
+            "diubah menjadi",
+            "menjadi OL",
+            "berstatus OL",
+            "meng-OL-kan"
+          ],
+          "issue": "missing_data_to_ol_relation"
+        },
+        {
+          "source_any": [
+            "成功",
+            "順利",
+            "顺利"
+          ],
+          "target_any": [
+            "berhasil",
+            "sukses"
+          ],
+          "issue": "missing_success_result"
+        }
+      ],
+      "examples": [
+        {
+          "source": "@budi santoso 山多 成功發料",
+          "target": "@budi santoso 山多 sudah berhasil mengubah status data menjadi OL.",
+          "bad_target": "@budi santoso 山多 berhasil mengeluarkan material.",
+          "reason": "發料是資料狀態轉為 OL，不是實體材料出庫。"
+        },
+        {
+          "source": "這筆工單已經發料完成",
+          "target": "Status data work order ini sudah diubah menjadi OL.",
+          "reason": "同一語意可搭配不同主詞與完成語氣，不能只記住單一句子。"
+        }
+      ]
+    },
+    {
+      "id": "night_attendance_replaced_by_k3_spot_checks",
+      "enabled": true,
+      "priority": 285,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "夜間點名取消並改為 K3 無固定時程入廠抽查",
+      "match": {
+        "all_groups": [
+          [
+            "夜間點名",
+            "夜间点名",
+            "夜班點名",
+            "夜班点名"
+          ],
+          [
+            "取消",
+            "停止",
+            "不再"
+          ],
+          [
+            "安衛",
+            "安卫",
+            "工安",
+            "K3"
+          ],
+          [
+            "抽查",
+            "稽查",
+            "查核"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "下週",
+          "下周",
+          "不定時",
+          "不定时",
+          "入廠",
+          "入厂",
+          "改成",
+          "改為",
+          "改为"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "『點名』在此是人員到勤／出席確認，不是集合或典禮，因此不可翻成 apel malam。",
+        "後半句是替代措施：K3／安衛人員在沒有固定時程的情況下到廠執行隨機抽查。"
+      ],
+      "preferred_target_phrases": [
+        "pengecekan kehadiran malam ditiadakan",
+        "bagian K3 melakukan pemeriksaan acak di pabrik tanpa jadwal tetap"
+      ],
+      "forbidden_target_phrases": [
+        "apel malam"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "pengecekan kehadiran malam",
+            "pemeriksaan kehadiran malam",
+            "absensi malam"
+          ],
+          "issue": "missing_night_attendance_check"
+        },
+        {
+          "target_any": [
+            "ditiadakan",
+            "dihapus",
+            "dihentikan",
+            "tidak dilakukan lagi"
+          ],
+          "issue": "missing_abolition"
+        },
+        {
+          "target_any": [
+            "bagian K3",
+            "departemen K3",
+            "tim K3",
+            "petugas K3"
+          ],
+          "issue": "missing_k3_actor"
+        },
+        {
+          "target_any": [
+            "pemeriksaan acak",
+            "inspeksi acak",
+            "pemeriksaan mendadak",
+            "inspeksi mendadak"
+          ],
+          "issue": "missing_random_inspection"
+        },
+        {
+          "source_any": [
+            "不定時",
+            "不定时",
+            "不定期"
+          ],
+          "target_any": [
+            "tanpa jadwal tetap",
+            "secara tidak terjadwal",
+            "tanpa waktu tetap"
+          ],
+          "issue": "missing_unscheduled_timing"
+        }
+      ],
+      "examples": [
+        {
+          "source": "下週開始取消夜間點名，改成安衛不定時入廠抽查。",
+          "target": "Mulai minggu depan, pengecekan kehadiran malam ditiadakan. Sebagai gantinya, bagian K3 akan melakukan pemeriksaan acak di pabrik tanpa jadwal tetap.",
+          "bad_target": "Mulai minggu depan, apel malam ditiadakan dan diganti dengan pemeriksaan acak oleh bagian K3.",
+          "reason": "點名是出勤確認；替代措施還包含到廠及無固定時程。"
+        }
+      ]
+    },
+    {
+      "id": "month_end_staffing_target_without_invented_unit",
+      "enabled": true,
+      "priority": 280,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "月底請假、人力與追量通知中的數值單位邊界",
+      "match": {
+        "all_groups": [
+          [
+            "請假",
+            "请假"
+          ],
+          [
+            "生產人力",
+            "生产人力"
+          ],
+          [
+            "本月目標",
+            "本月目标"
+          ],
+          [
+            "追量",
+            "趕量",
+            "赶量"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "月底前",
+          "進度",
+          "进度",
+          "上個月",
+          "上个月",
+          "一天"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "本月目標後的數值與單位是分離欄位；原文只寫數值時，不得依工廠習慣自行增加 ton、kg、件或其他單位。",
+        "同一通知中的提前告知請假、月底人力統計、落後上月、開多站追量與每天請假上限都是獨立且必須保留的關係。"
+      ],
+      "preferred_target_phrases": [
+        "Target bulan ini adalah 3800",
+        "mengoperasikan tiga stasiun untuk mengejar target",
+        "tidak lebih dari 2 orang per hari"
+      ],
+      "forbidden_target_phrases": [
+        "3800 ton",
+        "3800 kg"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "請假",
+            "请假"
+          ],
+          "target_any": [
+            "cuti",
+            "izin"
+          ],
+          "issue": "missing_leave_notice"
+        },
+        {
+          "source_any": [
+            "生產人力",
+            "生产人力"
+          ],
+          "target_any": [
+            "tenaga kerja produksi",
+            "tenaga produksi",
+            "jumlah tenaga kerja"
+          ],
+          "issue": "missing_production_staffing"
+        },
+        {
+          "source_any": [
+            "本月目標",
+            "本月目标"
+          ],
+          "target_any": [
+            "target bulan ini"
+          ],
+          "issue": "missing_monthly_target"
+        },
+        {
+          "source_any": [
+            "上個月",
+            "上个月"
+          ],
+          "target_any": [
+            "bulan lalu",
+            "bulan sebelumnya"
+          ],
+          "issue": "missing_previous_month_comparison"
+        },
+        {
+          "source_any": [
+            "追量",
+            "趕量",
+            "赶量"
+          ],
+          "target_any": [
+            "mengejar target",
+            "mengejar produksi",
+            "mengejar output"
+          ],
+          "issue": "missing_output_catchup_purpose"
+        },
+        {
+          "source_any": [
+            "一天",
+            "每日",
+            "每天"
+          ],
+          "target_any": [
+            "per hari",
+            "setiap hari",
+            "dalam satu hari"
+          ],
+          "issue": "missing_daily_scope"
+        }
+      ],
+      "preserve_source_regex": [
+        "\\b\\d+(?:[.,]\\d+)?\\b"
+      ],
+      "examples": [
+        {
+          "source": "月底前有確認請假的再提前告知，上面要統計月底生產人力。\n本月目標3800，目前進度比上個月還落後，月底前應該都是開三站追量，麻煩盡量一天請假不超過2員。",
+          "target": "Bagi yang sudah memastikan akan mengambil cuti sebelum akhir bulan, mohon beri tahu lebih awal. Pihak manajemen perlu menghitung tenaga kerja produksi untuk akhir bulan. Target bulan ini adalah 3800. Saat ini progresnya lebih tertinggal dibandingkan bulan lalu. Hingga akhir bulan, kemungkinan tiga stasiun packing akan terus dioperasikan untuk mengejar target. Mohon usahakan agar jumlah karyawan yang mengambil cuti tidak lebih dari 2 orang per hari.",
+          "bad_target": "Target bulan ini 3800 ton. Saat ini progres masih lebih lambat dibandingkan bulan lalu.",
+          "reason": "來源沒有 ton，且不能漏掉開站追量與每日請假人數上限。"
+        }
+      ]
+    },
+    {
+      "id": "qiwo_workwear_pickup_and_checkbox",
+      "enabled": true,
+      "priority": 270,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "QIWO 工作服與帽子按名單尺寸領取並勾選",
+      "match": {
+        "all_groups": [
+          [
+            "奇沃衣服",
+            "QIWO衣服",
+            "奇沃工作服",
+            "QIWO工作服"
+          ],
+          [
+            "帽子",
+            "工作帽"
+          ],
+          [
+            "領取",
+            "领取",
+            "來領",
+            "来领"
+          ],
+          [
+            "打勾",
+            "勾選",
+            "勾选",
+            "打鉤",
+            "打钩"
+          ]
+        ],
+        "require_all_groups": true,
+        "any_terms": [
+          "下班前",
+          "尺寸",
+          "單子",
+          "单子",
+          "名單",
+          "名单"
+        ],
+        "min_score": 16
+      },
+      "context": [
+        "奇沃／QIWO 是工作服名稱，應保留為 QIWO；衣服、帽子及各自數量不得混在一起。",
+        "領取期限、依名單尺寸領取，以及領完後在同一名單打勾，是三個獨立作業要求。"
+      ],
+      "preferred_target_phrases": [
+        "pakaian QIWO",
+        "topi",
+        "sesuai ukuran yang tercantum pada daftar",
+        "wajib beri tanda centang pada daftar"
+      ],
+      "forbidden_target_phrases": [],
+      "requirements": [
+        {
+          "target_any": [
+            "pakaian QIWO",
+            "baju QIWO",
+            "seragam QIWO"
+          ],
+          "issue": "missing_qiwo_workwear"
+        },
+        {
+          "target_any": [
+            "topi"
+          ],
+          "issue": "missing_hat"
+        },
+        {
+          "source_any": [
+            "下班前"
+          ],
+          "target_any": [
+            "sebelum pulang kerja",
+            "sebelum selesai kerja"
+          ],
+          "issue": "missing_pickup_deadline"
+        },
+        {
+          "target_any": [
+            "sesuai ukuran",
+            "berdasarkan ukuran"
+          ],
+          "issue": "missing_listed_size"
+        },
+        {
+          "target_any": [
+            "tanda centang",
+            "beri centang",
+            "mencentang"
+          ],
+          "issue": "missing_checkbox"
+        }
+      ],
+      "examples": [
+        {
+          "source": "下班前來領奇沃衣服（兩件）跟帽子（一頂），按照單子上的尺寸領取，領完一定要打勾。",
+          "target": "Sebelum pulang kerja, silakan ambil pakaian QIWO (2 potong) dan topi (1 buah). Mohon ambil sesuai ukuran yang tercantum pada daftar. Setelah selesai mengambil, wajib beri tanda centang pada daftar.",
+          "reason": "保留兩種品項、數量、名單尺寸及領後勾選的順序。"
+        }
+      ]
+    },
+    {
+      "id": "equipment_code_rusak_is_machine_failure",
+      "enabled": true,
+      "priority": 290,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "設備代碼加 rusak 表示該機台故障",
+      "match": {
+        "regex_any": [
+          "(?i)(?<![a-z0-9])(?:i\\d{1,2}|e\\d{1,2}|bf\\d+|pm\\d+|k\\d+)(?![a-z0-9]).{0,20}(?:rusak|tidak\\s+berfungsi|tidak\\s+bisa\\s+dipakai)"
+        ],
+        "require_any": true,
+        "min_score": 3
+      },
+      "context": [
+        "I15 等代碼是機台／站別識別碼；當 rusak 直接描述它時，應明確翻成『機台故障』。",
+        "『損傷』用於材料或表面缺陷；只寫『I15 損壞』會丟失機台角色及功能故障關係。"
+      ],
+      "preferred_target_phrases": [
+        "I15 機台故障"
+      ],
+      "forbidden_target_phrases": [
+        "I15 損壞",
+        "I15 损坏",
+        "I15 損傷",
+        "I15 损伤"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "機台",
+            "機器",
+            "設備"
+          ],
+          "issue": "missing_equipment_role"
+        },
+        {
+          "target_any": [
+            "故障"
+          ],
+          "issue": "missing_functional_failure"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?i)\\b(?:i\\d{1,2}|e\\d{1,2}|bf\\d+|pm\\d+|k\\d+)\\b"
+      ],
+      "examples": [
+        {
+          "source": "i15 rusak",
+          "target": "I15 機台故障",
+          "bad_target": "i15 損壞",
+          "reason": "設備代碼是主詞，rusak 表示機台功能故障。"
+        }
+      ]
+    },
+    {
+      "id": "protective_collar_source_object",
+      "enabled": true,
+      "priority": 200,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "套環是實體零件，保留補裝動作",
+      "match": {
+        "strong_phrases": [
+          "套環",
+          "套环"
+        ],
+        "require_any": true,
+        "min_score": 8
+      },
+      "context": [
+        "既有工單詞庫將套環定義為 Cincin Pelindung；一般群組訊息也沿用此名稱。",
+        "套環要補上表示把缺少的套環裝上。補上必須依原句的物件判斷，不能因為有補字就改成補毛重或重新秤重。",
+        "保留原句的要求、否定、詢問或已完成狀態；不要一律改成命令。"
+      ],
+      "preferred_target_phrases": [
+        "cincin pelindung",
+        "ring pelindung"
+      ],
+      "requirements": [
+        {
+          "target_any": [
+            "cincin",
+            "ring"
+          ],
+          "issue": "missing_protective_collar_object"
+        }
+      ]
+    },
+    {
+      "id": "taiwan_computer_not_calculator",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "臺灣職場電腦用語",
+      "match": {
+        "regex_any": [
+          "\\bkomputer\\b"
+        ],
+        "any_terms": [
+          "komputer"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "komputer 在臺灣工作現場譯為「電腦」；kalkulator 才是計算機。不要寫「中間計算機」使人誤以為是手持計算工具。",
+        "komputer tengah 是中間那台電腦；保留左右、中間等位置。tolong bukakan 表示請幫忙開啟，不可自行添加重開機、解鎖、登入成功或解除警報。",
+        "若同句也有 kalkulator 或明確引用名為「計算機」的應用程式，分別保留各自對象，不做全句替換。"
+      ],
+      "preferred_target_phrases": [
+        "電腦",
+        "中間那台電腦"
+      ],
+      "forbidden_target_rules": [
+        {
+          "phrases": [
+            "計算機",
+            "计算机"
+          ],
+          "unless_source": {
+            "regex_any": [
+              "\\bkalkulator\\b|計算機|计算机|計算器|计算器"
+            ]
+          }
+        }
+      ],
+      "requirements": [],
+      "examples": [
+        {
+          "source": "Komputer di sebelah kanan sedang rusak.",
+          "target": "右邊那台電腦目前故障。",
+          "reason": "電腦與計算機的臺灣常用語要區分，保留右邊位置及故障狀態。"
+        }
+      ]
+    },
+    {
+      "id": "inventory_record_transfer_object",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "庫存帳與非本月分類的紀錄操作",
+      "match": {
+        "regex_any": [
+          "(?:移到|移進|移入|轉入|转入)(?:庫存|库存)?[帳账](?!號|号|戶|户|篷|單|单)",
+          "(?:[帳账](?!號|号|戶|户|篷)|紀錄|記錄|记录|資料|资料).{0,16}(?:移出|轉出|转出)"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "移到帳／轉入庫存帳是在系統中把材料紀錄轉入庫存帳，譯為 pindahkan/masukkan catatan material ke pencatatan stok；帳不是 area akun 這種實體區域，也不是登入帳號。",
+        "先辨認動作對象。帳、資料、紀錄的移入／移出作用於 data/catatan；木箱、材料、儲區的實際搬運仍是材料移動。不要因為同段出現帳就把所有搬運改成資料操作。",
+        "同一項指示先講入帳，接著說非本月這兩捆不要移出時，應明說非本月分類中對應這兩捆的紀錄不要移出。保留兩捆、非當月分類及禁止移出三個資訊。",
+        "移入、移出與禁止各自綁定所屬子句，不可把另一句的 jangan 或 catatan 借來通過檢查；非本月不等於上個月。"
+      ],
+      "preferred_target_phrases": [
+        "pencatatan stok",
+        "catatan material",
+        "jangan keluarkan catatan dari kategori bukan untuk bulan ini"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "帳",
+            "账",
+            "資料",
+            "资料",
+            "紀錄",
+            "記錄",
+            "记录"
+          ],
+          "target_any": [
+            "catatan",
+            "data",
+            "pencatatan",
+            "entri",
+            "pembukuan",
+            "buku stok",
+            "buku persediaan"
+          ],
+          "issue": "inventory_transfer_requires_record_object"
+        }
+      ],
+      "examples": [
+        {
+          "source": "這三捆的帳先不要移出。",
+          "target": "Catatan untuk tiga bundel ini jangan dikeluarkan dulu.",
+          "bad_target": "Tiga bundel ini jangan dipindahkan keluar dulu.",
+          "reason": "保留三捆及暫時禁止移出的意思，並明確指定移出對象是紀錄。"
+        }
+      ]
+    },
+    {
+      "id": "packaging_storage_fields_and_manual_update",
+      "enabled": true,
+      "priority": 180,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "包裝存檔、入庫儲區欄位與手動維護資料",
+      "match": {
+        "all_groups": [
+          [
+            "儲區",
+            "儲位",
+            "储区",
+            "储位"
+          ],
+          [
+            "存檔",
+            "存档",
+            "資料",
+            "数据",
+            "欄位",
+            "字段",
+            "預設",
+            "默认",
+            "包裝",
+            "包装"
+          ]
+        ],
+        "require_all_groups": true
+      },
+      "context": [
+        "包裝／入庫畫面中的存檔是儲存作業資料（menyimpan data），不是檔案保管（penyimpanan arsip）。",
+        "使用者確認「存檔入庫都沒儲區」談的是TAG第一次列印沒有儲區、補印才顯示。不可據此宣稱系統欄位空白或實體倉庫沒有空間。原文另明說儲區預設不見、欄位空白時，才照該資料問題翻譯。",
+        "儲區資料的手動維護是填寫／更新欄位：mengisi atau memperbarui data lokasi penyimpanan secara manual；不是設備維修。原文明確說機台維護時仍譯為維護機台。",
+        "保留「若明確知道客戶儲區才先手動處理」的條件；不可猜測儲區值或從其他客戶複製。",
+        "儲運是負責倉儲與運輸的部門（bagian pergudangan dan transportasi）；保留由誰在何時回報。"
+      ],
+      "examples": [
+        {
+          "source": "存檔入庫都沒儲區",
+          "target": "Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak.",
+          "reason": "使用者確認缺少的是TAG首次列印的儲區資訊；未自行添加本句未說的補印指令。"
+        },
+        {
+          "source": "包裝存檔如果跳驗證有誤，先檢查是不是儲區預設不見了，如果你明確知道這間客戶的儲區，先手動維護，我明天跟儲運反應一下。",
+          "target": "Jika muncul kesalahan validasi saat menyimpan data pengemasan, periksa dahulu apakah nilai default lokasi penyimpanannya hilang. Jika kalian tahu pasti lokasi penyimpanan untuk pelanggan ini, isi atau perbarui datanya secara manual terlebih dahulu. Besok saya akan melaporkan masalah ini kepada bagian pergudangan dan transportasi.",
+          "reason": "維護對象是儲區資料；條件、先後與明天回報不變。"
+        },
+        {
+          "source": "包裝資料的儲位欄位是空白的，知道客戶儲位再手動更新。",
+          "target": "Kolom lokasi penyimpanan pada data pengemasan kosong. Perbarui secara manual hanya jika lokasi penyimpanan pelanggan sudah diketahui.",
+          "reason": "變換說法後仍綁定同一資料欄位，不套用歷史儲區代碼。"
+        }
+      ]
+    },
+    {
+      "id": "pending_crate_packing_staffing",
+      "enabled": true,
+      "priority": 180,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "線外人力支援與待裝木箱作業",
+      "match": {
+        "regex_any": [
+          "(?:待|等待|等著|等着)(?:裝|装)(?:入)?木箱"
+        ],
+        "none_terms": [
+          "組裝木箱",
+          "组装木箱",
+          "安裝木箱",
+          "安装木箱"
+        ],
+        "require_any": true,
+        "required_regex_any": [
+          "(?:待|等待|等著|等着)(?:裝|装)(?:入)?木箱"
+        ]
+      },
+      "context": [
+        "使用者明確確認：「待裝木箱」指成品等待裝進木箱（produk jadi yang menunggu dikemas ke dalam peti kayu），不是木箱等待組裝或安裝。原文明確說原料／材料時仍保留該物件。",
+        "設備待料是設備等待材料；拉人分擔線外工作是安排人力支援產線外作業，勿增添故障、停機命令或強制人數。",
+        "如果有待料設備才安排支援；如果沒有，才由當天線外人員留意待裝箱作業。保留兩個分支。",
+        "原文明確提木箱製作、組裝、釘箱或安裝時，應照該動作翻譯，不可改成包裝材料。"
+      ],
+      "examples": [
+        {
+          "source": "@All 有設備待料我會拉人安排分擔線外工作，如果沒有再麻煩當天線外人員要注意一下待裝木箱。",
+          "target": "@All Jika ada mesin yang sedang menunggu material, saya akan menugaskan sebagian personel untuk membantu pekerjaan di luar lini produksi. Jika tidak ada, mohon personel yang bertugas di luar lini hari itu memperhatikan produk jadi yang masih menunggu dikemas ke dalam peti kayu.",
+          "reason": "使用者確認待裝的是成品；保留有設備待料與沒有設備待料的兩個人力安排分支。"
+        },
+        {
+          "source": "線外人員先注意等待裝入木箱的材料。",
+          "target": "Personel di luar lini produksi, tolong perhatikan terlebih dahulu material yang menunggu dikemas ke dalam peti kayu.",
+          "reason": "明示材料時採同一包裝語義。"
+        }
+      ]
+    },
+    {
+      "id": "staffed_station_operation",
+      "enabled": true,
+      "priority": 150,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "人力安排開站是運轉工作站",
+      "match": {
+        "all_groups": [
+          [
+            "人力",
+            "人員",
+            "人员",
+            "排班",
+            "優先",
+            "优先",
+            "生產",
+            "生产"
+          ]
+        ],
+        "require_all_groups": true,
+        "regex_any": [
+          "(?:開|开|運轉|运转)(?:[一二兩两三四五六七八九十]|\\d+)(?:個|个)?站"
+        ],
+        "required_regex_any": [
+          "(?:開|开|運轉|运转)(?:[一二兩两三四五六七八九十]|\\d+)(?:個|个)?站"
+        ],
+        "none_terms": [
+          "新設",
+          "新建",
+          "新開",
+          "擴建",
+          "開幕"
+        ]
+      },
+      "context": [
+        "排班／生產計畫的開幾站是運轉現有工作站，用 mengoperasikan / menjalankan，不用表示開設新據點的字義。",
+        "數量、人力優先安排、起訖時間都維持原文；期間「到月底前」可以自然用 sampai/hingga akhir bulan。",
+        "明確說新建、新設工作站則保留新建的意思。",
+        "使用者已確認：包裝入庫人力計畫的「開三站」具體是圓型、異型、削皮三個包裝站，寫成 mengoperasikan tiga stasiun packing；其他明確站別仍依原文。"
+      ],
+      "examples": [
+        {
+          "source": "月底前人力會優先開三站。",
+          "target": "Sampai akhir bulan, tenaga kerja akan diprioritaskan untuk mengoperasikan tiga stasiun packing.",
+          "reason": "使用者確認三站是圓型、異型、削皮三個包裝站；保留月底期間與人力優先安排。"
+        },
+        {
+          "source": "明天人力優先開兩站。",
+          "target": "Besok, tenaga kerja diprioritaskan untuk mengoperasikan dua stasiun.",
+          "reason": "站數和日期取自當前原文。"
+        }
+      ]
+    },
+    {
+      "id": "customer_packaging_code_scope",
+      "enabled": true,
+      "priority": 225,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "包裝成品當次指定儲區優先於 TAG 與預設儲區",
+      "match": {
+        "all_groups": [
+          [
+            "包裝",
+            "包装",
+            "包的"
+          ],
+          [
+            "哪一站",
+            "哪站",
+            "所有站",
+            "各站",
+            "各個站"
+          ]
+        ],
+        "require_all_groups": true,
+        "required_regex_any": [
+          "[A-Z]{1,4}\\d{2,4}"
+        ]
+      },
+      "context": [
+        "經使用者確認：包裝完成且資料進入801後，成品要實際吊入對應儲區。這是成品位置，不是把801資料轉成儲區代碼，也不是支援某台設備。",
+        "原文「大成今晚包的不論哪一站都幫忙EC51」是當次儲區覆蓋指示：大成今晚的料包裝完成後，不論系統列印的TAG儲區是哪裡，成品一律吊到EC51。此簡語的「哪一站」不是泛指誰在哪個工作站做包裝。",
+        "要保留材料的客戶歸屬、今晚／當次的範圍、實際吊放動作與指定目的儲區；用 angkat dan pindahkan produk jadi ke area penyimpanan ...。",
+        "EC51是儲區位置。當次訊息指定的儲區優先於TAG與儲區查詢預設。不得把大成的永久預設改成EC51，也不得把後續其他客戶或其他代碼替換成EC51。",
+        "801是包裝完成後資料進入的站別，儲區則是成品實際存放位置。這是解讀背景；原文沒有801時，不額外增加801過帳指令。",
+        "沒有這種包裝儲區語境時，不能只看到英數代碼就猜儲區。只適用原文或明確相關的原始前文所建立的用途。",
+        "完整保留客戶名和代碼；中文名稱與外側印尼文需有空白，名稱內部不能拆分。"
+      ],
+      "examples": [
+        {
+          "source": "@All 大成今晚包的不論哪一站都幫忙EC51",
+          "target": "@All Untuk material 大成 yang dikemas malam ini, setelah selesai, angkat dan pindahkan semua produk jadi ke area penyimpanan EC51, terlepas dari lokasi penyimpanan yang tercetak pada TAG.",
+          "reason": "使用者確認的當次實體儲區指示；不是支援EC51，也不是永久更改客戶預設。"
+        },
+        {
+          "source": "客戶甲明天包裝的，不管哪站都幫忙EH28。",
+          "target": "Untuk material 客戶甲 yang dikemas besok, setelah selesai, angkat dan pindahkan semua produk jadi ke area penyimpanan EH28, terlepas dari lokasi penyimpanan yang tercetak pada TAG.",
+          "reason": "同一簡語的示意改寫；客戶、日期、目的儲區必須由當前原文綁定，不能借用大成或EC51。"
+        }
+      ]
+    },
+    {
+      "id": "elliptical_reprint_result",
+      "enabled": true,
+      "priority": 130,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "補印後才出現：用實際前文解析省略對象",
+      "match": {
+        "all_groups": [
+          [
+            "補印",
+            "补印",
+            "重印"
+          ],
+          [
+            "才有",
+            "才會有",
+            "才会有",
+            "才顯示",
+            "才显示"
+          ]
+        ],
+        "require_all_groups": true
+      },
+      "context": [
+        "「要補印才有」是補印這項必要條件；baru muncul / baru ada setelah dicetak ulang。",
+        "只有已提供且明確相關的原始前文，才能判斷出現的是儲區資訊、條碼或其他項目。沒有前文時保留省略，不要一律增添儲區。",
+        "本次已確認的原始對話：前文「存檔入庫都沒儲區」說TAG首印沒有儲區；緊接「要補印才有」指TAG補印後儲區資訊才出現。只有實際連結這段前文時，才翻出此省略對象，不套到無關的補印對話。"
+      ],
+      "examples": [
+        {
+          "source": "要補印才有。",
+          "target": "Harus dicetak ulang dulu, baru muncul.",
+          "reason": "獨立句不猜是什麼項目。"
+        },
+        {
+          "source": "標籤上的儲區欄位要補印才有。",
+          "target": "Informasi lokasi penyimpanan pada label baru muncul setelah dicetak ulang.",
+          "reason": "本句明示儲區資訊時才補出物件。"
+        }
+      ]
+    },
+    {
+      "id": "finished_goods_801_storage_destination",
+      "enabled": true,
+      "priority": 205,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "包裝成品資料進801後，實體吊入指定儲區",
+      "match": {
+        "all_groups": [
+          [
+            "801"
+          ],
+          [
+            "包裝",
+            "包装",
+            "成品"
+          ],
+          [
+            "儲區",
+            "储区",
+            "儲位",
+            "储位",
+            "入庫",
+            "入库"
+          ]
+        ],
+        "require_all_groups": true,
+        "required_regex_any": [
+          "儲[區区位]|储[區区位]|存放|放(?:到|回|在)|(?:成品|包裝完|包装完).{0,15}入[庫库]|\\b(?:area|lokasi|tempat)\\s+(?:penyimpanan|gudang)|\\b(?:simpan|disimpan|penyimpanan)\\b"
+        ]
+      },
+      "context": [
+        "使用者確認的工廠流程：客戶材料包裝完成，資料進入801就算入庫；之後成品實際吊入對應儲區。入庫計畫的噸數是系統登錄入庫的成品重量，801不是實體儲區碼。",
+        "句中的「資料進801」和「成品吊入儲區」是不同物件的動作，不可都譯成資料轉移，也不可把801譯成物理儲區。",
+        "如果本次指令指定另一儲區，按本次指令放置，不受TAG列印的預設儲區限制；不得永久修改客戶儲區對照。",
+        "只翻譯當前原文寫出或明確省略承接的動作，不自行增加801站、額外完工條件、其他客戶或機台。"
+      ],
+      "examples": [
+        {
+          "source": "包裝完成資料進801後，成品吊入指定儲區EC51。",
+          "target": "Setelah pengemasan selesai dan datanya masuk ke stasiun 801, angkat dan pindahkan produk jadi ke area penyimpanan EC51 yang ditentukan.",
+          "reason": "資料進站與實體成品吊放分別綁定正確物件，所有代碼照原文。"
+        },
+        {
+          "source": "包裝成品資料進入801就算入庫，入庫時間要分散。",
+          "target": "Produk jadi yang telah dikemas dianggap sudah tercatat masuk gudang begitu datanya masuk ke stasiun 801. Atur waktu pencatatan masuk gudang agar tersebar.",
+          "reason": "系統入庫完成條件與分散登錄時間均由使用者確認；只有原文明示才寫801。"
+        }
+      ]
+    },
+    {
+      "id": "three_packing_stations_staffing",
+      "enabled": true,
+      "priority": 220,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "使用者確認：開三站是圓型、異型、削皮三個包裝站",
+      "match": {
+        "regex_any": [
+          "(?:開|开|運轉|运转)\\s*(?:三|3)\\s*(?:個|个)?\\s*(?:包裝|包装)?站",
+          "圓型包裝站[、，,與和及\\s]*異型包裝站[、，,與和及\\s]*削皮包裝站"
+        ],
+        "required_regex_any": [
+          "(?:開|开|運轉|运转)\\s*(?:三|3)\\s*(?:個|个)?\\s*(?:包裝|包装)?站",
+          "圓型包裝站[、，,與和及\\s]*異型包裝站[、，,與和及\\s]*削皮包裝站"
+        ],
+        "none_terms": [
+          "捷運",
+          "地鐵",
+          "铁路",
+          "鐵路",
+          "新建",
+          "新設",
+          "新设",
+          "研磨站",
+          "拋光站",
+          "抛光站",
+          "檢驗站",
+          "检验站",
+          "新開",
+          "新开",
+          "擴建",
+          "扩建",
+          "開幕",
+          "开幕",
+          "地铁",
+          "削皮加工站"
+        ]
+      },
+      "context": [
+        "經使用者明確確認：本廠包裝／成品入庫人力安排中的「開三站」「開3站」，是開動三個包裝站：圓型包裝站、異型包裝站、削皮包裝站。",
+        "譯文應明確說 mengoperasikan tiga stasiun packing；不能只剩沒有作業類別的 tiga stasiun，也不是站號3或新建三站。",
+        "圓型包裝站可表達為 Stasiun packing batang bulat；異型包裝站沿用既有 Stasiun packing barang bentuk khusus；削皮包裝站是 Stasiun packing peeling，不能省略 packing 誤作削皮加工站。",
+        "原文省略三站名稱時，正文可自然寫「三個包裝站」，不強制把整段背景名稱全部加進譯文。",
+        "人力優先安排、站數、日期和起訖期間都取自當前原文；不要自行加每班都開、24小時不停或固定人數。",
+        "只在包裝／入庫人力語境套用這個現場簡稱；原文明確指定其他站別時，以原文為準。開兩站不推測是哪兩站。"
+      ],
+      "examples": [
+        {
+          "source": "包裝人力優先開三站。",
+          "target": "Tenaga kerja untuk packing diprioritaskan untuk mengoperasikan tiga stasiun packing.",
+          "reason": "三站是圓型、異型、削皮三個包裝站，正文保持原句簡潔。"
+        },
+        {
+          "source": "圓型包裝站、異型包裝站、削皮包裝站。",
+          "target": "Stasiun packing batang bulat, Stasiun packing barang bentuk khusus, dan Stasiun packing peeling.",
+          "reason": "三個包裝站的完整名稱，不推定系統站號或设备编号。"
+        }
+      ]
+    },
+    {
+      "id": "tag_first_print_missing_storage",
+      "enabled": true,
+      "priority": 215,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "使用者確認：TAG首印沒有儲區，補印才出現",
+      "match": {
+        "all_groups": [
+          [
+            "儲區",
+            "儲位",
+            "储区",
+            "储位"
+          ],
+          [
+            "TAG",
+            "tag",
+            "標籤",
+            "标签",
+            "存檔入庫",
+            "存档入库"
+          ]
+        ],
+        "require_all_groups": true,
+        "required_regex_any": [
+          "存[檔档]入[庫库].{0,4}(?:沒|没).{0,3}(?:儲區|储区|儲位|储位)",
+          "首印|首次|第一次|補印|补印|重印"
+        ]
+      },
+      "context": [
+        "使用者確認這次故障：TAG第一次列印沒有儲區，補印後才出現。缺的是標籤列印結果，不是物理空間，也不能斷言系統儲區欄位沒有值。",
+        "「存檔入庫都沒儲區」是描述存檔／入庫時TAG首印缺少儲區。若只翻這一句，不擅自附加「請補印」指令；後續「要補印才有」才表達補印的必要條件。",
+        "原文說條碼、批號、其他列印欄位時按當前物件翻譯；不要將所有列印故障都說成缺儲區。這是此次已確認的現象，不代表所有TAG永遠都需補印。"
+      ],
+      "examples": [
+        {
+          "source": "TAG第一次列印沒有儲區，補印才出現。",
+          "target": "Lokasi penyimpanan tidak tercantum pada TAG saat pertama kali dicetak; informasinya baru muncul setelah TAG dicetak ulang.",
+          "reason": "首印與補印的不同結果、同一儲區資訊。"
+        },
+        {
+          "source": "存檔入庫都沒儲區，要補印才有。",
+          "target": "Baik saat menyimpan data maupun mencatat masuk gudang, lokasi penyimpanan tidak tercantum pada TAG yang pertama kali dicetak. Informasinya baru muncul setelah TAG dicetak ulang.",
+          "reason": "同一原文明確包含首印問題與補印才出現的條件。"
+        }
+      ]
+    },
+    {
+      "id": "work_order_tag_color_and_ring_notice_20260923",
+      "enabled": true,
+      "priority": 280,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "9/23工單 TAG、顏色噴漆與佳東 G 製程套環公告",
+      "match": {
+        "strong_phrases": [
+          "工單資料如果跟掛牌不同",
+          "#佳東 #G製程的研磨棒要套環"
+        ],
+        "all_groups": [
+          [
+            "工單"
+          ],
+          [
+            "掛牌",
+            "TAG"
+          ],
+          [
+            "噴漆",
+            "顏色"
+          ],
+          [
+            "套環"
+          ],
+          [
+            "佳東"
+          ],
+          [
+            "G製程",
+            "#G"
+          ]
+        ],
+        "require_all_groups": true,
+        "min_score": 22
+      },
+      "context": [
+        "此公告中的掛牌是材料上的實體識別 TAG，印尼文保留為 TAG；不可譯成 papan gantung。",
+        "工單資料與 TAG 不同時以工單資料為準；噴漆位置記為 N 但顏色欄有顏色時，仍依顏色噴漆。逐字保留 N、顏色及動作。",
+        "「#佳東 #G製程」是客戶佳東與 G 製程標籤；句意是佳東 G 製程的研磨棒要套環，不是把佳東當成製程名稱。保留 #佳東 與 #G，並清楚表達 G 製程。",
+        "這是原公告內容的翻譯參考。工單查詢實際噴漆與套環判斷以當前程式規則為準。"
+      ],
+      "preferred_target_phrases": [
+        "TAG",
+        "pengecatan semprot sesuai warna",
+        "proses G",
+        "Cincin Pelindung"
+      ],
+      "forbidden_target_phrases": [
+        "papan gantung",
+        "proses 佳東 dan G",
+        "proses “佳東” dan G"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "掛牌"
+          ],
+          "target_any": [
+            "TAG"
+          ],
+          "issue": "tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "顏色"
+          ],
+          "target_any": [
+            "warna"
+          ],
+          "issue": "color_field_meaning_missing"
+        },
+        {
+          "source_any": [
+            "噴漆"
+          ],
+          "target_any": [
+            "pengecatan semprot",
+            "cat semprot"
+          ],
+          "issue": "spray_painting_missing"
+        },
+        {
+          "source_any": [
+            "套環"
+          ],
+          "target_any": [
+            "cincin pelindung"
+          ],
+          "issue": "protective_ring_missing"
+        },
+        {
+          "source_any": [
+            "佳東"
+          ],
+          "target_any": [
+            "#佳東"
+          ],
+          "issue": "customer_tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "#G",
+            "G製程"
+          ],
+          "target_any": [
+            "#G"
+          ],
+          "issue": "process_tag_not_preserved"
+        },
+        {
+          "source_any": [
+            "G製程"
+          ],
+          "target_any": [
+            "proses G"
+          ],
+          "issue": "process_g_relationship_missing"
+        },
+        {
+          "source_any": [
+            "研磨棒"
+          ],
+          "target_any": [
+            "batang grinding"
+          ],
+          "issue": "grinding_rod_missing"
+        }
+      ],
+      "preserve_source_regex": [
+        "(?<![A-Za-z])N(?![A-Za-z])"
+      ],
+      "examples": [
+        {
+          "source": "重新宣導一次，以9/23今天的最新資訊為主。\n工單資料如果跟掛牌不同，以工單資料為主。\n工單上噴漆位置\"N\"但是旁邊欄位有註記顏色，一律按照上面顏色噴漆。\n拋光人員注意：\n工單上套環欄位是N就不要套了。\n#佳東 #G製程的研磨棒要套環，如果另外有客戶溝通要套環我們後續再新增。",
+          "target": "Disampaikan kembali: gunakan informasi terbaru per hari ini, 9/23, sebagai acuan.\nJika informasi pada work order berbeda dengan TAG, gunakan informasi pada work order sebagai acuan.\nJika posisi pengecatan semprot pada work order tertulis \"N\", tetapi kolom di sebelahnya mencantumkan warna, tetap lakukan pengecatan semprot sesuai warna yang tertera.\nPerhatian bagi petugas polishing:\nJika kolom Cincin Pelindung pada work order tertulis N, jangan dipasang.\n#佳東 #G: Batang grinding pada proses G wajib dipasangi Cincin Pelindung. Jika ada komunikasi tambahan dari pelanggan bahwa Cincin Pelindung perlu dipasang, ketentuan itu akan kami tambahkan kemudian.",
+          "bad_target": "papan gantung",
+          "reason": "已校正掛牌為 TAG，並明確保留佳東客戶、G製程、研磨棒及套環的修飾關係。"
+        }
+      ]
+    },
+    {
+      "id": "factory_clamp_support_component",
+      "enabled": true,
+      "priority": 240,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "棒材設備夾靠部件名稱與缺料對象",
+      "match": {
+        "strong_phrases": [
+          "夾靠",
+          "夹靠",
+          "dudukan penjepit batang"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "依本次設備照片語境，「夾靠」指棒材加工設備上用來夾持、支承並定位棒材的部件；印尼文採用 dudukan penjepit batang。",
+        "「缺夾靠／夾靠不足」的缺少對象是夾靠部件，不是棒材材料；印尼文必須保留 dudukan penjepit batang，不可只譯成 ada kurang。",
+        "只保留原文已明示的短缺和處理請求；不要推定機台編號、缺少數量、故障原因、維修或補製方式。",
+        "印尼文的 dudukan penjepit batang 指回中文「夾靠」；保留詞義，不要改成夾輪、夾具操作或棒材短缺。"
+      ],
+      "preferred_target_phrases": [
+        "dudukan penjepit batang"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "target_any": [
+            "dudukan penjepit batang"
+          ],
+          "issue": "clamp_support_component_missing"
+        },
+        {
+          "source_any": [
+            "dudukan penjepit batang"
+          ],
+          "target_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "issue": "clamp_support_component_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "target_missing_any": [
+            "dudukan penjepit batang"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\bada\\s+kurang\\b",
+              "replacement": "dudukan penjepit batang kurang"
+            },
+            {
+              "pattern": "\\bada\\s+kekurangan\\b",
+              "replacement": "ada kekurangan dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\btidak\\s+ada\\b",
+              "replacement": "tidak ada dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bbelum\\s+ada\\b",
+              "replacement": "belum ada dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bkekurangan\\b",
+              "replacement": "kekurangan dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\btidak\\s+(?:cukup|mencukupi)\\b",
+              "replacement": "tidak cukup dudukan penjepit batang"
+            },
+            {
+              "pattern": "\\bkurang\\b",
+              "replacement": "kekurangan dudukan penjepit batang"
+            }
+          ]
+        },
+        {
+          "direction": "id-zh",
+          "source_any": [
+            "dudukan penjepit batang"
+          ],
+          "target_missing_any": [
+            "夾靠",
+            "夹靠"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "東西\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "零件\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "部件\\s*(?:不夠|不足)",
+              "replacement": "夾靠不足"
+            },
+            {
+              "pattern": "缺少(?:這個)?(?:部件|零件|東西|物品)",
+              "replacement": "缺少夾靠"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "factory_short_bar_specification_data_maintenance",
+      "enabled": true,
+      "priority": 235,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "短尺圖的系統規格資料維護",
+      "match": {
+        "strong_phrases": [
+          "短尺圖維護",
+          "短尺图维护",
+          "pemeliharaan data spesifikasi material pendek"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "依本次 ERP 畫面照片語境，「短尺圖維護」是系統內維護短尺材料規格／圖表資料的功能名稱；印尼文採用 pemeliharaan data spesifikasi material pendek。",
+        "這個畫面名稱指系統資料維護，不是現場處理短尺材料；短尺材料處理流程「短尺維護」仍用 penanganan material pendek。",
+        "「維護」在此是管理／更新系統資料，不能改成 tidak teratur（不規則）；不可補寫畫面未顯示的欄位、規格值或操作步驟。"
+      ],
+      "preferred_target_phrases": [
+        "pemeliharaan data spesifikasi material pendek"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "target_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "issue": "short_bar_specification_data_maintenance_missing"
+        },
+        {
+          "source_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "target_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "issue": "short_bar_specification_data_maintenance_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "target_missing_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\b(?:pemeliharaan|perawatan)\\s+(?:data\\s+)?ukuran\\s+pendek(?:\\s+tidak\\s+teratur)?\\b",
+              "replacement": "pemeliharaan data spesifikasi material pendek"
+            },
+            {
+              "pattern": "\\bdata\\s+ukuran\\s+pendek\\s+tidak\\s+teratur\\b",
+              "replacement": "data spesifikasi material pendek"
+            }
+          ]
+        },
+        {
+          "direction": "id-zh",
+          "source_any": [
+            "pemeliharaan data spesifikasi material pendek"
+          ],
+          "target_missing_any": [
+            "短尺圖維護",
+            "短尺图维护"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "短尺(?:材料)?(?:規格|规格)?(?:資料|资料|圖|图)\\s*(?:不規則|不规则)?維護",
+              "replacement": "短尺圖維護"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "factory_repeat_defect_photo_warning",
+      "enabled": true,
+      "priority": 230,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "重複缺失與再犯拍照警告",
+      "match": {
+        "strong_phrases": [
+          "重複缺失",
+          "重复缺失",
+          "累犯被拍照",
+          "pelanggaran terulang",
+          "temuan yang sama terus berulang"
+        ],
+        "min_score": 8
+      },
+      "context": [
+        "「重複缺失」是相同缺失反覆出現；可譯為 temuan/kekurangan yang sama terus berulang，不是缺點本身永遠存在。",
+        "「不要累犯被拍照」是在提醒不要再犯，若重犯會再被拍照留證。印尼文必須保留『重犯時會再拍照』的條件關係，例如 jangan mengulangi pelanggaran; jika terulang, akan difoto lagi。",
+        "這是正式的現場管理警告，依原文保留警告力度；沒有表情符號的原文不得新增笑臉、祈禱手勢或其他 emoji。"
+      ],
+      "preferred_target_phrases": [
+        "temuan yang sama terus berulang",
+        "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "重複缺失",
+            "重复缺失"
+          ],
+          "target_any": [
+            "kekurangannya selalu berulang",
+            "kekurangan yang sama terus berulang",
+            "temuan yang sama terus berulang",
+            "temuan yang sama berulang",
+            "temuan berulang"
+          ],
+          "issue": "repeated_defect_relation_missing"
+        },
+        {
+          "source_any": [
+            "累犯被拍照",
+            "累犯",
+            "再犯被拍照",
+            "再犯會被拍照",
+            "再犯会被拍照"
+          ],
+          "target_any": [
+            "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi",
+            "jika pelanggaran terulang, akan difoto lagi",
+            "jika mengulangi pelanggaran, akan difoto lagi",
+            "agar tidak difoto lagi",
+            "supaya tidak difoto lagi"
+          ],
+          "issue": "repeat_violation_photo_consequence_missing"
+        }
+      ],
+      "repair_rules": [
+        {
+          "direction": "zh-id",
+          "source_any": [
+            "累犯被拍照",
+            "累犯",
+            "再犯被拍照",
+            "再犯會被拍照",
+            "再犯会被拍照"
+          ],
+          "target_missing_any": [
+            "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi",
+            "jika pelanggaran terulang, akan difoto lagi",
+            "jika mengulangi pelanggaran, akan difoto lagi",
+            "agar tidak difoto lagi",
+            "supaya tidak difoto lagi"
+          ],
+          "candidate_rewrites": [
+            {
+              "pattern": "\\b(?:agar\\s+)?tidak\\s+mengulangi\\s+pelanggaran\\s+dan\\s+(?:akan\\s+)?difoto\\s+lagi\\b",
+              "replacement": "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+            },
+            {
+              "pattern": "\\bjangan\\s+mengulangi\\s+pelanggaran\\s+dan\\s+(?:akan\\s+)?difoto\\s+lagi\\b",
+              "replacement": "jangan mengulangi pelanggaran; jika terulang, akan difoto lagi"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "customer_name_dacheng_identity",
+      "enabled": true,
+      "priority": 300,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "大成是客戶識別名稱",
+      "match": {
+        "any_terms": [
+          "大成"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "在本廠客戶、材料、工單與包裝語境中，大成是客戶識別名稱，譯文必須原樣保留「大成」。",
+        "不要翻成印尼文普通形容詞 besar，也不要自行拼成 Da Cheng。只有明確不是客戶名稱的上下文才可依其字面義處理。"
+      ],
+      "preferred_target_phrases": [
+        "大成"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "大成"
+          ],
+          "target_any": [
+            "大成"
+          ],
+          "issue": "customer_identity_not_preserved"
+        }
+      ],
+      "preserve_source_regex": [
+        "大成"
+      ]
+    },
+    {
+      "id": "product_term_special_profile_bar",
+      "enabled": true,
+      "priority": 290,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "異型棒是特殊斷面棒材",
+      "match": {
+        "any_terms": [
+          "異型棒",
+          "异型棒"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "異型棒指特殊斷面／特殊型材的棒材，是產品或材料類別，不是包裝站名稱。",
+        "一般可譯為 batang profil khusus；不可與異型包裝站混為一談，也不可把異型棒拆成互不相關的項目。"
+      ],
+      "preferred_target_phrases": [
+        "batang profil khusus"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "異型棒",
+            "异型棒"
+          ],
+          "target_any": [
+            "batang profil khusus",
+            "batang dengan profil khusus",
+            "batang berbentuk khusus"
+          ],
+          "issue": "special_profile_bar_term_missing"
+        }
+      ]
+    },
+    {
+      "id": "term_furnace_heat_number",
+      "enabled": true,
+      "priority": 285,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "爐號是鋼材冶煉批次識別碼",
+      "match": {
+        "any_terms": [
+          "爐號",
+          "炉号",
+          "爐次號",
+          "炉次号"
+        ],
+        "require_any": true,
+        "min_score": 1
+      },
+      "context": [
+        "鋼材生產與標籤語境中的爐號／爐次號是 heat 的批次識別號；欄位名稱可用印尼文 nomor heat 或 nomor peleburan。",
+        "翻譯欄位名稱，不要改寫或翻譯實際爐號值；標籤與列印 ID 的爐號必須維持各自來源並表達兩者是否相同。"
+      ],
+      "preferred_target_phrases": [
+        "nomor heat"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "爐號",
+            "炉号",
+            "爐次號",
+            "炉次号"
+          ],
+          "target_any": [
+            "nomor heat",
+            "nomor peleburan"
+          ],
+          "issue": "heat_number_field_term_missing"
+        }
+      ]
+    },
+    {
+      "id": "factory_housekeeping_management_emphasis",
+      "enabled": true,
+      "priority": 165,
+      "directions": [
+        "zh-id",
+        "id-zh"
+      ],
+      "title": "作業環境整潔、一般掉落物與主管管理語氣",
+      "match": {
+        "all_groups": [
+          [
+            "作業環境",
+            "工作環境",
+            "廠區環境",
+            "環境整潔",
+            "環境衛生",
+            "作業區",
+            "工作區",
+            "地面",
+            "地板",
+            "整潔",
+            "掉落物",
+            "油水",
+            "掃地",
+            "掃除",
+            "清掃",
+            "拖地",
+            "kebersihan area",
+            "kebersihan lingkungan",
+            "kerapian area",
+            "lingkungan kerja",
+            "area kerja",
+            "lantai",
+            "sapu",
+            "menyapu",
+            "pel lantai",
+            "oli",
+            "benda yang jatuh",
+            "barang yang jatuh",
+            "tercecer",
+            "工作場所",
+            "作業場所",
+            "現場整潔",
+            "地上",
+            "雜物",
+            "掉落的雜物",
+            "地板上的雜物",
+            "清理",
+            "整理",
+            "打掃",
+            "清潔環境",
+            "廠區整潔"
+          ],
+          [
+            "總經理",
+            "經理",
+            "主管",
+            "外賓",
+            "訪客",
+            "重視",
+            "嚴格",
+            "監督",
+            "盯",
+            "釘",
+            "General Manager",
+            "manajer",
+            "atasan",
+            "tamu",
+            "memperhatikan",
+            "menekankan",
+            "mengawasi",
+            "pengawasan",
+            "tegas",
+            "ketat"
+          ]
+        ],
+        "require_all_groups": false,
+        "required_regex_any": [
+          "環境|整潔|卫生|衛生|掉落.{0,5}(?:物|東西)|雜物|油水|掃地|掃除|清掃|拖地|打掃|廠區整潔|(?:作業區|工作區|地面|地板|地上).{0,12}(?:清理|整理|清潔|打掃|掃|拖|擦)|\\b(?:kebersihan|kerapian|lingkungan|menyapu|disapu|tercecer|terjatuh)\\b|\\b(?:lantai|area\\s+kerja)\\b.{0,40}\\b(?:sapu|pel|bersih|oli|benda|barang)\\b"
+        ],
+        "min_score": 4
+      },
+      "context": [
+        "在工廠作業區語境中，掃地、拖地、擦拭油水和維持整潔指一般現場整理；用 kebersihan/kerapian area kerja 或 lingkungan kerja，不翻成生態保護，也不要和棒材清洗製程混淆。",
+        "主管／總經理把注意力放在一項現場目標上時，中文口語「盯／釘」表示密切關注、嚴格要求或監督；保留原文的開始時間和程度，但不可自行加上稽核、懲處或新的工作命令。",
+        "「掉落物、地面雜物、掉在地上的東西」沒有指定材料種類時，印尼文應保留一般物件類別，例如 benda/barang yang jatuh atau tercecer；不得自行窄化成原料、棒材或產品。",
+        "環境整潔、地面物品、油水和訪客等線索要合併判讀整段；不要把「環境」孤立翻成環境保護，也不要把非特定物品改成材料。"
+      ],
+      "preferred_target_phrases": [
+        "kebersihan area kerja",
+        "kerapian lingkungan kerja",
+        "lebih serius menekankan kebersihan",
+        "mengawasi dengan ketat",
+        "benda/barang yang jatuh atau tercecer"
+      ],
+      "requirements": [
+        {
+          "source_any": [
+            "掉落物",
+            "掉落的物品",
+            "地面雜物",
+            "地上的東西",
+            "落在地上的物品",
+            "掉落的雜物",
+            "地板上的雜物",
+            "地面上掉落的雜物"
+          ],
+          "target_any": [
+            "benda",
+            "barang"
+          ],
+          "issue": "generic_dropped_object_narrowed_or_omitted"
+        },
+        {
+          "source_any": [
+            "benda yang jatuh",
+            "barang yang jatuh",
+            "benda yang terjatuh",
+            "barang yang terjatuh",
+            "benda yang tercecer",
+            "barang yang tercecer"
+          ],
+          "target_any": [
+            "掉落物",
+            "地面上的物品",
+            "地上掉落的東西",
+            "落在地上的物品"
+          ],
+          "issue": "generic_dropped_object_narrowed_or_omitted"
+        }
+      ],
+      "examples": [
+        {
+          "source": "外賓來訪期間，請保持工作區整潔，地面掉落物要掃除，主管會嚴格盯現場。",
+          "target": "Selama kunjungan tamu, harap jaga kebersihan area kerja dan sapu benda-benda yang jatuh di lantai. Atasan akan mengawasi kondisi area dengan ketat."
+        },
+        {
+          "source": "General Manager semakin ketat memperhatikan kerapian area kerja; barang yang terjatuh di lantai mohon disapu.",
+          "target": "總經理越來越嚴格地重視作業區整潔；請把地面掉落物掃乾淨。"
+        }
+      ]
+    }
+  ]
+}
