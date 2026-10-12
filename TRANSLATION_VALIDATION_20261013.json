@@ -2,21 +2,23 @@
   "review_date": "2026-10-13",
   "source_archive": "line-translator-bot-main.zip",
   "source_archive_sha256": "9bd5e2212fdc9029cffd6bc3e9e1572c68a7ddc7a7efbdf38033109ae4d40856",
-  "scope": "Only changed or added files relative to the uploaded archive; project-relative ZIP paths",
+  "scope": "Cumulative changed or added files relative to the uploaded archive; includes the earlier same-day update; project-relative ZIP paths",
   "full_regression": {
-    "passed": 4068,
+    "passed": 4110,
     "warnings": 2,
     "subtests_passed": 450,
-    "seconds": 195.01,
+    "xml_testcases": 4560,
+    "seconds": 121.7,
     "external_network_blocked": true
   },
   "patch_overlay_regression": {
-    "passed": 96,
+    "passed": 138,
     "failures": 0,
     "errors": 0,
-    "seconds": 5.45
+    "seconds": 4.106,
+    "external_network_blocked": true
   },
-  "changed_python_compile_passed": 24,
+  "changed_python_compile_passed": 25,
   "assets": {
     "ok": true,
     "guard_self_test": {
@@ -42,8 +44,8 @@
     {
       "path": "UPDATE_20261013_TRANSLATION_REVIEW.md",
       "change": "added",
-      "size_bytes": 3749,
-      "sha256": "3421af8555a546c8a6d0af014eaf5cc49424b454b754c127b892aee352a5ad45",
+      "size_bytes": 4428,
+      "sha256": "e86ce75112d6198a1f9a1eb850f5fd0c17318d1674f1aab84c88dea7a1652869",
       "base_sha256": null
     },
     {
@@ -56,8 +58,8 @@
     {
       "path": "factory_chat_operation_semantics.py",
       "change": "added",
-      "size_bytes": 19487,
-      "sha256": "a169ee146b5734b09fb11011689ac8c79576d823cf5930d081578d1d754c30db",
+      "size_bytes": 26559,
+      "sha256": "6ccf67f6d8411ee2f4e84be82a2f4aa1e6c6b9e18a9885742861a34fdcafab7e",
       "base_sha256": null
     },
     {
@@ -122,6 +124,13 @@
       "size_bytes": 19443,
       "sha256": "8cb3dc5dc5cb8b19ab7319a97cf5757518008232686210334fa083aa0eda6325",
       "base_sha256": "0954a7e0b1100f2056a977c761206e5e7f502d56c354e26608985f5e7f589242"
+    },
+    {
+      "path": "test_operator_takeover_semantics.py",
+      "change": "added",
+      "size_bytes": 10729,
+      "sha256": "cdf49d5cf52e83e70381b8a54fef6d7ce60a078ae694edb1ecc34ad37ab4c07f",
+      "base_sha256": null
     },
     {
       "path": "test_station_alias_root_fix.py",
@@ -217,8 +226,8 @@
     {
       "path": "translation_learning_policy.py",
       "change": "modified",
-      "size_bytes": 18999,
-      "sha256": "55297d47023ead5141e74d70164a36a5a9adeb848f26ca4c41fb99d3a8ce811a",
+      "size_bytes": 19551,
+      "sha256": "658f71d18b5719a28b9ea4917fea93b5974351e5711347dd6434b55d44dd83e1",
       "base_sha256": "69e2d319e1562ec9676e93dc2468082b4e5cb83ad8dbd335b830e7393412a4a4"
     },
     {
@@ -249,5 +258,24 @@
       "sha256": "42061f3dd253fe32b7f7533100a8be6915e30b091ce99ee414f1c3942ae86764",
       "base_sha256": "f14882579958ab97c660b8bd22fb16384195eefdaba71f3f2abb0a9231087c39"
     }
-  ]
+  ],
+  "operator_takeover_regression": {
+    "passed": 42,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 2.411,
+    "source_meaning_confirmed_by_user": "下一班人員要開會，暫時沒有人接手設備；需關閉風扇",
+    "checks": [
+      "actor taking over equipment",
+      "conditional fan shutdown",
+      "separate idle-roller instruction",
+      "source-owned meeting",
+      "prohibition and completed-state controls",
+      "actual text and OCR entry paths",
+      "verified cache and measured learning"
+    ]
+  },
+  "chat_operation_build": "2026-10-13.2-operator-takeover-condition",
+  "learning_policy_build": "2026-10-13.2-operator-takeover-learning",
+  "zip_file_count": 32
 }

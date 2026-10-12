@@ -12,7 +12,7 @@ import re
 import unicodedata
 from decimal import Decimal
 
-BUILD_ID = "2026-10-13.1-source-owned-chat-operations"
+BUILD_ID = "2026-10-13.2-operator-takeover-condition"
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _ATOM = re.compile(r"https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]+|__[A-Z0-9_]+__", re.I)
 _QUOTE = re.compile(r'「[^」]*」|『[^』]*』|“[^”]*”|"[^"\n]*"')
@@ -42,6 +42,76 @@ _LIFT_ZH = re.compile(r"吊(?!牌|飾|饰)|起重|承重")
 _LIFT_ID = re.compile(r"\b(?:angkat|mengangkat|pengangkatan|beban|crane|derek)\b", re.I)
 _UPPER_ZH = re.compile(r"(?:(?:不要|不可|不得|不能|不准|禁止)(?:[^，,。！？!?;；\n]{0,12})(?:超過|超过)|不得大於|不得大于|不超過|不超过|上限(?:為|为|是)?|最多|至多)\s*$")
 _UPPER_ID = re.compile(r"\b(?:jangan|dilarang|tidak\s+boleh)[^.!?;\n]{0,80}\b(?:lebih\s+dari|melebihi)\s*$|\b(?:maksimal|maksimum|paling\s+banyak|tidak\s+lebih\s+dari)\s*(?:adalah\s*)?$|(?:<=|≤)\s*$", re.I)
+_NO_TAKEOVER_ZH = re.compile(
+    r"(?:沒(?:有)?|没(?:有)?|無|无|尚未有|還沒(?:有)?|还没(?:有)?)"
+    r"(?:人員|人员|操作員|操作员|人)(?:來|来|可|能|要|會|会)?"
+    r"(?:交接(?:班)?|接班|接手)")
+_FAN_ZH = re.compile(r"風扇|风扇")
+_FAN_ID = re.compile(r"\b(?:kipas(?:nya)?|fan)\b", re.I)
+_OFF_ZH = re.compile(r"關閉|关闭|關掉|关掉|停用|停止|關|关")
+_OFF_ID = re.compile(r"\b(?:matikan|mematikan|dimatikan|nonaktifkan|dinonaktifkan)\b", re.I)
+_PERSON_ID = r"(?:operator|petugas|pekerja|orang|personel|personil)"
+_TAKEOVER_ID = r"(?:mengambil\s+alih|menggantikan|melanjutkan\s+(?:pekerjaan|operasi)|menerima\s+serah\s+terima)"
+_NO_TAKEOVER_ID = re.compile(
+    r"\b(?:belum|tidak|tak)\s+ada\s+(?:seorang\s+)?" + _PERSON_ID +
+    r"[^.!?;\n]{0,65}\b" + _TAKEOVER_ID + r"\b|"
+    r"\b(?:belum|tidak)\s+ada\s+yang\s+" + _TAKEOVER_ID + r"\b|"
+    r"\b(?:belum|tidak|tanpa)\s+(?:ada\s+)?" + _PERSON_ID + r"\s+pengganti(?:nya)?\b|"
+    r"\b" + _PERSON_ID + r"[^.!?;\n]{0,60}\b(?:belum|tidak)\s+(?:(?:bisa|dapat)\s+)?" + _TAKEOVER_ID + r"\b|"
+    r"\b(?:belum|tidak)\s+(?:diambil\s+alih|digantikan)[^.!?;\n]{0,35}\b" + _PERSON_ID + r"\b", re.I)
+_BARE_HANDOVER_ID = re.compile(
+    r"\b(?P<relative>yang\s+)?(?P<absence>tidak|belum)\s+(?:ada\s+)?"
+    r"(?:serah\s+terima|diserahterimakan|diserah\s+terimakan)"
+    r"(?P<shift>\s+shift(?:\s+(?:berikutnya|selanjutnya))?)?\b", re.I)
+_FAN_CLAUSE = re.compile(r"(?:\.(?=\d)|[^.。！？!?;；\n])+[.。！？!?;；\n]*")
+
+
+def _fan_scopes(text, lang):
+    fan = _FAN_ZH if lang == "zh" else _FAN_ID
+    return [m for m in _FAN_CLAUSE.finditer(text) if fan.search(m.group())]
+
+
+def _fan_is_switched_off(scope, lang):
+    fan = _FAN_ZH if lang == "zh" else _FAN_ID
+    off = _OFF_ZH if lang == "zh" else _OFF_ID
+    for action in off.finditer(scope):
+        prefix = scope[max(0, action.start() - 35):action.start()]
+        forbidden = (r"(?:不要|不得|不可|不能|禁止|別|别|勿|不用|不必|不需|無需|无需|不|未)\s*(?:再|先|隨意|随意)?\s*$"
+                     if lang == "zh" else
+                     r"\b(?:jangan|dilarang|tidak\s+(?:boleh|perlu|harus)|belum\s+(?:boleh|perlu|harus))\s+"
+                     r"(?:(?:lagi|dulu|segera|langsung|sembarangan|pernah|keras|sampai)\s+){0,2}$|"
+                     r"\b(?:tidak|belum|sudah|telah|pernah)\s+(?:akan\s+)?$")
+        if re.search(forbidden, prefix, re.I):
+            continue
+        if lang == "zh" and (re.search(r"(?:已經|已经|已|早就|剛剛|刚刚)(?:被)?\s*$", prefix)
+                             or re.match(r"(?:了|過|过)", scope[action.end():])):
+            continue  # A completed fan shutdown is not a new shutdown order.
+        for item in fan.finditer(scope):
+            if abs(item.start() - action.start()) > (12 if lang == "zh" else 70):
+                continue
+            if action.end() <= item.start():
+                between = scope[action.end():item.start()]
+                unrelated = (r"[，,。]|膠輪|胶轮|馬達|马达" if lang == "zh" else
+                             r"[,;]|\b(?:roda|mesin|motor|pompa|jangan|hidupkan|nyalakan)\b")
+                if not re.search(unrelated, between, re.I):
+                    return True
+            elif item.end() <= action.start():
+                between = scope[item.end():action.start()]
+                unrelated = (r"[，,。]|膠輪|胶轮|馬達|马达" if lang == "zh" else
+                             r"[,;]|\b(?:roda|motor|pompa|menyala|hidupkan|nyalakan)\b")
+                # Indonesian post-noun shutdown is passive: kipas dimatikan.
+                passive = lang == "zh" or action.group().lower() in {"dimatikan", "dinonaktifkan"}
+                if passive and not re.search(unrelated, between, re.I):
+                    return True
+    return False
+
+
+def _no_operator_takes_over(scope, lang):
+    pattern = _NO_TAKEOVER_ZH if lang == "zh" else _NO_TAKEOVER_ID
+    negated = (r"(?:不是|並非|并非|不代表)\s*$" if lang == "zh"
+               else r"\b(?:bukan(?:\s+berarti)?|tidak\s+berarti)\s*$")
+    return any(not re.search(negated, scope[max(0, m.start() - 25):m.start()], re.I)
+               for m in pattern.finditer(scope))
 
 
 def _weight_value(raw):
@@ -112,6 +182,11 @@ def relations(source, src, tgt):
     prose = _ATOM.sub(" ", value)
     question = is_direct_question(prose)
     rows = []
+    if not question and any(_no_operator_takes_over(m.group(), src)
+                            and _fan_is_switched_off(m.group(), src)
+                            for m in _fan_scopes(prose, src)):
+        rows.append({"operation": "operator_takeover_condition",
+                     "instruction": "Nobody is taking over this equipment. Preserve the lack of a PERSON/OPERATOR taking over (tidak/belum ada petugas yang mengambil alih; belum diambil alih operator pengganti), not just a missing handover procedure (tidak ada serah terima). Switch off the FAN under this condition. In shift/meeting notices this is a gap in operator coverage, not permanent lack of staffing, missing ERP records or an order to stop all production. Preserve an explicitly stated meeting in its own source unit; never invent a meeting/cause, shut down the machine or merge this condition with the separate idle-roller instruction."})
     writes = _WRITE_ZH if src == "zh" else _WRITE_ID
     for match in writes.finditer(prose):
         before = prose[:match.start()]
@@ -237,6 +312,13 @@ def validate(rows, candidate, src, tgt):
                 issues.append("chat_operation:lifting_limit_value_or_unit_changed")
             elif not any((_UPPER_ID if tgt == "id" else _UPPER_ZH).search(target[:m.start()]) for m in weights):
                 issues.append("chat_operation:lifting_limit_direction_changed")
+        elif op == "operator_takeover_condition":
+            owned = [m.group() for m in _fan_scopes(target, tgt)]
+            if not any(_fan_is_switched_off(scope, tgt) for scope in owned):
+                issues.append("chat_operation:takeover_fan_shutdown_missing_or_negated")
+            if not any(_fan_is_switched_off(scope, tgt) and _no_operator_takes_over(scope, tgt)
+                       for scope in owned):
+                issues.append("chat_operation:takeover_operator_condition_missing")
     return list(dict.fromkeys(issues))
 
 
@@ -283,4 +365,26 @@ def canonicalize(source, candidate, src, tgt):
             matches = list(_SPLIT_ID.finditer(result))
             if len(matches) == 1:
                 result = _SPLIT_ID.sub("dibongkar kembali", result, count=1)
+        elif row["operation"] == "operator_takeover_condition":
+            # Repair only the missing actor in one already-owned fan predicate.
+            # A meeting in another sentence is retained there, never injected.
+            clauses = _fan_scopes(result, "id")
+            if len(clauses) != 1 or sum(r["operation"] == row["operation"] for r in rows) != 1:
+                continue
+            clause, old = clauses[0], clauses[0].group()
+            matches = list(_BARE_HANDOVER_ID.finditer(old))
+            if len(matches) != 1 or not _fan_is_switched_off(old, "id") or _no_operator_takes_over(old, "id"):
+                continue
+            match = matches[0]
+            # Explicit records, paperwork, reports and equipment recipients
+            # require model understanding; they do not license actor insertion.
+            if re.search(r"\b(?:data|dokumen|formulir|catatan|laporan|ERP|bukan)\b", old, re.I):
+                continue
+            absence = match["absence"].lower()
+            fixed = ("yang " + absence + " diambil alih oleh petugas pengganti"
+                     if match["relative"] else absence + " ada petugas yang mengambil alih")
+            if match["shift"]:
+                fixed += " pada pergantian " + match["shift"].strip()
+            updated = old[:match.start()] + fixed + old[match.end():]
+            result = result[:clause.start()] + updated + result[clause.end():]
     return result

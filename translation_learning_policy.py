@@ -17,7 +17,7 @@ import factory_source_understanding as understanding
 import factory_station_catalog
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-10-13.1-chat-operation-learning'
+BUILD_ID = '2026-10-13.2-operator-takeover-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
@@ -28,6 +28,7 @@ _ADVICE = {
     'station_identity': 'Use the CURRENT plant ERP catalog and source grammar together. A station identifier remains the actor, recipient or location of its stated action, never an unstated quantity. Explicit measurements and counts remain quantities. Preserve grit/specification expressions unchanged and keep production completion distinct from data release.',
     'terminology': 'Products and named plants are translatable typed entities, not personal names. Use the CURRENT source-grounded glossary and approved variants. Never translate a plant proper name as its literal factory class or leave an ordinary product term in the source language. Keep entities in their own source sentence.',
     'handoff': 'Distinguish ERP data release from physical placement or general approval. A station code is not a quantity. Keep alternative causes as a question, and do not turn inspection not occurring into inability or refusal without source evidence.',
+    'operator_takeover': 'For 沒人交接/沒人接班/沒人接手, preserve that nobody is taking over the equipment, not only an absent handover procedure or record. Retain the conditional fan shutdown and the separate idle-roller instruction. A shift meeting is a temporary personnel-coverage context only when stated in the original source; never invent the meeting or a production shutdown.',
     'record': 'Distinguish a system record/field from physical material. Keep each value attached to its stated field and storage operation; never move a number into a physical warehouse.',
     'printed_storage': 'For the confirmed shorthand 存檔入庫都沒儲區, the storage location is missing from the first TAG print, not necessarily from the system field. 補印才有 inherits that object only from linked original context; never assume every reprint concerns storage.',
     'intake_record': 'In this plant intake plan, goods count as inventoried when their data is recorded. Preserve the stated goods weight in ton and distinguish it from a record count or a physical lifting instruction. Spread system entry times when requested; never add an unstated station ID.',
@@ -65,6 +66,8 @@ def category(issue):
             'overhead_changed_to_upstairs': 'permission',
             'lifting_limit_value_or_unit_changed': 'quantity',
             'lifting_limit_direction_changed': 'permission',
+            'takeover_operator_condition_missing': 'operator_takeover',
+            'takeover_fan_shutdown_missing_or_negated': 'operator_takeover',
         }.get(code.split(':', 2)[1])
     if code.startswith('factory_station:'):
         return 'quantity' if 'specification_changed' in code else 'station_identity'
