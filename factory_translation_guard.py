@@ -27,10 +27,12 @@ import factory_quantity_semantics as fqs_module
 import factory_message_semantics as fmr_module
 import factory_terminology as terminology_module
 import factory_reported_event_semantics as reported_event_semantics
+import factory_chat_operation_semantics as chat_operations
 import translation_alignment
+import factory_station_catalog
 
 FACTORY_TRANSLATION_GUARD_API_VERSION = 1
-FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-10-07.1-source-relation-alignment"
+FACTORY_TRANSLATION_GUARD_BUILD_ID = "2026-10-13.1-chat-operation-acceptance"
 
 _ROOT = Path(__file__).resolve().parent
 _DEFAULT_KNOWLEDGE = _ROOT / "factory_knowledge.json"
@@ -221,6 +223,7 @@ class FactoryTranslationGuard:
             "message_semantics_build": fmr_module.FACTORY_MESSAGE_SEMANTICS_BUILD_ID,
             "order_semantics_build": fmr_module.order_semantics.BUILD_ID,
             "source_alignment_build": translation_alignment.BUILD_ID,
+            "chat_operations_build": chat_operations.BUILD_ID,
             "regression": regression,
             "knowledge": knowledge_doc,
         }
@@ -243,7 +246,7 @@ class FactoryTranslationGuard:
     @property
     def asset_fingerprint(self) -> str:
         with self._lock:
-            return self._fingerprint
+            return hashlib.sha256((self._fingerprint + factory_station_catalog.fingerprint()).encode()).hexdigest()
 
     def exact_case(self, source: Any, src: Any, tgt: Any) -> Optional[Dict[str, Any]]:
         if not supports_direction(src, tgt):
@@ -362,13 +365,21 @@ class FactoryTranslationGuard:
 
     @staticmethod
     def _validate_quantities(source: str, candidate: str, src: str, tgt: str) -> List[str]:
-        issues: List[str] = []
+        limits = [row for row in chat_operations.relations(source, src, tgt)
+                  if row["operation"] == "lifting_limit"]
+        # The shared safety relation binds value, unit and upper-bound meaning;
+        # its decimal-comma support must not be undone by a loose substring
+        # check of the same weight further down this compatibility validator.
+        issues: List[str] = chat_operations.validate(limits, candidate, src, tgt)
+        limit_values = {(_normalize_number(row["value"]), row["unit"]) for row in limits}
         target_norm = _normalize_target(candidate)
         compact = _compact_target(candidate)
         for match in _NUMBER_UNIT_RE.finditer(source or ""):
             number = _normalize_number(match.group("number"))
             unit_raw = match.group("unit")
             unit_key = unit_raw.casefold()
+            if unit_key in {"ton", "噸", "吨", "公噸", "公吨", "公斤", "千克", "kg", "kilogram"} and (number, chat_operations._weight_unit(unit_key)) in limit_values:
+                continue
             if number and number not in compact.replace(",", "."):
                 issues.append(f"factory_guard:quantity_number_missing:{number}{unit_raw}")
                 continue

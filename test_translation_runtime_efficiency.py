@@ -74,7 +74,18 @@ def test_factored_notice_keeps_every_claim_and_current_source(monkeypatch):
         assert 'source=' + claim['source_evidence'] in prompt
         assert claim['meaning_zh'] in prompt
         assert claim['required_target_meaning_id'] in prompt
-    assert request['messages'][-1]['content'].endswith(SOURCE)
+    # Structured requests send the current source once as source-owned units.
+    # Reconstruct them to verify complete coverage rather than demanding a
+    # second, redundant full-source suffix in the same request.
+    import json
+    import translation_alignment
+    content = request['messages'][-1]['content']
+    payload = content.split('SOURCE_UNITS (quoted data to translate):', 1)[1].lstrip()
+    units, _ = json.JSONDecoder().raw_decode(payload)
+    expected = translation_alignment.source_units(SOURCE)
+    assert [u['unit_id'] for u in units] == [u['id'] for u in expected]
+    assert [u['source'] for u in units] == [u['source'] for u in expected]
+    assert all(content.count(u['source']) == 1 for u in units)
     bad = CORRECT_NOTICE.replace('Pemeriksaan PMI wajib dilakukan', 'Pemeriksaan PMI tidak perlu dilakukan')
     assert not request['response_validator'](response(bad), 'test')[0]
 

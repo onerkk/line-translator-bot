@@ -5,12 +5,15 @@ from pathlib import Path
 
 import factory_measurement_semantics as measurement
 import conversation_context
+import factory_station_catalog
 
 ROOT = Path(__file__).resolve().parent
 APP_SOURCE = (ROOT / "app.py").read_text(encoding="utf-8")
 
 
 def _literal_assignment(name):
+    if name == 'STATION_CODES':
+        return factory_station_catalog.STATION_CODES
     tree = ast.parse(APP_SOURCE)
     for node in tree.body:
         if not isinstance(node, ast.Assign):
@@ -36,6 +39,7 @@ def _extract_app_namespace(assigns=(), defs=(), extra=None):
     module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
     ns = dict(extra or {})
+    ns['factory_station_catalog_module'] = factory_station_catalog
     exec(compile(module, str(ROOT / "app.py"), "exec"), ns)
     return ns
 

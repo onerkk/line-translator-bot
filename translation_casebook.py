@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-09-07.3-reference-relevance-cost"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-10-10.1-relevance-adaptive-references"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -632,7 +632,12 @@ def _rank_references(query, src, tgt, direction_cases, glossary, min_score):
 
 def _select_distinct_references(ranked, limit):
     """Cover different relevant topics instead of repeating one example family."""
-    remaining = list(ranked)
+    strongest = max((item.score for item in ranked if item.guarded), default=0.0)
+    # A source-sense match is better evidence than generic overlap. Do not fill
+    # spare prompt slots with weak, untriggered workflows just to reach limit.
+    # Keep complementary guarded matches and strong human/alias paraphrases.
+    floor = min(0.8, strongest * 0.5) if strongest >= 1.0 else 0.0
+    remaining = [item for item in ranked if item.guarded or item.score >= floor]
     selected, covered = [], set()
     while remaining and len(selected) < limit:
         def utility(item):

@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-09-10.9-source-grounded-success-markers"
+TRANSLATION_EXTRAS_VERSION = "2026-10-13.1-source-owned-question-markers"
 
 
 
@@ -490,24 +490,8 @@ def _semantic_indexes(units: list[str]) -> list[int]:
 def _analysis_for_question(source: str, structured: bool) -> ToneAnalysis | None:
     if structured or not source.strip():
         return None
-    # Question punctuation is reliable. Interrogative words without punctuation
-    # are accepted only for short chat-like units.
-    has_question = bool(re.search(r"[？?]", source))
-    if not has_question and len(source.strip()) <= 70:
-        # Do not mistake a *reported* question ("主管詢問為什麼…") for the
-        # current speaker asking the reader something.
-        reported_question = bool(re.search(
-            r"(?:詢問|問到|問了|表示|回報|說).{0,18}(?:為什麼|怎麼|何時|哪裡)|"
-            r"\b(?:menanyakan|bertanya|mengatakan|melaporkan).{0,30}"
-            r"(?:mengapa|kenapa|bagaimana|kapan|di\s+mana)\b",
-            source,
-            re.I,
-        ))
-        has_question = (not reported_question) and bool(re.search(
-            r"(?:嗎|呢|要不要|需不需要|可不可以|有沒有|為什麼|怎麼|何時|哪裡)|"
-            r"\b(?:apakah|kenapa|mengapa|bagaimana|kapan|di\s+mana|boleh|perlu)\b",
-            source, re.I,
-        ))
+    from factory_chat_operation_semantics import is_direct_question
+    has_question = is_direct_question(source)
     if not has_question:
         return None
     return ToneAnalysis(
@@ -1002,6 +986,11 @@ def build_expression_plan(
         # mapped source cue for languages not covered by local target patterns.
         source_analysis = analyze_message_tone(source_unit, source_language)
         target_analysis = analyze_message_tone(target_unit, None)
+        # Translation wording cannot create a question absent from the source.
+        # Non-question functional cues (limits, packing, schedules) may still
+        # choose the most relevant sentence marker as before.
+        if target_analysis.primary == "question" and source_analysis.primary != "question":
+            target_analysis = source_analysis
         # A non-neutral target cue is more precise than the proportionally mapped
         # source cue. This prevents one long source sentence about packaging and
         # limits from stamping the same icon onto every expanded target sentence.

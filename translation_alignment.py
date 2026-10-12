@@ -12,8 +12,10 @@ import json
 import re
 from typing import Any, Mapping
 import factory_terminology
+import factory_station_catalog
+import factory_chat_operation_semantics as chat_operations
 
-BUILD_ID = "2026-10-07.1-source-relation-contract"
+BUILD_ID = "2026-10-13.1-chat-operation-unit-contract"
 _SUPPORTED = {("zh", "id"), ("id", "zh")}
 _ATOMS = re.compile(r"https?://\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]+|__[A-Z0-9_]+__", re.I)
 _BREAK = re.compile(r"\n+|[。！？!?]+|(?<!\d)\.(?=\s|$)")
@@ -48,6 +50,8 @@ _DETACH_ID = re.compile(r"\b(?:diambil|mengambil|dilepas|dilepaskan|melepas|mele
 _DATA_RELEASE_ID = re.compile(r"\b(?:release|rilis|merilis|dirilis|di-?release|pelepasan)\s+(?:data|record)\b|\b(?:mengubah|ubah)\s+status\b", re.I)
 _APPROVAL_ID = r"\b(?:disetujui|persetujuan|diizinkan|izin|lolos|diperbolehkan|boleh\s+dilanjutkan)\b"
 _QUALITY_ID = r"\b(?:abnormalitas|ketidaksesuaian|cacat|kualitas|klarifikasi|masalah)\b"
+_TRANSPORT_PERMISSION_ZH = re.compile(r"(?<![不未])可以(?=[^。！？!?\n；;]{0,30}(?:上車|上车|吊|搬|送|運送|运送))")
+_URGENCY_ZH = re.compile(r"立即|馬上|马上|立刻|趕快|赶快|儘快|尽快|盡快|盡速|尽速|急迫|緊急|紧急")
 
 
 def _lang(value: Any) -> str:
@@ -98,6 +102,35 @@ def build_contract(source: Any, src: Any, tgt: Any, *, glossary: Mapping | None 
     glossary = factory_terminology.approved_glossary() if glossary is None else glossary
     for unit in contract["units"]:
         value = unit["source"]
+        for fact in chat_operations.relations(value, src, tgt):
+            contract["constraints"].append({"unit_id": unit["id"],
+                "kind": "chat_operation:" + fact["operation"], "source_span": value, **fact})
+        for fact in factory_station_catalog.station_facts(value, src):
+            contract["constraints"].append({"unit_id": unit["id"], "kind": "station_identity",
+                "code": fact["code"], "role": fact["role"], "event": fact["event"],
+                "instruction": "Keep this catalog station identifier attached to its own action and semantic role. It is not a quantity. Do not exchange actor, recipient and location or borrow a different source unit's action."})
+        for fact in factory_terminology.factory_entity_facts(value, src, glossary=glossary):
+            contract["constraints"].append({"unit_id": unit["id"], "kind": "factory_entity",
+                "canonical_source": fact["source"], "targets": fact["targets"],
+                "instruction": "Preserve this " + fact["kind"] + " in its own source unit; use an approved target term, not a person name or a literal factory class."})
+        # Bind professional roles to their own sentence. A division-head term
+        # somewhere else in the notice cannot excuse a missing chief engineer.
+        for role in factory_terminology.organization_role_facts(value, src):
+            if role["key"] not in {"chief_engineer", "deputy_chief_engineer", "head_technician"}:
+                continue
+            contract["constraints"].append({"unit_id": unit["id"], "kind": "organization_role",
+                "role_key": role["key"], "source_span": role[src], "target": role[tgt],
+                "instruction": "Preserve this professional role and its actor; chief engineer (Insinyur Kepala) and head technician (kepala teknisi) are different roles. A following/preceding personal name stays exactly as in this source, never romanized."})
+        if src == "zh":
+            if _TRANSPORT_PERMISSION_ZH.search(value):
+                contract["constraints"].append({"unit_id": unit["id"], "kind": "transport_permission",
+                    "source_urgent": bool(_URGENCY_ZH.search(value)),
+                    "instruction": "可以 before material movement states permission/readiness (bisa/boleh/dapat/silakan), not an unconditional immediate command. Preserve any completion prerequisite and come/go direction. Do not add segera/langsung unless the source explicitly states urgency."})
+            for person in factory_terminology.professional_person_facts(value):
+                if person["role_key"]:
+                    contract["constraints"].append({"unit_id": unit["id"], "kind": "professional_actor",
+                        "name": person["name"], "role_key": person["role_key"],
+                        "instruction": "Keep this source name bound to its own professional role; never swap titles between people."})
         if src == "zh":
             for match in factory_terminology.get_engine(glossary).match_zh(value):
                 row = glossary.get(match.source_term) or {}
@@ -147,16 +180,33 @@ def build_contract(source: Any, src: Any, tgt: Any, *, glossary: Mapping | None 
                 "instruction": "This is work allocation among packing stations, not fluid/pipe flow. Preserve the operated station count, the product being packed separately, the condition and any 盡量/usahakan effort qualifier. Do not invent which stations, equipment or new priorities."})
     # Align relational risks and multi-sentence factory notices, including OCR.
     # Atomic ordinary chat retains the same fast provider path.
-    contract["aligned"] = bool(contract["constraints"] or (
-        _FACTORY.search(source) and len(contract["units"]) >= 2))
+    relational = [row for row in contract["constraints"]
+                  if row["kind"] not in {"organization_role", "professional_actor", "station_identity"}]
+    # A single professional-title sentence needs the same local meaning/name
+    # checks, but does not benefit from a JSON segment wrapper. Multi-sentence
+    # notices and other relational risks retain source-unit alignment.
+    # One atomic station fact does not justify a new JSON wrapper for a short
+    # status reply. Multiple station relationships benefit from unit ownership.
+    station_links = sum(row["kind"] == "station_identity" for row in contract["constraints"])
+    other_facts = any(row["kind"] != "station_identity" for row in contract["constraints"])
+    contract["aligned"] = bool(relational or (
+        (_FACTORY.search(source) or other_facts or station_links > 1) and len(contract["units"]) >= 2))
     return contract
 
 
 def semantic_prompt(contract: Mapping) -> str:
     if not contract.get("constraints"):
         return ""
-    data = list(contract["constraints"])
-    return ("<source_modifier_contract>\n" + json.dumps(data, ensure_ascii=False) +
+    # Validation metadata stays local. The provider already receives the whole
+    # source; repeat each constraint's meaning once, then only its bound facts.
+    data, rules = [], {}
+    for row in contract["constraints"]:
+        kind = row["kind"]
+        rules.setdefault(kind, row.get("instruction", ""))
+        data.append({key: value for key, value in row.items()
+                     if key not in {"instruction", "source_span"}})
+    return ("<source_modifier_contract>\n" + json.dumps(
+            {"facts": data, "rules": rules}, ensure_ascii=False, separators=(",", ":")) +
             "\nResolve actor, role/rank, action, product, station, condition and scope together. "
             "A production 瓶頸 is a production bottleneck; 專案追蹤 describes dedicated tracking. "
             "Use prior original messages only to resolve references, never to add unstated facts. "
@@ -196,14 +246,50 @@ def translation_issues(contract: Mapping, target: Any, *, segments: Mapping | No
     """Conservative necessary checks; these are not a proof of full accuracy."""
     issues, target = [], str(target or "")
     src, tgt = contract.get("src"), contract.get("tgt")
+    if segments is None:
+        issues.extend(factory_station_catalog.translation_issues(contract.get("source", ""), target, src, tgt))
+    else:
+        for unit in contract.get("units", ()):
+            issues.extend(factory_station_catalog.translation_issues(
+                unit["source"], str(segments.get(unit["id"], "")), src, tgt))
     for row in contract.get("constraints", ()):
         text = str(segments.get(row["unit_id"], "")) if segments is not None else target
-        if row["kind"] == "term_sense":
+        if row["kind"].startswith("chat_operation:"):
+            issues.extend(chat_operations.validate([row], text, src, tgt))
+        elif row["kind"] == "factory_entity":
+            present = (any(factory_terminology._id_phrase_pattern(term).search(text) for term in row["targets"])
+                       if tgt == "id" else any(term in text for term in row["targets"]))
+            if not present:
+                issues.append("semantic:factory_entity_missing:" + row["canonical_source"])
+        elif row["kind"] == "term_sense":
             matches = [m for term in row["targets"] for m in factory_terminology._id_phrase_pattern(term).finditer(text)]
             if not matches:
                 issues.append("semantic:confirmed_term_sense_missing:" + row["canonical_source"])
             elif row.get("release_actor") and all(re.search(r"\bke\s+(?:pihak\s+)?$", text[:m.start()], re.I) for m in matches):
                 issues.append("semantic:station_actor_changed_to_data_destination")
+        elif row["kind"] == "organization_role":
+            keys = {role["key"] for role in factory_terminology.organization_role_facts(text, tgt)}
+            if row["role_key"] not in keys:
+                issues.append("semantic:organization_role_missing:" + row["role_key"])
+        elif row["kind"] == "professional_actor":
+            # Accept role-before-name and name-before-role word order. A role
+            # across a conjunction or a different name is not this person's.
+            linked = False
+            expected = row["role_key"]
+            for name in re.finditer(re.escape(row["name"]), text):
+                for start, end, key in factory_terminology.organization_role_spans(text, tgt):
+                    gap = (text[end:name.start()] if end <= name.start()
+                           else text[name.end():start] if name.end() <= start else None)
+                    if gap is not None and len(gap) <= 30 and re.fullmatch(
+                            r"[\s,:：()（）-]*(?:(?:Pak|Bapak|Ibu|Bu)\s+)?", gap, re.I) and key == expected:
+                        linked = True
+            if not linked:
+                issues.append("semantic:professional_name_role_changed:" + row["name"])
+        elif row["kind"] == "transport_permission":
+            if not re.search(r"\b(?:bisa|boleh|dapat|silakan)\b", text, re.I):
+                issues.append("semantic:movement_permission_missing")
+            if not row["source_urgent"] and re.search(r"\b(?:segera|langsung|secepatnya)\b", text, re.I):
+                issues.append("semantic:movement_urgency_invented")
         elif row["kind"] == "available_assistance":
             if not _PACK_ID.search(text) or not _SOME_ID.search(text):
                 issues.append("semantic:available_packing_assistance_missing")
@@ -281,6 +367,7 @@ def translation_issues(contract: Mapping, target: Any, *, segments: Mapping | No
 class AlignmentResult:
     text: str
     issues: tuple[str, ...]
+    original_text: str = ""
 
     @property
     def ok(self) -> bool:
@@ -329,14 +416,25 @@ def decode_response(raw: Any, contract: Mapping) -> AlignmentResult:
         # A structured object missing a source unit is not a translation.
         # Never turn its remaining fragments into an apparently complete reply.
         return AlignmentResult("", tuple(dict.fromkeys(issues)))
+    original = "".join(values.get(u["id"], "") + u["separator"] for u in units).strip()
+    # Normalize every source-owned predicate before acceptance. Previously the
+    # structured response path normalized only titles/entities, so a repair
+    # available to the final text path was rejected prematurely by providers.
+    from translation_quality_gate import canonicalize_source_terms, validate_translation
+    for unit in units:
+        # A source-owned segment makes an unambiguous title correction local,
+        # including notices containing multiple professional roles overall.
+        values[unit["id"]] = factory_terminology.canonicalize_organization_translation(
+            unit["source"], values[unit["id"]], contract["src"], contract["tgt"])
+        values[unit["id"]] = canonicalize_source_terms(
+            unit["source"], values[unit["id"]], contract["src"], contract["tgt"])
     rendered = "".join(values.get(u["id"], "") + u["separator"] for u in units).strip()
     issues.extend(translation_issues(contract, rendered, segments=values))
     # Presence in another sentence cannot excuse losing or swapping a code,
     # quantity, negation, person or unit in this source-owned sentence.
-    from translation_quality_gate import validate_translation
     for unit in units:
         candidate = values.get(unit["id"], "")
         if candidate:
             report = validate_translation(unit["source"], candidate, contract["src"], contract["tgt"])
             issues.extend("alignment:" + unit["id"] + ":" + defect for defect in report.hard_issues)
-    return AlignmentResult(rendered, tuple(dict.fromkeys(issues)))
+    return AlignmentResult(rendered, tuple(dict.fromkeys(issues)), original)

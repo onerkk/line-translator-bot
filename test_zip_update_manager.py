@@ -45,6 +45,29 @@ def test_inspect_strips_known_project_root_and_classifies_files(tmp_path):
     assert len(summary["plan_sha256"]) == 64
 
 
+@pytest.mark.parametrize("wrapper", ["line-translator-changed-20261010", "line-translator-changed-20261012", "line-translator-changed-files-20261013-review"])
+def test_dated_changed_file_wrapper_updates_running_root_modules(tmp_path, wrapper):
+    path = _make_zip(tmp_path / "dated.zip", [(wrapper + "/app.py", b"new"),
+        (wrapper + "/tests/data/example.json", b"{}")])
+    tree = {"app.py": {"sha": _git_blob_sha(b"old"), "mode": "100644", "type": "blob"}}
+    plan, _ = zu.inspect_zip_path(path, tree, "onerkk/line-translator-bot")
+    assert [(p.path, p.change) for p in plan] == [("app.py", "modified"), ("tests/data/example.json", "added")]
+
+
+@pytest.mark.parametrize("folder", ["static", "templates", "tests", "factory_data"])
+def test_real_single_directory_project_paths_are_never_unwrapped(tmp_path, folder):
+    path = _make_zip(tmp_path / "assets.zip", [(folder + "/example.txt", b"x")])
+    plan, _ = zu.inspect_zip_path(path, {}, "onerkk/line-translator-bot")
+    assert [p.path for p in plan] == [folder + "/example.txt"]
+
+
+def test_mixed_dated_wrapper_and_root_layout_is_rejected(tmp_path):
+    path = _make_zip(tmp_path / "mixed.zip", [("line-translator-changed-20261013/app.py", b"a"), ("app.py", b"b")])
+    with pytest.raises(zu.ZipUpdateError) as error:
+        zu.inspect_zip_path(path, {}, "onerkk/line-translator-bot")
+    assert error.value.code == "mixed_update_roots"
+
+
 @pytest.mark.parametrize("name", [
     "../escape.py",
     "/absolute.py",

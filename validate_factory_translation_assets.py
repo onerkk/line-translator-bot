@@ -21,12 +21,14 @@ import factory_measurement_semantics as measurement
 import factory_message_semantics as message_semantics
 import translation_casebook as casebook
 import translation_memory as memory
+import factory_station_catalog as station_catalog
 
 ROOT = Path(__file__).resolve().parent
 REQUIRED_JSON = (
     "factory_knowledge.json",
     "factory_translation_regression.json",
     "glossary_data.json",
+    "factory_station_data.json",
 )
 REQUIRED_PYTHON = (
     "app.py",
@@ -37,6 +39,7 @@ REQUIRED_PYTHON = (
     "translation_casebook.py",
     "factory_knowledge.py",
     "factory_terminology.py",
+    "factory_station_catalog.py",
     "glossary_policy.py",
     "glossary_enforcement.py",
     "translation_quality_gate.py",
@@ -84,6 +87,21 @@ def audit() -> Dict[str, Any]:
             py_compile.compile(str(ROOT / name), doraise=True)
         except Exception as exc:
             errors.append(f"compile:{name}:{type(exc).__name__}:{exc}")
+
+    station_health = {}
+    try:
+        catalog = station_catalog.catalog()
+        station_health = {"build_id": station_catalog.BUILD_ID,
+                          "asset_fingerprint": station_catalog.fingerprint(),
+                          "department_count": len(catalog["departments"]),
+                          "station_name_count": len(catalog["names"]),
+                          "equipment_count": len(catalog["equipment"]),
+                          "ambiguous_equipment_count": len(catalog.get("equipment_ambiguities", {}))}
+        expected = _literal_module_assignments("app.py").get("_EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID")
+        if expected != station_catalog.BUILD_ID:
+            errors.append("station_catalog_build_mismatch")
+    except Exception as exc:
+        errors.append(f"station_catalog:{type(exc).__name__}:{exc}")
 
     try:
         health = guard.reload()
@@ -249,6 +267,7 @@ def audit() -> Dict[str, Any]:
         "guard": health,
         "measurement_semantics": measurement_health,
         "message_semantics": message_semantics_health,
+        "station_catalog": station_health,
         "regression": {
             "case_count": len(regression.get("cases", []) or []),
             "verified_targets_accepted": verified_count,

@@ -2,6 +2,7 @@ import ast
 import json
 import re
 import unittest
+import factory_station_catalog
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -36,6 +37,7 @@ class StationAliasRootFixTests(unittest.TestCase):
         ast.fix_missing_locations(module)
         ns = {
             're': re,
+            'factory_station_catalog_module': factory_station_catalog,
             '_SEMANTIC_CONTRACT_VERSION': 'test',
             '_classify_qing_sense_zh_id': lambda text: None,
         }

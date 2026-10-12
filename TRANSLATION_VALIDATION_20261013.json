@@ -1,0 +1,253 @@
+{
+  "review_date": "2026-10-13",
+  "source_archive": "line-translator-bot-main.zip",
+  "source_archive_sha256": "9bd5e2212fdc9029cffd6bc3e9e1572c68a7ddc7a7efbdf38033109ae4d40856",
+  "scope": "Only changed or added files relative to the uploaded archive; project-relative ZIP paths",
+  "full_regression": {
+    "passed": 4068,
+    "warnings": 2,
+    "subtests_passed": 450,
+    "seconds": 195.01,
+    "external_network_blocked": true
+  },
+  "patch_overlay_regression": {
+    "passed": 96,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 5.45
+  },
+  "changed_python_compile_passed": 24,
+  "assets": {
+    "ok": true,
+    "guard_self_test": {
+      "approved_examples_validated": 65,
+      "known_bad_examples_rejected": 19,
+      "ok": true,
+      "regression_cases": 30
+    },
+    "station_catalog": {
+      "ambiguous_equipment_count": 2,
+      "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
+      "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+      "department_count": 7,
+      "equipment_count": 82,
+      "station_name_count": 63
+    }
+  },
+  "verification_limits": [
+    "Provider outputs are fixtures; no paid translation API or live LINE/Render deployment was tested.",
+    "The physical/ERP meaning of 先放一把 and the exact handling after unpacking remain context-dependent."
+  ],
+  "files": [
+    {
+      "path": "UPDATE_20261013_TRANSLATION_REVIEW.md",
+      "change": "added",
+      "size_bytes": 3749,
+      "sha256": "3421af8555a546c8a6d0af014eaf5cc49424b454b754c127b892aee352a5ad45",
+      "base_sha256": null
+    },
+    {
+      "path": "app.py",
+      "change": "modified",
+      "size_bytes": 2271291,
+      "sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff",
+      "base_sha256": "d41bd3b562e569a442a8cc0ad6b575ac53976cb6e31b564fbe33545cac1ffd56"
+    },
+    {
+      "path": "factory_chat_operation_semantics.py",
+      "change": "added",
+      "size_bytes": 19487,
+      "sha256": "a169ee146b5734b09fb11011689ac8c79576d823cf5930d081578d1d754c30db",
+      "base_sha256": null
+    },
+    {
+      "path": "factory_knowledge.json",
+      "change": "modified",
+      "size_bytes": 174786,
+      "sha256": "72e7e8f52679cf2d65e1a5214bc1006d438d7f6b3246b42a032f29ad540afb93",
+      "base_sha256": "a12d4aebcd7cdd5219887340b90fbbc7d46a4e46a52e851287fcb8a68431ffb1"
+    },
+    {
+      "path": "factory_semantic_audit.py",
+      "change": "modified",
+      "size_bytes": 135412,
+      "sha256": "5a2ecde529de2521cb99303e891eb0150fda32add562a04923bc17a39d6c2dc7",
+      "base_sha256": "e1d745816f7a77c01a7773115795700989107452617bf333ee37397549a24286"
+    },
+    {
+      "path": "factory_station_catalog.py",
+      "change": "added",
+      "size_bytes": 14948,
+      "sha256": "2709c1244a25fcd63bdbb6aa0116163420f70a1c2fdc294dda6696ee7bdcdb8d",
+      "base_sha256": null
+    },
+    {
+      "path": "factory_station_data.json",
+      "change": "added",
+      "size_bytes": 17392,
+      "sha256": "b1be733a55cbb209af2d5f5925ffc3442ff7040b27cb1999187bcd4a9247cf7f",
+      "base_sha256": null
+    },
+    {
+      "path": "factory_terminology.py",
+      "change": "modified",
+      "size_bytes": 58218,
+      "sha256": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e",
+      "base_sha256": "f62f005561bbf7846e5f9839d9f29a1421d33fffd51ef263c9a6494c280f4274"
+    },
+    {
+      "path": "factory_translation_guard.py",
+      "change": "modified",
+      "size_bytes": 28605,
+      "sha256": "0b1d2a68cc247c3654c6a2a4a60e7388906922ff14683c20ecc2e09cde9f9b30",
+      "base_sha256": "f11505da28b835518823fc4c66932caeb199390d7dabedc4625d02646666484d"
+    },
+    {
+      "path": "glossary_data.json",
+      "change": "modified",
+      "size_bytes": 114034,
+      "sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a",
+      "base_sha256": "7540e44acdd63e68fcfcb6bccc11b955232549023276a04ad8c4110b1c75528e"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "change": "modified",
+      "size_bytes": 34852,
+      "sha256": "446900c9248d2a24d83c2cd621073c0448f7e9a95b51879c273ca679d2a2447c",
+      "base_sha256": "67b11302820282c5dbfa276e874f0867f87be6c0ec587bd69a40079f0448e4f1"
+    },
+    {
+      "path": "test_factory_measurement_semantics_root_fix.py",
+      "change": "modified",
+      "size_bytes": 19443,
+      "sha256": "8cb3dc5dc5cb8b19ab7319a97cf5757518008232686210334fa083aa0eda6325",
+      "base_sha256": "0954a7e0b1100f2056a977c761206e5e7f502d56c354e26608985f5e7f589242"
+    },
+    {
+      "path": "test_station_alias_root_fix.py",
+      "change": "modified",
+      "size_bytes": 5135,
+      "sha256": "9cf40974a6a685326945a8cbe5f80b035097de5e0997959c701b40be9f83debc",
+      "base_sha256": "b9b0e5ccb50e68eea3fddc56e6021ebd283b0824af25edd2ff7753b5e085a89a"
+    },
+    {
+      "path": "test_translation_alignment.py",
+      "change": "modified",
+      "size_bytes": 14877,
+      "sha256": "0bc2b1ffa82f17decd9558953a65df5d557f8d6d723cc64a31c906ab9a128d02",
+      "base_sha256": "88e5c482cb9a31cb0ac200456dc89d37055e422942049e89c7674e47396a4c28"
+    },
+    {
+      "path": "test_translation_review_20261010.py",
+      "change": "added",
+      "size_bytes": 13687,
+      "sha256": "3cfa60fe138e557cd8a41eee1fe0e2be235647c1e8d5cc4a69b20714dd38ae62",
+      "base_sha256": null
+    },
+    {
+      "path": "test_translation_review_20261011.py",
+      "change": "added",
+      "size_bytes": 12030,
+      "sha256": "cede0161bc323375142fb93675790b5ca51ab3bb8be2d9fde691e4dbef11bd99",
+      "base_sha256": null
+    },
+    {
+      "path": "test_translation_review_20261013.py",
+      "change": "added",
+      "size_bytes": 20141,
+      "sha256": "e329a1dce6bb1e0206015d873ee8bd5d3afaad95e1ef06bf49f0bf6db7bc2a70",
+      "base_sha256": null
+    },
+    {
+      "path": "test_translation_runtime_efficiency.py",
+      "change": "modified",
+      "size_bytes": 9963,
+      "sha256": "fbd0a57ac4d456afc131e8adced5acacca8230d921d97ec500c8a4b028d9f1e4",
+      "base_sha256": "2fce3673cd1be670e98b4b99d2a9c5277a020ced4b7e8523a73996fb7b5a5783"
+    },
+    {
+      "path": "test_translation_station_catalog_20261012.py",
+      "change": "added",
+      "size_bytes": 13158,
+      "sha256": "0091294a8085e35e421efb3bc423e1df28541a98f154d2ee047c31923181641a",
+      "base_sha256": null
+    },
+    {
+      "path": "test_zip_update_manager.py",
+      "change": "modified",
+      "size_bytes": 8787,
+      "sha256": "ab36d1f6108845c13f1dc042bdc296c4c749d059622dc518e72ab15028d72798",
+      "base_sha256": "52d520e89c9032a7b30833c4871669bbcb723ad6ae5f57c2f2b144ff614197a5"
+    },
+    {
+      "path": "tests/data/translation_review_20261010.json",
+      "change": "added",
+      "size_bytes": 2188,
+      "sha256": "534671ac30f131a4bbf4224cfa9e7fc0cef97f740fe12f5edb09d6df2da4ddad",
+      "base_sha256": null
+    },
+    {
+      "path": "tests/data/translation_review_20261011.json",
+      "change": "added",
+      "size_bytes": 2311,
+      "sha256": "8fe10aa75d8a2410e76c9d2407dd5f317451aa47745dc59a6815c133886c240f",
+      "base_sha256": null
+    },
+    {
+      "path": "translation_alignment.py",
+      "change": "modified",
+      "size_bytes": 31208,
+      "sha256": "fd2cdfec5636b89b12587d95774ce1d1fdeab67d5f54cabd0451f6a5f64940eb",
+      "base_sha256": "2bb371bca1f08eeb6f18953502fdb77cd990347711ff2074dfbd784b90307b98"
+    },
+    {
+      "path": "translation_casebook.py",
+      "change": "modified",
+      "size_bytes": 41563,
+      "sha256": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70",
+      "base_sha256": "eb30fb5d78e95082e39e01311876d0275f6bbaeb93d8245860af85c3ac551c6c"
+    },
+    {
+      "path": "translation_extras.py",
+      "change": "modified",
+      "size_bytes": 63690,
+      "sha256": "6a1ba1863be0c2e674963ff12fb6a7b449845ca607f0b04f2410b0ef860fd487",
+      "base_sha256": "eaab366f545352c2e52f4fede54200890ae63074a2f3a1782515b2d79e5a8828"
+    },
+    {
+      "path": "translation_learning_policy.py",
+      "change": "modified",
+      "size_bytes": 18999,
+      "sha256": "55297d47023ead5141e74d70164a36a5a9adeb848f26ca4c41fb99d3a8ce811a",
+      "base_sha256": "69e2d319e1562ec9676e93dc2468082b4e5cb83ad8dbd335b830e7393412a4a4"
+    },
+    {
+      "path": "translation_privacy.py",
+      "change": "modified",
+      "size_bytes": 9599,
+      "sha256": "1cafb6ec353c0c3966eeed04a7b90230517a4b6ff7dd268409287b14073f1fb7",
+      "base_sha256": "47389517fefd0a5485c7750c524542bda8a829396c5f82b677d13cf5d5b1aa09"
+    },
+    {
+      "path": "translation_quality_gate.py",
+      "change": "modified",
+      "size_bytes": 129589,
+      "sha256": "3d9c975c22f2b44b8125ea7ce44d2ba8d9ede8ec1e336ee078eadb4c3f2adda6",
+      "base_sha256": "d4660a84714abe254b7c13420cd9f87272bddd02a5fdc386133eec15c376ce63"
+    },
+    {
+      "path": "validate_factory_translation_assets.py",
+      "change": "modified",
+      "size_bytes": 12567,
+      "sha256": "4967a8948ab355b12ade57c8c74d4d4bd404b4d4995f44c2fe2b7fc81bbe0b21",
+      "base_sha256": "d2b9149dcddcac03a5dbf249e3a67813183d76f95c85ff23d445084c3226186a"
+    },
+    {
+      "path": "zip_update_manager.py",
+      "change": "modified",
+      "size_bytes": 30457,
+      "sha256": "42061f3dd253fe32b7f7533100a8be6915e30b091ce99ee414f1c3942ae86764",
+      "base_sha256": "f14882579958ab97c660b8bd22fb16384195eefdaba71f3f2abb0a9231087c39"
+    }
+  ]
+}

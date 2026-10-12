@@ -23,7 +23,7 @@ import factory_terminology as terminology
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 FACTORY_SEMANTIC_AUDIT_API_VERSION = 1
-FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-09-19.1-station-handoff-scope"
+FACTORY_SEMANTIC_AUDIT_BUILD_ID = "2026-10-13.1-source-owned-notice-predicates"
 
 _MACHINE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,4}\s*-?\s*\d{1,4})(?![A-Za-z0-9])")
 _EXPLICIT_CRANE_ZH = ("天車", "吊車", "起重機", "行車", "crane", "derek")
@@ -835,7 +835,7 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     )
     flags["own_shift"] = _contains_any(compact, ("我們班", "我们班", "本班", "自己班"))
     flags["recent_many_cases"] = _search_any(compact, (
-        r"(?:這陣子|这阵子|最近|近期|近來|近来).{0,12}(?:太多|很多|不少)(?:件|次|案例|異常|异常)?",
+        r"(?:這陣子|这阵子|最近|近期|近來|近来).{0,12}(?:太多|很多|不少)(?:同類|同类|這類|这类|此類|此类)?(?:件|次|案例|案件|異常|异常|事故|問題|问题)",
         r"(?:太多|很多|不少)(?:件|次|案例|異常|异常).{0,12}(?:這陣子|这阵子|最近|近期|近來|近来)",
     ))
     flags["customer_complaint"] = _contains_any(compact, (
@@ -848,6 +848,8 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
     flags["sanction"] = _contains_any(compact, (
         "懲處", "惩处", "處分", "处分", "被罰", "被罚", "受罰", "受罚",
     ))
+    flags["sanction_received"] = bool(re.search(r"(?:被|遭|受到|遭到|受)(?:懲處|惩处|處分|处分|罰|罚)", compact))
+    flags["sanction_management"] = bool(re.search(r"(?:用|靠|以)(?:懲處|惩处|處分|处分)(?:來|来)?(?:管理|約束|约束)", compact))
     flags["severe_consequence"] = _contains_any(compact, (
         "會很傷", "会很伤", "很嚴重", "很严重", "後果很重", "后果很重",
         "影響很大", "影响很大", "代價很大", "代价很大",
@@ -1251,8 +1253,12 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         add("customer_complaint_risk", "一旦客訴", "若形成客戶申訴或抱怨", "jika sampai ada keluhan/komplain pelanggan")
     if flags["cannot_help"]:
         add("speaker_cannot_help", "我也幫不上忙", "發生客訴後，說話者也無法協助處理或保護", "saya juga tidak bisa/dapat membantu")
-    if flags["sanction"]:
+    if flags["sanction_management"]:
+        add("sanction_management", "用懲處來管理", "談論主管以懲處管理人員的方式；不表示已有人受到處分", "menggunakan sanksi/hukuman untuk mengelola pekerja")
+    if flags["sanction_received"]:
         add("sanction_risk", "被懲處／處分", "可能受到公司懲處或處分", "kena/dikenai/mendapat sanksi")
+    elif flags["sanction"] and not flags["sanction_management"]:
+        add("sanction_reference", "懲處／處分", "保留原文對懲處的提及與語氣，不自行增加已受處分的事件", "sanksi/hukuman, with the source actor and modality")
     if flags["severe_consequence"]:
         add("severe_consequence", "會很傷／後果很重", "受到懲處的後果或影響會很嚴重", "akibat/dampaknya akan sangat berat")
 
@@ -2419,11 +2425,19 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
         if not complaint_to_help:
             issues.append("factory_semantic_audit:complaint_cannot_help_relation_missing")
 
-    if flags.get("sanction") and not _has_any_target(low, (
+    if flags.get("sanction") and not re.search(r"\b(?:sanksi|hukuman)\b", low):
+        issues.append("factory_semantic_audit:sanction_missing")
+    if flags.get("sanction_received") and not _has_any_target(low, (
         "kena sanksi", "dikenai sanksi", "mendapat sanksi", "terkena sanksi",
         "mendapat hukuman", "dikenai hukuman",
     )):
         issues.append("factory_semantic_audit:sanction_missing")
+    if flags.get("sanction_management") and not _same_clause_has(low, (
+        ("menggunakan", "memakai", "memberikan", "memberi"),
+        ("sanksi", "hukuman"),
+        ("mengelola", "mengatur", "mengendalikan", "mendisiplinkan"),
+    )):
+        issues.append("factory_semantic_audit:sanction_management_relation_missing")
     if flags.get("severe_consequence") and not _has_any_target(low, (
         "akibatnya akan sangat berat", "dampaknya akan sangat berat",
         "akibatnya sangat berat", "dampaknya sangat berat",

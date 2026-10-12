@@ -37,14 +37,16 @@ import factory_structured_report as structured_report
 import factory_source_understanding as fsu_module
 import factory_terminology as terminology_module
 import factory_chat_notice_semantics as chat_notice_semantics
+import factory_chat_operation_semantics as chat_operations
 import factory_reported_event_semantics as reported_event_semantics
 import translation_alignment
+import factory_station_catalog
 
 logger = logging.getLogger(__name__)
 
 # Deployment contract: app.py verifies this exact build at startup.
-QUALITY_GATE_API_VERSION = 27
-QUALITY_GATE_BUILD_ID = "2026-10-07.1-source-relation-alignment"
+QUALITY_GATE_API_VERSION = 28
+QUALITY_GATE_BUILD_ID = "2026-10-13.1-source-owned-chat-operations"
 
 # ASCII placeholders survive all three providers more reliably than decorative
 # Unicode brackets.  The hash prevents accidental collision with ordinary text.
@@ -696,6 +698,11 @@ def protect_immutable_spans(text: str) -> ProtectedText:
         cursor = end
     chunks.append(text[cursor:])
     protected = "".join(chunks)
+    # Protect the source surname/name, leaving its professional title visible
+    # for translation. A source-defined identity is immutable even if only one
+    # Han character is used (e.g. surname + 總工).
+    for start, end, literal in reversed(terminology_module.professional_name_spans(protected)):
+        protected = protected[:start] + _new_placeholder(mapping, literal) + protected[end:]
     protected = _protect_explicit_code_lists(protected, mapping)
     protected = _protect_contextual_numeric_identifiers(protected, mapping)
     protected = _protect_document_defined_labels(protected, mapping)
@@ -1834,6 +1841,8 @@ def _comparison_integrity_issues(source: str, candidate: str) -> List[str]:
 def canonicalize_source_terms(source, candidate, src_lang, tgt_lang):
     """Normalize unambiguous source-bound terms without a model call."""
     result = chat_notice_semantics.canonicalize(source, candidate, src_lang, tgt_lang)
+    result = chat_operations.canonicalize(source, result, src_lang, tgt_lang)
+    result = terminology_module.canonicalize_factory_entities(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_computer_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_equipment_translation(source, result, src_lang, tgt_lang)
     result = terminology_module.canonicalize_process_translation(source, result, src_lang, tgt_lang)
@@ -1968,13 +1977,17 @@ def validate_translation(
         immutable_literals=tuple(immutable_literals),
         glossary_pairs=tuple(tuple(pair) for pair in glossary_pairs),
         require_paragraph_fidelity=bool(require_paragraph_fidelity),
+        station_policy=factory_station_catalog.fingerprint(),
+        entity_policy=tuple((fact["source"], fact["kind"], tuple(fact["targets"]),
+                             tuple(terminology_module.source_aliases(fact["row"])))
+                            for fact in terminology_module.factory_entity_facts(source, src_lang)),
     )
 
 
 @memoize
 def _validate_normalized_translation(
     source, candidate, src_lang, tgt_lang, *, immutable_literals,
-    glossary_pairs, require_paragraph_fidelity,
+    glossary_pairs, require_paragraph_fidelity, entity_policy, station_policy,
 ):
     # The full source, candidate, glossary and fidelity policy are the key.
     # Restoration/decoration or an edited glossary necessarily revalidates.
@@ -1982,8 +1995,10 @@ def _validate_normalized_translation(
     if not candidate:
         return ValidationResult(False, ["empty_translation"], ["empty_translation"], [])
 
+    issues.extend(terminology_module.factory_entity_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(terminology_module.process_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(terminology_module.packaging_translation_issues(source, candidate, src_lang, tgt_lang))
+    issues.extend(terminology_module.organization_translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(chat_notice_semantics.translation_issues(source, candidate, src_lang, tgt_lang))
     issues.extend(_invented_identifier_issues(source, candidate, src_lang, tgt_lang))
     modifier_contract = translation_alignment.build_contract(source, src_lang, tgt_lang)

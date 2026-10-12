@@ -22,9 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import glossary_policy as gp_module
+import translation_mentions
+import factory_station_catalog
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-07.1-contextual-station-senses"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-12.1-shared-station-retrieval"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -42,6 +44,141 @@ def approved_glossary() -> Mapping[str, Any]:
     path = Path(__file__).with_name("glossary_data.json")
     stat = path.stat()
     return _read_glossary_snapshot(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _entity_prose(text: str, source=None) -> str:
+    """Keep offsets while excluding identity tokens and quoted literal values."""
+    value = str(text or "")
+    value = _TERM_IDENTITY_RE.sub(lambda match: " " * len(match.group()), value)
+    quoted_values = ({match.group()[1:-1] for match in _TERM_QUOTE_RE.finditer(str(source))}
+                     if source is not None else None)
+    value = _TERM_QUOTE_RE.sub(
+        lambda match: " " * len(match.group()) if quoted_values is None or
+        match.group()[1:-1] in quoted_values else match.group(), value)
+    return value
+
+
+def factory_entity_facts(source, src_lang, *, glossary=None):
+    """Retrieve typed products/facilities from the shared glossary, not names.
+
+    Explicit entity metadata opts a compact term into this contract. Longest
+    source matching retains variant qualifiers and separates packaging stations
+    from products. Mentions, URLs and quoted data never grant a prose fact.
+    """
+    engine = get_engine(approved_glossary() if glossary is None else glossary)
+    prose = _entity_prose(_normalize_text(source))
+    facts = []
+    if str(src_lang).lower().startswith("zh"):
+        for match in engine.match_zh(prose, unique=False, limit=max(80, len(prose))):
+            row = engine.glossary[match.source_term]
+            if row.get("entity_kind") not in {"product", "facility"} or not gp_module.is_hard(row):
+                continue
+            facts.append({"source": match.source_term, "surface": match.matched_text,
+                          "target": match.target_term, "kind": row["entity_kind"],
+                          "targets": [match.target_term] + target_aliases(row),
+                          "start": match.start, "end": match.end, "row": row})
+    elif str(src_lang).lower().startswith("id"):
+        matches = []
+        for term, row in engine.entity_rows:
+            if row.get("reverse_safe") is not True:
+                continue
+            for surface in [gp_module.canonical_target(row)] + target_aliases(row):
+                for match in _id_phrase_pattern(surface).finditer(prose):
+                    matches.append((match.start(), match.end(), term, row, match.group()))
+        occupied = -1
+        for start, end, term, row, surface in sorted(matches, key=lambda item: (item[0], -item[1])):
+            if start < occupied:
+                continue
+            occupied = end
+            facts.append({"source": term, "surface": surface, "target": term,
+                          "kind": row["entity_kind"], "targets": [term] + source_aliases(row),
+                          "start": start, "end": end, "row": row})
+    return facts
+
+
+def identity_literals(values, *, glossary=None):
+    """Configured names cannot make a confirmed product/facility immutable."""
+    engine = get_engine(approved_glossary() if glossary is None else glossary)
+    result = []
+    for raw in values or ():
+        value = str(raw or "").strip()
+        matches = engine.match_zh(value, unique=False)
+        typed = any(match.start == 0 and match.end == len(_normalize_text(value))
+                    and engine.glossary[match.source_term].get("entity_kind") in {"product", "facility"}
+                    and match.target_term != match.matched_text for match in matches)
+        if value and not typed:
+            result.append(value)
+    return result
+
+
+def factory_entity_translation_issues(source, candidate, src_lang, tgt_lang, *, glossary=None):
+    if not ((str(src_lang).startswith("zh") and str(tgt_lang).startswith("id")) or
+            (str(src_lang).startswith("id") and str(tgt_lang).startswith("zh"))):
+        return []
+    view = _entity_prose(_normalize_text(candidate), source)
+    issues = []
+    for fact in factory_entity_facts(source, src_lang, glossary=glossary):
+        present = (any(_id_phrase_pattern(term).search(view) for term in fact["targets"])
+                   if str(tgt_lang).startswith("id") else
+                   any(term in view for term in fact["targets"]))
+        if not present:
+            issues.append("factory_entity_missing:" + fact["source"])
+        if str(tgt_lang).startswith("id") and any(
+                term in view for term in [fact["source"]] + source_aliases(fact["row"])):
+            issues.append("factory_entity_untranslated:" + fact["source"])
+    return list(dict.fromkeys(issues))
+
+
+def canonicalize_factory_entities(source, candidate, src_lang, tgt_lang, *, glossary=None):
+    """Repair only a source-owned lexical sense; never translate a sentence.
+
+    Copied translatable terms are safe to replace outside immutable spans.
+    A wrong facility class is repairable only with one distinct source facility,
+    no literal competing sense, and no more occurrences than source mentions.
+    Missing entities and ambiguous assignments stay visible to the validator.
+    """
+    if not (str(src_lang).startswith("zh") and str(tgt_lang).startswith("id")):
+        return candidate
+    result = str(candidate or "")
+    facts = factory_entity_facts(source, src_lang, glossary=glossary)
+    facilities = {fact["source"] for fact in facts if fact["kind"] == "facility"}
+    repairs = {}
+    for fact in facts:
+        for surface in [fact["source"]] + source_aliases(fact["row"]):
+            repairs[surface] = fact["target"]
+        row = fact["row"]
+        if (fact["kind"] != "facility" or len(facilities) != 1 or any(
+                term in _entity_prose(source) for term in row.get("literal_competing_zh", ()))):
+            continue
+        forbidden = row.get("forbidden_idn", ())
+        spans = {(match.start(), match.end()) for surface in forbidden
+                 for match in _id_phrase_pattern(surface).finditer(_entity_prose(result, source))}
+        mentions = sum(item["source"] == fact["source"] for item in facts)
+        if 0 < len(spans) <= mentions:
+            for surface in forbidden:
+                repairs[surface] = fact["target"]
+    # Match against the original candidate once. This avoids cascaded rewrites,
+    # replacement inside a name/URL, and changing literal quotation contents.
+    view = _entity_prose(result, source)
+    matches = []
+    for fact in facts:
+        for approved in fact["targets"]:
+            for surface in [fact["source"]] + source_aliases(fact["row"]):
+                pattern = re.compile("(?P<approved>" + _id_phrase_pattern(approved).pattern +
+                                     r")[ \t]*[（(][ \t]*" + re.escape(surface) + r"[ \t]*[）)]", re.I)
+                matches.extend((match.start(), match.end(), match.group("approved"))
+                               for match in pattern.finditer(view))
+    for surface, target in repairs.items():
+        pattern = re.compile(re.escape(surface)) if re.search(r"[\u3400-\u9fff]", surface) else _id_phrase_pattern(surface)
+        matches.extend((match.start(), match.end(), target) for match in pattern.finditer(view))
+    selected, occupied = [], -1
+    for start, end, target in sorted(matches, key=lambda item: (item[0], -item[1])):
+        if start >= occupied:
+            selected.append((start, end, target))
+            occupied = end
+    for start, end, target in reversed(selected):
+        result = result[:start] + target + result[end:]
+    return result
 
 
 def quality_release_context(text: str, lang: str = "zh") -> bool:
@@ -363,7 +500,40 @@ _ORGANIZATION_ROLE_SPECS: Tuple[Tuple[str, str, str, Tuple[str, ...]], ...] = (
     ("section_head", "plant_hierarchy", "課長", ("kepala seksi",)),
     ("subsection_head", "plant_hierarchy", "股長", ("kepala bagian",)),
     ("shift_head", "plant_hierarchy", "班長", ("kepala regu", "ketua shift")),
+    ("chief_engineer", "engineering", "總工程師", ("Insinyur Kepala", "kepala insinyur", "chief engineer")),
+    ("deputy_chief_engineer", "engineering", "副總工程師", ("Wakil Insinyur Kepala", "wakil kepala insinyur", "deputy chief engineer")),
+    ("head_technician", "engineering", "技師主管", ("kepala teknisi", "head technician", "chief technician")),
 )
+
+_ORGANIZATION_ZH_ALIASES = {
+    "chief_engineer": ("總工程師", "总工程师", "總工", "总工"),
+    "deputy_chief_engineer": ("副總工程師", "副总工程师", "副總工", "副总工"),
+    "head_technician": ("技師主管", "技师主管", "技術員主管", "技术员主管"),
+}
+
+# A surname attached to an explicit professional title is an identity, while
+# the title itself must be translated. Do not infer names from free prose.
+_TITLE_SURNAMES = "陳陈林黃黄張张李王吳吴劉刘蔡楊杨許许鄭郑郭洪曾邱廖賴赖徐周葉叶蘇苏莊庄江何蕭萧羅罗高潘簡简朱鍾钟游彭詹胡施沈余盧卢梁趙赵顏颜柯孫孙魏翁戴范方宋鄧邓杜侯曹傅丁溫温紀纪蔣蒋呂吕馬马"
+_PROFESSIONAL_NAME_RE = re.compile(
+    r"(?<![不任允])(?P<name>[" + _TITLE_SURNAMES + r"][\u3400-\u9fff]{0,2}?)"
+    r"(?P<title>副總工程師|副总工程师|副總工|副总工|總工程師|总工程师|總工|总工|技師主管|技师主管|技術員主管|技术员主管)"
+)
+
+
+def professional_name_spans(text: str) -> List[Tuple[int, int, str]]:
+    """Source-owned name spans; never include the translated role in a name."""
+    value = str(text or "")
+    mention_ranges = [(start, end) for start, end, _ in translation_mentions.mention_spans(value)]
+    return [(m.start("name"), m.end("name"), m.group("name"))
+            for m in _PROFESSIONAL_NAME_RE.finditer(value)
+            if not any(m.start() < end and m.end() > start for start, end in mention_ranges)]
+
+
+def professional_person_facts(text: str) -> List[Dict[str, str]]:
+    value = str(text or "")
+    return [{"name": name, "role_key": organization_role_key(
+                _PROFESSIONAL_NAME_RE.search(value, _start).group("title"), "zh")}
+            for _start, end, name in professional_name_spans(value)]
 
 
 def _id_phrase_pattern(phrase: str) -> re.Pattern[str]:
@@ -455,31 +625,80 @@ def _normalize_id(value: str) -> str:
 
 
 def _zh_role_keys(text: str, group: str) -> set[str]:
-    source = _normalize_text(text)
-    return {
-        key
-        for key, spec in _ORGANIZATION_ROLE_BY_KEY.items()
-        if spec["group"] == group and str(spec["zh"]) in source
-    }
+    return {key for _start, _end, key in organization_role_spans(text, "zh")
+            if _ORGANIZATION_ROLE_BY_KEY[key]["group"] == group}
 
 
 def _id_role_keys(text: str, group: str) -> set[str]:
-    source = _normalize_text(text)
-    return {
-        key
-        for key, spec in _ORGANIZATION_ROLE_BY_KEY.items()
-        if spec["group"] == group
-        and any(pattern.search(source) for pattern in _ORGANIZATION_ID_PATTERNS[key])
-    }
+    return {key for _start, _end, key in organization_role_spans(text, "id")
+            if _ORGANIZATION_ROLE_BY_KEY[key]["group"] == group}
+
+
+def organization_role_spans(text: str, lang: str) -> Tuple[Tuple[int, int, str], ...]:
+    value, lang = str(text or ""), "zh" if str(lang).startswith("zh") else "id"
+    # Pure role parsing has no glossary/configuration dependency. Bound its
+    # process cache; documents remain uncached and every output is immutable.
+    return (_organization_role_spans.__wrapped__(value, lang) if len(value) > 8192
+            else _organization_role_spans(value, lang))
+
+
+@lru_cache(maxsize=1024)
+def _organization_role_spans(source: str, lang: str) -> Tuple[Tuple[int, int, str], ...]:
+    for start, end, _ in reversed(translation_mentions.mention_spans(source)):
+        source = source[:start] + " " * (end - start) + source[end:]
+    if lang == "zh":
+        occurrences = [(m.start(), m.end(), key)
+                       for key, spec in _ORGANIZATION_ROLE_BY_KEY.items()
+                       for alias in _ORGANIZATION_ZH_ALIASES.get(key, (str(spec["zh"]),))
+                       for m in re.finditer(re.escape(alias), source)]
+    else:
+        occurrences = [(m.start(), m.end(), key)
+                       for key, patterns in _ORGANIZATION_ID_PATTERNS.items()
+                       for pattern in patterns for m in pattern.finditer(source)]
+    selected, occupied = [], []
+    # Longest role wins across families: 副總工程師 is neither 副總 nor 總工.
+    for start, end, key in sorted(occurrences, key=lambda row: (-(row[1]-row[0]), row[0])):
+        if any(start < b and end > a for a, b in occupied):
+            continue
+        occupied.append((start, end))
+        selected.append((start, end, key))
+    return tuple(sorted(selected))
 
 
 def organization_role_key(text: str, lang: str) -> str:
     """Shared, unambiguous role identity for qualifier and hierarchy checks."""
     keys = set()
-    for group in ("executive", "plant_hierarchy"):
+    for group in {spec["group"] for spec in _ORGANIZATION_ROLE_BY_KEY.values()}:
         keys.update(_zh_role_keys(text, group) if str(lang).lower().startswith("zh")
                     else _id_role_keys(text, group))
     return next(iter(keys)) if len(keys) == 1 else ""
+
+
+def organization_role_facts(text: str, lang: str) -> List[Dict[str, str]]:
+    """Role identities shared by prompts, unit alignment and reuse checks."""
+    keys = set()
+    for group in {spec["group"] for spec in _ORGANIZATION_ROLE_BY_KEY.values()}:
+        keys.update(_zh_role_keys(text, group) if str(lang).lower().startswith("zh")
+                    else _id_role_keys(text, group))
+    return [{"key": key, "zh": str(_ORGANIZATION_ROLE_BY_KEY[key]["zh"]),
+             "id": str(_ORGANIZATION_ROLE_BY_KEY[key]["id"])} for key in sorted(keys)]
+
+
+def organization_translation_issues(source: str, candidate: str, src: str, tgt: str) -> List[str]:
+    if not ((str(src).startswith("zh") and str(tgt).startswith("id"))
+            or (str(src).startswith("id") and str(tgt).startswith("zh"))):
+        return []
+    # Engineering roles were absent from the old hierarchy. Validate this
+    # professional family independently from the division/section hierarchy.
+    expected = (_zh_role_keys(source, "engineering") if str(src).startswith("zh")
+                else _id_role_keys(source, "engineering"))
+    actual = (_id_role_keys(candidate, "engineering") if str(tgt).startswith("id")
+              else _zh_role_keys(candidate, "engineering"))
+    if not expected:
+        return []
+    issues = ["factory_organization_role_missing:" + key for key in sorted(expected - actual)]
+    issues.extend("factory_organization_role_changed:" + key for key in sorted(actual - expected))
+    return issues
 
 
 def _replace_id_role(text: str, role_key: str, replacement: str) -> str:
@@ -613,7 +832,17 @@ def collect_organization_matches(
 
         standalone = (
             ("副廠長", "Wakil Kepala Pabrik", 125),
+            ("副總工程師", "Wakil Insinyur Kepala", 135),
+            ("副总工程师", "Wakil Insinyur Kepala", 135),
+            ("副總工", "Wakil Insinyur Kepala", 135),
+            ("副总工", "Wakil Insinyur Kepala", 135),
             ("副總", "Wakil Direktur", 125),
+            ("總工程師", "Insinyur Kepala", 130),
+            ("总工程师", "Insinyur Kepala", 130),
+            ("總工", "Insinyur Kepala", 130),
+            ("总工", "Insinyur Kepala", 130),
+            ("技師主管", "kepala teknisi", 130),
+            ("技师主管", "kepala teknisi", 130),
             ("處長", "kepala divisi", 120),
             ("課長", "kepala seksi", 115),
             ("股長", "kepala bagian", 115),
@@ -682,6 +911,9 @@ class FactoryTerminologyEngine:
 
     def __init__(self, glossary: Mapping[str, Any] | None):
         self.glossary = gp_module.normalize_glossary(glossary or {})
+        self.entity_rows = tuple((term, row) for term, row in self.glossary.items()
+                                 if row.get("entity_kind") in {"product", "facility"}
+                                 and gp_module.is_hard(row))
         self._trie: Dict[Any, Any] = {}
         self._surface_count = 0
         self._trie_nodes = 1
@@ -749,7 +981,7 @@ class FactoryTerminologyEngine:
             stack.extend(child for key, child in node.items() if key is not _TRIE_END)
         self._ocr_terms = sorted(ocr_candidates, key=lambda item: (-item[0], len(item[1]), item[1]))
 
-    def match_zh(self, text: str, *, limit: int = 80) -> List[FactoryTermMatch]:
+    def match_zh(self, text: str, *, limit: int = 80, unique: bool = True) -> List[FactoryTermMatch]:
         source = _normalize_text(text)
         results: List[FactoryTermMatch] = []
         seen_canonical = set()
@@ -785,7 +1017,7 @@ class FactoryTerminologyEngine:
                 if not canonical_target or mode == "disabled":
                     continue
                 dedupe_key = (canonical_source, canonical_target)
-                if dedupe_key in seen_canonical:
+                if unique and dedupe_key in seen_canonical:
                     continue
                 note = str(row.get("note_id") or row.get("note_zh") or "").strip()
                 results.append(FactoryTermMatch(
@@ -911,6 +1143,9 @@ def build_translation_prompt(
     tgt = (tgt_lang or "").lower()
     lines: List[str] = []
 
+    station_hint = factory_station_catalog.build_prompt(src_text, src, tgt)
+    if station_hint:
+        lines.append(station_hint)
     process_hint = build_process_prompt(src_text, src, tgt)
     if process_hint:
         lines.append(process_hint)
@@ -949,9 +1184,14 @@ def build_translation_prompt(
                 "Only source-grounded plant terms are listed. HARD mappings must appear with the same meaning; "
                 "SOFT mappings are semantic guidance and may inflect naturally in Indonesian."
             )
+            if any(get_engine(glossary).glossary[match.source_term].get("entity_kind") for match in matches):
+                lines.append("Products and named facilities are translatable entities, not person names. Preserve the proper plant name, not its literal factory class.")
             for match in matches:
                 if match.mode == "hard":
                     lines.append(f"[HARD] {match.matched_text} => {match.target_term}")
+                    row = get_engine(glossary).glossary[match.source_term]
+                    if row.get("entity_kind") and target_aliases(row):
+                        lines.append("Approved alternatives: " + "; ".join(target_aliases(row)))
                 else:
                     note = re.sub(r"\s+", " ", match.note)[:120]
                     suffix = f" | context: {note}" if note else ""

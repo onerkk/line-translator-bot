@@ -17,9 +17,10 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+import factory_terminology
 
 
-PRIVACY_BUILD_ID = "2026-08-18.1-provider-boundary-masking"
+PRIVACY_BUILD_ID = "2026-10-11.1-typed-name-classification"
 
 _PLACEHOLDER_RE = re.compile(r"__QG_KEEP_(\d{3})_([0-9A-F]{8})__")
 
@@ -40,12 +41,11 @@ _TW_NATIONAL_ID_RE = re.compile(r"(?<![A-Za-z0-9])[A-Z][12]\d{8}(?![A-Za-z0-9])"
 # batch code for a person.  The label remains visible; only the value is masked.
 _LABELLED_VALUE_RE = re.compile(
     r"(?P<label>"
-    r"(?:NIK|NO\.?\s*KTP|KTP|ARC|居留證(?:號碼)?|居留证(?:号码)?|"
-    r"身分證(?:字號|號碼)?|身份证(?:字号|号码)?|護照(?:號碼)?|护照(?:号码)?|"
-    r"PASSPORT(?:\s*(?:NO|NUMBER))?|"
-    r"員工(?:編號|工號)|员工(?:编号|工号)|工號|工号|EMPLOYEE\s*ID|"
-    r"BANK\s*ACCOUNT|ACCOUNT\s*(?:NO|NUMBER)|銀行帳號|银行账号|REKENING|"
-    r"LINE\s*ID)"
+    r"(?:(?<![A-Za-z0-9_])(?:NIK|NO\.?\s*KTP|KTP|ARC|"
+    r"PASSPORT(?:\s*(?:NO|NUMBER))?|EMPLOYEE\s*ID|"
+    r"BANK\s*ACCOUNT|ACCOUNT\s*(?:NO|NUMBER)|REKENING|LINE\s*ID)(?![A-Za-z_])|"
+    r"居留證(?:號碼)?|居留证(?:号码)?|身分證(?:字號|號碼)?|身份证(?:字号|号码)?|"
+    r"護照(?:號碼)?|护照(?:号码)?|員工(?:編號|工號)|员工(?:编号|工号)|工號|工号|銀行帳號|银行账号)"
     r"\s*[:：#號号-]?\s*"
     r")"
     r"(?P<value>[A-Za-z0-9][A-Za-z0-9._/-]{3,31})",
@@ -81,7 +81,7 @@ def _placeholder(index: int, literal: str) -> str:
 def _normalise_literals(values: Iterable[str]) -> List[str]:
     out: List[str] = []
     seen = set()
-    for raw in values or ():
+    for raw in factory_terminology.identity_literals(values):
         value = str(raw or "").strip()
         if len(value) < 2 or value in seen or _PLACEHOLDER_RE.fullmatch(value):
             continue
@@ -108,6 +108,9 @@ def _collect_matches(text: str, extra_literals: Iterable[str]) -> List[Tuple[int
     for literal in _normalise_literals(extra_literals):
         for match in re.finditer(re.escape(literal), text):
             matches.append((match.start(), match.end(), literal, "protected_name"))
+
+    for start, end, name in factory_terminology.professional_name_spans(text):
+        matches.append((start, end, name, "protected_name"))
 
     # Prefer the longest match at a position, then discard overlaps.  This keeps
     # an entire phone/e-mail token under one placeholder instead of fragmenting it.

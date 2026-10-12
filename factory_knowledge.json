@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-10-04.1-housekeeping-object-scope",
+  "build_id": "2026-10-10.1-source-sense-retrieval",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -1339,7 +1339,10 @@
           "回報"
         ],
         "require_all_groups": false,
-        "min_score": 8
+        "min_score": 8,
+        "required_regex_any": [
+          "一課|第一課|一股|第一股|股長|基本紀律|控制室|公司派|吹冷氣|被[釘盯]|盯很緊"
+        ]
       },
       "context": [
         "「一課」是工廠正式組織單位 Seksi 1，不是一般的 Departemen 1。",
@@ -1908,7 +1911,10 @@
         "regex_any": [
           "(?:抓帳|抓账|結帳|结账|關帳|关账).{0,40}(?:到料|來料|来料|到貨|到货).{0,50}(?:優先|优先).{0,15}(?:包裝|包装|裝箱|装箱)"
         ],
-        "min_score": 16
+        "min_score": 16,
+        "required_regex_any": [
+          "抓[帳账]|結[帳账]|结[帳账]|關[帳账]|关[帳账]|會計|会计|\\b(?:tutup\\s+buku|penutupan\\s+(?:buku|akun)|closing)\\b"
+        ]
       },
       "context": [
         "「抓帳」在此是會計結帳／關帳，印尼文用 tutup buku；不是 cek data、periksa data 或 rekap data。",
@@ -4179,7 +4185,10 @@
           "安裝木箱",
           "安装木箱"
         ],
-        "require_any": true
+        "require_any": true,
+        "required_regex_any": [
+          "(?:待|等待|等著|等着)(?:裝|装)(?:入)?木箱"
+        ]
       },
       "context": [
         "使用者明確確認：「待裝木箱」指成品等待裝進木箱（produk jadi yang menunggu dikemas ke dalam peti kayu），不是木箱等待組裝或安裝。原文明確說原料／材料時仍保留該物件。",
@@ -4375,7 +4384,10 @@
             "入库"
           ]
         ],
-        "require_all_groups": true
+        "require_all_groups": true,
+        "required_regex_any": [
+          "儲[區区位]|储[區区位]|存放|放(?:到|回|在)|(?:成品|包裝完|包装完).{0,15}入[庫库]|\\b(?:area|lokasi|tempat)\\s+(?:penyimpanan|gudang)|\\b(?:simpan|disimpan|penyimpanan)\\b"
+        ]
       },
       "context": [
         "使用者確認的工廠流程：客戶材料包裝完成，資料進入801就算入庫；之後成品實際吊入對應儲區。入庫計畫的噸數是系統登錄入庫的成品重量，801不是實體儲區碼。",
@@ -5141,7 +5153,7 @@
         ],
         "require_all_groups": false,
         "required_regex_any": [
-          "環境|整潔|卫生|衛生|作業區|工作區|作業場所|工作場所|地面|地板|地上|掉落.{0,5}(?:物|東西)|雜物|油水|掃地|掃除|清掃|拖地|打掃|廠區整潔|\\b(?:kebersihan|kerapian|lingkungan|lantai|menyapu|disapu|tercecer|terjatuh)\\b"
+          "環境|整潔|卫生|衛生|掉落.{0,5}(?:物|東西)|雜物|油水|掃地|掃除|清掃|拖地|打掃|廠區整潔|(?:作業區|工作區|地面|地板|地上).{0,12}(?:清理|整理|清潔|打掃|掃|拖|擦)|\\b(?:kebersihan|kerapian|lingkungan|menyapu|disapu|tercecer|terjatuh)\\b|\\b(?:lantai|area\\s+kerja)\\b.{0,40}\\b(?:sapu|pel|bersih|oli|benda|barang)\\b"
         ],
         "min_score": 4
       },

@@ -341,6 +341,17 @@ def _canonical_members(archive: zipfile.ZipFile, repo: str) -> list[tuple[zipfil
 
     repo_name = repo.rsplit("/", 1)[-1].casefold()
     project_roots = {repo_name, repo_name + "-main", "line-translator-bot-main"}
+    # Earlier changed-file deliveries used a dated wrapper. Writing that
+    # directory literally leaves the running root modules unchanged. Unwrap
+    # only a recognized, exclusive update wrapper; static/templates/tests
+    # directories are actual project paths and must retain their names.
+    top_roots = {parts[0].casefold() for _, parts in candidates}
+    update_roots = {name for name in top_roots if re.fullmatch(
+        r"line-translator-(?:changed|changed-files)-\d{8}(?:-[a-z0-9._-]+)?", name)}
+    if update_roots:
+        if len(top_roots) != 1 or not all(len(parts) > 1 for _, parts in candidates):
+            raise ZipUpdateError("mixed_update_roots", "更新 ZIP 混用了日期外層資料夾與其他根路徑；請使用同一套相對路徑重新打包。", 400)
+        project_roots.update(update_roots)
     strip_root = None
     for possible in project_roots:
         if any(parts[0].casefold() == possible and len(parts) > 1 for _, parts in candidates):

@@ -14,15 +14,19 @@ import re
 import time
 
 import factory_source_understanding as understanding
+import factory_station_catalog
 from translation_source_identity import canonical_source_key
 
-BUILD_ID = '2026-09-19.2-material-relation-learning'
+BUILD_ID = '2026-10-13.1-chat-operation-learning'
 
 # A fixed error taxonomy is independent of individual factory sentences. The
 # observed associations, frequency and source vocabulary are learned in SQLite.
 _ADVICE = {
+    'annotation': 'Preserve whether a code is requested to be written, already written, prohibited or queried. Keep the exact letters/slashes and grade family, if-condition and work-order ownership. Permission words do not make a statement a question.',
     'material_relation': 'Keep material origin (dari/from), location (di/at), and part (bagian/ujung) distinct. Bind dimensions to the material, not a distance from its end. Many bent pieces is a count statement, not bend severity. A direction never identifies an unstated process or station; use only current-source values.',
     'identity': 'Generic equipment words do not identify a specific machine or area. Preserve only identifiers present in the CURRENT source. Never copy equipment codes from a glossary label or historical example.',
+    'station_identity': 'Use the CURRENT plant ERP catalog and source grammar together. A station identifier remains the actor, recipient or location of its stated action, never an unstated quantity. Explicit measurements and counts remain quantities. Preserve grit/specification expressions unchanged and keep production completion distinct from data release.',
+    'terminology': 'Products and named plants are translatable typed entities, not personal names. Use the CURRENT source-grounded glossary and approved variants. Never translate a plant proper name as its literal factory class or leave an ordinary product term in the source language. Keep entities in their own source sentence.',
     'handoff': 'Distinguish ERP data release from physical placement or general approval. A station code is not a quantity. Keep alternative causes as a question, and do not turn inspection not occurring into inability or refusal without source evidence.',
     'record': 'Distinguish a system record/field from physical material. Keep each value attached to its stated field and storage operation; never move a number into a physical warehouse.',
     'printed_storage': 'For the confirmed shorthand 存檔入庫都沒儲區, the storage location is missing from the first TAG print, not necessarily from the system field. 補印才有 inherits that object only from linked original context; never assume every reprint concerns storage.',
@@ -42,6 +46,51 @@ _ADVICE = {
 def category(issue):
     """Accept only machine issue codes, never free-form feedback as a command."""
     code = str(issue).removeprefix('quality_gate:')
+    if code.startswith('chat_operation:'):
+        # Closed error classes only. Free-form feedback cannot become a rule.
+        return {
+            'annotation_literal_missing': 'identity',
+            'annotation_instruction_changed_to_state': 'annotation',
+            'annotation_question_missing': 'annotation',
+            'annotation_prohibition_missing': 'annotation',
+            'annotation_polarity_changed': 'annotation',
+            'annotation_condition_missing': 'annotation',
+            'grade_series_missing': 'annotation',
+            'annotation_work_order_missing': 'annotation',
+            'approval_changed_to_question': 'annotation',
+            'surplus_unpacking_action_missing': 'packing',
+            'surplus_split_method_invented': 'packing',
+            'surplus_unpacking_polarity_changed': 'packing',
+            'overhead_prohibition_missing': 'permission',
+            'overhead_changed_to_upstairs': 'permission',
+            'lifting_limit_value_or_unit_changed': 'quantity',
+            'lifting_limit_direction_changed': 'permission',
+        }.get(code.split(':', 2)[1])
+    if code.startswith('factory_station:'):
+        return 'quantity' if 'specification_changed' in code else 'station_identity'
+    # Source-unit defects used the semantic: namespace, which the historical
+    # whitelist dropped. Admit only this closed taxonomy, never arbitrary
+    # feedback/model prose. Old/new targets still must pass derive's replay.
+    semantic_classes = {
+        'organization_role_missing': 'actor', 'professional_name_role_changed': 'actor',
+        'role_rank_missing': 'actor', 'role_rank_changed': 'actor',
+        'station_actor_changed_to_data_destination': 'actor',
+        'confirmed_term_sense_missing': 'meaning',
+        'factory_entity_missing': 'terminology',
+        'available_packing_assistance_missing': 'quantity',
+        'assistance_quantity_strengthened': 'quantity',
+        'physical_window_missing': 'meaning', 'invented_observation_device': 'meaning',
+        'quality_clearance_changed_to_erp': 'handoff', 'quality_clearance_approval_missing': 'handoff',
+        'physical_document_changed_to_erp': 'handoff',
+        'physical_work_order_detachment_missing': 'handoff',
+        'work_order_detachment_prohibition_missing': 'permission',
+        'movement_permission_missing': 'permission', 'movement_urgency_invented': 'permission',
+        'next_bundle_work_order_owner_missing': 'actor',
+    }
+    if code.startswith('semantic:'):
+        return semantic_classes.get(code.split(':', 2)[1])
+    if code.startswith('factory_entity_'):
+        return 'terminology'
     if not re.match(r'^(?:factory_|record_|structured_|immutable_|missing_|invented_|number_|quantity_|source_|untranslated_|paragraph_|glossary_)', code):
         return None
     if re.search(r'unavailable|exception|timeout|network|provider', code):
@@ -71,6 +120,8 @@ def _features(source, lang):
                         r'(?<![a-z0-9])(?=[a-z0-9_/.-]*\d)[a-z0-9]+(?:[_/.-][a-z0-9]+)*(?![a-z0-9])',
                         ' ', normalized)
     concepts = {'c:' + value for value in understanding.concepts(normalized)}
+    if factory_station_catalog.station_facts(source, lang):
+        concepts.add('c:station_identity')
     if understanding.material_relations.build_facts(source, lang):
         concepts.add('c:material_relation')
     if re.search(r'入庫|登錄|登記|存入|輸入|系統|存檔|儲區|\b(?:input|diinput|menginput|mencatat|dicatat|pencatatan|sistem)\b', normalized):

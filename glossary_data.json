@@ -2575,5 +2575,117 @@
     "ocr_hint": true,
     "note_zh": "依本次棒材設備照片語境，「夾靠」指用來夾持、支承並定位棒材的機台部件。缺夾靠是該部件不足，不是棒材本身缺料；不得補寫機台編號、數量、故障原因或修理方式。",
     "note_id": "Komponen mesin untuk menjepit, menopang, dan memosisikan batang; gunakan istilah dudukan penjepit batang. Kekurangannya merujuk pada komponen ini, bukan batang material. Jangan menambahkan nomor mesin, jumlah, penyebab kerusakan, atau cara perbaikan yang tidak disebutkan."
+  },
+  "總工程師": {
+    "idn": "Insinyur Kepala",
+    "canonical_idn": "Insinyur Kepala",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "aliases_zh": [
+      "總工",
+      "总工程师",
+      "总工"
+    ],
+    "aliases_id": [
+      "kepala insinyur",
+      "chief engineer"
+    ],
+    "category": "organization_role",
+    "priority": 230,
+    "ocr_hint": true,
+    "note_zh": "總工是總工程師的職稱簡稱，不能改成技師主管。人名或姓氏與職稱分開處理，保留原始姓名。",
+    "note_id": "Insinyur Kepala, bukan kepala teknisi. Pertahankan nama orang persis seperti pada sumber; terjemahkan hanya jabatannya."
+  },
+  "副總工程師": {
+    "idn": "Wakil Insinyur Kepala",
+    "canonical_idn": "Wakil Insinyur Kepala",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "aliases_zh": [
+      "副總工",
+      "副总工程师",
+      "副总工"
+    ],
+    "aliases_id": [
+      "wakil kepala insinyur",
+      "deputy chief engineer"
+    ],
+    "category": "organization_role",
+    "priority": 240,
+    "ocr_hint": true,
+    "note_zh": "副總工程師／副總工與副總經理、總工程師是不同職稱；保留副職限定與原姓名。",
+    "note_id": "Wakil Insinyur Kepala, bukan Wakil Direktur atau Insinyur Kepala. Pertahankan nama dan status wakil."
+  },
+  "異型棒": {
+    "idn": "batang profil khusus",
+    "canonical_idn": "batang profil khusus",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "product",
+    "entity_kind": "product",
+    "priority": 180,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "异型棒"
+    ],
+    "aliases_id": [
+      "batang bentuk khusus",
+      "batang berbentuk khusus",
+      "batang berprofil khusus"
+    ],
+    "note_zh": "棒材產品種類；不可當成人名或包裝站。S、H 等形狀修飾須依原文保留。"
+  },
+  "鹽水廠": {
+    "idn": "Pabrik Yenshui",
+    "canonical_idn": "Pabrik Yenshui",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "facility",
+    "entity_kind": "facility",
+    "priority": 180,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "盐水厂"
+    ],
+    "aliases_id": [
+      "Pabrik Yanshui",
+      "Yenshui Plant",
+      "Yanshui Plant"
+    ],
+    "forbidden_idn": [
+      "pabrik garam",
+      "pabrik air garam"
+    ],
+    "literal_competing_zh": [
+      "鹽廠",
+      "盐厂",
+      "鹽工廠",
+      "盐工厂",
+      "製鹽",
+      "制盐",
+      "鹽水工廠",
+      "盐水工厂"
+    ],
+    "note_zh": "華新麗華鹽水廠的專有廠名。官方英文 Yenshui Plant；Yanshui 為舊版拼法別名。鹽水（液體）與製鹽工廠不能套用此廠名。",
+    "reference_url": "https://www.walsin.com/en/about-us/contact-us/general-contacts/"
+  },
+  "台中廠": {
+    "idn": "Pabrik Taichung",
+    "canonical_idn": "Pabrik Taichung",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "facility",
+    "entity_kind": "facility",
+    "priority": 180,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "臺中廠",
+      "台中厂",
+      "臺中厂"
+    ],
+    "aliases_id": [
+      "Taichung Plant"
+    ],
+    "note_zh": "專有廠名；只有原文包含廠才可套用，台中市不能推定為廠。"
   }
 }

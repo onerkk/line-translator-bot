@@ -99,8 +99,12 @@ def test_allocation_keeps_station_count_condition_and_pack_action(source):
     contract = alignment.build_contract(source, "zh", "id")
     row = next(r for r in contract["constraints"] if r["kind"] == "packing_allocation")
     n = row["station_count"]
-    good = f"Jika {n} stasiun packing dioperasikan, kemas material secara terpisah."
+    product = "batang profil khusus" if "異型棒" in source else "material"
+    good = f"Jika {n} stasiun packing dioperasikan, kemas {product} secara terpisah."
     assert alignment.translation_issues(contract, good) == []
+    if product != "material":
+        assert "semantic:factory_entity_missing:異型棒" in alignment.translation_issues(
+            contract, good.replace(product, "material"))
     assert "semantic:packing_station_count_changed" in alignment.translation_issues(contract, good.replace(str(n), "9"))
     assert "semantic:packing_allocation_condition_missing" in alignment.translation_issues(contract, good.replace("Jika", "Saat ini"))
     assert "semantic:packing_allocation_missing" in alignment.translation_issues(contract, good.replace("kemas", "proses"))
@@ -108,7 +112,10 @@ def test_allocation_keeps_station_count_condition_and_pack_action(source):
 
 def test_material_transfer_and_fluid_flow_do_not_become_packing_allocation():
     for source in ("異型站的料幫忙分流過來。", "如果開兩站，水流分開。", "異型棒不要分開包裝。"):
-        assert not alignment.build_contract(source, "zh", "id")["constraints"]
+        constraints = alignment.build_contract(source, "zh", "id")["constraints"]
+        assert not any(row["kind"] == "packing_allocation" for row in constraints)
+        if "異型棒" in source:
+            assert any(row["kind"] == "factory_entity" for row in constraints)
 
 
 def test_best_effort_is_not_changed_into_an_unconditional_requirement():
