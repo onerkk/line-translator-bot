@@ -2687,5 +2687,74 @@
       "Taichung Plant"
     ],
     "note_zh": "專有廠名；只有原文包含廠才可套用，台中市不能推定為廠。"
+  },
+  "材料識別牌": {
+    "idn": "TAG",
+    "canonical_idn": "TAG",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "material_identifier",
+    "priority": 190,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "材料識別掛牌",
+      "材料挂牌",
+      "材料掛牌"
+    ],
+    "contextual_aliases_zh": [
+      {
+        "text": "掛牌",
+        "before_regex": "材料|棒材|捆|包裝|包装|工單|工单|地上|地面|作業環境|作业环境",
+        "after_regex": "^(?:[、，,\\s]*(?:工單|工单|套環|套环))?(?:掉落|掉了|掉在|脫落|脱落|遺失|遗失|不見|不见)|^(?:不同|不符|一致)",
+        "exclude_context_regex": "上市|上櫃|上柜|證券|证券|股票|股價|股价|公司掛牌|公司挂牌|門口|门口|招牌|警告牌|安全標示|安全标示"
+      },
+      {
+        "text": "挂牌",
+        "before_regex": "材料|棒材|捆|包裝|包装|工單|工单|地上|地面|作業環境|作业环境",
+        "after_regex": "^(?:[、，,\\s]*(?:工單|工单|套環|套环))?(?:掉落|掉了|掉在|脫落|脱落|遺失|遗失|不見|不见)|^(?:不同|不符|一致)",
+        "exclude_context_regex": "上市|上櫃|上柜|證券|证券|股票|股價|股价|公司掛牌|公司挂牌|門口|门口|招牌|警告牌|安全標示|安全标示"
+      }
+    ],
+    "note_zh": "材料上的實體識別 TAG。由既有 9/23 工單公告的已確認詞義獨立為術語；一般清掃、掉落、工單核對也可檢索。公司上市掛牌、門口標示等不適用。",
+    "note_id": "TAG identifikasi material; bukan penanda area kerja atau papan pengumuman.",
+    "provenance": "factory_knowledge.json: 9/23工單 TAG、顏色噴漆與佳東 G 製程套環公告",
+    "forbidden_idn": [
+      "penanda area kerja",
+      "papan gantung"
+    ]
+  },
+  "職業安全衛生": {
+    "idn": "K3",
+    "canonical_idn": "K3",
+    "translation_mode": "hard",
+    "reverse_safe": false,
+    "category": "safety",
+    "priority": 180,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "職業安全卫生",
+      "职业安全卫生",
+      "安全衛生",
+      "安全卫生"
+    ],
+    "contextual_aliases_zh": [
+      {
+        "text": "安衛",
+        "before_regex": "職業|职业|勞工|劳工",
+        "after_regex": "^(?:科技|執法|执法|查核|稽查|檢查|检查|抽查|人員|人员|管理|規定|规定|教育|訓練|训练|不定時|不定时)",
+        "exclude_context_regex": "(?:安衛|安卫)(?:科技)?(?:公司|股份|有限公司)|品牌|商標|商标"
+      },
+      {
+        "text": "安卫",
+        "before_regex": "職業|职业|勞工|劳工",
+        "after_regex": "^(?:科技|執法|执法|查核|稽查|檢查|检查|抽查|人員|人员|管理|規定|规定|教育|訓練|训练|不定時|不定时)",
+        "exclude_context_regex": "(?:安衛|安卫)(?:科技)?(?:公司|股份|有限公司)|品牌|商標|商标"
+      }
+    ],
+    "note_zh": "安衛在職業安全檢查語境是安全衛生（K3）；不是叫 Anwei 的公司。科技描述檢查／執法的方式，不是機構名稱；不得自行補入警察、罰款或特定科技設備。源自既有 night_attendance_replaced_by_k3_spot_checks 的 K3 概念。",
+    "note_id": "Keselamatan dan kesehatan kerja (K3). Teknologi menjelaskan metode pemeriksaan, bukan nama perusahaan.",
+    "forbidden_idn": [
+      "Anwei"
+    ]
   }
 }

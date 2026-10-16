@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 TRANSLATION_CASEBOOK_API_VERSION = 4
-TRANSLATION_CASEBOOK_BUILD_ID = "2026-10-16.1-complete-correction-evidence"
+TRANSLATION_CASEBOOK_BUILD_ID = "2026-10-16.2-reference-scope-coverage"
 
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LATIN_WORD_RE = re.compile(r"[a-z0-9]+(?:[-_/][a-z0-9]+)*", re.I)
@@ -317,7 +317,7 @@ def _zh_content_runs(text: str) -> Tuple[str, ...]:
 
 
 def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: int = 10,
-                                shared_features=()) -> List[str]:
+                                shared_features=(), lexicon=None) -> List[str]:
     if direction == "id2zh":
         # Reverse corrections were all dropped: the old implementation returned
         # no Indonesian anchors, while callers required at least two anchors.
@@ -327,7 +327,7 @@ def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: 
                     if len(w) >= 4 and w not in _ID_STOPWORDS
                     and w not in {"mohon", "tolong", "harap", "harus", "bisa", "dapat"}}
         anchors = sorted(content_words(query) & content_words(source), key=lambda w: (-len(w), w))
-        return _add_semantic_anchors(anchors, query, source, shared_features)[:limit]
+        return _add_semantic_anchors(anchors, query, source, shared_features, lexicon, "id")[:limit]
     if direction != "zh2id":
         return []
     query_runs = _zh_content_runs(query)
@@ -343,11 +343,11 @@ def _distinctive_shared_anchors(query: str, source: str, direction: str, limit: 
                     continue
                 shared.append(phrase)
                 if len(shared) >= max(1, int(limit)):
-                    return _add_semantic_anchors(shared, query, source, shared_features)[:limit]
-    return _add_semantic_anchors(shared, query, source, shared_features)[:limit]
+                    return _add_semantic_anchors(shared, query, source, shared_features, lexicon, "zh")[:limit]
+    return _add_semantic_anchors(shared, query, source, shared_features, lexicon, "zh")[:limit]
 
 
-def _add_semantic_anchors(anchors, query, source, shared_features):
+def _add_semantic_anchors(anchors, query, source, shared_features, lexicon=None, src="zh"):
     # The same rule now applies in BOTH directions. In particular 過磅/秤重
     # and 吊牌/標籤 are useful evidence without sharing Chinese characters.
     shared = set(shared_features) | {
@@ -363,6 +363,10 @@ def _add_semantic_anchors(anchors, query, source, shared_features):
     # A literal label plus its glossary entry is one anchor, not two independent
     # facts. Alias-only matches still contribute the canonical term feature.
     shared -= redundant_terms
+    if lexicon is not None:
+        # An alias and its long database key are the SAME evidence (套環 and
+        # 工單訂單資訊「套環」), even when the key is not a substring of the alias.
+        shared -= lexicon.match(" ".join(anchors), src)
     codes = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,4}\d{1,8}|\d{2,8})(?![A-Za-z0-9])")
     shared_codes = {x.upper() for x in codes.findall(query)} & {x.upper() for x in codes.findall(source)}
     # Domain abbreviations without digits are evidence too. Do not treat all
@@ -384,6 +388,32 @@ def _specific_reference_anchors(anchors):
     # workflow. Keep them in ranking, but require actual shared subject matter
     # before using an untriggered guarded case as prompt evidence.
     return set(anchors) - _GENERIC_REFERENCE_ANCHORS
+
+
+def _reference_scope_coverage(query, source_match, lexicon, semantic, src):
+    """Discount partial workflow examples using their existing scope metadata.
+
+    Sharing two nouns must not override a case's six-part applicability scope.
+    Approved aliases/concepts count as retrieval evidence, so a paraphrase does
+    not have to copy the old words. This score never authorizes target reuse.
+    """
+    groups = source_match.get("all_groups") or ()
+    if not source_match.get("require_all_groups") or not groups:
+        return 1.0
+    covered = 0
+    for group in groups:
+        for term in group:
+            if _guard_contains(query, term):
+                covered += 1
+                break
+            evidence = lexicon.match(str(term), src) | {
+                "concept:" + name for name in source_understanding.concepts(term)}
+            if evidence & semantic:
+                covered += 1
+                break
+    # Fuzzy evidence remains usable when strongly similar. Missing scope reduces
+    # its rank; it doesn't turn a literal source guard into a paraphrase ban.
+    return covered / len(groups)
 
 @lru_cache(maxsize=8192)
 def _features(text: str, direction: str) -> Counter[str]:
@@ -543,7 +573,7 @@ def _rank_references(query, src, tgt, direction_cases, glossary, min_score):
             c_features[feature] = max(c_features[feature], 1.8)
         shared_semantic = q_semantic & c_semantic
         distinctive_anchors = _distinctive_shared_anchors(
-            query, source_view, direction, shared_features=shared_semantic)
+            query, source_view, direction, shared_features=shared_semantic, lexicon=lexicon)
         coverage, precision, harmonic = _weighted_overlap(q_features, c_features, idf, query_total)
         score = 0.55 * harmonic + 0.30 * coverage + 0.15 * precision
         useful_semantic = shared_semantic - {"concept:machine", "concept:shift", "concept:loading", "concept:unloading"}
@@ -608,6 +638,15 @@ def _rank_references(query, src, tgt, direction_cases, glossary, min_score):
                     and SequenceMatcher(None, query_norm, source_norm, autojunk=False).ratio() >= 0.72)
             if not near:
                 continue
+        if source_match and not guarded and score < 3.0:
+            coverage = _reference_scope_coverage(query_norm, source_match, lexicon, q_semantic, src)
+            groups = source_match.get("all_groups") or ()
+            if (source_match.get("require_all_groups") and groups
+                    and coverage < 0.5 and len(specific) * 2 < len(groups)):
+                # A complex multi-condition example needs proportionate
+                # independent evidence, not two repeatedly counted nouns.
+                continue
+            score *= max(0.5, coverage)
         if score < float(min_score):
             continue
         ranked.append(RetrievedCase(

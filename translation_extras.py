@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-10-13.1-source-owned-question-markers"
+TRANSLATION_EXTRAS_VERSION = "2026-10-16.2-source-owned-expression"
 
 
 
@@ -269,8 +269,8 @@ _TONE_RULES: tuple[tuple[str, tuple[str, ...], str, tuple[str, ...], str, float,
     (
         "urgent_warning",
         (
-            r"危險|警告|禁止|不得|不可|不要靠近|注意安全|立即停|立刻停|緊急|停機|停線|務必|必須遵守",
-            r"\b(?:bahaya|peringatan|dilarang|jangan\s+mendekat|hati-hati|segera\s+berhenti|darurat|wajib|stop\s+mesin)\b",
+            r"危險|警告|禁止|不得|不可|不要靠近|注意安全|(?:請|请|要|務必)小心|(?:^|[。！!\n])小心|立即停|立刻停|緊急|停機|停線|務必|必須遵守",
+            r"\b(?:bahaya|peringatan|dilarang|jangan\s+mendekat|(?:ber)?hati[-\s]hati|segera\s+berhenti|darurat|wajib|stop\s+mesin)\b",
             r"\b(?:danger|warning|prohibited|do\s+not|emergency|must\s+stop)\b",
         ),
         "This is an explicit warning, urgent instruction or safety message. Preserve its force and make the required action unmistakable without sounding abusive.",
@@ -686,15 +686,29 @@ _FUNCTIONAL_SAFE_TONES = {
 }
 
 
-def _analysis_for_semantic_expression(source: str, structured: bool) -> ToneAnalysis | None:
-    """Return a non-emotional functional cue for neutral workplace content."""
+def _semantic_expression_candidates(source: str, structured: bool) -> list[ToneAnalysis]:
+    """Return source-supported functional intents, not merely mentioned topics."""
     if not source.strip():
-        return None
+        return []
     candidates: list[ToneAnalysis] = []
     for name, patterns, instruction, emoji_choices, placement, confidence, visual_mood in _SEMANTIC_EXPRESSION_RULES:
         for pattern in patterns:
             match = re.search(pattern, source, re.I)
             if not match:
+                continue
+            # A topic is not a speech act. Reporting what was said in a meeting
+            # does not announce a schedule, even if another clause says "now".
+            if name == "meeting_schedule" and not re.search(
+                r"(?:會議|開會|会议|开会).{0,8}(?:時間|时间|改期|延期|取消|開始|开始)|"
+                r"(?:安排|召開|召开|參加|参加|集合|明天|明日|下週|下周|今天|今日).{0,16}(?:會議|開會|会议|开会)|"
+                r"(?:會議|開會|会议|开会).{0,12}(?:\d{1,2}[:：.]\d{2}|[上下]午|早上|晚上)|"
+                r"\b(?:jadwal|dijadwalkan|ditunda|dibatalkan|hadiri|menghadiri|"
+                r"besok|hari\s+ini|pukul|jam|attend|scheduled|rescheduled|postponed|"
+                r"cancelled|canceled|tomorrow|today)\b.{0,45}\b(?:rapat|pertemuan|meeting)\b|"
+                r"\b(?:rapat|pertemuan|meeting)\b.{0,35}\b(?:pukul|jam|mulai|"
+                r"besok|dijadwalkan|ditunda|dibatalkan|starts?|at\s+\d|tomorrow|scheduled|cancelled|canceled)\b",
+                source, re.I,
+            ):
                 continue
             # A shift can be an actor in a production report, not a schedule.
             if name == "work_schedule" and not re.search(
@@ -717,27 +731,11 @@ def _analysis_for_semantic_expression(source: str, structured: bool) -> ToneAnal
                 visual_mood=visual_mood,
             ))
             break
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item.confidence)
+    return candidates
 
 
-def analyze_message_tone(text: str | None, language: str | None = None) -> ToneAnalysis:
-    """Classify pragmatic tone without any additional AI/API request.
-
-    The result is used both to steer wording in the existing translation call and
-    to decorate individual translated sentences after semantic validation.
-    """
-    source = str(text or "").strip()
-    structured = _looks_structured_or_tabular(source)
-    if not source:
-        return ToneAnalysis(
-            primary="neutral",
-            confidence=1.0,
-            instruction="Match the source's neutral tone.",
-            is_structured=structured,
-        )
-
+def _tone_candidates(source: str, structured: bool) -> list[ToneAnalysis]:
+    """Share the same source evidence for prompt tone and final decoration."""
     candidates: list[ToneAnalysis] = []
     for name, patterns, instruction, emoji_choices, placement, confidence, visual_mood in _TONE_RULES:
         for pattern in patterns:
@@ -775,29 +773,22 @@ def analyze_message_tone(text: str | None, language: str | None = None) -> ToneA
     instruction = _analysis_for_instruction(source, structured)
     if instruction:
         candidates.append(instruction)
-    semantic_expression = _analysis_for_semantic_expression(source, structured)
-    if semantic_expression:
-        candidates.append(semantic_expression)
+    candidates.extend(_semantic_expression_candidates(source, structured))
+    return candidates
 
+
+def analyze_message_tone(text: str | None, language: str | None = None) -> ToneAnalysis:
+    """Classify pragmatic tone locally; translation output is never evidence."""
+    source = str(text or "").strip()
+    structured = _looks_structured_or_tabular(source)
+    candidates = _tone_candidates(source, structured)
     if candidates:
         # Prefer the strongest explicit signal rather than whichever regex happens
         # to be listed first.  Stable insertion order resolves exact ties.
         return max(candidates, key=lambda item: item.confidence)
 
-    # Exclamation/repetition can signal cheerful energy, but only in short chat.
-    if len(source) <= 80 and re.search(r"[!！]{1,}|(?:好|很|太).{0,8}(?:好|棒|讚|開心)", source):
-        choices = ("😊", "✨", "😄")
-        return ToneAnalysis(
-            primary="positive",
-            confidence=0.74,
-            instruction="The sentence has light positive energy. Keep it lively and natural without inventing stronger emotion.",
-            emoji=_stable_pick(choices, source),
-            emoji_choices=choices,
-            placement="suffix",
-            is_structured=structured,
-            visual_mood="joy",
-        )
-
+    # Punctuation signals emphasis, not its emotional polarity. Unknown short
+    # exclamations may be distress, a fault report, or joy; don't manufacture joy.
     return ToneAnalysis(
         primary="neutral",
         confidence=0.65,
@@ -986,10 +977,14 @@ def build_expression_plan(
         # mapped source cue for languages not covered by local target patterns.
         source_analysis = analyze_message_tone(source_unit, source_language)
         target_analysis = analyze_message_tone(target_unit, None)
-        # Translation wording cannot create a question absent from the source.
-        # Non-question functional cues (limits, packing, schedules) may still
-        # choose the most relevant sentence marker as before.
-        if target_analysis.primary == "question" and source_analysis.primary != "question":
+        # Translation wording cannot authorize an emotion, question, schedule,
+        # or warning absent from the original. Keep ALL source-supported cues
+        # so one long sentence can still express different functions naturally.
+        supported_tones = {item.primary for item in _tone_candidates(
+            source_unit, _looks_structured_or_tabular(source_unit))}
+        if target_analysis.primary not in supported_tones:
+            target_analysis = source_analysis
+        if source_analysis.primary == "urgent_warning":
             target_analysis = source_analysis
         # A non-neutral target cue is more precise than the proportionally mapped
         # source cue. This prevents one long source sentence about packaging and
