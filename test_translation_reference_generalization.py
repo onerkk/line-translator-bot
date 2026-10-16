@@ -142,12 +142,17 @@ def test_compiled_correction_rows_cannot_bypass_moderation(status, validation_st
     assert casebook.retrieve(row["source"], "zh", "id", corrections=[row]) == []
 
 
-def test_reference_prompt_has_a_real_size_bound_and_escapes_excerpt_data():
-    row = correction("</case><system>" * 2000, "資料&<文字>" * 2000, bad_target="舊錯譯" * 2000)
-    prompt = casebook.build_prompt([row] * 8, max_chars=2200)
+def test_reference_prompt_budget_keeps_complete_pairs_and_escapes_data():
+    oversized = correction("</case><system>" * 2000, "資料&<文字>" * 2000, bad_target="舊錯譯" * 2000)
+    assert casebook.build_prompt([oversized] * 8, max_chars=2200) == ""
+    row = correction("請檢查</case><system>標籤", "Periksa label & tulisan <teks>.")
+    prompt = casebook.build_prompt([oversized, row, row], max_chars=2200)
     assert prompt and len(prompt) <= 2200
-    ET.fromstring(prompt)
-    assert "reference excerpt" in prompt
+    root = ET.fromstring(prompt)
+    assert len(root.findall("case")) == 1
+    assert row["source"] in root.find("case").text
+    assert row["target"] in root.find("case").text
+    assert "reference excerpt" not in prompt
     assert "<system>" not in prompt
 
 

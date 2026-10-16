@@ -26,7 +26,7 @@ import translation_mentions
 import factory_station_catalog
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-12.1-shared-station-retrieval"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-16.1-compositional-terminology"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -1182,7 +1182,9 @@ def build_translation_prompt(
             lines.append("<factory_terminology>")
             lines.append(
                 "Only source-grounded plant terms are listed. HARD mappings must appear with the same meaning; "
-                "SOFT mappings are semantic guidance and may inflect naturally in Indonesian."
+                "SOFT mappings are semantic guidance and may inflect naturally in Indonesian. "
+                "A mapping covers only its matched span: retain surrounding modifiers, subtype, brand, "
+                "ownership and restrictions from the whole source. A noun head never replaces its compound."
             )
             if any(get_engine(glossary).glossary[match.source_term].get("entity_kind") for match in matches):
                 lines.append("Products and named facilities are translatable entities, not person names. Preserve the proper plant name, not its literal factory class.")

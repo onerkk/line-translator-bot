@@ -1,0 +1,294 @@
+{
+  "release": "2026-10-16-source-first-composition",
+  "baseline_archive_sha256": "018d8fd695d78582da6962ac28ef26ea5c749522bf76b309f8348c35201d1b48",
+  "deployment": "Not deployed; changed-files archive only",
+  "verification": {
+    "suite_command": "python run_translation_offline_checks.py",
+    "suite_summary": "4132 passed, 2 warnings, 450 subtests passed in 109.10s (0:01:49)",
+    "network": "external HTTP/DNS/sockets blocked; loopback and test transports only",
+    "model_outputs": "fixed fixtures, not live model evaluation",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "warnings": [
+      "Existing multithreaded fork DeprecationWarning (2)"
+    ],
+    "asset_validation_ok": true,
+    "asset_self_test": {
+      "approved_examples_validated": 65,
+      "known_bad_examples_rejected": 19,
+      "ok": true,
+      "regression_cases": 30
+    }
+  },
+  "prompt_comparison": {
+    "metric": "characters of actual outbound messages; not billed tokens, latency or cost",
+    "corpus_sha256": "6bd280382a16808bc4595fdeb31037391f0625c5db707ada9c76a71134fd29b5",
+    "samples": 15,
+    "before": {
+      "samples": 15,
+      "prompt_chars_total": 63370,
+      "reference_lookup_median_ms": 2.25,
+      "good_fixtures_accepted": 15,
+      "bad_fixtures_rejected": 0,
+      "bad_fixture_count": 6
+    },
+    "after": {
+      "samples": 15,
+      "prompt_chars_total": 53909,
+      "reference_lookup_median_ms": 2.282,
+      "good_fixtures_accepted": 15,
+      "bad_fixtures_rejected": 0,
+      "bad_fixture_count": 6
+    },
+    "chars_saved": 9461,
+    "reduction_percent": 14.93,
+    "timing_note": "Reference-lookup timings only; no model/network/LINE time. Small variations are not a claimed speed improvement.",
+    "delivery_policy_note": "Existing delivery policy retains readable candidates; known-bad fixture rejection counts refer to delivery, not local quality checks. No accuracy rate can be inferred.",
+    "rows": [
+      {
+        "id": "routine_id_1",
+        "before_chars": 2913,
+        "after_chars": 2278,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "routine_id_2",
+        "before_chars": 2817,
+        "after_chars": 2168,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "routine_id_3",
+        "before_chars": 2991,
+        "after_chars": 2279,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "routine_id_4",
+        "before_chars": 2979,
+        "after_chars": 2282,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "routine_id_5",
+        "before_chars": 3074,
+        "after_chars": 2278,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "routine_id_6",
+        "before_chars": 2990,
+        "after_chars": 2164,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "packing_progress_today",
+        "before_chars": 2937,
+        "after_chars": 2274,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "packing_progress_tomorrow",
+        "before_chars": 2937,
+        "after_chars": 2274,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "pmi_pending",
+        "before_chars": 5174,
+        "after_chars": 4417,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "pmi_pending_typo",
+        "before_chars": 4624,
+        "after_chars": 4001,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "pmi_pending_nominal",
+        "before_chars": 7574,
+        "after_chars": 6995,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "pmi_completed",
+        "before_chars": 7449,
+        "after_chars": 6862,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "pmi_instrument",
+        "before_chars": 4695,
+        "after_chars": 4072,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "data_heavy",
+        "before_chars": 6144,
+        "after_chars": 6362,
+        "before_calls": 1,
+        "after_calls": 1
+      },
+      {
+        "id": "critical_mixup",
+        "before_chars": 4072,
+        "after_chars": 3203,
+        "before_calls": 1,
+        "after_calls": 1
+      }
+    ]
+  },
+  "screenshot_and_controls": [
+    {
+      "id": "label",
+      "source_sha256": "b8a7d81b4e622ff78fab5a1055d910a2ff388b48393518fa436ba36250303ac7",
+      "before_chars": 5344,
+      "after_chars": 4396,
+      "before_reasoning": "low",
+      "after_reasoning": "low",
+      "after_translation_fast_quality": false,
+      "mocked_calls": 1
+    },
+    {
+      "id": "label_typo",
+      "source_sha256": "8601883390256b7118d54a01e9b64dbda6daad16b9b520b48ea69f1e58fd157e",
+      "before_chars": 5344,
+      "after_chars": 4396,
+      "before_reasoning": "low",
+      "after_reasoning": "low",
+      "after_translation_fast_quality": false,
+      "mocked_calls": 1
+    },
+    {
+      "id": "simple",
+      "source_sha256": "5f4b929297187e84c3c0b302835d022fd90ae7fd79d43cf202fac0ffc567f884",
+      "before_chars": 2628,
+      "after_chars": 2267,
+      "before_reasoning": "low",
+      "after_reasoning": "none",
+      "after_translation_fast_quality": true,
+      "mocked_calls": 1
+    },
+    {
+      "id": "notice",
+      "source_sha256": "06195a778ceeb2ae2f60af38f45a599a1d4c0d187660b25e684b7de17a1975ad",
+      "before_chars": 3271,
+      "after_chars": 2741,
+      "before_reasoning": "low",
+      "after_reasoning": "low",
+      "after_translation_fast_quality": false,
+      "mocked_calls": 1
+    },
+    {
+      "id": "reverse",
+      "source_sha256": "8ed95052b84b344bc04bda13cc4ca95edc8fd6f13eab572bd5c2fadb650a6dcc",
+      "before_chars": 6065,
+      "after_chars": 4339,
+      "before_reasoning": "low",
+      "after_reasoning": "low",
+      "after_translation_fast_quality": false,
+      "mocked_calls": 1
+    }
+  ],
+  "limitations": [
+    "No live provider quality, latency, cost or account availability measurement.",
+    "Generic clause-scope reasoning is prompted, not proven by a new sentence-specific validator.",
+    "Learning means approved correction retrieval and existing measured error policy; model weights are not trained.",
+    "Oversized correction pairs remain stored; a pair that does not fit the prompt budget is omitted whole."
+  ],
+  "files_excluding_this_report": [
+    {
+      "path": "app.py",
+      "change": "modified",
+      "sha256": "4f2d72ef774ef48055872be5cb3230364e8d2ac88ce992afc12a9b19f7f69bcb",
+      "baseline_sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff"
+    },
+    {
+      "path": "factory_terminology.py",
+      "change": "modified",
+      "sha256": "8c10e815ffe2e2aba01803ee63348e835a473763126865f3302818ebcfbaaf4a",
+      "baseline_sha256": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e"
+    },
+    {
+      "path": "glossary_data.json",
+      "change": "modified",
+      "sha256": "618674b517c0f597d5f1aac1b0914e9c55dac276385be9859de5918cfd6db25e",
+      "baseline_sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a"
+    },
+    {
+      "path": "glossary_policy.py",
+      "change": "modified",
+      "sha256": "0fc95dc25dbc48573bbf65ee5619e89779a205f6b8b6f6fff00e5acb561d816f",
+      "baseline_sha256": "8aaeba891e49ad1310852646f65e1c558b00296c47a8465b181d0737710615f8"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "change": "modified",
+      "sha256": "c65c8bf0b362dffce418fa2f2d654a932e10877879c846e01d928504e3010d79",
+      "baseline_sha256": "446900c9248d2a24d83c2cd621073c0448f7e9a95b51879c273ca679d2a2447c"
+    },
+    {
+      "path": "translation_casebook.py",
+      "change": "modified",
+      "sha256": "dd36e816109b6264b80aafd62f66eb1c0af753ff22c86cb453abb7c787bc3b5f",
+      "baseline_sha256": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70"
+    },
+    {
+      "path": "test_factory_operational_status_translation_root_fix.py",
+      "change": "modified",
+      "sha256": "77e41a68e04aaf83fe8e84ff2dcc119c7b2ced968b07385e06cb4cde51c0f3a8",
+      "baseline_sha256": "4f4b92ff6760e0e37c1820b812bfbebca00c603c2f150f5c816bfa8d8a86b587"
+    },
+    {
+      "path": "test_factory_translation_guard_root_fix.py",
+      "change": "modified",
+      "sha256": "414c12f56d634baf4bd4f402a842bf7b4d6c5d0e54e64062113e2cb93592856d",
+      "baseline_sha256": "577a348678c76223f918057fe091c3a15c4661c406f8a754379bff4ca5c9109f"
+    },
+    {
+      "path": "test_translation_pipeline_optimization.py",
+      "change": "modified",
+      "sha256": "57ac2756dbe08ff0924ec08f88e33ab453d16e4fc9ed5b09371eb08a3f9681fa",
+      "baseline_sha256": "2cfd5e32c6d9d6916728144c4098f9ce3e28e9fa883481236dcf0bb12a44a600"
+    },
+    {
+      "path": "test_translation_reference_generalization.py",
+      "change": "modified",
+      "sha256": "104c654717770e14000ec5682e034b52413a95df5366674ce6c511a3d667eb17",
+      "baseline_sha256": "79a2de1fb6c836d5588bcd8f42b6ff1ebbab72022753d29c2fbd64324d7f5005"
+    },
+    {
+      "path": "test_translation_source_first.py",
+      "change": "added",
+      "sha256": "3f2554e634b021f3dd4ecc9b509762f873512bf18731e95182ff99fb27d0e51e",
+      "baseline_sha256": null
+    },
+    {
+      "path": "UPDATE_20261016_TRANSLATION_CORE.md",
+      "change": "added",
+      "sha256": "11124ec9f665091206ac4982d456626f328918c3f68365695c77c6875e67f229",
+      "baseline_sha256": null
+    }
+  ],
+  "references": [
+    "https://developers.openai.com/api/docs/guides/latency-optimization",
+    "https://developers.openai.com/api/docs/guides/cost-optimization",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://ai.google.dev/gemini-api/docs/pricing",
+    "https://developers.openai.com/api/docs/pricing"
+  ]
+}

@@ -13,7 +13,7 @@ import copy
 import re
 from typing import Any, Dict, Iterator, Mapping, Tuple
 
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 
 # Corrections are glossary data migrations, not sentence-specific replacements.
 # They repair corrupted canonical entries wherever the glossary is consumed:
@@ -49,9 +49,13 @@ _CORE_MIGRATIONS: Dict[str, Dict[str, Any]] = {
         "note_id": "Gunakan poles kasar untuk tindakan; dipoles kasar, memoles kasar, atau pemolesan kasar sesuai tata bahasa. Pertahankan pelaku, negasi, pengulangan, dan objek dari sumber.",
     },
     "標籤": {
-        "canonical_idn": "label produk",
+        # A noun head must not invent a subtype. Modifiers in the current
+        # message supply heat number, customer, inspection, product, etc.
+        "canonical_idn": "label",
         "translation_mode": "hard",
         "reverse_safe": True,
+        "note_zh": "標籤的泛稱；標籤種類、內容、品牌及限定範圍由原句決定，不得一律補成產品標籤。",
+        "note_id": "Label umum. Pertahankan jenis, isi, merek, dan batasan sesuai sumber; jangan menambahkan produk jika tidak dinyatakan.",
         "forbidden_idn": ["Faktur Pemesanan", "Surat pesanan pelanggan"],
     },
     "研磨機": {

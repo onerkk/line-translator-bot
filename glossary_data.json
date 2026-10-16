@@ -50,10 +50,10 @@
     "note_id": "Untuk mengangkat dan mengikat barang saat proses pengangkatan"
   },
   "標籤": {
-    "idn": "label produk",
-    "note_zh": "貼在產品外部，標示出貨資訊，如重量、單號、客戶、儲存位置等",
-    "note_id": "Label yang ditempel pada produk untuk mencantumkan berat, nomor pesanan, pelanggan, dan lokasi penyimpanan.",
-    "canonical_idn": "label produk",
+    "idn": "label",
+    "note_zh": "標籤的泛稱；標籤種類、內容、品牌及限定範圍由原句決定，不得一律補成產品標籤。",
+    "note_id": "Label umum. Pertahankan jenis, isi, merek, dan batasan sesuai sumber; jangan menambahkan produk jika tidak dinyatakan.",
+    "canonical_idn": "label",
     "translation_mode": "hard",
     "reverse_safe": true,
     "forbidden_idn": [

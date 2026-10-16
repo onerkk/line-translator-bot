@@ -217,7 +217,7 @@ class FactoryTranslationGuardRootFixTests(unittest.TestCase):
         app_text = (ROOT / "app.py").read_text(encoding="utf-8")
         required_fragments = (
             "import factory_translation_guard as factory_translation_guard_module",
-            "factory_translation_guard_module.build_prompt(text, src, tgt)",
+            "prompt_opt_module.compile_request_prompt(",
             "def _factory_guard_report(",
             "def _final_delivery_guard(",
             "def _tm_bypass_integrity_ok(",

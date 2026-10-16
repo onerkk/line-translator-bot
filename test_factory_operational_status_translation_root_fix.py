@@ -265,9 +265,18 @@ class FactoryOperationalStatusTranslationRootFixTests(unittest.TestCase):
         )
         self.assertNotIn("發料=issue material", app_source)
         self.assertNotIn("領料/發料 → issue material", app_source)
-        self.assertIn("發料=mengubah status data menjadi OL", app_source)
+        # Translation instructions now come directly from the shared glossary,
+        # not duplicate dictionary literals embedded in app.py.
+        import factory_terminology
+        glossary = json.loads((ROOT / "glossary_data.json").read_text(encoding="utf-8"))
+        terminology = factory_terminology.build_translation_prompt(
+            "發料後取消夜間點名", glossary, "zh", "id")
+        runtime_prompt, _ = prompt_optimizer.compile_request_prompt(
+            "發料後取消夜間點名", "zh", "id", terminology_prompt=terminology)
+        self.assertIn("mengubah status data menjadi OL", runtime_prompt)
         self.assertNotIn("點名=ada pengawas yang datang", app_source)
-        self.assertIn("點名=pengecekan kehadiran/absensi", app_source)
+        self.assertIn("pengecekan kehadiran", runtime_prompt)
+        self.assertNotIn("pengecekan kehadiran/absensi", runtime_prompt)
         self.assertNotIn('"roll call": "inspeksi pengawas"', app_source)
         self.assertIn('"roll call": "pengecekan kehadiran"', app_source)
         self.assertIn('"rusak": "故障",', app_source)

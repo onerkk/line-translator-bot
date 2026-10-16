@@ -126,7 +126,7 @@ def test_nmt_blocks_indonesian_factory_and_negative_messages():
 def test_corrected_glossary_entries_are_canonical_and_old_phrases_forbidden():
     glossary = json.loads((ROOT / "glossary_data.json").read_text(encoding="utf-8"))
     expected = {
-        "標籤": "label produk",
+        "標籤": "label",
         "研磨機": "mesin grinding",
         "工單訂單資訊「長度 MIN」": "Panjang MIN",
         "工單訂單資訊「長度 MAX」": "Panjang MAX",
