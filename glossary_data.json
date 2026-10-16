@@ -2756,5 +2756,35 @@
     "forbidden_idn": [
       "Anwei"
     ]
+  },
+  "董事長": {
+    "idn": "Ketua Dewan Direksi",
+    "canonical_idn": "Ketua Dewan Direksi",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 130,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "董事长"
+    ],
+    "note_zh": "台灣公司董事會職稱，保留董事會層級與正副職；不是泛稱 Ketua、班長、總經理或 Direktur Utama。未列姓名不補姓名。",
+    "note_id": "Jabatan pimpinan dewan direksi perusahaan Taiwan; pertahankan tingkat jabatan serta wakil/non-wakil.",
+    "source_note": "董事長採 Ketua Dewan Direksi；台灣駐泗水辦事處印尼文新聞亦使用此稱呼：https://www.roc-taiwan.org/idsub_id/post/4113.html"
+  },
+  "副董事長": {
+    "idn": "Wakil Ketua Dewan Direksi",
+    "canonical_idn": "Wakil Ketua Dewan Direksi",
+    "translation_mode": "hard",
+    "reverse_safe": true,
+    "category": "organization",
+    "priority": 140,
+    "ocr_hint": true,
+    "aliases_zh": [
+      "副董事长"
+    ],
+    "note_zh": "台灣公司董事會職稱，保留董事會層級與正副職；不是泛稱 Ketua、班長、總經理或 Direktur Utama。未列姓名不補姓名。",
+    "note_id": "Jabatan pimpinan dewan direksi perusahaan Taiwan; pertahankan tingkat jabatan serta wakil/non-wakil.",
+    "source_note": "董事長採 Ketua Dewan Direksi；台灣駐泗水辦事處印尼文新聞亦使用此稱呼：https://www.roc-taiwan.org/idsub_id/post/4113.html"
   }
 }

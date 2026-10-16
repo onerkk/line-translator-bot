@@ -1,11 +1,11 @@
 {
-  "release": "2026-10-16.3-user-confirmed-senses",
+  "release": "2026-10-16.4-board-title-and-reverse-spans",
   "baseline_archive_sha256": "018d8fd695d78582da6962ac28ef26ea5c749522bf76b309f8348c35201d1b48",
   "deployed": false,
   "verification": {
     "command": "python run_translation_offline_checks.py",
-    "summary": "4215 passed, 2 warnings, 450 subtests passed in 121.40s (0:02:01)",
-    "targeted": "119 passed",
+    "summary": "4230 passed, 2 warnings, 450 subtests passed in 127.49s (0:02:07)",
+    "targeted": "100 passed",
     "live_ai_calls": 0,
     "line_messages_sent": 0,
     "provider_outputs": "fixed fixtures, not live translation quality evidence",
@@ -104,7 +104,7 @@
     "final": {
       "samples": 15,
       "prompt_chars_total": 54752,
-      "reference_lookup_median_ms": 2.277,
+      "reference_lookup_median_ms": 2.705,
       "good_fixtures_accepted": 15,
       "bad_fixtures_rejected": 0,
       "bad_fixture_count": 6
@@ -134,19 +134,19 @@
     {
       "path": "app.py",
       "change": "modified",
-      "sha256": "aa8c9dc3ac8364d520b2c24a39754c016fe11025cae1149c544b1dff823eed19",
+      "sha256": "8844b2f4c15fda40e1ae539002227a92c9be77e1bd5403b6d2cfc15e24257a2a",
       "baseline_sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff"
     },
     {
       "path": "factory_terminology.py",
       "change": "modified",
-      "sha256": "8c10e815ffe2e2aba01803ee63348e835a473763126865f3302818ebcfbaaf4a",
+      "sha256": "99774cd6833484301f6ad2451185061826ed3ad5f6e90862915af452a26bfa87",
       "baseline_sha256": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e"
     },
     {
       "path": "glossary_data.json",
       "change": "modified",
-      "sha256": "98b6d44900d5fda2ba12410e8a27f67ca1af8ae4e19ec87d447c9e910317794d",
+      "sha256": "2c58e285a9d91e9b33d0abb2f3ce83963fd0b6bc76befd768564a5ff0d60bc9f",
       "baseline_sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a"
     },
     {
@@ -212,7 +212,7 @@
     {
       "path": "UPDATE_20261016_TRANSLATION_REVIEW.md",
       "change": "added",
-      "sha256": "e2e891f5034b918e9d9c7c7e3772d155395dccb4ad1627f92314f2101a70bd94",
+      "sha256": "e81321857aba907289f782ccaad9d6f7790ad3cbdc4491c53dce94412c0f1341",
       "baseline_sha256": null
     },
     {
@@ -225,6 +225,12 @@
       "path": "test_user_confirmed_factory_senses.py",
       "change": "added",
       "sha256": "dfecc04d1936f88e5f67532b020972887f6a979fe73f4b908496fd651fd6be74",
+      "baseline_sha256": null
+    },
+    {
+      "path": "test_board_title_translation.py",
+      "change": "added",
+      "sha256": "565d0a15a7f00969245a8efb240640c8c7eb72e0a486f378b59e2bdec299efe7",
       "baseline_sha256": null
     }
   ],
@@ -479,5 +485,100 @@
     "Bosa": "設備；不指定品牌、零件或特定機種",
     "又有舞臺": "這個人又紅了、再次受到關注；不是藉題發揮"
   },
-  "cache_change": "Hash reloaded knowledge content, not only process-start build ID; identical-label content edits invalidate old translation cache."
+  "cache_change": "Hash reloaded knowledge content, not only process-start build ID; identical-label content edits invalidate old translation cache.",
+  "prior_confirmed_release_verification": {
+    "command": "python run_translation_offline_checks.py",
+    "summary": "4215 passed, 2 warnings, 450 subtests passed in 121.40s (0:02:01)",
+    "targeted": "119 passed",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "provider_outputs": "fixed fixtures, not live translation quality evidence",
+    "assets": {
+      "errors": [],
+      "guard": {
+        "api_version": 1,
+        "asset_fingerprint": "d925d04f39e15ecb351d44de0f0cb43a7afadc3ef57d3abe2661fe627ac22a6a",
+        "build_id": "2026-10-13.1-chat-operation-acceptance",
+        "exact_case_count": 75,
+        "knowledge": {
+          "api_version": 1,
+          "build_id": "2026-10-16.3-user-confirmed-senses",
+          "enabled_count": 52,
+          "entry_count": 52,
+          "path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_knowledge.json",
+          "schema_version": 1,
+          "sha256": "e0470eefdf403969e09b92e200e978324ae26763b265eb64945fd572839cf97d"
+        },
+        "regression_path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_translation_regression.json",
+        "self_test": {
+          "approved_examples_validated": 65,
+          "known_bad_examples_rejected": 19,
+          "ok": true,
+          "regression_cases": 30
+        }
+      },
+      "measurement_semantics": {
+        "api_version": 1,
+        "build_id": "2026-10-02.1-explicit-measurement-subject",
+        "self_test": {
+          "checks": 22,
+          "ok": true
+        }
+      },
+      "message_semantics": {
+        "api_version": 3,
+        "build_id": "2026-10-07.1-release-domain-ownership",
+        "self_test": {
+          "checks": 106,
+          "ok": true
+        }
+      },
+      "ok": true,
+      "policy": {
+        "always_review_opt_in": false,
+        "api_version": 8,
+        "block_unverified_delivery": false,
+        "build_id": "2026-10-07.1-contextual-release-senses",
+        "emergency_nmt_fallback": true,
+        "fail_closed": false,
+        "generic_nmt_fallback": false,
+        "mode": "always",
+        "review_mode": "off",
+        "review_success_required": false,
+        "verified_cache_required": true
+      },
+      "regression": {
+        "case_count": 30,
+        "forbidden_probes_rejected": 29,
+        "verified_targets_accepted": 30
+      },
+      "station_catalog": {
+        "ambiguous_equipment_count": 2,
+        "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
+        "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+        "department_count": 7,
+        "equipment_count": 82,
+        "station_name_count": 63
+      },
+      "warnings": [
+        "review_mode_override:off"
+      ]
+    }
+  },
+  "board_notice_review": {
+    "source": "明天董事長可能會來，上班要帶長袖制服，有通知確定會到現場再穿",
+    "finding": "Main conditional sequence is correct; Ketua loses the specific board title.",
+    "changes": [
+      "Add chairman/deputy chairman atomic glossary concepts and synchronize fallback",
+      "Longest non-overlapping reverse terms own their spans; independent occurrences remain eligible"
+    ],
+    "fixture_tests": [
+      "text entry",
+      "OCR entry",
+      "generic Ketua not board chairman",
+      "deputy-only span",
+      "separate chairman/deputy occurrences",
+      "unseen tool compound"
+    ]
+  }
 }

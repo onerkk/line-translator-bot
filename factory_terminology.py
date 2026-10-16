@@ -26,7 +26,7 @@ import translation_mentions
 import factory_station_catalog
 
 FACTORY_TERMINOLOGY_API_VERSION = 1
-FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-16.1-compositional-terminology"
+FACTORY_TERMINOLOGY_BUILD_ID = "2026-10-16.4-bidirectional-compound-spans"
 
 _CACHE_LOCK = threading.RLock()
 _ENGINE_CACHE: Dict[Tuple[int, int], "FactoryTerminologyEngine"] = {}
@@ -1114,9 +1114,21 @@ def collect_applicable_pairs(
             if match.mode == "hard":
                 pairs.append((match.matched_text, match.target_term))
         normalized = _normalize_id(src_text)
+        # A compound owns its span: a deputy title must not also inject its
+        # embedded non-deputy title. Independent occurrences still both apply.
+        candidates = []
         for norm, row in (safe_reverse_index or {}).items():
-            if re.search(r"(?<![a-z0-9])" + re.escape(str(norm)) + r"(?![a-z0-9])", normalized):
-                pairs.append((str(row.get("source_term") or norm), str(row.get("target_term") or "")))
+            for hit in re.finditer(r"(?<![a-z0-9])" + re.escape(str(norm)) + r"(?![a-z0-9])", normalized):
+                candidates.append((hit.start(), hit.end(), norm, row))
+        occupied = []
+        selected = []
+        for start, end, norm, row in sorted(candidates, key=lambda item: (-(item[1] - item[0]), item[0])):
+            if any(start < other_end and other_start < end for other_start, other_end in occupied):
+                continue
+            occupied.append((start, end))
+            selected.append((start, norm, row))
+        for _, norm, row in sorted(selected, key=lambda item: item[0]):
+            pairs.append((str(row.get("source_term") or norm), str(row.get("target_term") or "")))
 
     deduped: List[Tuple[str, str]] = []
     seen = set()

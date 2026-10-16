@@ -60,3 +60,17 @@ python benchmark_translation_cp.py --runs 3 --output cp-result.json
 ## 本次確認版驗證
 
 4215 passed, 2 warnings, 450 subtests passed in 121.40s (0:02:01)。針對本次新增知識與相關管線的測試為 119 passed。全部為離線測試，固定模型回覆，不代表已線上逐句驗證。15 例既有比較資料的請求仍為 54,752 字；新知識只在相符語境加入。知識資產驗證通過。
+
+## 董事長通知截圖追加修正
+
+原譯整體大致正確：先帶長袖制服，收到確認董事長會到現場的通知後再穿；不是收到通知後才帶，也不是一上班就穿。mungkin 保留可能性，pasti 出現在確認通知的條件中，沒有直接斷言一定會來。主要不足為董事長僅譯 Ketua，職稱太籠統。
+
+詞庫原本缺少董事長條目。現在新增「董事長＝Ketua Dewan Direksi」與「副董事長＝Wakil Ketua Dewan Direksi」，沿用一般詞庫注入與檢查，文字與 OCR 入口一致。沒有新增整句強制改寫，沒有將通用 Ketua 反向固定為董事長。台灣駐泗水辦事處印尼文資料也使用 Ketua Dewan Direksi：https://www.roc-taiwan.org/idsub_id/post/4113.html （本次檢索可見摘要，直接抓取頁面回傳 403）。這不是對印尼所有公司治理職稱的一律對應。
+
+另外修正反向術語的共通範圍處理：同一範圍優先取較長完整詞，避免副職名稱內的正職被重複注入；不同位置的正、副職仍能同時被辨識。測試也用新造的長短工具名稱確認此機制不綁定董事長。
+
+參考譯文：
+
+> Besok Ketua Dewan Direksi mungkin akan datang. Bawa seragam lengan panjang saat berangkat kerja. Kenakan setelah ada pemberitahuan yang memastikan beliau akan datang ke lokasi.
+
+本輪文字／OCR、雙向術語與範圍反例測試：100 passed。完整回歸：4230 passed, 2 warnings, 450 subtests passed in 127.49s (0:02:07)。知識資產驗證通過；模型回覆為固定測試樣本，未作線上模型品質保證。既有 15 例實際請求總字數為 54,752，仍維持單次生成，不增加付費複審。
