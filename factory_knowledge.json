@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "build_id": "2026-10-10.1-source-sense-retrieval",
+  "build_id": "2026-10-16.3-user-confirmed-senses",
   "description": "Plant-specific translation knowledge. Add or revise entries here; do not add sentence patches to app.py.",
   "entries": [
     {
@@ -5216,6 +5216,87 @@
           "target": "總經理越來越嚴格地重視作業區整潔；請把地面掉落物掃乾淨。"
         }
       ]
+    },
+    {
+      "id": "plant_bosa_equipment_sense",
+      "enabled": true,
+      "priority": 310,
+      "directions": [
+        "id-zh"
+      ],
+      "title": "現場 Bosa 指設備（使用者確認）",
+      "match": {
+        "all_groups": [
+          [
+            "bosa"
+          ]
+        ],
+        "require_all_groups": true,
+        "required_regex_any": [
+          "\\bbosa\\s+(?:[a-z]{1,4}\\d{1,8}|(?:ini|itu|rusak|mati|hidup|bermasalah|belum|sudah|tidak)\\b)",
+          "\\b(?:perbaiki|periksa|cek|matikan|nyalakan)\\s+bosa\\b"
+        ],
+        "none_terms": [
+          "nama orang",
+          "bernama",
+          "Pak Bosa",
+          "Bosa datang",
+          "Bosa bilang"
+        ],
+        "min_score": 4
+      },
+      "context": [
+        "使用者於 2026-10-16 確認：本廠設備訊息中的 Bosa 是指「設備」，不是已確認的品牌、人名或某種特定零件。以設備／機台表達；設備代號按當前原文保留，不加入原文沒有的型號或用途。",
+        "設備故障、修理、開停機等狀態仍依原句動詞、否定和時態翻譯。rusak 在此為故障／損壞；belum diperbaiki 是尚未修理，不可翻成已修好。若語境明示是人名或引用文字，不能套用設備義。"
+      ],
+      "preferred_target_phrases": [
+        "設備",
+        "機台"
+      ],
+      "requirements": [],
+      "examples": []
+    },
+    {
+      "id": "person_stage_figurative_attention",
+      "enabled": true,
+      "priority": 310,
+      "directions": [
+        "zh-id"
+      ],
+      "title": "人又有舞臺：又紅了、再次受到關注（使用者確認）",
+      "match": {
+        "regex_any": [
+          "(?:又|再次|重新)(?:有|得到|獲得|获得)(?:了)?舞[臺台]"
+        ],
+        "required_regex_any": [
+          "(?:又|再次|重新)(?:有|得到|獲得|获得)(?:了)?舞[臺台]"
+        ],
+        "none_terms": [
+          "搭建",
+          "搭舞臺",
+          "搭舞台",
+          "舞臺尺寸",
+          "舞台尺寸",
+          "實體舞臺",
+          "實體舞台",
+          "实体舞台",
+          "演唱會",
+          "演唱会",
+          "表演場地",
+          "表演场地"
+        ],
+        "min_score": 3
+      },
+      "context": [
+        "使用者於 2026-10-16 確認：這段工廠對話說某人「又有舞臺了」意指這人又紅了、再次受到關注；不是又能藉題發揮、責備他人或取得處罰權力。",
+        "在指人的比喻語境中，以 kembali menjadi sorotan／kembali populer 表達再次成為焦點；不要直譯為有實體舞臺，也不表示被關注一定是好事。姓名照原文保留；原文若有反諷，保留反諷而不新增動機或懲處。明確談演出或實體舞臺時，按字面翻譯，不套此比喻。"
+      ],
+      "preferred_target_phrases": [
+        "kembali menjadi sorotan",
+        "kembali populer"
+      ],
+      "requirements": [],
+      "examples": []
     }
   ]
 }

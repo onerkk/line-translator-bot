@@ -11712,7 +11712,9 @@ def _translation_cache_asset_fingerprint():
         "active_learning": al_module.ACTIVE_LEARNING_BUILD_ID,
         "adaptive_memory": getattr(globals().get("adaptive_memory_module"), "ADAPTIVE_MEMORY_VERSION", ""),
         "factory_guard": factory_translation_guard_module.asset_fingerprint(),
-        "factory_knowledge": globals().get("_FACTORY_KNOWLEDGE_BUILD_ID", ""),
+        # Reload only when the knowledge file changes; content edits invalidate
+        # translations even when an administrator keeps the same build label.
+        "factory_knowledge": _FACTORY_KNOWLEDGE_STORE.reload(force=False).get("sha256", ""),
         "semantic_audit": getattr(
             factory_semantic_audit_module,
             "FACTORY_SEMANTIC_AUDIT_BUILD_ID",

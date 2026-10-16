@@ -1,29 +1,29 @@
 {
-  "release": "2026-10-16-cumulative-translation-review",
+  "release": "2026-10-16.3-user-confirmed-senses",
   "baseline_archive_sha256": "018d8fd695d78582da6962ac28ef26ea5c749522bf76b309f8348c35201d1b48",
   "deployed": false,
   "verification": {
     "command": "python run_translation_offline_checks.py",
-    "summary": "4195 passed, 2 warnings, 450 subtests passed in 111.67s (0:01:51)",
-    "network": "external HTTP/DNS/sockets blocked; loopback tests allowed",
+    "summary": "4215 passed, 2 warnings, 450 subtests passed in 121.40s (0:02:01)",
+    "targeted": "119 passed",
     "live_ai_calls": 0,
     "line_messages_sent": 0,
-    "provider_outputs": "fixed test fixtures; NOT live model evaluation",
+    "provider_outputs": "fixed fixtures, not live translation quality evidence",
     "assets": {
       "errors": [],
       "guard": {
         "api_version": 1,
-        "asset_fingerprint": "3faae629f110259e29e22c7204df537c0de57cd937204235ecaa64fd46aff7f3",
+        "asset_fingerprint": "d925d04f39e15ecb351d44de0f0cb43a7afadc3ef57d3abe2661fe627ac22a6a",
         "build_id": "2026-10-13.1-chat-operation-acceptance",
         "exact_case_count": 75,
         "knowledge": {
           "api_version": 1,
-          "build_id": "2026-10-10.1-source-sense-retrieval",
-          "enabled_count": 50,
-          "entry_count": 50,
+          "build_id": "2026-10-16.3-user-confirmed-senses",
+          "enabled_count": 52,
+          "entry_count": 52,
           "path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_knowledge.json",
           "schema_version": 1,
-          "sha256": "b34ccefe1a03449f1808aa6f3272adfe2646d7bd2e039192f65540f5638eeea8"
+          "sha256": "e0470eefdf403969e09b92e200e978324ae26763b265eb64945fd572839cf97d"
         },
         "regression_path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_translation_regression.json",
         "self_test": {
@@ -104,7 +104,7 @@
     "final": {
       "samples": 15,
       "prompt_chars_total": 54752,
-      "reference_lookup_median_ms": 2.895,
+      "reference_lookup_median_ms": 2.277,
       "good_fixtures_accepted": 15,
       "bad_fixtures_rejected": 0,
       "bad_fixture_count": 6
@@ -114,7 +114,200 @@
     "delivery_note": "Bad fixture rejection is a delivery-policy metric; 0 rejected is not a claim of correct translation. Existing readable-candidate delivery policy remains unchanged.",
     "timing_note": "Local lookup timing only, no model/LINE/network timing; do not infer speed improvement."
   },
-  "screenshot_requests": {
+  "confirmed_database_concepts": [
+    "標籤: label, subtype from current source",
+    "材料識別掛牌: TAG, contextual sense only",
+    "安衛: K3, contextual sense only",
+    "套環: existing Cincin Pelindung",
+    "處長: existing kepala divisi"
+  ],
+  "unresolved": [
+    "治具具體型式未指定；保留廣義工具含義，不猜造型式。"
+  ],
+  "limitations": [
+    "No live model output quality, latency, billing or cheapest-model comparison.",
+    "General semantic relationships are prompt-guided, not guaranteed by a complete semantic validator.",
+    "Learning uses approved database/memory retrieval, not weight training.",
+    "No per-screenshot sentence rewriting was added."
+  ],
+  "files_excluding_this_report": [
+    {
+      "path": "app.py",
+      "change": "modified",
+      "sha256": "aa8c9dc3ac8364d520b2c24a39754c016fe11025cae1149c544b1dff823eed19",
+      "baseline_sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff"
+    },
+    {
+      "path": "factory_terminology.py",
+      "change": "modified",
+      "sha256": "8c10e815ffe2e2aba01803ee63348e835a473763126865f3302818ebcfbaaf4a",
+      "baseline_sha256": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e"
+    },
+    {
+      "path": "glossary_data.json",
+      "change": "modified",
+      "sha256": "98b6d44900d5fda2ba12410e8a27f67ca1af8ae4e19ec87d447c9e910317794d",
+      "baseline_sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a"
+    },
+    {
+      "path": "glossary_policy.py",
+      "change": "modified",
+      "sha256": "0fc95dc25dbc48573bbf65ee5619e89779a205f6b8b6f6fff00e5acb561d816f",
+      "baseline_sha256": "8aaeba891e49ad1310852646f65e1c558b00296c47a8465b181d0737710615f8"
+    },
+    {
+      "path": "prompt_optimizer.py",
+      "change": "modified",
+      "sha256": "d79c6cd6b5bd8edbc3e8ac057123f9c94bf7f2409767ee1207a172726073fed9",
+      "baseline_sha256": "446900c9248d2a24d83c2cd621073c0448f7e9a95b51879c273ca679d2a2447c"
+    },
+    {
+      "path": "translation_casebook.py",
+      "change": "modified",
+      "sha256": "63f04f1d2c828d80d916c07f1dcea391f5d84811c14f31c3dc41f1a5fae6a3a1",
+      "baseline_sha256": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70"
+    },
+    {
+      "path": "translation_extras.py",
+      "change": "modified",
+      "sha256": "b7b31bb80fd36928102ca724451f01af652827e736d20952c52cce77994f441f",
+      "baseline_sha256": "6a1ba1863be0c2e674963ff12fb6a7b449845ca607f0b04f2410b0ef860fd487"
+    },
+    {
+      "path": "test_factory_operational_status_translation_root_fix.py",
+      "change": "modified",
+      "sha256": "77e41a68e04aaf83fe8e84ff2dcc119c7b2ced968b07385e06cb4cde51c0f3a8",
+      "baseline_sha256": "4f4b92ff6760e0e37c1820b812bfbebca00c603c2f150f5c816bfa8d8a86b587"
+    },
+    {
+      "path": "test_factory_translation_guard_root_fix.py",
+      "change": "modified",
+      "sha256": "414c12f56d634baf4bd4f402a842bf7b4d6c5d0e54e64062113e2cb93592856d",
+      "baseline_sha256": "577a348678c76223f918057fe091c3a15c4661c406f8a754379bff4ca5c9109f"
+    },
+    {
+      "path": "test_translation_pipeline_optimization.py",
+      "change": "modified",
+      "sha256": "57ac2756dbe08ff0924ec08f88e33ab453d16e4fc9ed5b09371eb08a3f9681fa",
+      "baseline_sha256": "2cfd5e32c6d9d6916728144c4098f9ce3e28e9fa883481236dcf0bb12a44a600"
+    },
+    {
+      "path": "test_translation_reference_generalization.py",
+      "change": "modified",
+      "sha256": "104c654717770e14000ec5682e034b52413a95df5366674ce6c511a3d667eb17",
+      "baseline_sha256": "79a2de1fb6c836d5588bcd8f42b6ff1ebbab72022753d29c2fbd64324d7f5005"
+    },
+    {
+      "path": "test_translation_source_first.py",
+      "change": "added",
+      "sha256": "3f2554e634b021f3dd4ecc9b509762f873512bf18731e95182ff99fb27d0e51e",
+      "baseline_sha256": null
+    },
+    {
+      "path": "test_translation_pragmatic_integrity.py",
+      "change": "added",
+      "sha256": "81b8f83a9289a346eec059e8a4d7b4b15657aefceaa7b9d9daf03e1d5387e3e9",
+      "baseline_sha256": null
+    },
+    {
+      "path": "UPDATE_20261016_TRANSLATION_REVIEW.md",
+      "change": "added",
+      "sha256": "e2e891f5034b918e9d9c7c7e3772d155395dccb4ad1627f92314f2101a70bd94",
+      "baseline_sha256": null
+    },
+    {
+      "path": "factory_knowledge.json",
+      "change": "modified",
+      "sha256": "a030b90a37abcc423731a3f61aca637eb21bf6438e39626801e2eb1e378854c6",
+      "baseline_sha256": "72e7e8f52679cf2d65e1a5214bc1006d438d7f6b3246b42a032f29ad540afb93"
+    },
+    {
+      "path": "test_user_confirmed_factory_senses.py",
+      "change": "added",
+      "sha256": "dfecc04d1936f88e5f67532b020972887f6a979fe73f4b908496fd651fd6be74",
+      "baseline_sha256": null
+    }
+  ],
+  "previous_release_verification": {
+    "command": "python run_translation_offline_checks.py",
+    "summary": "4195 passed, 2 warnings, 450 subtests passed in 111.67s (0:01:51)",
+    "network": "external HTTP/DNS/sockets blocked; loopback tests allowed",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "provider_outputs": "fixed test fixtures; NOT live model evaluation",
+    "assets": {
+      "errors": [],
+      "guard": {
+        "api_version": 1,
+        "asset_fingerprint": "3faae629f110259e29e22c7204df537c0de57cd937204235ecaa64fd46aff7f3",
+        "build_id": "2026-10-13.1-chat-operation-acceptance",
+        "exact_case_count": 75,
+        "knowledge": {
+          "api_version": 1,
+          "build_id": "2026-10-10.1-source-sense-retrieval",
+          "enabled_count": 50,
+          "entry_count": 50,
+          "path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_knowledge.json",
+          "schema_version": 1,
+          "sha256": "b34ccefe1a03449f1808aa6f3272adfe2646d7bd2e039192f65540f5638eeea8"
+        },
+        "regression_path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_translation_regression.json",
+        "self_test": {
+          "approved_examples_validated": 65,
+          "known_bad_examples_rejected": 19,
+          "ok": true,
+          "regression_cases": 30
+        }
+      },
+      "measurement_semantics": {
+        "api_version": 1,
+        "build_id": "2026-10-02.1-explicit-measurement-subject",
+        "self_test": {
+          "checks": 22,
+          "ok": true
+        }
+      },
+      "message_semantics": {
+        "api_version": 3,
+        "build_id": "2026-10-07.1-release-domain-ownership",
+        "self_test": {
+          "checks": 106,
+          "ok": true
+        }
+      },
+      "ok": true,
+      "policy": {
+        "always_review_opt_in": false,
+        "api_version": 8,
+        "block_unverified_delivery": false,
+        "build_id": "2026-10-07.1-contextual-release-senses",
+        "emergency_nmt_fallback": true,
+        "fail_closed": false,
+        "generic_nmt_fallback": false,
+        "mode": "always",
+        "review_mode": "off",
+        "review_success_required": false,
+        "verified_cache_required": true
+      },
+      "regression": {
+        "case_count": 30,
+        "forbidden_probes_rejected": 29,
+        "verified_targets_accepted": 30
+      },
+      "station_catalog": {
+        "ambiguous_equipment_count": 2,
+        "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
+        "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+        "department_count": 7,
+        "equipment_count": 82,
+        "station_name_count": 63
+      },
+      "warnings": [
+        "review_mode_override:off"
+      ]
+    }
+  },
+  "previous_release_screenshot_requests": {
     "samples": 16,
     "first_12_previous_chars": 57230,
     "first_12_final_chars": 57108,
@@ -281,108 +474,10 @@
       }
     ]
   },
-  "confirmed_database_concepts": [
-    "標籤: label, subtype from current source",
-    "材料識別掛牌: TAG, contextual sense only",
-    "安衛: K3, contextual sense only",
-    "套環: existing Cincin Pelindung",
-    "處長: existing kepala divisi"
-  ],
-  "unresolved": [
-    "Bosa: no confirmed local meaning; preserve unknown identity",
-    "又有舞臺: figurative intent needs user confirmation; no invented role or penalty",
-    "治具: exact physical tool unspecified; do not invent tool type"
-  ],
-  "limitations": [
-    "No live model output quality, latency, billing or cheapest-model comparison.",
-    "General semantic relationships are prompt-guided, not guaranteed by a complete semantic validator.",
-    "Learning uses approved database/memory retrieval, not weight training.",
-    "No per-screenshot sentence rewriting was added."
-  ],
-  "files_excluding_this_report": [
-    {
-      "path": "app.py",
-      "change": "modified",
-      "sha256": "7c1beed7ff152ce7d8db9545d22290e9bae2ab5e6fb3007d18926eefd8b52271",
-      "baseline_sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff"
-    },
-    {
-      "path": "factory_terminology.py",
-      "change": "modified",
-      "sha256": "8c10e815ffe2e2aba01803ee63348e835a473763126865f3302818ebcfbaaf4a",
-      "baseline_sha256": "43162d5915433b07b7416d8c779e5472788108c8223a70de4d0a323ac15fbc5e"
-    },
-    {
-      "path": "glossary_data.json",
-      "change": "modified",
-      "sha256": "98b6d44900d5fda2ba12410e8a27f67ca1af8ae4e19ec87d447c9e910317794d",
-      "baseline_sha256": "9fd47b4a970230300d571aaa51569283a5cf0b700764b68dd5a1118f06ac171a"
-    },
-    {
-      "path": "glossary_policy.py",
-      "change": "modified",
-      "sha256": "0fc95dc25dbc48573bbf65ee5619e89779a205f6b8b6f6fff00e5acb561d816f",
-      "baseline_sha256": "8aaeba891e49ad1310852646f65e1c558b00296c47a8465b181d0737710615f8"
-    },
-    {
-      "path": "prompt_optimizer.py",
-      "change": "modified",
-      "sha256": "d79c6cd6b5bd8edbc3e8ac057123f9c94bf7f2409767ee1207a172726073fed9",
-      "baseline_sha256": "446900c9248d2a24d83c2cd621073c0448f7e9a95b51879c273ca679d2a2447c"
-    },
-    {
-      "path": "translation_casebook.py",
-      "change": "modified",
-      "sha256": "63f04f1d2c828d80d916c07f1dcea391f5d84811c14f31c3dc41f1a5fae6a3a1",
-      "baseline_sha256": "4fa83c37ca98135a0a22296d3832db53d35b8438b36b63190f2f24478b31ae70"
-    },
-    {
-      "path": "translation_extras.py",
-      "change": "modified",
-      "sha256": "b7b31bb80fd36928102ca724451f01af652827e736d20952c52cce77994f441f",
-      "baseline_sha256": "6a1ba1863be0c2e674963ff12fb6a7b449845ca607f0b04f2410b0ef860fd487"
-    },
-    {
-      "path": "test_factory_operational_status_translation_root_fix.py",
-      "change": "modified",
-      "sha256": "77e41a68e04aaf83fe8e84ff2dcc119c7b2ced968b07385e06cb4cde51c0f3a8",
-      "baseline_sha256": "4f4b92ff6760e0e37c1820b812bfbebca00c603c2f150f5c816bfa8d8a86b587"
-    },
-    {
-      "path": "test_factory_translation_guard_root_fix.py",
-      "change": "modified",
-      "sha256": "414c12f56d634baf4bd4f402a842bf7b4d6c5d0e54e64062113e2cb93592856d",
-      "baseline_sha256": "577a348678c76223f918057fe091c3a15c4661c406f8a754379bff4ca5c9109f"
-    },
-    {
-      "path": "test_translation_pipeline_optimization.py",
-      "change": "modified",
-      "sha256": "57ac2756dbe08ff0924ec08f88e33ab453d16e4fc9ed5b09371eb08a3f9681fa",
-      "baseline_sha256": "2cfd5e32c6d9d6916728144c4098f9ce3e28e9fa883481236dcf0bb12a44a600"
-    },
-    {
-      "path": "test_translation_reference_generalization.py",
-      "change": "modified",
-      "sha256": "104c654717770e14000ec5682e034b52413a95df5366674ce6c511a3d667eb17",
-      "baseline_sha256": "79a2de1fb6c836d5588bcd8f42b6ff1ebbab72022753d29c2fbd64324d7f5005"
-    },
-    {
-      "path": "test_translation_source_first.py",
-      "change": "added",
-      "sha256": "3f2554e634b021f3dd4ecc9b509762f873512bf18731e95182ff99fb27d0e51e",
-      "baseline_sha256": null
-    },
-    {
-      "path": "test_translation_pragmatic_integrity.py",
-      "change": "added",
-      "sha256": "81b8f83a9289a346eec059e8a4d7b4b15657aefceaa7b9d9daf03e1d5387e3e9",
-      "baseline_sha256": null
-    },
-    {
-      "path": "UPDATE_20261016_TRANSLATION_REVIEW.md",
-      "change": "added",
-      "sha256": "77b21f11a8e497f3576df62c37a84d9e2f6e4249ffb8ada3c1c4b253bb9f2a02",
-      "baseline_sha256": null
-    }
-  ]
+  "confirmed_by_user": {
+    "at": "2026-10-16T19:48:11+08:00",
+    "Bosa": "設備；不指定品牌、零件或特定機種",
+    "又有舞臺": "這個人又紅了、再次受到關注；不是藉題發揮"
+  },
+  "cache_change": "Hash reloaded knowledge content, not only process-start build ID; identical-label content edits invalidate old translation cache."
 }
