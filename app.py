@@ -489,7 +489,7 @@ logger.info(
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
 _EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-10-16.2-source-owned-expression"
-_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-10-16.2-pragmatic-source-integrity"
+_EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-10-17.2-pragmatic-action-timing"
 _required_translation_extra_functions = (
     "analyze_message_tone",
     "build_tone_prompt_instruction",
@@ -3223,9 +3223,9 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
     msgs = [{"role": "system", "content": sys_prompt}]
     snapshot = conversation_context.current_for(retrieval_source)
     quoted_context = str(getattr(_tl, 'quoted_context_source', '') or '').strip()
-    if snapshot and snapshot.get("entries"):
+    if conversation_context.has_prompt_evidence(snapshot):
         # Stable instructions first; original user text remains untrusted data.
-        msgs.append({"role": "system", "content": conversation_context.PROMPT_RULES})
+        msgs.append({"role": "system", "content": conversation_context.prompt_rules(snapshot)})
     elif quoted_context:
         msgs.append({"role": "system", "content": conversation_context.PROMPT_RULES})
     direction_key = translation_casebook_module.direction_key(src, tgt)
@@ -3289,10 +3289,10 @@ def _build_messages_with_fewshot(sys_prompt, user_msg, src, tgt, group_id=None, 
     if reference_messages:
         msgs.extend(reference_messages)
 
-    if snapshot and snapshot.get("entries"):
+    if conversation_context.has_prompt_evidence(snapshot):
         msgs.append({"role": "user", "content": "<conversation_context>\n"
                      + conversation_context.prompt_data(snapshot) + "\n</conversation_context>"})
-    elif quoted_context:
+    if quoted_context and not (snapshot and snapshot.get("entries")):
         msgs.append({"role": "user", "content": "<line_reply_context>\n"
                      + json.dumps({"quoted_original": quoted_context[:1200]}, ensure_ascii=False)
                      + "\n</line_reply_context>"})
@@ -11573,7 +11573,7 @@ def _translation_cache_context_bound(text):
     if get_recent_media_scene(getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)):
         return True
     snapshot = conversation_context.current_for(text)
-    return bool(snapshot and (snapshot.get("entries") or snapshot.get("media_evidence")))
+    return bool(snapshot and (conversation_context.has_prompt_evidence(snapshot) or snapshot.get("media_evidence")))
 
 
 def _translation_cache_scope(*, effective_conversation=None):
@@ -11619,7 +11619,7 @@ def _context_translation_request_key(text, src, tgt):
     snapshot = conversation_context.current_for(text) or {}
     if snapshot.get("reason") == "store_unavailable":
         return None
-    effective = conversation_context.prompt_data(snapshot) if snapshot.get("entries") else ""
+    effective = conversation_context.prompt_data(snapshot) if conversation_context.has_prompt_evidence(snapshot) else ""
     payload = {
         "version": "2026-09-08.1-context-exact-reuse",
         "source": text, "src": src, "tgt": tgt,
@@ -15485,8 +15485,8 @@ def _translate_core(text, src, tgt):
             )
             _review_context = build_translation_semantic_contract_prompt(_semantic_contract)
             _review_snapshot = conversation_context.current_for(text)
-            if _review_snapshot and _review_snapshot.get("entries"):
-                _review_context += ("\n" + conversation_context.PROMPT_RULES
+            if conversation_context.has_prompt_evidence(_review_snapshot):
+                _review_context += ("\n" + conversation_context.prompt_rules(_review_snapshot)
                     + "\n<conversation_context>\n" + conversation_context.prompt_data(_review_snapshot)
                     + "\n</conversation_context>")
             _learning_review_context = al_module.build_review_context(
@@ -18392,14 +18392,12 @@ def handle_qry_command(text):
             return result
     if not entries:
         return "❌ 找不到客戶 / Pelanggan tidak ditemukan: " + query + "\n請確認名稱是否正確 / Mohon periksa nama"
-    # Build response
-    lines = []
-    lines.append("📦 " + query + " 儲區查詢 / Cek gudang")
-    lines.append("=" * 18)
+    # Mobile text bubbles use proportional fonts and user-selected font sizes.
+    # Give every condition and destination its own line instead of relying on
+    # spaces, long rules or a condition/arrow/code fitting on the same line.
+    lines = ["📦 " + query, "儲區查詢", "Cek gudang"]
     for length, area in entries:
-        zh = format_length_zh(length)
-        lines.append(zh + " \u2192 " + area)
-    lines.append("=" * 18)
+        lines.extend(["", format_length_zh(length), "→ " + area])
     return "\n".join(lines)
 
 

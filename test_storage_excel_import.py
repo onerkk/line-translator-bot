@@ -74,9 +74,9 @@ def test_old_in_memory_table_works_for_work_order_and_qry(monkeypatch):
                               app._work_order_storage_lookup())
     assert (result["status"], result["area"]) == ("ok", "CUSTOM01")
     query = app.handle_qry_command("/qry 方鉦")
-    assert "3200以下（含） → CUSTOM01" in query
-    assert "3200～4200 → CUSTOM02" in query
-    assert "超過4200 → CUSTOM03" in query
+    assert "3200以下（含）\n→ CUSTOM01" in query
+    assert "3200～4200\n→ CUSTOM02" in query
+    assert "超過4200\n→ CUSTOM03" in query
     assert live["方鉦"][0][0] == "A"
 
 

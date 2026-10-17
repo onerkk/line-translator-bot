@@ -1,6 +1,8 @@
 """Regression checks for storage rows extracted from the ag-grid workbook."""
 
+import copy
 import json
+import re
 from pathlib import Path
 
 from storage_import import parse_storage_ag_grid_rows
@@ -30,9 +32,8 @@ def test_ag_grid_rows_keep_all_distinct_areas_and_conflicting_repeats():
 
 
 def test_shipped_source_rows_preserve_original_conflicts_and_multiple_areas():
-    data = json.loads((_DIRECTORY / "storage_data.json").read_text(encoding="utf-8"))
-    reference = json.loads((_DIRECTORY / "storage_reference.json").read_text(encoding="utf-8"))
-    assert data == reference
+    # This is the immutable workbook reference, not the admin-editable table.
+    data = json.loads((_DIRECTORY / "storage_reference.json").read_text(encoding="utf-8"))
     assert len(data) == 398
     assert sum(len(rows) for rows in data.values()) == 1204
     assert data["方鉦"] == [["<=3200", "EH79"], [">3200<=4200", "EH72"], [">4200", "EH72"]]
@@ -50,3 +51,35 @@ def test_shipped_source_rows_preserve_original_conflicts_and_multiple_areas():
     assert data["域鑫科技"] == [[">4200", "EC40"]]
     assert data["NMSK"] == [["<=3200", "EH28"], [">4200", "EG34"]]
     assert data["鉅豐"] == [["<=3200", "EH79"]]
+
+
+def test_live_storage_table_has_valid_rows_without_requiring_historical_equality():
+    from storage_import import normalize_storage_lookup
+
+    live = json.loads((_DIRECTORY / "storage_data.json").read_text(encoding="utf-8"))
+    assert isinstance(live, dict) and live
+    for customer, rows in live.items():
+        assert isinstance(customer, str) and customer.strip(), repr(customer)
+        assert isinstance(rows, list), customer
+        for row in rows:
+            assert isinstance(row, list) and len(row) == 2, (customer, row)
+            assert all(isinstance(value, str) and value.strip() for value in row), (customer, row)
+    normalized = normalize_storage_lookup(live)
+    assert set(normalized) == set(live)
+    for customer, rows in normalized.items():
+        assert len(rows) == len(live[customer]), customer
+        for index, (condition, area) in enumerate(rows):
+            assert re.fullmatch(r"(?:(?:<=|>=|<|>)\d+(?:\.\d+)?)+", condition), (customer, condition)
+            assert area == live[customer][index][1], (customer, area)
+
+
+def test_admin_edits_remain_authoritative_without_changing_reference():
+    from work_order_storage_reference import effective_work_order_storage_lookup
+
+    reference = {"示例客戶": [["<=3200", "OLD01"], [">3200", "OLD02"]]}
+    live = {"示例客戶": [["<=3200", "NEW01、NEW02"], [">3200", "NEW03"]],
+            "新增客戶": [[">4200", "NEW04"]]}
+    before_live, before_reference = copy.deepcopy(live), copy.deepcopy(reference)
+    assert effective_work_order_storage_lookup(live, reference) == live
+    assert live == before_live
+    assert reference == before_reference
