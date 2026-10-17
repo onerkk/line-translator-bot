@@ -149,6 +149,7 @@ import translation_request_cache
 import factory_record_contract
 import line_command_catalog
 import conversation_context
+import media_context_evidence
 import translation_mentions
 import line_user_names
 import functools
@@ -411,7 +412,7 @@ if (getattr(factory_translation_policy_module, "FACTORY_TRANSLATION_POLICY_API_V
     )
 logger.info("[FactoryPolicy] deployment verified %s", factory_translation_policy_module.health())
 
-_EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID = "2026-10-12.1-shared-erp-catalog-and-number-roles"
+_EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID = "2026-10-17.1-catalog-abbreviation-retrieval"
 if factory_station_catalog_module.BUILD_ID != _EXPECTED_FACTORY_STATION_CATALOG_BUILD_ID:
     raise RuntimeError("ERP catalog deployment mismatch. Replace app.py, factory_station_catalog.py and factory_station_data.json together.")
 
@@ -1248,8 +1249,8 @@ group_tracking = {}
 # v3.9.39: 視覺媒體上下文(根治 rusak 語意歧義 — 媒體場景影響下一則文字翻譯)
 # 跨 worker 共享 — 用 disk(_load_media_ctx / _save_media_ctx)
 # 不能用 in-memory dict(Render gunicorn 多 worker 會 75% 失效率)
-MEDIA_CONTEXT_TTL = 120          # seconds — 同人 2 分鐘內的媒體當作上下文
-MEDIA_CONTEXT_PER_USER = 3       # 每人最多保留幾筆
+MEDIA_CONTEXT_TTL = media_context_evidence.TTL          # seconds — 同人最近一組照片，依文字事件時間選取
+MEDIA_CONTEXT_PER_USER = media_context_evidence.MAX_ITEMS       # pending 與完成結果共用同一訊息位置
 
 # DM (private message) target language per user, default "id"
 dm_target_lang = {}
@@ -10820,14 +10821,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         if _auto_tone_instruction:
             tone_instruction = tone_instruction + " " + _auto_tone_instruction
 
-        _scene = get_recent_media_scene(
-            getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)
-        ) or ""
-        _media_context_note = (
-            "<source_bound_context>Recent image context (use only to resolve omitted references; "
-            "do not override explicit source facts or infer new actions): " + str(_scene)[:1200]
-            + "</source_bound_context>"
-        ) if _scene else ""
+        _media_context_note = translation_media_context(text)
         _prompt_contract = (getattr(_tl, 'semantic_contract', None)
                             or build_translation_semantic_contract(text, src, tgt))
         _source_glossary_hint = inject_glossary_hint(text, src, tgt)
@@ -10949,7 +10943,7 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _translation_needs_upgrade_model(text)
             or prompt_opt_module.needs_semantic_reasoning(
                 text, _prompt_contract,
-                contextual=bool(_scene or getattr(_tl, 'quoted_context_source', '')
+                contextual=bool(_media_context_note or getattr(_tl, 'quoted_context_source', '')
                                 or (conversation_context.current_for(text) or {}).get('entries')))))
         _alignment_contract = translation_alignment_module.build_contract(protected, src, tgt, glossary=GLOSSARY_LOOKUP)
         _use_alignment = bool(_factory_cognitive_route and _alignment_contract.get("aligned")
@@ -11579,7 +11573,7 @@ def _translation_cache_context_bound(text):
     if get_recent_media_scene(getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)):
         return True
     snapshot = conversation_context.current_for(text)
-    return bool(snapshot and snapshot.get("entries"))
+    return bool(snapshot and (snapshot.get("entries") or snapshot.get("media_evidence")))
 
 
 def _translation_cache_scope(*, effective_conversation=None):
@@ -11593,6 +11587,7 @@ def _translation_cache_scope(*, effective_conversation=None):
         "tone_custom": str(getattr(_tl, "tone_custom", "") or ""),
         "variant": str(getattr(_tl, "translation_variant", "default") or "default"),
         "station": line_factory_features.station_scope(),
+        "media_evidence": (getattr(_tl, "conversation_snapshot", None) or {}).get("media_evidence", []),
         "protected_names": sorted(set(CUSTOMER_NAMES + _line_user_protected_names())),
         "conversation": (conversation_context.fingerprint(
             getattr(_tl, "conversation_snapshot", None))
@@ -11696,6 +11691,7 @@ def _translation_cache_asset_fingerprint():
         "mention_restoration": "2026-09-10.whole-identity-tokens",
         "prompt_compiler": getattr(prompt_opt_module, "PROMPT_OPTIMIZER_VERSION", ""),
         "tone_semantics": getattr(translation_extras_module, "TRANSLATION_EXTRAS_VERSION", ""),
+        "visual_evidence": media_context_evidence.BUILD_ID,
         "expressive_engine": getattr(expressive_engine_module, "EXPRESSIVE_ENGINE_VERSION", ""),
         "source_understanding": getattr(globals().get("source_understanding_module"), "SOURCE_UNDERSTANDING_VERSION", ""),
         "source_alignment": translation_alignment_module.BUILD_ID,
@@ -13982,6 +13978,44 @@ def _conversation_journal():
     return conversation_context.SourceJournal(str(translation_retry_queue_module.DB_PATH) + ".context")
 
 
+def capture_translation_media_context(snapshot):
+    """Freeze eligible photo IDs before the durable text job is persisted."""
+    if not snapshot or snapshot.get("reason") == "disabled":
+        return snapshot
+    if "media_evidence" not in snapshot:
+        group, author = snapshot.get("group_id"), snapshot.get("author")
+        rows = _load_media_ctx().get(group, {}).get(author, [])
+        snapshot["media_evidence"] = media_context_evidence.select(
+            rows, snapshot.get("timestamp") or time.time(), MEDIA_CONTEXT_TTL)
+    return snapshot
+
+
+def translation_media_context(text):
+    snapshot = getattr(_tl, "conversation_snapshot", None)
+    if snapshot and snapshot.get("source_key") == conversation_context.source_key(text):
+        capture_translation_media_context(snapshot)
+        rows = snapshot.get("media_evidence", [])
+        # Allow only originally selected pending IDs to gain observations.
+        # Do not attach photos that arrived after this text or another sender's.
+        live = {str(e[1]): e for e in _load_media_ctx().get(snapshot.get("group_id"), {}).get(snapshot.get("author"), [])}
+        selected = []
+        for row in rows:
+            item = dict(row)
+            if item["message_id"] not in live:
+                continue
+            if item["state"] == "pending":
+                current = live[item["message_id"]]
+                if not str(current[2]).startswith(PENDING_IMAGE_MEDIA_SCENE_PREFIX):
+                    item.update(state="observed", observation=str(current[2])[:600])
+            selected.append(item)
+        return media_context_evidence.prompt(selected)
+    # Direct callers retain existing group/sender isolation without creating a
+    # conversation turn. Normal webhook/retry paths always use the snapshot.
+    group, author = getattr(_tl, "group_id", None), getattr(_tl, "user_id", None)
+    rows = _load_media_ctx().get(group, {}).get(author, [])
+    return media_context_evidence.prompt(media_context_evidence.select(rows, time.time(), MEDIA_CONTEXT_TTL))
+
+
 def _conversation_group_id():
     group = str(getattr(_tl, "group_id", "") or "")
     return str(getattr(_tl, "user_id", "") or "") if group.startswith("__dm") else group
@@ -14003,6 +14037,7 @@ def _conversation_translation_scope(function):
                 group, "", text, author=getattr(_tl, "user_id", ""), lang=src, record=False)
         else:
             snapshot = _conversation_journal().sanitize(snapshot)
+        capture_translation_media_context(snapshot)
         _tl.conversation_snapshot = snapshot
         with conversation_context.scope(snapshot):
             result = function(text, src, tgt)
@@ -17650,23 +17685,7 @@ def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
         msgs = [
             {
                 "role": "system",
-                "content": (
-                    "你是工廠現場視覺判讀。看圖,用一句話客觀描述「主體 + 狀態」:\n"
-                    "1. 主體分類:設備類(機台/操作盤/控制盤/工具/儀表/管路/電線/感測器/按鈕/馬達)、"
-                    "料件類(棒材/物料/包裝/料件)、人員、文件、其他\n"
-                    "2. 狀態描述:正常/破損/燒毀/裂痕/凹陷/卡料/泄漏/熔斷/變形 等\n"
-                    "規則:\n"
-                    "- 嚴格 25 字內\n"
-                    "- 只描述看得見的,不推測\n"
-                    "- 用工廠術語(操作盤、按鈕、棒材、料件、機台)\n"
-                    "- 看不出來 → 輸出「無法判讀」\n"
-                    "範例:\n"
-                    "「操作盤,綠色按鈕被燒焦」\n"
-                    "「機台前棒材一捆,後端有刮痕」\n"
-                    "「電線接頭,絕緣外皮裂開」\n"
-                    "「控制盤,液晶顯示熄滅」\n"
-                    "「料件包裝,綁帶鬆脫」"
-                ),
+                "content": media_context_evidence.SCENE_SYSTEM,
             },
             {
                 "role": "user",
@@ -17680,7 +17699,7 @@ def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
                             "detail": "low",
                         },
                     },
-                    {"type": "text", "text": "請用 25 字內描述「主體+狀態」。"},
+                    {"type": "text", "text": "請提供可見主體、周邊環境與狀態；不猜測故障。"},
                 ],
             },
         ]
@@ -17699,7 +17718,7 @@ def describe_scene_for_context(image_base64, mime_type="image/jpeg"):
         if not result or "無法判讀" in result:
             return ""
         # 安全上限(避免 LLM 不聽 25 字限制)
-        return result[:60]
+        return media_context_evidence.normalize_summary(result)
     except Exception as e:
         logger.warning("[scene_describe] failed: %s", e)
         return ""
@@ -17722,10 +17741,8 @@ def store_media_scene(group_id, user_id, msg_id, scene_summary):
             data = _load_media_ctx()
             g = data.setdefault(group_id, {})
             u = g.setdefault(user_id, [])
-            u.append(entry)
-            now = time.time()
-            fresh = [e for e in u if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL]
-            g[user_id] = fresh[-MEDIA_CONTEXT_PER_USER:]
+            g[user_id] = media_context_evidence.upsert(
+                u, msg_id, scene_summary, time.time(), MEDIA_CONTEXT_TTL, MEDIA_CONTEXT_PER_USER)
             _save_media_ctx(data)
     except Exception:
         # lock 失敗 → 非原子寫入(degraded)
@@ -17733,10 +17750,8 @@ def store_media_scene(group_id, user_id, msg_id, scene_summary):
             data = _load_media_ctx()
             g = data.setdefault(group_id, {})
             u = g.setdefault(user_id, [])
-            u.append(entry)
-            now = time.time()
-            fresh = [e for e in u if isinstance(e, list) and len(e) == 3 and now - e[0] < MEDIA_CONTEXT_TTL]
-            g[user_id] = fresh[-MEDIA_CONTEXT_PER_USER:]
+            g[user_id] = media_context_evidence.upsert(
+                u, msg_id, scene_summary, time.time(), MEDIA_CONTEXT_TTL, MEDIA_CONTEXT_PER_USER)
             _save_media_ctx(data)
         except Exception:
             pass
@@ -19878,6 +19893,8 @@ def handle_message(event):
             quoted_id=get_quoted_message_id(event.message) or "",
             enabled=get_conv_context_enabled(user_id))
 
+        capture_translation_media_context(_tl.conversation_snapshot)
+
         # Durable outbox: persist the source before the first provider call.
         # If the process crashes or every provider is temporarily unavailable,
         # the same source survives and is delivered after recovery.
@@ -20173,6 +20190,7 @@ def handle_message(event):
         group_id, msg_id, text, author=user_id or "", recipients=_recipients, lang=lang,
         timestamp=float(_event_ms) / 1000 if _event_ms else None,
         quoted_id=str(quoted_id or ""), enabled=get_conv_context_enabled(group_id))
+    capture_translation_media_context(_tl.conversation_snapshot)
     if _tl.conversation_snapshot.get("selection") == "quoted_original":
         _tl.quoted_context_source = _tl.conversation_snapshot["entries"][-1]["text"]
 

@@ -18,7 +18,7 @@ import unicodedata
 
 import translation_mentions
 
-BUILD_ID = "2026-10-12.1-shared-erp-catalog-and-number-roles"
+BUILD_ID = "2026-10-17.1-catalog-abbreviation-retrieval"
 _PATH = Path(__file__).with_name("factory_station_data.json")
 
 
@@ -260,6 +260,14 @@ def build_prompt(source, src, tgt):
             rows.append({"name_zh": name, **row,
                          "process_or_station": name in data.get("process_names", ())})
             break
+    # Parenthesized catalog abbreviations are searchable identities in either
+    # source language (e.g. an English catalog label used in Chinese chat).
+    # Actual equipment rows take precedence over a station abbreviation.
+    for name, row in data["names"].items():
+        for alias in re.findall(r"[（(]([A-Z][A-Z0-9+-]{1,9})[）)]", row["id"]):
+            hits = list(re.finditer(r"(?<![A-Za-z0-9_])"+re.escape(alias)+r"(?![A-Za-z0-9_])", text, re.I))
+            if hits and not any(a < h.end() and h.start() < b for h in hits for a,b in equipment_spans):
+                rows.append({"catalog_abbreviation":alias,"name_zh":name,**row})
     for rule in data.get("aliases", ()):
         if src == "zh" and any(re.search(pattern, text) for pattern in rule["patterns"]):
             rows.append({"alias_zh": rule["canonical_zh"], "id": rule["canonical_id"]})

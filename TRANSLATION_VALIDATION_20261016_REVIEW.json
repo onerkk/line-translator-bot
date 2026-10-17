@@ -1,11 +1,11 @@
 {
-  "release": "2026-10-16.4-board-title-and-reverse-spans",
+  "release": "2026-10-17.1-visual-context-and-catalog-retrieval",
   "baseline_archive_sha256": "018d8fd695d78582da6962ac28ef26ea5c749522bf76b309f8348c35201d1b48",
   "deployed": false,
   "verification": {
     "command": "python run_translation_offline_checks.py",
-    "summary": "4230 passed, 2 warnings, 450 subtests passed in 127.49s (0:02:07)",
-    "targeted": "100 passed",
+    "summary": "4241 passed, 2 warnings, 450 subtests passed in 138.67s (0:02:18)",
+    "new_tests": "11 passed",
     "live_ai_calls": 0,
     "line_messages_sent": 0,
     "provider_outputs": "fixed fixtures, not live translation quality evidence",
@@ -70,8 +70,8 @@
       },
       "station_catalog": {
         "ambiguous_equipment_count": 2,
-        "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
-        "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+        "asset_fingerprint": "82b31c168398a1ce86f93e62edba90a7d4a3243a872eca44b12b3de97f6e7143",
+        "build_id": "2026-10-17.1-catalog-abbreviation-retrieval",
         "department_count": 7,
         "equipment_count": 82,
         "station_name_count": 63
@@ -104,7 +104,7 @@
     "final": {
       "samples": 15,
       "prompt_chars_total": 54752,
-      "reference_lookup_median_ms": 2.705,
+      "reference_lookup_median_ms": 2.681,
       "good_fixtures_accepted": 15,
       "bad_fixtures_rejected": 0,
       "bad_fixture_count": 6
@@ -134,7 +134,7 @@
     {
       "path": "app.py",
       "change": "modified",
-      "sha256": "8844b2f4c15fda40e1ae539002227a92c9be77e1bd5403b6d2cfc15e24257a2a",
+      "sha256": "bd37544ed6c6036a3100e20e4208a22ee10b8a61c746e0ded671f7707637c929",
       "baseline_sha256": "c176f352d33e61d77c6650406f0fbcdcbc3ded0f11010d9569834c4007152eff"
     },
     {
@@ -212,7 +212,7 @@
     {
       "path": "UPDATE_20261016_TRANSLATION_REVIEW.md",
       "change": "added",
-      "sha256": "e81321857aba907289f782ccaad9d6f7790ad3cbdc4491c53dce94412c0f1341",
+      "sha256": "b4b0faef7cdf0a8320f0c6f265da5b23e847857ba67fba3d4d2e3d3f6667a981",
       "baseline_sha256": null
     },
     {
@@ -231,6 +231,24 @@
       "path": "test_board_title_translation.py",
       "change": "added",
       "sha256": "565d0a15a7f00969245a8efb240640c8c7eb72e0a486f378b59e2bdec299efe7",
+      "baseline_sha256": null
+    },
+    {
+      "path": "factory_station_catalog.py",
+      "change": "modified",
+      "sha256": "4daf3f0d5df0745c6378609db2fff617fef7dd009ed8d7f4811f558828a5292f",
+      "baseline_sha256": "2709c1244a25fcd63bdbb6aa0116163420f70a1c2fdc294dda6696ee7bdcdb8d"
+    },
+    {
+      "path": "media_context_evidence.py",
+      "change": "added",
+      "sha256": "2c327b08f994b375161f8ba7b8e0554f743c39214953aa020081e709dac21867",
+      "baseline_sha256": null
+    },
+    {
+      "path": "test_visual_evidence_batches.py",
+      "change": "added",
+      "sha256": "322563cb955d06a64e0d6c963111cdd917624f08791a84ebd11590258561350c",
       "baseline_sha256": null
     }
   ],
@@ -580,5 +598,105 @@
       "separate chairman/deputy occurrences",
       "unseen tool compound"
     ]
+  },
+  "prior_board_release_verification": {
+    "command": "python run_translation_offline_checks.py",
+    "summary": "4230 passed, 2 warnings, 450 subtests passed in 127.49s (0:02:07)",
+    "targeted": "100 passed",
+    "live_ai_calls": 0,
+    "line_messages_sent": 0,
+    "provider_outputs": "fixed fixtures, not live translation quality evidence",
+    "assets": {
+      "errors": [],
+      "guard": {
+        "api_version": 1,
+        "asset_fingerprint": "d925d04f39e15ecb351d44de0f0cb43a7afadc3ef57d3abe2661fe627ac22a6a",
+        "build_id": "2026-10-13.1-chat-operation-acceptance",
+        "exact_case_count": 75,
+        "knowledge": {
+          "api_version": 1,
+          "build_id": "2026-10-16.3-user-confirmed-senses",
+          "enabled_count": 52,
+          "entry_count": 52,
+          "path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_knowledge.json",
+          "schema_version": 1,
+          "sha256": "e0470eefdf403969e09b92e200e978324ae26763b265eb64945fd572839cf97d"
+        },
+        "regression_path": "/workspace/scratch/e8f8bc302b8a/project/line-translator-bot-main/factory_translation_regression.json",
+        "self_test": {
+          "approved_examples_validated": 65,
+          "known_bad_examples_rejected": 19,
+          "ok": true,
+          "regression_cases": 30
+        }
+      },
+      "measurement_semantics": {
+        "api_version": 1,
+        "build_id": "2026-10-02.1-explicit-measurement-subject",
+        "self_test": {
+          "checks": 22,
+          "ok": true
+        }
+      },
+      "message_semantics": {
+        "api_version": 3,
+        "build_id": "2026-10-07.1-release-domain-ownership",
+        "self_test": {
+          "checks": 106,
+          "ok": true
+        }
+      },
+      "ok": true,
+      "policy": {
+        "always_review_opt_in": false,
+        "api_version": 8,
+        "block_unverified_delivery": false,
+        "build_id": "2026-10-07.1-contextual-release-senses",
+        "emergency_nmt_fallback": true,
+        "fail_closed": false,
+        "generic_nmt_fallback": false,
+        "mode": "always",
+        "review_mode": "off",
+        "review_success_required": false,
+        "verified_cache_required": true
+      },
+      "regression": {
+        "case_count": 30,
+        "forbidden_probes_rejected": 29,
+        "verified_targets_accepted": 30
+      },
+      "station_catalog": {
+        "ambiguous_equipment_count": 2,
+        "asset_fingerprint": "fea0c1f1b238f7bfbc437c01961558a4e25f03c54497158185357c520c3bc13b",
+        "build_id": "2026-10-12.1-shared-erp-catalog-and-number-roles",
+        "department_count": 7,
+        "equipment_count": 82,
+        "station_name_count": 63
+      },
+      "warnings": [
+        "review_mode_override:off"
+      ]
+    }
+  },
+  "visual_context_review": {
+    "user_confirmed_intent": "Environment/housekeeping findings in preceding photos; ET and BF5 identify equipment areas, not proven functional failures",
+    "media_retention_seconds": 600,
+    "unique_items_per_sender": 12,
+    "max_selected_batch": 8,
+    "batch_gap_seconds": 180,
+    "mechanism": [
+      "catalog-derived parenthesized abbreviations",
+      "structured observations with uncertainty",
+      "arrival-order idempotent upsert",
+      "source-timed same-author/group photo snapshot",
+      "context-aware cache separation"
+    ],
+    "limitations": [
+      "No deployment or live image/model quality measurement",
+      "Existing context and image-processing settings remain authoritative",
+      "Pending images are not awaited and do not authorize invented findings",
+      "Expired media unavailable; only same-author recent batch linked"
+    ],
+    "extra_model_calls": 0
   }
 }
