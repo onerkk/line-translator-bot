@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#e7edea">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icons/icon-apple.png">
+  <title>我的班表｜My Shift</title>
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+  <!-- The original opening can paint before any stylesheet or SDK arrives.
+       All complete stylesheets still apply before the application renders. -->
+  <style>
+    body{margin:0;font:400 1rem/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;-webkit-font-smoothing:antialiased}
+    #splash,#splash *{box-sizing:border-box;margin:0;padding:0}
+    #splash{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(150deg,#263f65,#10243e);color:#fff;pointer-events:none}
+    #splash img{width:74px;height:74px;border-radius:22px;border:1px solid #a6c4ea5c;box-shadow:inset 0 1px 0 #fff8,0 4px 0 #0b1930,0 15px 30px #07152a70}
+    #splash h1{font-size:1.625rem;margin-top:21px;letter-spacing:-.025em}
+    #splash p{font-size:.8125rem;color:#c3d4e8;margin-top:5px;letter-spacing:.07em}
+  </style>
+  <script>
+    window.myshiftShellStartedAt=performance.now();
+    window.myshiftStylesReady=false;
+    window.myshiftStyleLoaded=function(link){
+      if(link.dataset.ready)return;
+      link.dataset.ready='1';link.media='all';
+      if(document.querySelectorAll('link[data-shell-style][data-ready="1"]').length===document.querySelectorAll('link[data-shell-style]').length){
+        window.myshiftStylesReady=true;
+        window.dispatchEvent(new Event('myshift:styles-ready'));
+      }
+    };
+    window.myshiftStyleFailed=function(){
+      var p=document.querySelector('#splash p');
+      if(p){p.textContent='連線中斷，點此重新載入';p.style.pointerEvents='auto';p.onclick=function(){location.reload()};}
+    };
+  </script>
+  <link rel="stylesheet" href="./styles.css?v=328-ui" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./studio-v308.css?v=325-night-auto" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./nature-ui.css?v=325-night-auto" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./calendar-ui.css?v=340-actors" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./immersive-ui.css?v=329-account" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./share-calendar.css?v=325-night-auto" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./atelier-ui.css?v=340-actors" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./observatory-ui.css?v=340-actors" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./immersive-v341.css?v=344-day" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <link rel="stylesheet" href="./daylight-v344.css?v=344-day" data-shell-style media="print" onload="myshiftStyleLoaded(this)" onerror="myshiftStyleFailed()">
+  <!-- Same official Firebase SDK bytes; available with the site and offline. -->
+  <script defer src="./vendor/firebase/10.12.0/firebase-app-compat.js"></script>
+  <script defer src="./vendor/firebase/10.12.0/firebase-auth-compat.js"></script>
+  <script defer src="./vendor/firebase/10.12.0/firebase-firestore-compat.js"></script>
+  <script defer src="./weather-data.js?v=325-night-auto"></script>
+  <script defer src="./payroll.js?v=325-night-auto"></script>
+  <script defer src="./nature-context.js?v=340-actors"></script>
+  <script defer src="./nature-taiwan.js?v=344-day"></script>
+  <script defer src="./sky-gl.js?v=344-day"></script>
+  <script defer src="./nature-effects.js?v=344-day"></script>
+  <script defer src="./nature-audio.js?v=340-actors"></script>
+  <script defer src="./config-sync.js?v=325-night-auto"></script>
+  <script defer src="./schedule-experience.js?v=340-actors"></script>
+  <script defer src="./share-calendar.js?v=325-night-auto"></script>
+  <script defer src="./navigation-ui.js?v=340-actors"></script>
+  <script defer src="./app.js?v=341-glass2"></script>
+  <script defer src="./ui-effects.js?v=325-night-auto"></script>
+</head>
+<body class="myshift-ui depth-v337">
+  <div id="splash"><img src="./icons/icon-192x192.png" alt=""><h1>我的班表</h1><p>My Shift</p></div>
+  <div id="app"></div>
+  <div id="mr"></div>
+</body>
+</html>
