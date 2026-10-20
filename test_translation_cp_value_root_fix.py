@@ -34,10 +34,12 @@ class _FakeReviewClient:
 
 class TranslationCpValueRootFixTests(unittest.TestCase):
     def test_balanced_model_tiers_keep_sol_out_of_normal_spend(self):
-        self.assertEqual(ai_provider.DEFAULT_OPENAI_MODEL, "gpt-5.6-luna")
-        self.assertEqual(ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL, "gpt-5.6-terra")
-        self.assertNotEqual(ai_provider.DEFAULT_OPENAI_MODEL, "gpt-5.6-sol")
-        self.assertNotEqual(ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL, "gpt-5.6-sol")
+        # 2026-10-20: GPT-6 Luna ($0.10/$0.50) routine, GPT-6.1 Sol ($2/$10) only for long notices;
+        # Astra ($10/$50) never a default.
+        self.assertEqual(ai_provider.DEFAULT_OPENAI_MODEL, "gpt-6-luna")
+        self.assertEqual(ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL, "gpt-6.1-sol")
+        self.assertNotEqual(ai_provider.DEFAULT_OPENAI_MODEL, "gpt-6-astra")
+        self.assertNotEqual(ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL, "gpt-6-astra")
 
     def test_cost_dashboard_uses_current_56_tier_prices(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")

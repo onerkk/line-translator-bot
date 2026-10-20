@@ -243,7 +243,7 @@ _ZIP_UPDATE_LOCK = threading.Lock()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.49.0-operational-data-continuity-root-fix-2026-09-02"
+VERSION = "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -488,7 +488,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-10-16.2-source-owned-expression"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-10-20.1-closing-courtesy-tone"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-10-17.2-pragmatic-action-timing"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -1307,6 +1307,11 @@ _CLAUDE_SONNET5_PRICE = (
     else (3.00, 15.00)
 )
 ANTHROPIC_PRICE_PER_M = {
+    # 2026-10-20 官方價格頁：Haiku 5.5 $0.10/$0.50（≤100k tokens；>100k 為 $0.50/$2.50），
+    # Sonnet 5.5 $2/$10，Opus 5.5 $4/$20。
+    "claude-haiku-5-5":  (0.10,  0.50),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5":   (4.00, 20.00),
     "claude-opus-4-7":   (5.00, 25.00),
     "claude-opus-4-6":   (5.00, 25.00),
     "claude-opus-4-5":   (5.00, 25.00),
@@ -1321,7 +1326,11 @@ ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
 # OpenAI 官方價格 (USD per 1M tokens) — (input, output)
 # cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
 OPENAI_PRICE_PER_M = {
-    # 現行翻譯選單
+    # 現行翻譯選單（2026-10-20 https://developers.openai.com/api/docs/pricing）
+    "gpt-6-luna":    (0.10,  0.50),
+    "gpt-6.1-sol":   (2.00, 10.00),
+    "gpt-6-astra":   (10.00, 50.00),
+    # 舊層級；GPT-5.6 Sol 優惠價至 2026-11-21
     "gpt-5.6-luna":  (0.20,  1.20),
     "gpt-5.6-terra": (2.00, 12.00),
     # https://developers.openai.com/api/docs/models/gpt-5.6-sol (2026-09-06)
@@ -1373,7 +1382,7 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
     """
     p = (provider or "").lower()
     if p == "anthropic":
-        in_rate, out_rate = _match_price(model, ANTHROPIC_PRICE_PER_M, "claude-haiku-4-5")
+        in_rate, out_rate = _match_price(model, ANTHROPIC_PRICE_PER_M, "claude-haiku-5-5")
         # https://platform.claude.com/docs/en/build-with-claude/prompt-caching
         one_hour = max(0, min(cache_write, cache_write_1h))
         cost = (
@@ -1396,7 +1405,7 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
             + output_tok    * out_rate        / 1_000_000
         )
     # OpenAI
-    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-5.6-luna")
+    in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-6-luna")
     # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
     cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
     # Cache details are subsets of prompt_tokens, not extra input tokens.
@@ -1410,7 +1419,7 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
         + cache_write * in_rate * 1.25 / 1_000_000
         + output_tok    * out_rate             / 1_000_000
     )
-    if (model or "").lower().startswith("gpt-5.6"):
+    if (model or "").lower().startswith(("gpt-6", "gpt-5.6")):
         cost *= {"flex": 0.5, "fast": 2.0, "priority": 2.0}.get(str(service_tier).lower(), 1.0)
     return cost
 
@@ -1793,8 +1802,8 @@ model_threshold = 150             # 短訊息走低延遲模型；長公告才�
 # 新邏輯:切到 Anthropic 時,pick_model() 優先看以下兩個變數;
 #       共用 model_threshold(沿用同一個字數門檻,不另設)
 # 預設:短=Haiku 4.5 / 長=Sonnet 5,工人日常閒聊省 75% 成本,長工單才升級
-claude_model_default = "claude-haiku-4-5-20251001"  # 短訊息用 Haiku 4.5
-claude_model_upgrade = "claude-sonnet-5"           # 長訊息升級 Sonnet 5
+claude_model_default = "claude-haiku-5-5"   # 短訊息用 Haiku 5.5（$0.10/$0.50）
+claude_model_upgrade = "claude-sonnet-5-5"  # 長訊息升級 Sonnet 5.5（$2/$10）
 claude_auto_switch_enabled = True                    # 總開關:OFF 時走「套用模型」單一映射(舊行為)
 
 # v3.21: Gemini 路徑模型(第三 provider — Google 官方定位 flash-lite 為
@@ -1831,8 +1840,8 @@ def _model_family(model_name):
     # app.py 翻譯層比照 claude:只送 max_tokens/temperature
     if m.startswith("gemini"):
         return "gemini"
-    # GPT-5.4 / 5.5 官方皆支援 reasoning_effort=none；翻譯用 none 最快最省。
-    if m.startswith(("gpt-5.6", "gpt-5.5", "gpt-5.4")):
+    # GPT-6 / 5.4 / 5.5 / 5.6 皆支援 reasoning_effort=none；翻譯用 none 最快最省。
+    if m.startswith(("gpt-6", "gpt-5.6", "gpt-5.5", "gpt-5.4")):
         return "gpt5_none"
     # 只為讀取舊紀錄保留；正式設定會先遷移到 5.4 / 5.5。
     if m.startswith(("gpt-5.2", "gpt-5.1", "gpt-5")):
@@ -2154,7 +2163,7 @@ def _pick_aux_model(purpose="utility"):
     造成反譯、OCR 輔助或正規化流程 404。現統一使用 gpt-5.4-nano。
     """
     md = ai_provider.normalize_openai_model(model_default)
-    if md.startswith(("gpt-5.6", "gpt-5.4", "gpt-5.5", "gpt-4.1")):
+    if md.startswith(("gpt-6", "gpt-5.6", "gpt-5.4", "gpt-5.5", "gpt-4.1")):
         return ai_provider.DEFAULT_OPENAI_AUX_MODEL
     return ai_provider.DEFAULT_OPENAI_MODEL
 
@@ -2582,11 +2591,18 @@ def pick_model(text):
     # brittle (for example a Gemini model id sent to OpenAI after a failover).
     if _translation_cp_router_enabled():
         _cp_routine_model, _cp_quality_model = _translation_cp_tier_models()
+        # 2026-10-20：只有長公告才用品質層（Sonnet 5.5 / GPT-6.1 Sol，單價 20 倍）。
+        # 短句的操作風險改用常規層 + 較高推理 effort 處理：Haiku 5.5 / GPT-6 Luna
+        # 已有自適應思考，否定、條件、站別等風險句用 medium effort 即可，
+        # 不必為一句 30 字的提醒付 Sonnet 價格。
+        _tl.translation_effort_boost = False
         if (
             model_threshold > 0
             and (len(text) if isinstance(text, str) else 0) >= model_threshold
-        ) or _translation_needs_upgrade_model(text):
+        ):
             return _cp_quality_model
+        if _translation_needs_upgrade_model(text):
+            _tl.translation_effort_boost = True
         return _cp_routine_model
     try:
         provider = ai_provider.get_active_provider()
@@ -10801,7 +10817,9 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         conversation_context.register_source_form(input_text, _provider_source_text)
 
         # Get tone from thread-local (set by handler before calling translate)
-        _tone = getattr(_tl, 'tone', 'casual')
+        # 未設定時回到全域預設語氣（後台「factory」），不再掉到 casual 的口語/俚語指令，
+        # 否則會與 <translation_principles> 的標準印尼文要求互相矛盾。
+        _tone = getattr(_tl, 'tone', None) or translation_tone
         _tone_custom = getattr(_tl, 'tone_custom', '')
         _translation_variant = getattr(_tl, 'translation_variant', 'default') or 'default'
         # v3.2-0426d: tone_custom is ADDITIVE (appends to preset) instead of REPLACING.
@@ -11054,6 +11072,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             "low" if _semantic_reasoning and model_supports(_model, "reasoning_effort")
             else optimal_reasoning_for_translation(_model)
         )
+        if (_translation_effort in ("low", "none", "minimal")
+                and getattr(_tl, "translation_effort_boost", False)
+                and model_supports(_model, "reasoning_effort")):
+            # 風險句留在常規層，但給模型多一點自適應思考（見 pick_model）。
+            _translation_effort = "medium"
         if _translation_effort not in (None, "none"):
             _output_budget += 768
         _output_budget = min(_output_budget, 8192)
@@ -14073,7 +14096,7 @@ def translate(text, src, tgt):
         "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
         "context_result_cacheable",
         "learning_rejections", "generated_candidate", "nmt_attempted",
-        "translation_alignment_issues",
+        "translation_alignment_issues", "translation_effort_boost",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -24538,9 +24561,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">短訊息(便宜)</label>
       <select id="aip-oai-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.6-luna">⭐ 5.6 Luna($0.20/$1.20，日常翻譯)</option>
-        <option value="gpt-5.6-terra">🟡 5.6 Terra($2/$12，長文)</option>
-        <option value="gpt-5.6-sol">🔴 5.6 Sol($4/$20，最高品質)</option>
+        <option value="gpt-6-luna">⭐ GPT-6 Luna($0.10/$0.50，日常翻譯)</option>
+        <option value="gpt-6.1-sol">🟡 GPT-6.1 Sol($2/$10，長文)</option>
+        <option value="gpt-5.6-luna">5.6 Luna($0.20/$1.20，相容)</option>
+        <option value="gpt-5.6-terra">5.6 Terra($2/$12，相容)</option>
+        <option value="gpt-5.6-sol">5.6 Sol($4/$20，相容)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1-mini">🟢 4.1-mini($0.40/$1.60)</option>
         <option value="gpt-5.4-nano">💰 5.4-nano($0.20/$1.25)</option>
@@ -24550,9 +24575,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <div style="flex:1">
       <label style="color:#888;font-size:11px;display:block;margin-bottom:4px">長訊息(升級)</label>
       <select id="aip-oai-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-        <option value="gpt-5.6-terra">⭐ 5.6 Terra($2/$12，推薦長文)</option>
-        <option value="gpt-5.6-sol">🔴 5.6 Sol($4/$20，最高品質)</option>
-        <option value="gpt-5.6-luna">🟢 5.6 Luna($0.20/$1.20，速度優先)</option>
+        <option value="gpt-6.1-sol">⭐ GPT-6.1 Sol($2/$10，推薦長文)</option>
+        <option value="gpt-6-luna">🟢 GPT-6 Luna($0.10/$0.50，速度優先)</option>
+        <option value="gpt-5.6-terra">5.6 Terra($2/$12，相容)</option>
+        <option value="gpt-5.6-sol">5.6 Sol($4/$20，相容)</option>
+        <option value="gpt-5.6-luna">5.6 Luna($0.20/$1.20，相容)</option>
         <option value="gpt-5.4">5.4($2.50/$15，相容)</option>
         <option value="gpt-5.4-mini">5.4-mini($0.75/$4.50，相容)</option>
         <option value="gpt-4.1">4.1($2/$8，相容)</option>
@@ -24636,18 +24663,18 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
       <div style="flex:1">
         <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">短訊息(便宜)</div>
         <select id="aip-claude-default" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-          <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5($1/$5)</option>
-          <option value="claude-sonnet-5">⭐ Sonnet 5($3/$15，速度/智慧平衡)</option>
-          <option value="claude-sonnet-4-6">Sonnet 4.6($3/$15，相容)</option>
+          <option value="claude-haiku-5-5">🟢 Haiku 5.5($0.10/$0.50，最快)</option>
+          <option value="claude-sonnet-5-5">⭐ Sonnet 5.5($2/$10，速度/智慧平衡)</option>
+          <option value="claude-opus-5-5">🔴 Opus 5.5($4/$20)</option>
           <option value="claude-opus-4-7">🔴 Opus 4.7($5/$25)</option>
         </select>
       </div>
       <div style="flex:1">
         <div style="font-size:11px;color:#8a8a9a;margin-bottom:4px">長訊息(升級)</div>
         <select id="aip-claude-upgrade" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:12px">
-          <option value="claude-haiku-4-5-20251001">🟢 Haiku 4.5</option>
-          <option value="claude-sonnet-5" selected>⭐ Sonnet 5</option>
-          <option value="claude-sonnet-4-6">Sonnet 4.6(相容)</option>
+          <option value="claude-haiku-5-5">🟢 Haiku 5.5</option>
+          <option value="claude-sonnet-5-5" selected>⭐ Sonnet 5.5</option>
+          <option value="claude-opus-5-5">🔴 Opus 5.5</option>
           <option value="claude-opus-4-7">🔴 Opus 4.7</option>
         </select>
       </div>
@@ -24662,9 +24689,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   <!-- 自動切換 OFF 時:單一下拉(舊行為) -->
   <div id="aip-claude-single-model" style="display:none">
     <select id="aip-anthropic-model" style="width:100%;padding:10px;border-radius:6px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:13px;margin-bottom:8px">
-      <option value="claude-haiku-4-5-20251001">🟢 Claude Haiku 4.5(便宜快速,$1/$5 per M)</option>
-      <option value="claude-sonnet-5">⭐ Claude Sonnet 5(速度/智慧平衡,$3/$15 per M)</option>
-      <option value="claude-sonnet-4-6">Claude Sonnet 4.6(相容,$3/$15 per M)</option>
+      <option value="claude-haiku-5-5">🟢 Claude Haiku 5.5(便宜快速,$0.10/$0.50 per M)</option>
+      <option value="claude-sonnet-5-5">⭐ Claude Sonnet 5.5(速度/智慧平衡,$2/$10 per M)</option>
+      <option value="claude-opus-5-5">Claude Opus 5.5($4/$20 per M)</option>
       <option value="claude-opus-4-7">🔴 Claude Opus 4.7(最強最貴,$5/$25 per M)</option>
     </select>
     <button onclick="aipUpdateAnthropicModel()" style="width:100%;padding:10px;border-radius:6px;border:none;background:#d4a437;color:#000;font-size:13px;cursor:pointer;font-weight:600">套用模型(全 LINE bot 翻譯都用同一個)</button>
@@ -25179,9 +25206,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">預設模型（短訊息）</div>
 <select id="modelDefault" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.6-luna">⭐ gpt-5.6-luna（$0.20 / $1.20，即時翻譯）</option>
-<option value="gpt-5.6-terra">gpt-5.6-terra（$2 / $12，品質平衡）</option>
-<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，最高品質）</option>
+<option value="gpt-6-luna">⭐ gpt-6-luna（$0.10 / $0.50，即時翻譯）</option>
+<option value="gpt-6.1-sol">gpt-6.1-sol（$2 / $10，品質平衡）</option>
+<option value="gpt-5.6-luna">gpt-5.6-luna（$0.20 / $1.20，相容）</option>
+<option value="gpt-5.6-terra">gpt-5.6-terra（$2 / $12，相容）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，相容）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50，相容）</option>
 <option value="gpt-4.1-mini">gpt-4.1-mini（$0.40 / $1.60，穩定）</option>
 <option value="gpt-5.4-nano">gpt-5.4-nano（$0.20 / $1.25，最省）</option>
@@ -25193,9 +25222,11 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 <div style="flex:1">
 <div style="font-size:12px;color:#8a8a9a;margin-bottom:4px">升級模型（長訊息）</div>
 <select id="modelUpgrade" onchange="onModelChange()" style="width:100%;padding:6px;border-radius:6px;border:1px solid #3a3a4e;background:#0d0d1a;color:#e0e0e0;font-size:12px">
-<option value="gpt-5.6-terra">⭐ gpt-5.6-terra（$2 / $12，推薦長文）</option>
-<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，關鍵公告）</option>
-<option value="gpt-5.6-luna">gpt-5.6-luna（$0.20 / $1.20）</option>
+<option value="gpt-6.1-sol">⭐ gpt-6.1-sol（$2 / $10，推薦長文）</option>
+<option value="gpt-6-luna">gpt-6-luna（$0.10 / $0.50）</option>
+<option value="gpt-5.6-terra">gpt-5.6-terra（$2 / $12，相容）</option>
+<option value="gpt-5.6-sol">gpt-5.6-sol（$4 / $20，相容）</option>
+<option value="gpt-5.6-luna">gpt-5.6-luna（$0.20 / $1.20，相容）</option>
 <option value="gpt-5.4">gpt-5.4（$2.50 / $15.00，相容）</option>
 <option value="gpt-5.4-mini">gpt-5.4-mini（$0.75 / $4.50）</option>
 <option value="gpt-4.1">gpt-4.1（$2.00 / $8.00，穩定）</option>
@@ -25915,7 +25946,7 @@ async function batchSetConfig(){
   const enabled = confirm('啟用 Batch API?(取消 = 停用)');
   const openai_model = prompt('OpenAI batch 用的模型(預設 gpt-5.6-luna):', 'gpt-5.6-luna');
   if(openai_model === null) return;
-  const anthropic_model = prompt('Anthropic batch 用的模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
+  const anthropic_model = prompt('Anthropic batch 用的模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-5-5');
   if(anthropic_model === null) return;
   try {
     const r = await fetch('/api/admin/batch/config', {
@@ -26129,7 +26160,7 @@ async function qeSetConfig(){
   const enabled = confirm('啟用 Quality Estimation?(取消 = 停用)');
   const openai_model = prompt('OpenAI provider 時用的 QE 模型(預設 gpt-5.6-luna):', 'gpt-5.6-luna');
   if(openai_model === null) return;
-  const anthropic_model = prompt('Anthropic provider 時用的 QE 模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-4-5-20251001');
+  const anthropic_model = prompt('Anthropic provider 時用的 QE 模型(預設 claude-haiku-4-5-20251001):', 'claude-haiku-5-5');
   if(anthropic_model === null) return;
   const sample = prompt('採樣率(0.0-1.0,1.0=全部評,0.1=10% 採樣,預設 1.0):', '1.0');
   if(sample === null) return;
@@ -26148,7 +26179,7 @@ async function apeSetConfig(){
   const enabled = confirm('啟用 Auto Post-Editing?(取消 = 停用)');
   const openai_model = prompt('OpenAI provider 時用的 APE 模型(預設 gpt-5.6-terra):', 'gpt-5.6-terra');
   if(openai_model === null) return;
-  const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-5):', 'claude-sonnet-5');
+  const anthropic_model = prompt('Anthropic provider 時用的 APE 模型(預設 claude-sonnet-5):', 'claude-sonnet-5-5');
   if(anthropic_model === null) return;
   const trigger = prompt('觸發門檻(QE 分數 < 此值才 APE,預設 70):', '70');
   if(trigger === null) return;
@@ -26248,7 +26279,7 @@ async function aipLoadStatus(){
     // 載入當前 Anthropic 模型映射(gpt-5.4-mini 的對應)
     try {
       const mapping = cfg.model_mapping || {};
-      const currentModel = mapping['gpt-5.6-luna'] || mapping['gpt-5.4-mini'] || 'claude-haiku-4-5-20251001';
+      const currentModel = mapping['gpt-6-luna'] || mapping['gpt-5.6-luna'] || mapping['gpt-5.4-mini'] || 'claude-haiku-5-5';
       const sel = document.getElementById('aip-anthropic-model');
       if (sel) sel.value = currentModel;
     } catch(e) {}
@@ -26315,9 +26346,9 @@ async function aipLoadStatus(){
           aipApplyAutoSwitchUI(ase);
         }
         if (document.getElementById('aip-claude-default'))
-          document.getElementById('aip-claude-default').value = fd.claude_model_default || 'claude-haiku-4-5-20251001';
+          document.getElementById('aip-claude-default').value = fd.claude_model_default || 'claude-haiku-5-5';
         if (document.getElementById('aip-claude-upgrade'))
-          document.getElementById('aip-claude-upgrade').value = fd.claude_model_upgrade || 'claude-sonnet-5';
+          document.getElementById('aip-claude-upgrade').value = fd.claude_model_upgrade || 'claude-sonnet-5-5';
         if (document.getElementById('aip-shared-threshold'))
           document.getElementById('aip-shared-threshold').textContent = (fd.model_threshold || 0);
       }
@@ -28603,9 +28634,9 @@ async function _loadFeatures(gid){
       aipApplyAutoSwitchUI(ase);
     }
     if(document.getElementById('aip-claude-default'))
-      document.getElementById('aip-claude-default').value=d.claude_model_default||'claude-haiku-4-5-20251001';
+      document.getElementById('aip-claude-default').value=d.claude_model_default||'claude-haiku-5-5';
     if(document.getElementById('aip-claude-upgrade'))
-      document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-5';
+      document.getElementById('aip-claude-upgrade').value=d.claude_model_upgrade||'claude-sonnet-5-5';
     if(document.getElementById('aip-shared-threshold'))
       document.getElementById('aip-shared-threshold').textContent=(d.model_threshold||0);
     // v3.9.35: OpenAI 24h cache toggle
@@ -30311,9 +30342,9 @@ def load_settings():
         except Exception as _aie:
             logger.warning("[Load] AI provider 設定還原失敗: %s", _aie)
         if "claude_model_default" in data:
-            claude_model_default = str(data["claude_model_default"])
+            claude_model_default = ai_provider.normalize_anthropic_model(str(data["claude_model_default"]))
         if "claude_model_upgrade" in data:
-            claude_model_upgrade = str(data["claude_model_upgrade"])
+            claude_model_upgrade = ai_provider.normalize_anthropic_model(str(data["claude_model_upgrade"]))
         if "claude_auto_switch_enabled" in data:
             claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
 
@@ -30325,8 +30356,8 @@ def load_settings():
             model_default = ai_provider.DEFAULT_OPENAI_MODEL
             model_upgrade = ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
             model_threshold = 150
-            claude_model_default = "claude-haiku-4-5-20251001"
-            claude_model_upgrade = "claude-sonnet-5"
+            claude_model_default = "claude-haiku-5-5"
+            claude_model_upgrade = "claude-sonnet-5-5"
             claude_auto_switch_enabled = True
             gemini_model_default = "gemini-3.1-flash-lite"
             gemini_model_upgrade = "gemini-2.5-flash"
@@ -33023,9 +33054,9 @@ def api_admin_features():
                 model_threshold = int(data["model_threshold"])
             # v3.9.33: Anthropic 字數切換設定
             if "claude_model_default" in data:
-                claude_model_default = str(data["claude_model_default"])
+                claude_model_default = ai_provider.normalize_anthropic_model(str(data["claude_model_default"]))
             if "claude_model_upgrade" in data:
-                claude_model_upgrade = str(data["claude_model_upgrade"])
+                claude_model_upgrade = ai_provider.normalize_anthropic_model(str(data["claude_model_upgrade"]))
             if "claude_auto_switch_enabled" in data:
                 claude_auto_switch_enabled = bool(data["claude_auto_switch_enabled"])
             # v3.9.35: OpenAI 24h cache retention
@@ -35225,8 +35256,8 @@ def admin_apply_best_defaults():
         "model_default": "gpt-5.6-luna",      # 即時、高量翻譯
         "model_upgrade": "gpt-5.6-terra",     # 長公告與複雜工廠語境
         "model_threshold": 150,               # 短訊息低延遲；長公告升級強模型
-        "claude_model_default": "claude-haiku-4-5-20251001",
-        "claude_model_upgrade": "claude-sonnet-5",
+        "claude_model_default": "claude-haiku-5-5",
+        "claude_model_upgrade": "claude-sonnet-5-5",
         "claude_auto_switch_enabled": True,
         "gemini_model_default": "gemini-3.1-flash-lite",
         "gemini_model_upgrade": "gemini-2.5-flash",

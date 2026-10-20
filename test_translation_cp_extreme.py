@@ -35,6 +35,14 @@ ROUTINE_ID = [
 ]
 
 
+def _expect_risk_tier(source):
+    """2026-10-20 policy: operational risk raises reasoning effort on the routine
+    tier (Haiku 5.5 / GPT-6 Luna adaptive thinking) instead of paying the 20x
+    quality-tier price; only length ≥ model_threshold selects the quality model."""
+    assert app.pick_model(source) == ai_provider.DEFAULT_OPENAI_MODEL
+    assert app._tl.translation_effort_boost is True
+
+
 @pytest.mark.parametrize("source", ROUTINE_ID)
 def test_indonesian_prose_does_not_pay_for_fictitious_equipment_codes(source):
     app._tl.semantic_contract = app.build_translation_semantic_contract(source, "id", "zh")
@@ -48,16 +56,20 @@ def test_indonesian_prose_does_not_pay_for_fictitious_equipment_codes(source):
     "禁止混料，必須立即停機。",
     "Dilarang mencampur material, segera hentikan mesin.",
     "1.確認標籤。\n2.核對重量。\n3.確認包裝。\n4.交接班。",
-    SOURCE,
 ])
-def test_real_data_and_high_risk_instructions_keep_quality_tier(source):
+def test_real_data_and_high_risk_instructions_raise_effort_on_routine_tier(source):
+    _expect_risk_tier(source)
+
+
+@pytest.mark.parametrize("source", [SOURCE, "各站再麻煩注意一下。" * 20])
+def test_long_notice_still_selects_quality_tier(source):
     assert app.pick_model(source) == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
 
 
 def test_operational_risk_context_and_explicit_override_are_preserved():
     for contract in ({"context_bound": True}, {"risks": [{"analysis": {"suggestions": ["uncertain"]}}]}):
         app._tl.semantic_contract = contract
-        assert app.pick_model("資料確認") == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+        _expect_risk_tier("資料確認")
     app._tl.force_model = "gpt-5.6-sol"
     assert app.pick_model(ROUTINE_ID[0]) == "gpt-5.6-sol"
 
@@ -123,7 +135,7 @@ def test_pmi_state_is_not_borrowed_from_packaging_or_another_machine():
     assert not pmi.validate(facts, good, "id")
     assert pmi.validate(facts, bad, "id")
     app._tl.semantic_contract = app.build_translation_semantic_contract(source, "zh", "id")
-    assert app.pick_model(source) == ai_provider.DEFAULT_OPENAI_UPGRADE_MODEL
+    _expect_risk_tier(source)
 
 
 def test_instrument_check_cannot_replace_steel_grade_inspection():

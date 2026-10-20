@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-10-16.2-source-owned-expression"
+TRANSLATION_EXTRAS_VERSION = "2026-10-20.1-closing-courtesy-tone"
 
 
 
@@ -199,7 +199,7 @@ _TONE_RULES: tuple[tuple[str, tuple[str, ...], str, tuple[str, ...], str, float,
             r"\b(?:terima\s+kasih|makasih|trimakasih|thanks?|thank\s+you)\b",
         ),
         "The speaker is expressing thanks or appreciation. Keep the wording warm but natural for a workplace chat.",
-        ("🙏", "💛", "😊"),
+        ("🙏", "😊"),
         "suffix",
         0.96,
         "gratitude",
@@ -734,6 +734,34 @@ def _semantic_expression_candidates(source: str, structured: bool) -> list[ToneA
     return candidates
 
 
+# A trailing 謝謝 / terima kasih / 辛苦了 is a sign-off, not the message's
+# intent.  "蘇比 你今日體檢沒有採集檢…請記得先準備好…，謝謝" is an instruction
+# that happens to end politely; classifying it as gratitude told the model
+# to make the wording warm and stamped thanks emoji onto every sentence.
+_CLOSING_COURTESY_RE = re.compile(
+    r"(?:[,，、。!！\s]*)(?:謝謝(?:你|您|大家|各位)?|感謝(?:你|您|大家|各位)?|多謝|感恩|辛苦(?:了|你了|大家了)|麻煩(?:你|您)?了|"
+    r"terima\s+kasih(?:\s+(?:ya|semua|banyak))?|makasih(?:\s+ya)?|trimakasih|thanks?(?:\s+(?:all|everyone))?|thank\s+you(?:\s+all)?)"
+    r"[\s。.!！~～🙏]*$",
+    re.I,
+)
+_COURTESY_CONFIDENCE = 0.6  # below every decoration threshold; still a tie-breaker when nothing else matches
+
+
+def _closing_courtesy_only(source: str, matched: str) -> bool:
+    """True when the gratitude cue is only a short sign-off after real content."""
+    text = str(source or "").rstrip()
+    if not text:
+        return False
+    match = _CLOSING_COURTESY_RE.search(text)
+    if not match or matched not in match.group(0):
+        return False
+    body = text[: match.start()].strip(" ,，、。!！\n\t")
+    # Count substantive content before the closer: CJK characters or Latin words.
+    cjk = len(re.findall(r"[\u3400-\u9fff]", body))
+    words = len(re.findall(r"[A-Za-z]{2,}", body))
+    return cjk >= 8 or words >= 5
+
+
 def _tone_candidates(source: str, structured: bool) -> list[ToneAnalysis]:
     """Share the same source evidence for prompt tone and final decoration."""
     candidates: list[ToneAnalysis] = []
@@ -753,10 +781,16 @@ def _tone_candidates(source: str, structured: bool) -> list[ToneAnalysis]:
             if name == "request" and _looks_factory_technical(source):
                 choices = ()
                 resolved_placement = "none"
+            resolved_confidence = confidence
+            if name == "gratitude" and _closing_courtesy_only(source, match.group(0)):
+                # Sign-off thanks: keep the cue (so a target "Terima kasih." unit
+                # may still get one 🙏) but never let it dominate the message or
+                # decorate unrelated sentences.
+                resolved_confidence = _COURTESY_CONFIDENCE
             emoji = choices[0] if choices else ""
             candidates.append(ToneAnalysis(
                 primary=name,
-                confidence=confidence,
+                confidence=resolved_confidence,
                 instruction=instruction,
                 emoji=emoji,
                 emoji_choices=choices,
@@ -986,13 +1020,25 @@ def build_expression_plan(
             target_analysis = source_analysis
         if source_analysis.primary == "urgent_warning":
             target_analysis = source_analysis
+        # A sign-off (謝謝 / terima kasih) belongs to the sentence that carries
+        # it. When the mapped source unit's own thanks cue is only a closer and
+        # this target sentence has no thanks of its own, treat it as neutral.
+        if (source_analysis.primary == "gratitude"
+                and source_analysis.confidence <= _COURTESY_CONFIDENCE
+                and target_analysis.primary == "gratitude"
+                and analyze_message_tone(target_unit, None).primary != "gratitude"):
+            source_analysis = analyze_message_tone(
+                _CLOSING_COURTESY_RE.sub("", source_unit.rstrip()), source_language)
+            target_analysis = source_analysis
         # A non-neutral target cue is more precise than the proportionally mapped
         # source cue. This prevents one long source sentence about packaging and
         # limits from stamping the same icon onto every expanded target sentence.
         if target_analysis.primary != "neutral" and target_analysis.should_decorate:
             unit_analysis = target_analysis
+            own_cue = target_analysis is not source_analysis
         else:
             unit_analysis = source_analysis
+            own_cue = False
 
         # Dense technical data may still receive a restrained functional marker
         # such as ⚖️/📋/🔧, but never an invented social emotion.
@@ -1004,7 +1050,24 @@ def build_expression_plan(
             visual_scores[unit_analysis.visual_mood] = visual_scores.get(unit_analysis.visual_mood, 0.0) + unit_analysis.confidence
         if not unit_analysis.should_decorate or unit_analysis.confidence < min_confidence:
             continue
-        candidates.append((_expression_priority(unit_analysis), unit_index, source_unit, unit_analysis))
+        candidates.append((_expression_priority(unit_analysis), unit_index, source_unit, unit_analysis, own_cue))
+
+    # One Chinese sentence written with commas often becomes 3-4 Indonesian
+    # sentences. The source cue belongs to that sentence once, not to every
+    # expanded target sentence, so keep at most one decoration per source
+    # unit unless the target sentence carries its own cue (e.g. a closing
+    # "Terima kasih.").
+    per_source: dict[str, list] = {}
+    for item in candidates:
+        per_source.setdefault(item[2], []).append(item)
+    deduped = []
+    for items in per_source.values():
+        own = [item for item in items if item[4]]
+        rest = [item for item in items if not item[4]]
+        deduped.extend(own)
+        if rest:
+            deduped.append(max(rest, key=lambda item: (item[0], item[1])))
+    candidates = [item[:4] for item in deduped]
 
     # Select the most meaningful expressions first, then apply them in message
     # order. This prevents an early low-value icon from displacing a later safety

@@ -1,4 +1,4 @@
-"""Offline regression tests for the 2026-07-12 OpenAI model policy."""
+"""Offline regression tests for the OpenAI model policy (GPT-6 refresh 2026-10-20)."""
 
 from copy import deepcopy
 from pathlib import Path
@@ -9,6 +9,8 @@ import ai_provider
 
 ROOT = Path(__file__).resolve().parent
 CURRENT_CHAT_MODELS = {
+    "gpt-6-luna",
+    "gpt-6.1-sol",
     "gpt-5.6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-sol",
@@ -23,16 +25,19 @@ CURRENT_CHAT_MODELS = {
 
 def test_model_migrations():
     cases = {
-        "gpt-5-2025-08-07": "gpt-5.6-sol",
-        "gpt-5-mini-2025-08-07": "gpt-5.4-mini",
-        "gpt-5-nano-2025-08-07": "gpt-5.4-nano",
+        "gpt-5-2025-08-07": "gpt-6.1-sol",
+        "gpt-5-mini-2025-08-07": "gpt-6-luna",
+        "gpt-5-nano-2025-08-07": "gpt-6-luna",
         "gpt-5-pro-2025-10-06": "gpt-5.5-pro",
-        "gpt-4.1-nano": "gpt-5.4-nano",
-        "o1": "gpt-5.6-sol",
-        "o3-mini": "gpt-5.6-sol",
-        "o4-mini": "gpt-5.4-mini",
-        "gpt-5.5-mini": "gpt-5.4-mini",
-        "gpt-5.5-nano": "gpt-5.4-nano",
+        "gpt-4.1-nano": "gpt-6-luna",
+        "o1": "gpt-6.1-sol",
+        "o3-mini": "gpt-6.1-sol",
+        "o4-mini": "gpt-6-luna",
+        "gpt-5.5-mini": "gpt-6-luna",
+        "gpt-5.5-nano": "gpt-6-luna",
+        "gpt-5.6-luna": "gpt-6-luna",
+        "gpt-5.6-terra": "gpt-6.1-sol",
+        "gpt-5.6-sol": "gpt-6.1-sol",
     }
     for old, expected in cases.items():
         assert ai_provider.normalize_openai_model(old) == expected
@@ -48,8 +53,8 @@ def test_tts_migrations():
 
 
 def test_unknown_admin_value_falls_back():
-    assert ai_provider.normalize_translation_model("not-a-model") == "gpt-5.6-luna"
-    assert ai_provider.normalize_vision_model("not-a-model") == "gpt-5.6-terra"
+    assert ai_provider.normalize_translation_model("not-a-model") == "gpt-6-luna"
+    assert ai_provider.normalize_vision_model("not-a-model") == "gpt-6.1-sol"
 
 
 def test_cross_provider_model_never_reaches_openai_boundary():
@@ -97,8 +102,9 @@ def test_saved_mapping_migration_preserves_custom_target():
         "gemini_model_mapping": {"gpt-4.1-nano": "gemini-custom"},
     }
     migrated = ai_provider._migrate_config_models(cfg)
-    assert migrated["model_mapping"]["gpt-5.6-terra"] == "claude-sonnet-custom"
-    assert migrated["gemini_model_mapping"]["gpt-5.4-nano"] == "gemini-custom"
+    # The custom target follows the tier it was attached to (gpt-5-mini → 6.1 Sol tier).
+    assert migrated["model_mapping"]["gpt-6.1-sol"] == "claude-sonnet-custom"
+    assert migrated["gemini_model_mapping"]["gpt-6-luna"] == "gemini-custom"
 
 
 def test_no_deprecated_models_in_html_options():
@@ -159,7 +165,7 @@ def test_openai_parameter_shaping():
             logprobs=True,
         )
         shaped = calls[-1]
-        assert shaped["model"] == "gpt-5.6-terra"
+        assert shaped["model"] == "gpt-6.1-sol"
         assert shaped["max_completion_tokens"] == 321
         assert shaped["reasoning_effort"] == "none"
         for unsupported in ("max_tokens", "temperature", "top_p", "seed", "stop", "logprobs"):

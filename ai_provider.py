@@ -328,15 +328,22 @@ PROVIDER_CONFIG_PATH = _resolve_provider_config_path()
 # 後台只提供仍在服役、適合文字/圖片翻譯的模型。舊設定不直接丟棄，
 # 而是在呼叫前遷移到官方建議替代型號，避免重新部署後因舊 model id 404。
 ACTIVE_OPENAI_TRANSLATION_MODELS = (
-    "gpt-5.6-luna",   # 即時、高量翻譯：官方定位為 fast / high-volume
-    "gpt-5.6-terra",  # 品質與成本平衡：長公告、複雜工廠語境
-    "gpt-5.6-sol",    # 最高品質選項；成本較高，不作一般預設
+    # 2026-10-20 查核 https://developers.openai.com/api/docs/pricing ：
+    # 現行旗艦為 gpt-6-luna($0.10/$0.50)、gpt-6.1-sol($2/$10)、gpt-6-astra。
+    # 官方未推出 GPT-6 Terra；GPT-5.6 Sol 優惠價僅至 2026-11-21。
+    "gpt-6-luna",     # 即時、高量翻譯：GPT-6 系列最便宜、最快
+    "gpt-6.1-sol",    # 品質層：長公告、複雜工廠語境
+    "gpt-5.6-luna",   # 相容：舊設定仍可讀取
+    "gpt-5.6-terra",  # 相容
+    "gpt-5.6-sol",    # 相容
     "gpt-5.4-mini",   # 低成本相容選項
     "gpt-5.4-nano",   # 最低成本輔助任務
     "gpt-4.1-mini",   # 穩定非推理相容選項
     "gpt-4.1",
 )
 ACTIVE_OPENAI_VISION_MODELS = (
+    "gpt-6.1-sol",
+    "gpt-6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
@@ -345,11 +352,11 @@ ACTIVE_OPENAI_VISION_MODELS = (
     "gpt-5.4-nano",
     "gpt-4.1",
 )
-DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
-DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-5.6-terra"
-DEFAULT_OPENAI_AUX_MODEL = "gpt-5.4-nano"
-DEFAULT_OPENAI_VISION_MODEL = "gpt-5.6-terra"
-DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-5.6-luna"
+DEFAULT_OPENAI_MODEL = "gpt-6-luna"
+DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-6.1-sol"
+DEFAULT_OPENAI_AUX_MODEL = "gpt-6-luna"
+DEFAULT_OPENAI_VISION_MODEL = "gpt-6.1-sol"
+DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-6-luna"
 # GPT-4o mini TTS family is deprecated. Use the still-active Speech API model
 # tts-1 by default; keep tts-1-hd as an optional quality-first choice.
 DEFAULT_OPENAI_TTS_MODEL = "tts-1"
@@ -361,11 +368,18 @@ ACTIVE_OPENAI_TTS_MODELS = (
 # 官方 deprecations 頁面列出的替代關係，以及本專案過去曾產生的無效名稱。
 # floating alias 的遷移是本專案的主動升級政策；dated snapshot 的替代則依官方公告。
 OPENAI_MODEL_REPLACEMENTS = {
-    # v3.32 model policy: migrate floating GPT-5 aliases to the current
-    # production family while preserving older explicit cost choices.
-    "gpt-5.6": "gpt-5.6-sol",
-    "gpt-5.5": "gpt-5.6-sol",
-    "gpt-5.4": "gpt-5.6-terra",
+    # 2026-10-20 model policy: GPT-6 Luna/6.1 Sol replace the 5.6 tiers at
+    # half the price (official pricing page). Old tier names keep working
+    # because they are migrated here before any request or mapping lookup.
+    "gpt-5.6-luna": "gpt-6-luna",
+    "gpt-5.6-terra": "gpt-6.1-sol",
+    "gpt-5.6-sol": "gpt-6.1-sol",
+    "gpt-6-sol": "gpt-6.1-sol",
+    "gpt-5.4-nano": "gpt-6-luna",   # 5.4-nano $0.20/$1.25 > 6-luna $0.10/$0.50
+    "gpt-5.4-mini": "gpt-6-luna",
+    "gpt-5.6": "gpt-6.1-sol",
+    "gpt-5.5": "gpt-6.1-sol",
+    "gpt-5.4": "gpt-6.1-sol",
     # 2026-12-11 shutdown（官方替代）
     "gpt-5-2025-08-07": "gpt-5.5",
     "gpt-5-mini-2025-08-07": "gpt-5.4-mini",
@@ -505,7 +519,9 @@ DEFAULT_CONFIG = {
     "openai": {"api_key": "", "base_url": None},
     "anthropic": {
         "api_key": "",
-        "default_model": "claude-haiku-4-5-20251001",
+        # 2026-10-07 Claude Haiku 5.5：$0.10/$0.50（≤100k tokens），1M context，
+        # adaptive thinking；Haiku 4.5 是 $1/$5。官方 ID 無日期後綴。
+        "default_model": "claude-haiku-5-5",
     },
     # === v3.21 Gemini(第三 provider)===
     # Google 官方把 Gemini 3.1 Flash-Lite 的第一使用場景明列為
@@ -562,6 +578,8 @@ DEFAULT_CONFIG = {
     },
     # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
     "gemini_model_mapping": {
+        "gpt-6-luna": "gemini-3.1-flash-lite",
+        "gpt-6.1-sol": "gemini-2.5-flash",
         "gpt-5.6-luna": "gemini-3.1-flash-lite",
         "gpt-5.6-terra": "gemini-2.5-flash",
         "gpt-5.6-sol": "gemini-2.5-flash",
@@ -576,18 +594,20 @@ DEFAULT_CONFIG = {
         "gpt-4o":       "gemini-2.5-flash",
     },
     "model_mapping": {
-        "gpt-5.6-luna": "claude-haiku-4-5-20251001",
-        "gpt-5.6-terra": "claude-sonnet-5",
-        "gpt-5.6-sol": "claude-sonnet-5",
-        "gpt-5.4-mini": "claude-haiku-4-5-20251001",
-        "gpt-4.1-mini": "claude-haiku-4-5-20251001",
-        "gpt-5.4-nano": "claude-haiku-4-5-20251001",
-        "gpt-4.1":      "claude-sonnet-5",
-        "gpt-5.4":      "claude-sonnet-5",
-        "gpt-5.5":      "claude-sonnet-5",
+        "gpt-6-luna":   "claude-haiku-5-5",
+        "gpt-6.1-sol":  "claude-sonnet-5-5",
+        "gpt-5.6-luna": "claude-haiku-5-5",
+        "gpt-5.6-terra": "claude-sonnet-5-5",
+        "gpt-5.6-sol": "claude-sonnet-5-5",
+        "gpt-5.4-mini": "claude-haiku-5-5",
+        "gpt-4.1-mini": "claude-haiku-5-5",
+        "gpt-5.4-nano": "claude-haiku-5-5",
+        "gpt-4.1":      "claude-sonnet-5-5",
+        "gpt-5.4":      "claude-sonnet-5-5",
+        "gpt-5.5":      "claude-sonnet-5-5",
         # 相容仍在服役但不再列入本專案新選單的舊多模態模型
-        "gpt-4o-mini":  "claude-haiku-4-5-20251001",
-        "gpt-4o":       "claude-sonnet-5",
+        "gpt-4o-mini":  "claude-haiku-5-5",
+        "gpt-4o":       "claude-sonnet-5-5",
     },
     # === v3.0 Claude 專屬能力(全部預設 ON)===
     "claude_features": {
@@ -694,12 +714,19 @@ def _migrate_config_models(cfg):
                 defaults[new_key] = target
         cfg[field] = defaults
 
+    anthropic_cfg = cfg.setdefault("anthropic", {})
+    anthropic_cfg["default_model"] = normalize_anthropic_model(
+        anthropic_cfg.get("default_model"), "claude-haiku-5-5")
+    for _mm_key, _mm_val in list((cfg.get("model_mapping") or {}).items()):
+        if isinstance(_mm_val, str) and _mm_val.startswith("claude-"):
+            cfg["model_mapping"][_mm_key] = normalize_anthropic_model(_mm_val)
+
     gemini_cfg = cfg.setdefault("gemini", {})
     if gemini_cfg.get("upgrade_model") in (None, "", "gemini-3.5-flash"):
         gemini_cfg["upgrade_model"] = "gemini-2.5-flash"
 
     gm = cfg.setdefault("gemini_model_mapping", {})
-    for key in ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-4.1", "gpt-5.4", "gpt-5.5", "gpt-4o"):
+    for key in ("gpt-6.1-sol", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-4.1", "gpt-5.4", "gpt-5.5", "gpt-4o"):
         if gm.get(key) in (None, "", "gemini-3.5-flash"):
             gm[key] = "gemini-2.5-flash"
 
@@ -1299,12 +1326,13 @@ def _resolve_anthropic_model(openai_model):
     """Claude 名稱原樣使用；OpenAI 舊名稱先遷移，再查現行 mapping。"""
     _ensure_initialized()
     if openai_model and isinstance(openai_model, str) and openai_model.startswith("claude-"):
-        return openai_model
+        return normalize_anthropic_model(openai_model)
     normalized = normalize_openai_model(openai_model)
     mapping = _current_config.get("model_mapping", {})
     if normalized in mapping:
-        return mapping[normalized]
-    return _current_config["anthropic"].get("default_model", "claude-haiku-4-5-20251001")
+        return normalize_anthropic_model(mapping[normalized])
+    return normalize_anthropic_model(
+        _current_config["anthropic"].get("default_model", "claude-haiku-5-5"))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1322,6 +1350,11 @@ def _resolve_anthropic_model(openai_model):
 
 # 模型 → cache 最小 token 門檻
 _MODEL_CACHE_MIN_TOKENS = {
+    # Claude 5.5 系列：Haiku 5.5 官方最小可快取 512 tokens（模型頁「须知事项」）。
+    # Sonnet/Opus 5.5 保守取 1024。
+    "claude-haiku-5-5":         512,
+    "claude-sonnet-5-5":        1024,
+    "claude-opus-5-5":          1024,
     "claude-opus-4-7":          2048,
     "claude-haiku-4-5":         4096,
     "claude-sonnet-5":          1024,
@@ -1340,6 +1373,8 @@ _MODEL_CACHE_MIN_TOKENS = {
 # "Prefilling is not supported on Claude Mythos Preview, Claude Opus 4.7,
 #  Claude Opus 4.6, and Claude Sonnet 4.6."
 _MODELS_NO_PREFILL = (
+    "-5-5",            # Haiku/Sonnet/Opus 5.5：prefill 回 400（遷移指南）
+    "claude-fable",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-5",
@@ -1426,25 +1461,89 @@ def _should_apply_cache(system_text, anthropic_model, smart_mode=True):
 #   omitted    — 不回 thinking 文字,只回最終翻譯(Opus 4.7 預設,加快首 token)
 # ═══════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════
+# 2026-10-20 Claude 5.5 系列（Haiku 5.5 / Sonnet 5.5 / Opus 5.5）
+# 官方遷移指南 https://platform.claude.com/docs/zh-CN/models/haiku-5-5/migration-guide ：
+#   - ID 無日期後綴：claude-haiku-5-5 / claude-sonnet-5-5 / claude-opus-5-5
+#   - temperature / top_p / top_k 必須省略（非預設值回 400）
+#   - thinking 預設 adaptive，深度用 output_config.effort；可送 {"type":"disabled"}
+#   - assistant prefill 回 400
+#   - 最小可快取 prompt 512 tokens（Haiku 5.5）
+#   - tokenizer 同 Claude 4.7+，同文字 token 數約 +30%
+# ═══════════════════════════════════════════════════════════════════
+ANTHROPIC_MODEL_REPLACEMENTS = {
+    "claude-haiku-4-5": "claude-haiku-5-5",
+    "claude-haiku-4-5-20251001": "claude-haiku-5-5",
+    "claude-3-5-haiku-latest": "claude-haiku-5-5",
+    "claude-3-5-haiku-20241022": "claude-haiku-5-5",
+    "claude-3-haiku-20240307": "claude-haiku-5-5",
+    "claude-sonnet-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-6": "claude-sonnet-5-5",
+    "claude-sonnet-4-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-5-20250929": "claude-sonnet-5-5",
+    "claude-opus-5": "claude-opus-5-5",
+}
+
+
+def normalize_anthropic_model(model, fallback="claude-haiku-5-5"):
+    """遷移已被取代的 Claude ID（Haiku 4.5 → 5.5、Sonnet 5 → 5.5）。
+
+    5.5 系列同時更便宜、更新（Haiku 5.5 $0.10/$0.50 vs Haiku 4.5 $1/$5；
+    Sonnet 5.5 $2/$10 vs Sonnet 5 $3/$15），因此舊設定一律前進遷移。
+    非 claude- 名稱原樣回傳。
+    """
+    raw = str(model or "").strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if not low.startswith("claude-"):
+        return raw
+    return ANTHROPIC_MODEL_REPLACEMENTS.get(low, raw)
+
+
+def _model_is_claude_55_family(anthropic_model):
+    """Haiku 5.5 / Sonnet 5.5 / Opus 5.5 / Fable / Mythos：新一代參數契約。"""
+    m = (anthropic_model or "").lower()
+    return any(k in m for k in ("-5-5", "fable", "mythos"))
+
+
+def _claude_translation_effort(reasoning_effort):
+    """把 app 的 OpenAI 式 reasoning_effort 轉成 Claude effort / thinking 決策。
+
+    回傳 (thinking_cfg, effort)。翻譯是指令遵循任務：簡單句關閉思考，
+    有否定/條件/多句關係的句子才保留低量自適應思考。
+    """
+    value = str(reasoning_effort or "").strip().lower()
+    if value in ("none", "minimal"):
+        return {"type": "disabled"}, "low"
+    if value in ("medium", "high", "max", "xhigh"):
+        return {"type": "adaptive"}, ("high" if value in ("high", "max", "xhigh") else "medium")
+    # low / 未指定：adaptive + low，簡單請求模型會自行跳過思考
+    return {"type": "adaptive"}, "low"
+
+
 def _model_is_sonnet5(anthropic_model):
     return "sonnet-5" in (anthropic_model or "").lower()
 
 
 def _model_supports_adaptive(anthropic_model):
-    """Opus 4.6+/4.7 + Sonnet 4.6/5 支援 adaptive thinking。"""
+    """Opus 4.6+/4.7 + Sonnet 4.6/5 + 全部 5.5 系列支援 adaptive thinking。"""
     m = (anthropic_model or "").lower()
-    return any(k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6", "sonnet-5"])
+    return _model_is_claude_55_family(m) or any(
+        k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6", "sonnet-5"])
 
 
 def _model_requires_adaptive(anthropic_model):
     """不接受 legacy budget thinking 的模型。"""
     m = (anthropic_model or "").lower()
-    return "opus-4-7" in m or "sonnet-5" in m
+    return "opus-4-7" in m or "sonnet-5" in m or _model_is_claude_55_family(m)
 
 
 def _model_supports_thinking(anthropic_model):
-    """除 Haiku 系列外都支援 thinking"""
+    """Haiku 4.5 以前的 Haiku 不支援 thinking；Haiku 5.5 起為 adaptive。"""
     m = (anthropic_model or "").lower()
+    if _model_is_claude_55_family(m):
+        return True
     return "haiku" not in m
 
 
@@ -1461,7 +1560,8 @@ def _normalize_effort(effort, anthropic_model):
         eff = "medium"
     # xhigh is available on Sonnet 5 and selected Opus generations.
     m = (anthropic_model or "").lower()
-    if eff == "xhigh" and not any(k in m for k in ("sonnet-5", "opus-4-7", "opus-4-8")):
+    if eff == "xhigh" and not any(k in m for k in ("sonnet-5", "opus-4-7", "opus-4-8")) \
+            and not _model_is_claude_55_family(m):
         eff = "high"
     return eff
 
@@ -1535,10 +1635,20 @@ def register_glossary(glossary_dict):
 
 
 def _find_relevant_glossary_terms(messages, max_items=50):
+    """Only the user's source text decides which glossary rows are attached.
+
+    The system prompt (factory preset, examples, semantic contract) mentions
+    dozens of glossary terms as explanations. Matching against it attached
+    11 unrelated search_result blocks to a 70-character reminder, paying for
+    them on every request. Rows are attached when their source term occurs
+    in the message actually being translated.
+    """
     if not _registered_glossary:
         return []
     all_text = ""
     for m in messages:
+        if m.get("role") == "system":
+            continue
         c = m.get("content", "")
         if isinstance(c, str):
             all_text += " " + c
@@ -1841,8 +1951,19 @@ def delete_uploaded_glossary():
 # ═══════════════════════════════════════════════════════════════════
 # Phase 4: Stop Sequences
 # ═══════════════════════════════════════════════════════════════════
-def _build_stop_sequences():
-    """根據官方建議,加入翻譯場景常見的「Claude 想加註解」前綴"""
+def _build_stop_sequences(system_text=""):
+    """根據官方建議,加入翻譯場景常見的「Claude 想加註解」前綴。
+
+    Anthropic 只接受前 4 個；依請求方向排序，中→印輸出時印尼文雜訊優先，
+    否則舊版固定取前四個全是中文前綴，對印尼文輸出毫無保護。
+    """
+    text = str(system_text or "")
+    to_indonesian = "Direction: zh->id" in text or "->id" in text[:400]
+    if to_indonesian:
+        return [
+            "\nCatatan:", "\nTerjemahan:", "\nPenjelasan:", "\nNote:",
+            "\n註:", "\n注:", "\n翻譯:", "\nTranslation:",
+        ]
     return [
         # 中文輸出時的雜訊
         "\n註:", "\n注:", "\n（註",
@@ -2532,6 +2653,7 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
             temperature=temperature, timeout=timeout,
             extra_stop=stop, fast_quality=fast_quality,
             structured_schema=structured_schema, structured_name=structured_name,
+            reasoning_effort=reasoning_effort,
         )
     if provider == "gemini":
         return _chat_complete_gemini(
@@ -2545,7 +2667,7 @@ def _dispatch_provider(provider, model, messages, max_tokens=None,
     if fast_quality and reasoning_effort not in ("none", "minimal"):
         # 只對 reasoning family 覆寫；GPT-4.1 等非 reasoning 模型不送此參數。
         m = (model or "").lower()
-        if m.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        if m.startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
             reasoning_effort = "none"
         elif m.startswith(("gpt-5", "o1", "o3", "o4")):
             reasoning_effort = "minimal"
@@ -2711,7 +2833,7 @@ def _configure_openai_translation_cache(call_kwargs):
     extra_body keeps this wire field compatible with older installed SDKs.
     """
     model = str(call_kwargs.get("model", ""))
-    if not model.startswith("gpt-5.6"):
+    if not model.startswith(("gpt-6", "gpt-5.6")):
         return False
     if os.environ.get("OPENAI_TRANSLATION_EXPLICIT_CACHE", "1").lower() in {"0", "false", "off", "no"}:
         return False
@@ -2829,7 +2951,7 @@ def _chat_complete_openai(model, messages, **kwargs):
     # GPT-5.4 / GPT-5.5 是 reasoning family：Chat Completions 使用
     # max_completion_tokens；純翻譯預設 reasoning=none，並移除不相容採樣參數。
     _model_lower = (model or "").lower()
-    if _model_lower.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+    if _model_lower.startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
         if "max_tokens" in call_kwargs and "max_completion_tokens" not in call_kwargs:
             call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
         for _unsupported in (
@@ -2850,7 +2972,7 @@ def _chat_complete_openai(model, messages, **kwargs):
             import threading as _th
             _tn = _th.current_thread().name or ""
             _m = (call_kwargs.get("model") or "").lower()
-            if _tn.startswith(("bgpost", "evlog")) and _m.startswith(("gpt-5", "o3", "o4")):
+            if _tn.startswith(("bgpost", "evlog")) and _m.startswith(("gpt-6", "gpt-5", "o3", "o4")):
                 call_kwargs["service_tier"] = "flex"
                 _flex_used = True
     except Exception:
@@ -2898,7 +3020,8 @@ def _chat_complete_openai(model, messages, **kwargs):
 @_bounded_provider_transport
 def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
                               timeout=120, extra_stop=None, fast_quality=False,
-                              structured_schema=None, structured_name="structured_response"):
+                              structured_schema=None, structured_name="structured_response",
+                              reasoning_effort=None):
     """Anthropic 路徑 — v3.0 完整 Claude 能力全部自動啟用"""
     client = _get_anthropic_client()
     if client is None:
@@ -2950,6 +3073,24 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     is_haiku = "haiku" in anthropic_model.lower()
     is_opus = "opus" in anthropic_model.lower()
     is_sonnet5 = _model_is_sonnet5(anthropic_model)
+    is_claude55 = _model_is_claude_55_family(anthropic_model)
+    # 新格式提示詞（app 直接組裝 <role>+<translation_principles>）已自帶輸出
+    # 規則，不再套舊的 <task>/<rules>/<success_criteria>/<thinking_protocol>
+    # 外層，避免兩個 <role>、兩個 <output_format> 互相矛盾並多付 60% 字數。
+    _direct_prompt = any(
+        isinstance(m.get("content"), str)
+        and "<translation_principles>" in m.get("content", "")
+        for m in messages if m.get("role") == "system"
+    )
+    if _direct_prompt:
+        features["cot_thinking_tag"] = False
+        features["success_criteria"] = False
+        features["role_strong"] = False
+        features["citations"] = False
+        features["output_translation_tag"] = False
+        if any("<source_terminology>" in str(m.get("content", ""))
+               or "<required_terminology>" in str(m.get("content", "")) for m in messages):
+            features["glossary_grounding"] = False
 
     # ─── Step 1: 訊息格式轉換 ───
     system_text = ""
@@ -3098,15 +3239,22 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
         )
         cache_threshold_used = threshold
         cache_est_tokens = est_tok
-        if fast_quality:
+        if fast_quality or _direct_prompt:
             # Never guess that 80% of a compiled request is stable. In the
             # current format that includes per-message claims and references,
             # causing a new premium cache write for almost every source.
-            boundary = system_text.find("</translation_principles>")
-            stable_end = boundary + len("</translation_principles>") if boundary >= 0 else 0
+            # 穩定區 = role + principles + 群組語氣預設（每則相同）；
+            # 語氣分析、語意契約、術語、範例屬於每則不同的動態區，不快取。
+            stable_end = 0
+            for _tag in ("</translation_preset>", "</translation_principles>"):
+                boundary = system_text.find(_tag)
+                if boundary >= 0:
+                    stable_end = boundary + len(_tag)
+                    break
             stable = system_text[:stable_end]
             stable_cache, _, _ = _should_apply_cache(stable, anthropic_model, smart_mode=True)
             if use_cache and stable and stable_cache:
+                # 5 分鐘 TTL：寫入 1.25x；1h 寫入 2x，對每幾分鐘一則的群組聊天無額外價值。
                 call_kwargs["system"] = [
                     {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
                 ]
@@ -3142,12 +3290,12 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
 
     # Phase 4: Stop Sequences
     if use_stop:
-        stops = _build_stop_sequences()
+        stops = _build_stop_sequences(system_text)
         if extra_stop:
             if isinstance(extra_stop, str):
-                stops.append(extra_stop)
+                stops.insert(0, extra_stop)
             elif isinstance(extra_stop, list):
-                stops.extend(extra_stop)
+                stops = list(extra_stop) + stops
         # Anthropic 上限 4 個 stop sequences,挑最重要的
         call_kwargs["stop_sequences"] = stops[:4]
 
@@ -3156,7 +3304,25 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
     #             Sonnet 4.6 預設改 adaptive(舊 enabled mode deprecated)
     thinking_applied = False
     thinking_mode_used = "none"
-    thinking_cfg, thinking_mode_used = _pick_thinking_config(features, anthropic_model)
+    if is_claude55:
+        # 5.5 系列：不送 temperature/top_p/top_k；思考由 effort 控制。
+        # 翻譯路徑依 app 的每句推理配置：簡單句 disabled，有風險的句子 adaptive+low/medium。
+        if fast_quality:
+            thinking_cfg, eff = {"type": "disabled"}, "low"
+        else:
+            thinking_cfg, eff = _claude_translation_effort(
+                reasoning_effort if reasoning_effort is not None
+                else features.get("thinking_effort", "low"))
+        if not features.get("extended_thinking", False) and reasoning_effort is None and not fast_quality:
+            # 後台未開 thinking 又沒有每句配置：維持最省設定
+            thinking_cfg, eff = {"type": "disabled"}, "low"
+        call_kwargs["thinking"] = thinking_cfg
+        call_kwargs["output_config"] = {"effort": _normalize_effort(eff, anthropic_model)}
+        thinking_applied = thinking_cfg.get("type") != "disabled"
+        thinking_mode_used = (thinking_cfg.get("type") or "disabled") + "_" + eff
+        thinking_cfg = None  # 已處理，略過舊分支
+    else:
+        thinking_cfg, thinking_mode_used = _pick_thinking_config(features, anthropic_model)
     if thinking_cfg is not None:
         # adaptive 模式不需要也不能設 budget_tokens
         # enabled 模式需要確保 max_tokens >= budget + 1024
@@ -3173,6 +3339,8 @@ def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
             call_kwargs["output_config"] = {
                 "effort": _normalize_effort(features.get("thinking_effort", "low"), anthropic_model)
             }
+    elif is_claude55:
+        pass
     else:
         if is_sonnet5:
             # Sonnet 5 未傳 thinking 時預設 adaptive/high，會增加即時翻譯延遲。
@@ -3345,7 +3513,7 @@ def _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwa
         raise RuntimeError("OpenAI client 未初始化")
     model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
     call_kwargs = {"model": model, "messages": messages, "stream": True}
-    if model.lower().startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+    if model.lower().startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
         if max_tokens is not None:
             call_kwargs["max_completion_tokens"] = max_tokens
         if not model.lower().endswith("-pro"):
