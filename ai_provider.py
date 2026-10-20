@@ -3653,6 +3653,37 @@ def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **
 # ═══════════════════════════════════════════════════════════════════
 # Phase 7: Native Vision — 圖片直接給 Claude 讀
 # ═══════════════════════════════════════════════════════════════════
+# Claude Haiku 5.5 uses the high-resolution image tier (downscale only above a
+# 2,576 px long edge / 4,784 vision tokens), so a 2,000×1,500 phone photo costs
+# about 2.5× the vision tokens it cost on Haiku 4.5, which capped at 1,568 px.
+# Every earlier Claude model this bot used was served at ≤1,568 px, so sending
+# the same bound keeps OCR quality unchanged while keeping image spend flat.
+ANTHROPIC_IMAGE_MAX_EDGE = 1568
+
+
+def _bound_image_for_anthropic(media_type, b64data, max_edge=ANTHROPIC_IMAGE_MAX_EDGE):
+    """Return (media_type, b64data) with the long edge capped at max_edge."""
+    try:
+        import base64 as _b64
+        import io as _io
+        from PIL import Image as _Image
+        raw = _b64.b64decode(b64data)
+        img = _Image.open(_io.BytesIO(raw))
+        width, height = img.size
+        longest = max(width, height)
+        if longest <= max_edge:
+            return media_type, b64data
+        scale = max_edge / float(longest)
+        img = img.convert("RGB").resize(
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            _Image.Resampling.LANCZOS)
+        out = _io.BytesIO()
+        img.save(out, format="JPEG", quality=90, optimize=True)
+        return "image/jpeg", _b64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        return media_type, b64data
+
+
 def _convert_openai_content_blocks_to_anthropic(blocks):
     """OpenAI multi-modal content → Anthropic content list
     
@@ -3707,6 +3738,7 @@ def _convert_openai_content_blocks_to_anthropic(blocks):
                             "source": {"type": "base64", "media_type": "application/pdf", "data": b64data}
                         })
                     else:
+                        media_type, b64data = _bound_image_for_anthropic(media_type, b64data)
                         result.append({
                             "type": "image",
                             "source": {"type": "base64", "media_type": media_type, "data": b64data}

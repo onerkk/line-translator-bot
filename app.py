@@ -24698,9 +24698,9 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
   </div>
 
   <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.6">
-    ✅ <strong style="color:#10b981">省錢策略</strong>:開啟字數切換,工人閒聊全走 Haiku 省 75%,工單長翻譯才升 Sonnet。<br>
-    🟢 Haiku 4.5:推薦,品質夠用,便宜。<br>
-    ⭐ Sonnet 5:速度與智慧平衡；即時翻譯會關閉不必要 thinking 並使用 low effort。<br>
+    ✅ <strong style="color:#10b981">省錢策略</strong>:短句走 Haiku 5.5（$0.10/$0.50），有操作風險的短句自動提高 effort；只有長公告才升 Sonnet 5.5。<br>
+    🟢 Haiku 5.5:推薦，最快、支援自適應思考；不接受 temperature/prefill，程式已自動處理。<br>
+    ⭐ Sonnet 5.5:長公告用；即時翻譯用 low effort。<br>
     🔴 Opus 4.7:過度殺雞用牛刀,不推薦工廠翻譯場景。
   </div>
 </div>
@@ -24817,7 +24817,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     <!-- v3.2.4 D8 Phase 22: Assistant Prefill(僅 Haiku 4.5 可用) -->
     <div style="margin-top:8px;padding:8px;background:#0a0a1a;border-radius:6px;border:1px solid #2a2a3e">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span>📝 <strong>Assistant Prefill</strong> <span style="color:#e0a437;font-size:10px">僅 Haiku 4.5 可用</span></span>
+        <span>📝 <strong>Assistant Prefill</strong> <span style="color:#e0a437;font-size:10px">僅 Haiku 4.5 以前可用；5.5 系列會自動略過</span></span>
         <label class="toggle" style="transform:scale(0.7)"><input type="checkbox" id="aip-toggle-prefill" onchange="aipToggleFeature('assistant_prefill',this.checked)"><span class="slider"></span></label>
       </div>
       <input type="text" id="aip-prefill-text" placeholder="例如:翻譯:&#10;留空=不啟用(僅勾上方 toggle 不夠)" style="width:100%;padding:6px;border-radius:4px;border:1px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:11px;margin-bottom:6px">
@@ -24836,7 +24836,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     📷 <strong>圖片翻譯</strong>:OCR 也走 Claude vision,工單照片可直翻。<br>
     🪜 <strong>多層 cache</strong>:把 system 拆成「穩定區(1h)+ 動態區(5m)」,跨 group 共用 stable。<br>
     🎯 <strong>v3.2 Adaptive Thinking</strong>:Claude 自己判斷簡單句不思考、複雜句深思考,省 token + 提質。<br>
-    🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku/Opus 4.7 需 4096,Sonnet 4.6 需 2048),避免 silent fail。<br>
+    🎚️ <strong>v3.2 Smart Cache</strong>:按 model 用正確 token 門檻(Haiku 5.5 需 512,Sonnet 5.5 需 1024,Opus 4.7 需 2048),避免 silent fail。<br>
     🖼️ <strong>v3.2.2 圖片翻譯獨立開關</strong>:Claude vision 一張 ~1MP 圖約 1600 tokens($0.008 input)。<br>
     &nbsp;&nbsp;&nbsp;&nbsp;OFF 時:圖片優先改走其他已設定且支援視覺的 AI；若主要供應商失敗或額度不足，仍由統一三家接力機制接手。<br>
     📝 <strong>v3.2.3 LINE 純文字模式</strong>:強制 Claude 不輸出 **粗體** # 標題 - bullet 等 markdown 廢字元。<br>
@@ -24894,8 +24894,10 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
     </tr></thead>
     <tbody>
       <tr><td style="padding:5px">GPT-4.1-mini</td><td style="text-align:right">$0.40</td><td style="text-align:right">$1.60</td></tr>
-      <tr style="border-top:1px solid #2a2a3e"><td style="padding:5px;color:#d4a437">Claude Haiku 4.5</td><td style="text-align:right">$1.00</td><td style="text-align:right">$5.00</td></tr>
-      <tr><td style="padding:5px;color:#d4a437">Claude Sonnet 4.6</td><td style="text-align:right">$3.00</td><td style="text-align:right">$15.00</td></tr>
+      <tr style="border-top:1px solid #2a2a3e"><td style="padding:5px;color:#d4a437">Claude Haiku 5.5</td><td style="text-align:right">$0.10</td><td style="text-align:right">$0.50</td></tr>
+      <tr><td style="padding:5px;color:#d4a437">Claude Sonnet 5.5</td><td style="text-align:right">$2.00</td><td style="text-align:right">$10.00</td></tr>
+      <tr><td style="padding:5px">GPT-6 Luna</td><td style="text-align:right">$0.10</td><td style="text-align:right">$0.50</td></tr>
+      <tr><td style="padding:5px">GPT-6.1 Sol</td><td style="text-align:right">$2.00</td><td style="text-align:right">$10.00</td></tr>
     </tbody>
   </table>
   <div style="margin-top:8px;font-size:10px;color:#666;line-height:1.5">Anthropic 比 OpenAI 同級貴 2-3x。建議:Anthropic credits 用完就切回 OpenAI。</div>
@@ -25257,7 +25259,7 @@ id2zh | 料件後端損傷 | Barang rusak dari belakang" style="width:100%;paddi
 🔹 <b>gpt-5.6-terra</b>— 長公告、被動句、圖片與複雜工廠語境。<br>
 🔹 <b>gpt-5.6-sol</b>— 關鍵內容最高品質選項，成本最高。<br>
 🔹 <b>gpt-4.1-mini / 5.4 系列</b>— 保留作相容與成本選項。<br>
-<b>GPT-5.4/5.5/5.6</b> 翻譯會自動使用 <code>reasoning_effort=none</code>，避免不必要延遲與推理費用。<br>
+<b>GPT-6 / 5.4 / 5.5 / 5.6</b> 翻譯會自動使用 <code>reasoning_effort=none</code>，避免不必要延遲與推理費用。<br>
 價格格式：每百萬 input/output token（USD）。
 </div>
 
@@ -28711,7 +28713,7 @@ function saveExpressiveSetting(key,val){
 function _modelFamily(name){
   if(!name) return 'unknown';
   var n=name.toLowerCase();
-  if(n.indexOf('gpt-5.6')===0||n.indexOf('gpt-5.5')===0||n.indexOf('gpt-5.4')===0||n.indexOf('gpt-5')===0) return 'gpt5';
+  if(n.indexOf('gpt-6')===0||n.indexOf('gpt-5.6')===0||n.indexOf('gpt-5.5')===0||n.indexOf('gpt-5.4')===0||n.indexOf('gpt-5')===0) return 'gpt5';
   if(n.indexOf('o1')===0||n.indexOf('o3')===0||n.indexOf('o4')===0) return 'oseries';
   if(n.indexOf('gpt-4')===0) return 'gpt4';
   return 'unknown';

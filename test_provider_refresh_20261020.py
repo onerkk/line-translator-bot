@@ -214,3 +214,24 @@ def test_gratitude_palette_has_no_affection_emoji():
     for name, _patterns, _instr, emoji, *_rest in extras._TONE_RULES:
         if name == "gratitude":
             assert "💛" not in emoji and "🥰" not in emoji
+
+
+# ─── vision cost on Haiku 5.5 high-resolution tier ─────────────────────────
+
+def test_large_images_are_bounded_to_the_previous_1568px_tier_before_claude():
+    import base64, io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (2400, 1800), "white").save(buf, format="JPEG")
+    big = base64.b64encode(buf.getvalue()).decode("ascii")
+    blocks = ai_provider._convert_openai_content_blocks_to_anthropic(
+        [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + big}}, {"type": "text", "text": "讀"}])
+    image = next(b for b in blocks if b["type"] == "image")
+    decoded = Image.open(io.BytesIO(base64.b64decode(image["source"]["data"])))
+    assert max(decoded.size) == 1568 and decoded.size == (1568, 1176)
+    buf = io.BytesIO()
+    Image.new("RGB", (1200, 900), "white").save(buf, format="PNG")
+    small = base64.b64encode(buf.getvalue()).decode("ascii")
+    blocks = ai_provider._convert_openai_content_blocks_to_anthropic(
+        [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + small}}])
+    assert blocks[0]["source"]["data"] == small and blocks[0]["source"]["media_type"] == "image/png"

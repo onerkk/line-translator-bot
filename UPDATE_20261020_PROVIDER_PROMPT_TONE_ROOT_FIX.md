@@ -42,15 +42,25 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 依官方單價推算，常規短句每則輸入費用由約 $0.009（Haiku 4.5 / 5.6 Luna，無快取）降到約 $0.0002
 （Haiku 5.5 / GPT-6 Luna，穩定區命中快取）。這是單價推算，不是帳單；正式速度與費用須部署後實測。
 
+## 第三段：作業確認、圖片 OCR、後台
+
+- 作業確認（/ack、/確認、提醒、收據、停止）：594 項測試連跑 5 次全通過；指令解析、點名範圍、提醒 lease、
+  通知翻譯走同一條翻譯管線（含群組語氣）。程式邏輯未發現需要修改的缺陷。第二段整包執行時偶發的
+  `test_only_scheduled_deadline_posts…` 在第三段整包執行已通過；它是提醒排程到期的時間邊界測試，
+  不是功能缺陷。
+- 圖片 OCR：Claude Haiku 5.5 改用高解析度影像層級（長邊 2,576 px 才縮圖），同一張手機照片的視覺
+  token 約為 Haiku 4.5 的 2.5 倍。送到 Claude 前把長邊限制在 1,568 px（過去所有 Claude 模型的服務上限），
+  OCR 品質不變、影像費用不漲；小於上限的圖片原樣送出。OpenAI／Gemini 路徑不受影響。
+- 後台：模型選單、價格表、說明文字、前端模型家族判斷（gpt-6 → reasoning family）同步更新；
+  儲存舊 Claude ID 時自動遷移。
+
 ## 測試
 
-- 新增 `test_provider_refresh_20261020.py`（33 項）：ID 遷移、5.5 參數契約、不二次包裝、快取邊界、
+- 新增 `test_provider_refresh_20261020.py`（34 項）：ID 遷移、5.5 參數契約、不二次包裝、快取邊界、
   grounding 範圍、停止序列、分流、語氣。
 - 更新 `test_model_refresh.py`、`test_translation_cp_extreme.py`、`test_translation_cp_value_root_fix.py`
   以反映新模型政策；版本字串測試同步到 `v3.50.0`。
-- 全套 `python run_translation_offline_checks.py`：4,290 項通過、450 子測試通過。
-  `test_ack_backend_only.py::test_only_scheduled_deadline_posts…` 在整包執行時偶發 1 次失敗、單獨執行 3/3 通過，
-  為既有提醒排程的時間邊界測試（`tick(fresh, due)` 與浮點時間），與本次改動無關，列入下一段作業確認檢查。
+- 全套 `python run_translation_offline_checks.py`：4,292 項通過、450 子測試通過。
 
 ## 版本連動
 
