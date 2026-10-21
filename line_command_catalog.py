@@ -2,7 +2,7 @@
 import re
 from urllib.parse import urlencode
 
-BUILD_ID = "2026-09-09.ui104"
+BUILD_ID = "2026-10-21.ui105"
 
 
 def entry(key, chinese, category, description, indonesian, example="", *,
@@ -130,71 +130,159 @@ def txt(text, size="sm", color="#203447", **options):
     return dict(type="text", text=text or "—", size=size, color=color, wrap=True, **options)
 
 
-def nav(label, topic, lang):
-    return dict(type="button", height="sm", style="link", color="#087F78",
+# ======================================================================
+# /help  (ui105, 2026-10-21)
+# Commands are visible on the first screen: every category bubble lists
+# its commands with a one-line meaning; tapping a row opens that command's
+# detail card. A "most used" bubble comes first. No separate category menu.
+# ======================================================================
+HELP_BUILD = "2026-10-21.ui105"
+BRAND = "#102F42"
+ACCENT = {
+    "start": "#0E9C8A", "ack": "#D97706", "tools": "#2563EB", "media": "#7C3AED",
+    "buttons": "#DB2777", "quality": "#DC2626", "settings": "#059669", "names": "#0891B2",
+    "admin": "#475569", "popular": "#102F42",
+}
+ICON = {
+    "start": "💬", "ack": "📋", "tools": "🏭", "media": "🖼️", "buttons": "🔘",
+    "quality": "✅", "settings": "⚙️", "names": "👤", "admin": "🛠️", "popular": "⭐",
+}
+POPULAR = ("ack", "handover", "mylang", "wrong", "factory", "status", "help")
+ROWS_PER_BUBBLE = 9
+
+
+def brief(text, limit=26):
+    """First clause of a description, short enough for one line on a phone."""
+    head = re.split(r"[；;。]", str(text or ""), 1)[0].strip()
+    return head if len(head) <= limit else head[:limit - 1] + "…"
+
+
+def nav(label, topic, lang, *, style="link", color=None):
+    return dict(type="button", height="sm", style=style, color=color or "#087F78",
                 action=dict(type="postback", label=label[:20], data="action=help&" + urlencode(dict(topic=topic, lang=lang))))
 
 
-def bubble(title, subtitle, contents, footer):
-    return {"type": "bubble", "size": "mega", "header": {
-        "type": "box", "layout": "vertical", "paddingAll": "20px", "backgroundColor": "#102F42",
-        "contents": [txt("翻譯小助手 · PENERJEMAH", "xxs", "#8DDDD1"),
-                     txt(title, "xl", "#FFFFFF", weight="bold", margin="sm"),
-                     txt(subtitle, "xs", "#BED3DD", margin="sm")]},
-        "body": {"type": "box", "layout": "vertical", "paddingAll": "20px", "spacing": "lg", "backgroundColor": "#FFFFFF", "contents": contents},
-        "footer": {"type": "box", "layout": "vertical", "paddingAll": "12px", "backgroundColor": "#F1F7F8", "contents": footer}}
+def bubble(category, title, subtitle, contents, footer):
+    accent = ACCENT.get(category, BRAND)
+    return {"type": "bubble", "size": "mega",
+            "header": {"type": "box", "layout": "vertical", "paddingAll": "18px", "backgroundColor": BRAND,
+                       "contents": [
+                           {"type": "box", "layout": "horizontal", "alignItems": "center", "contents": [
+                               txt(ICON.get(category, "💬") + "  " + title, "lg", "#FFFFFF", weight="bold", flex=1),
+                               {"type": "box", "layout": "vertical", "width": "6px", "height": "22px",
+                                "backgroundColor": accent, "cornerRadius": "3px", "contents": []}]},
+                           txt(subtitle, "xs", "#BED3DD", margin="sm")]},
+            "body": {"type": "box", "layout": "vertical", "paddingAll": "12px", "spacing": "sm",
+                     "backgroundColor": "#FFFFFF", "contents": contents},
+            "footer": {"type": "box", "layout": "horizontal", "paddingAll": "8px", "spacing": "sm",
+                       "backgroundColor": "#F1F7F8", "contents": footer}}
+
+
+def command_row(row, lang, category):
+    accent = ACCENT.get(row["category"], BRAND)
+    names = "/" + row["english"] + "  /" + row["chinese"]
+    meaning = brief(row["description"] if lang == "zh" else row["indonesian"], 26 if lang == "zh" else 34)
+    tag = []
+    if row["admin"]:
+        tag.append(txt("管理員" if lang == "zh" else "Admin", "xxs", accent, weight="bold", flex=0, margin="sm"))
+    return {"type": "box", "layout": "horizontal", "spacing": "md", "paddingAll": "10px", "cornerRadius": "12px",
+            "backgroundColor": "#F6F9FA", "alignItems": "center",
+            "action": {"type": "postback", "label": ("/" + row["chinese"])[:20],
+                       "data": "action=help&" + urlencode(dict(topic="cmd:" + row["key"], lang=lang))},
+            "contents": [
+                {"type": "box", "layout": "vertical", "width": "44px", "height": "44px", "cornerRadius": "10px",
+                 "backgroundColor": accent, "justifyContent": "center", "alignItems": "center",
+                 "contents": [txt(ICON.get(row["category"], "💬"), "lg", "#FFFFFF", align="center")]},
+                {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+                    {"type": "box", "layout": "horizontal", "contents": [txt(names, "sm", BRAND, weight="bold", flex=1)] + tag},
+                    txt(meaning, "xs", "#526577", margin="xs")]},
+                txt("›", "lg", "#9AAABB", flex=0)]}
+
+
+def guide_row(title, description):
+    return {"type": "box", "layout": "vertical", "paddingAll": "12px", "cornerRadius": "12px",
+            "backgroundColor": "#F6F9FA", "spacing": "xs",
+            "contents": [txt(title, "sm", BRAND, weight="bold"), txt(description, "xs", "#526577")]}
+
+
+def _category_bubbles(category, rows, lang):
+    zh, idn = CATEGORIES[category]
+    title, subtitle = (zh, idn) if lang == "zh" else (idn, zh)
+    guides = GUIDES.get(category)
+    if guides:
+        body = [guide_row(g[0] if lang == "zh" else g[1], g[2] if lang == "zh" else g[3]) for g in guides]
+        return [bubble(category, title, subtitle, body, [nav("全部指令" if lang == "zh" else "Semua perintah", "", lang),
+                                                       nav("Bahasa Indonesia" if lang == "zh" else "中文", category, "id" if lang == "zh" else "zh")])]
+    pages = []
+    total = (len(rows) + ROWS_PER_BUBBLE - 1) // ROWS_PER_BUBBLE
+    for offset in range(0, len(rows), ROWS_PER_BUBBLE):
+        body = [command_row(r, lang, category) for r in rows[offset:offset + ROWS_PER_BUBBLE]]
+        if category == "ack" and offset == 0:
+            body.append(txt("了解只記錄，不另發訊息；查看回覆與停止提醒限發起人與管理員。" if lang == "zh"
+                            else "Paham hanya dicatat; Status dan Stop hanya untuk pengirim/admin.", "xxs", "#087F78", margin="sm"))
+        page = (" · " + str(offset // ROWS_PER_BUBBLE + 1) + "/" + str(total)) if total > 1 else ""
+        pages.append(bubble(category, title, subtitle + page + ("  點指令看用法" if lang == "zh" else "  Ketuk untuk detail"), body,
+                            [nav("全部指令" if lang == "zh" else "Semua perintah", "", lang),
+                             nav("Bahasa Indonesia" if lang == "zh" else "中文", category, "id" if lang == "zh" else "zh")]))
+    return pages
+
+
+def _detail_bubble(row, lang):
+    accent = ACCENT.get(row["category"], BRAND)
+    zh, idn = CATEGORIES[row["category"]]
+    usage = (" " + row["usage"]) if row["usage"] else ""
+    chip = lambda text: {"type": "box", "layout": "vertical", "paddingAll": "8px", "cornerRadius": "10px",
+                         "backgroundColor": accent, "flex": 0,
+                         "contents": [txt(text, "sm", "#FFFFFF", weight="bold")]}
+    scope = {"both": "群組／私訊 · Grup/pribadi", "group": "群組 · Grup", "dm": "私訊 · Pribadi"}[row["scope"]]
+    body = [
+        {"type": "box", "layout": "horizontal", "spacing": "sm", "contents": [chip("/" + row["english"]), chip("/" + row["chinese"])]},
+        txt("/" + row["english"] + "  /" + row["chinese"], "xxs", "#9AAABB", margin="sm"),
+        txt(("管理員 · Admin · " if row["admin"] else "") + scope, "xxs", "#647689"),
+        txt(row["description"] if lang == "zh" else row["indonesian"], "sm", margin="md"),
+        txt(row["indonesian"] if lang == "zh" else row["description"], "xs", "#526577", margin="sm"),
+    ]
+    if row["usage"]:
+        body.append({"type": "box", "layout": "vertical", "paddingAll": "10px", "cornerRadius": "10px", "backgroundColor": "#F1F7F8", "margin": "md",
+                     "contents": [txt("用法 / Format", "xxs", "#647689"), txt("/" + row["chinese"] + usage, "sm", BRAND, weight="bold", margin="xs")]})
+    if row["example"]:
+        body.append({"type": "box", "layout": "vertical", "paddingAll": "10px", "cornerRadius": "10px", "backgroundColor": "#EAF7F5", "margin": "md",
+                     "contents": [txt("範例 / Contoh", "xxs", "#087F78"), txt(row["example"], "sm", "#0B5F58", margin="xs")]})
+    footer = [nav("← " + (zh if lang == "zh" else idn), row["category"], lang)]
+    if not row["usage"]:
+        footer.append(dict(type="button", height="sm", style="primary", color=accent,
+                           action=dict(type="message", label=("送出 /" + row["chinese"])[:20], text="/" + row["chinese"])))
+    else:
+        footer.append(nav("Bahasa Indonesia" if lang == "zh" else "中文", "cmd:" + row["key"], "id" if lang == "zh" else "zh"))
+    return bubble(row["category"], "/" + row["chinese"] if lang == "zh" else "/" + row["english"],
+                  (zh if lang == "zh" else idn) + "  ·  " + ("指令說明" if lang == "zh" else "Detail perintah"), body, footer)
 
 
 def build_help(primary_lang="zh", is_admin=False, topic=""):
     lang = "id" if primary_lang == "id" else "zh"
     topic = str(topic or "").strip().lstrip("/").casefold()
-    topic = topic if topic in CATEGORIES else ALIASES.get(topic, topic)
-    topic = next((k for k, v in CATEGORIES.items() if topic in v), topic)
+    detail = topic.startswith("cmd:")
+    topic = topic[4:] if detail else topic
+    if not detail:
+        topic = topic if topic in CATEGORIES else ALIASES.get(topic, topic)
+        topic = next((k for k, v in CATEGORIES.items() if topic in v), topic)
     visible = [r for r in COMMANDS if is_admin or not r["admin"]]
-    category = topic if topic in CATEGORIES else None
-    if topic in BY_KEY and topic not in CATEGORIES:
-        rows = [r for r in visible if r["key"] == topic]
-    elif category in GUIDES:
-        rows = [dict(guide=True, title=zh if lang == "zh" else idn,
-                     description=desc, indonesian=desc_id, category=category)
-                for zh, idn, desc, desc_id in GUIDES[category]]
-    elif category:
-        rows = [r for r in visible if r["category"] == category]
-    else:
-        rows = []
     pages = []
-    if not rows:
-        groups = [key for key in CATEGORIES if key in GUIDES or any(r["category"] == key for r in visible)]
-        for offset in range(0, len(groups), 4):
-            body = [txt("直接傳訊息即可翻譯；群組須已開啟自動翻譯。\nKirim pesan untuk diterjemahkan jika mode otomatis aktif.", color="#526577")]
-            for key in groups[offset:offset + 4]:
-                zh, idn = CATEGORIES[key]
-                body.append({"type": "box", "layout": "vertical", "backgroundColor": "#F1F7F8", "cornerRadius": "12px", "paddingAll": "12px",
-                             "action": {"type": "postback", "label": zh, "data": "action=help&" + urlencode(dict(topic=key, lang=lang))},
-                             "contents": [txt(zh if lang == "zh" else idn, "md", weight="bold"), txt(idn if lang == "zh" else zh, "xs", "#526577", margin="xs")]})
-            body.append(txt("所有指令皆可使用英文或中文，例如 /ack = /確認。\nPerintah menerima nama Inggris atau Mandarin.", "xs", "#526577"))
-            pages.append(bubble("使用說明" if lang == "zh" else "Panduan", "選擇分類查看用法與範例 / Pilih kategori", body,
-                                [nav("Bahasa Indonesia" if lang == "zh" else "中文說明", "", "id" if lang == "zh" else "zh")]))
-    else:
-        title = CATEGORIES.get(category or rows[0]["category"])[0 if lang == "zh" else 1]
-        for offset in range(0, len(rows), 3):
-            body = []
-            if category == "ack" and offset == 0:
-                body.append(txt("通知內容 → 按了解 → 後台記錄\n了解只記錄，名單外回覆不處理。查看回覆與停止提醒限發起人、管理員；其他人點擊無反應。到後台設定的時間，僅標記仍未回覆者，名單不足也不改用 @All。了解不代表作業完成。" if lang == "zh" else "Isi pesan → Paham → Catatan admin\nPaham hanya dicatat. Status dan Stop hanya untuk pengirim/admin; klik orang lain diabaikan. Pengingat hanya menyebut yang belum menjawab pada jadwal admin, tanpa @All. Paham bukan berarti pekerjaan selesai.", color="#087F78"))
-            for row in rows[offset:offset + 3]:
-                if row.get("guide"):
-                    body.append({"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-                        txt(row["title"], "md", weight="bold"),
-                        txt(row["description"] if lang == "zh" else row["indonesian"])]})
-                    continue
-                scope = {"both": "群組／私訊 · Grup/pribadi", "group": "群組 · Grup", "dm": "私訊 · Pribadi"}[row["scope"]]
-                cells = [txt("/" + row["english"] + "  /" + row["chinese"], "md", weight="bold"),
-                         txt(("管理員 · Admin · " if row["admin"] else "") + scope, "xxs", "#647689"),
-                         txt(row["description"] if lang == "zh" else row["indonesian"], "sm", margin="sm")]
-                if row["usage"]:
-                    cells.append(txt("/" + row["english"] + " " + row["usage"], "xs", "#526577", margin="sm"))
-                cells.append(txt(row["example"], "sm", "#087F78", margin="sm"))
-                body.append({"type": "box", "layout": "vertical", "spacing": "xs", "contents": cells})
-            pages.append(bubble(title, "用法與範例 · " + str(offset // 3 + 1) + "/" + str((len(rows) + 2) // 3), body,
-                                [nav("全部分類 / Menu", "", lang), nav("Bahasa Indonesia" if lang == "zh" else "中文說明", topic, "id" if lang == "zh" else "zh")]))
-    return "翻譯小助手使用說明 / Panduan perintah", {"type": "carousel", "contents": pages}
+    if topic in BY_KEY and (detail or topic not in CATEGORIES):
+        rows = [r for r in visible if r["key"] == topic]
+        if rows:
+            pages = [_detail_bubble(rows[0], lang)]
+    elif topic in CATEGORIES:
+        pages = _category_bubbles(topic, [r for r in visible if r["category"] == topic], lang)
+    if not pages:
+        popular = [BY_KEY[k] for k in POPULAR if BY_KEY[k] in visible][:7]
+        body = [command_row(r, lang, "popular") for r in popular]
+        body.append(txt("指令可用英文或中文，例如 /ack = /確認；直接傳訊息即可翻譯。" if lang == "zh"
+                        else "Perintah bisa Inggris atau Mandarin (/ack = /確認). Kirim pesan untuk menerjemahkan.", "xxs", "#647689", margin="sm"))
+        pages.append(bubble("popular", "常用指令" if lang == "zh" else "Sering dipakai", "點指令看用法 · 向右滑看分類" if lang == "zh" else "Ketuk untuk detail · geser untuk kategori", body,
+                            [nav("Bahasa Indonesia" if lang == "zh" else "中文說明", "", "id" if lang == "zh" else "zh")]))
+        for key in CATEGORIES:
+            rows = [r for r in visible if r["category"] == key]
+            if key in GUIDES or rows:
+                pages.extend(_category_bubbles(key, rows, lang))
+    return "翻譯小助手使用說明 / Panduan perintah", {"type": "carousel", "contents": pages[:12]}

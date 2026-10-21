@@ -73,3 +73,13 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
   移除採樣參數、adaptive thinking、禁 prefill。
 - OpenAI Pricing（developers.openai.com/api/docs/pricing）：gpt-6-luna $0.10/$0.50、gpt-6.1-sol $2/$10、
   GPT-5.6 Sol 優惠價至 2026-11-21。
+
+## 2026-10-21 /help 重新設計（ui105，`line_command_catalog.py`）
+
+- 第一張卡「常用指令」直接列出 /確認、/交班摘要、/我的語言、/標錯、/工廠、/狀態、/說明。
+- 之後每張卡就是一個分類，卡內直接列出該分類全部指令：左側分類色塊圖示、中英指令名、一句用途、
+  管理員標記；點任一列開啟該指令的說明卡（用法、範例、雙語說明），無參數指令有「送出」按鈕一鍵執行。
+- 不再有「先選分類、再翻頁」的中間層；圖片／按鈕兩類維持圖文教學。
+- 指令列的 postback 改用 `topic=cmd:<key>`，解決 /ack 既是指令又是分類而無法開啟說明的問題；
+  `/說明 確認` 等文字用法不變。
+- 版本：`BUILD_ID` → `2026-10-21.ui105`；新增 `test_help_ui105.py`（4 項），`test_ui104_commands.py` 維持通過。
