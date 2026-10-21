@@ -8,6 +8,7 @@ data, not as Python sentence patches.
 from __future__ import annotations
 
 import copy
+import logging
 import translation_request_cache
 import hashlib
 import json
@@ -23,6 +24,7 @@ import factory_message_semantics as message_semantics
 import factory_planning_semantics as planning_semantics
 
 FACTORY_KNOWLEDGE_API_VERSION = 1
+logger = logging.getLogger(__name__)
 DEFAULT_FILENAME = "factory_knowledge.json"
 
 
@@ -179,7 +181,20 @@ class FactoryKnowledgeStore:
 
     def _read(self) -> Dict[str, Any]:
         with open(self.path, "r", encoding="utf-8") as handle:
-            return validate_document(json.load(handle))
+            document = json.load(handle)
+        # Screenshot-review bundles (translation_reviews/*.json) contribute
+        # cards through the same validator, so a reviewed rule is retrieved,
+        # prompted and enforced exactly like a hand-written one.
+        try:
+            import translation_reviews as reviews_module
+            extra = reviews_module.knowledge_entries(reviews_module.load_bundles(os.path.dirname(self.path)))
+        except Exception as exc:  # a broken bundle must not take the whole store down
+            logger.warning("[FactoryKnowledge] review bundles skipped: %s", exc)
+            extra = []
+        if extra and isinstance(document, dict):
+            known = {str(e.get("id")) for e in document.get("entries", []) if isinstance(e, dict)}
+            document = dict(document, entries=list(document.get("entries", [])) + [e for e in extra if e["id"] not in known])
+        return validate_document(document)
 
     def reload(self, force: bool = False) -> Dict[str, Any]:
         with self._lock:

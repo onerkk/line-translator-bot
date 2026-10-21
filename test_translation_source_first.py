@@ -160,21 +160,26 @@ def test_unknown_human_correction_is_retrieved_without_new_error_rules(runtime, 
     pending = learning.submit_correction(src_text=source, original_tgt="Stiker disimpan.", corrected_tgt=target,
         src_lang="zh", tgt_lang="id", corrected_by="operator", group_id="G-source-first")
     assert pending["ok"]
-    assert not casebook.active_corrections_snapshot(learning, group_id="G-source-first")
+    # Global screenshot-review corrections (group_id "") are visible to every
+    # group by design; the pending row for this group must not be.
+    assert not [r for r in casebook.active_corrections_snapshot(learning, group_id="G-source-first")
+                if r.get("group_id") == "G-source-first"]
     approval = learning.approve_correction(pending["correction_id"], approved_by="admin")
     assert approval["ok"], approval
     rows = casebook.active_corrections_snapshot(learning, group_id="G-source-first")
-    assert len(rows) == 1
+    assert len([r for r in rows if r.get("group_id") == "G-source-first"]) == 1
     query = "黃色貼紙留在櫃子，客戶的紫色貼紙改放辦公桌旁。"
     selected = casebook.retrieve(query, "zh", "id", corrections=rows)
     assert selected
     memory_prompt = casebook.build_prompt(selected)
     assert target in memory_prompt and source in memory_prompt
     assert casebook.exact_verified_target(query, selected) is None
-    assert not casebook.active_corrections_snapshot(learning, group_id="G-other")
+    assert not [r for r in casebook.active_corrections_snapshot(learning, group_id="G-other")
+                if r.get("group_id")]  # another group's row never leaks; global review rows may
     revoked = learning.reject_correction(pending["correction_id"], rejected_by="admin", reason="wrong interpretation")
     assert revoked["ok"]
-    assert not casebook.active_corrections_snapshot(learning, group_id="G-source-first")
+    assert not [r for r in casebook.active_corrections_snapshot(learning, group_id="G-source-first")
+                if r.get("group_id")]
     casebook.invalidate_active_cache()
 
 

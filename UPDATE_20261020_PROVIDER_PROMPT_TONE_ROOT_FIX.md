@@ -117,3 +117,21 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
   `python learning_loop_eval.py --provider openai --limit 40`；`--dry-run` 不花 API。
   這是閉環的第三塊（量測）；第二塊（錯誤類型累積→規則草稿→管理員核准）下一段做，評審給的
   error category 就是它的輸入。
+
+## 2026-10-21 學習閉環第二塊：截圖審核 → 機器人自動學習（`translation_reviews.py`）
+
+從現在起，截圖審核的產出是**資料**（`translation_reviews/*.json`），不是程式碼。每個 bundle 在開機時進三層：
+1. corrections → 核准修正（全域）→ casebook 對照式 few-shot，相似訊息會看到「錯的 vs 對的」。
+2. glossary → 併入術語表（不覆蓋後台已有詞）→ factory_terminology 索引、提示詞術語區。
+3. rule → factory_knowledge 卡片（情境說明、範例、禁用句）→ 檢索進提示詞；
+   若模型仍輸出審核過的禁用句，**只有這種情況**會多做一次修正呼叫（每則最多一次，修正結果須通過全部卡片與品質閘門才採用）。
+
+實測（固定模型回覆）：10/20 截圖那句的 bundle 放進去後，一句改寫過的新訊息「阿迪 你今天體檢沒有採集檢…」
+提示詞已含卡片、術語與修正範例；模型故意重複舊錯時第二次呼叫把它修成 sampel … belum dikumpulkan。
+
+- 第一個 bundle：`translation_reviews/2026-10-20-health-check-sample.json`（採集檢主詞、陰涼處 teduh）。
+- 驗證：`python translation_reviews.py validate`；手動灌入：`python translation_reviews.py ingest`；
+  開機由 worker 啟動流程自動灌入（可重複、不重複寫入）。
+- 新增 `test_translation_reviews.py`（6 項）；`test_translation_source_first.py` 調整為容許全域審核修正。
+- 之後每次截圖審核，我回覆一個 bundle JSON 檔，你放進 `translation_reviews/` 部署即可；
+  累積後用 `learning_loop_eval.py` 量測。

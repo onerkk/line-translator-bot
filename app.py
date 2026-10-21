@@ -9750,6 +9750,27 @@ def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt,
             })
         except Exception:
             pass
+        # 2026-10-21 learning loop: a phrase the owner explicitly reviewed as
+        # wrong (translation_reviews bundle, card id "review_*") is the one case
+        # worth a second paid generation. Everything else stays advisory as
+        # before. One repair per request; the repair is kept only if it clears
+        # every card and does not introduce a new quality-gate defect.
+        reviewed = [i for i in issues if ":review_" in str(i) and ":forbidden:" in str(i)]
+        if reviewed and not getattr(_tl, "review_repair_done", False):
+            _tl.review_repair_done = True
+            try:
+                repaired = translate_openai(src_text, src, tgt, repair_mode=True, bad_result=translation)
+                repaired = str(repaired or "").strip()
+                ok2, issues2 = factory_knowledge_module.validate_translation(cards, src_text, repaired) if repaired else (False, ["empty"])
+                if ok2 and not _delivery_validation_issues(src_text, repaired, src, tgt):
+                    _event_log_write("review_rule_repair_applied", {
+                        "src_text": (src_text or "")[:200], "issues": reviewed[:5]})
+                    _tl.factory_knowledge_issues = []
+                    return repaired
+                _event_log_write("review_rule_repair_rejected", {
+                    "src_text": (src_text or "")[:200], "issues": list(issues2)[:5]})
+            except Exception as exc:
+                logger.warning("[Reviews] repair call failed, keeping first candidate: %s", exc)
     return translation
 
 
@@ -10208,6 +10229,18 @@ if os.path.exists(_glossary_json_path):
         logger.warning("Failed to load glossary_data.json, using embedded: %s", _e)
 else:
     logger.info("Using embedded glossary: %d terms", len(GLOSSARY_LOOKUP))
+
+# 2026-10-21: screenshot-review bundles (translation_reviews/*.json) add
+# reviewed terms before normalisation so terminology, casebook and the prompt
+# all see them. Reviews never overwrite an admin-maintained term.
+import translation_reviews as translation_reviews_module
+try:
+    _REVIEW_BUNDLES = translation_reviews_module.load_bundles()
+    _REVIEW_GLOSSARY_ADDED = translation_reviews_module.apply_glossary(GLOSSARY_LOOKUP, _REVIEW_BUNDLES)
+    logger.info("[Reviews] %d bundles, %d glossary terms added", len(_REVIEW_BUNDLES), _REVIEW_GLOSSARY_ADDED)
+except Exception as _review_exc:
+    logger.warning("[Reviews] bundles skipped: %s", _review_exc)
+    _REVIEW_BUNDLES = []
 
 # v3.32.4: The glossary is a mixed knowledge base.  Normalize it once so every
 # consumer sees the same canonical/soft/disabled policy; descriptions are never
@@ -14096,7 +14129,7 @@ def translate(text, src, tgt):
         "cacheable", "tm_references", "ge_violations", "factory_knowledge_issues",
         "context_result_cacheable",
         "learning_rejections", "generated_candidate", "nmt_attempted",
-        "translation_alignment_issues", "translation_effort_boost",
+        "translation_alignment_issues", "translation_effort_boost", "review_repair_done",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -38764,7 +38797,16 @@ def _start_worker_services():
                 "async_ingress=%s webhook_workers=%s text_retry_workers=2 media_retry_workers=1",
                 webhook_runtime.BUILD_ID, _WORKER_STARTUP_BUILD, os.getpid(), os.getppid(),
                 webhook_runtime.asynchronous_ingress(), _WEBHOOK_INBOX.pool.workers)
+    def _ingest_review_bundles():
+        # Screenshot-review corrections become approved few-shot cases in the
+        # worker's correction store. Idempotent: duplicates are ignored.
+        bundles = translation_reviews_module.load_bundles()
+        if bundles:
+            logger.info("[Reviews] corrections ingested: %s",
+                        translation_reviews_module.apply_corrections(al_module, bundles))
+
     for name, start in (
+        ("review-bundles", _ingest_review_bundles),
         ("translation-recovery", _resume_persisted_translation_retries),
         ("webhook-recovery", _WEBHOOK_INBOX.pool.ensure_started),
         ("factory-reminders", factory_hub.reminder_worker.start),

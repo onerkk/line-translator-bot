@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "review_id": "2026-10-20-health-check-sample",
+  "source": "screenshot review by Claude, 研磨股 group 10/20 17:32",
+  "items": [
+    {
+      "id": "sample-collection-subject",
+      "src": "zh",
+      "tgt": "id",
+      "source": "蘇比 你今日體檢沒有採集檢，10/21(三)09:00 司機會抽空去收(罐子已給)，請記得先準備好放陰涼處等司機，謝謝",
+      "observed": "蘇比, pemeriksaan kesehatan hari ini belum mengambil sampel. Pada 10/21 (Rabu) pukul 09:00 sopir akan meluangkan waktu untuk mengambilnya (wadahnya sudah diberikan). Harap siapkan terlebih dahulu dan letakkan di tempat yang sejuk, lalu tunggu sopir. Terima kasih.",
+      "corrected": "蘇比, sampel pemeriksaan kesehatan kamu hari ini belum dikumpulkan. Pada 10/21 (Rabu) pukul 09:00 sopir akan menyempatkan diri mengambilnya (wadahnya sudah diberikan). Tolong siapkan dulu dan letakkan di tempat teduh, lalu tunggu sopir. Terima kasih.",
+      "category": "term",
+      "reason": "「採集檢」是體檢的檢體（尿液／糞便）採集；主詞是工人的檢體還沒交，不是「體檢沒去採樣」。陰涼處用 tempat teduh 比 sejuk 貼切。",
+      "glossary": [
+        {"zh": "採集檢", "id": "pengumpulan sampel pemeriksaan kesehatan", "mode": "soft"}
+      ],
+      "rule": {
+        "when": [["體檢", "健檢"], ["採集", "採檢", "檢體", "罐子"]],
+        "directions": ["zh-id"],
+        "title": "體檢檢體採集通知",
+        "context": [
+          "「採集檢／採檢」在體檢通知中指工人的檢體（尿液或糞便）採集；譯文主詞是工人的檢體（sampel … kamu belum dikumpulkan），不是體檢本身沒採樣。",
+          "「罐子已給」= wadah/botol sampel sudah diberikan；「司機會抽空去收」= sopir akan menyempatkan diri mengambil；「放陰涼處」= letakkan di tempat teduh。",
+          "這是提醒，不是感謝；結尾謝謝只是禮貌收尾，語氣維持中性指令。"
+        ],
+        "forbidden": ["pemeriksaan kesehatan hari ini belum mengambil sampel"]
+      }
+    }
+  ]
+}
