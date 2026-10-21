@@ -35,7 +35,7 @@ def test_review_glossary_never_overwrites_admin_terms():
 
 
 def test_validation_rejects_placeholders_and_no_op_corrections():
-    base = reviews.load_bundles()[0]
+    base = next(b for b in reviews.load_bundles() if b["review_id"].startswith("2026-10-20"))
     broken = copy.deepcopy(base)
     broken["items"][0]["corrected"] = broken["items"][0]["observed"]
     with pytest.raises(reviews.ReviewError):
@@ -57,7 +57,7 @@ def test_corrections_are_submitted_as_approved_global_rows():
             calls.append((args, kwargs)); return {"ok": True}
     stats = reviews.apply_corrections(FakeAL(), reviews.load_bundles())
     assert stats["submitted"] == len(calls) >= 1
-    args, kwargs = calls[0]
+    args, kwargs = next(c for c in calls if c[1]["approved_by"].endswith("health-check-sample"))
     assert kwargs["auto_approve"] is True and kwargs["group_id"] == "" and kwargs["approved_by"].startswith("review:")
     assert args[2].startswith("蘇比, sampel")
 
@@ -87,3 +87,29 @@ def test_reviewed_forbidden_phrase_triggers_exactly_one_repair_generation(monkey
     app._tl.tone, app._tl.group_id = "factory", "Cx"
     monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: (calls.append(kw) or response(good)))
     assert "belum dikumpulkan" in app.translate(src + "。", "zh", "id") and len(calls) == 1
+
+
+def test_verified_correction_bad_wording_also_earns_the_single_repair(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    import translation_casebook as casebook
+    src = "黃色貼紙留在櫃子，客戶的紫色貼紙改放辦公桌旁。"
+    case = {"source": "客戶的紫色貼紙先放辦公桌，黃色貼紙留在櫃子。",
+            "target": "Taruh stiker ungu milik pelanggan di meja kantor dahulu, dan biarkan stiker kuning di lemari.",
+            "bad_target": "Stiker ungu disimpan di lemari.", "direction": "zh-id", "origin": "active_learning",
+            "case_id": "correction:1", "source_match": {}, "verified_correction": True, "revision": 1,
+            "group_id": "", "validation_state": "passed", "reason": "顏色與位置對調"}
+    monkeypatch.setattr(casebook, "active_corrections_snapshot", lambda *a, **k: [dict(case)])
+    bad = "Stiker ungu disimpan di lemari, stiker kuning taruh di meja kantor."
+    good = "Biarkan stiker kuning di lemari, stiker ungu milik pelanggan dipindahkan ke samping meja kantor."
+    calls = []
+    def create(**kw):
+        calls.append(kw)
+        return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear()
+    app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert len(calls) <= 2
+    if len(calls) == 2:
+        assert "kuning di lemari" in out

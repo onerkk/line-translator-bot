@@ -9734,9 +9734,24 @@ def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt,
     stage is intentionally local-only.
     """
     cards = _factory_knowledge_cards_from_contract(contract)
-    if not cards or not translation:
+    verified_cases = _verified_cases_from_contract(contract)
+    if (not cards and not verified_cases) or not translation:
         return translation
-    ok, issues = factory_knowledge_module.validate_translation(cards, src_text, translation)
+    ok, issues = (factory_knowledge_module.validate_translation(cards, src_text, translation)
+                  if cards else (True, []))
+    issues = list(issues or [])
+    learned_hits = []
+    if verified_cases:
+        # A human-approved correction whose known-bad wording reappears is the
+        # clearest learning signal the store has; treat it like a forbidden phrase.
+        try:
+            case_ok, case_issues = translation_casebook_module.validate_translation_cases(verified_cases, translation)
+            if not case_ok or case_issues:
+                learned_hits = [str(x) for x in (case_issues or ["verified_case_bad_target"]) if str(x).strip()]
+                issues.extend("verified_correction:" + x for x in learned_hits)
+                ok = False
+        except Exception:
+            pass
     if not ok:
         try:
             _tl.factory_knowledge_issues = list(issues)
@@ -9755,13 +9770,20 @@ def _maybe_repair_factory_knowledge_translation(src_text, translation, src, tgt,
         # worth a second paid generation. Everything else stays advisory as
         # before. One repair per request; the repair is kept only if it clears
         # every card and does not introduce a new quality-gate defect.
-        reviewed = [i for i in issues if ":review_" in str(i) and ":forbidden:" in str(i)]
+        # Learned signals that earn the one repair: a forbidden phrase on any
+        # knowledge card (hand-written or review bundle) or a verified
+        # correction's known-bad wording. Generic card requirements stay advisory.
+        reviewed = [i for i in issues if ":forbidden:" in str(i) or str(i).startswith("verified_correction:")]
         if reviewed and not getattr(_tl, "review_repair_done", False):
             _tl.review_repair_done = True
             try:
                 repaired = translate_openai(src_text, src, tgt, repair_mode=True, bad_result=translation)
                 repaired = str(repaired or "").strip()
-                ok2, issues2 = factory_knowledge_module.validate_translation(cards, src_text, repaired) if repaired else (False, ["empty"])
+                ok2, issues2 = factory_knowledge_module.validate_translation(cards, src_text, repaired) if (repaired and cards) else (bool(repaired), [] if repaired else ["empty"])
+                if ok2 and verified_cases:
+                    case_ok2, case_issues2 = translation_casebook_module.validate_translation_cases(verified_cases, repaired)
+                    ok2 = case_ok2 and not case_issues2
+                    issues2 = list(issues2) + list(case_issues2 or [])
                 if ok2 and not _delivery_validation_issues(src_text, repaired, src, tgt):
                     _event_log_write("review_rule_repair_applied", {
                         "src_text": (src_text or "")[:200], "issues": reviewed[:5]})

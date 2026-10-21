@@ -135,3 +135,11 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 新增 `test_translation_reviews.py`（6 項）；`test_translation_source_first.py` 調整為容許全域審核修正。
 - 之後每次截圖審核，我回覆一個 bundle JSON 檔，你放進 `translation_reviews/` 部署即可；
   累積後用 `learning_loop_eval.py` 量測。
+
+### 2026-10-21 補：既有餵養資料全部接到同一套學習邏輯
+- 既有四處資料本來就會進提示詞（52 張情境卡、323 術語、30 筆回歸句、Redis 備份的後台核准修正）；
+  但它們被違反時只是「記錄」，不改結果。現在統一：任何情境卡的禁用句、任何核准修正的已知錯誤寫法再出現，
+  都觸發同一個「每則最多一次」的修正呼叫；一般卡片要求維持建議性，費用不變。
+- 13 筆 2026-10-07／10-10 的截圖審核案例（以前只是測試）轉成 bundle
+  `translation_reviews/2026-10-07-and-10-10-screenshot-reviews.json`，開機後成為對照範例。
+- `test_translation_reviews.py` 7 項；全套 4,306 通過。
