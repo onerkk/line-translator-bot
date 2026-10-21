@@ -32,3 +32,19 @@ def test_dry_run_report_has_gate_and_categories(tmp_path, monkeypatch):
     assert report["summary"]["gate"] == "pass"
     loop.write_report(report, str(tmp_path / "r"))
     assert (tmp_path / "r.md").read_text(encoding="utf-8").startswith("# Learning loop evaluation")
+
+
+def test_judge_parses_fenced_json_from_the_real_provider_entry_point(monkeypatch):
+    app, al, casebook = loop._load_app()
+    from test_translation_instruction_cost_quality import response
+    seen = {}
+    def fake_chat_complete(**kw):
+        seen.update(kw)
+        return response('```json\n{"score": 4, "category": "term", "note": "ok"}\n```')
+    monkeypatch.setattr(app.ai_provider, "chat_complete", fake_chat_complete)
+    case = {"src_lang": "zh", "tgt_lang": "id", "source": "今天加班", "corrected": "Hari ini lembur."}
+    verdict = loop.judge(app, case, "Hari ini kerja lembur.", "gpt-6-luna")
+    assert verdict == {"score": 4, "category": "term", "note": "ok"}
+    assert seen["model"] == "gpt-6-luna" and seen["reasoning_effort"] == "none"
+    monkeypatch.setattr(app.ai_provider, "chat_complete", lambda **kw: response("no json here"))
+    assert loop.judge(app, case, "x", "gpt-6-luna")["score"] is None

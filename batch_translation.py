@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 BATCH_ENABLED = True
 
 BATCH_MODEL_BY_PROVIDER = {
-    "openai": "gpt-5.4-mini",                    # 批次翻譯品質/成本平衡
-    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-6-luna",                      # 批次翻譯品質/成本平衡
+    "anthropic": "claude-haiku-5-5",
 }
 
 # Restore backend configuration from the unified cloud phase store.

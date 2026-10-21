@@ -42,8 +42,8 @@ APE_ENABLED = True
 
 # 雙系統模型 mapping(APE 修錯需要好模型,品質優先)
 APE_MODEL_BY_PROVIDER = {
-    "openai": "gpt-5.4",               # 長句修譯品質優先
-    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-6.1-sol",            # 長句修譯品質優先（2026-10 現行品質層）
+    "anthropic": "claude-sonnet-5-5",
 }
 
 APE_TRIGGER_QE_SCORE = 70  # QE 分數 < 此值觸發 APE
@@ -267,9 +267,13 @@ def ape_set_config(enabled: Optional[bool] = None,
             APE_MODEL_BY_PROVIDER["openai"] = _aip.normalize_translation_model(
                 openai_model, _aip.DEFAULT_OPENAI_UPGRADE_MODEL)
         except Exception:
-            APE_MODEL_BY_PROVIDER["openai"] = "gpt-5.4"
+            APE_MODEL_BY_PROVIDER["openai"] = "gpt-6.1-sol"
     if anthropic_model:
-        APE_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
+        try:
+            import ai_provider as _aip
+            APE_MODEL_BY_PROVIDER["anthropic"] = _aip.normalize_anthropic_model(str(anthropic_model))
+        except Exception:
+            APE_MODEL_BY_PROVIDER["anthropic"] = str(anthropic_model)
     if trigger_qe_score is not None:
         APE_TRIGGER_QE_SCORE = max(0, min(100, int(trigger_qe_score)))
     cfg = {

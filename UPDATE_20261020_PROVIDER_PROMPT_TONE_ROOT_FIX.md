@@ -143,3 +143,26 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 13 筆 2026-10-07／10-10 的截圖審核案例（以前只是測試）轉成 bundle
   `translation_reviews/2026-10-07-and-10-10-screenshot-reviews.json`，開機後成為對照範例。
 - `test_translation_reviews.py` 7 項；全套 4,306 通過。
+
+## 2026-10-21 全面檢查（功能、技術、文件）
+
+檢查方法與結果（都可重跑）：
+- 靜態分析（ruff F821/F811/B 系列）全部正式模組：1 處脆弱寫法修正（`line_ack_reminders` 失敗回呼引用 except 變數，改為明確綁定）；其餘為 benchmark 腳本與即時呼叫的閉包，非錯誤。
+- Python 3.11 語法相容（Render 用 3.11.0，開發環境 3.12）：全部 `.py` 以 3.11 文法解析通過。
+- 相依套件：正式模組所有第三方 import 都可載入；PyPDF2／argostranslate／tiktoken 皆為可選且有 try 保護。
+- HTTP 煙霧測試：92 個 GET 路由（未登入與超級管理員各一輪）＋ 97 個 POST 路由空 JSON。
+  **真 bug 1 個已修**：`/api/admin/tbx/validate` 對任何格式錯誤的 TBX 回 500（set 無法 JSON 序列化），改為正確回傳錯誤清單。
+  其餘 503 為測試環境沒有 Redis／GitHub／LINE 網路，屬預期。
+- 後台／LIFF 內嵌 JavaScript 9 段與 static 5 支以 node --check 全通過；全部 JSON 資產可解析。
+- 過時模型預設統一（規則 1「同類一起改」）：`auto_post_edit`、`quality_estimation`、`batch_translation`、`glossary_enforcement`
+  仍寫死 gpt-5.4／Haiku 4.5／Sonnet 4.6，雖經遷移層可用，現改為現行模型；APE 後台存的 Claude 模型也走遷移。
+- README 補 2026-10-21 更新段，修正過時的模型說明。
+- 圖片費用（規則 2 先查官方）：OpenAI 在 detail=high 時伺服器端自行縮到 ≤2,500 patches／2048 px，不需客戶端縮圖；
+  Gemini 同理。只有 Claude 5.5 改了解析度層級，前一段已加 1,568 px 上限。無需再改。
+- 舊審核 bundle 13 筆錯誤類型由 other 改為逐筆判定並補上原因（term 4、station_equipment 4、omission 2、tone 2、number_unit 1、other 1）。
+- `learning_loop_eval.py` 評審解析加強：支援 OpenAI／Anthropic 兩種回應形狀與 ```json 圍欄，解析失敗不中斷；新增測試。
+
+未解決、如實列出：
+- 作業確認提醒的兩個測試早前在整包執行時各偶發失敗 1 次；之後連續 3 次整包執行（4,307 項）全部通過，單獨執行、CPU 壓力下從未失敗。
+  正式邏輯未見缺陷（`exc` 閉包綁定已順手修正，但它不是偶發原因）；若再出現，需在 CI 固定 seed 重跑定位。
+- `/api/admin/richmenu/setup` 遇 LINE 網路錯誤回 500（帶 JSON 錯誤訊息），語意上應為 502；行為正確，只是狀態碼。

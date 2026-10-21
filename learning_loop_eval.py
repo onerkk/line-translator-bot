@@ -110,17 +110,33 @@ Reference translation approved by the admin: %s
 Candidate translation: %s"""
 
 
+def _response_text(resp) -> str:
+    """OpenAI-style (choices[0].message.content), Anthropic-style (content blocks) or str."""
+    choices = getattr(resp, "choices", None)
+    if choices:
+        message = getattr(choices[0], "message", None)
+        content = getattr(message, "content", None) if message is not None else None
+        if isinstance(content, list):
+            content = "".join(getattr(b, "text", "") or (b.get("text", "") if isinstance(b, dict) else "") for b in content)
+        if content:
+            return str(content)
+    content = getattr(resp, "content", None)
+    if isinstance(content, list):
+        return "".join(getattr(b, "text", "") or (b.get("text", "") if isinstance(b, dict) else "") for b in content)
+    return str(content or resp or "")
+
+
 def judge(app, case, candidate: str, model: str) -> Dict[str, Any]:
     prompt = JUDGE_PROMPT % (list(ERROR_CATEGORIES), case["src_lang"], case["source"], case["corrected"], candidate)
     try:
         resp = app.ai_provider.chat_complete(
             model=model, messages=[{"role": "user", "content": prompt}],
-            max_tokens=120, reasoning_effort="none", translation_fast_quality=True)
-        text = resp.choices[0].message.content if hasattr(resp, "choices") else str(resp)
-        text = str(text).strip().strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-        data = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            max_tokens=160, reasoning_effort="none", translation_fast_quality=True)
+        text = _response_text(resp)
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end < 0:
+            raise ValueError("judge returned no JSON: " + text[:80])
+        data = json.loads(text[start:end + 1])
         score = max(1, min(5, int(data.get("score", 3))))
         category = str(data.get("category") or "other")
         return {"score": score, "category": category if category in ERROR_CATEGORIES else "other",

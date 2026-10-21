@@ -320,9 +320,9 @@ def auto_fix_violations(src_text: str, bad_tgt: str,
         except Exception:
             try:
                 provider = ai_client.get_active_provider()
-                model = "claude-sonnet-4-6" if provider == "anthropic" else "gpt-5.4"
+                model = "claude-sonnet-5-5" if provider == "anthropic" else "gpt-6.1-sol"
             except Exception:
-                model = "gpt-5.4-mini"
+                model = "gpt-6-luna"
     
     # 建構修正 prompt(分區 XML)
     violation_lines = []

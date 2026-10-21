@@ -236,7 +236,11 @@ def validate_tbx(filepath: str) -> Dict[str, Any]:
     
     Returns: {"valid": bool, "errors": [...], "entry_count": int, "lang_pairs": [...]}
     """
-    result = {"valid": False, "errors": [], "entry_count": 0, "lang_pairs": set()}
+    # lang_pairs is collected as a set and exported as a list on every exit
+    # path: the early returns used to hand a set to jsonify (HTTP 500 on
+    # /api/admin/tbx/validate for any malformed upload).
+    pairs = set()
+    result = {"valid": False, "errors": [], "entry_count": 0, "lang_pairs": []}
     if not os.path.exists(filepath):
         result["errors"].append("file not found")
         return result
@@ -275,8 +279,8 @@ def validate_tbx(filepath: str) -> Dict[str, Any]:
                 if lang:
                     langs_in_entry.append(lang)
         if len(langs_in_entry) >= 2:
-            result["lang_pairs"].add(tuple(sorted(langs_in_entry[:2])))
+            pairs.add(tuple(sorted(langs_in_entry[:2])))
     
-    result["lang_pairs"] = [list(p) for p in result["lang_pairs"]]
+    result["lang_pairs"] = [list(p) for p in sorted(pairs)]
     result["valid"] = len(result["errors"]) == 0 and result["entry_count"] > 0
     return result

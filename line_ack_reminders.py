@@ -540,16 +540,17 @@ class NoticeService:
                                      "initial" if batch["initial"] else "users",
                                      len(batch["ids"]))
         except Exception as exc:
+            error = exc  # bind explicitly: `exc` is unbound once the except block ends
             def failed(current):
                 attempts = current.get("attempts", 0) + 1
                 current.update(lease_id="", attempts=attempts,
                                reminder_state="failed",
-                               last_error=(str(exc) if isinstance(exc, (SendError, NoticeInputError)) else
+                               last_error=(str(error) if isinstance(error, (SendError, NoticeInputError)) else
                                            "通知翻譯未回傳內容，本次嘗試已結束。" if stage == "translation" else
                                            "通知狀態儲存尚未確認，本次嘗試已結束。" if stage == "storage" else
                                            "LINE 派送尚未確認，本次嘗試已結束。"),
                                last_error_stage=stage,
-                               last_error_kind="input" if isinstance(exc, NoticeInputError) else "operational",
+                               last_error_kind="input" if isinstance(error, NoticeInputError) else "operational",
                                wake_at=None)
                 return finish_if_no_pending(current, departed, now=self.clock())
             self._update(key, lease, failed)

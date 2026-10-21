@@ -9,8 +9,8 @@
    "tgt": "id",
    "source": "以上宣導務必注意，生產前未確認溝槽內是否有殘料，這是造成混料的高風險行為。\n\n出料床上前一捆未吊離前，下一捆待生產的料的工單不可取下。\n\n再發現這種應注意未注意的缺失會扣罰績效獎金。",
    "corrected": "Harap perhatikan sungguh-sungguh pengarahan di atas. Tidak memastikan apakah masih ada sisa material di dalam alur sebelum produksi berisiko tinggi menyebabkan material tercampur.\n\nSebelum bundel sebelumnya di meja output diangkat, lembar work order pada material bundel berikutnya yang akan diproduksi tidak boleh dilepas.\n\nJika kelalaian seperti ini kembali terjadi, bonus kinerja akan dipotong.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "omission",
+   "reason": "多段公告：殘料／混料、出料床工單不可取下、扣罰績效三段都要齊全，不能漏段"
   },
   {
    "id": "r1007-peeling_release",
@@ -18,8 +18,8 @@
    "tgt": "id",
    "source": "請剝皮先放這2把",
    "corrected": "Tolong pihak Stasiun packing peeling release data untuk 2 bundel ini terlebih dahulu.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "station_equipment",
+   "reason": "「剝皮」在此指削皮站（Stasiun packing peeling）發料放行，不是動作剝皮"
   },
   {
    "id": "r1007-window_observation",
@@ -28,7 +28,7 @@
    "source": "小趙在窗戶看",
    "corrected": "小趙 sedang melihat dari jendela.",
    "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "reason": "人名小趙保留原字；簡句直譯"
   },
   {
    "id": "r1007-issued_record",
@@ -36,8 +36,8 @@
    "tgt": "id",
    "source": "@budi santoso 山多 I5已發料成功",
    "corrected": "@budi santoso 山多 I5 sudah berhasil mengubah status data menjadi OL.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "station_equipment",
+   "reason": "「已發料」= ERP 狀態改為已發料，不是實體搬料"
   },
   {
    "id": "r1007-supervisor_warning",
@@ -45,8 +45,8 @@
    "tgt": "id",
    "source": "處長不高興唸了一下，下次有人提醒主管還沒離開不要太鬆懈😤",
    "corrected": "Kepala divisi tidak senang dan menegur sebentar. Lain kali, kalau ada yang mengingatkan bahwa atasan belum pergi, jangan terlalu lengah 😤",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "tone",
+   "reason": "主管不高興的提醒語氣，emoji 保留，不加重也不軟化"
   },
   {
    "id": "r1007-apology",
@@ -54,8 +54,8 @@
    "tgt": "zh",
    "source": "Maafkan saya,🙏",
    "corrected": "請原諒我，🙏",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "tone",
+   "reason": "印→中道歉短句，保留 🙏"
   },
   {
    "id": "r1007-phone_incident",
@@ -63,8 +63,8 @@
    "tgt": "id",
    "source": "剛剛研磨機那邊誰被處長抓滑手機",
    "corrected": "Tadi di area mesin grinding, siapa yang ketahuan main ponsel oleh kepala divisi?",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "station_equipment",
+   "reason": "研磨機區＝area mesin grinding；「被處長抓」= ketahuan"
   },
   {
    "id": "r1007-supervisor_visit",
@@ -72,8 +72,8 @@
    "tgt": "id",
    "source": "處長下來巡視",
    "corrected": "Kepala divisi turun untuk meninjau keadaan.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "term",
+   "reason": "處長＝Kepala divisi；巡視＝meninjau"
   },
   {
    "id": "r1007-cleared_packing_assistance",
@@ -81,8 +81,8 @@
    "tgt": "id",
    "source": "等等一批異型棒異常澄清後放行的，幫忙多少包一些",
    "corrected": "Nanti, setelah abnormalitas pada satu batch batang profil khusus diklarifikasi dan batch tersebut disetujui untuk diproses lebih lanjut, tolong bantu mengemas sebagian semampunya.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "omission",
+   "reason": "異常澄清後放行 + 幫忙多包一些，兩個條件都要保留"
   },
   {
    "id": "r1007-walk_to_packing_station",
@@ -90,8 +90,8 @@
    "tgt": "id",
    "source": "@All 小趙走去削皮",
    "corrected": "@All 小趙 berjalan ke Stasiun packing peeling.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "station_equipment",
+   "reason": "「削皮」此處是站別名稱 Stasiun packing peeling"
   },
   {
    "id": "r1007-kyt_photo",
@@ -99,8 +99,8 @@
    "tgt": "id",
    "source": "@All 來拍KYT吧",
    "corrected": "@All ayo foto KYT.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "term",
+   "reason": "KYT 保留縮寫；「來拍」= ayo foto"
   },
   {
    "id": "r1010-qa_hold_inspection",
@@ -108,8 +108,8 @@
    "tgt": "id",
    "source": "@EggEgg @阿堂 這把品保HOLD待會驗的 已經放我們這三個多禮拜，等等有空把它吊到品保架上。",
    "corrected": "@EggEgg @阿堂 Bundel ini di-HOLD oleh QA untuk menunggu pemeriksaan. Sudah lebih dari tiga minggu diletakkan di area kita. Kalau ada waktu nanti, angkat dengan crane ke rak QA.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "term",
+   "reason": "品保 HOLD＝di-HOLD oleh QA；品保架＝rak QA；吊＝angkat dengan crane"
   },
   {
    "id": "r1010-profile_bar_daily_packing",
@@ -117,8 +117,8 @@
    "tgt": "id",
    "source": "@All 每日線外人員進行入儲分流時幫忙注意異型棒出料狀況，地上有2～3把檢驗完成就可以上車過來包裝。\n\n每天要回報三次異型棒的入庫進度，各站有分流到異型棒幫忙優先包裝，不然蔣總工跟處長還要問一堆怎麼安排跟工作內容",
    "corrected": "@All Saat personel di luar lini melakukan pemilahan untuk masuk ke area penyimpanan setiap hari, bantu perhatikan kondisi hasil produksi mesin batang profil khusus. Jika di lantai sudah ada 2～3 bundel yang selesai diperiksa, bundel tersebut bisa dinaikkan ke troli dan dibawa ke sini untuk dikemas.\n\nSetiap hari wajib melaporkan progres masuk gudang batang profil khusus sebanyak tiga kali. Setiap stasiun yang menerima batang profil khusus melalui pemilahan harus membantu memprioritaskan pengemasannya. Kalau tidak, Insinyur Kepala 蔣 dan kepala divisi masih akan menanyakan banyak hal tentang pengaturan dan isi pekerjaan.",
-   "category": "other",
-   "reason": "2026-10 截圖審核確認的譯法（原為測試案例）"
+   "category": "number_unit",
+   "reason": "2～3把、每天回報三次等數量與頻率必須逐一保留；異型棒＝batang profil"
   }
  ]
 }

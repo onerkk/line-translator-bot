@@ -43,8 +43,8 @@ QE_ENABLED = True  # 全局開關
 
 # 雙系統模型 mapping(用便宜模型評分即可,QE 是 LLM-as-judge 不需頂級模型)
 QE_MODEL_BY_PROVIDER = {
-    "openai": "gpt-5.4-mini",                    # 現行翻譯品質評估首選
-    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-6-luna",                      # 現行翻譯品質評估首選（$0.10/$0.50）
+    "anthropic": "claude-haiku-5-5",
 }
 
 QE_THRESHOLD_WARN = 70  # 分數 < 此值 → ⚠️ 警告

@@ -1,4 +1,13 @@
-## 2026-09-08：共用原文上下文修正（最新更新）
+## 2026-10-21：模型升級、提示詞快取、/help、截圖學習閉環（最新更新）
+
+- 三家供應商升級：gpt-6-luna／gpt-6.1-sol、claude-haiku-5-5／claude-sonnet-5-5；舊 ID 自動遷移；Claude 5.5 參數契約（無採樣參數、adaptive thinking、禁 prefill、512 快取門檻）。
+- 提示詞不再二次包裝；穩定前綴（原則＋群組語氣預設）在三家都進快取；詞庫 grounding 只比對原文。
+- 語氣：結尾謝謝不再主導全句；移除 💛；一個中文長句展開多句時最多一個標記。
+- /help 改版：常用指令第一屏可見，每分類直接列指令，點列看用法；控制在 LINE 50 KB 上限內。
+- 學習閉環：`translation_reviews/*.json` 截圖審核 bundle 開機進修正／術語／情境卡三層；任何情境卡禁用句或核准修正的已知錯誤再出現，每則最多一次修正呼叫；`learning_loop_eval.py` 量測是否真的變好。
+- 詳見 `UPDATE_20261020_PROVIDER_PROMPT_TONE_ROOT_FIX.md`。
+
+## 2026-09-08：共用原文上下文修正（歷史更新）
 
 以 GitHub commit `ad4c2f8dad333d1a31010b5e0d9f5cb6310c178e` 為基準，交付 **17 個新增或修改檔案**，全部一次上傳至專案根目錄，保留其他檔案。務必包含新增的 `conversation_context.py`。
 
@@ -235,7 +244,7 @@ ACTIVE_LEARNING_EVENT_RETENTION=10000
 
 1. 到 [OpenAI Platform](https://platform.openai.com/api-keys) 申請
 2. 建立一組 API Key
-3. 儲值一點額度（預設使用 gpt-5.4-mini；需要最低成本可改用 gpt-5.4-nano）
+3. 儲值一點額度（預設使用 gpt-6-luna；長公告自動升級 gpt-6.1-sol；備援 Claude Haiku 5.5／Sonnet 5.5、Gemini）
 
 ### 3. 一台伺服器（以下任選一個）
 
@@ -365,7 +374,7 @@ Dewi：Terima kasih, bos
 
 ### 費用大概多少？
 - LINE Bot：免費
-- OpenAI：`gpt-5.4-mini` 為預設翻譯模型；`gpt-5.4-nano` 適合大量簡短訊息
+- OpenAI：`gpt-6-luna` 為預設翻譯模型（$0.10/$0.50 per M）；長公告升級 `gpt-6.1-sol`。Claude 備援 `claude-haiku-5-5`／`claude-sonnet-5-5`；舊模型 ID 會自動遷移
   - 實際費用依訊息長度、圖片、快取命中與背景品檢次數計算
 - 伺服器：看你選的平台，Railway 免費額度夠小群組用
 
