@@ -84,7 +84,7 @@ def test_help_covers_every_executable_command_and_both_aliases():
             for bubble in data["contents"]:
                 assert len(json.dumps(bubble, ensure_ascii=False).encode()) < 30000
             for node in walk(data):
-                if node.get("type") == "text":
+                if node.get("type") in ("text", "span") and "text" in node:
                     assert len(node["text"]) <= 2000
                     for row in catalog.COMMANDS:
                         if node["text"] == "/" + row["english"] + "  /" + row["chinese"]:

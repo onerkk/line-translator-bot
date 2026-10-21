@@ -167,11 +167,8 @@ def bubble(category, title, subtitle, contents, footer):
     return {"type": "bubble", "size": "mega",
             "header": {"type": "box", "layout": "vertical", "paddingAll": "18px", "backgroundColor": BRAND,
                        "contents": [
-                           {"type": "box", "layout": "horizontal", "alignItems": "center", "contents": [
-                               txt(ICON.get(category, "💬") + "  " + title, "lg", "#FFFFFF", weight="bold", flex=1),
-                               {"type": "box", "layout": "vertical", "width": "6px", "height": "22px",
-                                "backgroundColor": accent, "cornerRadius": "3px", "contents": []}]},
-                           txt(subtitle, "xs", "#BED3DD", margin="sm")]},
+                           txt(ICON.get(category, "💬") + "  " + title, "lg", "#FFFFFF", weight="bold"),
+                           txt(subtitle, "xs", accent if category != "popular" else "#BED3DD", margin="sm")]},
             "body": {"type": "box", "layout": "vertical", "paddingAll": "12px", "spacing": "sm",
                      "backgroundColor": "#FFFFFF", "contents": contents},
             "footer": {"type": "box", "layout": "horizontal", "paddingAll": "8px", "spacing": "sm",
@@ -179,24 +176,22 @@ def bubble(category, title, subtitle, contents, footer):
 
 
 def command_row(row, lang, category):
+    """One tappable row. Kept small on purpose: LINE rejects a Flex message
+    whose JSON exceeds 50 KB, and the menu lists every command at once."""
     accent = ACCENT.get(row["category"], BRAND)
     names = "/" + row["english"] + "  /" + row["chinese"]
     meaning = brief(row["description"] if lang == "zh" else row["indonesian"], 26 if lang == "zh" else 34)
-    tag = []
     if row["admin"]:
-        tag.append(txt("管理員" if lang == "zh" else "Admin", "xxs", accent, weight="bold", flex=0, margin="sm"))
-    return {"type": "box", "layout": "horizontal", "spacing": "md", "paddingAll": "10px", "cornerRadius": "12px",
-            "backgroundColor": "#F6F9FA", "alignItems": "center",
+        meaning += " · " + ("管理員" if lang == "zh" else "Admin")
+    return {"type": "box", "layout": "horizontal", "paddingAll": "8px", "cornerRadius": "10px",
+            "backgroundColor": "#F6F9FA",
             "action": {"type": "postback", "label": ("/" + row["chinese"])[:20],
                        "data": "action=help&" + urlencode(dict(topic="cmd:" + row["key"], lang=lang))},
             "contents": [
-                {"type": "box", "layout": "vertical", "width": "44px", "height": "44px", "cornerRadius": "10px",
-                 "backgroundColor": accent, "justifyContent": "center", "alignItems": "center",
-                 "contents": [txt(ICON.get(row["category"], "💬"), "lg", "#FFFFFF", align="center")]},
-                {"type": "box", "layout": "vertical", "flex": 1, "contents": [
-                    {"type": "box", "layout": "horizontal", "contents": [txt(names, "sm", BRAND, weight="bold", flex=1)] + tag},
-                    txt(meaning, "xs", "#526577", margin="xs")]},
-                txt("›", "lg", "#9AAABB", flex=0)]}
+                {"type": "box", "layout": "vertical", "width": "4px", "backgroundColor": accent, "contents": []},
+                {"type": "text", "wrap": True, "margin": "md", "flex": 1, "size": "sm", "contents": [
+                    {"type": "span", "text": names, "weight": "bold", "color": BRAND},
+                    {"type": "span", "text": "\n" + meaning, "size": "xs", "color": "#526577"}]}]}
 
 
 def guide_row(title, description):
@@ -285,4 +280,12 @@ def build_help(primary_lang="zh", is_admin=False, topic=""):
             rows = [r for r in visible if r["category"] == key]
             if key in GUIDES or rows:
                 pages.extend(_category_bubbles(key, rows, lang))
-    return "翻譯小助手使用說明 / Panduan perintah", {"type": "carousel", "contents": pages[:12]}
+    carousel = {"type": "carousel", "contents": pages[:10]}
+    # LINE rejects a Flex message whose JSON exceeds 50 KB (silent "no reply"
+    # in the chat). Drop the duplicate "most used" bubble first, then trim
+    # from the end, rather than ever sending an oversize message.
+    import json as _json
+    while len(_json.dumps(carousel, ensure_ascii=False).encode("utf-8")) > 46_000 and len(carousel["contents"]) > 1:
+        carousel["contents"].pop(0 if not topic and len(carousel["contents"]) > 1 and
+                                 carousel["contents"][0]["header"]["contents"][0]["text"].startswith(ICON["popular"]) else -1)
+    return "翻譯小助手使用說明 / Panduan perintah", carousel

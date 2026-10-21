@@ -83,3 +83,37 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 指令列的 postback 改用 `topic=cmd:<key>`，解決 /ack 既是指令又是分類而無法開啟說明的問題；
   `/說明 確認` 等文字用法不變。
 - 版本：`BUILD_ID` → `2026-10-21.ui105`；新增 `test_help_ui105.py`（4 項），`test_ui104_commands.py` 維持通過。
+
+### 2026-10-21 補：/help 完全沒反應的根因與修正
+- 根因：ui105 第一版把全部指令列在一則訊息，JSON 達 65 KB；LINE Flex Message 上限 50 KB，LINE 回 400，
+  聊天室看起來就是「沒反應」（翻譯本身正常，截圖「測試 → Tes」可證）。
+- 修正：指令列改用 span 單一文字節點，移除圖示色塊；成員選單約 31 KB、管理員約 43 KB；
+  另加保護：組裝後超過 46 KB 會先捨去「常用」卡再從尾端裁減，永遠不送超限訊息。
+- 測試：`test_help_ui105.py` 新增 50 KB 與每卡 10 KB 的尺寸測試，所有語言／身分／主題組合都檢查。
+
+## 學習閉環第一塊：`learning_loop_eval.py`
+- 更正前一段的說法：核准過的 /標錯 修正**已經**會進 casebook 當對照式 few-shot（`translation_casebook._case_from_correction`），
+  不只精準命中。缺的是「有沒有變聰明」的量測與錯誤類型的累積。
+- 這支工具把全部核准修正當保留評測集，對真正的翻譯管線跑兩種模式：baseline（把該筆修正藏起來，看其他修正和規則能否推廣）、
+  learned（修正可被檢索）；用相似度加評審模型（預設 gpt-6-luna）打 1–5 分並標錯誤類型（術語／否定／數字單位／站別／語氣／漏譯）。
+- 輸出 JSON 與 Markdown 報告，含錯誤類型統計、退步案例與 gate（pass／review）。改提示詞或換模型前後各跑一次，數字沒升就不上線。
+- 用法：`python learning_loop_eval.py --provider openai --limit 40 --out eval_report`；`--dry-run` 不花 API。
+- 下一塊（未做）：錯誤類型累積 ≥3 自動產生規則草稿、管理員核准後進穩定提示詞區。
+
+## 2026-10-21 b：/help 沒反應的根因與修正；學習閉環第一塊
+
+- **根因**：新版 /help 一次列出全部指令，Flex JSON 達 65 KB；LINE 對單一 Flex 訊息的上限是 50 KB，
+  API 回 400，所以 /help 完全沒有回覆。修正後：成員選單約 31 KB、管理員選單約 43 KB、每張卡 < 10 KB，
+  並新增測試鎖住 45 KB／10 KB 上限（指令列改用 span 文字、移除圖示方塊）。
+- **其他情況**：若整個機器人（含一般翻譯）都沒反應，表示部署時沒有一起覆蓋 app.py、translation_extras.py、
+  ai_provider.py、line_command_catalog.py；app.py 啟動時會故意失敗並在 Render 日誌印出
+  「deployment mismatch」。請把 ZIP 內所有檔案一起覆蓋。
+- **學習閉環現況（更正前面的說法）**：核准過的 /標錯 修正本來就會進 casebook，作為「錯例→正例」對照範本依相似度檢索，
+  不只是同句重用。真正缺的是量測：沒有任何數字能證明核准修正讓新句子變好。
+- **新增 `learning_loop_eval.py`**：把核准修正當保留評測集，對每一筆跑正式翻譯管線兩次 —
+  baseline（隱藏這一筆修正，leave-one-out）與 learned（保留），比較與核准譯文的相似度，
+  並可用 gpt-6-luna 評審打 1–5 分及錯誤類型（術語／否定／數字單位／站別設備／語氣／漏譯）。
+  輸出 JSON 與 Markdown 報告與 gate（pass／review）。用法：
+  `python learning_loop_eval.py --provider openai --limit 40`；`--dry-run` 不花 API。
+  這是閉環的第三塊（量測）；第二塊（錯誤類型累積→規則草稿→管理員核准）下一段做，評審給的
+  error category 就是它的輸入。

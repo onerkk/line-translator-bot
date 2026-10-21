@@ -8,7 +8,7 @@ import line_command_catalog as catalog
 
 def _texts(node, out):
     if isinstance(node, dict):
-        if node.get("type") == "text":
+        if node.get("type") in ("text", "span") and "text" in node:
             out.append(node["text"])
         for v in node.values():
             _texts(v, out)
@@ -25,8 +25,22 @@ def test_menu_shows_every_visible_command_without_a_second_tap():
     for row in catalog.COMMANDS:
         shown = ("/" + row["english"] + "  /" + row["chinese"]) in texts
         assert shown == (not row["admin"]), row["key"]
-    assert data["contents"][0]["header"]["contents"][0]["contents"][0]["text"].endswith("常用指令")
+    assert data["contents"][0]["header"]["contents"][0]["text"].endswith("常用指令")
     assert len(data["contents"]) <= 12
+
+
+def test_every_help_message_stays_under_the_line_50kb_flex_limit():
+    # LINE Messaging API rejects a Flex message whose JSON exceeds 50 KB; the
+    # first ui105 draft was 65 KB and /help went silent in production.
+    for lang in ("zh", "id"):
+        for admin in (False, True):
+            for topic in ("", "cmd:ack", "settings", *catalog.CATEGORIES):
+                _, data = catalog.build_help(lang, is_admin=admin, topic=topic)
+                size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+                assert size < 45_000, (lang, admin, topic, size)
+                assert len(data["contents"]) <= 10
+                for bubble in data["contents"]:
+                    assert len(json.dumps(bubble, ensure_ascii=False).encode("utf-8")) < 10_000, (topic, bubble["header"])
 
 
 def test_command_row_opens_detail_even_when_key_equals_a_category():
