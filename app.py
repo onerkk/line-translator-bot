@@ -17234,11 +17234,18 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
         return None
     if mime_type == "image/heic":
         mime_type = "image/jpeg"
-    try:
-        from work_order_cell_recovery import orientation_candidates
-        initial_views = orientation_candidates(image_base64)
-    except Exception:
-        initial_views = []
+    # 2026-10-21 cost: the rotated views (90°/270°, upscaled to 2,400 px)
+    # tripled the image tokens of every work-order photo, yet most photos are
+    # upright. The first call now sends the original only; the rotated views
+    # are added in a second call only when the upright read finds nothing or
+    # almost nothing (NO_WORK_ORDER or fewer than 3 field lines).
+    def _rotated_views():
+        try:
+            from work_order_cell_recovery import orientation_candidates
+            return orientation_candidates(image_base64)
+        except Exception:
+            return []
+    initial_views = []
     fields = (
         "文件標題, 訂單編號, 客戶名稱, 收貨人, 成品尺寸MIN, 成品尺寸MAX, "
         "長度MIN, 長度MAX, 訂單流程, 成品MC, 噴漆位置, 套環, 顏色, 包裝代碼, "
@@ -17278,11 +17285,25 @@ def ocr_work_order_fields(image_base64, mime_type="image/jpeg"):
     try:
         response = _vision_call(
             messages, max_tokens=1400,
-            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_rotated_views_v1"),
+            cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_upright_first_v2"),
             task_type="ocr",
         )
         track_tokens(response)
         result = (response.choices[0].message.content or "").strip()
+        _field_lines = [ln for ln in result.splitlines() if "：" in ln or ":" in ln]
+        if result.upper() == "NO_WORK_ORDER" or len(_field_lines) < 3:
+            rotated = _rotated_views()
+            if rotated:
+                _tl.ocr_orientation_retry = True
+                messages[1]["content"][1:1] = [{"type": "image_url", "image_url": {
+                    "url": "data:image/jpeg;base64," + candidate["base64"], "detail": "high"}} for candidate in rotated]
+                response = _vision_call(
+                    messages, max_tokens=1400,
+                    cache_key=_build_cache_key(getattr(_tl, "group_id", ""), "img", "txt", "ocr_work_order_query_rotated_views_v2"),
+                    task_type="ocr",
+                )
+                track_tokens(response)
+                result = (response.choices[0].message.content or "").strip()
         if result.upper() == "NO_WORK_ORDER":
             _tl.ocr_extraction_state = "empty"
             return ""
@@ -30804,7 +30825,9 @@ def api_admin_richmenu_setup():
                 _err += " | " + e.read().decode()[:300]
         except Exception:
             pass
-        return jsonify({"ok": False, "error": _err, "steps": log}), 500
+        # Upstream (LINE) failure, not a server bug: 502 keeps the admin page
+        # and monitoring from counting it as an application error.
+        return jsonify({"ok": False, "error": _err, "steps": log}), 502
 
 
 @app.route("/api/admin/ai-provider/key", methods=["POST"])

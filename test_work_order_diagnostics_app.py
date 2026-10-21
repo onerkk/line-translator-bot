@@ -56,7 +56,9 @@ def test_app_records_retried_ring_inputs_and_rendered_card_without_raw_order(
     first_prompt = calls[0][0][0]["content"]
     assert "看見『土藍』就保留『土藍』" in first_prompt
     assert "完整色名或明確列出的別名查詢" in first_prompt
-    assert sum(item["type"] == "image_url" for item in calls[0][0][1]["content"]) == 3
+    # 2026-10-21: upright photo is read alone; rotated views are only added on
+    # a second call when the first read finds (almost) nothing.
+    assert sum(item["type"] == "image_url" for item in calls[0][0][1]["content"]) == 1
     assert "訂單流程：CHRAPL" in result
     assert "成品尺寸MIN：20" in result
     assert "成品尺寸MAX：20" in result
@@ -119,3 +121,24 @@ def test_admin_endpoint_requires_access_and_exposes_live_storage_with_fingerprin
     assert data["storage"]["live_rows"][0] == ["<=3200", "EH79"]
     assert all(re.fullmatch(r"[0-9a-f]{16}", data["fingerprints"][name])
                for name in ("app.py", "work_order_query.py", "storage_data.json"))
+
+
+def test_rotated_views_are_sent_only_when_the_upright_read_is_empty(monkeypatch):
+    import base64, io
+    from PIL import Image
+    import app
+    buf = io.BytesIO(); Image.new("RGB", (800, 600), "white").save(buf, format="JPEG")
+    image = base64.b64encode(buf.getvalue()).decode("ascii")
+    calls = []
+    def vision(messages, **options):
+        import copy
+        calls.append(copy.deepcopy(messages))  # the retry mutates the same message list
+        text = "NO_WORK_ORDER" if len(calls) == 1 else "文件標題：製造指示書\n訂單編號：A1\n客戶名稱：B\n套環：N"
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))], usage=None)
+    monkeypatch.setattr(app, "_vision_call", vision)
+    monkeypatch.setattr(app, "_has_ai_capability", lambda _c: True)
+    monkeypatch.setattr(app, "track_tokens", lambda _r: None)
+    app.ocr_work_order_fields(image)
+    assert len(calls) >= 2  # later field re-reads are the existing recovery passes
+    assert sum(i["type"] == "image_url" for i in calls[0][1]["content"]) == 1
+    assert sum(i["type"] == "image_url" for i in calls[1][1]["content"]) == 3

@@ -512,10 +512,10 @@ def normalize_tts_model(model, fallback=None):
 # 預設配置
 # ═══════════════════════════════════════════════════════════════════
 DEFAULT_CONFIG = {
-    # v3.37: production default/failover hierarchy is strict and predictable:
-    # Claude -> OpenAI(ChatGPT) -> Gemini.  The active provider remains the
-    # first choice; this default only applies to a fresh install.
-    "active_provider": "anthropic",
+    # 2026-10-21: fresh-install default follows production: ChatGPT (GPT-6
+    # Luna, $0.10/$0.50) -> Claude (Haiku 5.5, same price, used as failover)
+    # -> Gemini.  A saved config always overrides this.
+    "active_provider": "openai",
     "openai": {"api_key": "", "base_url": None},
     "anthropic": {
         "api_key": "",
@@ -546,7 +546,7 @@ DEFAULT_CONFIG = {
         "per_provider_timeout_seconds": 24,
         "circuit_breaker_failures": 2,
         "circuit_breaker_cooldown_seconds": 60,
-        "provider_order": ["anthropic", "openai", "gemini"],
+        "provider_order": ["anthropic", "openai", "gemini"],  # failover chain after the active provider
         # Real-time LINE messages need a much tighter tail-latency budget than
         # long documents or OCR.  Callers select one profile; the old two
         # timeout fields remain as backwards-compatible fallbacks.
