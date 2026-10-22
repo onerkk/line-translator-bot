@@ -701,10 +701,29 @@ def organization_translation_issues(source: str, candidate: str, src: str, tgt: 
     return issues
 
 
+def _match_case(matched: str, replacement: str) -> str:
+    """Keep the capitalization shape of the replaced span.
+
+    The canonical Indonesian titles are stored lowercase (``kepala divisi``).
+    A sentence-initial ``Kepala divisi`` or an all-caps heading used to be
+    rewritten to lowercase, so LINE replies started with a lowercase letter.
+    """
+    if not matched or not replacement:
+        return replacement
+    if matched.isupper() and len(matched) > 1:
+        return replacement.upper()
+    if matched[0].isupper():
+        words = matched.split()
+        if len(words) > 1 and all(w[:1].isupper() for w in words):
+            return " ".join(w[:1].upper() + w[1:] for w in replacement.split())
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
 def _replace_id_role(text: str, role_key: str, replacement: str) -> str:
     result = text
     for pattern in _ORGANIZATION_ID_PATTERNS[role_key]:
-        result = pattern.sub(replacement, result)
+        result = pattern.sub(lambda m: _match_case(m.group(0), replacement), result)
     return result
 
 

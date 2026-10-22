@@ -1832,17 +1832,28 @@ def count_tokens(model, messages, system=None):
         input_tokens = result.input_tokens
 
         # 估算成本(per 1M tokens)
+        # 2026-10-22 核對官方價格頁（input，USD / 1M tokens）。舊表沒有 5.5 系列，
+        # Haiku 5.5 會落到預設 $1.00（高估 10 倍）、Sonnet 5 仍寫 $3。
+        # 最長前綴優先，避免 claude-sonnet-5 吃掉 claude-sonnet-5-5。
         cost_table = {
+            "claude-haiku-5-5":  0.10 / 1_000_000,
+            "claude-sonnet-5-5": 2.00 / 1_000_000,
+            "claude-opus-5-5":   4.00 / 1_000_000,
+            "claude-sonnet-5":   2.00 / 1_000_000,
             "claude-haiku-4-5":  1.00 / 1_000_000,
-            "claude-sonnet-5":   3.00 / 1_000_000,
             "claude-sonnet-4-6": 3.00 / 1_000_000,
+            "claude-sonnet-4-5": 3.00 / 1_000_000,
             "claude-opus-4-7":   5.00 / 1_000_000,
+            "claude-opus-4-6":   5.00 / 1_000_000,
         }
-        per_token = 1.00 / 1_000_000  # default
-        for key, price in cost_table.items():
-            if key in anthropic_model.lower():
-                per_token = price
-                break
+        per_token = 0.10 / 1_000_000  # default = 現行預設 Haiku 5.5
+        _md = anthropic_model.lower()
+        _best = ""
+        for key in cost_table:
+            if _md.startswith(key) and len(key) > len(_best):
+                _best = key
+        if _best:
+            per_token = cost_table[_best]
         estimated_cost = input_tokens * per_token
 
         return {

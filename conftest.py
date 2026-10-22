@@ -1,9 +1,31 @@
 """Keep durable feature state isolated between independent offline scenarios."""
+import os
 import sys
+import tempfile
 import threading
 import time
 
 import pytest
+
+# Offline runs used to append to the repository's own translation_log.json /
+# last_translate_debug.json (both are runtime artifacts, see .gitignore). Point
+# them at a throwaway directory before app.py resolves its persistence paths so
+# a test run never dirties the working tree or a ZIP update bundle.
+_OFFLINE_ARTIFACT_DIR = tempfile.mkdtemp(prefix="line-translator-tests-")
+os.environ.setdefault("TRANSLATION_LOG_FILE", os.path.join(_OFFLINE_ARTIFACT_DIR, "translation_log.json"))
+os.environ.setdefault("LAST_TRANSLATE_DEBUG_FILE", os.path.join(_OFFLINE_ARTIFACT_DIR, "last_translate_debug.json"))
+# The translation memory / vector / active-learning SQLite files defaulted to
+# /tmp and therefore persisted between pytest runs on the same machine: a
+# verified row written by one run made a later run skip the provider call that
+# a test was asserting on (test_material_rework_translation). Fresh files per run.
+for _env_name, _file_name in (
+    ("TM_DB_PATH", "translation_memory.db"),
+    ("VECTOR_TM_DB_PATH", "vector_tm.db"),
+    ("ACTIVE_LEARNING_DB_PATH", "active_learning.db"),
+    ("TRANSLATION_RETRY_DB_PATH", "translation_retry_queue.db"),
+    ("LINE_FACTORY_DB_PATH", "line_factory.db"),
+):
+    os.environ.setdefault(_env_name, os.path.join(_OFFLINE_ARTIFACT_DIR, _file_name))
 
 
 def wait_for_webhooks(timeout=5):

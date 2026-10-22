@@ -231,7 +231,9 @@ def test_real_entry_restores_name_and_normalizes_each_source_owned_unit(monkeypa
         return result
     monkeypatch.setattr(app.ai.chat.completions, "create", create)
     result = app.translate(source, "zh", "id")
-    assert result == "Insinyur Kepala 蔣 memeriksa work order.\n\nkepala divisi memeriksa pengemasan."
+    # 2026-10-22: the provider wrote a sentence-initial "Kepala divisi"; title
+    # canonicalization now keeps that capitalization instead of lowercasing it.
+    assert result == "Insinyur Kepala 蔣 memeriksa work order.\n\nKepala divisi memeriksa pengemasan."
     assert len(calls) == 1
     assert calls[0]["translation_max_generations"] == 1
     assert not getattr(app._tl, "translation_alignment_issues", ())

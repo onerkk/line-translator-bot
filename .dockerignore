@@ -1,0 +1,33 @@
+# Keep the Render/Docker image to runtime files only. Historical delivery
+# snapshots and docs below are ~15 MB (four extra copies of app.py) and are
+# never imported at runtime; excluding them shortens every build and deploy.
+.git
+.github
+__pycache__
+*.pyc
+*.db
+000/
+line-translator-changed-*/
+myshift-v344-day/
+validation/
+apply_ack116_update.py
+apply_ci106_update.py
+benchmark_*.py
+test_*.py
+tests/
+conftest.py
+*.md
+!README.md
+*_SHA256SUMS.txt
+*.sha256
+SHA256_*.txt
+SHA256_*.json
+*_VALIDATION_*.json
+TRANSLATION_LATENCY_BENCHMARK_*.json
+TRANSLATION_EFFICIENCY_MEASUREMENTS_*.json
+TRANSLATION107_BENCHMARK.json
+Chat.png
+Chat1.png
+Dockerfile.txt
+translation_log.json
+last_translate_debug.json

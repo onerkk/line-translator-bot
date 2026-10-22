@@ -279,7 +279,7 @@ def test_style_buttons_cannot_reintroduce_a_provider_semantic_error():
 
 def test_release_contract_runs_the_new_behavioral_self_test_at_boot():
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert 'VERSION = "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20"' in app_source
+    assert 'VERSION = "v3.51.0-audit-cost-mention-privacy-root-fix-2026-10-22"' in app_source
     assert (
         '_EXPECTED_FACTORY_MESSAGE_SEMANTICS_BUILD_ID = '
         '"2026-10-07.1-release-domain-ownership"'

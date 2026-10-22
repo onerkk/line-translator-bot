@@ -152,9 +152,18 @@ ROWS_PER_BUBBLE = 9
 
 
 def brief(text, limit=26):
-    """First clause of a description, short enough for one line on a phone."""
+    """First clause of a description, short enough for one or two lines on a phone.
+
+    Latin text is cut at a word boundary so an Indonesian row never ends in a
+    half word (``@All atau t…``).
+    """
     head = re.split(r"[；;。]", str(text or ""), 1)[0].strip()
-    return head if len(head) <= limit else head[:limit - 1] + "…"
+    if len(head) <= limit:
+        return head
+    cut = head[:limit - 1]
+    if " " in cut and re.search(r"[A-Za-z]", cut):
+        cut = cut[:cut.rfind(" ")].rstrip(" ,.")
+    return cut + "…"
 
 
 def nav(label, topic, lang, *, style="link", color=None):
@@ -180,7 +189,10 @@ def command_row(row, lang, category):
     whose JSON exceeds 50 KB, and the menu lists every command at once."""
     accent = ACCENT.get(row["category"], BRAND)
     names = "/" + row["english"] + "  /" + row["chinese"]
-    meaning = brief(row["description"] if lang == "zh" else row["indonesian"], 26 if lang == "zh" else 34)
+    # The row text wraps, so two phone lines are available: ~26 CJK characters
+    # or ~72 Latin characters at size xs inside a mega bubble. The previous
+    # 34-character Indonesian cut lost most of each description.
+    meaning = brief(row["description"] if lang == "zh" else row["indonesian"], 26 if lang == "zh" else 72)
     if row["admin"]:
         meaning += " · " + ("管理員" if lang == "zh" else "Admin")
     return {"type": "box", "layout": "horizontal", "paddingAll": "8px", "cornerRadius": "10px",

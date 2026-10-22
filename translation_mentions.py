@@ -104,7 +104,31 @@ def extract_mentions(text):
     for m in re.findall(r'@[Aa][Ll][Ll](?![A-Za-z0-9_.-])', text):
         if m not in mentions:
             mentions.append(m)
-    return list(dict.fromkeys(mentions))
+    # Pipeline placeholders (privacy masks such as ``__QG_KEEP_900_ABCD1234__``,
+    # ``__MENTION_1__``, glossary ``__QG_TERM_*``) are Latin tokens, so the
+    # name parsers above could absorb one that follows a mention, e.g.
+    # ``@budi santoso 山多`` masked to ``@budi santoso __QG_KEEP_900_...__``.
+    # A mention that owns the placeholder hides it from the provider, the
+    # privacy layer then reports it missing, and the raw token is restored
+    # into the LINE reply.  Trim them from the mention tail so the placeholder
+    # stays in the translatable text where its own layer restores it.
+    trimmed = []
+    for mention in mentions:
+        mention = _strip_trailing_placeholders(mention)
+        if mention and len(mention) > 1 and mention not in trimmed:
+            trimmed.append(mention)
+    return list(dict.fromkeys(trimmed))
+
+
+_PIPELINE_PLACEHOLDER_TAIL = re.compile(r'(?:\s*__[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*__)+\s*$')
+
+
+def _strip_trailing_placeholders(mention):
+    """Remove pipeline placeholders a textual mention parser swallowed at its end."""
+    if not mention or '__' not in mention:
+        return mention
+    stripped = _PIPELINE_PLACEHOLDER_TAIL.sub('', mention).rstrip()
+    return stripped if stripped.startswith('@') and len(stripped) > 1 else ''
 
 
 def mention_spans(text):

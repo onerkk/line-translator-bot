@@ -172,6 +172,7 @@ import translation_alignment as translation_alignment_module
 import translation_adaptive_memory as adaptive_memory_module
 import hashlib
 import hmac
+import html as _html_escape_module
 import copy
 try:
     import fcntl  # POSIX file lock,用於跨 worker 同步 file I/O
@@ -243,7 +244,7 @@ _ZIP_UPDATE_LOCK = threading.Lock()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20"
+VERSION = "v3.51.0-audit-cost-mention-privacy-root-fix-2026-10-22"
 
 # v3.9.57: 啟動時偵測 gunicorn worker 數量,非 1 就警告
 # multi-worker 是群組漏顯示/設定不同步/費用偏低的根因
@@ -1301,13 +1302,11 @@ bot_stats = {
 
 # Anthropic 官方價格 (USD per 1M tokens) — (base_input, output)
 # cache 倍率業界官方標準:write_5m = base×1.25, read = base×0.10
-_CLAUDE_SONNET5_PRICE = (
-    (2.00, 10.00)
-    if datetime.now(timezone.utc) < datetime(2026, 9, 1, tzinfo=timezone.utc)
-    else (3.00, 15.00)
-)
+# 2026-10-22 核對：Sonnet 5 的 $2/$10 已在 2026-08 由 Anthropic 定為永久價，
+# 不再於 9/1 後自動跳回 $3/$15（舊邏輯會讓成本儀表板高估 50%）。
+_CLAUDE_SONNET5_PRICE = (2.00, 10.00)
 ANTHROPIC_PRICE_PER_M = {
-    # 2026-10-20 官方價格頁：Haiku 5.5 $0.10/$0.50（≤100k tokens；>100k 為 $0.50/$2.50），
+    # 2026-10-22 官方價格頁：Haiku 5.5 $0.10/$0.50（≤100k tokens；>100k 為 $0.50/$2.50），
     # Sonnet 5.5 $2/$10，Opus 5.5 $4/$20。
     "claude-haiku-5-5":  (0.10,  0.50),
     "claude-sonnet-5-5": (2.00, 10.00),
@@ -1321,7 +1320,22 @@ ANTHROPIC_PRICE_PER_M = {
     "claude-haiku-4-5":  (1.00,  5.00),
 }
 ANTHROPIC_CACHE_WRITE_MULT = 1.25   # 5m cache write
-ANTHROPIC_CACHE_READ_MULT  = 0.10   # cache hit/read(便宜 90%)
+ANTHROPIC_CACHE_READ_MULT  = 0.10   # 預設 cache hit/read(便宜 90%)
+# 2026-10-07 起 Sonnet 5.5 cache read 降為 $0.10（base 的 5%）；Opus 5.5 為 $0.20（5%）。
+# Haiku 5.5（$0.01）、Sonnet 5、Haiku 4.5 維持 10%。以 model 前綴查表，查不到用預設。
+ANTHROPIC_CACHE_READ_MULT_BY_MODEL = {
+    "claude-sonnet-5-5": 0.05,
+    "claude-opus-5-5":   0.05,
+}
+
+
+def _anthropic_cache_read_mult(model):
+    md = (model or "").lower()
+    best = ""
+    for mk in ANTHROPIC_CACHE_READ_MULT_BY_MODEL:
+        if md.startswith(mk) and len(mk) > len(best):
+            best = mk
+    return ANTHROPIC_CACHE_READ_MULT_BY_MODEL.get(best, ANTHROPIC_CACHE_READ_MULT)
 
 # OpenAI 官方價格 (USD per 1M tokens) — (input, output)
 # cached input 折扣:GPT-5 系列 cache hit = input × 0.10;GPT-4.x = input × 0.50
@@ -1387,7 +1401,7 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
         one_hour = max(0, min(cache_write, cache_write_1h))
         cost = (
             input_tok   * in_rate                              / 1_000_000
-            + cache_read  * in_rate * ANTHROPIC_CACHE_READ_MULT  / 1_000_000
+            + cache_read  * in_rate * _anthropic_cache_read_mult(model) / 1_000_000
             + (cache_write - one_hour) * in_rate * ANTHROPIC_CACHE_WRITE_MULT / 1_000_000
             + one_hour * in_rate * 2.0 / 1_000_000
             + output_tok  * out_rate                             / 1_000_000
@@ -1406,8 +1420,18 @@ def calc_cost_usd(provider, model, *, input_tok=0, output_tok=0,
         )
     # OpenAI
     in_rate, out_rate = _match_price(model, OPENAI_PRICE_PER_M, "gpt-6-luna")
-    # GPT-5 系列 cache hit = input×0.10;其餘(gpt-4.x)= input×0.50
-    cache_mult = 0.10 if (model or "").lower().startswith("gpt-5") else 0.50
+    # cache hit 折扣（2026-10-22 核對 developers.openai.com/api/docs/pricing）：
+    #   gpt-6.1-sol  cached $0.10 / $2.00  = 5%
+    #   gpt-6-luna   cached $0.01 / $0.10  = 10%，gpt-6-sol/astra、GPT-5 系列 = 10%
+    #   gpt-4.x      = 50%
+    # 舊版只認 "gpt-5" 前綴，GPT-6 全部被當 50%，成本儀表板高估 5～10 倍的快取費用。
+    _md = (model or "").lower()
+    if _md.startswith("gpt-6.1"):
+        cache_mult = 0.05
+    elif _md.startswith(("gpt-5", "gpt-6")):
+        cache_mult = 0.10
+    else:
+        cache_mult = 0.50
     # Cache details are subsets of prompt_tokens, not extra input tokens.
     # https://developers.openai.com/api/docs/pricing
     cached_input = max(0, min(input_tok, cached_input))
@@ -7157,7 +7181,15 @@ def post_fix_factory_id_to_zh(src_text, zh_text):
                 )
                 result = new_result
 
-    result = re.sub(r"[，,。．\s]+$", "", result)
+    # Trailing comma/space is always noise.  A trailing full stop is only
+    # dropped when the source itself has no sentence-final punctuation (casual
+    # chat such as ``i15 rusak`` → ``I15 機台故障``); a verified announcement
+    # that ends with ``.`` keeps its ``。`` instead of losing it here.
+    result = re.sub(r"[，,\s]+$", "", result)
+    body = re.sub(r"[。．\s]+$", "", result)
+    multi_sentence = bool(re.search(r"[。！？!?]", body)) or "\n" in body.strip()
+    if not (multi_sentence and re.search(r"[.。!！?？]\s*$", (src_text or ""))):
+        result = body
     return result.strip()
 
 
@@ -11475,6 +11507,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         # integrity validator can reject an otherwise complete translation.
         result = _repair_pipeline_identity_placeholders(text, result)
         result = restore_mentions(result, placeholders)
+        if _privacy_envelope.mapping and "__QG_KEEP_" in (result or ""):
+            # A mention literal may still carry a privacy placeholder (mention
+            # protection ran on the masked text).  Restore it now so a raw
+            # ``__QG_KEEP_*__`` token can never reach LINE.
+            result = translation_privacy_module.restore_sensitive_text(result, _privacy_envelope)
         _role_defects = factory_terminology_module.organization_translation_issues(text, result, src, tgt)
         if _role_defects:
             # Keep the restored, original candidate before local normalization.
@@ -23976,7 +24013,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div class="login-wrap">
 <div class="login-box">
 <h2>🔒 管理員登入</h2>
-<div style="font-size:11px;color:#666;margin-bottom:8px">v3.0</div>
+<div style="font-size:11px;color:#666;margin-bottom:8px">__ADMIN_VERSION__</div>
 <div style="display:flex;gap:6px;margin-bottom:10px">
 <button id="modeSuper" class="btn btn-primary btn-sm" style="flex:1;font-size:12px" onclick="switchLoginMode(&apos;super&apos;)">超級管理員</button>
 <button id="modeManager" class="btn btn-sm" style="flex:1;font-size:12px;background:#2a2a3e;color:#aaa;border:1px solid #3a3a4e;border-radius:6px" onclick="switchLoginMode(&apos;manager&apos;)">管理員</button>
@@ -31957,7 +31994,7 @@ def admin_page():
     html = ADMIN_HTML.replace(
         "__GOOGLE_CLIENT_ID_JSON__",
         _json_for_inline_script(GOOGLE_CLIENT_ID),
-    )
+    ).replace("__ADMIN_VERSION__", _html_escape_module.escape(VERSION))
     header = '<div class="header"><h1>🤖 翻譯Bot 管理後台 <span class="platform">LINE</span></h1></div>'
     header_with_zip_link = (
         '<div class="header"><h1>🤖 翻譯Bot 管理後台 <span class="platform">LINE</span></h1>'
@@ -32067,20 +32104,87 @@ def service_worker():
     return resp
 
 
+_ADMIN_ICON_CACHE = {}
+
+
+def _build_admin_icon_png(size):
+    """Render the admin PWA icon as a real PNG (cached per size).
+
+    Previous builds wrote the PNG signature with doubled backslashes (a
+    literal "\\x89" text sequence instead of the 0x89 byte), so Chrome reported "resource isn't a valid image" and the
+    home-screen icon never appeared. Pillow draws a maskable rounded tile with
+    a speech bubble and "A/文" glyphs; a minimal valid 1x1 PNG is the fallback.
+    """
+    cached = _ADMIN_ICON_CACHE.get(size)
+    if cached:
+        return cached
+    png = None
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        r = size // 5
+        d.rounded_rectangle((0, 0, size - 1, size - 1), radius=r, fill=(14, 36, 50, 255))
+        d.rounded_rectangle((size * 0.08, size * 0.08, size * 0.92, size * 0.92), radius=r,
+                            fill=(20, 78, 92, 255))
+        # speech bubble
+        bx0, by0, bx1, by1 = size * 0.18, size * 0.24, size * 0.82, size * 0.70
+        d.rounded_rectangle((bx0, by0, bx1, by1), radius=size * 0.12, fill=(118, 221, 198, 255))
+        d.polygon([(size * 0.32, by1 - 2), (size * 0.46, by1 - 2), (size * 0.30, size * 0.83)],
+                  fill=(118, 221, 198, 255))
+        font = None
+        for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+            try:
+                font = ImageFont.truetype(path, int(size * 0.30))
+                break
+            except Exception:
+                continue
+        if font is None:
+            try:
+                font = ImageFont.load_default(size=int(size * 0.30))  # Pillow >= 10.1
+            except TypeError:
+                font = ImageFont.load_default()
+        d.text((size * 0.50, size * 0.47), "A", fill=(14, 36, 50, 255), font=font, anchor="mm")
+        # Indonesia / Taiwan colour dots
+        dot = size * 0.07
+        d.ellipse((size * 0.60, size * 0.76, size * 0.60 + dot, size * 0.76 + dot), fill=(230, 60, 60, 255))
+        d.ellipse((size * 0.72, size * 0.76, size * 0.72 + dot, size * 0.76 + dot), fill=(60, 110, 230, 255))
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        png = buf.getvalue()
+    except Exception as e:  # pragma: no cover - Pillow missing or draw failure
+        logger.warning("[AdminIcon] Pillow render failed (%s); using 1x1 fallback", e)
+    if not png:
+        import struct, zlib
+        ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+        idat = zlib.compress(b"\x00\x14\x4e\x5c")
+        png = (b"\x89PNG\r\n\x1a\n"
+               + struct.pack(">I", 13) + b"IHDR" + ihdr
+               + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr) & 0xffffffff)
+               + struct.pack(">I", len(idat)) + b"IDAT" + idat
+               + struct.pack(">I", zlib.crc32(b"IDAT" + idat) & 0xffffffff)
+               + struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND") & 0xffffffff))
+    _ADMIN_ICON_CACHE[size] = png
+    return png
+
+
 @app.route("/icon-192.png")
 @app.route("/icon-512.png")
 def admin_icon():
-    # Generate a simple green circle PNG as icon
-    import struct, zlib
     size = 192 if "192" in request.path else 512
-    # 1x1 green pixel PNG, browser will scale
-    png = (b'\\x89PNG\\r\\n\\x1a\\n'
-           + struct.pack('>I', 13) + b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
-           + struct.pack('>I', zlib.crc32(b'IHDR' + struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) & 0xffffffff)
-           + struct.pack('>I', 12) + b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')
-           + struct.pack('>I', zlib.crc32(b'IDAT' + zlib.compress(b'\\x00\\x06\\xc7\\x55')) & 0xffffffff)
-           + struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff))
-    return app.response_class(png, mimetype="image/png")
+    resp = app.response_class(_build_admin_icon_png(size), mimetype="image/png")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+@app.route("/favicon.ico")
+def admin_favicon():
+    # Browsers request /favicon.ico on every admin visit; it used to 404 in the console.
+    resp = app.response_class(_build_admin_icon_png(64), mimetype="image/png")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 # ─── Admin API ──────────────────────────────────────────
