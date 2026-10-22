@@ -113,3 +113,27 @@ def test_verified_correction_bad_wording_also_earns_the_single_repair(monkeypatc
     assert len(calls) <= 2
     if len(calls) == 2:
         assert "kuning di lemari" in out
+
+
+def test_role_canonicalization_keeps_sentence_initial_capital():
+    import factory_terminology as ft
+    out = ft.canonicalize_organization_translation("處長下來巡視", "Kepala Divisi turun untuk meninjau keadaan.", "zh", "id")
+    assert out.startswith("Kepala divisi")
+    out = ft.canonicalize_organization_translation("處長下來巡視", "Tadi kepala departemen turun.", "zh", "id")
+    assert out == "Tadi kepala divisi turun."
+
+
+def test_2026_10_22_bundle_changes_similar_new_messages(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    src = "圓棒跟急單幫忙注意，10/25做到170～175"
+    bad = "Mohon perhatikan batang bulat dan work order mendesak. Pada 10/25 jumlah yang masuk mencapai 170～175."
+    good = "Mohon perhatikan batang bulat dan work order mendesak; pada 10/25 harus sampai nomor 170–175."
+    calls = []
+    def create(**kw):
+        calls.append(kw); return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert "進度編號" in calls[0]["messages"][0]["content"]  # reviewed card reached the prompt
+    assert "harus sampai nomor" in out and len(calls) == 2

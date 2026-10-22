@@ -1,12 +1,4 @@
-## 2026-10-22：全面體檢修正 — 成本計價、點名／隱私記號外漏、職稱大小寫、後台 PWA 圖示（最新更新）
-
-- 成本儀表板：GPT-6 快取折扣、Sonnet/Opus 5.5 cache read 5%、Sonnet 5 永久價、count-tokens 估價表全部依 2026-10-22 官方價格頁修正。
-- 翻譯：`@budi santoso 山多 …` 不再把 `__QG_KEEP_*__` 記號漏到 LINE；「處長下來巡視」不再變成句首小寫 `kepala divisi`；多句公告保留結尾句號。
-- 後台：PWA 圖示改為真正的 PNG、補 `/favicon.ico`、登入頁顯示實際版號；`.dockerignore` 讓映像少 15 MB。
-- 測試：每次執行用獨立暫存 DB／日誌，不再污染 repo 與 `/tmp`。全套 4,364 項 + 450 子測試通過。
-- 詳見 `UPDATE_20261022_AUDIT_COST_MENTION_PRIVACY_ROOT_FIX.md`。
-
-## 2026-10-21：模型升級、提示詞快取、/help、截圖學習閉環（歷史更新）
+## 2026-10-21：模型升級、提示詞快取、/help、截圖學習閉環（最新更新）
 
 - 三家供應商升級：gpt-6-luna／gpt-6.1-sol、claude-haiku-5-5／claude-sonnet-5-5；舊 ID 自動遷移；Claude 5.5 參數契約（無採樣參數、adaptive thinking、禁 prefill、512 快取門檻）。
 - 提示詞不再二次包裝；穩定前綴（原則＋群組語氣預設）在三家都進快取；詞庫 grounding 只比對原文。

@@ -702,21 +702,20 @@ def organization_translation_issues(source: str, candidate: str, src: str, tgt: 
 
 
 def _match_case(matched: str, replacement: str) -> str:
-    """Keep the capitalization shape of the replaced span.
+    """Keep the casing shape of the matched text when swapping in a canonical.
 
-    The canonical Indonesian titles are stored lowercase (``kepala divisi``).
-    A sentence-initial ``Kepala divisi`` or an all-caps heading used to be
-    rewritten to lowercase, so LINE replies started with a lowercase letter.
+    Canonicals are stored lowercase ("kepala divisi"); blindly substituting
+    them lowercased every sentence that opened with a role title
+    ("Kepala divisi turun…" → "kepala divisi turun…"). A sentence-initial or
+    title-cased match keeps its capital; an all-caps match stays caps;
+    canonicals that carry their own capitals ("Bagian Grinding") are kept.
     """
     if not matched or not replacement:
         return replacement
     if matched.isupper() and len(matched) > 1:
         return replacement.upper()
-    if matched[0].isupper():
-        words = matched.split()
-        if len(words) > 1 and all(w[:1].isupper() for w in words):
-            return " ".join(w[:1].upper() + w[1:] for w in replacement.split())
-        return replacement[:1].upper() + replacement[1:]
+    if matched[0].isupper() and replacement[0].islower():
+        return replacement[0].upper() + replacement[1:]
     return replacement
 
 

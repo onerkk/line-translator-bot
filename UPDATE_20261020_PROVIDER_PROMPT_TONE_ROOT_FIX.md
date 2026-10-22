@@ -175,3 +175,13 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 預設設定：全新安裝的 active_provider 改為 openai（與正式環境一致）；`/api/admin/richmenu/setup` 上游錯誤改回 502；
   `.gitignore` 加入 translation_log.json、last_translate_debug.json、*.db。
 - 看到但未做：一般圖片翻譯與語音轉文字（gpt-4o-transcribe）未重新查價；一般圖片翻譯仍可能因列切割重讀多次，待有實際費用數據再決定。
+
+## 2026-10-22 截圖審核：研磨C班兩則（bundle `2026-10-22-grinding-c-notices`）
+- 「主管北上…再注意一下」：語意對，但 ia 把人數定成單數、Mohon perhatikan lagi 失去「保持警覺」的意思；
+  規則卡：主管可能到場時的「再注意一下」= tetap waspada；「有主管」不用 ia／dia；晚上時間帶 malam。
+- 「10/22入到156～160」：原譯把進度目標譯成已達成的數量；規則卡：「入到／做到／包到 N～M」是進度編號目標，
+  不是 jumlah。語意依語境推定，請老闆確認（見回覆）。
+- 順手發現並根治一個通用 bug：組織職稱正規化把句首「Kepala divisi」改成小寫（`factory_terminology._replace_id_role`
+  以小寫 canonical 覆蓋，影響所有職稱）。改為保留原匹配的大小寫形狀；相關舊測試原本把小寫當正確，已更正。
+- 驗證：改寫過的新句「圓棒跟急單幫忙注意，10/25做到170～175」「處長晚上可能會進來巡視，大家再注意一下」
+  提示詞含卡片；模型重複舊錯時一次修正成功。

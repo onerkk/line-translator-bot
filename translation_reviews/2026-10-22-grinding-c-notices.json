@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "review_id": "2026-10-22-grinding-c-notices",
+  "source": "screenshot review by Claude, 研磨C班 group 10/21 20:09 and 20:12",
+  "items": [
+    {
+      "id": "supervisor-return-stay-alert",
+      "src": "zh",
+      "tgt": "id",
+      "source": "@All 今天有主管北上參加60週年廠慶活動，晚上可能10～11點會搭車回到鹽水廠，不知道會不會進來拿東西，再注意一下。",
+      "observed": "@All Hari ini ada atasan yang pergi ke utara untuk menghadiri acara perayaan ulang tahun pabrik ke-60. Malam nanti mungkin sekitar pukul 10–11 ia akan naik kendaraan kembali ke Pabrik Yenshui. Belum tahu apakah ia akan masuk untuk mengambil barang. Mohon perhatikan lagi.",
+      "corrected": "@All Hari ini ada atasan yang berangkat ke utara untuk menghadiri acara perayaan HUT pabrik ke-60. Malam ini sekitar pukul 10–11 malam mereka mungkin kembali ke Pabrik Yenshui. Belum tahu apakah akan masuk untuk mengambil barang, jadi mohon tetap waspada dan jaga sikap kerja.",
+      "category": "tone",
+      "reason": "「有主管」未指定單複數，印尼文不要用 ia（單數他）定死；「再注意一下」在此是提醒大家警覺、別鬆懈（主管可能突然進來），不是「再看一次」，Mohon perhatikan lagi 語意不清。",
+      "rule": {
+        "when": [["再注意一下", "注意一下", "再注意"], ["主管", "處長", "經理", "廠長", "課長", "巡視", "進來"]],
+        "directions": ["zh-id"],
+        "title": "主管可能出現時的「再注意一下」",
+        "context": [
+          "主管／處長可能到場或巡視時，「再注意一下」「注意一下」是要大家保持警覺、別鬆懈，譯 mohon tetap waspada／jaga sikap kerja，不是 perhatikan lagi（再看一次）。",
+          "「有主管」「有人」未說明人數時不用 ia／dia 定為單數，用 mereka 或省略主詞。",
+          "晚上 10～11 點譯為 pukul 10–11 malam 或 22.00–23.00，必須帶 malam。"
+        ],
+        "forbidden": ["Mohon perhatikan lagi"]
+      }
+    },
+    {
+      "id": "intake-progress-target-number",
+      "src": "zh",
+      "tgt": "id",
+      "source": "異型棒跟急單幫忙注意一下，10/22入到156～160",
+      "observed": "Mohon perhatikan batang profil khusus dan work order mendesak. Pada 10/22, jumlah yang masuk mencapai 156～160.",
+      "corrected": "Mohon perhatikan batang profil khusus dan work order mendesak; pada 10/22 pemasukan gudang harus sampai nomor 156–160.",
+      "category": "number_unit",
+      "reason": "「入到156～160」是入庫進度要做到第 156～160 號（目標），不是「入庫數量達到 156～160」；「到」接編號是進度，不是數量。原譯 jumlah yang masuk mencapai 把目標寫成已發生的數量。",
+      "rule": {
+        "when": [["入到", "做到", "包到", "出到"], ["異型棒", "急單", "入庫", "進度", "工單"]],
+        "directions": ["zh-id"],
+        "title": "「入到／做到／包到 N～M」是進度編號目標",
+        "context": [
+          "「入到 N～M」「做到 N～M」「包到 N～M」接的是工單／順序編號，表示進度要推進到第 N～M 號（目標或截止），譯 harus sampai nomor N–M／sampai urutan N–M；不是數量 jumlah，也不是已完成的事實。",
+          "有日期時是截止：pada 10/22 harus sampai nomor 156–160。",
+          "數量才用 jumlah（例：入庫 156 把 = masuk 156 bundel）。"
+        ],
+        "forbidden": ["jumlah yang masuk mencapai"]
+      }
+    }
+  ]
+}
