@@ -181,3 +181,26 @@ def test_removed_bundle_items_are_retracted_but_admin_rows_are_not():
                    src_lang=item["src"], tgt_lang=item["tgt"])
     rejected.clear()
     assert reviews.retract_removed(FakeAL(), bundles) == 0
+
+
+def test_confirmed_length_entry_rule_repairs_measure_wording(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    src = "沒短尺的都亂打重量跟長度"
+    bad = "Kalau tidak ada material pendek, panjangnya diukur asal-asalan."
+    good = "Tidak ada material pendek, tapi data berat dan panjangnya diinput asal-asalan di sistem."
+    calls = []
+    def create(**kw):
+        calls.append(kw); return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert "系統輸入" in calls[0]["messages"][0]["content"]
+    assert "diinput" in out and len(calls) == 2
+
+
+def test_middle_shift_is_a_confirmed_hard_term():
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["中班"]["idn"] == "shift tengah" and lookup["中班"]["translation_mode"] == "hard"
+    assert "小夜班" not in lookup  # existing card keeps 小夜班 = shift sore

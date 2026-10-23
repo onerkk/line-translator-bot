@@ -1,0 +1,41 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-10-22-grinding-c-confirmed",
+ "source": "screenshot review by Claude; meanings confirmed by the owner on 10/22",
+ "items": [
+  {
+   "id": "random-length-data-entry",
+   "src": "zh",
+   "tgt": "id",
+   "source": "沒短尺都亂打長度",
+   "observed": "Kalau tidak ada material pendek, panjangnya diukur asal-asalan.",
+   "corrected": "Tidak ada material pendek, tapi data panjangnya diinput asal-asalan di sistem.",
+   "category": "term",
+   "reason": "老闆確認：材料沒有短尺，卻在系統裡亂輸入長度。「打長度」是在系統輸入長度資料，不是現場量長度；原句是陳述已發生的問題，不是「如果…就…」的條件句。",
+   "rule": {
+    "when": [["打長度", "打重量", "打支數", "打尺寸", "打儲區", "打資料"]],
+    "directions": ["zh-id"],
+    "title": "「打＋資料欄位」是在系統輸入資料",
+    "context": [
+     "現場說「打長度／打重量／打支數／打尺寸／打儲區」是在電腦系統輸入該欄位資料，譯 input／ketik data … di sistem；不是用量具測量（diukur），也不是敲打。",
+     "「打鋼種」是 PMI 檢驗、「打鋼印」是打印記號，另有術語，不套用本規則。",
+     "「沒…都亂打…」是在抱怨已發生的錯誤輸入，用陳述句（Tidak ada …, tapi …），不要改成假設條件句 Kalau …。"
+    ],
+    "forbidden": ["panjangnya diukur asal-asalan"]
+   }
+  },
+  {
+   "id": "middle-shift-name",
+   "src": "zh",
+   "tgt": "id",
+   "source": "開三站中班大概在20～25噸",
+   "observed": "Pada shift tengah, pengoperasian tiga stasiun packing sekitar 20～25 ton.",
+   "corrected": "Kalau tiga stasiun packing dibuka, hasil shift tengah sekitar 20–25 ton.",
+   "category": "term",
+   "reason": "老闆確認印尼同事稱「中班」為 shift tengah，固定此譯名；「小夜班」既有卡片另用 shift sore，兩者不互換。",
+   "glossary": [
+    {"zh": "中班", "id": "shift tengah", "mode": "hard", "reverse_safe": true}
+   ]
+  }
+ ]
+}
