@@ -38846,9 +38846,11 @@ def _start_worker_services():
         # Screenshot-review corrections become approved few-shot cases in the
         # worker's correction store. Idempotent: duplicates are ignored.
         bundles = translation_reviews_module.load_bundles()
-        if bundles:
-            logger.info("[Reviews] corrections ingested: %s",
-                        translation_reviews_module.apply_corrections(al_module, bundles))
+        stats = translation_reviews_module.apply_corrections(al_module, bundles) if bundles else {}
+        # Retract review corrections whose bundle item was deleted, so a
+        # withdrawn judgement stops steering similar messages.
+        stats["retracted"] = translation_reviews_module.retract_removed(al_module, bundles)
+        logger.info("[Reviews] corrections synced: %s", stats)
 
     for name, start in (
         ("review-bundles", _ingest_review_bundles),

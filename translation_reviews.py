@@ -61,7 +61,7 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-TRANSLATION_REVIEWS_BUILD_ID = "2026-10-21.1-review-bundles"
+TRANSLATION_REVIEWS_BUILD_ID = "2026-10-22.1-review-sync"
 REVIEWS_DIRNAME = "translation_reviews"
 CATEGORIES = ("term", "negation", "number_unit", "station_equipment", "tone", "omission", "other")
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,78}")
@@ -201,6 +201,38 @@ def apply_corrections(al_module: Any, bundles: List[Dict[str, Any]]) -> Dict[str
     return stats
 
 
+def retract_removed(al_module: Any, bundles: List[Dict[str, Any]]) -> int:
+    """Reject approved review corrections that no bundle carries any more.
+
+    Editing an item's ``corrected`` text already supersedes the old row
+    (active_learning revisions per source), but deleting an item or a whole
+    bundle left its correction approved forever, so a retracted judgement
+    kept steering similar messages. Only rows created by a review bundle
+    (corrected_by starts with ``review:``) are touched; admin corrections never.
+    """
+    current = {(item["src"], item["tgt"], item["source"].strip(), item["corrected"].strip())
+               for bundle in bundles for item in bundle["items"]}
+    retracted = 0
+    offset = 0
+    while True:
+        rows = al_module.list_corrections(limit=200, offset=offset, status="approved")
+        if not rows:
+            break
+        for row in rows:
+            if not str(row.get("corrected_by") or "").startswith("review:"):
+                continue
+            key = (str(row.get("src_lang") or "").lower(), str(row.get("tgt_lang") or "").lower(),
+                   str(row.get("src_text") or "").strip(), str(row.get("corrected_translation") or "").strip())
+            if key not in current:
+                result = al_module.reject_correction(int(row["id"]), rejected_by="review-sync",
+                                                     reason="review bundle item removed or replaced")
+                retracted += 1 if result.get("ok") else 0
+        if len(rows) < 200:
+            break
+        offset += 200
+    return retracted
+
+
 def category_counts(bundles: List[Dict[str, Any]]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for bundle in bundles:
@@ -225,7 +257,9 @@ def main(argv=None) -> int:
         import active_learning as al
         al.init()
         bundles = load_bundles()
-        print(json.dumps({"corrections": apply_corrections(al, bundles), **health()}, ensure_ascii=False, indent=1))
+        stats = apply_corrections(al, bundles)
+        stats["retracted"] = retract_removed(al, bundles)
+        print(json.dumps({"corrections": stats, **health()}, ensure_ascii=False, indent=1))
         return 0
     print(__doc__)
     return 1

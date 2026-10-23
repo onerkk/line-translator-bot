@@ -123,17 +123,61 @@ def test_role_canonicalization_keeps_sentence_initial_capital():
     assert out == "Tadi kepala divisi turun."
 
 
-def test_2026_10_22_bundle_changes_similar_new_messages(monkeypatch):
+def test_2026_10_22_intake_rule_uses_tons_and_target_not_work_order_numbers(monkeypatch):
     import app
     from test_translation_instruction_cost_quality import response
-    src = "圓棒跟急單幫忙注意，10/25做到170～175"
+    src = "圓棒跟急單幫忙注意，10/25幫忙入到170～175"
     bad = "Mohon perhatikan batang bulat dan work order mendesak. Pada 10/25 jumlah yang masuk mencapai 170～175."
-    good = "Mohon perhatikan batang bulat dan work order mendesak; pada 10/25 harus sampai nomor 170–175."
+    good = "Mohon perhatikan batang bulat dan work order mendesak; pada 10/25 mohon bantu catat pemasukan gudang sampai 170–175 ton."
     calls = []
     def create(**kw):
         calls.append(kw); return response(good if len(calls) > 1 else bad)
     monkeypatch.setattr(app.ai.chat.completions, "create", create)
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     out = app.translate(src, "zh", "id")
-    assert "進度編號" in calls[0]["messages"][0]["content"]  # reviewed card reached the prompt
-    assert "harus sampai nomor" in out and len(calls) == 2
+    prompt = calls[0]["messages"][0]["content"]
+    assert "入庫噸數目標" in prompt and "工單編號" in prompt  # card says: tons, not work-order numbers
+    assert "170–175 ton" in out and len(calls) == 2
+
+
+def test_alert_rule_needs_a_presence_cue_not_just_a_supervisor_title():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    hit = store.retrieve("處長晚上可能會進來巡視，大家再注意一下。", "zh", "id", limit=5)
+    miss = store.retrieve("樓上是一股股長，基本紀律注意一下，他什麼都會跟處長講。", "zh", "id", limit=5)
+    assert any(str(c.get("id", "")).endswith("supervisor-return-stay-alert") for c in hit)
+    assert not any(str(c.get("id", "")).endswith("supervisor-return-stay-alert") for c in miss)
+
+
+def test_three_station_shift_estimate_rule_reaches_prompt_for_paraphrase():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("明天開兩站夜班大概在15噸左右", "zh", "id", limit=5)
+    assert any(str(c.get("id", "")).endswith("three-stations-shift-estimate") for c in cards)
+
+
+def test_review_glossary_makes_storage_transport_dept_global():
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["儲運"]["idn"] == "bagian pergudangan dan transportasi"
+
+
+def test_removed_bundle_items_are_retracted_but_admin_rows_are_not():
+    rejected = []
+    rows = [
+        {"id": 1, "src_lang": "zh", "tgt_lang": "id", "src_text": "舊句", "corrected_translation": "lama",
+         "corrected_by": "review:old-bundle"},
+        {"id": 2, "src_lang": "zh", "tgt_lang": "id", "src_text": "後台改的", "corrected_translation": "admin",
+         "corrected_by": "admin"},
+    ]
+    class FakeAL:
+        def list_corrections(self, **kw):
+            return rows if kw.get("offset", 0) == 0 else []
+        def reject_correction(self, cid, **kw):
+            rejected.append(cid); return {"ok": True}
+    bundles = reviews.load_bundles()
+    assert reviews.retract_removed(FakeAL(), bundles) == 1 and rejected == [1]
+    item = bundles[0]["items"][0]
+    rows[0].update(src_text=item["source"], corrected_translation=item["corrected"],
+                   src_lang=item["src"], tgt_lang=item["tgt"])
+    rejected.clear()
+    assert reviews.retract_removed(FakeAL(), bundles) == 0

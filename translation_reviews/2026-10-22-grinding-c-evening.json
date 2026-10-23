@@ -1,0 +1,73 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-10-22-grinding-c-evening",
+ "source": "screenshot review by Claude, 研磨C班 group 10/22 06:01–20:37",
+ "items": [
+  {
+   "id": "three-stations-shift-estimate",
+   "src": "zh",
+   "tgt": "id",
+   "source": "10/23幫忙入到163～165。開三站中班大概在20～25噸",
+   "observed": "Pada 10/23, mohon bantu proses pemasukan hingga 163～165 ton. Pada shift tengah, pengoperasian tiga stasiun packing sekitar 20～25 ton.",
+   "corrected": "Pada 10/23 mohon bantu catat pemasukan gudang sampai 163–165 ton. Kalau tiga stasiun packing dibuka, hasil shift tengah sekitar 20–25 ton.",
+   "category": "other",
+   "reason": "「開三站中班大概在20～25噸」是「開三個包裝站時，中班大約可入庫 20～25 噸」的估計；原譯寫成「三站的運作大約 20～25 噸」，主詞錯位。",
+   "rule": {
+    "when": [
+     [
+      "開三站",
+      "開兩站",
+      "開3站",
+      "開2站",
+      "開一站",
+      "開1站",
+      "開站"
+     ],
+     [
+      "噸",
+      "吨"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「開N站＋班別＋大概 X 噸」是該班產量估計",
+    "context": [
+     "「開N站（某班）大概在 X 噸」表示開 N 個包裝站時，該班大約能入庫／產出 X 噸；譯為 kalau N stasiun packing dibuka, hasil shift … sekitar X ton。",
+     "主詞是該班的產量，不是「站的運作」；不要寫 pengoperasian … stasiun packing sekitar X ton。"
+    ],
+    "forbidden": [
+     "pengoperasian tiga stasiun packing sekitar",
+     "pengoperasian dua stasiun packing sekitar"
+    ]
+   }
+  },
+  {
+   "id": "storage-transport-dept-term",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@All 儲運的用餐室過六點就不要進去了，剛剛原物料副理聽到開門聲在問誰在隔壁。",
+   "observed": "@All Jangan masuk ke ruang makan bagian penyimpanan dan pengiriman setelah pukul enam. Tadi wakil manajer bahan baku mendengar suara pintu dibuka dan bertanya siapa yang ada di sebelah.",
+   "corrected": "@All Jangan masuk ke ruang makan bagian pergudangan dan transportasi setelah pukul enam. Tadi wakil manajer bahan baku mendengar suara pintu dibuka dan bertanya siapa yang ada di sebelah.",
+   "category": "term",
+   "reason": "儲運在同一群組兩則訊息被譯成兩種名稱；既有卡片已定義 儲運 = bagian pergudangan dan transportasi，但只在包裝存檔語境被檢索，改為全域術語。",
+   "glossary": [
+    {
+     "zh": "儲運",
+     "id": "bagian pergudangan dan transportasi",
+     "mode": "soft"
+    }
+   ]
+  },
+  {
+   "id": "supervisor-also-may-come",
+   "src": "zh",
+   "tgt": "id",
+   "source": "早上注意一下，颱風天有排值班，月底了主管也可能進來看一下",
+   "observed": "Pagi ini tetap waspada. Saat hari topan ada jadwal piket, dan karena sudah akhir bulan, atasan mungkin masuk untuk melihat kondisi.",
+   "corrected": "Pagi ini tetap waspada. Saat hari topan ada jadwal piket, dan karena sudah akhir bulan, atasan juga mungkin masuk untuk melihat kondisi.",
+   "category": "omission",
+   "reason": "「主管也可能進來」的「也」漏譯：值班主管之外，月底主管也可能進來。"
+  }
+ ]
+}
