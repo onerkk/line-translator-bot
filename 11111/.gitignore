@@ -1,0 +1,6 @@
+
+# local runtime artifacts (appended by tests/probes; not deployment data)
+translation_log.json
+last_translate_debug.json
+__pycache__/
+*.db

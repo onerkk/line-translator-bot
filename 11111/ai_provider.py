@@ -1,0 +1,3847 @@
+"""
+ai_provider.py — 統一 AI Provider 介面層 (v3.2.6 / 2026-05-28)
+
+【v3.2.6 治本修法 — Phase 25 雙系統官方治本(2026-05-28)】
+🎯 根治 LLM 元評論洩漏(Wait — I notice / However / If English: / If Indonesian:):
+   - 修補 _wrap_system_prompt_xml 在 already_partitioned 模式下忽略 output_tag 的 bug
+     (app.py 已含 <role>+<critical_rules> 時,Phase 25 從未生效)
+   - OpenAI 路徑對稱實作 Phase 25:sys prompt 注入 <output_format> + response 抽 <translation> tag
+   - output_translation_tag 預設改 True
+   - 後端強制 regex 抽 <translation> tag 內容,丟棄所有 tag 外雜訊
+     → 不依賴 LLM 聽話,後端強制治本
+   - 雙系統官方依據:
+     OpenAI cookbook persistence + output_contract:
+       https://cookbook.openai.com/examples/gpt-5/gpt-5_troubleshooting_guide
+     Anthropic use-xml-tags 結構化 system prompt:
+       https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+
+【v3.3 — 雙系統共用分區 XML system prompt(2026-05-20)】
+🎯 根治翻譯品質:
+   - 配合 app.py v3.9.37 的分區 XML sys_prompt(<role>/<critical_rules>/
+     <factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>)
+   - _wrap_system_prompt_xml 偵測新分區結構時不再 early return,改 append Anthropic
+     專屬條件 tag(<glossary_priority>/<line_message_format>/<layout_preservation>/
+     <thinking_protocol>/<success_criteria>)
+   - _split_system_into_cache_blocks 改用 </context_disambiguation> 等新 tag 邊界
+     當 cache split point(向後相容舊 </rules> 結構)
+   - 官方依據:
+     https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+     https://docs.anthropic.com/en/docs/long-context-window-tips
+     https://docs.claude.com/en/docs/build-with-claude/prompt-engineering/multishot-prompting
+   - 預期效果:Claude long-context 召回率提升,「分流消化/有好處理的」類誤譯根治
+
+【v3.0 — 完整 Claude 翻譯能力(切到 Anthropic 自動全部啟用)】
+✅ Phase 1: Prompt Caching             — system / glossary 自動 cache,輸入成本降 70-90%
+✅ Phase 2: Extended Thinking          — Sonnet/Opus 啟用思考鏈(budget 2000 tokens)
+✅ Phase 3: Search Result Grounding    — 自動把 LINE bot 的 glossary 包成 source blocks
+✅ Phase 4: Stop Sequences             — 防 Claude 加註解 / Translation: / Catatan: 等
+✅ Phase 5: XML System Prompt Wrapping — Claude 對 XML 標籤遵循度提升 20-30%
+✅ Phase 6: Multi-shot Examples        — user/assistant 交替訊息自動相容(LINE bot 已有)
+✅ Phase 7: Native Vision              — 圖片/PDF 用 Claude vision 直接讀
+✅ Phase 8: 1-hour Extended Cache      — beta header 啟用 1 小時 TTL cache
+✅ Phase 9: Citations API              — 顯示用了哪條 glossary 引用
+✅ Phase 10: Streaming                 — chat_complete_stream() 提供漸進輸出
+
+【v3.1 D3 新增】
+✅ Phase 12: Multi-block Caching       — system 拆 stable(1h)+ dynamic(5m),命中率 60%→95%
+✅ Phase 16: Token Counting API        — 翻譯前可預估 token + 成本
+✅ Phase 17: Files API for Glossary    — glossary 可上傳到 Anthropic 端,避免每次重傳
+
+【v3.2 D4 新增 — 修 3 個 BUG + 上 3 個新技術(2026-05-15)】
+🔴 BUG 修復:
+   1. Cache 門檻字元→token,按模型分(Haiku/Opus 4.7=4096 tok / Sonnet 4.6=2048 tok / 舊=1024)
+      官方:低於門檻 silent fail(cache_creation_input_tokens=0,照付全價)
+   2. Opus 4.7 強制 adaptive thinking — 不再丟 budget_tokens(會 400 + retry 浪費延遲)
+   3. Sonnet 4.6 預設改 adaptive(舊 type=enabled 已 deprecated,未來移除)
+
+✨ 新技術 (Phase 13-15):
+✅ Phase 13: Adaptive Thinking        — Claude 自己判斷簡單句不思考、複雜句深思考
+                                        effort: low/medium/high(+ Opus 4.7 xhigh)
+✅ Phase 14: Thinking Display Mode    — Opus 4.7 預設 omitted(快首 token),
+                                        Sonnet 4.6 預設 summarized
+✅ Phase 15: Smart Cache Threshold    — 用 model-specific token 門檻,避免 silent fail
+
+【v3.2.1 D5 新增(2026-05-15)】
+✅ Phase 18: Image-then-text Reorder  — 官方 vision best practice:單圖+文字時
+                                        自動把圖片排前面,翻譯/OCR 略佳
+                                        多圖場景不重排(避免破壞 few-shot)
+
+【v3.2.2 D6 新增(2026-05-15)】
+✅ Phase 19: Image Translation Toggle  — 圖片翻譯是否走 Claude vision 的獨立開關
+                                          切到 Anthropic 時可獨立關閉圖片翻譯(成本控制)
+                                          OFF 時:文字仍走 Claude,圖片仍走 OpenAI
+
+【v3.2.3 D7 新增 — LINE 視覺/排版品質升級(2026-05-15)】
+✅ Phase 20: LINE Plain Text Mode      — 防 Claude 輸出 markdown 廢字元污染 LINE 訊息
+                                          (LINE 不渲染 markdown,**粗體** ## 等會字面顯示)
+                                          官方根據:「reduce markdown in prompt → reduce markdown in output」
+✅ Phase 21: OCR Strict Layout         — 偵測訊息含圖片時,system prompt 加 XML 嚴格保版面指令
+                                          (行數 / 編號 / 縮排 / 表格欄位完全對應原文)
+
+【v3.2.4 D8 新增 — Anthropic 官方 prompting 最佳實踐三件套(2026-05-15)】
+✅ Phase 22: Assistant Prefill          — 預填回應開頭跳過 preamble(歐那場景預設 OFF)
+                                          自動偵測 model(Sonnet 4.6 / Opus 4.6+ 不支援,跳過)
+                                          官方:「Prefill bypasses Claude's friendly preamble」
+✅ Phase 23: CoT Thinking Tag           — XML 引導 Claude 內部思考(Haiku 4.5 不支援 Extended
+                                          Thinking,靠這個補足)
+                                          官方:「Chain-of-thought via XML consistently improves accuracy」
+✅ Phase 24: Strong Role Prompting     — 強化 <role> 從「翻譯助手」變「20 年資深中印工廠譯者」
+                                          官方:「Detailed role with specific expertise produces
+                                          better quality responses」
+
+【v3.2.5 D9 新增 — Anthropic 官方「Output Tag + Success Criteria」終局(2026-05-16)】
+✅ Phase 25: Output Translation Tag    — 強制 Claude 把翻譯包在 <translation>...</translation> tag
+                                          內,後端 regex 抽 tag 內內容,徹底解決前綴問題。
+                                          官方明文:「Having output in XML tags allows reliable extraction」
+                                          預設 OFF;歐那實測後可開啟取代 stop_sequences。
+✅ Phase 26: Success Criteria          — system prompt 加 <success_criteria> 6 條成功標準
+                                          官方明文:「State the expected outcome and success criteria」
+                                          預設 ON,直接影響 Claude 翻譯品質判斷基準。
+
+【作者】onerkk@gmail.com
+"""
+
+import os
+import json
+import errno
+import re
+import sys
+import time
+import threading
+import logging
+import importlib
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+
+import glossary_policy as gp_module
+import translation_privacy as privacy_module
+import prompt_optimizer
+
+_TRANSLATION_REQUEST = ContextVar("translation_request_budget", default=None)
+_TRANSPORT_SCOPE = ContextVar("provider_transport_scope", default=None)
+_USAGE_OBSERVER = None
+
+
+def set_usage_observer(observer):
+    """Observe every received provider response, including rejects and reviews."""
+    global _USAGE_OBSERVER
+    _USAGE_OBSERVER = observer
+
+
+def translation_request_budget(function):
+    """Share one generation/recovery/review budget, isolated between workers."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if _TRANSLATION_REQUEST.get() is not None:
+            return function(*args, **kwargs)
+        def setting(name, default, low, high):
+            try:
+                return max(low, min(high, float(os.environ.get(name, default))))
+            except (TypeError, ValueError):
+                return float(default)
+        # Start the clock at the first API request, after cache/preparation.
+        budget = dict(
+            deadline=None, attempts=0, generations=0,
+            seconds=setting("TRANSLATION_TOTAL_API_SECONDS", 35, 5, 90),
+            max_attempts=1,
+            max_generations=1,
+        )
+        token = _TRANSLATION_REQUEST.set(budget)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _TRANSLATION_REQUEST.reset(token)
+    return wrapped
+
+
+def translation_budget_snapshot():
+    return dict(_TRANSLATION_REQUEST.get() or {})
+
+
+def _bounded_provider_transport(function):
+    """One provider's compatibility retries share the original timeout.
+
+    The coordinator reserves/counts the first SDK attempt. Further actual SDK
+    calls consume the same request budget; a parameter fallback is not free.
+    Direct SDK-adapter callers also get a single per-provider deadline.
+    """
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        seconds = max(0.1, float(kwargs.get("timeout") or 90))
+        budget = _TRANSLATION_REQUEST.get()
+        deadline = time.monotonic() + seconds
+        if budget is not None and budget.get("deadline") is not None:
+            deadline = min(deadline, budget["deadline"])
+        scope = {"deadline": deadline, "calls": 0, "phases_ms": {},
+                 "provider": function.__name__.rsplit("_", 1)[-1]}
+        token = _TRANSPORT_SCOPE.set(scope)
+        started = time.monotonic()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _log_provider_timing(scope, time.monotonic() - started)
+            _TRANSPORT_SCOPE.reset(token)
+    return wrapped
+
+
+@contextmanager
+def _provider_stage(name):
+    scope = _TRANSPORT_SCOPE.get()
+    if scope is None:
+        yield
+        return
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        phases = scope.setdefault("phases_ms", {})
+        phases[name] = phases.get(name, 0.0) + max(0.0, time.monotonic() - started) * 1000
+
+
+def _provider_timed_stage(name):
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            with _provider_stage(name):
+                return function(*args, **kwargs)
+        return run
+    return decorate
+
+
+def _log_provider_timing(scope, seconds):
+    try:
+        import webhook_runtime
+        total_ms = max(0.0, seconds) * 1000
+        phases = scope.get("phases_ms", {})
+        record = {"trace": webhook_runtime.trace_id(), "provider": scope["provider"],
+                  "total_ms": round(total_ms, 2), "sdk_calls": scope["calls"],
+                  **{key + "_ms": round(phases.get(key, 0.0), 2)
+                     for key in ("client_setup", "request_options", "resource_setup", "sdk", "sdk_logging")},
+                  "other_ms": round(max(0.0, total_ms - sum(phases.values())), 2),
+                  "outside_sdk_ms": round(max(0.0, total_ms - phases.get("sdk", 0.0)), 2)}
+        logging.getLogger("app").info("[AIProviderPerf] %s", json.dumps(record, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        pass  # Diagnostics cannot mask a translation result or its real error.
+
+
+@_provider_timed_stage("resource_setup")
+def _translation_create_method(client, provider):
+    """Measure SDK lazy resource imports BEFORE the timed network call.
+
+    Evaluating client.chat.completions.create used to happen before _sdk_create
+    entered, hiding the first-request resource/schema loading in the API gap.
+    """
+    return client.messages.create if provider == "anthropic" else client.chat.completions.create
+
+
+def _sdk_create(create, call_kwargs):
+    scope = _TRANSPORT_SCOPE.get()
+    kwargs = dict(call_kwargs)
+    if scope is not None:
+        remaining = scope["deadline"] - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Provider transport deadline exhausted")
+        budget = _TRANSLATION_REQUEST.get()
+        if scope["calls"]:
+            raise RuntimeError("Provider already attempted; parameter/transport retries disabled")
+        scope["calls"] += 1
+        kwargs["timeout"] = min(float(kwargs.get("timeout") or remaining), remaining)
+    started = time.monotonic()
+    response, failure = None, None
+    try:
+        response = create(**kwargs)
+        return response
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        # Usage is observed once by the coordinator for billing. This log only
+        # measures the actual SDK call, including compatibility attempts.
+        elapsed = max(0.0, time.monotonic() - started)
+        if scope is not None:
+            phases = scope.setdefault("phases_ms", {})
+            phases["sdk"] = phases.get("sdk", 0.0) + elapsed * 1000
+        with _provider_stage("sdk_logging"):
+            _log_sdk_request(kwargs, response, failure, elapsed, scope)
+
+
+def _log_sdk_request(kwargs, response, failure, seconds, scope):
+    """Whitelist transport/usage metadata; never log source text or credentials."""
+    try:
+        import webhook_runtime
+
+        def field(obj, key, default=None):
+            return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+        def count(value):
+            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+        def label(value):
+            return re.sub(r"[^A-Za-z0-9_.:/-]", "_", str(value or ""))[:96]
+
+        usage = field(response, "usage")
+        details = field(usage, "prompt_tokens_details")
+        output_details = field(usage, "completion_tokens_details")
+        policy = kwargs.get("prompt_cache_options") or (kwargs.get("extra_body") or {}).get("prompt_cache_options") or {}
+        messages = kwargs.get("messages") or []
+        first = messages[0].get("content") if messages and isinstance(messages[0], dict) else None
+        record = {
+            "trace": webhook_runtime.trace_id(),
+            "provider": label((scope or {}).get("provider")),
+            "model": label(field(response, "model") or kwargs.get("model")),
+            "status": "error" if failure is not None else "ok",
+            "error_type": type(failure).__name__ if failure is not None else None,
+            "http_status": count(getattr(failure, "status_code", None)),
+            "sdk_ms": round(max(0.0, seconds) * 1000),
+            "transport_attempt": (scope or {}).get("calls", 1),
+            "input_tokens": count(field(usage, "prompt_tokens", field(usage, "input_tokens"))),
+            "output_tokens": count(field(usage, "completion_tokens", field(usage, "output_tokens"))),
+            "cached_input_tokens": count(field(details, "cached_tokens", field(usage, "cache_read_input_tokens"))),
+            "cache_write_tokens": count(field(details, "cache_write_tokens", field(usage, "cache_creation_input_tokens"))),
+            "reasoning_tokens": count(field(output_details, "reasoning_tokens")),
+            "reasoning_effort": label(kwargs.get("reasoning_effort")),
+            "service_tier": label(field(response, "service_tier") or kwargs.get("service_tier") or "default"),
+            "cache_mode": label(field(policy, "mode") or "default"),
+            "cache_breakpoint": isinstance(first, list) and any(
+                isinstance(part, dict) and "prompt_cache_breakpoint" in part for part in first),
+        }
+        logging.getLogger("app").info("[AIRequest] %s", json.dumps(record, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        # Metrics must not alter a successful response or mask the real error.
+        pass
+
+# ═══════════════════════════════════════════════════════════════════
+# 設定檔路徑
+# ═══════════════════════════════════════════════════════════════════
+def _resolve_provider_config_path():
+    for d in ("/var/data", "/data", "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "ai_provider_config.json")
+    return "ai_provider_config.json"
+
+PROVIDER_CONFIG_PATH = _resolve_provider_config_path()
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.3.0 (2026-06-16): OpenAI 模型生命週期與翻譯模型政策
+# ═══════════════════════════════════════════════════════════════════
+# 後台只提供仍在服役、適合文字/圖片翻譯的模型。舊設定不直接丟棄，
+# 而是在呼叫前遷移到官方建議替代型號，避免重新部署後因舊 model id 404。
+ACTIVE_OPENAI_TRANSLATION_MODELS = (
+    # 2026-10-20 查核 https://developers.openai.com/api/docs/pricing ：
+    # 現行旗艦為 gpt-6-luna($0.10/$0.50)、gpt-6.1-sol($2/$10)、gpt-6-astra。
+    # 官方未推出 GPT-6 Terra；GPT-5.6 Sol 優惠價僅至 2026-11-21。
+    "gpt-6-luna",     # 即時、高量翻譯：GPT-6 系列最便宜、最快
+    "gpt-6.1-sol",    # 品質層：長公告、複雜工廠語境
+    "gpt-5.6-luna",   # 相容：舊設定仍可讀取
+    "gpt-5.6-terra",  # 相容
+    "gpt-5.6-sol",    # 相容
+    "gpt-5.4-mini",   # 低成本相容選項
+    "gpt-5.4-nano",   # 最低成本輔助任務
+    "gpt-4.1-mini",   # 穩定非推理相容選項
+    "gpt-4.1",
+)
+ACTIVE_OPENAI_VISION_MODELS = (
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.4-mini",
+    "gpt-4.1-mini",
+    "gpt-5.4-nano",
+    "gpt-4.1",
+)
+DEFAULT_OPENAI_MODEL = "gpt-6-luna"
+DEFAULT_OPENAI_UPGRADE_MODEL = "gpt-6.1-sol"
+DEFAULT_OPENAI_AUX_MODEL = "gpt-6-luna"
+DEFAULT_OPENAI_VISION_MODEL = "gpt-6.1-sol"
+DEFAULT_OPENAI_VISION_FALLBACK_MODEL = "gpt-6-luna"
+# GPT-4o mini TTS family is deprecated. Use the still-active Speech API model
+# tts-1 by default; keep tts-1-hd as an optional quality-first choice.
+DEFAULT_OPENAI_TTS_MODEL = "tts-1"
+ACTIVE_OPENAI_TTS_MODELS = (
+    "tts-1",
+    "tts-1-hd",
+)
+
+# 官方 deprecations 頁面列出的替代關係，以及本專案過去曾產生的無效名稱。
+# floating alias 的遷移是本專案的主動升級政策；dated snapshot 的替代則依官方公告。
+OPENAI_MODEL_REPLACEMENTS = {
+    # 2026-10-20 model policy: GPT-6 Luna/6.1 Sol replace the 5.6 tiers at
+    # half the price (official pricing page). Old tier names keep working
+    # because they are migrated here before any request or mapping lookup.
+    "gpt-5.6-luna": "gpt-6-luna",
+    "gpt-5.6-terra": "gpt-6.1-sol",
+    "gpt-5.6-sol": "gpt-6.1-sol",
+    "gpt-6-sol": "gpt-6.1-sol",
+    "gpt-5.4-nano": "gpt-6-luna",   # 5.4-nano $0.20/$1.25 > 6-luna $0.10/$0.50
+    "gpt-5.4-mini": "gpt-6-luna",
+    "gpt-5.6": "gpt-6.1-sol",
+    "gpt-5.5": "gpt-6.1-sol",
+    "gpt-5.4": "gpt-6.1-sol",
+    # 2026-12-11 shutdown（官方替代）
+    "gpt-5-2025-08-07": "gpt-5.5",
+    "gpt-5-mini-2025-08-07": "gpt-5.4-mini",
+    "gpt-5-nano-2025-08-07": "gpt-5.4-nano",
+    "gpt-5-pro-2025-10-06": "gpt-5.5-pro",
+    "o3-2025-04-16": "gpt-5.5",
+    "o3-pro-2025-06-10": "gpt-5.5-pro",
+    # 2026-10-23 shutdown（官方替代）
+    "gpt-4.1-nano": "gpt-5.4-nano",
+    "gpt-4.1-nano-2025-04-14": "gpt-5.4-nano",
+    "o1": "gpt-5.5",
+    "o1-2024-12-17": "gpt-5.5",
+    "o1-pro": "gpt-5.5-pro",
+    "o1-pro-2025-03-19": "gpt-5.5-pro",
+    "o3-mini": "gpt-5.5",
+    "o3-mini-2025-01-31": "gpt-5.5",
+    "o4-mini": "gpt-5.4-mini",
+    "o4-mini-2025-04-16": "gpt-5.4-mini",
+    # 2026-07-23 shutdown / legacy aliases
+    "gpt-5-chat-latest": "gpt-5.5",
+    "gpt-5-codex": "gpt-5.5",
+    "gpt-5.1-chat-latest": "gpt-5.5",
+    "gpt-5.1-codex": "gpt-5.5",
+    "gpt-5.1-codex-max": "gpt-5.5",
+    "gpt-5.1-codex-mini": "gpt-5.4-mini",
+    "gpt-5.2-codex": "gpt-5.5",
+    # 本專案舊選單 / 過去程式可能留下的名稱
+    "gpt-5": "gpt-5.6-sol",
+    "gpt-5-mini": "gpt-5.6-terra",
+    "gpt-5-nano": "gpt-5.4-nano",
+    "gpt-5.1": "gpt-5.4",
+    "gpt-5.2": "gpt-5.4",
+    "gpt-5.5-mini": "gpt-5.4-mini",  # OpenAI 未提供
+    "gpt-5.5-nano": "gpt-5.4-nano",  # OpenAI 未提供
+    "gpt-5.2-nano": "gpt-5.4-nano",  # OpenAI 未提供
+    "gpt-5.1-nano": "gpt-5.4-nano",  # OpenAI 未提供
+}
+
+
+def normalize_openai_model(model, fallback=None, allowed=None):
+    """遷移舊 OpenAI model id，並可選擇限制在白名單內。
+
+    Claude / Gemini 名稱原樣保留。未知 OpenAI 名稱在沒有 allowed 時保留，
+    讓未來新模型仍可由進階程式呼叫；後台與持久化設定會傳 allowed，
+    因而不會把拼錯或已移除的名稱送進正式翻譯流程。
+    """
+    fallback = fallback or DEFAULT_OPENAI_MODEL
+    if model is None:
+        return fallback
+    raw = str(model).strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if low.startswith(("claude-", "gemini")):
+        # Generic mapping helpers may need to preserve a provider-native name,
+        # but a caller that supplies an OpenAI allow-list is explicitly asking
+        # for an OpenAI request model.  Never let a Claude/Gemini ID cross that
+        # boundary and become a paid 404 request.
+        return fallback if allowed is not None else raw
+    normalized = raw
+    # Some historical IDs map to an intermediate floating alias. Resolve a
+    # short chain so a retired snapshot never survives just because the first
+    # replacement itself was later superseded.
+    seen = set()
+    for _ in range(4):
+        key = str(normalized).lower()
+        if key in seen or key not in OPENAI_MODEL_REPLACEMENTS:
+            break
+        seen.add(key)
+        normalized = OPENAI_MODEL_REPLACEMENTS[key]
+    if allowed is not None and normalized not in tuple(allowed):
+        return fallback
+    return normalized
+
+
+def normalize_openai_request_model(model, fallback=None):
+    """Resolve a model at the final OpenAI API boundary.
+
+    Provider failover deliberately carries one canonical quality-tier model
+    through the coordinator.  Historical code paths can still hand this function
+    a provider-native Claude/Gemini model.  OpenAI must never receive those IDs;
+    they are replaced with the configured OpenAI fallback before the request is
+    created.  Unknown future OpenAI-looking IDs remain forward-compatible.
+    """
+    fallback = fallback or DEFAULT_OPENAI_MODEL
+    raw = str(model or "").strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if low.startswith("claude-"):
+        # Preserve the requested quality tier across provider failover instead
+        # of collapsing every Claude model to the cheapest OpenAI default.
+        return (
+            DEFAULT_OPENAI_UPGRADE_MODEL
+            if any(family in low for family in ("sonnet", "opus"))
+            else fallback
+        )
+    if low.startswith("gemini"):
+        return (
+            fallback
+            if "flash-lite" in low
+            else DEFAULT_OPENAI_UPGRADE_MODEL
+        )
+    return normalize_openai_model(raw, fallback=fallback)
+
+
+def normalize_translation_model(model, fallback=None):
+    return normalize_openai_model(
+        model, fallback or DEFAULT_OPENAI_MODEL, ACTIVE_OPENAI_TRANSLATION_MODELS)
+
+
+def normalize_vision_model(model, fallback=None):
+    return normalize_openai_model(
+        model, fallback or DEFAULT_OPENAI_VISION_MODEL, ACTIVE_OPENAI_VISION_MODELS)
+
+
+def normalize_tts_model(model, fallback=None):
+    """遷移已公告停用的 TTS snapshot，並限制為 Speech API 可用型號。"""
+    fallback = fallback or DEFAULT_OPENAI_TTS_MODEL
+    raw = str(model or "").strip().lower()
+    replacements = {
+        "gpt-4o-mini-tts": DEFAULT_OPENAI_TTS_MODEL,
+        "gpt-4o-mini-tts-2025-03-20": DEFAULT_OPENAI_TTS_MODEL,
+        "gpt-4o-mini-tts-2025-12-15": DEFAULT_OPENAI_TTS_MODEL,
+    }
+    normalized = replacements.get(raw, raw or fallback)
+    return normalized if normalized in ACTIVE_OPENAI_TTS_MODELS else fallback
+
+# ═══════════════════════════════════════════════════════════════════
+# 預設配置
+# ═══════════════════════════════════════════════════════════════════
+DEFAULT_CONFIG = {
+    # 2026-10-21: fresh-install default follows production: ChatGPT (GPT-6
+    # Luna, $0.10/$0.50) -> Claude (Haiku 5.5, same price, used as failover)
+    # -> Gemini.  A saved config always overrides this.
+    "active_provider": "openai",
+    "openai": {"api_key": "", "base_url": None},
+    "anthropic": {
+        "api_key": "",
+        # 2026-10-07 Claude Haiku 5.5：$0.10/$0.50（≤100k tokens），1M context，
+        # adaptive thinking；Haiku 4.5 是 $1/$5。官方 ID 無日期後綴。
+        "default_model": "claude-haiku-5-5",
+    },
+    # === v3.21 Gemini(第三 provider)===
+    # Google 官方把 Gemini 3.1 Flash-Lite 的第一使用場景明列為
+    # 「翻譯:快速、便宜、大量,例如處理聊天訊息」— 三家裡最低價位。
+    # 走 Gemini 官方 OpenAI 相容端點,重用 OpenAI SDK,不引入新依賴。
+    "gemini": {
+        "api_key": "",
+        "default_model": "gemini-3.1-flash-lite",   # 短訊息(最省)
+        # Gemini 2.5 Flash is Google's stable best-price-performance model and
+        # is substantially cheaper than 3.5 Flash for long factory notices.
+        "upgrade_model": "gemini-2.5-flash",
+    },
+    # v3.25: OpenAI 官方 Flex tier — 背景品檢呼叫(QE/APE)半價。
+    # 官方定位:「較低費用換較慢回應與偶發資源不足,適合非即時任務」,
+    # 背景執行緒不在使用者等待路徑上 = 零感知省 50%。
+    # v3.26: 跨 provider 自動容錯移轉(主力限流/過載/連線失敗時換備援家救句子)
+    "provider_failover": True,
+    # 單一協調層負責跨 provider 接力。所有 provider 共用一個總期限，
+    # 避免「外層重試 × 三家切換 × SDK 內建重試」把單句拖到數分鐘。
+    "failover_policy": {
+        "total_timeout_seconds": 60,
+        "per_provider_timeout_seconds": 24,
+        "circuit_breaker_failures": 2,
+        "circuit_breaker_cooldown_seconds": 60,
+        "provider_order": ["anthropic", "openai", "gemini"],  # failover chain after the active provider
+        # Real-time LINE messages need a much tighter tail-latency budget than
+        # long documents or OCR.  Callers select one profile; the old two
+        # timeout fields remain as backwards-compatible fallbacks.
+        "latency_profiles": {
+            "realtime_text": {"total": 22, "per_provider": 8},
+            "long_text": {"total": 40, "per_provider": 16},
+            "vision": {"total": 50, "per_provider": 20},
+            "background": {"total": 90, "per_provider": 45},
+        },
+        # Root-fix: keep failover deterministic.  Cost/latency telemetry must
+        # never reorder ChatGPT behind Gemini when Claude is the configured main.
+        "strict_failover_order": True,
+        "adaptive_backup_order": False,
+        "latency_ewma_alpha": 0.25,
+    },
+    # v3.28/v3.37: 額度耗盡 → 永久切換主力 + LINE 通知管理員。
+    # Exhausted providers are persisted and skipped until an admin explicitly
+    # switches back or updates that provider's API key.
+    "auto_switch_on_exhaust": True,
+    "quota_exhausted_providers": {},
+    "auto_switch_state": {},
+    "openai_features": {
+        "flex_background": True,   # CP值預設 ON;僅 gpt-5 系/o 系生效,其他模型自動略過
+    },
+    "gemini_features": {
+        # Gemini 3 系列翻譯使用 minimal：保留模型與 prompt，只壓低不必要的思考延遲。
+        # 相容端點若暫不接受 minimal，會先退到 low，再移除可選參數重試。
+        "reasoning_effort": "minimal",
+    },
+    # OpenAI 模型名 → Gemini 模型(與 anthropic model_mapping 同模式)
+    "gemini_model_mapping": {
+        "gpt-6-luna": "gemini-3.1-flash-lite",
+        "gpt-6.1-sol": "gemini-2.5-flash",
+        "gpt-5.6-luna": "gemini-3.1-flash-lite",
+        "gpt-5.6-terra": "gemini-2.5-flash",
+        "gpt-5.6-sol": "gemini-2.5-flash",
+        "gpt-5.4-mini": "gemini-3.1-flash-lite",
+        "gpt-4.1-mini": "gemini-3.1-flash-lite",
+        "gpt-5.4-nano": "gemini-3.1-flash-lite",
+        "gpt-4.1":      "gemini-2.5-flash",
+        "gpt-5.4":      "gemini-2.5-flash",
+        "gpt-5.5":      "gemini-2.5-flash",
+        # 相容仍在服役但不再列入本專案新選單的舊多模態模型
+        "gpt-4o-mini":  "gemini-3.1-flash-lite",
+        "gpt-4o":       "gemini-2.5-flash",
+    },
+    "model_mapping": {
+        "gpt-6-luna":   "claude-haiku-5-5",
+        "gpt-6.1-sol":  "claude-sonnet-5-5",
+        "gpt-5.6-luna": "claude-haiku-5-5",
+        "gpt-5.6-terra": "claude-sonnet-5-5",
+        "gpt-5.6-sol": "claude-sonnet-5-5",
+        "gpt-5.4-mini": "claude-haiku-5-5",
+        "gpt-4.1-mini": "claude-haiku-5-5",
+        "gpt-5.4-nano": "claude-haiku-5-5",
+        "gpt-4.1":      "claude-sonnet-5-5",
+        "gpt-5.4":      "claude-sonnet-5-5",
+        "gpt-5.5":      "claude-sonnet-5-5",
+        # 相容仍在服役但不再列入本專案新選單的舊多模態模型
+        "gpt-4o-mini":  "claude-haiku-5-5",
+        "gpt-4o":       "claude-sonnet-5-5",
+    },
+    # === v3.0 Claude 專屬能力(全部預設 ON)===
+    "claude_features": {
+        "prompt_caching": True,         # Phase 1
+        # v3.18 省錢省時預設:翻譯是輕量指令跟隨任務,thinking/reasoning 提高
+        # 反而傷指令遵循(arxiv 2505.14810,OpenAI 路徑 v3.9.8 同結論已套用)。
+        # Sonnet 升級路徑原本每句先吐最多 2000 thinking tokens 才出譯文
+        # = 多 3-8 秒延遲 + 2000 output tokens 費用,品質無增益。
+        # 預設改 OFF;後台 claude_features 開關照常可開回(存檔值優先)。
+        "extended_thinking": False,     # Phase 2(v3.18: True→False)
+        "thinking_budget": 2000,
+        "glossary_grounding": True,     # Phase 3
+        "glossary_max_items": 50,
+        "stop_sequences": True,         # Phase 4
+        "xml_system_prompt": True,      # Phase 5
+        # Phase 6 自動,不用 flag
+        "native_vision": True,          # Phase 7
+        "extended_cache_1h": True,      # Phase 8 — 1 hour TTL
+        "citations": True,              # Phase 9
+        # Phase 10 streaming 用獨立 function
+        # === D3 v3.1 新增 ===
+        "multi_block_caching": True,    # Phase 12 — 多層 cache(stable + dynamic)
+        "files_api_glossary": False,    # Phase 17 — 把 glossary 上傳 Files API(預設 OFF,要先上傳)
+        # === D4 v3.2 新增 ===
+        "adaptive_thinking": True,      # Phase 13 — Opus 4.7 強制 / Sonnet 4.6 推薦
+        "thinking_effort": "low",       # v3.18: medium→low(若開 thinking 也用最低檔)
+        "thinking_display": "auto",     # auto / summarized / omitted
+                                        # auto = Opus 4.7→omitted(快); Sonnet/Opus 4.6→summarized
+        "smart_cache_threshold": True,  # Phase 15 — 用 model-specific token 門檻,而非字元數 1024
+        # === D5 v3.2.2 新增 ===
+        "image_translation_use_claude": True,  # Phase 19 — 切到 Anthropic 時,圖片翻譯也走 Claude vision
+                                                # OFF 時:圖片優先走其他已設定的視覺 provider；統一協調層仍可跨三家接力
+        # === D7 v3.2.3 新增 ===
+        "line_plain_text_mode": True,   # Phase 20 — 防 Claude 輸出 markdown 廢字元(LINE 不渲染)
+                                         # 禁:**粗體** *斜體* `code` # 標題 --- 分隔線 markdown table
+        "ocr_strict_layout": True,      # Phase 21 — OCR 翻譯場景嚴格保版面(行數 / 編號 / 縮排對齊)
+                                         # 偵測訊息含 image block 才啟動
+        # === D8 v3.2.4 新增 ===
+        "assistant_prefill": False,     # Phase 22 — Assistant Prefill(預填回應開頭)
+                                         # 預設 OFF;歐那要時填 assistant_prefill_text 字串
+                                         # 自動偵測 model(Sonnet 4.6 / Opus 4.6+ 跳過)
+        "assistant_prefill_text": "",   # Phase 22 — 自訂 prefill 文字(空字串=不啟用)
+        "cot_thinking_tag": True,       # Phase 23 — XML CoT 引導(讓 Haiku 也能思考)
+        "role_strong": True,            # Phase 24 — 強化 Role(20 年資深譯者身分)
+        # === D9 v3.2.5 新增 ===
+        "output_translation_tag": True,  # Phase 25 — 強制 <translation>...</translation> XML 包裝
+                                         # v3.2.6 預設改 True:後端 regex 抽 tag 內內容,
+                                         # 徹底丟棄 LLM 元評論(Wait/I notice/However/If English:/markdown)
+                                         # 不依賴 LLM 聽話,後端強制抽取治本
+        "success_criteria": True,       # Phase 26 — system prompt 加 <success_criteria> 段
+                                         # 官方:「State expected outcome and success criteria」
+    },
+    "last_updated": "",
+}
+
+_config_lock = threading.RLock()
+_current_config = None
+_last_config_mtime = 0  # 修跨 worker 同步 — 記錄上次讀 config 時磁碟檔 mtime
+ERROR_POLICY_BUILD_ID = "2026-09-11.5-typed-transport-recovery"
+_openai_client = None
+_anthropic_client = None
+_gemini_client = None   # v3.21
+_registered_glossary = None
+
+# Provider 健康狀態只存於目前 worker；用途是暫時避開連續失敗的供應商，
+# 不寫入設定檔，也不會永久停用。多 worker 各自觀察自己的連線狀況較安全。
+_provider_health_lock = threading.RLock()
+_provider_health = {
+    "openai": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+    "anthropic": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+    "gemini": {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0},
+}
+
+_PROVIDER_CAPABILITIES = {
+    "openai": {"chat", "vision", "batch"},
+    "anthropic": {"chat", "vision", "batch"},
+    "gemini": {"chat", "vision"},
+}
+
+# === D3 Phase 17: Files API state ===
+# 把整個 glossary 上傳到 Anthropic Files API,後續 messages 內只引用 file_id
+# 避免每次都送 2-5KB glossary 文字
+_uploaded_glossary_file_id = None  # 上傳成功後存的 file_id
+_uploaded_glossary_hash = None      # 用來判斷 glossary 有沒有改過需要重傳
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Config 讀寫
+# ═══════════════════════════════════════════════════════════════════
+def _migrate_config_models(cfg):
+    """把磁碟中的舊 mapping key 遷移到現行模型與 CP 路由。
+
+    v3.36 intentionally migrates the former expensive Gemini 3.5 Flash text
+    upgrade route to stable Gemini 2.5 Flash.  This is a one-way migration only
+    for values that still equal the old project default; an administrator who
+    later chooses another model is not overwritten.
+    """
+    for field in ("model_mapping", "gemini_model_mapping"):
+        defaults = dict(DEFAULT_CONFIG.get(field, {}))
+        saved = cfg.get(field, {})
+        if isinstance(saved, dict):
+            for old_key, target in saved.items():
+                new_key = normalize_openai_model(old_key)
+                defaults[new_key] = target
+        cfg[field] = defaults
+
+    anthropic_cfg = cfg.setdefault("anthropic", {})
+    anthropic_cfg["default_model"] = normalize_anthropic_model(
+        anthropic_cfg.get("default_model"), "claude-haiku-5-5")
+    for _mm_key, _mm_val in list((cfg.get("model_mapping") or {}).items()):
+        if isinstance(_mm_val, str) and _mm_val.startswith("claude-"):
+            cfg["model_mapping"][_mm_key] = normalize_anthropic_model(_mm_val)
+
+    gemini_cfg = cfg.setdefault("gemini", {})
+    if gemini_cfg.get("upgrade_model") in (None, "", "gemini-3.5-flash"):
+        gemini_cfg["upgrade_model"] = "gemini-2.5-flash"
+
+    gm = cfg.setdefault("gemini_model_mapping", {})
+    for key in ("gpt-6.1-sol", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-4.1", "gpt-5.4", "gpt-5.5", "gpt-4o"):
+        if gm.get(key) in (None, "", "gemini-3.5-flash"):
+            gm[key] = "gemini-2.5-flash"
+
+    policy = cfg.setdefault("failover_policy", {})
+    old_order = list(policy.get("provider_order") or [])
+    # v3.37 root-fix: legacy configs are migrated to one strict recovery chain.
+    # If Claude has no credit, ChatGPT must be tried before Gemini.
+    policy["provider_order"] = list(dict.fromkeys(
+        ["anthropic", "openai", "gemini"] + old_order
+    ))
+    policy["strict_failover_order"] = True
+    policy["adaptive_backup_order"] = False
+    if not isinstance(cfg.get("quota_exhausted_providers"), dict):
+        cfg["quota_exhausted_providers"] = {}
+    # Old versions applied OpenAI's human-readable quota message to Gemini.
+    # A recoverable request/token limit then survived restarts as an empty
+    # credit balance. Reclassify only records with affirmative rate-limit
+    # evidence. Keep genuine/unknown billing blocks and the selected primary.
+    blocked = cfg["quota_exhausted_providers"]
+    for provider, record in list(blocked.items()):
+        if _legacy_temporary_quota_block(provider, record):
+            blocked.pop(provider)
+    if not isinstance(cfg.get("auto_switch_state"), dict):
+        cfg["auto_switch_state"] = {}
+    return cfg
+
+
+def _load_config_from_disk():
+    try:
+        if os.path.exists(PROVIDER_CONFIG_PATH):
+            with open(PROVIDER_CONFIG_PATH, "r", encoding="utf-8") as f:
+                disk_cfg = json.load(f)
+            merged = json.loads(json.dumps(DEFAULT_CONFIG))
+            def _deep_merge(dst, src):
+                for k, v in src.items():
+                    if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                        _deep_merge(dst[k], v)
+                    else:
+                        dst[k] = v
+            _deep_merge(merged, disk_cfg)
+            return _migrate_config_models(merged)
+    except Exception as e:
+        print(f"[ai_provider] WARN: 讀 config 失敗 {e}", flush=True)
+    return json.loads(json.dumps(DEFAULT_CONFIG))
+
+
+def _save_config_to_disk(cfg):
+    global _last_config_mtime
+    try:
+        cfg["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(PROVIDER_CONFIG_PATH))
+        descriptor, temporary = tempfile.mkstemp(prefix=".ai-provider-", dir=directory)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, PROVIDER_CONFIG_PATH)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        # 存檔後更新 mtime,避免自己的 _ensure_initialized 又 reload 一次
+        try:
+            _last_config_mtime = os.path.getmtime(PROVIDER_CONFIG_PATH)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[ai_provider] ERROR: 存 config 失敗 {e}", flush=True)
+        return False
+
+
+def _init_config():
+    global _current_config
+    cfg = _load_config_from_disk()
+    if not cfg["openai"].get("api_key"):
+        cfg["openai"]["api_key"] = os.environ.get("OPENAI_API_KEY", "")
+    if not cfg["anthropic"].get("api_key"):
+        cfg["anthropic"]["api_key"] = os.environ.get("ANTHROPIC_API_KEY", "")
+    # v3.21: Gemini key 環境變數(GEMINI_API_KEY 或 GOOGLE_API_KEY 都接受)
+    if not cfg.get("gemini", {}).get("api_key"):
+        cfg.setdefault("gemini", {})["api_key"] = (
+            os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", ""))
+    _current_config = cfg
+
+
+def _ensure_initialized():
+    """每次都重讀磁碟 — 修跨 Gunicorn worker 同步 bug
+    
+    為什麼這樣做:
+      Render 用 gunicorn --workers N 跑,每個 worker 是獨立 process
+      各自有自己的 _current_config global 變數
+      用戶在後台切換 provider → 只有「處理切換 request 的那個 worker」更新了
+      其他 worker 的 _current_config 還是舊值
+      → 用戶下次翻譯被別的 worker 處理時,讀到舊值,打到舊 provider
+    
+    解法:每次 _ensure_initialized() 都檢查磁碟檔有沒有更新,有就 reload
+    成本:每次多一個 stat() + 可能一次 read(磁碟很快,影響可忽略)
+    """
+    global _current_config, _last_config_mtime
+    with _config_lock:
+        try:
+            mtime = os.path.getmtime(PROVIDER_CONFIG_PATH) if os.path.exists(PROVIDER_CONFIG_PATH) else 0
+        except Exception:
+            mtime = 0
+        # 第一次 init,或磁碟檔有更新 → 重讀
+        if _current_config is None or mtime > _last_config_mtime:
+            _init_config()
+            _last_config_mtime = mtime
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Clients
+# ═══════════════════════════════════════════════════════════════════
+@_provider_timed_stage("client_setup")
+def _get_openai_client():
+    global _openai_client
+    _ensure_initialized()
+    with _config_lock:
+        api_key = _current_config["openai"].get("api_key", "")
+        if not api_key:
+            return None
+        if _openai_client is not None and getattr(_openai_client, "_jy_key", None) == api_key:
+            return _openai_client
+        try:
+            from openai import OpenAI
+            _openai_client = OpenAI(api_key=api_key, timeout=90.0, max_retries=0)  # v3.2.7: 30→90 配合長訊息翻譯
+            _openai_client._jy_key = api_key
+            return _openai_client
+        except Exception as e:
+            print(f"[ai_provider] OpenAI client 建立失敗 {e}", flush=True)
+            return None
+
+
+@_provider_timed_stage("client_setup")
+def _get_anthropic_client():
+    global _anthropic_client
+    _ensure_initialized()
+    with _config_lock:
+        api_key = _current_config["anthropic"].get("api_key", "")
+        if not api_key:
+            return None
+        if _anthropic_client is not None and getattr(_anthropic_client, "_jy_key", None) == api_key:
+            return _anthropic_client
+        try:
+            from anthropic import Anthropic
+            # Phase 8: 啟用 extended-cache-ttl beta header(1 hour cache 需要)
+            extra_headers = {}
+            features = _current_config.get("claude_features", {})
+            if features.get("extended_cache_1h", True):
+                extra_headers["anthropic-beta"] = "extended-cache-ttl-2025-04-11"
+            _anthropic_client = Anthropic(
+                api_key=api_key,
+                timeout=120.0,
+                max_retries=0,
+                default_headers=extra_headers if extra_headers else None,
+            )
+            _anthropic_client._jy_key = api_key
+            return _anthropic_client
+        except Exception as e:
+            print(f"[ai_provider] Anthropic client 建立失敗 {e}", flush=True)
+            return None
+
+
+@_provider_timed_stage("client_setup")
+def _get_gemini_client():
+    """v3.21: Gemini 走官方 OpenAI 相容端點 — 重用 OpenAI SDK,零新依賴。
+    https://ai.google.dev/gemini-api/docs/openai
+    """
+    global _gemini_client
+    _ensure_initialized()
+    with _config_lock:
+        api_key = _current_config.get("gemini", {}).get("api_key", "")
+        if not api_key:
+            return None
+        if _gemini_client is not None and getattr(_gemini_client, "_jy_key", None) == api_key:
+            return _gemini_client
+        try:
+            from openai import OpenAI
+            _gemini_client = OpenAI(
+                api_key=api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                timeout=90.0,
+                max_retries=0,
+            )
+            _gemini_client._jy_key = api_key
+            return _gemini_client
+        except Exception as e:
+            print(f"[ai_provider] Gemini client 建立失敗 {e}", flush=True)
+            return None
+
+
+@_provider_timed_stage("request_options")
+def _client_with_limits(client, timeout):
+    """建立單次呼叫 client，關閉 SDK 隱藏重試並套用本協調層分配的期限。"""
+    try:
+        return client.with_options(timeout=float(timeout), max_retries=0)
+    except (AttributeError, TypeError):
+        # 測試替身或舊 SDK 沒有 with_options 時仍可運作；呼叫參數中的 timeout
+        # 會保留為第二道限制。
+        return client
+
+
+_sdk_prepare_lock = threading.Lock()
+_prepared_translation_sdks = set()
+_inherited_parent_clients = ()
+
+
+def _after_worker_fork():
+    global _config_lock, _provider_health_lock, _sdk_prepare_lock
+    global _openai_client, _anthropic_client, _gemini_client, _inherited_parent_clients
+    _config_lock = threading.RLock()
+    _provider_health_lock = threading.RLock()
+    _sdk_prepare_lock = threading.Lock()
+    # Do not call SDK cleanup in the fork callback: it may take a mutex held
+    # by a vanished parent thread. Keep references, but never reuse its clients.
+    _inherited_parent_clients = (*_inherited_parent_clients,
+                                _openai_client, _anthropic_client, _gemini_client)
+    _openai_client = _anthropic_client = _gemini_client = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_worker_fork)
+
+
+def prepare_translation_sdk_resources():
+    """Load configured translation SDK classes during application startup.
+
+    Imports only: no clients, sockets, API requests, credentials in logs or
+    background threads. Modules can safely be shared by a preloaded Gunicorn
+    parent; live HTTP clients still belong to their normal request process.
+    OpenAI and Gemini use the same SDK resources and need one import only.
+    """
+    families = list(dict.fromkeys("anthropic" if provider == "anthropic" else "openai"
+                                 for provider in get_available_providers("chat")))
+    rows = []
+    for family in families:
+        with _sdk_prepare_lock:
+            if family in _prepared_translation_sdks:
+                continue
+            started = time.monotonic()
+            module = "anthropic.resources.messages" if family == "anthropic" else "openai.resources.chat"
+            try:
+                importlib.import_module(module)
+                _prepared_translation_sdks.add(family)
+                row = {"sdk": family, "status": "loaded", "http_requests": 0,
+                       "imports_ms": round((time.monotonic() - started) * 1000, 2)}
+            except Exception as exc:
+                # A missing/unsupported optional SDK must not stop the server
+                # or disable another configured provider's existing failover.
+                row = {"sdk": family, "status": "unavailable", "http_requests": 0,
+                       "error_type": type(exc).__name__}
+            rows.append(row)
+            logging.getLogger("app").info("[SDKPrepared] %s", json.dumps(row, sort_keys=True))
+    return rows
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 對外 API
+# ═══════════════════════════════════════════════════════════════════
+def get_active_provider():
+    _ensure_initialized()
+    return _current_config.get("active_provider", "openai")
+
+
+def _provider_has_key(provider):
+    _ensure_initialized()
+    return bool((_current_config or {}).get(provider, {}).get("api_key"))
+
+
+def _provider_quota_blocked(provider):
+    """True when a provider returned an explicit credit/quota exhaustion error.
+
+    This state is persisted in ai_provider_config.json so every Gunicorn worker
+    skips the depleted provider.  It is intentionally not time-based: refill is
+    an external billing event, so only an admin switch/key update clears it.
+    """
+    _ensure_initialized()
+    blocked = (_current_config or {}).get("quota_exhausted_providers", {})
+    return bool(isinstance(blocked, dict) and blocked.get(provider))
+
+
+def get_quota_exhausted_providers():
+    """Return a safe copy for admin diagnostics/tests."""
+    _ensure_initialized()
+    with _config_lock:
+        value = (_current_config or {}).get("quota_exhausted_providers", {})
+        return json.loads(json.dumps(value if isinstance(value, dict) else {}))
+
+
+def _provider_supports(provider, capability="chat"):
+    return capability in _PROVIDER_CAPABILITIES.get(provider, set())
+
+
+def _circuit_is_open(provider, now=None):
+    now = time.monotonic() if now is None else now
+    with _provider_health_lock:
+        return float(_provider_health.get(provider, {}).get("open_until", 0.0) or 0.0) > now
+
+
+def _record_provider_success(provider, latency_seconds=None):
+    _ensure_initialized()
+    policy = (_current_config or {}).get("failover_policy", {})
+    alpha = min(1.0, max(0.01, float(policy.get("latency_ewma_alpha", 0.25) or 0.25)))
+    with _provider_health_lock:
+        state = _provider_health.setdefault(provider, {})
+        state.update({"failures": 0, "open_until": 0.0, "last_error": ""})
+        if latency_seconds is not None:
+            latency = max(0.0, float(latency_seconds))
+            prev = state.get("latency_ewma")
+            state["latency_ewma"] = latency if prev is None else (alpha * latency + (1.0 - alpha) * float(prev))
+            state["successes"] = int(state.get("successes", 0) or 0) + 1
+
+
+def _record_provider_failure(provider, err):
+    _ensure_initialized()
+    policy = (_current_config or {}).get("failover_policy", {})
+    threshold = max(1, int(policy.get("circuit_breaker_failures", 2) or 2))
+    cooldown = max(1.0, float(policy.get("circuit_breaker_cooldown_seconds", 60) or 60))
+    with _provider_health_lock:
+        state = _provider_health.setdefault(
+            provider, {"failures": 0, "open_until": 0.0, "last_error": "", "latency_ewma": None, "successes": 0})
+        state["failures"] = int(state.get("failures", 0) or 0) + 1
+        state["last_error"] = str(err)[:300]
+        if state["failures"] >= threshold:
+            state["open_until"] = time.monotonic() + cooldown
+
+
+def reset_provider_health(provider=None):
+    """測試/管理用途：清除暫時熔斷狀態，不變更 API key 或主力設定。"""
+    targets = (provider,) if provider else tuple(_PROVIDER_CAPABILITIES)
+    with _provider_health_lock:
+        for name in targets:
+            _provider_health[name] = {
+                "failures": 0, "open_until": 0.0, "last_error": "",
+                "latency_ewma": None, "successes": 0,
+            }
+
+
+def get_provider_health_snapshot():
+    """Return a copy suitable for admin diagnostics and tests."""
+    with _provider_health_lock:
+        return {name: dict(state) for name, state in _provider_health.items()}
+
+
+def get_available_providers(capability="chat", preference=None, include_open_circuits=False):
+    """回傳具備指定能力且已設定 key 的 provider，順序即實際接力順序。
+
+    preference 可指定優先順序；未指定時主力優先，再依 failover_policy.provider_order。
+    已明確回報額度耗盡的 provider 會跨 worker 持久跳過，直到管理員修復。
+    熔斷中的 provider 在仍有其他可用者時會略過；若全部都熔斷，允許一次探測，
+    避免所有服務在冷卻期間被永久鎖死。
+    """
+    _ensure_initialized()
+    active = get_active_provider()
+    configured_order = list(((_current_config or {}).get("failover_policy", {})
+                             .get("provider_order") or ("anthropic", "openai", "gemini")))
+    requested = list(preference or [])
+    order = []
+    for name in ([active] if not requested else []) + requested + configured_order + ["openai", "gemini", "anthropic"]:
+        if name in _PROVIDER_CAPABILITIES and name not in order:
+            order.append(name)
+    eligible = [
+        p for p in order
+        if _provider_has_key(p)
+        and _provider_supports(p, capability)
+        and not _provider_quota_blocked(p)
+    ]
+    if include_open_circuits:
+        return eligible
+    closed = [p for p in eligible if not _circuit_is_open(p)]
+    candidates = closed or eligible
+
+    # Preserve the explicitly selected first provider.  Only rank backups;
+    # this avoids silently changing the user's cost/provider preference while
+    # still improving tail latency after a failure.
+    _failover_policy = ((_current_config or {}).get("failover_policy", {}) or {})
+    strict_order = bool(_failover_policy.get("strict_failover_order", True))
+    adaptive = bool(_failover_policy.get("adaptive_backup_order", False)) and not strict_order
+    if adaptive and len(candidates) > 2:
+        first, rest = candidates[0], candidates[1:]
+        with _provider_health_lock:
+            def _score(name):
+                state = _provider_health.get(name, {})
+                latency = state.get("latency_ewma")
+                # Unknown providers remain in configured order behind measured
+                # fast providers but ahead of a clearly slow one only after
+                # enough evidence accumulates.
+                return (latency is None, float(latency or 9999.0),
+                        int(state.get("failures", 0) or 0))
+            rest = sorted(rest, key=_score)
+        candidates = [first] + rest
+    return candidates
+
+
+def has_available_provider(capability="chat"):
+    return bool(get_available_providers(capability=capability))
+
+
+def get_provider_diagnostics(capability="chat"):
+    """Report eligibility separately from a successful live request."""
+    _ensure_initialized()
+    rows = []
+    for provider, variable in (("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY"),
+                               ("gemini", "GEMINI_API_KEY")):
+        key = str((_current_config or {}).get(provider, {}).get("api_key") or "")
+        configured = bool(key.strip())
+        blocked = _provider_quota_blocked(provider)
+        supported = _provider_supports(provider, capability)
+        reason = ("missing_key" if not configured else "unsupported_capability" if not supported
+                  else "quota_exhausted" if blocked else "circuit_open" if _circuit_is_open(provider) else "eligible")
+        env_key = os.environ.get(variable, "") or (os.environ.get("GOOGLE_API_KEY", "") if provider == "gemini" else "")
+        rows.append({"provider": provider, "configured": configured, "quota_blocked": blocked,
+                     "reason": reason, "eligible": reason == "eligible",
+                     "environment_matches": bool(key and env_key and key == env_key),
+                     "environment_configured": bool(env_key)})
+    return {"active_provider": get_active_provider(), "providers": rows,
+            "error_policy_build": ERROR_POLICY_BUILD_ID,
+            "available": get_available_providers(capability), "capability": capability}
+
+
+def complete_provider_probe(provider):
+    """Clear a stale exhaustion flag after that provider actually succeeded."""
+    _ensure_initialized()
+    with _config_lock:
+        _current_config.setdefault("quota_exhausted_providers", {}).pop(provider, None)
+        saved = _save_config_to_disk(_current_config)
+    reset_provider_health(provider)
+    return saved
+
+
+def get_native_client(provider):
+    """供同專案的原生 API 模組（Batch/TTS 以外）取得已套用統一設定的 client。"""
+    if provider == "openai":
+        return _get_openai_client()
+    if provider == "anthropic":
+        return _get_anthropic_client()
+    if provider == "gemini":
+        return _get_gemini_client()
+    return None
+
+
+def set_active_provider(provider, *, manual=False, respect_auto_switch=False):
+    """Set the main provider.
+
+    manual=True means an administrator intentionally selected this provider
+    after refill/testing, so its persisted exhausted flag is cleared.
+    respect_auto_switch=True is used while restoring old bot_settings: a stale
+    saved provider must not undo a newer automatic billing failover.
+    """
+    if provider not in ("openai", "anthropic", "gemini"):
+        return False, f"unknown provider: {provider}"
+    _ensure_initialized()
+    with _config_lock:
+        state = (_current_config or {}).get("auto_switch_state", {})
+        if (respect_auto_switch and isinstance(state, dict) and state.get("active")
+                and provider != (_current_config or {}).get("active_provider")):
+            return False, "保留額度耗盡後的自動切換主力"
+        blocked = (_current_config or {}).setdefault("quota_exhausted_providers", {})
+        if provider in blocked and not manual:
+            return False, f"{provider} 已標記額度耗盡，需管理員手動切回或更新 API key"
+        if manual:
+            blocked.pop(provider, None)
+            _current_config["auto_switch_state"] = {}
+        _current_config["active_provider"] = provider
+        if _save_config_to_disk(_current_config):
+            reset_provider_health(provider)
+            return True, f"切換到 {provider}"
+        return False, "存檔失敗"
+
+
+def update_provider_key(provider, api_key):
+    if provider not in ("openai", "anthropic", "gemini"):
+        return False, f"unknown provider: {provider}"
+    _ensure_initialized()
+    with _config_lock:
+        previous = json.loads(json.dumps(_current_config))
+        _current_config.setdefault(provider, {})["api_key"] = (api_key or "").strip()
+        # A new/re-entered key is the strongest signal that billing credentials
+        # were repaired.  Allow this provider to participate again, but do not
+        # silently make it primary; the admin can switch it back explicitly.
+        _current_config.setdefault("quota_exhausted_providers", {}).pop(provider, None)
+        if _save_config_to_disk(_current_config):
+            global _openai_client, _anthropic_client, _gemini_client
+            if provider == "openai":
+                _openai_client = None
+            elif provider == "gemini":
+                _gemini_client = None
+            else:
+                _anthropic_client = None
+            return True, f"{provider} key 已更新"
+        _current_config.clear()
+        _current_config.update(previous)
+        return False, "存檔失敗"
+
+
+def update_openai_features(features):
+    """v3.25: 後台更新 OpenAI 設定(flex_background 等)。"""
+    if not isinstance(features, dict):
+        return False, "features 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        cur = _current_config.get("openai_features", {})
+        cur.update(features)
+        _current_config["openai_features"] = cur
+        if _save_config_to_disk(_current_config):
+            return True, "OpenAI features 已更新"
+        return False, "存檔失敗"
+
+
+def update_gemini_features(features):
+    """v3.21: 後台更新 Gemini 設定(reasoning_effort 等)。"""
+    if not isinstance(features, dict):
+        return False, "features 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        cur = _current_config.get("gemini_features", {})
+        cur.update(features)
+        _current_config["gemini_features"] = cur
+        if _save_config_to_disk(_current_config):
+            return True, "Gemini features 已更新"
+        return False, "存檔失敗"
+
+
+def update_gemini_models(default_model=None, upgrade_model=None):
+    """v3.22: 後台更新 Gemini 短/長訊息模型(與 Claude 雙模型同模式)。"""
+    _ensure_initialized()
+    with _config_lock:
+        g = _current_config.setdefault("gemini", {})
+        if default_model:
+            g["default_model"] = str(default_model).strip()
+        if upgrade_model:
+            g["upgrade_model"] = str(upgrade_model).strip()
+        if _save_config_to_disk(_current_config):
+            return True, "Gemini 模型已更新"
+        return False, "存檔失敗"
+
+
+def get_gemini_models():
+    """v3.22: 回傳 (短訊息模型, 長訊息模型) — pick_model 用,後台改了立即生效。"""
+    _ensure_initialized()
+    g = _current_config.get("gemini", {}) if _current_config else {}
+    return (g.get("default_model") or "gemini-3.1-flash-lite",
+            g.get("upgrade_model") or "gemini-2.5-flash")
+
+
+def update_model_mapping(mapping):
+    if not isinstance(mapping, dict):
+        return False, "mapping 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        _current_config["model_mapping"] = mapping
+        if _save_config_to_disk(_current_config):
+            return True, "model mapping 已更新"
+        return False, "存檔失敗"
+
+
+def update_claude_features(features):
+    if not isinstance(features, dict):
+        return False, "features 必須是 dict"
+    _ensure_initialized()
+    with _config_lock:
+        cur = _current_config.get("claude_features", {})
+        cur.update(features)
+        _current_config["claude_features"] = cur
+        # extended_cache_1h 改了要重建 client
+        if "extended_cache_1h" in features:
+            global _anthropic_client
+            _anthropic_client = None
+        if _save_config_to_disk(_current_config):
+            return True, "Claude features 已更新"
+        return False, "存檔失敗"
+
+
+def get_current_config_safe():
+    _ensure_initialized()
+    with _config_lock:
+        cfg = json.loads(json.dumps(_current_config))
+        for p in ("openai", "anthropic", "gemini"):
+            if p not in cfg or not isinstance(cfg.get(p), dict):
+                continue
+            k = cfg[p].get("api_key", "")
+            if k:
+                cfg[p]["api_key_preview"] = k[:8] + "..." + k[-4:] if len(k) > 12 else "***"
+                cfg[p]["api_key_set"] = True
+            else:
+                cfg[p]["api_key_preview"] = "(未設定)"
+                cfg[p]["api_key_set"] = False
+            cfg[p].pop("api_key", None)
+        cfg["_glossary_registered"] = _registered_glossary is not None
+        cfg["_glossary_size"] = len(_registered_glossary) if _registered_glossary else 0
+        return cfg
+
+
+def _resolve_anthropic_model(openai_model):
+    """Claude 名稱原樣使用；OpenAI 舊名稱先遷移，再查現行 mapping。"""
+    _ensure_initialized()
+    if openai_model and isinstance(openai_model, str) and openai_model.startswith("claude-"):
+        return normalize_anthropic_model(openai_model)
+    normalized = normalize_openai_model(openai_model)
+    mapping = _current_config.get("model_mapping", {})
+    if normalized in mapping:
+        return normalize_anthropic_model(mapping[normalized])
+    return normalize_anthropic_model(
+        _current_config["anthropic"].get("default_model", "claude-haiku-5-5"))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2 Phase 15: Smart Cache Threshold(按 model-specific token 門檻)
+# ═══════════════════════════════════════════════════════════════════
+# 官方公布的 cache 最小寫入門檻(低於此 → silent fail,cache_creation=0,照付全價):
+#   Opus 4.7:   2,048 tokens
+#   Haiku 4.5:  4,096 tokens
+#   Sonnet 5 / Sonnet 4.6: 1,024 tokens
+#   舊模型(Sonnet 4.5 / Opus 4.1 / Sonnet 3.7): 1,024 tokens
+#
+# 舊版邏輯 `len(system_text) >= 1024` 是字元數,中文約 0.6 token/字
+# → 1024 字元 ≈ 600 tokens,對 Sonnet 4.6 / Haiku 4.5 都 silent fail!
+# ═══════════════════════════════════════════════════════════════════
+
+# 模型 → cache 最小 token 門檻
+_MODEL_CACHE_MIN_TOKENS = {
+    # Claude 5.5 系列：Haiku 5.5 官方最小可快取 512 tokens（模型頁「须知事项」）。
+    # Sonnet/Opus 5.5 保守取 1024。
+    "claude-haiku-5-5":         512,
+    "claude-sonnet-5-5":        1024,
+    "claude-opus-5-5":          1024,
+    "claude-opus-4-7":          2048,
+    "claude-haiku-4-5":         4096,
+    "claude-sonnet-5":          1024,
+    "claude-sonnet-4-6":        1024,
+    # 舊模型 fallback
+    "claude-sonnet-4-5":        1024,
+    "claude-opus-4-5":          1024,
+    "claude-opus-4-1":          1024,
+    "claude-sonnet-3-7":        1024,
+}
+
+
+# === v3.2.4 Phase 22: Assistant Prefill ===
+# Anthropic 官方明文(2026-02 起):部分模型不支援 prefill,送出會 400
+# https://platform.claude.com/docs/en/build-with-claude/working-with-messages
+# "Prefilling is not supported on Claude Mythos Preview, Claude Opus 4.7,
+#  Claude Opus 4.6, and Claude Sonnet 4.6."
+_MODELS_NO_PREFILL = (
+    "-5-5",            # Haiku/Sonnet/Opus 5.5：prefill 回 400（遷移指南）
+    "claude-fable",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-mythos",
+)
+
+
+def _supports_prefill(anthropic_model):
+    """Check whether the given Anthropic model supports assistant prefill.
+    
+    回傳 True/False。歐那 Haiku 4.5 → True,Sonnet 4.6 / Opus 4.6+ → False
+    """
+    if not anthropic_model or not isinstance(anthropic_model, str):
+        return False
+    m = anthropic_model.lower()
+    for blocked in _MODELS_NO_PREFILL:
+        if blocked in m:
+            return False
+    return True
+
+
+def _get_cache_min_tokens(anthropic_model):
+    """根據 model 名稱回傳 cache 最小 token 門檻"""
+    m = (anthropic_model or "").lower()
+    for key, threshold in _MODEL_CACHE_MIN_TOKENS.items():
+        if key in m:
+            return threshold
+    # 未知模型保守用最高門檻
+    return 4096
+
+
+def _estimate_tokens_from_text(text):
+    """粗估 text 的 token 數(不打 API,本機速算)
+    
+    經驗法則:
+      - 中文:1 字 ≈ 0.6 tokens
+      - 英文:1 字 ≈ 1.3 tokens(平均 4 字元 + 空白)
+      - 印尼文:同英文
+      - XML/markdown 標籤:當英文計
+    
+    LINE bot system prompt 是中英印混雜,取中位數 0.5 tokens/字元
+    """
+    if not text:
+        return 0
+    return int(len(text) * 0.5)
+
+
+def _should_apply_cache(system_text, anthropic_model, smart_mode=True):
+    """判斷是否該套 cache_control
+    
+    smart_mode=True  → 用 model-specific token 門檻(v3.2 修 BUG 後的正確邏輯)
+    smart_mode=False → 舊邏輯 len >= 1024 字元(留著當降級選項)
+    
+    Returns: (should_cache, threshold_used, estimated_tokens)
+    """
+    if not system_text:
+        return False, 0, 0
+    if not smart_mode:
+        # 舊邏輯
+        return len(system_text) >= 1024, 1024, len(system_text)
+    threshold = _get_cache_min_tokens(anthropic_model)
+    est_tokens = _estimate_tokens_from_text(system_text)
+    return est_tokens >= threshold, threshold, est_tokens
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2 Phase 13+14: Adaptive Thinking + Display Mode
+# ═══════════════════════════════════════════════════════════════════
+# Opus 4.7:     強制 adaptive(舊 enabled mode 已 removed,丟了會 400 error)
+# Sonnet 4.6:   推薦 adaptive(舊 enabled mode deprecated,未來移除)
+# Opus 4.5/4.6: 兩種都行,adaptive 較推薦
+# 其他:          只能舊的 enabled + budget_tokens
+# Haiku 全系:    無 thinking 功能
+#
+# effort:
+#   low     — 簡單問題不思考
+#   medium  — 平衡(Sonnet 4.6 官方推薦預設)
+#   high    — 幾乎總是思考(adaptive 預設值)
+#   xhigh   — 只有 Opus 4.7 支援
+#
+# display:
+#   summarized — 回傳 thinking 摘要(Sonnet/Opus 4.6 預設)
+#   omitted    — 不回 thinking 文字,只回最終翻譯(Opus 4.7 預設,加快首 token)
+# ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# 2026-10-20 Claude 5.5 系列（Haiku 5.5 / Sonnet 5.5 / Opus 5.5）
+# 官方遷移指南 https://platform.claude.com/docs/zh-CN/models/haiku-5-5/migration-guide ：
+#   - ID 無日期後綴：claude-haiku-5-5 / claude-sonnet-5-5 / claude-opus-5-5
+#   - temperature / top_p / top_k 必須省略（非預設值回 400）
+#   - thinking 預設 adaptive，深度用 output_config.effort；可送 {"type":"disabled"}
+#   - assistant prefill 回 400
+#   - 最小可快取 prompt 512 tokens（Haiku 5.5）
+#   - tokenizer 同 Claude 4.7+，同文字 token 數約 +30%
+# ═══════════════════════════════════════════════════════════════════
+ANTHROPIC_MODEL_REPLACEMENTS = {
+    "claude-haiku-4-5": "claude-haiku-5-5",
+    "claude-haiku-4-5-20251001": "claude-haiku-5-5",
+    "claude-3-5-haiku-latest": "claude-haiku-5-5",
+    "claude-3-5-haiku-20241022": "claude-haiku-5-5",
+    "claude-3-haiku-20240307": "claude-haiku-5-5",
+    "claude-sonnet-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-6": "claude-sonnet-5-5",
+    "claude-sonnet-4-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-5-20250929": "claude-sonnet-5-5",
+    "claude-opus-5": "claude-opus-5-5",
+}
+
+
+def normalize_anthropic_model(model, fallback="claude-haiku-5-5"):
+    """遷移已被取代的 Claude ID（Haiku 4.5 → 5.5、Sonnet 5 → 5.5）。
+
+    5.5 系列同時更便宜、更新（Haiku 5.5 $0.10/$0.50 vs Haiku 4.5 $1/$5；
+    Sonnet 5.5 $2/$10 vs Sonnet 5 $3/$15），因此舊設定一律前進遷移。
+    非 claude- 名稱原樣回傳。
+    """
+    raw = str(model or "").strip()
+    if not raw:
+        return fallback
+    low = raw.lower()
+    if not low.startswith("claude-"):
+        return raw
+    return ANTHROPIC_MODEL_REPLACEMENTS.get(low, raw)
+
+
+def _model_is_claude_55_family(anthropic_model):
+    """Haiku 5.5 / Sonnet 5.5 / Opus 5.5 / Fable / Mythos：新一代參數契約。"""
+    m = (anthropic_model or "").lower()
+    return any(k in m for k in ("-5-5", "fable", "mythos"))
+
+
+def _claude_translation_effort(reasoning_effort):
+    """把 app 的 OpenAI 式 reasoning_effort 轉成 Claude effort / thinking 決策。
+
+    回傳 (thinking_cfg, effort)。翻譯是指令遵循任務：簡單句關閉思考，
+    有否定/條件/多句關係的句子才保留低量自適應思考。
+    """
+    value = str(reasoning_effort or "").strip().lower()
+    if value in ("none", "minimal"):
+        return {"type": "disabled"}, "low"
+    if value in ("medium", "high", "max", "xhigh"):
+        return {"type": "adaptive"}, ("high" if value in ("high", "max", "xhigh") else "medium")
+    # low / 未指定：adaptive + low，簡單請求模型會自行跳過思考
+    return {"type": "adaptive"}, "low"
+
+
+def _model_is_sonnet5(anthropic_model):
+    return "sonnet-5" in (anthropic_model or "").lower()
+
+
+def _model_supports_adaptive(anthropic_model):
+    """Opus 4.6+/4.7 + Sonnet 4.6/5 + 全部 5.5 系列支援 adaptive thinking。"""
+    m = (anthropic_model or "").lower()
+    return _model_is_claude_55_family(m) or any(
+        k in m for k in ["opus-4-7", "opus-4-6", "sonnet-4-6", "sonnet-5"])
+
+
+def _model_requires_adaptive(anthropic_model):
+    """不接受 legacy budget thinking 的模型。"""
+    m = (anthropic_model or "").lower()
+    return "opus-4-7" in m or "sonnet-5" in m or _model_is_claude_55_family(m)
+
+
+def _model_supports_thinking(anthropic_model):
+    """Haiku 4.5 以前的 Haiku 不支援 thinking；Haiku 5.5 起為 adaptive。"""
+    m = (anthropic_model or "").lower()
+    if _model_is_claude_55_family(m):
+        return True
+    return "haiku" not in m
+
+
+def _normalize_effort(effort, anthropic_model):
+    """把 effort 字串標準化,避免不支援的值丟 400
+    
+    Sonnet 4.6 支援: low / medium / high
+    Opus 4.7      支援: low / medium / high / xhigh
+    Opus 4.6      支援: low / medium / high
+    """
+    valid = {"low", "medium", "high", "max", "xhigh"}
+    eff = (effort or "medium").lower().strip()
+    if eff not in valid:
+        eff = "medium"
+    # xhigh is available on Sonnet 5 and selected Opus generations.
+    m = (anthropic_model or "").lower()
+    if eff == "xhigh" and not any(k in m for k in ("sonnet-5", "opus-4-7", "opus-4-8")) \
+            and not _model_is_claude_55_family(m):
+        eff = "high"
+    return eff
+
+
+def _resolve_thinking_display(display_pref, anthropic_model):
+    """auto → Opus 4.7 omitted / 其他 summarized
+    summarized / omitted → 照原樣
+    """
+    pref = (display_pref or "auto").lower()
+    if pref in ("summarized", "omitted"):
+        return pref
+    # auto
+    if "opus-4-7" in (anthropic_model or "").lower():
+        return "omitted"
+    return "summarized"
+
+
+def _pick_thinking_config(features, anthropic_model):
+    """v3.2 核心:根據 model 自動選 adaptive 或 legacy thinking config
+    
+    Returns: 
+      thinking_dict | None  — 直接丟給 call_kwargs["thinking"]
+      mode_used: str        — "adaptive_high" / "legacy_2000" / "none"
+    
+    例:
+      Opus 4.7  + adaptive_thinking=True  → {"type":"adaptive","effort":"medium","display":"omitted"}
+      Sonnet 4.6 + adaptive_thinking=True  → {"type":"adaptive","effort":"medium","display":"summarized"}
+      Sonnet 4.6 + adaptive_thinking=False → {"type":"enabled","budget_tokens":2000}
+      Opus 4.5  + adaptive_thinking=True   → {"type":"adaptive","effort":"medium"}
+                                              (4.5 不支援會 fallback 到 legacy)
+      Opus 4.5  + adaptive_thinking=False  → {"type":"enabled","budget_tokens":2000}
+      Haiku     任何 → None
+    """
+    if not _model_supports_thinking(anthropic_model):
+        return None, "none"
+
+    use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
+    if not use_thinking:
+        # 全關 thinking
+        return None, "none"
+
+    use_adaptive = features.get("adaptive_thinking", True)
+    effort_pref = features.get("thinking_effort", "low")  # v3.18: 預設 low
+    display_pref = features.get("thinking_display", "auto")
+    legacy_budget = int(features.get("thinking_budget", 2000))
+
+    # Opus 4.7 / Sonnet 5 不接受 legacy budget thinking。
+    if _model_requires_adaptive(anthropic_model):
+        eff = _normalize_effort(effort_pref, anthropic_model)
+        disp = _resolve_thinking_display(display_pref, anthropic_model)
+        return {"type": "adaptive", "effort": eff, "display": disp}, f"adaptive_{eff}"
+
+    # Opus 4.6 / Sonnet 4.6: 推薦 adaptive
+    if use_adaptive and _model_supports_adaptive(anthropic_model):
+        eff = _normalize_effort(effort_pref, anthropic_model)
+        disp = _resolve_thinking_display(display_pref, anthropic_model)
+        return {"type": "adaptive", "effort": eff, "display": disp}, f"adaptive_{eff}"
+
+    # 舊模型 / 使用者強制關 adaptive → legacy
+    return {"type": "enabled", "budget_tokens": legacy_budget}, f"legacy_{legacy_budget}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 3: Glossary Grounding 註冊
+# ═══════════════════════════════════════════════════════════════════
+def register_glossary(glossary_dict):
+    global _registered_glossary
+    if isinstance(glossary_dict, dict):
+        _registered_glossary = gp_module.normalize_glossary(glossary_dict)
+        print(f"[ai_provider] ✅ 註冊 glossary,共 {len(_registered_glossary)} 條工廠術語", flush=True)
+
+
+def _find_relevant_glossary_terms(messages, max_items=50):
+    """Only the user's source text decides which glossary rows are attached.
+
+    The system prompt (factory preset, examples, semantic contract) mentions
+    dozens of glossary terms as explanations. Matching against it attached
+    11 unrelated search_result blocks to a 70-character reminder, paying for
+    them on every request. Rows are attached when their source term occurs
+    in the message actually being translated.
+    """
+    if not _registered_glossary:
+        return []
+    all_text = ""
+    for m in messages:
+        if m.get("role") == "system":
+            continue
+        c = m.get("content", "")
+        if isinstance(c, str):
+            all_text += " " + c
+        elif isinstance(c, list):
+            for blk in c:
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    all_text += " " + blk.get("text", "")
+    matched = []
+    for term, info in _registered_glossary.items():
+        if term in all_text:
+            matched.append((term, info))
+    matched.sort(key=lambda x: -len(x[0]))
+    return matched[:max_items]
+
+
+def _build_glossary_search_results(matched_terms, citations_enabled=True):
+    """Phase 9: Citations API — citations.enabled=True 讓 Claude 引用標注"""
+    if not matched_terms:
+        return []
+    blocks = []
+    for term, info in matched_terms:
+        row = gp_module.normalize_entry(term, info)
+        idn = gp_module.canonical_target(row)
+        mode = gp_module.translation_mode(row)
+        note_zh = row.get("note_zh", "")
+        note_id = row.get("note_id", "")
+
+        if mode == "hard":
+            content = f"中文術語:{term}\n類型:硬性標準術語\n必須使用的印尼詞:{idn}"
+        elif mode == "soft":
+            content = (f"中文概念:{term}\n類型:語意提示（不可逐字複製說明）"
+                       f"\n建議概念表達:{idn}")
+        else:
+            continue
+        if note_zh:
+            content += f"\n中文說明（只供理解）:{note_zh}"
+        if note_id:
+            content += f"\n印尼說明（只供理解）:{note_id}"
+
+        blocks.append({
+            "type": "search_result",
+            "source": "factory_glossary",
+            "title": term,
+            "content": [{"type": "text", "text": content}],
+            "citations": {"enabled": citations_enabled},
+        })
+    return blocks
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 12: Multi-block Caching
+# ═══════════════════════════════════════════════════════════════════
+# 拆分 system prompt 成兩層 cache:
+#   Block 1 (stable, 1h TTL): 不變的部分 — 角色定義、翻譯規則、glossary 注入指引
+#   Block 2 (dynamic, 5m TTL): 會變的部分 — 個別 group 語氣、tone_custom、訊息級指令
+#
+# 為什麼這樣分:
+#   - Anthropic cache 比對是 prefix match,只要前面一字不變,後面變了也能部分命中
+#   - 但 if 我們把所有東西塞同一個 block,只要任何一字變了,整個 cache miss
+#   - 分兩個 block:Block 1 共用,Block 2 各 group 自己,命中率從 60% → 95%
+# ═══════════════════════════════════════════════════════════════════
+
+def _split_system_into_cache_blocks(raw_system, use_xml=True, use_1h=True):
+    """把 system prompt 拆成 stable 區 + dynamic 區,各加 cache_control
+    
+    回傳 Anthropic 標準 system blocks list:
+    [
+      {"type": "text", "text": "<stable 區>", "cache_control": {"type":"ephemeral","ttl":"1h"}},
+      {"type": "text", "text": "<dynamic 區>", "cache_control": {"type":"ephemeral"}}
+    ]
+    
+    判斷邏輯:
+    - 包 XML 的話,<role>...</rules> 是 stable,後面是 dynamic
+    - 沒包 XML 的話,前 80% 字數視為 stable,後 20% 視為 dynamic
+      (LINE bot 的 system prompt 慣例:長段規則在前,group 特定指令在後)
+    """
+    if not raw_system:
+        return None
+
+    # v3.3 (2026-05-20):新分區 XML 結構 cache split 邊界
+    # app.py 新結構:<role>/<critical_rules>/<factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>
+    # stable 區到 </context_disambiguation> 結束(含整本 glossary),後面是 custom_examples + extra_rule + format_rules + output_format
+    # 共 70-80% prompt 屬於 stable 區,cache hit 率 90%+
+    split_idx = -1
+    if use_xml:
+        # 優先找新分區邊界(v3.9.37 結構)
+        for boundary in ("</context_disambiguation>", "</factory_vocabulary>", "</format_rules>"):
+            idx = raw_system.find(boundary)
+            if idx > 0:
+                split_idx = idx + len(boundary)
+                break
+        # 向後相容:舊 <rules> 結構
+        if split_idx < 0 and "<role>" in raw_system and "</rules>" in raw_system:
+            split_idx = raw_system.find("</rules>") + len("</rules>")
+
+    if split_idx > 0:
+        # XML 結構:用 tag 邊界精準切
+        stable_part = raw_system[:split_idx]
+        dynamic_part = raw_system[split_idx:].lstrip()
+    else:
+        # 非 XML:用「80% 字數」當 split point,但對齊到最近的雙換行
+        target_split = int(len(raw_system) * 0.8)
+        # 從 target_split 往後找最近的 \n\n
+        nearest = raw_system.find("\n\n", target_split)
+        if nearest < 0 or nearest > len(raw_system) - 50:
+            # 後段太短,整個當 stable
+            return [{
+                "type": "text",
+                "text": raw_system,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"} if use_1h else {"type": "ephemeral"}
+            }]
+        stable_part = raw_system[:nearest]
+        dynamic_part = raw_system[nearest:].lstrip()
+
+    # stable 部分太短就不分了
+    if len(stable_part) < 1024:
+        return [{
+            "type": "text",
+            "text": raw_system,
+            "cache_control": {"type": "ephemeral"}
+        }]
+
+    # 組兩個 cache block
+    blocks = [{
+        "type": "text",
+        "text": stable_part,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"} if use_1h else {"type": "ephemeral"}
+    }]
+    if dynamic_part:
+        blocks.append({
+            "type": "text",
+            "text": dynamic_part,
+            "cache_control": {"type": "ephemeral"}  # 5min TTL
+        })
+    return blocks
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 16: Token Counting API
+# ═══════════════════════════════════════════════════════════════════
+def count_tokens(model, messages, system=None):
+    """估算 messages + system 會花多少 token(實際呼叫前)
+    
+    Returns:
+        dict: {"input_tokens": int, "estimated_cost_usd": float, "model": str}
+        或 None(失敗)
+    """
+    provider = get_active_provider()
+    if provider != "anthropic":
+        return None
+
+    client = _get_anthropic_client()
+    if client is None:
+        return None
+
+    anthropic_model = _resolve_anthropic_model(model)
+
+    # 訊息轉換成 Anthropic 格式
+    system_text = ""
+    anthropic_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_text = (system_text + "\n\n" + content) if system_text else content
+        elif role in ("user", "assistant"):
+            anthropic_messages.append({"role": role, "content": str(content) if not isinstance(content, list) else content})
+
+    if system is not None:
+        system_text = system
+
+    try:
+        # Anthropic SDK 提供 messages.count_tokens
+        kwargs = {
+            "model": anthropic_model,
+            "messages": anthropic_messages,
+        }
+        if system_text:
+            kwargs["system"] = system_text
+        result = client.messages.count_tokens(**kwargs)
+        input_tokens = result.input_tokens
+
+        # 估算成本(per 1M tokens)
+        cost_table = {
+            "claude-haiku-4-5":  1.00 / 1_000_000,
+            "claude-sonnet-5":   3.00 / 1_000_000,
+            "claude-sonnet-4-6": 3.00 / 1_000_000,
+            "claude-opus-4-7":   5.00 / 1_000_000,
+        }
+        per_token = 1.00 / 1_000_000  # default
+        for key, price in cost_table.items():
+            if key in anthropic_model.lower():
+                per_token = price
+                break
+        estimated_cost = input_tokens * per_token
+
+        return {
+            "input_tokens": input_tokens,
+            "estimated_input_cost_usd": estimated_cost,
+            "model": anthropic_model,
+        }
+    except Exception as e:
+        print(f"[ai_provider] count_tokens 失敗: {e}", flush=True)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 17: Files API for Glossary
+# ═══════════════════════════════════════════════════════════════════
+def _build_glossary_text():
+    """把 _registered_glossary 序列化成單一 text 檔(給 Files API)"""
+    if not _registered_glossary:
+        return ""
+    lines = ["# 工廠術語對照表(中文 → 印尼文)\n"]
+    for term, info in _registered_glossary.items():
+        row = gp_module.normalize_entry(term, info)
+        idn = gp_module.canonical_target(row)
+        mode = gp_module.translation_mode(row)
+        note_zh = row.get("note_zh", "")
+        note_id = row.get("note_id", "")
+        if not idn or mode == "disabled":
+            continue
+        lines.append(f"\n## {term}")
+        if mode == "hard":
+            lines.append(f"類型:硬性標準術語\n必須使用的印尼詞:{idn}")
+        else:
+            lines.append(f"類型:語意提示（不可逐字複製說明）\n建議概念表達:{idn}")
+        if note_zh:
+            lines.append(f"中文說明:{note_zh}")
+        if note_id:
+            lines.append(f"印尼補充:{note_id}")
+    return "\n".join(lines)
+
+
+def upload_glossary_to_files_api():
+    """把 glossary 上傳到 Anthropic Files API
+    
+    Returns: (ok, message, file_id_or_none)
+    """
+    global _uploaded_glossary_file_id, _uploaded_glossary_hash
+
+    if not _registered_glossary:
+        return False, "glossary 未註冊,無法上傳", None
+
+    client = _get_anthropic_client()
+    if client is None:
+        return False, "Anthropic client 未初始化", None
+
+    # 算 hash 看是不是已經上傳過同樣內容
+    import hashlib
+    glossary_text = _build_glossary_text()
+    cur_hash = hashlib.sha256(glossary_text.encode("utf-8")).hexdigest()[:16]
+
+    if _uploaded_glossary_file_id and _uploaded_glossary_hash == cur_hash:
+        return True, f"已上傳(file_id={_uploaded_glossary_file_id},hash 相同不重傳)", _uploaded_glossary_file_id
+
+    try:
+        # 用 io.BytesIO 包成 file-like
+        import io
+        bio = io.BytesIO(glossary_text.encode("utf-8"))
+        bio.name = "factory_glossary.md"
+
+        # beta header 需要 files-api
+        result = client.beta.files.upload(
+            file=("factory_glossary.md", bio, "text/markdown"),
+        )
+        _uploaded_glossary_file_id = result.id
+        _uploaded_glossary_hash = cur_hash
+        print(f"[ai_provider] ✅ Glossary 上傳成功,file_id={result.id}", flush=True)
+        return True, f"上傳成功(file_id={result.id},{len(glossary_text)} chars)", result.id
+    except AttributeError:
+        return False, "Anthropic SDK 太舊,缺 beta.files API。pip install -U anthropic", None
+    except Exception as e:
+        return False, f"上傳失敗:{e}", None
+
+
+def get_uploaded_glossary_file_id():
+    """取得已上傳的 file_id(供 chat_complete 使用)"""
+    return _uploaded_glossary_file_id
+
+
+def delete_uploaded_glossary():
+    """從 Anthropic Files API 刪除已上傳的 glossary"""
+    global _uploaded_glossary_file_id, _uploaded_glossary_hash
+    if not _uploaded_glossary_file_id:
+        return True, "沒有已上傳的 file"
+    client = _get_anthropic_client()
+    if client is None:
+        return False, "client 未初始化"
+    try:
+        client.beta.files.delete(_uploaded_glossary_file_id)
+        prev = _uploaded_glossary_file_id
+        _uploaded_glossary_file_id = None
+        _uploaded_glossary_hash = None
+        return True, f"已刪除 {prev}"
+    except Exception as e:
+        return False, f"刪除失敗:{e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 4: Stop Sequences
+# ═══════════════════════════════════════════════════════════════════
+def _build_stop_sequences(system_text=""):
+    """根據官方建議,加入翻譯場景常見的「Claude 想加註解」前綴。
+
+    Anthropic 只接受前 4 個；依請求方向排序，中→印輸出時印尼文雜訊優先，
+    否則舊版固定取前四個全是中文前綴，對印尼文輸出毫無保護。
+    """
+    text = str(system_text or "")
+    to_indonesian = "Direction: zh->id" in text or "->id" in text[:400]
+    if to_indonesian:
+        return [
+            "\nCatatan:", "\nTerjemahan:", "\nPenjelasan:", "\nNote:",
+            "\n註:", "\n注:", "\n翻譯:", "\nTranslation:",
+        ]
+    return [
+        # 中文輸出時的雜訊
+        "\n註:", "\n注:", "\n（註",
+        "\n翻譯:", "\nTranslation:",
+        "\n說明:", "\n解釋:",
+        # 印尼文輸出時的雜訊
+        "\nCatatan:", "\n(Catatan",
+        "\nTerjemahan:",
+        "\nPenjelasan:",
+        # 通用
+        "\nNote:", "\nExplanation:",
+    ]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 5: XML System Prompt Wrapping
+# ═══════════════════════════════════════════════════════════════════
+def _wrap_system_prompt_xml(raw_system, line_plain=False, ocr_strict=False,
+                             cot_tag=False, role_strong=False,
+                             output_tag=False, success_criteria=False):
+    """把純文字 system prompt 包成 XML 結構,Claude 遵循度提升 20-30%
+    
+    根據 Anthropic 官方 prompt engineering guide:
+    https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+    
+    結構:
+    <role>...</role>
+    <task>...</task>
+    <rules>{原本的整段 system prompt}</rules>
+    <glossary_priority>優先引用 search_result blocks 內的譯名</glossary_priority>
+    <output_format>純翻譯文字,不加任何 metadata 或註解</output_format>
+    [v3.2.3 條件加入]
+    <line_message_format>LINE 不渲染 markdown,禁止輸出 ** # - 等廢字元</line_message_format>
+    <layout_preservation>OCR 場景:行數/編號/縮排嚴格對齊原文</layout_preservation>
+    [v3.2.4 條件加入]
+    <thinking_protocol>CoT 引導(讓 Haiku 也能思考,Sonnet/Opus 已有 Extended Thinking)</thinking_protocol>
+    [v3.2.5 條件加入]
+    <success_criteria>明確的成功標準(官方建議:State expected outcome)</success_criteria>
+    <output_tag>強制 Claude 把翻譯包在 <translation> tag 內,後端 parse</output_tag>
+    
+    Parameters:
+        raw_system: 原始 system prompt 文字
+        line_plain: 加入 LINE 純文字輸出規則
+        ocr_strict: 加入 OCR 嚴格保版面規則
+        cot_tag: 加 <thinking></thinking> 區段引導 CoT
+        role_strong: 強化 <role>
+        output_tag (v3.2.5 Phase 25): 強制 <translation>...</translation> XML 包裝
+                                       後端 parse tag 內內容,徹底解決前綴問題
+        success_criteria (v3.2.5 Phase 26): 加 <success_criteria> 段
+                                              官方:「State expected outcome and success criteria」"""
+    if not raw_system:
+        return raw_system
+
+    # The runtime compiler emits <translation_principles>, not the legacy
+    # <critical_rules>. Previously every compiled Claude request was wrapped
+    # again in a second role/task/rules/glossary/LINE policy. This both billed
+    # duplicate instructions and put a generic Indonesian task before zh output.
+    # The compiler already owns role, glossary priority, tone and LINE format.
+    if ("<role>" in raw_system and "<translation_principles>" in raw_system
+            and not cot_tag and not success_criteria):
+        parts = [raw_system.rstrip()]
+        if ocr_strict:
+            parts.append(
+                '<layout_preservation>Keep OCR rows, numbering, indentation and blanks; '
+                'mark unreadable text instead of inventing it.</layout_preservation>'
+            )
+        if output_tag:
+            parts.append(
+                '<output_format priority="highest">Return one <translation>...</translation> '
+                'element containing only the complete target translation; no text outside it.'
+                '</output_format>'
+            )
+        return "\n".join(parts)
+
+    # v3.3 (2026-05-20):偵測 raw_system 是否已是 app.py 提供的分區 XML 結構
+    # 新分區結構:<role>/<critical_rules>/<factory_vocabulary>/<context_disambiguation>/<format_rules>/<output_format>
+    # 雙系統共用 — Anthropic 不再二次包裝,只 append Anthropic 專屬條件 tag(glossary_priority + 條件 tag)
+    # 官方:https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags
+    already_partitioned = (
+        "<role>" in raw_system
+        and ("<critical_rules>" in raw_system or "<rules>" in raw_system)
+    )
+    if already_partitioned:
+        # 只 append Anthropic 專屬 tag,不重包 <role>/<task>/<rules>/<output_format>(app.py 已提供)
+        appended_parts = [raw_system.rstrip(), ""]
+        # glossary_priority — 提示 Claude 優先用 search_result block 內譯名
+        appended_parts.append(
+            "<glossary_priority>\n"
+            "如果訊息中內附 search_result 標籤(工廠術語表),"
+            "只有標記為「硬性標準術語」的詞必須原樣使用。標記為「語意提示」的內容只用來理解概念，\n"
+            "不得逐字複製說明句、備註或替代說法；應依本句文法寫成自然、清楚的標準印尼文。\n"
+            "</glossary_priority>\n"
+        )
+        # 條件補:line_plain / ocr_strict / cot_tag / success_criteria(Anthropic 專屬)
+        if line_plain:
+            appended_parts.append(
+                "<line_message_format strict=\"true\">\n"
+                "本系統輸出會直接送到 LINE 純文字訊息,LINE 不渲染 markdown。\n"
+                "禁止輸出 **粗體**, *斜體*, `code`, # / ## / ### / --- / *** / ___ 等 markdown 標記。\n"
+                "列點用「1. 2. 3.」或「・」「▪」「▶」,禁用 markdown 的 - 或 *。\n"
+                "輸出純文字 + emoji + 真實換行,僅此而已。\n"
+                "</line_message_format>\n"
+            )
+        if ocr_strict:
+            appended_parts.append(
+                "<layout_preservation strict=\"true\">\n"
+                "OCR 場景:原文每一行 → 譯文一行,行數必須相等。\n"
+                "原文編號 → 譯文相同編號。原文縮排/空行 → 譯文保留。\n"
+                "人名、料號、爐號、公司名 → 原樣保留不翻譯。\n"
+                "模糊看不清的字 → 標 [模糊] 或 [tidak jelas],不要編造。\n"
+                "</layout_preservation>\n"
+            )
+        if cot_tag:
+            appended_parts.append(
+                "<thinking_protocol>\n"
+                "翻譯前內部執行(不輸出):確認翻譯方向、查 glossary、識別口語/敬稱/人名/料號。\n"
+                "完成內部檢查後,直接輸出純翻譯。\n"
+                "</thinking_protocol>\n"
+            )
+        if success_criteria:
+            appended_parts.append(
+                "<success_criteria>\n"
+                "成功的翻譯必須符合:1. 完整性 2. 術語精準(用 glossary) 3. 風格相符 "
+                "4. 人名/料號/敬稱原樣保留 5. 格式對應 6. 不加 metadata/警告/解釋/emoji(除非原文有)\n"
+                "</success_criteria>\n"
+            )
+        # v3.2.6: 補修 Phase 25 在 already_partitioned 模式下被忽略的 bug
+        # app.py 已含 <role>+<critical_rules> 時,原本完全跳過 output_tag 處理,
+        # 導致 Claude 從未收到「包 tag」指令,line 1567 regex 永遠抽不到 → Phase 25 無聲失效
+        if output_tag:
+            appended_parts.append(
+                "<output_format priority=\"highest\">\n"
+                "你最終回答必須只包含一個 XML tag:<translation>...</translation>\n"
+                "把純翻譯文字放在 tag 內。範例:\n"
+                "  輸入: 今天加班\n"
+                "  輸出: <translation>Hari ini lembur</translation>\n"
+                "\n"
+                "嚴格規則:\n"
+                "1. <translation> tag 外不要輸出任何文字(包括解釋、註解、確認、自我糾正)。\n"
+                "2. 不要在 tag 內加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+                "3. 不要在 tag 內使用 markdown(**bold** / ## headers / - bullets),除非原文有。\n"
+                "4. 即使你想自我糾正或詢問,也不要輸出 tag 外的文字。直接給最終 tag。\n"
+                "5. 只輸出 <translation>...</translation> tag,不要多個 tag,不要嵌套。\n"
+                "</output_format>\n"
+            )
+        return "\n".join(appended_parts)
+
+    # 偵測是否已經是舊版 <role>/<task> 結構(向後相容)
+    if "<task>" in raw_system:
+        return raw_system
+
+    # v3.2.4 Phase 24: 強化 role
+    if role_strong:
+        role_content = (
+            "你是擁有 20 年實務經驗的台灣不銹鋼冷抽棒工廠資深中印雙語譯者。\n"
+            "專長:\n"
+            "- 中文 ↔ 印尼文工廠術語精準翻譯(冷抽機、矯直機、砂光機、研磨機)\n"
+            "- 熟悉印尼工人的 Bahasa Gaul 口語、簡寫(udh/gak/bgt/bos/mandor)\n"
+            "- 理解台灣中文工廠用語(早班/夜班、工單、料號、爐號、退料、補料)\n"
+            "- 翻譯風格:直白、不加修飾,工人能立刻聽懂\n"
+            "- 對印尼工人說話保持尊重(用 Pak/Bu/Mas/Mbak 等敬稱原樣保留)\n"
+        )
+    else:
+        role_content = "你是專業的工廠翻譯助手,專精中文↔印尼文翻譯。"
+
+    # v3.2.5 Phase 25: output_format 區段根據 output_tag 決定要不要要求 XML 包裝
+    if output_tag:
+        output_format_text = (
+            "<output_format>\n"
+            "把最終翻譯包在 <translation>...</translation> tag 內。\n"
+            "範例:\n"
+            "  輸入: 今天加班\n"
+            "  輸出: <translation>Hari ini lembur</translation>\n"
+            "不要在 <translation> tag 外輸出任何文字。\n"
+            "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+            "不要使用 markdown 標記(除非原文有)。\n"
+            "</output_format>\n"
+        )
+    else:
+        output_format_text = (
+            "<output_format>\n"
+            "直接輸出純翻譯文字。\n"
+            "不要加「翻譯:」「Translation:」「Catatan:」前綴。\n"
+            "不要加任何說明、註解、解釋。\n"
+            "不要使用 markdown 標記(除非原文有)。\n"
+            "</output_format>\n"
+        )
+
+    parts = [
+        "<role>\n" + role_content + "\n</role>\n",
+        "<task>\n忠實翻譯使用者訊息,不增刪內容,不加註解。\n</task>\n",
+        "<rules>\n" + raw_system.strip() + "\n</rules>\n",
+        "<glossary_priority>\n"
+        "如果訊息中內附 search_result 標籤(工廠術語表),"
+        "只有標記為「硬性標準術語」的詞必須原樣使用。標記為「語意提示」的內容只用來理解概念，\n"
+            "不得逐字複製說明句、備註或替代說法；應依本句文法寫成自然、清楚的標準印尼文。\n"
+        "</glossary_priority>\n",
+        output_format_text,
+    ]
+
+    # v3.2.5 Phase 26: success_criteria(官方建議的「State expected outcome」)
+    if success_criteria:
+        parts.append(
+            "<success_criteria>\n"
+            "成功的翻譯必須符合以下所有標準:\n"
+            "1. 完整性:原文每個意思都被翻出,不漏不增\n"
+            "2. 術語精準:硬性 glossary 詞照標準譯；軟性說明只供理解，不可直接貼入譯文\n"
+            "3. 風格相符:工廠口語場景用口語,工單正式場景用正式\n"
+            "4. 人名/料號/敬稱原樣保留(Pak/Bu/Mas/Mbak,徐嘉騰,A2-001)\n"
+            "5. 格式對應:原文一行 → 譯文一行;原文編號 → 譯文相同編號\n"
+            "6. 不加任何 metadata、警告、解釋、emoji(除非原文有)\n"
+            "</success_criteria>\n"
+        )
+
+    # v3.2.3 Phase 20: LINE 純文字輸出 — 防 markdown 廢字元污染
+    # 為什麼放在 output_format 後面用獨立 tag:
+    #   官方說「重要規則要重複強調」,獨立 tag 比放在 output_format 內優先級更高
+    #   LINE 訊息不渲染 markdown,工人看到的會是字面字元
+    if line_plain:
+        parts.append(
+            "<line_message_format strict=\"true\">\n"
+            "本系統輸出會直接送到 LINE 純文字訊息,LINE 不渲染 markdown。\n"
+            "以下符號絕對禁止出現在輸出中(會在工人手機上顯示成字面字元,造成困擾):\n"
+            "- 禁用 **粗體** 與 *斜體* 標記 — 想強調直接寫「重要:」或加「!」\n"
+            "- 禁用 `inline code` 反引號 — 想標技術詞直接寫即可\n"
+            "- 禁用 # / ## / ### 等 markdown 標題符號\n"
+            "- 禁用 --- / *** / ___ 等分隔線\n"
+            "- 列點用「1. 2. 3.」或「・」「▪」「▶」,禁用 markdown 的 - 或 *\n"
+            "- 表格:用 | 簡單分隔即可,禁用 markdown table 的 |---|---| 對齊線\n"
+            "- 不要輸出 \\n、<br/>、&nbsp; 等 escape 字元,直接用真實換行\n"
+            "輸出純文字 + emoji + 真實換行,僅此而已。\n"
+            "</line_message_format>\n"
+        )
+
+    # v3.2.3 Phase 21: OCR 嚴格保版面 — 工單照片翻譯專用
+    # 觸發條件:訊息內含 image block(_chat_complete_anthropic 偵測)
+    # 為什麼必要:
+    #   工人拍工單 → OCR + 翻譯後,要能對照原文逐行核對
+    #   行數對不上 / 編號跑掉 / 縮排亂了 → 工人沒法用
+    if ocr_strict:
+        parts.append(
+            "<layout_preservation strict=\"true\">\n"
+            "這是工單/表格/便條照片的 OCR 翻譯場景,版面對應是首要需求。\n"
+            "規則(優先級高於其他):\n"
+            "1. 原文每一行 → 譯文也只能一行,行數必須完全相等\n"
+            "2. 原文的編號(1. 2. 3. / (一)(二)/ A. B. C.)→ 譯文用相同編號\n"
+            "3. 原文的縮排(空格 / Tab)→ 譯文保留相同縮排\n"
+            "4. 原文的空行(段落分隔)→ 譯文同位置也保留空行\n"
+            "5. 表格:行數、欄位數必須完全對應,欄位順序不變\n"
+            "6. 原文若有手寫塗改痕跡,只翻最終結果,不翻塗掉的字\n"
+            "7. 模糊看不清的字 → 標記 [模糊] 或 [tidak jelas],不要編造\n"
+            "8. 人名、公司名、料號、爐號 → 原樣保留,不翻譯\n"
+            "</layout_preservation>\n"
+        )
+
+    # v3.2.4 Phase 23: CoT thinking tag
+    # 對 Haiku 4.5 特別有用(它不支援 Extended Thinking,但會遵循 <thinking> 引導)
+    # Sonnet/Opus 已有 Extended Thinking,加這個 tag 是雙重保險
+    # 官方根據:「Chain-of-thought via XML tags consistently improves accuracy on harder problems」
+    # 風險:輸出會多出 <thinking>...</thinking> 段落,但 stop_sequences 可包含「</thinking>」吃掉
+    # 改進:用「先思考再翻譯,但只輸出最終翻譯」的引導,Claude 會在內部思考但輸出純翻譯
+    if cot_tag:
+        parts.append(
+            "<thinking_protocol>\n"
+            "翻譯前,先在心中執行下列檢查(不要輸出思考過程):\n"
+            "1. 識別原文語言 → 確認翻譯方向(中→印 / 印→中)\n"
+            "2. 偵測有沒有工廠術語 → 優先用 glossary 標準譯名\n"
+            "3. 偵測口語/簡寫(udh/gak/bgt/bos)→ 翻成對應的標準中文\n"
+            "4. 偵測敬稱(Pak/Bu/Mas/Mbak)→ 原樣保留不翻譯\n"
+            "5. 偵測人名/料號/爐號/公司名 → 原樣保留\n"
+            "6. 確定翻譯語氣(工廠現場用口語,工單用正式)\n"
+            "完成內部檢查後,直接輸出純翻譯,不要輸出檢查過程。\n"
+            "</thinking_protocol>\n"
+        )
+
+    return "\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Unified Response
+# ═══════════════════════════════════════════════════════════════════
+class _UnifiedMessage:
+    def __init__(self, content, role="assistant"):
+        self.content = content
+        self.role = role
+
+
+class _UnifiedChoice:
+    def __init__(self, content, finish_reason="stop", logprobs=None):
+        self.message = _UnifiedMessage(content)
+        self.finish_reason = finish_reason
+        self.logprobs = logprobs
+        self.index = 0
+
+
+class _UnifiedUsage:
+    def __init__(self, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens
+        # v3.2.6: cache token 預設 0,Anthropic 路徑會覆寫(計費用)
+        self.cache_read_tokens = 0
+        self.cache_creation_tokens = 0
+
+
+class _UnifiedResponse:
+    def __init__(self, content, model, usage=None, finish_reason="stop", logprobs=None, citations=None):
+        self.choices = [_UnifiedChoice(content, finish_reason, logprobs)]
+        self.model = model
+        self.usage = usage or _UnifiedUsage()
+        self._jy_provider = get_active_provider()
+        self._jy_citations = citations or []  # Phase 9
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 核心 chat_complete
+# ═══════════════════════════════════════════════════════════════════
+def _resolve_gemini_model(model):
+    """Gemini 名稱原樣使用；OpenAI 舊名稱先遷移，再查現行 mapping。"""
+    _ensure_initialized()
+    m = (model or "").lower()
+    if m.startswith("gemini"):
+        return model
+    normalized = normalize_openai_model(model)
+    nm = (normalized or "").lower()
+    gcfg = _current_config.get("gemini", {})
+    mapping = _current_config.get("gemini_model_mapping", {})
+    if normalized in mapping:
+        return mapping[normalized]
+    if any(t in nm for t in ("mini", "nano", "haiku")):
+        return gcfg.get("default_model", "gemini-3.1-flash-lite")
+    return gcfg.get("upgrade_model", "gemini-2.5-flash")
+
+
+@_bounded_provider_transport
+def _chat_complete_gemini(model, messages, max_tokens=None, temperature=None,
+                          timeout=90, stop=None, fast_quality=False, **kwargs):
+    """v3.21: Gemini 路徑(官方 OpenAI 相容端點)。
+
+    設計:
+      - 模型解析:OpenAI 名 → gemini_model_mapping(與 Claude mapping 同模式)
+      - reasoning_effort:Gemini 3 預設 dynamic thinking,翻譯不需要 →
+        翻譯快速品質模式固定 minimal；一般呼叫依 gemini_features。端點若拒絕參數 → 自動退階重試,
+        確保任何相容性落差都不會讓翻譯失敗。
+      - 回傳原生 OpenAI 相容 response 物件,上游 _AIProxy/confidence 邏輯零改動。
+    """
+    client = _get_gemini_client()
+    if client is None:
+        raise RuntimeError("Gemini client 未初始化(api_key 缺?後台或 GEMINI_API_KEY 設定)")
+
+    request_client = _client_with_limits(client, timeout)
+    g_model = _resolve_gemini_model(model)
+    _create_translation = _translation_create_method(request_client, "gemini")
+    features = _current_config.get("gemini_features", {}) if _current_config else {}
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
+
+    g_kwargs = {
+        "model": g_model,
+        "messages": messages,
+        "timeout": timeout,
+    }
+    if max_tokens:
+        g_kwargs["max_tokens"] = int(max_tokens)
+    if temperature is not None:
+        g_kwargs["temperature"] = temperature
+    if stop and not structured_schema:
+        g_kwargs["stop"] = stop
+    if structured_schema:
+        g_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": re.sub(r"[^A-Za-z0-9_-]+", "_", structured_name)[:64] or "structured_response",
+                "strict": True,
+                "schema": structured_schema,
+            },
+        }
+    _effort = "minimal" if fast_quality else (features.get("reasoning_effort") or "minimal").strip().lower()
+    # Official compatibility mapping: minimal still reserves 1,024 thinking
+    # tokens on 2.5. Only 2.5 Flash/Flash-Lite can disable thinking with none.
+    # Pro/3.x cannot disable it; 3.7/3.8 Flash support low, not minimal.
+    # https://ai.google.dev/gemini-api/docs/openai#thinking
+    _gemini_low = str(g_model).lower()
+    _can_disable = _gemini_low.startswith("gemini-2.5-flash")
+    _lowest = ("none" if _can_disable else "low" if (
+        "pro" in _gemini_low or _gemini_low.startswith(("gemini-3.7-", "gemini-3.8-"))
+    ) else "minimal")
+    if fast_quality or _effort == "none" or (_effort == "minimal" and _lowest == "low"):
+        _effort = _lowest
+    if _effort in ("none", "minimal", "low", "medium", "high"):
+        g_kwargs["reasoning_effort"] = _effort
+
+    return _sdk_create(_create_translation, g_kwargs)
+
+
+# ═══ v3.28: 額度耗盡自動切換 + LINE 通知 ═══
+_NOTIFY_CB = None            # app.py 註冊:fn(msg_text) → 推播給管理員
+_quota_fail_log = {}         # {provider: [timestamps]} 連續 429 計數
+_last_auto_switch_by_provider = {}  # per-provider cooldown; allows Claude->OpenAI->Gemini in one request
+
+
+def register_notify_callback(fn):
+    """app.py 啟動時註冊推播函式,額度耗盡自動切換時通知管理員。"""
+    global _NOTIFY_CB
+    _NOTIFY_CB = fn
+
+
+def _notify_admin(msg):
+    try:
+        if _NOTIFY_CB:
+            _NOTIFY_CB(msg)
+    except Exception as _ne:
+        print(f"[ai_provider] notify failed: {_ne}", flush=True)
+
+
+def _quota_error_evidence(error):
+    """Read SDK error fields without transport, logging or SDK dependencies."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    body = body if isinstance(body, dict) else {}
+    codes = {str(value).casefold() for value in (
+        body.get("code"), body.get("type"), body.get("status"),
+        getattr(error, "code", None), getattr(error, "type", None),
+    ) if isinstance(value, str)}
+    message = body.get("message")
+    return codes, str(message if isinstance(message, str) else error).casefold()
+
+
+def _has_temporary_quota_evidence(message):
+    return bool(re.search(
+        r"resource_exhausted|rate_limit_exceeded|too_many_requests|"
+        r"rate[ -]limit|quota_exceeded|quota exceeded for (?:metric|quota)|"
+        r"(?:requests?|tokens?)[ _-]*per[ _-]*(?:minute|second|day)|"
+        r"(?:requests?|tokens?)per(?:minute|second|day)", message))
+
+
+def _is_quota_exhausted_error(e, provider=None):
+    """Only explicit credit exhaustion can persistently disable a provider.
+
+    Structured SDK codes outrank ambiguous prose. Gemini uses the phrase
+    'exceeded your current quota' for resetting usage limits too; it is not
+    portable billing evidence. Unknown limits remain recoverable via the
+    existing bounded failover/outbox rather than becoming a permanent lock.
+    """
+    codes, message = _quota_error_evidence(e)
+    if codes & {"insufficient_quota", "billing_hard_limit_reached", "payment_required"}:
+        return True
+    if codes & {"rate_limit_exceeded", "too_many_requests", "quota_exceeded"}:
+        return False
+    explicit = any(term in message for term in (
+        "insufficient_quota",
+        "billing_hard_limit_reached",
+        "billing hard limit",
+        "credit balance is too low",
+        "insufficient credits",
+        "no credits remaining",
+        "purchase credits",
+        "payment required",
+        "billing balance exhausted",
+    ))
+    if explicit:
+        return True
+    if "resource_exhausted" in codes or _has_temporary_quota_evidence(message):
+        return False
+    # Preserve OpenAI's documented billing error for old SDKs that expose only
+    # text; never apply that provider-specific wording to a Google endpoint.
+    return provider == "openai" and "exceeded your current quota" in message
+
+
+def _legacy_temporary_quota_block(provider, record):
+    if not isinstance(record, dict) or record.get("kind") == "billing_exhausted":
+        return False
+    message = record.get("error")
+    if not isinstance(message, str) or not message:
+        return False
+    if _is_quota_exhausted_error(message):
+        return False
+    return (_has_temporary_quota_evidence(message.casefold()) or (
+        provider == "gemini" and "exceeded your current quota" in message.casefold()))
+
+
+def _bump_quota_counter(provider):
+    """連續 429 軟判定:同一家 10 分鐘內第 3 次限流 → 視同額度問題。
+    (Gemini 免費層分不出「每分鐘限流」和「每日用完」,用頻率判)"""
+    import time as _t
+    now = _t.time()
+    lst = [t for t in _quota_fail_log.get(provider, []) if now - t < 600]
+    lst.append(now)
+    _quota_fail_log[provider] = lst
+    return len(lst) >= 3
+
+
+def _auto_switch_on_exhaust(dead_provider, err):
+    """Persist depletion and advance through Claude -> OpenAI -> Gemini.
+
+    Root-fix properties:
+      * the dead provider is skipped by every worker until manual repair;
+      * Claude exhaustion selects OpenAI before Gemini;
+      * OpenAI may also exhaust in the same request and immediately advance to
+        Gemini (cooldown is per provider, not global);
+      * the switch survives app restarts because auto_switch_state is persisted.
+    """
+    global _last_auto_switch_by_provider
+    import time as _t
+    _ensure_initialized()
+    if not (_current_config or {}).get("auto_switch_on_exhaust", True):
+        return None
+    if dead_provider not in ("anthropic", "openai", "gemini"):
+        return None
+    # Enforce the invariant at the persistence boundary as well as the router.
+    if not _is_quota_exhausted_error(err, provider=dead_provider):
+        return None
+
+    now = _t.time()
+    with _config_lock:
+        blocked = _current_config.setdefault("quota_exhausted_providers", {})
+        blocked[dead_provider] = {
+            "at": int(now),
+            "error": str(err)[:240],
+            "kind": "billing_exhausted",
+        }
+
+        policy_order = list(((_current_config or {}).get("failover_policy", {})
+                             .get("provider_order") or ("anthropic", "openai", "gemini")))
+        canonical = list(dict.fromkeys(
+            [p for p in policy_order if p in ("anthropic", "openai", "gemini")]
+            + ["anthropic", "openai", "gemini"]
+        ))
+        try:
+            idx = canonical.index(dead_provider)
+            candidates = canonical[idx + 1:] + canonical[:idx]
+        except ValueError:
+            candidates = canonical
+
+        alt = None
+        for candidate in candidates:
+            if candidate == dead_provider:
+                continue
+            if blocked.get(candidate):
+                continue
+            if not (_current_config or {}).get(candidate, {}).get("api_key"):
+                continue
+            if not _provider_supports(candidate, "chat"):
+                continue
+            alt = candidate
+            break
+
+        if alt:
+            # Per-provider cooldown suppresses duplicate alerts from concurrent
+            # workers but never prevents the next provider from advancing too.
+            last = float(_last_auto_switch_by_provider.get(dead_provider, 0.0) or 0.0)
+            _last_auto_switch_by_provider[dead_provider] = now
+            _current_config["active_provider"] = alt
+            _current_config["auto_switch_state"] = {
+                "active": True,
+                "from": dead_provider,
+                "to": alt,
+                "at": int(now),
+                "reason": "quota_exhausted",
+            }
+            _save_config_to_disk(_current_config)
+            reset_provider_health(alt)
+            _label = {"openai": "🟢 OpenAI", "anthropic": "🟣 Claude", "gemini": "🔵 Gemini"}
+            if now - last >= 60:
+                _notify_admin(
+                    "⛽ AI 額度警報\n─────\n"
+                    + _label.get(dead_provider, dead_provider) + " 額度耗盡\n"
+                    + "錯誤:" + str(err)[:80] + "\n─────\n"
+                    + "✅ 已自動切換主力 → " + _label.get(alt, alt) + "\n"
+                    + "翻譯服務不中斷。儲值後請至後台手動切回。")
+            print(f"[ai_provider] ⛽ {dead_provider} 額度耗盡 → 主力自動切換 {alt}", flush=True)
+            return alt
+
+        _current_config["auto_switch_state"] = {
+            "active": True,
+            "from": dead_provider,
+            "to": None,
+            "at": int(now),
+            "reason": "quota_exhausted_no_backup",
+        }
+        _save_config_to_disk(_current_config)
+
+    _notify_admin("🚨 AI 額度警報:" + dead_provider + " 額度耗盡,且無其他可用 provider!"
+                  "\n請立即儲值或到後台補 key,翻譯服務目前中斷。")
+    return None
+
+
+def _is_transport_error(error):
+    """Recognize transport failures even when their message is empty.
+
+    The SDK's own deadline guard raises TimeoutError with 'deadline exhausted',
+    and HTTP clients may emit empty ReadTimeout/ReadError messages. Matching
+    English error text alone silently disabled failover in both cases. Look up
+    classes only in already-loaded adapters; this adds no SDK import or I/O to
+    successful requests. Local protocol, disk and programming faults stay out.
+    """
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    if isinstance(error, OSError) and error.errno in {
+        errno.ECONNRESET, errno.ECONNREFUSED, errno.ECONNABORTED, errno.ETIMEDOUT,
+        errno.EHOSTUNREACH, errno.ENETUNREACH, errno.ENETDOWN, errno.EPIPE,
+    }:
+        return True
+    for module_name, names in (
+        ("httpx", ("TimeoutException", "NetworkError", "RemoteProtocolError")),
+        ("httpx2", ("TimeoutException", "NetworkError", "RemoteProtocolError")),
+        ("requests.exceptions", ("Timeout", "ConnectionError")),
+        ("urllib3.exceptions", ("TimeoutError", "NewConnectionError", "ProtocolError")),
+        ("openai", ("APIConnectionError",)),
+        ("anthropic", ("APIConnectionError",)),
+    ):
+        module = sys.modules.get(module_name)
+        classes = tuple(cls for name in names
+                        if isinstance(cls := getattr(module, name, None), type))
+        if classes and isinstance(error, classes):
+            return True
+    return False
+
+
+def _is_availability_error(e):
+    """v3.26: 判斷是否為「provider 暫時不可用」類錯誤(才值得容錯移轉)。
+    包含:連線/逾時、429 限流、5xx/529 過載。
+    排除:400(參數)、401/403(key 問題)— 這些換家也沒用,該浮出來修。"""
+    code = getattr(e, "status_code", None)
+    if code in (429, 500, 502, 503, 504, 529):
+        return True
+    if code in (400, 401, 403, 404, 422):
+        return False
+    if _is_transport_error(e):
+        return True
+    m = str(e).lower()
+    return any(t in m for t in ("connection", "timed out", "timeout",
+                                "overloaded", "unavailable", "rate limit",
+                                "529", "503", "502"))
+
+
+def _is_provider_failover_error(e):
+    """只判斷「換一家可能成功」的錯誤，避免內容政策/資料格式錯誤白打三家。"""
+    code = getattr(e, "status_code", None)
+    if code in (401, 403, 404, 408, 409, 429, 500, 502, 503, 504, 529):
+        return True
+    if _is_transport_error(e):
+        return True
+    m = str(e).lower()
+    provider_specific = (
+        "api key", "authentication", "unauthorized", "forbidden",
+        "model not found", "does not exist", "unsupported model",
+        "insufficient_quota", "quota", "credit balance", "billing",
+        "rate limit", "resource_exhausted", "overloaded", "unavailable",
+        "connection", "timed out", "timeout", "temporarily", "server error",
+        "refusal",
+    )
+    if any(token in m for token in provider_specific):
+        return True
+    # 400/422 只在明確為供應商參數相容問題時接力；一般輸入錯誤不重送。
+    if code in (400, 422) or "400" in m or "422" in m:
+        return any(token in m for token in (
+            "unsupported", "unrecognized", "unknown parameter", "invalid model",
+            "reasoning_effort", "service_tier", "max_completion_tokens",
+        ))
+    return False
+
+
+def _is_feature_parameter_error(e, *feature_names):
+    code = getattr(e, "status_code", None)
+    m = str(e).lower()
+    if code not in (400, 422) and not any(x in m for x in ("400", "422", "invalid", "unsupported", "unrecognized")):
+        return False
+    return any(str(name).lower() in m for name in feature_names)
+
+
+def _dispatch_provider(provider, model, messages, max_tokens=None,
+                       max_completion_tokens=None, temperature=None, timeout=90,
+                       prompt_cache_key=None, reasoning_effort=None, verbosity=None,
+                       logprobs=False, top_logprobs=None, logit_bias=None,
+                       stop=None, **kwargs):
+    """單一 provider 呼叫分派(v3.26 自容錯重構抽出)。"""
+    # 內部旗標只控制翻譯延遲，不送到任何第三方 API。
+    fast_quality = bool(kwargs.pop("translation_fast_quality", False))
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
+    if provider == "anthropic":
+        return _chat_complete_anthropic(
+            model=model, messages=messages,
+            max_tokens=max_tokens or max_completion_tokens or 1024,
+            temperature=temperature, timeout=timeout,
+            extra_stop=stop, fast_quality=fast_quality,
+            structured_schema=structured_schema, structured_name=structured_name,
+            reasoning_effort=reasoning_effort,
+        )
+    if provider == "gemini":
+        return _chat_complete_gemini(
+            model=model, messages=messages,
+            max_tokens=max_tokens or max_completion_tokens or 1024,
+            temperature=temperature, timeout=timeout, stop=stop,
+            fast_quality=fast_quality, structured_schema=structured_schema,
+            structured_name=structured_name,
+        )
+    model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
+    if fast_quality and reasoning_effort not in ("none", "minimal"):
+        # 只對 reasoning family 覆寫；GPT-4.1 等非 reasoning 模型不送此參數。
+        m = (model or "").lower()
+        if m.startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
+            reasoning_effort = "none"
+        elif m.startswith(("gpt-5", "o1", "o3", "o4")):
+            reasoning_effort = "minimal"
+    return _chat_complete_openai(
+        model=model, messages=messages,
+        max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
+        temperature=temperature, timeout=timeout,
+        prompt_cache_key=prompt_cache_key,
+        reasoning_effort=reasoning_effort, verbosity=verbosity,
+        logprobs=logprobs, top_logprobs=top_logprobs,
+        logit_bias=logit_bias, stop=stop,
+        structured_schema=structured_schema, structured_name=structured_name,
+        **kwargs,
+    )
+
+
+def _prepare_provider_privacy(messages, extra_literals=()):
+    """Mask string message content once at the final external-provider edge."""
+    combined = "\n".join(
+        str(message.get("content") or "")
+        for message in (messages or [])
+        if isinstance(message, dict) and isinstance(message.get("content"), str)
+    )
+    envelope = privacy_module.mask_sensitive_text(
+        combined, extra_literals=extra_literals
+    )
+    return privacy_module.mask_messages(messages or [], envelope), envelope
+
+
+def _restore_provider_privacy(response, envelope, *, structured=False):
+    if not envelope.mapping or not getattr(response, "choices", None):
+        return response
+    try:
+        message = response.choices[0].message
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            if structured:
+                # Restore string VALUES after parsing JSON. A protected name
+                # containing a quote, backslash or newline must not break the
+                # provider's schema or change unit IDs/property names.
+                try:
+                    payload = json.loads(content)
+                except (TypeError, ValueError):
+                    return response  # Let the shared decoder reject malformed JSON.
+                def restore_values(value):
+                    if isinstance(value, str):
+                        return privacy_module.restore_sensitive_text(value, envelope)
+                    if isinstance(value, list):
+                        return [restore_values(item) for item in value]
+                    if isinstance(value, dict):
+                        return {key: restore_values(item) for key, item in value.items()}
+                    return value
+                message.content = json.dumps(restore_values(payload), ensure_ascii=False)
+            else:
+                message.content = privacy_module.restore_sensitive_text(content, envelope)
+    except Exception as exc:
+        print(f"[ai_provider] privacy restore failed: {type(exc).__name__}", flush=True)
+    return response
+
+
+def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
+                  temperature=None, timeout=90, prompt_cache_key=None,
+                  reasoning_effort=None, verbosity=None, logprobs=False,
+                  top_logprobs=None, logit_bias=None, stop=None, **kwargs):
+    """One provider request. Quality findings are diagnostic, never a retry."""
+    _ensure_initialized()
+    required_capability = str(kwargs.pop("required_capability", "chat") or "chat")
+    preference = kwargs.pop("provider_preference", None)
+    probe = kwargs.pop("diagnostic_probe", None)
+    profile = str(kwargs.pop("latency_profile", "") or "")
+    validator = kwargs.pop("response_validator", None)
+    kwargs.pop("translation_max_generations", None)
+    kwargs.pop("translation_repair_model", None)
+    privacy_literals = kwargs.pop("privacy_literals", ()) or ()
+    messages, envelope = _prepare_provider_privacy(messages, extra_literals=privacy_literals)
+    policy = (_current_config or {}).get("failover_policy", {})
+    limits = (policy.get("latency_profiles", {}) or {}).get(profile, {})
+    total = float(kwargs.pop("failover_total_timeout", None) or limits.get("total") or policy.get("total_timeout_seconds", 60) or 60)
+    per_provider = float(kwargs.pop("failover_per_provider_timeout", None) or limits.get("per_provider") or policy.get("per_provider_timeout_seconds", 24) or 24)
+    providers = get_available_providers(required_capability, preference=preference)
+    if probe is not None:
+        if probe not in ("openai", "anthropic", "gemini") or not _provider_supports(probe, required_capability):
+            raise ValueError("不支援的測試提供者。")
+        if not _provider_has_key(probe):
+            raise RuntimeError(probe + " 尚未設定 API 金鑰。")
+        providers = [probe]
+    if not providers:
+        raise RuntimeError("沒有可用的 " + required_capability + " AI 提供者。請檢查 API 金鑰。")
+    if not (_current_config or {}).get("provider_failover", True) and probe is None:
+        active = get_active_provider()
+        providers = [active] if active in providers else providers[:1]
+    provider = providers[0]
+    seconds = max(0.1, min(float(timeout or 90), total, per_provider))
+    budget = _TRANSLATION_REQUEST.get()
+    if budget is not None:
+        if budget["attempts"] >= 1 or budget["generations"] >= 1:
+            raise RuntimeError("Translation request already attempted; automatic retry disabled")
+        if budget["deadline"] is None:
+            budget["deadline"] = time.monotonic() + budget["seconds"]
+        seconds = min(seconds, budget["deadline"] - time.monotonic())
+        if seconds <= 0:
+            raise TimeoutError("Translation request deadline exhausted")
+        budget["attempts"] += 1
+    started = time.monotonic()
+    try:
+        response = _dispatch_provider(provider, timeout=seconds, model=model, messages=messages,
+            max_tokens=max_tokens, max_completion_tokens=max_completion_tokens,
+            temperature=temperature, prompt_cache_key=prompt_cache_key,
+            reasoning_effort=reasoning_effort, verbosity=verbosity, logprobs=logprobs,
+            top_logprobs=top_logprobs, logit_bias=logit_bias, stop=stop, **kwargs)
+    except Exception as exc:
+        if _is_quota_exhausted_error(exc, provider=provider) and probe is None:
+            _auto_switch_on_exhaust(provider, exc)  # selects a route for future messages only
+        if _is_provider_failover_error(exc):
+            _record_provider_failure(provider, exc)
+        raise
+    finally:
+        import webhook_runtime
+        webhook_runtime.note_ai_attempt(time.monotonic() - started)
+    elapsed = time.monotonic() - started
+    if budget is not None:
+        budget["generations"] += 1
+    response._jy_provider = provider
+    if _USAGE_OBSERVER is not None:
+        try:
+            _USAGE_OBSERVER(response)
+        except Exception as exc:
+            logging.getLogger("app").warning("AI usage observer failed: %s", type(exc).__name__)
+    response = _restore_provider_privacy(response, envelope, structured=bool(kwargs.get("structured_schema")))
+    issues = []
+    choices = getattr(response, "choices", None) or []
+    finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
+    if finish in {"length", "max_tokens", "model_context_window_exceeded", "refusal", "content_filter"}:
+        issues.append("provider_finish:" + finish)
+    if callable(validator):
+        try:
+            verdict = validator(response, provider)
+            ok = bool(verdict[0]) if isinstance(verdict, tuple) else bool(verdict)
+            if not ok:
+                issues.append(str(verdict[1]) if isinstance(verdict, tuple) and len(verdict) > 1 else "quality_warning")
+        except Exception as exc:
+            issues.append("validation_exception:" + type(exc).__name__)
+    response._jy_failover_attempts = []
+    response._jy_latency_seconds = elapsed
+    response._jy_latency_profile = profile or "default"
+    response._jy_quality_degraded = bool(issues)
+    response._jy_quality_reject_reason = "; ".join(issues)
+    if issues:
+        logging.getLogger("app").warning("[AIQuality] retaining first response without retry: %s", issues)
+    _record_provider_success(provider, elapsed)
+    return response
+
+
+_openai_cache_unsupported_until = {}
+
+
+def _configure_openai_translation_cache(call_kwargs):
+    """Write only a reusable compiled prefix on GPT-5.6 Chat Completions.
+
+    Dynamic source/context prefixes otherwise incur a 1.25x cache-write charge.
+    Explicit mode with no eligible breakpoint performs ordinary uncached input
+    processing. No padding/count-tokens request is used to reach the threshold.
+    extra_body keeps this wire field compatible with older installed SDKs.
+    """
+    model = str(call_kwargs.get("model", ""))
+    if not model.startswith(("gpt-6", "gpt-5.6")):
+        return False
+    if os.environ.get("OPENAI_TRANSLATION_EXPLICIT_CACHE", "1").lower() in {"0", "false", "off", "no"}:
+        return False
+    with _provider_health_lock:
+        if _openai_cache_unsupported_until.get(model, 0) > time.monotonic():
+            return False
+    messages = call_kwargs.get("messages") or []
+    # Only the first message is guaranteed to be a stable prefix. Never move
+    # user text or an image across another message to manufacture cacheability.
+    if not messages or messages[0].get("role") not in {"system", "developer"}:
+        return False
+    content = messages[0].get("content")
+    if not isinstance(content, str) or "<translation_principles>" not in content:
+        return False
+    stable, dynamic = prompt_optimizer.split_cache_prefix(content)
+    if not stable:
+        return False
+    extra = dict(call_kwargs.get("extra_body") or {})
+    # An explicit caller-supplied policy remains authoritative.
+    if "prompt_cache_options" in call_kwargs or "prompt_cache_options" in extra:
+        return False
+    extra["prompt_cache_options"] = {"mode": "explicit"}
+    call_kwargs["extra_body"] = extra
+    if _estimate_tokens_from_text(stable) >= 1024:
+        parts = [{"type": "text", "text": stable,
+                  "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        if dynamic:
+            parts.append({"type": "text", "text": dynamic})
+        call_kwargs["messages"] = [{**messages[0], "content": parts}, *messages[1:]]
+    return True
+
+
+@_bounded_provider_transport
+def _chat_complete_openai(model, messages, **kwargs):
+    client = _get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI client 未初始化(api_key 缺?)")
+
+    # 最後一道模型生命週期保護：任何內部模組傳入舊 ID 都先遷移。
+    model = normalize_openai_request_model(model, fallback=DEFAULT_OPENAI_MODEL)
+
+    structured_schema = kwargs.pop("structured_schema", None)
+    structured_name = str(kwargs.pop("structured_name", "structured_response") or "structured_response")
+
+    # v3.2.6: Phase 25 對稱 — OpenAI 路徑也支援 output_translation_tag
+    # OpenAI GPT-5 reasoning model 跟 Claude 一樣會吐元評論(Wait/I notice/If English:),
+    # 後端 regex 抽 <translation> tag 內容是兩家通用的官方治本路徑。
+    # OpenAI 官方 cookbook 也推薦 XML structured output:
+    #   https://developers.openai.com/api/docs/guides/prompt-guidance (<output_contract> 範例)
+    _ensure_initialized()
+    features = _current_config.get("claude_features", {})
+    use_output_tag = features.get("output_translation_tag", False) and not structured_schema
+
+    if use_output_tag and messages:
+        # 在 system / developer role 訊息末尾注入 <output_format> 指令
+        new_messages = []
+        injected = False
+        tag_instruction = (
+            "\n\n<output_format priority=\"highest\">\n"
+            "Your final answer must contain ONLY this XML tag: <translation>...</translation>\n"
+            "Put the pure translation text inside the tag. Example:\n"
+            "  Input: 今天加班\n"
+            "  Output: <translation>Hari ini lembur</translation>\n"
+            "\n"
+            "Strict rules:\n"
+            "1. Do NOT output any text outside the <translation> tag (no explanation, "
+            "no self-correction like 'Wait — I notice', no clarifying questions, no alternatives).\n"
+            "2. Do NOT add prefixes like 'Translation:' or 'Catatan:' inside the tag.\n"
+            "3. Do NOT use markdown (**bold**, ## headers, - bullets) inside the tag unless source has them.\n"
+            "4. Even if you want to self-correct or ask the user, do NOT output text outside the tag. "
+            "Just give the final <translation>...</translation>.\n"
+            "5. Output exactly ONE <translation> tag, not multiple, not nested.\n"
+            "</output_format>\n"
+        )
+        if any("<translation_principles>" in str(m.get("content", "")) for m in messages):
+            tag_instruction = (
+                '\n<output_format priority="highest">Return one <translation>...</translation> '
+                'element containing only the complete target translation; no text outside it.'
+                '</output_format>'
+            )
+        for m in messages:
+            if not injected and isinstance(m, dict) and m.get("role") in ("system", "developer"):
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    new_messages.append({**m, "content": content + tag_instruction})
+                    injected = True
+                    continue
+            new_messages.append(m)
+        if not injected:
+            # 訊息中沒 system/developer role,prepend 一個
+            new_messages.insert(0, {"role": "system", "content": tag_instruction.lstrip()})
+        messages = new_messages
+
+    timeout = kwargs.get("timeout", 90)
+    request_client = _client_with_limits(client, timeout)
+    call_kwargs = {"model": model, "messages": messages}
+    _create_translation = _translation_create_method(request_client, "openai")
+    for k, v in kwargs.items():
+        if v is None:
+            continue
+        if k == "logprobs" and v is False:
+            continue
+        call_kwargs[k] = v
+    if structured_schema:
+        call_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": re.sub(r"[^A-Za-z0-9_-]+", "_", structured_name)[:64] or "structured_response",
+                "strict": True,
+                "schema": structured_schema,
+            },
+        }
+        call_kwargs.pop("stop", None)
+
+    # GPT-5.4 / GPT-5.5 是 reasoning family：Chat Completions 使用
+    # max_completion_tokens；純翻譯預設 reasoning=none，並移除不相容採樣參數。
+    _model_lower = (model or "").lower()
+    if _model_lower.startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        if "max_tokens" in call_kwargs and "max_completion_tokens" not in call_kwargs:
+            call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
+        for _unsupported in (
+            "temperature", "top_p", "seed", "stop", "logprobs",
+            "top_logprobs", "logit_bias",
+        ):
+            call_kwargs.pop(_unsupported, None)
+        if not _model_lower.endswith("-pro"):
+            call_kwargs.setdefault("reasoning_effort", "none")
+    # v3.25: 背景執行緒(bgpost/evlog)的呼叫走官方 Flex tier 半價。
+    # 偵測:thread 名稱(v3.13 背景池命名)+ config 開關 + 模型支援
+    # (官方 flex 支援 gpt-5 系/o 系;gpt-4.1 系不支援 → 自動略過)。
+    # 任何拒絕 → 退掉 service_tier 重試,不讓背景品檢失敗。
+    _flex_used = False
+    try:
+        _ofeat = (_current_config or {}).get("openai_features", {})
+        if _ofeat.get("flex_background", True):
+            import threading as _th
+            _tn = _th.current_thread().name or ""
+            _m = (call_kwargs.get("model") or "").lower()
+            if _tn.startswith(("bgpost", "evlog")) and _m.startswith(("gpt-6", "gpt-5", "o3", "o4")):
+                call_kwargs["service_tier"] = "flex"
+                _flex_used = True
+    except Exception:
+        pass
+    _cache_original_messages = call_kwargs["messages"]
+    _cache_original_extra = call_kwargs.get("extra_body")
+    _explicit_cache_used = _configure_openai_translation_cache(call_kwargs)
+    try:
+        resp = _sdk_create(_create_translation, call_kwargs)
+    except Exception as exc:
+        # Remember compatibility for future messages; never repeat this paid
+        # request just to remove an optional cache parameter.
+        if _explicit_cache_used and _is_feature_parameter_error(exc, "prompt_cache_options"):
+            _openai_cache_unsupported_until[model] = time.monotonic() + 3600
+        raise
+
+    # v3.2.6: response 抽 <translation> tag(對稱 Anthropic line 1567-1574)
+    # 容錯:若 LLM 沒乖乖包 tag,保留原 content 不動(向後相容)
+    if use_output_tag and getattr(resp, "choices", None):
+        try:
+            first = resp.choices[0]
+            msg = getattr(first, "message", None)
+            content = getattr(msg, "content", None) if msg else None
+            if content:
+                import re as _re_tag
+                match = _re_tag.search(
+                    r"<translation[^>]*>(.*?)</translation>",
+                    content, _re_tag.DOTALL | _re_tag.IGNORECASE,
+                )
+                if match:
+                    extracted = match.group(1).strip()
+                    if extracted:
+                        try:
+                            first.message.content = extracted
+                        except Exception:
+                            # OpenAI response 物件不可寫 — 印警告但不 raise
+                            print(f"[ai_provider] WARN: OpenAI response.message.content 不可寫,"
+                                  f"無法抽 tag。原內容保留。", flush=True)
+        except Exception as _e:
+            print(f"[ai_provider] WARN: OpenAI 抽 <translation> tag 失敗: {_e}", flush=True)
+
+    return resp
+
+
+@_bounded_provider_transport
+def _chat_complete_anthropic(model, messages, max_tokens, temperature=None,
+                              timeout=120, extra_stop=None, fast_quality=False,
+                              structured_schema=None, structured_name="structured_response",
+                              reasoning_effort=None):
+    """Anthropic 路徑 — v3.0 完整 Claude 能力全部自動啟用"""
+    client = _get_anthropic_client()
+    if client is None:
+        raise RuntimeError("Anthropic client 未初始化(api_key 缺?或 pip install anthropic)")
+    request_client = _client_with_limits(client, timeout)
+
+    _ensure_initialized()
+    features = dict(_current_config.get("claude_features", {}))
+    _create_translation = _translation_create_method(request_client, "anthropic")
+    structured_name = str(structured_name or "structured_response")
+    # Native structured outputs cannot be combined with citation blocks, XML
+    # output wrappers or stop sequences that may truncate JSON.
+    if structured_schema:
+        features["extended_thinking"] = False
+        features["adaptive_thinking"] = False
+        features["citations"] = False
+        features["stop_sequences"] = False
+        features["output_translation_tag"] = False
+        features["assistant_prefill"] = False
+        features["glossary_grounding"] = False
+    # 翻譯快速品質模式只關閉 Extended/Adaptive Thinking；模型、system prompt、
+    # glossary grounding、cache、stop sequence 與輸出後處理全部維持不變。
+    if fast_quality:
+        features["extended_thinking"] = False
+        features["adaptive_thinking"] = False
+        # The application already supplies the exact source glossary and output
+        # contract. Extra citation blocks and emitted <thinking> waste tokens
+        # and compete with the instruction to return one translation only.
+        features["cot_thinking_tag"] = False
+        features["success_criteria"] = False
+        if any("<source_terminology>" in str(m.get("content", ""))
+               or "<required_terminology>" in str(m.get("content", "")) for m in messages):
+            features["glossary_grounding"] = False
+    use_cache = features.get("prompt_caching", True)
+    use_thinking = features.get("extended_thinking", False)  # v3.18: 預設 False
+    thinking_budget = int(features.get("thinking_budget", 2000))
+    use_grounding = features.get("glossary_grounding", True)
+    glossary_max = int(features.get("glossary_max_items", 50))
+    use_stop = features.get("stop_sequences", True)
+    use_xml = features.get("xml_system_prompt", True)
+    use_citations = features.get("citations", True)
+    use_cache_1h = features.get("extended_cache_1h", True)
+    use_multi_cache = features.get("multi_block_caching", True)  # D3 Phase 12
+    use_files_api = features.get("files_api_glossary", False)    # D3 Phase 17
+    # === v3.2 D4 新增 ===
+    use_smart_threshold = features.get("smart_cache_threshold", True)  # Phase 15
+
+    anthropic_model = _resolve_anthropic_model(model)
+    is_haiku = "haiku" in anthropic_model.lower()
+    is_opus = "opus" in anthropic_model.lower()
+    is_sonnet5 = _model_is_sonnet5(anthropic_model)
+    is_claude55 = _model_is_claude_55_family(anthropic_model)
+    # 新格式提示詞（app 直接組裝 <role>+<translation_principles>）已自帶輸出
+    # 規則，不再套舊的 <task>/<rules>/<success_criteria>/<thinking_protocol>
+    # 外層，避免兩個 <role>、兩個 <output_format> 互相矛盾並多付 60% 字數。
+    _direct_prompt = any(
+        isinstance(m.get("content"), str)
+        and "<translation_principles>" in m.get("content", "")
+        for m in messages if m.get("role") == "system"
+    )
+    if _direct_prompt:
+        features["cot_thinking_tag"] = False
+        features["success_criteria"] = False
+        features["role_strong"] = False
+        features["citations"] = False
+        features["output_translation_tag"] = False
+        if any("<source_terminology>" in str(m.get("content", ""))
+               or "<required_terminology>" in str(m.get("content", "")) for m in messages):
+            features["glossary_grounding"] = False
+
+    # ─── Step 1: 訊息格式轉換 ───
+    system_text = ""
+    anthropic_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            if system_text:
+                system_text += "\n\n" + (content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))
+            else:
+                system_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        elif role in ("user", "assistant"):
+            if isinstance(content, list):
+                anthropic_content = _convert_openai_content_blocks_to_anthropic(content)
+                anthropic_messages.append({"role": role, "content": anthropic_content})
+            else:
+                anthropic_messages.append({"role": role, "content": str(content)})
+
+    # v3.2.3 Phase 21: 偵測是否為 OCR 場景(訊息內含 image / document block)
+    # 偵測完整 anthropic_messages list,只要任一 user message 有視覺 block 就算
+    _has_visual_input = False
+    for _m in anthropic_messages:
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            for _blk in _c:
+                if isinstance(_blk, dict) and _blk.get("type") in ("image", "document"):
+                    _has_visual_input = True
+                    break
+        if _has_visual_input:
+            break
+
+    # v3.2.3 讀取新 toggle
+    use_line_plain = features.get("line_plain_text_mode", True)        # Phase 20
+    use_ocr_strict = features.get("ocr_strict_layout", True)           # Phase 21
+    # OCR 嚴格保版面只在有視覺輸入時觸發
+    _apply_ocr_strict = use_ocr_strict and _has_visual_input
+
+    # v3.2.4 Phase 23+24
+    use_cot_tag = features.get("cot_thinking_tag", True)
+    use_role_strong = features.get("role_strong", True)
+    # v3.2.5 Phase 25+26
+    use_output_tag = features.get("output_translation_tag", False)
+    use_success_criteria = features.get("success_criteria", True)
+
+    # Phase 5 + 20 + 21 + 23 + 24 + 25 + 26: XML 包裝 system prompt
+    if use_xml and system_text:
+        system_text = _wrap_system_prompt_xml(
+            system_text,
+            line_plain=use_line_plain,
+            ocr_strict=_apply_ocr_strict,
+            cot_tag=use_cot_tag,
+            role_strong=use_role_strong,
+            output_tag=use_output_tag,
+            success_criteria=use_success_criteria,
+        )
+
+    # 連續 same-role 合併(Phase 6 few-shot 自動 OK,因為 user→assistant 交替)
+    merged = []
+    for m in anthropic_messages:
+        if merged and merged[-1]["role"] == m["role"]:
+            prev = merged[-1]
+            if isinstance(prev["content"], str) and isinstance(m["content"], str):
+                prev["content"] = prev["content"] + "\n\n" + m["content"]
+            else:
+                a = prev["content"] if isinstance(prev["content"], str) else json.dumps(prev["content"], ensure_ascii=False)
+                b = m["content"] if isinstance(m["content"], str) else json.dumps(m["content"], ensure_ascii=False)
+                prev["content"] = a + "\n\n" + b
+        else:
+            merged.append(m)
+
+    # ─── Step 2: Phase 3 — Glossary Grounding ───
+    grounding_used = False
+    matched_terms_count = 0
+    if use_grounding and merged:
+        matched = _find_relevant_glossary_terms(messages, max_items=glossary_max)
+        if matched:
+            matched_terms_count = len(matched)
+            grounding_blocks = _build_glossary_search_results(
+                matched, citations_enabled=use_citations
+            )
+            for i in range(len(merged) - 1, -1, -1):
+                if merged[i]["role"] == "user":
+                    cur_content = merged[i]["content"]
+                    if isinstance(cur_content, str):
+                        text_block = {"type": "text", "text": cur_content}
+                        merged[i]["content"] = grounding_blocks + [text_block]
+                    elif isinstance(cur_content, list):
+                        merged[i]["content"] = grounding_blocks + cur_content
+                    grounding_used = True
+                    break
+
+    # ─── Step 2.5: v3.2.4 Phase 22: Assistant Prefill ───
+    # Anthropic 官方:prefill assistant turn 可跳過 preamble、強制輸出格式
+    # https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prefill-claudes-response
+    #
+    # 重要限制:
+    #   - Sonnet 4.6 / Opus 4.6+ / Opus 4.7 / Mythos 不支援(送出會 400)
+    #     歐那雙模型場景:Haiku 4.5 可用,Sonnet 4.6 跳過
+    #   - prefill 內容不能 trailing whitespace
+    #   - 必須是最後一個 message
+    #   - 含圖片場景不 prefill(避免 vision 行為被干擾)
+    #
+    # 預設 OFF,歐那要時可在後台填自訂 prefill text(例如「翻譯:」)
+    # 但建議**不填**,因 Phase 4 stop_sequences + Phase 5 XML output_format 已有效防前綴
+    prefill_applied = False
+    use_prefill = features.get("assistant_prefill", False)
+    prefill_text = features.get("assistant_prefill_text", "")
+    if use_prefill and prefill_text and isinstance(prefill_text, str):
+        if _supports_prefill(anthropic_model):
+            # 偵測上一條 user message 是純文字
+            last_user_is_text = False
+            if merged and merged[-1].get("role") == "user":
+                last_content = merged[-1].get("content")
+                if isinstance(last_content, str):
+                    last_user_is_text = True
+                elif isinstance(last_content, list):
+                    has_visual = any(
+                        isinstance(b, dict) and b.get("type") in ("image", "document")
+                        for b in last_content
+                    )
+                    last_user_is_text = not has_visual
+            if last_user_is_text:
+                # rstrip 確保無 trailing whitespace(官方明文禁止,否則 400)
+                clean_prefill = prefill_text.rstrip()
+                if clean_prefill:
+                    merged.append({"role": "assistant", "content": clean_prefill})
+                    prefill_applied = True
+
+    # ─── Step 3: 組裝 call_kwargs ───
+    call_kwargs = {
+        "model": anthropic_model,
+        "messages": merged,
+        "max_tokens": int(max_tokens or 1024),
+    }
+
+    # Phase 1 + 8 + 12 + 15: Prompt Caching
+    # v3.2 BUG 修:改用 model-specific token 門檻,不再 silent fail
+    caching_applied = False
+    multi_block_applied = False
+    cache_threshold_used = 0
+    cache_est_tokens = 0
+    if system_text:
+        should_cache, threshold, est_tok = _should_apply_cache(
+            system_text, anthropic_model, smart_mode=use_smart_threshold
+        )
+        cache_threshold_used = threshold
+        cache_est_tokens = est_tok
+        if fast_quality or _direct_prompt:
+            # Never guess that 80% of a compiled request is stable. In the
+            # current format that includes per-message claims and references,
+            # causing a new premium cache write for almost every source.
+            # 穩定區 = role + principles + 群組語氣預設（每則相同）；
+            # 語氣分析、語意契約、術語、範例屬於每則不同的動態區，不快取。
+            stable_end = 0
+            for _tag in ("</translation_preset>", "</translation_principles>"):
+                boundary = system_text.find(_tag)
+                if boundary >= 0:
+                    stable_end = boundary + len(_tag)
+                    break
+            stable = system_text[:stable_end]
+            stable_cache, _, _ = _should_apply_cache(stable, anthropic_model, smart_mode=True)
+            if use_cache and stable and stable_cache:
+                # 5 分鐘 TTL：寫入 1.25x；1h 寫入 2x，對每幾分鐘一則的群組聊天無額外價值。
+                call_kwargs["system"] = [
+                    {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+                ]
+                if system_text[stable_end:]:
+                    call_kwargs["system"].append({"type": "text", "text": system_text[stable_end:]})
+                caching_applied = True
+            else:
+                call_kwargs["system"] = system_text
+        elif use_cache and should_cache:
+            if use_multi_cache:
+                # Phase 12: Multi-block — 把 system 拆 stable + dynamic 兩層 cache
+                blocks = _split_system_into_cache_blocks(
+                    system_text, use_xml=use_xml, use_1h=use_cache_1h
+                )
+                if blocks:
+                    call_kwargs["system"] = blocks
+                    caching_applied = True
+                    multi_block_applied = len(blocks) > 1
+            else:
+                # 單層 cache(舊邏輯)
+                cache_control = {"type": "ephemeral"}
+                if use_cache_1h:
+                    cache_control["ttl"] = "1h"
+                call_kwargs["system"] = [{
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": cache_control
+                }]
+                caching_applied = True
+        else:
+            # 沒達門檻 → 純 system,不套 cache_control(避免 silent 浪費)
+            call_kwargs["system"] = system_text
+
+    # Phase 4: Stop Sequences
+    if use_stop:
+        stops = _build_stop_sequences(system_text)
+        if extra_stop:
+            if isinstance(extra_stop, str):
+                stops.insert(0, extra_stop)
+            elif isinstance(extra_stop, list):
+                stops = list(extra_stop) + stops
+        # Anthropic 上限 4 個 stop sequences,挑最重要的
+        call_kwargs["stop_sequences"] = stops[:4]
+
+    # Phase 2 + 13 + 14: Extended/Adaptive Thinking
+    # v3.2 BUG 修:Opus 4.7 強制 adaptive(舊 enabled mode 已 removed,丟了會 400)
+    #             Sonnet 4.6 預設改 adaptive(舊 enabled mode deprecated)
+    thinking_applied = False
+    thinking_mode_used = "none"
+    if is_claude55:
+        # 5.5 系列：不送 temperature/top_p/top_k；思考由 effort 控制。
+        # 翻譯路徑依 app 的每句推理配置：簡單句 disabled，有風險的句子 adaptive+low/medium。
+        if fast_quality:
+            thinking_cfg, eff = {"type": "disabled"}, "low"
+        else:
+            thinking_cfg, eff = _claude_translation_effort(
+                reasoning_effort if reasoning_effort is not None
+                else features.get("thinking_effort", "low"))
+        if not features.get("extended_thinking", False) and reasoning_effort is None and not fast_quality:
+            # 後台未開 thinking 又沒有每句配置：維持最省設定
+            thinking_cfg, eff = {"type": "disabled"}, "low"
+        call_kwargs["thinking"] = thinking_cfg
+        call_kwargs["output_config"] = {"effort": _normalize_effort(eff, anthropic_model)}
+        thinking_applied = thinking_cfg.get("type") != "disabled"
+        thinking_mode_used = (thinking_cfg.get("type") or "disabled") + "_" + eff
+        thinking_cfg = None  # 已處理，略過舊分支
+    else:
+        thinking_cfg, thinking_mode_used = _pick_thinking_config(features, anthropic_model)
+    if thinking_cfg is not None:
+        # adaptive 模式不需要也不能設 budget_tokens
+        # enabled 模式需要確保 max_tokens >= budget + 1024
+        if thinking_cfg.get("type") == "enabled":
+            needed_max = max(
+                int(max_tokens or 1024),
+                int(thinking_cfg.get("budget_tokens", 2000)) + 1024
+            )
+            call_kwargs["max_tokens"] = needed_max
+        call_kwargs["thinking"] = thinking_cfg
+        thinking_applied = True
+        if is_sonnet5:
+            # Sonnet 5 的 effort 必須放在 output_config，且 sampling params 不接受。
+            call_kwargs["output_config"] = {
+                "effort": _normalize_effort(features.get("thinking_effort", "low"), anthropic_model)
+            }
+    elif is_claude55:
+        pass
+    else:
+        if is_sonnet5:
+            # Sonnet 5 未傳 thinking 時預設 adaptive/high，會增加即時翻譯延遲。
+            # 翻譯路徑明確關閉 thinking，並把整體輸出 effort 固定 low。
+            call_kwargs["thinking"] = {"type": "disabled"}
+            call_kwargs["output_config"] = {"effort": "low"}
+            thinking_mode_used = "disabled_low"
+        elif temperature is not None and not is_opus:
+            call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
+
+    if structured_schema:
+        output_config = dict(call_kwargs.get("output_config") or {})
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": structured_schema,
+        }
+        call_kwargs["output_config"] = output_config
+
+    # ─── Step 4: 呼叫 ───
+    resp = _sdk_create(_create_translation, call_kwargs)
+
+    # Preserve usage even for HTTP-200 refusal responses. The coordinator must
+    # count the generation and its cost before rejecting it and failing over.
+    refused = getattr(resp, "stop_reason", None) == "refusal"
+
+    # ─── Step 5: 抽出文字 + Phase 9 citations ───
+    full_text = ""
+    citations_list = []
+    if resp.content:
+        for block in resp.content:
+            block_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+            if block_type == "text":
+                if hasattr(block, "text"):
+                    full_text += block.text or ""
+                elif isinstance(block, dict):
+                    full_text += block.get("text", "")
+                # 收集 citations(Phase 9)
+                block_citations = getattr(block, "citations", None) or (block.get("citations") if isinstance(block, dict) else None)
+                if block_citations:
+                    for c in block_citations:
+                        title = getattr(c, "title", None) or (c.get("title") if isinstance(c, dict) else None)
+                        if title:
+                            citations_list.append(title)
+            # thinking block 不抽出
+
+    # v3.2.5 Phase 25: 若啟用 output_translation_tag,從 <translation>...</translation> 抽純翻譯
+    # 容錯處理:
+    #   - 若 Claude 沒乖乖包 tag(僅輸出純文字),回傳 full_text 不動(向後相容)
+    #   - 若 Claude 包了 tag,只取 tag 內內容,丟棄 tag 前/後雜訊
+    #   - 多個 tag 取第一個(理論上 Claude 只會出一個)
+    if use_output_tag and full_text:
+        import re as _re_tag
+        # 寬鬆 regex:支援 <translation> 或 <translation lang="id"> 等變體
+        match = _re_tag.search(r"<translation[^>]*>(.*?)</translation>", full_text, _re_tag.DOTALL | _re_tag.IGNORECASE)
+        if match:
+            extracted = match.group(1).strip()
+            if extracted:
+                full_text = extracted
+        # 若沒命中 tag,保留 full_text 原樣(向後相容)
+
+    usage = _UnifiedUsage(
+        prompt_tokens=getattr(resp.usage, "input_tokens", 0) if resp.usage else 0,
+        completion_tokens=getattr(resp.usage, "output_tokens", 0) if resp.usage else 0,
+    )
+    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
+    if resp.usage:
+        usage.cache_read_tokens = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        usage.cache_creation_tokens = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
+        cache_creation = getattr(resp.usage, "cache_creation", None)
+        usage.cache_creation_1h_tokens = (
+            cache_creation.get("ephemeral_1h_input_tokens", 0)
+            if isinstance(cache_creation, dict) else
+            getattr(cache_creation, "ephemeral_1h_input_tokens", 0)
+        ) or 0
+
+    result = _UnifiedResponse(
+        content="" if refused else full_text,
+        model=anthropic_model,
+        usage=usage,
+        finish_reason=getattr(resp, "stop_reason", "stop") or "stop",
+        logprobs=None,
+        citations=citations_list,
+    )
+    # Direct adapter callers and failover can differ from the active provider.
+    result._jy_provider = "anthropic"
+
+    # debug 標記:這次用了哪些 Claude 能力
+    result._jy_claude_features_used = {
+        "caching": caching_applied,
+        "caching_1h": caching_applied and use_cache_1h and not fast_quality,
+        "multi_block_caching": multi_block_applied,  # D3 Phase 12
+        "thinking": thinking_applied,
+        "thinking_mode": thinking_mode_used,         # v3.2 Phase 13:adaptive_medium / legacy_2000 / none
+        "grounding": grounding_used,
+        "grounding_terms_count": matched_terms_count,
+        "stop_sequences": use_stop,
+        "xml_system": use_xml,
+        "citations": use_citations and len(citations_list) > 0,
+        "citation_count": len(citations_list),
+        # v3.2 Phase 15:cache 門檻診斷
+        "cache_threshold_tokens": cache_threshold_used,
+        "cache_est_tokens": cache_est_tokens,
+        "cache_above_threshold": cache_est_tokens >= cache_threshold_used if cache_threshold_used > 0 else None,
+        # v3.2.3 Phase 20+21
+        "line_plain_text_mode": use_xml and use_line_plain,         # 防 LINE markdown 廢字元
+        "has_visual_input": _has_visual_input,                       # 偵測到圖片/PDF
+        "ocr_strict_layout_applied": use_xml and _apply_ocr_strict,  # OCR 嚴格保版面實際生效
+        # v3.2.4 Phase 22+23
+        "prefill_applied": prefill_applied,                          # Assistant Prefill 是否實際套用
+        "prefill_supports_model": _supports_prefill(anthropic_model),  # 此 model 是否支援 prefill
+        # v3.2.5 Phase 25+26
+        "output_translation_tag_applied": use_output_tag,            # 是否強制 <translation> tag
+        "success_criteria_applied": use_xml and use_success_criteria, # 是否注入成功標準
+    }
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 10: Streaming
+# ═══════════════════════════════════════════════════════════════════
+def chat_complete_stream(model, messages, max_tokens=None, temperature=None, **kwargs):
+    """Streaming 版本 — 漸進輸出 token
+    
+    Yields:
+        - text chunks (字串)
+        - 最後 yield 一個 dict {"_final": True, "usage": ..., "model": ...}
+    
+    使用方式:
+        full_text = ""
+        for chunk in chat_complete_stream(model="gpt-4.1-mini", messages=[...]):
+            if isinstance(chunk, dict) and chunk.get("_final"):
+                # 最後 metadata
+                print("Total tokens:", chunk["usage"])
+            else:
+                full_text += chunk
+                print(chunk, end="", flush=True)
+    """
+    provider = get_active_provider()
+    if provider == "anthropic":
+        yield from _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **kwargs)
+    elif provider == "gemini":
+        # v3.21: Gemini 相容端點支援 OpenAI 式 streaming
+        client = _get_gemini_client()
+        if client is None:
+            raise RuntimeError("Gemini client 未初始化")
+        g_model = _resolve_gemini_model(model)
+        stream = client.chat.completions.create(
+            model=g_model, messages=messages, stream=True,
+            **({"max_tokens": int(max_tokens)} if max_tokens else {}),
+            **({"temperature": temperature} if temperature is not None else {}),
+        )
+        usage = None
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+            except Exception:
+                delta = None
+            if delta:
+                yield delta
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+        yield {"_final": True, "usage": usage, "model": g_model}
+    else:
+        yield from _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwargs)
+
+
+def _chat_complete_stream_openai(model, messages, max_tokens, temperature, **kwargs):
+    client = _get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI client 未初始化")
+    model = normalize_openai_model(model, fallback=DEFAULT_OPENAI_MODEL)
+    call_kwargs = {"model": model, "messages": messages, "stream": True}
+    if model.lower().startswith(("gpt-6", "gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        if max_tokens is not None:
+            call_kwargs["max_completion_tokens"] = max_tokens
+        if not model.lower().endswith("-pro"):
+            call_kwargs["reasoning_effort"] = "none"
+    else:
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+    stream = client.chat.completions.create(**call_kwargs)
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+    yield {"_final": True, "model": model, "provider": "openai"}
+
+
+def _chat_complete_stream_anthropic(model, messages, max_tokens, temperature, **kwargs):
+    """Anthropic streaming — 同樣套用 v3.0 所有 Claude 能力"""
+    client = _get_anthropic_client()
+    if client is None:
+        raise RuntimeError("Anthropic client 未初始化")
+
+    # 走跟 _chat_complete_anthropic 一樣的訊息處理邏輯,只是改 stream
+    # 簡化:複用 non-stream 路徑來組 call_kwargs,然後改 stream=True
+    _ensure_initialized()
+    features = _current_config.get("claude_features", {})
+
+    # 訊息轉換(同 non-stream)
+    system_text = ""
+    anthropic_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_text = (system_text + "\n\n" + content) if system_text else content
+        elif role in ("user", "assistant"):
+            anthropic_messages.append({"role": role, "content": str(content) if not isinstance(content, list) else content})
+
+    # v3.2.3: streaming 路徑同步套 line_plain / ocr_strict
+    _has_visual_input = False
+    for _m in anthropic_messages:
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            for _blk in _c:
+                if isinstance(_blk, dict) and _blk.get("type") in ("image", "document"):
+                    _has_visual_input = True
+                    break
+        if _has_visual_input:
+            break
+
+    if features.get("xml_system_prompt", True) and system_text:
+        system_text = _wrap_system_prompt_xml(
+            system_text,
+            line_plain=features.get("line_plain_text_mode", True),
+            ocr_strict=features.get("ocr_strict_layout", True) and _has_visual_input,
+            cot_tag=features.get("cot_thinking_tag", True),
+            role_strong=features.get("role_strong", True),
+            output_tag=features.get("output_translation_tag", False),
+            success_criteria=features.get("success_criteria", True),
+        )
+
+    # Grounding
+    merged = anthropic_messages
+    if features.get("glossary_grounding", True):
+        matched = _find_relevant_glossary_terms(messages, max_items=features.get("glossary_max_items", 50))
+        if matched:
+            grounding_blocks = _build_glossary_search_results(matched, citations_enabled=features.get("citations", True))
+            for i in range(len(merged) - 1, -1, -1):
+                if merged[i]["role"] == "user":
+                    cur = merged[i]["content"]
+                    if isinstance(cur, str):
+                        merged[i]["content"] = grounding_blocks + [{"type": "text", "text": cur}]
+                    elif isinstance(cur, list):
+                        merged[i]["content"] = grounding_blocks + cur
+                    break
+
+    anthropic_model = _resolve_anthropic_model(model)
+    is_haiku = "haiku" in anthropic_model.lower()
+
+    call_kwargs = {
+        "model": anthropic_model,
+        "messages": merged,
+        "max_tokens": int(max_tokens or 1024),
+    }
+
+    # v3.2: 套 smart cache threshold
+    use_smart_threshold = features.get("smart_cache_threshold", True)
+    if system_text:
+        should_cache, _, _ = _should_apply_cache(
+            system_text, anthropic_model, smart_mode=use_smart_threshold
+        )
+        if features.get("prompt_caching", True) and should_cache:
+            cc = {"type": "ephemeral"}
+            if features.get("extended_cache_1h", True):
+                cc["ttl"] = "1h"
+            call_kwargs["system"] = [{"type": "text", "text": system_text, "cache_control": cc}]
+        else:
+            call_kwargs["system"] = system_text
+
+    if features.get("stop_sequences", True):
+        call_kwargs["stop_sequences"] = _build_stop_sequences()[:4]
+
+    # v3.2: 用 _pick_thinking_config 自動處理 Opus 4.7 強制 adaptive 的問題
+    thinking_cfg, _ = _pick_thinking_config(features, anthropic_model)
+    if thinking_cfg is not None:
+        if thinking_cfg.get("type") == "enabled":
+            budget = int(thinking_cfg.get("budget_tokens", 2000))
+            call_kwargs["max_tokens"] = max(call_kwargs["max_tokens"], budget + 1024)
+        call_kwargs["thinking"] = thinking_cfg
+    elif temperature is not None:
+        call_kwargs["temperature"] = max(0.0, min(1.0, float(temperature)))
+
+    # 啟用 stream
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        with client.messages.stream(**call_kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
+            # stream 結束後可拿 final message
+            final = stream.get_final_message()
+            if final and final.usage:
+                input_tokens = final.usage.input_tokens
+                output_tokens = final.usage.output_tokens
+    except Exception as e:
+        # streaming 失敗 → 拋出讓上層處理(可 fallback to non-stream)
+        raise
+
+    yield {
+        "_final": True,
+        "model": anthropic_model,
+        "provider": "anthropic",
+        "usage": {"input": input_tokens, "output": output_tokens},
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 7: Native Vision — 圖片直接給 Claude 讀
+# ═══════════════════════════════════════════════════════════════════
+# Claude Haiku 5.5 uses the high-resolution image tier (downscale only above a
+# 2,576 px long edge / 4,784 vision tokens), so a 2,000×1,500 phone photo costs
+# about 2.5× the vision tokens it cost on Haiku 4.5, which capped at 1,568 px.
+# Every earlier Claude model this bot used was served at ≤1,568 px, so sending
+# the same bound keeps OCR quality unchanged while keeping image spend flat.
+ANTHROPIC_IMAGE_MAX_EDGE = 1568
+
+
+def _bound_image_for_anthropic(media_type, b64data, max_edge=ANTHROPIC_IMAGE_MAX_EDGE):
+    """Return (media_type, b64data) with the long edge capped at max_edge."""
+    try:
+        import base64 as _b64
+        import io as _io
+        from PIL import Image as _Image
+        raw = _b64.b64decode(b64data)
+        img = _Image.open(_io.BytesIO(raw))
+        width, height = img.size
+        longest = max(width, height)
+        if longest <= max_edge:
+            return media_type, b64data
+        scale = max_edge / float(longest)
+        img = img.convert("RGB").resize(
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            _Image.Resampling.LANCZOS)
+        out = _io.BytesIO()
+        img.save(out, format="JPEG", quality=90, optimize=True)
+        return "image/jpeg", _b64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        return media_type, b64data
+
+
+def _convert_openai_content_blocks_to_anthropic(blocks):
+    """OpenAI multi-modal content → Anthropic content list
+    
+    Phase 7: 圖片(包含 PDF base64)直接走 Claude vision
+    
+    v3.2.1 Phase 18: image-then-text 自動重排
+      官方明文 best practice:
+        "Claude works best when images come before text.
+         Prefer image-then-text structure."
+        — platform.claude.com/docs/en/build-with-claude/vision
+      
+      重排規則(保守,避免破壞 few-shot vision):
+        - 若視覺 block(image/document) 剛好 1 個 + text block ≥ 1 個
+          → 把視覺 block 提到最前面
+        - 若多張視覺 block → 保持原順序(可能是 few-shot 範例)
+        - 若沒有視覺或沒有文字 → 保持原順序
+      
+      不重排的情況不會犧牲品質 — 官方說
+      "Images placed after text or interpolated with text still perform well"
+      只是 image-first 略佳。
+    
+    v3.9.33 型別安全:
+      - None 輸入 → 回空 list
+      - 純字串輸入 → 包裝成單一 text block(避免字串被當 iterable 拆字元)
+    """
+    # 型別安全
+    if blocks is None:
+        return []
+    if isinstance(blocks, str):
+        return [{"type": "text", "text": blocks}]
+    if not isinstance(blocks, list):
+        return [{"type": "text", "text": str(blocks)}]
+    
+    result = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            result.append({"type": "text", "text": str(b)})
+            continue
+        btype = b.get("type", "")
+        if btype == "text":
+            result.append({"type": "text", "text": b.get("text", "")})
+        elif btype == "image_url":
+            url = b.get("image_url", {}).get("url", "") if isinstance(b.get("image_url"), dict) else ""
+            if url.startswith("data:"):
+                try:
+                    header, b64data = url.split(",", 1)
+                    media_type = header.split(";")[0].replace("data:", "") or "image/png"
+                    # PDF 也支援(Claude 原生)
+                    if media_type == "application/pdf":
+                        result.append({
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": b64data}
+                        })
+                    else:
+                        media_type, b64data = _bound_image_for_anthropic(media_type, b64data)
+                        result.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": b64data}
+                        })
+                except Exception:
+                    result.append({"type": "text", "text": "[image decode error]"})
+            else:
+                # URL 模式
+                result.append({
+                    "type": "image",
+                    "source": {"type": "url", "url": url}
+                })
+        elif btype == "image":
+            # 已經是 Anthropic 格式,直接保留
+            result.append(b)
+        else:
+            result.append({"type": "text", "text": f"[unsupported block type: {btype}]"})
+
+    # v3.2.1 Phase 18: image-then-text 重排
+    # 找出視覺 block 的位置
+    visual_indices = [
+        i for i, blk in enumerate(result)
+        if isinstance(blk, dict) and blk.get("type") in ("image", "document")
+    ]
+    text_count = sum(
+        1 for blk in result
+        if isinstance(blk, dict) and blk.get("type") == "text"
+    )
+    # 規則:剛好 1 個視覺 block + ≥1 個文字 block + 視覺不在最前面 → 移到最前
+    if len(visual_indices) == 1 and text_count >= 1 and visual_indices[0] != 0:
+        visual_block = result.pop(visual_indices[0])
+        result.insert(0, visual_block)
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# v3.2.2 Phase 19: Image Translation Toggle
+# ═══════════════════════════════════════════════════════════════════
+def should_use_claude_for_images():
+    """app.py 在做圖片 OCR/翻譯前呼叫,決定要用 Claude 還是 OpenAI
+    
+    Returns: True  → 走 Claude vision(若 active provider 是 anthropic)
+             False → 強制走 OpenAI vision(不管 active provider)
+    
+    用途:給歐那一個獨立開關,避免「切到 Anthropic 後圖片成本爆」
+         圖片 token 比文字貴(一張 1MP 圖 ≈ 1600 tokens × $5/M Claude = $0.008)
+         有時候只想讓文字翻譯走 Claude,圖片優先改走其他已設定的視覺 provider
+    
+    呼叫例:
+        if ai_provider.get_active_provider() == "anthropic" and ai_provider.should_use_claude_for_images():
+            # 圖片走 Claude(透過 ai.chat.completions.create 自動路由)
+            ...
+        else:
+            # 強制 OpenAI:直接呼叫 oai client,繞過 _AIProxy
+            ...
+    """
+    _ensure_initialized()
+    features = _current_config.get("claude_features", {})
+    return features.get("image_translation_use_claude", True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Audio transcription(Anthropic 不支援)
+# ═══════════════════════════════════════════════════════════════════
+def audio_transcribe(audio_file_path, model="gpt-4o-transcribe", **kwargs):
+    provider = get_active_provider()
+    if provider == "anthropic":
+        raise NotImplementedError(
+            "Anthropic 不支援音訊轉文字 API。請切回 OpenAI 或在 LINE 內回覆 sender 改用文字。"
+        )
+    client = _get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI client 未初始化")
+    with open(audio_file_path, "rb") as f:
+        return client.audio.transcriptions.create(model=model, file=f, **kwargs)
+
+
+def supports_capability(capability):
+    provider = get_active_provider()
+    table = {
+        "audio_transcribe": {"openai": True, "anthropic": False},
+        "logprobs":         {"openai": True, "anthropic": False},
+        "predicted_outputs": {"openai": True, "anthropic": False},
+        "vision":           {"openai": True, "anthropic": True},
+        "prompt_cache":     {"openai": True, "anthropic": True},
+        "chat":             {"openai": True, "anthropic": True},
+        "thinking":         {"openai": False, "anthropic": True},
+        "grounding":        {"openai": False, "anthropic": True},
+        "stop_sequences":   {"openai": True, "anthropic": True},
+        "streaming":        {"openai": True, "anthropic": True},
+        "citations":        {"openai": False, "anthropic": True},
+        "pdf_native":       {"openai": False, "anthropic": True},
+        "extended_cache_1h": {"openai": False, "anthropic": True},
+    }
+    return table.get(capability, {}).get(provider, False)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 模組啟動
+# ═══════════════════════════════════════════════════════════════════
+_init_config()
+
+if __name__ == "__main__":
+    print("Active provider:", get_active_provider())
+    print("Config:", json.dumps(get_current_config_safe(), ensure_ascii=False, indent=2))
