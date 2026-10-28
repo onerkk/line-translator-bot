@@ -2,9 +2,9 @@
   "_meta": {
     "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "af218435258ca55d3f9b91ce59327bbf48d146aab4f053e7a45506df57d0929b",
-    "updated_at_iso": "2026-10-28T01:31:39.191336+00:00",
-    "updated_at_unix": 1793151099.191336
+    "state_hash": "f8cd2956ea828090b9fe5f258b0ee3804e306bae50eb2b8c2db03e5848e6509f",
+    "updated_at_iso": "2026-10-28T10:32:34.967071+00:00",
+    "updated_at_unix": 1793183554.9670713
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -196,15 +196,15 @@
     "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 139153,
-    "oai_cached": 34392,
-    "oai_cost_usd": 0.52784738,
-    "oai_input": 531497,
-    "oai_output": 7851,
-    "oai_reasoning": 836,
-    "text_translations": 321,
-    "tokens_completion": 25307,
-    "tokens_prompt": 4766268,
+    "oai_cache_write": 162780,
+    "oai_cached": 37633,
+    "oai_cost_usd": 0.54579238,
+    "oai_input": 563633,
+    "oai_output": 8575,
+    "oai_reasoning": 1076,
+    "text_translations": 330,
+    "tokens_completion": 26031,
+    "tokens_prompt": 4798404,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -399,13 +399,13 @@
   "group_api_usage": {
     "C28bb7127640539f3c1bc743ecdf61a24": {
       "cache_read": 0,
-      "cache_write": 6302,
-      "cost_usd": 0.01383145,
-      "model": "gpt-5.6-terra",
+      "cache_write": 9517,
+      "cost_usd": 0.014285025,
+      "model": "gpt-6-luna",
       "provider": "openai",
       "reasoning": 31,
-      "tokens_completion": 262,
-      "tokens_prompt": 7755
+      "tokens_completion": 308,
+      "tokens_prompt": 11257
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "cache_read": 3163,
@@ -435,14 +435,14 @@
       "tokens_prompt": 55512
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
-      "cache_read": 15815,
-      "cache_write": 78356,
-      "cost_usd": 2.100306225,
+      "cache_read": 19056,
+      "cache_write": 98768,
+      "cost_usd": 2.1177976500000004,
       "model": "gpt-6-luna",
       "provider": "openai",
-      "reasoning": 680,
-      "tokens_completion": 10698,
-      "tokens_prompt": 2115967
+      "reasoning": 920,
+      "tokens_completion": 11376,
+      "tokens_prompt": 2144601
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -590,6 +590,7 @@
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U7cb9d2608183ea3b37ef17abff19e33a": "Agus Sw 鐸多",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
+      "U96c3e9076800170fbd92891e5419ce3b": "khoirul",
       "Ua29c1bea13a5a3b288d0eeed13d90049": "巴憂",
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄",
       "Ub4f75efd0e7288220ed7e98eda4fb9e4": "蘇比 sobirin",
@@ -3289,6 +3290,7 @@
     "U7cb9d2608183ea3b37ef17abff19e33a": "https://sprofile.line-scdn.net/0h5za2GMa3alVMS3qvDn4UKjwbaT9vOjNHMngtNSlPMmJwKysLYH4iM3tLMDF1eiVXM3osMixLZGJAWB0zUh2WYUt7N2RwcygKZy4isA",
     "U7d9b5871f22b54ebbbf994c3a42e93fc": "https://sprofile.line-scdn.net/0hMfpI2VRyEkldMAQg9sdsNi1gESN-QUtbJVAKe2A5RHwwVAFNJlRdJm9jSH1mAF1LcVVbezxnT39RI2UvQ2bufVoAT3hhCFAWdlVarA",
     "U94e9ecdc36ca5ea0e127846ef2fc6733": "https://sprofile.line-scdn.net/0hu2yuEscHKh1UDDmpHjdUYiRcKXd3fXMPLG5hezFbdCU7Om0ceG9ifWIOICRtaWwbKj4wfWIIIypYH117SlrWKVM8dyxoNGhCf2li-A",
+    "U96c3e9076800170fbd92891e5419ce3b": "https://sprofile.line-scdn.net/0hUQ0xI2MBCn4dARoE0z50AW1RCRQ-cFNsM29ASi8CVx51ZR94MmMVEC5RBxsiNBh7ZDMXEHwIVRsREn0YA1f2ShoxV08hOUghNmRCmw",
     "U98def5ae6e4786c8ecc3e4a2f510cfb8": "https://sprofile.line-scdn.net/0ho5vCSgzYMBpbOi7k8ftOJCtqM3B4S2kIdl96dTppOS02CHFJfgx3dG86bCtkA3YecVp2ezxuO3h5S3QuNigtBx1OGE84DBckLDUoPxJFbG0ZTig-Ex4bBhRaOF5iXTwVASUleT5AHV45XyUMKyc8ITQ8NyInfH4EEW1cTF4IXpk0OEdPdl13eWc9bS3l",
     "U9a70db5b38f2b61dd0473cfff4c84b68": "https://sprofile.line-scdn.net/0hStdSn5TpDFtJKiHCxNNyJDl6DzFqW1VJYExAby94WmkjSBkMMEkUanouAG98GRsLZBsWPnspWj5FOXs9V3zwb04aUWp1Ek4EYk9Evg",
     "Ua29c1bea13a5a3b288d0eeed13d90049": "https://sprofile.line-scdn.net/0hP4lfdP5lDxtBHx-vsdVxZDFPDHFiblYJOHlFKnxNUH8oLkofanBEf3xLA34vKxwdPnAXKnQZUn5NDHh9X0nzL0YvUip9J01EanpH_g",
