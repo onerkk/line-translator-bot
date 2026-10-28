@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "app_version": "v3.49.0-operational-data-continuity-root-fix-2026-09-02",
+    "app_version": "v3.50.0-claude-5-5-gpt-6-prompt-cache-root-fix-2026-10-20",
     "schema_version": 8,
-    "state_hash": "56ee7355202204544c96d2487fad36bcc682505348d98ddc3c603c258232fa49",
-    "updated_at_iso": "2026-09-30T18:37:45.502965+00:00",
-    "updated_at_unix": 1790793465.5029647
+    "state_hash": "af218435258ca55d3f9b91ce59327bbf48d146aab4f053e7a45506df57d0929b",
+    "updated_at_iso": "2026-10-28T01:31:39.191336+00:00",
+    "updated_at_unix": 1793151099.191336
   },
   "ab_test_enabled": false,
   "admin_users": {
@@ -65,7 +65,7 @@
   "ai_provider_config": {
     "active_provider": "openai",
     "anthropic": {
-      "default_model": "claude-haiku-4-5-20251001"
+      "default_model": "claude-haiku-5-5"
     },
     "auto_switch_on_exhaust": true,
     "auto_switch_state": {
@@ -152,21 +152,25 @@
       "gpt-5.5": "gemini-2.5-flash",
       "gpt-5.6-luna": "gemini-3.1-flash-lite",
       "gpt-5.6-sol": "gemini-2.5-flash",
-      "gpt-5.6-terra": "gemini-2.5-flash"
+      "gpt-5.6-terra": "gemini-2.5-flash",
+      "gpt-6-luna": "gemini-3.1-flash-lite",
+      "gpt-6.1-sol": "gemini-2.5-flash"
     },
-    "last_updated": "2026-09-29 16:27:22",
+    "last_updated": "2026-10-25 18:27:35",
     "model_mapping": {
-      "gpt-4.1": "claude-sonnet-5",
-      "gpt-4.1-mini": "claude-haiku-4-5-20251001",
-      "gpt-4o": "claude-sonnet-5",
-      "gpt-4o-mini": "claude-haiku-4-5-20251001",
-      "gpt-5.4": "claude-sonnet-5",
-      "gpt-5.4-mini": "claude-haiku-4-5-20251001",
-      "gpt-5.4-nano": "claude-haiku-4-5-20251001",
-      "gpt-5.5": "claude-sonnet-5",
-      "gpt-5.6-luna": "claude-haiku-4-5-20251001",
-      "gpt-5.6-sol": "claude-sonnet-5",
-      "gpt-5.6-terra": "claude-sonnet-5"
+      "gpt-4.1": "claude-sonnet-5-5",
+      "gpt-4.1-mini": "claude-haiku-5-5",
+      "gpt-4o": "claude-sonnet-5-5",
+      "gpt-4o-mini": "claude-haiku-5-5",
+      "gpt-5.4": "claude-sonnet-5-5",
+      "gpt-5.4-mini": "claude-haiku-5-5",
+      "gpt-5.4-nano": "claude-haiku-5-5",
+      "gpt-5.5": "claude-sonnet-5-5",
+      "gpt-5.6-luna": "claude-haiku-5-5",
+      "gpt-5.6-sol": "claude-sonnet-5-5",
+      "gpt-5.6-terra": "claude-sonnet-5-5",
+      "gpt-6-luna": "claude-haiku-5-5",
+      "gpt-6.1-sol": "claude-sonnet-5-5"
     },
     "openai": {
       "base_url": null
@@ -192,15 +196,15 @@
     "commands": 18,
     "followers": 1,
     "image_translations": 4,
-    "oai_cache_write": 119073,
+    "oai_cache_write": 139153,
     "oai_cached": 34392,
-    "oai_cost_usd": 0.5246479799999999,
-    "oai_input": 510058,
-    "oai_output": 6744,
-    "oai_reasoning": 120,
-    "text_translations": 316,
-    "tokens_completion": 24200,
-    "tokens_prompt": 4744829,
+    "oai_cost_usd": 0.52784738,
+    "oai_input": 531497,
+    "oai_output": 7851,
+    "oai_reasoning": 836,
+    "text_translations": 321,
+    "tokens_completion": 25307,
+    "tokens_prompt": 4766268,
     "tokens_prompt_cached": 138368,
     "tokens_reasoning": 0,
     "voice_translations": 0,
@@ -209,8 +213,8 @@
   "camera_qr_enabled": false,
   "camera_roll_qr_enabled": false,
   "claude_auto_switch_enabled": true,
-  "claude_model_default": "claude-haiku-4-5-20251001",
-  "claude_model_upgrade": "claude-sonnet-5",
+  "claude_model_default": "claude-haiku-5-5",
+  "claude_model_upgrade": "claude-sonnet-5-5",
   "clipboard_qr_enabled": true,
   "confidence_threshold": 0.85,
   "custom_translation_examples": [
@@ -415,13 +419,13 @@
     },
     "Cd188e1adc7792e407c90f3fa78850316": {
       "cache_read": 6326,
-      "cache_write": 31534,
-      "cost_usd": 0.655182120000001,
-      "model": "gpt-5.6-luna",
+      "cache_write": 35699,
+      "cost_usd": 0.655807245000001,
+      "model": "gpt-6-luna",
       "provider": "openai",
-      "reasoning": 0,
-      "tokens_completion": 3206,
-      "tokens_prompt": 532349
+      "reasoning": 125,
+      "tokens_completion": 3398,
+      "tokens_prompt": 536599
     },
     "Ce494607afbd4516a8992c788f05cbbdc": {
       "cost_usd": 0.032847750000000175,
@@ -432,13 +436,13 @@
     },
     "Cf5e2ea027bb3db193677e7ef3b51adea": {
       "cache_read": 15815,
-      "cache_write": 62441,
-      "cost_usd": 2.09773195,
-      "model": "gpt-5.6-luna",
+      "cache_write": 78356,
+      "cost_usd": 2.100306225,
+      "model": "gpt-6-luna",
       "provider": "openai",
-      "reasoning": 89,
-      "tokens_completion": 9783,
-      "tokens_prompt": 2098778
+      "reasoning": 680,
+      "tokens_completion": 10698,
+      "tokens_prompt": 2115967
     },
     "__dm__": {
       "tokens_completion": 42,
@@ -572,7 +576,8 @@
       "U7625d783fa290ef397f79d6667fd222d": "budi santoso 山多",
       "U78ae67bff0f53d01e513be10be1d7162": "伊努滿 Sumertha",
       "U94e9ecdc36ca5ea0e127846ef2fc6733": "迪弟 kampret",
-      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥"
+      "Ucbc2c71e01fb7b1fc12b756eed45c042": "小麥",
+      "Uf42a7e934d7baa697797662c31721c08": "法比恩 Fabian"
     },
     "C6c708f629dd38d6864669ecacf7712f4": {
       "Uaf4dc8fc636bc8f6060521c398514dc1": "就是這個光 ✨༄"
@@ -651,9 +656,9 @@
   "location_translate_enabled": true,
   "logprobs_enabled": true,
   "mark_read_enabled": true,
-  "model_default": "gpt-5.6-luna",
+  "model_default": "gpt-6-luna",
   "model_threshold": 300,
-  "model_upgrade": "gpt-5.6-terra",
+  "model_upgrade": "gpt-6.1-sol",
   "multi_path_backtrans_enabled": false,
   "multi_path_min_chars": 60,
   "openai_24h_cache_enabled": false,
@@ -3299,7 +3304,7 @@
     "Uff3f3fd8afbec93efe07adea31a70dd6": "https://sprofile.line-scdn.net/0hu8THoqPPKhd5MTqgpc5UaAlhKX1aQHMFUFI2d0QzdyVMB2kUUF5jJEw0IHVEBGxCUlU2cE9lfCJ1Il1xZ2fWI34BdyZFCWhIUlRi8g"
   },
   "video_ocr_enabled": true,
-  "vision_model": "gpt-5.6-terra",
+  "vision_model": "gpt-6.1-sol",
   "welcome_settings": {
     "enabled": true,
     "text_id": "👋 Selamat datang!\nGrup ini memiliki asisten penerjemah AI, bahasa Mandarin dan Indonesia akan diterjemahkan otomatis.",
