@@ -61,7 +61,7 @@ from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
-TRANSLATION_REVIEWS_BUILD_ID = "2026-10-22.1-review-sync"
+TRANSLATION_REVIEWS_BUILD_ID = "2026-10-29.2-review-unless"
 REVIEWS_DIRNAME = "translation_reviews"
 CATEGORIES = ("term", "negation", "number_unit", "station_equipment", "tone", "omission", "other")
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,78}")
@@ -126,6 +126,14 @@ def validate_bundle(doc: Dict[str, Any], name: str = "bundle") -> Dict[str, Any]
                 raise ReviewError(where + " rule needs when and context")
             if not all(isinstance(group, list) and group for group in rule["when"]):
                 raise ReviewError(where + " rule.when must be a list of non-empty lists")
+            if rule.get("unless") is not None and not (isinstance(rule["unless"], list)
+                                                       and all(str(t).strip() for t in rule["unless"])):
+                raise ReviewError(where + " rule.unless must be a list of non-empty terms")
+            for pattern in rule.get("regex_any") or []:
+                try:
+                    re.compile(str(pattern))
+                except re.error as exc:
+                    raise ReviewError(where + f" rule.regex_any invalid: {exc}")
     return doc
 
 
@@ -172,6 +180,14 @@ def knowledge_entries(bundles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "requirements": [],
                 "examples": [{"source": item["source"], "target": item["corrected"]}],
             }
+            if rule.get("unless"):
+                # Optional exclusion: the card stays off when the source names
+                # the other reading explicitly (e.g. 背對鏡頭 really is the camera).
+                entry["match"]["none_terms"] = [str(t) for t in rule["unless"]]
+            if rule.get("regex_any"):
+                # Optional guard: the card applies only when one pattern matches
+                # (e.g. a target followed by a number), same as hand-written cards.
+                entry["match"]["required_regex_any"] = [str(p) for p in rule["regex_any"]]
             if rule.get("forbidden"):
                 entry["forbidden_target_rules"] = [{"phrases": [str(p) for p in rule["forbidden"]]}]
             entries.append(entry)

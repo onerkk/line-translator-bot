@@ -50,6 +50,7 @@ def build_transfers(text, intro=""):
                 continue
             direction = "out" if _OUT.fullmatch(operation.group()) else "in"
             negative = bool(_NEGATIVE.search(before[-18:]))
+            not_done = bool(re.search(r"(?:沒有?|没有?|未|尚未|還沒有?|还没有?)(?:再|先|把|將|将|有)?$", before[-6:]))
             # Questions and double negations are not affirmative instructions.
             uncertain = bool(re.search(r"不是(?:說|说)?不要|是否|可不可以|能不能", before[-20:]) or re.search(r"嗎|吗|？|\?", clause))
             quantities = re.findall(r"([0-9零〇一二兩两三四五六七八九十]+)捆", compact)
@@ -60,8 +61,11 @@ def build_transfers(text, intro=""):
                 "noncurrent": period,
                 "bundle_quantities": quantities,
                 "previously_entered": bool(re.search(r"(?:先丟進去|先丢进去|已.{0,4}(?:入|存)|存進去|存进去|丟進去|丢进去)", compact)),
+                "not_done": not_done,
                 "meaning_zh": ("移出帳務紀錄／非本月分類中的資料" if direction == "out" else "把材料的紀錄轉入庫存帳；帳不是實體區域或登入帳號")
-                    + ("；禁止此動作" if negative and not uncertain else "；保留原文語氣與動作狀態"),
+                    + ("；禁止此動作" if negative and not uncertain
+                       else "；這是陳述「紀錄沒有／尚未轉」的事實，不是指示也不是禁止" if not_done
+                       else "；保留原文語氣與動作狀態"),
                 "required_target_meaning_id": ("jangan " if negative and not uncertain else "")
                     + ("keluarkan/pindahkan data atau catatan dari kategori" if direction == "out" else "pindahkan/masukkan catatan material ke pencatatan stok")
                     + (" bukan untuk bulan ini" if period else ""),
@@ -85,6 +89,16 @@ def _candidate_clauses(text, relation):
 
 
 def validate_transfer(relation, target):
+    if relation.get("not_done"):
+        # The record was NOT moved: a faithful clause names the record and a
+        # factual negation (belum/tidak), never an order or a prohibition.
+        for clause in _CLAUSES.findall(str(target or "")):
+            if (re.search(_RECORD_ID, clause, re.I)
+                    and re.search(r"\b(?:belum|tidak|tak|blm)\b", clause, re.I)
+                    and re.search(r"\b(?:di|me|ter)?(?:pindah\w*|masuk\w*|input\w*|catat\w*)\b", clause, re.I)
+                    and not re.search(_NEG_ID, clause, re.I)):
+                return True
+        return False
     candidates = list(_candidate_clauses(target, relation))
     if not candidates:
         return False

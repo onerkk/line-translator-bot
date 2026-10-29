@@ -1,0 +1,100 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-10-24-grinding-c-night",
+ "source": "screenshot review by Claude, 研磨C班 group 00:41–01:19",
+ "items": [
+  {
+   "id": "crate-staging-conditional-request",
+   "src": "zh",
+   "tgt": "id",
+   "source": "有發生移入木箱暫存區，帳沒移進去但是TAG跑出來的狀況，再麻煩提供ID給我。我再請中冠查一下紀錄。\n\n非本月不大方便反應，所以給我木箱的就好😅",
+   "observed": "Ada kasus material dipindahkan ke area penyimpanan sementara peti kayu, tetapi catatan stoknya tidak ikut masuk dan TAG sudah muncul. Mohon kirimkan ID-nya kepada saya. Saya akan minta Zhongguan memeriksa catatannya.\n\nUntuk catatan sementara kategori bukan bulan berjalan, agak sulit ditindaklanjuti, jadi cukup kirimkan yang peti kayu saja 😅",
+   "corrected": "Kalau ada kasus material sudah dipindahkan ke area penyimpanan sementara peti kayu, tetapi catatan stoknya belum ikut dipindahkan padahal TAG-nya sudah tercetak, mohon kirimkan ID-nya ke saya. Saya akan minta vendor sistem Zhongguan memeriksa catatannya.\n\nKasus yang bukan bulan ini kurang praktis untuk dilaporkan, jadi cukup kirimkan yang peti kayu saja 😅",
+   "category": "other",
+   "reason": "「有發生…的狀況，再麻煩提供ID給我」是條件式請求（遇到這種情況就把 ID 給我），原譯寫成已發生的單一案件。第二段原譯捏造了「catatan sementara kategori」，原文只是「不是本月的案件不方便反應（回報）」。TAG 跑出來＝TAG 已印出（既有卡片：TAG 是列印的標籤）。 老闆確認「中冠」是系統／資訊廠商，譯文要讓印尼同事知道是廠商，不只是音譯名字。",
+   "glossary": [
+    {
+     "zh": "非本月",
+     "id": "bukan bulan ini",
+     "mode": "soft"
+    },
+    {
+     "zh": "暫存區",
+     "id": "area penyimpanan sementara",
+     "mode": "soft"
+    },
+    {
+     "zh": "中冠",
+     "id": "vendor sistem Zhongguan",
+     "mode": "soft"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "有發生",
+      "有遇到",
+      "有出現",
+      "如果有",
+      "若有"
+     ],
+     [
+      "的狀況",
+      "的情況",
+      "的問題"
+     ],
+     [
+      "再麻煩",
+      "再請",
+      "麻煩提供",
+      "麻煩拍",
+      "麻煩告訴"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「有發生…的狀況，再麻煩…」是條件式請求",
+    "context": [
+     "「有（發生／遇到）X 的狀況，再麻煩 Y」意思是：遇到 X 的情況時，請做 Y。譯 Kalau ada (kasus) X, mohon Y；不要寫成 Ada kasus X（已發生的單一事件）再要求提供「那一件」的資料。",
+     "「反應」在工作群組指向上回報問題，用 melaporkan／menyampaikan；「非本月」= bukan bulan ini，不要另造分類名稱。"
+    ]
+   }
+  },
+  {
+   "id": "dodge-camera-colloquial",
+   "src": "zh",
+   "tgt": "id",
+   "source": "處長還沒睡有在看監視器哦，違規動作閃一下",
+   "observed": "Kepala divisi belum tidur dan masih memantau CCTV, lho. Gerakan yang melanggar aturan, meski cuma sebentar, tetap terlihat.",
+   "corrected": "Kepala divisi belum tidur dan masih memantau CCTV, lho. Kalau melakukan hal yang melanggar aturan, menghindar dulu dari kamera.",
+   "category": "term",
+   "reason": "老闆確認：「違規動作閃一下」= 做違規動作時避開鏡頭。口語「閃一下」是避開／讓開，不是「一閃而過」；原譯把「一下」當成「很短暫」，把提醒改成了「再短也會被看到」的陳述。",
+   "rule": {
+    "when": [
+     [
+      "閃一下",
+      "閃開",
+      "閃遠",
+      "閃旁邊",
+      "閃鏡頭",
+      "閃一閃"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "口語「閃一下」是避開／讓開",
+    "context": [
+     "台灣口語「閃一下／閃開」是避開或讓開（menghindar／minggir），不是閃爍或「一下下、很短暫」。",
+     "有監視器、鏡頭、主管在看的語境：指避開鏡頭或不被看到（menghindar dari kamera）；有堆高機、吊車、車輛經過的語境：指讓開路（minggir dulu）。",
+     "句子是提醒或指示，保留祈使語氣，不要改寫成觀察陳述。"
+    ],
+    "forbidden": [
+     "meski cuma sebentar",
+     "berkedip"
+    ]
+   }
+  }
+ ]
+}

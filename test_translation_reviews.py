@@ -204,3 +204,155 @@ def test_middle_shift_is_a_confirmed_hard_term():
     reviews.apply_glossary(lookup, reviews.load_bundles())
     assert lookup["中班"]["idn"] == "shift tengah" and lookup["中班"]["translation_mode"] == "hard"
     assert "小夜班" not in lookup  # existing card keeps 小夜班 = shift sore
+
+
+def test_conditional_request_card_reaches_a_paraphrase():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("有遇到TAG印錯的情況，再麻煩拍照給我。", "zh", "id", limit=5)
+    assert any(str(c.get("id", "")).endswith("crate-staging-conditional-request") for c in cards)
+    cards = factory_knowledge.get_store().retrieve("今天有發生跳電，大家先休息。", "zh", "id", limit=5)
+    assert not any(str(c.get("id", "")).endswith("crate-staging-conditional-request") for c in cards)
+
+
+def test_not_this_month_is_a_review_term():
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["非本月"]["idn"] == "bukan bulan ini"
+
+
+def test_dodge_colloquial_card_covers_camera_and_traffic_senses():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    for text in ("主管在看監視器，滑手機的閃一下", "堆高機要過了，大家閃一下"):
+        cards = store.retrieve(text, "zh", "id", limit=5)
+        assert any(str(c.get("id", "")).endswith("dodge-camera-colloquial") for c in cards), text
+
+
+def test_dodge_rule_repairs_brief_misreading(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    src = "經理在看監視器，抽菸的閃一下"
+    bad = "Manajer sedang memantau CCTV. Yang merokok, meski cuma sebentar, tetap terlihat."
+    good = "Manajer sedang memantau CCTV. Yang merokok, menghindar dulu dari kamera."
+    calls = []
+    def create(**kw):
+        calls.append(kw); return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert "menghindar" in out and len(calls) == 2
+
+
+def test_zhongguan_is_the_system_vendor():
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["中冠"]["idn"] == "vendor sistem Zhongguan"
+
+
+def test_bare_catalog_station_before_material_is_a_location():
+    import factory_station_catalog as stations
+    assert [(f["code"], f["role"]) for f in stations.station_facts("452的料麻煩安排生產", "zh")] == [("452", "location")]
+    assert stations.station_facts("還有452支料", "zh") == []
+    assert stations.station_facts("總共452的料", "zh") == []
+    assert stations.translation_issues("452的料麻煩安排生產", "Material 452, mohon diatur untuk diproduksi.", "zh", "id")
+    assert not stations.translation_issues("452的料麻煩安排生產", "Material di stasiun 452, mohon diatur untuk diproduksi.", "zh", "id")
+
+
+def test_2026_10_29_rules_route_to_the_right_messages():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def review_ids(text):
+        return [c["id"] for c in store.retrieve(text, "zh", "id", limit=6) if c["id"].startswith("review_")]
+    both = review_ids("本月目標應該會下修，但仍一天要170左右。\n\n後面三天主管應該會比較常下來走動，再麻煩注意一下。")
+    assert any(i.endswith("daily-target-tons") for i in both)
+    assert any(i.endswith("supervisor-return-stay-alert") for i in both)
+    assert review_ids("下午還會有急單過來再麻煩注意一下。") == []      # no supervisor presence → plain "please note"
+    assert review_ids("本月目標是零工安") == []                       # target without a number
+    assert any(i.endswith("remark-urgent-orders") for i in review_ids("有備註出貨急單的先包"))
+
+
+def test_remark_heading_misreading_is_repaired_once(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    src = "有備註急單的再麻煩先包"
+    bad = "Catatan: Work order mendesak, mohon dikemas dulu."
+    good = "Work order mendesak (sesuai catatan), mohon dikemas dulu."
+    calls = []
+    def create(**kw):
+        calls.append(kw); return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert out.startswith("Work order mendesak (sesuai catatan)") and len(calls) == 2
+
+
+def test_review_rule_regex_guard_is_validated():
+    import copy
+    bundle = copy.deepcopy(next(b for b in reviews.load_bundles() if b["review_id"] == "2026-10-29-grinding-c-day"))
+    bundle["items"][-1]["rule"]["regex_any"] = ["(unclosed"]
+    with pytest.raises(reviews.ReviewError):
+        reviews.validate_bundle(bundle)
+
+
+def test_every_review_correction_passes_the_bots_own_gates_and_is_accepted(tmp_path, monkeypatch):
+    """A correction the delivery gate rejects is silently dropped at ingestion
+    (active_learning marks it failed), so it never teaches anything. Two such
+    items shipped unnoticed before this check existed."""
+    import app
+    import active_learning as al
+    db = str(tmp_path / "al.db")
+    monkeypatch.setenv("ACTIVE_LEARNING_DB_PATH", db)
+    monkeypatch.setattr(al, "AL_DB_PATH", db)
+    monkeypatch.setattr(al, "_init_done", False)
+    al.init()
+    failures = []
+    for bundle in reviews.load_bundles():
+        for item in bundle["items"]:
+            issues = app._delivery_validation_issues(item["source"], item["corrected"], item["src"], item["tgt"])
+            if issues:
+                failures.append((bundle["review_id"], item["id"], issues[:3]))
+    assert failures == []
+    stats = reviews.apply_corrections(al, reviews.load_bundles())
+    assert stats["rejected"] == 0, stats
+
+
+def test_factual_not_moved_record_is_not_turned_into_an_order():
+    import factory_record_semantics as records
+    relation = records.build_transfers("帳沒移進去但是TAG跑出來的狀況")[0]
+    assert relation["not_done"] and relation["prohibited"] is False
+    assert records.validate_transfer(relation, "catatan stoknya belum dipindahkan padahal TAG sudah tercetak")
+    assert not records.validate_transfer(relation, "pindahkan catatan ke pencatatan stok")
+
+
+def test_tag_printing_out_is_not_a_production_instruction():
+    import factory_semantic_audit as audit
+    frame = audit.build_source_frame("帳沒移進去但是TAG跑出來的狀況，再麻煩提供ID給我。", "zh", "id")
+    _ok, issues = audit.validate_translation(frame, "Catatan belum dipindahkan padahal TAG sudah tercetak, mohon kirim ID.")
+    assert "factory_semantic_audit:missing_production_action" not in issues
+    assert not frame["flags"]["production"]
+    assert audit.build_source_frame("機台在跑，這批先跑完", "zh", "id")["flags"]["production"]  # real running cue kept
+
+
+def test_indonesian_ordinal_of_a_source_number_is_not_an_invented_identifier():
+    import translation_quality_gate as gate
+    assert gate._invented_identifier_issues("參加60週年廠慶活動", "menghadiri perayaan HUT pabrik ke-60", "zh", "id") == []
+    assert gate._invented_identifier_issues("參加廠慶活動", "menghadiri perayaan ke-60", "zh", "id")
+
+
+def test_back_turned_rule_respects_explicit_camera_mention():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("back-turned-to-load") for c in store.retrieve(text, "zh", "id", limit=6))
+    assert hit("天車吊料時他們背對著聊天，影片我有存")
+    assert not hit("他們背對鏡頭聊天的畫面我剪掉了")
+
+
+def test_concentrated_on_two_day_numbers_reads_as_dates():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text):
+        return any(c["id"].endswith("orders-concentrated-on-dates") for c in store.retrieve(text, "zh", "id", limit=6))
+    assert hit("外銷急單都排在5、6，看到就先包")
+    assert not hit("急單都集中在422、452站")
+    assert not hit("料都集中在3、4區")

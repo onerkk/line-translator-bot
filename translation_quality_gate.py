@@ -1887,6 +1887,13 @@ def _invented_identifier_issues(source, candidate, src_lang, tgt_lang):
             if re.fullmatch(r"\s*(?:安[衛卫]|工安)\s*[。.!！]?\s*", prose):
                 checked_candidate = re.sub(r"^\s*K3\s*[.。!！]?\s*$", " ", checked_candidate, flags=re.I)
 
+    if str(tgt_lang).lower().startswith("id"):
+        # Indonesian ordinals (perayaan ke-60, hari ke-3) restate a source
+        # number; they are not new equipment/record identifiers.
+        checked_candidate = re.sub(
+            r"\bke-(\d+)\b",
+            lambda m: " " + m.group(1) + " " if re.search(r"(?<!\d)" + m.group(1) + r"(?!\d)", source) else m.group(0),
+            checked_candidate, flags=re.I)
     actual = gp_module.identity_codes(checked_candidate)
     # Slash-delimited lists can spell already-inventoried atoms together.
     # Never split an opaque product identifier such as G8G9 into new atoms.

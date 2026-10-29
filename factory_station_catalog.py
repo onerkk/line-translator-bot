@@ -137,6 +137,12 @@ def _role(text, start, end, lang):
                 return "actor", event
         if re.search(r"(?:站(?:別|别|號|号)?|檢驗站|检验站)\s*$", left) or re.match(r"\s*(?:(?:檢驗|检验)?站)", right):
             return "identifier", ""
+        # 2026-10-29: chat drops 站 after a catalog code ("452的料麻煩安排生產",
+        # parallel to "在422站料"). Code + 的 + material noun is the material
+        # sitting at that station; quantities never reach here (_is_value).
+        if (re.match(r"\s*的\s*(?:料|材料|貨|货|成品|棒材|東西|东西|那批|這批|这批)", right)
+                and not re.search(r"(?:總共|总共|總計|总计|一共|共|大約|大约|約|约|剩下?|還有|还有|超過|超过|不到)\s*$", left)):
+            return "location", ""
     elif lang == "id":
         if re.search(r"\b(?:ke|kepada|untuk)\s+" + _STATION_ID + r"$", left, re.I):
             return "destination", ""

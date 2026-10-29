@@ -18,7 +18,19 @@
       "再注意一下",
       "注意一下",
       "再注意",
-      "留心一下"
+      "留心一下",
+      "自己注意"
+     ],
+     [
+      "主管",
+      "處長",
+      "經理",
+      "廠長",
+      "課長",
+      "股長",
+      "副理",
+      "長官",
+      "上面的人"
      ],
      [
       "進來",
@@ -26,10 +38,13 @@
       "值班",
       "會來",
       "來看",
+      "下來",
+      "走動",
       "北上",
       "回到",
       "到場",
-      "來的頻率"
+      "來的頻率",
+      "監視器"
      ]
     ],
     "directions": [
@@ -37,12 +52,13 @@
     ],
     "title": "主管可能出現時的「再注意一下」",
     "context": [
-     "主管／處長可能到場或巡視時，「再注意一下」「注意一下」是要大家保持警覺、別鬆懈，譯 mohon tetap waspada／jaga sikap kerja，不是 perhatikan lagi（再看一次）。",
+     "主管／處長可能到場、下來走動、巡視、值班或在看監視器時，「再注意一下」「自己注意一下」是要大家保持警覺、別鬆懈，譯 mohon tetap waspada／jaga sikap kerja；不要只寫 Mohon diperhatikan／perhatikan lagi（看不出是要警覺）。",
      "「有主管」「有人」未說明人數時不用 ia／dia 定為單數，用 mereka 或省略主詞。",
      "晚上 10～11 點譯為 pukul 10–11 malam 或 22.00–23.00，必須帶 malam。"
     ],
     "forbidden": [
-     "Mohon perhatikan lagi"
+     "Mohon perhatikan lagi",
+     "Mohon diperhatikan."
     ]
    }
   },

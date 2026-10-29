@@ -434,7 +434,10 @@ def build_source_frame(source: str, src_lang: str, tgt_lang: str) -> Dict[str, A
         _contains_any(compact, ("優先", "优先", "先跑", "先從", "先从", "先行生產", "先行生产"))
         or re.search(r"先做(?!清楚|明確|明确|標記|标记|記號|记号)", compact)
     )
-    flags["production"] = _contains_any(compact, ("生產", "生产", "加工", "跑料", "跑"))
+    # 跑 means running a job (跑料、機台在跑、跑這批), but not 跑出來／跑掉／跑去
+    # (a TAG "跑出來" was printed; material "跑掉" slipped away).
+    flags["production"] = (_contains_any(compact, ("生產", "生产", "加工", "跑料"))
+                           or bool(re.search(r"跑(?!出|掉|去|到|來|来|回|過|过|走|步)", compact)))
     # A prohibition over a negative result can be expressed positively in the
     # target (不要讓庫存降不下來 -> pastikan stok bisa berkurang). Its relational
     # validator is authoritative; only other source prohibitions need a literal

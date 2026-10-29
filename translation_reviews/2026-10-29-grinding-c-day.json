@@ -1,0 +1,206 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-10-29-grinding-c-day",
+ "source": "screenshot review by Claude, 研磨C班 group 10/29 08:27–10:27",
+ "items": [
+  {
+   "id": "remark-urgent-orders",
+   "src": "zh",
+   "tgt": "id",
+   "source": "備註急單再麻煩安排處理",
+   "observed": "Catatan: Work order mendesak, mohon atur penanganannya.",
+   "corrected": "Work order mendesak (sesuai catatan), mohon bantu diatur penanganannya.",
+   "category": "term",
+   "reason": "「備註急單」是備註欄註明急單的工單（修飾語），原譯把「備註」當成句首標題 Catatan:，看起來像翻譯附註。 譯法沿用既有術語 work order mendesak 連在一起（工單急單語意檢查依此判定），再補「依備註」。",
+   "glossary": [
+    {
+     "zh": "備註急單",
+     "id": "work order mendesak (sesuai catatan)",
+     "mode": "soft"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "備註急單",
+      "備註出貨急單",
+      "有備註急單",
+      "備註的急單",
+      "備註要急"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「備註急單」是被註明急單的工單",
+    "context": [
+     "「備註急單／有備註（出貨）急單」指工單備註欄註明急單的工單，譯 work order (pengiriman) mendesak (sesuai catatan)；「work order … mendesak」要連在一起，是既有急單術語。",
+     "不要把「備註」譯成句首標題 Catatan:，那會像翻譯者的附註。"
+    ],
+    "forbidden": [
+     "Catatan: Work order",
+     "Catatan: work order"
+    ]
+   }
+  },
+  {
+   "id": "report-less-serious-moment",
+   "src": "zh",
+   "tgt": "id",
+   "source": "要回報我有找比較不嚴重的時間點",
+   "observed": "Saya sudah mencari titik waktu yang kejadiannya tidak terlalu serius untuk dilaporkan.",
+   "corrected": "Untuk laporan ke atasan, saya sudah memilih bagian waktu yang kelihatannya tidak terlalu parah.",
+   "category": "other",
+   "reason": "「要回報（的話），我有找比較不嚴重的時間點」= 為了回報，挑了看起來比較不嚴重的畫面。原譯 tidak terlalu serius untuk dilaporkan 在印尼文會讀成「不嚴重到不必回報」，意思相反。"
+  },
+  {
+   "id": "crane-delay-slip",
+   "src": "zh",
+   "tgt": "id",
+   "source": "我看影片都有目視吊掛物 個人覺得是發現開始滑動 但天車有設定延遲 導致無法即時修正滑落",
+   "observed": "Saya melihat di video bahwa beban yang diangkat terus dipantau secara visual. Menurut saya, mereka menyadari beban mulai bergeser, tetapi crane memiliki pengaturan jeda sehingga tidak bisa segera mengoreksi pergeseran tersebut.",
+   "corrected": "Saya lihat di video mereka terus melihat beban yang diangkat. Menurut saya, mereka sudah sadar beban mulai bergeser, tetapi crane punya pengaturan jeda, jadi tidak sempat dikoreksi dan bebannya merosot jatuh.",
+   "category": "omission",
+   "reason": "「滑落」是滑動後掉落；原譯只說「無法修正位移」，漏了掉落這個安全事故結果。",
+   "glossary": [
+    {
+     "zh": "滑落",
+     "id": "merosot jatuh",
+     "mode": "soft"
+    }
+   ]
+  },
+  {
+   "id": "bare-station-code-material",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@迪弟 kampret 在422站料再麻煩安排清洗給下一站，@Irwan 布納萬 @budi santoso 山多 452的料麻煩安排生產",
+   "observed": "@迪弟 kampret Material di stasiun 422, mohon diatur untuk dicuci agar siap ke stasiun berikutnya. @Irwan 布納萬 @budi santoso 山多 Material 452, mohon diatur untuk diproduksi.",
+   "corrected": "@迪弟 kampret Material di stasiun 422, mohon diatur untuk dicuci agar siap ke stasiun berikutnya. @Irwan 布納萬 @budi santoso 山多 Material di stasiun 452, mohon diatur untuk diproduksi.",
+   "category": "station_equipment",
+   "reason": "452 是 ERP 站別（站別目錄有 452），「452的料」= 452站的料，與前半句「422站料」平行；原譯 Material 452 會被讀成料號或數量。程式已同步讓站別目錄辨識「站號＋的料」。"
+  },
+  {
+   "id": "daily-target-tons",
+   "src": "zh",
+   "tgt": "id",
+   "source": "本月目標應該會下修，但仍一天要170左右，待包如果持續下降，前站產出沒法維持就不關我們的事了。\n\n後面三天主管應該會比較常下來走動，再麻煩注意一下。",
+   "observed": "Target bulan ini kemungkinan akan diturunkan, tetapi tetap sekitar 170 per hari. Kalau jumlah barang yang menunggu dikemas terus menurun dan produksi stasiun sebelumnya tidak bisa dipertahankan, itu bukan urusan kita.\n\nSelama tiga hari ke depan, atasan mungkin akan lebih sering turun dan berkeliling. Mohon diperhatikan.",
+   "corrected": "Target bulan ini kemungkinan akan diturunkan, tetapi tetap sekitar 170 ton per hari. Kalau barang yang menunggu dikemas terus berkurang dan produksi stasiun sebelumnya tidak bisa dipertahankan, itu sudah bukan urusan kita.\n\nTiga hari ke depan atasan kemungkinan akan lebih sering turun dan berkeliling, jadi mohon tetap waspada.",
+   "category": "number_unit",
+   "reason": "班長的本月／每日目標數字是入庫噸數（使用者確認的入庫定義），沒寫「噸」也要寫 ton；原卡片只在出現「入庫」時才觸發，這句沒有。第二段主管會下來走動時的「再麻煩注意一下」是要大家警覺。",
+   "rule": {
+    "when": [
+     [
+      "本月目標",
+      "月目標",
+      "目標",
+      "一天要",
+      "每天要",
+      "每日要"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "regex_any": [
+     "(?:一天|每天|每日)要?[^。！？!?；;，,\\n]{0,4}\\d+",
+     "目標[^。！？!?；;\\n]{0,14}\\d+"
+    ],
+    "title": "班長的每日／本月目標數字是入庫噸數",
+    "context": [
+     "研磨／包裝群組裡「本月目標」「一天要 N」「每天要 N」講的是入庫噸數目標（使用者確認：入庫數字是登錄入庫的成品噸數）；原文沒寫單位也要寫 ton，例：sekitar 170 ton per hari。",
+     "如果數字後面原文另有單位（支、把、件、捆），照原文單位，不改成 ton。"
+    ],
+    "forbidden": [
+     "sekitar 170 per hari"
+    ]
+   }
+  },
+  {
+   "id": "back-turned-to-load",
+   "src": "zh",
+   "tgt": "id",
+   "source": "他們背對聊天的畫面我剪掉了",
+   "observed": "Saya sudah memotong bagian video saat mereka mengobrol sambil membelakangi kamera.",
+   "corrected": "Bagian video saat mereka mengobrol sambil membelakangi beban yang diangkat sudah saya potong.",
+   "category": "other",
+   "reason": "老闆確認：背對的是吊掛物／工作（沒看吊掛物），不是鏡頭。原譯看到「畫面」就自行補了 kamera。",
+   "rule": {
+    "when": [
+     [
+      "背對",
+      "背向",
+      "背著",
+      "背对"
+     ],
+     [
+      "畫面",
+      "影片",
+      "監視器",
+      "天車",
+      "吊掛",
+      "吊",
+      "聊天",
+      "畫面我"
+     ]
+    ],
+    "unless": [
+     "鏡頭",
+     "镜头",
+     "攝影機",
+     "摄影机",
+     "監視器的方向"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「背對」的對象依現場，不自行補「鏡頭」",
+    "context": [
+     "吊掛／天車作業語境的「背對（聊天）」是背對吊掛物或工作、沒有目視吊掛物：membelakangi beban yang diangkat／tidak melihat beban。",
+     "談影片、畫面、監視器時，原文沒說「背對鏡頭」就不要補 kamera；背對的對象照原文或依作業語境。"
+    ],
+    "forbidden": [
+     "membelakangi kamera"
+    ]
+   }
+  },
+  {
+   "id": "orders-concentrated-on-dates",
+   "src": "zh",
+   "tgt": "id",
+   "source": "下午還會有急單過來再麻煩注意一下。\nCOGNE CELIK、YOSHU、大順。\n\n大部分急單HAKUDO、COGNE KR、HUA、HWA、YOUNG DONG、QPLUS、SAMWON、ABE等外銷單都集中在30、31，有看到備註急單也可以順著包下去。",
+   "observed": "Sore nanti masih akan ada work order mendesak yang masuk. Mohon diperhatikan.\nCOGNE CELIK、YOSHU、大順。\n\nSebagian besar work order mendesak HAKUDO、COGNE KR、HUA、HWA、YOUNG DONG、QPLUS、SAMWON、ABE dan pesanan ekspor lainnya terpusat di 30 dan 31. Jika melihat catatan “work order mendesak”, kalian juga bisa lanjutkan pengemasannya.",
+   "corrected": "Sore nanti masih akan ada work order mendesak yang masuk, mohon diperhatikan.\nCOGNE CELIK、YOSHU、大順。\n\nSebagian besar work order mendesak, seperti pesanan ekspor HAKUDO、COGNE KR、HUA、HWA、YOUNG DONG、QPLUS、SAMWON、ABE, terpusat pada tanggal 30 dan 31. Kalau melihat work order mendesak (sesuai catatan), boleh sekalian dikemas.",
+   "category": "number_unit",
+   "reason": "老闆確認：30、31 是日期 10/30、10/31（群組公告同一件事）。原譯 terpusat di 30 dan 31 看不出是日期。",
+   "rule": {
+    "when": [
+     [
+      "集中在",
+      "排在",
+      "安排在",
+      "都在",
+      "改到",
+      "延到",
+      "移到"
+     ]
+    ],
+    "regex_any": [
+     "(?:集中在|排在|安排在|都在|改到|延到|移到)\\s*[0-3]?\\d\\s*[、,，和跟及]\\s*[0-3]?\\d(?!\\d)(?!\\s*(?:站|區|区|噸|吨|把|支|捆|台|號站))"
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「集中在／排在 30、31」是日期",
+    "context": [
+     "「都集中在 30、31」「排在 5、6」這類兩個 1–31 的數字，接在集中／排／改到之後、後面沒有站、區、噸、把等單位時，是當月日期：pada tanggal 30 dan 31。",
+     "原文若寫明站、儲區、編號或數量單位，照原文，不改成日期。"
+    ],
+    "forbidden": [
+     "terpusat di 30 dan 31"
+    ]
+   }
+  }
+ ]
+}
