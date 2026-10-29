@@ -201,6 +201,16 @@
      "terpusat di 30 dan 31"
     ]
    }
+  },
+  {
+   "id": "department-as-subject",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@All 拋光 研磨也優先生產上面提到的客戶",
+   "observed": "@All Proses polishing dan grinding juga prioritaskan produksi untuk pelanggan yang disebutkan di atas.",
+   "corrected": "@All Bagian polishing dan grinding juga mohon prioritaskan produksi untuk pelanggan yang disebutkan di atas.",
+   "category": "tone",
+   "reason": "「拋光、研磨也優先生產…」的主詞是拋光、研磨兩個單位的人，不是「製程」；Proses … prioritaskan 讀起來像製程自己去排優先。用 Bagian … mohon prioritaskan 才是對單位下指示。"
   }
  ]
 }

@@ -289,7 +289,7 @@ def test_remark_heading_misreading_is_repaired_once(monkeypatch):
 def test_review_rule_regex_guard_is_validated():
     import copy
     bundle = copy.deepcopy(next(b for b in reviews.load_bundles() if b["review_id"] == "2026-10-29-grinding-c-day"))
-    bundle["items"][-1]["rule"]["regex_any"] = ["(unclosed"]
+    next(i for i in bundle["items"] if i["id"] == "daily-target-tons")["rule"]["regex_any"] = ["(unclosed"]
     with pytest.raises(reviews.ReviewError):
         reviews.validate_bundle(bundle)
 
@@ -376,3 +376,18 @@ def test_dirty_cached_result_is_cleaned_at_the_exit(monkeypatch):
     import app
     monkeypatch.setattr(app, "_translate_unsanitized", lambda text, src, tgt: "Rapat</final>")
     assert app.translate("開會", "zh", "id") == "Rapat"
+
+
+def test_provider_layer_cleans_leaks_for_every_feature_but_keeps_requested_tags():
+    import types
+    import ai_provider
+    def resp(text):
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=text))])
+    ocr = ai_provider._strip_leaked_wrappers(resp("訂單編號：A1</final>"), [{"role": "user", "content": "讀這張工單"}])
+    assert ocr.choices[0].message.content == "訂單編號：A1"
+    asked = ai_provider._strip_leaked_wrappers(
+        resp("<translation>Rapat</translation>"),
+        [{"role": "system", "content": "Return one <translation>...</translation> tag"}])
+    assert asked.choices[0].message.content == "<translation>Rapat</translation>"
+    structured = ai_provider._strip_leaked_wrappers(resp('{"a": "</final>"}'), [], structured=True)
+    assert structured.choices[0].message.content == '{"a": "</final>"}'

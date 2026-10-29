@@ -230,3 +230,7 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
   </final>、<answer>、殘留 <translation> 或 <|channel|> 這類模板記號會原樣送到 LINE。三家供應商共用這個出口。
 - 修正：`_strip_model_wrapper_artifacts` 在入庫前清理，且 `translate()` 所有出口（含翻譯記憶／快取命中）統一再清一次，
   已經存進快取的髒譯文也會在送出時被清掉；原文本來就有的同名標籤保留不動。不額外呼叫 API。
+- 同類一起修：標籤洩漏不只會出現在一般翻譯。圖片 OCR、語音、作業確認公告、交班摘要等功能也直接呼叫模型，不經過 translate()。
+  現在在 `ai_provider.chat_complete` 的共同出口（三家供應商、所有功能都經過）加上同樣的清理；請求裡本來就要求的標籤
+  （例如要求模型用 <translation> 包起來的提示）保留給下游擷取，結構化 JSON 輸出不動。
+- 審核資料：「拋光 研磨也優先生產…」主詞改為單位（Bagian polishing dan grinding … mohon prioritaskan）。

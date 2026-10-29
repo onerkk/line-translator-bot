@@ -2697,6 +2697,53 @@ def _prepare_provider_privacy(messages, extra_literals=()):
     return privacy_module.mask_messages(messages or [], envelope), envelope
 
 
+# 2026-10-29: one choke point for every provider (OpenAI / Claude / Gemini) and
+# every feature (translation, OCR, voice, notices, summaries): models sometimes
+# leak a one-sided output wrapper (</final>, <answer>) or chat-template tokens
+# (<|channel|>final<|message|>). A tag that appears anywhere in the request is
+# kept, so prompts that ask for <translation>…</translation> still get their
+# tags for extraction downstream.
+_LEAKED_WRAPPER_TAG = re.compile(
+    r"<\s*/?\s*(?:final|final_answer|answer|output|translation|translated_text|result|response|target|reply)\b[^<>]{0,40}>",
+    re.IGNORECASE)
+_LEAKED_TEMPLATE_TOKEN = re.compile(
+    r"<\|[a-z_]{2,24}\|>(?:\s*(?:final|analysis|commentary|assistant)\b)?", re.IGNORECASE)
+
+
+def _request_text(messages):
+    parts = []
+    for message in messages or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+    return "\n".join(parts).lower()
+
+
+def _strip_leaked_wrappers(response, messages, *, structured=False):
+    if structured or not getattr(response, "choices", None):
+        return response
+    try:
+        message = response.choices[0].message
+        content = getattr(message, "content", None)
+        if not isinstance(content, str) or "<" not in content:
+            return response
+        request = _request_text(messages)
+        def drop(match):
+            token = match.group(0)
+            return token if token.lower() in request else ""
+        cleaned = _LEAKED_WRAPPER_TAG.sub(drop, _LEAKED_TEMPLATE_TOKEN.sub(drop, content))
+        if cleaned != content:
+            message.content = re.sub(r"[ \t]+\n", "\n", cleaned).strip()
+            response._jy_wrapper_markup_removed = True
+    except Exception as exc:
+        print(f"[ai_provider] wrapper cleanup failed: {type(exc).__name__}", flush=True)
+    return response
+
+
 def _restore_provider_privacy(response, envelope, *, structured=False):
     if not envelope.mapping or not getattr(response, "choices", None):
         return response
@@ -2797,6 +2844,7 @@ def chat_complete(model, messages, max_tokens=None, max_completion_tokens=None,
         except Exception as exc:
             logging.getLogger("app").warning("AI usage observer failed: %s", type(exc).__name__)
     response = _restore_provider_privacy(response, envelope, structured=bool(kwargs.get("structured_schema")))
+    response = _strip_leaked_wrappers(response, messages, structured=bool(kwargs.get("structured_schema")))
     issues = []
     choices = getattr(response, "choices", None) or []
     finish = str(getattr(choices[0], "finish_reason", "") or "").lower() if choices else ""
