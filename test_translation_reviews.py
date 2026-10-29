@@ -356,3 +356,23 @@ def test_concentrated_on_two_day_numbers_reads_as_dates():
     assert hit("外銷急單都排在5、6，看到就先包")
     assert not hit("急單都集中在422、452站")
     assert not hit("料都集中在3、4區")
+
+
+def test_leaked_wrapper_markup_never_reaches_line(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    assert app._strip_thinking_tags("你在開玩笑吧！！！</final>") == "你在開玩笑吧！！！"
+    assert app._strip_thinking_tags("<final>Hari ini lembur</final>") == "Hari ini lembur"
+    assert app._strip_thinking_tags("<|channel|>final<|message|>Tes") == "Tes"
+    assert app._strip_thinking_tags("Tes</translation>") == "Tes"
+    # the author's own markup survives
+    assert app._strip_model_wrapper_artifacts("請看 <result> 欄位", "請看 <result> 欄位") == "請看 <result> 欄位"
+    monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: response("你在開玩笑吧！！！</final>"))
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    assert app.translate("Anda bercanda!!!", "id", "zh") == "你在開玩笑吧！！！"
+
+
+def test_dirty_cached_result_is_cleaned_at_the_exit(monkeypatch):
+    import app
+    monkeypatch.setattr(app, "_translate_unsanitized", lambda text, src, tgt: "Rapat</final>")
+    assert app.translate("開會", "zh", "id") == "Rapat"

@@ -11987,12 +11987,48 @@ _THINKING_OPEN_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-def _strip_thinking_tags(text):
-    """移除 <thinking>...</thinking> 等內部思考 tag,只保留真正譯文。
-    若整個 text 都是 thinking(罕見) 則回傳空字串供上層 fallback。
+# 2026-10-29 (截圖：「你在開玩笑吧！！！</final>」): models occasionally leak
+# output-wrapper markup — a stray </final>, <answer>, unmatched <translation>
+# or chat-template tokens like <|channel|>final<|message|>. Only complete
+# <translation> pairs were extracted before, so one-sided tags reached LINE.
+_WRAPPER_TAG_PATTERN = re.compile(
+    r"<\s*/?\s*(?:final|final_answer|answer|output|translation|translated_text|result|response|target|reply)\b[^<>]{0,40}>",
+    re.IGNORECASE,
+)
+_CHAT_TEMPLATE_TOKEN_PATTERN = re.compile(
+    r"<\|[a-z_]{2,24}\|>(?:\s*(?:final|analysis|commentary|assistant)\b)?",
+    re.IGNORECASE,
+)
+
+
+def _strip_model_wrapper_artifacts(text, source=""):
+    """Remove wrapper tags / template tokens the model added around a translation.
+
+    A tag that also appears in the source is the author's own text and stays.
     """
     if not text or not isinstance(text, str):
         return text
+    source_lower = str(source or "").lower()
+    def _drop(match):
+        token = match.group(0)
+        return token if token.lower() in source_lower else ""
+    cleaned = _CHAT_TEMPLATE_TOKEN_PATTERN.sub(_drop, text)
+    cleaned = _WRAPPER_TAG_PATTERN.sub(_drop, cleaned)
+    if cleaned == text:
+        return text
+    # Tidy only the whitespace the removal left behind; keep the author's layout.
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return cleaned.strip()
+
+
+def _strip_thinking_tags(text):
+    """移除 <thinking>...</thinking> 等內部思考 tag,只保留真正譯文。
+    若整個 text 都是 thinking(罕見) 則回傳空字串供上層 fallback。
+    2026-10-29: 也移除殘留的輸出包裝標籤（</final>、<answer>、單邊 <translation>）。
+    """
+    if not text or not isinstance(text, str):
+        return text
+    text = _strip_model_wrapper_artifacts(text)
     cleaned = _THINKING_TAG_PATTERN.sub("", text)
     # 處理沒閉合的開頭 tag — 但要先確認譯文部分還在
     if "<thinking" in cleaned.lower() or "<thought" in cleaned.lower():
@@ -16134,6 +16170,29 @@ def _translate_paragraphs_separately(text, src, tgt, translate_fn):
     """Compatibility shim: paragraphs are preserved in one whole-message request."""
     return None
 
+
+
+_translate_unsanitized = translate
+
+
+@functools.wraps(_translate_unsanitized)
+def translate(text, src, tgt):
+    """Single exit for all translate() paths, including cache and memory hits.
+
+    Earlier results may already sit in translation memory with leaked wrapper
+    markup; cleaning at the exit fixes those without purging the stores.
+    """
+    result = _translate_unsanitized(text, src, tgt)
+    if isinstance(result, str) and result:
+        cleaned = _strip_model_wrapper_artifacts(result, text)
+        if cleaned and cleaned != result:
+            try:
+                _event_log_write("model_wrapper_markup_removed", {
+                    "src_text": str(text or "")[:120], "before": result[-60:], "after": cleaned[-60:]})
+            except Exception:
+                pass
+            return cleaned
+    return result
 
 
 def _translate_inner(text, src, tgt):
