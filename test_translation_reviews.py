@@ -266,7 +266,8 @@ def test_2026_10_29_rules_route_to_the_right_messages():
     both = review_ids("本月目標應該會下修，但仍一天要170左右。\n\n後面三天主管應該會比較常下來走動，再麻煩注意一下。")
     assert any(i.endswith("daily-target-tons") for i in both)
     assert any(i.endswith("supervisor-return-stay-alert") for i in both)
-    assert review_ids("下午還會有急單過來再麻煩注意一下。") == []      # no supervisor presence → plain "please note"
+    plain = review_ids("下午還會有急單過來再麻煩注意一下。")  # no supervisor presence → plain "please note"
+    assert not any(i.endswith("supervisor-return-stay-alert") for i in plain)
     assert review_ids("本月目標是零工安") == []                       # target without a number
     assert any(i.endswith("remark-urgent-orders") for i in review_ids("有備註出貨急單的先包"))
 
@@ -391,3 +392,62 @@ def test_provider_layer_cleans_leaks_for_every_feature_but_keeps_requested_tags(
     assert asked.choices[0].message.content == "<translation>Rapat</translation>"
     structured = ai_provider._strip_leaked_wrappers(resp('{"a": "</final>"}'), [], structured=True)
     assert structured.choices[0].message.content == '{"a": "</final>"}'
+
+
+def test_author_emoji_survive_translation_in_both_directions(monkeypatch):
+    import app
+    import translation_extras as extras
+    from test_translation_instruction_cost_quality import response
+    assert extras.restore_source_emoji("要脫後面再脫掉🙏", "Kalau mau dilepas, nanti saja.") == "Kalau mau dilepas, nanti saja. 🙏"
+    assert extras.restore_source_emoji("今天加班😭明天休息", "Hari ini lembur, besok libur.") == "Hari ini lembur, besok libur. 😭"
+    assert extras.restore_source_emoji("好👍🏻", "Oke 👍") == "Oke 👍"        # same emoji, other skin tone: already there
+    assert extras.restore_source_emoji("OK", "Oke 🙂") == "Oke 🙂"          # nothing from the author: untouched
+    assert extras.restore_source_emoji("🇹🇼 開會", "Rapat") == "Rapat"       # flags are not author emoji here
+    monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: response("Hari ini lembur."))
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    assert app.translate("今天加班喔🙏", "zh", "id").endswith("🙏")
+
+
+def test_afternoon_slash_hedge_rule_reaches_new_messages():
+    import factory_knowledge
+    cards = factory_knowledge.get_store().retrieve("下午阿迪先回去，機台給Hasim顧", "zh", "id", limit=6)
+    assert any(c["id"].endswith("afternoon-no-slash-hedge") for c in cards)
+
+
+def test_ol_button_rule_both_directions_without_matching_ordinary_words():
+    import factory_knowledge
+    store = factory_knowledge.get_store()
+    def hit(text, src, tgt):
+        return any(c["id"].endswith("ol-production-button") for c in store.retrieve(text, src, tgt, limit=6))
+    assert hit("7J5 masih belum bisa OL, kenapa?", "id", "zh")
+    assert hit("這個ID發料後幫忙按OL", "zh", "id")
+    assert not hit("tolong cek kontrol mesin", "id", "zh")
+
+
+def test_decorative_emoji_off_unless_admin_turns_them_back_on(monkeypatch):
+    import app
+    monkeypatch.setattr(app, "expressive_emoji_enabled", app.expressive_emoji_enabled)
+    monkeypatch.setattr(app, "group_expressive_emoji_settings", dict(app.group_expressive_emoji_settings))
+    monkeypatch.setattr(app, "save_settings", lambda *a, **k: None, raising=False)
+    # Saved settings from before the owner's decision: migrated off once.
+    monkeypatch.setattr(app, "_load_settings_document",
+                        lambda: {"expressive_emoji_enabled": True, "group_expressive_emoji_settings": {"G1": True}})
+    app.load_settings()
+    assert app.get_expressive_emoji_enabled("G1") is False and app.get_expressive_emoji_enabled("") is False
+    # An admin who turns emoji back on after the decision is respected.
+    monkeypatch.setattr(app, "_load_settings_document",
+                        lambda: {"expressive_emoji_enabled": True, app.EMOJI_POLICY_MARKER: True,
+                                 "group_expressive_emoji_settings": {"G1": True}})
+    app.group_expressive_emoji_settings.clear()
+    app.load_settings()
+    assert app.get_expressive_emoji_enabled("G1") is True and app.get_expressive_emoji_enabled("") is True
+
+
+def test_instruction_without_author_emoji_gets_no_added_emoji(monkeypatch):
+    import app
+    from test_translation_instruction_cost_quality import response
+    monkeypatch.setattr(app.ai.chat.completions, "create",
+                        lambda **kw: response("@迪弟 kampret Mohon atur pencucian agar material siap ke stasiun berikutnya."))
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate("@迪弟 kampret 幫忙安排清洗給下一站", "zh", "id")
+    assert not any(e in out for e in ("👀", "📌", "✅", "🙂", "🙏"))

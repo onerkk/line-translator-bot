@@ -23,7 +23,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-TRANSLATION_EXTRAS_VERSION = "2026-10-20.1-closing-courtesy-tone"
+TRANSLATION_EXTRAS_VERSION = "2026-10-29.1-author-emoji-kept"
 
 
 
@@ -439,6 +439,46 @@ def _looks_dense_technical_unit(text: str) -> bool:
         text or "", re.I,
     ))
     return _looks_factory_technical(text) and numeric_tokens >= 2 and not social_cues
+
+
+# 2026-10-29 (截圖：「…要脫後面再脫掉🙏」→「…Terima kasih.」): the prompt says
+# "preserve emoji" but nothing enforced it, so the author's own emoji could be
+# rewritten into words or dropped. Author emoji are part of the message.
+_EMOJI_CLUSTER_RE = re.compile(
+    "(?:[\U0001F300-\U0001FAFF\u2600-\u27BF](?:[\U0001F3FB-\U0001F3FF]|\uFE0F)?"
+    "(?:\u200D[\U0001F300-\U0001FAFF\u2600-\u27BF](?:[\U0001F3FB-\U0001F3FF]|\uFE0F)?)*)"
+)
+
+
+def _emoji_key(cluster: str) -> str:
+    return re.sub("[\uFE0F\U0001F3FB-\U0001F3FF]", "", cluster)
+
+
+def restore_source_emoji(source: str, translation: str) -> str:
+    """Append author emoji that the translation lost, in source order.
+
+    Only emoji written by the author count (flags and decoration added later
+    are not involved); an emoji already present in the translation is kept
+    where the model placed it.
+    """
+    if not source or not translation:
+        return translation
+    wanted = _EMOJI_CLUSTER_RE.findall(source)
+    if not wanted:
+        return translation
+    available: dict[str, int] = {}
+    for cluster in _EMOJI_CLUSTER_RE.findall(translation):
+        available[_emoji_key(cluster)] = available.get(_emoji_key(cluster), 0) + 1
+    missing = []
+    for cluster in wanted:
+        key = _emoji_key(cluster)
+        if available.get(key, 0) > 0:
+            available[key] -= 1
+        else:
+            missing.append(cluster)
+    if not missing:
+        return translation
+    return translation.rstrip() + " " + "".join(missing)
 
 
 def _strip_flag_emoji(text: str) -> str:

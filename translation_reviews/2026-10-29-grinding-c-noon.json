@@ -1,0 +1,79 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-10-29-grinding-c-noon",
+ "source": "screenshot review by Claude, 研磨C班 group 10/29 07:38–11:09",
+ "items": [
+  {
+   "id": "ppe-photo-who-wears",
+   "src": "zh",
+   "tgt": "id",
+   "source": "早上工作安排後，安全護具的拍照回報先讓我拍穿長袖制服，要脫後面再脫掉🙏",
+   "observed": "Setelah pembagian tugas pagi, untuk laporan foto APD, biarkan saya foto dulu saat memakai seragam lengan panjang. Kalau harus dilepas, nanti saja dilepas. Terima kasih.",
+   "corrected": "Setelah pembagian tugas pagi, untuk laporan foto APD, saya foto kalian dulu dengan seragam lengan panjang. Kalau mau dilepas, nanti saja setelah difoto. 🙏",
+   "category": "other",
+   "reason": "「先讓我拍穿長袖制服」是班長要先拍大家穿長袖制服的照片；原譯 biarkan saya foto dulu saat memakai… 看不出是誰穿。「要脫後面再脫」是想脫的話拍完再脫（mau），不是「必須脫」（harus）。原文的 🙏 被改寫成 Terima kasih，程式已改為一律保留作者自己的表情符號。"
+  },
+  {
+   "id": "afternoon-no-slash-hedge",
+   "src": "zh",
+   "tgt": "id",
+   "source": "表格內453那兩把先不管，研磨目前生產我昨天通知的尺寸就好，30.2、24.5、40.2這三種不能停機，下午 @伊努滿 Sumertha 提早下班，@Hasim 有急單的設備幫忙接著生產，其他不趕出貨的尺寸四點後可以先停機。",
+   "observed": "Untuk sementara abaikan 2 bundel di 453 dalam tabel. Bagian grinding saat ini cukup memproduksi ukuran yang saya beri tahu kemarin. Produksi ketiga ukuran 30.2、24.5、40.2 tidak boleh dihentikan. Siang/sore ini @伊努滿 Sumertha selesai shift lebih awal. @Hasim tolong lanjutkan produksi pada mesin yang mengerjakan work order mendesak. Mesin untuk ukuran lain yang pengirimannya tidak mendesak boleh dihentikan setelah pukul 4.",
+   "corrected": "Untuk sementara abaikan 2 bundel di 453 dalam tabel. Bagian grinding saat ini cukup memproduksi ukuran yang saya beri tahu kemarin. Produksi ketiga ukuran 30.2、24.5、40.2 tidak boleh dihentikan. Sore ini @伊努滿 Sumertha pulang lebih awal. @Hasim tolong lanjutkan produksi pada mesin yang mengerjakan work order mendesak. Mesin untuk ukuran lain yang pengirimannya tidak mendesak boleh dihentikan setelah pukul 4.",
+   "category": "tone",
+   "reason": "「下午」被譯成兩個選項並列的 Siang/sore，像翻譯沒拿定主意。沒有具體時間的「下午」用 sore；「提早下班」口語是 pulang lebih awal。",
+   "rule": {
+    "when": [
+     [
+      "下午"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「下午」只給一個說法，不並列 siang/sore",
+    "context": [
+     "沒有具體時間的「下午」譯 sore ini／nanti sore；有具體時間時依時間（例：下午1點 pukul 1 siang、下午4點 pukul 4 sore）。",
+     "不要寫成 siang/sore、sore/siang 這種斜線並列。"
+    ],
+    "forbidden": [
+     "siang/sore",
+     "sore/siang"
+    ]
+   }
+  },
+  {
+   "id": "ol-production-button",
+   "src": "id",
+   "tgt": "zh",
+   "source": "ID 7J576102A tidak bisa OL",
+   "observed": "ID 7J576102A 無法轉成 OL",
+   "corrected": "ID 7J576102A 無法按 OL（設為生產中）",
+   "category": "term",
+   "reason": "老闆確認：OL 是系統按鈕，工單 ID 要生產、發料後按 OL 代表這個 ID 生產中。原譯「轉成 OL」看不出是按鈕／狀態。",
+   "rule": {
+    "when": [
+     [
+      "ol"
+     ]
+    ],
+    "regex_any": [
+     "(?<![a-z])ol(?![a-z])"
+    ],
+    "directions": [
+     "id-zh",
+     "zh-id"
+    ],
+    "title": "OL＝把工單 ID 設為生產中的系統按鈕",
+    "context": [
+     "OL 是生產系統的按鈕：工單 ID 要生產時先發料，按下 OL 代表這個 ID 已在生產中。保留 OL 原字。",
+     "印尼文 tidak bisa OL ＝中文「無法按 OL（設為生產中）」；中文「按 OL／OL 不了」＝印尼文 tekan OL (tandai sedang produksi)／tidak bisa OL。不要寫成「轉成 OL」。"
+    ],
+    "forbidden": [
+     "轉成 OL",
+     "轉成OL"
+    ]
+   }
+  }
+ ]
+}

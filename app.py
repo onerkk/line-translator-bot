@@ -488,7 +488,7 @@ logger.info(
 # the reason an app-only upload could start successfully and then fail on the
 # first translation with AttributeError.  Fail during deploy instead of charging
 # for a request and discovering the mismatch inside the LINE webhook.
-_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-10-20.1-closing-courtesy-tone"
+_EXPECTED_TRANSLATION_EXTRAS_VERSION = "2026-10-29.1-author-emoji-kept"
 _EXPECTED_PROMPT_OPTIMIZER_VERSION = "2026-10-17.2-pragmatic-action-timing"
 _required_translation_extra_functions = (
     "analyze_message_tone",
@@ -1658,7 +1658,11 @@ auto_tone_emoji_enabled = True
 expressive_translation_mode = "smart"       # off / tone_only / emoji / image / card / smart
 expressive_translation_intensity = "natural"  # subtle / natural / lively
 expressive_visual_style = "auto"             # auto / cute / minimal / formal / factory / photo
-expressive_emoji_enabled = True
+# 2026-10-29 owner decision: no emoji the author did not type ("原文沒表情就不加").
+# Author emoji are kept by translation_extras.restore_source_emoji; decorative
+# inline emoji stay available behind the admin toggle but default off.
+expressive_emoji_enabled = False
+EMOJI_POLICY_MARKER = "emoji_policy_author_only_20261029"
 expressive_images_enabled = True
 expressive_short_message_image_enabled = True
 expressive_short_message_max_chars = 80
@@ -16185,9 +16189,15 @@ def translate(text, src, tgt):
     result = _translate_unsanitized(text, src, tgt)
     if isinstance(result, str) and result:
         cleaned = _strip_model_wrapper_artifacts(result, text)
+        try:
+            # The author's own emoji belong to the message (the prompt asks
+            # the model to keep them; this makes it hold every time).
+            cleaned = translation_extras_module.restore_source_emoji(text, cleaned)
+        except Exception:
+            pass
         if cleaned and cleaned != result:
             try:
-                _event_log_write("model_wrapper_markup_removed", {
+                _event_log_write("translation_exit_normalized", {
                     "src_text": str(text or "")[:120], "before": result[-60:], "after": cleaned[-60:]})
             except Exception:
                 pass
@@ -29933,6 +29943,7 @@ def _do_save_impl():
             "group_expressive_intensity_settings": group_expressive_intensity_settings,
             "group_expressive_visual_style_settings": group_expressive_visual_style_settings,
             "group_expressive_emoji_settings": group_expressive_emoji_settings,
+            EMOJI_POLICY_MARKER: True,
             "group_expressive_images_settings": group_expressive_images_settings,
             "group_expressive_short_image_settings": group_expressive_short_image_settings,
             "group_expressive_short_max_chars_settings": group_expressive_short_max_chars_settings,
@@ -30232,6 +30243,13 @@ def load_settings():
         group_expressive_intensity_settings.update(data.get("group_expressive_intensity_settings", {}))
         group_expressive_visual_style_settings.update(data.get("group_expressive_visual_style_settings", {}))
         group_expressive_emoji_settings.update(data.get("group_expressive_emoji_settings", {}))
+        if not data.get(EMOJI_POLICY_MARKER):
+            # One-time migration of the owner's decision onto saved settings:
+            # decorative emoji off globally and in every group once. A later
+            # admin toggle is saved together with the marker and respected.
+            expressive_emoji_enabled = False
+            for _gid in list(group_expressive_emoji_settings):
+                group_expressive_emoji_settings[_gid] = False
         group_expressive_images_settings.update(data.get("group_expressive_images_settings", {}))
         group_expressive_short_image_settings.update(data.get("group_expressive_short_image_settings", {}))
         group_expressive_short_max_chars_settings.update(data.get("group_expressive_short_max_chars_settings", {}))
