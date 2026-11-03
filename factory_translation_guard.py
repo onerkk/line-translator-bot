@@ -66,6 +66,16 @@ _UNIT_TARGETS_ID_ZH: Dict[str, Tuple[str, ...]] = {
 }
 
 
+_THOUSANDS_GROUPED_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[.,\u00a0 ]\d{3})+(?![\d])")
+
+
+def _degroup_thousands(text: str) -> str:
+    """Indonesian writes 4000 as "4.000" (and 12500 as "12.500"); English as
+    "4,000". Remove grouping separators so a correct "4.000 ton" is not
+    reported as a missing 4000噸 (which silently blocked a whole notice)."""
+    return _THOUSANDS_GROUPED_RE.sub(lambda m: re.sub(r"[.,\u00a0 ]", "", m.group(0)), str(text or ""))
+
+
 class GuardConfigurationError(ValueError):
     """Raised when approved translation assets contradict each other."""
 
@@ -374,13 +384,18 @@ class FactoryTranslationGuard:
         limit_values = {(_normalize_number(row["value"]), row["unit"]) for row in limits}
         target_norm = _normalize_target(candidate)
         compact = _compact_target(candidate)
-        for match in _NUMBER_UNIT_RE.finditer(source or ""):
+        # Indonesian groups thousands with a dot ("12.500 kg" = 12500 kg) and
+        # writes decimals with a comma, so an ID source is read degrouped.
+        numeric_source = (re.sub(r"(?<![\d.,])\d{1,3}(?:\.\d{3})+(?![\d,])",
+                                 lambda m: m.group(0).replace(".", ""), source or "")
+                          if _lang(src) == "id" else (source or ""))
+        for match in _NUMBER_UNIT_RE.finditer(numeric_source):
             number = _normalize_number(match.group("number"))
             unit_raw = match.group("unit")
             unit_key = unit_raw.casefold()
             if unit_key in {"ton", "噸", "吨", "公噸", "公吨", "公斤", "千克", "kg", "kilogram"} and (number, chat_operations._weight_unit(unit_key)) in limit_values:
                 continue
-            if number and number not in compact.replace(",", "."):
+            if number and number not in compact.replace(",", ".") and number not in _degroup_thousands(candidate):
                 issues.append(f"factory_guard:quantity_number_missing:{number}{unit_raw}")
                 continue
             # Only enforce cross-language unit realization for ZH->ID. ID->ZH may

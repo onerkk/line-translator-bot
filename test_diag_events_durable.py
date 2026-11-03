@@ -75,3 +75,27 @@ def test_reasoning_effort_gets_a_matching_output_budget(monkeypatch):
     monkeypatch.setattr(app, "_translation_needs_upgrade_model", lambda _t: True)
     app.translate("十一月目標量4000噸，20號前一天排2個", "zh", "id")
     assert seen.get("reasoning_effort") == "medium" and seen.get("max_completion_tokens", 0) >= 2048 + 384
+
+
+NOTICE = ("十一月目標量4000噸，異型群組還是在，這個月又新開一個削皮棒追蹤群組，暫時比照上個月異型棒優先安排處理。\n\n"
+          "11、12月要排特休的找時間可以在班表上畫時間，20號前盡量一天排2個就好，20號後盡量一天排1個，"
+          "避免臨時還有病假或其他突發事情，導致人力不足。")
+NOTICE_ID = ("Target bulan November 4.000 ton. Grup batang profil khusus masih ada, dan bulan ini dibuka lagi grup "
+             "pelacakan batang peeling. Untuk sementara prioritaskan penanganannya seperti batang profil khusus bulan lalu.\n\n"
+             "Yang ingin mengambil cuti tahunan di bulan November dan Desember, silakan tandai waktunya di jadwal shift. "
+             "Sebelum tanggal 20 usahakan maksimal 2 orang per hari, setelah tanggal 20 usahakan maksimal 1 orang per hari, "
+             "agar kalau mendadak ada yang sakit atau urusan lain, tenaga kerja tidak kurang.")
+
+
+def test_indonesian_thousands_separator_is_not_a_missing_quantity(monkeypatch):
+    """Real case: '4000噸' rendered '4.000 ton' was rejected as a missing quantity
+    and the whole notice was silently never translated (three times)."""
+    from test_translation_instruction_cost_quality import response
+    assert app._delivery_validation_issues(NOTICE, NOTICE_ID, "zh", "id") == []
+    assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000", "4,000"), "zh", "id") == []
+    assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000", "400"), "zh", "id")  # real loss still caught
+    assert app._delivery_validation_issues("Target 4.000 ton, sisa 12.500 kg", "目標 4000 噸，剩 12500 kg", "id", "zh") == []
+    assert app._delivery_validation_issues("Berat 2,5 ton", "重量 2.5 噸", "id", "zh") == []
+    monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: response(NOTICE_ID))
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    assert app.translate(NOTICE, "zh", "id").startswith("Target bulan November 4.000 ton")

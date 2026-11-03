@@ -2049,6 +2049,10 @@ def _validate_normalized_translation(
         # completely missing value.  For ordinary codes/mentions require token
         # identity.
         cand_count = _count_semantic_atom(candidate, atom, quoted_preferred=quoted)
+        if src_count and cand_count < src_count and _THOUSANDS_GROUPED_RE.search(atom):
+            # "12.500 kg" (Indonesian grouping) and "12500 kg" are the same datum.
+            cand_count = max(cand_count, _count_semantic_atom(
+                _degroup_thousands(candidate), _degroup_thousands(atom), quoted_preferred=quoted))
         if src_count and cand_count < src_count:
             issues.append(f"missing_literal:{atom}")
 
@@ -2499,6 +2503,14 @@ def review_translation(
     except Exception as exc:
         logger.warning("[QualityGate] conditional source audit unavailable: %s", exc)
         return None
+
+_THOUSANDS_GROUPED_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[.,\u00a0 ]\d{3})+(?![\d])")
+
+
+def _degroup_thousands(text: str) -> str:
+    """Drop thousands separators ("4.000" / "4,000" / "12 500" → "4000" / "12500")."""
+    return _THOUSANDS_GROUPED_RE.sub(lambda m: re.sub(r"[.,\u00a0 ]", "", m.group(0)), str(text or ""))
+
 
 def _append_missing_data_note(candidate: str, missing_literals: Sequence[str], tgt_lang: str) -> str:
     """Keep a usable translation deliverable even when a model omitted source data.
