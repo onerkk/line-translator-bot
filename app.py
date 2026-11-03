@@ -2165,7 +2165,7 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
                 # Provider-level rejections never reached /診斷 before: an
                 # alignment parse failure or truncation looked like "empty".
                 reason = verdict[1] if isinstance(verdict, tuple) and len(verdict) > 1 else "rejected"
-                _tl.last_rejection = {"issues": [str(reason)[:160]],
+                _tl.last_rejection = {"ts": time.time(), "issues": [str(reason)[:160]],
                                       "candidate": str(_translation_response_text(response) or "")[:120]}
         except Exception:
             pass
@@ -2525,7 +2525,8 @@ def _set_translation_outcome(status, reason="", **details):
         try:
             _extra = {"group_id": str(getattr(_tl, "group_id", "") or "")}
             _rej = getattr(_tl, "last_rejection", None)
-            if payload["status"] == "failed" and isinstance(_rej, dict):
+            if (payload["status"] == "failed" and isinstance(_rej, dict)
+                    and time.time() - float(_rej.get("ts", 0) or 0) < 180):
                 _extra["issues"] = _rej.get("issues")
                 _extra["candidate"] = _rej.get("candidate")
             _event_log_write("translation_outcome", dict(payload, **_extra))
@@ -11668,6 +11669,15 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
         return result
     except Exception as e:
         logger.error("OpenAI error: %s", e)
+        # A provider-side failure (every provider/validator attempt refused)
+        # surfaces here as an exception and used to leave no durable trace.
+        try:
+            _tl.last_rejection = {"ts": time.time(), "issues": ["provider: " + str(e)[:300]], "candidate": ""}
+            _event_log_write("translation_provider_error", {
+                "group_id": str(getattr(_tl, "group_id", "") or ""),
+                "error": str(e)[:300], "text": str(text or "")[:40]})
+        except Exception:
+            pass
         # v3.9.5: record exception in debug snapshot
         try:
             _update_last_translate_debug(
@@ -12554,7 +12564,7 @@ def _delivery_validation_issues(source_text, candidate, src, tgt):
     if issues:
         # Keep the last rejection reason for /診斷 (see _set_translation_outcome).
         try:
-            _tl.last_rejection = {"issues": [str(i)[:80] for i in list(issues)[:6]],
+            _tl.last_rejection = {"ts": time.time(), "issues": [str(i)[:80] for i in list(issues)[:6]],
                                   "candidate": str(candidate or "")[:120]}
         except Exception:
             pass
@@ -14299,7 +14309,6 @@ def translate(text, src, tgt):
         "context_result_cacheable",
         "learning_rejections", "generated_candidate", "nmt_attempted",
         "translation_alignment_issues", "translation_effort_boost", "review_repair_done",
-        "last_rejection",
     ):
         if hasattr(_tl, _request_attr):
             delattr(_tl, _request_attr)
@@ -20322,6 +20331,8 @@ def handle_message(event):
                     _parts.append("{} {} {} {}".format(
                         _taiwan_time_str(_e.get("ts", 0)), _e.get("type", ""),
                         _d.get("status", "") or "", _d.get("reason", "") or "").strip())
+                    if _d.get("error"):
+                        _parts.append("   錯誤：" + str(_d.get("error"))[:120])
                     if _d.get("issues"):
                         _parts.append("   原因：" + "；".join(str(x) for x in list(_d.get("issues"))[:3]))
                     if _d.get("candidate"):

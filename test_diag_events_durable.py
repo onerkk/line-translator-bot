@@ -126,3 +126,16 @@ def test_provider_level_rejections_are_recorded_for_diagnostics():
     assert verdict[0] is False
     assert "truncated" in app._tl.last_rejection["issues"][0]
     assert app._tl.last_rejection["candidate"].startswith("Target 4.000")
+
+
+def test_provider_exception_is_recorded_durably(monkeypatch):
+    seen = []
+    monkeypatch.setattr(app, "_event_log_write", lambda t, d: seen.append((t, d)))
+    def boom(**kw):
+        raise RuntimeError("all providers rejected: alignment:unit_count_mismatch")
+    monkeypatch.setattr(app.ai.chat.completions, "create", boom)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    app.translate(NOTICE, "zh", "id")
+    errors = [d for t, d in seen if t == "translation_provider_error"]
+    assert errors and "alignment:unit_count_mismatch" in errors[0]["error"] and errors[0]["group_id"] == "Cx"
+    assert app._diag_event_wanted("translation_provider_error")
