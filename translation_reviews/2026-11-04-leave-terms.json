@@ -1,0 +1,52 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-04-leave-terms",
+ "source": "screenshot review by Claude, test group 00:39",
+ "items": [
+  {
+   "id": "annual-leave-term",
+   "src": "zh",
+   "tgt": "id",
+   "source": "十一月目標量4000噸，異型群組還是在，這個月又新開一個削皮棒追蹤群組，暫時比照上個月異型棒優先安排處理。\n\n11、12月要排特休的找時間可以在班表上畫時間，20號前盡量一天排2個就好，20號後盡量一天排1個，避免臨時還有病假或其他突發事情，導致人力不足。",
+   "observed": "Target bulan November 4000 ton. Grup batang profil khusus tetap ada. Bulan ini juga dibuat grup pelacakan batang untuk proses peeling. Untuk sementara, pengaturannya mengikuti bulan lalu, dengan memprioritaskan batang profil khusus untuk diproses.\n\nYang ingin mengambil cuti khusus pada bulan November dan Desember, silakan cari waktu untuk menandai jadwalnya di daftar shift. Sebelum tanggal 20, usahakan maksimal 2 orang per hari. Setelah tanggal 20, usahakan maksimal 1 orang per hari, agar jika ada cuti sakit mendadak atau kejadian tak terduga lainnya, jumlah tenaga kerja tidak sampai kurang.",
+   "corrected": "Target bulan November 4000 ton. Grup batang profil khusus tetap ada. Bulan ini juga dibuat grup pelacakan batang untuk proses peeling. Untuk sementara, pengaturannya mengikuti bulan lalu, dengan memprioritaskan batang profil khusus untuk diproses.\n\nYang ingin mengambil cuti tahunan pada bulan November dan Desember, silakan cari waktu untuk menandai jadwalnya di daftar shift. Sebelum tanggal 20, usahakan maksimal 2 orang per hari. Setelah tanggal 20, usahakan maksimal 1 orang per hari, agar jika ada cuti sakit mendadak atau kejadian tak terduga lainnya, jumlah tenaga kerja tidak sampai kurang.",
+   "category": "term",
+   "reason": "台灣「特休」是特別休假＝每年的有薪年假，印尼文是 cuti tahunan；原譯 cuti khusus 在印尼是婚喪等特殊事由的假，意思不同。",
+   "glossary": [
+    {
+     "zh": "特休",
+     "id": "cuti tahunan",
+     "mode": "hard",
+     "reverse_safe": true
+    },
+    {
+     "zh": "病假",
+     "id": "cuti sakit",
+     "mode": "soft"
+    }
+   ],
+   "rule": {
+    "when": [
+     [
+      "特休",
+      "特別休假",
+      "排休",
+      "年假"
+     ]
+    ],
+    "directions": [
+     "zh-id",
+     "id-zh"
+    ],
+    "title": "特休＝年假（cuti tahunan）",
+    "context": [
+     "台灣「特休／特別休假」是每年的有薪年假，印尼文 cuti tahunan；不要譯成 cuti khusus（婚喪等特殊事由假）。",
+     "印尼同事說 cuti tahunan，中文譯「特休」。病假＝cuti sakit。"
+    ],
+    "forbidden": [
+     "cuti khusus"
+    ]
+   }
+  }
+ ]
+}

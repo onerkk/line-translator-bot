@@ -470,3 +470,12 @@ def test_work_order_slip_rule_reaches_paraphrases_and_repairs_pasang(monkeypatch
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     out = app.translate(src, "zh", "id")
     assert out.startswith("Selipkan kertas work order") and len(calls) == 2
+
+
+def test_annual_leave_is_cuti_tahunan_in_both_directions():
+    import factory_knowledge
+    lookup = {}
+    reviews.apply_glossary(lookup, reviews.load_bundles())
+    assert lookup["特休"]["idn"] == "cuti tahunan" and lookup["特休"]["translation_mode"] == "hard"
+    store = factory_knowledge.get_store()
+    assert any(c["id"].endswith("annual-leave-term") for c in store.retrieve("下個月要排特休的先登記", "zh", "id", limit=6))

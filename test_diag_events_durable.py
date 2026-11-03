@@ -82,11 +82,20 @@ def test_reasoning_effort_gets_a_matching_output_budget(monkeypatch):
 NOTICE = ("十一月目標量4000噸，異型群組還是在，這個月又新開一個削皮棒追蹤群組，暫時比照上個月異型棒優先安排處理。\n\n"
           "11、12月要排特休的找時間可以在班表上畫時間，20號前盡量一天排2個就好，20號後盡量一天排1個，"
           "避免臨時還有病假或其他突發事情，導致人力不足。")
+# The exact notice is now an approved review correction (answered from memory
+# without a model call), so model-path tests use a lightly edited variant.
 NOTICE_ID = ("Target bulan November 4.000 ton. Grup batang profil khusus masih ada, dan bulan ini dibuka lagi grup "
              "pelacakan batang peeling. Untuk sementara prioritaskan penanganannya seperti batang profil khusus bulan lalu.\n\n"
              "Yang ingin mengambil cuti tahunan di bulan November dan Desember, silakan tandai waktunya di jadwal shift. "
              "Sebelum tanggal 20 usahakan maksimal 2 orang per hari, setelah tanggal 20 usahakan maksimal 1 orang per hari, "
              "agar kalau mendadak ada yang sakit atau urusan lain, tenaga kerja tidak kurang.")
+
+
+NOTICE_VARIANT = None
+
+
+def _variant():
+    return NOTICE.replace("暫時比照", "目前比照")
 
 
 def test_indonesian_thousands_separator_is_not_a_missing_quantity(monkeypatch):
@@ -100,7 +109,7 @@ def test_indonesian_thousands_separator_is_not_a_missing_quantity(monkeypatch):
     assert app._delivery_validation_issues("Berat 2,5 ton", "重量 2.5 噸", "id", "zh") == []
     monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: response(NOTICE_ID))
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
-    assert app.translate(NOTICE, "zh", "id").startswith("Target bulan November 4.000 ton")
+    assert app.translate(_variant(), "zh", "id").startswith("Target bulan November 4.000 ton")
 
 
 def test_failure_diagnostics_carry_the_rejection_reason(monkeypatch):
@@ -136,7 +145,7 @@ def test_provider_exception_is_recorded_durably(monkeypatch):
         raise RuntimeError("all providers rejected: alignment:unit_count_mismatch")
     monkeypatch.setattr(app.ai.chat.completions, "create", boom)
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
-    app.translate(NOTICE, "zh", "id")
+    app.translate(_variant(), "zh", "id")
     errors = [d for t, d in seen if t == "translation_provider_error"]
     assert errors and "alignment:unit_count_mismatch" in errors[0]["error"] and errors[0]["group_id"] == "Cx"
     assert app._diag_event_wanted("translation_provider_error")
@@ -151,7 +160,7 @@ def test_long_risky_notice_uses_low_effort_and_the_long_latency_window(monkeypat
         seen.update(kw); return response(NOTICE_ID)
     monkeypatch.setattr(app.ai.chat.completions, "create", create)
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
-    out = app.translate(NOTICE, "zh", "id")
+    out = app.translate(_variant(), "zh", "id")
     assert out.startswith("Target bulan November")
     assert seen.get("reasoning_effort") in ("low", "none", None)
     assert seen.get("latency_profile") == "long_text"
@@ -166,3 +175,11 @@ def test_short_plain_message_keeps_the_fast_window(monkeypatch):
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     app.translate("測試", "zh", "id")
     assert seen.get("latency_profile") == "realtime_text"
+
+
+def test_reviewed_notice_is_answered_from_memory_without_a_model_call(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app.ai.chat.completions, "create", lambda **kw: calls.append(kw))
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(NOTICE, "zh", "id")
+    assert "cuti tahunan" in out and not calls
