@@ -2076,7 +2076,7 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
         "i cannot translate", "i can't translate",
     )
 
-    def _validate(response, provider):
+    def _validate_impl(response, provider):
         text = _translation_response_text(response)
         if alignment_contract:
             raw = getattr(getattr(response.choices[0], "message", None), "content", "") if getattr(response, "choices", None) else ""
@@ -2157,7 +2157,22 @@ def _build_translation_response_validator(source_text, src_lang=None, tgt_lang=N
             return False, f"{provider} quality advisory: " + "; ".join(defects)[:650] + (". " + hints if hints else "")
         return True, "ok"
 
+    def _validate(response, provider):
+        verdict = _validate_impl(response, provider)
+        try:
+            ok = verdict[0] if isinstance(verdict, tuple) else bool(verdict)
+            if not ok:
+                # Provider-level rejections never reached /診斷 before: an
+                # alignment parse failure or truncation looked like "empty".
+                reason = verdict[1] if isinstance(verdict, tuple) and len(verdict) > 1 else "rejected"
+                _tl.last_rejection = {"issues": [str(reason)[:160]],
+                                      "candidate": str(_translation_response_text(response) or "")[:120]}
+        except Exception:
+            pass
+        return verdict
+
     return _validate
+
 
 
 def _remember_translation_rejection(source, candidate, issues):
@@ -20300,7 +20315,8 @@ def handle_message(event):
             if not _rows:
                 _diag_text = "🩺 這個群組 14 天內沒有翻譯失敗或略過的紀錄。"
             else:
-                _parts = ["🩺 最近的翻譯診斷（台灣時間）"]
+                _parts = ["🩺 最近的翻譯診斷（台灣時間・版本 "
+                          + (os.environ.get("RENDER_GIT_COMMIT", "")[:7] or "local") + "）"]
                 for _e in _rows:
                     _d = _e.get("data") or {}
                     _parts.append("{} {} {} {}".format(

@@ -27,6 +27,7 @@ def test_failed_and_skipped_outcomes_are_kept_durably(monkeypatch):
 def test_non_delivered_outcome_emits_a_diagnostic_event(monkeypatch):
     seen = []
     monkeypatch.setattr(app, "_event_log_write", lambda t, d: seen.append((t, d)))
+    app._tl.__dict__.clear()
     app._tl.group_id = "Cx"
     app._set_translation_outcome("failed", "empty_or_rejected_translation")
     app._set_translation_outcome("delivered", "")
@@ -114,3 +115,14 @@ def test_failure_diagnostics_carry_the_rejection_reason(monkeypatch):
 def test_indonesian_scale_words_count_as_the_same_quantity():
     assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000 ton", "4 ribu ton"), "zh", "id") == []
     assert app._delivery_validation_issues(NOTICE, NOTICE_ID.replace("4.000 ton", "3 ribu ton"), "zh", "id")
+
+
+def test_provider_level_rejections_are_recorded_for_diagnostics():
+    from types import SimpleNamespace as NS
+    app._tl.__dict__.clear()
+    validate = app._build_translation_response_validator("十一月目標量4000噸", "zh", "id")
+    resp = NS(choices=[NS(message=NS(content="Target 4.000 ton"), finish_reason="length")])
+    verdict = validate(resp, "openai")
+    assert verdict[0] is False
+    assert "truncated" in app._tl.last_rejection["issues"][0]
+    assert app._tl.last_rejection["candidate"].startswith("Target 4.000")
