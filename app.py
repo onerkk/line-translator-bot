@@ -1048,6 +1048,64 @@ def _should_skip_message_event(event):
     return False
 
 
+# 2026-11 診斷根治：/tmp 的事件紀錄只留 200 筆，而且每次重新部署就清空，
+# 「為什麼這則沒翻譯」的證據常常在查之前就消失了。失敗、略過、拒絕、送出問題
+# 這類診斷事件另外存一份到既有的 Upstash（最多 1000 筆、保留 14 天），
+# 由背景執行緒寫入，不影響翻譯速度，也不多花 AI 費用。
+_DIAG_KV_KEY = "line_bot:diag_events"
+_DIAG_KV_MAX = 1000
+_DIAG_KV_TTL_SECONDS = 14 * 86400
+_DIAG_EVENT_HINTS = ("skip", "fail", "error", "reject", "degrad", "empty", "timeout", "blocked", "outcome", "delivery")
+
+
+def _diag_event_wanted(event_type):
+    name = str(event_type or "").lower()
+    return any(hint in name for hint in _DIAG_EVENT_HINTS)
+
+
+def _diag_compact(data, limit=160):
+    """Keep diagnostics small: short text previews, no nested blobs."""
+    out = {}
+    for key, value in (data or {}).items() if isinstance(data, dict) else []:
+        if isinstance(value, str):
+            out[key] = value[:limit]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            out[key] = value
+        elif isinstance(value, (list, tuple)):
+            out[key] = [str(v)[:80] for v in list(value)[:8]]
+        else:
+            out[key] = str(value)[:limit]
+    return out
+
+
+def _diag_kv_append(event_type, data):
+    if not _kv_enabled():
+        return
+    entry = json.dumps({"ts": int(time.time()), "type": str(event_type), "data": _diag_compact(data)},
+                       ensure_ascii=False)
+    _kv_command(["LPUSH", _DIAG_KV_KEY, entry])
+    _kv_command(["LTRIM", _DIAG_KV_KEY, "0", str(_DIAG_KV_MAX - 1)])
+    _kv_command(["EXPIRE", _DIAG_KV_KEY, str(_DIAG_KV_TTL_SECONDS)])
+
+
+def _diag_kv_read(n=200):
+    raw = _kv_command(["LRANGE", _DIAG_KV_KEY, "0", str(max(0, int(n) - 1))]) or []
+    entries = []
+    for item in raw:
+        try:
+            entries.append(json.loads(item))
+        except Exception:
+            continue
+    return entries
+
+
+def _taiwan_time_str(ts):
+    """Render server timestamps in Taiwan time (Render runs in UTC)."""
+    import datetime as _dt
+    offset = _safe_int(os.environ.get("DISPLAY_TZ_OFFSET_HOURS", "8"), default=8, min_val=-12, max_val=14)
+    return (_dt.datetime.utcfromtimestamp(int(ts or 0)) + _dt.timedelta(hours=offset)).strftime("%m/%d %H:%M:%S")
+
+
 def _event_log_write(event_type, data):
     """v3.13: 改走背景單一執行緒佇列。
     原本每筆事件都在呼叫端「鎖檔 → 整檔讀 → JSON parse 200 筆 → 整檔重寫」,
@@ -1057,6 +1115,11 @@ def _event_log_write(event_type, data):
         _EVENT_LOG_EXECUTOR.submit(_event_log_write_sync, event_type, data)
     except Exception:
         pass
+    if _diag_event_wanted(event_type):
+        try:
+            _EVENT_LOG_EXECUTOR.submit(_diag_kv_append, event_type, data)
+        except Exception:
+            pass
 
 
 def _event_log_write_sync(event_type, data):
@@ -2442,6 +2505,12 @@ def _set_translation_outcome(status, reason="", **details):
     if details:
         payload.update(details)
     _tl.translation_outcome = payload
+    if payload["status"] != "delivered":
+        # Durable "why wasn't this translated" evidence (see _DIAG_KV_KEY).
+        try:
+            _event_log_write("translation_outcome", dict(payload, group_id=str(getattr(_tl, "group_id", "") or "")))
+        except Exception:
+            pass
     return payload
 
 
@@ -20234,13 +20303,14 @@ def handle_message(event):
 
     is_on = group_settings.get(group_id, True)
     if not is_on:
-        _event_log_write("text_skipped", {"reason": "translation_off", "group_id": group_id})
+        _event_log_write("text_skipped", {"reason": "translation_off", "group_id": group_id, "text": text[:60]})
         return
 
     # Check skip list
     sender_id = getattr(source, 'user_id', None)
     if sender_id and sender_id in group_skip_users.get(group_id, set()):
-        _event_log_write("text_skipped", {"reason": "user_in_skip_list", "group_id": group_id})
+        _event_log_write("text_skipped", {"reason": "user_in_skip_list", "group_id": group_id,
+                                          "user_id": sender_id, "text": text[:60]})
         return
 
     # Normalize LINE mention spans first.  This also repairs a malformed @()
@@ -35759,6 +35829,41 @@ def admin_health_check():
     return Response("\n".join(h), mimetype="text/html; charset=utf-8")
 
 
+@app.route("/debug/diag-events", methods=["GET"])
+def debug_diag_events():
+    """Durable diagnostics (Upstash, 14 days, 1000 entries): skipped / failed /
+    rejected translations and delivery problems, in Taiwan time. Survives
+    redeploys, unlike /debug/event-log which lives in /tmp.
+
+    Usage: GET /debug/diag-events?key=KEY[&n=200][&q=研磨]
+    """
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    n = _safe_int(request.args.get("n", "200"), default=200, min_val=1, max_val=_DIAG_KV_MAX)
+    query = str(request.args.get("q", "") or "")
+    entries = _diag_kv_read(n)
+    if query:
+        entries = [e for e in entries if query in json.dumps(e, ensure_ascii=False)]
+    from html import escape as _esc
+    html = ["<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>",
+            "<style>body{background:#0f0f1a;color:#ddd;font-family:sans-serif;padding:10px;font-size:14px}",
+            ".e{background:#1a1a2e;border:1px solid #2a2a3e;border-radius:6px;padding:8px;margin:6px 0}",
+            ".t{color:#8a8a9a;font-size:12px}.k{color:#7FB3FF;font-weight:bold}pre{white-space:pre-wrap;word-break:break-all;margin:4px 0}</style>",
+            "</head><body><h2>🩺 翻譯診斷紀錄（台灣時間，保留 14 天）</h2>"]
+    if not _kv_enabled():
+        html.append("<p>未設定 Upstash，無法保存診斷紀錄。</p>")
+    elif not entries:
+        html.append("<p>目前沒有失敗或略過的紀錄。</p>")
+    else:
+        html.append(f"<p>共 {len(entries)} 筆，新的在上</p>")
+        for e in entries:
+            html.append("<div class='e'><div class='t'>" + _esc(_taiwan_time_str(e.get("ts", 0))) +
+                        " · <span class='k'>" + _esc(str(e.get("type", "?"))) + "</span></div><pre>" +
+                        _esc(json.dumps(e.get("data", {}), ensure_ascii=False, indent=1)) + "</pre></div>")
+    html.append("</body></html>")
+    return "".join(html)
+
+
 @app.route("/debug/event-log", methods=["GET"])
 def debug_event_log():
     """v3.9.19: 看磁碟版 webhook 事件 log(跨 worker)
@@ -35826,7 +35931,7 @@ def debug_event_log():
         html += f"<p>共 {len(entries)} 筆,新的在上</p>"
         import datetime as _dt
         for e in entries:
-            ts_str = _dt.datetime.fromtimestamp(e.get("ts", 0)).strftime("%H:%M:%S")
+            ts_str = _taiwan_time_str(e.get("ts", 0))
             t = e.get("type", "?")
             d = e.get("data", {})
             html += f'<div class="entry {t}">'
