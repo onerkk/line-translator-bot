@@ -451,3 +451,22 @@ def test_instruction_without_author_emoji_gets_no_added_emoji(monkeypatch):
     app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
     out = app.translate("@迪弟 kampret 幫忙安排清洗給下一站", "zh", "id")
     assert not any(e in out for e in ("👀", "📌", "✅", "🙂", "🙏"))
+
+
+def test_work_order_slip_rule_reaches_paraphrases_and_repairs_pasang(monkeypatch):
+    import app
+    import factory_knowledge
+    from test_translation_instruction_cost_quality import response
+    store = factory_knowledge.get_store()
+    for text in ("那捆的工單沒插，幫忙補一下", "包好記得把工單插上去"):
+        assert any(c["id"].endswith("insert-work-order-slip") for c in store.retrieve(text, "zh", "id", limit=6)), text
+    src = "這捆工單插好再吊走"
+    bad = "Pasang work order untuk bundel ini, lalu angkat dengan crane."
+    good = "Selipkan kertas work order ke bundel ini, lalu angkat dengan crane."
+    calls = []
+    def create(**kw):
+        calls.append(kw); return response(good if len(calls) > 1 else bad)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(src, "zh", "id")
+    assert out.startswith("Selipkan kertas work order") and len(calls) == 2

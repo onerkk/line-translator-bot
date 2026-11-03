@@ -1,0 +1,30 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-work-order-slip-insert",
+ "source": "screenshot review by Claude, 研磨C班 group 17:47; meaning confirmed by the owner",
+ "items": [
+  {
+   "id": "insert-work-order-slip",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@法比恩 Fabian 等等秤台上這把工單插好，吊下來放旁邊",
+   "observed": "@法比恩 Fabian Nanti pasang work order untuk bundel ini di timbangan, lalu turunkan dengan crane dan letakkan di samping.",
+   "corrected": "@法比恩 Fabian Nanti selipkan kertas work order ke bundel yang ada di timbangan ini, lalu turunkan dengan crane dan letakkan di samping.",
+   "category": "term",
+   "reason": "老闆確認：「工單插好」是把工單紙插進這捆料上。原譯 pasang（安裝）work order untuk bundel ini 看不出是把紙本工單插進料捆。",
+   "glossary": [
+    {"zh": "插工單", "id": "menyelipkan kertas work order ke bundel", "mode": "soft"}
+   ],
+   "rule": {
+    "when": [["工單插", "插工單", "插好工單", "把工單插", "工單要插", "工單沒插"]],
+    "directions": ["zh-id"],
+    "title": "「工單插好」是把工單紙插進料捆",
+    "context": [
+     "現場說「工單插好／插工單／工單沒插」指的是把紙本工單插進料捆（捆帶或工單夾）上，譯 selipkan kertas work order ke bundel；沒插好 = kertas work order belum diselipkan。",
+     "不要用 pasang work order（像在安裝系統資料），也不要寫成 work order untuk bundel（替這捆開工單）。"
+    ],
+    "forbidden": ["pasang work order"]
+   }
+  }
+ ]
+}
