@@ -1,6 +1,8 @@
 """Diagnostics for untranslated messages survive redeploys (Upstash) and show Taiwan time."""
 import json
 
+from test_translation_notice_availability import runtime  # noqa: F401
+
 import app
 
 
@@ -48,3 +50,28 @@ def test_diag_page_requires_admin_key_and_renders(monkeypatch):
 def test_legacy_translation_card_alt_text_is_clipped():
     msg = app.build_translation_flex("原文", "x" * 900, "🇹🇼", "🇮🇩")
     assert msg is not None and len(msg.alt_text) <= 400
+
+
+def test_admin_can_read_diagnostics_from_line(runtime, monkeypatch):
+    from test_translation_notice_availability import event, delivered_text
+    monkeypatch.setattr(app, "is_group_admin", lambda uid: True)
+    gid = event("/診斷").source.group_id
+    monkeypatch.setattr(app, "_diag_kv_read", lambda n: [
+        {"ts": 0, "type": "translation_outcome", "data": {"status": "failed", "reason": "empty_or_rejected_translation",
+                                                         "group_id": gid, "text": "十一月目標量4000噸"}},
+        {"ts": 0, "type": "translation_outcome", "data": {"status": "failed", "reason": "x", "group_id": "other"}}])
+    app.handle_message(event("/診斷"))
+    text = delivered_text(runtime)
+    assert "🩺" in text and "empty_or_rejected_translation" in text and "十一月目標量4000噸" in text and " x" not in text
+
+
+def test_reasoning_effort_gets_a_matching_output_budget(monkeypatch):
+    from test_translation_instruction_cost_quality import response
+    seen = {}
+    def create(**kw):
+        seen.update(kw); return response("Tes")
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    monkeypatch.setattr(app, "_translation_needs_upgrade_model", lambda _t: True)
+    app.translate("十一月目標量4000噸，20號前一天排2個", "zh", "id")
+    assert seen.get("reasoning_effort") == "medium" and seen.get("max_completion_tokens", 0) >= 2048 + 384

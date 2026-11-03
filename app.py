@@ -11206,7 +11206,13 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             # 風險句留在常規層，但給模型多一點自適應思考（見 pick_model）。
             _translation_effort = "medium"
         if _translation_effort not in (None, "none"):
-            _output_budget += 768
+            # Reasoning tokens are spent from the same max_completion_tokens
+            # budget as the visible translation. A fixed +768 was enough for
+            # "low" but a "medium" pass on a long multi-clause notice could use
+            # it all up and return an empty/truncated translation (seen on a
+            # 2-paragraph monthly-target/leave notice that never got translated).
+            _output_budget += {"low": 768, "minimal": 512, "medium": 2048,
+                               "high": 4096}.get(str(_translation_effort), 2048)
         _output_budget = min(_output_budget, 8192)
         if model_supports(_model, "max_completion_tokens"):
             _kwargs["max_completion_tokens"] = _output_budget
@@ -20269,6 +20275,26 @@ def handle_message(event):
     if group_id and not is_dm:
         # 1. 打「設定」「語言」直接開設定面板(參考 JFETEK 面板 / Ligo 指令的痛點:
         #    工人記不住指令,給一個最自然的中文入口)
+        if text.strip() in ("/診斷", "/诊断", "/diag") and is_group_admin(getattr(source, "user_id", None)):
+            # Evidence for "why wasn't that translated" without opening a URL.
+            _rows = [e for e in _diag_kv_read(300)
+                     if str((e.get("data") or {}).get("group_id", "")) == str(group_id)][:6]
+            if not _rows:
+                _diag_text = "🩺 這個群組 14 天內沒有翻譯失敗或略過的紀錄。"
+            else:
+                _parts = ["🩺 最近的翻譯診斷（台灣時間）"]
+                for _e in _rows:
+                    _d = _e.get("data") or {}
+                    _parts.append("{} {} {} {}".format(
+                        _taiwan_time_str(_e.get("ts", 0)), _e.get("type", ""),
+                        _d.get("status", "") or "", _d.get("reason", "") or "").strip())
+                    if _d.get("text"):
+                        _parts.append("   「" + str(_d.get("text"))[:40] + "」")
+                _diag_text = "\n".join(_parts)
+            with ApiClient(configuration) as api_client:
+                MessagingApi(api_client).reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token, messages=[TextMessage(text=_clip_line_text(_diag_text))]))
+            return
         _t_strip = text.strip().lower()
         if _t_strip in ("設定", "设定", "語言設定", "语言设定", "setting", "settings",
                         "panel", "pengaturan"):
