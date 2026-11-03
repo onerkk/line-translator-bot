@@ -11225,7 +11225,10 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
                 and getattr(_tl, "translation_effort_boost", False)
                 and model_supports(_model, "reasoning_effort")):
             # 風險句留在常規層，但給模型多一點自適應思考（見 pick_model）。
-            _translation_effort = "medium"
+            # Long risky notices get "low": "medium" on a two-paragraph notice
+            # ran past the 8 s realtime budget and the whole message was lost
+            # ("Request timed out", 2026-11-04). Short risky lines stay fast.
+            _translation_effort = "medium" if _src_len < 120 else "low"
         if _translation_effort not in (None, "none"):
             # Reasoning tokens are spent from the same max_completion_tokens
             # budget as the visible translation. A fixed +768 was enough for
@@ -11235,6 +11238,11 @@ def translate_openai(text, src, tgt, strict_no_source_script=False, repair_mode=
             _output_budget += {"low": 768, "minimal": 512, "medium": 2048,
                                "high": 4096}.get(str(_translation_effort), 2048)
         _output_budget = min(_output_budget, 8192)
+        # Latency budget must match the work requested: reasoning and long,
+        # multi-paragraph output need the long-text window on every provider.
+        if (_translation_effort in ("medium", "high", "xhigh") or _src_len >= 120
+                or (text or "").count("\n") >= 2 or _output_budget >= 1500):
+            _kwargs["latency_profile"] = "long_text"
         if model_supports(_model, "max_completion_tokens"):
             _kwargs["max_completion_tokens"] = _output_budget
         elif model_supports(_model, "max_tokens"):

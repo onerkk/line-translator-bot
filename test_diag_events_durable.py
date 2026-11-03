@@ -76,6 +76,7 @@ def test_reasoning_effort_gets_a_matching_output_budget(monkeypatch):
     monkeypatch.setattr(app, "_translation_needs_upgrade_model", lambda _t: True)
     app.translate("十一月目標量4000噸，20號前一天排2個", "zh", "id")
     assert seen.get("reasoning_effort") == "medium" and seen.get("max_completion_tokens", 0) >= 2048 + 384
+    assert seen.get("latency_profile") == "long_text"
 
 
 NOTICE = ("十一月目標量4000噸，異型群組還是在，這個月又新開一個削皮棒追蹤群組，暫時比照上個月異型棒優先安排處理。\n\n"
@@ -139,3 +140,29 @@ def test_provider_exception_is_recorded_durably(monkeypatch):
     errors = [d for t, d in seen if t == "translation_provider_error"]
     assert errors and "alignment:unit_count_mismatch" in errors[0]["error"] and errors[0]["group_id"] == "Cx"
     assert app._diag_event_wanted("translation_provider_error")
+
+
+def test_long_risky_notice_uses_low_effort_and_the_long_latency_window(monkeypatch):
+    """Real case 2026-11-04: medium reasoning on this notice exceeded the 8 s
+    realtime window ('Request timed out') and nothing was delivered."""
+    from test_translation_instruction_cost_quality import response
+    seen = {}
+    def create(**kw):
+        seen.update(kw); return response(NOTICE_ID)
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    out = app.translate(NOTICE, "zh", "id")
+    assert out.startswith("Target bulan November")
+    assert seen.get("reasoning_effort") in ("low", "none", None)
+    assert seen.get("latency_profile") == "long_text"
+
+
+def test_short_plain_message_keeps_the_fast_window(monkeypatch):
+    from test_translation_instruction_cost_quality import response
+    seen = {}
+    def create(**kw):
+        seen.update(kw); return response("Tes")
+    monkeypatch.setattr(app.ai.chat.completions, "create", create)
+    app._tl.__dict__.clear(); app._tl.tone, app._tl.group_id = "factory", "Cx"
+    app.translate("測試", "zh", "id")
+    assert seen.get("latency_profile") == "realtime_text"
