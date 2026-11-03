@@ -479,3 +479,14 @@ def test_annual_leave_is_cuti_tahunan_in_both_directions():
     assert lookup["特休"]["idn"] == "cuti tahunan" and lookup["特休"]["translation_mode"] == "hard"
     store = factory_knowledge.get_store()
     assert any(c["id"].endswith("annual-leave-term") for c in store.retrieve("下個月要排特休的先登記", "zh", "id", limit=6))
+
+
+def test_semantic_audit_accepts_natural_indonesian_forms():
+    import factory_semantic_audit as audit
+    src = "棒材油汙該重新清洗就吊回去，如果被客戶提出客訴會很麻煩"
+    frame = audit.build_source_frame(src, "zh", "id")
+    ok_issues = audit.validate_translation(frame, "Kalau kotor, angkat kembali untuk dicuci. Kalau ada keluhan dari pelanggan akan repot.")[1]
+    assert "factory_semantic_audit:missing_hoist_or_load_action" not in ok_issues
+    assert "factory_semantic_audit:customer_complaint_missing" not in ok_issues
+    bad_issues = audit.validate_translation(frame, "Kalau kotor, cuci saja. Nanti repot.")[1]
+    assert "factory_semantic_audit:customer_complaint_missing" in bad_issues

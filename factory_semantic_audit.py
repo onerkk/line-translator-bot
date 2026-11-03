@@ -2409,9 +2409,12 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     )):
         issues.append("factory_semantic_audit:recent_repeated_cases_missing")
 
-    if flags.get("customer_complaint") and not _has_any_target(low, (
-        "keluhan pelanggan", "komplain pelanggan", "pengaduan pelanggan",
-    )):
+    if flags.get("customer_complaint") and not (
+        _has_any_target(low, ("keluhan pelanggan", "komplain pelanggan", "pengaduan pelanggan"))
+        # Natural variants: "keluhan dari pelanggan", "pelanggan mengajukan komplain".
+        or re.search(r"(?:keluhan|komplain|pengaduan)\s+(?:dari\s+)?(?:para\s+)?(?:pelanggan|customer)", low)
+        or re.search(r"(?:pelanggan|customer)\s+(?:\w+\s+){0,2}(?:keluhan|komplain|pengaduan|mengeluh|komplen)", low)
+    ):
         issues.append("factory_semantic_audit:customer_complaint_missing")
     if flags.get("cannot_help") and not _has_any_target(low, (
         "saya juga tidak bisa membantu", "saya juga tidak dapat membantu",
@@ -2534,7 +2537,9 @@ def validate_translation(frame: Mapping[str, Any], translation: str) -> Tuple[bo
     if flags.get("prohibition") and not _has_any_target(low, ("tidak boleh", "jangan", "dilarang", "tidak diperbolehkan")):
         issues.append("factory_semantic_audit:missing_prohibition")
     if flags.get("hoist_or_load") and not _has_any_target(low, (
-        "mengangkat", "memasukkan", "memuat", "menaikkan", "menempatkan",
+        # Base forms also cover me-/di- forms and the imperative an instruction
+        # uses ("angkat kembali", "naikkan ke rak"), not only "mengangkat".
+        "angkat", "masukkan", "muat", "naikkan", "tempatkan",
     )):
         issues.append("factory_semantic_audit:missing_hoist_or_load_action")
     if flags.get("slow_run") and not _has_any_target(low, ("secara lambat", "secara perlahan", "berjalan lambat", "produksi lambat")):

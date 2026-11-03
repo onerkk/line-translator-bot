@@ -1,0 +1,36 @@
+{
+ "schema_version": 1,
+ "review_id": "2026-11-04-oily-bars-hoist-back",
+ "source": "screenshot review by Claude, 研磨C班 03:47",
+ "items": [
+  {
+   "id": "hoist-back-for-rewash",
+   "src": "zh",
+   "tgt": "id",
+   "source": "@budi santoso 山多 @Irwan 布納萬 棒材油汙該重新清洗就吊回去，不要想省事貪圖一點時間，之後如果被客戶提出客訴，主管勢必會要求改善措施跟更高的品質標準，你們只會越來越難做事。",
+   "observed": "@budi santoso 山多 @Irwan 布納萬 Jika batang baja terkena minyak dan perlu dicuci ulang, pindahkan kembali. Jangan mencari cara mudah hanya demi menghemat sedikit waktu. Jika nanti sampai ada keluhan dari pelanggan, atasan pasti akan meminta tindakan perbaikan dan standar kualitas yang lebih tinggi. Kalian akan semakin sulit bekerja.",
+   "corrected": "@budi santoso 山多 @Irwan 布納萬 Kalau batang baja kena minyak dan harus dicuci ulang, angkat kembali untuk dicuci lagi. Jangan mencari cara mudah hanya demi menghemat sedikit waktu. Kalau nanti ada keluhan dari pelanggan, atasan pasti akan meminta tindakan perbaikan dan standar kualitas yang lebih tinggi. Kalian sendiri yang akan semakin sulit bekerja.",
+   "category": "other",
+   "reason": "整體語意正確。「吊回去」是把料吊回去重洗，原譯 pindahkan kembali（移回去）看不出是吊起送回清洗；「你們只會越來越難做事」是「最後苦的是你們自己」。",
+   "rule": {
+    "when": [
+     [
+      "吊回去",
+      "吊回",
+      "吊過去",
+      "吊上去",
+      "吊走"
+     ]
+    ],
+    "directions": [
+     "zh-id"
+    ],
+    "title": "「吊回去／吊過去」是吊起搬回",
+    "context": [
+     "「吊回去／吊過去／吊走」是把料吊起搬到某處，譯 angkat kembali／angkat ke …；原文沒寫天車就不要自行補 crane。",
+     "要重洗的「吊回去」寫出目的：angkat kembali untuk dicuci lagi。"
+    ]
+   }
+  }
+ ]
+}

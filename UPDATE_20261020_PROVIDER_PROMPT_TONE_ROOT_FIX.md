@@ -296,3 +296,8 @@ Gemini 路徑原本就不包裝、不 grounding；本次只更新模型對照（
 - 00:39 驗證：那則公告已正常翻譯送出。審核譯文：「特休」被譯成 cuti khusus（印尼的婚喪特殊假），應為 cuti tahunan（年假）；
   新增 bundle `2026-11-04-leave-terms`（特休＝cuti tahunan 硬性術語、雙向；病假＝cuti sakit）。
 - 已確認：「暫時比照上個月異型棒優先安排處理」＝繼續優先處理異型棒，原譯正確（我的判讀錯了），審核譯文維持原樣。
+
+## 2026-11-04 研磨C班 03:47「棒材油汙該重新清洗就吊回去…」
+- 整體正確；「吊回去」被譯成 pindahkan kembali（移回去），改為 angkat kembali untuk dicuci lagi（bundle `2026-11-04-oily-bars-hoist-back`）。
+- 同類根治：語意稽核只認 mengangkat 這種 me- 動詞與「keluhan pelanggan」固定寫法，命令句的 angkat／naikkan 和
+  「keluhan dari pelanggan」這些自然說法都被誤判缺漏，會讓正確的修正範例被拒收。改為接受基本形與常見變化，真的漏掉仍會抓到。
