@@ -23967,7 +23967,9 @@ def build_translation_flex(original, translated, src_flag, tgt_flag, sender_name
             }
         }
         return FlexMessage(
-            alt_text=tgt_flag + " " + translated,
+            # Same 400-char altText limit the v2 card already respects; an
+            # unclipped long translation made LINE reject the whole reply.
+            alt_text=_flex_alt_text(tgt_flag, translated),
             contents=FlexContainer.from_dict(flex_obj)
         )
     except Exception as e:

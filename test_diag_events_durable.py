@@ -43,3 +43,8 @@ def test_diag_page_requires_admin_key_and_renders(monkeypatch):
     assert client.get("/debug/diag-events").status_code == 403
     page = client.get("/debug/diag-events?key=k").get_data(as_text=True)
     assert "01/01 08:00:00" in page and "&lt;x&gt;" in page
+
+
+def test_legacy_translation_card_alt_text_is_clipped():
+    msg = app.build_translation_flex("原文", "x" * 900, "🇹🇼", "🇮🇩")
+    assert msg is not None and len(msg.alt_text) <= 400
